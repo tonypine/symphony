@@ -230,6 +230,37 @@ defmodule SymphonyElixir.Linear.Adapter do
   }
   """
 
+  # Setup reads one team's states and labels at a time (`SymphonyElixir.Setup.TeamCache`).
+  @team_workflow_states_query """
+  query SymphonyTeamWorkflowStates($team: String!) {
+    workflowStates(filter: {team: {key: {eqIgnoreCase: $team}}}, first: 250) {
+      nodes {
+        id
+        name
+        team {
+          id
+          key
+        }
+      }
+    }
+  }
+  """
+
+  @team_labels_query """
+  query SymphonyTeamLabels($team: String!) {
+    issueLabels(filter: {or: [{team: {key: {eqIgnoreCase: $team}}}, {team: {null: true}}]}, first: 250) {
+      nodes {
+        id
+        name
+        team {
+          id
+          key
+        }
+      }
+    }
+  }
+  """
+
   # A new phase state is a started state: it sits beside In Progress on the board. Linear requires
   # the color.
   @create_workflow_state_mutation """
@@ -690,6 +721,30 @@ defmodule SymphonyElixir.Linear.Adapter do
   @spec labels() :: {:ok, [Tracker.label()]} | {:error, term()}
   def labels do
     with {:ok, response} <- client_module().graphql(@all_labels_query, %{}),
+         nodes when is_list(nodes) <- get_in(response, ["data", "issueLabels", "nodes"]) do
+      {:ok, Enum.map(nodes, &label/1)}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :labels_unavailable}
+    end
+  end
+
+  @doc "The workflow states of the team whose key is `team`."
+  @spec team_workflow_states(String.t()) :: {:ok, [Tracker.workflow_state()]} | {:error, term()}
+  def team_workflow_states(team) when is_binary(team) do
+    with {:ok, response} <- client_module().graphql(@team_workflow_states_query, %{team: team}),
+         nodes when is_list(nodes) <- get_in(response, ["data", "workflowStates", "nodes"]) do
+      {:ok, Enum.map(nodes, &workflow_state/1)}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :workflow_states_unavailable}
+    end
+  end
+
+  @doc "The labels the team whose key is `team` can use: its own and the workspace's."
+  @spec team_labels(String.t()) :: {:ok, [Tracker.label()]} | {:error, term()}
+  def team_labels(team) when is_binary(team) do
+    with {:ok, response} <- client_module().graphql(@team_labels_query, %{team: team}),
          nodes when is_list(nodes) <- get_in(response, ["data", "issueLabels", "nodes"]) do
       {:ok, Enum.map(nodes, &label/1)}
     else

@@ -8,12 +8,24 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.PrWatch.Health
   alias SymphonyElixir.Secret
+  alias SymphonyElixir.Setup
 
   @endpoint SymphonyElixirWeb.Endpoint
   @t0 ~U[2026-10-17 09:00:00Z]
 
   # The `github_updates` section's contract with the app: the app's decoding tests read this file too.
   @fixture Path.expand("../../fixtures/api/github_updates.json", __DIR__)
+  # The setup problems' contract with the app, for its Setup screens.
+  @problems_fixture Path.expand("../../fixtures/api/setup_problems.json", __DIR__)
+
+  # Answers the snapshot `/api/v1/state` reads: nothing running.
+  defmodule IdleOrchestrator do
+    use GenServer
+
+    def start_link(name), do: GenServer.start_link(__MODULE__, nil, name: name)
+    def init(nil), do: {:ok, nil}
+    def handle_call(:snapshot, _from, state), do: {:reply, %{running: [], retrying: [], rate_limits: nil}, state}
+  end
 
   setup do
     # The test config writes every section inline; the setup edits blocks (see WebhookSetupTest).
@@ -49,15 +61,38 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
       port: fn -> 4040 end
     ]
 
+    setup_server = Module.concat(__MODULE__, "Setup#{System.unique_integer([:positive])}")
+    start_supervised!({Setup, name: setup_server, now: fn -> @t0 end})
+    # Its startup run reads the config: let it finish before a test edits the file.
+    Setup.refresh(setup_server)
+    orchestrator = Module.concat(__MODULE__, "Orchestrator#{System.unique_integer([:positive])}")
+    start_supervised!({IdleOrchestrator, orchestrator})
+
     endpoint_config =
       :symphony_elixir
       |> Application.get_env(SymphonyElixirWeb.Endpoint, [])
-      |> Keyword.merge(server: false, secret_key_base: String.duplicate("s", 64), github_updates: opts)
+      |> Keyword.merge(
+        server: false,
+        secret_key_base: String.duplicate("s", 64),
+        github_updates: opts,
+        setup: setup_server,
+        orchestrator: orchestrator,
+        snapshot_timeout_ms: 1_000
+      )
 
     Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, endpoint_config)
     start_supervised!({SymphonyElixirWeb.Endpoint, []})
-    on_exit(fn -> Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, Keyword.delete(endpoint_config, :github_updates)) end)
+
+    on_exit(fn ->
+      Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, Keyword.drop(endpoint_config, [:github_updates, :setup, :orchestrator, :snapshot_timeout_ms]))
+    end)
+
     :ok
+  end
+
+  defp refresh(headers \\ [{"content-type", "application/json"}]) do
+    Enum.reduce(headers, build_conn(), fn {name, value}, conn -> put_req_header(conn, name, value) end)
+    |> post("/api/v1/setup/refresh", "{}")
   end
 
   defp fake_gh(["auth", "status"]), do: {:ok, "  - Token scopes: 'admin:repo_hook', 'repo'\n"}
@@ -136,10 +171,44 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
 
     :ok = RunStore.put_ticket_pr_watch("default", "issue-1", "TP-1", watch)
 
-    section = build_conn() |> get("/api/v1/setup") |> json_response(200)
+    section = build_conn() |> get("/api/v1/setup") |> json_response(200) |> Map.take(["github_updates"])
 
     if System.get_env("SYMPHONY_WRITE_FIXTURES") == "1", do: File.write!(@fixture, Jason.encode_to_iodata!(section, pretty: true))
     assert section == @fixture |> File.read!() |> Jason.decode!()
+  end
+
+  describe "setup problems" do
+    test "a healthy config has no problems and nothing unchecked, next to github_updates" do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+
+      assert %{"problems" => [], "not_checked" => [], "checked_at" => "2026-10-17T09:00:00Z", "linear_checked_at" => "2026-10-17T09:00:00Z"} =
+               refresh() |> json_response(200)
+
+      assert %{"problems" => [], "not_checked" => [], "github_updates" => %{"mode" => "off"}} = build_conn() |> get("/api/v1/setup") |> json_response(200)
+    end
+
+    test "a refresh checks the edited config again, and /api/v1/state carries the same payload" do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      assert %{"problems" => []} = refresh() |> json_response(200)
+
+      File.write!(Workflow.symphony_file_path(), File.read!(Workflow.symphony_file_path()) <> "auto_review:\n  enabled: true\n")
+      Cache.clear()
+
+      problems = refresh() |> json_response(200)
+      if System.get_env("SYMPHONY_WRITE_FIXTURES") == "1", do: File.write!(@problems_fixture, Jason.encode_to_iodata!(problems, pretty: true))
+      assert problems == @problems_fixture |> File.read!() |> Jason.decode!()
+
+      assert %{"problems" => [%{"id" => "deprecated_key:auto_review.enabled", "severity" => "warning", "fix" => %{"kind" => "config_edit", "action" => "remove"}}]} =
+               problems
+
+      assert build_conn() |> get("/api/v1/setup") |> json_response(200) |> Map.delete("github_updates") == problems
+      assert build_conn() |> get("/api/v1/state") |> json_response(200) |> Map.fetch!("setup") == problems
+    end
+
+    test "a refresh is refused from another site's page, and takes no other method" do
+      assert refresh([{"content-type", "application/json"}, {"origin", "https://evil.example.com"}]).status == 403
+      assert build_conn() |> get("/api/v1/setup/refresh") |> json_response(405)
+    end
   end
 
   test "takes curl's JSON sent as a form, as the walkthrough does" do

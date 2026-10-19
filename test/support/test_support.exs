@@ -71,6 +71,7 @@ defmodule SymphonyElixir.TestSupport do
         SymphonyElixir.TestSupport.ensure_pubsub_started!()
         if Process.whereis(SymphonyElixir.WorkflowStore), do: SymphonyElixir.WorkflowStore.force_reload()
         stop_default_orchestrator()
+        SymphonyElixir.TestSupport.stop_default_setup()
         :ok = SymphonyElixir.TestSupport.clear_run_store!()
         stop_verification_port_pool()
         stop_default_http_server()
@@ -474,6 +475,20 @@ defmodule SymphonyElixir.TestSupport do
     else
       _ -> :ok
     end
+  catch
+    :exit, _reason -> :ok
+  end
+
+  # The app's Setup server checks the config after every reload, from a task of its own: a run that
+  # reads the config while a test rewrites it would put the old file back in the cache. Tests that
+  # need Setup start their own.
+  def stop_default_setup do
+    case named_process(SymphonyElixir.Supervisor) do
+      supervisor when is_pid(supervisor) -> Supervisor.terminate_child(supervisor, SymphonyElixir.Setup)
+      _ -> :ok
+    end
+
+    :ok
   catch
     :exit, _reason -> :ok
   end

@@ -39,7 +39,7 @@ defmodule SymphonyElixir.Config.CacheTest do
   describe "status/0" do
     test "exposes cached entries with stale flag and last error", %{root: root} do
       symphony_path = Path.join(root, "symphony.yml")
-      File.write!(symphony_path, "tracker:\n  kind: memory\n")
+      File.write!(symphony_path, config(0))
       Workflow.set_symphony_file_path(symphony_path)
 
       assert {:ok, _value} = Cache.get_symphony(symphony_path)
@@ -64,10 +64,69 @@ defmodule SymphonyElixir.Config.CacheTest do
     end
   end
 
+  describe "a symphony.yml edit the schema rejects" do
+    test "keeps the last good config, says since when, and reads the rejected file only once", %{root: root} do
+      # No watcher: only this test's reads may read the file.
+      Application.put_env(:symphony_elixir, :config_cache_watch, false)
+      symphony_path = Path.join(root, "symphony.yml")
+      File.write!(symphony_path, config(1))
+      assert {:ok, %{"repositories" => [%{"key" => "r1"}]}} = Cache.get_symphony(symphony_path)
+
+      test_pid = self()
+
+      Application.put_env(:symphony_elixir, :config_cache_file_reader, fn path ->
+        send(test_pid, {:read, path})
+        File.read(path)
+      end)
+
+      File.write!(symphony_path, config(1) <> "pull_request:\n  enabled: true\n")
+      bump_mtime!(symphony_path)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{"repositories" => [%{"key" => "r1"}]}, [stale: true]} = Cache.get_symphony(symphony_path)
+          [entry] = Cache.status()
+          assert entry.last_error == {:invalid_symphony_config, "unknown symphony.yml key `pull_request`"}
+          assert is_integer(entry.stale_since)
+
+          assert {:ok, _value, [stale: true]} = Cache.get_symphony(symphony_path)
+          assert [%{stale_since: stale_since}] = Cache.status()
+          assert stale_since == entry.stale_since
+        end)
+
+      assert log =~ "keeping last known good value"
+      assert_received {:read, _path}
+      refute_received {:read, _path}
+
+      File.write!(symphony_path, config(2))
+      bump_mtime!(symphony_path)
+      assert {:ok, %{"repositories" => [%{"key" => "r2"}]}} = Cache.get_symphony(symphony_path)
+      assert [%{stale?: false, stale_since: nil}] = Cache.status()
+    end
+
+    test "the good file coming back with its old stamp loads again", %{root: root} do
+      symphony_path = Path.join(root, "symphony.yml")
+      File.write!(symphony_path, config(1))
+      File.touch!(symphony_path, 1_700_000_000)
+      assert {:ok, _value} = Cache.get_symphony(symphony_path)
+
+      File.rm!(symphony_path)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, _value, [stale: true]} = Cache.get_symphony(symphony_path)
+      end)
+
+      File.write!(symphony_path, config(1))
+      File.touch!(symphony_path, 1_700_000_000)
+      assert {:ok, %{"repositories" => [%{"key" => "r1"}]}} = Cache.get_symphony(symphony_path)
+      assert [%{stale?: false}] = Cache.status()
+    end
+  end
+
   describe "telemetry on stale fallback" do
     test "emits [:symphony, :config, :cache, :stale] when reload fails", %{root: root} do
       symphony_path = Path.join(root, "symphony.yml")
-      File.write!(symphony_path, "tracker:\n  kind: memory\n")
+      File.write!(symphony_path, config(0))
       Workflow.set_symphony_file_path(symphony_path)
 
       assert {:ok, _value} = Cache.get_symphony(symphony_path)
@@ -103,24 +162,102 @@ defmodule SymphonyElixir.Config.CacheTest do
   describe "file_event reload" do
     test "handle_info reloads cached entry when reload event arrives", %{root: root} do
       symphony_path = Path.join(root, "symphony.yml")
-      File.write!(symphony_path, "tracker:\n  kind: memory\nfoo: 1\n")
+      File.write!(symphony_path, config(1))
       Workflow.set_symphony_file_path(symphony_path)
 
-      assert {:ok, %{"foo" => 1}} = Cache.get_symphony(symphony_path)
+      assert {:ok, %{"repositories" => [%{"key" => "r1"}]}} = Cache.get_symphony(symphony_path)
 
       # Write new contents that the cache must pick up only via the file_event
       # handler. We bump mtime so the stat-stamp differs from the cached entry.
-      File.write!(symphony_path, "tracker:\n  kind: memory\nfoo: 2\n")
+      File.write!(symphony_path, config(2))
       bump_mtime!(symphony_path)
 
       cache = start_private_cache!()
 
+      handler_id = "cache-reloaded-test-#{System.unique_integer([:positive])}"
+      test_pid = self()
+      :telemetry.attach(handler_id, Cache.reloaded_event(), fn _event, _measurements, metadata, _config -> send(test_pid, {:reloaded, metadata.path}) end, nil)
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
       send(cache, {:file_event, self(), {symphony_path, [:modified]}})
       :sys.get_state(cache)
+      expanded = Path.expand(symphony_path)
+      assert_received {:reloaded, ^expanded}
+
+      # A file no cached entry reads is not a reload.
+      notes = Path.join(root, "notes.txt")
+      send(cache, {:file_event, self(), {notes, [:modified]}})
+      :sys.get_state(cache)
+      refute_received {:reloaded, ^notes}
 
       # Subsequent reads should see the new value via either the eager reload
       # (file_event branch) or the lazy stamp refresh.
-      assert {:ok, %{"foo" => 2}} = Cache.get_symphony(symphony_path)
+      assert {:ok, %{"repositories" => [%{"key" => "r2"}]}} = Cache.get_symphony(symphony_path)
+    end
+  end
+
+  describe "reload event without a watcher" do
+    test "a read that finds an edit emits the reload once per change", %{root: root} do
+      # As under the escript, which can't start the file watcher.
+      Application.put_env(:symphony_elixir, :config_cache_watcher, fn _dir -> :ignore end)
+      symphony_path = Path.expand(Path.join(root, "symphony.yml"))
+      write_stamped!(symphony_path, config(1), 1)
+      attach_reloaded!()
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{"repositories" => [%{"key" => "r1"}]}} = Cache.get_symphony(symphony_path)
+          :sys.get_state(Cache)
+        end)
+
+      assert log =~ "falling back to stat-based polling"
+      # The first load is not a reload.
+      refute_received {:reloaded, ^symphony_path}
+
+      write_stamped!(symphony_path, config(2), 2)
+      assert {:ok, %{"repositories" => [%{"key" => "r2"}]}} = Cache.get_symphony(symphony_path)
+      assert {:ok, %{"repositories" => [%{"key" => "r2"}]}} = Cache.get_symphony(symphony_path)
+      assert_received {:reloaded, ^symphony_path}
+      refute_received {:reloaded, ^symphony_path}
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        # A rejected edit, read twice.
+        write_stamped!(symphony_path, config(2) <> "pull_request:\n  enabled: true\n", 3)
+        assert {:ok, %{"repositories" => [%{"key" => "r2"}]}, [stale: true]} = Cache.get_symphony(symphony_path)
+        assert {:ok, _value, [stale: true]} = Cache.get_symphony(symphony_path)
+        assert_received {:reloaded, ^symphony_path}
+        refute_received {:reloaded, ^symphony_path}
+
+        # Another rejected edit.
+        write_stamped!(symphony_path, config(2) <> "pull_request:\n  enabled: false\n", 4)
+        assert {:ok, _value, [stale: true]} = Cache.get_symphony(symphony_path)
+        assert_received {:reloaded, ^symphony_path}
+
+        # The file gone, read twice.
+        File.rm!(symphony_path)
+        assert {:ok, _value, [stale: true]} = Cache.get_symphony(symphony_path)
+        assert {:ok, _value, [stale: true]} = Cache.get_symphony(symphony_path)
+        assert_received {:reloaded, ^symphony_path}
+        refute_received {:reloaded, ^symphony_path}
+      end)
+
+      # The file fixed.
+      write_stamped!(symphony_path, config(3), 5)
+      assert {:ok, %{"repositories" => [%{"key" => "r3"}]}} = Cache.get_symphony(symphony_path)
+      assert_received {:reloaded, ^symphony_path}
+    end
+
+    test "dropping a cached file is a reload, dropping one the cache never read is not", %{root: root} do
+      symphony_path = Path.expand(Path.join(root, "symphony.yml"))
+      File.write!(symphony_path, config(1))
+      assert {:ok, _value} = Cache.get_symphony(symphony_path)
+      attach_reloaded!()
+
+      assert :ok = Cache.invalidate(symphony_path)
+      assert_received {:reloaded, ^symphony_path}
+
+      assert :ok = Cache.invalidate(symphony_path)
+      refute_received {:reloaded, ^symphony_path}
     end
   end
 
@@ -130,7 +267,7 @@ defmodule SymphonyElixir.Config.CacheTest do
       # then send the app's Cache to watch `dir` too, and that attempt could
       # reach the stub before this instance marks `dir` as stat-only.
       symphony_path = Path.join(root, "symphony.yml")
-      File.write!(symphony_path, "tracker:\n  kind: memory\n")
+      File.write!(symphony_path, config(0))
 
       test_pid = self()
       symphony_path = Path.expand(symphony_path)
@@ -148,7 +285,7 @@ defmodule SymphonyElixir.Config.CacheTest do
       # config while this test runs.
       other_path = Path.join([root, "other", "symphony.yml"])
       File.mkdir_p!(Path.dirname(other_path))
-      File.write!(other_path, "tracker:\n  kind: memory\n")
+      File.write!(other_path, config(0))
       other_dir = Path.dirname(other_path)
 
       cache = start_private_cache!()
@@ -178,7 +315,7 @@ defmodule SymphonyElixir.Config.CacheTest do
 
     test "drops watcher entry from state so the next access re-watches", %{root: root} do
       symphony_path = Path.join(root, "symphony.yml")
-      File.write!(symphony_path, "tracker:\n  kind: memory\n")
+      File.write!(symphony_path, config(0))
       Workflow.set_symphony_file_path(symphony_path)
 
       cache = start_private_cache!()
@@ -208,7 +345,7 @@ defmodule SymphonyElixir.Config.CacheTest do
   describe "EXIT handler" do
     test "drops watcher when its process exits", %{root: root} do
       symphony_path = Path.join(root, "symphony.yml")
-      File.write!(symphony_path, "tracker:\n  kind: memory\n")
+      File.write!(symphony_path, config(0))
       Workflow.set_symphony_file_path(symphony_path)
 
       cache = start_private_cache!()
@@ -254,16 +391,16 @@ defmodule SymphonyElixir.Config.CacheTest do
   describe "missing file after warm cache" do
     test "returns last known good value when file disappears", %{root: root} do
       symphony_path = Path.join(root, "symphony.yml")
-      File.write!(symphony_path, "tracker:\n  kind: memory\nfoo: 7\n")
+      File.write!(symphony_path, config(7))
       Workflow.set_symphony_file_path(symphony_path)
 
-      assert {:ok, %{"foo" => 7}} = Cache.get_symphony(symphony_path)
+      assert {:ok, %{"repositories" => [%{"key" => "r7"}]}} = Cache.get_symphony(symphony_path)
 
       File.rm!(symphony_path)
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->
-          assert {:ok, %{"foo" => 7}, [stale: true]} = Cache.get_symphony(symphony_path)
+          assert {:ok, %{"repositories" => [%{"key" => "r7"}]}, [stale: true]} = Cache.get_symphony(symphony_path)
         end)
 
       assert log =~ "keeping last known good value"
@@ -273,23 +410,23 @@ defmodule SymphonyElixir.Config.CacheTest do
   describe "invalidate/1" do
     test "drops a symphony.yml rewritten in the same second with the same length", %{root: root} do
       symphony_path = Path.join(root, "symphony.yml")
-      File.write!(symphony_path, "tracker:\n  kind: memory\nfoo: 7\n")
+      File.write!(symphony_path, config(7))
       File.touch!(symphony_path, 1_700_000_000)
-      assert {:ok, %{"foo" => 7}} = Cache.get_symphony(symphony_path)
+      assert {:ok, %{"repositories" => [%{"key" => "r7"}]}} = Cache.get_symphony(symphony_path)
 
-      File.write!(symphony_path, "tracker:\n  kind: memory\nfoo: 8\n")
+      File.write!(symphony_path, config(8))
       File.touch!(symphony_path, 1_700_000_000)
-      assert {:ok, %{"foo" => 7}} = Cache.get_symphony(symphony_path)
+      assert {:ok, %{"repositories" => [%{"key" => "r7"}]}} = Cache.get_symphony(symphony_path)
 
       assert Cache.invalidate(symphony_path) == :ok
-      assert {:ok, %{"foo" => 8}} = Cache.get_symphony(symphony_path)
+      assert {:ok, %{"repositories" => [%{"key" => "r8"}]}} = Cache.get_symphony(symphony_path)
     end
   end
 
   describe "clear/0" do
     test "removes entries and watched-dir tracking", %{root: root} do
       symphony_path = Path.join(root, "symphony.yml")
-      File.write!(symphony_path, "tracker:\n  kind: memory\n")
+      File.write!(symphony_path, config(0))
       Workflow.set_symphony_file_path(symphony_path)
 
       assert {:ok, _} = Cache.get_symphony(symphony_path)
@@ -306,9 +443,25 @@ defmodule SymphonyElixir.Config.CacheTest do
   # (TP-304, TP-382). An unnamed instance under the test supervisor lives
   # exactly as long as the test. Watch state is shared through
   # `:persistent_term`, which setup and `on_exit` clear.
+  # Writes `content` with its own mtime, so each write is a new stamp even within one second.
+  defp write_stamped!(path, content, n) do
+    File.write!(path, content)
+    File.touch!(path, 1_700_000_000 + n)
+  end
+
+  defp attach_reloaded! do
+    handler_id = "cache-reloaded-test-#{System.unique_integer([:positive])}"
+    test_pid = self()
+    :telemetry.attach(handler_id, Cache.reloaded_event(), fn _event, _measurements, metadata, _config -> send(test_pid, {:reloaded, metadata.path}) end, nil)
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
   defp start_private_cache! do
     start_supervised!({Cache, name: nil})
   end
+
+  # The smallest `symphony.yml` that validates, its one repo keyed `r<n>`.
+  defp config(n), do: "repositories:\n  - key: r#{n}\n    route:\n      team: T\n"
 
   defp restore_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
   defp restore_env(key, value), do: Application.put_env(:symphony_elixir, key, value)

@@ -63,6 +63,14 @@ that repository.
 
 Relative repository workflow paths resolve from the directory containing `symphony.yml`.
 
+Symphony reloads both files when they change. An edit it rejects (an unknown or removed key, an
+invalid value, YAML that doesn't parse) does not stop it: it keeps running the last settings that
+loaded, logs the reason, and lists the rejected file under `problems` in `GET /api/v1/setup`
+(the key or line, the reason, and since when) until the file loads again. The same list warns
+about each deprecated key the file still sets, with what replaced it and, for a key that does
+nothing now, a fix that removes it. `POST /api/v1/setup/refresh` checks again at once. See
+[SPEC.md](../SPEC.md) for the problem shape.
+
 ## Settings in the macOS app
 
 Every `symphony.yml` setting gets a control in the macOS app, or a person's exemption. When a
