@@ -608,6 +608,7 @@ defmodule SymphonyElixir.QaVerification do
   defp verdict_reason(_outcome), do: "the run could not verify the change"
 
   defp error_reason(reason) when is_binary(reason), do: reason
+  defp error_reason({:qa_dev_server_failed, _cause, _log} = reason), do: QaAgent.blocked_reason(reason)
   defp error_reason({:remote_worker_unsupported, host}), do: "QA cannot run on the remote worker #{inspect(host)}"
   defp error_reason(reason), do: inspect(reason)
 

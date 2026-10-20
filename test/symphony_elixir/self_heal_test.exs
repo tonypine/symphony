@@ -153,6 +153,8 @@ defmodule SymphonyElixir.SelfHealTest do
     test "maps each known cause to its component" do
       cases = [
         {{:qa_dev_server_failed, {:verification_failed, {:dev_server_build_failed, 3}}}, "dev_server"},
+        {{:qa_dev_server_failed, :health_timeout, "listening soon"}, "dev_server"},
+        {{:qa_dev_server_failed, {:dev_server_unreachable, "ssh: refused"}, ""}, "qa_environment"},
         {{:verification_failed, {:dev_server_exit, 1}}, "dev_server"},
         {{:dev_server_not_on_socket, "s"}, "dev_server"},
         {{:dev_server_not_configured}, "dev_server"},
@@ -205,6 +207,8 @@ defmodule SymphonyElixir.SelfHealTest do
   describe "signature/1" do
     test "normalizes the outcome's cause" do
       assert SelfHeal.signature(%{cause: {:dev_server_exit, 3}}) == "{:dev_server_exit, 3}"
+      # A QA-host dev server's log is not part of the failure.
+      assert SelfHeal.signature(%{cause: {:qa_dev_server_failed, :health_timeout, "one log"}}) == "{:qa_dev_server_failed, :health_timeout}"
       assert SelfHeal.signature(%{cause: "  a   spaced\n reason "}) == "a spaced reason"
       assert SelfHeal.signature(%{cause: nil, reason: nil}) == ""
       assert SelfHeal.signature(:not_a_map) == ""

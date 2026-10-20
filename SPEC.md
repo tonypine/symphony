@@ -1408,7 +1408,14 @@ Fields:
   `enabled`; a new kind needs `paths` and `prompt`. The built-in `macos_app` kind also takes
   `build` (shell command run in the QA worktree), `app` (the `.app` bundle path relative to the
   repo root) and `build_timeout_ms` (default `900000`), and is off unless `build` and `app` are
-  set. The built-in `web` kind also takes `browser_mcp` (an MCP server definition, the shape of
+  set. It also takes `dev_server` (boolean, default `false`, valid on `android_app` and any kind
+  too: the pass starts `verification.dev_server`, on the QA host for a `macos_app` pass on a
+  `worker_host`), `dev_server_port` (1..65535, default `8090`: that QA-host server's
+  `SYMPHONY_VERIFICATION_PORT`) and `launch_env` (map of string to string, default `{}`: extra
+  variables `qa_launch_app` sets on the app after Symphony's own, `$SYMPHONY_VERIFICATION_PORT`
+  replaced by `dev_server_port`; names MUST match `^[A-Z][A-Z0-9_]*$`, and the variables Symphony
+  sets on the app itself, `PATH`, `HOME` and `DYLD_*` fail validation, naming the key). Values are
+  plain text and MUST NOT be secrets. The built-in `web` kind also takes `browser_mcp` (an MCP server definition, the shape of
   an `agent.mcp.servers` entry) and is off unless `verification.enabled` is true and
   `verification.dev_server.start_cmd` is set. The built-in `android_app` kind also takes `build`
   (shell command the QA agent runs in its own sandbox), `apk_paths` (list of the APKs it writes,
@@ -1421,7 +1428,16 @@ Fields:
   merged over this map key by key, the repository's value winning.
 - `worker_host` (string, optional): an SSH host (`user@host` or `host:port`, the form
   `workers.ssh_hosts` uses) where the `macos_app` playbook's `qa_*` tools run instead of the
-  Symphony host. It does not need to be, and should not be, listed in `workers.ssh_hosts`.
+  Symphony host. It does not need to be, and should not be, listed in `workers.ssh_hosts`. With
+  `dev_server: true` on that playbook, the pass runs `verification.dev_server` there before the
+  agent starts: from its own copy of the PR head in the pass's run directory, `build_cmd` then
+  `start_cmd` as the QA user, unsandboxed, with `SYMPHONY_VERIFICATION_PORT` set to
+  `dev_server_port`, `HOME` a fresh folder and `TMPDIR` in the run directory, in a process group of
+  its own. The QA host polls `health_check_url` until it answers 200 or `health_timeout_ms`
+  passes; a failed build, an exit or a timeout makes the pass `blocked` with reason
+  `qa_dev_server_failed: …` and the log's last 20 lines, component `dev_server`. The QA prompt
+  names its URL. When the pass ends the group gets `stop_signal`, then is killed after
+  `stop_timeout_ms`, before the run directory is removed.
 - `android` (object, optional): host settings for Android QA. `avd` (AVD name, required for
   Android QA), `sdk_root` (string, default `$ANDROID_HOME`, then `$ANDROID_SDK_ROOT`, then
   `~/Library/Android/sdk`), `boot_timeout_ms` (positive integer, default `180000`) and

@@ -213,6 +213,14 @@ set (or, in Development mode, no checkout folder).
   with no state change, new PR head or decision, Symphony starts no more and puts it on a Blocked hold whose
   reason says why; the Inbox lists it with **Unblock…**, and **Restart…** under ⋯. Save runs `symphony check`
   first and writes only the changed lines.
+- **macOS app QA** sets what a `macos_app` QA pass on the QA host (`auto_review.worker_host`) needs and how it
+  runs the project's own server: **QA host tools** is `auto_review.playbooks.macos_app.requires`, the programs
+  the pass looks for when it starts, **Start the project's dev server on the QA host** is `dev_server`
+  (off by default), **Dev server port** is `dev_server_port` (8090), and **App environment** is `launch_env`, a
+  table of variables the app under test gets after Symphony's own, with **Add Variable** and a remove button per
+  row. Values are saved in plain text, so they hold documented QA values only, never a secret. Save runs
+  `symphony check` first, which refuses a name Symphony sets itself, `PATH`, `HOME` or `DYLD_*`, and writes only
+  the changed lines.
 - **Models** sets the provider, model and effort for each kind of run, also in the `symphony.yml` itself.
   The **Scope** picker chooses which `agent` block the rows edit: **All repositories** is the top-level
   `agent` section, and each `repositories[]` key edits that repository's `repositories[<key>].agent`

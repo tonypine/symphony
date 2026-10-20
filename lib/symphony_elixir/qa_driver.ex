@@ -185,6 +185,13 @@ defmodule SymphonyElixir.QaDriver do
   shell and environment the build gets (over SSH on a `worker_host`). `host_check/1` returns the
   ones missing, and the QA pass is `blocked` before the agent starts: the QA host needs
   provisioning (`scripts/qa-vm/provision.sh`), which is not the project's defect.
+
+  Dev server: `start_dev_server/2` runs the project's `verification.dev_server`
+  on the QA host, beside the app (`SymphonyElixir.QaDriver.DevServer`), and the
+  driver stops it when it stops, after the apps and before the run directory
+  goes. Every `qa_launch_app` also gives the app the playbook's `launch_env`
+  after Symphony's own variables (`SymphonyElixir.QaAgent.PlaybookSettings`),
+  and refuses a name Symphony sets itself.
   """
 
   use GenServer
@@ -192,7 +199,8 @@ defmodule SymphonyElixir.QaDriver do
   require Logger
 
   alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, Workspace}
-  alias SymphonyElixir.QaDriver.{Checks, Host, ReleasePair, Remote}
+  alias SymphonyElixir.QaAgent.PlaybookSettings
+  alias SymphonyElixir.QaDriver.{Checks, DevServer, Host, ReleasePair, Remote}
 
   @evidence_dir "qa-evidence"
   @qa_root_env "SYMPHONY_BAR_QA_ROOT"
@@ -414,6 +422,27 @@ defmodule SymphonyElixir.QaDriver do
   @spec host_ports(pid() | nil) :: {:ok, [pos_integer()]} | {:error, String.t()}
   def host_ports(nil), do: {:ok, []}
   def host_ports(driver) when is_pid(driver), do: GenServer.call(driver, :host_ports, 30_000)
+
+  @doc """
+  Starts the project's dev server on the QA host for this pass (see
+  `SymphonyElixir.QaDriver.DevServer`) and returns its URL there. The driver stops it when it
+  stops, before the run directory goes. `{:ok, nil}` without a `worker_host`, or when the QA host
+  was refused, whose tools then say why.
+  """
+  @spec start_dev_server(pid(), DevServer.spec()) :: {:ok, %{url: String.t(), port: pos_integer()} | nil} | DevServer.failure()
+  def start_dev_server(driver, spec) when is_pid(driver) do
+    case GenServer.call(driver, :config) do
+      %{remote?: true, host_dir: dir} = config when is_binary(dir) ->
+        with {:ok, server} <- DevServer.start(config, spec) do
+          GenServer.call(driver, {:dev_server, server})
+          Logger.info("QA dev server started #{config.log_context} worker_host=#{config.worker_host} port=#{server.port} pid=#{server.pid}")
+          {:ok, %{url: server.url, port: server.port}}
+        end
+
+      _local_or_refused ->
+        {:ok, nil}
+    end
+  end
 
   @doc """
   Whether the QA host has every executable the playbook `requires`:
@@ -1788,12 +1817,13 @@ defmodule SymphonyElixir.QaDriver do
       status_menu_poll: Keyword.get(opts, :status_menu_poll, @status_menu_poll),
       release_pair_timeout_ms: Keyword.get(opts, :release_pair_timeout_ms, @default_release_pair_timeout_ms),
       relaunch_poll_ms: Keyword.get(opts, :relaunch_poll_ms, @relaunch_poll_ms),
-      feed_poll: Keyword.get(opts, :feed_poll, @feed_poll)
+      feed_poll: Keyword.get(opts, :feed_poll, @feed_poll),
+      launch_env: PlaybookSettings.launch_env(playbook)
     }
 
     state = %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil, stub: nil}
     state = Map.merge(state, %{wide_pass: nil, launched_app?: false, host_ports: pick_host_ports(), tunnel: nil, tunnel_error: nil, checkouts: []})
-    state = Map.merge(state, %{pair: nil, pair_launches: %{}, feed: nil})
+    state = Map.merge(state, %{pair: nil, pair_launches: %{}, feed: nil, dev_server: nil})
     state = Map.put(state, :host_check, check_tools(state.config))
     {:ok, open_tunnel(state, @tunnel_attempts)}
   end
@@ -1931,6 +1961,7 @@ defmodule SymphonyElixir.QaDriver do
 
   def handle_call(:stand_in_choices, _from, state), do: {:reply, %{host_ports: state.host_ports, checkouts: state.checkouts}, state}
   def handle_call({:checkout, path}, _from, state), do: {:reply, :ok, %{state | checkouts: [path | state.checkouts]}}
+  def handle_call({:dev_server, server}, _from, state), do: {:reply, :ok, %{state | dev_server: server}}
 
   def handle_call({:launch, executable, info}, _from, state) do
     running = Enum.count(state.apps, fn {_pid, app} -> app.exit_status == nil end)
@@ -2017,6 +2048,7 @@ defmodule SymphonyElixir.QaDriver do
   @impl true
   def terminate(_reason, state) do
     for {pid, %{exit_status: nil}} <- state.apps, do: state.config.host.kill.(pid)
+    stop_dev_server(state)
     stop_feed(state)
     if state.pair_launches != %{}, do: stop_strays(state.config)
     if state.stub, do: OpenRouter.Stub.stop(state.stub.pid)
@@ -2026,10 +2058,20 @@ defmodule SymphonyElixir.QaDriver do
     :ok
   end
 
+  # After the apps, which talk to it, and before the run directory goes.
+  defp stop_dev_server(%{dev_server: nil}), do: :ok
+
+  defp stop_dev_server(%{dev_server: server, config: config}) do
+    outcome = DevServer.stop(config, server)
+    Logger.info("QA dev server stopped #{config.log_context} worker_host=#{config.worker_host} port=#{server.port} pid=#{server.pid} outcome=#{inspect(outcome)}")
+  end
+
   defp launch(executable, info, state) do
     with {:ok, state} <- ensure_stub(state),
+         {:ok, playbook_env} <- playbook_env(state.config),
          {stub_url, forwards} = stub_route(state.config, state.stub.port),
-         launch_opts = [cd: state.config.qa_root, env: launch_env(state.config, stub_url, app_env(info)), args: info.args, reverse_forwards: forwards],
+         env = launch_env(state.config, stub_url, app_env(info), playbook_env),
+         launch_opts = [cd: state.config.qa_root, env: env, args: info.args, reverse_forwards: forwards],
          {:ok, port, pid} <- state.config.host.launch.(executable, launch_opts) do
       Logger.info("QA driver launched app pid=#{pid} executable=#{executable} openrouter_stub=#{stub_url}")
       app = Map.merge(info, %{port: port, output: "", exit_status: nil, window: nil})
@@ -2169,13 +2211,24 @@ defmodule SymphonyElixir.QaDriver do
     {OpenRouter.Stub.url(remote_port), [{"127.0.0.1:#{remote_port}", "127.0.0.1:#{port}"}]}
   end
 
-  # The QA host has its own login environment; only the QA root, the stub's URL
-  # and the launch's own variables (the API fixtures' copy, the stand-ins) cross over.
-  defp launch_env(%{remote?: true, qa_root: qa_root}, stub_url, app_env),
-    do: [{@qa_root_env, qa_root}, {OpenRouter.qa_url_env(), stub_url} | app_env]
+  # The QA host has its own login environment; only the QA root, the stub's URL,
+  # the launch's own variables (the API fixtures' copy, the stand-ins) and then the
+  # playbook's `launch_env` cross over.
+  defp launch_env(%{remote?: true, qa_root: qa_root}, stub_url, app_env, playbook_env),
+    do: [{@qa_root_env, qa_root}, {OpenRouter.qa_url_env(), stub_url} | app_env] ++ playbook_env
 
-  defp launch_env(config, stub_url, app_env),
-    do: AgentEnv.build_with(Map.new([{@qa_root_env, config.qa_root}, {OpenRouter.qa_url_env(), stub_url} | app_env]))
+  defp launch_env(config, stub_url, app_env, playbook_env),
+    do: AgentEnv.build_with(Map.new(playbook_env ++ [{@qa_root_env, config.qa_root}, {OpenRouter.qa_url_env(), stub_url} | app_env]))
+
+  # The config check refuses these names already; a driver started without it refuses them too.
+  defp playbook_env(%{launch_env: {:ok, env}}), do: {:ok, env}
+
+  defp playbook_env(%{launch_env: {:error, name}}) do
+    tool_error(
+      "qa_launch_env_refused",
+      "The playbook's launch_env sets #{name}, which Symphony or the system sets on the app itself, so no app was launched. #{Checks.blocked_hint()}"
+    )
+  end
 
   defp app_env(%{api_fixtures: nil, stand_ins: stand_ins}), do: stand_ins
   defp app_env(%{api_fixtures: dir, stand_ins: stand_ins}), do: [{@api_fixtures_env, dir} | stand_ins]
