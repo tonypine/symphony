@@ -560,6 +560,7 @@ Allowed repo-local front matter keys:
 - `hooks`
 - `prompts`
 - `push_check`
+- `proof_check`
 - `verification`
 - `validation`
 - `auto_review`, with only its `playbooks` key
@@ -574,7 +575,7 @@ error that directs the operator to move operator-owned configuration to `symphon
 
 Unless explicitly called out as repo-local, fields in this section live in `symphony.yml` and become
 part of the merged runtime config. Repo-local front matter contributes `hooks`, `push_check`,
-`verification`, `auto_review.playbooks` and `human_actions.enabled` values to the runtime settings for that repo. Nested
+`proof_check`, `verification`, `auto_review.playbooks` and `human_actions.enabled` values to the runtime settings for that repo. Nested
 repo-local maps are merged over the operator config so repos can override only their dev-server
 command while inheriting process-wide verification defaults such as port allocation, or only one
 playbook's settings while inheriting the operator's other playbooks.
@@ -1029,6 +1030,15 @@ Behavior:
   16 KiB) whose first line is the pushed commit's SHA followed by `pass`. A `fail` result for that
   commit is refused with the recorded failure lines; a missing result, a result for another commit
   or an unreadable file is refused with the command to run.
+
+#### 5.4.8b `proof_check` (string, repo-local)
+
+The GitHub check run or workflow name that proves the repository's automated tests ran (Symphony's
+own repository: `make-all`). It is a property of the repository, so a ticket never repeats it.
+
+- Default: `null`. A repository without it has no named-test proofs: every step of its
+  walkthroughs is a QA step (Section 5.4.17, **Walkthrough proofs**).
+- A blank value fails configuration validation. `symphony.yml` MUST NOT accept the key.
 
 #### 5.4.8 `agent` (object)
 
@@ -1485,6 +1495,19 @@ when that is unset (`repositories[].manual_review`). Its `escalate` rules (and a
 
 The QA agent:
 
+- **Walkthrough proofs.** The person writing a ticket describes the user's flow in plain steps and
+  names no test and no check. The implementer, who writes the tests, ends each step a test of its PR
+  covers with `Proved by: <test>` through `linear_record_walkthrough_proofs`, naming only tests in
+  the PR and never a check. The repository names the check that runs them (`proof_check`, Section
+  5.4.8b). A step ending in `Proved by: <test>` is proved by that test, run by the `proof_check`; the
+  older `Proved by: <check> › <test>` MUST still be read, naming the check itself; `Proved by: QA`, or
+  no line, is a QA step. A `Proved by:` inside inline code is a quotation in the step's prose, not its
+  proof, and MUST NOT be read as one. Without a `proof_check`, every step is a QA step. Before a QA
+  agent starts, Symphony MUST confirm each named-test step on the PR head: the test is in the
+  checkout and its check passed (pass), is still running (pending, waited for boundedly) or failed,
+  did not run or the test is missing (fail to `Rework` with no agent run). A step naming a check that
+  is neither the `proof_check` nor a check on the head MUST fail with a message naming the
+  repository's `proof_check`. QA links a confirmed step's result instead of walking it.
 - QA selection is deterministic and runs before any agent: a `qa:skip` label skips; a
   `qa:<kind>` label selects that playbook; a diff that only touches docs, tests or `skip_globs`
   skips; otherwise playbooks are selected by their trigger paths, and the `cli` playbook also by a
@@ -3820,7 +3843,8 @@ Scoped Linear tool extension contract:
   `linear_attach_url`, `linear_attach_file`, `linear_create_subissue`, `linear_update_subissue`,
   `linear_add_blocked_by`, `linear_create_project_update`, `linear_create_document`,
   `linear_update_document`, `linear_get_document`, `linear_update_issue_summary`,
-  `linear_request_human_action`, and `linear_withdraw_human_action`.
+  `linear_record_walkthrough_proofs`, `linear_request_human_action`, and
+  `linear_withdraw_human_action`.
 - `linear_add_comment` MAY take a `parent_id` naming a comment on the current issue; the comment is
   then posted as a reply under it. `linear_get_comments` SHOULD return each reply's parent id.
 - `linear_get_related_issues` MAY read beyond the current issue, but only inside its family: the
@@ -3901,9 +3925,16 @@ Scoped Linear tool extension contract:
   In the QA scope alone (a QA pass and an epic review), `linear_get_document` MUST also list and
   read the documents the parent issue's runs created (marked by the parent's attachments, listed
   apart from the issue's own); `linear_update_document` still MUST refuse them.
-- `linear_update_issue_summary` is the only tool that writes the current issue's description (the
-  Decisions section is Symphony's own write, outside any tool), and
-  it MUST only write the Symphony summary block between `<!-- symphony:summary:start -->` and
+- `linear_update_issue_summary` and `linear_record_walkthrough_proofs` are the only tools that write
+  the current issue's description (the Decisions section is Symphony's own write, outside any tool).
+  `linear_record_walkthrough_proofs` accepts only `proofs`, a list of a step number and a test; it
+  MUST read the description right before writing and change only the `Proved by:` line of each named
+  step of its `## User walkthrough` (replacing a test proof, or appending one), leaving every other
+  byte unchanged. It MUST refuse, with nothing written, a test holding a ` › ` or ` > ` separator (a
+  check name), `QA`, a step the walkthrough lacks, a step its author ended with `Proved by: QA`, and a
+  test that fails the comments' secret scan; the read-only reviewer and QA scopes MUST NOT advertise
+  or execute it. `linear_update_issue_summary`
+  MUST only write the Symphony summary block between `<!-- symphony:summary:start -->` and
   `<!-- symphony:summary:end -->`. It accepts only a one-line `status`, an optional `links` object
   (`review_brief`, the URL of the review brief comment, and `artifacts`, a list of `label` and
   `url`; URLs MUST be http(s)) and a one-line `changelog_entry`; every field MUST pass the same

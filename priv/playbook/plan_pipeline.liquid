@@ -78,13 +78,12 @@ second document for a stage.
    feature it builds, the journey and the screens it serves and the feature's
    Kano class (feature → journey → screen → ticket), and carries a
    `## User walkthrough`: numbered steps a user takes, each with the result they
-   should see and the one place that proves it, `Proved by: <check> › <test>` or
-   `Proved by: QA`, routed as `Splitting work and out-of-scope improvements` says
-   (a check only the operator can make once the change is live goes under
-   `## After release`, which QA skips and which never blocks the ticket). Never
-   put one journey both in a sub-ticket's walkthrough and in an end-to-end
-   ticket: the end-to-end ticket owns it, and the sub-ticket's step names that
-   test. File
+   should see, in plain words and naming no test and no check, as `Splitting work
+   and out-of-scope improvements` says (a check only the operator can make once
+   the change is live goes under `## After release`, which QA skips and which
+   never blocks the ticket). Never put one journey both in a sub-ticket's
+   walkthrough and in an end-to-end ticket: the end-to-end ticket owns it, and the
+   sub-ticket leaves it out. File
    the Must-be tickets first, then Performance, then
    Attractive; Indifferent features get no ticket unless the description asks
    for them. With no Kano map, name the part of the description each sub-ticket
@@ -125,7 +124,7 @@ what fails, and record the check in the workpad `Notes`, one line per rubric.
 - **Implementation plan:** every sub-ticket traces to a feature, a journey and a
   Kano class; every Must-be feature is covered by a sub-ticket; Must-be tickets
   come first; every sub-ticket has acceptance criteria and a
-  `## User walkthrough` whose every step names its proof; no journey sits both in
+  `## User walkthrough` of plain steps that name no test and no check; no journey sits both in
   a sub-ticket's walkthrough and in an end-to-end ticket; no step that needs an
   environment QA lacks is `Proved by: QA`; no sub-ticket is a verification ticket, and the parent's
   own description still states the requirements the epic review will resolve.

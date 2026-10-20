@@ -563,17 +563,30 @@ defmodule SymphonyElixir.QaAgent do
     """
   end
 
+  # A walkthrough with no named-test step is QA's to walk whole: in a repo without a proof check
+  # its `Proved by:` lines name nothing a check of the repo runs (`SymphonyElixir.Walkthrough`).
   defp proof_routing(job, journey) do
-    """
-    Each walkthrough step names the one place that proves it. A step ending in
-    `Proved by: <check> › <test>` is proved by that named automated test: do not walk it. Report it
-    as its own step, named after the walkthrough step, with that check's result on `#{job.sha}` and
-    the check run's URL in `details` and `evidence`. #{check_runs_hint(job)} The check passed: `pass`.
-    It failed, or never ran on `#{job.sha}`: `fail`, naming the step and the check in `findings`, since
-    the ticket's proof is part of its work. It is still running: poll it for at most 10 minutes, then
-    `blocked` with the reason. Walk every step that says `Proved by: QA` or names no proof.
-    #{routed_steps(Map.get(journey, :steps, []))}\
-    """
+    case Enum.split_with(Map.get(journey, :steps, []), &Walkthrough.named_test?/1) do
+      {[], _qa_steps} ->
+        "No walkthrough step names a test that a check of this repo runs: walk every step, whatever its `Proved by:` line says.\n"
+
+      {test_steps, qa_steps} ->
+        """
+        Each walkthrough step names the one place that proves it. A step ending in
+        `Proved by: <test>` (run by the repo's proof check) or `Proved by: <check> › <test>` is proved
+        by that named automated test, run by the check listed with it below: do not walk it. Report it
+        as its own step, named after the walkthrough step, with that check's result on `#{job.sha}` and
+        the check run's URL in `details` and `evidence`. #{check_runs_hint(job)} The check passed: `pass`.
+        It failed, or never ran on `#{job.sha}`: `fail`, naming the step and the check in `findings`, since
+        the ticket's proof is part of its work. It is still running: poll it for at most 10 minutes, then
+        `blocked` with the reason. Walk every step that says `Proved by: QA` or names no proof.
+
+        Steps a named test proves (link the check run, do not walk them):
+        #{step_lines(test_steps, true)}
+        Steps to walk (`Proved by: QA`, or no proof named):
+        #{step_lines(qa_steps, false)}\
+        """
+    end
   end
 
   defp check_runs_hint(%{epic_review: true}), do: "Read the check the way the CI rule above reads CI's runs."
@@ -583,22 +596,6 @@ defmodule SymphonyElixir.QaAgent do
       "and its check runs with `gh api repos/<owner>/<repo>/commits/#{job.sha}/check-runs` where `gh` is allowed, " <>
       "else `curl -fsS \"https://api.github.com/repos/<owner>/<repo>/commits/#{job.sha}/check-runs\"`, " <>
       "with `<owner>/<repo>` from `git remote get-url origin`."
-  end
-
-  defp routed_steps(steps) do
-    case Enum.split_with(steps, &Walkthrough.named_test?/1) do
-      {[], _qa_steps} ->
-        ""
-
-      {test_steps, qa_steps} ->
-        """
-
-        Steps a named test proves (link the check run, do not walk them):
-        #{step_lines(test_steps, true)}
-        Steps to walk (`Proved by: QA`, or no proof named):
-        #{step_lines(qa_steps, false)}
-        """
-    end
   end
 
   defp confirmed_line(%{step: step} = proof) do

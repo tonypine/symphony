@@ -1383,6 +1383,66 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
   end
 
+  describe "linear_record_walkthrough_proofs" do
+    @walkthrough "## Goal\n\nShip it.\n\n## User walkthrough\n\n1. Write a ticket. Expected: saved.\n2. Look at it. Expected: it looks right.\n"
+
+    test "is advertised to both runners with its one field, and not to the read-only or QA scopes" do
+      specs = Map.new(DynamicTool.tool_specs(), &{&1["name"], &1["inputSchema"]})
+
+      assert %{"required" => ["proofs"], "properties" => %{"proofs" => %{"items" => %{"required" => ["step", "test"]}}}} =
+               specs["linear_record_walkthrough_proofs"]
+
+      assert "linear_record_walkthrough_proofs" in Enum.map(SymphonyElixir.McpServer.tool_specs(), & &1["name"])
+
+      for scope <- [:read_only, :qa] do
+        refute "linear_record_walkthrough_proofs" in Enum.map(DynamicTool.tool_specs(scope), & &1["name"])
+      end
+
+      response =
+        DynamicTool.execute("linear_record_walkthrough_proofs", %{"proofs" => [], "description" => "replace it all"},
+          issue: %Issue{id: "issue-current"},
+          linear_client: fn _query, _variables, _opts -> flunk("a smuggled description must not reach Linear") end
+        )
+
+      assert %{"error" => %{"code" => "unexpected_arguments", "arguments" => ["description"]}} = Jason.decode!(response["output"])
+    end
+
+    test "writes the steps' proofs into the walkthrough through AgentTools.Linear" do
+      client = fn query, variables, _opts ->
+        if query =~ "SymphonyAgentIssueDescription" do
+          {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "description" => @walkthrough}}}}
+        else
+          send(self(), {:description, variables.description})
+          {:ok, %{"data" => %{"issueUpdate" => %{"success" => true, "issue" => %{"id" => "issue-current", "url" => "https://linear.app/acme/issue/TP-7"}}}}}
+        end
+      end
+
+      args = %{"proofs" => [%{"step" => 1, "test" => "test/symphony_elixir/walkthrough_test.exs"}]}
+      response = DynamicTool.execute("linear_record_walkthrough_proofs", args, issue: %Issue{id: "issue-current"}, linear_client: client)
+
+      assert %{"issue" => %{"id" => "issue-current"}, "steps" => [1]} = Jason.decode!(response["output"])
+
+      assert_received {:description, description}
+
+      assert description ==
+               String.replace(@walkthrough, "Expected: saved.", "Expected: saved. Proved by: `test/symphony_elixir/walkthrough_test.exs`")
+    end
+
+    test "refuses a check name before writing, with the reason" do
+      client = fn query, _variables, _opts ->
+        if query =~ "SymphonyAgentIssueDescription",
+          do: {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "description" => @walkthrough}}}},
+          else: flunk("a refused proof must not be written")
+      end
+
+      args = %{"proofs" => [%{"step" => 1, "test" => "ci › test/x_test.exs"}]}
+      response = DynamicTool.execute("linear_record_walkthrough_proofs", args, issue: %Issue{id: "issue-current"}, linear_client: client)
+
+      assert %{"error" => %{"code" => "invalid_walkthrough_proof", "message" => "linear_record_walkthrough_proofs: step 1: name the test only, never a check" <> _rest}} =
+               Jason.decode!(response["output"])
+    end
+  end
+
   describe "linear document tools" do
     @document_scope %{"id" => "issue-current", "identifier" => "TP-7", "project" => %{"id" => "project-1"}, "attachments" => %{"nodes" => []}}
 
