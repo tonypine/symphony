@@ -86,14 +86,8 @@ extension SymphonyWindowModel {
         }
     }
 
-    /// The config sheet with the exact edit of the file as it is now, or why the edit can't be made.
     private func configSheet(_ problem: SetupPayload.Problem, path: String, action: SetupPayload.ConfigAction, value: SetupValue) -> SetupFixSheet? {
-        let file = SymphonyConfigFile(settingsPath: configPath())
-        let text = file?.text()
-        let edited: Result<String, Error>? = text.map { text in
-            Result { try SetupConfigEdit.apply(path: path, action: action, value: value, to: text) }
-        }
-        return SetupFixSheet(problem: problem, text: text, edited: edited, fileName: file?.fileName ?? "symphony.yml")
+        SetupFixRunner.configSheet(problem, path: path, action: action, value: value, configPath: configPath())
     }
 
     func open(_ destination: SetupDestination) {
@@ -131,47 +125,22 @@ extension SymphonyWindowModel {
         working.start()
         setupSheet = working
         Task {
-            if case let .configEdit(path, action, value) = sheet.fix {
-                await applyConfigFix(working, path: path, action: action, value: value)
-            } else if let descriptor = sheet.fix.descriptor(tickets: sheet.tickets.isEmpty ? nil : sheet.tickets) {
-                switch await onSetupRequest(descriptor) {
-                case let .checked(payload):
-                    setupSheet = nil
-                    accept(payload)
-                    showSetupBanner(.fixed(working))
-                case let .failed(message):
-                    fail(working, message)
-                }
-            }
-            client.refresh()
-        }
-    }
-
-    /// SU7: the copy to `.bak` first, then the edit through the settings writer once `symphony check` passes, then
-    /// Check Again.
-    private func applyConfigFix(_ sheet: SetupFixSheet, path: String, action: SetupPayload.ConfigAction, value: SetupValue) async {
-        guard let file = SymphonyConfigFile(settingsPath: configPath()) else {
-            fail(sheet, "Settings names no symphony.yml, so nothing was saved.")
-            return
-        }
-        let check = onCheckConfig
-        do {
-            let result = try await file.applySetupFix({ try SetupConfigEdit.apply(path: path, action: action, value: value, to: $0) }, at: Date()) { copy in
-                await check(copy)
-            }
-            switch result {
-            case let .applied(backup):
+            switch await SetupFixRunner.run(working, configPath: configPath(), checkConfig: onCheckConfig, request: { await self.onSetupRequest($0) }) {
+            case let .fixed(payload?, backup):
                 setupSheet = nil
-                showSetupBanner(.fixed(sheet, backup: backup))
+                accept(payload)
+                showSetupBanner(.fixed(working, backup: backup))
+            case let .fixed(nil, backup):
+                setupSheet = nil
+                showSetupBanner(.fixed(working, backup: backup))
                 checkSetupAgain()
             case .unchanged:
                 setupSheet = nil
                 checkSetupAgain()
-            case let .rejected(message):
-                fail(sheet, "symphony check refused the change, so nothing was saved: \(ConfigCheck.reasonFirst(message))")
+            case let .failed(message):
+                fail(working, message)
             }
-        } catch {
-            fail(sheet, "Couldn't change symphony.yml, so nothing was saved: \(error.localizedDescription)")
+            client.refresh()
         }
     }
 
@@ -216,6 +185,89 @@ extension SymphonyWindowModel {
     }
 }
 
+// MARK: - Making a fix
+
+/// What a confirmed fix did, for the Setup page and Add Repo's Check setup step alike.
+enum SetupFixOutcome {
+    /// The fix was made. `payload` is Symphony's check after a Linear fix, nil after a settings fix, which needs Check
+    /// Again; `backup` is the settings fix's copy, for Undo.
+    case fixed(SetupPayload?, backup: SetupBackup?)
+    /// The settings fix found nothing to change.
+    case unchanged
+    /// Nothing was changed, and why.
+    case failed(String)
+}
+
+/// Makes a fix the operator confirmed in its sheet (SU7–SU9): a settings fix through the settings writer, a Linear fix
+/// through Symphony.
+@MainActor
+enum SetupFixRunner {
+    /// The config sheet with the exact edit of the file as it is now, or why the edit can't be made.
+    static func configSheet(
+        _ problem: SetupPayload.Problem,
+        path: String,
+        action: SetupPayload.ConfigAction,
+        value: SetupValue,
+        configPath: String
+    ) -> SetupFixSheet? {
+        let file = SymphonyConfigFile(settingsPath: configPath)
+        let text = file?.text()
+        let edited: Result<String, Error>? = text.map { text in
+            Result { try SetupConfigEdit.apply(path: path, action: action, value: value, to: text) }
+        }
+        return SetupFixSheet(problem: problem, text: text, edited: edited, fileName: file?.fileName ?? "symphony.yml")
+    }
+
+    /// Makes `sheet`'s fix: `request` sends a Linear fix to Symphony; a settings fix copies the file to its `.bak`, then
+    /// writes the edit once `checkConfig` (`symphony check`) passes on it.
+    static func run(
+        _ sheet: SetupFixSheet,
+        configPath: String,
+        checkConfig: @escaping (String) async -> ConfigCheckResult,
+        request: ([String: Any]) async -> SetupAPI.Result
+    ) async -> SetupFixOutcome {
+        if case let .configEdit(path, action, value) = sheet.fix {
+            return await applyConfigFix(path: path, action: action, value: value, configPath: configPath, checkConfig: checkConfig)
+        }
+        guard let descriptor = sheet.fix.descriptor(tickets: sheet.tickets.isEmpty ? nil : sheet.tickets) else {
+            return .failed("This app can't make this fix.")
+        }
+        switch await request(descriptor) {
+        case let .checked(payload):
+            return .fixed(payload, backup: nil)
+        case let .failed(message):
+            return .failed(message)
+        }
+    }
+
+    private static func applyConfigFix(
+        path: String,
+        action: SetupPayload.ConfigAction,
+        value: SetupValue,
+        configPath: String,
+        checkConfig: @escaping (String) async -> ConfigCheckResult
+    ) async -> SetupFixOutcome {
+        guard let file = SymphonyConfigFile(settingsPath: configPath) else {
+            return .failed("Settings names no symphony.yml, so nothing was saved.")
+        }
+        do {
+            let result = try await file.applySetupFix({ try SetupConfigEdit.apply(path: path, action: action, value: value, to: $0) }, at: Date()) { copy in
+                await checkConfig(copy)
+            }
+            switch result {
+            case let .applied(backup):
+                return .fixed(nil, backup: backup)
+            case .unchanged:
+                return .unchanged
+            case let .rejected(message):
+                return .failed("symphony check refused the change, so nothing was saved: \(ConfigCheck.reasonFirst(message))")
+            }
+        } catch {
+            return .failed("Couldn't change symphony.yml, so nothing was saved: \(error.localizedDescription)")
+        }
+    }
+}
+
 // MARK: - The page
 
 /// SU3–SU6: the Setup page, from `/api/v1/state`'s `setup` and the answers of its fixes.
@@ -238,7 +290,7 @@ struct SetupContent: View {
                 EmptyState(title: page.sentence, symbol: SymphonyView.setup.symbol, showsSpinner: true)
             case .healthy, .problems:
                 ScrollView {
-                    SetupPageBody(page: page, actions: actions)
+                    SetupPageBody(page: page, actions: actions, welcome: model.setupWelcome)
                 }
                 .overlay(alignment: .bottom) {
                     if let banner = model.setupBanner {
@@ -278,9 +330,22 @@ struct SetupPageBody: View {
     var actions = SetupPageActions()
     /// Rows whose Details start open (SU4's snapshot).
     var expanded: Set<String> = []
+    /// SU12: the first launch's welcome line, above the sentence.
+    var welcome: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
+            if let welcome {
+                Label {
+                    Text(welcome).font(DesignTokens.TypeStyle.body.font).fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "hand.wave").foregroundStyle(Color.accentColor)
+                }
+                .padding(DesignTokens.Space.s3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(DesignTokens.Surface.raised.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous))
+                .accessibilityElement(children: .combine)
+            }
             SetupSentence(page: page)
             if let stale = page.staleBanner {
                 Label {

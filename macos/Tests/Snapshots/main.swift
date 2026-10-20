@@ -223,6 +223,44 @@ func setupLabelSheet(failed: Bool = false) -> some View {
     return setupSheet(sheet)
 }
 
+// Add Repo's Check setup step (TP-911, SU11) from its QA fixtures, and the first launch's Setup page (SU12).
+func addRepoAnswer(_ fixture: String, _ file: String) -> SetupPayload {
+    let url = here.appendingPathComponent("../Fixtures/director-app/\(fixture)/api/v1/setup/\(file)").standardizedFileURL
+    guard let payload = SetupPayload.decode(try! Data(contentsOf: url)) else { fatalError("\(url.path) isn't a setup payload") }
+    return payload.forRepo("widgets")
+}
+
+/// The Add Repo sheet on its last step: its title, the steps, the page and the footer, at the sheet's size.
+@MainActor
+func addRepoCheck(_ phase: AddRepoSetupCheck.Phase, fixMessage: String? = nil) -> some View {
+    let check = AddRepoSetupCheck(
+        key: "widgets", route: RepositoryRoute(team: "QA", projects: ["8e6f0c39-6a8b-4c1e-9d0e-1f2a3b4c5d6e"]), phase: phase
+    )
+    return VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(AddRepo.sheetTitle).font(.headline)
+            AddRepoStepIndicator(steps: [.source, .linear, .review, .check], current: .check)
+        }
+        .padding([.top, .horizontal], 16)
+        .padding(.bottom, 8)
+        Divider()
+        AddRepoCheckPage(check: check, fixMessage: fixMessage, now: setupNow)
+            .frame(maxHeight: .infinity, alignment: .top)
+        Divider()
+        AddRepoCheckFooter(check: check, canStart: true)
+    }
+    .frame(width: AddRepoView.size.width, height: AddRepoView.size.height)
+    .background(DesignTokens.Surface.window.color)
+}
+
+@MainActor
+func firstLaunchSetup() -> some View {
+    let width = DesignTokens.Layout.windowWidth - DesignTokens.Layout.sidebarWidth
+    return SetupPageBody(page: SetupPage(payload: setupState, now: setupNow, timeZone: TimeZone(identifier: "UTC")!), welcome: SetupOnStart.welcome)
+        .frame(width: width)
+        .background(DesignTokens.Surface.window.color)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -276,5 +314,13 @@ MainActor.assumeIsolated {
         render(setupConfigSheet(), scheme, to: "setup-config-sheet-\(suffix).png")
         render(setupLabelSheet(), scheme, to: "setup-label-sheet-\(suffix).png")
         render(setupLabelSheet(failed: true), scheme, to: "setup-fix-failed-\(suffix).png")
+        // Add Repo's Check setup (TP-911): an error with its fix, the fix made, a warning only, Symphony stopped; and
+        // the first launch's Setup page.
+        render(addRepoCheck(.checked(addRepoAnswer("add-repo-setup", "refresh.1.json"))), scheme, to: "add-repo-check-error-\(suffix).png")
+        render(addRepoCheck(.checked(addRepoAnswer("add-repo-setup", "fixes.json")), fixMessage: "Created the label “Blocked” in team QA."),
+               scheme, to: "add-repo-check-fixed-\(suffix).png")
+        render(addRepoCheck(.checked(addRepoAnswer("add-repo-setup-warning", "refresh.1.json"))), scheme, to: "add-repo-check-warning-\(suffix).png")
+        render(addRepoCheck(.onNextStart), scheme, to: "add-repo-check-stopped-\(suffix).png")
+        render(firstLaunchSetup(), scheme, to: "setup-first-launch-\(suffix).png")
     }
 }

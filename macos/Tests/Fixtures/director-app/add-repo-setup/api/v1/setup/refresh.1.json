@@ -1,0 +1,63 @@
+{
+  "checked_at": "2026-10-19T12:01:00Z",
+  "linear_checked_at": "2026-10-19T12:01:00Z",
+  "not_checked": [],
+  "problems": [
+    {
+      "category": "labels",
+      "consequence": "Tickets Symphony can't go on with can't be marked Blocked, so they look like they are moving.",
+      "details": [
+        {
+          "label": "Team",
+          "value": "QA"
+        },
+        {
+          "label": "Label",
+          "value": "Blocked"
+        }
+      ],
+      "fix": {
+        "action": "create_label",
+        "kind": "linear",
+        "name": "Blocked",
+        "team": "QA",
+        "type": null
+      },
+      "id": "labels:missing:QA:Blocked",
+      "repos": [
+        "widgets"
+      ],
+      "severity": "error",
+      "tickets": [],
+      "title": "Team QA has no \"Blocked\" label"
+    },
+    {
+      "category": "labels",
+      "consequence": "Decisions you are asked for can't be marked on the ticket.",
+      "details": [
+        {
+          "label": "Team",
+          "value": "TP"
+        },
+        {
+          "label": "Label",
+          "value": "Needs Decision"
+        }
+      ],
+      "fix": {
+        "action": "create_label",
+        "kind": "linear",
+        "name": "Needs Decision",
+        "team": "TP",
+        "type": null
+      },
+      "id": "labels:missing:TP:Needs Decision",
+      "repos": [
+        "web-shop"
+      ],
+      "severity": "error",
+      "tickets": [],
+      "title": "Team TP has no \"Needs Decision\" label"
+    }
+  ]
+}

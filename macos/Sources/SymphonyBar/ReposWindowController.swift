@@ -84,6 +84,12 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     var restartMachine: () -> RestartMachine = { RestartMachine() }
     var restartNow: () -> Void = {}
     var cancelRestart: () -> Void = {}
+    /// Records a repo Add Repo saved while Symphony was stopped: Setup opens at its start if the repo has an error.
+    var checkAtStart: (_ key: String) -> Void = { _ in }
+    /// The app's Check for Updates…, an `open` fix's destination.
+    var checkForUpdates: () -> Void = {}
+    /// Opens the Symphony window on the Setup page.
+    var openSetup: () -> Void = {}
 
     private let secrets: SecretsReader
     /// The `WORKFLOW.md` files Add Repo added that Symphony can't read yet.
@@ -255,19 +261,57 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         sheet.onSaveError = { [weak self] message in self?.show(ReposChange.failed(key: key, message: message).banner) }
         sheet.openSettings = { [weak self] in self?.openSettings() }
         sheet.apply = { [weak self] in self.map { AddRepo.apply(status: $0.status) } ?? .onNextStart }
+        // SU11: the Check setup step asks Symphony, once it has read the repo saved.
+        sheet.checkRepo = { [weak self] key in
+            await SetupAPI.checkRepo(key) { repo in await self?.setupRequest(repo: repo) ?? .failed("") }
+        }
+        sheet.setupRequest = { [weak self] fix in await self?.setupRequest(fix: fix) ?? .failed("") }
+        sheet.startSymphony = { [weak self] in self?.start() }
+        sheet.canStartSymphony = { [weak self] in self?.canStart() ?? false }
+        sheet.openDestination = { [weak self] destination in self?.open(destination) }
+        sheet.close = { [weak model] in model?.addRepo = nil }
         model.addRepo = sheet
     }
 
-    /// Closes the sheet, shows the repo from the file, and gets Symphony to use it: Symphony reads routes while it
-    /// runs, but makes a repo's workflow store and its own clone only when it starts.
+    /// Check Again for `repo`, or `fix`, sent to the Symphony running now.
+    private func setupRequest(fix: [String: Any]? = nil, repo: String? = nil) async -> SetupAPI.Result {
+        await SetupAPI.send(
+            fix: fix, repo: repo, stateRoot: stateRoot(), fallback: AppStores.current.apiFallback, transport: AppStores.current.apiTransport
+        )
+    }
+
+    /// Where an `open` fix in the Check setup step goes.
+    private func open(_ destination: SetupDestination) {
+        switch destination {
+        case .settings:
+            openSettings()
+        case .symphonyYML:
+            NSWorkspace.shared.open(URL(fileURLWithPath: configPath))
+        case let .linear(url):
+            URLOpener.open(url ?? URL(string: "https://linear.app")!)
+        case let .drainReport(url):
+            if let url { URLOpener.open(url) } else { openSetup() }
+        case .repos:
+            // The repo is saved: the sheet closes on it.
+            model?.addRepo?.finish()
+        case .update:
+            checkForUpdates()
+        }
+    }
+
+    /// Shows the repo from the file and gets Symphony to use it: Symphony reads routes while it runs, but makes a repo's
+    /// workflow store and its own clone only when it starts. An Edit sheet closes; Add Repo's goes on to Check setup.
     private func saved(_ saved: AddRepoViewModel.Saved) {
         switch saved {
         case let .added(key, madeDefault, workflow):
             if let workflow { pendingWorkflows.record(workflow, for: key) }
             let apply = AddRepo.apply(status: status)
+            if apply == .onNextStart { checkAtStart(key) }
+            // The sheet stays open on its Check setup step.
             finish(
                 .added(key: key, apply: apply, madeDefault: madeDefault, workflow: workflow),
                 apply: apply,
+                closesSheet: false,
                 question: { AddRepo.restartQuestion(key: key, runs: $0) }
             )
         case let .edited(original, entry, previousDefault):
@@ -462,9 +506,10 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     private func finish(
         _ change: ReposChange,
         apply: AddRepoApply?,
+        closesSheet: Bool = true,
         question: @escaping (_ runs: Int) -> (title: String, message: String)
     ) {
-        model?.addRepo = nil
+        if closesSheet { model?.addRepo = nil }
         update(status: status)
         show(change.banner)
         switch apply {

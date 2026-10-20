@@ -23,13 +23,13 @@ final class AddRepoFlowTests: XCTestCase {
 
     func testTheWorkflowStepShowsOnlyForARepoWithoutOne() {
         var flow = ready
-        XCTAssertEqual(flow.steps, [.source, .linear, .review])
+        XCTAssertEqual(flow.steps, [.source, .linear, .review, .check])
         XCTAssertEqual(flow.step(after: .source), .linear)
         XCTAssertEqual(flow.step(after: .linear), .review)
         XCTAssertEqual(flow.step(before: .review), .linear)
 
         flow.workflowCheck = .missing(WorkflowStack(), branch: "main")
-        XCTAssertEqual(flow.steps, [.source, .linear, .workflow, .review])
+        XCTAssertEqual(flow.steps, [.source, .linear, .workflow, .review, .check])
         XCTAssertEqual(flow.step(after: .linear), .workflow)
         XCTAssertEqual(flow.step(after: .workflow), .review)
         XCTAssertEqual(flow.step(before: .review), .workflow)
@@ -39,11 +39,21 @@ final class AddRepoFlowTests: XCTestCase {
 
         for check in [WorkflowCheck.idle, .checking, .failed("gh is missing")] {
             flow.workflowCheck = check
-            XCTAssertEqual(flow.steps, [.source, .linear, .review], "\(check)")
+            XCTAssertEqual(flow.steps, [.source, .linear, .review, .check], "\(check)")
         }
         // A step that is gone still leads on, as when the base branch changes on Review.
         XCTAssertEqual(flow.step(after: .workflow), .review)
         XCTAssertEqual(flow.step(before: .workflow), .linear)
+    }
+
+    /// SU11: Connect saves on Review and goes on to Check setup, which has no way back or on, and nothing to stop.
+    func testCheckSetupComesAfterConnectWithNoWayBack() {
+        let flow = ready
+        XCTAssertNil(flow.step(after: .review))
+        XCTAssertNil(flow.step(after: .check))
+        XCTAssertNil(flow.step(before: .check))
+        XCTAssertNil(flow.problem(at: .check))
+        XCTAssertEqual(AddRepoStep.check.rawValue, "Check setup")
     }
 
     func testAReadyDraftPassesEveryStep() {
@@ -232,6 +242,21 @@ final class AddRepoFlowTests: XCTestCase {
         XCTAssertEqual(flow.routePreview, "Issues in Web with labels a and b go to this repo.")
         flow.draft.project = nil
         XCTAssertEqual(flow.routePreview, "Pick a project: its issues go to this repo.")
+    }
+
+    /// The preview names the project; the Review's Route line says what Connect writes: the project's ID and its team.
+    func testRouteWrittenNamesTheProjectIDAndTeam() {
+        var flow = ready
+        flow.draft.projectID = "8e6f0c39"
+        flow.draft.team = "TP"
+        XCTAssertEqual(flow.routePreview, "Issues in Web with label frontend go to web.")
+        XCTAssertEqual(flow.routeWritten, "Project ID 8e6f0c39 · team TP")
+        flow.draft.team = nil
+        XCTAssertEqual(flow.routeWritten, "Project ID 8e6f0c39 · no team: the project isn't in exactly one team")
+        flow.draft.projectID = nil
+        XCTAssertEqual(flow.routeWritten, "Project Web, by name: Linear didn't give its ID · no team: the project isn't in exactly one team")
+        flow.draft.project = nil
+        XCTAssertEqual(flow.routeWritten, "")
     }
 
     // MARK: WORKFLOW.md

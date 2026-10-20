@@ -65,6 +65,12 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         model?.show(view)
     }
 
+    /// SU12: opens the window on the Setup page, with the first launch's welcome line when `welcome` is given.
+    func showSetup(welcome: String?) {
+        show(view: .setup)
+        model?.setupWelcome = welcome
+    }
+
     /// Opens the window on the Inbox, with the item of issue id `id` selected when it is listed.
     func showInbox(selecting id: String?) {
         show()

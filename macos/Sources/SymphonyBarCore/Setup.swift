@@ -200,6 +200,14 @@ public struct SetupPayload: Equatable {
         self.linearCheckedAt = linearCheckedAt
     }
 
+    /// The payload with only the problems of the repo `key`: those naming it, and those naming no repo (keys, secrets
+    /// and the rest of the global setup), as `GET /api/v1/setup?repo=` answers.
+    public func forRepo(_ key: String) -> SetupPayload {
+        var payload = self
+        payload.problems = problems.filter { $0.repos.isEmpty || $0.repos.contains(key) }
+        return payload
+    }
+
     public var errors: [Problem] { problems.filter { $0.severity == .error } }
     public var warnings: [Problem] { problems.filter { $0.severity == .warning } }
 

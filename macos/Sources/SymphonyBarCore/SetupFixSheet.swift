@@ -192,6 +192,8 @@ public enum SetupAPI {
     public static let fixesPath = "api/v1/setup/fixes"
     /// A fix runs the checks again after it, which reads Linear.
     public static let timeout: TimeInterval = 60
+    /// What a repo key keeps unescaped in a query: a key holds letters, digits, `.`, `_` and `-`.
+    private static let queryValue = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
 
     public enum Result: Equatable {
         /// The problems after the check or the fix.
@@ -200,9 +202,13 @@ public enum SetupAPI {
         case failed(String)
     }
 
-    /// The request for Check Again, or for `descriptor`'s fix, against Symphony at `base`.
-    public static func request(fix descriptor: [String: Any]? = nil, base: URL) -> URLRequest {
-        let path = descriptor == nil ? refreshPath : fixesPath
+    /// The request for Check Again, or for `descriptor`'s fix, against Symphony at `base`. With `repo`, Check Again
+    /// answers with that repo's problems and the global ones only.
+    public static func request(fix descriptor: [String: Any]? = nil, repo: String? = nil, base: URL) -> URLRequest {
+        var path = descriptor == nil ? refreshPath : fixesPath
+        if descriptor == nil, let repo, let query = repo.addingPercentEncoding(withAllowedCharacters: queryValue) {
+            path += "?repo=" + query
+        }
         var request = URLRequest(url: LiveAPIClient.url(path, base: base) ?? base, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -218,6 +224,7 @@ public enum SetupAPI {
     /// written one).
     public static func send(
         fix descriptor: [String: Any]? = nil,
+        repo: String? = nil,
         stateRoot: URL,
         fallback: URL? = SymphonyState.defaultBaseURL,
         transport: ControlAPI.Transport = { try await URLSession.shared.data(for: $0) }
@@ -226,10 +233,39 @@ public enum SetupAPI {
         guard let base = StateRoot.controlURL(in: stateRoot, fallback: fallback) else {
             return .failed("\(prefix): Symphony hasn't said where it listens.")
         }
-        guard let (data, response) = try? await transport(request(fix: descriptor, base: base)) else {
+        guard let (data, response) = try? await transport(request(fix: descriptor, repo: repo, base: base)) else {
             return .failed("\(prefix): nothing answered at \(base.absoluteString).")
         }
         return result(prefix: prefix, statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0, data: data)
+    }
+
+    /// How long Add Repo's check waits for Symphony to read the repo it saved: through a reload, or a restart that sets
+    /// the repo up.
+    public static let repoCheckWait: TimeInterval = 120
+    /// How long it waits between two tries.
+    public static let repoCheckInterval: TimeInterval = 2
+
+    /// Add Repo's check of the repo `key` it saved: Check Again for that repo, asked again while Symphony hasn't read the
+    /// repo yet or doesn't answer (it reloads `symphony.yml`, or restarts), until it answers or `wait` runs out. Its
+    /// answer keeps only the repo's problems and the global ones, whatever Symphony sent.
+    public static func checkRepo(
+        _ key: String,
+        wait: TimeInterval = repoCheckWait,
+        interval: TimeInterval = repoCheckInterval,
+        send: (_ repo: String) async -> Result,
+        sleep: (TimeInterval) async -> Void = { try? await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) }
+    ) async -> Result {
+        var waited: TimeInterval = 0
+        while true {
+            switch await send(key) {
+            case let .checked(payload):
+                return .checked(payload.forRepo(key))
+            case let .failed(message):
+                guard waited + interval <= wait, !Task.isCancelled else { return .failed(message) }
+            }
+            await sleep(interval)
+            waited += interval
+        }
     }
 
     /// Symphony's answer: the payload, or the error it names. An answer with an `error` is a failure whatever its

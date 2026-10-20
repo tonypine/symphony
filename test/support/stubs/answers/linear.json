@@ -13,7 +13,7 @@
       "data": {
         "project": {
           "teams": {
-            "nodes": [{"id": "t1"}],
+            "nodes": [{"id": "t1", "key": "QA"}],
             "pageInfo": {"hasNextPage": false, "endCursor": null}
           }
         }

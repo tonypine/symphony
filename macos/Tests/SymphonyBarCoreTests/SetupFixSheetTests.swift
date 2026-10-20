@@ -199,6 +199,55 @@ final class SetupFixSheetTests: XCTestCase {
         XCTAssertEqual(String(decoding: body, as: UTF8.self), #"{"fix":{"action":"create_label","kind":"linear","name":"Needs Decision","team":"TP"}}"#)
     }
 
+    /// Add Repo's check asks for the repo it saved; a fix never names one.
+    func testARepoCheckNamesTheRepo() {
+        let base = URL(string: "http://127.0.0.1:4000")!
+        let check = SetupAPI.request(repo: "web-shop.v2_x", base: base)
+        XCTAssertEqual(check.url?.absoluteString, "http://127.0.0.1:4000/api/v1/setup/refresh?repo=web-shop.v2_x")
+        XCTAssertEqual(check.httpMethod, "POST")
+        XCTAssertEqual(SetupAPI.request(repo: "a b", base: base).url?.query, "repo=a%20b")
+        XCTAssertEqual(SetupAPI.request(fix: ["kind": "linear"], repo: "web", base: base).url?.path, "/api/v1/setup/fixes")
+        XCTAssertNil(SetupAPI.request(fix: ["kind": "linear"], repo: "web", base: base).url?.query)
+    }
+
+    /// The check asks again while Symphony hasn't read the repo or doesn't answer, as through a reload or a restart, and
+    /// keeps only the repo's problems and the global ones of the answer.
+    func testARepoCheckAsksAgainUntilSymphonyHasReadTheRepo() async {
+        var answers: [SetupAPI.Result] = [
+            .failed("Couldn't check the setup again: nothing answered at http://127.0.0.1:4000."),
+            .failed("Couldn't check the setup again: Symphony hasn't read the repo web from symphony.yml yet."),
+            .checked(SetupPayload(problems: [
+                SetupPayload.Problem(id: "web", severity: .error, category: "labels", title: "web", consequence: "", repos: ["web"]),
+                SetupPayload.Problem(id: "api", severity: .error, category: "labels", title: "api", consequence: "", repos: ["api"]),
+                SetupPayload.Problem(id: "key", severity: .warning, category: "keys", title: "key", consequence: ""),
+            ])),
+        ]
+        var asked: [String] = []
+        var slept: [TimeInterval] = []
+
+        let result = await SetupAPI.checkRepo("web", send: { repo in
+            asked.append(repo)
+            return answers.removeFirst()
+        }, sleep: { slept.append($0) })
+
+        guard case let .checked(payload) = result else { return XCTFail("\(result)") }
+        XCTAssertEqual(payload.problems.map(\.id), ["web", "key"])
+        XCTAssertEqual(asked, ["web", "web", "web"])
+        XCTAssertEqual(slept, [SetupAPI.repoCheckInterval, SetupAPI.repoCheckInterval])
+    }
+
+    /// It gives up with Symphony's last reason once the wait runs out.
+    func testARepoCheckGivesUpAfterItsWait() async {
+        var tries = 0
+        let result = await SetupAPI.checkRepo("web", wait: 6, interval: 2, send: { _ in
+            tries += 1
+            return .failed("nothing answered (\(tries))")
+        }, sleep: { _ in })
+
+        XCTAssertEqual(result, .failed("nothing answered (4)"))
+        XCTAssertEqual(tries, 4)
+    }
+
     func testAnswers() throws {
         let ok = Data(#"{"problems": [], "not_checked": [], "checked_at": "2026-10-19T12:01:00Z", "linear_checked_at": null}"#.utf8)
         guard case let .checked(payload) = SetupAPI.result(prefix: "p", statusCode: 200, data: ok) else { return XCTFail("not checked") }
@@ -243,6 +292,45 @@ final class SetupFixSheetTests: XCTestCase {
     }
 
     // MARK: - QA fixtures: a POST answered in turn
+
+    /// TP-911's QA fixtures: Add Repo of widgets checks it, lists its error (not web-shop's), and after Create Label
+    /// it is set up right; the warning fixture lists only a warning, which leaves Done on.
+    func testTheAddRepoFixturesAnswerTheCheckThenTheFix() async throws {
+        let root = uniqueTemporaryDirectory("add-repo-fixtures")
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        func fixtures(_ name: String) -> APIFixtures {
+            APIFixtures(directory: SetupTests.fixture(name).deletingLastPathComponent().deletingLastPathComponent(), requestLog: root.appendingPathComponent("\(name).jsonl"))
+        }
+        func check(_ fixtures: APIFixtures) async -> AddRepoSetupCheck {
+            let result = await SetupAPI.checkRepo("widgets", send: { repo in
+                let request = SetupAPI.request(repo: repo, base: APIFixtures.baseURL)
+                let (data, response) = fixtures.answer(request)
+                return SetupAPI.result(prefix: "p", statusCode: response.statusCode, data: data)
+            }, sleep: { _ in })
+            guard case let .checked(payload) = result else { return AddRepoSetupCheck(key: "widgets", route: RepositoryRoute(), phase: .failed("\(result)")) }
+            return AddRepoSetupCheck(key: "widgets", route: RepositoryRoute(team: "QA", projects: ["p1"]), phase: .checked(payload))
+        }
+
+        let setup = fixtures("add-repo-setup")
+        let state = try XCTUnwrap(SetupPayload.decode(state: try Data(contentsOf: setup.directory.appendingPathComponent("api/v1/state.json"))))
+        XCTAssertEqual(state.problems, [])
+        let first = await check(setup)
+        XCTAssertEqual(first.payload?.problems.map(\.id), ["labels:missing:QA:Blocked"])
+        XCTAssertFalse(first.canFinish)
+        let row = try XCTUnwrap(first.page()?.errors.first?.rows.first)
+        XCTAssertEqual(row.actionTitle, "Create Label…")
+        var fix = URLRequest(url: APIFixtures.baseURL.appendingPathComponent(SetupAPI.fixesPath))
+        fix.httpMethod = "POST"
+        let fixed = try XCTUnwrap(SetupPayload.decode(setup.answer(fix).0)).forRepo("widgets")
+        XCTAssertEqual(fixed.problems, [])
+        let again = await check(setup)
+        XCTAssertTrue(again.canFinish)
+        XCTAssertEqual(again.written.map(\.value), ["p1", "QA"])
+
+        let warning = await check(fixtures("add-repo-setup-warning"))
+        XCTAssertEqual(warning.payload?.problems.map(\.id), ["uncloned_repo:widgets"])
+        XCTAssertTrue(warning.canFinish)
+    }
 
     func testTheSetupFixturesAnswerFixUndoAndFixAgainInTurn() throws {
         let root = uniqueTemporaryDirectory("setup-fixtures")
