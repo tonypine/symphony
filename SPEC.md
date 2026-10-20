@@ -1450,10 +1450,15 @@ Fields:
   `start_cmd` as the QA user, unsandboxed, with `SYMPHONY_VERIFICATION_PORT` set to
   `dev_server_port`, `HOME` a fresh folder and `TMPDIR` in the run directory, in a process group of
   its own. The QA host polls `health_check_url` until it answers 200 or `health_timeout_ms`
-  passes; a failed build, an exit or a timeout makes the pass `blocked` with reason
-  `qa_dev_server_failed: …` and the log's last 20 lines, component `dev_server`. The QA prompt
+  passes, and an answer counts only while `start_cmd` still runs; a failed build, an exit
+  or a timeout makes the pass `blocked` with reason `qa_dev_server_failed: …` and the log's last
+  20 lines, component `dev_server`. A port something listens on before `start_cmd` makes it
+  `blocked` with `qa_dev_server_port_busy: <port> held by pid <n> (<ticket>)`. The QA prompt
   names its URL. When the pass ends the group gets `stop_signal`, then is killed after
-  `stop_timeout_ms`, before the run directory is removed.
+  `stop_timeout_ms`, before the run directory is removed. One pass at a time runs a server on a
+  `worker_host` and `dev_server_port`: a pass takes that pair's lease before it starts its server,
+  a second pass waits for it in turn (listed in `dispatch_skipped` as `waiting for the QA host's
+  dev server port: …`), and the lease passes on once the holder's server stopped.
 - `android` (object, optional): host settings for Android QA. `avd` (AVD name, required for
   Android QA), `sdk_root` (string, default `$ANDROID_HOME`, then `$ANDROID_SDK_ROOT`, then
   `~/Library/Android/sdk`), `boot_timeout_ms` (positive integer, default `180000`) and

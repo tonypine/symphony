@@ -1892,14 +1892,33 @@ host and the worktree checks still apply there. Then:
   `dev_server_port` (default `8090`), `HOME` set to a fresh `dev-server/home/` (so the QA user's
   config files are never read) and `TMPDIR` to `dev-server/tmp/`. `start_cmd` runs in a process
   group of its own and logs to `dev-server/server.log`. The QA host polls `health_check_url` with
-  `curl` until it answers 200 or `health_timeout_ms` passes. A build that fails, a server that
-  exits, or a health check that times out makes the pass `blocked` before the agent starts, with
-  the reason `qa_dev_server_failed: …` and the log's last 20 lines; self-heal files its fix ticket,
-  component `dev_server`, in the project's repository. The QA prompt names the server's URL. When
-  the pass ends Symphony sends the group `stop_signal`, waits `stop_timeout_ms` and kills what is
-  left, then removes the run directory. The Symphony host starts no dev server of its own for
-  that playbook. The log lines are `QA dev server started issue_id=… issue_identifier=…
-  worker_host=… port=… pid=…` and `QA dev server stopped … outcome=…`;
+  `curl` until it answers 200 or `health_timeout_ms` passes, and after each answer checks that
+  `start_cmd` still runs, in the foreground as on the Symphony host: a 200 from another server on
+  the port never counts. A build
+  that fails, a server that exits (one that could not bind its port, say), or a health check that
+  times out makes the pass `blocked` before the agent starts, with the reason
+  `qa_dev_server_failed: …` and the log's last 20 lines; self-heal files its fix ticket, component
+  `dev_server`, in the project's repository. The QA prompt names the server's URL. When the pass
+  ends Symphony sends the group `stop_signal`, waits `stop_timeout_ms` and kills what is left,
+  then removes the run directory. The Symphony host starts no dev server of its own for that
+  playbook.
+
+  One pass at a time runs a dev server on a QA host's port, since the app under test reads its
+  hub URL from its own defaults and the port is fixed. Before it starts its server (so before any
+  `qa_build`), a pass takes a lease on the `worker_host` and `dev_server_port`; a second pass
+  waits for it, first come first served, and starts once the first pass stopped its own server
+  at its end. While it waits, `GET /api/v1/state` lists it under `dispatch_skipped` with
+  `waiting for the QA host's dev server port: 8090 on … is held by TP-…'s QA pass`. Passes
+  without a QA-host dev server never wait. The lease lives in Symphony, so it covers the passes of
+  one Symphony. Before `start_cmd`, a port something already listens on (a server another pass or
+  a crashed Symphony left behind) makes the pass `blocked` with
+  `qa_dev_server_port_busy: 8090 held by pid <n> (<ticket>)`: the listener's pid, from `lsof` on the
+  QA host, and the ticket of the pass whose server it is, read from its run directory.
+
+  The log lines are `QA dev server started issue_id=… issue_identifier=… worker_host=… port=…
+  pid=… lease=<worker_host>:<port>` and `QA dev server stopped … outcome=…`; a pass that has to
+  wait logs `QA dev server lease busy: <ticket> waits worker_host=… port=… held_by=<ticket>`, and
+  the hand-over `QA dev server lease passed from <ticket> to <ticket> …`;
 - `qa_launch_app` adds the playbook's `launch_env` after Symphony's own variables;
 - the run directory is removed when the pass ends. A build that times out is stopped on the
   Symphony side; on the QA host it may run until it finishes.

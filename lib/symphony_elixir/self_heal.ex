@@ -565,6 +565,7 @@ defmodule SymphonyElixir.SelfHeal do
   defp component_for({:verification_failed, cause}), do: component_for(cause)
   defp component_for({:dev_server_exit, _status}), do: @dev_server
   defp component_for({:dev_server_build_failed, _status}), do: @dev_server
+  defp component_for({:dev_server_port_busy, _port, _pid, _ticket}), do: @dev_server
   defp component_for({:dev_server_not_on_socket, _socket}), do: @dev_server
   defp component_for({:dev_server_not_configured}), do: @dev_server
   defp component_for(:health_timeout), do: @dev_server
@@ -609,7 +610,11 @@ defmodule SymphonyElixir.SelfHeal do
   defp signature_for(cause) when is_binary(cause), do: normalize(cause)
   # A failed CI check is its name and the first line of its error, as the PR watcher's streak reads it.
   defp signature_for({:ci_check_failed, check, error}) when is_binary(check) and is_binary(error), do: normalize("#{check}: #{error}")
-  # A QA-host dev server's log changes from run to run; the failure is its cause.
+  # A QA-host dev server's log changes from run to run; the failure is its cause. A busy port is the
+  # port: the pid holding it changes too.
+  defp signature_for({:qa_dev_server_failed, {:dev_server_port_busy, port, _pid, _ticket}, _log}),
+    do: signature_for({:qa_dev_server_failed, {:dev_server_port_busy, port}})
+
   defp signature_for({:qa_dev_server_failed, cause, _log}), do: signature_for({:qa_dev_server_failed, cause})
   defp signature_for(nil), do: ""
   defp signature_for(cause), do: cause |> inspect() |> normalize()

@@ -62,6 +62,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.{Client, Issue, RateLimit, TransientRetry, Usage}
+  alias SymphonyElixir.QaDriver.DevServerLease
   alias SymphonyElixir.Routing.PollLog
   alias SymphonyElixirWeb.ObservabilityPubSub
 
@@ -3870,12 +3871,20 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp taken_reason(%Issue{id: issue_id} = issue, %State{} = state) do
     cond do
-      Map.has_key?(state.running, issue_id) -> "already running"
+      Map.has_key?(state.running, issue_id) -> running_reason(issue_id)
       MapSet.member?(state.claimed, issue_id) -> "claimed by a retry or a Linear update in flight"
       MapSet.member?(state.budget_exhausted, issue_id) -> "its token budget is spent (agent.max_tokens_per_issue)"
       setup_failed_suppressed?(state.setup_failed, issue) -> "workspace setup failed in #{issue.state}; it waits for the ticket to change state"
       not priority_allowed?(issue, state) -> priority_reason(issue)
       true -> nil
+    end
+  end
+
+  # A QA pass waiting for another pass's dev server port on the QA host says so (TP-1125).
+  defp running_reason(issue_id) do
+    case DevServerLease.waiting(issue_id) do
+      nil -> "already running"
+      wait -> DevServerLease.reason(wait)
     end
   end
 

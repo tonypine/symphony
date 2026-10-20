@@ -8,6 +8,7 @@ defmodule SymphonyElixir.QaAgentTest do
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaAgent.{Report, Selection}
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
+  alias SymphonyElixir.QaDriver.DevServerLease
   alias SymphonyElixir.SelfHeal
   alias SymphonyElixir.Verification
 
@@ -639,6 +640,8 @@ defmodule SymphonyElixir.QaAgentTest do
             {:qa_dev_server_failed, {:dev_server_build_failed, :timeout}, "build_cmd did not finish within 15 minutes"},
             {:qa_dev_server_failed, {:dev_server_exit, 1}, ""},
             {:qa_dev_server_failed, {:dev_server_unreachable, "ssh: Connection refused"}, ""},
+            {:qa_dev_server_failed, {:dev_server_port_busy, 8090, 6557, "TP-1124"}, ""},
+            {:qa_dev_server_failed, {:dev_server_port_busy, 8090, nil, nil}, ""},
             {:qa_host_tunnel_failed, "ssh exited with status 255"},
             {:qa_host_missing_tool, ["go", "pg_ctl"]},
             {:qa_host_tool_check_failed, "exit status 255: Connection refused"},
@@ -663,6 +666,8 @@ defmodule SymphonyElixir.QaAgentTest do
                "qa_dev_server_failed: the dev server on the QA host did not finish its build_cmd in time; its last log lines:\n" <> _,
                "qa_dev_server_failed: the dev server on the QA host exited (status 1) before its health check answered 200",
                "qa_dev_server_failed: the dev server on the QA host could not be started over SSH: ssh: Connection refused",
+               "qa_dev_server_port_busy: 8090 held by pid 6557 (TP-1124), so the dev server on the QA host did not start",
+               "qa_dev_server_port_busy: 8090 held by a process lsof could not name (not a QA pass's server), so the dev server on the QA host did not start",
                "the tunnel that forwards QA_HOST_PORTS" <> _,
                "qa_host_missing_tool: go, pg_ctl: the QA host has no `go`, `pg_ctl` on the build's PATH" <> missing_tool,
                "qa_host_tool_check_failed: could not check the QA host" <> _,
@@ -1589,6 +1594,9 @@ defmodule SymphonyElixir.QaAgentTest do
         script =~ ~s(rm -rf "$dir") ->
           {:ok, {"symphony-qa-dev-server-dir:/Users/qa/.symphony-qa/runs/run.abc/dev-server\n", 0}}
 
+        script =~ "lsof -nP" ->
+          {:ok, {"symphony-qa-dev-server-port:free\n", 0}}
+
         script =~ ~s(case "$3") ->
           send(test, {:qa_host_dev_server, args})
           if Enum.at(args, 1) == "start", do: {:ok, {"symphony-qa-dev-server-pid:4242\n", 0}}, else: {:ok, {"", 0}}
@@ -1602,6 +1610,41 @@ defmodule SymphonyElixir.QaAgentTest do
           {:ok, {"symphony-qa-dev-server:stopped\n", 0}}
       end
     end
+
+    # A QA host's dev-server scripts for one of two passes: each tells the test what ran and when,
+    # and the first pass's health check waits for the test's `:go`, so that pass holds the lease.
+    defp leased_host_cmd(test, pass) do
+      fn "/bin/bash", ["-c", script, "sh", _dir | _args], _opts ->
+        at = System.unique_integer([:monotonic])
+
+        cond do
+          script =~ ~s(rm -rf "$dir") ->
+            send(test, {pass, :prepare, at})
+            {:ok, {"symphony-qa-dev-server-dir:/Users/qa/.symphony-qa/runs/run.abc/dev-server\n", 0}}
+
+          script =~ "lsof -nP" ->
+            {:ok, {"symphony-qa-dev-server-port:free\n", 0}}
+
+          script =~ ~s(case "$3") ->
+            {:ok, {"symphony-qa-dev-server-pid:4242\n", 0}}
+
+          script =~ "end=" ->
+            hold_health_check(test, pass)
+            {:ok, {"symphony-qa-dev-server:healthy\n", 0}}
+
+          script =~ ~s(kill -s "$3") ->
+            send(test, {pass, :stopped, at})
+            {:ok, {"symphony-qa-dev-server:stopped\n", 0}}
+        end
+      end
+    end
+
+    defp hold_health_check(test, :first) do
+      send(test, {:first, :health_check, self()})
+      receive(do: (:go -> :ok))
+    end
+
+    defp hold_health_check(_test, _pass), do: :ok
 
     defp qa_host_macos_app do
       settings = qa_host_settings()
@@ -1625,7 +1668,7 @@ defmodule SymphonyElixir.QaAgentTest do
         end)
 
       assert {:ok, %{result: %{verdict: :inconclusive}}} = result
-      assert log =~ ~r/QA dev server started issue_id=\S+ issue_identifier=TP-900 worker_host=qa-vm port=8090 pid=4242/
+      assert log =~ ~r/QA dev server started issue_id=\S+ issue_identifier=TP-900 worker_host=qa-vm port=8090 pid=4242 lease=qa-vm:8090/
       assert log =~ "QA dev server stopped issue_id="
       assert_received {:qa_host_shipped, "/Users/qa/.symphony-qa/runs/run.abc/dev-server/src"}
       assert_received {:qa_host_dev_server, ["8090", "build", "make server"]}
@@ -1664,6 +1707,53 @@ defmodule SymphonyElixir.QaAgentTest do
 
       assert QaAgent.blocked_reason(cause) ==
                "qa_dev_server_failed: the dev server on the QA host did not answer its health check with 200 in time; its last log lines:\npostgres: could not bind"
+    end
+
+    # TP-1123 and TP-1124 ran on one QA host at once: the second's server could not bind the port
+    # the first's held. A second pass now waits for the port's lease, and starts its server only
+    # once the first pass stopped its own.
+    test "a second pass on the same QA host and port starts its server only after the first pass stopped its own" do
+      lease = :"qa_agent_dev_server_lease_#{System.unique_integer([:positive])}"
+      start_supervised!({DevServerLease, name: lease})
+      test = self()
+
+      run = fn pass, issue, opts ->
+        host = %{qa_host_dev_server_host(nil) | cmd: leased_host_cmd(test, pass)}
+
+        QaAgent.run(
+          job(%{issue: issue, playbooks: [qa_host_macos_app()]}),
+          qa_host_settings(),
+          [
+            git: fake_git(),
+            qa_agent_module: FakeSession,
+            verification: FakeVerification,
+            qa_driver_opts: [host: host, dev_server_lease: lease]
+          ] ++ opts
+        )
+      end
+
+      first = Task.async(fn -> run.(:first, issue(), []) end)
+      assert_receive {:first, :health_check, health_check}, 5_000
+
+      second_issue = issue(%{id: "issue-qa-2", identifier: "TP-901"})
+      heartbeat = fn message -> send(test, {:second, :message, message}) end
+      second = Task.async(fn -> run.(:second, second_issue, on_message: heartbeat, dev_server_lease_opts: [heartbeat_ms: 10]) end)
+
+      # The second pass waits, never silently: its heartbeat keeps it from looking stalled, and the
+      # orchestrator can say whom it waits for.
+      assert_receive {:second, :message, %{event: :tool_progress, timestamp: %DateTime{}}}, 5_000
+      assert DevServerLease.waiting(lease, "issue-qa-2") == %{worker_host: "qa-vm", port: 8090, held_by: "TP-900"}
+      refute_received {:second, :prepare, _at}
+
+      send(health_check, :go)
+      assert {:ok, _first} = Task.await(first)
+      assert {:ok, _second} = Task.await(second)
+
+      assert_received {:first, :stopped, stopped_at}
+      assert_received {:second, :prepare, prepared_at}
+      assert stopped_at < prepared_at
+      assert_received {:second, :stopped, _at}
+      assert DevServerLease.waiting(lease, "issue-qa-2") == nil
     end
 
     test "blocks a macos_app pass whose QA host lacks a tool the playbook requires, before the agent starts" do

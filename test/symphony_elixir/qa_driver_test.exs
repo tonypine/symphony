@@ -4,7 +4,7 @@ defmodule SymphonyElixir.QaDriverTest do
   import ExUnit.CaptureLog
 
   alias SymphonyElixir.{AgentEnv, Paths, PathSafety, QaDriver}
-  alias SymphonyElixir.QaDriver.{Host, ReleasePair}
+  alias SymphonyElixir.QaDriver.{DevServerLease, Host, ReleasePair}
 
   @app "macos/build/Demo.app"
   @helper "/fake/symphony-qa-driver"
@@ -2446,6 +2446,7 @@ defmodule SymphonyElixir.QaDriverTest do
 
     @healthy_dev_server [
       {"rm -rf \"$dir\"", {:ok, {"symphony-qa-dev-server-dir:#{@run_dir}/dev-server\n", 0}}},
+      {"lsof -nP", {:ok, {"symphony-qa-dev-server-port:free\n", 0}}},
       {"case \"$3\"", {:ok, {"symphony-qa-dev-server-pid:4242\n", 0}}},
       {"end=", {:ok, {"symphony-qa-dev-server:healthy\n", 0}}},
       {"kill -s \"$3\"", {:ok, {"symphony-qa-dev-server:stopped\n", 0}}}
@@ -2460,25 +2461,65 @@ defmodule SymphonyElixir.QaDriverTest do
         stop_signal: "TERM",
         stop_timeout_ms: 1_000,
         port: 8091,
-        url: "http://127.0.0.1:8091/"
+        url: "http://127.0.0.1:8091/",
+        ticket: "QA-7"
       }
     end
 
-    test "starts the project's dev server on the QA host and stops it before the run directory goes", %{worktree: worktree} do
-      driver = remote_driver(worktree, dev_server_host(@healthy_dev_server), &clean_git/2, log_context: "issue_id=i1 issue_identifier=QA-7")
+    # Waits up to 5 seconds for the pass of `issue_id` to queue for a lease.
+    defp wait_for_waiting(lease, issue_id, tries \\ 250) do
+      cond do
+        DevServerLease.waiting(lease, issue_id) -> :ok
+        tries > 0 -> Process.sleep(20) && wait_for_waiting(lease, issue_id, tries - 1)
+        true -> flunk("#{issue_id} never queued for the lease")
+      end
+    end
 
-      {result, log} = with_log(fn -> QaDriver.start_dev_server(driver, dev_server_spec()) end)
+    # A lease manager of the test's own, so no other test's pass waits on its leases.
+    defp lease_manager do
+      name = :"dev_server_lease_#{System.unique_integer([:positive])}"
+      start_supervised!({DevServerLease, name: name})
+      name
+    end
+
+    test "starts the project's dev server on the QA host and stops it before the run directory goes", %{worktree: worktree} do
+      lease = lease_manager()
+      opts = [log_context: "issue_id=i1 issue_identifier=QA-7", dev_server_lease: lease]
+      driver = remote_driver(worktree, dev_server_host(@healthy_dev_server), &clean_git/2, opts)
+
+      {result, log} = with_log(fn -> QaDriver.start_dev_server(driver, dev_server_spec(), issue_id: "i1") end)
       assert result == {:ok, %{url: "http://127.0.0.1:8091/", port: 8091}}
-      assert log =~ "QA dev server started issue_id=i1 issue_identifier=QA-7 worker_host=qa@qa-vm port=8091 pid=4242"
+      assert log =~ "QA dev server started issue_id=i1 issue_identifier=QA-7 worker_host=qa@qa-vm port=8091 pid=4242 lease=qa@qa-vm:8091"
       assert_received {:ship, _tar, dest}
       assert dest == @run_dir <> "/dev-server/src"
+      assert_received {:dev_server_script, "rm -rf \"$dir\"", ["QA-7"], _opts}
+      assert_received {:dev_server_script, "lsof -nP", ["8091"], _opts}
       assert_received {:dev_server_script, "case \"$3\"", ["8091", "start", "server/scripts/dev-server.sh"], _opts}
       assert_received {:dev_server_script, "end=", ["http://127.0.0.1:8091/health", "5", "4242"], _opts}
+
+      # The driver holds the port's lease while its server runs: another pass's driver waits for it.
+      other = spawn_link(fn -> Process.sleep(:infinity) end)
+      waiter = Task.async(fn -> DevServerLease.acquire(lease, {"qa@qa-vm", 8091}, %{pid: other, issue_id: "i2", ticket: "QA-8"}, heartbeat_ms: 60_000) end)
+      wait_for_waiting(lease, "i2")
 
       {_result, log} = with_log(fn -> QaDriver.stop(driver) end)
       assert log =~ "QA dev server stopped issue_id=i1 issue_identifier=QA-7 worker_host=qa@qa-vm port=8091 pid=4242 outcome=:stopped"
       assert_received {:dev_server_script, "kill -s \"$3\"", ["4242", "TERM", "10"], _opts}
       assert_received {:cleanup, @run_dir}
+      assert Task.await(waiter) == :ok
+    end
+
+    test "a dev server that does not start gives the port's lease back at once", %{worktree: worktree} do
+      lease = lease_manager()
+      answers = List.keyreplace(@healthy_dev_server, "lsof -nP", 0, {"lsof -nP", {:ok, {"symphony-qa-dev-server-port:busy:777:QA-6\n", 0}}})
+      driver = remote_driver(worktree, dev_server_host(answers), &clean_git/2, dev_server_lease: lease)
+
+      assert {:error, {:dev_server_port_busy, 8091, 777, "QA-6"}, ""} = QaDriver.start_dev_server(driver, dev_server_spec())
+      refute_received {:dev_server_script, "case \"$3\"", _args, _opts}
+
+      other = spawn_link(fn -> Process.sleep(:infinity) end)
+      assert DevServerLease.acquire(lease, {"qa@qa-vm", 8091}, %{pid: other, issue_id: "i2", ticket: "QA-8"}) == :ok
+      QaDriver.stop(driver)
     end
 
     test "a dev server that fails its health check is stopped and reported with its log", %{worktree: worktree} do
