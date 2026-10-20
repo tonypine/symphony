@@ -97,7 +97,7 @@ final class SettingsUIManifestTests: XCTestCase {
             try QAHostTools.updating($0, from: QAHostTools(), to: QAHostTools(tools: ["go", "pg_ctl"]))
         }, from: yaml)
         let macAppQA = MacAppQAPlaybook(devServer: true, devServerPort: 8091, launchEnv: [LaunchVariable(name: "HUB_OWNER_TOKEN", value: "abc")])
-        yaml = try record("setting the Mac app QA dev server", {
+        yaml = try record("setting the macOS app QA dev server", {
             try MacAppQAPlaybook.updating($0, from: MacAppQAPlaybook(), to: macAppQA)
         }, from: yaml)
         _ = try record("removing a repository", { try RepositoriesConfig.removing("api", from: $0) }, from: yaml)

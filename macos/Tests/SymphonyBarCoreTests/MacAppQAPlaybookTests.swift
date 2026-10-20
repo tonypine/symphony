@@ -73,7 +73,7 @@ final class MacAppQAPlaybookTests: XCTestCase {
         }
         XCTAssertEqual(
             MacAppQAPlaybookError.notABlock("playbooks").errorDescription,
-            "`playbooks:` in symphony.yml is not an indented block. Change the Mac app QA settings by hand."
+            "`playbooks:` in symphony.yml is not an indented block. Change the macOS app QA settings by hand."
         )
         XCTAssertEqual(
             MacAppQAPlaybookError.unreadable(key: "dev_server", value: "yes").errorDescription,
@@ -165,6 +165,21 @@ final class MacAppQAPlaybookTests: XCTestCase {
         XCTAssertThrowsError(try MacAppQAPlaybook.updating(inline, from: MacAppQAPlaybook(), to: variables)) { error in
             XCTAssertEqual(error as? MacAppQAPlaybookError, .notABlock("launch_env"))
         }
+    }
+
+    func testKeepsTheQAHostToolsInTheSamePlaybook() throws {
+        let tools = QAHostTools(tools: ["go", "pg_ctl"])
+        let withTools = try QAHostTools.updating(config, from: QAHostTools(), to: tools)
+        var new = configPlaybook
+        new.devServerPort = 8092
+        new.launchEnv.append(LaunchVariable(name: "HUB_DEBUG", value: "1"))
+        let updated = try MacAppQAPlaybook.updating(withTools, from: configPlaybook, to: new)
+        XCTAssertEqual(try MacAppQAPlaybook.values(in: updated), new)
+        XCTAssertEqual(try QAHostTools.values(in: updated), tools)
+
+        let retooled = try QAHostTools.updating(updated, from: tools, to: QAHostTools(tools: ["go"]))
+        XCTAssertEqual(try MacAppQAPlaybook.values(in: retooled), new)
+        XCTAssertEqual(try QAHostTools.values(in: retooled), QAHostTools(tools: ["go"]))
     }
 
     func testTrimmedDropsBlankRowsAndTrimsNames() {

@@ -1632,7 +1632,7 @@ auto_review:
 
 `launch_env` values are written in plain text, in `symphony.yml` or a repository's `WORKFLOW.md`,
 which is often public: put only documented QA values there (a QA owner token such as the Job
-Search Hub's `HUB_OWNER_TOKEN`), never a secret. The Director's **Settings → Mac app QA** edits
+Search Hub's `HUB_OWNER_TOKEN`), never a secret. The Director's **Settings → macOS app QA** edits
 `dev_server`, `dev_server_port` and `launch_env` in `symphony.yml`.
 
 For Symphony's own app, build with `make -C macos qa-app`, not `make -C macos app`. The app runs

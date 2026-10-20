@@ -225,31 +225,6 @@ struct SettingsView: View {
                 .disabled(!model.canEditTicketPriorities)
 
                 Section {
-                    LabeledContent("QA host tools") {
-                        TextField("QA host tools", text: $model.qaHostToolsText, prompt: Text("e.g. go, pg_ctl"))
-                            .labelsHidden()
-                    }
-                    Text(
-                        "The programs a macOS app QA pass needs on the QA host, comma-separated. Symphony looks for "
-                            + "each when the pass starts; a missing one blocks the pass, and self-heal files the fix "
-                            + "for the QA host."
-                    )
-                    .foregroundStyle(.secondary)
-                    if model.qaHostToolsError != nil {
-                        CheckErrorPointer(subject: "these QA host tools")
-                    }
-                } header: {
-                    Text("macOS app QA (saved in symphony.yml)")
-                } footer: {
-                    SectionFooter(
-                        "auto_review.playbooks.macos_app.requires (default none). A repo's WORKFLOW.md may set its "
-                            + "own list. scripts/qa-vm/provision.sh installs Go, Postgres and jq on a QA VM. Save "
-                            + "checks symphony.yml with symphony check first; Symphony reads it at the next QA pass."
-                    )
-                }
-                .disabled(!model.canEditQAHostTools)
-
-                Section {
                     Text("The Linear workflow states Symphony creates for the board's phases. Nothing moves tickets into them yet.")
                         .foregroundStyle(.secondary)
                     WorkflowStateRow(title: "Code review", name: $model.workflowStates.codeReview)
@@ -536,7 +511,7 @@ struct SettingsView: View {
                     Text("symphony check rejected the dispatch-loop limits; see Dispatch loops.").foregroundStyle(.red)
                 }
                 if model.macAppQAError != nil {
-                    Text("symphony check rejected the Mac app QA settings; see Mac app QA.").foregroundStyle(.red)
+                    Text("symphony check rejected the macOS app QA settings; see macOS app QA.").foregroundStyle(.red)
                 }
                 if model.ticketPrioritiesError != nil {
                     Text("symphony check rejected the ticket priorities; see Tickets.").foregroundStyle(.red)
@@ -804,66 +779,89 @@ private struct OpenRouterModelField: View {
     }
 }
 
-/// A section's help text under the Form. Fixed to its wrapped height: without it the grouped Form can lay a footer
-/// out as one line cut off with an ellipsis.
-/// D14: one switch per kind of notification, kept in the app's defaults and read at each poll.
-/// The `macos_app` QA playbook's dev server on the QA host and the variables the app under test gets
-/// (`auto_review.playbooks.macos_app.dev_server`, `dev_server_port` and `launch_env`).
+/// The `macos_app` QA playbook: the tools the QA host needs, the project's dev server there and the variables the
+/// app under test gets (`auto_review.playbooks.macos_app.requires`, `dev_server`, `dev_server_port` and `launch_env`).
 private struct MacAppQASection: View {
     @ObservedObject var model: SettingsViewModel
 
     var body: some View {
         Section {
-            Toggle("Start the project's dev server on the QA host", isOn: $model.macAppQA.devServer)
-            Text(
-                "A Mac app QA pass on the QA host runs the project's verification.dev_server there, beside the app, "
-                    + "from the PR head, before the app launches, and stops it when the pass ends."
-            )
-            .foregroundStyle(.secondary)
-            LabeledContent("Dev server port") {
-                TextField("Dev server port", value: $model.macAppQA.devServerPort, format: .number.grouping(.never))
-                    .labelsHidden()
-                    .multilineTextAlignment(.trailing)
-                    .frame(width: 80)
-            }
-            Text("App environment")
-            ForEach($model.macAppQA.launchEnv) { $variable in
-                HStack {
-                    TextField("Name", text: $variable.name, prompt: Text("NAME"))
+            Group {
+                LabeledContent("QA host tools") {
+                    TextField("QA host tools", text: $model.qaHostToolsText, prompt: Text("e.g. go, pg_ctl"))
                         .labelsHidden()
-                    TextField("Value", text: $variable.value, prompt: Text("Value"))
-                        .labelsHidden()
-                    Button {
-                        model.removeLaunchVariable(id: variable.id)
-                    } label: {
-                        Image(systemName: "minus.circle")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Remove this variable")
+                }
+                Text(
+                    "The programs a macOS app QA pass needs on the QA host, comma-separated. Symphony looks for "
+                        + "each when the pass starts; a missing one blocks the pass, and self-heal files the fix "
+                        + "for the QA host."
+                )
+                .foregroundStyle(.secondary)
+                if model.qaHostToolsError != nil {
+                    CheckErrorPointer(subject: "these QA host tools")
                 }
             }
-            Button("Add Variable") { model.addLaunchVariable() }
-            Text(
-                "QA sets these on the app after its own variables; $SYMPHONY_VERIFICATION_PORT becomes the port. "
-                    + "They are saved in plain text, so never put a secret here."
-            )
-            .foregroundStyle(.secondary)
-            if let error = model.macAppQAError {
-                Text(error).foregroundStyle(.red)
+            .disabled(!model.canEditQAHostTools)
+            Group {
+                devServerControls
             }
+            .disabled(!model.canEditMacAppQA)
         } header: {
-            Text("Mac app QA (saved in symphony.yml)")
+            Text("macOS app QA (saved in symphony.yml)")
         } footer: {
             SectionFooter(
-                "auto_review.playbooks.macos_app.dev_server (default off), dev_server_port (default 8090) and "
-                    + "launch_env (default none). A repository's WORKFLOW.md can set them too, and wins. Save checks "
+                "auto_review.playbooks.macos_app.requires (default none), dev_server (default off), dev_server_port "
+                    + "(default 8090) and launch_env (default none). A repository's WORKFLOW.md can set them too, and "
+                    + "wins. scripts/qa-vm/provision.sh installs Go, Postgres and jq on a QA VM. Save checks "
                     + "symphony.yml with symphony check first; the next QA pass uses them."
             )
         }
-        .disabled(!model.canEditMacAppQA)
+    }
+
+    @ViewBuilder private var devServerControls: some View {
+        Toggle("Start the project's dev server on the QA host", isOn: $model.macAppQA.devServer)
+        Text(
+            "A macOS app QA pass on the QA host runs the project's verification.dev_server there, beside the app, "
+                + "from the PR head, before the app launches, and stops it when the pass ends."
+        )
+        .foregroundStyle(.secondary)
+        LabeledContent("Dev server port") {
+            TextField("Dev server port", value: $model.macAppQA.devServerPort, format: .number.grouping(.never))
+                .labelsHidden()
+                .multilineTextAlignment(.trailing)
+                .frame(width: 80)
+        }
+        Text("App environment")
+        ForEach($model.macAppQA.launchEnv) { $variable in
+            HStack {
+                TextField("Name", text: $variable.name, prompt: Text("NAME"))
+                    .labelsHidden()
+                TextField("Value", text: $variable.value, prompt: Text("Value"))
+                    .labelsHidden()
+                Button {
+                    model.removeLaunchVariable(id: variable.id)
+                } label: {
+                    Image(systemName: "minus.circle")
+                }
+                .buttonStyle(.borderless)
+                .help("Remove this variable")
+            }
+        }
+        Button("Add Variable") { model.addLaunchVariable() }
+        Text(
+            "QA sets these on the app after its own variables; $SYMPHONY_VERIFICATION_PORT becomes the port. "
+                + "They are saved in plain text, so never put a secret here."
+        )
+        .foregroundStyle(.secondary)
+        if let error = model.macAppQAError {
+            Text(error).foregroundStyle(.red)
+        }
     }
 }
 
+/// A section's help text under the Form. Fixed to its wrapped height: without it the grouped Form can lay a footer
+/// out as one line cut off with an ellipsis.
+/// D14: one switch per kind of notification, kept in the app's defaults and read at each poll.
 private struct NotificationsSection: View {
     @State private var preferences = NotificationPreferences.load(from: AppStores.current.defaults)
 

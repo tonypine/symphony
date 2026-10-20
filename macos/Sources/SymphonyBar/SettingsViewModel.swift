@@ -123,10 +123,10 @@ final class SettingsViewModel: ObservableObject {
     /// Why `symphony check` rejected the changed dispatch-loop limits, shown in their section.
     @Published private(set) var dispatchLoopError: String?
     /// `auto_review.playbooks.macos_app.dev_server`, `dev_server_port` and `launch_env` in the configured
-    /// symphony.yml: whether a Mac app QA pass on the QA host starts the project's dev server there, on which port,
+    /// symphony.yml: whether a macOS app QA pass on the QA host starts the project's dev server there, on which port,
     /// and the variables the app under test gets.
     @Published var macAppQA = MacAppQAPlaybook()
-    /// Why `symphony check` rejected the changed Mac app QA settings, shown in their section.
+    /// Why `symphony check` rejected the changed macOS app QA settings, shown in their section.
     @Published private(set) var macAppQAError: String?
     /// True while Save waits for `symphony check`.
     @Published private(set) var isSaving = false
@@ -155,7 +155,7 @@ final class SettingsViewModel: ObservableObject {
     /// stepper moved is written.
     private var loadedDispatchLoopLimits: DispatchLoopLimits?
 
-    /// The Mac app QA settings read from symphony.yml, or nil when they couldn't be read. Only a setting that
+    /// The macOS app QA settings read from symphony.yml, or nil when they couldn't be read. Only a setting that
     /// changed is written.
     private var loadedMacAppQA: MacAppQAPlaybook?
 
@@ -426,7 +426,7 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
-    /// The Mac app QA controls are off until a symphony.yml has been read, and while Save checks it.
+    /// The macOS app QA controls are off until a symphony.yml has been read, and while Save checks it.
     var canEditMacAppQA: Bool { loadedMacAppQA != nil && !isSaving }
 
     private func loadMacAppQA() {
@@ -437,7 +437,7 @@ final class SettingsViewModel: ObservableObject {
             macAppQA = playbook
             loadedMacAppQA = playbook
         } catch {
-            configFileError = "Could not read the Mac app QA settings from symphony.yml: \(error.localizedDescription)"
+            configFileError = "Could not read the macOS app QA settings from symphony.yml: \(error.localizedDescription)"
         }
     }
 
@@ -807,7 +807,7 @@ final class SettingsViewModel: ObservableObject {
         return true
     }
 
-    /// Writes the Mac app QA settings that changed to symphony.yml once `symphony check` passes on the result.
+    /// Writes the macOS app QA settings that changed to symphony.yml once `symphony check` passes on the result.
     private func saveMacAppQA(
         _ playbook: MacAppQAPlaybook,
         from loaded: MacAppQAPlaybook,
@@ -821,11 +821,11 @@ final class SettingsViewModel: ObservableObject {
                 await check(path, settings, secrets)
             }
         } catch {
-            configFileError = "Could not save the Mac app QA settings to symphony.yml: \(error.localizedDescription)"
+            configFileError = "Could not save the macOS app QA settings to symphony.yml: \(error.localizedDescription)"
             return false
         }
         if case .failed(let message) = result {
-            macAppQAError = "symphony check rejected these Mac app QA settings, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
+            macAppQAError = "symphony check rejected these macOS app QA settings, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
             return false
         }
         configFileError = nil

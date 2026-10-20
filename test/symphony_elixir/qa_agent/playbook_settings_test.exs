@@ -50,7 +50,7 @@ defmodule SymphonyElixir.QaAgent.PlaybookSettingsTest do
       playbooks = macos_app(%{"launch_env" => %{"PATH" => "/opt/homebrew/bin"}})
 
       assert {:error, {:invalid_symphony_config, message}} = SystemSchema.parse(Map.put(@base, "auto_review", %{"playbooks" => playbooks}))
-      assert message =~ "auto_review.playbooks.macos_app.launch_env.PATH is set by Symphony or the system"
+      assert message == "auto_review.playbooks.macos_app.launch_env.PATH is set by Symphony or the system, so launch_env may not set it"
 
       assert {:error, {:invalid_repo_workflow_config, message}} = RepoWorkflowSchema.parse(%{"auto_review" => %{"playbooks" => playbooks}})
       assert message == "auto_review.playbooks.macos_app.launch_env.PATH is set by Symphony or the system, so launch_env may not set it"

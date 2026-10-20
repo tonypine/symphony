@@ -1,6 +1,6 @@
 import Foundation
 
-/// Why the Mac app QA settings can't be read or changed by editing their lines.
+/// Why the macOS app QA settings can't be read or changed by editing their lines.
 public enum MacAppQAPlaybookError: LocalizedError, Equatable {
     /// A key on the path holds an inline value (for example `macos_app: {build: make}`) instead of an indented block.
     case notABlock(String)
@@ -10,7 +10,7 @@ public enum MacAppQAPlaybookError: LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case .notABlock(let key):
-            return "`\(key):` in symphony.yml is not an indented block. Change the Mac app QA settings by hand."
+            return "`\(key):` in symphony.yml is not an indented block. Change the macOS app QA settings by hand."
         case let .unreadable(key, value):
             return "`\(key): \(value)` in symphony.yml can't be read here. Change it by hand."
         }
@@ -238,7 +238,7 @@ public struct MacAppQAPlaybook: Equatable {
         return document.text
     }
 
-    /// Reports an inline section above a setting as a Mac app QA error.
+    /// Reports an inline section above a setting as a macOS app QA error.
     private static func blockSection<T>(_ body: () throws -> T) throws -> T {
         do {
             return try body()
@@ -253,7 +253,7 @@ extension SymphonyConfigFile {
         try MacAppQAPlaybook.values(in: read())
     }
 
-    /// Sets the Mac app QA settings that differ between `old` and `new`, once `check` passes on the result.
+    /// Sets the macOS app QA settings that differ between `old` and `new`, once `check` passes on the result.
     public func writeMacAppQAPlaybook(
         _ new: MacAppQAPlaybook,
         from old: MacAppQAPlaybook,

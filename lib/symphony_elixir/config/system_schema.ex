@@ -1626,7 +1626,10 @@ defmodule SymphonyElixir.Config.SystemSchema do
   defp format_error(nil, error), do: rewrite_operator_error_message(error)
 
   defp format_error(prefix, error) do
-    operator_error_path(prefix) <> " " <> rewrite_operator_error_message(error)
+    message = rewrite_operator_error_message(error)
+
+    # A message that names its own key below the field (`auto_review.playbooks.macos_app...`) needs no prefix.
+    if String.starts_with?(message, prefix <> "."), do: message, else: operator_error_path(prefix) <> " " <> message
   end
 
   defp operator_error_path(prefix) do
