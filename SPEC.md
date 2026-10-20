@@ -1498,12 +1498,13 @@ The QA agent:
   the PR and never a check. The repository names the check that runs them (`proof_check`, Section
   5.4.8b). A step ending in `Proved by: <test>` is proved by that test, run by the `proof_check`; the
   older `Proved by: <check> › <test>` MUST still be read, naming the check itself; `Proved by: QA`, or
-  no line, is a QA step. Without a `proof_check`, every step is a QA step. Before a QA agent starts,
-  Symphony MUST confirm each named-test step on the PR head: the test is in the checkout and its
-  check passed (pass), is still running (pending, waited for boundedly) or failed, did not run or
-  the test is missing (fail to `Rework` with no agent run). A step naming a check that is neither the
-  `proof_check` nor a check on the head MUST fail with a message naming the repository's
-  `proof_check`. QA links a confirmed step's result instead of walking it.
+  no line, is a QA step. A `Proved by:` inside inline code is a quotation in the step's prose, not its
+  proof, and MUST NOT be read as one. Without a `proof_check`, every step is a QA step. Before a QA
+  agent starts, Symphony MUST confirm each named-test step on the PR head: the test is in the
+  checkout and its check passed (pass), is still running (pending, waited for boundedly) or failed,
+  did not run or the test is missing (fail to `Rework` with no agent run). A step naming a check that
+  is neither the `proof_check` nor a check on the head MUST fail with a message naming the
+  repository's `proof_check`. QA links a confirmed step's result instead of walking it.
 - QA selection is deterministic and runs before any agent: a `qa:skip` label skips; a
   `qa:<kind>` label selects that playbook; a diff that only touches docs, tests or `skip_globs`
   skips; otherwise playbooks are selected by their trigger paths, and the `cli` playbook also by a

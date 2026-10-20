@@ -15,16 +15,19 @@ defmodule SymphonyElixir.Walkthrough do
       without a test.
     * `Proved by: QA`: the QA agent walks the step.
 
-  A step with no `Proved by:` is read as `Proved by: QA`. A repo without a `proof_check` has no
-  named-test proofs: every step of its walkthroughs is a QA step. The QA pre-check
-  (`SymphonyElixir.QaPreCheck`) confirms the named-test steps on the PR head before the QA agent
-  starts, and the QA prompt (`SymphonyElixir.QaAgent`) tells QA to link, not walk, them.
+  A step with no `Proved by:` is read as `Proved by: QA`. A `Proved by:` inside inline code (between
+  backticks) is a quotation, not a proof: a step that describes proof lines quotes them and keeps
+  its text whole. A repo without a `proof_check` has no named-test proofs: every step of its
+  walkthroughs is a QA step. The QA pre-check (`SymphonyElixir.QaPreCheck`) confirms the named-test
+  steps on the PR head before the QA agent starts, and the QA prompt (`SymphonyElixir.QaAgent`)
+  tells QA to link, not walk, them.
   """
 
   @heading ~r/^\s*\#{1,6}\s+User walkthrough\s*:?\s*$/i
   @any_heading ~r/^\s*\#{1,6}\s+\S/
   @step_start ~r/^ {0,3}(\d+)[.)]\s+(.*)$/
   @proved_by ~r/proved by:/i
+  @backticks ~r/`+/
   @separator ~r/\s*(?:›|\s>\s)\s*/u
   # `QA` as the whole spec, or followed only by a note: `QA (light mode only)`, `QA: desktop`.
   @qa ~r/^qa(?:$|\s*[(:,;]|\s+[-–—]\s)/iu
@@ -201,17 +204,17 @@ defmodule SymphonyElixir.Walkthrough do
     {Enum.reverse(content), Enum.reverse(blank)}
   end
 
-  # The step's text up to its last `Proved by:`, with the new proof after it; or the text with the
-  # proof appended when it has none. An explicit `Proved by: QA` is the author's and is kept.
+  # The step's text up to its last `Proved by:` outside inline code, with the new proof after it; or
+  # the text with the proof appended when it has none. An explicit `Proved by: QA` is the author's
+  # and is kept.
   defp with_proof(body, number, test) do
     proof = "Proved by: `#{test}`"
 
-    case Regex.scan(@proved_by, body, return: :index) do
-      [] ->
+    case last_proved_by(body) do
+      nil ->
         {:ok, body <> " " <> proof}
 
-      matches ->
-        [{position, length}] = List.last(matches)
+      {position, length} ->
         spec = body |> binary_part(position + length, byte_size(body) - position - length) |> normalize_spec()
 
         if spec != "" and qa_spec?(unquote_part(spec), spec),
@@ -250,13 +253,38 @@ defmodule SymphonyElixir.Walkthrough do
 
   # The step's text and the spec after its last `Proved by:`, or nil when the step has none.
   defp split_last(body) do
-    case Regex.split(@proved_by, body) do
-      [_body] ->
-        nil
+    case last_proved_by(body) do
+      nil -> nil
+      {position, length} -> {body |> binary_part(0, position) |> String.trim(), binary_part(body, position + length, byte_size(body) - position - length)}
+    end
+  end
 
-      parts ->
-        {spec, text_parts} = List.pop_at(parts, -1)
-        {text_parts |> Enum.join("Proved by:") |> String.trim(), spec}
+  # The byte position and length of the last `Proved by:` in `body` outside inline code, or nil.
+  defp last_proved_by(body) do
+    spans = code_spans(body)
+
+    @proved_by
+    |> Regex.scan(body, return: :index)
+    |> Enum.map(fn [match] -> match end)
+    |> Enum.reject(fn {position, _length} -> Enum.any?(spans, fn {from, to} -> position >= from and position < to end) end)
+    |> List.last()
+  end
+
+  # The byte ranges of `body`'s inline code: a run of backticks up to the next run of the same
+  # length (CommonMark's code span). A run with no closing run is a literal backtick.
+  defp code_spans(body) do
+    @backticks
+    |> Regex.scan(body, return: :index)
+    |> Enum.map(fn [run] -> run end)
+    |> pair_runs([])
+  end
+
+  defp pair_runs([], spans), do: spans
+
+  defp pair_runs([{from, length} | rest], spans) do
+    case Enum.drop_while(rest, fn {_position, run_length} -> run_length != length end) do
+      [{to, ^length} | after_span] -> pair_runs(after_span, [{from, to + length} | spans])
+      [] -> pair_runs(rest, spans)
     end
   end
 

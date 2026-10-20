@@ -259,6 +259,21 @@ defmodule SymphonyElixir.QaVerificationTest do
                QaVerification.journey(issue("QA", %{description: description}), "make-all")
     end
 
+    test "a step that quotes a proof line in its prose is QA's to walk, its text whole" do
+      description = """
+      ## User walkthrough
+
+      1. Let Symphony pick it up. Expected: two steps now end with `Proved by: <test path>` and the third is unchanged.
+      2. Write a step ending with `Proved by: ci › test/x_test.exs` in the Symphony repo. Expected: the pre-check fails it.
+      """
+
+      assert %{steps: [%{number: 1, text: first, proof: %{by: :qa}}, %{number: 2, text: second, proof: %{by: :qa}}]} =
+               QaVerification.journey(issue("QA", %{description: description}), "make-all")
+
+      assert first =~ "and the third is unchanged."
+      assert second =~ "Expected: the pre-check fails it."
+    end
+
     test "falls back to the acceptance criteria" do
       description = "Some context.\n\n## Acceptance criteria\n\n- It works.\n- It is fast.\n"
 

@@ -1358,6 +1358,10 @@ A proof is the line at the end of a step:
 | `Proved by: QA` | the QA pass: a judgment by sight the author keeps for QA | walks the step |
 | no `Proved by:` line | read as `Proved by: QA` | walks the step |
 
+A `Proved by:` inside inline code (between backticks) is a quotation, not a proof: a step that
+describes proof lines quotes them, keeps its text whole, and is proved by its own last unquoted
+`Proved by:`, or is a QA step when it has none.
+
 A repo without `proof_check` has no named-test proofs: QA walks every step of its walkthroughs,
 whatever their `Proved by:` lines say. `SymphonyElixir.Walkthrough` parses the walkthrough into steps
 with their proof, and the QA prompt lists the steps to link and the steps to walk when the

@@ -162,6 +162,28 @@ defmodule SymphonyElixir.WalkthroughTest do
       assert text == "Read where it says Proved by: x › y in the docs."
     end
 
+    test "a Proved by: quoted in inline code is the step's text, not its proof" do
+      text = """
+      1. The operator lets Symphony pick it up. Expected: two of the three steps now end with `Proved by: <test path>` and the third is unchanged.
+      2. The operator writes a step that ends with `Proved by: ci › test/x_test.exs` in the Symphony repo. Expected: the pre-check fails it.
+      3. Quote ``Proved by: `make-all` › a`` and keep it. Proved by: `test/x_test.exs`
+      4. A literal ` before Proved by: test/y_test.exs
+      """
+
+      assert [first, second, third, fourth] = Walkthrough.steps(text, "make-all")
+
+      assert first.text ==
+               "The operator lets Symphony pick it up. Expected: two of the three steps now end with `Proved by: <test path>` and the third is unchanged."
+
+      assert first.proof == %{by: :qa}
+      assert second.text =~ "ends with `Proved by: ci › test/x_test.exs` in the Symphony repo. Expected: the pre-check fails it."
+      assert second.proof == %{by: :qa}
+      assert third.text == "Quote ``Proved by: `make-all` › a`` and keep it."
+      assert third.proof == %{by: :test, check: "make-all", test: "test/x_test.exs"}
+      assert fourth.text == "A literal ` before"
+      assert fourth.proof == %{by: :test, check: "make-all", test: "test/y_test.exs"}
+    end
+
     test "no steps in empty text or without text" do
       assert Walkthrough.steps("Nothing changes on screen.", "make-all") == []
       assert Walkthrough.steps(nil, "make-all") == []
@@ -218,6 +240,15 @@ defmodule SymphonyElixir.WalkthroughTest do
 
       assert {:ok, last} = Walkthrough.record_proofs("## User walkthrough\n\n1. Do it.", [%{"step" => 1, "test" => "test/a_test.exs"}])
       assert last == "## User walkthrough\n\n1. Do it. Proved by: `test/a_test.exs`"
+    end
+
+    test "a step that quotes a proof line in its prose gets its proof appended, the quotation kept" do
+      description = "## User walkthrough\n\n1. Steps end with `Proved by: <test path>` and the third is unchanged.\n"
+
+      assert {:ok, recorded} = Walkthrough.record_proofs(description, [%{"step" => 1, "test" => "test/x_test.exs"}])
+
+      assert recorded ==
+               "## User walkthrough\n\n1. Steps end with `Proved by: <test path>` and the third is unchanged. Proved by: `test/x_test.exs`\n"
     end
 
     test "refuses a check name, a QA proof, a step the walkthrough lacks and an author's Proved by: QA" do
