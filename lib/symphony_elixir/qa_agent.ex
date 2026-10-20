@@ -14,14 +14,15 @@ defmodule SymphonyElixir.QaAgent do
   writes evidence under `qa-evidence/`, and records its verdict with the `qa_verdict` tool
   (`SymphonyElixir.QaAgent.Verdict`) as its last act, the call recorded the moment it arrives and
   winning over whatever the turn then says (the same object as its final message's JSON is the
-  fallback for one release): `pass | fail | blocked` with per-step results and findings, and `needs_person` when only a person can do what
-  is left (`SymphonyElixir.SelfHeal` then keeps the ticket on an access hold a person lifts),
-  `needs_dev_server` when the project's own server was not running for the pass (self-heal then
-  files the fix in the project's repo), or `covered_by` naming an open ticket that already tracks
-  a missing QA tool (self-heal then holds the ticket on that one instead of filing a fix ticket). A turn that ends without a
-  verdict gets one follow-up turn in the same session asking for the `qa_verdict` call; a follow-up
-  that comes back empty (the agent process exited, or the turn was finalised with no answer) runs
-  the pass again once in the same run, as the same attempt, logged as `qa_verdict_missing`. A pass that runs the `macos_app`
+  fallback for one release): `pass | fail | blocked` with per-step results and findings, and
+  `needs_person` when only a person can do what is left (`SymphonyElixir.SelfHeal` then keeps the
+  ticket on an access hold a person lifts), `needs_dev_server` when the project's own server was
+  not running for the pass (self-heal then files the fix in the project's repo), or `covered_by`
+  naming an open ticket that already tracks a missing QA tool (self-heal then holds the ticket on
+  that one instead of filing a fix ticket). A turn that ends without a verdict gets one follow-up
+  turn in the same session asking for the `qa_verdict` call; a follow-up that comes back empty (the
+  agent process exited, or the turn was finalised with no answer) runs the pass again once in the
+  same run, as the same attempt, logged as `qa_verdict_missing`. A pass that runs the `macos_app`
   playbook also gets the host-side `qa_*` tools of a `SymphonyElixir.QaDriver`,
   stopped (quitting every app it launched) when the pass ends, and its `pass` is
   `inconclusive` when no `qa_resize_window` call ran the playbook's wide pass (in an epic review it
