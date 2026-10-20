@@ -157,7 +157,6 @@ defmodule SymphonyElixir.SelfHealTest do
         {{:dev_server_not_on_socket, "s"}, "dev_server"},
         {{:dev_server_not_configured}, "dev_server"},
         {:health_timeout, "dev_server"},
-        {:qa_needs_dev_server, "dev_server"},
         {{:remote_worker_unsupported, "worker-1"}, "worker_host"},
         {"no QA playbook applies to this change", "qa_playbook"},
         {"QA cannot run on the remote worker \"worker-1\"", "worker_host"},
@@ -170,6 +169,10 @@ defmodule SymphonyElixir.SelfHealTest do
       end
 
       assert SelfHeal.component(%{reason: "no QA playbook applies"}) == "qa_playbook"
+
+      # A QA run that says the project's own server was not running names its dev server, whatever its wording.
+      assert SelfHeal.component(%{reason: "Without a running hub, the app can't show the board", needs_dev_server: true}) == "dev_server"
+      assert SelfHeal.component(%{reason: "Without a running hub, the app can't show the board", needs_dev_server: false}) == "qa_environment"
 
       # The PR and CI watcher's red backstop names the failing check, with or without its error.
       assert SelfHeal.component(%{cause: {:ci_check_failed, "make all"}}) == "ci:make all"
@@ -203,9 +206,6 @@ defmodule SymphonyElixir.SelfHealTest do
       assert SelfHeal.signature(%{cause: "  a   spaced\n reason "}) == "a spaced reason"
       assert SelfHeal.signature(%{cause: nil, reason: nil}) == ""
       assert SelfHeal.signature(:not_a_map) == ""
-
-      assert SelfHeal.signature(%{cause: :qa_needs_dev_server, reason: "the hub needs Postgres"}) ==
-               "QA needs the project's own server, and no QA playbook starts it (dev_server: true)"
     end
 
     test "a QA agent's own block is named by its blocked steps and covering ticket, not its wording" do
@@ -283,50 +283,13 @@ defmodule SymphonyElixir.SelfHealTest do
       assert description =~ "- Pull request: https://github.com/acme/app/pull/7\n"
     end
 
-    test "a QA step that needs the project's own server files the fix ticket in the project's repo" do
-      outcome = outcome(:qa_needs_dev_server, %{reason: "the Jobs page needs the hub, and hub-server needs Postgres"})
-
-      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome))
-
-      assert %{scope: @repo_key, component: "dev_server", title: "Self-heal: repair the dev_server block", description: description} =
-               Process.get(:fixer_create)
-
-      assert description =~ "the Jobs page needs the hub, and hub-server needs Postgres"
-      assert description =~ "`verification.enabled: true` and `verification.dev_server`"
-      assert description =~ "set `dev_server: true` on the QA playbook"
-      assert %{component: "dev_server", scope: @repo_key} = Process.get(:recorded_self_heal)
-    end
-
-    test "a changed block that moved to the project's repo after Symphony's fix landed files there instead of retrying" do
-      # TP-1102: its first block went to Symphony as a qa_environment gap; once that fix landed, QA
-      # names the gap as the project's own server.
-      previous =
-        recorded(@repo_key, @issue_id, %{
-          component: "qa_environment",
-          scope: @symphony_repo_key,
-          signature: "blocked steps: Jobs page header with the inspector open",
-          fix_ticket: nil
-        })
-
-      Process.put(:ticket_state, previous)
-
-      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome(:qa_needs_dev_server), attempts: 3))
-      assert %{scope: @repo_key, component: "dev_server"} = Process.get(:fixer_create)
-      assert {:blocked, %{waits_on: %{keys: [@fix_ticket]}}} = Process.get(:hold_attrs)
-
-      # The head's attempts still bound it.
-      Process.delete(:fixer_create)
-      Process.put(:ticket_state, previous)
-      capture_log(fn -> assert :escalated = SelfHeal.heal(issue(), heal_opts(outcome(:qa_needs_dev_server), attempts: 5)) end)
-      assert Process.get(:fixer_create) == nil
-    end
-
     test "a CI check failing after another component's block, or another check's, files its own fix ticket" do
       ci = outcome({:ci_check_failed, "specs"})
 
       for previous <- [
             %{component: "ci:lint", scope: @repo_key, signature: ~s({:ci_check_failed, "lint"})},
-            %{component: "qa_environment", scope: @symphony_repo_key, signature: "an old failure"}
+            %{component: "qa_environment", scope: @symphony_repo_key, signature: "an old failure"},
+            %{component: "dev_server", scope: @repo_key, signature: ~s({:ci_check_failed, "specs"})}
           ] do
         Process.delete(:fixer_create)
         Process.put(:ticket_state, recorded(@repo_key, @issue_id, previous))
@@ -539,8 +502,8 @@ defmodule SymphonyElixir.SelfHealTest do
     test "a narrowed failure retries with the new information, attached to the fix ticket" do
       previous =
         recorded(@repo_key, @issue_id, %{
-          component: "qa_environment",
-          scope: @symphony_repo_key,
+          component: "dev_server",
+          scope: @repo_key,
           signature: "{:dev_server_exit, 3} after build",
           fix_ticket: @fix_ticket
         })
@@ -553,6 +516,46 @@ defmodule SymphonyElixir.SelfHealTest do
       assert {@fix_ticket, evidence} = Process.get(:fixer_attach)
       assert evidence =~ "{:dev_server_exit, 3}"
       assert Process.get(:hold_attrs) == nil
+    end
+
+    test "the same blocked steps found to need the project's own server after a Symphony repair file in the project's repo" do
+      steps = [%{name: "Open the Pipeline board", status: "blocked"}, %{name: "Wide pass", status: "blocked"}]
+      first = %{verdict: :blocked, reason: "Without a running hub, the app can't show the board", steps: steps, findings: []}
+      Process.put(:ticket_state, recorded(@repo_key, @issue_id, %{component: "qa_environment", scope: @symphony_repo_key, signature: SelfHeal.signature(first)}))
+
+      # Narrowed to one of the steps, or unchanged: either way the project's repo has never been asked.
+      for again <- [first, %{first | steps: Enum.take(steps, 1)}] do
+        Process.delete(:fixer_create)
+        assert :filed = SelfHeal.heal(issue(), heal_opts(Map.put(again, :needs_dev_server, true), attempts: 3))
+
+        assert %{scope: @repo_key, component: "dev_server", title: "Self-heal: repair the dev_server block", description: description} =
+                 Process.get(:fixer_create)
+
+        assert description =~ "QA had no running copy of this project's own server"
+        assert description =~ "set `verification.enabled: true` and `verification.dev_server`"
+        assert %{component: "dev_server", scope: @repo_key, fix_ticket: @fix_ticket} = Process.get(:recorded_self_heal)
+      end
+
+      # Once the project's repo has its fix ticket, the same block again is unchanged and escalates.
+      again = Map.put(first, :needs_dev_server, true)
+      Process.put(:ticket_state, recorded(@repo_key, @issue_id, %{component: "dev_server", scope: @repo_key, signature: SelfHeal.signature(again)}))
+      assert :escalated = SelfHeal.heal(issue(), heal_opts(again, attempts: 4))
+    end
+
+    test "another component's failure with the same owner is compared, not filed again" do
+      previous = %{component: "worker_host", scope: @symphony_repo_key, signature: ":environment_unreachable on worker-1", fix_ticket: @fix_ticket}
+      Process.put(:ticket_state, recorded(@repo_key, @issue_id, previous))
+
+      assert :retry = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable)))
+      assert Process.get(:fixer_create) == nil
+      assert %{component: "qa_environment", fix_ticket: @fix_ticket} = Process.get(:recorded_self_heal)
+    end
+
+    test "a dev server that fails to start keeps the generic fix description" do
+      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome({:dev_server_exit, 3})))
+      assert %{component: "dev_server", description: description} = Process.get(:fixer_create)
+      assert description =~ "This is the dev_server component"
+      refute description =~ "QA had no running copy"
     end
 
     test "a reworded QA block with the same blocked steps escalates instead of retrying" do

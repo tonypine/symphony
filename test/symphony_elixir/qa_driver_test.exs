@@ -95,6 +95,8 @@ defmodule SymphonyElixir.QaDriverTest do
         "ax-set-value" => {~s({"ok":true,"element":{"path":"0.2","role":"AXTextField"}}), 0},
         "ax-select" => {~s({"ok":true,"selected":true,"element":{"path":"0.3.1","role":"AXRow","selected":true}}), 0},
         "click" => {~s({"ok":true,"clicked":{"x":120,"y":200},"clicks":1,"element":{"path":"0.4","role":"AXButton"}}), 0},
+        "hover" => {~s({"ok":true,"hovered":{"x":120,"y":200},"settled":true,"under_pointer":{"role":"AXRow"}}), 0},
+        "context-menu" => {~s({"ok":true,"clicked":{"x":120,"y":200},"menu":{"path":"2","role":"AXMenu","items":[{"path":"2.0","role":"AXMenuItem","title":"Pause"}]},"window_id":31}), 0},
         "key" => {~s({"ok":true,"key":"return","modifiers":[],"window":{"role":"AXWindow"},"focused":{"role":"AXOutline"}}), 0}
       },
       Map.get(overrides, :helper_replies, %{})
@@ -799,6 +801,8 @@ defmodule SymphonyElixir.QaDriverTest do
             {"qa_ax_set_value", %{"path" => "0", "value" => "v"}},
             {"qa_ax_select", %{"path" => "0"}},
             {"qa_click", %{"path" => "0"}},
+            {"qa_hover", %{"path" => "0"}},
+            {"qa_context_menu", %{"x" => 1, "y" => 1}},
             {"qa_key", %{"key" => "return"}}
           ] do
         assert {:error, {:qa_tool, "qa_pid_not_launched", message}} = QaDriver.call_tool(driver, tool, Map.put(args, "pid", stranger))
@@ -954,11 +958,64 @@ defmodule SymphonyElixir.QaDriverTest do
       for command <- ["ax-select", "click", "key"], do: refute_received({:cmd, @helper, [^command | _rest], _opts})
     end
 
+    test "hovers and opens a context menu at an element or a point through the helper", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree)
+      pid_arg = Integer.to_string(pid)
+
+      assert {:ok, %{"settled" => true, "under_pointer" => %{"role" => "AXRow"}}} =
+               QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "path" => "0.3.1"})
+
+      assert_received {:cmd, @helper, ["hover", ^pid_arg, "0.3.1"], _opts}
+
+      assert {:ok, %{"hovered" => %{"x" => 120}}} = QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "x" => -40, "y" => 200})
+      assert_received {:cmd, @helper, ["hover", ^pid_arg, "-40,200"], _opts}
+
+      assert {:ok, %{"menu" => %{"items" => [%{"path" => "2.0", "title" => "Pause"}]}, "window_id" => 31}} =
+               QaDriver.call_tool(driver, "qa_context_menu", %{"pid" => pid, "path" => "0.3.1"})
+
+      assert_received {:cmd, @helper, ["context-menu", ^pid_arg, "0.3.1"], _opts}
+
+      assert {:ok, _reply} = QaDriver.call_tool(driver, "qa_context_menu", %{"pid" => pid, "x" => 0, "y" => 32_768})
+      assert_received {:cmd, @helper, ["context-menu", ^pid_arg, "0,32768"], _opts}
+    end
+
+    test "validates hover and context menu targets before calling the helper", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree)
+
+      bad_targets = [
+        %{},
+        %{"x" => 1},
+        %{"y" => 1},
+        %{"path" => "0..1"},
+        %{"path" => 3},
+        %{"x" => 1.5, "y" => 2},
+        %{"x" => 32_769, "y" => 0},
+        %{"x" => "1", "y" => 2}
+      ]
+
+      for tool <- ["qa_hover", "qa_context_menu"] do
+        for args <- bad_targets do
+          assert error_code(QaDriver.call_tool(driver, tool, Map.put(args, "pid", pid))) == "invalid_arguments"
+        end
+
+        both = %{"pid" => pid, "path" => "0", "x" => 1, "y" => 2}
+        assert {:error, {:qa_tool, "invalid_arguments", message}} = QaDriver.call_tool(driver, tool, both)
+        assert message =~ "not both"
+
+        assert {:error, {:qa_tool, "invalid_arguments", message}} = QaDriver.call_tool(driver, tool, %{"pid" => pid, "x" => 1})
+        assert message =~ "both `x` and `y`"
+      end
+
+      for command <- ["hover", "context-menu"], do: refute_received({:cmd, @helper, [^command | _rest], _opts})
+    end
+
     test "passes the helper's row, click and key errors on to the agent", %{worktree: worktree} do
       replies = %{
         "ax-select" => {~s({"error":{"code":"not_a_row","message":"The element at 0.1 is not a table or outline row."}}), 1},
         "click" => {~s({"error":{"code":"covered","message":"Another app's window covers the element at 0.4"}}), 1},
-        "key" => {~s({"error":{"code":"no_window","message":"The app has no focused window to send the key to."}}), 1}
+        "key" => {~s({"error":{"code":"no_window","message":"The app has no focused window to send the key to."}}), 1},
+        "hover" => {~s({"error":{"code":"not_on_screen","message":"Point 5,5 is not on screen"}}), 1},
+        "context-menu" => {~s({"error":{"code":"no_menu","message":"No context menu opened at the element at 0.4."}}), 1}
       }
 
       {driver, pid} = launched_app(worktree, host: host(%{helper_replies: replies}))
@@ -966,6 +1023,8 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:error, {:qa_tool, "qa_not_a_row", _message}} = QaDriver.call_tool(driver, "qa_ax_select", %{"pid" => pid, "path" => "0.1"})
       assert {:error, {:qa_tool, "qa_covered", _message}} = QaDriver.call_tool(driver, "qa_click", %{"pid" => pid, "path" => "0.4"})
       assert {:error, {:qa_tool, "qa_no_window", _message}} = QaDriver.call_tool(driver, "qa_key", %{"pid" => pid, "key" => "escape"})
+      assert {:error, {:qa_tool, "qa_not_on_screen", _message}} = QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "x" => 5, "y" => 5})
+      assert {:error, {:qa_tool, "qa_no_menu", _message}} = QaDriver.call_tool(driver, "qa_context_menu", %{"pid" => pid, "path" => "0.4"})
     end
 
     test "captures each on-screen window or one window id into qa-evidence", %{worktree: worktree} do

@@ -13,11 +13,10 @@ defmodule SymphonyElixir.QaAgent do
   The agent follows the selected playbooks (see `SymphonyElixir.QaAgent.Selection`),
   writes evidence under `qa-evidence/`, and answers with one JSON object:
   `pass | fail | blocked` with per-step results, and `needs_person` when only a person can do what
-  is left (`SymphonyElixir.SelfHeal` then keeps the ticket on an access hold a person lifts), or
-  `covered_by` naming an open ticket that already tracks a missing QA tool (self-heal then holds
-  the ticket on that one instead of filing a fix ticket), or `needs_dev_server` when a blocked step
-  needs the project's own server and no playbook in the pass started one (`blocked_cause/2`; the
-  project's own repo then gets the fix ticket). An answer without that object gets
+  is left (`SymphonyElixir.SelfHeal` then keeps the ticket on an access hold a person lifts),
+  `needs_dev_server` when the project's own server was not running for the pass (self-heal then
+  files the fix in the project's repo), or `covered_by` naming an open ticket that already tracks
+  a missing QA tool (self-heal then holds the ticket on that one instead of filing a fix ticket). An answer without that object gets
   one follow-up turn in the same session asking for it. A pass that runs the `macos_app`
   playbook also gets the host-side `qa_*` tools of a `SymphonyElixir.QaDriver`,
   stopped (quitting every app it launched) when the pass ends, and its `pass` is
@@ -262,9 +261,9 @@ defmodule SymphonyElixir.QaAgent do
     use System V shared memory, so a database such as Postgres cannot start inside it (`initdb`
     fails with `could not create shared memory segment: Operation not permitted`); do not try. A
     playbook with `dev_server: true` has Symphony run the project's server, and its database,
-    outside your sandbox. When a step is `blocked` because it needs the project's own server or its
-    database and Symphony started no dev server for this pass, set `needs_dev_server` to true: the
-    project's repository then gets the fix ticket that sets up its dev server.
+    outside your sandbox. When Symphony started no dev server for this pass and a step is blocked
+    because the project's own server or database is not running, set `needs_dev_server` to true:
+    the project then sets up a dev server for the playbook. Leave it false for any other block.
 
     When a QA tool or capability is missing and an open ticket already tracks adding it (one named
     in the issue, its comments or its relations), put that ticket's identifier in `covered_by`, so
@@ -293,8 +292,8 @@ defmodule SymphonyElixir.QaAgent do
       "findings": ["<required for fail: one actionable defect per entry>"],
       "reason": "<required for blocked>",
       "needs_person": true | false,
-      "covered_by": "<optional: the identifier of an open ticket that already tracks the missing QA tool>",
-      "needs_dev_server": true | false
+      "needs_dev_server": true | false,
+      "covered_by": "<optional: the identifier of an open ticket that already tracks the missing QA tool>"
     }
     """
   end
@@ -829,20 +828,6 @@ defmodule SymphonyElixir.QaAgent do
 
   defp validate_verdict(:blocked, _steps, _findings, nil), do: {:error, :missing_blocked_reason}
   defp validate_verdict(_verdict, _steps, _findings, _reason), do: :ok
-
-  @doc """
-  The cause a blocked QA answer gives `SymphonyElixir.SelfHeal`, or `nil`: `:qa_needs_dev_server`
-  when the agent said a blocked step needs the project's own server (`needs_dev_server`) and none
-  of the pass's `playbooks` started one. That gap is the project's own run setup, so its fix ticket
-  goes to the project's repo rather than to Symphony. A pass that had a dev server keeps the
-  agent's reason, since its server was running.
-  """
-  @spec blocked_cause(result(), [map()]) :: :qa_needs_dev_server | nil
-  def blocked_cause(%{verdict: :blocked, needs_dev_server: true}, playbooks) when is_list(playbooks) do
-    if Enum.any?(playbooks, &dev_server_playbook?/1), do: nil, else: :qa_needs_dev_server
-  end
-
-  def blocked_cause(_result, _playbooks), do: nil
 
   @doc "Findings for the continuation prompt: explicit findings, else the failing steps."
   @spec failure_findings(result()) :: [String.t()]

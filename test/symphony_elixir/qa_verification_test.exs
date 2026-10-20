@@ -759,28 +759,18 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert %{waits_on: %{type: "fix_ticket", keys: ["TP-716"]}} = Hold.get(@repo_key, @issue_id, :blocked)
     end
 
-    test "a step that needs the project's own server, in a pass with no dev server, files the fix ticket in the project's repo" do
+    test "a block on the project's own missing server files its fix ticket in the project's repo" do
       {workspace, _head} = git_workspace!()
 
-      blocked = %{
-        verdict: :blocked,
-        summary: "",
-        steps: [%{name: "Open the Jobs inspector", status: "blocked", details: "no hub", evidence: []}],
-        findings: [],
-        reason: "the Jobs page needs the hub, and hub-server needs Postgres",
-        needs_dev_server: true
-      }
-
+      steps = [%{name: "Open the Pipeline board", status: "blocked", details: "no hub", evidence: []}]
+      blocked = %{verdict: :blocked, summary: "", steps: steps, findings: [], reason: "the app has no hub to talk to", needs_dev_server: true}
       Process.put(:qa_agent_result, {:ok, %{result: blocked, tokens: %{input: 1, output: 1}}})
 
       assert :ok = run(workspace, [])
       assert :ok = run(workspace, [])
 
-      assert_received {:fixer_create, attrs}
-      assert attrs.scope == @repo_key
-      assert attrs.component == "dev_server"
-      assert attrs.description =~ "the Jobs page needs the hub, and hub-server needs Postgres"
-      assert %{waits_on: %{type: "fix_ticket", keys: [@fix_ticket]}} = Hold.get(@repo_key, @issue_id, :blocked)
+      assert_received {:fixer_create, %{scope: @repo_key, component: "dev_server", description: description}}
+      assert description =~ "set `dev_server: true` on the playbook"
     end
 
     test "a second ticket hitting the same break reuses the one fix ticket" do
