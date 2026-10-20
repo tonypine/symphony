@@ -157,6 +157,11 @@ public struct AddRepoDraft: Equatable {
     public var baseBranch: String
     /// The name of the Linear project picked.
     public var project: String?
+    /// The id of the project picked, which the entry names so Symphony resolves its issues back to the repo; nil while
+    /// Linear hasn't listed it, when the entry names the project by `project`.
+    public var projectID: String?
+    /// The key of the picked project's team when it has exactly one, written as `route.team`.
+    public var team: String?
     public var labels: [String]
     /// Whether the repo is the default one, which only the Edit sheet's Linear routing shows. Turning it on moves
     /// `default: true` from the current default.
@@ -173,6 +178,8 @@ public struct AddRepoDraft: Equatable {
         key: String = "",
         baseBranch: String = AddRepo.defaultBaseBranch,
         project: String? = nil,
+        projectID: String? = nil,
+        team: String? = nil,
         labels: [String] = [],
         isDefault: Bool = false,
         manualReview: ManualReviewChoice = .off,
@@ -184,6 +191,8 @@ public struct AddRepoDraft: Equatable {
         self.key = key
         self.baseBranch = baseBranch
         self.project = project
+        self.projectID = projectID
+        self.team = team
         self.labels = labels
         self.isDefault = isDefault
         self.manualReview = manualReview
@@ -305,11 +314,18 @@ public enum AddRepo {
         branch.trimmingWhitespace().isEmpty ? AddRepoProblem("Enter a base branch, such as main.") : nil
     }
 
-    /// The route of the draft's project and labels, nil while no project is picked.
+    /// The route of the draft's project and labels, nil while no project is picked: the project by its id, which Symphony
+    /// always resolves back to the repo, and its team when it has exactly one.
     static func route(of draft: AddRepoDraft) -> RepositoryRoute? {
         guard let project = draft.project?.trimmingWhitespace(), !project.isEmpty else { return nil }
+        let id = draft.projectID?.trimmingWhitespace() ?? ""
+        let team = draft.team?.trimmingWhitespace() ?? ""
         let labels = draft.labels.map { $0.trimmingWhitespace() }.filter { !$0.isEmpty }
-        return RepositoryRoute(projects: [project], labels: labels.isEmpty ? nil : labels)
+        return RepositoryRoute(
+            team: team.isEmpty ? nil : team,
+            projects: [id.isEmpty ? project : id],
+            labels: labels.isEmpty ? nil : labels
+        )
     }
 
     /// Why `route` can't be added: another repo in `existing` already takes the same issues.

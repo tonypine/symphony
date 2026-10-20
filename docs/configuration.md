@@ -80,7 +80,8 @@ creates a missing one; a label one typo away from one of them; the deprecated `h
 label in `escalate.labels` (a fix removes it) or on open tickets; and tickets whose `Blocked` or
 `Needs Decision` label disagrees with the hold Symphony keeps, with a fix that re-syncs the label.
 `POST /api/v1/setup/fixes` runs a Linear fix the last check proposed, and
-`POST /api/v1/setup/refresh` checks again at once. See [SPEC.md](../SPEC.md) for the problem shape.
+`POST /api/v1/setup/refresh` checks again at once; with `?repo=<key>`, either one keeps the
+problems of that repo and the global ones. See [SPEC.md](../SPEC.md) for the problem shape.
 
 ## Settings in the macOS app
 
@@ -99,7 +100,9 @@ in neither of these:
   Repos sections read and write, one string literal per line. A key holding a free-form map, such
   as `agent.run_profiles`, covers everything under it. A Swift test runs every line-editor write
   and fails when one writes a key the manifest doesn't list, or the manifest lists a key no editor
-  writes. The task also fails when the manifest lists a key that is not a setting.
+  writes. The task also fails when the manifest lists a key that is not a setting. It may list a
+  path inside a setting that holds a map, such as `auto_review.playbooks.macos_app.requires`, when
+  the app edits that one entry; the setting itself still needs its own entry or exemption.
 - **The exemption file**, `config/settings_ui_exempt.yml`: entries with a `key` (a key path, or
   `prefix.*` for every key under the prefix, including later ones) or a `keys` list, a `reason`,
   and an optional `ticket` for the planned control. The task warns about an exemption that matches
@@ -227,7 +230,7 @@ issues:
   new name, and is then recreated, so a name is never silently duplicated. The
   machine enters them and dispatch picks them up — `Code Review` for the reviewer run, `QA` for the
   QA pass, `CI Fix` for mechanical repair, and `Epic Review` for the automatic close of a plan
-  parent whose sub-issues are all terminal (pass -> `Done`; gaps -> each one filed as a follow-up
+  parent whose sub-issues are all terminal (pass -> `Done`; gaps -> each defect filed as a follow-up
   sub-ticket in `Todo` under the same epic with the epic's priority, with the parent back in
   `Waiting on sub-tickets`). They sit in Linear's `started` group, beside `In Progress`, so they
   read as active columns;
@@ -893,7 +896,7 @@ agent:
 
 - `prompts.include_project_guides` defaults to `true`. Set it to `false` to omit the injected
   `## Project conventions` prompt section. A prompt that ends in an output contract, such as the
-  reviewer's JSON verdict, gets the section above that contract, so the contract stays last.
+  reviewer's verdict, gets the section above that contract, so the contract stays last.
 - `prompts.project_guide_files: null` uses the runner default: `["CLAUDE.md"]` for Claude, `[]`
   for Codex. Codex keeps relying on native workspace `AGENTS.md` discovery unless an explicit list
   is configured.
@@ -1197,6 +1200,17 @@ locally (format, compile, lint, the tests for the changed code; Symphony's own l
 `run_on` defaults to `always`; set it to `first_push` to skip the reviewer on PR follow-up runs while keeping it enabled for initial issue runs.
 Follow-up runs include explicit PR dispatches (`symphony pr`) and automatic rework runs triggered by reviewer comments, CI failures, or PR conflicts; these also omit the review-agent gate from the prompt so the agent can push and exit in a single turn.
 
+The reviewer records its verdict with the `review_verdict` tool, whose input schema is the verdict
+contract (`approve`, `request_changes` or `block`, and findings with file, line range, quoted
+snippet, summary and suggested fix). A reviewer that ends its turn without calling it is read from
+the JSON in its final message instead. Both are read leniently (`Approved`, `changes_requested`, a
+line range `"12-15"`, a reversed pair), and a verdict Symphony still cannot read gets one repair
+turn in the same session, with the error, before the review counts as inconclusive. A finding
+whose quote cannot be found in the diff or the file is kept as a comment marked "could not be
+placed" and the verdict stands; only a change request none of whose findings can be placed is
+unverifiable. `/api/v1/state` counts inconclusive Code Review runs per cause
+(`counts.review_inconclusive`), and the Mac app's ticket page shows the cause on the run's row.
+
 The review-agent gate the prompt carries comes before the push that hands the ticket to
 `Code Review`, and both the gate and the workflow's handoff text say so: the agent stops at the
 gate, and the same run pushes once the reviewer approves.
@@ -1246,7 +1260,7 @@ Before any agent runs, Symphony decides whether the PR needs QA and which playbo
 | `qa:<kind>` label (for example `qa:cli`) | that playbook runs |
 | only docs, tests or `skip_globs` paths changed | skipped |
 | `## User walkthrough` in the ticket | `cli` playbook runs |
-| web paths changed and `verification.dev_server` configured | `web` playbook runs |
+| web paths changed, `verification.enabled` on and `verification.dev_server` configured | `web` playbook runs |
 | Android paths changed, `android_app` configured and `auto_review.android.avd` set | `android_app` playbook runs |
 | a playbook's trigger paths changed | that playbook runs |
 | nothing else | skipped (internal changes rely on tests and the pre-push review) |
@@ -1304,6 +1318,26 @@ Inbox lists it, and `Unblock` starts the wait again from zero. The public API is
 `api.github.com`, which is not in the built-in network allowlist; add it to
 `agent.permissions.network.allowed_domains` for the fallback to work.
 
+A commit whose runs finished with a failed one is not judged at once: Symphony reruns the failed
+jobs of each failed run once per commit (`gh run rerun <id> --failed`, as the PR watcher reruns a
+red PR head before CI Fix) and waits for the rerun the same way, the hour starting again. A run
+green on its rerun is a flake: Symphony records a `ci_flake` signal on the epic with the commit, the
+runs and the failed job and test names it read before the rerun, files nothing, and the review
+judges a green commit. A run red again is judged as before, and its follow-up quotes the second
+failure's log. The review's report names what the rerun found in its `ci_rerun` pre-check. A commit
+is never rerun twice: the rerun is recorded on the epic before it is made, and a review that cannot
+record it does not rerun.
+
+**One follow-up per defect.** The epic review's agent names, for each failing step, the defect it
+rests on (`"defect"` in its answer: a few words saying what is broken). Steps that fail for the same
+cause carry the same defect, matched without regard to case or surrounding spaces, and a plan-level
+step that fails only because a design-check step failed names that step's defect. Symphony files one
+follow-up per defect: titled `Epic review fails: <defect>`, its description lists every step that
+rests on it, each with its details and evidence, and its acceptance criteria list every one of those
+steps, so the next review marks them. A failing step that names no defect is a follow-up of its own,
+titled after the step. A defect's follow-up answers to every `gap` label of its steps and waits on
+what any of them waits on, except on one another.
+
 **Which steps QA walks.** Each step of a `## User walkthrough` names the one place that proves it
 ([ADR 0003](adr/0003-automated-tests-first-qa-last-resort.md)), on a line at the end of the step:
 
@@ -1332,7 +1366,7 @@ agent reading check runs: a green head does not prove it, since a path-filtered 
 | --- | --- | --- |
 | the check passed and the test is in the checkout | `pass`, linked to the check run | the agent starts; the prompt lists the step as confirmed, with its link, and tells the agent not to walk it |
 | the check failed, did not run on the head, reported only `skipped`, or the named test is not in the checkout | `fail`, naming the step and what is missing | `fail` to `Rework` with no agent run: the ticket's proof is part of its work |
-| the check is still running | waiting | waits like the epic review waits for CI (above): the pass starts again a minute later, with no verdict; after an hour on the same head it is `blocked` with the reason, retried like any blocked pass, then handed to the self-heal lane |
+| the check is still running | waiting | waits like the epic review waits for CI (above): the pass starts again a minute later, with no verdict; after an hour on the same head it is `blocked` with the reason, retried like any blocked pass, then a person decides (no QA tool raised it, so it never reaches the self-heal lane) |
 | CI on the PR head cannot be read, or the PR head is not the commit QA judges | — | `blocked` with the reason |
 
 The QA report lists every result under `### Pre-checks`, one line per step with the check run's
@@ -1386,9 +1420,21 @@ paths, since it tests the merged result.
 
 Every pass rewrites one `## Symphony QA Report` comment on the issue (Symphony's only comment
 besides the agent workpad) and records a run with `kind: "qa"`, its tokens and wall time in the
-run store, which the dashboard's run history shows. The `QA` state applies the verdict (pass →
-`Merging`, fail → `Rework`, blocked → retried, then a `Blocked` hold on a fix ticket); see
-[`design/state-machine.md`](design/state-machine.md).
+run store, which the dashboard's run history shows. The `QA` state applies the verdict; see
+[`design/state-machine.md`](design/state-machine.md):
+
+| Verdict | What it means | What happens |
+| --- | --- | --- |
+| `pass` | every step behaved as the ticket describes, the wide pass included | `Merging` |
+| `pass` with `scope: none` | the change has nothing on screen to judge: neither the diff nor the ticket names a walkthrough step or a screen, by the agent's answer or by the QA policy (below) | `Merging` with the reason in the report, but only when the pass ran `qa_build`, `qa_launch_app` and a `qa_check_app` that found the app healthy, so the merge still waits on the app starting; without them it is `inconclusive` |
+| `fail` | a step shows a defect in the change | `Rework` |
+| `inconclusive` | the QA run itself fell short: a `macos_app` pass that judged screens but never ran the wide pass, or a `scope: none` pass that never started the app | QA runs once more on the same head, then the ticket pauses in `QA` on a Needs Decision hold. Nothing in the environment is broken, so no fix ticket is filed |
+| `blocked` | the pass could not test the change | retried once on the same head, then: the self-heal lane when the QA tools raised the block themselves (`qa_worker_*`, `qa_host_missing_tool`, `qa_host_tool_check_failed`, `qa_host_tunnel_failed`, `qa_dev_server_failed`), when only a person can clear it (`needs_person`, an access hold), or when the agent named the open ticket that covers it (`covered_by`) or the project's missing dev server (`needs_dev_server`); any other block (the agent's own account, a crash, the token limit, a check that never finished) pauses the ticket in `QA` on a Needs Decision hold instead of filing a fix ticket for a problem nothing names |
+
+The QA policy gives a pass `scope: none` up front when a `macos_app` pass is selected (by a
+`qa:macos_app` label) although no changed path matches any selected playbook's `paths`, and the
+ticket has no `## User walkthrough`: the agent is told that building and launching the app are the
+whole check.
 
 `playbooks` overrides playbooks per kind, and adds kinds of your own with `paths` and `prompt`:
 
@@ -1410,9 +1456,20 @@ Set `dev_server: true` on a kind of your own when its pass needs the project's s
 such as an API and the Postgres it stores in that the app under test talks to. Symphony then
 starts `verification.dev_server` for that pass as it does for `web` (from its own worktree at the
 PR head, on a pooled port, outside the agent's sandbox), gives the agent its URL and lets the
-agent's sandbox reach `localhost`; only a `web` pass also gets the `browser` MCP server. Without
-a configured dev server the kind is off, and the `QA selection` log line says it needs
-`verification.dev_server`:
+agent's sandbox reach `localhost`; only a `web` pass also gets the `browser` MCP server. The
+`macos_app` playbook takes `dev_server: true` too: on a `worker_host` its server runs on the QA
+host, beside the app (see [macOS app QA](#macos-app-qa)). Each path reads its own flags:
+
+| Playbook with a dev server | Needs |
+| --- | --- |
+| `macos_app` with `dev_server: true` on a `worker_host` | `verification.dev_server.start_cmd` only; `verification.enabled` may be `false` |
+| `web`, a kind of your own with `dev_server: true`, `macos_app` without a `worker_host` | `verification.enabled: true` and `verification.dev_server.start_cmd` |
+
+`verification.enabled` also starts the dev server on the Symphony host for every agent run (see
+[`verification`](#verification)), so a repository whose server only runs on the QA host, beside a
+Mac app, leaves it `false`. Without the flags it needs the kind is off, and the `QA selection` log
+line says which one is missing: `` needs `verification.dev_server` `` without a start command,
+`` needs `verification.enabled` `` with one but verification off:
 
 ```yaml
 auto_review:
@@ -1470,10 +1527,11 @@ That repository's `macos_app` playbook builds with `make -C macos app` and trigg
 
 Each QA pass re-reads the repository's `WORKFLOW.md` from its base branch first, after a
 `git fetch origin` when `fetch_before_dispatch` is on, so a playbook merged since the last
-dispatch applies to the next pass. It logs its selection at info level in one line:
+dispatch applies to the next pass. Each QA decision, at Code Review's approve and again when the
+QA state runs, logs its selection at info level in one line:
 
 ```text
-QA selection issue_id=… issue_identifier=MOT-32 sha=… decision=run playbooks=android_app not_selected="cli: not triggered; macos_app: needs `auto_review.playbooks.macos_app.build`, `auto_review.playbooks.macos_app.app`; web: needs `verification.dev_server`" workflow_refresh=:ok
+QA selection issue_id=… issue_identifier=MOT-32 sha=… decision=run playbooks=android_app not_selected="cli: not triggered; macos_app: needs `auto_review.playbooks.macos_app.build`, `auto_review.playbooks.macos_app.app`; web: needs `verification.enabled`"
 ```
 
 `not_selected` names each playbook that did not run: `not triggered` when none of its paths
@@ -1609,8 +1667,28 @@ auto_review:
       build: make -C macos qa-app         # run in the QA worktree
       app: macos/build/Symphony.app       # relative to the repo root
       build_timeout_ms: 900000            # optional, default 15 minutes
+      # requires: [go, pg_ctl]          # optional: tools the QA host must have (see below)
       # paths: ["macos/Sources/**"]       # optional, default: Swift, Info.plist, xib, storyboard, xcassets
+      # dev_server: true                  # optional, default false: run verification.dev_server for the pass
+      # dev_server_port: 8090             # optional, default 8090: its port on the QA host
+      # launch_env:                       # optional, default {}: extra variables for the app under test
+      #   HUB_OWNER_TOKEN: qa-owner-token
 ```
+
+| Key | Default | Does |
+| --- | --- | --- |
+| `build` | none (required) | the command `qa_build` runs in the QA worktree, or in `src/` on a `worker_host` |
+| `app` | none (required) | the `.app` bundle the build writes, relative to the repo root |
+| `build_timeout_ms` | `900000` | how long `qa_build` waits for `build` |
+| `paths` | Swift, `Info.plist`, xib, storyboard, xcassets | the changed paths that select the playbook |
+| `dev_server` | `false` | the pass starts `verification.dev_server`. On a `worker_host` it runs on the QA host, beside the app (see [Running QA on a separate macOS host](#running-qa-on-a-separate-macos-host)); without one, on the Symphony host as for any `dev_server: true` playbook (see [QA passes](#qa-passes)) |
+| `dev_server_port` | `8090` | the port the QA-host dev server listens on, as `SYMPHONY_VERIFICATION_PORT` |
+| `launch_env` | `{}` | extra variables `qa_launch_app` sets on the app, after Symphony's own, with `$SYMPHONY_VERIFICATION_PORT` replaced by `dev_server_port`. Names match `^[A-Z][A-Z0-9_]*$`; the variables Symphony sets itself (`SYMPHONY_BAR_QA_ROOT`, `SYMPHONY_QA_OPENROUTER_URL`, `SYMPHONY_BAR_QA_API_FIXTURES` and the stand-ins below), `PATH`, `HOME` and `DYLD_*` fail the config check, naming the key |
+
+`launch_env` values are written in plain text, in `symphony.yml` or a repository's `WORKFLOW.md`,
+which is often public: put only documented QA values there (a QA owner token such as the Job
+Search Hub's `HUB_OWNER_TOKEN`), never a secret. The Director's **Settings → macOS app QA** edits
+`dev_server`, `dev_server_port` and `launch_env` in `symphony.yml`.
 
 For Symphony's own app, build with `make -C macos qa-app`, not `make -C macos app`. The app runs
 `symphony check` on every Settings Save, and a plain `make` build has no Symphony to run it with,
@@ -1637,7 +1715,7 @@ tools for it on the host, outside the sandbox, and checks every argument:
 | Tool | Does | Refuses |
 | --- | --- | --- |
 | `qa_build` | runs `build` in the QA worktree with the agent's scrubbed environment plus `QA_HOST_PORTS` (the pass's [host ports](#qa-passes), comma-separated; unset when their tunnel could not open), then copies the `app` bundle into a private directory | a worktree with changes outside `qa-evidence/` and `.gradle-daemons/` (Symphony's own), gitignored files included: none may exist before the first build, and none may appear or change after a build; a bundle that resolves (symlinks included) outside the worktree, or that holds an absolute symlink or one with `..` |
-| `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)) and `SYMPHONY_QA_OPENROUTER_URL` set to the pass's [OpenRouter stub](#qa-passes), and returns its PID. With `api_fixtures`, a directory relative to the PR checkout (such as `macos/Tests/Fixtures/director-app/running`), it copies that directory's files into a fresh `api-fixtures-<n>/` in the pass's private directory (the run directory on a `worker_host`) and sets `SYMPHONY_BAR_QA_API_FIXTURES` to the copy, so the app reads Symphony's local API from those JSON files. Optional stand-ins: `gh_stub_port` sets `SYMPHONY_BAR_GH` to Symphony's own fake `gh` (written into the run directory's `bin/`) and `SYMPHONY_QA_GH_URL` to `http://localhost:<port>`; the fake POSTs each call's arguments there as form fields (`argc`, then one `arg` per argument, in order) and prints the answer, a 200 on stdout with exit status 0 and anything else on stderr with exit status 1. `linear_stub_port` sets `SYMPHONY_QA_LINEAR_URL` to `http://localhost:<port>/graphql`, where the Add Repo sheet sends its Linear queries. The QA agent serves both with the shared stubs, `python3 -B test/support/stubs/gh.py` and `python3 -B test/support/stubs/linear.py`, which answer from committed answers files, give an unknown call a clear error and log every request (see [`test/support/README.md`](../test/support/README.md#the-gh-and-linear-stubs)). `open_panel_dir` sets `SYMPHONY_BAR_QA_OPEN_PANEL_DIR`, the folder the Add Repo sheet's folder picker opens in. `update_feed_port` sets `SYMPHONY_BAR_UPDATE_URL` to `http://localhost:<port>/releases/latest`, the release feed the app's update checks read instead of GitHub's; the QA agent serves it there with the shared feed server, `python3 -B test/support/stubs/update_feed.py` (a made-up newer release, a release pair's feed, nothing newer or a 403, every request logged; see [`test/support/README.md`](../test/support/README.md#the-update-feed)). `update_check_interval_seconds` sets `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL`, the seconds between the app's background update checks. `appearance`, `light` or `dark`, makes the app draw in that appearance whatever the QA host's: it sets `SYMPHONY_BAR_QA_APPEARANCE`, which Symphony's own app reads, and injects Symphony's appearance library (`priv/qa_driver/symphony-qa-appearance.m`, built with `clang` on the machine the app runs on, once per source under the state root or once per pass in the QA host's run directory) with `DYLD_INSERT_LIBRARIES`, which reads the same variable and sets any AppKit app's appearance as it finishes launching, printing `symphony-qa-appearance: <light|dark>` to the app's output. AppKit reads the system appearance from the global defaults only, so a launch argument such as `-AppleInterfaceStyle Dark` cannot do it; a light launch also passes `-NSRequiresAquaSystemAppearance YES`. An app built with the hardened runtime ignores the library. Without `appearance` the app follows the host. The host's own appearance is never switched: a pass that died would leave it switched for the next pass, and switching it needs Apple Events, which the QA host blocks. With `release_pair: true` it starts a fresh copy of the [signed release pair](#the-signed-release-pair)'s N instead of the `qa_build` bundle, with the pair's update feed beside it | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse; an `api_fixtures` path that is absolute or resolves (symlinks followed) outside the checkout or into its `.git`, or not a directory, a directory holding a symlink, a special file or a file with other hard links, over 5 MB or over 1000 files, and a file replaced while it is read; a stub port that is not one of `QA_HOST_PORTS`; an `open_panel_dir` that `qa_put_checkout` did not return in the pass; an `update_check_interval_seconds` that is not a positive integer; an `appearance` other than `light` or `dark`, or an appearance library that cannot be built (`qa_appearance_unavailable`); `release_pair` before a successful `qa_build_release_pair`, or with `update_feed_port` |
+| `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)) and `SYMPHONY_QA_OPENROUTER_URL` set to the pass's [OpenRouter stub](#qa-passes), and returns its PID. With `api_fixtures`, a directory relative to the PR checkout (such as `macos/Tests/Fixtures/director-app/running`), it copies that directory's files into a fresh `api-fixtures-<n>/` in the pass's private directory (the run directory on a `worker_host`) and sets `SYMPHONY_BAR_QA_API_FIXTURES` to the copy, so the app reads Symphony's local API from those JSON files. Optional stand-ins: `gh_stub_port` sets `SYMPHONY_BAR_GH` to Symphony's own fake `gh` (written into the run directory's `bin/`) and `SYMPHONY_QA_GH_URL` to `http://localhost:<port>`; the fake POSTs each call's arguments there as form fields (`argc`, then one `arg` per argument, in order) and prints the answer, a 200 on stdout with exit status 0 and anything else on stderr with exit status 1. `linear_stub_port` sets `SYMPHONY_QA_LINEAR_URL` to `http://localhost:<port>/graphql`, where the Add Repo sheet sends its Linear queries. The QA agent serves both with the shared stubs, `python3 -B test/support/stubs/gh.py` and `python3 -B test/support/stubs/linear.py`, which answer from committed answers files, give an unknown call a clear error and log every request (see [`test/support/README.md`](../test/support/README.md#the-gh-and-linear-stubs)). `open_panel_dir` sets `SYMPHONY_BAR_QA_OPEN_PANEL_DIR`, the folder the Add Repo sheet's folder picker opens in. `update_feed_port` sets `SYMPHONY_BAR_UPDATE_URL` to `http://localhost:<port>/releases/latest`, the release feed the app's update checks read instead of GitHub's; the QA agent serves it there with the shared feed server, `python3 -B test/support/stubs/update_feed.py` (a made-up newer release, a release pair's feed, nothing newer or a 403, every request logged; see [`test/support/README.md`](../test/support/README.md#the-update-feed)). `update_check_interval_seconds` sets `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL`, the seconds between the app's background update checks. `appearance`, `light` or `dark`, makes the app draw in that appearance whatever the QA host's: it sets `SYMPHONY_BAR_QA_APPEARANCE`, which Symphony's own app reads, and injects Symphony's appearance library (`priv/qa_driver/symphony-qa-appearance.m`, built with `clang` on the machine the app runs on, once per source under the state root or once per pass in the QA host's run directory) with `DYLD_INSERT_LIBRARIES`, which reads the same variable and sets any AppKit app's appearance as it finishes launching, printing `symphony-qa-appearance: <light|dark>` to the app's output. AppKit reads the system appearance from the global defaults only, so a launch argument such as `-AppleInterfaceStyle Dark` cannot do it; a light launch also passes `-NSRequiresAquaSystemAppearance YES`. An app built with the hardened runtime ignores the library. Without `appearance` the app follows the host. The host's own appearance is never switched: a pass that died would leave it switched for the next pass, and switching it needs Apple Events, which the QA host blocks. With `release_pair: true` it starts a fresh copy of the [signed release pair](#the-signed-release-pair)'s N instead of the `qa_build` bundle, with the pair's update feed beside it. Every launch of the pass shares one QA root, root 1 (`app-root/` in the private directory, the run directory on a `worker_host`), so its settings carry from one launch to the next. `fresh_root: true` (default `false`) starts the app in a new, empty QA root instead, `qa-root-<n>/` beside the first and numbered from 2, with the same `api_fixtures`, stand-ins and `launch_env`, for a first-launch step, a step that resets the app, or a scenario that must not see earlier settings; `root: <n>` starts it in a root the pass already has (`root: 1` is the first). The result names the app's `root`; a release pair's app is relaunched in its root, and `qa_open_status_menu` writes into it | `fresh_root` that is not a boolean, or with `root`; a `root` the pass does not have (`qa_unknown_root`, naming the pass's roots); a fresh root that cannot be made; an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse; an `api_fixtures` path that is absolute or resolves (symlinks followed) outside the checkout or into its `.git`, or not a directory, a directory holding a symlink, a special file or a file with other hard links, over 5 MB or over 1000 files, and a file replaced while it is read; a stub port that is not one of `QA_HOST_PORTS`; an `open_panel_dir` that `qa_put_checkout` did not return in the pass; an `update_check_interval_seconds` that is not a positive integer; an `appearance` other than `light` or `dark`, or an appearance library that cannot be built (`qa_appearance_unavailable`); `release_pair` before a successful `qa_build_release_pair`, or with `update_feed_port` |
 | `qa_quit_app` | quits a launched app and returns its recent output | a PID it did not launch |
 | `qa_screenshot` | saves the app's on-screen windows to new files `qa-evidence/<name>.png` | a PID it did not launch, a window of another app, a name that already exists (file or symlink) |
 | `qa_ax_tree` | reads the accessibility tree (role, title, value, frame; never a secure field's value), filtered by `role` or `text`, capped in depth, nodes and size | a PID it did not launch |
@@ -1649,13 +1727,13 @@ tools for it on the host, outside the sandbox, and checks every argument:
 | `qa_key` | presses a named key (`return`, `escape`, arrows, …) or one character key, with `command`, `shift`, `option` or `control`, in the app's focused window, with key events sent to the app alone; returns the focused window and element | a PID it did not launch, a key or modifier outside that list, an app with no focused window |
 | `qa_resize_window` | the wide pass: moves the app's main window (or the `AXWindow` at `path`) to the top left of the screen and resizes it to `width`×`height` points (1400×900 by default), or the screen's usable area when that is smaller, with `AXSize` or else the window's zoom button; returns the window frame it reached, the screen and its usable area, and `limited` when that area is under 1400×900 pt | a PID it did not launch, a size under 1400×900 or over 8192 pt, a `path` that is not a window |
 | `qa_open_status_menu` | opens a launched app's status-bar menu on screen, as a click on its menu bar item would, and returns the menu's `window_id` and `frame` once it shows, for `qa_screenshot`; `qa_key` with `escape` closes it. It writes an empty `status-menu/open-<pid>` under the app's QA root (on the QA host for a `worker_host`), which the app takes in [QA mode](../macos/README.md#qa-mode) only, then waits up to 10 seconds for a pop-up menu window (layer 101) in the app's window list. It goes around Accessibility because `AXPress` on the status item blocks until the menu closes (AXError -25204) and a click on it is refused as covered | a PID it did not launch; a menu that does not show within 10 seconds (`qa_status_menu_not_opened`), after which it removes the request so the menu does not open later |
-| `qa_check_app` | says whether a launched app still runs (also after it exited), answers an accessibility request within 10 seconds (else it is hung), and has written a new `~/Library/Logs/DiagnosticReports/<executable>*` crash report since launch (read on the QA host for a `worker_host`), with each problem naming the `page` the agent passes and the window size `qa_resize_window` set | a PID it did not launch |
+| `qa_check_app` | says whether a launched app still runs (also after it exited), answers an accessibility request within 10 seconds (else it is hung), and has written a new `~/Library/Logs/DiagnosticReports/<executable>*` crash report since launch (read on the QA host for a `worker_host`), with each problem naming the `page` the agent passes and the window size `qa_resize_window` set, and names the app's QA `root` | a PID it did not launch |
 | `qa_put_file` | puts a fixture file the agent wrote (a test `symphony.yml`, a `WORKFLOW.md`) where the app can open it and returns that path: the file's own path on this host, a copy in the run directory's `files/` on a `worker_host` | a file that resolves outside the worktree and the pass's `$TMPDIR`, a symlink, a directory or other non-regular file, a file with other hard links, a file over 1 MB, and a file replaced while it is read |
 | `qa_put_checkout` | puts a git checkout where the app can open it: clones a `git bundle` the agent made into `checkouts/<remote_name>` in the driver's directory (the run directory on a `worker_host`) with no hooks, sets its `origin` to `remote_url`, and returns its path. Nothing is fetched from GitHub | the bundle files `qa_put_file` refuses, a `remote_url` that is not `https://github.com/<owner>/<repo>`, a `remote_name` that is not a plain file name, a checkout name already taken in the pass |
 | `qa_build_release_pair` | builds the [signed release pair](#the-signed-release-pair) (`make -C macos release-pair`) where the app runs, signed with the QA host's test signing identity, into the pass's private directory, and returns its `manifest.json` | a worktree `qa_build` would refuse; a QA host without the identity (`qa_signing_identity_missing`) or whose identity is not trusted for code signing (`qa_signing_identity_untrusted`), which the QA agent reports as `blocked`, unless a `worker_host` with passwordless `sudo` lets Symphony install it first (`signing_identity_installed: true`) |
 | `qa_relaunched_app` | waits up to `wait_seconds` (default 60) for the update helper of a release pair's app to ask for the app to start again, after an install or a rollback, starts that bundle in QA mode with the launch's environment and returns its PID, `version` and `build` | a pass that launched no `release_pair` app; a bundle no `release_pair` launch made; no request in time (`qa_no_relaunch`) |
 | `qa_update_feed` | returns the release pair's feed's `mode`, `url` and the app's `requests` to it (oldest first, at most 200), after switching it to `mode` when given: `publish` offers N+1, `none` nothing newer, `forbidden` answers 403 | a pass whose feed is not running; another `mode` |
-| `qa_api_requests` | returns the requests an app launched with `api_fixtures` logged to `api-requests.jsonl` in its QA root since the last call (each POST's `method`, `path` and `body`), oldest first, at most the last 500 with `dropped` counting the rest, and takes the log away so the next call returns only newer ones; on a `worker_host` it reads the log there | a log that cannot be read |
+| `qa_api_requests` | returns the requests the apps launched with `api_fixtures` in one QA root logged to `api-requests.jsonl` there since the last call (each POST's `method`, `path` and `body`), oldest first, at most the last 500 with `dropped` counting the rest, and takes the log away so the next call returns only newer ones; on a `worker_host` it reads the log there. `root: <n>` names the root (a number `qa_launch_app` returned); without it, the root of the last launch. The result names the `root` it read | a `root` the pass does not have (`qa_unknown_root`), a log that cannot be read |
 
 At most three launched apps run at once, and every app still running is quit when the pass ends.
 Only QA agents see these tools; executor and reviewer sessions cannot list or call them.
@@ -1687,10 +1765,12 @@ accessibility answer for 10 seconds) or writes a new crash report, and the repor
 the window size. The report's `Wide pass` step gives the window size, the screen size and the
 pages it covered. A QA screen whose usable area is under 1400×900 pt (a VM with a 1024×768 display)
 cannot run it at full size: the step says the wide pass was limited, and Symphony reports a `pass`
-from that screen as `blocked` for a person instead of passing it. A `pass` with no `qa_resize_window` call at all is `blocked` too, with the
-reason that the wide pass did not run. An epic review gets every enabled playbook whatever the epic
-shipped, so it owes the wide pass only when it launched an app: an epic review of a backend-only
-epic that launched none keeps its `pass`. Give the QA VM a larger display, for example
+from that screen as `blocked` for a person instead of passing it. A `pass` with no `qa_resize_window`
+call at all is `inconclusive`, with the reason that the wide pass did not run: QA runs once more,
+then a person decides. A `pass` with `scope: none` owes no wide pass, since it has nothing on screen
+to judge. An epic review gets every enabled playbook whatever the epic shipped, so it owes the wide
+pass only when it launched an app: an epic review of a backend-only epic that launched none keeps
+its `pass`, and one that launched an app without the wide pass is `blocked`. Give the QA VM a larger display, for example
 `tart set symphony-qa --display 1920x1200`, and restart it. The resize needs no grant beyond the
 helper's Accessibility.
 
@@ -1810,6 +1890,46 @@ host and the worktree checks still apply there. Then:
   path, since the app cannot read files on the Symphony host;
 - `qa_api_requests` moves the app's `api-requests.jsonl` aside in the run directory and copies it
   back over SSH;
+- `qa_launch_app` with `fresh_root: true` makes the new QA root, `qa-root-<n>/`, in the run
+  directory there with `mkdir` over SSH, and the app runs in it;
+- with `dev_server: true` on the `macos_app` playbook and `verification.dev_server.start_cmd` set,
+  whatever `verification.enabled` says (leave it `false` so agent runs start no server on the
+  Symphony host), the project's dev server runs on the QA host, beside the app, which cannot reach a server on the
+  Symphony host. When the pass starts, before the agent does, Symphony copies the worktree's `HEAD`
+  into `dev-server/src/` in the run directory (a copy of its own, since each `qa_build` unpacks
+  `src/` afresh), runs `verification.dev_server.build_cmd` and then `start_cmd` there as the QA user,
+  unsandboxed like `qa_build`, with `SYMPHONY_VERIFICATION_PORT` set to the playbook's
+  `dev_server_port` (default `8090`), `HOME` set to a fresh `dev-server/home/` (so the QA user's
+  config files are never read) and `TMPDIR` to `dev-server/tmp/`. `start_cmd` runs in a process
+  group of its own and logs to `dev-server/server.log`. The QA host polls `health_check_url` with
+  `curl` until it answers 200 or `health_timeout_ms` passes, and after each answer checks that
+  `start_cmd` still runs, in the foreground as on the Symphony host: a 200 from another server on
+  the port never counts. A build
+  that fails, a server that exits (one that could not bind its port, say), or a health check that
+  times out makes the pass `blocked` before the agent starts, with the reason
+  `qa_dev_server_failed: …` and the log's last 20 lines; self-heal files its fix ticket, component
+  `dev_server`, in the project's repository. The QA prompt names the server's URL. When the pass
+  ends Symphony sends the group `stop_signal`, waits `stop_timeout_ms` and kills what is left,
+  then removes the run directory. The Symphony host starts no dev server of its own for that
+  playbook.
+
+  One pass at a time runs a dev server on a QA host's port, since the app under test reads its
+  hub URL from its own defaults and the port is fixed. Before it starts its server (so before any
+  `qa_build`), a pass takes a lease on the `worker_host` and `dev_server_port`; a second pass
+  waits for it, first come first served, and starts once the first pass stopped its own server
+  at its end. While it waits, `GET /api/v1/state` lists it under `dispatch_skipped` with
+  `waiting for the QA host's dev server port: 8090 on … is held by TP-…'s QA pass`. Passes
+  without a QA-host dev server never wait. The lease lives in Symphony, so it covers the passes of
+  one Symphony. Before `start_cmd`, a port something already listens on (a server another pass or
+  a crashed Symphony left behind) makes the pass `blocked` with
+  `qa_dev_server_port_busy: 8090 held by pid <n> (<ticket>)`: the listener's pid, from `lsof` on the
+  QA host, and the ticket of the pass whose server it is, read from its run directory.
+
+  The log lines are `QA dev server started issue_id=… issue_identifier=… worker_host=… port=…
+  pid=… lease=<worker_host>:<port>` and `QA dev server stopped … outcome=…`; a pass that has to
+  wait logs `QA dev server lease busy: <ticket> waits worker_host=… port=… held_by=<ticket>`, and
+  the hand-over `QA dev server lease passed from <ticket> to <ticket> …`;
+- `qa_launch_app` adds the playbook's `launch_env` after Symphony's own variables;
 - the run directory is removed when the pass ends. A build that times out is stopped on the
   Symphony side; on the QA host it may run until it finishes.
 
@@ -1825,6 +1945,23 @@ the QA agent answers `blocked`. The check fails when the QA host:
 - has a forwarded SSH agent (`ForwardAgent yes` for that host in your SSH config).
 
 An unreachable host gives `qa_worker_unreachable` and a `blocked` verdict.
+
+Next, Symphony looks for each executable the playbook lists in `requires` with `command -v`, in
+the shell and environment the build gets (a non-login shell over SSH on a `worker_host`):
+
+```yaml
+auto_review:
+  playbooks:
+    macos_app:
+      requires: [go, pg_ctl, initdb]   # default none
+```
+
+A missing one makes the pass `blocked` before the agent starts, with the reason
+`qa_host_missing_tool: <name>`. The fix belongs to the QA host, not to the project, so self-heal
+files it under the `worker_host` component in Symphony's repo, where
+[`scripts/qa-vm/provision.sh`](../scripts/qa-vm/provision.sh) installs the toolchain. A repo's
+`WORKFLOW.md` may set its own list; the app's Settings edits the one in `symphony.yml`, under
+**macOS app QA**.
 
 One QA host keeps state across passes. Removing the run directory removes the pass's source,
 bundles and helper, but anything a build or app leaves behind as the QA user stays on the host: a
@@ -1847,8 +1984,13 @@ home as shared by every PR it has built.
    **Accessibility**, use **+**, press **⌘⇧G**, enter `/usr/libexec/sshd-keygen-wrapper` and turn it
    on. Commands started over SSH are attributed to it, so this covers `screencapture` and the
    helper. Restart the VM.
-5. Install whatever `build` needs (for example the repo's toolchain) and run the build once by hand
-   over SSH to confirm it works. The [signed release pair](#the-signed-release-pair)'s test
+5. Install what `build` needs, then run the build once by hand over SSH to confirm it works. For
+   Go, Postgres 18 and jq, run `scripts/qa-vm/provision.sh admin@<vm>` from the Symphony Mac: it
+   installs Go from go.dev (`--go-version`, default `1.26`) and Homebrew's `postgresql@18` and
+   `jq`, links them into `/usr/local/bin` and puts that first on the non-login SSH `PATH` in
+   `~/.zshenv`, and prints each tool's version from a fresh SSH session. It never starts Postgres
+   or creates a cluster, refuses a VM that holds push credentials, and installs nothing when run
+   again. List the tools in the playbook's `requires` so a pass on a VM without them says so. The [signed release pair](#the-signed-release-pair)'s test
    signing identity needs nothing here: the tart image's `admin` has passwordless `sudo`, so QA
    installs it the first time a pass builds the pair, and again on a clone reset from an image
    without it.
@@ -2173,6 +2315,15 @@ Discovery is automatic: on start the daemon writes `<state-root>/control_url` an
 `<state-root>/control_token` (both `0600`). Override either with `SYMPHONY_CONTROL_URL` or
 `SYMPHONY_CONTROL_TOKEN` for remote setups (e.g. when the daemon is reverse-proxied).
 
+**Stop** (`POST /api/v1/control/stop`, `mix symphony.stop`, the Director's Stop Run) ends one
+ticket's run and leaves its Linear state as it is, but the ticket is not dispatched again: Symphony's
+copy of it still reads the old state until a poll, so the stop marks it, lists it under
+`dispatch_skipped` as `stopped by the operator at <time>; waiting for the next poll`, and asks for a
+poll at once. The mark is a `Blocked` hold of type `operator_stop` in the run store (it survives a
+restart), shown in the Inbox as "Stopped by you". A poll that finds the ticket closed or out of the
+active states clears it; otherwise the ticket waits for a person: **Unblock** runs it again in place,
+**Restart** starts it over from main, and moving it to another state on the board clears the mark.
+
 ### `watchdog`
 
 Progress watchdog for stalled runs. A run waiting out a Linear rate limit or outage is not stalled:
@@ -2241,7 +2392,7 @@ Optional dev-server orchestration for verification runs.
 verification:
   enabled: true
   port_allocation:
-    range: [4000, 4099]
+    range: [4100, 4199]
   dev_server:
     build_cmd: "pnpm install"   # optional, runs before start_cmd
     start_cmd: "pnpm dev --port $SYMPHONY_VERIFICATION_PORT"
@@ -2253,6 +2404,18 @@ verification:
 
 `WORKFLOW.md` can override `verification.dev_server` per repo while inheriting the operator-owned
 port range.
+
+`enabled: true` starts `dev_server` on the Symphony host before the first turn of every agent run
+(implementation, review and fix runs alike) on a port from `port_allocation.range`, and turns on the
+QA `web` playbook and other `dev_server: true` kinds, whose server runs on this host too. With
+`enabled: false` no agent run starts a dev server or takes a port. A `macos_app` QA pass on a
+`worker_host` with `dev_server: true` reads only `dev_server`, whatever `enabled` says: its server
+runs on the QA host (see [macOS app QA](#macos-app-qa)).
+
+The pool hands out the first port in `range` that no other run holds and nothing on the host already
+listens on (on `127.0.0.1`), so a port another program took is skipped rather than failing the run.
+The default range, `[4100, 4199]`, leaves out `4000`, Symphony's own API port. When every port is
+taken the dispatch waits for one, logging `Verification port range exhausted`.
 
 `start_cmd` gets `SYMPHONY_VERIFICATION_PORT`. On macOS it also gets `SYMPHONY_VERIFICATION_SOCKET`
 and must listen on that unix socket instead of the port: the dev server's sandbox allows no TCP
@@ -2680,6 +2843,29 @@ hooks:
   started inside its sandbox, and the hook leaves no daemon behind.
 
 Each repository's `WORKFLOW.md` sets its own hooks and timeouts.
+
+### Scoped GitHub tools
+
+Agents reach GitHub only through Symphony's scoped `github_*` tools: `gh` itself is refused in the
+agent sandbox. Each tool acts on the session's `origin` repository and refuses repo, remote, branch
+and ref arguments. The read tools are given to every run kind, the reviewer and QA included; the
+others to the implementation runs.
+
+| Tool | What it does |
+| --- | --- |
+| `github_get_pull_request` | Reads the current branch's pull request. |
+| `github_get_pr_checks` | Reads its checks: names, status and conclusions. |
+| `github_list_pr_comments`, `github_list_pr_review_comments`, `github_list_pr_reviews` | Read its comments and reviews. |
+| `github_get_failed_run_log` | Reads the failed log of its latest failing run, clamped to `github.failed_run_log_max_bytes`. |
+| `github_ci_log` | Reads a failed job's log: pass `run_id` (a run's failed jobs), `job_id` (one job) or `pr_number` (a pull request's failed checks). Each job comes with its failed steps, its annotations and the last 400 lines of its failed steps' log, each line clipped, at most 10 jobs. `failed_only` (default true) refuses a job that did not fail; `false` reads every job and step. A run or job of another repository is refused. |
+| `github_fetch_origin`, `github_sync_base` | Fetch `origin`, and merge the base branch outside the sandbox. |
+| `github_create_pull_request`, `github_update_pull_request_body`, `github_add_pr_comment`, `github_reply_to_review_comment` | Open the pull request and write on it. |
+| `github_push_branch` | Pushes the branch (see [Push check](#push-check)). |
+| `github_merge_pull_request` | Squash-merges it, only in `Merging` with every check green. |
+
+The epic review uses `github_ci_log` to name why CI failed on the commit it reviews, and Symphony
+quotes the same log (failed steps, annotations, the last 60 lines of each failed job) in the
+follow-up it files for that CI. The CI Fix run gets the failed log in its prompt, as before.
 
 ### Push check
 

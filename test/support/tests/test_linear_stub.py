@@ -23,7 +23,7 @@ PAGE_INFO = {"hasNextPage": False, "endCursor": None}
 COMMITTED = {
     "SymphonyBarProjects": {"data": {"projects": {"nodes": [{"id": "p1", "name": "QA Project"}],
                                                   "pageInfo": PAGE_INFO}}},
-    "SymphonyBarProjectTeams": {"data": {"project": {"teams": {"nodes": [{"id": "t1"}], "pageInfo": PAGE_INFO}}}},
+    "SymphonyBarProjectTeams": {"data": {"project": {"teams": {"nodes": [{"id": "t1", "key": "QA"}], "pageInfo": PAGE_INFO}}}},
     "SymphonyBarLabels": {"data": {"issueLabels": {"nodes": [{"id": "l1", "name": "macos", "isGroup": False}],
                                                    "pageInfo": PAGE_INFO}}},
 }

@@ -130,8 +130,8 @@ public struct RepoHealth: Equatable {
     public static func stopQuestion(issueIdentifier: String) -> (title: String, message: String) {
         (
             "Stop the run on \(issueIdentifier)?",
-            "Symphony stops the agent now. The issue stays where it is in Linear, and Symphony may start it again on a "
-                + "later poll."
+            "Symphony stops the agent now. The issue stays where it is in Linear, and Symphony doesn't start it again "
+                + "until you Unblock or Restart it from the Inbox, or move it on the board."
         )
     }
 

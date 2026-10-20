@@ -25,7 +25,8 @@ defmodule SymphonyElixir.Hold do
   @kinds [:blocked, :needs_decision]
   @dispatch_loop_type "dispatch_loop"
   @ci_wait_type "ci_wait"
-  @unblockable_types ["access", @dispatch_loop_type, @ci_wait_type]
+  @operator_stop_type "operator_stop"
+  @unblockable_types ["access", @dispatch_loop_type, @ci_wait_type, @operator_stop_type]
 
   @typedoc "The holds the design defines."
   @type kind :: :blocked | :needs_decision
@@ -92,9 +93,11 @@ defmodule SymphonyElixir.Hold do
   @doc """
   Whether a hold waits on a person's `Unblock` (see `SymphonyElixir.DirectorMoves`): one waiting on
   an access grant a person hands over — what an agent's block report records — one the
-  dispatch-loop guard set (`SymphonyElixir.DispatchLoop`), or one an epic review's wait for CI set
-  once it reached its limit (`SymphonyElixir.CiWait`). A dependency or fix-ticket hold clears on its
-  own when what it waits on goes terminal; these three never clear without a person.
+  dispatch-loop guard set (`SymphonyElixir.DispatchLoop`), one an epic review's wait for CI set
+  once it reached its limit (`SymphonyElixir.CiWait`), or one an operator's stop set
+  (`SymphonyElixir.OperatorStop`). A dependency or fix-ticket hold clears on its own when what it
+  waits on goes terminal; these four never clear without a person (a stop's also clears when the
+  ticket leaves the workflow or moves on the board).
   """
   @spec unblockable?(TicketState.hold() | term()) :: boolean()
   def unblockable?(%{waits_on: %{type: type}}) when type in @unblockable_types, do: true

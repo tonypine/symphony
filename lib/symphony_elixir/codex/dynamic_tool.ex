@@ -9,6 +9,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   alias SymphonyElixir.Linear.Usage, as: LinearUsage
   alias SymphonyElixir.QaAndroid.Driver, as: QaAndroidDriver
   alias SymphonyElixir.QaDriver
+  alias SymphonyElixir.ReviewAgent.Verdict
 
   # The decision writing standard (`docs/standards/decision-writing.md`), as the tool states it.
   @decision_writing_standard "Write every field in the Director's words: they decide from the Inbox and do not read code. " <>
@@ -507,6 +508,25 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "name" => "github_get_failed_run_log",
       "description" => "Read the length-clamped failed-step log excerpt for the latest failing GitHub Actions run on the current pull request.",
       "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
+    },
+    %{
+      "name" => "github_ci_log",
+      "description" =>
+        "Read the log of a failed GitHub Actions job in this run's repository, to name a red check's cause instead of guessing it from the job's name. " <>
+          "Pass one of run_id (a workflow run: its failed jobs), job_id (one job) or pr_number (the failed checks of a pull request). " <>
+          "Each job comes with its failed steps, its annotations and the last #{SymphonyElixir.GitHub.CiLog.default_line_limit()} lines of its failed steps' log " <>
+          "(at most #{SymphonyElixir.GitHub.CiLog.job_limit()} jobs). failed_only (default true) refuses a job that did not fail; false reads every job and step. " <>
+          "A run, job or pull request of another repository is refused.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{
+          "run_id" => %{"type" => ["integer", "string"], "description" => "A workflow run id, as in .../actions/runs/<run_id>."},
+          "job_id" => %{"type" => ["integer", "string"], "description" => "A job id, as in .../actions/runs/<run_id>/job/<job_id>."},
+          "pr_number" => %{"type" => ["integer", "string"], "description" => "A pull request number in this repository."},
+          "failed_only" => %{"type" => "boolean", "description" => "Only failed jobs and their failed steps (default true)."}
+        }
+      }
     }
   ]
 
@@ -526,7 +546,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_launch_app",
       "description" =>
-        "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID. Pass api_fixtures when a walkthrough runs the app with SYMPHONY_BAR_QA_API_FIXTURES set. Optionally point the app at your stubs on QA_HOST_PORTS (a fake gh, Linear, a release feed), shorten its update-check interval, open its folder picker in a qa_put_checkout checkout and draw it light or dark (appearance) whatever the host's appearance.",
+        "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID and its QA root's number (`root`): launches share root 1 and its settings unless you pass fresh_root (a new, empty root) or root (an earlier one). Pass api_fixtures when a walkthrough runs the app with SYMPHONY_BAR_QA_API_FIXTURES set. Optionally point the app at your stubs on QA_HOST_PORTS (a fake gh, Linear, a release feed), shorten its update-check interval, open its folder picker in a qa_put_checkout checkout and draw it light or dark (appearance) whatever the host's appearance.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -566,6 +586,16 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             "type" => "boolean",
             "description" =>
               "Launch release N of the pair qa_build_release_pair built, from a fresh copy, instead of the qa_build app. Its update checks read the pair's own feed, which offers N+1, so N can install it; then call qa_relaunched_app. Not with update_feed_port."
+          },
+          "fresh_root" => %{
+            "type" => "boolean",
+            "description" =>
+              "Launch in a new, empty QA root (no settings, no first-run record, no request log) instead of the pass's first root (1), which every other launch shares. Use it for a first-launch step, a step that resets the app, or a scenario that must not see earlier settings. The result's `root` is its number. Not with root."
+          },
+          "root" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "Launch in a QA root this pass already has, by the number a launch returned as `root`: 1 is the first, each fresh_root launch adds the next. Defaults to 1."
           }
         }
       }
@@ -815,8 +845,18 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_api_requests",
       "description" =>
-        "Return the requests an app launched with api_fixtures logged to api-requests.jsonl since the last call (each POST with its path and body), oldest first, at most the last 500 (`dropped` counts the rest). Takes no arguments.",
-      "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
+        "Return the requests an app launched with api_fixtures logged to api-requests.jsonl in its QA root since the last call (each POST with its path and body), oldest first, at most the last 500 (`dropped` counts the rest). Reads one root: `root`, or the last launch's.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{
+          "root" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "The QA root whose apps' requests to return, as qa_launch_app returned it. Defaults to the root of the last launch."
+          }
+        }
+      }
     }
   ]
 
@@ -1017,6 +1057,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "github_list_pr_review_comments" => [],
     "github_list_pr_reviews" => [],
     "github_get_failed_run_log" => [],
+    "github_ci_log" => ["run_id", "job_id", "pr_number", "failed_only"],
     "qa_build" => [],
     "qa_launch_app" => [
       "api_fixtures",
@@ -1026,7 +1067,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "update_feed_port",
       "update_check_interval_seconds",
       "appearance",
-      "release_pair"
+      "release_pair",
+      "fresh_root",
+      "root"
     ],
     "qa_build_release_pair" => [],
     "qa_relaunched_app" => ["wait_seconds"],
@@ -1046,7 +1089,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_open_status_menu" => ["pid"],
     "qa_put_file" => ["local_path", "remote_name"],
     "qa_put_checkout" => ["local_path", "remote_url", "remote_name"],
-    "qa_api_requests" => [],
+    "qa_api_requests" => ["root"],
     "qa_android_install" => ["apk"],
     "qa_android_launch" => ["application_id"],
     "qa_android_stop" => ["application_id"],
@@ -1058,7 +1101,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_android_rotate" => ["orientation"],
     "qa_android_dark_mode" => ["mode"],
     "qa_android_font_scale" => ["scale"],
-    "qa_android_put_file" => ["local_path", "dest"]
+    "qa_android_put_file" => ["local_path", "dest"],
+    "review_verdict" => Verdict.tool_arguments()
   }
   @legacy_tool_aliases %{
     "linear.get_current_issue" => "linear_get_current_issue",
@@ -1101,7 +1145,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
                      "github_list_pr_comments",
                      "github_list_pr_review_comments",
                      "github_list_pr_reviews",
-                     "github_get_failed_run_log"
+                     "github_get_failed_run_log",
+                     "github_ci_log"
                    ])
 
   # The QA agent reads like the reviewer and may attach evidence files; it never
@@ -1136,7 +1181,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   def tool_specs, do: @tool_schemas
 
   @spec tool_specs(:default | :read_only | :qa | nil) :: [map()]
-  def tool_specs(:read_only), do: Enum.filter(@tool_schemas, &(Map.get(&1, "name") in @read_only_tools))
+  # The reviewer (`SymphonyElixir.ReviewAgent`) reads, and records its verdict with `review_verdict`.
+  def tool_specs(:read_only), do: Enum.filter(@tool_schemas, &(Map.get(&1, "name") in @read_only_tools)) ++ [Verdict.tool_spec()]
 
   def tool_specs(:qa) do
     @tool_schemas
@@ -1178,6 +1224,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     do: QaAndroidDriver.call_tool(Keyword.get(opts, :qa_android_driver), tool, args)
 
   defp execute_tool("qa_" <> _rest = tool, _context, args, opts), do: QaDriver.call_tool(Keyword.get(opts, :qa_driver), tool, args)
+  defp execute_tool("review_verdict", _context, args, opts), do: Verdict.record(args, Keyword.get(opts, :review_verdict_sink))
 
   defp execute_authorized_tool(tool, context, args, opts) do
     case authorize_tool_scope(tool, opts) do
@@ -1189,6 +1236,13 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   defp authorize_tool_scope("qa_" <> _rest = tool, opts) do
     case Keyword.get(opts, :tool_scope) do
       :qa -> :ok
+      scope -> {:error, {:tool_scope_rejected, scope, tool}}
+    end
+  end
+
+  defp authorize_tool_scope("review_verdict" = tool, opts) do
+    case Keyword.get(opts, :tool_scope) do
+      :read_only -> :ok
       scope -> {:error, {:tool_scope_rejected, scope, tool}}
     end
   end
@@ -1324,6 +1378,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp execute_github_tool("github_list_pr_reviews", context, _args, opts), do: GitHub.list_pr_reviews(context, opts)
   defp execute_github_tool("github_get_failed_run_log", context, _args, opts), do: GitHub.get_failed_run_log(context, opts)
+  defp execute_github_tool("github_ci_log", context, args, opts), do: GitHub.ci_log(context, args, opts)
 
   defp normalize_tool_name(tool) when is_binary(tool), do: Map.get(@legacy_tool_aliases, tool, tool)
   defp normalize_tool_name(tool), do: tool
@@ -1544,6 +1599,16 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
+  defp tool_error_payload({:tool_scope_rejected, _scope, "review_verdict"}) do
+    %{
+      "error" => %{
+        "code" => "tool_scope_rejected",
+        "message" => "review_verdict records the reviewer's verdict; only a reviewer session may call it.",
+        "tool" => "review_verdict"
+      }
+    }
+  end
+
   defp tool_error_payload({:tool_scope_rejected, :read_only, tool}) do
     %{
       "error" => %{
@@ -1582,6 +1647,24 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "code" => "tool_scope_rejected",
         "message" => "#{tool} drives a macOS app for QA and is only available to the QA agent.",
         "tool" => tool
+      }
+    }
+  end
+
+  defp tool_error_payload({:invalid_review_verdict, reason}) do
+    %{
+      "error" => %{
+        "code" => "invalid_review_verdict",
+        "message" => "Symphony could not read the verdict: #{Verdict.describe_error(reason)} Fix it and call review_verdict again."
+      }
+    }
+  end
+
+  defp tool_error_payload(:review_verdict_unavailable) do
+    %{
+      "error" => %{
+        "code" => "review_verdict_unavailable",
+        "message" => "This session records no review verdict; end your turn with the verdict as your final message instead."
       }
     }
   end
@@ -2347,6 +2430,27 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "message" => "No failed GitHub Actions run with a log was found for the current pull request."
       }
     }
+  end
+
+  defp tool_error_payload({kind, id, repo}) when kind in [:run_not_in_repo, :job_not_in_repo] do
+    what = if kind == :run_not_in_repo, do: "Workflow run", else: "Job"
+    %{"error" => %{"code" => Atom.to_string(kind), "message" => "#{what} #{id} is not in #{repo}, this run's repository; github_ci_log reads no other."}}
+  end
+
+  defp tool_error_payload({:job_not_failed, id, conclusion}) do
+    %{"error" => %{"code" => "job_not_failed", "message" => "Job #{id} did not fail (#{conclusion || "no conclusion yet"}). Pass failed_only: false to read it anyway."}}
+  end
+
+  defp tool_error_payload({:no_failed_jobs, target}) do
+    %{"error" => %{"code" => "no_failed_jobs", "message" => "No failed GitHub Actions job to read for #{inspect(target)}. Pass failed_only: false to read every job."}}
+  end
+
+  defp tool_error_payload(reason) when reason in [:missing_ci_log_target, :ambiguous_ci_log_target, :invalid_ci_log_target] do
+    %{"error" => %{"code" => Atom.to_string(reason), "message" => "github_ci_log needs exactly one of run_id, job_id or pr_number, a positive number."}}
+  end
+
+  defp tool_error_payload(:invalid_failed_only) do
+    %{"error" => %{"code" => "invalid_failed_only", "message" => "github_ci_log `failed_only` must be true or false."}}
   end
 
   defp tool_error_payload(:invalid_failed_run_log_max_bytes) do

@@ -40,10 +40,25 @@ defmodule SymphonyElixir.Verification do
   def enabled?(%Schema{verification: %{enabled: enabled}}), do: enabled == true
   def enabled?(_settings), do: false
 
-  @doc "Whether verification is on and `verification.dev_server.start_cmd` is set."
+  @doc """
+  Whether verification is on and `verification.dev_server.start_cmd` is set: what a dev server on
+  this host needs, for an agent run or a `web` pass.
+  """
   @spec dev_server_configured?(Schema.t()) :: boolean()
-  def dev_server_configured?(%Schema{verification: %{dev_server: %{start_cmd: command}}} = settings),
-    do: enabled?(settings) and is_binary(command) and command != ""
+  def dev_server_configured?(%Schema{} = settings), do: enabled?(settings) and dev_server_command_configured?(settings)
+
+  @doc """
+  Whether `verification.dev_server.start_cmd` is set, whatever `verification.enabled` says: what a
+  `macos_app` pass's dev server on the QA host needs, as it uses no port pool and no sandbox here.
+  """
+  @spec dev_server_command_configured?(Schema.t()) :: boolean()
+  def dev_server_command_configured?(%Schema{verification: %{dev_server: %{start_cmd: command}}}),
+    do: is_binary(command) and command != ""
+
+  @doc "The dev-server flags `SymphonyElixir.QaAgent.Selection` reads to turn playbooks on."
+  @spec selection_opts(Schema.t()) :: keyword()
+  def selection_opts(%Schema{} = settings),
+    do: [dev_server?: dev_server_configured?(settings), dev_server_command?: dev_server_command_configured?(settings)]
 
   @doc """
   Allocates a port and starts `verification.dev_server` in `workspace` for a QA pass, after its

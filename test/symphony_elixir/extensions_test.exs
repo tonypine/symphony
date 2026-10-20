@@ -621,7 +621,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                "claimed" => 2,
                "forced" => 2,
                "shipped_today" => 1,
-               "waiting_on_you" => 0
+               "waiting_on_you" => 0,
+               "review_inconclusive" => %{"invalid_verdict" => 1}
              },
              "running" => [
                %{
@@ -725,7 +726,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "transcript_path" => nil,
                  "turn_count" => 7,
                  "runtime_seconds" => 42,
-                 "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12}
+                 "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12},
+                 "review_inconclusive_cause" => "invalid_verdict"
                }
              ],
              "codex_totals" => %{
@@ -2633,7 +2635,8 @@ defmodule SymphonyElixir.ExtensionsTest do
              "claimed" => 2,
              "forced" => 2,
              "shipped_today" => 1,
-             "waiting_on_you" => 0
+             "waiting_on_you" => 0,
+             "review_inconclusive" => %{"invalid_verdict" => 1}
            }
 
     root = Req.get!("http://127.0.0.1:#{port}/")
@@ -2801,7 +2804,8 @@ defmodule SymphonyElixir.ExtensionsTest do
           transcript_path: nil,
           turn_count: 7,
           runtime_seconds: 42,
-          tokens: %{input_tokens: 4, output_tokens: 8, total_tokens: 12}
+          tokens: %{input_tokens: 4, output_tokens: 8, total_tokens: 12},
+          review_inconclusive_cause: "invalid_verdict"
         }
       ],
       codex_totals: %{input_tokens: 4, output_tokens: 8, total_tokens: 12, seconds_running: 42.5},

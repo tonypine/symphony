@@ -149,6 +149,118 @@ func silentWaitOverview() -> some View {
         .background(DesignTokens.Surface.content.color)
 }
 
+// Setup (TP-910): SU3–SU9 from the Setup QA fixture, at its clock.
+let setupAPI = here.appendingPathComponent("../Fixtures/director-app/setup/api/v1").standardizedFileURL
+let setupConfig = here.appendingPathComponent("../Fixtures/director-app/setup/config/symphony.yml").standardizedFileURL
+let setupNow = ISO8601DateFormatter().date(from: "2026-10-19T12:00:30Z")!
+let setupState = SetupPayload.decode(state: try Data(contentsOf: setupAPI.appendingPathComponent("state.json")))!
+
+func setupProblem(_ id: String) -> SetupPayload.Problem {
+    guard let problem = setupState.problems.first(where: { $0.id == id }) else { fatalError("\(id) is missing from the Setup fixture") }
+    return problem
+}
+
+/// A Setup page beside the sidebar of a 1200 pt window.
+@MainActor
+func setupPage(_ payload: SetupPayload, expanded: Set<String> = []) -> some View {
+    let width = DesignTokens.Layout.windowWidth - DesignTokens.Layout.sidebarWidth
+    return SetupPageBody(page: SetupPage(payload: payload, now: setupNow, timeZone: TimeZone(identifier: "UTC")!), expanded: expanded)
+        .frame(width: width)
+        .background(DesignTokens.Surface.window.color)
+}
+
+/// SU4: a hold drift row with its Details open, one line per ticket with its own Re-sync, and a key's Details.
+let setupDrift = SetupPayload.Problem(
+    id: "hold_drift:web-shop", severity: .warning, category: "labels",
+    title: "2 tickets in web-shop have hold labels that don't match their holds",
+    consequence: "A ticket's label says it is paused when it isn't, or a paused ticket doesn't show it, and Symphony couldn't put it right on its own. "
+        + "Re-sync sets the label from the hold Symphony keeps.",
+    repos: ["web-shop"], tickets: [.init(identifier: "TP-412"), .init(identifier: "TP-415")],
+    details: [
+        .init(label: "TP-412", value: "Blocked label with no hold, since 2026-10-19 09:12 UTC"),
+        .init(label: "TP-415", value: "Needs Decision hold with no label, since 2026-10-19 10:40 UTC"),
+    ],
+    fix: .resyncHold(repo: "web-shop", tickets: ["TP-412", "TP-415"])
+)
+
+/// SU6: no Linear API key, so the secrets error and the Linear-side checks under Not checked.
+let setupNoKey = SetupPayload(
+    problems: [SetupPayload.Problem(
+        id: "secrets:LINEAR_API_KEY", severity: .error, category: "secrets",
+        title: "Symphony can't read Linear: no ticket is picked up",
+        consequence: "Without a Linear API key Symphony reads no tickets, so nothing runs, and Setup can't check the Linear teams, states and labels.",
+        details: [.init(label: "Key", value: "issues.linear.api_key"), .init(label: "Variable", value: "LINEAR_API_KEY")],
+        fix: .open(.settings, url: nil)
+    )],
+    notChecked: [
+        ("routing", "Routing of each repository's tickets"), ("teams", "Each repository's Linear team"),
+        ("labels", "Symphony's labels in each Linear team"), ("hold_drift", "Hold labels that don't match their holds"),
+    ].map { SetupPayload.NotChecked(id: $0.0, title: $0.1, reason: "No Linear API key is set, so Symphony can't read Linear. Add one in Settings.") },
+    checkedAt: setupState.checkedAt
+)
+
+/// SU7–SU9: a fix's sheet on the window's surface.
+@MainActor
+func setupSheet(_ sheet: SetupFixSheet) -> some View {
+    SetupFixSheetView(sheet: sheet, cancel: {}, confirm: {})
+        .background(DesignTokens.Surface.window.color)
+}
+
+@MainActor
+func setupConfigSheet() -> some View {
+    let text = (try? String(contentsOf: setupConfig, encoding: .utf8)) ?? ""
+    let edited = Result { try SetupConfigEdit.apply(path: "auto_review.enabled", action: .remove, value: .null, to: text) }
+    return setupSheet(SetupFixSheet(problem: setupProblem("deprecated_key:auto_review.enabled"), text: text, edited: edited)!)
+}
+
+@MainActor
+func setupLabelSheet(failed: Bool = false) -> some View {
+    var sheet = SetupFixSheet(problem: setupProblem("labels:missing:TP:Needs Decision"))!
+    if failed {
+        sheet.fail("Linear refused to create the label \"Needs Decision\" in team TP: the Linear API key isn't allowed to (HTTP 403). "
+            + "Ask an admin of the team to do it, or use a key that may.")
+    }
+    return setupSheet(sheet)
+}
+
+// Add Repo's Check setup step (TP-911, SU11) from its QA fixtures, and the first launch's Setup page (SU12).
+func addRepoAnswer(_ fixture: String, _ file: String) -> SetupPayload {
+    let url = here.appendingPathComponent("../Fixtures/director-app/\(fixture)/api/v1/setup/\(file)").standardizedFileURL
+    guard let payload = SetupPayload.decode(try! Data(contentsOf: url)) else { fatalError("\(url.path) isn't a setup payload") }
+    return payload.forRepo("widgets")
+}
+
+/// The Add Repo sheet on its last step: its title, the steps, the page and the footer, at the sheet's size.
+@MainActor
+func addRepoCheck(_ phase: AddRepoSetupCheck.Phase, fixMessage: String? = nil) -> some View {
+    let check = AddRepoSetupCheck(
+        key: "widgets", route: RepositoryRoute(team: "QA", projects: ["8e6f0c39-6a8b-4c1e-9d0e-1f2a3b4c5d6e"]), phase: phase
+    )
+    return VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(AddRepo.sheetTitle).font(.headline)
+            AddRepoStepIndicator(steps: [.source, .linear, .review, .check], current: .check)
+        }
+        .padding([.top, .horizontal], 16)
+        .padding(.bottom, 8)
+        Divider()
+        AddRepoCheckPage(check: check, fixMessage: fixMessage, now: setupNow)
+            .frame(maxHeight: .infinity, alignment: .top)
+        Divider()
+        AddRepoCheckFooter(check: check, canStart: true)
+    }
+    .frame(width: AddRepoView.size.width, height: AddRepoView.size.height)
+    .background(DesignTokens.Surface.window.color)
+}
+
+@MainActor
+func firstLaunchSetup() -> some View {
+    let width = DesignTokens.Layout.windowWidth - DesignTokens.Layout.sidebarWidth
+    return SetupPageBody(page: SetupPage(payload: setupState, now: setupNow, timeZone: TimeZone(identifier: "UTC")!), welcome: SetupOnStart.welcome)
+        .frame(width: width)
+        .background(DesignTokens.Surface.window.color)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -193,5 +305,22 @@ MainActor.assumeIsolated {
         }
         render(watcherDecision(), scheme, to: "watcher-decision-\(suffix).png")
         render(silentWaitOverview(), scheme, to: "silent-wait-\(suffix).png")
+        // Setup (TP-910): the page with problems, its Details, healthy, no Linear key, and the fix sheets.
+        render(setupPage(setupState), scheme, to: "setup-problems-\(suffix).png")
+        render(setupPage(SetupPayload(problems: setupState.problems + [setupDrift], checkedAt: setupState.checkedAt),
+                         expanded: ["hold_drift:web-shop", "deprecated_key:auto_review.enabled"]), scheme, to: "setup-details-\(suffix).png")
+        render(setupPage(SetupPayload(checkedAt: setupState.checkedAt?.addingTimeInterval(300))), scheme, to: "setup-healthy-\(suffix).png")
+        render(setupPage(setupNoKey), scheme, to: "setup-no-linear-key-\(suffix).png")
+        render(setupConfigSheet(), scheme, to: "setup-config-sheet-\(suffix).png")
+        render(setupLabelSheet(), scheme, to: "setup-label-sheet-\(suffix).png")
+        render(setupLabelSheet(failed: true), scheme, to: "setup-fix-failed-\(suffix).png")
+        // Add Repo's Check setup (TP-911): an error with its fix, the fix made, a warning only, Symphony stopped; and
+        // the first launch's Setup page.
+        render(addRepoCheck(.checked(addRepoAnswer("add-repo-setup", "refresh.1.json"))), scheme, to: "add-repo-check-error-\(suffix).png")
+        render(addRepoCheck(.checked(addRepoAnswer("add-repo-setup", "fixes.json")), fixMessage: "Created the label “Blocked” in team QA."),
+               scheme, to: "add-repo-check-fixed-\(suffix).png")
+        render(addRepoCheck(.checked(addRepoAnswer("add-repo-setup-warning", "refresh.1.json"))), scheme, to: "add-repo-check-warning-\(suffix).png")
+        render(addRepoCheck(.onNextStart), scheme, to: "add-repo-check-stopped-\(suffix).png")
+        render(firstLaunchSetup(), scheme, to: "setup-first-launch-\(suffix).png")
     }
 }

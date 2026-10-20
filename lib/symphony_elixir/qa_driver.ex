@@ -69,11 +69,24 @@ defmodule SymphonyElixir.QaDriver do
     would, then waits for the menu's window (the pop-up menu layer, 101) in the
     helper's window list. A menu that does not open in time takes the request
     back and fails with `qa_status_menu_not_opened`;
-  - `qa_api_requests` returns the requests the app logged to `api-requests.jsonl`
-    in its QA root since the last call (the POSTs it answered from
-    `api_fixtures`), at most the last 500, and takes the log away so the next
-    call returns only newer ones. The QA root is outside the agent sandbox, on
-    the QA host for a `worker_host`, so the agent cannot read the log itself.
+  - `qa_api_requests` returns the requests the apps of one QA root (its `root`,
+    by default the last launch's) logged to `api-requests.jsonl` there since the
+    last call (the POSTs they answered from `api_fixtures`), at most the last
+    500, and takes the log away so the next call returns only newer ones. The QA
+    root is outside the agent sandbox, on the QA host for a `worker_host`, so the
+    agent cannot read the log itself.
+
+  QA roots: every launch shares the pass's first QA root (root 1, `app-root/` in
+  the private directory, or in the run directory on a `worker_host`), so what a
+  launch saved is there for the next one. `qa_launch_app` with `fresh_root: true`
+  makes a new, empty root instead (`qa-root-<n>/` beside the first, numbered from
+  2) for a step that needs the app's first run, a reset of its settings, or a
+  state no earlier launch touched; with `root: <n>` it reuses a root the pass
+  already has and refuses any other, naming the pass's roots. Each launch returns
+  its root's number, gets the same API fixtures, stand-ins and `launch_env`, and
+  keeps its root: `qa_open_status_menu` writes into it, `qa_check_app` names it,
+  and a release pair's app is relaunched in it. A fresh root stays once it exists,
+  even when its app then fails to start, so numbers are never reused.
 
   Release pair: `qa_build_release_pair` builds release N of the app and its
   update N+1, signed with the QA host's test signing identity, into the private
@@ -139,9 +152,11 @@ defmodule SymphonyElixir.QaDriver do
   and again at each check, on the QA host for a `worker_host`), naming the page
   the agent passes and that window size in each problem. A resize on a screen
   whose usable area is under 1400×900 pt marks the pass's wide pass limited
-  (`wide_pass/1`), which `SymphonyElixir.QaAgent` reports as `blocked`, as it does
-  a `pass` with no resize at all (`wide_pass/1` is `nil`), unless it is an epic
-  review that launched no app (`launched_app?/1`).
+  (`wide_pass/1`), which `SymphonyElixir.QaAgent` reports as `blocked`. A `pass`
+  with no resize at all (`wide_pass/1` is `nil`) is `inconclusive` (an epic review
+  reports it `blocked`, unless it launched no app, `launched_app?/1`), unless the
+  pass answered `scope: none`: then `app_check/1` says whether it built, launched and
+  checked the app, which is the whole check of such a pass.
 
   OpenRouter stub: the first `qa_launch_app` starts a
   `SymphonyElixir.OpenRouter.Stub` in this BEAM, on `127.0.0.1`, and every app
@@ -180,6 +195,21 @@ defmodule SymphonyElixir.QaDriver do
   which fails with `qa_host_tunnel_failed` when it cannot. A QA host that can reach
   the operator's credentials or holds push credentials is refused at start,
   and every tool then fails with `qa_worker_unsafe`.
+
+  Next, the driver looks for each executable the playbook `requires` with `command -v`, in the
+  shell and environment the build gets (over SSH on a `worker_host`). `host_check/1` returns the
+  ones missing, and the QA pass is `blocked` before the agent starts: the QA host needs
+  provisioning (`scripts/qa-vm/provision.sh`), which is not the project's defect.
+
+  Dev server: `start_dev_server/3` runs the project's `verification.dev_server`
+  on the QA host, beside the app (`SymphonyElixir.QaDriver.DevServer`), and the
+  driver stops it when it stops, after the apps and before the run directory
+  goes. One pass at a time runs a server on a QA host's port: the driver takes
+  the port's lease first (`SymphonyElixir.QaDriver.DevServerLease`), waiting
+  while another pass's driver holds it, and gives it back once its own server
+  stopped. Every `qa_launch_app` also gives the app the playbook's `launch_env`
+  after Symphony's own variables (`SymphonyElixir.QaAgent.PlaybookSettings`),
+  and refuses a name Symphony sets itself.
   """
 
   use GenServer
@@ -187,7 +217,8 @@ defmodule SymphonyElixir.QaDriver do
   require Logger
 
   alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, Workspace}
-  alias SymphonyElixir.QaDriver.{Checks, Host, ReleasePair, Remote}
+  alias SymphonyElixir.QaAgent.PlaybookSettings
+  alias SymphonyElixir.QaDriver.{Checks, DevServer, DevServerLease, Host, ReleasePair, Remote}
 
   @evidence_dir "qa-evidence"
   @qa_root_env "SYMPHONY_BAR_QA_ROOT"
@@ -219,6 +250,8 @@ defmodule SymphonyElixir.QaDriver do
   @feed_poll {50, 100}
   @feed_attempts 3
   @helper_timeout_ms 30_000
+  # Prints each executable `command -v` cannot find, then a line that says the check ran.
+  @tool_check_script ~S(for tool in "$@"; do command -v "$tool" >/dev/null 2>&1 || printf 'symphony-qa-missing-tool:%s\n' "$tool"; done; printf 'symphony-qa-tools:checked\n')
   @screenshot_timeout_ms 15_000
   @output_limit 8_000
   @app_output_limit 16_000
@@ -338,6 +371,7 @@ defmodule SymphonyElixir.QaDriver do
   @type helper_result :: {:ok, Path.t()} | {:error, term()}
   @type cmd_result :: {:ok, {String.t(), integer()}} | {:error, term()}
   @type tool_error :: {:qa_tool, String.t(), String.t()}
+  @type host_check_error :: {:qa_host_missing_tool, [String.t()]} | {:qa_host_tool_check_failed, String.t()}
 
   @doc "The `qa_*` tool names this driver serves."
   @spec tools() :: [String.t()]
@@ -355,7 +389,8 @@ defmodule SymphonyElixir.QaDriver do
   `:start_stub` (a `fn -> {:ok, pid, port} | {:error, reason}` that starts the
   OpenRouter stub, default `SymphonyElixir.OpenRouter.Stub.start_link/0`) and
   `:status_menu_poll` (`{attempts, interval_ms}` for `qa_open_status_menu`,
-  default `{40, 250}`).
+  default `{40, 250}`) and `:dev_server_lease` (the lease manager
+  `start_dev_server/3` asks, default `SymphonyElixir.QaDriver.DevServerLease`).
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
@@ -388,6 +423,36 @@ defmodule SymphonyElixir.QaDriver do
     :exit, _reason -> false
   end
 
+  @doc """
+  What the pass did with the app: `built` when the last `qa_build` produced the app, `launched`
+  when `qa_launch_app` started one (even one that has quit since), and `checked` when the last
+  `qa_check_app` answer found it healthy. All `false` when there is no driver.
+  """
+  @spec app_check(pid() | nil) :: %{built: boolean(), launched: boolean(), checked: boolean()}
+  def app_check(nil), do: %{built: false, launched: false, checked: false}
+
+  def app_check(driver) when is_pid(driver) do
+    GenServer.call(driver, :app_check)
+  catch
+    :exit, _reason -> app_check(nil)
+  end
+
+  @doc """
+  The `qa_worker_*` tool error every `qa_*` tool returns when Symphony refused or could not reach
+  the QA host, as `{code, message}`; `nil` when the QA host is usable or there is no driver.
+  """
+  @spec unavailable(pid() | nil) :: {String.t(), String.t()} | nil
+  def unavailable(nil), do: nil
+
+  def unavailable(driver) when is_pid(driver) do
+    case GenServer.call(driver, :config) do
+      %{unavailable: {:error, {:qa_tool, code, message}}} -> {code, message}
+      _usable -> nil
+    end
+  catch
+    :exit, _reason -> nil
+  end
+
   @doc "Stops the driver, quitting every app it launched."
   @spec stop(pid() | nil) :: :ok
   def stop(nil), do: :ok
@@ -406,6 +471,55 @@ defmodule SymphonyElixir.QaDriver do
   @spec host_ports(pid() | nil) :: {:ok, [pos_integer()]} | {:error, String.t()}
   def host_ports(nil), do: {:ok, []}
   def host_ports(driver) when is_pid(driver), do: GenServer.call(driver, :host_ports, 30_000)
+
+  @doc """
+  Starts the project's dev server on the QA host for this pass (see
+  `SymphonyElixir.QaDriver.DevServer`) and returns its URL there. The driver stops it when it
+  stops, before the run directory goes. `{:ok, nil}` without a `worker_host`, or when the QA host
+  was refused, whose tools then say why.
+
+  It first takes the lease on the QA host's port for the driver (`DevServerLease.acquire/4`),
+  waiting while another pass holds it. `opts`: `:issue_id`, the pass's ticket id the orchestrator
+  asks `DevServerLease.waiting/2` about, and `acquire/4`'s `:heartbeat` and `:heartbeat_ms`. A
+  server that does not start gives the lease back at once.
+  """
+  @spec start_dev_server(pid(), DevServer.spec(), keyword()) :: {:ok, %{url: String.t(), port: pos_integer()} | nil} | DevServer.failure()
+  def start_dev_server(driver, spec, opts \\ []) when is_pid(driver) do
+    case GenServer.call(driver, :config) do
+      %{remote?: true, host_dir: dir} = config when is_binary(dir) ->
+        holder = %{pid: driver, issue_id: Keyword.get(opts, :issue_id), ticket: spec.ticket}
+        :ok = DevServerLease.acquire(config.dev_server_lease, {config.worker_host, spec.port}, holder, opts)
+
+        case DevServer.start(config, spec) do
+          {:ok, server} ->
+            GenServer.call(driver, {:dev_server, server})
+
+            Logger.info(
+              "QA dev server started #{config.log_context} worker_host=#{config.worker_host} port=#{server.port} pid=#{server.pid} " <>
+                "lease=#{config.worker_host}:#{server.port}"
+            )
+
+            {:ok, %{url: server.url, port: server.port}}
+
+          {:error, _cause, _log} = failure ->
+            DevServerLease.release(config.dev_server_lease, driver)
+            failure
+        end
+
+      _local_or_refused ->
+        {:ok, nil}
+    end
+  end
+
+  @doc """
+  Whether the QA host has every executable the playbook `requires`:
+  `{:error, {:qa_host_missing_tool, names}}` names the missing ones, and
+  `{:error, {:qa_host_tool_check_failed, reason}}` says the check could not run. `:ok` too
+  when the driver refused the QA host, whose tools then fail with `qa_worker_unsafe`.
+  """
+  @spec host_check(pid() | nil) :: :ok | {:error, host_check_error()}
+  def host_check(nil), do: :ok
+  def host_check(driver) when is_pid(driver), do: GenServer.call(driver, :host_check, 30_000)
 
   @doc """
   Runs one `qa_*` tool with the agent's arguments. Returns the tool payload or a
@@ -470,7 +584,7 @@ defmodule SymphonyElixir.QaDriver do
   defp run_tool("qa_relaunched_app", driver, config, args) do
     with {:ok, wait_s} <- optional_integer(args, "wait_seconds", 1, 300),
          {:ok, launches} <- pair_launches(driver),
-         {:ok, bundle} <- await_relaunch(config, wait_s || @default_relaunch_wait_s),
+         {:ok, bundle} <- await_relaunch(config, pair_roots(launches), wait_s || @default_relaunch_wait_s),
          {:ok, info} <- relaunch_info(launches, bundle),
          {:ok, name} <- bundle_executable_name(config, bundle),
          {:ok, payload} <- GenServer.call(driver, {:launch, Path.join([bundle, "Contents", "MacOS", name]), %{info | name: name}}) do
@@ -601,12 +715,17 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, app} <- GenServer.call(driver, {:app, pid}),
          {:ok, reports} <- crash_reports(config, app.name),
          {:ok, responding} <- responding(driver, config, pid, app) do
-      {:ok, health(pid, page, app, reports -- app.crash_reports, responding, config)}
+      health = health(pid, page, app, reports -- app.crash_reports, responding, config)
+      GenServer.call(driver, {:checked, health["healthy"]})
+      {:ok, health}
     end
   end
 
+  # The request goes into the app's own QA root, which a fresh_root launch made.
   defp run_tool("qa_open_status_menu", driver, config, args) do
     with {:ok, pid} <- running_pid(driver, args),
+         {:ok, app} <- GenServer.call(driver, {:app, pid}),
+         config = %{config | qa_root: app.qa_root},
          {:ok, helper} <- helper(driver, config),
          :ok <- request_status_menu(config, pid) do
       await_status_menu(config, helper, pid, config.status_menu_poll)
@@ -621,8 +740,28 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  defp run_tool("qa_api_requests", _driver, config, _args) do
-    log = Path.join(config.qa_root, @api_requests_log)
+  defp run_tool("qa_api_requests", driver, config, args) do
+    with {:ok, root, qa_root} <- pass_root(driver, Map.get(args, "root")),
+         {:ok, payload} <- take_api_requests(config, qa_root) do
+      {:ok, Map.put(payload, "root", root)}
+    end
+  end
+
+  defp run_tool("qa_put_checkout", driver, config, args) do
+    with {:ok, local_path} <- Checks.fixture_path(Map.get(args, "local_path")),
+         {:ok, url, repo} <- github_url(Map.get(args, "remote_url")),
+         {:ok, name} <- checkout_name(Map.get(args, "remote_name"), repo),
+         {:ok, _path, bytes} <- Checks.read_fixture(config.put_roots, config.worktree, local_path, "qa_put_checkout"),
+         {:ok, bundle} <- stage_bundle(config, bytes, name),
+         {:ok, path} <- clone_checkout(config, bundle, name, url) do
+      GenServer.call(driver, {:checkout, path})
+      {:ok, %{"path" => path, "remote_url" => url, "note" => "Pass this path as qa_launch_app's open_panel_dir to open the folder picker in it."}}
+    end
+  end
+
+  # Only the log in this QA root: an app in another root logs to its own.
+  defp take_api_requests(config, qa_root) do
+    log = Path.join(qa_root, @api_requests_log)
     taken = Path.join(config.host_dir, "api-requests-#{System.unique_integer([:positive])}.jsonl")
 
     # Moved aside before it is read, so a request the app logs meanwhile lands in
@@ -641,22 +780,52 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  defp run_tool("qa_put_checkout", driver, config, args) do
-    with {:ok, local_path} <- Checks.fixture_path(Map.get(args, "local_path")),
-         {:ok, url, repo} <- github_url(Map.get(args, "remote_url")),
-         {:ok, name} <- checkout_name(Map.get(args, "remote_name"), repo),
-         {:ok, _path, bytes} <- Checks.read_fixture(config.put_roots, config.worktree, local_path, "qa_put_checkout"),
-         {:ok, bundle} <- stage_bundle(config, bytes, name),
-         {:ok, path} <- clone_checkout(config, bundle, name, url) do
-      GenServer.call(driver, {:checkout, path})
-      {:ok, %{"path" => path, "remote_url" => url, "note" => "Pass this path as qa_launch_app's open_panel_dir to open the folder picker in it."}}
+  # -- QA roots ---------------------------------------------------------------
+
+  # The QA root a launch runs in: the pass's first root (1) unless `fresh_root`
+  # asks for a new, empty one or `root` names one the pass already has.
+  defp root_choice(driver, args) do
+    case {Map.get(args, "fresh_root"), Map.get(args, "root")} do
+      {fresh, _root} when fresh not in [nil, true, false] ->
+        tool_error("invalid_arguments", "`fresh_root` must be true or false.")
+
+      {true, nil} ->
+        {:ok, :fresh}
+
+      {true, _root} ->
+        tool_error("invalid_arguments", "Pass `fresh_root: true` for a new QA root or `root` to reuse one, not both.")
+
+      {_not_fresh, nil} ->
+        {:ok, 1}
+
+      {_not_fresh, root} ->
+        with {:ok, root, _path} <- pass_root(driver, root), do: {:ok, root}
+    end
+  end
+
+  # A root this pass has, by number; `nil` is the root of the last launch.
+  defp pass_root(driver, root) do
+    %{roots: roots, last: last} = GenServer.call(driver, :roots)
+    number = if is_nil(root), do: last, else: root
+
+    case Map.fetch(roots, number) do
+      {:ok, path} ->
+        {:ok, number, path}
+
+      :error ->
+        tool_error(
+          "qa_unknown_root",
+          "QA root #{inspect(root)} is not one of this pass's QA roots (#{roots |> Map.keys() |> Enum.sort() |> Enum.join(", ")}). " <>
+            "Launch with fresh_root: true to make a new one."
+        )
     end
   end
 
   # -- launches ---------------------------------------------------------------
 
   defp launch_build(driver, config, args) do
-    with {:ok, fixtures} <- api_fixtures(config, args),
+    with {:ok, root} <- root_choice(driver, args),
+         {:ok, fixtures} <- api_fixtures(config, args),
          {:ok, built} <- fetch_build(driver),
          {:ok, stand_ins} <- stand_ins(driver, config, args),
          :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
@@ -668,6 +837,7 @@ defmodule SymphonyElixir.QaDriver do
       app_args = appearance_args(Map.get(args, "appearance"))
       stand_ins = stand_ins ++ library_env
       info = %{name: name, crash_reports: reports, api_fixtures: fixtures_dir, stand_ins: stand_ins, args: app_args}
+      info = Map.put(info, :root, root)
       GenServer.call(driver, {:launch, built.executable, info})
     end
   end
@@ -676,6 +846,7 @@ defmodule SymphonyElixir.QaDriver do
   # Symphony's relaunch stand-in as the update helper's `open`.
   defp launch_pair(driver, config, args) do
     with :ok <- pair_feed_argument(args),
+         {:ok, root} <- root_choice(driver, args),
          {:ok, fixtures} <- api_fixtures(config, args),
          {:ok, _pair} <- fetch_pair(driver),
          {:ok, stand_ins} <- stand_ins(driver, config, args),
@@ -688,7 +859,7 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, fixtures_dir} <- copy_api_fixtures(config, fixtures) do
       pair_env = [{"SYMPHONY_BAR_UPDATE_URL", ReleasePair.latest_url(feed_port)}, {"SYMPHONY_UPDATE_OPEN", relaunch}]
       stand_ins = stand_ins ++ library_env ++ pair_env
-      info = %{name: name, crash_reports: reports, api_fixtures: fixtures_dir, stand_ins: stand_ins}
+      info = %{name: name, crash_reports: reports, api_fixtures: fixtures_dir, stand_ins: stand_ins, root: root}
       info = Map.merge(info, %{pair_bundle: bundle, args: appearance_args(Map.get(args, "appearance"))})
 
       with {:ok, payload} <- GenServer.call(driver, {:launch, Path.join([bundle, "Contents", "MacOS", name]), info}) do
@@ -1074,16 +1245,22 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  defp await_relaunch(config, wait_s), do: await_relaunch(config, wait_s, div(wait_s * 1_000 + config.relaunch_poll_ms - 1, config.relaunch_poll_ms))
+  # The update helper leaves its request in the QA root of the app it updates.
+  defp pair_roots(launches), do: launches |> Map.values() |> Enum.map(& &1.qa_root) |> Enum.uniq()
 
-  defp await_relaunch(config, wait_s, attempts) do
-    case ReleasePair.take_relaunch(config) do
+  defp await_relaunch(config, roots, wait_s) do
+    attempts = div(wait_s * 1_000 + config.relaunch_poll_ms - 1, config.relaunch_poll_ms)
+    await_relaunch(config, roots, wait_s, attempts)
+  end
+
+  defp await_relaunch(config, roots, wait_s, attempts) do
+    case ReleasePair.take_relaunch(config, roots) do
       {:ok, bundle} when is_binary(bundle) ->
         {:ok, bundle}
 
       {:ok, nil} when attempts > 1 ->
         Process.sleep(config.relaunch_poll_ms)
-        await_relaunch(config, wait_s, attempts - 1)
+        await_relaunch(config, roots, wait_s, attempts - 1)
 
       {:ok, nil} ->
         tool_error(
@@ -1518,6 +1695,7 @@ defmodule SymphonyElixir.QaDriver do
 
     %{
       "pid" => pid,
+      "root" => app.root,
       "page" => page,
       "window" => window_payload(app.window),
       "running" => app.exit_status == nil,
@@ -1758,6 +1936,7 @@ defmodule SymphonyElixir.QaDriver do
       build: Map.fetch!(playbook, :build),
       app: Map.fetch!(playbook, :app),
       build_timeout_ms: Map.get(playbook, :build_timeout_ms) || @default_build_timeout_ms,
+      requires: Map.get(playbook, :requires, []),
       scratch_dir: Checks.private_dir("qa-driver"),
       put_roots: Checks.fixture_roots(worktree, Keyword.get(opts, :tmp_dir)),
       remote?: worker_host != nil,
@@ -1769,13 +1948,43 @@ defmodule SymphonyElixir.QaDriver do
       status_menu_poll: Keyword.get(opts, :status_menu_poll, @status_menu_poll),
       release_pair_timeout_ms: Keyword.get(opts, :release_pair_timeout_ms, @default_release_pair_timeout_ms),
       relaunch_poll_ms: Keyword.get(opts, :relaunch_poll_ms, @relaunch_poll_ms),
-      feed_poll: Keyword.get(opts, :feed_poll, @feed_poll)
+      feed_poll: Keyword.get(opts, :feed_poll, @feed_poll),
+      launch_env: PlaybookSettings.launch_env(playbook),
+      dev_server_lease: Keyword.get(opts, :dev_server_lease, DevServerLease)
     }
 
     state = %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil, stub: nil}
-    state = Map.merge(state, %{wide_pass: nil, launched_app?: false, host_ports: pick_host_ports(), tunnel: nil, tunnel_error: nil, checkouts: []})
-    state = Map.merge(state, %{pair: nil, pair_launches: %{}, feed: nil})
+    state = Map.merge(state, %{wide_pass: nil, launched_app?: false, checked_app?: false, host_ports: pick_host_ports(), tunnel: nil, tunnel_error: nil, checkouts: []})
+    state = Map.merge(state, %{pair: nil, pair_launches: %{}, feed: nil, dev_server: nil})
+    # QA roots by number: 1 is the pass's first, and each fresh_root launch adds the next.
+    state = Map.merge(state, %{roots: %{1 => Map.get(state.config, :qa_root)}, last_root: 1})
+    state = Map.put(state, :host_check, check_tools(state.config))
     {:ok, open_tunnel(state, @tunnel_attempts)}
+  end
+
+  # After the credentials check, so a refused QA host runs nothing more. The check runs in the
+  # build's shell and environment, so a tool it finds is one the build finds.
+  defp check_tools(%{unavailable: _error}), do: :ok
+  defp check_tools(%{requires: []}), do: :ok
+
+  defp check_tools(config) do
+    opts = [env: AgentEnv.build_with(%{}), remote_env: [], timeout_ms: @helper_timeout_ms, output_limit: @output_limit]
+
+    case config.host.cmd.("/bin/sh", ["-c", @tool_check_script, "sh" | config.requires], opts) do
+      {:ok, {output, 0}} -> tool_check_result(output)
+      {:ok, {output, status}} -> {:error, {:qa_host_tool_check_failed, "exit status #{status}: #{tail(String.trim(output), 500)}"}}
+      {:error, reason} -> {:error, {:qa_host_tool_check_failed, inspect(reason)}}
+    end
+  end
+
+  defp tool_check_result(output) do
+    lines = String.split(output, "\n", trim: true)
+
+    case {"symphony-qa-tools:checked" in lines, for("symphony-qa-missing-tool:" <> name <- lines, do: name)} do
+      {false, _missing} -> {:error, {:qa_host_tool_check_failed, "no answer: #{tail(String.trim(output), 500)}"}}
+      {true, []} -> :ok
+      {true, missing} -> {:error, {:qa_host_missing_tool, missing}}
+    end
   end
 
   # Held open together, so the ports differ; the agent binds them later.
@@ -1854,11 +2063,18 @@ defmodule SymphonyElixir.QaDriver do
 
   def handle_call(:host_ports, _from, %{tunnel_error: nil} = state), do: {:reply, {:ok, state.host_ports}, state}
   def handle_call(:host_ports, _from, state), do: {:reply, {:error, state.tunnel_error}, state}
+  def handle_call(:host_check, _from, state), do: {:reply, state.host_check, state}
   def handle_call(:build, _from, state), do: {:reply, state.build, state}
   def handle_call(:ignored, _from, state), do: {:reply, state.ignored, state}
   def handle_call(:helper, _from, state), do: {:reply, state.helper, state}
   def handle_call(:wide_pass, _from, state), do: {:reply, state.wide_pass, state}
   def handle_call(:launched_app?, _from, state), do: {:reply, state.launched_app?, state}
+  def handle_call(:roots, _from, state), do: {:reply, %{roots: state.roots, last: state.last_root}, state}
+
+  def handle_call(:app_check, _from, state),
+    do: {:reply, %{built: state.build != nil, launched: state.launched_app?, checked: state.checked_app?}, state}
+
+  def handle_call({:checked, healthy}, _from, state), do: {:reply, :ok, %{state | checked_app?: healthy}}
   def handle_call({:helper, path}, _from, state), do: {:reply, :ok, %{state | helper: path}}
 
   def handle_call({:record_build, fingerprint, ignored}, _from, state),
@@ -1885,6 +2101,7 @@ defmodule SymphonyElixir.QaDriver do
 
   def handle_call(:stand_in_choices, _from, state), do: {:reply, %{host_ports: state.host_ports, checkouts: state.checkouts}, state}
   def handle_call({:checkout, path}, _from, state), do: {:reply, :ok, %{state | checkouts: [path | state.checkouts]}}
+  def handle_call({:dev_server, server}, _from, state), do: {:reply, :ok, %{state | dev_server: server}}
 
   def handle_call({:launch, executable, info}, _from, state) do
     running = Enum.count(state.apps, fn {_pid, app} -> app.exit_status == nil end)
@@ -1971,6 +2188,7 @@ defmodule SymphonyElixir.QaDriver do
   @impl true
   def terminate(_reason, state) do
     for {pid, %{exit_status: nil}} <- state.apps, do: state.config.host.kill.(pid)
+    stop_dev_server(state)
     stop_feed(state)
     if state.pair_launches != %{}, do: stop_strays(state.config)
     if state.stub, do: OpenRouter.Stub.stop(state.stub.pid)
@@ -1980,23 +2198,73 @@ defmodule SymphonyElixir.QaDriver do
     :ok
   end
 
+  # After the apps, which talk to it, and before the run directory goes. The port's lease goes to
+  # the next pass once the server stopped.
+  defp stop_dev_server(%{dev_server: nil}), do: :ok
+
+  defp stop_dev_server(%{dev_server: server, config: config}) do
+    outcome = DevServer.stop(config, server)
+    Logger.info("QA dev server stopped #{config.log_context} worker_host=#{config.worker_host} port=#{server.port} pid=#{server.pid} outcome=#{inspect(outcome)}")
+    DevServerLease.release(config.dev_server_lease, self())
+  end
+
   defp launch(executable, info, state) do
     with {:ok, state} <- ensure_stub(state),
-         {stub_url, forwards} = stub_route(state.config, state.stub.port),
-         launch_opts = [cd: state.config.qa_root, env: launch_env(state.config, stub_url, app_env(info)), args: info.args, reverse_forwards: forwards],
-         {:ok, port, pid} <- state.config.host.launch.(executable, launch_opts) do
-      Logger.info("QA driver launched app pid=#{pid} executable=#{executable} openrouter_stub=#{stub_url}")
-      app = Map.merge(info, %{port: port, output: "", exit_status: nil, window: nil})
-      payload = %{"pid" => pid, "qa_mode" => true, "note" => "Wait for the window to settle before judging it."}
-      payload = if info.api_fixtures, do: Map.put(payload, "api_fixtures", info.api_fixtures), else: payload
-      state = if info[:pair_bundle], do: put_in(state.pair_launches[info.pair_bundle], info), else: state
-      {:reply, {:ok, payload}, %{state | apps: Map.put(state.apps, pid, app), launched_app?: true}}
+         {:ok, playbook_env} <- playbook_env(state.config),
+         {:ok, root, state} <- launch_root(state, info.root) do
+      start_app(executable, %{info | root: root}, playbook_env, state)
     else
-      {:error, {:qa_tool, _code, _message}} = error ->
-        {:reply, error, state}
+      {:error, {:qa_tool, _code, _message}} = error -> {:reply, error, state}
+    end
+  end
+
+  # A fresh root is kept once it exists, even when the app then fails to start,
+  # so the next fresh root gets the next number.
+  defp start_app(executable, info, playbook_env, state) do
+    qa_root = Map.fetch!(state.roots, info.root)
+    info = Map.put(info, :qa_root, qa_root)
+    {stub_url, forwards} = stub_route(state.config, state.stub.port)
+    env = launch_env(state.config, qa_root, stub_url, app_env(info), playbook_env)
+
+    case state.config.host.launch.(executable, cd: qa_root, env: env, args: info.args, reverse_forwards: forwards) do
+      {:ok, port, pid} ->
+        Logger.info("QA driver launched app pid=#{pid} executable=#{executable} root=#{info.root} openrouter_stub=#{stub_url}")
+        app = Map.merge(info, %{port: port, output: "", exit_status: nil, window: nil})
+        payload = %{"pid" => pid, "qa_mode" => true, "root" => info.root, "note" => "Wait for the window to settle before judging it."}
+        payload = if info.api_fixtures, do: Map.put(payload, "api_fixtures", info.api_fixtures), else: payload
+        state = if info[:pair_bundle], do: put_in(state.pair_launches[info.pair_bundle], info), else: state
+        {:reply, {:ok, payload}, %{state | apps: Map.put(state.apps, pid, app), launched_app?: true, last_root: info.root}}
 
       {:error, reason} ->
         {:reply, tool_error("qa_launch_failed", "The app could not start: #{inspect(reason)}"), state}
+    end
+  end
+
+  # A fresh root is a new, empty folder beside the first, where the app runs: no
+  # settings, no first-run record, no request log.
+  defp launch_root(state, :fresh) do
+    root = map_size(state.roots) + 1
+    path = Path.join(state.config.host_dir, "qa-root-#{root}")
+
+    with :ok <- make_root(state.config, path) do
+      Logger.info("QA driver made a fresh QA root root=#{root} path=#{path}")
+      {:ok, root, %{state | roots: Map.put(state.roots, root, path)}}
+    end
+  end
+
+  defp launch_root(state, root), do: {:ok, root, state}
+
+  defp make_root(%{remote?: false}, path) do
+    case File.mkdir(path) do
+      :ok -> :ok
+      {:error, reason} -> tool_error("qa_launch_failed", "A fresh QA root could not be made at #{path}: #{inspect(reason)}")
+    end
+  end
+
+  defp make_root(config, path) do
+    case config.host.cmd.("/bin/mkdir", [path], timeout_ms: @helper_timeout_ms, output_limit: @output_limit) do
+      {:ok, {_output, 0}} -> :ok
+      other -> tool_error("qa_launch_failed", "A fresh QA root could not be made on the QA host at #{path}: #{inspect(other)}")
     end
   end
 
@@ -2123,13 +2391,24 @@ defmodule SymphonyElixir.QaDriver do
     {OpenRouter.Stub.url(remote_port), [{"127.0.0.1:#{remote_port}", "127.0.0.1:#{port}"}]}
   end
 
-  # The QA host has its own login environment; only the QA root, the stub's URL
-  # and the launch's own variables (the API fixtures' copy, the stand-ins) cross over.
-  defp launch_env(%{remote?: true, qa_root: qa_root}, stub_url, app_env),
-    do: [{@qa_root_env, qa_root}, {OpenRouter.qa_url_env(), stub_url} | app_env]
+  # The QA host has its own login environment; only the QA root, the stub's URL,
+  # the launch's own variables (the API fixtures' copy, the stand-ins) and then the
+  # playbook's `launch_env` cross over.
+  defp launch_env(%{remote?: true}, qa_root, stub_url, app_env, playbook_env),
+    do: [{@qa_root_env, qa_root}, {OpenRouter.qa_url_env(), stub_url} | app_env] ++ playbook_env
 
-  defp launch_env(config, stub_url, app_env),
-    do: AgentEnv.build_with(Map.new([{@qa_root_env, config.qa_root}, {OpenRouter.qa_url_env(), stub_url} | app_env]))
+  defp launch_env(_config, qa_root, stub_url, app_env, playbook_env),
+    do: AgentEnv.build_with(Map.new(playbook_env ++ [{@qa_root_env, qa_root}, {OpenRouter.qa_url_env(), stub_url} | app_env]))
+
+  # The config check refuses these names already; a driver started without it refuses them too.
+  defp playbook_env(%{launch_env: {:ok, env}}), do: {:ok, env}
+
+  defp playbook_env(%{launch_env: {:error, name}}) do
+    tool_error(
+      "qa_launch_env_refused",
+      "The playbook's launch_env sets #{name}, which Symphony or the system sets on the app itself, so no app was launched. #{Checks.blocked_hint()}"
+    )
+  end
 
   defp app_env(%{api_fixtures: nil, stand_ins: stand_ins}), do: stand_ins
   defp app_env(%{api_fixtures: dir, stand_ins: stand_ins}), do: [{@api_fixtures_env, dir} | stand_ins]

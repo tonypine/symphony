@@ -153,11 +153,17 @@ defmodule SymphonyElixir.SelfHealTest do
     test "maps each known cause to its component" do
       cases = [
         {{:qa_dev_server_failed, {:verification_failed, {:dev_server_build_failed, 3}}}, "dev_server"},
+        {{:qa_dev_server_failed, :health_timeout, "listening soon"}, "dev_server"},
+        {{:qa_dev_server_failed, {:dev_server_port_busy, 8090, 6557, "TP-1124"}, ""}, "dev_server"},
+        {{:qa_dev_server_failed, {:dev_server_unreachable, "ssh: refused"}, ""}, "qa_environment"},
         {{:verification_failed, {:dev_server_exit, 1}}, "dev_server"},
         {{:dev_server_not_on_socket, "s"}, "dev_server"},
         {{:dev_server_not_configured}, "dev_server"},
         {:health_timeout, "dev_server"},
         {{:remote_worker_unsupported, "worker-1"}, "worker_host"},
+        {{:qa_host_missing_tool, ["go"]}, "worker_host"},
+        {{:qa_worker, "qa_worker_unsafe"}, "worker_host"},
+        {{:qa_host_tool_check_failed, "exit status 255"}, "worker_host"},
         {"no QA playbook applies to this change", "qa_playbook"},
         {"QA cannot run on the remote worker \"worker-1\"", "worker_host"},
         {"something else entirely", "qa_environment"},
@@ -203,6 +209,12 @@ defmodule SymphonyElixir.SelfHealTest do
   describe "signature/1" do
     test "normalizes the outcome's cause" do
       assert SelfHeal.signature(%{cause: {:dev_server_exit, 3}}) == "{:dev_server_exit, 3}"
+      # A QA-host dev server's log is not part of the failure.
+      assert SelfHeal.signature(%{cause: {:qa_dev_server_failed, :health_timeout, "one log"}}) == "{:qa_dev_server_failed, :health_timeout}"
+      # Nor is the pid that holds a busy port, which changes from run to run.
+      assert SelfHeal.signature(%{cause: {:qa_dev_server_failed, {:dev_server_port_busy, 8090, 6557, "TP-1124"}, ""}}) ==
+               "{:qa_dev_server_failed, {:dev_server_port_busy, 8090}}"
+
       assert SelfHeal.signature(%{cause: "  a   spaced\n reason "}) == "a spaced reason"
       assert SelfHeal.signature(%{cause: nil, reason: nil}) == ""
       assert SelfHeal.signature(:not_a_map) == ""
@@ -264,6 +276,40 @@ defmodule SymphonyElixir.SelfHealTest do
 
       assert {:blocked, %{waits_on: %{type: "fix_ticket", keys: [@fix_ticket]}}} = Process.get(:hold_attrs)
       assert {@issue_id, "Blocked"} = Process.get(:machine_label)
+    end
+
+    test "a setup block's dev server build files in the project's repo, and the hold gives the cause in words" do
+      outcome = SymphonyElixir.SetupBlock.outcome({:verification_failed, {:dev_server_build_failed, 127}})
+      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome))
+
+      assert %{scope: @repo_key, component: "dev_server", description: description} = Process.get(:fixer_create)
+      assert description =~ "before the agent's first turn"
+
+      assert {:blocked, %{reason: reason}} = Process.get(:hold_attrs)
+
+      assert reason ==
+               "waiting on fix ticket TP-900 for the dev_server block: " <>
+                 "verification.dev_server build failed with exit 127: a command it runs is not on the sandbox PATH"
+    end
+
+    test "a setup block's port collision is Symphony's, a structural cause" do
+      outcome = SymphonyElixir.SetupBlock.outcome({:verification_failed, {:loopback_bridge_unavailable, :eaddrinuse}})
+      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome))
+
+      assert %{scope: @symphony_repo_key, component: "qa_environment"} = Process.get(:fixer_create)
+      assert {:blocked, %{reason: reason}} = Process.get(:hold_attrs)
+      assert reason =~ "the port is already in use (eaddrinuse)"
+    end
+
+    test "files a QA host's missing tool in Symphony's repo, where its provisioning script lives" do
+      cause = {:qa_host_missing_tool, ["go"]}
+      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome(cause, %{reason: SymphonyElixir.QaAgent.blocked_reason(cause)})))
+
+      assert %{scope: @symphony_repo_key, component: "worker_host", title: "Self-heal: repair the worker_host block", description: description} =
+               Process.get(:fixer_create)
+
+      assert description =~ "qa_host_missing_tool: go"
+      assert description =~ "scripts/qa-vm/provision.sh"
     end
 
     test "a CI check that keeps failing files a fix ticket in the repo whose CI fails, naming the pull request" do

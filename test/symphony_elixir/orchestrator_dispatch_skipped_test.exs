@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.QaDriver.DevServerLease
   alias SymphonyElixir.RunStore
 
   @waiting "Waiting on sub-tickets"
@@ -136,12 +137,52 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     assert %{blocked_by: [%{identifier: "MT-B", title: nil, state: "In Progress"}], parent: nil} = state.dispatch_skipped["blocked"].connected
   end
 
+  # TP-1125: a QA pass waiting for another pass's dev server port on the QA host is running, but
+  # says what it waits for instead of "already running".
+  test "a running QA pass that waits for the QA host's dev server port names the ticket holding it" do
+    unless GenServer.whereis(DevServerLease), do: start_supervised!(DevServerLease)
+    key = {"admin@qa-vm-#{System.unique_integer([:positive])}", 8090}
+    {holder, waiter} = {spawn(fn -> Process.sleep(:infinity) end), spawn(fn -> Process.sleep(:infinity) end)}
+    on_exit(fn -> Enum.each([holder, waiter], &Process.exit(&1, :kill)) end)
+
+    :ok = DevServerLease.acquire(DevServerLease, key, %{pid: holder, issue_id: "holding-qa", ticket: "MT-1124"})
+    test = self()
+    waiting = %{pid: waiter, issue_id: "waiting-qa", ticket: "MT-1123"}
+    spawn_link(fn -> send(test, DevServerLease.acquire(DevServerLease, key, waiting)) end)
+    wait_until_queued("waiting-qa")
+
+    candidates = [issue("waiting-qa", "MT-1123", "In Progress"), issue("holding-qa", "MT-1124", "In Progress")]
+    state = orchestrator_state() |> run(Enum.at(candidates, 0)) |> run(Enum.at(candidates, 1))
+    state = Orchestrator.dispatch_chosen_issues_for_test(candidates, state)
+    {host, 8090} = key
+
+    assert state.dispatch_skipped["waiting-qa"].reason == "waiting for the QA host's dev server port: 8090 on #{host} is held by MT-1124's QA pass"
+
+    assert state.dispatch_skipped["holding-qa"].reason == "already running"
+
+    DevServerLease.release(DevServerLease, holder)
+    assert_receive :ok
+    DevServerLease.release(DevServerLease, waiter)
+  end
+
+  defp wait_until_queued(issue_id, tries \\ 250) do
+    cond do
+      DevServerLease.waiting(issue_id) -> :ok
+      tries > 0 -> Process.sleep(10) && wait_until_queued(issue_id, tries - 1)
+      true -> flunk("#{issue_id} never queued for the lease")
+    end
+  end
+
   # TP-1019: dispatch reads the issue again by id, and that read carries no repo key. The dispatch's
   # own goes on the refreshed copy, so its holds are read where they are kept.
   test "dispatch reads the issue again under its repo key: a held copy is skipped and nothing is read with no repo key" do
     polled = issue("held", "MT-HELD", "QA")
     unkeyed = %{polled | repo_key: nil}
     fetcher = fn ["held"] -> {:ok, [unkeyed]} end
+
+    # A green head, so the QA ticket's own gate is open and only the hold holds it back.
+    SymphonyElixir.PrWatchSupport.put_watch!("default", "held", phase: :qa)
+    on_exit(fn -> RunStore.delete_ticket_state("default", "held") end)
 
     :ok = RunStore.set_ticket_hold("default", "held", :needs_decision, %{reason: "Investigate the qa_environment by hand?"})
     on_exit(fn -> RunStore.clear_ticket_hold("default", "held", :needs_decision) end)

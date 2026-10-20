@@ -794,11 +794,14 @@ Fields:
 
 - `enabled` (boolean)
   - Default: `false`.
-  - When false or omitted, no verification port allocation or dev-server supervision is active.
+  - When false or omitted, no verification port allocation or dev-server supervision is active,
+    and no agent run starts a dev server.
+  - A `macos_app` QA pass on a `worker_host` with `dev_server: true` reads only
+    `dev_server.start_cmd`: its server runs on the QA host, with no port allocation here.
 - `port_allocation.range` (two-integer list)
-  - Default: `[4000, 4099]`.
+  - Default: `[4100, 4199]`, which leaves out Symphony's own API port.
   - The implementation allocates the first free port in the inclusive range for each dispatched
-    issue.
+    issue: one no other allocation holds and nothing on the host already listens on.
   - The range is global to the Symphony process across all worker hosts. Operators using SSH worker
     pools should size the range for total verification-enabled concurrency, not per-host
     concurrency.
@@ -1354,16 +1357,29 @@ SHOULD stop before pushing, the reviewer SHOULD receive issue context plus the c
 reviewer SHOULD judge code quality and bugs (correctness, tests for new branches, error handling,
 the repository's code rules) and not the issue's acceptance criteria or scope, and the reviewer
 MUST return a structured verdict of `approve`, `request_changes`, or `block`. Reviewer
-sessions SHOULD expose only read-only scoped Linear/GitHub tools. An `approve` verdict SHOULD keep
+sessions SHOULD expose only read-only scoped Linear/GitHub tools, plus the `review_verdict` tool
+through which the reviewer records its verdict: its input schema is the verdict contract (a
+`verdict` enum, `findings` with `file`, `line_range`, `quoted_snippet`, `summary` and
+`suggested_fix`, `comments` notes and a `reason`), it answers a verdict it cannot read with the
+parser's error so the reviewer can call it again in the same turn, and the last verdict a turn
+recorded wins over the turn's text, even when the turn then failed. A verdict scraped as JSON from
+the reviewer's final message is the fallback for a turn that recorded none. Both are read leniently
+where a slip has one reading: a verdict word in another case or a synonym (`approved`,
+`changes_requested`, `request-changes`, `blocked`), and a line range given as one line (`12`,
+`"12"`), a span (`"12-15"`), a reversed pair or a `{"start", "end"}` object. A turn whose verdict
+Symphony cannot read SHOULD get one repair turn in the same session, carrying the parser's error
+and the contract, before the review counts as inconclusive. An `approve` verdict SHOULD keep
 later executor continuations in push/PR handoff mode rather than reintroducing the pre-push reviewer
 gate. `request_changes` and `block` verdicts SHOULD include evidence-backed findings with file,
-line range, quoted snippet, summary, and suggested fix; Symphony SHOULD reject verdicts whose
-findings cannot be verified against the reviewer diff/context, and SHOULD run one bounded
+line range, quoted snippet, summary, and suggested fix. A finding whose quote cannot be located in
+the reviewer diff/context SHOULD be kept as an unanchored comment marked as one that could not be
+placed, with the verdict standing; Symphony SHOULD treat a verdict as unverifiable only when it is a
+`request_changes` none of whose findings can be placed. Symphony SHOULD run one bounded
 self-check turn before accepting blocking findings. A finding SHOULD be grounded against every
 evidence source for the cited file (the diff, the full file contents and the adjacent windows): the
 cited range first, then the nearest place in the changed file the quote appears (within 10 lines of
 the cited range before anywhere else), moving the finding's line range to where the quote was found.
-When no finding can be grounded, Symphony SHOULD give the same reviewer session one re-quote turn
+When no finding of a `request_changes` can be grounded, Symphony SHOULD give the same reviewer session one re-quote turn
 that shows the text actually at the cited lines. The reviewer prompt SHOULD tell the reviewer to
 review the diff by reading it and not to run the test suite, coverage or static analysis, which CI
 runs after the push. Reviewer token usage SHOULD be tracked separately from the aggregate run token
@@ -1408,18 +1424,41 @@ Fields:
   `enabled`; a new kind needs `paths` and `prompt`. The built-in `macos_app` kind also takes
   `build` (shell command run in the QA worktree), `app` (the `.app` bundle path relative to the
   repo root) and `build_timeout_ms` (default `900000`), and is off unless `build` and `app` are
-  set. The built-in `web` kind also takes `browser_mcp` (an MCP server definition, the shape of
+  set. It also takes `dev_server` (boolean, default `false`, valid on `android_app` and any kind
+  too: the pass starts `verification.dev_server`, on the QA host for a `macos_app` pass on a
+  `worker_host`), `dev_server_port` (1..65535, default `8090`: that QA-host server's
+  `SYMPHONY_VERIFICATION_PORT`) and `launch_env` (map of string to string, default `{}`: extra
+  variables `qa_launch_app` sets on the app after Symphony's own, `$SYMPHONY_VERIFICATION_PORT`
+  replaced by `dev_server_port`; names MUST match `^[A-Z][A-Z0-9_]*$`, and the variables Symphony
+  sets on the app itself, `PATH`, `HOME` and `DYLD_*` fail validation, naming the key). Values are
+  plain text and MUST NOT be secrets. The built-in `web` kind also takes `browser_mcp` (an MCP server definition, the shape of
   an `agent.mcp.servers` entry) and is off unless `verification.enabled` is true and
   `verification.dev_server.start_cmd` is set. The built-in `android_app` kind also takes `build`
   (shell command the QA agent runs in its own sandbox), `apk_paths` (list of the APKs it writes,
   relative to the repo root; `apk_path`, one string, is a one-item list, and both may be set),
   and `application_ids` (list of strings), and is off unless `build`, at least one APK path, a
-  non-empty `application_ids` and `auto_review.android.avd` are set. A repository's
+  non-empty `application_ids` and `auto_review.android.avd` are set. Any kind takes `requires`
+  (list of executable names, default `[]`), the tools its pass needs on the QA host; Symphony
+  checks the `macos_app` kind's. A repository's
   `WORKFLOW.md` MAY set `auto_review.playbooks` too; for that repository's QA passes each kind is
   merged over this map key by key, the repository's value winning.
 - `worker_host` (string, optional): an SSH host (`user@host` or `host:port`, the form
   `workers.ssh_hosts` uses) where the `macos_app` playbook's `qa_*` tools run instead of the
-  Symphony host. It does not need to be, and should not be, listed in `workers.ssh_hosts`.
+  Symphony host. It does not need to be, and should not be, listed in `workers.ssh_hosts`. With
+  `dev_server: true` on that playbook, the pass runs `verification.dev_server` there before the
+  agent starts: from its own copy of the PR head in the pass's run directory, `build_cmd` then
+  `start_cmd` as the QA user, unsandboxed, with `SYMPHONY_VERIFICATION_PORT` set to
+  `dev_server_port`, `HOME` a fresh folder and `TMPDIR` in the run directory, in a process group of
+  its own. The QA host polls `health_check_url` until it answers 200 or `health_timeout_ms`
+  passes, and an answer counts only while `start_cmd` still runs; a failed build, an exit
+  or a timeout makes the pass `blocked` with reason `qa_dev_server_failed: …` and the log's last
+  20 lines, component `dev_server`. A port something listens on before `start_cmd` makes it
+  `blocked` with `qa_dev_server_port_busy: <port> held by pid <n> (<ticket>)`. The QA prompt
+  names its URL. When the pass ends the group gets `stop_signal`, then is killed after
+  `stop_timeout_ms`, before the run directory is removed. One pass at a time runs a server on a
+  `worker_host` and `dev_server_port`: a pass takes that pair's lease before it starts its server,
+  a second pass waits for it in turn (listed in `dispatch_skipped` as `waiting for the QA host's
+  dev server port: …`), and the lease passes on once the holder's server stopped.
 - `android` (object, optional): host settings for Android QA. `avd` (AVD name, required for
   Android QA), `sdk_root` (string, default `$ANDROID_HOME`, then `$ANDROID_SDK_ROOT`, then
   `~/Library/Android/sdk`), `boot_timeout_ms` (positive integer, default `180000`) and
@@ -1498,6 +1537,11 @@ The QA agent:
   the QA worktree or the pass's temp folder, and MUST refuse symlinks and files with other hard
   links. `qa_api_requests` returns the requests the app logged to `api-requests.jsonl` in its QA
   root since the last call, read where the app runs, and MUST read nothing outside that QA root.
+  Every launch of a pass shares one QA root unless `qa_launch_app` asks for a fresh one
+  (`fresh_root`), a new, empty directory beside it in the same private directory, or names a root
+  the pass already has (`root`); it MUST refuse a root the pass does not have. Each launch's
+  result names its root, and `qa_api_requests` reads one root's log (`root`, by default the last
+  launch's).
   `qa_ax_set_value` MUST enter a text field's value so the app registers the edit, with key events
   sent to that app alone, and the tools MUST NOT return a secure field's value.
   `qa_ax_select` selects a table or outline row through accessibility, `qa_click` clicks an
@@ -1515,9 +1559,16 @@ The QA agent:
   window size. A pass whose resize met a usable screen area under 1400×900 points MUST NOT be
   reported `pass`: its `pass` becomes `blocked`, and that pass's `blocked` goes to a person. A pass
   with no `qa_resize_window` call MUST NOT be reported `pass` either: its wide pass did not run, so
-  its `pass` becomes `blocked` with that reason. An epic review gets every enabled playbook whatever
-  the epic shipped, so this applies to it only when the pass launched an app: an epic review that
-  launched none (a backend-only epic) keeps its `pass`. Every tool that
+  its `pass` becomes `inconclusive` with that reason (an epic review's becomes `blocked`). A missing
+  wide pass is the QA run's omission, never an environment fault: an `inconclusive` pass MUST be
+  rerun once on the same head and then pause the ticket on a Needs Decision hold, and MUST NOT reach
+  the self-heal lane. A `pass` with `scope: none` (the change has nothing on screen to judge, by the
+  agent's answer or because the QA policy found no changed path matching any selected playbook's
+  `paths` and no `## User walkthrough`) owes no wide pass, but MUST be recorded `pass` only when the
+  pass built the app (`qa_build`), launched it (`qa_launch_app`) and a `qa_check_app` found it
+  healthy; otherwise it is `inconclusive`. An epic review gets every enabled playbook whatever
+  the epic shipped, so the wide pass applies to it only when the pass launched an app: an epic review
+  that launched none (a backend-only epic) keeps its `pass`. Every tool that
   takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
@@ -1574,6 +1625,11 @@ The QA agent:
   credentials, a global git credential helper or a forwarded SSH agent); the `qa_*` tools then fail
   with `qa_worker_unsafe` (or `qa_worker_unreachable` when the host cannot be reached) and tell the
   agent to answer `blocked`.
+- After that check, a `macos_app` pass MUST look for each executable in the playbook's `requires`
+  with `command -v`, in the shell and environment the playbook's `build` gets, on the QA host. A
+  missing one MUST make the pass `blocked` before the agent starts, with the reason
+  `qa_host_missing_tool: <name>`, and self-heal MUST file its fix under the `worker_host`
+  component, in Symphony's repo.
 - A `macos_app` pass MUST hand the QA agent the host loopback ports it may serve the app's stubs
   and proxies on (`QA_HOST_PORTS`), and the app reaches them at `http://localhost:<port>`. The
   playbook's `build` MUST get the same `QA_HOST_PORTS` in its environment, unless the forwards
@@ -1600,6 +1656,15 @@ The QA agent:
   on that commit, recorded in the ticket-state record), the review is not started again and the
   ticket is held `Blocked` with `waits_on.type` `ci_wait` and a reason naming the commit and the
   workflows still running, which a person lifts with `Unblock`; the next wait starts from zero.
+- The epic review MUST NOT judge a failed workflow run on the base branch head it reviews before it
+  reran it once: once every run on the commit finished, it reruns the failed jobs of each failed run
+  (`gh run rerun <id> --failed`) and waits for the rerun as for an unfinished run, the wait on that
+  commit starting from zero again. The rerun MUST be made at most once per commit: it is recorded
+  on the ticket (a `ci_rerun` signal bound to the commit, carrying the failed jobs' and tests' names
+  read before the rerun) before it is made, and a review that cannot record it MUST NOT rerun. A run
+  green on its rerun MUST be recorded as a `ci_flake` signal on the epic (the commit, the runs, the
+  job and test names), once per commit, and files no follow-up; a run red again is judged and filed
+  as any red run. The review's report SHOULD name what the rerun found.
 - The PR QA prompt MUST list the agent-protected paths (`WORKFLOW.md`, `.agents/skills`, the project
   `.claude` settings and the rest an agent's sandbox denies writes to) and tell the agent to mark a
   criterion that only a change to one of them can meet `skipped`, naming the follow-up ticket, when
@@ -1924,7 +1989,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `repositories[].workspace.fetch_before_dispatch`: boolean, defaulting through global
   `workspaces.fetch_before_dispatch` or `true`
 - `verification.enabled`: boolean, default `false`
-- `verification.port_allocation.range`: two-integer inclusive range, default `[4000, 4099]`
+- `verification.port_allocation.range`: two-integer inclusive range, default `[4100, 4199]`
 - `verification.dev_server.build_cmd`: shell command or null
 - `verification.dev_server.start_cmd`: shell command or null
 - `verification.dev_server.health_check_url`: URL template or null
@@ -2541,7 +2606,12 @@ Rules:
   `waiting_on_you` in `/api/v1/state`) lists the ticket. A person lifts it with `Unblock` or
   `Restart`, and the count starts again.
 - **Green-head gating.** CI state (`running` / `green` / `red`) is an attribute per PR head, not a
-  state. The reviewer and QA runs MUST dispatch only on a green head; a red head in `Code Review`,
+  state. The reviewer and QA runs MUST dispatch only on a green head, whether the poll, a retry or
+  the continuation of an earlier run (the reviewer's approve moving the ticket into `QA`) dispatches
+  them; a held-back run records `code_review_head_not_green` or `qa_head_not_green` once per head. A
+  QA `fail` or block on a head the PR watcher reads as red, missing a required check, or
+  conflicting is recorded `blocked` with the component `ci` and leaves the ticket in `QA` for the
+  watcher to route; it MUST NOT go to `Rework`. A red head in `Code Review`,
   `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its
   origin recorded, whether or not the PR also conflicts. A `Code Review` or `QA` ticket back from
   `CI Fix` on the same red head or the same conflict (a repair that pushed nothing) MUST enter
@@ -2636,7 +2706,20 @@ Rules:
   confirming continues into `Merging`. Rework verdicts never wait on a person.
 - **Self-heal.** A QA or epic review blocked by tooling or environment retries boundedly, then files
   (or reuses) one fix ticket per broken component and sets a `Blocked` hold on the affected ticket
-  waiting on it. Each blocked QA attempt logs, and records on its `blocked` verdict, the block's
+  waiting on it. From the `QA` state only these blocks reach it: the ones the QA tools raise
+  themselves (`qa_worker_*`, `qa_host_missing_tool`, `qa_host_tool_check_failed`,
+  `qa_host_tunnel_failed`, `qa_dev_server_failed`), the `needs_person` access cases, and the QA
+  answer's `covered_by` and `needs_dev_server`. Any other blocked QA pass (the agent's own account
+  of the block, a crashed or token-limited run, a check that never finished) names nothing broken,
+  so it MUST pause on a Needs Decision hold after its retries instead of filing a fix ticket.
+  A run that fails in its own setup before the agent's first turn (any
+  `verification_failed`: the dev server's build, start, health check or the bridge to its port) is a
+  setup block: nothing changes between attempts, so it is not retried as a crash and goes to the
+  same lane straight away, with its hold reason giving the cause in words (`verification.dev_server
+  build failed with exit 127: a command it runs is not on the sandbox PATH`), its log line
+  `Setup block for <ticket>: <component> — <cause>; self-heal holds it on <fix ticket>`, and the
+  ticket listed under `/api/v1/state`'s `blocked` (kind `hold`) while the hold lasts. A lane that
+  asks for another attempt, or cannot record the block, falls back to the crash retry. Each blocked QA attempt logs, and records on its `blocked` verdict, the block's
   reason, whether it needs a person, the model the run used and the playbooks it ran. A new fix ticket takes the affected ticket's priority when that is more urgent than
   High (an Urgent ticket's fix is Urgent, so `tickets.priorities` dispatches it), else High; a
   reused one keeps its priority. A new fix ticket is assigned to the user the fix's repo polls for
@@ -2665,7 +2748,11 @@ Rules:
   PR before it merges: a gap whose check needs another unmerged ticket, or the change running in
   Symphony, is filed as two follow-ups, the second blocked by the first (a gap names its blocker,
   another gap of the same answer or a sub-ticket of the epic; any other blocker is logged and left
-  out). No `Final verification:` ticket or close-out run is created.
+  out). The review files one follow-up per defect, not per failing step: each failing step names
+  the defect it rests on, steps that fail for one cause (a plan-level step that fails only because
+  a design check failed, and that check) name the same defect, and their follow-up lists every one
+  of those steps with its evidence and makes each an acceptance criterion. A failing step that names
+  no defect is a follow-up of its own. No `Final verification:` ticket or close-out run is created.
 - **Prompt.** The rendered prompt MUST NOT name Auto Review, `In Review`, the Human Review state,
   supervisor checks or `Final verification:` tickets. Prompt assembly still passes `state_machine`,
   always `designed`, so an instruction file that branches on it keeps rendering.
@@ -2970,6 +3057,9 @@ Backoff formula:
 
 - Normal continuation retries after a clean worker exit use a short fixed delay of `1000` ms.
 - Failure-driven retries use `delay = min(10000 * 2^(attempt - 1), agent.max_retry_backoff_ms)`.
+  A setup block (a `verification_failed` before the agent's first turn) is not a failure-driven
+  retry: it goes to the self-heal lane (§ Self-heal). An unreachable worker host and a failed
+  workspace hook still retry, since a retry may pick another host or find the hook's cause gone.
 - Power is capped by the configured max retry backoff (default `300000` / 5m).
 
 Retry handling behavior:
@@ -3682,7 +3772,8 @@ Optional client-side tool extension:
 - Current standardized optional tools: scoped Linear tools whose protocol-facing names match
   `^[a-zA-Z0-9_-]+$`, such as `linear_get_current_issue`, `linear_get_comments`, and
   `linear_update_state`, and scoped GitHub tools such as `github_get_pull_request`,
-  `github_fetch_origin`, `github_sync_base`, `github_push_branch`, and `github_merge_pull_request`.
+  `github_fetch_origin`, `github_sync_base`, `github_push_branch`, `github_merge_pull_request`,
+  and `github_ci_log`.
 - If implemented, supported tools SHOULD be advertised to the agent session during startup using the
   protocol mechanism supported by the configured adapter.
 - Unsupported tool names SHOULD still return a failure result using the targeted protocol and
@@ -3898,13 +3989,25 @@ Scoped GitHub tool extension contract:
   the human-approved `Merging` state, MUST refuse while any check is failing or
   pending (only the checks the base branch requires, when it requires any; see the CI poller's
   landing read), and MUST pin the merge to the head commit whose checks were read.
+- `github_ci_log`, if exposed, MUST read only the session's `origin` repository: it takes one of a
+  workflow run id, a job id or a pull request number (and `failed_only`, default true), MUST refuse
+  a run or job whose URL is not that repository's, and with `failed_only` MUST refuse a job that did
+  not fail. It returns each job's failed steps, its check annotations and the last lines of its log
+  (`gh run view --job <id> --log-failed`), bounded: at most 400 lines per job, each line clipped,
+  and at most 10 jobs, counting the rest. It is a read tool, so every run kind has it, the reviewer
+  and QA included; it gives no other `gh` access.
+- The epic review SHOULD read the failed jobs of CI on the commit it reviewed itself when it files a
+  follow-up about CI (a failing step or finding that names CI or a workflow run), and quote their
+  failed steps, annotations and log tail in the follow-up's description, so the run that takes it
+  starts from the cause rather than from the job's name.
 - GitHub read-only review sessions SHOULD hide GitHub tools that mutate local
   workspace Git metadata or remote GitHub state.
 
 Elixir evidence: `lib/symphony_elixir/agent_tools/github.ex`,
-`lib/symphony_elixir/codex/dynamic_tool.ex`,
-`test/symphony_elixir/agent_tools_github_test.exs`, and
-`test/symphony_elixir/dynamic_tool_test.exs`.
+`lib/symphony_elixir/codex/dynamic_tool.ex`, `lib/symphony_elixir/github/ci_log.ex`,
+`test/symphony_elixir/agent_tools_github_test.exs`,
+`test/symphony_elixir/dynamic_tool_test.exs`, `test/symphony_elixir/github/ci_log_test.exs`, and
+`test/symphony_elixir/epic_review_test.exs`.
 
 User-input-required policy:
 
@@ -4437,10 +4540,14 @@ Minimum endpoints:
   - `dispatch_skipped` lists every candidate the last dispatch pass neither started nor left waiting
     for a slot, each with its `repo_key`, `state`, the `reason` (the first closed gate: `blocked by
     MT-2`, `on a Needs Decision hold`, `priority medium is not in tickets.priorities (urgent, high)`,
-    a usage limit, ...; while the operator pause, the workspace free-space pause or the daily token
+    `stopped by the operator at <time>; waiting for the next poll`, a usage limit, ...; while the operator pause, the workspace free-space pause or the daily token
     budget stops the pass, the pause) and `since`, when that reason was first seen. A candidate is
     never passed over in silence; the orchestrator also logs `Skipping dispatch:` at debug level once
     per new or changed reason.
+  - `counts.review_inconclusive` counts the inconclusive Code Review runs in `run_history` per
+    cause (`invalid_verdict`, `no_json_object`, `review_agent_unverifiable`, `max_iterations`, ...),
+    and each `run_history` row carries its `review_inconclusive_cause` (null for a run that was not
+    one), so a rise in one cause shows without reading logs.
   - `waiting_on_you` lists what waits on the operator, as `GET /api/v1/inbox` does, in short, and
     `counts.waiting_on_you` is its length: the Mac app's menu bar badge, its Waiting on you menu
     items and the Overview's Waiting on you stage read them. `checks_green` is true for a pull
@@ -4460,7 +4567,8 @@ Minimum endpoints:
         "retrying": 1,
         "forced": 1,
         "shipped_today": 1,
-        "waiting_on_you": 1
+        "waiting_on_you": 1,
+        "review_inconclusive": {"invalid_verdict": 1}
       },
       "repos": ["web", "api"],
       "running": [
@@ -4849,10 +4957,18 @@ Minimum endpoints:
     in 24 hours, relay restarts, test), the poll intervals and GitHub's rate limit. `needs_setup`
     is `enabled: true` on a Mac whose setup never ran; `degraded` is a relay that can't restart, or
     no delivery for `silence_alert_minutes` after a read found a change none reported.
+  - `?repo=<key>` keeps only the problems whose `repos` name that repository, and those that name
+    none (keys, secrets and the rest of the global setup); `not_checked` and the times are as
+    they are. While the running config has no repository `<key>` (between an Add Repo save and
+    the reload or restart that reads it, or while `symphony.yml` doesn't load) it answers `404`
+    `repo_not_loaded`, so the app asks again rather than reading a check that predates the repo.
 - `POST /api/v1/setup/refresh`
   - Runs the setup checks again, with the team cache emptied, and answers with `problems`,
     `not_checked`, `checked_at` and `linear_checked_at` once they finish. A run already going
-    finishes first. Same-origin like Check Now.
+    finishes first. Same-origin like Check Now. `?repo=<key>` filters the answer as for
+    `GET /api/v1/setup`, and answers `404` `repo_not_loaded` without running the checks while the
+    running config has no such repository. The macOS app's Add Repo sheet ends with this call for
+    the repo it saved.
 - `POST /api/v1/setup/fixes`
   - Runs a `linear` fix (the descriptor as a problem lists it, or under `fix`): it does exactly
     what the descriptor says, runs the checks again with the team cache emptied and answers like
@@ -5187,6 +5303,20 @@ Minimum endpoints:
     }
     ```
 
+- `POST /api/v1/control/stop` (OPTIONAL)
+  - Ends the running agent of `issue_identifier` (the identifier or the Linear id) and records the
+    run as `stopped`, without changing the ticket's Linear state; answers `{"stopped": false}` when
+    nothing runs on it.
+  - A stop is not a restart. Symphony's copy of the ticket still reads the state it had until a poll
+    reads Linear again, so the stop marks the ticket: the dispatcher skips it (listed under
+    `dispatch_skipped` as `stopped by the operator at <time>; waiting for the next poll`), and the
+    stop asks for a poll at once. The mark is kept in the run store as a `Blocked` hold of type
+    `operator_stop`, so it survives a restart and the Inbox lists the ticket as "Stopped by you".
+  - Each poll reads the stopped tickets by id. One that is gone, terminal or no longer in an active
+    state loses the mark and its hold. One still active stays skipped until a person acts: `unblock`
+    runs it again in place, `restart` starts it over, and a move to another state on the board
+    clears the mark too.
+
 - `POST /api/v1/control/<move>` (the Director's moves, OPTIONAL)
   - The Mac app's Inbox makes the Director's Linear moves through Symphony, which holds the Linear
     key and the audit log. Like the other control endpoints they require the control bearer token.
@@ -5203,7 +5333,7 @@ Minimum endpoints:
     | `restart` | any open ticket | `In Progress`, after the reset | `reason` (required), posted before the move; the reset (close the pull requests, remove the workspaces, supersede the workpad) runs first, and a reset that fails answers `502` `restart_incomplete` and makes no move |
     | `decisions` | a plan in `Plan Review` | no move | one comment with `picks` (required, `[{"question", "answer"}]`) |
     | `backlog` | any open ticket | `Backlog` | `note` (optional), posted before the move |
-    | `unblock` | any ticket waiting on an access hold (an agent's block report) | no move; the hold clears and the ticket continues in place | one comment, posted after the hold clears |
+    | `unblock` | any ticket waiting on an access, dispatch-loop or operator-stop hold | no move; the hold clears and the ticket continues in place | one comment, posted after the hold clears |
     | `decide` | any ticket waiting on a `Needs Decision` hold | no move, else the state `move` names (`rework` or `done`), through the guard | the answer, posted as a reply under the request comment `request_comment_id` names; `picks` are required |
     | `undo` | the state the ticket's last move put it in | the state it came from | none |
 
@@ -5959,6 +6089,8 @@ infrastructure.
 - Reconciliation with no running issues is a no-op
 - Normal worker exit schedules a short continuation retry (attempt 1)
 - Abnormal worker exit increments retries with 10s-based exponential backoff
+- A setup block (`verification_failed` before the first turn) is not retried: self-heal files or
+  reuses the fix ticket and holds the ticket on it
 - Retry backoff cap uses configured `agent.max_retry_backoff_ms`
 - Retry queue entries include attempt, due time, identifier, and error
 - Completed issues in non-active, non-terminal states appear as watching rows

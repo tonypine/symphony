@@ -213,6 +213,14 @@ set (or, in Development mode, no checkout folder).
   with no state change, new PR head or decision, Symphony starts no more and puts it on a Blocked hold whose
   reason says why; the Inbox lists it with **Unblock…**, and **Restart…** under ⋯. Save runs `symphony check`
   first and writes only the changed lines.
+- **macOS app QA** sets what a `macos_app` QA pass on the QA host (`auto_review.worker_host`) needs and how it
+  runs the project's own server: **QA host tools** is `auto_review.playbooks.macos_app.requires`, the programs
+  the pass looks for when it starts, **Start the project's dev server on the QA host** is `dev_server`
+  (off by default), **Dev server port** is `dev_server_port` (8090), and **App environment** is `launch_env`, a
+  table of variables the app under test gets after Symphony's own, with **Add Variable** and a remove button per
+  row. Values are saved in plain text, so they hold documented QA values only, never a secret. Save runs
+  `symphony check` first, which refuses a name Symphony sets itself, `PATH`, `HOME` or `DYLD_*`, and writes only
+  the changed lines.
 - **Models** sets the provider, model and effort for each kind of run, also in the `symphony.yml` itself.
   The **Scope** picker chooses which `agent` block the rows edit: **All repositories** is the top-level
   `agent` section, and each `repositories[]` key edits that repository's `repositories[<key>].agent`
@@ -506,9 +514,9 @@ In place of the repos, the detail shows:
 
 **Add Repo…** (the toolbar's **+**, the **+** under the sidebar, ⌘N, or the button of an empty window) opens
 a sheet that adds an entry to `repositories:` in the `symphony.yml` set in Settings. The sheet asks one thing
-per page: **Source**, **Linear**, **WORKFLOW.md** (only for a repo that has none) and **Review**. A step
-indicator at the top names the pages, and a fixed footer holds **Cancel**, **Back** and **Continue**
-(**Connect** on Review). The sheet is 520×520pt, so its footer stays on a 1024×768 screen on every page.
+per page: **Source**, **Linear**, **WORKFLOW.md** (only for a repo that has none), **Review** and, once the
+repo is saved, **Check setup**. A step indicator at the top names the pages, and a fixed footer holds
+**Cancel**, **Back** and **Continue** (**Connect** on Review). The sheet is 520×520pt, so its footer stays on a 1024×768 screen on every page.
 Continue stays off until the page checks out, and its help says why.
 
 **Source.** Pick where the code comes from:
@@ -537,7 +545,10 @@ a query Linear finds too complex) shows in a warning box under the pickers, whic
 **Retry** and **Open Settings…**. Each request reads one list in pages of 50, so it stays well under
 Linear's query complexity limit.
 
-**Review** sums up the source, the route and what happens to `WORKFLOW.md`, and holds:
+**Review** sums up the source, the route and what happens to `WORKFLOW.md`, and what Connect writes as the
+route: the project by its ID (Symphony always resolves an issue back to the repo by it) and `route.team`, the
+project's team when it is in exactly one ("Project ID 8e6f… · team TP"). Repos added before keep their route;
+Setup's routing and teams checks offer the fix. It holds:
 
 - **Repo key**, filled in from the repo name (in lower case, with `-2`, `-3`… when taken) until you
   type one. It holds letters, digits, `.`, `_` and `-`, and must differ from every other key; a key that is
@@ -623,6 +634,21 @@ and **Restart Now** once the runs outlast the restart timeout. A running Symphon
 next poll, as it reads the route right away; a GitHub URL repo shows `not cloned yet` and its
 `WORKFLOW.md` as `missing` until the restart clones it. With Symphony stopped, the sidebar shows the repo
 from `symphony.yml`.
+
+#### Check setup
+
+After Connect, the sheet stays open on **Check setup** while Symphony reads the repo (it reloads
+`symphony.yml`, or restarts) and runs the Setup page's checks for it: "Checking setup for billing-api…",
+then the repo's problems and the global ones (`POST /api/v1/setup/refresh?repo=<key>`), each with its fix
+button and the same confirm sheet as the Setup page. **Done** stays off while it checks and while there is an
+error ("Done is available once there are no errors."); a warning doesn't stop it. With no error left, the step
+shows the project ID and team written. **Close** keeps the repo saved and its errors on the Setup page. With
+Symphony stopped, the step says it checks the repo when it starts, with **Start Symphony** and **Done**; the
+Setup page opens at that start if the repo has an error.
+
+The first time Symphony runs and checks its setup on a Mac (the app keeps a record, so a new Mac with a copied
+`symphony.yml` counts), setup errors open the Symphony window on the Setup page with a welcome line. A later
+launch opens nothing: the sidebar badge and the menu bar say so.
 
 ### Edit, disconnect or remove a clone
 
@@ -999,7 +1025,7 @@ and, in the toolbar, **Back** and **Forward** (⌘[ and ⌘], between the views 
 view's title, Symphony's connection state (quiet while Symphony answers; the time of the last update is in its
 help), the scope pop-up and **Refresh** (⌘R). The sidebar lists the views this
 version has, in the order they will keep as more arrive, on ⌘1 to ⌘8: **Inbox**, **Overview**, **Initiatives**, then under
-**Factory**, **Repos** (which opens the Repos window) and **Diagnostics**. Its foot shows Symphony's version and
+**Factory**, **Repos** (which opens the Repos window), **Setup** and **Diagnostics**. Its foot shows Symphony's version and
 state. The window opens on the Inbox the first time.
 
 - **Inbox** lists everything that waits on you (`/api/v1/inbox`), grouped as Plans, Pull requests, Final
@@ -1096,6 +1122,24 @@ state. The window opens on the Inbox the first time.
   selected record in full. **Export…** saves every record under the filters and the search as NDJSON, one per
   line as Symphony wrote it, from the API's export. With nothing to show it says "No audit records match." with
   **Clear Filters**.
+- **Setup** lists what is wrong with Symphony's setup, from `/api/v1/state`'s `setup`: a sentence ("Setup has 1
+  error and 1 warning.", or "Symphony is set up right." with what was checked, when, and that Symphony checks again
+  every 15 minutes and each time `symphony.yml` changes), then an Errors and a Warnings card, rows grouped by
+  category (routing, teams, labels, statuses, keys, secrets, runtime). Each row says what breaks, the repos and
+  tickets it touches (a ticket opens its page), **Details**, and its fix: **Remove…**, **Change…** or **Add…** for
+  an edit of `symphony.yml`, **Create Label…** (or **Create Status…**) and **Re-sync…** for a Linear change, or the
+  place to fix it by hand (**Open Settings…**, **Open symphony.yml**, **Open in Linear**, **Open Drain Report**,
+  **Open Repos**). Nothing is fixed without its sheet: an edit shows the exact lines it removes and adds, copies
+  `symphony.yml` to `symphony.yml.<yyyyMMdd-HHmmss>.bak` next to it (the last 10 are kept), saves through the same
+  writer as Settings once `symphony check` passes, and offers **Undo** for 10 seconds; a Linear change names what it
+  creates, in which team, and how to undo it by hand. A fix that fails keeps its sheet open with the reason, **Open
+  Settings…** (where the Linear key and the `symphony.yml` path are), **Close** and **Try Again**. **Check Again**
+  (⌘R) runs the checks now. Checks that couldn't run (no Linear API key) show under **Not checked**; when Linear
+  can't be reached, a banner says when the Linear results are from. A warning also shows when Symphony runs another
+  build than the app, with **Check for Updates…**. Its sidebar item counts the errors in red, or the warnings in
+  orange when there are no errors; Overview's Needs attention has one row for the errors, with **Open Setup**; and
+  the menu bar has a "Setup: 1 error, 1 warning" row and a red dot on its icon while there are errors. A Symphony
+  older than Setup shows **Check for Updates…** and no badge.
 - **Diagnostics** shows Symphony's own health in plain words: the connection (version, API URL, uptime, last
   update), capacity (agent slots, landing slots, forced allowance, initiative slots), Linear requests by
   caller over the last hour, the CI and review pollers and GitHub webhooks, and stray processes. **Copy State

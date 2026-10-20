@@ -84,6 +84,15 @@ defmodule SymphonyElixir.Setup do
     if GenServer.whereis(server), do: GenServer.call(server, :refresh, @refresh_timeout_ms), else: check()
   end
 
+  @doc """
+  The payload with only the problems of the repo `key`: those naming it, and those naming no repo
+  (keys, secrets and the rest of the global setup), as the app's Add Repo check reads it.
+  """
+  @spec for_repo(payload(), String.t()) :: payload()
+  def for_repo(payload, key) when is_binary(key) do
+    %{payload | problems: Enum.filter(payload.problems, &(&1.repos == [] or key in &1.repos))}
+  end
+
   @doc "Empties the team cache, as a Setup fix that changed Linear does."
   @spec invalidate_team_cache(GenServer.server()) :: :ok
   def invalidate_team_cache(server \\ __MODULE__), do: GenServer.call(server, :invalidate_team_cache)

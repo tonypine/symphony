@@ -1,0 +1,61 @@
+{
+  "checked_at": "2026-10-19T12:01:00Z",
+  "linear_checked_at": "2026-10-19T12:01:00Z",
+  "not_checked": [],
+  "problems": [
+    {
+      "category": "runtime",
+      "consequence": "Symphony clones acme/widgets when it starts, then reads its WORKFLOW.md. Until then no ticket for widgets can run.",
+      "details": [
+        {
+          "label": "Repo",
+          "value": "widgets"
+        },
+        {
+          "label": "GitHub",
+          "value": "acme/widgets"
+        }
+      ],
+      "fix": {
+        "kind": "open",
+        "target": "repos",
+        "url": null
+      },
+      "id": "uncloned_repo:widgets",
+      "repos": [
+        "widgets"
+      ],
+      "severity": "warning",
+      "tickets": [],
+      "title": "widgets is not cloned yet"
+    },
+    {
+      "category": "labels",
+      "consequence": "Decisions you are asked for can't be marked on the ticket.",
+      "details": [
+        {
+          "label": "Team",
+          "value": "TP"
+        },
+        {
+          "label": "Label",
+          "value": "Needs Decision"
+        }
+      ],
+      "fix": {
+        "action": "create_label",
+        "kind": "linear",
+        "name": "Needs Decision",
+        "team": "TP",
+        "type": null
+      },
+      "id": "labels:missing:TP:Needs Decision",
+      "repos": [
+        "web-shop"
+      ],
+      "severity": "error",
+      "tickets": [],
+      "title": "Team TP has no \"Needs Decision\" label"
+    }
+  ]
+}

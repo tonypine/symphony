@@ -36,6 +36,12 @@ defmodule SymphonyElixir.SelfHeal do
   lacks) never reaches the filing path: it keeps the access hold it always had, which a person
   lifts.
 
+  The QA state sends only the blocks a fix can repair (`SymphonyElixir.QaVerification`): the ones
+  the QA tools raise themselves (a refused or unreachable QA host, a tool it lacks, its host-port
+  tunnel, a dev server that fails), the `needs_person` access cases, and the QA agent's structured
+  `covered_by` and `needs_dev_server` answers. A QA run's own omission (an `inconclusive` pass) or
+  any other block names nothing broken, so it goes to a person instead of a fix ticket here.
+
   Every effect is injectable: `opts[:store]` (the run store), `opts[:tracker]` and `opts[:fixer]`
   (the fix-ticket filer) default to the real ones and are fakes in tests.
   """
@@ -63,7 +69,7 @@ defmodule SymphonyElixir.SelfHeal do
   @blocked_hold :blocked
   @needs_decision_hold :needs_decision
 
-  @typedoc "A blocked run's outcome, as `SymphonyElixir.QaVerification` builds it."
+  @typedoc "A blocked run's outcome, as `SymphonyElixir.QaVerification` or `SymphonyElixir.SetupBlock` builds it."
   @type outcome :: map()
 
   @typedoc "What the self-heal lane did with the block."
@@ -413,7 +419,7 @@ defmodule SymphonyElixir.SelfHeal do
 
   defp fix_ticket_hold(ctx, identifier) do
     attrs = %{
-      reason: "waiting on fix ticket #{identifier} for the #{ctx.component} block: #{ctx.signature}",
+      reason: "waiting on fix ticket #{identifier} for the #{ctx.component} block: #{summary(ctx)}",
       clearing_condition: "when the fix ticket #{identifier} is terminal",
       waits_on: %{type: @fix_ticket_type, keys: [identifier]}
     }
@@ -427,6 +433,10 @@ defmodule SymphonyElixir.SelfHeal do
         {:error, reason}
     end
   end
+
+  # The block in words when the outcome gives them (`SymphonyElixir.SetupBlock`), else its signature.
+  defp summary(%{outcome: %{summary: summary}}) when is_binary(summary) and summary != "", do: summary
+  defp summary(ctx), do: ctx.signature
 
   defp previous(repo_key, issue_id, opts) do
     repo_key
@@ -551,13 +561,20 @@ defmodule SymphonyElixir.SelfHeal do
   defp component_for({:ci_check_failed, check}) when is_binary(check), do: @ci_prefix <> check
   defp component_for({:ci_check_failed, check, _error}) when is_binary(check), do: @ci_prefix <> check
   defp component_for({:qa_dev_server_failed, cause}), do: component_for(cause)
+  defp component_for({:qa_dev_server_failed, cause, _log}), do: component_for(cause)
   defp component_for({:verification_failed, cause}), do: component_for(cause)
   defp component_for({:dev_server_exit, _status}), do: @dev_server
   defp component_for({:dev_server_build_failed, _status}), do: @dev_server
+  defp component_for({:dev_server_port_busy, _port, _pid, _ticket}), do: @dev_server
   defp component_for({:dev_server_not_on_socket, _socket}), do: @dev_server
   defp component_for({:dev_server_not_configured}), do: @dev_server
   defp component_for(:health_timeout), do: @dev_server
   defp component_for({:remote_worker_unsupported, _host}), do: @worker_host
+  # Symphony refused the QA host or could not reach it (`qa_worker_unsafe`, `qa_worker_unreachable`).
+  defp component_for({:qa_worker, _code}), do: @worker_host
+  # The QA host lacks a tool the playbook needs: Symphony's provisioning script installs it.
+  defp component_for({:qa_host_missing_tool, _names}), do: @worker_host
+  defp component_for({:qa_host_tool_check_failed, _reason}), do: @worker_host
   defp component_for(reason) when is_binary(reason), do: binary_component(reason)
   defp component_for(_cause), do: @default_component
 
@@ -593,6 +610,12 @@ defmodule SymphonyElixir.SelfHeal do
   defp signature_for(cause) when is_binary(cause), do: normalize(cause)
   # A failed CI check is its name and the first line of its error, as the PR watcher's streak reads it.
   defp signature_for({:ci_check_failed, check, error}) when is_binary(check) and is_binary(error), do: normalize("#{check}: #{error}")
+  # A QA-host dev server's log changes from run to run; the failure is its cause. A busy port is the
+  # port: the pid holding it changes too.
+  defp signature_for({:qa_dev_server_failed, {:dev_server_port_busy, port, _pid, _ticket}, _log}),
+    do: signature_for({:qa_dev_server_failed, {:dev_server_port_busy, port}})
+
+  defp signature_for({:qa_dev_server_failed, cause, _log}), do: signature_for({:qa_dev_server_failed, cause})
   defp signature_for(nil), do: ""
   defp signature_for(cause), do: cause |> inspect() |> normalize()
 

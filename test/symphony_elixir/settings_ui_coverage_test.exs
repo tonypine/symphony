@@ -152,6 +152,17 @@ defmodule SymphonyElixir.SettingsUICoverageTest do
       assert report.unused_exemptions == ["gone.*", "gone.key"]
       assert report.redundant_exemptions == ["agent.model"]
     end
+
+    test "a manifest entry inside a map setting is known, and leaves the setting's own exemption standing" do
+      keys = ["auto_review.playbooks", "agent.model"]
+      manifest = ["agent.model", "auto_review.playbooks.macos_app.requires", "auto_review.playbooksx.requires"]
+      report = SettingsUICoverage.check(keys, manifest, [exemption(["auto_review.playbooks"])])
+
+      assert report.uncovered == []
+      assert report.unknown_manifest_keys == ["auto_review.playbooksx.requires"]
+      assert report.unused_exemptions == []
+      assert report.redundant_exemptions == []
+    end
   end
 
   test "exempts?/2 matches a key exactly, or a prefix at a dot" do

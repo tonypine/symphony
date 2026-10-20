@@ -312,6 +312,22 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(page.timeline[2].duration, "5 min")
     }
 
+    func testAnInconclusiveCodeReviewRunSaysItsCause() {
+        let state = json([
+            "generated_at": "2026-10-07T14:20:00Z",
+            "run_history": [
+                ["issue_identifier": "P-1", "run_id": "r1", "run_kind": "code_review", "status": "failure",
+                 "error": "agent exited: {:code_review_inconclusive, ...}", "review_inconclusive_cause": "invalid_verdict",
+                 "started_at": "2026-10-07T13:00:00Z", "ended_at": "2026-10-07T13:05:00Z"],
+                ["issue_identifier": "P-1", "run_id": "r2", "status": "failure", "error": "boom", "review_inconclusive_cause": " ",
+                 "started_at": "2026-10-07T13:10:00Z"],
+            ],
+        ])
+        let page = TicketPage(identifier: "P-1", sources: TicketPage.Sources(state: state), now: wallClock, timeZone: utc)
+
+        XCTAssertEqual(page.timeline.map(\.detail), ["Review inconclusive: invalid verdict", "boom"])
+    }
+
     func testARunsStatusReadsAsAResult() {
         XCTAssertEqual(TicketPage.result(nil, error: nil).0, .done)
         XCTAssertEqual(TicketPage.result(nil, error: "boom").1, "failed")
@@ -485,9 +501,10 @@ final class StopRunSheetTests: XCTestCase {
         XCTAssertEqual(sheet.happens(alsoBacklog: false), "Ends the agent working on SHOP-305 and removes its workspace, with any work it hasn't pushed.")
         XCTAssertEqual(
             sheet.stays(alsoBacklog: false),
-            "SHOP-305 keeps its Linear state, In Progress, so Symphony starts it again on its next poll. Its pull request and branch stay as they are."
+            "SHOP-305 keeps its Linear state, In Progress, but Symphony doesn't start it again: it waits in the Inbox as stopped by "
+                + "you until you Unblock or Restart it, or move it on the board. Its pull request and branch stay as they are."
         )
-        XCTAssertTrue(StopRunSheet(identifier: "A-1", origin: .ticketPage, isRunning: true).stays(alsoBacklog: false).hasPrefix("A-1 keeps its Linear state, so"))
+        XCTAssertTrue(StopRunSheet(identifier: "A-1", origin: .ticketPage, isRunning: true).stays(alsoBacklog: false).hasPrefix("A-1 keeps its Linear state, but"))
         XCTAssertTrue(sheet.canSend(alsoBacklog: false))
         XCTAssertEqual(sheet.actions(alsoBacklog: false, note: "ignored"), [.stop("SHOP-305")])
     }
