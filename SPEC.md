@@ -4911,10 +4911,18 @@ Minimum endpoints:
     in 24 hours, relay restarts, test), the poll intervals and GitHub's rate limit. `needs_setup`
     is `enabled: true` on a Mac whose setup never ran; `degraded` is a relay that can't restart, or
     no delivery for `silence_alert_minutes` after a read found a change none reported.
+  - `?repo=<key>` keeps only the problems whose `repos` name that repository, and those that name
+    none (keys, secrets and the rest of the global setup); `not_checked` and the times are as
+    they are. While the running config has no repository `<key>` (between an Add Repo save and
+    the reload or restart that reads it, or while `symphony.yml` doesn't load) it answers `404`
+    `repo_not_loaded`, so the app asks again rather than reading a check that predates the repo.
 - `POST /api/v1/setup/refresh`
   - Runs the setup checks again, with the team cache emptied, and answers with `problems`,
     `not_checked`, `checked_at` and `linear_checked_at` once they finish. A run already going
-    finishes first. Same-origin like Check Now.
+    finishes first. Same-origin like Check Now. `?repo=<key>` filters the answer as for
+    `GET /api/v1/setup`, and answers `404` `repo_not_loaded` without running the checks while the
+    running config has no such repository. The macOS app's Add Repo sheet ends with this call for
+    the repo it saved.
 - `POST /api/v1/setup/fixes`
   - Runs a `linear` fix (the descriptor as a problem lists it, or under `fix`): it does exactly
     what the descriptor says, runs the checks again with the team cache emptied and answers like

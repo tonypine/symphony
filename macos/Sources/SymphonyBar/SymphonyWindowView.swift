@@ -173,6 +173,8 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var setupChecking = false
     /// The banner after a fix, with Undo for 10 s after a settings fix (SU10).
     @Published var setupBanner: SetupBanner?
+    /// SU12: the welcome line above the Setup page when the first launch opened it, nil otherwise.
+    @Published var setupWelcome: String?
     var setupBannerTask: Task<Void, Never>?
     /// The app's own build, for the build warning (J11).
     var appBuild = AppBuild(build: 0, isDevelopment: true)

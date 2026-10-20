@@ -514,9 +514,9 @@ In place of the repos, the detail shows:
 
 **Add Repo…** (the toolbar's **+**, the **+** under the sidebar, ⌘N, or the button of an empty window) opens
 a sheet that adds an entry to `repositories:` in the `symphony.yml` set in Settings. The sheet asks one thing
-per page: **Source**, **Linear**, **WORKFLOW.md** (only for a repo that has none) and **Review**. A step
-indicator at the top names the pages, and a fixed footer holds **Cancel**, **Back** and **Continue**
-(**Connect** on Review). The sheet is 520×520pt, so its footer stays on a 1024×768 screen on every page.
+per page: **Source**, **Linear**, **WORKFLOW.md** (only for a repo that has none), **Review** and, once the
+repo is saved, **Check setup**. A step indicator at the top names the pages, and a fixed footer holds
+**Cancel**, **Back** and **Continue** (**Connect** on Review). The sheet is 520×520pt, so its footer stays on a 1024×768 screen on every page.
 Continue stays off until the page checks out, and its help says why.
 
 **Source.** Pick where the code comes from:
@@ -545,7 +545,10 @@ a query Linear finds too complex) shows in a warning box under the pickers, whic
 **Retry** and **Open Settings…**. Each request reads one list in pages of 50, so it stays well under
 Linear's query complexity limit.
 
-**Review** sums up the source, the route and what happens to `WORKFLOW.md`, and holds:
+**Review** sums up the source, the route and what happens to `WORKFLOW.md`, and what Connect writes as the
+route: the project by its ID (Symphony always resolves an issue back to the repo by it) and `route.team`, the
+project's team when it is in exactly one ("Project ID 8e6f… · team TP"). Repos added before keep their route;
+Setup's routing and teams checks offer the fix. It holds:
 
 - **Repo key**, filled in from the repo name (in lower case, with `-2`, `-3`… when taken) until you
   type one. It holds letters, digits, `.`, `_` and `-`, and must differ from every other key; a key that is
@@ -631,6 +634,21 @@ and **Restart Now** once the runs outlast the restart timeout. A running Symphon
 next poll, as it reads the route right away; a GitHub URL repo shows `not cloned yet` and its
 `WORKFLOW.md` as `missing` until the restart clones it. With Symphony stopped, the sidebar shows the repo
 from `symphony.yml`.
+
+#### Check setup
+
+After Connect, the sheet stays open on **Check setup** while Symphony reads the repo (it reloads
+`symphony.yml`, or restarts) and runs the Setup page's checks for it: "Checking setup for billing-api…",
+then the repo's problems and the global ones (`POST /api/v1/setup/refresh?repo=<key>`), each with its fix
+button and the same confirm sheet as the Setup page. **Done** stays off while it checks and while there is an
+error ("Done is available once there are no errors."); a warning doesn't stop it. With no error left, the step
+shows the project ID and team written. **Close** keeps the repo saved and its errors on the Setup page. With
+Symphony stopped, the step says it checks the repo when it starts, with **Start Symphony** and **Done**; the
+Setup page opens at that start if the repo has an error.
+
+The first time Symphony runs and checks its setup on a Mac (the app keeps a record, so a new Mac with a copied
+`symphony.yml` counts), setup errors open the Symphony window on the Setup page with a welcome line. A later
+launch opens nothing: the sidebar badge and the menu bar say so.
 
 ### Edit, disconnect or remove a clone
 

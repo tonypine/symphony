@@ -17,6 +17,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         )
     )
     private lazy var symphonyWindow = SymphonyWindowController(client: apiClient)
+    /// SU12: the first run on this Mac, and the repos Add Repo saved while Symphony was stopped, wait here for Symphony's
+    /// first setup check.
+    private let setupOnStart = SetupOnStartStore(defaults: AppStores.current.defaults)
     /// Notifies each new Inbox item and Needs attention problem from the window's state polls (D14).
     private lazy var inboxNotifications = InboxNotificationCenter(defaults: AppStores.current.defaults)
     private var stateSubscription: AnyCancellable?
@@ -205,6 +208,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         reposWindow.restartMachine = { [weak self] in self?.restarter.machine ?? RestartMachine() }
         reposWindow.restartNow = { [weak self] in self?.restartNow(nil) }
         reposWindow.cancelRestart = { [weak self] in self?.cancelRestart(nil) }
+        reposWindow.checkAtStart = { [weak self] key in self?.setupOnStart.addPending(key) }
+        reposWindow.checkForUpdates = { [weak self] in self?.checkForUpdates(nil) }
+        reposWindow.openSetup = { [weak self] in self?.symphonyWindow.show(view: .setup) }
         symphonyWindow.appVersion = updates.current.version ?? ""
         symphonyWindow.appBuild = updates.current
         symphonyWindow.secrets = runner.secrets
@@ -946,6 +952,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         // An open Repos window refreshes with each poll.
         reposWindow.update(status: machine.status)
         symphonyWindow.update(status: machine.status, configPath: configPath)
+        if let decision = setupOnStart.settle(status: machine.status), decision.openSetup {
+            symphonyWindow.showSetup(welcome: decision.welcome ? SetupOnStart.welcome : nil)
+        }
         switch event {
         case .started:
             // A Pause or Resume error was about the Symphony that was running before.

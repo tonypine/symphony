@@ -210,6 +210,34 @@ final class AddRepoTests: XCTestCase {
         XCTAssertEqual(draft.gitHub, "acme/web")
     }
 
+    /// TP-911: the picked project goes in by its id, which Symphony always resolves back to the repo, with its one team.
+    func testAPickedProjectIsWrittenByItsIDWithItsTeam() throws {
+        let id = "8e6f0c39-6a8b-4c1e-9d0e-1f2a3b4c5d6e"
+        let draft = AddRepoDraft(gitHubInput: "acme/web", key: "web", project: "Web platform", projectID: id, team: " TP ", labels: ["api"])
+
+        let result = AddRepo.entry(for: draft, existing: [])
+
+        XCTAssertEqual(result, .success(RepositoryEntry(
+            key: "web",
+            baseBranch: "main",
+            route: RepositoryRoute(team: "TP", projects: [id], labels: ["api"]),
+            workspace: RepositoryWorkspace(source: "acme/web")
+        )))
+        let entry = try result.get()
+        let text = try AddRepo.adding(entry, to: "repositories: []\n").text
+        XCTAssertEqual(try RepositoriesConfig.entries(in: text).first?.route, RepositoryRoute(team: "TP", projects: [id], labels: ["api"]))
+        XCTAssertTrue(text.contains("team: TP"), text)
+        XCTAssertTrue(text.contains(id), text)
+        XCTAssertFalse(text.contains("Web platform"), text)
+
+        // A project in several teams, or none, gets no `route.team`; one Linear didn't list keeps its name.
+        var noTeam = draft
+        noTeam.team = nil
+        XCTAssertEqual(try AddRepo.entry(for: noTeam, existing: []).get().route, RepositoryRoute(projects: [id], labels: ["api"]))
+        noTeam.projectID = " "
+        XCTAssertEqual(try AddRepo.entry(for: noTeam, existing: []).get().route, RepositoryRoute(projects: ["Web platform"], labels: ["api"]))
+    }
+
     func testALocalFolderBecomesAWorktreeSourceWithItsWorkflow() {
         let draft = AddRepoDraft(mode: .localFolder, folder: .success(checkout), key: "web", project: "Web")
 

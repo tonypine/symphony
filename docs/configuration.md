@@ -80,7 +80,8 @@ creates a missing one; a label one typo away from one of them; the deprecated `h
 label in `escalate.labels` (a fix removes it) or on open tickets; and tickets whose `Blocked` or
 `Needs Decision` label disagrees with the hold Symphony keeps, with a fix that re-syncs the label.
 `POST /api/v1/setup/fixes` runs a Linear fix the last check proposed, and
-`POST /api/v1/setup/refresh` checks again at once. See [SPEC.md](../SPEC.md) for the problem shape.
+`POST /api/v1/setup/refresh` checks again at once; with `?repo=<key>`, either one keeps the
+problems of that repo and the global ones. See [SPEC.md](../SPEC.md) for the problem shape.
 
 ## Settings in the macOS app
 
