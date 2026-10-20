@@ -154,6 +154,7 @@ defmodule SymphonyElixir.SelfHealTest do
       cases = [
         {{:qa_dev_server_failed, {:verification_failed, {:dev_server_build_failed, 3}}}, "dev_server"},
         {{:qa_dev_server_failed, :health_timeout, "listening soon"}, "dev_server"},
+        {{:qa_dev_server_failed, {:dev_server_port_busy, 8090, 6557, "TP-1124"}, ""}, "dev_server"},
         {{:qa_dev_server_failed, {:dev_server_unreachable, "ssh: refused"}, ""}, "qa_environment"},
         {{:verification_failed, {:dev_server_exit, 1}}, "dev_server"},
         {{:dev_server_not_on_socket, "s"}, "dev_server"},
@@ -210,6 +211,10 @@ defmodule SymphonyElixir.SelfHealTest do
       assert SelfHeal.signature(%{cause: {:dev_server_exit, 3}}) == "{:dev_server_exit, 3}"
       # A QA-host dev server's log is not part of the failure.
       assert SelfHeal.signature(%{cause: {:qa_dev_server_failed, :health_timeout, "one log"}}) == "{:qa_dev_server_failed, :health_timeout}"
+      # Nor is the pid that holds a busy port, which changes from run to run.
+      assert SelfHeal.signature(%{cause: {:qa_dev_server_failed, {:dev_server_port_busy, 8090, 6557, "TP-1124"}, ""}}) ==
+               "{:qa_dev_server_failed, {:dev_server_port_busy, 8090}}"
+
       assert SelfHeal.signature(%{cause: "  a   spaced\n reason "}) == "a spaced reason"
       assert SelfHeal.signature(%{cause: nil, reason: nil}) == ""
       assert SelfHeal.signature(:not_a_map) == ""

@@ -34,6 +34,7 @@ defmodule SymphonyElixir.PrWatch.SweepTest do
         "the reviewer is turned off for its repo" => "gate: reviewer off",
         "held in Merging until CI settles on abc" => "gate: Merging CI wait",
         "already running" => "gate: run active",
+        "waiting for the QA host's dev server port: 8090 on admin@qa-vm is held by TP-1124's QA pass" => "gate: QA dev server port",
         "claimed by a retry or a Linear update in flight" => "gate: claimed",
         "its token budget is spent (agent.max_tokens_per_issue)" => "gate: token budget",
         "the daily token budget is spent (agent.max_tokens_per_day)" => "gate: token budget",

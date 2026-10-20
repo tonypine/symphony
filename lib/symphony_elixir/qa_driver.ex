@@ -201,10 +201,13 @@ defmodule SymphonyElixir.QaDriver do
   ones missing, and the QA pass is `blocked` before the agent starts: the QA host needs
   provisioning (`scripts/qa-vm/provision.sh`), which is not the project's defect.
 
-  Dev server: `start_dev_server/2` runs the project's `verification.dev_server`
+  Dev server: `start_dev_server/3` runs the project's `verification.dev_server`
   on the QA host, beside the app (`SymphonyElixir.QaDriver.DevServer`), and the
   driver stops it when it stops, after the apps and before the run directory
-  goes. Every `qa_launch_app` also gives the app the playbook's `launch_env`
+  goes. One pass at a time runs a server on a QA host's port: the driver takes
+  the port's lease first (`SymphonyElixir.QaDriver.DevServerLease`), waiting
+  while another pass's driver holds it, and gives it back once its own server
+  stopped. Every `qa_launch_app` also gives the app the playbook's `launch_env`
   after Symphony's own variables (`SymphonyElixir.QaAgent.PlaybookSettings`),
   and refuses a name Symphony sets itself.
   """
@@ -215,7 +218,7 @@ defmodule SymphonyElixir.QaDriver do
 
   alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, Workspace}
   alias SymphonyElixir.QaAgent.PlaybookSettings
-  alias SymphonyElixir.QaDriver.{Checks, DevServer, Host, ReleasePair, Remote}
+  alias SymphonyElixir.QaDriver.{Checks, DevServer, DevServerLease, Host, ReleasePair, Remote}
 
   @evidence_dir "qa-evidence"
   @qa_root_env "SYMPHONY_BAR_QA_ROOT"
@@ -386,7 +389,8 @@ defmodule SymphonyElixir.QaDriver do
   `:start_stub` (a `fn -> {:ok, pid, port} | {:error, reason}` that starts the
   OpenRouter stub, default `SymphonyElixir.OpenRouter.Stub.start_link/0`) and
   `:status_menu_poll` (`{attempts, interval_ms}` for `qa_open_status_menu`,
-  default `{40, 250}`).
+  default `{40, 250}`) and `:dev_server_lease` (the lease manager
+  `start_dev_server/3` asks, default `SymphonyElixir.QaDriver.DevServerLease`).
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
@@ -473,15 +477,33 @@ defmodule SymphonyElixir.QaDriver do
   `SymphonyElixir.QaDriver.DevServer`) and returns its URL there. The driver stops it when it
   stops, before the run directory goes. `{:ok, nil}` without a `worker_host`, or when the QA host
   was refused, whose tools then say why.
+
+  It first takes the lease on the QA host's port for the driver (`DevServerLease.acquire/4`),
+  waiting while another pass holds it. `opts`: `:issue_id`, the pass's ticket id the orchestrator
+  asks `DevServerLease.waiting/2` about, and `acquire/4`'s `:heartbeat` and `:heartbeat_ms`. A
+  server that does not start gives the lease back at once.
   """
-  @spec start_dev_server(pid(), DevServer.spec()) :: {:ok, %{url: String.t(), port: pos_integer()} | nil} | DevServer.failure()
-  def start_dev_server(driver, spec) when is_pid(driver) do
+  @spec start_dev_server(pid(), DevServer.spec(), keyword()) :: {:ok, %{url: String.t(), port: pos_integer()} | nil} | DevServer.failure()
+  def start_dev_server(driver, spec, opts \\ []) when is_pid(driver) do
     case GenServer.call(driver, :config) do
       %{remote?: true, host_dir: dir} = config when is_binary(dir) ->
-        with {:ok, server} <- DevServer.start(config, spec) do
-          GenServer.call(driver, {:dev_server, server})
-          Logger.info("QA dev server started #{config.log_context} worker_host=#{config.worker_host} port=#{server.port} pid=#{server.pid}")
-          {:ok, %{url: server.url, port: server.port}}
+        holder = %{pid: driver, issue_id: Keyword.get(opts, :issue_id), ticket: spec.ticket}
+        :ok = DevServerLease.acquire(config.dev_server_lease, {config.worker_host, spec.port}, holder, opts)
+
+        case DevServer.start(config, spec) do
+          {:ok, server} ->
+            GenServer.call(driver, {:dev_server, server})
+
+            Logger.info(
+              "QA dev server started #{config.log_context} worker_host=#{config.worker_host} port=#{server.port} pid=#{server.pid} " <>
+                "lease=#{config.worker_host}:#{server.port}"
+            )
+
+            {:ok, %{url: server.url, port: server.port}}
+
+          {:error, _cause, _log} = failure ->
+            DevServerLease.release(config.dev_server_lease, driver)
+            failure
         end
 
       _local_or_refused ->
@@ -1927,7 +1949,8 @@ defmodule SymphonyElixir.QaDriver do
       release_pair_timeout_ms: Keyword.get(opts, :release_pair_timeout_ms, @default_release_pair_timeout_ms),
       relaunch_poll_ms: Keyword.get(opts, :relaunch_poll_ms, @relaunch_poll_ms),
       feed_poll: Keyword.get(opts, :feed_poll, @feed_poll),
-      launch_env: PlaybookSettings.launch_env(playbook)
+      launch_env: PlaybookSettings.launch_env(playbook),
+      dev_server_lease: Keyword.get(opts, :dev_server_lease, DevServerLease)
     }
 
     state = %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil, stub: nil}
@@ -2175,12 +2198,14 @@ defmodule SymphonyElixir.QaDriver do
     :ok
   end
 
-  # After the apps, which talk to it, and before the run directory goes.
+  # After the apps, which talk to it, and before the run directory goes. The port's lease goes to
+  # the next pass once the server stopped.
   defp stop_dev_server(%{dev_server: nil}), do: :ok
 
   defp stop_dev_server(%{dev_server: server, config: config}) do
     outcome = DevServer.stop(config, server)
     Logger.info("QA dev server stopped #{config.log_context} worker_host=#{config.worker_host} port=#{server.port} pid=#{server.pid} outcome=#{inspect(outcome)}")
+    DevServerLease.release(config.dev_server_lease, self())
   end
 
   defp launch(executable, info, state) do
