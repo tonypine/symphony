@@ -182,14 +182,14 @@ defmodule SymphonyElixir.WorkflowInstructionsTest do
 
   # The symphony repo's WORKFLOW.md with its body replaced by the playbook line.
   defp playbook_only(content) do
-    ["", front_matter, _body] = String.split(content, ~r/^---$/m, parts: 3)
+    ["", front_matter, body] = String.split(content, ~r/^---$/m, parts: 3)
 
     front_matter =
       if front_matter =~ ~r/^playbook:/m,
         do: front_matter,
         else: "\nplaybook:\n  lockfile: mix.lock" <> front_matter
 
-    "---" <> front_matter <> "---\n\n{% render \"playbook\" %}\n"
+    "---" <> front_matter <> "---" <> body
   end
 
   defp write!(dir, name, content) do
