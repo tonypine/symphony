@@ -5001,9 +5001,13 @@ Minimum endpoints:
     its value), each step (`relay`, `gh_ready`, `secret`, `port`, `repo:<key>`, `test:<key>`) with
     its `status` (`done`, `failed`, `waiting`, `pending`) and, when it failed, a plain-words
     `detail` and `fix`, each repository's connection and health (last delivery, signature failures
-    in 24 hours, relay restarts, test), the poll intervals and GitHub's rate limit. `needs_setup`
-    is `enabled: true` on a Mac whose setup never ran; `degraded` is a relay that can't restart, or
-    no delivery for `silence_alert_minutes` after a read found a change none reported.
+    in 24 hours, the relay's status, restarts, last error and whether it is `stable`, test, why
+    it is degraded (`degraded_reason`) and the interval its watcher polls at now
+    (`poll_interval_ms`)), the poll intervals and GitHub's rate limit. `needs_setup` is
+    `enabled: true` on a Mac whose setup never ran; `degraded` is a relay that can't restart, or
+    that stopped more than twice in ten minutes and hasn't run ten minutes since (its watcher
+    keeps the normal poll interval meanwhile), or no delivery for `silence_alert_minutes` after a
+    read found a change none reported.
   - `?repo=<key>` keeps only the problems whose `repos` name that repository, and those that name
     none (keys, secrets and the rest of the global setup); `not_checked` and the times are as
     they are. While the running config has no repository `<key>` (between an Add Repo save and

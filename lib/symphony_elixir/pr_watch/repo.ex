@@ -63,9 +63,10 @@ defmodule SymphonyElixir.PrWatch.Repo do
   watched PR and the open PRs, as a timed tick, so the landing order and the race are as fresh as a
   poll's. While deliveries are healthy (`SymphonyElixir.PrWatch.Health`) the timed tick is
   only the safety net, every `github.webhooks.fallback_poll_interval_ms`; one that finds a change
-  no delivery reported marks them unhealthy, and the next tick is back at the poll interval. The
-  watcher of the first repository also reads the app repository's newest release on each timed
-  tick (`SymphonyElixir.PrWatch.Release.poll/1`).
+  no delivery reported marks them unhealthy, and the next tick is back at the poll interval, as it
+  is while the repository's `gh webhook forward` relay keeps stopping (`SymphonyElixir.GitHub.Relay`
+  not `stable`, read once a tick). The watcher of the first repository also reads the app
+  repository's newest release on each timed tick (`SymphonyElixir.PrWatch.Release.poll/1`).
   """
 
   use GenServer
@@ -87,7 +88,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     Tracker
   }
 
-  alias SymphonyElixir.GitHub.PullRequest
+  alias SymphonyElixir.GitHub.{PullRequest, RelaySupervisor}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrDecision.{Action, Apply, Facts}
   alias SymphonyElixir.PrWatch.{Attempts, Competitors, Fetch, Health, Ingest, Release, SilentWait}
@@ -120,7 +121,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
   `:github`, `:run_store`, `:self_heal`, `:fixer`, `:linker`, `:git` and `:settings` (the modules
   and settings it reads and acts through), `:now` (a clock function), `:timer`
   (`fn message, delay_ms -> ref`, in place of `Process.send_after/3` for the confirm reads),
-  `:interval_ms`, `app_release: true` to read the app repository's newest release on each timed
+  `:interval_ms`, `:relay_status` (`fn repo_key -> relay status or nil`, in place of
+  `SymphonyElixir.GitHub.RelaySupervisor.status/2`), `app_release: true` to read the app repository's newest release on each timed
   tick, and `auto: false` to tick only on `poll/2`.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -188,7 +190,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
       confirm_timer: nil,
       rereads: [],
       reread_tries: %{},
-      reread_timer: nil
+      reread_timer: nil,
+      relay: nil
     }
 
     {:ok, schedule(state, 0)}
@@ -361,6 +364,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # (`{:only, issue_ids}`, a confirm read), which keep the landing order of the last timed tick.
   defp tick(state, scope \\ :all) do
     now = now(state)
+    state = %{state | relay: relay_status(state)}
 
     with {:ok, settings} <- settings(state),
          {:ok, issues} <- watched_issues(state, settings) do
@@ -1313,8 +1317,13 @@ defmodule SymphonyElixir.PrWatch.Repo do
     Keyword.get(state.opts, :interval_ms) || settings.pr_review.poll_interval_ms || settings.polling.interval_ms
   end
 
-  # The safety net while deliveries are healthy, else the poll interval.
-  defp tick_interval_ms(state, settings), do: Health.interval_ms(state.health, settings.github.webhooks, poll_interval_ms(state, settings))
+  # The safety net while deliveries are healthy and the relay runs steadily, else the poll interval.
+  defp tick_interval_ms(state, settings), do: Health.interval_ms(state.health, settings.github.webhooks, poll_interval_ms(state, settings), state.relay)
+
+  # The repository's `gh webhook forward` relay, read once a tick; nil when it has none.
+  defp relay_status(state) do
+    Keyword.get(state.opts, :relay_status, &RelaySupervisor.status(RelaySupervisor, &1)).(state.repo_key)
+  end
 
   defp backoff_ms(state) do
     case settings(state) do

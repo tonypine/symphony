@@ -23,8 +23,11 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
   `off` while `github.webhooks.enabled` is false. `needs_setup` while it is on but this Mac was
   never set up (a `symphony.yml` brought from another Mac: J6); the steps already done show done.
   `setting_up` until every step is done and each connected repository's test verified. Then `on`,
-  or `degraded` (D12) while a relay can't restart or a repository heard nothing for
-  `github.webhooks.silence_alert_minutes` since a read found a change no delivery reported.
+  or `degraded` (D12) while a relay can't restart or stopped more than twice in ten minutes and
+  hasn't run ten minutes since, or a repository heard nothing for
+  `github.webhooks.silence_alert_minutes` since a read found a change no delivery reported. Each
+  repository says why (`degraded_reason`) and the interval its watcher polls at now
+  (`poll_interval_ms`).
 
   What this Mac's setup did is kept in the run store (`{:setup, :webhooks}`): when it was turned
   on, a URL relay's public URL, the hooks Symphony created (so turning off deletes only those), each
@@ -702,6 +705,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
     connected? = match?(%{status: "done"}, Map.get(record.steps, "repo:" <> repo.key))
     relay = RelaySupervisor.status(ctx.relays, repo.key)
     test = Map.get(record.tests, repo.key)
+    degraded_reason = if connected?, do: degraded_reason(health, relay, webhooks, now)
 
     %{
       key: repo.key,
@@ -717,19 +721,31 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
       signature_failures_24h: Health.signature_failures(health, now),
       missed_at: health.missed_at,
       relay_restarts: (relay && relay.restarts) || 0,
-      degraded: connected? and degraded?(health, relay, webhooks, now)
+      degraded: degraded_reason != nil,
+      degraded_reason: degraded_reason,
+      poll_interval_ms: Health.interval_ms(health, webhooks, poll_interval_ms(ctx), relay)
     }
   end
 
   defp hook_entry(%{id: id}), do: %{id: id, created_by_symphony: true}
   defp hook_entry(nil), do: nil
 
-  # D12: a relay that can't restart, or nothing heard for the alert's minutes since a read found a
-  # change no delivery reported.
-  defp degraded?(health, relay, webhooks, now) do
-    relay_down = match?(%{state: :restarting, failures: failures} when failures >= 2, relay)
+  # D12: a relay that can't restart or keeps stopping, or nothing heard for the alert's minutes
+  # since a read found a change no delivery reported. Why, in plain words; nil while it isn't.
+  defp degraded_reason(_health, %{state: :restarting, failures: failures} = relay, _webhooks, _now) when failures >= 2 do
+    "The relay can't start again: #{relay.last_error}"
+  end
+
+  defp degraded_reason(_health, %{stable: false} = relay, _webhooks, _now) do
+    "The relay stopped more than twice in ten minutes (#{relay.last_error}). Symphony polls at the normal interval until it runs ten minutes without a stop."
+  end
+
+  defp degraded_reason(health, _relay, webhooks, now) do
     missed = health.missed_at != nil and (health.last_delivery_at == nil or DateTime.after?(health.missed_at, health.last_delivery_at))
-    relay_down or (missed and Health.silent?(health, webhooks, now))
+
+    if missed and Health.silent?(health, webhooks, now) do
+      "No delivery for #{webhooks.silence_alert_minutes} minutes after a read found a change none reported."
+    end
   end
 
   defp relay_entry(webhooks, record, ctx) do

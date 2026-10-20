@@ -33,7 +33,10 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     test = self()
     relays = Module.concat(__MODULE__, "Relays#{System.unique_integer([:positive])}")
     timer = fn ms, message -> send(test, {:relay_timer, ms, message}) && make_ref() end
-    start_supervised!({RelaySupervisor, name: relays, resume: nil, relay_opts: [executable: gh_bin, timer: timer]})
+    # The relays' monotonic clock, in milliseconds.
+    relay_clock = start_supervised!({Agent, fn -> 0 end}, id: :relay_clock)
+    relay_opts = [executable: gh_bin, timer: timer, clock: fn -> Agent.get(relay_clock, & &1) end]
+    start_supervised!({RelaySupervisor, name: relays, resume: nil, relay_opts: relay_opts})
 
     gh = start_supervised!({Agent, fn -> %{installed: false, overrides: %{}, hook_ids: [11, 12]} end}, id: :gh)
     secret = start_supervised!({Agent, fn -> nil end}, id: :secret)
@@ -56,6 +59,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     ]
 
     %{opts: opts, gh: gh, secret: secret, clock: clock, repos: repos, port: port, relays: relays, dir: dir}
+    |> Map.put(:relay_clock, relay_clock)
   end
 
   ## The fake `gh`
@@ -247,10 +251,11 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     section = WebhookSetup.section(opts)
     assert %{status: "done", detail: "received and verified"} = step(section, "test:app")
     assert section.mode == "on"
-    assert %{relay: %{state: "running"}, relay_restarts: 1, hook: nil, degraded: false} = repo(section, "app")
+    assert %{relay: %{state: "running", stable: true}, relay_restarts: 1, hook: nil, degraded: false} = repo(section, "app")
+    assert repo(section, "app").degraded_reason == nil
   end
 
-  test "a relay that is killed starts again, and one that can't restart degrades the mode", %{opts: opts, dir: dir} = ctx do
+  test "a relay that is killed starts again, and one that can't restart degrades the mode", %{opts: opts, dir: dir, relay_clock: relay_clock} = ctx do
     set_up_forwarding(ctx)
     WebhookSetup.delivered("https://github.com/acme/app", opts)
     assert WebhookSetup.section(opts).mode == "on"
@@ -276,12 +281,18 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     section = WebhookSetup.section(opts)
     assert section.mode == "degraded"
     assert %{degraded: true, relay: %{state: "restarting", failures: 3}} = repo(section, "app")
+    assert repo(section, "app").degraded_reason == "The relay can't start again: unable to connect to webhooks server, forwarding stopped"
     assert %{status: "failed", detail: "The relay for acme/app stopped: unable to connect to webhooks server, forwarding stopped"} = step(section, "repo:app")
 
+    # Back, but it stopped more than twice in ten minutes: degraded until it runs ten minutes.
     File.rm!(Path.join(dir, "fail"))
     send(relay, :start)
     assert wait_for(Path.join(dir, "args"))
-    assert Enum.find_value(1..300, fn _ -> WebhookSetup.section(opts).mode == "on" || (Process.sleep(10) && nil) end)
+    assert Enum.find_value(1..300, fn _ -> match?(%{relay: %{state: "running"}}, repo(WebhookSetup.section(opts), "app")) || (Process.sleep(10) && nil) end)
+    assert %{degraded: true, degraded_reason: "The relay stopped more than twice in ten minutes" <> _} = repo(WebhookSetup.section(opts), "app")
+
+    Agent.update(relay_clock, &(&1 + 10 * 60_000))
+    assert WebhookSetup.section(opts).mode == "on"
   end
 
   test "a change no delivery reported, then silence past the alert's minutes, degrades the mode", %{opts: opts, clock: clock} = ctx do
@@ -300,7 +311,46 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     section = WebhookSetup.section(opts)
     assert section.mode == "degraded"
     assert %{degraded: true, silent: true, healthy: false, last_delivery_at: last, deliveries: 1} = repo(section, "app")
+    assert repo(section, "app").degraded_reason == "No delivery for 10 minutes after a read found a change none reported."
     assert last == DateTime.add(@t0, 5)
+  end
+
+  test "a relay killed three times in ten minutes degrades its repository and keeps the normal poll until it runs ten minutes",
+       %{opts: opts, dir: dir, relay_clock: relay_clock} = ctx do
+    set_up_forwarding(ctx)
+    WebhookSetup.delivered("https://github.com/acme/app", opts)
+    :ok = Health.save(RunStore, "app", Health.delivered(Health.new(), @t0))
+
+    section = WebhookSetup.section(opts)
+    assert section.mode == "on"
+    assert %{degraded: false, poll_interval_ms: fallback} = repo(section, "app")
+    assert fallback == section.poll.fallback_interval_ms
+    assert fallback != section.poll.interval_ms
+
+    [relay] = Registry.lookup(Module.concat(ctx.relays, Registry), "app") |> Enum.map(&elem(&1, 0))
+
+    for _kill <- 1..3 do
+      assert wait_for(Path.join(dir, "pid"))
+      pid = dir |> Path.join("pid") |> File.read!() |> String.trim()
+      File.rm!(Path.join(dir, "pid"))
+      System.cmd("kill", ["-9", pid])
+      assert_receive {:relay_timer, _ms, :start}, 2_000
+      send(relay, :start)
+    end
+
+    assert wait_for(Path.join(dir, "pid"))
+    section = WebhookSetup.section(opts)
+    assert section.mode == "degraded"
+    assert %{degraded: true, relay: %{state: "running", stable: false, last_error: "gh webhook forward stopped" <> _status}} = repo(section, "app")
+    assert "The relay stopped more than twice in ten minutes (gh webhook forward stopped" <> _rest = repo(section, "app").degraded_reason
+    assert repo(section, "app").poll_interval_ms == section.poll.interval_ms
+
+    # Ten minutes up without a stop: steady again, at the safety-net pace.
+    Agent.update(relay_clock, &(&1 + 10 * 60_000))
+    section = WebhookSetup.section(opts)
+    assert section.mode == "on"
+    assert %{degraded: false, degraded_reason: nil, relay: %{stable: true}} = repo(section, "app")
+    assert repo(section, "app").poll_interval_ms == fallback
   end
 
   test "a test that hears nothing in 30 seconds fails with what to check", %{opts: opts, clock: clock} = ctx do

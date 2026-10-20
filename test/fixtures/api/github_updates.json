@@ -32,6 +32,7 @@
       {
         "connection": "webhook",
         "degraded": false,
+        "degraded_reason": null,
         "deliveries": 3,
         "github": "acme/app",
         "healthy": true,
@@ -39,10 +40,12 @@
         "key": "app",
         "last_delivery_at": "2026-10-17T09:00:05Z",
         "missed_at": null,
+        "poll_interval_ms": 300000,
         "relay": {
           "failures": 0,
           "last_error": null,
           "restarts": 1,
+          "stable": true,
           "started_at": "2026-10-17T09:00:00Z",
           "state": "running"
         },
@@ -57,6 +60,7 @@
       {
         "connection": "polling",
         "degraded": false,
+        "degraded_reason": null,
         "deliveries": 0,
         "github": "acme/lib",
         "healthy": false,
@@ -64,6 +68,7 @@
         "key": "lib",
         "last_delivery_at": null,
         "missed_at": null,
+        "poll_interval_ms": 30000,
         "relay": null,
         "relay_restarts": 0,
         "signature_failures_24h": 0,
