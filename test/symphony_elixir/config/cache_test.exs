@@ -23,6 +23,14 @@ defmodule SymphonyElixir.Config.CacheTest do
     # the supervised Cache process directly.
     SymphonyElixir.TestSupport.ensure_config_cache_started!()
     Cache.clear()
+    # The cache is global to the node, and any process may read config while a
+    # test runs (the app's own, with the repo's WORKFLOW.md). A file of its own
+    # stands in for that reader, so a test that asserts on the whole cache
+    # instead of its own entry fails every run, not some (TP-1153).
+    bystander = Path.join([root, "bystander", "symphony.yml"])
+    File.mkdir_p!(Path.dirname(bystander))
+    File.write!(bystander, config(9))
+    assert {:ok, _value} = Cache.get_symphony(bystander)
 
     on_exit(fn ->
       Cache.clear()
@@ -33,7 +41,7 @@ defmodule SymphonyElixir.Config.CacheTest do
       File.rm_rf(root)
     end)
 
-    {:ok, root: root}
+    {:ok, root: root, bystander: bystander}
   end
 
   describe "status/0" do
@@ -43,7 +51,7 @@ defmodule SymphonyElixir.Config.CacheTest do
       Workflow.set_symphony_file_path(symphony_path)
 
       assert {:ok, _value} = Cache.get_symphony(symphony_path)
-      [entry] = Cache.status()
+      entry = status_entry(symphony_path)
       assert entry.kind == :symphony
       assert entry.path == Path.expand(symphony_path)
       assert entry.stale? == false
@@ -58,7 +66,7 @@ defmodule SymphonyElixir.Config.CacheTest do
         assert {:ok, _value, [stale: true]} = Cache.get_symphony(symphony_path)
       end)
 
-      [entry] = Cache.status()
+      entry = status_entry(symphony_path)
       assert entry.stale? == true
       refute entry.last_error == nil
     end
@@ -85,12 +93,12 @@ defmodule SymphonyElixir.Config.CacheTest do
       log =
         ExUnit.CaptureLog.capture_log(fn ->
           assert {:ok, %{"repositories" => [%{"key" => "r1"}]}, [stale: true]} = Cache.get_symphony(symphony_path)
-          [entry] = Cache.status()
+          entry = status_entry(symphony_path)
           assert entry.last_error == {:invalid_symphony_config, "unknown symphony.yml key `pull_request`"}
           assert is_integer(entry.stale_since)
 
           assert {:ok, _value, [stale: true]} = Cache.get_symphony(symphony_path)
-          assert [%{stale_since: stale_since}] = Cache.status()
+          assert %{stale_since: stale_since} = status_entry(symphony_path)
           assert stale_since == entry.stale_since
         end)
 
@@ -101,7 +109,7 @@ defmodule SymphonyElixir.Config.CacheTest do
       File.write!(symphony_path, config(2))
       bump_mtime!(symphony_path)
       assert {:ok, %{"repositories" => [%{"key" => "r2"}]}} = Cache.get_symphony(symphony_path)
-      assert [%{stale?: false, stale_since: nil}] = Cache.status()
+      assert %{stale?: false, stale_since: nil} = status_entry(symphony_path)
     end
 
     test "the good file coming back with its old stamp loads again", %{root: root} do
@@ -119,7 +127,7 @@ defmodule SymphonyElixir.Config.CacheTest do
       File.write!(symphony_path, config(1))
       File.touch!(symphony_path, 1_700_000_000)
       assert {:ok, %{"repositories" => [%{"key" => "r1"}]}} = Cache.get_symphony(symphony_path)
-      assert [%{stale?: false}] = Cache.status()
+      assert %{stale?: false} = status_entry(symphony_path)
     end
   end
 
@@ -424,16 +432,19 @@ defmodule SymphonyElixir.Config.CacheTest do
   end
 
   describe "clear/0" do
-    test "removes entries and watched-dir tracking", %{root: root} do
+    test "removes entries and watched-dir tracking", %{root: root, bystander: bystander} do
       symphony_path = Path.join(root, "symphony.yml")
+      # Not set as the node's config path: another config reader would load it
+      # again right after the clear.
       File.write!(symphony_path, config(0))
-      Workflow.set_symphony_file_path(symphony_path)
 
       assert {:ok, _} = Cache.get_symphony(symphony_path)
-      refute Cache.status() == []
+      assert status_entry(symphony_path)
+      assert status_entry(bystander)
 
       assert :ok = Cache.clear()
-      assert Cache.status() == []
+      refute status_entry(symphony_path)
+      refute status_entry(bystander)
     end
   end
 
@@ -447,6 +458,12 @@ defmodule SymphonyElixir.Config.CacheTest do
   defp write_stamped!(path, content, n) do
     File.write!(path, content)
     File.touch!(path, 1_700_000_000 + n)
+  end
+
+  # The cached `symphony.yml` entry for `path`, or nil.
+  defp status_entry(path) do
+    expanded = Path.expand(path)
+    Enum.find(Cache.status(), &(&1.kind == :symphony and &1.path == expanded))
   end
 
   defp attach_reloaded! do
