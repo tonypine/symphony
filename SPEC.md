@@ -1532,6 +1532,11 @@ The QA agent:
   the QA worktree or the pass's temp folder, and MUST refuse symlinks and files with other hard
   links. `qa_api_requests` returns the requests the app logged to `api-requests.jsonl` in its QA
   root since the last call, read where the app runs, and MUST read nothing outside that QA root.
+  Every launch of a pass shares one QA root unless `qa_launch_app` asks for a fresh one
+  (`fresh_root`), a new, empty directory beside it in the same private directory, or names a root
+  the pass already has (`root`); it MUST refuse a root the pass does not have. Each launch's
+  result names its root, and `qa_api_requests` reads one root's log (`root`, by default the last
+  launch's).
   `qa_ax_set_value` MUST enter a text field's value so the app registers the edit, with key events
   sent to that app alone, and the tools MUST NOT return a secure field's value.
   `qa_ax_select` selects a table or outline row through accessibility, `qa_click` clicks an

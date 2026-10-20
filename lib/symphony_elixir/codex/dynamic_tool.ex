@@ -527,7 +527,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_launch_app",
       "description" =>
-        "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID. Pass api_fixtures when a walkthrough runs the app with SYMPHONY_BAR_QA_API_FIXTURES set. Optionally point the app at your stubs on QA_HOST_PORTS (a fake gh, Linear, a release feed), shorten its update-check interval, open its folder picker in a qa_put_checkout checkout and draw it light or dark (appearance) whatever the host's appearance.",
+        "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID and its QA root's number (`root`): launches share root 1 and its settings unless you pass fresh_root (a new, empty root) or root (an earlier one). Pass api_fixtures when a walkthrough runs the app with SYMPHONY_BAR_QA_API_FIXTURES set. Optionally point the app at your stubs on QA_HOST_PORTS (a fake gh, Linear, a release feed), shorten its update-check interval, open its folder picker in a qa_put_checkout checkout and draw it light or dark (appearance) whatever the host's appearance.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -567,6 +567,16 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             "type" => "boolean",
             "description" =>
               "Launch release N of the pair qa_build_release_pair built, from a fresh copy, instead of the qa_build app. Its update checks read the pair's own feed, which offers N+1, so N can install it; then call qa_relaunched_app. Not with update_feed_port."
+          },
+          "fresh_root" => %{
+            "type" => "boolean",
+            "description" =>
+              "Launch in a new, empty QA root (no settings, no first-run record, no request log) instead of the pass's first root (1), which every other launch shares. Use it for a first-launch step, a step that resets the app, or a scenario that must not see earlier settings. The result's `root` is its number. Not with root."
+          },
+          "root" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "Launch in a QA root this pass already has, by the number a launch returned as `root`: 1 is the first, each fresh_root launch adds the next. Defaults to 1."
           }
         }
       }
@@ -816,8 +826,18 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_api_requests",
       "description" =>
-        "Return the requests an app launched with api_fixtures logged to api-requests.jsonl since the last call (each POST with its path and body), oldest first, at most the last 500 (`dropped` counts the rest). Takes no arguments.",
-      "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
+        "Return the requests an app launched with api_fixtures logged to api-requests.jsonl in its QA root since the last call (each POST with its path and body), oldest first, at most the last 500 (`dropped` counts the rest). Reads one root: `root`, or the last launch's.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{
+          "root" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "The QA root whose apps' requests to return, as qa_launch_app returned it. Defaults to the root of the last launch."
+          }
+        }
+      }
     }
   ]
 
@@ -1027,7 +1047,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "update_feed_port",
       "update_check_interval_seconds",
       "appearance",
-      "release_pair"
+      "release_pair",
+      "fresh_root",
+      "root"
     ],
     "qa_build_release_pair" => [],
     "qa_relaunched_app" => ["wait_seconds"],
@@ -1047,7 +1069,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_open_status_menu" => ["pid"],
     "qa_put_file" => ["local_path", "remote_name"],
     "qa_put_checkout" => ["local_path", "remote_url", "remote_name"],
-    "qa_api_requests" => [],
+    "qa_api_requests" => ["root"],
     "qa_android_install" => ["apk"],
     "qa_android_launch" => ["application_id"],
     "qa_android_stop" => ["application_id"],
