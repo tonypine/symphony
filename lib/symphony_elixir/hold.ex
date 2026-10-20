@@ -274,7 +274,7 @@ defmodule SymphonyElixir.Hold do
   # A Blocked hold set again with the reason and wait it already has is the same fact, so it records
   # no second `hold.set`.
   defp record_set(repo_key, issue_id, :blocked, attrs) do
-    hold = TicketState.set_hold(nil, :blocked, attrs) |> TicketState.get_hold(:blocked)
+    hold = %{} |> TicketState.normalize() |> TicketState.set_hold(:blocked, attrs) |> TicketState.get_hold(:blocked)
     payload = Map.reject(%{kind: "blocked", reason: hold.reason, waits_on: hold.waits_on}, fn {_key, value} -> is_nil(value) end)
 
     if open_blocked(repo_key, issue_id) == payload,
