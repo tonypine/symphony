@@ -1536,9 +1536,16 @@ The QA agent:
   window size. A pass whose resize met a usable screen area under 1400×900 points MUST NOT be
   reported `pass`: its `pass` becomes `blocked`, and that pass's `blocked` goes to a person. A pass
   with no `qa_resize_window` call MUST NOT be reported `pass` either: its wide pass did not run, so
-  its `pass` becomes `blocked` with that reason. An epic review gets every enabled playbook whatever
-  the epic shipped, so this applies to it only when the pass launched an app: an epic review that
-  launched none (a backend-only epic) keeps its `pass`. Every tool that
+  its `pass` becomes `inconclusive` with that reason (an epic review's becomes `blocked`). A missing
+  wide pass is the QA run's omission, never an environment fault: an `inconclusive` pass MUST be
+  rerun once on the same head and then pause the ticket on a Needs Decision hold, and MUST NOT reach
+  the self-heal lane. A `pass` with `scope: none` (the change has nothing on screen to judge, by the
+  agent's answer or because the QA policy found no changed path matching any selected playbook's
+  `paths` and no `## User walkthrough`) owes no wide pass, but MUST be recorded `pass` only when the
+  pass built the app (`qa_build`), launched it (`qa_launch_app`) and a `qa_check_app` found it
+  healthy; otherwise it is `inconclusive`. An epic review gets every enabled playbook whatever
+  the epic shipped, so the wide pass applies to it only when the pass launched an app: an epic review
+  that launched none (a backend-only epic) keeps its `pass`. Every tool that
   takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
@@ -2667,7 +2674,13 @@ Rules:
   confirming continues into `Merging`. Rework verdicts never wait on a person.
 - **Self-heal.** A QA or epic review blocked by tooling or environment retries boundedly, then files
   (or reuses) one fix ticket per broken component and sets a `Blocked` hold on the affected ticket
-  waiting on it. A run that fails in its own setup before the agent's first turn (any
+  waiting on it. From the `QA` state only these blocks reach it: the ones the QA tools raise
+  themselves (`qa_worker_*`, `qa_host_missing_tool`, `qa_host_tool_check_failed`,
+  `qa_host_tunnel_failed`, `qa_dev_server_failed`), the `needs_person` access cases, and the QA
+  answer's `covered_by` and `needs_dev_server`. Any other blocked QA pass (the agent's own account
+  of the block, a crashed or token-limited run, a check that never finished) names nothing broken,
+  so it MUST pause on a Needs Decision hold after its retries instead of filing a fix ticket.
+  A run that fails in its own setup before the agent's first turn (any
   `verification_failed`: the dev server's build, start, health check or the bridge to its port) is a
   setup block: nothing changes between attempts, so it is not retried as a crash and goes to the
   same lane straight away, with its hold reason giving the cause in words (`verification.dev_server

@@ -161,6 +161,7 @@ defmodule SymphonyElixir.SelfHealTest do
         {:health_timeout, "dev_server"},
         {{:remote_worker_unsupported, "worker-1"}, "worker_host"},
         {{:qa_host_missing_tool, ["go"]}, "worker_host"},
+        {{:qa_worker, "qa_worker_unsafe"}, "worker_host"},
         {{:qa_host_tool_check_failed, "exit status 255"}, "worker_host"},
         {"no QA playbook applies to this change", "qa_playbook"},
         {"QA cannot run on the remote worker \"worker-1\"", "worker_host"},
