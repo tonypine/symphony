@@ -41,8 +41,8 @@ defmodule SymphonyElixir.QaAgent do
   (`SymphonyElixir.QaDriver.start_dev_server/3`), and needs only `verification.dev_server`, not
   `verification.enabled`. It never runs it on this host: without a `worker_host` no server starts
   and the QA driver's tools say why. One that fails makes the pass `blocked` with
-  `qa_dev_server_failed` and its log, and a port already taken with `qa_dev_server_port_busy`. Such a pass first waits for
-  the QA host port's lease while another pass's server holds it
+  `qa_dev_server_failed` and its log, and a port already taken with `qa_dev_server_port_busy`.
+  Such a pass first waits for the QA host port's lease while another pass's server holds it
   (`SymphonyElixir.QaDriver.DevServerLease`). A `web` pass's session alone gets a
   `browser` MCP server: headless Playwright limited to the dev server's localhost origins, or
   the playbook's `browser_mcp`.
@@ -999,10 +999,10 @@ defmodule SymphonyElixir.QaAgent do
   # beside the app, before the agent starts (TP-1111), and never on this host: without a
   # `worker_host` the driver starts none, and its tools say why (TP-1080). A server that does not
   # build, exits or fails its health check makes the pass `blocked` with its log, and costs no
-  # tokens. It needs only `verification.dev_server`: `verification.enabled` turns on this host's dev server,
-  # for agent runs and `web` passes, which a Mac app repo's server must not start (TP-1115). A pass
-  # waits while another pass's server holds the QA host's port (TP-1125), with a heartbeat to the
-  # orchestrator so its first-turn stall check does not stop it.
+  # tokens. It needs only `verification.dev_server`: `verification.enabled` turns on this host's
+  # dev server, for agent runs and `web` passes, which a Mac app repo's server must not start
+  # (TP-1115). A pass waits while another pass's server holds the QA host's port (TP-1125), with a
+  # heartbeat to the orchestrator so its first-turn stall check does not stop it.
   defp start_qa_host_dev_server(driver, job, settings, opts) do
     lease_opts = Keyword.merge([issue_id: job.issue.id, heartbeat: lease_heartbeat(opts)], Keyword.get(opts, :dev_server_lease_opts, []))
 
