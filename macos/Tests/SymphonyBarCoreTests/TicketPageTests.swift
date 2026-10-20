@@ -501,9 +501,10 @@ final class StopRunSheetTests: XCTestCase {
         XCTAssertEqual(sheet.happens(alsoBacklog: false), "Ends the agent working on SHOP-305 and removes its workspace, with any work it hasn't pushed.")
         XCTAssertEqual(
             sheet.stays(alsoBacklog: false),
-            "SHOP-305 keeps its Linear state, In Progress, so Symphony starts it again on its next poll. Its pull request and branch stay as they are."
+            "SHOP-305 keeps its Linear state, In Progress, but Symphony doesn't start it again: it waits in the Inbox as stopped by "
+                + "you until you Unblock or Restart it, or move it on the board. Its pull request and branch stay as they are."
         )
-        XCTAssertTrue(StopRunSheet(identifier: "A-1", origin: .ticketPage, isRunning: true).stays(alsoBacklog: false).hasPrefix("A-1 keeps its Linear state, so"))
+        XCTAssertTrue(StopRunSheet(identifier: "A-1", origin: .ticketPage, isRunning: true).stays(alsoBacklog: false).hasPrefix("A-1 keeps its Linear state, but"))
         XCTAssertTrue(sheet.canSend(alsoBacklog: false))
         XCTAssertEqual(sheet.actions(alsoBacklog: false, note: "ignored"), [.stop("SHOP-305")])
     }

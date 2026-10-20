@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.DirectorMovesTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{AuditLog, BlockedHold, DirectorMoves, Hold, PlanComments, RunStore, SubIssueWait}
+  alias SymphonyElixir.{AuditLog, BlockedHold, DirectorMoves, Hold, OperatorStop, PlanComments, RunStore, SubIssueWait}
 
   @waiting "Waiting on sub-tickets"
 
@@ -206,6 +206,23 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       refute Hold.held?("repo-restart", "pr", :blocked)
       assert RunStore.get_ticket_state("repo-restart", "pr").dispatches == []
+    end
+
+    test "lifts an operator's stop, so the ticket the Director stopped runs again from main", %{opts: opts} do
+      put_issues([%{pr("Todo") | repo_key: "repo-restart"}])
+      :ok = OperatorStop.set_hold("repo-restart", "pr", OperatorStop.mark("MOT-40", "repo-restart", ~U[2026-10-20 08:41:25Z]))
+
+      assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "Start over"}, restart_opts(opts))
+      refute Hold.held?("repo-restart", "pr", :blocked)
+
+      :ok = OperatorStop.set_hold("repo-restart", "pr", OperatorStop.mark("MOT-40", "repo-restart", ~U[2026-10-20 08:41:25Z]))
+
+      log =
+        capture_log(fn ->
+          assert {:ok, _result} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, opts |> restart_opts() |> Keyword.put(:store, UnwritableStore))
+        end)
+
+      assert log =~ "Restarted MOT-40 but couldn't clear its operator-stop hold: :boom"
     end
 
     test "leaves any other Blocked hold, and stands when the store refuses to clear the loop's", %{opts: opts} do
