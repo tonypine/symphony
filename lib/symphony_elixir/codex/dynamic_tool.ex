@@ -508,6 +508,25 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "name" => "github_get_failed_run_log",
       "description" => "Read the length-clamped failed-step log excerpt for the latest failing GitHub Actions run on the current pull request.",
       "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
+    },
+    %{
+      "name" => "github_ci_log",
+      "description" =>
+        "Read the log of a failed GitHub Actions job in this run's repository, to name a red check's cause instead of guessing it from the job's name. " <>
+          "Pass one of run_id (a workflow run: its failed jobs), job_id (one job) or pr_number (the failed checks of a pull request). " <>
+          "Each job comes with its failed steps, its annotations and the last #{SymphonyElixir.GitHub.CiLog.default_line_limit()} lines of its failed steps' log " <>
+          "(at most #{SymphonyElixir.GitHub.CiLog.job_limit()} jobs). failed_only (default true) refuses a job that did not fail; false reads every job and step. " <>
+          "A run, job or pull request of another repository is refused.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{
+          "run_id" => %{"type" => ["integer", "string"], "description" => "A workflow run id, as in .../actions/runs/<run_id>."},
+          "job_id" => %{"type" => ["integer", "string"], "description" => "A job id, as in .../actions/runs/<run_id>/job/<job_id>."},
+          "pr_number" => %{"type" => ["integer", "string"], "description" => "A pull request number in this repository."},
+          "failed_only" => %{"type" => "boolean", "description" => "Only failed jobs and their failed steps (default true)."}
+        }
+      }
     }
   ]
 
@@ -1038,6 +1057,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "github_list_pr_review_comments" => [],
     "github_list_pr_reviews" => [],
     "github_get_failed_run_log" => [],
+    "github_ci_log" => ["run_id", "job_id", "pr_number", "failed_only"],
     "qa_build" => [],
     "qa_launch_app" => [
       "api_fixtures",
@@ -1125,7 +1145,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
                      "github_list_pr_comments",
                      "github_list_pr_review_comments",
                      "github_list_pr_reviews",
-                     "github_get_failed_run_log"
+                     "github_get_failed_run_log",
+                     "github_ci_log"
                    ])
 
   # The QA agent reads like the reviewer and may attach evidence files; it never
@@ -1357,6 +1378,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp execute_github_tool("github_list_pr_reviews", context, _args, opts), do: GitHub.list_pr_reviews(context, opts)
   defp execute_github_tool("github_get_failed_run_log", context, _args, opts), do: GitHub.get_failed_run_log(context, opts)
+  defp execute_github_tool("github_ci_log", context, args, opts), do: GitHub.ci_log(context, args, opts)
 
   defp normalize_tool_name(tool) when is_binary(tool), do: Map.get(@legacy_tool_aliases, tool, tool)
   defp normalize_tool_name(tool), do: tool
@@ -2408,6 +2430,27 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "message" => "No failed GitHub Actions run with a log was found for the current pull request."
       }
     }
+  end
+
+  defp tool_error_payload({kind, id, repo}) when kind in [:run_not_in_repo, :job_not_in_repo] do
+    what = if kind == :run_not_in_repo, do: "Workflow run", else: "Job"
+    %{"error" => %{"code" => Atom.to_string(kind), "message" => "#{what} #{id} is not in #{repo}, this run's repository; github_ci_log reads no other."}}
+  end
+
+  defp tool_error_payload({:job_not_failed, id, conclusion}) do
+    %{"error" => %{"code" => "job_not_failed", "message" => "Job #{id} did not fail (#{conclusion || "no conclusion yet"}). Pass failed_only: false to read it anyway."}}
+  end
+
+  defp tool_error_payload({:no_failed_jobs, target}) do
+    %{"error" => %{"code" => "no_failed_jobs", "message" => "No failed GitHub Actions job to read for #{inspect(target)}. Pass failed_only: false to read every job."}}
+  end
+
+  defp tool_error_payload(reason) when reason in [:missing_ci_log_target, :ambiguous_ci_log_target, :invalid_ci_log_target] do
+    %{"error" => %{"code" => Atom.to_string(reason), "message" => "github_ci_log needs exactly one of run_id, job_id or pr_number, a positive number."}}
+  end
+
+  defp tool_error_payload(:invalid_failed_only) do
+    %{"error" => %{"code" => "invalid_failed_only", "message" => "github_ci_log `failed_only` must be true or false."}}
   end
 
   defp tool_error_payload(:invalid_failed_run_log_max_bytes) do

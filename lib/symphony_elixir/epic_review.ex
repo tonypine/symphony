@@ -34,7 +34,11 @@ defmodule SymphonyElixir.EpicReview do
        reaches the self-heal lane: a review started the moment the last sub-ticket merged would
        otherwise judge a commit CI has not finished with. A run still unfinished after two hours
        is not waited on: the review runs and reports it, so stuck CI blocks and self-heals as any
-       other block does.
+       other block does. A commit whose runs finished with a failed one is not judged yet either:
+       the review reruns its failed jobs once per commit (`SymphonyElixir.EpicReview.CiRerun`)
+       and waits for the rerun the same way, so a flake on the default branch is recorded as a
+       `ci_flake` signal on the epic instead of filed as a gap. Only a run red again reaches the
+       agent as a failure.
     4. The **verdict**, through the one writer `SymphonyElixir.TransitionGuard`:
          * `pass` -> `Done` (`:epic_review_pass`);
          * `fail` (gaps) -> each failing step, or without failing steps each finding, is filed as a
@@ -79,7 +83,8 @@ defmodule SymphonyElixir.EpicReview do
   }
 
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
-  alias SymphonyElixir.GitHub.PullRequest
+  alias SymphonyElixir.EpicReview.CiRerun
+  alias SymphonyElixir.GitHub.{CiLog, PullRequest}
   alias SymphonyElixir.Linear.{Issue, TransientRetry}
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaAgent.{Report, Selection}
@@ -105,6 +110,13 @@ defmodule SymphonyElixir.EpicReview do
   # How long the review waits for a workflow run on the commit under review to finish. Longer than
   # any healthy run of CI; a run still going after it is stuck, and the review reports it.
   @ci_wait_limit_seconds 2 * 3600
+  # A follow-up about CI quotes the failed jobs of at most this many runs, each job's last lines,
+  # at most this many characters of them: enough for the cause, small enough for a ticket.
+  @ci_log_runs 3
+  @ci_log_lines 60
+  @ci_log_chars 6_000
+  # A failing step or finding is about CI when it names CI or a workflow run.
+  @ci_gap ~r{\bCI\b|/actions/runs/\d+}
 
   @typedoc "One deterministic pre-check: what it found and whether the review must account for it."
   @type check :: %{name: atom(), status: :ok | :attention, detail: String.t()}
@@ -239,7 +251,7 @@ defmodule SymphonyElixir.EpicReview do
         {:error, {:ci_pending, info}}
 
       outcome ->
-        apply_outcome(issue, outcome, settings, opts)
+        apply_outcome(issue, outcome, settings, Keyword.put(opts, :workspace, workspace))
     end
   end
 
@@ -285,9 +297,10 @@ defmodule SymphonyElixir.EpicReview do
         Map.merge(outcome, %{ref: context.base_ref, checks: checks, runtime_seconds: System.monotonic_time(:second) - started_at})
 
       nil ->
-        case pending_ci_runs(workspace, context.sha, opts) do
-          [] -> run_qa_agent(issue, workspace, context, settings, opts, checks, started_at)
-          runs -> %{ci_pending: %{sha: context.sha, runs: runs}}
+        case ci_gate(issue, workspace, context.sha, opts) do
+          {:wait, runs} -> %{ci_pending: %{sha: context.sha, runs: runs}}
+          {:proceed, nil} -> run_qa_agent(issue, workspace, context, settings, opts, checks, started_at)
+          {:proceed, check} -> run_qa_agent(issue, workspace, context, settings, opts, checks ++ [check], started_at)
         end
     end
   end
@@ -315,21 +328,30 @@ defmodule SymphonyElixir.EpicReview do
     end
   end
 
-  # The workflow runs on the commit under review that are still going and worth waiting for. The
-  # review judges CI by the commit's runs, and a run without a conclusion cannot be judged, so the
-  # review waits for it (`review_epic/5`). Anything that keeps the wait from being sure is not
-  # waited on, and the review runs as it would without the wait: runs that cannot be read, and a
-  # run still unfinished after `@ci_wait_limit_seconds`, which the agent then reports.
-  defp pending_ci_runs(workspace, sha, opts) do
+  # Whether the agent may judge the commit's CI yet. The review judges CI by the commit's runs, and
+  # a run without a conclusion cannot be judged, so the review waits for it (`review_epic/5`). Once
+  # every run finished, a failed one is rerun once per commit before it can become a gap
+  # (`SymphonyElixir.EpicReview.CiRerun`), and the review waits for that rerun too. Anything that
+  # keeps the wait from being sure is not waited on, and the review runs as it would without the
+  # wait: runs that cannot be read, and a run still unfinished after `@ci_wait_limit_seconds`, which
+  # the agent then reports.
+  defp ci_gate(issue, workspace, sha, opts) do
     case PullRequest.list_commit_runs(sha, [cwd: workspace] ++ Keyword.take(opts, [:gh_runner])) do
       {:ok, runs} ->
-        now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
-        Enum.filter(runs, &(unfinished_run?(&1) and not stuck_run?(&1, now)))
+        case pending_ci_runs(runs, opts) do
+          [] -> CiRerun.check(repo_key(issue, opts), issue.id, sha, runs, [workspace: workspace] ++ Keyword.take(opts, [:gh_runner]))
+          pending -> {:wait, pending}
+        end
 
       {:error, reason} ->
         Logger.warning("Epic review could not read CI on #{short_sha(sha)}; reviewing without waiting for it: #{inspect(reason)}")
-        []
+        {:proceed, nil}
     end
+  end
+
+  defp pending_ci_runs(runs, opts) do
+    now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
+    Enum.filter(runs, &(unfinished_run?(&1) and not stuck_run?(&1, now)))
   end
 
   defp unfinished_run?(%{status: status}), do: is_binary(status) and status != "COMPLETED"
@@ -519,7 +541,7 @@ defmodule SymphonyElixir.EpicReview do
   # `Todo` until they land, rather than both running at once and holding each other in QA.
   defp create_gaps(issue, outcome, opts) do
     {:ok, registry} = CommentRegistry.start_link()
-    gaps = gap_tickets(outcome, issue)
+    gaps = gap_tickets(outcome, issue, opts)
     labels = gaps |> Enum.flat_map(&List.wrap(&1.gap)) |> MapSet.new(&gap_label/1)
     context = %{issue: issue, comment_registry: registry, epic_tickets: epic_tickets(issue), labels: labels}
 
@@ -635,14 +657,105 @@ defmodule SymphonyElixir.EpicReview do
 
   defp gap_label(name), do: name |> String.trim() |> String.downcase()
 
-  defp gap_tickets(outcome, issue) do
+  defp gap_tickets(outcome, issue, opts) do
     case Enum.filter(Map.get(outcome, :steps, []), &(&1.status == "fail")) do
-      [] -> Enum.map(Map.get(outcome, :findings, []), &finding_ticket(&1, outcome, issue))
-      failed -> Enum.map(failed, &step_ticket(&1, outcome, issue))
+      [] -> tickets(Map.get(outcome, :findings, []), &to_string/1, &finding_ticket(&1, outcome, issue, &2), outcome, opts)
+      failed -> tickets(failed, &step_text/1, &step_ticket(&1, outcome, issue, &2), outcome, opts)
     end
   end
 
-  defp step_ticket(step, outcome, issue) do
+  defp tickets(gaps, text, ticket, outcome, opts) do
+    Enum.zip_with(gaps, gaps |> Enum.map(text) |> ci_logs(outcome, opts), ticket)
+  end
+
+  defp step_text(step), do: Enum.join([step.name, to_string(step.details) | List.wrap(step.evidence)], "\n")
+
+  # A follow-up about a red CI quotes the failed jobs' logs, which Symphony reads itself on the
+  # commit under review (`SymphonyElixir.GitHub.CiLog`): the agent's step names the check, the log
+  # names the cause, so the run that takes the follow-up starts from the cause and not from a guess
+  # at it (TP-1126). The commit's runs are read once, and only when a gap is about CI.
+  defp ci_logs(texts, outcome, opts) do
+    if Enum.any?(texts, &ci_gap?/1) do
+      runs = failed_runs(outcome.sha, opts)
+      Enum.map(texts, &if(ci_gap?(&1), do: ci_log_section(runs_named(&1, runs), outcome.sha, opts), else: ""))
+    else
+      Enum.map(texts, fn _text -> "" end)
+    end
+  end
+
+  defp ci_gap?(text), do: String.match?(text, @ci_gap)
+
+  defp failed_runs(sha, opts) do
+    case PullRequest.list_commit_runs(sha, ci_opts(opts)) do
+      {:ok, runs} ->
+        Enum.filter(runs, &(is_binary(&1.id) and CiLog.failed?(&1.conclusion)))
+
+      {:error, reason} ->
+        Logger.warning("Epic review could not read CI on #{short_sha(sha)} for its follow-up: #{inspect(reason)}")
+        []
+    end
+  end
+
+  defp ci_opts(opts), do: [cwd: Keyword.get(opts, :workspace)] ++ Keyword.take(opts, [:gh_runner])
+
+  # The runs the gap names, else every failed run on the commit.
+  defp runs_named(text, runs) do
+    named = Enum.filter(runs, &Regex.match?(~r{/actions/runs/#{Regex.escape(&1.id)}(?!\d)}, text))
+    Enum.take(if(named == [], do: runs, else: named), @ci_log_runs)
+  end
+
+  defp ci_log_section([], _sha, _opts), do: ""
+
+  defp ci_log_section(runs, sha, opts) do
+    "## CI log\n\nSymphony read the failed jobs of CI on `#{short_sha(sha)}`: the cause is in these lines, not in a job's name.\n\n" <>
+      Enum.map_join(runs, "\n", &run_log(&1, opts)) <> "\n"
+  end
+
+  defp run_log(run, opts) do
+    case CiLog.read(CiLog.repo_from_url(run.url) || "", {:run, run.id}, [failed_only: true, line_limit: @ci_log_lines] ++ ci_opts(opts)) do
+      {:ok, read} ->
+        Enum.map_join(read.jobs, "\n", &job_log(run, &1))
+
+      {:error, reason} ->
+        Logger.warning("Epic review could not read the failed log of run #{run.id}: #{inspect(reason)}")
+        "### #{run_name(run)}\n\n#{run.url}\n\nSymphony could not read this run's failed log: `#{inspect(reason)}`\n"
+    end
+  end
+
+  defp job_log(run, job) do
+    """
+    ### #{run_name(run)} › #{job.name || job.job_id}
+
+    #{job.url || run.url}
+
+    Failed steps: #{if job.failed_steps == [], do: "none named", else: Enum.join(job.failed_steps, ", ")}
+
+    Annotations:
+
+    #{if job.annotations == [], do: "- none", else: Enum.map_join(job.annotations, "\n", &("- " <> unfenced(&1)))}
+
+    The last #{job.log_lines} lines of the failed steps' log#{if job.truncated, do: " (of #{job.total_lines})", else: ""}:
+
+    ```text
+    #{log_tail(job.log)}
+    ```
+    """
+  end
+
+  defp run_name(run), do: run.workflow_name || "Run #{run.id}"
+
+  defp unfenced(text), do: String.replace(text, "```", "'''")
+
+  # The log's last `@ci_log_chars` characters: its end is where the cause is.
+  defp log_tail(log) do
+    log = unfenced(log)
+
+    if String.length(log) > @ci_log_chars,
+      do: "[... earlier lines cut ...]\n" <> String.slice(log, -@ci_log_chars, @ci_log_chars),
+      else: log
+  end
+
+  defp step_ticket(step, outcome, issue, ci_log) do
     body = """
     #{ticket_intro(outcome, issue)}
 
@@ -658,7 +771,7 @@ defmodule SymphonyElixir.EpicReview do
 
     #{evidence_list(step.evidence)}
 
-    ## Acceptance criteria
+    #{ci_log}## Acceptance criteria
 
     - [ ] The step "#{step.name}" behaves as #{issue.identifier} describes on the default branch.
     - [ ] The epic's review passes this step when it runs #{issue.identifier} again.
@@ -672,7 +785,7 @@ defmodule SymphonyElixir.EpicReview do
     }
   end
 
-  defp finding_ticket(finding, outcome, issue) do
+  defp finding_ticket(finding, outcome, issue, ci_log) do
     body = """
     #{ticket_intro(outcome, issue)}
 
@@ -684,7 +797,7 @@ defmodule SymphonyElixir.EpicReview do
 
     #{outcome |> Map.get(:steps, []) |> Enum.flat_map(& &1.evidence) |> evidence_list()}
 
-    ## Acceptance criteria
+    #{ci_log}## Acceptance criteria
 
     - [ ] The finding above is fixed on the default branch.
     - [ ] The epic's review passes when it runs #{issue.identifier} again.

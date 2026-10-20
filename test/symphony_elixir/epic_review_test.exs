@@ -855,6 +855,296 @@ defmodule SymphonyElixir.EpicReviewTest do
     end
   end
 
+  describe "run/3 on a red base branch head" do
+    @red_run "https://github.com/acme/app/actions/runs/501"
+
+    # The review already reran this commit's failed run once and it failed again, so the agent
+    # judges the red commit (`SymphonyElixir.EpicReview.CiRerun`).
+    setup do
+      RunStore.record_ticket_signal(@repo_key, @issue_id, "ci_rerun", %{
+        sha: @sha,
+        runs: [%{id: "501", workflow: "CI", url: @red_run, jobs: ["verify"], tests: []}]
+      })
+    end
+
+    # `gh` on a commit whose `CI` run 501 failed in its `verify` job (601) and whose `release` run
+    # passed: the runs, the failed run's jobs, the job's annotations and its failed log.
+    defp red_gh(overrides \\ %{}) do
+      recipient = self()
+
+      fn args, opts ->
+        send(recipient, {:gh, args, opts[:cd]})
+
+        case Map.fetch(overrides, hd(tl(args))) do
+          {:ok, answer} -> answer.(args)
+          :error -> red_answer(args)
+        end
+      end
+    end
+
+    defp red_answer(["run", "list", "--commit", @sha | _rest]) do
+      runs = [
+        ci_run("CI", "completed", %{"databaseId" => 501, "conclusion" => "failure", "url" => @red_run}),
+        ci_run("release", "completed", %{"databaseId" => 502})
+      ]
+
+      {Jason.encode!(runs), 0}
+    end
+
+    defp red_answer(["run", "view", "501", "-R", "acme/app", "--json", _fields]) do
+      job = %{
+        "databaseId" => 601,
+        "name" => "verify",
+        "conclusion" => "failure",
+        "url" => @red_run <> "/job/601",
+        "steps" => [%{"name" => "Verify app bundle", "conclusion" => "failure"}]
+      }
+
+      {Jason.encode!(%{"url" => @red_run, "workflowName" => "CI", "jobs" => [job]}), 0}
+    end
+
+    defp red_answer(["api", "repos/acme/app/check-runs/601/annotations"]) do
+      {Jason.encode!([%{"annotation_level" => "failure", "path" => ".github", "start_line" => 30, "message" => "Process completed with exit code 141."}]), 0}
+    end
+
+    defp red_answer(["run", "view", "--job", "601", "--log-failed", "-R", "acme/app"]) do
+      {"verify\tVerify app bundle\t2026-10-20T06:30:00.000Z checking the bundle\n" <>
+         "verify\tVerify app bundle\t2026-10-20T06:30:01.000Z printf: write error: Broken pipe\n", 0}
+    end
+
+    defp ci_step(details), do: %{name: "CI on c0ffee001122", status: "fail", details: details, evidence: []}
+
+    test "files the CI follow-up with the failing step's log tail and annotations, read by Symphony" do
+      agent_result(:fail, %{
+        steps: [
+          ci_step("The CI workflow failed (#{@red_run}); its verify job is red."),
+          %{name: "Settings shows the API key field", status: "fail", details: "There is no field.", evidence: []}
+        ]
+      })
+
+      assert :ok = run(epic(), gh_runner: red_gh())
+
+      assert [ci, other] = created_subissues()
+      assert ci["title"] == "Epic review fails: CI on c0ffee001122"
+      assert ci["description"] =~ "## CI log"
+      assert ci["description"] =~ "Symphony read the failed jobs of CI on `c0ffee001122`"
+      assert ci["description"] =~ "### CI › verify\n\n#{@red_run}/job/601"
+      assert ci["description"] =~ "Failed steps: Verify app bundle"
+      assert ci["description"] =~ "- failure .github:30 Process completed with exit code 141."
+      assert ci["description"] =~ "The last 2 lines of the failed steps' log:\n\n```text\nchecking the bundle\nprintf: write error: Broken pipe\n```"
+      # The section sits between the evidence and the acceptance criteria.
+      assert ci["description"] =~ ~r/## Evidence.*## CI log.*## Acceptance criteria/s
+
+      refute other["description"] =~ "## CI log"
+
+      assert_received {:gh, ["run", "view", "--job", "601", "--log-failed", "-R", "acme/app"], _cwd}
+      refute_received {:gh, ["run", "view", "502" | _rest], _cwd}
+    end
+
+    test "a step that names a run quotes that run only, not one whose id it starts" do
+      runs = [
+        ci_run("CI", "completed", %{"databaseId" => 50, "conclusion" => "failure", "url" => "https://github.com/acme/app/actions/runs/50"}),
+        ci_run("CI", "completed", %{"databaseId" => 501, "conclusion" => "failure", "url" => @red_run})
+      ]
+
+      agent_result(:fail, %{steps: [ci_step("Red: #{@red_run}")]})
+
+      assert :ok = run(epic(), gh_runner: red_gh(%{"list" => fn _args -> {Jason.encode!(runs), 0} end}))
+
+      assert [ci] = created_subissues()
+      assert ci["description"] =~ "printf: write error: Broken pipe"
+      refute_received {:gh, ["run", "view", "50" | _rest], _cwd}
+    end
+
+    test "a finding that names CI without a run quotes every failed run on the commit" do
+      agent_result(:fail, %{summary: "Red.", findings: ["CI is red on the default branch", "The export button is absent"]})
+
+      assert :ok = run(epic(), gh_runner: red_gh())
+
+      assert [ci, other] = created_subissues()
+      assert ci["description"] =~ "printf: write error: Broken pipe"
+      refute other["description"] =~ "## CI log"
+    end
+
+    test "a log too long for a ticket keeps its end, and a job without steps or annotations says so" do
+      lines = for n <- 1..100, do: "verify\tVerify app bundle\t2026-10-20T06:30:00.000Z line #{n} " <> String.duplicate("x", 200)
+
+      overrides = %{
+        "view" => fn
+          ["run", "view", "501" | _rest] ->
+            {Jason.encode!(%{"url" => @red_run, "jobs" => [%{"databaseId" => 601, "conclusion" => "failure", "url" => nil}]}), 0}
+
+          ["run", "view", "--job", "601" | _rest] ->
+            {Enum.join(lines, "\n"), 0}
+        end,
+        "repos/acme/app/check-runs/601/annotations" => fn _args -> {"[]", 0} end,
+        "list" => fn _args -> {Jason.encode!([ci_run("CI", "completed", %{"databaseId" => 501, "conclusion" => "failure", "url" => @red_run, "workflowName" => nil})]), 0} end
+      }
+
+      runner = fn args, opts ->
+        case args do
+          ["api", endpoint] -> Map.fetch!(overrides, endpoint).(args)
+          _other -> red_gh(overrides).(args, opts)
+        end
+      end
+
+      agent_result(:fail, %{steps: [ci_step("Red: #{@red_run}")]})
+
+      assert :ok = run(epic(), gh_runner: runner)
+
+      assert [ci] = created_subissues()
+      assert ci["description"] =~ "### Run 501 › 601\n\n#{@red_run}\n"
+      assert ci["description"] =~ "Failed steps: none named"
+      assert ci["description"] =~ "Annotations:\n\n- none"
+      assert ci["description"] =~ "The last 60 lines of the failed steps' log (of 100):\n\n```text\n[... earlier lines cut ...]\n"
+      assert ci["description"] =~ "line 100 xxx"
+      refute ci["description"] =~ "line 40 "
+    end
+
+    test "a log Symphony cannot read is named in the follow-up, and the follow-up is still filed" do
+      overrides = %{"view" => fn _args -> {"HTTP 404: Not Found", 1} end}
+      agent_result(:fail, %{steps: [ci_step("Red: #{@red_run}")]})
+
+      log = capture_log(fn -> assert :ok = run(epic(), gh_runner: red_gh(overrides)) end)
+
+      assert [ci] = created_subissues()
+      assert ci["description"] =~ "### CI\n\n#{@red_run}\n\nSymphony could not read this run's failed log: `{:gh_failed"
+      assert log =~ "Epic review could not read the failed log of run 501"
+    end
+
+    test "CI that cannot be read files the follow-up without a log" do
+      agent_result(:fail, %{steps: [ci_step("The CI workflow failed.")]})
+
+      log = capture_log(fn -> assert :ok = run(epic(), gh_runner: gh_runner({"HTTP 502", 1})) end)
+
+      assert [ci] = created_subissues()
+      refute ci["description"] =~ "## CI log"
+      assert log =~ "Epic review could not read CI on c0ffee001122 for its follow-up"
+    end
+
+    test "a green commit adds no CI log to a CI follow-up" do
+      agent_result(:fail, %{steps: [ci_step("The agent thinks CI failed.")]})
+
+      assert :ok = run(epic(), gh_runner: gh_runner([ci_run("CI", "completed")]))
+
+      assert [ci] = created_subissues()
+      refute ci["description"] =~ "## CI log"
+    end
+  end
+
+  describe "run/3 on a red base branch head not rerun yet" do
+    @flaky_test "TestAnAppThatDoesntQuitAbandonsTheInstall"
+
+    # `red_gh/1` whose `gh run list` answers each of `lists` in turn and the last one from then on,
+    # which accepts the rerun, and whose failed job log names a failed Go test.
+    defp rerun_gh(lists) do
+      Process.put(:epic_review_run_lists, lists)
+
+      red_gh(%{
+        "list" => fn _args ->
+          [list | rest] = Process.get(:epic_review_run_lists)
+          Process.put(:epic_review_run_lists, if(rest == [], do: [list], else: rest))
+          {Jason.encode!(list), 0}
+        end,
+        "rerun" => fn _args -> {"", 0} end,
+        "view" => fn
+          ["run", "view", "--job" | _rest] ->
+            {"verify\tgo test\t2026-10-20T06:30:00.000Z --- FAIL: #{@flaky_test} (0.30s)\n" <>
+               "verify\tgo test\t2026-10-20T06:30:01.000Z printf: write error: Broken pipe\n", 0}
+
+          args ->
+            red_answer(args)
+        end
+      })
+    end
+
+    defp red_runs, do: [ci_run("CI", "completed", %{"databaseId" => 501, "conclusion" => "failure", "url" => @red_run}), release_run()]
+
+    defp green_runs, do: [ci_run("CI", "completed", %{"databaseId" => 501, "url" => @red_run}), release_run()]
+
+    defp release_run, do: ci_run("release", "completed", %{"databaseId" => 502})
+
+    defp reruns(messages \\ peek()), do: for({:gh, ["run", "rerun" | _rest] = args, _cwd} <- messages, do: args)
+
+    defp agent_runs(messages \\ peek()), do: for({:qa_agent_run, _job, _settings, _opts} <- messages, do: :run)
+
+    defp signal(name), do: Enum.find(signals(), &(&1.name == name))
+
+    test "reruns the failed jobs once and waits for them: no agent pass, no verdict, no follow-up" do
+      {result, log} = with_log(fn -> run(epic(), gh_runner: rerun_gh([red_runs()])) end)
+
+      assert {:error, {:ci_pending, %{sha: @sha, runs: [%{id: "501"}]}}} = result
+
+      assert reruns() == [["run", "rerun", "501", "--failed", "-R", "acme/app"]]
+      assert agent_runs() == []
+      assert verdicts() == []
+      assert created_subissues() == []
+      assert comments_posted() == []
+      assert log =~ "Epic review reran the failed CI on c0ffee001122: CI (#{@red_run})"
+
+      # The rerun is bound to the commit with what its attempt replaces, and the CI wait starts over.
+      assert [%{name: "ci_wait_started", details: %{sha: @sha}}, %{name: "ci_rerun", details: rerun} | _rest] = signals()
+      assert %{sha: @sha, runs: [%{id: "501", workflow: "CI", url: @red_run, jobs: ["verify"], tests: [@flaky_test]}]} = rerun
+    end
+
+    test "a red run that passes on rerun files no follow-up, records the flake, and the review proceeds" do
+      runner = rerun_gh([red_runs(), green_runs()])
+
+      assert {:error, {:ci_pending, _info}} = run(epic(), gh_runner: runner)
+      assert :ok = run(epic(%{state: "Epic Review"}), gh_runner: runner)
+
+      assert length(reruns()) == 1
+      assert agent_runs() == [:run]
+      assert created_subissues() == []
+      assert [%{kind: "epic_review", head_sha: @sha, outcome: "pass"}] = verdicts()
+
+      assert %{details: %{sha: @sha, runs: [@red_run], workflows: ["CI"], jobs: ["verify"], tests: [@flaky_test]}} = signal("ci_flake")
+
+      assert [{@issue_id, report}] = comments_posted()
+      assert report =~ "- **attention** ci_rerun: CI (#{@red_run}) failed and passed on Symphony's rerun, a flake in verify, #{@flaky_test}"
+    end
+
+    test "a red run that fails twice files a follow-up whose description contains the log tail" do
+      runner = rerun_gh([red_runs()])
+
+      assert {:error, {:ci_pending, _info}} = run(epic(), gh_runner: runner)
+
+      agent_result(:fail, %{steps: [ci_step("The CI workflow failed (#{@red_run}); its verify job is red.")]})
+      assert :ok = run(epic(%{state: "Epic Review"}), gh_runner: runner)
+
+      assert length(reruns()) == 1
+      assert [ci] = created_subissues()
+      assert ci["title"] == "Epic review fails: CI on c0ffee001122"
+      assert ci["description"] =~ "## CI log"
+      assert ci["description"] =~ "--- FAIL: #{@flaky_test} (0.30s)\nprintf: write error: Broken pipe"
+      assert signal("ci_flake") == nil
+
+      assert [{@issue_id, report}] = comments_posted()
+      assert report =~ "- **attention** ci_rerun: CI (#{@red_run}) is not green after Symphony's rerun"
+    end
+
+    test "the rerun is attempted once per head: a third review on the same head does not rerun again" do
+      runner = rerun_gh([red_runs()])
+      agent_result(:fail, %{summary: "Red.", findings: ["The export button is absent"]})
+
+      assert {:error, {:ci_pending, _info}} = run(epic(), gh_runner: runner)
+      assert :ok = run(epic(), gh_runner: runner)
+      assert :ok = run(epic(), gh_runner: runner)
+
+      assert length(reruns()) == 1
+      assert agent_runs() == [:run, :run]
+    end
+
+    test "a carried verdict reads no CI and reruns nothing" do
+      :ok = TicketSignals.record_verdict(@repo_key, @issue_id, "epic_review", @sha, "pass")
+
+      assert :ok = run(epic(), gh_runner: rerun_gh([red_runs()]))
+
+      assert reruns() == []
+      assert signal("ci_rerun") == nil
+    end
+  end
+
   describe "run/3 while CI runs on the base branch head" do
     @now ~U[2026-10-14 18:30:00Z]
 

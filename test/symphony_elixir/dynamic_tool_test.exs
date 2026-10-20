@@ -89,6 +89,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert "github_list_pr_review_comments" in tool_names
     assert "github_list_pr_reviews" in tool_names
     assert "github_get_failed_run_log" in tool_names
+    assert "github_ci_log" in tool_names
     refute "linear_graphql" in tool_names
     refute "linear_set_assignee" in tool_names
     refute "linear.get_current_issue" in tool_names
@@ -3221,6 +3222,60 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     after
       File.rm_rf(workspace)
     end
+  end
+
+  test "github_ci_log reads a failed job for every run kind and refuses another repository's run" do
+    gh_runner = fn
+      ["run", "view", "77", "-R", "acme/symphony", "--json", _fields], _opts ->
+        {Jason.encode!(%{"url" => "https://github.com/someone/else/actions/runs/77", "jobs" => []}), 0}
+
+      ["run", "view", "78", "-R", "acme/symphony", "--json", _fields], _opts ->
+        {Jason.encode!(%{
+           "url" => "https://github.com/acme/symphony/actions/runs/78",
+           "workflowName" => "CI",
+           "jobs" => [%{"databaseId" => 5, "name" => "test", "conclusion" => "failure", "url" => "https://github.com/acme/symphony/actions/runs/78/job/5"}]
+         }), 0}
+
+      ["run", "view", "79", "-R", "acme/symphony", "--json", _fields], _opts ->
+        {Jason.encode!(%{"url" => "https://github.com/acme/symphony/actions/runs/79", "jobs" => []}), 0}
+
+      ["api", "repos/acme/symphony/actions/jobs/" <> id], _opts ->
+        repo = if id == "6", do: "someone/else", else: "acme/symphony"
+        conclusion = if id == "7", do: "success"
+        {Jason.encode!(%{"id" => id, "conclusion" => conclusion, "html_url" => "https://github.com/#{repo}/actions/runs/1/job/#{id}"}), 0}
+
+      ["api", "repos/acme/symphony/check-runs/5/annotations"], _opts ->
+        {"[]", 0}
+
+      ["run", "view", "--job", "5", "--log-failed", "-R", "acme/symphony"], _opts ->
+        {"test\tRun mix test\t2026-10-20T06:30:00.000Z printf: write error: Broken pipe", 0}
+    end
+
+    opts = github_tool_opts("/tmp", gh_runner: gh_runner)
+
+    for scope <- [nil, :read_only, :qa] do
+      assert "github_ci_log" in Enum.map(DynamicTool.tool_specs(scope), & &1["name"])
+      response = DynamicTool.execute("github_ci_log", %{"run_id" => 78}, Keyword.put(opts, :tool_scope, scope))
+      assert response["success"] == true
+      assert %{"workflow" => "CI", "jobs" => [%{"log" => "printf: write error: Broken pipe"}]} = Jason.decode!(response["output"])
+    end
+
+    error = fn args ->
+      response = DynamicTool.execute("github_ci_log", args, opts)
+      assert response["success"] == false
+      Jason.decode!(response["output"])["error"]
+    end
+
+    assert %{"code" => "run_not_in_repo", "message" => "Workflow run 77 is not in acme/symphony" <> _rest} = error.(%{"run_id" => "77"})
+    assert %{"code" => "job_not_in_repo", "message" => "Job 6 is not in acme/symphony" <> _rest} = error.(%{"job_id" => 6})
+    assert %{"code" => "job_not_failed", "message" => "Job 7 did not fail (SUCCESS)." <> _rest} = error.(%{"job_id" => 7})
+    assert %{"code" => "job_not_failed", "message" => "Job 8 did not fail (no conclusion yet)." <> _rest} = error.(%{"job_id" => 8})
+    assert %{"code" => "no_failed_jobs"} = error.(%{"run_id" => 79})
+    assert %{"code" => "missing_ci_log_target"} = error.(%{})
+    assert %{"code" => "ambiguous_ci_log_target"} = error.(%{"run_id" => 1, "job_id" => 2})
+    assert %{"code" => "invalid_ci_log_target"} = error.(%{"run_id" => "../1"})
+    assert %{"code" => "invalid_failed_only"} = error.(%{"run_id" => 78, "failed_only" => "no"})
+    assert %{"code" => "scope_argument_rejected"} = error.(%{"run_id" => 78, "repo" => "someone/else"})
   end
 
   test "github.get_failed_run_log surfaces no failed run cleanly" do

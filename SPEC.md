@@ -1656,6 +1656,15 @@ The QA agent:
   on that commit, recorded in the ticket-state record), the review is not started again and the
   ticket is held `Blocked` with `waits_on.type` `ci_wait` and a reason naming the commit and the
   workflows still running, which a person lifts with `Unblock`; the next wait starts from zero.
+- The epic review MUST NOT judge a failed workflow run on the base branch head it reviews before it
+  reran it once: once every run on the commit finished, it reruns the failed jobs of each failed run
+  (`gh run rerun <id> --failed`) and waits for the rerun as for an unfinished run, the wait on that
+  commit starting from zero again. The rerun MUST be made at most once per commit: it is recorded
+  on the ticket (a `ci_rerun` signal bound to the commit, carrying the failed jobs' and tests' names
+  read before the rerun) before it is made, and a review that cannot record it MUST NOT rerun. A run
+  green on its rerun MUST be recorded as a `ci_flake` signal on the epic (the commit, the runs, the
+  job and test names), once per commit, and files no follow-up; a run red again is judged and filed
+  as any red run. The review's report SHOULD name what the rerun found.
 - The PR QA prompt MUST list the agent-protected paths (`WORKFLOW.md`, `.agents/skills`, the project
   `.claude` settings and the rest an agent's sandbox denies writes to) and tell the agent to mark a
   criterion that only a change to one of them can meet `skipped`, naming the follow-up ticket, when
@@ -3759,7 +3768,8 @@ Optional client-side tool extension:
 - Current standardized optional tools: scoped Linear tools whose protocol-facing names match
   `^[a-zA-Z0-9_-]+$`, such as `linear_get_current_issue`, `linear_get_comments`, and
   `linear_update_state`, and scoped GitHub tools such as `github_get_pull_request`,
-  `github_fetch_origin`, `github_sync_base`, `github_push_branch`, and `github_merge_pull_request`.
+  `github_fetch_origin`, `github_sync_base`, `github_push_branch`, `github_merge_pull_request`,
+  and `github_ci_log`.
 - If implemented, supported tools SHOULD be advertised to the agent session during startup using the
   protocol mechanism supported by the configured adapter.
 - Unsupported tool names SHOULD still return a failure result using the targeted protocol and
@@ -3975,13 +3985,25 @@ Scoped GitHub tool extension contract:
   the human-approved `Merging` state, MUST refuse while any check is failing or
   pending (only the checks the base branch requires, when it requires any; see the CI poller's
   landing read), and MUST pin the merge to the head commit whose checks were read.
+- `github_ci_log`, if exposed, MUST read only the session's `origin` repository: it takes one of a
+  workflow run id, a job id or a pull request number (and `failed_only`, default true), MUST refuse
+  a run or job whose URL is not that repository's, and with `failed_only` MUST refuse a job that did
+  not fail. It returns each job's failed steps, its check annotations and the last lines of its log
+  (`gh run view --job <id> --log-failed`), bounded: at most 400 lines per job, each line clipped,
+  and at most 10 jobs, counting the rest. It is a read tool, so every run kind has it, the reviewer
+  and QA included; it gives no other `gh` access.
+- The epic review SHOULD read the failed jobs of CI on the commit it reviewed itself when it files a
+  follow-up about CI (a failing step or finding that names CI or a workflow run), and quote their
+  failed steps, annotations and log tail in the follow-up's description, so the run that takes it
+  starts from the cause rather than from the job's name.
 - GitHub read-only review sessions SHOULD hide GitHub tools that mutate local
   workspace Git metadata or remote GitHub state.
 
 Elixir evidence: `lib/symphony_elixir/agent_tools/github.ex`,
-`lib/symphony_elixir/codex/dynamic_tool.ex`,
-`test/symphony_elixir/agent_tools_github_test.exs`, and
-`test/symphony_elixir/dynamic_tool_test.exs`.
+`lib/symphony_elixir/codex/dynamic_tool.ex`, `lib/symphony_elixir/github/ci_log.ex`,
+`test/symphony_elixir/agent_tools_github_test.exs`,
+`test/symphony_elixir/dynamic_tool_test.exs`, `test/symphony_elixir/github/ci_log_test.exs`, and
+`test/symphony_elixir/epic_review_test.exs`.
 
 User-input-required policy:
 
