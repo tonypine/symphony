@@ -2567,7 +2567,12 @@ Rules:
   `waiting_on_you` in `/api/v1/state`) lists the ticket. A person lifts it with `Unblock` or
   `Restart`, and the count starts again.
 - **Green-head gating.** CI state (`running` / `green` / `red`) is an attribute per PR head, not a
-  state. The reviewer and QA runs MUST dispatch only on a green head; a red head in `Code Review`,
+  state. The reviewer and QA runs MUST dispatch only on a green head, whether the poll, a retry or
+  the continuation of an earlier run (the reviewer's approve moving the ticket into `QA`) dispatches
+  them; a held-back run records `code_review_head_not_green` or `qa_head_not_green` once per head. A
+  QA `fail` or block on a head the PR watcher reads as red, missing a required check, or
+  conflicting is recorded `blocked` with the component `ci` and leaves the ticket in `QA` for the
+  watcher to route; it MUST NOT go to `Rework`. A red head in `Code Review`,
   `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its
   origin recorded, whether or not the PR also conflicts. A `Code Review` or `QA` ticket back from
   `CI Fix` on the same red head or the same conflict (a repair that pushed nothing) MUST enter

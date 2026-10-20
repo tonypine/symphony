@@ -19,7 +19,9 @@ defmodule SymphonyElixir.QaPreCheck do
     * `pass`: the check passed and the test exists. QA links it and does not walk it.
     * `pending`: the check is still running. QA waits for it, boundedly.
     * `fail`: the check failed, did not run on the head (or only reported skipped), or the named
-      test is not in the checkout. The ticket's proof is part of its work, so QA fails to `Rework`.
+      test is not in the checkout. The ticket's proof is part of its work, so QA fails to `Rework`,
+      unless the PR and CI watcher reads the head as red or conflicting: then the pass is blocked on
+      CI and the watcher routes the head (`SymphonyElixir.QaVerification`).
 
   A walkthrough without a named-test step is `:none`: nothing is read, and QA runs as it always did.
   """

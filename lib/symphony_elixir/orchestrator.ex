@@ -4495,7 +4495,10 @@ defmodule SymphonyElixir.Orchestrator do
           "Skipping stale dispatch after issue refresh: #{issue_context(refreshed_issue)} state=#{inspect(refreshed_issue.state)} assigned_to_worker=#{refreshed_issue.assigned_to_worker} blocked_by=#{length(refreshed_issue.blocked_by)} sub_issues=#{length(refreshed_issue.sub_issues)}"
         )
 
-        release_undispatched_claim(state, issue.id)
+        # A Code Review or QA ticket held back on its head records why, as the poll does.
+        state
+        |> note_blocked_flow_head(refreshed_issue)
+        |> release_undispatched_claim(issue.id)
 
       {:error, reason} ->
         skip_dispatch_after_refresh_failure(state, issue, attempt, preferred_worker_host, repo_key, reason)
@@ -4966,7 +4969,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states, _opts), do: {:ok, issue}
 
   defp dispatch_revalidated_issue?(%Issue{} = issue, terminal_states, true),
-    do: active_retry_issue?(issue, terminal_states) and !landing_gated?(issue)
+    do: active_retry_issue?(issue, terminal_states) and !flow_gated?(issue)
 
   defp dispatch_revalidated_issue?(%Issue{} = issue, terminal_states, _sticky_route?), do: retry_candidate_issue?(issue, terminal_states)
 
@@ -9153,14 +9156,18 @@ defmodule SymphonyElixir.Orchestrator do
   defp retry_candidate_issue?(%Issue{} = issue, terminal_states) do
     candidate_issue?(issue, active_state_set(), terminal_states) and
       !issue_held?(issue, terminal_states) and
-      !landing_gated?(issue)
+      !flow_gated?(issue)
   end
 
-  # With auto-merge on, the PR and CI watcher lands a `Merging` issue without an agent; the landing
-  # agent runs only when its decision hands the PR to one (`SymphonyElixir.PrWatch.dispatch_reason/2`).
-  defp landing_gated?(%Issue{} = issue) do
-    if merging_state?(issue.state) and watch_gate_reason(issue) != nil do
-      Logger.debug("Skipping dispatch; the PR watcher lands #{issue_context(issue)}")
+  # A retry or a continuation passes the same review-flow gate as the poll (`review_flow_reason/2`'s
+  # reviewer and watcher parts): a Code Review or QA run starts only on a green, conflict-free head,
+  # and with auto-merge on the PR and CI watcher lands a `Merging` issue without an agent, the
+  # landing agent running only when its decision hands the PR to one
+  # (`SymphonyElixir.PrWatch.dispatch_reason/2`). Without it, the continuation of a reviewer run
+  # that approved reads the ticket again, now in QA, and starts QA on a red head.
+  defp flow_gated?(%Issue{} = issue) do
+    if code_review_reviewer_disabled?(issue) or watch_gate_reason(issue) != nil do
+      Logger.debug("Skipping dispatch; the review flow holds #{issue_context(issue)} back on its PR")
       true
     else
       false
