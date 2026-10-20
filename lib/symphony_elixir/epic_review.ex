@@ -685,7 +685,7 @@ defmodule SymphonyElixir.EpicReview do
 
   # The runs the gap names, else every failed run on the commit.
   defp runs_named(text, runs) do
-    named = Enum.filter(runs, &(String.contains?(text, "/actions/runs/#{&1.id}") or (is_binary(&1.url) and String.contains?(text, &1.url))))
+    named = Enum.filter(runs, &Regex.match?(~r{/actions/runs/#{Regex.escape(&1.id)}(?!\d)}, text))
     Enum.take(if(named == [], do: runs, else: named), @ci_log_runs)
   end
 

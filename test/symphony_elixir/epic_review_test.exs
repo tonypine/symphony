@@ -932,6 +932,21 @@ defmodule SymphonyElixir.EpicReviewTest do
       refute_received {:gh, ["run", "view", "502" | _rest], _cwd}
     end
 
+    test "a step that names a run quotes that run only, not one whose id it starts" do
+      runs = [
+        ci_run("CI", "completed", %{"databaseId" => 50, "conclusion" => "failure", "url" => "https://github.com/acme/app/actions/runs/50"}),
+        ci_run("CI", "completed", %{"databaseId" => 501, "conclusion" => "failure", "url" => @red_run})
+      ]
+
+      agent_result(:fail, %{steps: [ci_step("Red: #{@red_run}")]})
+
+      assert :ok = run(epic(), gh_runner: red_gh(%{"list" => fn _args -> {Jason.encode!(runs), 0} end}))
+
+      assert [ci] = created_subissues()
+      assert ci["description"] =~ "printf: write error: Broken pipe"
+      refute_received {:gh, ["run", "view", "50" | _rest], _cwd}
+    end
+
     test "a finding that names CI without a run quotes every failed run on the commit" do
       agent_result(:fail, %{summary: "Red.", findings: ["CI is red on the default branch", "The export button is absent"]})
 
