@@ -33,7 +33,6 @@ defmodule SymphonyElixir.Notifications.Formatter do
       "issue_url" => event.issue_url,
       "pr_url" => event.pr_url,
       "state_url" => state_url(event),
-      "transcript_url" => event.transcript_url,
       "timestamp" => DateTime.to_iso8601(event.timestamp),
       "state" => event.state,
       "reason" => event.reason,
@@ -110,7 +109,6 @@ defmodule SymphonyElixir.Notifications.Formatter do
         field("Event", event.event),
         field_mrkdwn("State URL", link_text(state_url(event), "Open")),
         field_mrkdwn("PR", link_text(event.pr_url, "Pull request")),
-        field_mrkdwn("Transcript", link_text(event.transcript_url, "Transcript")),
         field("State", event.state),
         field("Reason", event.reason)
       ]

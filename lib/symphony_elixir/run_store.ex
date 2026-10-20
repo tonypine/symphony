@@ -808,20 +808,25 @@ defmodule SymphonyElixir.RunStore do
   def put_ticket_pr_watch(_repo_key, _issue_id, _issue_identifier, _pr_watch), do: {:error, :invalid_issue_id}
 
   @doc """
-  Appends a verdict, bound to the head SHA it judged, to the ticket's record, creating the record
-  when none exists. The read-modify-write runs in one durable transaction.
+  Appends a verdict, bound to the head SHA it judged and carrying `details`, to the ticket's record,
+  creating the record when none exists. The read-modify-write runs in one durable transaction.
   """
   @spec record_ticket_verdict(String.t(), String.t(), String.t(), String.t() | nil, String.t()) ::
           :ok | {:error, term()}
-  def record_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome) when is_binary(issue_id) do
+  def record_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome),
+    do: record_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome, %{})
+
+  @spec record_ticket_verdict(String.t(), String.t(), String.t(), String.t() | nil, String.t(), map()) ::
+          :ok | {:error, term()}
+  def record_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome, details) when is_binary(issue_id) do
     with {:ok, repo_key} <- normalize_repo_key(repo_key),
          :ok <- ensure_started() do
-      durable_transaction(fn -> write_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome) end)
+      durable_transaction(fn -> write_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome, details) end)
       |> unwrap_nested_error()
     end
   end
 
-  def record_ticket_verdict(_repo_key, _issue_id, _kind, _head_sha, _outcome), do: {:error, :invalid_issue_id}
+  def record_ticket_verdict(_repo_key, _issue_id, _kind, _head_sha, _outcome, _details), do: {:error, :invalid_issue_id}
 
   @doc """
   Sets (or replaces) the hold of `kind` on the ticket's record, creating the record when none
@@ -1783,7 +1788,7 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
-  defp write_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome) do
+  defp write_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome, details) do
     key = scoped_key(repo_key, issue_id)
 
     record =
@@ -1792,7 +1797,7 @@ defmodule SymphonyElixir.RunStore do
         [] -> TicketState.new(repo_key, issue_id)
       end
 
-    updated = TicketState.record_verdict(record, kind, head_sha, outcome)
+    updated = TicketState.record_verdict(record, kind, head_sha, outcome, DateTime.utc_now(), details)
     :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
     :ok
   end

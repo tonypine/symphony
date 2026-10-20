@@ -74,6 +74,8 @@ defmodule SymphonyElixir.Application do
           # Before the task supervisor, so it stops after the agent runners and
           # can stop the agent processes they leave behind.
           SymphonyElixir.AgentProcesses,
+          # Before the task supervisor too: the QA passes it runs wait on its leases.
+          SymphonyElixir.QaDriver.DevServerLease,
           {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
           SymphonyElixir.WorkspaceCleanup,
           SymphonyElixir.Config.Cache,
@@ -82,6 +84,7 @@ defmodule SymphonyElixir.Application do
           SymphonyElixir.Linear.Usage,
           SymphonyElixir.Repo.FetchLog,
           SymphonyElixir.Routing.PollLog,
+          SymphonyElixir.Hold.Drift,
           SymphonyElixir.PullRequestPage,
           SymphonyElixir.Repo.Fetcher,
           SymphonyElixir.McpServer,

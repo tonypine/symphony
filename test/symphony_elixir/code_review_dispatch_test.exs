@@ -124,6 +124,40 @@ defmodule SymphonyElixir.CodeReviewDispatchTest do
       assert head_signals(@designed_repo) == []
     end
 
+    test "a retry on a red head starts no reviewer run" do
+      # A reviewer run that ended (inconclusive, or failed) is retried; the retry reads the ticket
+      # again and must pass the same gate as the poll, or the reviewer judges a red head.
+      record_ci!(@designed_repo, "abc123", "red")
+      review_ticket = issue(@designed_repo, "Code Review")
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [review_ticket])
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_issues) end)
+
+      retrying = %Orchestrator.State{
+        max_concurrent_agents: 3,
+        claimed: MapSet.new([@issue_id]),
+        codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}
+      }
+
+      metadata = %{identifier: "TP-815", repo_key: @designed_repo}
+
+      capture_log(fn ->
+        fetcher = fn _ids -> {:ok, [review_ticket]} end
+        assert {:noreply, next} = Orchestrator.handle_retry_issue_for_test(retrying, @issue_id, 2, metadata, fetcher)
+        send(self(), {:state, next})
+      end)
+
+      assert_received {:state, next}
+      refute Map.has_key?(next.running, @issue_id)
+      assert next.claimed == MapSet.new()
+      assert [%{details: %{head: "abc123", status: "red"}}] = head_signals(@designed_repo)
+
+      # The reviewer turned off holds a retry back too.
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", repos: designed_repos())
+      record_ci!(@designed_repo, "def456", "green")
+
+      refute Orchestrator.dispatch_revalidated_issue_for_test(review_ticket, true)
+    end
+
     test "a Code Review ticket whose reviewer run is missing is dispatched exactly once" do
       record_ci!(@designed_repo, "abc123", "green")
       issue = issue(@designed_repo, "Code Review")

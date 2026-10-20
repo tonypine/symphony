@@ -16,7 +16,10 @@ for you on the host. They only act on this worktree's configured app and on apps
   `update_feed_port`, `update_check_interval_seconds`. Pass `appearance` (`light` or `dark`) to
   draw the app in that appearance whatever the host's, for any AppKit app (Symphony injects a
   library that sets the app's appearance); without it the app follows the host. See
-  "Light and dark, and the status-bar menu" below.
+  "Light and dark, and the status-bar menu" below. It also returns the app's QA `root`: every
+  launch shares root 1 and its settings unless you pass `fresh_root: true` (a new, empty root) or
+  `root` (one an earlier launch returned). See "QA roots: a first launch, a reset, a clean state"
+  below.
 - `qa_ax_tree`: the app's accessibility tree with each element's role, title, value, `help`
   and `frame` (`x`, `y`, `w`, `h` in points). Pass `role` or `text` to list only matching elements.
   `help` is the text of the element's tooltip: a step that hovers to read a tooltip reads it
@@ -34,9 +37,23 @@ for you on the host. They only act on this worktree's configured app and on apps
   `control`) in the app's focused window. A shortcut such as ⌘[ is `key: "["`,
   `modifiers: ["command"]`. It returns the `window` and `focused` element the key went to.
 - `qa_click`: clicks the centre of an element's frame (`clicks: 2` double-clicks), for a control
-  no accessibility action reaches. It fails with `not_on_screen` when the element is scrolled out
-  of the app's window, and with `covered` when another app would take the click at that point;
-  the message names that app, so quote it in the step's `details`.
+  no accessibility action reaches. The pointer moves there first, as a person's mouse would, and
+  the result names the element under it (`under_pointer`) and whether the tree or the windows
+  `changed`. When a single click changed nothing and the element answers `AXPress`, it is
+  pressed that way instead and `fallback` is `AXPress`: say so in the step's `details`. It fails
+  with `not_on_screen` when the element is scrolled out of the app's window, and with `covered`
+  when another app would take the click at that point; the message names that app, so quote it
+  in the step's `details`.
+- `qa_hover`: moves the pointer over an element's centre (`path`) or a point on screen (`x`,
+  `y`, in the points of `qa_ax_tree`'s frames) and waits for the app to settle (`settled`). The
+  pointer stays there, so a hover state (a button that only shows on hover, a highlight) is in
+  the next `qa_ax_tree` and `qa_screenshot`. A `qa_click` on what the hover showed moves the
+  pointer onto it, as a person's would. It fails like `qa_click`.
+- `qa_context_menu`: right-clicks an element's centre or a point and returns the `menu` that
+  opened, with each item's `path`, `title`, `enabled` and `shortcut`, and its `window_id` for
+  `qa_screenshot`. Press an item with `qa_ax_press` on its `path`; close the menu with `qa_key`
+  and `key: "escape"`. Use it for a row or control whose `AXShowMenu` is `unsupported`. It fails
+  with `no_menu` when no menu opened.
 - `qa_resize_window`: moves the app's main window (or the `AXWindow` at `path`) to the top left
   of the screen and resizes it to `width`×`height` points, 1400×900 by default, or the screen's
   usable area when that is smaller. It returns the window's new frame in `window` (`x`, `y`, `w`,
@@ -66,7 +83,8 @@ for you on the host. They only act on this worktree's configured app and on apps
   checkout's `path`. Nothing is fetched from or pushed to GitHub.
 - `qa_api_requests`: returns the `requests` an app launched with `api_fixtures` sent since the
   last call, oldest first: each POST it logged to `api-requests.jsonl` in its QA root, with its
-  `method`, `path` and `body`. The log lives where you cannot read it, so use this instead.
+  `method`, `path` and `body`. It reads one root, the last launch's unless you pass `root`, and
+  names it. The log lives where you cannot read it, so use this instead.
 - `qa_build_release_pair`, `qa_relaunched_app` and `qa_update_feed`, with `qa_launch_app`'s
   `release_pair: true`: build release N and its update N+1 signed, launch N, and drive the app
   after it installed N+1. See "After an update: the signed release pair" below.
@@ -74,7 +92,9 @@ for you on the host. They only act on this worktree's configured app and on apps
 Do not edit files in the worktree, gitignored ones included (such as build caches):
 `qa_build` and `qa_launch_app` refuse a modified checkout.
 
-Servers the app talks to (a stub of the project's API, a proxy) run in your shell on this host:
+Servers the app talks to (a stand-in for an outside service, a proxy to the dev server Symphony
+started) run in your shell on this host; never a stub you write of the project's own server or
+API, which is the system under test. For each one:
 - Bind each one to `127.0.0.1` at a port from `QA_HOST_PORTS` (see "Host ports" above), never
   to `0.0.0.0` or another port, and point the app at `http://localhost:<port>`. The app may run on
   a separate QA machine: Symphony forwards those ports, and only those, from its `localhost` to
@@ -87,6 +107,20 @@ Servers the app talks to (a stub of the project's API, a proxy) run in your shel
   app's requests from that log in the step's `details`.
 - When the server cannot listen on the port, or the app still cannot reach it, mark the steps
   that need it `blocked` with the error in `details`.
+
+QA roots: a first launch, a reset, a clean state. In QA mode the app keeps its settings in a QA
+root, never the real ones, and every `qa_launch_app` of the pass shares root 1: what one launch
+saved (a config path typed in Settings, a first-run record, a dismissed welcome) is there for the
+next, which a flow across launches needs. Never rely on launch order to get a clean state:
+
+- **A first-launch step** (what the app shows the first time it runs on a Mac), **a step that
+  resets the app**, or **a scenario that must not see earlier settings**: launch with
+  `fresh_root: true`. The app starts in a new, empty root, with the same `api_fixtures`,
+  stand-ins and appearance you pass, and the result's `root` is its number (2, then 3, …).
+- **Back to an earlier state:** launch with `root` set to that number (`root: 1` is the first). A
+  root the pass does not have is refused with the roots it has.
+- `qa_api_requests` reads one root's requests; pass `root` when you judge an app other than the
+  last one you launched.
 
 Stand-ins for GitHub, Linear, updates and the folder picker (the Add Repo sheet, update checks
 and anything else that runs `gh`, asks Linear or picks a folder). Never let the app reach real
@@ -172,6 +206,61 @@ GitHub or Linear in QA:
     Rework, …" with **Open PR**. The Inbox lists none of TP-704, TP-707 and TP-709.
   - VoiceOver: the card's summary reads as one element (the status word, the line, who acts
     next, since when, Updated), each action row as one, and each button by its title.
+- **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
+  state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one
+  warning, `symphony.yml sets auto_review.enabled, which is deprecated` (**Remove…**). Before
+  Remove, copy the fixture's `config/symphony.yml` to `qa-evidence/`, `qa_put_file` it, and type
+  the returned path into Settings' config field: Remove edits that file, and `symphony check`
+  passes on it before and after.
+  - Sidebar: **Setup** between Repos and Diagnostics with a red badge of 1; Overview's Needs
+    attention has "Setup has 1 error." with **Open Setup**; the status-bar menu has
+    "Setup: 1 error, 1 warning" (it opens the Setup page) and the icon's dot is red.
+  - The fixtures answer in turn, so press each button once, in this order: **Create Label…** then
+    the sheet's **Create Label** (`qa_api_requests` lists `POST /api/v1/setup/fixes` with
+    `fix.action` `create_label`, `team` `TP`, `name` `Needs Decision`): the error row leaves and
+    the badge turns orange with 1. **Remove…** shows the two removed lines (`auto_review:`,
+    `  enabled: true`); **Remove**: the row leaves and the banner names the
+    `symphony.yml.<time>.bak` copy and offers **Undo**. **Undo** within 10 s: the warning row is
+    back, and **Remove…** shows the same two lines again (the key is back in the file). **Remove**
+    again, then **Check Again** (⌘R): "Symphony is set up right." with "at 12:05" and "Symphony checks again every 15 minutes
+    and each time symphony.yml changes.", and no badge.
+    Each of these posts `POST /api/v1/setup/refresh`. That the file loses the key, the backup
+    holds the old bytes and Undo restores them byte for byte is proved by
+    `SetupConfigEditTests`, not by reading the file.
+  - Refused: launch again with `macos/Tests/Fixtures/director-app/setup-refused`. **Create Label…**
+    then **Create Label**: the sheet stays open with "Linear refused to create the label …
+    (HTTP 403) …" in red, **Open Settings…**, **Close** and **Try Again**; **Open Settings…** opens the
+    Settings window with the sheet still open behind it, and the row is still there.
+  - Look: judge the page, its Details, both sheets and the banner in light and dark against
+    `macos/Tests/Snapshots/setup-*.png`.
+- **Add Repo's Check setup and the first launch (TP-911):**
+  - First launch, before any other launch of the pass: every launch in a pass shares one QA root,
+    and the first one that sees Symphony's setup checked records the app's first run, so only that
+    launch is a first launch. Make the pass's first `qa_launch_app` the one with
+    `macos/Tests/Fixtures/director-app/setup` as `api_fixtures` and `appearance: "dark"`: the
+    Symphony window opens on its own on Setup with "Welcome to Symphony on this Mac…" above
+    "Setup has 1 error and 1 warning." (walkthrough step 6). Judge the welcome by sight there
+    against `macos/Tests/Snapshots/setup-first-launch-dark.png`. No later launch is a first
+    launch, so judge the light welcome from `macos/Tests/Snapshots/setup-first-launch-light.png`
+    alone until a launch can start from a fresh QA root (TP-1121). That a first launch without
+    errors, or a later launch with errors, opens nothing is proved by `SetupOnStartTests`.
+  - Then pass `macos/Tests/Fixtures/director-app/add-repo-setup` as `api_fixtures`, with the gh
+    and Linear stubs. Copy its `config/symphony.yml` to `qa-evidence/`, `qa_put_file` it, and type
+    the returned path into Settings' config field. Add `acme/widgets` (GitHub URL, key `widgets`),
+    pick `QA Project`, and on WORKFLOW.md pick **Don't create one now**.
+  - Review's **Route** line reads "Project ID p1 · team QA"; after **Connect**, the file's
+    `widgets` entry has `route.projects: [p1]` and `route.team: QA`.
+  - Check setup shows "Setup has 1 error for widgets." with `Team QA has no "Blocked" label`
+    and **Create Label…** (not web-shop's `Needs Decision` error), **Done** disabled, and
+    "Done is available once there are no errors." beside it. **Create Label…** then **Create
+    Label** (`qa_api_requests` lists `POST /api/v1/setup/refresh` before it and
+    `POST /api/v1/setup/fixes` with `create_label`, `QA`, `Blocked`): "widgets is set up right.",
+    Written to symphony.yml with Project `p1` and Team `QA`, and **Done** enabled.
+  - Warning only: launch again with `macos/Tests/Fixtures/director-app/add-repo-setup-warning`
+    and add the repo the same way: `widgets is not cloned yet` is listed and **Done** is enabled.
+  - Symphony stopped: launch without `api_fixtures` and add the repo: "Symphony isn't running, so
+    it checks widgets when it starts." with **Start Symphony** and **Done** both enabled.
+  - Look: judge the step in light and dark against `macos/Tests/Snapshots/add-repo-check-*.png`.
 
 QA does three things, in this order: (a) the walkthrough steps marked `Proved by: QA` (no test
 can drive them), steps 1 to 7 below; (b) the `Design check` of every UI deliverable, by sight, in
@@ -216,10 +305,12 @@ install works is proved by the `macos-e2e` check, not by you: do not report the 
 step you proved, judge what the app shows.
 
 **One-time setup on the QA host.** The QA host gets a persistent test identity, installed and
-trusted once, rather than a throwaway one trusted for each pass: trusting a certificate needs
-`sudo`, so per-pass trust would need passwordless `sudo` for the QA user on every pass, and a pass
-that died would leave its trust setting behind. Whoever provisions the host does this as the QA
-user, from a checkout of this repository:
+trusted once, rather than a throwaway one trusted for each pass: a pass that died would leave its
+trust setting behind. On a QA VM (a `worker_host`) whose QA user has passwordless `sudo`,
+`qa_build_release_pair` installs it itself the first time it finds none, or finds it untrusted,
+with Symphony's own copy of the script, and builds the pair in the same call. Anywhere else (QA on
+Symphony's own host, or a QA user whose `sudo` asks for a password) whoever provisions the host
+runs it by hand as the QA user, from a checkout of this repository:
 
 ```sh
 scripts/qa/install-test-signing-identity.sh          # asks for sudo once, to trust the certificate
@@ -234,14 +325,17 @@ only finds an identity there) and trusts the certificate for code signing only
 (`sudo security add-trusted-cert -d -r trustRoot -p codeSign`). Running it again changes nothing
 once the identity is installed and trusted, and finishes an install that stopped half way. The
 pair's build also needs `minisign` and `jq` (`brew install minisign jq`) and the repository's
-toolchain for `make release`. This is host setup, not a pass step: you never install it yourself,
-and the QA sandbox cannot run `sudo` anyway. Without it `qa_build_release_pair` fails with
-`qa_signing_identity_missing` or `qa_signing_identity_untrusted`, as **Build** below says.
+toolchain for `make release`. You never install it yourself, and the QA sandbox cannot run `sudo`
+anyway: Symphony's tool does it, or it is host setup. Where it can't be installed,
+`qa_build_release_pair` fails with `qa_signing_identity_missing` or
+`qa_signing_identity_untrusted`, as **Build** below says.
 
 - **Build:** `qa_build_release_pair` builds release N and its update N+1 on the machine the app
   runs on and returns their `manifest` (each one's `version` and `build`). It takes several
   minutes; call it once, after `qa_build`. A non-zero `exit_status` is a failing step; quote the
-  end of the output. When it fails with `qa_signing_identity_missing` or
+  end of the output. When its result has `signing_identity_installed: true`, Symphony installed the
+  QA host's test signing identity in that call: say so in the report. When it fails with
+  `qa_signing_identity_missing` or
   `qa_signing_identity_untrusted`, the QA host lacks its test signing identity: mark the steps that
   need the pair `blocked` with the tool's message, finish the other steps, and answer `blocked`
   with that message.
@@ -264,7 +358,8 @@ and the QA sandbox cannot run `sudo` anyway. Without it `qa_build_release_pair` 
 
 1. Run `qa_build`. A non-zero `exit_status` from a change that should build is a failing
    step; quote the end of the output.
-2. Run `qa_launch_app`. In QA mode the app starts with empty settings. When the walkthrough
+2. Run `qa_launch_app`. In QA mode the app starts with empty settings the first time, and later
+   launches share them unless you pass `fresh_root: true` (see "QA roots" above). When the walkthrough
    runs the app with `SYMPHONY_BAR_QA_API_FIXTURES` set to a fixtures directory, pass that
    directory as `api_fixtures`, never by setting the variable yourself: the app reads Symphony's
    API from those files instead of a running Symphony. When the walkthrough checks what the app
@@ -276,7 +371,9 @@ and the QA sandbox cannot run `sudo` anyway. Without it `qa_build_release_pair` 
      read `qa_ax_tree` again to check what the selection shows (an inspector, a detail pane);
    - a step that names a key or shortcut (Return opens the selected item, ⌘[ goes back, Escape
      closes): press it with `qa_key` after selecting what it acts on;
-   - any other control: `qa_click` it.
+   - any other control: `qa_click` it;
+   - a step that hovers over something (to show a button, a highlight) or right-clicks it: use
+     `qa_hover` or `qa_context_menu` on it, and screenshot the state it shows.
 4. Let every window settle before you judge it. A window can open at the right size and
    collapse seconds later, so a check right after opening proves nothing:
    - wait about 10 seconds after the window opens (`sleep 10` in your shell);
@@ -339,8 +436,11 @@ and the QA sandbox cannot run `sudo` anyway. Without it `qa_build_release_pair` 
    wide pass: still run it at the size you got, say in the step that the wide pass was limited
    with the screen size, and mark the step `blocked`. Symphony reports a pass whose wide pass
    was limited as `blocked` either way, so a person enlarges the QA screen, and reports a pass
-   with no `qa_resize_window` call as `blocked` too, because its wide pass did not run. In an epic
-   review that launches no app, because the epic changed none, there is no wide pass to run.
+   with no `qa_resize_window` call as `inconclusive`, because its wide pass did not run, and runs
+   QA again. In an epic review that launches no app, because the epic changed none, there is no
+   wide pass to run. Outside an epic review, a change with nothing on screen to judge owes no wide
+   pass either: build the app, launch it, call `qa_check_app`, and answer `pass` with
+   `"scope": "none"` and the reason.
 10. Run `qa_quit_app` when you are done. It returns what the app wrote to its output; quote
    the lines that bear on a step in that step's `details`.
 11. Attach the screenshots that show each step's result with `linear_attach_file`

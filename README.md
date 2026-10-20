@@ -74,8 +74,9 @@ branch name Linear suggests for the ticket; a PR on a branch with any other name
 
 - **Multi-repo orchestration** — one process supervises several repositories from a single
   `symphony.yml`, with per-repo Linear selectors and conflict detection.
-- **LiveView dashboard** — active runs, watched issues, the retry queue, quality-gate state,
-  per-issue transcripts with JSON access, and an audit timeline.
+- **Observability and control API** — active runs, watched issues, the retry queue, quality-gate
+  state, per-issue transcripts and the audit log as JSON under `/api/v1`, which the Mac app and
+  `symphony dashboard` read.
 - **Operator controls** — pause, resume, and stop, persisted across restarts.
 - **PR-driven runs** — work an existing pull request from the CLI for review comments, failing CI, and
   conflict fixes.
@@ -131,15 +132,14 @@ branch name Linear suggests for the ticket; a PR on a branch with any other name
 - **QA** — the `QA` state's agent uses each PR the way a user would, with
   built-in playbooks for CLIs (`cli`), web apps in a headless browser (`web`), macOS apps through
   accessibility (`macos_app`) and Android apps on a host-side emulator (`android_app`). See
-  [`auto_review`](docs/configuration.md#auto_review), which keeps the QA settings. The `Auto Review`
+  [`auto_review`](docs/configuration.md#auto_review), which keeps the QA settings;
+  `scripts/qa-vm/provision.sh admin@<vm>` gives a QA VM Go, Postgres and jq. The `Auto Review`
   state and the acceptance gate are retired; the gate's escalation rules now act in Code Review
   (see [docs/acceptance_gate.md](docs/acceptance_gate.md)).
 - **Docker runner** — host Symphony with mounted repos, state, logs, and agent credentials.
 - **macOS menu bar app** — start, stop, pause, and resume Symphony from the menu bar, with its status in
   the icon, the Linear key in a file only you can read, optional launch at login, and updates from the menu. See
   [macos/README.md](macos/README.md).
-
-![Symphony Web dashboard screenshot](.github/media/elixir-screenshot-web.png)
 
 ## Quickstart
 
@@ -206,9 +206,10 @@ Run Symphony from a checkout to work on Symphony itself, or on a platform withou
    The menu bar app can run a checkout too: turn on Development mode in its Settings. See
    [Development mode](macos/README.md#development-mode).
 
-The LiveView dashboard runs at `http://127.0.0.1:4000` by default. It has no built-in authentication
-and binds to loopback only — to expose it remotely, front it with a reverse proxy that handles auth
-(Tailscale, Cloudflare Access, nginx). See [docs/security.md](docs/security.md) for details.
+Symphony serves its JSON API at `http://127.0.0.1:4000` by default; the Mac app is its UI (there is
+no web dashboard). The read endpoints have no built-in authentication and the server binds to
+loopback only — to expose it remotely, front it with a reverse proxy that handles auth (Tailscale,
+Cloudflare Access, nginx). See [docs/security.md](docs/security.md) for details.
 
 ## Configuration
 
@@ -342,7 +343,7 @@ Forcing never changes a ticket's state: a ticket in `Backlog` stays there
 an active state. An unknown ticket, a missing or rejected control token, an unreachable Symphony and
 a Linear error each print a message and exit non-zero.
 
-The terminal and web dashboards list forced tickets in a "Forced" section above the running agents,
+The terminal dashboard and the Mac app list forced tickets in a "Forced" section above the running agents,
 with the phase each is in and what it waits on (`implementation · running`,
 `waiting for a human`, `implementation · waiting on blocker TP-12`), and mark forced rows elsewhere
 with ⚡. Once a forced ticket is done, Symphony removes the label.
@@ -428,7 +429,9 @@ mise exec -- mix symphony.pr 123 --intent "fix failing CI"
 ```
 
 `Pause` stops new dispatches while in-flight agents continue; `Stop` ends one issue's session and
-records it as `stopped` without changing the Linear issue state.
+records it as `stopped` without changing the Linear issue state. The stopped ticket is not started
+again: it waits in the Inbox as "Stopped by you" until you Unblock or Restart it, or move it on the
+board, and it is let go once a poll finds it closed or out of the workflow.
 
 **Waiting on you.** The Mac app's Inbox (`/api/v1/inbox`), the dashboard's `Waiting on you`
 section, `/api/v1/state`'s `waiting_on_you` list and the menu bar app list everything only you can
@@ -463,7 +466,8 @@ so it starts the plan revision run like any comment of yours.
 Every ticket row opens the ticket's page: what runs now, a timeline of its runs and of your moves, its
 facts and the agent's last message, with **View Transcript** (the run's events, grouped by turn, in their
 own window) and **Stop Run…**. Stop Run says what a stop does before it does it, and can also move the
-ticket to Backlog with a note; a stop writes a `run_stopped` audit record, so the timeline says "Stopped by
+ticket to Backlog with a note; a stopped ticket stays stopped until you Unblock or Restart it from the
+Inbox, or move it on the board; a stop writes a `run_stopped` audit record, so the timeline says "Stopped by
 you".
 
 A run that reports an external block leaves its ticket in place with the `Blocked` machine label and

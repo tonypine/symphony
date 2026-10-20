@@ -22,7 +22,12 @@ defmodule SymphonyElixir.VerificationTest do
   end
 
   test "port pool allocates unique ports and never double allocates when exhausted" do
-    {:ok, _pid} = PortPool.start_link(reconcile_interval_ms: nil, process_alive?: fn _pid -> true end)
+    {:ok, _pid} =
+      PortPool.start_link(
+        reconcile_interval_ms: nil,
+        process_alive?: fn _pid -> true end,
+        port_free?: fn _port -> true end
+      )
 
     attrs = fn run_id ->
       %{
@@ -53,6 +58,26 @@ defmodule SymphonyElixir.VerificationTest do
 
     assert :ok = PortPool.release(released_run_id, "test release")
     assert {:ok, %{port: 4110}} = PortPool.allocate(attrs.("run-3"))
+  end
+
+  test "port pool skips a port something already listens on, such as Symphony's own API" do
+    {holder, port} = held_port_before_a_free_one()
+    {:ok, _pid} = PortPool.start_link(reconcile_interval_ms: nil, process_alive?: fn _pid -> true end)
+
+    refute PortPool.port_free?(port)
+    next = port + 1
+    assert {:ok, %{port: ^next}} = PortPool.allocate(%{run_id: "run-next", port_range: [port, next]})
+    assert {:error, :exhausted} = PortPool.allocate(%{run_id: "run-held", port_range: [port, port]})
+
+    :gen_tcp.close(holder)
+    assert PortPool.port_free?(port)
+    assert {:ok, %{port: ^port}} = PortPool.allocate(%{run_id: "run-held", port_range: [port, port]})
+  end
+
+  test "the default port range leaves out Symphony's own API port" do
+    write_workflow_file!(Workflow.workflow_file_path())
+    [first, last] = Config.settings!().verification.port_allocation.range
+    refute 4000 in first..last
   end
 
   test "port pool restart reconciliation keeps live allocations and releases stale ones" do
@@ -698,12 +723,12 @@ defmodule SymphonyElixir.VerificationTest do
     # (scripts/qa-dashboard-build.sh) fetches deps and builds the escript in the build sandbox, which
     # lets Mix listen on loopback and can take minutes; `start_cmd` then runs in the dev server's
     # sandbox, which allows no TCP listener and so no Mix (see the guard in
-    # `scripts/qa-dashboard-server.sh`), and the bridge serves the dashboard. A plain `mix test`
+    # `scripts/qa-dashboard-server.sh`), and the bridge serves Symphony's API. A plain `mix test`
     # skips it; `--include qa_dashboard_e2e` or `--only seatbelt` runs it.
     @tag :seatbelt
     @tag :qa_dashboard_e2e
     @tag timeout: 1_800_000
-    test "serves the dashboard from a fresh worktree, built by build_cmd, from inside the real sandboxes", %{root: root, port: port} do
+    test "serves Symphony's API from a fresh worktree, built by build_cmd, from inside the real sandboxes", %{root: root, port: port} do
       worktree = Path.join(root, "pr-head")
       {output, 0} = System.cmd("git", ["worktree", "add", "--detach", worktree, "HEAD"], stderr_to_stdout: true)
       on_exit(fn -> System.cmd("git", ["worktree", "remove", "--force", worktree], stderr_to_stdout: true) end)
@@ -740,9 +765,9 @@ defmodule SymphonyElixir.VerificationTest do
       case result do
         {:ok, dev_server} ->
           assert File.exists?(Path.join(worktree, "bin/symphony"))
-          # The health check answered on `/api/v1/state`; the dashboard's first page render on a
-          # fresh server, in the sandbox, on a shared runner, can take longer than one short try.
-          assert_http_ok_within("http://127.0.0.1:#{port}/", 10_000)
+          # The health check answered on `/api/v1/state` through the bridge; ask it once more, with
+          # room for a fresh server, in the sandbox, on a shared runner.
+          assert_http_ok_within("http://127.0.0.1:#{port}/api/v1/state", 10_000)
           assert :ok = Verification.stop_qa_dev_server(dev_server)
 
         {:error, reason} ->
@@ -768,7 +793,7 @@ defmodule SymphonyElixir.VerificationTest do
     assert Schema.dev_server_network_allowed_domains(Config.settings!()) == []
   end
 
-  test "agent runner aborts before first turn when verification health check fails" do
+  test "agent runner aborts before first turn as a setup block when verification health check fails" do
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -813,14 +838,72 @@ defmodule SymphonyElixir.VerificationTest do
         state: "In Progress"
       }
 
-      assert_raise RuntimeError, ~r/verification_failed/, fn ->
-        AgentRunner.run(issue, nil)
-      end
+      # A setup block, not a crash: the orchestrator sends it to self-heal instead of retrying it.
+      assert {:setup_block, {:verification_failed, _cause}} = catch_exit(AgentRunner.run(issue, nil))
 
       refute File.exists?(trace_file)
 
       assert [%{run_id: run_id, status: "released"}] = RunStore.list_verification_allocations()
       assert String.starts_with?(run_id, "issue-verification-timeout-verification-")
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "with verification off, an agent run starts no dev server and takes no port, even with a start command" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-verification-off-#{System.unique_integer([:positive])}")
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      fake_codex = Path.join(test_root, "fake-codex")
+      trace_file = Path.join(test_root, "codex.trace")
+      marker = Path.join(test_root, "dev-server-started")
+      File.mkdir_p!(test_root)
+
+      File.write!(fake_codex, """
+      #!/bin/sh
+      printf 'agent-turn-started\\n' > "#{trace_file}"
+      exit 0
+      """)
+
+      File.chmod!(fake_codex, 0o755)
+
+      # A Mac app repo: its server runs on the QA host beside the app, never on this host.
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        max_turns: 1,
+        workspace_root: workspace_root,
+        agent_command: "#{fake_codex} app-server",
+        verification: %{
+          enabled: false,
+          dev_server: %{
+            build_cmd: "touch #{marker}",
+            start_cmd: "touch #{marker}; sleep 30",
+            health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/health"
+          }
+        }
+      )
+
+      settings = Config.settings!()
+      issue = %Issue{id: "issue-verification-off", identifier: "ACME-OFF", title: "Mac app change", state: "In Progress"}
+
+      assert Verification.dev_server_command_configured?(settings)
+      refute Verification.dev_server_configured?(settings)
+      assert Verification.selection_opts(settings) == [dev_server?: false, dev_server_command?: true]
+      assert Verification.context_for_agent(issue, settings: settings) == {:ok, nil}
+      assert Verification.child_specs_for_runtime(settings) == []
+
+      try do
+        AgentRunner.run(issue, nil)
+      rescue
+        _error -> :ok
+      end
+
+      # The agent started, with no dev server before it and no port taken for one.
+      assert File.read!(trace_file) == "agent-turn-started\n"
+      refute File.exists?(marker)
+      assert RunStore.list_verification_allocations() == []
+      assert GenServer.whereis(PortPool) == nil
     after
       File.rm_rf(test_root)
     end
@@ -1027,6 +1110,19 @@ defmodule SymphonyElixir.VerificationTest do
   defp real_path(path) do
     {:ok, real_path} = SymphonyElixir.PathSafety.canonicalize(path)
     real_path
+  end
+
+  # A port held by a listener on 127.0.0.1, as Symphony's API holds its own, whose next port is free.
+  defp held_port_before_a_free_one(attempts \\ 20) when attempts > 0 do
+    {:ok, holder} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+    {:ok, port} = :inet.port(holder)
+
+    if port < 65_535 and PortPool.port_free?(port + 1) do
+      {holder, port}
+    else
+      :gen_tcp.close(holder)
+      held_port_before_a_free_one(attempts - 1)
+    end
   end
 
   defp free_tcp_port do

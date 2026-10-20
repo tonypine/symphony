@@ -111,6 +111,27 @@ final class LinearAPITests: XCTestCase {
         XCTAssertEqual(filter as? NSDictionary, expected as NSDictionary)
     }
 
+    /// TP-911: the same two requests give the project's teams, by key, so Add Repo writes `route.team` for a project in
+    /// exactly one team.
+    func testAProjectsScopeHasItsTeamsKeysAndLabels() async {
+        let label = #"{"data":{"issueLabels":{"nodes":[{"id":"l1","name":"Bug"}],"pageInfo":{"hasNextPage":false}}}}"#
+        let one = #"{"data":{"project":{"teams":{"nodes":[{"id":"t1","key":"TP"}],"pageInfo":{"hasNextPage":false}}}}}"#
+        let (client, transport) = client([(200, one), (200, label)])
+
+        let result = await client.scope(forProject: "p1")
+
+        let scope = LinearProjectScope(teams: [LinearTeam(id: "t1", key: "TP")], labels: [LinearLabel(id: "l1", name: "Bug")])
+        XCTAssertEqual(result, .success(scope))
+        XCTAssertEqual(scope.teamKey, "TP")
+        XCTAssertEqual(transport.requests.count, 2)
+        XCTAssertTrue(LinearClient.projectTeamsQuery.contains("nodes { id key }"))
+
+        XCTAssertNil(LinearProjectScope(teams: [LinearTeam(id: "t1", key: "TP"), LinearTeam(id: "t2", key: "OPS")]).teamKey)
+        XCTAssertNil(LinearProjectScope(teams: [LinearTeam(id: "t1")]).teamKey)
+        XCTAssertNil(LinearProjectScope(teams: [LinearTeam(id: "t1", key: " ")]).teamKey)
+        XCTAssertNil(LinearProjectScope().teamKey)
+    }
+
     func testListsEveryLabelWithoutAProject() async throws {
         let page = #"{"data":{"issueLabels":{"nodes":[{"id":"l1","name":"Bug"}],"pageInfo":{"hasNextPage":false}}}}"#
         let (client, transport) = client([(200, page)])

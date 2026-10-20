@@ -21,7 +21,9 @@ defmodule SymphonyElixir.CodeReview do
   recorded in the verdict's signal, and the guard row it picks does the move — `:code_review_approve`
   into the configured QA state, `:code_review_approve_skip` into `Merging`.
 
-  An inconclusive review retries boundedly on the same head, then escalates the same way. `run/3`
+  An inconclusive review retries boundedly on the same head, then escalates the same way. Its cause
+  (`ReviewAgent.inconclusive_cause/1`) is recorded on the verdict and on the run, so `/api/v1/state`
+  counts inconclusive reviews per cause. `run/3`
   returns `:skip` for anything but a `Code Review` ticket, so the executor path is untouched.
 
   An escalation never moves the ticket: it posts a `## Decision needed:` request and sets a Needs
@@ -58,6 +60,7 @@ defmodule SymphonyElixir.CodeReview do
     NeedsDecisionHold,
     QaPolicy,
     ReviewAgent,
+    RunStore,
     TicketPullRequest,
     TicketSignals,
     Tracker,
@@ -639,15 +642,17 @@ defmodule SymphonyElixir.CodeReview do
   defp inconclusive(issue, workspace, opts, settings, reason) do
     head = workspace_head(workspace, opts)
     retries = inconclusive_retries(issue, opts, head)
+    cause = ReviewAgent.inconclusive_cause(reason)
+    record_inconclusive_cause(issue, opts, cause)
 
     if retries < @max_inconclusive_retries do
-      record_verdict(issue, opts, head, "inconclusive")
+      record_verdict(issue, opts, head, "inconclusive", %{cause: cause})
 
-      Logger.warning("Code Review for #{issue_label(issue)} head=#{head || "unknown"} was inconclusive (attempt #{retries + 1}/#{@max_inconclusive_retries}); retrying")
+      Logger.warning("Code Review for #{issue_label(issue)} head=#{head || "unknown"} was inconclusive cause=#{cause} (attempt #{retries + 1}/#{@max_inconclusive_retries}); retrying")
 
       {:error, {:code_review_inconclusive, reason}}
     else
-      record_verdict(issue, opts, head, "inconclusive_escalated")
+      record_verdict(issue, opts, head, "inconclusive_escalated", %{cause: cause})
       Logger.warning("Code Review for #{issue_label(issue)} head=#{head || "unknown"} stayed inconclusive: #{inspect(reason)}")
       escalate(issue, opts, settings, head, "The reviewer could not reach a decision on the change after #{retries} more tries.", :rework)
     end
@@ -733,8 +738,22 @@ defmodule SymphonyElixir.CodeReview do
     end
   end
 
-  defp record_verdict(issue, opts, head, outcome) do
-    TicketSignals.record_verdict(repo_key(issue, opts), issue.id, @verdict_kind, head, outcome)
+  defp record_verdict(issue, opts, head, outcome, details \\ %{}) do
+    TicketSignals.record_verdict(repo_key(issue, opts), issue.id, @verdict_kind, head, outcome, details)
+  end
+
+  # The run's record carries the cause, so the run history counts inconclusive reviews per cause.
+  defp record_inconclusive_cause(issue, opts, cause) do
+    case {repo_key(issue, opts), Keyword.get(opts, :run_id)} do
+      {repo_key, run_id} when is_binary(repo_key) and is_binary(run_id) ->
+        case RunStore.update_run(repo_key, run_id, %{review_inconclusive_cause: cause}) do
+          :ok -> :ok
+          {:error, error} -> Logger.warning("Failed to record the inconclusive cause on run #{run_id}: #{inspect(error)}")
+        end
+
+      _no_run ->
+        :ok
+    end
   end
 
   defp record_move_signal(issue, opts, signal, extra) do

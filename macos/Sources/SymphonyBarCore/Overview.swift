@@ -143,6 +143,8 @@ public struct Overview: Equatable {
         case checkNow(String)
         /// Opens the ticket's page (D3), named in full where the row's first button is another one.
         case openTicket(String)
+        /// Opens the Setup page (SU1).
+        case openSetup
 
         public var title: String {
             switch self {
@@ -154,6 +156,7 @@ public struct Overview: Equatable {
             case .openUsage: "Open Usage"
             case .stopForcing: "Stop Forcing"
             case .stopRun: StopRunSheet.buttonTitle
+            case .openSetup: "Open Setup"
             }
         }
     }
@@ -174,6 +177,8 @@ public struct Overview: Equatable {
         case strayProcesses
         /// A watched ticket with nothing under way and no reason anybody can act on (S17).
         case silentWait
+        /// Setup found errors (SU1): one row for all of them.
+        case setup
     }
 
     public enum Severity: Int, Comparable {
@@ -557,6 +562,14 @@ public struct Overview: Equatable {
                 ageSeconds: wait.since.map { max(Int(reference.timeIntervalSince($0)), 0) },
                 note: PRWatchCard.silentExpectation,
                 fixes: [.checkNow(wait.identifier), .openTicket(wait.identifier)]
+            ))
+        }
+
+        // SU1: one row for every setup error, whatever the scope: setup is the whole factory's.
+        if let sentence = SetupSummary(payload: state.snapshot.setup).attentionSentence {
+            findings.append(Finding(
+                subject: "setup", kind: .setup, severity: .problem, sentence: sentence,
+                note: "Symphony may skip tickets or fail quietly until they are fixed.", fixes: [.openSetup]
             ))
         }
 

@@ -593,6 +593,33 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert Enum.sort(outcomes) == ["inconclusive", "inconclusive", "inconclusive_escalated"]
     end
 
+    test "record their cause on the verdict and on the run, so the run history counts it" do
+      run_id = "run-inconclusive-#{System.unique_integer([:positive])}"
+
+      :ok =
+        RunStore.put_run(%{
+          repo_key: @repo_key,
+          run_id: run_id,
+          issue_id: @issue_id,
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
+
+      Process.put(:fake_review_result, {:error, {:review_agent_inconclusive, {:malformed_review_agent_response, :invalid_verdict}}})
+
+      assert {:error, {:code_review_inconclusive, _cause}} = run("/tmp/workspace", settings: designed_settings(), run_id: run_id)
+
+      assert [%{outcome: "inconclusive", details: %{cause: "invalid_verdict"}}] = verdicts()
+      assert %{review_inconclusive_cause: "invalid_verdict"} = @repo_key |> RunStore.list_issue_runs(@issue_id) |> Enum.find(&(&1.run_id == run_id))
+
+      # A run with no record, or no run at all, still retries and escalates as before.
+      assert {:error, {:code_review_inconclusive, _cause}} = run("/tmp/workspace", settings: designed_settings(), run_id: "run-without-a-record")
+      assert :ok = run("/tmp/workspace", settings: designed_settings())
+
+      assert ["inconclusive_escalated", "invalid_verdict"] ==
+               verdicts() |> Enum.find(&(&1.outcome == "inconclusive_escalated")) |> then(&[&1.outcome, &1.details.cause])
+    end
+
     test "a retry on a different head starts its own count" do
       Process.put(:fake_review_result, {:error, {:review_agent_inconclusive, :no_grounding}})
 

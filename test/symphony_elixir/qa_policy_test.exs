@@ -162,6 +162,35 @@ defmodule SymphonyElixir.QaPolicyTest do
                QaPolicy.decision(issue(), settings!(), ["lib/symphony_elixir/cli.ex"])
     end
 
+    # A `qa:macos_app` label on a change no selected playbook's paths reach, with no walkthrough:
+    # there is nothing on screen to judge, so building and launching the app are the whole check.
+    test "scopes a macos_app pass with nothing on screen to judge to building and launching the app" do
+      settings = settings!(%{"auto_review" => %{"playbooks" => %{"macos_app" => %{"build" => "make app", "app" => "build/App.app"}}}})
+      backend = ["lib/symphony_elixir/orchestrator.ex"]
+
+      assert {:run, [%{kind: "macos_app", scope: :none}], reason} = QaPolicy.decision(issue(%{labels: ["qa:macos_app"]}), settings, backend)
+      assert reason =~ "nothing on screen to judge: the PR changes none of the selected playbooks' paths"
+      assert reason =~ "building and launching the app are the whole check"
+
+      # Only the app's playbook is scoped; another selected one runs as it would.
+      assert {:run, [%{kind: "cli"} = cli, %{kind: "macos_app", scope: :none}], _reason} =
+               QaPolicy.decision(issue(%{labels: ["qa:cli", "qa:macos_app"]}), settings, backend)
+
+      refute Map.has_key?(cli, :scope)
+
+      # A path a selected playbook triggers on, a walkthrough, or no app to build: the pass judges as before.
+      walkthrough = issue(%{labels: ["qa:macos_app"], description: "## User walkthrough\n\n1. Open the app.\n"})
+
+      for {ticket, paths} <- [
+            {issue(%{labels: ["qa:macos_app"]}), ["macos/Sources/App/Window.swift"]},
+            {walkthrough, backend},
+            {issue(%{labels: ["qa:cli"]}), backend}
+          ] do
+        assert {:run, playbooks, "the change delivers or updates a user journey"} = QaPolicy.decision(ticket, settings, paths)
+        refute Enum.any?(playbooks, &Map.has_key?(&1, :scope))
+      end
+    end
+
     test "skips a change that reaches no playbook" do
       assert {:skip, reason} = QaPolicy.decision(issue(), settings!(), ["lib/symphony_elixir/orchestrator.ex"])
       assert reason =~ "no QA playbook applies"
@@ -180,6 +209,42 @@ defmodule SymphonyElixir.QaPolicyTest do
       for label <- ["qa:skip", "qa:cli"] do
         assert {:nothing_to_verify, _reason} = QaPolicy.decision(issue(%{labels: [label]}), settings!(), [])
       end
+    end
+  end
+
+  describe "the QA selection log line" do
+    test "names the playbooks it runs and why each other one does not, with the flag each reads" do
+      # A Mac app repo: verification off, its dev server run on the QA host beside the app.
+      settings =
+        settings!(%{
+          "verification" => %{"enabled" => false, "dev_server" => %{"start_cmd" => "server/scripts/dev-server.sh", "health_check_url" => "http://127.0.0.1:8090/health"}},
+          "auto_review" => %{
+            "worker_host" => "qa-vm",
+            "playbooks" => %{"macos_app" => %{"build" => "make app", "app" => "build/App.app", "dev_server" => true}}
+          }
+        })
+
+      log =
+        capture_log(fn ->
+          assert {:run, [%{kind: "cli"}], _reason} =
+                   QaPolicy.decide(issue(), settings, workspace: @workspace, repo_key: "repo", git: git(["lib/symphony_elixir/cli.ex"]), sha: @sha)
+        end)
+
+      assert log =~
+               "QA selection issue_id=issue-qa-policy issue_identifier=TP-816 sha=#{@sha} decision=run playbooks=cli " <>
+                 ~s(not_selected="macos_app: not triggered; android_app: needs)
+
+      assert log =~ ~s(web: needs `verification.enabled`")
+
+      log =
+        capture_log(fn ->
+          assert {:skip, _reason} =
+                   QaPolicy.decide(issue(), settings!(), workspace: @workspace, repo_key: "repo", git: git(["docs/a.md"]), sha: @sha)
+        end)
+
+      assert log =~ ~s(decision=skip reason="the PR only changes docs)
+      assert log =~ ~s(playbooks= not_selected="cli: not triggered; macos_app: needs)
+      assert log =~ ~s(web: needs `verification.dev_server`")
     end
   end
 

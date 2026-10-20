@@ -9,11 +9,12 @@ defmodule SymphonyElixir.ReviewAgent do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Decisions
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.ReviewAgent.Context
+  alias SymphonyElixir.ReviewAgent.{Context, Verdict}
 
   @max_diff_prompt_bytes 120_000
   @self_check_max_iterations 4
   @last_resort_comparison_base "origin/main"
+  @unplaced_prefix "[could not be placed] "
   @agent_message_methods [
     "item/agentMessage/delta",
     "codex/event/agent_message_delta",
@@ -89,13 +90,8 @@ defmodule SymphonyElixir.ReviewAgent do
     with :ok <- reject_runtime_error_response(text),
          {:ok, json} <- isolate_json_object(text),
          {:ok, decoded} <- Jason.decode(json),
-         {:ok, verdict} <- coerce_verdict(Map.get(decoded, "verdict")),
-         {:ok, comments} <- coerce_comments(Map.get(decoded, "comments")),
-         {:ok, findings} <- coerce_findings(Map.get(decoded, "findings")),
-         {:ok, reason} <- coerce_reason(Map.get(decoded, "reason"), verdict),
-         {:ok, result} <-
-           validate_result(%{verdict: verdict, comments: comments, findings: findings, reason: reason}) do
-      {:ok, compact_result(result)}
+         {:ok, result} <- Verdict.from_map(decoded) do
+      {:ok, result}
     else
       {:error, {:review_agent_runtime_error, _raw} = reason} -> {:error, reason}
       {:error, %Jason.DecodeError{} = reason} -> {:error, {:malformed_review_agent_response, {:invalid_json, reason}}}
@@ -103,7 +99,13 @@ defmodule SymphonyElixir.ReviewAgent do
     end
   end
 
-  @doc false
+  @doc """
+  Grounds a change request's or a block's findings in the reviewed head. A finding whose quote is
+  found stays a finding (moved to the lines it quotes). One whose quote cannot be placed is kept as
+  an unanchored comment marked as such, and the verdict stands. The verdict is unverifiable
+  (`review_agent_unverifiable`) only when it requests changes and none of its findings can be
+  placed (or it gave none).
+  """
   @spec validate_findings(result(), map()) :: {:ok, result()} | {:error, term()}
   def validate_findings(%{verdict: verdict} = result, source) when verdict in [:block, :request_changes] and is_map(source) do
     findings = Map.get(result, :findings, [])
@@ -112,12 +114,12 @@ defmodule SymphonyElixir.ReviewAgent do
     |> Enum.map(&validate_finding(&1, source))
     |> split_valid_findings()
     |> case do
-      {[], failures} ->
+      {[], failures} when verdict == :request_changes ->
         payload = %{verdict: verdict, failures: failures, comments: Map.get(result, :comments, [])}
         {:error, {:review_agent_inconclusive, {:review_agent_unverifiable, payload}}}
 
-      {valid_findings, _failures} ->
-        {:ok, result |> Map.put(:findings, valid_findings) |> put_grounded_comments()}
+      {valid_findings, failures} ->
+        {:ok, result |> Map.put(:findings, valid_findings) |> put_grounded_comments(failures)}
     end
   end
 
@@ -324,13 +326,30 @@ defmodule SymphonyElixir.ReviewAgent do
 
   defp decision_note(finding), do: "Against decision #{finding.decision}, so a note, not a change request: " <> finding_comment(finding)
 
-  defp put_grounded_comments(%{findings: findings} = result) when is_list(findings) do
-    Map.put(result, :comments, Enum.map(findings, &finding_comment/1))
+  # A grounded verdict's comments are its findings, then the findings that could not be placed. A
+  # verdict with no findings at all keeps the reviewer's own comments.
+  defp put_grounded_comments(%{findings: []} = result, []), do: result
+
+  defp put_grounded_comments(%{findings: findings} = result, failures) do
+    unplaced = Enum.map(failures, fn %{finding: finding} -> @unplaced_prefix <> finding_comment(finding) end)
+    Map.put(result, :comments, Enum.map(findings, &finding_comment/1) ++ unplaced)
   end
 
   defp finding_comment(%{summary: summary, file: file, line_range: {start_line, end_line}, suggested_fix: suggested_fix}) do
     "#{summary} (#{file}:#{start_line}-#{end_line}) Suggested fix: #{suggested_fix}"
   end
+
+  @doc """
+  A short label for why a review stayed inconclusive (the cause in
+  `{:review_agent_inconclusive, cause}`), such as `invalid_verdict`, `no_json_object` or
+  `review_agent_unverifiable`, so inconclusive reviews can be counted per cause.
+  """
+  @spec inconclusive_cause(term()) :: String.t()
+  def inconclusive_cause({:malformed_review_agent_response, {:invalid_json, _error}}), do: "invalid_json"
+  def inconclusive_cause({:malformed_review_agent_response, reason}) when is_atom(reason), do: Atom.to_string(reason)
+  def inconclusive_cause({cause, _details}) when is_atom(cause), do: Atom.to_string(cause)
+  def inconclusive_cause(cause) when is_atom(cause), do: Atom.to_string(cause)
+  def inconclusive_cause(_cause), do: "other"
 
   @spec approval_prompt(result()) :: String.t()
   def approval_prompt(result), do: approval_prompt(result, [])
@@ -519,6 +538,7 @@ defmodule SymphonyElixir.ReviewAgent do
                run_id: Keyword.get(opts, :run_id),
                run_profile: Keyword.get(opts, :reviewer_run_profile) || Config.pre_push_review_profile(settings),
                tool_scope: :read_only,
+               review_verdict_sink: self(),
                linear_comment_registry: Keyword.get(opts, :linear_comment_registry),
                # The executor run's temp folder, which the run's settings already make writable.
                extra_env: AgentTmpDir.env(reviewer_settings.agent.kind, Keyword.get(opts, :agent_tmp_dir))
@@ -535,6 +555,8 @@ defmodule SymphonyElixir.ReviewAgent do
           end
         after
           agent_module.stop_session(session)
+          # A verdict recorded after the last turn's read must not reach the next review in this process.
+          recorded_verdict(nil)
         end
       end
     end
@@ -547,35 +569,54 @@ defmodule SymphonyElixir.ReviewAgent do
       repo_key: Keyword.get(opts, :repo_key),
       run_id: Keyword.get(opts, :run_id),
       tool_scope: :read_only,
+      review_verdict_sink: self(),
       linear_comment_registry: Keyword.get(extra, :linear_comment_registry)
     ]
   end
 
+  # The verdict the reviewer recorded with the `review_verdict` tool during the turn wins, even
+  # over a turn that then failed; without one, the verdict is read from the turn's text.
   defp run_review_turn(agent_module, session, prompt, issue, message_collector, turn_opts) do
-    case agent_module.run_turn(session, prompt, issue, turn_opts) do
-      {:ok, result} ->
+    turn_result = agent_module.run_turn(session, prompt, issue, turn_opts)
+    messages = drain_collected_messages(message_collector, [])
+
+    case {recorded_verdict(nil), turn_result} do
+      {%{} = verdict, _turn_result} ->
+        {:ok, verdict}
+
+      {nil, {:ok, result}} ->
         result
-        |> response_payload(message_collector)
+        |> response_texts(messages)
         |> pick_review_response()
         |> classify_review_turn_result()
 
-      {:error, {:model_api_unreachable, _info} = reason} ->
+      {nil, {:error, {:model_api_unreachable, _info} = reason}} ->
         {:error, reason}
 
-      {:error, reason} ->
+      {nil, {:error, reason}} ->
         {:error, classify_review_turn_failure(reason)}
     end
   end
 
-  # A long tool-using review, or a follow-up turn (self-check, re-quote), can end in prose
-  # instead of the JSON verdict. The same session gets one short turn asking for the verdict
-  # alone before the run counts as inconclusive, so the review it already did is kept.
+  # The last verdict the turn's `review_verdict` calls recorded (`Verdict.record/2`), or nil.
+  defp recorded_verdict(last) do
+    receive do
+      {:review_verdict, verdict} -> recorded_verdict(verdict)
+    after
+      0 -> last
+    end
+  end
+
+  # The repair turn. A long tool-using review, or a follow-up turn (self-check, re-quote), can end
+  # without a verdict Symphony can read: prose, or a verdict outside the contract. The same session
+  # gets one short turn with the parser's error and the contract before the run counts as
+  # inconclusive, so the review it already did is kept.
   defp review_or_nudge(agent_module, session, prompt, issue, message_collector, turn_opts) do
     case run_review_turn(agent_module, session, prompt, issue, message_collector, turn_opts) do
-      {:error, {:review_agent_inconclusive, {:malformed_review_agent_response, _reason}}} = malformed ->
+      {:error, {:review_agent_inconclusive, {:malformed_review_agent_response, reason}}} = malformed ->
         nudge_opts = Keyword.put(turn_opts, :max_iterations, @self_check_max_iterations)
 
-        case run_review_turn(agent_module, session, json_nudge_prompt(), issue, message_collector, nudge_opts) do
+        case run_review_turn(agent_module, session, repair_prompt(reason), issue, message_collector, nudge_opts) do
           {:ok, _verdict} = ok -> ok
           {:error, {:model_api_unreachable, _info}} = unreachable -> unreachable
           {:error, _reason} -> malformed
@@ -586,10 +627,13 @@ defmodule SymphonyElixir.ReviewAgent do
     end
   end
 
-  defp json_nudge_prompt do
+  defp repair_prompt(reason) do
     """
     #{ProjectGuides.output_contract_marker()}
-    Return only the JSON verdict for the review you just did, with any corrections you were asked for: one JSON object in the shape the review prompt asked for, with no other text.
+    Symphony could not read your verdict: #{Verdict.describe_error(reason)}
+    Do not review again. Record the verdict for the review you just did, with any corrections you were asked for: call the `review_verdict` tool once with it, then end your turn. The verdict has this shape:
+    #{verdict_shape()}
+    If the `review_verdict` tool is not available, your final message must be only this JSON object, with no prose before or after it.
     """
   end
 
@@ -724,12 +768,12 @@ defmodule SymphonyElixir.ReviewAgent do
     """
   end
 
-  # The JSON rule goes last, after the previous JSON, so a reply that explains itself
-  # still ends in the object.
+  # The verdict rule goes last, after the previous JSON, so a reply that explains itself
+  # still ends in the verdict.
   defp follow_up_json_rule do
     """
     #{ProjectGuides.output_contract_marker()}
-    Return the corrected JSON object in the same shape as the previous JSON. Your final message must be only this JSON object, with no prose before or after it.\
+    Call the `review_verdict` tool once with the corrected verdict, in the same shape as the previous JSON, then end your turn. If the `review_verdict` tool is not available, your final message must be only the corrected JSON object, with no prose before or after it.\
     """
   end
 
@@ -805,7 +849,14 @@ defmodule SymphonyElixir.ReviewAgent do
     - Do not fabricate function or module names. If you cannot grep for the symbol you intend to cite, do not cite it.
 
     #{ProjectGuides.output_contract_marker()}
-    Return ONLY one JSON object in this shape:
+    When the review is done, call the `review_verdict` tool once with your verdict, then end your turn. If the tool refuses the verdict, it says why: fix it and call the tool again. The verdict has this shape:
+    #{verdict_shape()}
+    If the `review_verdict` tool is not available, your final message must be only this JSON object, with no prose before or after it.
+    """
+  end
+
+  defp verdict_shape do
+    """
     {
       "verdict": "approve" | "request_changes" | "block",
       "findings": [
@@ -818,9 +869,7 @@ defmodule SymphonyElixir.ReviewAgent do
         }
       ],
       "reason": "<required for block>"
-    }
-
-    Your final message must be only this JSON object, with no prose before or after it.
+    }\
     """
   end
 
@@ -893,10 +942,6 @@ defmodule SymphonyElixir.ReviewAgent do
     |> String.replace(~r/```(?:json)?\s*/i, "")
     |> String.replace("```", "")
     |> extract_objects()
-  end
-
-  defp response_payload(result, collector) do
-    response_texts(result, drain_collected_messages(collector, []))
   end
 
   defp response_texts(result, messages) do
@@ -1156,111 +1201,6 @@ defmodule SymphonyElixir.ReviewAgent do
 
   defp scan_object_byte(_byte, text, start, index, depth, in_string?, _escape?),
     do: scan_object(text, start, index + 1, depth, in_string?, false)
-
-  defp coerce_verdict(verdict) when verdict in ["approve", "request_changes", "block"] do
-    {:ok, String.to_existing_atom(verdict)}
-  end
-
-  defp coerce_verdict(_verdict), do: {:error, :invalid_verdict}
-
-  defp coerce_comments(nil), do: {:ok, []}
-
-  defp coerce_comments(comments) when is_list(comments) do
-    {:ok,
-     comments
-     |> Enum.filter(&is_binary/1)
-     |> Enum.map(&String.trim/1)
-     |> Enum.reject(&(&1 == ""))}
-  end
-
-  defp coerce_comments(_comments), do: {:error, :invalid_comments}
-
-  defp coerce_findings(nil), do: {:ok, []}
-
-  defp coerce_findings(findings) when is_list(findings) do
-    findings
-    |> Enum.map(&coerce_finding/1)
-    |> collect_coerced_findings([])
-  end
-
-  defp coerce_findings(_findings), do: {:error, :invalid_findings}
-
-  defp collect_coerced_findings([], acc), do: {:ok, Enum.reverse(acc)}
-  defp collect_coerced_findings([{:ok, finding} | rest], acc), do: collect_coerced_findings(rest, [finding | acc])
-  defp collect_coerced_findings([{:error, reason} | _rest], _acc), do: {:error, reason}
-
-  defp coerce_finding(finding) when is_map(finding) do
-    with {:ok, summary} <- required_string(Map.get(finding, "summary"), :invalid_finding_summary),
-         {:ok, file} <- required_string(Map.get(finding, "file"), :invalid_finding_file),
-         {:ok, line_range} <- coerce_line_range(Map.get(finding, "line_range")),
-         {:ok, quoted_snippet} <- required_string(Map.get(finding, "quoted_snippet"), :invalid_finding_quoted_snippet),
-         {:ok, suggested_fix} <- required_string(Map.get(finding, "suggested_fix"), :invalid_finding_suggested_fix) do
-      {:ok,
-       maybe_put_decision(
-         %{
-           summary: summary,
-           file: file,
-           line_range: line_range,
-           quoted_snippet: quoted_snippet,
-           suggested_fix: suggested_fix
-         },
-         Map.get(finding, "decision")
-       )}
-    end
-  end
-
-  defp coerce_finding(_finding), do: {:error, :invalid_finding}
-
-  # The recorded decision a finding is about (`honour_decisions/3`), as `D<n>`.
-  defp maybe_put_decision(finding, decision) when is_binary(decision) do
-    case String.trim(decision) |> String.upcase() do
-      "" -> finding
-      decision -> Map.put(finding, :decision, decision)
-    end
-  end
-
-  defp maybe_put_decision(finding, _decision), do: finding
-
-  defp required_string(value, error) when is_binary(value) do
-    case String.trim(value) do
-      "" -> {:error, error}
-      trimmed -> {:ok, trimmed}
-    end
-  end
-
-  defp required_string(_value, error), do: {:error, error}
-
-  defp coerce_line_range([start_line, end_line]) do
-    with {:ok, start_line} <- coerce_positive_integer(start_line),
-         {:ok, end_line} <- coerce_positive_integer(end_line),
-         true <- start_line <= end_line do
-      {:ok, {start_line, end_line}}
-    else
-      _other -> {:error, :invalid_finding_line_range}
-    end
-  end
-
-  defp coerce_line_range(_line_range), do: {:error, :invalid_finding_line_range}
-
-  defp coerce_positive_integer(value) when is_integer(value) and value > 0, do: {:ok, value}
-  defp coerce_positive_integer(_value), do: {:error, :invalid_positive_integer}
-
-  defp coerce_reason(reason, :block) when is_binary(reason) do
-    case String.trim(reason) do
-      "" -> {:error, :missing_block_reason}
-      trimmed -> {:ok, trimmed}
-    end
-  end
-
-  defp coerce_reason(_reason, :block), do: {:error, :missing_block_reason}
-  defp coerce_reason(reason, _verdict) when is_binary(reason), do: {:ok, String.trim(reason)}
-  defp coerce_reason(_reason, _verdict), do: {:ok, nil}
-
-  defp validate_result(%{verdict: :request_changes, comments: [], findings: []}), do: {:error, :missing_request_changes_comments}
-  defp validate_result(result), do: {:ok, result}
-
-  defp compact_result(%{reason: nil} = result), do: Map.delete(result, :reason)
-  defp compact_result(result), do: result
 
   defp truncate(text, max_bytes) when is_binary(text) and byte_size(text) > max_bytes do
     binary_part(text, 0, max_bytes) <> "\n[... truncated by Symphony review_agent ...]"

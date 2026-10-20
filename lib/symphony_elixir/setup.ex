@@ -33,7 +33,10 @@ defmodule SymphonyElixir.Setup do
     Checks.UnclonedRepos,
     Checks.Routing,
     Checks.Secrets,
-    Checks.Teams
+    Checks.Teams,
+    Checks.Labels,
+    Checks.DeprecatedLabels,
+    Checks.HoldDrift
   ]
 
   @type not_checked :: %{id: String.t(), title: String.t(), reason: String.t()}
@@ -77,6 +80,15 @@ defmodule SymphonyElixir.Setup do
   @spec refresh(GenServer.server()) :: payload()
   def refresh(server) do
     if GenServer.whereis(server), do: GenServer.call(server, :refresh, @refresh_timeout_ms), else: check()
+  end
+
+  @doc """
+  The payload with only the problems of the repo `key`: those naming it, and those naming no repo
+  (keys, secrets and the rest of the global setup), as the app's Add Repo check reads it.
+  """
+  @spec for_repo(payload(), String.t()) :: payload()
+  def for_repo(payload, key) when is_binary(key) do
+    %{payload | problems: Enum.filter(payload.problems, &(&1.repos == [] or key in &1.repos))}
   end
 
   @doc "Empties the team cache, as a Setup fix that changed Linear does."

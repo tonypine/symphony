@@ -2,7 +2,7 @@ import Foundation
 
 /// A view of the Symphony window, in sidebar order (`docs/design/director-app-screens.md` §0).
 public enum SymphonyView: String, CaseIterable, Equatable {
-    case inbox, overview, initiatives, tickets, quality, usage, shipped, audit, repos, diagnostics
+    case inbox, overview, initiatives, tickets, quality, usage, shipped, audit, repos, setup, diagnostics
 
     public var title: String {
         switch self {
@@ -15,6 +15,7 @@ public enum SymphonyView: String, CaseIterable, Equatable {
         case .shipped: "Shipped"
         case .audit: "Audit"
         case .repos: "Repos"
+        case .setup: "Setup"
         case .diagnostics: "Diagnostics"
         }
     }
@@ -31,6 +32,7 @@ public enum SymphonyView: String, CaseIterable, Equatable {
         case .shipped: "What shipped and what the crew learned"
         case .audit: "Every move on record, hash-chained"
         case .repos: "Repositories Symphony works on"
+        case .setup: "What's wrong with the setup, and how to fix it"
         case .diagnostics: "Symphony's own health"
         }
     }
@@ -47,6 +49,7 @@ public enum SymphonyView: String, CaseIterable, Equatable {
         case .shipped: "shippingbox"
         case .audit: "checklist"
         case .repos: "square.stack.3d.up"
+        case .setup: "wrench.and.screwdriver"
         case .diagnostics: "stethoscope"
         }
     }
@@ -56,7 +59,7 @@ public enum SymphonyView: String, CaseIterable, Equatable {
         case .inbox, .overview, .initiatives, .tickets: .main
         case .quality, .usage: .insights
         case .shipped, .audit: .records
-        case .repos, .diagnostics: .factory
+        case .repos, .setup, .diagnostics: .factory
         }
     }
 
@@ -81,7 +84,7 @@ public enum SidebarSection: String, CaseIterable, Equatable {
 /// The sidebar: only the views built so far, in the design's order, with ⌘1–⌘8 following that order.
 public struct Sidebar: Equatable {
     /// The views this version of the app has. Later views join here, in place.
-    public static let builtViews: [SymphonyView] = [.inbox, .overview, .initiatives, .tickets, .quality, .usage, .shipped, .audit, .repos, .diagnostics]
+    public static let builtViews: [SymphonyView] = [.inbox, .overview, .initiatives, .tickets, .quality, .usage, .shipped, .audit, .repos, .setup, .diagnostics]
     public static let maxShortcuts = 8
 
     public let views: [SymphonyView]
@@ -132,6 +135,8 @@ public enum WindowState: Equatable {
     /// What a button on a placeholder does.
     public enum Action: Equatable {
         case startSymphony, openLogs, restartSymphony, openSettings
+        /// The app's update check, from Setup's older-service state and its build warning.
+        case checkForUpdates
         /// The menu's Cancel Update and Update Now Anyway, from the dispatch control's popover (S3a, S3b).
         case cancelUpdate, updateNow
 
@@ -141,6 +146,7 @@ public enum WindowState: Equatable {
             case .openLogs: StatusMenu.openLogsTitle
             case .restartSymphony: StatusMenu.restartTitle
             case .openSettings: "Open Settings…"
+            case .checkForUpdates: UpdateMenu.checkTitle
             case .cancelUpdate: UpdateMenu.cancelUpdateTitle
             case .updateNow: UpdateMenu.updateNowTitle
             }

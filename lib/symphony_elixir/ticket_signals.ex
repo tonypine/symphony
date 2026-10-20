@@ -25,18 +25,19 @@ defmodule SymphonyElixir.TicketSignals do
   def record(_repo_key, _issue_id, _name, _details), do: :ok
 
   @doc """
-  Records a verdict of `kind` with `outcome`, bound to the `head_sha` it judged, on the ticket's
-  record. No-ops when the ticket carries no repo key.
+  Records a verdict of `kind` with `outcome`, bound to the `head_sha` it judged and carrying
+  `details`, on the ticket's record. No-ops when the ticket carries no repo key.
   """
-  @spec record_verdict(String.t() | nil, String.t() | nil, String.t(), String.t() | nil, String.t()) :: :ok
-  def record_verdict(repo_key, issue_id, kind, head_sha, outcome)
-      when is_binary(repo_key) and is_binary(issue_id) do
-    repo_key
-    |> RunStore.record_ticket_verdict(issue_id, kind, head_sha, outcome)
-    |> log_error("record #{kind} verdict")
+  @spec record_verdict(String.t() | nil, String.t() | nil, String.t(), String.t() | nil, String.t(), map()) :: :ok
+  def record_verdict(repo_key, issue_id, kind, head_sha, outcome, details \\ %{}) do
+    if is_binary(repo_key) and is_binary(issue_id) do
+      repo_key
+      |> RunStore.record_ticket_verdict(issue_id, kind, head_sha, outcome, details)
+      |> log_error("record #{kind} verdict")
+    else
+      :ok
+    end
   end
-
-  def record_verdict(_repo_key, _issue_id, _kind, _head_sha, _outcome), do: :ok
 
   defp log_error(:ok, _action), do: :ok
 

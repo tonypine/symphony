@@ -1752,7 +1752,7 @@ defmodule SymphonyElixir.Config.Schema do
 
       @primary_key false
       embedded_schema do
-        field(:range, {:array, :integer}, default: [4000, 4099])
+        field(:range, {:array, :integer}, default: [4100, 4199])
       end
 
       @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -2063,6 +2063,7 @@ defmodule SymphonyElixir.Config.Schema do
     import Ecto.Changeset
 
     alias SymphonyElixir.Config.DeprecatedGateSettings
+    alias SymphonyElixir.QaAgent.PlaybookSettings
 
     # Recompile when the deprecated gate block's defaults change (see the note in `SystemSchema`).
     require DeprecatedGateSettings
@@ -2150,7 +2151,15 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:timeout_ms, greater_than: 0)
       |> validate_number(:max_concurrent, greater_than: 0)
       |> validate_number(:max_fix_attempts, greater_than_or_equal_to: 0)
+      |> validate_change(:playbooks, &validate_playbooks/2)
       |> Agent.validate_profile_fields()
+    end
+
+    defp validate_playbooks(:playbooks, playbooks) do
+      case PlaybookSettings.validate(playbooks) do
+        :ok -> []
+        {:error, message} -> [playbooks: message]
+      end
     end
   end
 

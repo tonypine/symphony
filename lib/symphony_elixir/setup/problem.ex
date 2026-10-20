@@ -9,7 +9,10 @@ defmodule SymphonyElixir.Setup.Problem do
 
     * `config_edit` (`path`, `action` `remove` | `set` | `add`, `value`): the app applies the edit
       to `symphony.yml` through its settings writer once the operator confirms it.
-    * `linear` (`action`, `team`, `name`, `type`): the service runs it once the operator confirms.
+    * `linear` (`action`, `team`, `name`, `type`): the service runs it once the operator confirms,
+      through `POST /api/v1/setup/fixes` (`SymphonyElixir.Setup.Fixes`). `create_label` creates the
+      label `name` in the team `team`. `resync_hold` (`repo`, `tickets`) re-syncs each ticket's hold
+      label from the store; the operator may send it for one of its tickets or for all of them.
     * `open` (`target` `settings` | `symphony_yml` | `linear` | `drain_report` | `repos`, `url`): no
       fix is safe, so the app shows the button that goes where the operator fixes it.
   """
@@ -67,6 +70,12 @@ defmodule SymphonyElixir.Setup.Problem do
   @spec linear(String.t(), String.t(), String.t(), String.t() | nil) :: fix()
   def linear(action, team, name, type \\ nil) when is_binary(action) and is_binary(team) and is_binary(name) do
     %{kind: "linear", action: action, team: team, name: name, type: type}
+  end
+
+  @doc "Re-syncs the hold labels of `tickets` (identifiers) in the repo `repo` from the store."
+  @spec resync_hold(String.t(), [String.t()]) :: fix()
+  def resync_hold(repo, tickets) when is_binary(repo) and is_list(tickets) do
+    %{kind: "linear", action: "resync_hold", repo: repo, tickets: tickets}
   end
 
   @doc "No safe fix: the place where the operator fixes it."

@@ -10,10 +10,15 @@ defmodule SymphonyElixir.QaDriver.ReleasePair do
   `scripts/qa/install-test-signing-identity.sh` installs and trusts once per QA
   host: a self-signed identity named for QA tests in a keychain of its own, never
   Symphony's release certificate. The build runs that script's `--use` first,
-  which unlocks the keychain and prints the identity; without it the tool fails
-  with `qa_signing_identity_missing` or `qa_signing_identity_untrusted`, which the
-  QA agent reports as `blocked`. The minisign key is the throwaway one the build
-  makes.
+  which unlocks the keychain and prints the identity. On a `worker_host` with
+  passwordless sudo (`sudo -n true`) a missing or untrusted identity is installed
+  there and then: Symphony runs its own copy of the script, embedded at compile
+  time, never the checkout's, which the PR under test may change. Anywhere else
+  the tool fails with `qa_signing_identity_missing` or
+  `qa_signing_identity_untrusted`, which the QA agent reports as `blocked`:
+  Symphony never trusts a code-signing root in the operator's own System keychain
+  with a key the PR's build can read. The minisign key is the throwaway one the
+  build makes.
 
   Everything lives in the pass's private directory (`host_dir`), never in the
   worktree: the pair in `release-pair/`, a fresh copy of N for each launch in
@@ -32,10 +37,16 @@ defmodule SymphonyElixir.QaDriver.ReleasePair do
   drive it, and would outlive the pass.
   """
 
+  require Logger
+
   alias SymphonyElixir.AgentEnv
   alias SymphonyElixir.QaDriver.Checks
 
   @identity_script "scripts/qa/install-test-signing-identity.sh"
+  @installer_path Path.expand(Path.join([__DIR__, "..", "..", "..", @identity_script]))
+  @external_resource @installer_path
+  @installer File.read!(@installer_path)
+  @install_timeout_ms 120_000
   @build_command ~s(make -C macos release-pair RELEASE_PAIR_OUT="$1")
   @python "/usr/bin/python3"
   @timeout_ms 30_000
@@ -91,16 +102,18 @@ defmodule SymphonyElixir.QaDriver.ReleasePair do
   printf 'symphony-qa-relaunch-script:%s\\n' "$1/bin/relaunch"
   """
 
-  # Takes the oldest relaunch request under the QA root `$1`.
+  # Takes the oldest relaunch request under the first of the QA roots (`$@`) that has one.
   @take_relaunch_script """
-  for request in "$1"/relaunch/[0-9]*; do
-    if [ -f "$request" ]; then printf 'symphony-qa-relaunch:%s\\n' "$(head -n 1 "$request")"; rm -f "$request"; exit 0; fi
+  for root in "$@"; do
+    for request in "$root"/relaunch/[0-9]*; do
+      if [ -f "$request" ]; then printf 'symphony-qa-relaunch:%s\\n' "$(head -n 1 "$request")"; rm -f "$request"; exit 0; fi
+    done
   done
   exit 0
   """
 
   @type tool_error :: {:error, {:qa_tool, String.t(), String.t()}}
-  @type identity :: %{sha: String.t(), keychain: String.t()}
+  @type identity :: %{sha: String.t(), keychain: String.t(), installed?: boolean()}
 
   @doc "The modes `qa_update_feed` switches the feed to."
   @spec modes() :: [String.t()]
@@ -177,10 +190,24 @@ defmodule SymphonyElixir.QaDriver.ReleasePair do
   @doc """
   Runs the checkout's `#{@identity_script} --use` where the app runs: it unlocks
   the QA signing identity's keychain and prints the identity, or fails with exit
-  status 3 (not installed) or 4 (not trusted for code signing).
+  status 3 (not installed) or 4 (not trusted for code signing). On a
+  `worker_host` with passwordless sudo, either failure installs the identity
+  with Symphony's own copy of the script and runs `--use` once more;
+  `installed?` says it did.
   """
   @spec identity(map(), Path.t()) :: {:ok, identity()} | tool_error()
   def identity(config, source) do
+    case use_identity(config, source) do
+      {:absent, code, message} -> install_identity(config, source, code, message)
+      result -> result
+    end
+  end
+
+  @doc "Symphony's own copy of `#{@identity_script}`, which installs the identity on a QA host."
+  @spec installer() :: String.t()
+  def installer, do: @installer
+
+  defp use_identity(config, source) do
     opts = [cd: source, env: AgentEnv.build(), timeout_ms: @timeout_ms, output_limit: @output_limit]
 
     case config.host.cmd.("/bin/sh", [Path.join(source, @identity_script), "--use"], opts) do
@@ -188,21 +215,65 @@ defmodule SymphonyElixir.QaDriver.ReleasePair do
         with sha when is_binary(sha) <- marker(output, "symphony-qa-signing-identity"),
              true <- Regex.match?(~r/\A[0-9A-F]{40}\z/, sha),
              keychain when is_binary(keychain) and keychain != "" <- marker(output, "symphony-qa-signing-keychain") do
-          {:ok, %{sha: sha, keychain: keychain}}
+          {:ok, %{sha: sha, keychain: keychain, installed?: false}}
         else
           _other -> identity_error("qa_signing_identity_check_failed", "The QA signing identity check printed no identity: #{tail(output, 500)}")
         end
 
       {:ok, {output, 3}} ->
-        identity_error("qa_signing_identity_missing", "The QA host has no QA signing identity: #{String.trim(tail(output, 500))}")
+        {:absent, "qa_signing_identity_missing", "The QA host has no QA signing identity: #{String.trim(tail(output, 500))}"}
 
       {:ok, {output, 4}} ->
-        identity_error("qa_signing_identity_untrusted", "The QA host's QA signing identity is not trusted for code signing: #{String.trim(tail(output, 500))}")
+        {:absent, "qa_signing_identity_untrusted", "The QA host's QA signing identity is not trusted for code signing: #{String.trim(tail(output, 500))}"}
 
       other ->
         identity_error("qa_signing_identity_check_failed", "The QA signing identity check failed: #{describe(other)}")
     end
   end
+
+  # Only on a separate QA host: on this host the trust root would land in the
+  # operator's own System keychain, with a key the PR's build can read.
+  defp install_identity(%{remote?: false}, _source, code, message), do: identity_error(code, message)
+
+  defp install_identity(config, source, code, message) do
+    if passwordless_sudo?(config) do
+      case run_installer(config) do
+        :ok ->
+          Logger.info("QA driver installed the QA signing identity #{log_context(config)} outcome=completed")
+          installed_identity(config, source)
+
+        {:error, reason} ->
+          Logger.warning("QA driver could not install the QA signing identity #{log_context(config)} outcome=failed reason=#{inspect(reason)}")
+          identity_error(code, "#{message} Symphony could not install it on the QA host: #{reason}.")
+      end
+    else
+      Logger.info("QA driver left the QA signing identity to an operator #{log_context(config)} reason=no_passwordless_sudo")
+      identity_error(code, message)
+    end
+  end
+
+  defp passwordless_sudo?(config),
+    do: match?({:ok, {_output, 0}}, config.host.cmd.("/usr/bin/sudo", ["-n", "true"], timeout_ms: @timeout_ms, output_limit: 1_000))
+
+  # `sudo -n`: the trust step fails rather than waits for a password no one types.
+  defp run_installer(config) do
+    opts = [cd: config.host_dir, remote_env: [{"SYMPHONY_QA_SIGNING_SUDO", "sudo -n"}], timeout_ms: @install_timeout_ms, output_limit: @output_limit]
+
+    case config.host.cmd.("/bin/sh", ["-c", @installer, "sh"], opts) do
+      {:ok, {_output, 0}} -> :ok
+      other -> {:error, describe(other)}
+    end
+  end
+
+  defp installed_identity(config, source) do
+    case use_identity(config, source) do
+      {:ok, identity} -> {:ok, %{identity | installed?: true}}
+      {:absent, code, message} -> identity_error(code, "#{message} Symphony installed it on the QA host this pass, and the check still fails.")
+      error -> error
+    end
+  end
+
+  defp log_context(config), do: String.trim("#{config.log_context} worker_host=#{config.worker_host}")
 
   defp identity_error(code, message) do
     tool_error(
@@ -300,10 +371,13 @@ defmodule SymphonyElixir.QaDriver.ReleasePair do
     end
   end
 
-  @doc "Takes the oldest relaunch request the update helper left: the bundle to start, or `nil`."
-  @spec take_relaunch(map()) :: {:ok, Path.t() | nil} | tool_error()
-  def take_relaunch(config) do
-    case config.host.cmd.("/bin/sh", ["-c", @take_relaunch_script, "sh", config.qa_root], timeout_ms: @timeout_ms, output_limit: @output_limit) do
+  @doc """
+  Takes the oldest relaunch request the update helper left in one of the QA roots of the pass's
+  release_pair launches: the bundle to start, or `nil`.
+  """
+  @spec take_relaunch(map(), [Path.t()]) :: {:ok, Path.t() | nil} | tool_error()
+  def take_relaunch(config, qa_roots) do
+    case config.host.cmd.("/bin/sh", ["-c", @take_relaunch_script, "sh" | qa_roots], timeout_ms: @timeout_ms, output_limit: @output_limit) do
       {:ok, {output, 0}} -> {:ok, marker(output, "symphony-qa-relaunch")}
       other -> tool_error("qa_relaunch_failed", "The update helper's relaunch requests could not be read: #{describe(other)}")
     end

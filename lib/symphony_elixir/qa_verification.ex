@@ -12,13 +12,24 @@ defmodule SymphonyElixir.QaVerification do
   through the one writer, `SymphonyElixir.TransitionGuard`:
 
     * `pass` -> `Merging`
+    * `pass` with `scope: none` (nothing to judge on screen, by the agent's answer or by
+      `SymphonyElixir.QaPolicy`) -> `Merging` with the reason in the report, only when the pass built,
+      launched and checked the app; otherwise `inconclusive`
     * `fail` -> `Rework`, with the report on the ticket for the next run
+    * `inconclusive` (the QA run's own omission, such as a pass that claimed screens but ran no wide
+      pass) -> rerun once on the same head, then a Needs Decision hold in `QA`; never the self-heal
+      lane, since nothing in the environment is broken
     * skip (the deterministic docs-only/internal-only rule, `SymphonyElixir.QaPolicy`) -> `Merging`
     * no open pull request, or a head that changes nothing -> a Needs Decision hold in `QA`
       (`SymphonyElixir.ClosedPullRequest`), with no verdict recorded: an empty diff means there is
       no change to verify, never a docs-only one
-    * `blocked` (tooling or environment) -> retried boundedly on the same head, then a Blocked hold
-      with the reason recorded
+    * `blocked` (tooling or environment) -> retried boundedly on the same head, then the self-heal
+      lane when the QA tools raised the block themselves or only a person can clear it, else a Needs
+      Decision hold in `QA`: a block nothing names as broken gets no fix ticket
+    * a `fail` or a block on a head the PR and CI watcher reads as rejected by CI (red checks, a
+      required check that never reported, a conflict with the base branch) -> `blocked` with the
+      component `ci`, the ticket left in `QA` for the watcher to route (a rerun, then CI Fix, or a
+      conflict fix): a CI or merge state is not a defect of the change, so it never goes to `Rework`
     * a provider usage limit, or a model API the agent could not reach -> no verdict and no report:
       the run comes back as `{:error, {:usage_limited, info}}`, and the orchestrator holds it until
       the limit resets (SPEC §8.4.1)
@@ -41,8 +52,11 @@ defmodule SymphonyElixir.QaVerification do
   alias SymphonyElixir.{
     CiWait,
     ClosedPullRequest,
+    Config,
     Handoff,
     MergeConfirmation,
+    NeedsDecisionHold,
+    PrWatch,
     QaPolicy,
     QaPreCheck,
     SelfHeal,
@@ -59,7 +73,9 @@ defmodule SymphonyElixir.QaVerification do
 
   @verdict_kind "qa"
   @max_blocked_attempts 2
+  @max_inconclusive_attempts 2
   @head_unreadable_signal "qa_head_unreadable"
+  @ci_component "ci"
   @acceptance_heading ~r/^\s*\#{1,6}\s+Acceptance criteria\s*:?\s*$/i
   @any_heading ~r/^\s*\#{1,6}\s+\S/
 
@@ -363,6 +379,13 @@ defmodule SymphonyElixir.QaVerification do
     end
   end
 
+  defp apply_outcome(issue, opts, settings, head, %{verdict: :pass, scope: :none} = outcome) do
+    case missing_app_checks(outcome) do
+      [] -> pass(issue, opts, settings, head, outcome)
+      missing -> inconclusive(issue, opts, settings, head, Map.merge(outcome, %{verdict: :inconclusive, reason: unproved(missing)}))
+    end
+  end
+
   defp apply_outcome(issue, opts, settings, head, %{verdict: :pass} = outcome) do
     pass(issue, opts, settings, head, outcome)
   end
@@ -375,8 +398,23 @@ defmodule SymphonyElixir.QaVerification do
     blocked(issue, opts, settings, head, outcome)
   end
 
+  defp apply_outcome(issue, opts, settings, head, %{verdict: :inconclusive} = outcome) do
+    inconclusive(issue, opts, settings, head, outcome)
+  end
+
   defp apply_outcome(_issue, _opts, _settings, _head, %{verdict: verdict}) do
     {:error, {:qa_unknown_verdict, verdict}}
+  end
+
+  defp pass(issue, opts, settings, head, %{scope: :none} = outcome) do
+    record_verdict(issue, opts, head, "pass", %{scope: "none", reason: outcome.reason})
+    publish_report(issue, opts, head, outcome, "Merging")
+    Logger.info("QA passed for #{issue_label(issue)} head=#{head} with nothing on screen to judge: #{outcome.reason}")
+
+    merge_entry(issue, opts, settings, :qa_pass, %{reason: "the app built, launched and checked healthy; nothing on screen to judge"}, %{
+      recommendation: "the app built, launched and checked healthy, and the change has nothing on screen to judge; ready to merge",
+      qa: "nothing on screen to judge: #{outcome.reason}"
+    })
   end
 
   defp pass(issue, opts, settings, head, outcome) do
@@ -390,6 +428,47 @@ defmodule SymphonyElixir.QaVerification do
     })
   end
 
+  # A pass with nothing on screen to judge rests on the app starting: the merge stays gated on a
+  # build that produced the app, a launch, and a `qa_check_app` that found it healthy
+  # (`SymphonyElixir.QaDriver.app_check/1`). A pass with no macOS app to build has none of them.
+  defp missing_app_checks(outcome) do
+    checks = Map.get(outcome, :app_check) || %{}
+
+    for {key, tool} <- [built: "qa_build", launched: "qa_launch_app", checked: "a healthy qa_check_app"], Map.get(checks, key) != true, do: tool
+  end
+
+  defp unproved(missing) do
+    "the pass answered `scope: none` (nothing on screen to judge), but #{Enum.join(missing, ", ")} did not run, " <>
+      "so it did not prove the app builds and starts"
+  end
+
+  # An inconclusive pass is the QA run's own omission, not a fault of its environment: it ran but did
+  # not reach a verdict it could ground (a pass that claimed screens but ran no wide pass, a
+  # `scope: none` pass that never started the app). Nothing is broken for the self-heal lane to
+  # repair, so it never goes there: the pass reruns once on the same head, like an inconclusive Code
+  # Review, then asks a person on a Needs Decision hold. A head CI rejects is the PR watcher's first.
+  defp inconclusive(issue, opts, settings, head, outcome) do
+    case ci_rejection(issue, opts, head) do
+      nil -> inconclusive_run(issue, opts, settings, head, outcome)
+      rejection -> ci_blocked(issue, opts, settings, head, outcome, rejection)
+    end
+  end
+
+  defp inconclusive_run(issue, opts, settings, head, outcome) do
+    details = blocked_details(opts, settings, outcome)
+    record_verdict(issue, opts, head, "inconclusive", details)
+    attempts = count_verdicts(issue, opts, head, "inconclusive")
+    rerun? = attempts < @max_inconclusive_attempts
+    publish_report(issue, opts, head, outcome, if(rerun?, do: "QA (inconclusive, rerunning)", else: "QA (inconclusive; a person decides)"))
+
+    Logger.warning(
+      "QA inconclusive for #{issue_label(issue)} head=#{head} model=#{details.model} playbooks=#{Enum.join(details.playbooks, ",")} " <>
+        "(attempt #{attempts}/#{@max_inconclusive_attempts}); #{if rerun?, do: "rerunning", else: "asking a person"}: #{details.reason}"
+    )
+
+    if rerun?, do: :ok, else: escalate(issue, opts, settings, attempts, details.reason)
+  end
+
   defp qa_result(outcome) do
     case Map.get(outcome, :summary) do
       summary when is_binary(summary) and summary != "" -> summary
@@ -397,7 +476,16 @@ defmodule SymphonyElixir.QaVerification do
     end
   end
 
+  # A pass that did not get through on a head CI rejects says nothing about the change, so neither
+  # a fail nor a block of the environment is recorded: the head is the PR watcher's to route.
   defp fail(issue, opts, settings, head, outcome) do
+    case ci_rejection(issue, opts, head) do
+      nil -> fail_to_rework(issue, opts, settings, head, outcome)
+      rejection -> ci_blocked(issue, opts, settings, head, outcome, rejection)
+    end
+  end
+
+  defp fail_to_rework(issue, opts, settings, head, outcome) do
     record_verdict(issue, opts, head, "fail")
     publish_report(issue, opts, head, outcome, "Rework")
     Logger.warning("QA failed for #{issue_label(issue)} head=#{head}: #{verdict_reason(outcome)}")
@@ -410,18 +498,145 @@ defmodule SymphonyElixir.QaVerification do
   # (`SymphonyElixir.SelfHeal`), which files or reuses the fix ticket for the broken component,
   # holds the ticket on it, and resumes it by itself when the fix lands — or, for a block only a
   # person can clear, takes the access hold a person lifts. Either way the ticket pauses in QA
-  # rather than failing silently.
-  defp blocked(issue, opts, _settings, head, outcome) do
-    record_verdict(issue, opts, head, "blocked")
+  # rather than failing silently. The block's reason, whether it needs a person, the model the run
+  # used and the playbooks it ran are logged and recorded on the verdict, so a block can be
+  # diagnosed after the fact.
+  defp blocked(issue, opts, settings, head, outcome) do
+    case ci_rejection(issue, opts, head) do
+      nil -> blocked_on_environment(issue, opts, settings, head, outcome)
+      rejection -> ci_blocked(issue, opts, settings, head, outcome, rejection)
+    end
+  end
+
+  defp blocked_on_environment(issue, opts, settings, head, outcome) do
+    details = blocked_details(opts, settings, outcome)
+    record_verdict(issue, opts, head, "blocked", details)
     attempts = blocked_attempts(issue, opts, head)
+    next = blocked_next(attempts, outcome)
     publish_report(issue, opts, head, outcome, blocked_target(attempts, outcome))
 
-    if retry_blocked?(attempts, outcome) do
-      Logger.warning("QA blocked for #{issue_label(issue)} head=#{head} (attempt #{attempts}/#{@max_blocked_attempts}); retrying")
-      :ok
-    else
-      self_heal(issue, opts, attempts, outcome)
+    Logger.warning(
+      "QA blocked for #{issue_label(issue)} head=#{head} model=#{details.model} needs_person=#{details.needs_person} " <>
+        "playbooks=#{Enum.join(details.playbooks, ",")} (attempt #{attempts}/#{@max_blocked_attempts}); " <>
+        "#{next_label(next)}: #{details.reason}"
+    )
+
+    case next do
+      :retry -> :ok
+      :self_heal -> self_heal(issue, opts, attempts, outcome)
+      :escalate -> escalate(issue, opts, settings, attempts, details.reason)
     end
+  end
+
+  defp blocked_next(attempts, outcome) do
+    cond do
+      retry_blocked?(attempts, outcome) -> :retry
+      self_heal_input?(outcome) -> :self_heal
+      true -> :escalate
+    end
+  end
+
+  defp next_label(:retry), do: "retrying"
+  defp next_label(:self_heal), do: "self-healing"
+  defp next_label(:escalate), do: "asking a person"
+
+  # What the self-heal lane may repair: a block the QA tools raised themselves, which names the
+  # broken part of the QA environment, or one only a person can clear (`needs_person`, the access
+  # hold). Two structured answers of the QA agent route there too: `covered_by` waits on the open
+  # ticket that already tracks the gap and files nothing, and `needs_dev_server` files the project's
+  # own dev server setup in its repo (TP-1106). Any other block — the agent's own account of what
+  # went wrong, a run that crashed or ran out of tokens, a check that never finished — names nothing
+  # broken to fix, so a fix ticket for it would chase a non-problem (TP-1118): it goes to a person.
+  defp self_heal_input?(%{needs_person: true}), do: true
+  defp self_heal_input?(%{needs_dev_server: true}), do: true
+  defp self_heal_input?(%{covered_by: identifier}) when is_binary(identifier), do: true
+  defp self_heal_input?(outcome), do: tool_cause?(Map.get(outcome, :cause))
+
+  defp tool_cause?({:qa_worker, _code}), do: true
+  defp tool_cause?({:qa_host_missing_tool, _names}), do: true
+  defp tool_cause?({:qa_host_tool_check_failed, _reason}), do: true
+  defp tool_cause?({:qa_host_tunnel_failed, _reason}), do: true
+  defp tool_cause?({:qa_dev_server_failed, _cause}), do: true
+  defp tool_cause?({:qa_dev_server_failed, _cause, _log}), do: true
+  defp tool_cause?(_cause), do: false
+
+  # A pass that keeps ending without a verdict and names nothing the machine can repair: the ticket
+  # pauses in QA on a person's decision. Answering it clears the hold and QA runs again on the same
+  # head; each further run that ends the same way asks again.
+  defp escalate(issue, opts, settings, attempts, reason) do
+    Logger.warning("QA for #{issue_label(issue)} could not reach a verdict after #{attempts} run(s); asking a person: #{reason}")
+    hold_opts = opts |> Keyword.take([:tracker, :store]) |> Keyword.put(:repo_key, repo_key(issue, opts))
+
+    case NeedsDecisionHold.pause(issue, escalation_request(issue, settings, attempts, reason), hold_opts) do
+      :ok -> :ok
+      {:error, error} -> {:error, {:qa_escalation_failed, error}}
+    end
+  end
+
+  defp escalation_request(issue, settings, attempts, reason) do
+    %{
+      title: "QA could not reach a verdict on #{issue_label(issue)}",
+      question: "QA ran #{issue_mention(issue)} #{attempts} times on the same change without reaching a verdict. How should it continue?",
+      why: "The last run ended with: #{String.replace(reason, "`", "")}. No QA tool reported a broken part of the QA environment, so the machine files no fix ticket for it.",
+      options: [
+        %{label: "Run QA again", effect: "the hold clears and QA runs once more on the same change", recommended: true},
+        %{label: "Send it back to Rework", effect: "you move #{issue_label(issue)} to Rework, and its next run reads QA's report"},
+        %{label: "Merge without a QA verdict", effect: "you move #{issue_label(issue)} to #{TransitionGuard.target(:qa_pass, %{settings: settings})}, and it merges on its review and CI alone"}
+      ],
+      if_unanswered: "#{issue_label(issue)} stays in #{settings.tracker.qa_state} and goes no further."
+    }
+  end
+
+  defp issue_mention(%Issue{identifier: identifier, title: title}) when is_binary(identifier) and is_binary(title), do: "#{identifier} (#{title})"
+  defp issue_mention(issue), do: issue_label(issue)
+
+  # A head the PR and CI watcher reads as rejected by CI: its checks red, a required check that never
+  # reported, or a conflict with the base branch (which runs no workflow at all). A QA pass that did
+  # not get through there failed for a CI or merge state, not for the change's behaviour, and those
+  # cases are the watcher's own: a rerun, then CI Fix with the failed log (R22, R21), or a conflict
+  # fix (R14), each bounded. So the pass is recorded `blocked` with the component `ci`, its report is
+  # published, and the ticket stays in QA: the dispatch gate holds QA back on that head, and the
+  # watcher's next read routes it. No blocked attempt is spent and no fix ticket is filed. Only the
+  # watcher's record of this same head counts; with none, the outcome is applied as it is.
+  defp ci_rejection(issue, opts, head) when is_binary(head) do
+    case PrWatch.watch(issue.id, repo_key: repo_key(issue, opts)) do
+      %{head_sha: ^head, facts: facts} -> rejection(facts)
+      _none_or_other_head -> nil
+    end
+  end
+
+  defp ci_rejection(_issue, _opts, _head), do: nil
+
+  defp rejection(%{mergeable: :dirty}), do: "the PR conflicts with its base branch, so CI cannot run on this head"
+  defp rejection(%{ci: :red, failing_check: check}) when is_binary(check), do: "CI is red on this head: #{check} failed"
+  defp rejection(%{ci: :red}), do: "CI is red on this head"
+  defp rejection(%{ci: :required_missing}), do: "a required check never reported on this head"
+  defp rejection(_facts), do: nil
+
+  defp ci_blocked(issue, opts, settings, head, outcome, rejection) do
+    outcome = Map.merge(outcome, %{verdict: :blocked, reason: rejection, needs_person: false})
+    details = opts |> blocked_details(settings, outcome) |> Map.merge(%{reason: rejection, component: @ci_component})
+    record_verdict(issue, opts, head, "blocked", details)
+    publish_report(issue, opts, head, outcome, "QA (blocked on CI; the PR watcher routes the head)")
+
+    Logger.warning("QA blocked on CI for #{issue_label(issue)} head=#{head} model=#{details.model}; handing the head to the PR watcher: #{rejection}")
+
+    :ok
+  end
+
+  defp blocked_details(opts, settings, outcome) do
+    %{
+      reason: verdict_reason(outcome),
+      needs_person: needs_person?(outcome),
+      model: qa_model(opts, settings),
+      playbooks: Enum.map(Map.get(outcome, :playbooks, []), &to_string/1)
+    }
+  end
+
+  # The model the QA agent ran on: the run's profile, else the QA profile `QaAgent` starts with.
+  defp qa_model(opts, settings) do
+    profile = Keyword.get(opts, :run_profile) || Config.qa_profile(settings)
+    Map.get(profile, :model) || "default"
   end
 
   defp self_heal(issue, opts, attempts, outcome) do
@@ -439,10 +654,13 @@ defmodule SymphonyElixir.QaVerification do
     if retry_blocked?(attempts, outcome), do: "QA (blocked, retrying)", else: "QA (blocked)"
   end
 
-  defp blocked_attempts(issue, opts, head) do
+  # A block on CI is the watcher's, not the environment's, so it spends no attempt.
+  defp blocked_attempts(issue, opts, head), do: count_verdicts(issue, opts, head, "blocked")
+
+  defp count_verdicts(issue, opts, head, outcome) do
     issue
     |> verdicts(opts)
-    |> Enum.count(&(&1.head_sha == head and &1.outcome == "blocked"))
+    |> Enum.count(&(&1.head_sha == head and &1.outcome == outcome and Map.get(&1.details, :component) != @ci_component))
   end
 
   defp needs_person?(%{needs_person: true}), do: true
@@ -473,7 +691,11 @@ defmodule SymphonyElixir.QaVerification do
       findings: Map.get(result, :findings, []),
       reason: Map.get(result, :reason),
       needs_person: Map.get(result, :needs_person, false),
+      needs_dev_server: Map.get(result, :needs_dev_server, false),
       covered_by: Map.get(result, :covered_by),
+      cause: Map.get(result, :cause),
+      scope: Map.get(result, :scope),
+      app_check: Map.get(result, :app_check),
       tokens: tokens,
       playbooks: playbook_kinds(playbooks)
     }
@@ -553,8 +775,8 @@ defmodule SymphonyElixir.QaVerification do
     end
   end
 
-  defp record_verdict(issue, opts, head, outcome) do
-    TicketSignals.record_verdict(repo_key(issue, opts), issue.id, @verdict_kind, head, outcome)
+  defp record_verdict(issue, opts, head, outcome, details \\ %{}) do
+    TicketSignals.record_verdict(repo_key(issue, opts), issue.id, @verdict_kind, head, outcome, details)
   end
 
   defp record_move_signal(issue, opts, signal, extra) do
@@ -586,6 +808,7 @@ defmodule SymphonyElixir.QaVerification do
   defp verdict_reason(_outcome), do: "the run could not verify the change"
 
   defp error_reason(reason) when is_binary(reason), do: reason
+  defp error_reason({:qa_dev_server_failed, _cause, _log} = reason), do: QaAgent.blocked_reason(reason)
   defp error_reason({:remote_worker_unsupported, host}), do: "QA cannot run on the remote worker #{inspect(host)}"
   defp error_reason(reason), do: inspect(reason)
 
