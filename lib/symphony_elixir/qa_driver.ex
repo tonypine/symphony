@@ -139,9 +139,11 @@ defmodule SymphonyElixir.QaDriver do
   and again at each check, on the QA host for a `worker_host`), naming the page
   the agent passes and that window size in each problem. A resize on a screen
   whose usable area is under 1400×900 pt marks the pass's wide pass limited
-  (`wide_pass/1`), which `SymphonyElixir.QaAgent` reports as `blocked`, as it does
-  a `pass` with no resize at all (`wide_pass/1` is `nil`), unless it is an epic
-  review that launched no app (`launched_app?/1`).
+  (`wide_pass/1`), which `SymphonyElixir.QaAgent` reports as `blocked`. A `pass`
+  with no resize at all (`wide_pass/1` is `nil`) is `inconclusive` (an epic review
+  reports it `blocked`, unless it launched no app, `launched_app?/1`), unless the
+  pass answered `scope: none`: then `app_check/1` says whether it built, launched and
+  checked the app, which is the whole check of such a pass.
 
   OpenRouter stub: the first `qa_launch_app` starts a
   `SymphonyElixir.OpenRouter.Stub` in this BEAM, on `127.0.0.1`, and every app
@@ -404,6 +406,36 @@ defmodule SymphonyElixir.QaDriver do
     :exit, _reason -> false
   end
 
+  @doc """
+  What the pass did with the app: `built` when the last `qa_build` produced the app, `launched`
+  when `qa_launch_app` started one (even one that has quit since), and `checked` when the last
+  `qa_check_app` answer found it healthy. All `false` when there is no driver.
+  """
+  @spec app_check(pid() | nil) :: %{built: boolean(), launched: boolean(), checked: boolean()}
+  def app_check(nil), do: %{built: false, launched: false, checked: false}
+
+  def app_check(driver) when is_pid(driver) do
+    GenServer.call(driver, :app_check)
+  catch
+    :exit, _reason -> app_check(nil)
+  end
+
+  @doc """
+  The `qa_worker_*` tool error every `qa_*` tool returns when Symphony refused or could not reach
+  the QA host, as `{code, message}`; `nil` when the QA host is usable or there is no driver.
+  """
+  @spec unavailable(pid() | nil) :: {String.t(), String.t()} | nil
+  def unavailable(nil), do: nil
+
+  def unavailable(driver) when is_pid(driver) do
+    case GenServer.call(driver, :config) do
+      %{unavailable: {:error, {:qa_tool, code, message}}} -> {code, message}
+      _usable -> nil
+    end
+  catch
+    :exit, _reason -> nil
+  end
+
   @doc "Stops the driver, quitting every app it launched."
   @spec stop(pid() | nil) :: :ok
   def stop(nil), do: :ok
@@ -648,7 +680,9 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, app} <- GenServer.call(driver, {:app, pid}),
          {:ok, reports} <- crash_reports(config, app.name),
          {:ok, responding} <- responding(driver, config, pid, app) do
-      {:ok, health(pid, page, app, reports -- app.crash_reports, responding, config)}
+      health = health(pid, page, app, reports -- app.crash_reports, responding, config)
+      GenServer.call(driver, {:checked, health["healthy"]})
+      {:ok, health}
     end
   end
 
@@ -1822,7 +1856,7 @@ defmodule SymphonyElixir.QaDriver do
     }
 
     state = %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil, stub: nil}
-    state = Map.merge(state, %{wide_pass: nil, launched_app?: false, host_ports: pick_host_ports(), tunnel: nil, tunnel_error: nil, checkouts: []})
+    state = Map.merge(state, %{wide_pass: nil, launched_app?: false, checked_app?: false, host_ports: pick_host_ports(), tunnel: nil, tunnel_error: nil, checkouts: []})
     state = Map.merge(state, %{pair: nil, pair_launches: %{}, feed: nil, dev_server: nil})
     state = Map.put(state, :host_check, check_tools(state.config))
     {:ok, open_tunnel(state, @tunnel_attempts)}
@@ -1935,6 +1969,11 @@ defmodule SymphonyElixir.QaDriver do
   def handle_call(:helper, _from, state), do: {:reply, state.helper, state}
   def handle_call(:wide_pass, _from, state), do: {:reply, state.wide_pass, state}
   def handle_call(:launched_app?, _from, state), do: {:reply, state.launched_app?, state}
+
+  def handle_call(:app_check, _from, state),
+    do: {:reply, %{built: state.build != nil, launched: state.launched_app?, checked: state.checked_app?}, state}
+
+  def handle_call({:checked, healthy}, _from, state), do: {:reply, :ok, %{state | checked_app?: healthy}}
   def handle_call({:helper, path}, _from, state), do: {:reply, :ok, %{state | helper: path}}
 
   def handle_call({:record_build, fingerprint, ignored}, _from, state),

@@ -114,6 +114,23 @@ defmodule SymphonyElixir.QaAgentTest do
     end
   end
 
+  # Builds, launches and checks the macos_app without a wide pass, as a QA agent does for a change
+  # with nothing on screen to judge, then answers like `FakeSession`.
+  defmodule AppCheckSession do
+    alias SymphonyElixir.QaDriver
+
+    defdelegate start_session(workspace, opts), to: FakeSession
+    defdelegate stop_session(session), to: FakeSession
+
+    def run_turn(session, prompt, issue, opts) do
+      driver = opts[:qa_driver]
+      {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      {:ok, %{"pid" => pid}} = QaDriver.call_tool(driver, "qa_launch_app", %{})
+      {:ok, %{"healthy" => true}} = QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid})
+      FakeSession.run_turn(session, prompt, issue, opts)
+    end
+  end
+
   defmodule AndroidPutFileSession do
     defdelegate start_session(workspace, opts), to: FakeSession
     defdelegate stop_session(session), to: FakeSession
@@ -249,6 +266,9 @@ defmodule SymphonyElixir.QaAgentTest do
 
       "/fake/helper", ["ax-resize" | _args], _opts ->
         {:ok, {resized, 0}}
+
+      "/fake/helper", ["ax-ping" | _args], _opts ->
+        {:ok, {~s({"ok":true,"responding":true,"ms":2}), 0}}
     end
 
     %{
@@ -689,6 +709,16 @@ defmodule SymphonyElixir.QaAgentTest do
 
       assert {:ok, blocked} = QaAgent.parse_response(~s({"verdict":"blocked","reason":"no hub running","needs_dev_server":"yes"}))
       refute Map.has_key?(blocked, :needs_dev_server)
+    end
+
+    test "reads a pass with nothing on screen to judge, and ignores any other scope" do
+      assert {:ok, %{verdict: :pass, scope: :none, reason: "the change touches no screen"}} =
+               QaAgent.parse_response(~s({"verdict":"pass","scope":" None ","reason":"the change touches no screen"}))
+
+      for scope <- [~s("journeys"), ~s(""), "true", "null"] do
+        assert {:ok, pass} = QaAgent.parse_response(~s({"verdict":"pass","scope":#{scope}}))
+        refute Map.has_key?(pass, :scope)
+      end
     end
 
     test "keeps a covering ticket the blocked answer names, and drops anything that is not an identifier" do
@@ -1456,7 +1486,7 @@ defmodule SymphonyElixir.QaAgentTest do
       [macos_app] =
         Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
 
-      assert {:ok, %{result: %{verdict: :blocked}}} =
+      assert {:ok, %{result: %{verdict: :inconclusive}}} =
                QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
                  git: fake_git(),
                  qa_agent_module: FakeSession,
@@ -1590,7 +1620,7 @@ defmodule SymphonyElixir.QaAgentTest do
           )
         end)
 
-      assert {:ok, %{result: %{verdict: :blocked}}} = result
+      assert {:ok, %{result: %{verdict: :inconclusive}}} = result
       assert log =~ ~r/QA dev server started issue_id=\S+ issue_identifier=TP-900 worker_host=qa-vm port=8090 pid=4242/
       assert log =~ "QA dev server stopped issue_id="
       assert_received {:qa_host_shipped, "/Users/qa/.symphony-qa/runs/run.abc/dev-server/src"}
@@ -1712,7 +1742,7 @@ defmodule SymphonyElixir.QaAgentTest do
       refute Map.has_key?(failed, :needs_person)
     end
 
-    test "reports a macos_app pass that never resized a window as blocked, since its wide pass did not run" do
+    test "reports a macos_app pass that never resized a window as inconclusive, since its wide pass did not run" do
       [macos_app] =
         Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
 
@@ -1726,18 +1756,126 @@ defmodule SymphonyElixir.QaAgentTest do
         )
       end
 
-      assert {:ok, %{result: %{verdict: :blocked, reason: reason, steps: [%{name: "symphony check"}]} = blocked}} =
+      assert {:ok, %{result: %{verdict: :inconclusive, reason: reason, steps: [%{name: "symphony check"}]} = inconclusive}} =
                run.({:ok, %{result: FakeSession.pass_json()}})
 
       assert reason =~ "the wide pass did not run: no `qa_resize_window` call resized the app's window"
-      refute Map.has_key?(blocked, :needs_person)
-      assert Report.render(%{verdict: :blocked, reason: reason, sha: @sha, target_state: "In Review"}) =~ "Reason: the wide pass did not run"
+      refute Map.has_key?(inconclusive, :needs_person)
+      assert Report.render(%{verdict: :inconclusive, reason: reason, sha: @sha, target_state: "QA"}) =~ "Reason: the wide pass did not run"
 
       fail_json = Jason.encode!(%{verdict: "fail", summary: "The app crashed at launch.", steps: [], findings: ["App exits at launch"]})
       assert {:ok, %{result: %{verdict: :fail}}} = run.({:ok, %{result: fail_json}})
 
       Application.delete_env(:symphony_elixir, :qa_test_turn_result)
       assert {:ok, %{result: %{verdict: :pass}}} = QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+    end
+
+    test "a macos_app pass with nothing on screen to judge owes no wide pass and carries what it did with the app" do
+      [macos_app] =
+        Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
+
+      scope_none = Jason.encode!(%{verdict: "pass", summary: "Nothing to judge.", scope: "none", reason: "the change touches no screen; the app built and launched"})
+      Application.put_env(:symphony_elixir, :qa_test_turn_result, {:ok, %{result: scope_none}})
+
+      run = fn session ->
+        {result, _log} =
+          with_log(fn ->
+            QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
+              git: fake_git(),
+              qa_agent_module: session,
+              qa_driver_opts: [host: wide_pass_host({1920, 1200}), git: fn _args, _cwd -> {"", 0} end]
+            )
+          end)
+
+        result
+      end
+
+      assert {:ok, %{result: %{verdict: :pass, scope: :none, reason: "the change touches no screen; the app built and launched", app_check: app_check}}} =
+               run.(AppCheckSession)
+
+      assert app_check == %{built: true, launched: true, checked: true}
+
+      # The agent is told when such a pass applies, and what Symphony accepts it on.
+      assert_received {:qa_turn, _session, prompt, _issue, _turn_opts}
+      assert prompt =~ "Nothing on screen to judge:"
+      assert prompt =~ ~r/Symphony accepts that pass only when the build, the launch and a healthy `qa_check_app` all\s+ran/
+      assert prompt =~ ~s("scope": "<optional: none, on a pass with nothing to judge on screen>")
+
+      # A pass that never checked the app, or never started it, carries that too; QA verification
+      # does not accept it (`SymphonyElixir.QaVerification`).
+      assert {:ok, %{result: %{verdict: :pass, scope: :none, app_check: launched}}} = run.(LaunchOnlySession)
+      assert launched == %{built: true, launched: true, checked: false}
+      assert {:ok, %{result: %{verdict: :pass, scope: :none, app_check: nothing}}} = run.(FakeSession)
+      assert nothing == %{built: false, launched: false, checked: false}
+      assert_received {:qa_turn, _session, _prompt, _issue, _turn_opts}
+      assert_received {:qa_turn, _session, _prompt, _issue, _turn_opts}
+
+      # The QA policy found nothing on screen: the agent is told build and launch are the whole
+      # check, and its pass is one with nothing to judge, whatever its answer said.
+      Application.put_env(:symphony_elixir, :qa_test_turn_result, {:ok, %{result: FakeSession.pass_json()}})
+
+      {result, _log} =
+        with_log(fn ->
+          QaAgent.run(job(%{playbooks: [Map.put(macos_app, :scope, :none)]}), Config.settings!(),
+            git: fake_git(),
+            qa_agent_module: AppCheckSession,
+            qa_driver_opts: [host: wide_pass_host({1920, 1200}), git: fn _args, _cwd -> {"", 0} end]
+          )
+        end)
+
+      assert {:ok, %{result: %{verdict: :pass, scope: :none, reason: reason, app_check: checked}}} = result
+      assert checked == %{built: true, launched: true, checked: true}
+      assert reason =~ "Symphony's QA policy found nothing on screen to judge"
+      assert_received {:qa_turn, _session, policy_prompt, _issue, _turn_opts}
+      assert policy_prompt =~ "so build and launch are the whole check"
+
+      # A pass without the macos_app playbook is told nothing of the kind.
+      Application.delete_env(:symphony_elixir, :qa_test_turn_result)
+      assert {:ok, %{result: %{verdict: :pass} = cli_pass}} = QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+      refute Map.has_key?(cli_pass, :scope)
+      assert_received {:qa_turn, _session, cli_prompt, _issue, _turn_opts}
+      refute cli_prompt =~ "Nothing on screen to judge"
+      refute cli_prompt =~ ~s("scope")
+    end
+
+    test "reports a pass whose QA host Symphony refused as blocked by the QA host, keeping a fail" do
+      [macos_app] =
+        Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
+
+      host = %{
+        kill: fn _pid -> :ok end,
+        prepare: fn _operator_home, _canary -> {:error, {:unsafe, "has a private key ~/.ssh/id_ed25519"}} end,
+        cleanup: fn _dir -> :ok end
+      }
+
+      run = fn turn_result ->
+        Application.put_env(:symphony_elixir, :qa_test_turn_result, turn_result)
+
+        {result, _log} =
+          with_log(fn ->
+            QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
+              git: fake_git(),
+              qa_agent_module: FakeSession,
+              qa_driver_opts: [worker_host: "qa-vm", host: host]
+            )
+          end)
+
+        result
+      end
+
+      assert {:ok, %{result: %{verdict: :blocked, cause: {:qa_worker, "qa_worker_unsafe"}, reason: reason}}} =
+               run.({:ok, %{result: FakeSession.pass_json()}})
+
+      assert reason =~ "The QA host qa-vm has a private key ~/.ssh/id_ed25519."
+
+      blocked_json = Jason.encode!(%{verdict: "blocked", summary: "", reason: "every qa_* tool refused the QA host"})
+
+      assert {:ok, %{result: %{verdict: :blocked, cause: {:qa_worker, "qa_worker_unsafe"}, reason: "every qa_* tool refused the QA host"}}} =
+               run.({:ok, %{result: blocked_json}})
+
+      fail_json = Jason.encode!(%{verdict: "fail", summary: "The CLI failed.", steps: [], findings: ["exit 1"]})
+      assert {:ok, %{result: %{verdict: :fail} = failed}} = run.({:ok, %{result: fail_json}})
+      refute Map.has_key?(failed, :cause)
     end
 
     test "holds an epic review to the wide pass only when it launched an app" do
@@ -1767,13 +1905,38 @@ defmodule SymphonyElixir.QaAgentTest do
       assert reason =~ "the wide pass did not run: no `qa_resize_window` call resized the app's window"
 
       assert {:ok, %{result: %{verdict: :pass}}} = run.(WidePassSession)
+
+      # The epic review judges the merged result: an answer of nothing to judge on screen does not
+      # excuse its wide pass, and its prompt does not offer one.
+      scope_none = Jason.encode!(%{verdict: "pass", summary: "Nothing to judge.", scope: "none", reason: "no screen"})
+      Application.put_env(:symphony_elixir, :qa_test_turn_result, {:ok, %{result: scope_none}})
+      assert {:ok, %{result: %{verdict: :blocked, reason: reason}}} = run.(LaunchOnlySession)
+      assert reason =~ "the wide pass did not run"
+
+      assert {:ok, %{result: %{verdict: :pass}}} =
+               (fn ->
+                  {result, _log} =
+                    with_log(fn ->
+                      QaAgent.run(%{epic_job | playbooks: [Map.put(macos_app, :scope, :none)]}, Config.settings!(),
+                        git: fake_git(),
+                        qa_agent_module: FakeSession,
+                        qa_driver_opts: [host: wide_pass_host({1920, 1200}), git: fn _args, _cwd -> {"", 0} end]
+                      )
+                    end)
+
+                  result
+                end).()
+
+      assert_received {:qa_turn, _session, epic_prompt, _issue, _turn_opts}
+      refute epic_prompt =~ "Nothing on screen to judge:"
+      refute epic_prompt =~ ~s("scope": "<optional)
     end
 
     test "lets the QA driver read fixtures from the pass's own $TMPDIR" do
       [macos_app] =
         Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
 
-      assert {:ok, %{result: %{verdict: :blocked}}} =
+      assert {:ok, %{result: %{verdict: :inconclusive}}} =
                QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
                  git: fake_git(),
                  qa_agent_module: PutFileSession,
@@ -2343,6 +2506,15 @@ defmodule SymphonyElixir.QaAgentTest do
       blocked = Report.render(%{verdict: :blocked, sha: @sha, target_state: "In Review", reason: "no mix", summary: "ignored"})
       assert blocked =~ "Reason: no mix"
       refute blocked =~ "ignored"
+
+      inconclusive = Report.render(%{verdict: :inconclusive, sha: @sha, target_state: "QA (inconclusive, rerunning)", reason: "no wide pass", summary: "ignored"})
+      assert inconclusive =~ "**Verdict:** inconclusive → QA (inconclusive, rerunning)"
+      assert inconclusive =~ "Reason: no wide pass"
+      refute inconclusive =~ "ignored"
+
+      nothing = Report.render(%{verdict: :pass, scope: :none, sha: @sha, target_state: "Merging", reason: "the change touches no screen", summary: ""})
+      assert nothing =~ "**Verdict:** pass (nothing on screen to judge; the app built and launched) → Merging"
+      assert nothing =~ "\nWhy nothing was judged on screen: the change touches no screen\n"
 
       long = Report.render(%{verdict: :pass, sha: @sha, target_state: "In Review", steps: [%{name: "x", status: "pass", details: String.duplicate("a", 2_100), evidence: []}]})
       assert long =~ "[... truncated ...]"

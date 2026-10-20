@@ -139,7 +139,8 @@ defmodule SymphonyElixir.QaAgent.Selection do
           optional(:application_ids) => [String.t()],
           optional(:browser_mcp) => map() | nil,
           optional(:dev_server) => true,
-          optional(:requires) => [String.t()]
+          optional(:requires) => [String.t()],
+          optional(:scope) => :none
         }
   @type decision :: {:run, [playbook()]} | {:skip, String.t()}
 

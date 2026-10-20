@@ -1335,7 +1335,7 @@ agent reading check runs: a green head does not prove it, since a path-filtered 
 | --- | --- | --- |
 | the check passed and the test is in the checkout | `pass`, linked to the check run | the agent starts; the prompt lists the step as confirmed, with its link, and tells the agent not to walk it |
 | the check failed, did not run on the head, reported only `skipped`, or the named test is not in the checkout | `fail`, naming the step and what is missing | `fail` to `Rework` with no agent run: the ticket's proof is part of its work |
-| the check is still running | waiting | waits like the epic review waits for CI (above): the pass starts again a minute later, with no verdict; after an hour on the same head it is `blocked` with the reason, retried like any blocked pass, then handed to the self-heal lane |
+| the check is still running | waiting | waits like the epic review waits for CI (above): the pass starts again a minute later, with no verdict; after an hour on the same head it is `blocked` with the reason, retried like any blocked pass, then a person decides (no QA tool raised it, so it never reaches the self-heal lane) |
 | CI on the PR head cannot be read, or the PR head is not the commit QA judges | — | `blocked` with the reason |
 
 The QA report lists every result under `### Pre-checks`, one line per step with the check run's
@@ -1389,9 +1389,21 @@ paths, since it tests the merged result.
 
 Every pass rewrites one `## Symphony QA Report` comment on the issue (Symphony's only comment
 besides the agent workpad) and records a run with `kind: "qa"`, its tokens and wall time in the
-run store, which the dashboard's run history shows. The `QA` state applies the verdict (pass →
-`Merging`, fail → `Rework`, blocked → retried, then a `Blocked` hold on a fix ticket); see
-[`design/state-machine.md`](design/state-machine.md).
+run store, which the dashboard's run history shows. The `QA` state applies the verdict; see
+[`design/state-machine.md`](design/state-machine.md):
+
+| Verdict | What it means | What happens |
+| --- | --- | --- |
+| `pass` | every step behaved as the ticket describes, the wide pass included | `Merging` |
+| `pass` with `scope: none` | the change has nothing on screen to judge: neither the diff nor the ticket names a walkthrough step or a screen, by the agent's answer or by the QA policy (below) | `Merging` with the reason in the report, but only when the pass ran `qa_build`, `qa_launch_app` and a `qa_check_app` that found the app healthy, so the merge still waits on the app starting; without them it is `inconclusive` |
+| `fail` | a step shows a defect in the change | `Rework` |
+| `inconclusive` | the QA run itself fell short: a `macos_app` pass that judged screens but never ran the wide pass, or a `scope: none` pass that never started the app | QA runs once more on the same head, then the ticket pauses in `QA` on a Needs Decision hold. Nothing in the environment is broken, so no fix ticket is filed |
+| `blocked` | the pass could not test the change | retried once on the same head, then: the self-heal lane when the QA tools raised the block themselves (`qa_worker_*`, `qa_host_missing_tool`, `qa_host_tool_check_failed`, `qa_host_tunnel_failed`, `qa_dev_server_failed`), when only a person can clear it (`needs_person`, an access hold), or when the agent named the open ticket that covers it (`covered_by`) or the project's missing dev server (`needs_dev_server`); any other block (the agent's own account, a crash, the token limit, a check that never finished) pauses the ticket in `QA` on a Needs Decision hold instead of filing a fix ticket for a problem nothing names |
+
+The QA policy gives a pass `scope: none` up front when a `macos_app` pass is selected (by a
+`qa:macos_app` label) although no changed path matches any selected playbook's `paths`, and the
+ticket has no `## User walkthrough`: the agent is told that building and launching the app are the
+whole check.
 
 `playbooks` overrides playbooks per kind, and adds kinds of your own with `paths` and `prompt`:
 
@@ -1722,10 +1734,12 @@ accessibility answer for 10 seconds) or writes a new crash report, and the repor
 the window size. The report's `Wide pass` step gives the window size, the screen size and the
 pages it covered. A QA screen whose usable area is under 1400×900 pt (a VM with a 1024×768 display)
 cannot run it at full size: the step says the wide pass was limited, and Symphony reports a `pass`
-from that screen as `blocked` for a person instead of passing it. A `pass` with no `qa_resize_window` call at all is `blocked` too, with the
-reason that the wide pass did not run. An epic review gets every enabled playbook whatever the epic
-shipped, so it owes the wide pass only when it launched an app: an epic review of a backend-only
-epic that launched none keeps its `pass`. Give the QA VM a larger display, for example
+from that screen as `blocked` for a person instead of passing it. A `pass` with no `qa_resize_window`
+call at all is `inconclusive`, with the reason that the wide pass did not run: QA runs once more,
+then a person decides. A `pass` with `scope: none` owes no wide pass, since it has nothing on screen
+to judge. An epic review gets every enabled playbook whatever the epic shipped, so it owes the wide
+pass only when it launched an app: an epic review of a backend-only epic that launched none keeps
+its `pass`, and one that launched an app without the wide pass is `blocked`. Give the QA VM a larger display, for example
 `tart set symphony-qa --display 1920x1200`, and restart it. The resize needs no grant beyond the
 helper's Accessibility.
 
