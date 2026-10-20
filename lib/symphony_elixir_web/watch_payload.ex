@@ -29,8 +29,10 @@ defmodule SymphonyElixirWeb.WatchPayload do
   @doc """
   The `watch` block of a ticket state record: the phase, the PR head the facts were read on and how
   they arrived (`source`), the decision (`rule`, `action`, `reason`, who acts next (`owner`) and
-  what clears it (`clears_when`), since when it stands, its `outcome`), the facts in one line (`summary`) and in full (`facts`), the last
-  five actions applied with how their facts arrived, the ticket's silence, and what it waits on
+  what clears it (`clears_when`), since when it stands, its `outcome`), the facts in one line
+  (`summary`) and in full (`facts`, with `protected_files`: the protected paths the PR changes when
+  only a check a person clears is red on its head, R18), the last five actions applied with how
+  their facts arrived, the ticket's silence, and what it waits on
   (`waits_on`: the competing PRs of its landing hold, and the fix ticket of the red backstop, D15).
   `decision`, `applied` and `links` are the record's own. Nil when the watcher doesn't watch the
   ticket.
@@ -152,9 +154,14 @@ defmodule SymphonyElixirWeb.WatchPayload do
       read_at: iso8601(watch.read_at),
       github: github,
       github_reset_at: reset_at,
-      rate_limit: facts_rate_limit(watch.rate_limit)
+      rate_limit: facts_rate_limit(watch.rate_limit),
+      protected_files: protected_files(watch)
     })
   end
+
+  # R18's evidence: the protected paths the PR changes, read on the record's head; none otherwise.
+  defp protected_files(%{protected_files: %{head_sha: head, paths: paths}, head_sha: head}), do: paths
+  defp protected_files(_watch), do: []
 
   defp facts_rate_limit(%{} = rate_limit), do: %{remaining: rate_limit.remaining, reset_at: iso8601(rate_limit.reset_at)}
   defp facts_rate_limit(nil), do: nil
