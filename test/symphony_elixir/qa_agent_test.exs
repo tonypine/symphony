@@ -1213,6 +1213,10 @@ defmodule SymphonyElixir.QaAgentTest do
              - A run failed (any conclusion other than `success`, `skipped` or `neutral`): mark the criterion
                `fail`, and in `details` and `findings` name the failing workflow and job (`gh run view <id>
                --json jobs`, or the run's `jobs_url`) with the run URL. A red `origin/main` is a defect.
+               Read the failed job's log with the `github_ci_log` tool (`run_id`, or `job_id`) before you
+               say why it failed, and quote the lines that name the cause (the failing step's last lines and
+               its annotations): never guess the cause from the job's name or the diff. Symphony quotes the
+               same log in the follow-up it files for the run you name.
              - Mark it `skipped` only when no run can be read (the commands are refused, or CI has no run for
                this commit) or a run is still in progress, and say which in `details`, with the run URL when
                there is one.

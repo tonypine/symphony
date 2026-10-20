@@ -855,6 +855,174 @@ defmodule SymphonyElixir.EpicReviewTest do
     end
   end
 
+  describe "run/3 on a red base branch head" do
+    @red_run "https://github.com/acme/app/actions/runs/501"
+
+    # `gh` on a commit whose `CI` run 501 failed in its `verify` job (601) and whose `release` run
+    # passed: the runs, the failed run's jobs, the job's annotations and its failed log.
+    defp red_gh(overrides \\ %{}) do
+      recipient = self()
+
+      fn args, opts ->
+        send(recipient, {:gh, args, opts[:cd]})
+
+        case Map.fetch(overrides, hd(tl(args))) do
+          {:ok, answer} -> answer.(args)
+          :error -> red_answer(args)
+        end
+      end
+    end
+
+    defp red_answer(["run", "list", "--commit", @sha | _rest]) do
+      runs = [
+        ci_run("CI", "completed", %{"databaseId" => 501, "conclusion" => "failure", "url" => @red_run}),
+        ci_run("release", "completed", %{"databaseId" => 502})
+      ]
+
+      {Jason.encode!(runs), 0}
+    end
+
+    defp red_answer(["run", "view", "501", "-R", "acme/app", "--json", _fields]) do
+      job = %{
+        "databaseId" => 601,
+        "name" => "verify",
+        "conclusion" => "failure",
+        "url" => @red_run <> "/job/601",
+        "steps" => [%{"name" => "Verify app bundle", "conclusion" => "failure"}]
+      }
+
+      {Jason.encode!(%{"url" => @red_run, "workflowName" => "CI", "jobs" => [job]}), 0}
+    end
+
+    defp red_answer(["api", "repos/acme/app/check-runs/601/annotations"]) do
+      {Jason.encode!([%{"annotation_level" => "failure", "path" => ".github", "start_line" => 30, "message" => "Process completed with exit code 141."}]), 0}
+    end
+
+    defp red_answer(["run", "view", "--job", "601", "--log-failed", "-R", "acme/app"]) do
+      {"verify\tVerify app bundle\t2026-10-20T06:30:00.000Z checking the bundle\n" <>
+         "verify\tVerify app bundle\t2026-10-20T06:30:01.000Z printf: write error: Broken pipe\n", 0}
+    end
+
+    defp ci_step(details), do: %{name: "CI on c0ffee001122", status: "fail", details: details, evidence: []}
+
+    test "files the CI follow-up with the failing step's log tail and annotations, read by Symphony" do
+      agent_result(:fail, %{
+        steps: [
+          ci_step("The CI workflow failed (#{@red_run}); its verify job is red."),
+          %{name: "Settings shows the API key field", status: "fail", details: "There is no field.", evidence: []}
+        ]
+      })
+
+      assert :ok = run(epic(), gh_runner: red_gh())
+
+      assert [ci, other] = created_subissues()
+      assert ci["title"] == "Epic review fails: CI on c0ffee001122"
+      assert ci["description"] =~ "## CI log"
+      assert ci["description"] =~ "Symphony read the failed jobs of CI on `c0ffee001122`"
+      assert ci["description"] =~ "### CI › verify\n\n#{@red_run}/job/601"
+      assert ci["description"] =~ "Failed steps: Verify app bundle"
+      assert ci["description"] =~ "- failure .github:30 Process completed with exit code 141."
+      assert ci["description"] =~ "The last 2 lines of the failed steps' log:\n\n```text\nchecking the bundle\nprintf: write error: Broken pipe\n```"
+      # The section sits between the evidence and the acceptance criteria.
+      assert ci["description"] =~ ~r/## Evidence.*## CI log.*## Acceptance criteria/s
+
+      refute other["description"] =~ "## CI log"
+
+      assert_received {:gh, ["run", "view", "--job", "601", "--log-failed", "-R", "acme/app"], _cwd}
+      refute_received {:gh, ["run", "view", "502" | _rest], _cwd}
+    end
+
+    test "a step that names a run quotes that run only, not one whose id it starts" do
+      runs = [
+        ci_run("CI", "completed", %{"databaseId" => 50, "conclusion" => "failure", "url" => "https://github.com/acme/app/actions/runs/50"}),
+        ci_run("CI", "completed", %{"databaseId" => 501, "conclusion" => "failure", "url" => @red_run})
+      ]
+
+      agent_result(:fail, %{steps: [ci_step("Red: #{@red_run}")]})
+
+      assert :ok = run(epic(), gh_runner: red_gh(%{"list" => fn _args -> {Jason.encode!(runs), 0} end}))
+
+      assert [ci] = created_subissues()
+      assert ci["description"] =~ "printf: write error: Broken pipe"
+      refute_received {:gh, ["run", "view", "50" | _rest], _cwd}
+    end
+
+    test "a finding that names CI without a run quotes every failed run on the commit" do
+      agent_result(:fail, %{summary: "Red.", findings: ["CI is red on the default branch", "The export button is absent"]})
+
+      assert :ok = run(epic(), gh_runner: red_gh())
+
+      assert [ci, other] = created_subissues()
+      assert ci["description"] =~ "printf: write error: Broken pipe"
+      refute other["description"] =~ "## CI log"
+    end
+
+    test "a log too long for a ticket keeps its end, and a job without steps or annotations says so" do
+      lines = for n <- 1..100, do: "verify\tVerify app bundle\t2026-10-20T06:30:00.000Z line #{n} " <> String.duplicate("x", 200)
+
+      overrides = %{
+        "view" => fn
+          ["run", "view", "501" | _rest] ->
+            {Jason.encode!(%{"url" => @red_run, "jobs" => [%{"databaseId" => 601, "conclusion" => "failure", "url" => nil}]}), 0}
+
+          ["run", "view", "--job", "601" | _rest] ->
+            {Enum.join(lines, "\n"), 0}
+        end,
+        "repos/acme/app/check-runs/601/annotations" => fn _args -> {"[]", 0} end,
+        "list" => fn _args -> {Jason.encode!([ci_run("CI", "completed", %{"databaseId" => 501, "conclusion" => "failure", "url" => @red_run, "workflowName" => nil})]), 0} end
+      }
+
+      runner = fn args, opts ->
+        case args do
+          ["api", endpoint] -> Map.fetch!(overrides, endpoint).(args)
+          _other -> red_gh(overrides).(args, opts)
+        end
+      end
+
+      agent_result(:fail, %{steps: [ci_step("Red: #{@red_run}")]})
+
+      assert :ok = run(epic(), gh_runner: runner)
+
+      assert [ci] = created_subissues()
+      assert ci["description"] =~ "### Run 501 › 601\n\n#{@red_run}\n"
+      assert ci["description"] =~ "Failed steps: none named"
+      assert ci["description"] =~ "Annotations:\n\n- none"
+      assert ci["description"] =~ "The last 60 lines of the failed steps' log (of 100):\n\n```text\n[... earlier lines cut ...]\n"
+      assert ci["description"] =~ "line 100 xxx"
+      refute ci["description"] =~ "line 40 "
+    end
+
+    test "a log Symphony cannot read is named in the follow-up, and the follow-up is still filed" do
+      overrides = %{"view" => fn _args -> {"HTTP 404: Not Found", 1} end}
+      agent_result(:fail, %{steps: [ci_step("Red: #{@red_run}")]})
+
+      log = capture_log(fn -> assert :ok = run(epic(), gh_runner: red_gh(overrides)) end)
+
+      assert [ci] = created_subissues()
+      assert ci["description"] =~ "### CI\n\n#{@red_run}\n\nSymphony could not read this run's failed log: `{:gh_failed"
+      assert log =~ "Epic review could not read the failed log of run 501"
+    end
+
+    test "CI that cannot be read files the follow-up without a log" do
+      agent_result(:fail, %{steps: [ci_step("The CI workflow failed.")]})
+
+      log = capture_log(fn -> assert :ok = run(epic(), gh_runner: gh_runner({"HTTP 502", 1})) end)
+
+      assert [ci] = created_subissues()
+      refute ci["description"] =~ "## CI log"
+      assert log =~ "Epic review could not read CI on c0ffee001122 for its follow-up"
+    end
+
+    test "a green commit adds no CI log to a CI follow-up" do
+      agent_result(:fail, %{steps: [ci_step("The agent thinks CI failed.")]})
+
+      assert :ok = run(epic(), gh_runner: gh_runner([ci_run("CI", "completed")]))
+
+      assert [ci] = created_subissues()
+      refute ci["description"] =~ "## CI log"
+    end
+  end
+
   describe "run/3 while CI runs on the base branch head" do
     @now ~U[2026-10-14 18:30:00Z]
 

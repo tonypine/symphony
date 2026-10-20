@@ -2796,6 +2796,29 @@ hooks:
 
 Each repository's `WORKFLOW.md` sets its own hooks and timeouts.
 
+### Scoped GitHub tools
+
+Agents reach GitHub only through Symphony's scoped `github_*` tools: `gh` itself is refused in the
+agent sandbox. Each tool acts on the session's `origin` repository and refuses repo, remote, branch
+and ref arguments. The read tools are given to every run kind, the reviewer and QA included; the
+others to the implementation runs.
+
+| Tool | What it does |
+| --- | --- |
+| `github_get_pull_request` | Reads the current branch's pull request. |
+| `github_get_pr_checks` | Reads its checks: names, status and conclusions. |
+| `github_list_pr_comments`, `github_list_pr_review_comments`, `github_list_pr_reviews` | Read its comments and reviews. |
+| `github_get_failed_run_log` | Reads the failed log of its latest failing run, clamped to `github.failed_run_log_max_bytes`. |
+| `github_ci_log` | Reads a failed job's log: pass `run_id` (a run's failed jobs), `job_id` (one job) or `pr_number` (a pull request's failed checks). Each job comes with its failed steps, its annotations and the last 400 lines of its failed steps' log, each line clipped, at most 10 jobs. `failed_only` (default true) refuses a job that did not fail; `false` reads every job and step. A run or job of another repository is refused. |
+| `github_fetch_origin`, `github_sync_base` | Fetch `origin`, and merge the base branch outside the sandbox. |
+| `github_create_pull_request`, `github_update_pull_request_body`, `github_add_pr_comment`, `github_reply_to_review_comment` | Open the pull request and write on it. |
+| `github_push_branch` | Pushes the branch (see [Push check](#push-check)). |
+| `github_merge_pull_request` | Squash-merges it, only in `Merging` with every check green. |
+
+The epic review uses `github_ci_log` to name why CI failed on the commit it reviews, and Symphony
+quotes the same log (failed steps, annotations, the last 60 lines of each failed job) in the
+follow-up it files for that CI. The CI Fix run gets the failed log in its prompt, as before.
+
 ### Push check
 
 `github_push_branch` pushes through Symphony, outside the agent sandbox, with repo git hooks turned
