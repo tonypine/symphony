@@ -93,6 +93,9 @@ final class SettingsUIManifestTests: XCTestCase {
             )
         }, from: yaml)
         yaml = try record("turning off the built-in ticket patterns", { try BuiltInTicketPatterns.setting(false, in: $0) }, from: yaml)
+        yaml = try record("setting the QA host tools", {
+            try QAHostTools.updating($0, from: QAHostTools(), to: QAHostTools(tools: ["go", "pg_ctl"]))
+        }, from: yaml)
         _ = try record("removing a repository", { try RepositoriesConfig.removing("api", from: $0) }, from: yaml)
 
         // The acceptance gate's retired mode keys still load, with a deprecation warning, until the schema drops

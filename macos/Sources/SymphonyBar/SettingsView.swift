@@ -225,6 +225,31 @@ struct SettingsView: View {
                 .disabled(!model.canEditTicketPriorities)
 
                 Section {
+                    LabeledContent("QA host tools") {
+                        TextField("QA host tools", text: $model.qaHostToolsText, prompt: Text("e.g. go, pg_ctl"))
+                            .labelsHidden()
+                    }
+                    Text(
+                        "The programs a macOS app QA pass needs on the QA host, comma-separated. Symphony looks for "
+                            + "each when the pass starts; a missing one blocks the pass, and self-heal files the fix "
+                            + "for the QA host."
+                    )
+                    .foregroundStyle(.secondary)
+                    if model.qaHostToolsError != nil {
+                        CheckErrorPointer(subject: "these QA host tools")
+                    }
+                } header: {
+                    Text("macOS app QA (saved in symphony.yml)")
+                } footer: {
+                    SectionFooter(
+                        "auto_review.playbooks.macos_app.requires (default none). A repo's WORKFLOW.md may set its "
+                            + "own list. scripts/qa-vm/provision.sh installs Go, Postgres and jq on a QA VM. Save "
+                            + "checks symphony.yml with symphony check first; Symphony reads it at the next QA pass."
+                    )
+                }
+                .disabled(!model.canEditQAHostTools)
+
+                Section {
                     Text("The Linear workflow states Symphony creates for the board's phases. Nothing moves tickets into them yet.")
                         .foregroundStyle(.secondary)
                     WorkflowStateRow(title: "Code review", name: $model.workflowStates.codeReview)
@@ -510,6 +535,9 @@ struct SettingsView: View {
                 }
                 if model.ticketPrioritiesError != nil {
                     Text("symphony check rejected the ticket priorities; see Tickets.").foregroundStyle(.red)
+                }
+                if let error = model.qaHostToolsError {
+                    CheckErrorText(message: error)
                 }
                 if let error = model.ticketPatternsBuiltInError {
                     CheckErrorText(message: error)

@@ -7,7 +7,7 @@ import Foundation
 /// `mix settings.ui_coverage` reads this list from this file and fails CI for a setting that is neither here
 /// nor in `config/settings_ui_exempt.yml`, so a new setting ships with a control. `SettingsUIManifestTests`
 /// checks that every key the line editors (`RepositoriesConfig`, `RunProfilesConfig`, `MaxConcurrentAgents`,
-/// `TokenLimits`, `OperationTimeouts`, `GitHubUpdates`, `DispatchLoopLimits`, `BuiltInTicketPatterns`) write is here. Keep one string
+/// `TokenLimits`, `OperationTimeouts`, `GitHubUpdates`, `DispatchLoopLimits`, `BuiltInTicketPatterns`, `QAHostTools`) write is here. Keep one string
 /// literal per line, sorted.
 public enum SettingsUIManifest {
     public static let keyPaths: [String] = [
@@ -26,6 +26,7 @@ public enum SettingsUIManifest {
         "auto_review.command",
         "auto_review.effort",
         "auto_review.model",
+        "auto_review.playbooks.macos_app.requires",
         "github.webhooks.fallback_poll_interval_ms",
         "github.webhooks.silence_alert_minutes",
         "issues.states.ci_fix",

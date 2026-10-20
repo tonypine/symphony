@@ -29,6 +29,10 @@ defmodule SymphonyElixir.QaAgent.Selection do
   QA agent runs in its sandbox, the APKs it writes (`apk_paths`, or one
   `apk_path`) and the apps' `application_ids`, and `auto_review.android.avd` names the emulator that the
   host-side `qa_android_*` tools of `SymphonyElixir.QaAndroid.Driver` drive.
+
+  Any playbook may list `requires`, the executables its pass needs on the QA host
+  (default none). `SymphonyElixir.QaDriver` checks the `macos_app` playbook's with
+  `command -v` when the pass starts.
   """
 
   alias SymphonyElixir.Linear.Issue
@@ -126,7 +130,8 @@ defmodule SymphonyElixir.QaAgent.Selection do
           optional(:apk_paths) => [String.t()],
           optional(:application_ids) => [String.t()],
           optional(:browser_mcp) => map() | nil,
-          optional(:dev_server) => true
+          optional(:dev_server) => true,
+          optional(:requires) => [String.t()]
         }
   @type decision :: {:run, [playbook()]} | {:skip, String.t()}
 
@@ -243,7 +248,16 @@ defmodule SymphonyElixir.QaAgent.Selection do
   defp build_playbook(kind, override) do
     playbook = %{kind: kind, paths: paths(kind, override), prompt: prompt(kind, override)}
     playbook = if dev_server?(kind, override), do: Map.put(playbook, :dev_server, true), else: playbook
+    playbook = put_requires(playbook, override)
     put_host_settings(playbook, kind, override)
+  end
+
+  # The executables the pass needs on the QA host, trimmed and without repeats.
+  defp put_requires(playbook, override) do
+    case override |> Map.get("requires") |> string_list() |> List.wrap() |> Enum.flat_map(&List.wrap(string_value(&1))) do
+      [] -> playbook
+      requires -> Map.put(playbook, :requires, requires |> Enum.map(&String.trim/1) |> Enum.uniq())
+    end
   end
 
   defp prompt(kind, override), do: string_value(Map.get(override, "prompt")) || Map.get(@built_in_prompts, kind)

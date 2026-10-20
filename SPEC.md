@@ -1414,7 +1414,9 @@ Fields:
   (shell command the QA agent runs in its own sandbox), `apk_paths` (list of the APKs it writes,
   relative to the repo root; `apk_path`, one string, is a one-item list, and both may be set),
   and `application_ids` (list of strings), and is off unless `build`, at least one APK path, a
-  non-empty `application_ids` and `auto_review.android.avd` are set. A repository's
+  non-empty `application_ids` and `auto_review.android.avd` are set. Any kind takes `requires`
+  (list of executable names, default `[]`), the tools its pass needs on the QA host; Symphony
+  checks the `macos_app` kind's. A repository's
   `WORKFLOW.md` MAY set `auto_review.playbooks` too; for that repository's QA passes each kind is
   merged over this map key by key, the repository's value winning.
 - `worker_host` (string, optional): an SSH host (`user@host` or `host:port`, the form
@@ -1574,6 +1576,11 @@ The QA agent:
   credentials, a global git credential helper or a forwarded SSH agent); the `qa_*` tools then fail
   with `qa_worker_unsafe` (or `qa_worker_unreachable` when the host cannot be reached) and tell the
   agent to answer `blocked`.
+- After that check, a `macos_app` pass MUST look for each executable in the playbook's `requires`
+  with `command -v`, in the shell and environment the playbook's `build` gets, on the QA host. A
+  missing one MUST make the pass `blocked` before the agent starts, with the reason
+  `qa_host_missing_tool: <name>`, and self-heal MUST file its fix under the `worker_host`
+  component, in Symphony's repo.
 - A `macos_app` pass MUST hand the QA agent the host loopback ports it may serve the app's stubs
   and proxies on (`QA_HOST_PORTS`), and the app reaches them at `http://localhost:<port>`. The
   playbook's `build` MUST get the same `QA_HOST_PORTS` in its environment, unless the forwards
