@@ -1009,6 +1009,124 @@ defmodule SymphonyElixir.QaVerificationTest do
   end
 
   # The QA pre-check (`SymphonyElixir.QaPreCheck`) on a ticket whose walkthrough steps name tests.
+  describe "a head CI rejects" do
+    # The PR and CI watcher's record of the head while the QA run is under way (R9 waits on it).
+    defp watch_head!(head, facts) do
+      attrs = [phase: :qa, head_sha: head, facts: facts, decision: :wait]
+      SymphonyElixir.PrWatchSupport.put_watch!(@repo_key, @issue_id, attrs)
+    end
+
+    defp fail_result do
+      {:ok, %{result: %{verdict: :fail, summary: "CI did not run.", steps: [], findings: ["the make-all workflow never ran on this head"]}, tokens: %{}}}
+    end
+
+    test "a fail on a red head is blocked on CI and handed to the PR watcher, never Rework" do
+      {workspace, head} = git_workspace!()
+      watch_head!(head, %{ci: :red, failing_check: "coverage (2/4)"})
+      Process.put(:qa_agent_result, fail_result())
+
+      log = capture_log(fn -> assert :ok = run(workspace, []) end)
+
+      assert log =~ "QA blocked on CI for TP-816 head=#{head} model=default; handing the head to the PR watcher: CI is red on this head: coverage (2/4) failed"
+      refute_received {:memory_tracker_state_update, _, _}
+      refute_received {:fixer_create, _}
+      refute Hold.held?(@repo_key, @issue_id, :blocked)
+
+      assert [%{outcome: "blocked", head_sha: ^head, details: details}] = verdicts()
+      assert %{component: "ci", reason: "CI is red on this head: coverage (2/4) failed", needs_person: false} = details
+
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "**Verdict:** blocked → QA (blocked on CI; the PR watcher routes the head)"
+      assert report =~ "Reason: CI is red on this head: coverage (2/4) failed"
+      assert report =~ "- the make-all workflow never ran on this head"
+      assert Handoff.signals(@repo_key, @issue_id) == []
+    end
+
+    test "a conflict, a red head with no failing check named, or a required check missing reads as CI" do
+      for {facts, reason} <- [
+            {%{mergeable: :dirty}, "the PR conflicts with its base branch, so CI cannot run on this head"},
+            {%{ci: :red}, "CI is red on this head"},
+            {%{ci: :required_missing}, "a required check never reported on this head"}
+          ] do
+        RunStore.delete_ticket_state(@repo_key, @issue_id)
+        {workspace, head} = git_workspace!()
+        watch_head!(head, facts)
+        Process.put(:qa_agent_result, fail_result())
+
+        capture_log(fn -> assert :ok = run(workspace, []) end)
+
+        refute_received {:memory_tracker_state_update, _, _}
+        assert [%{outcome: "blocked", details: %{component: "ci", reason: ^reason}}] = verdicts()
+      end
+    end
+
+    test "a pre-check that finds the named check never ran on a conflicting head is blocked on CI" do
+      {workspace, head} = git_workspace!()
+      watch_head!(head, %{mergeable: :dirty})
+
+      gh = fn
+        ["pr", "view", @pr_url, "--json", _fields], _opts -> {Jason.encode!(%{"url" => @pr_url, "headRefOid" => head, "statusCheckRollup" => []}), 0}
+        ["api" | _endpoint], _opts -> {Jason.encode!(%{"workflow_runs" => []}), 0}
+      end
+
+      description = "## User walkthrough\n\n1. Run `symphony check` → it passes. Proved by: `make-all`\n"
+
+      capture_log(fn ->
+        assert :ok =
+                 QaVerification.run(issue("QA", %{description: description}), workspace,
+                   settings: settings!(),
+                   repo_key: @repo_key,
+                   qa_policy: RunPolicy,
+                   qa_agent: FakeQaAgent,
+                   fixer: FakeFixer,
+                   gh_runner: gh
+                 )
+      end)
+
+      refute_received {:qa_agent_run, _, _}
+      refute_received {:memory_tracker_state_update, _, _}
+      assert [%{outcome: "blocked", details: %{component: "ci"}}] = verdicts()
+    end
+
+    test "an environment block on a red head is handed to the watcher and spends no attempt" do
+      {workspace, head} = git_workspace!()
+      watch_head!(head, %{ci: :red})
+      Process.put(:qa_agent_result, {:error, :environment_unreachable, %{}})
+
+      capture_log(fn -> assert :ok = run(workspace, []) end)
+
+      refute_received {:fixer_create, _}
+      assert [%{outcome: "blocked", details: %{component: "ci"}}] = verdicts()
+
+      # The rerun turned the same head green: a real environment block is its first attempt.
+      watch_head!(head, %{ci: :green})
+      log = capture_log(fn -> assert :ok = run(workspace, []) end)
+
+      assert log =~ "(attempt 1/2); retrying"
+      refute_received {:fixer_create, _}
+    end
+
+    test "a fail on a green head, on another head, or with no watcher record still goes to Rework" do
+      for watch <- [{:same, %{ci: :green}}, {:other, %{ci: :red}}, :none] do
+        RunStore.delete_ticket_state(@repo_key, @issue_id)
+        {workspace, head} = git_workspace!()
+
+        case watch do
+          {:same, facts} -> watch_head!(head, facts)
+          {:other, facts} -> watch_head!("another-head", facts)
+          :none -> :ok
+        end
+
+        Process.put(:qa_agent_result, fail_result())
+
+        capture_log(fn -> assert :ok = run(workspace, []) end)
+
+        assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
+        assert [%{outcome: "fail", head_sha: ^head}] = verdicts()
+      end
+    end
+  end
+
   describe "the QA pre-check of named tests" do
     @run_url "https://github.com/acme/repo/actions/runs/555/job/1"
 
