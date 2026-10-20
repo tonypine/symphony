@@ -768,7 +768,7 @@ defmodule SymphonyElixir.VerificationTest do
     assert Schema.dev_server_network_allowed_domains(Config.settings!()) == []
   end
 
-  test "agent runner aborts before first turn when verification health check fails" do
+  test "agent runner aborts before first turn as a setup block when verification health check fails" do
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -813,9 +813,8 @@ defmodule SymphonyElixir.VerificationTest do
         state: "In Progress"
       }
 
-      assert_raise RuntimeError, ~r/verification_failed/, fn ->
-        AgentRunner.run(issue, nil)
-      end
+      # A setup block, not a crash: the orchestrator sends it to self-heal instead of retrying it.
+      assert {:setup_block, {:verification_failed, _cause}} = catch_exit(AgentRunner.run(issue, nil))
 
       refute File.exists?(trace_file)
 
