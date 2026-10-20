@@ -34,7 +34,7 @@ defmodule SymphonyElixir.PrWatch.HealthTest do
     refute Health.healthy?(health, @on)
     assert Health.silent?(health, @on, @now)
     refute Health.silent?(health, %Webhooks{enabled: false}, @now)
-    assert Health.interval_ms(health, @on, 30_000) == 30_000
+    assert Health.interval_ms(health, @on, 30_000, nil) == 30_000
   end
 
   test "a delivery makes it healthy, at the safety-net pace, until a missed change after it" do
@@ -42,12 +42,20 @@ defmodule SymphonyElixir.PrWatch.HealthTest do
 
     assert Health.healthy?(health, @on)
     refute Health.healthy?(health, %Webhooks{enabled: false})
-    assert Health.interval_ms(health, @on, 30_000) == 300_000
+    assert Health.interval_ms(health, @on, 30_000, nil) == 300_000
 
     missed = Health.missed(health, "https://github.com/acme/app/pull/1", :ci, @now)
     refute Health.healthy?(missed, @on)
-    assert Health.interval_ms(missed, @on, 30_000) == 30_000
+    assert Health.interval_ms(missed, @on, 30_000, nil) == 30_000
     assert Health.healthy?(Health.delivered(missed, DateTime.add(@now, 1)), @on)
+  end
+
+  test "a relay that keeps stopping keeps the poll interval, however healthy the deliveries" do
+    health = Health.delivered(Health.new(), ~U[2026-10-16 11:59:00Z])
+
+    assert Health.interval_ms(health, @on, 30_000, %{stable: false}) == 30_000
+    assert Health.interval_ms(health, @on, 30_000, %{stable: true}) == 300_000
+    assert Health.interval_ms(health, @on, 30_000, nil) == 300_000
   end
 
   test "silence starts after silence_alert_minutes without a delivery" do

@@ -370,6 +370,17 @@ defmodule SymphonyElixir.PrWatch.IngestTest do
       assert %{missed: 0, results_via_poll: 1} = health()
     end
 
+    test "a relay that keeps stopping keeps the poll interval, read again each tick" do
+      relay = start_supervised!({Agent, fn -> %{state: :running, stable: false} end}, id: :relay)
+      pid = started!([{"1", "Code Review", []}], relay_status: fn "default" -> Agent.get(relay, & &1) end)
+      :ok = Ingest.deliver(:ignored, @repo_url, watchers: [pid])
+      assert next_tick_ms(pid) == 30_000
+      assert Health.healthy?(health(), Config.settings!().github.webhooks)
+
+      Agent.update(relay, &%{&1 | stable: true})
+      assert next_tick_ms(pid) == 300_000
+    end
+
     test "the safety-net interval is the setting's" do
       workflow!(true, %{fallback_poll_interval_ms: 120_000})
       pid = started!([{"1", "Code Review", []}])

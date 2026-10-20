@@ -11,6 +11,16 @@ defmodule SymphonyElixir.GitHub.Relay do
   1 s, doubling the wait up to 5 minutes while it keeps failing, and counts each restart and its
   last error for health (`status/1`). A run that lasted a minute starts the wait over at 1 s.
 
+  `gh` prints its usage text after the error that stopped it, so the error is the first of the
+  last 20 output lines that reads as one (`error`, `failed`, `unable to`), else the line before
+  the usage text, else the exit status (a signal when it was killed): any other line, such as the
+  greeting `gh` prints when it starts, says nothing about the stop. Each stop logs one warning with
+  that reason and the 20 lines.
+
+  A relay that stopped more than twice in ten minutes is not `stable` until it has run ten minutes
+  without a stop: its repository reads as degraded and its watcher keeps the normal poll interval
+  (`SymphonyElixir.PrWatch.Health.interval_ms/4`).
+
   The secret reaches `gh` as `--secret`: the extension reads it from no environment variable and
   no standard input, so while the relay runs its command line (`ps`) shows it to any local process.
   It is scrubbed from everything the relay keeps or logs.
@@ -25,8 +35,12 @@ defmodule SymphonyElixir.GitHub.Relay do
   @min_backoff_ms 1_000
   @max_backoff_ms 300_000
   @stable_ms 60_000
+  @steady_ms 600_000
+  @steady_stops 2
   @output_bytes 4_000
+  @tail_lines 20
   @error_chars 300
+  @error_line ~r/\berror\b|\bfailed\b|\bunable to\b/i
 
   @type spec :: %{
           repo_key: String.t(),
@@ -41,7 +55,8 @@ defmodule SymphonyElixir.GitHub.Relay do
           restarts: non_neg_integer(),
           failures: non_neg_integer(),
           last_error: String.t() | nil,
-          started_at: DateTime.t() | nil
+          started_at: DateTime.t() | nil,
+          stable: boolean()
         }
 
   @doc """
@@ -64,7 +79,7 @@ defmodule SymphonyElixir.GitHub.Relay do
     min(@min_backoff_ms * Integer.pow(2, min(failures - 1, 20)), @max_backoff_ms)
   end
 
-  @doc "Whether it runs, how many times it restarted and why it last stopped."
+  @doc "Whether it runs, how many times it restarted, why it last stopped and whether it keeps stopping."
   @spec status(GenServer.server(), timeout()) :: status()
   def status(server, timeout \\ 5_000), do: GenServer.call(server, :status, timeout)
 
@@ -91,6 +106,8 @@ defmodule SymphonyElixir.GitHub.Relay do
       restarts: 0,
       failures: 0,
       last_error: nil,
+      stops: [],
+      unsteady: false,
       timer_ref: nil
     }
 
@@ -102,7 +119,8 @@ defmodule SymphonyElixir.GitHub.Relay do
 
   @impl true
   def handle_call(:status, _from, state) do
-    {:reply, %{state: if(state.port, do: :running, else: :restarting), restarts: state.restarts, failures: state.failures, last_error: state.last_error, started_at: state.started_at}, state}
+    status = %{state: if(state.port, do: :running, else: :restarting), restarts: state.restarts, failures: state.failures, last_error: state.last_error, started_at: state.started_at}
+    {:reply, Map.put(status, :stable, stable?(state)), state}
   end
 
   def handle_call(:restart, _from, state) do
@@ -118,8 +136,9 @@ defmodule SymphonyElixir.GitHub.Relay do
   end
 
   def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
-    error = last_line(state.output) || "gh webhook forward stopped (exit status #{status})"
-    {:noreply, dropped(%{state | port: nil, os_pid: nil}, error)}
+    tail = tail(state.output)
+    error = reason(tail) || exit_reason(status)
+    {:noreply, dropped(%{state | port: nil, os_pid: nil}, error, tail)}
   end
 
   def handle_info(:start, state), do: {:noreply, start(%{state | timer_ref: nil, restarts: state.restarts + 1})}
@@ -143,16 +162,32 @@ defmodule SymphonyElixir.GitHub.Relay do
     error in ErlangError -> dropped(state, "gh webhook forward didn't start: #{Exception.message(error)}")
   end
 
-  defp dropped(state, error) do
-    ran_ms = if state.began, do: state.clock.() - state.began, else: 0
+  defp dropped(state, error, tail \\ []) do
+    now = state.clock.()
+    ran_ms = if state.began, do: now - state.began, else: 0
     failures = if ran_ms >= @stable_ms, do: 1, else: state.failures + 1
     wait_ms = backoff_ms(failures)
     error = error |> scrub(state.spec) |> String.slice(0, @error_chars)
+    stops = [now | Enum.filter(state.stops, &(now - &1 < @steady_ms))]
+    # More than two stops in ten minutes, or a stop before the relay ran ten minutes since.
+    unsteady = length(stops) > @steady_stops or (state.unsteady and ran_ms < @steady_ms)
 
-    Logger.warning("GitHub relay for repo=#{state.spec.repo_key} github=#{state.spec.repo} stopped: #{error}; starting it again in #{wait_ms} ms")
+    Logger.warning(
+      "GitHub relay for repo=#{state.spec.repo_key} github=#{state.spec.repo} stopped: #{error}; starting it again in #{wait_ms} ms" <>
+        if(unsteady, do: "; it stopped more than twice in ten minutes, so the watcher polls at its normal interval until it runs ten minutes", else: "") <>
+        output_log(tail, state.spec)
+    )
 
-    %{state | began: nil, failures: failures, last_error: error, timer_ref: state.timer.(wait_ms, :start)}
+    %{state | began: nil, failures: failures, last_error: error, stops: stops, unsteady: unsteady, timer_ref: state.timer.(wait_ms, :start)}
   end
+
+  defp output_log([], _spec), do: ""
+  defp output_log(tail, spec), do: "\ngh's last output:\n" <> scrub(Enum.join(tail, "\n"), spec)
+
+  # Steady once it ran ten minutes without a stop.
+  defp stable?(%{unsteady: false}), do: true
+  defp stable?(%{port: nil}), do: false
+  defp stable?(state), do: state.clock.() - state.began >= @steady_ms
 
   defp stop_port(%{port: nil} = state), do: state
 
@@ -176,12 +211,32 @@ defmodule SymphonyElixir.GitHub.Relay do
 
   defp cancel_timer(state), do: %{state | timer_ref: nil}
 
-  defp last_line(output) do
+  defp tail(output) do
     output
     |> String.split(["\r\n", "\n", "\r"], trim: true)
     |> Enum.map(&String.trim/1)
     |> Enum.reject(&(&1 == ""))
-    |> List.last()
+    |> Enum.take(-@tail_lines)
+  end
+
+  @doc """
+  Why `gh` stopped, from its last output lines: the first that reads as an error, else the line
+  before its usage text (`Usage:`); nil when no line says (no output, or only its greeting).
+  """
+  @spec reason([String.t()]) :: String.t() | nil
+  def reason(lines) do
+    Enum.find(lines, &Regex.match?(@error_line, &1)) || before_usage(lines)
+  end
+
+  # A port reports a process killed by signal N as exit status 128 + N.
+  defp exit_reason(status) when status > 128, do: "gh webhook forward was killed by signal #{status - 128}"
+  defp exit_reason(status), do: "gh webhook forward stopped (exit status #{status})"
+
+  defp before_usage(lines) do
+    case Enum.split_while(lines, &(not String.starts_with?(&1, "Usage:"))) do
+      {[_ | _] = before, [_usage | _rest]} -> List.last(before)
+      _no_usage -> nil
+    end
   end
 
   @doc "`text` with the relay's secret replaced, so no log or status carries it."
