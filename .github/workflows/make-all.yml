@@ -300,7 +300,9 @@ jobs:
       - build
       - coverage-report
       - dialyzer
-    if: ${{ always() }}
+    # Not when the run is cancelled: a cancelled run's check reads cancelled, not failed,
+    # so the PR watcher does not rerun it or send it to CI Fix.
+    if: ${{ !cancelled() }}
 
     steps:
       - name: Summarize gate results
