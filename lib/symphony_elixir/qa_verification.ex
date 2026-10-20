@@ -19,6 +19,10 @@ defmodule SymphonyElixir.QaVerification do
       no change to verify, never a docs-only one
     * `blocked` (tooling or environment) -> retried boundedly on the same head, then a Blocked hold
       with the reason recorded
+    * a `fail` or a block on a head the PR and CI watcher reads as rejected by CI (red checks, a
+      required check that never reported, a conflict with the base branch) -> `blocked` with the
+      component `ci`, the ticket left in `QA` for the watcher to route (a rerun, then CI Fix, or a
+      conflict fix): a CI or merge state is not a defect of the change, so it never goes to `Rework`
     * a provider usage limit, or a model API the agent could not reach -> no verdict and no report:
       the run comes back as `{:error, {:usage_limited, info}}`, and the orchestrator holds it until
       the limit resets (SPEC §8.4.1)
@@ -44,6 +48,7 @@ defmodule SymphonyElixir.QaVerification do
     Config,
     Handoff,
     MergeConfirmation,
+    PrWatch,
     QaPolicy,
     QaPreCheck,
     SelfHeal,
@@ -61,6 +66,7 @@ defmodule SymphonyElixir.QaVerification do
   @verdict_kind "qa"
   @max_blocked_attempts 2
   @head_unreadable_signal "qa_head_unreadable"
+  @ci_component "ci"
   @acceptance_heading ~r/^\s*\#{1,6}\s+Acceptance criteria\s*:?\s*$/i
   @any_heading ~r/^\s*\#{1,6}\s+\S/
 
@@ -398,7 +404,16 @@ defmodule SymphonyElixir.QaVerification do
     end
   end
 
+  # A pass that did not get through on a head CI rejects says nothing about the change, so neither
+  # a fail nor a block of the environment is recorded: the head is the PR watcher's to route.
   defp fail(issue, opts, settings, head, outcome) do
+    case ci_rejection(issue, opts, head) do
+      nil -> fail_to_rework(issue, opts, settings, head, outcome)
+      rejection -> ci_blocked(issue, opts, settings, head, outcome, rejection)
+    end
+  end
+
+  defp fail_to_rework(issue, opts, settings, head, outcome) do
     record_verdict(issue, opts, head, "fail")
     publish_report(issue, opts, head, outcome, "Rework")
     Logger.warning("QA failed for #{issue_label(issue)} head=#{head}: #{verdict_reason(outcome)}")
@@ -415,6 +430,13 @@ defmodule SymphonyElixir.QaVerification do
   # used and the playbooks it ran are logged and recorded on the verdict, so a block can be
   # diagnosed after the fact.
   defp blocked(issue, opts, settings, head, outcome) do
+    case ci_rejection(issue, opts, head) do
+      nil -> blocked_on_environment(issue, opts, settings, head, outcome)
+      rejection -> ci_blocked(issue, opts, settings, head, outcome, rejection)
+    end
+  end
+
+  defp blocked_on_environment(issue, opts, settings, head, outcome) do
     details = blocked_details(opts, settings, outcome)
     record_verdict(issue, opts, head, "blocked", details)
     attempts = blocked_attempts(issue, opts, head)
@@ -428,6 +450,40 @@ defmodule SymphonyElixir.QaVerification do
     )
 
     if retry?, do: :ok, else: self_heal(issue, opts, attempts, outcome)
+  end
+
+  # A head the PR and CI watcher reads as rejected by CI: its checks red, a required check that never
+  # reported, or a conflict with the base branch (which runs no workflow at all). A QA pass that did
+  # not get through there failed for a CI or merge state, not for the change's behaviour, and those
+  # cases are the watcher's own: a rerun, then CI Fix with the failed log (R22, R21), or a conflict
+  # fix (R14), each bounded. So the pass is recorded `blocked` with the component `ci`, its report is
+  # published, and the ticket stays in QA: the dispatch gate holds QA back on that head, and the
+  # watcher's next read routes it. No blocked attempt is spent and no fix ticket is filed. Only the
+  # watcher's record of this same head counts; with none, the outcome is applied as it is.
+  defp ci_rejection(issue, opts, head) when is_binary(head) do
+    case PrWatch.watch(issue.id, repo_key: repo_key(issue, opts)) do
+      %{head_sha: ^head, facts: facts} -> rejection(facts)
+      _none_or_other_head -> nil
+    end
+  end
+
+  defp ci_rejection(_issue, _opts, _head), do: nil
+
+  defp rejection(%{mergeable: :dirty}), do: "the PR conflicts with its base branch, so CI cannot run on this head"
+  defp rejection(%{ci: :red, failing_check: check}) when is_binary(check), do: "CI is red on this head: #{check} failed"
+  defp rejection(%{ci: :red}), do: "CI is red on this head"
+  defp rejection(%{ci: :required_missing}), do: "a required check never reported on this head"
+  defp rejection(_facts), do: nil
+
+  defp ci_blocked(issue, opts, settings, head, outcome, rejection) do
+    outcome = Map.merge(outcome, %{verdict: :blocked, reason: rejection, needs_person: false})
+    details = opts |> blocked_details(settings, outcome) |> Map.merge(%{reason: rejection, component: @ci_component})
+    record_verdict(issue, opts, head, "blocked", details)
+    publish_report(issue, opts, head, outcome, "QA (blocked on CI; the PR watcher routes the head)")
+
+    Logger.warning("QA blocked on CI for #{issue_label(issue)} head=#{head} model=#{details.model}; handing the head to the PR watcher: #{rejection}")
+
+    :ok
   end
 
   defp blocked_details(opts, settings, outcome) do
@@ -460,10 +516,11 @@ defmodule SymphonyElixir.QaVerification do
     if retry_blocked?(attempts, outcome), do: "QA (blocked, retrying)", else: "QA (blocked)"
   end
 
+  # A block on CI is the watcher's, not the environment's, so it spends no attempt.
   defp blocked_attempts(issue, opts, head) do
     issue
     |> verdicts(opts)
-    |> Enum.count(&(&1.head_sha == head and &1.outcome == "blocked"))
+    |> Enum.count(&(&1.head_sha == head and &1.outcome == "blocked" and Map.get(&1.details, :component) != @ci_component))
   end
 
   defp needs_person?(%{needs_person: true}), do: true
