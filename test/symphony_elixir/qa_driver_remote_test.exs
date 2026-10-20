@@ -9,6 +9,7 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
   alias SymphonyElixir.QaDriver.{Host, Remote}
 
   @app "macos/build/Demo.app"
+  @symphony_mac "1A2B3C4D-0000-1111-2222-333344445555"
   @env ~w(PATH QA_FAKE_HOME QA_FAKE_BIN QA_FAKE_TRACE QA_FAKE_SSH_MODE QA_FAKE_SSH_OUTPUT QA_FAKE_SSH_STATUS QA_FAKE_AUTH_SOCK)
 
   setup do
@@ -54,6 +55,8 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       hang) exec sleep 5 ;;
     esac
     for last; do :; done
+    # The QA host's hardware UUID: another machine than the Symphony host's (`@symphony_mac`).
+    case "$last" in *IOPlatformExpertDevice*) echo '  "IOPlatformUUID" = "99999999-8888-7777-6666-555544443333"'; exit 0 ;; esac
     eval "set -- $last"
     HOME="$QA_FAKE_HOME" XDG_CONFIG_HOME="$QA_FAKE_HOME/.config" SSH_AUTH_SOCK="${QA_FAKE_AUTH_SOCK:-}" PATH="$QA_FAKE_BIN:$PATH" exec sh -c "$3"
     """)
@@ -140,6 +143,7 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
         QaDriver.start_link(
           worktree: worktree,
           worker_host: ssh_host,
+          local_uuid: fn -> {:ok, @symphony_mac} end,
           playbook: %{kind: "macos_app", build: "sh build.sh", app: @app},
           host: %{prepare: prepare}
         )
@@ -177,7 +181,7 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
                ~s(New crash report \(page "Settings"\) in ~/Library/Logs/DiagnosticReports on the QA host: Demo-2026-10-06-120000.ips.)
 
       assert {:ok, %{"root" => %{"children" => [%{"title" => "Settings"}]}}} = QaDriver.call_tool(driver, "qa_ax_tree", %{"pid" => pid})
-      assert File.read!(Path.join(run_dir, "helper/symphony-qa-driver.swift")) == elem(Host.helper_source(), 1)
+      assert File.read!(Path.join(run_dir, "helper/symphony-qa-driver.swift")) == Host.helper_source()
       refute File.exists?(Path.join(qa_home, ".symphony-qa/helper"))
 
       assert {:ok, %{"files" => [%{"path" => "qa-evidence/settings.png", "window_id" => 11}]}} =
@@ -220,6 +224,7 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
           QaDriver.start_link(
             worktree: worktree,
             worker_host: ssh_host,
+            local_uuid: fn -> {:ok, @symphony_mac} end,
             playbook: %{build: "sh build.sh", app: @app},
             host: %{prepare: prepare}
           )
@@ -261,6 +266,7 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
         QaDriver.start_link(
           worktree: worktree,
           worker_host: ssh_host,
+          local_uuid: fn -> {:ok, @symphony_mac} end,
           playbook: %{build: "sh build.sh", app: @app},
           host: %{prepare: prepare}
         )
@@ -340,6 +346,7 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
           QaDriver.start_link(
             worktree: worktree,
             worker_host: ssh_host,
+            local_uuid: fn -> {:ok, @symphony_mac} end,
             playbook: %{build: "make", app: @app},
             host: %{prepare: prepare}
           )
