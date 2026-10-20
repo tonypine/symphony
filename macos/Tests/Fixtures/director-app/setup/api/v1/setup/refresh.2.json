@@ -1,0 +1,36 @@
+{
+  "checked_at": "2026-10-19T12:03:00Z",
+  "linear_checked_at": "2026-10-19T12:03:00Z",
+  "not_checked": [],
+  "problems": [
+    {
+      "category": "keys",
+      "consequence": "Nothing uses it any more (Auto Review is retired; QA runs in the QA state), and a later Symphony will refuse to load a symphony.yml that still sets it.",
+      "details": [
+        {
+          "label": "Key",
+          "value": "auto_review.enabled"
+        },
+        {
+          "label": "Replacement",
+          "value": "Auto Review is retired; QA runs in the QA state"
+        },
+        {
+          "label": "Line",
+          "value": "10"
+        }
+      ],
+      "fix": {
+        "action": "remove",
+        "kind": "config_edit",
+        "path": "auto_review.enabled",
+        "value": null
+      },
+      "id": "deprecated_key:auto_review.enabled",
+      "repos": [],
+      "severity": "warning",
+      "tickets": [],
+      "title": "symphony.yml sets auto_review.enabled, which is deprecated"
+    }
+  ]
+}
