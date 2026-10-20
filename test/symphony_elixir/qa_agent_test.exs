@@ -1505,7 +1505,7 @@ defmodule SymphonyElixir.QaAgentTest do
     defp qa_host_dev_server_host(health) do
       test = self()
 
-      cmd = fn "/bin/sh", ["-c", script, "sh", _dir | args], _opts -> qa_host_script(test, script, args, health) end
+      cmd = fn "/bin/bash", ["-c", script, "sh", _dir | args], _opts -> qa_host_script(test, script, args, health) end
 
       %{
         cmd: cmd,

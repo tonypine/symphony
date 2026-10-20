@@ -2258,7 +2258,7 @@ defmodule SymphonyElixir.QaDriverTest do
       test = self()
 
       intercept = fn
-        "/bin/sh", ["-c", script, "sh", @run_dir | args], opts -> dev_server_answer(test, answers, script, args, opts)
+        "/bin/bash", ["-c", script, "sh", @run_dir | args], opts -> dev_server_answer(test, answers, script, args, opts)
         _executable, _args, _opts -> :pass
       end
 

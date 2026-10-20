@@ -11,7 +11,9 @@ defmodule SymphonyElixir.QaDriver.DevServer do
   to the fresh `dev-server/home/` (so no config file of the QA user's is read) and `TMPDIR` to
   `dev-server/tmp/`. `start_cmd` runs in a process group of its own, its output in
   `dev-server/server.log`. The QA host then polls `health_check_url` with `curl` until it answers
-  200, the server exits, or `health_timeout_ms` passes.
+  200, the server exits, or `health_timeout_ms` passes. The driver's scripts run in `bash`, whose
+  `set -m` makes that group with no terminal; dash, Linux's `/bin/sh`, turns job control off
+  without one.
 
   `stop/2` sends the group `stop_signal`, waits `stop_timeout_ms` and kills what is left of it.
   The driver's removal of the run directory takes the rest.
@@ -22,6 +24,7 @@ defmodule SymphonyElixir.QaDriver.DevServer do
   @output_limit 8_000
   @log_lines 20
   @stop_outcomes %{"stopped" => :stopped, "killed" => :killed, "gone" => :gone}
+  @shell "/bin/bash"
 
   # Creates `$1/dev-server` with a fresh home and temp folder and an empty log.
   @prepare_script """
@@ -239,7 +242,7 @@ defmodule SymphonyElixir.QaDriver.DevServer do
   end
 
   defp script(config, script, args, timeout_ms) do
-    config.host.cmd.("/bin/sh", ["-c", script, "sh", config.host_dir | args], timeout_ms: timeout_ms, output_limit: @output_limit)
+    config.host.cmd.(@shell, ["-c", script, "sh", config.host_dir | args], timeout_ms: timeout_ms, output_limit: @output_limit)
   end
 
   defp unreachable(output), do: {:error, {:dev_server_unreachable, String.trim(output)}, ""}

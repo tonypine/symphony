@@ -71,6 +71,21 @@ defmodule SymphonyElixir.QaDriver.DevServerTest do
 
   defp server_pid(run_dir), do: run_dir |> Path.join("dev-server/src/pid") |> File.read!() |> String.trim()
 
+  # Waits up to 5 seconds for `start_cmd` to have written its pid.
+  defp await_pid(run_dir, tries \\ 250) do
+    case File.read(Path.join(run_dir, "dev-server/src/pid")) do
+      {:ok, pid} when byte_size(pid) > 1 ->
+        :ok
+
+      _not_yet when tries > 0 ->
+        Process.sleep(20)
+        await_pid(run_dir, tries - 1)
+
+      not_yet ->
+        flunk("start_cmd never wrote its pid: #{inspect(not_yet)}")
+    end
+  end
+
   defp health(url) do
     {output, 0} = System.cmd("curl", ["-s", "--noproxy", "*", "-o", "/dev/null", "-w", "%{http_code}", url])
     output
@@ -166,7 +181,18 @@ defmodule SymphonyElixir.QaDriver.DevServerTest do
 
     test "the health check cannot run", %{config: config, run_dir: run_dir} do
       spec = spec(%{start_cmd: "echo $$ > pid; exec sleep 30"})
-      config = %{config | host: local_host(%{cmd: fail_script("end=", {:error, :closed})})}
+
+      # The host is lost once the server runs, so the stop that follows has a server to stop.
+      lost_host = fn executable, ["-c", script | _rest] = args, opts ->
+        if String.contains?(script, "end=") do
+          await_pid(run_dir)
+          {:error, :closed}
+        else
+          Host.cmd(executable, args, opts)
+        end
+      end
+
+      config = %{config | host: local_host(%{cmd: lost_host})}
       assert {:error, {:dev_server_unreachable, ":closed"}, ""} = DevServer.start(config, spec)
       refute alive?(server_pid(run_dir))
     end
@@ -192,7 +218,7 @@ defmodule SymphonyElixir.QaDriver.DevServerTest do
   # Answers the run script's `mode` call with `answer` and runs every other script.
   defp fail_on(mode, answer) do
     fn
-      "/bin/sh", ["-c", _script, "sh", _dir, _port, ^mode, _command], _opts -> answer
+      "/bin/bash", ["-c", _script, "sh", _dir, _port, ^mode, _command], _opts -> answer
       executable, args, opts -> Host.cmd(executable, args, opts)
     end
   end
