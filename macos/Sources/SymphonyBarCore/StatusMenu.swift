@@ -192,6 +192,33 @@ public enum StatusMenu {
         }
     }
 
+    /// SU2: what Setup counts while Symphony answers, the app's build warning included; nothing otherwise, and
+    /// nothing from a Symphony that predates Setup.
+    public static func setupSummary(_ status: SymphonyStatus, app: AppBuild) -> SetupSummary {
+        switch status {
+        case let .running(snapshot, _), let .paused(snapshot, _):
+            guard let setup = snapshot.setup else { return SetupSummary() }
+            return SetupSummary(payload: setup, buildWarning: SetupBuildCheck.warning(serviceVersion: snapshot.serviceVersion, app: app))
+        case .stopped, .starting, .error:
+            return SetupSummary()
+        }
+    }
+
+    /// The dot in the menu bar icon's corner: `status.problem` while Setup has errors (SU2), else `status.you` while
+    /// something waits on the operator, else none.
+    public static func iconDot(badge: Int?, setup: SetupSummary) -> DesignTokens.Status? {
+        if setup.showsMenuDot { return .problem }
+        return badge == nil ? nil : .you
+    }
+
+    /// The status item's tooltip and accessibility description, with Setup's errors after what waits on the
+    /// operator: "Symphony: running, 2 tickets wait on you, Setup has 1 error".
+    public static func iconLabel(for status: SymphonyStatus, badge: Int?, setup: SetupSummary) -> String {
+        let label = iconLabel(for: status, badge: badge)
+        guard let sentence = setup.attentionSentence else { return label }
+        return "\(label), \(sentence.dropLast())"
+    }
+
     private static func shortened(_ text: String) -> String {
         let line = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard line.count > waitingHeadlineLimit else { return line }
