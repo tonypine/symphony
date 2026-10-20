@@ -15,6 +15,12 @@ defmodule SymphonyElixir.HoldTest do
     def list_ticket_states(_repo_key), do: {:error, :boom}
   end
 
+  # The record can't be read, but the clear lands.
+  defmodule UnreadableStore do
+    def clear_ticket_hold(repo_key, issue_id, kind), do: RunStore.clear_ticket_hold(repo_key, issue_id, kind)
+    def get_ticket_state(_repo_key, _issue_id), do: {:error, :boom}
+  end
+
   defmodule FailingTracker do
     def set_machine_label(_issue_id, _name), do: {:error, :boom}
     def clear_machine_label(_issue_id, _name), do: {:error, :boom}
@@ -126,6 +132,85 @@ defmodule SymphonyElixir.HoldTest do
 
       assert log =~ "Failed to clear the machine label"
       refute Hold.held?(@repo_key, @issue_id, :blocked)
+    end
+  end
+
+  describe "the events a hold write records" do
+    @request %{
+      reason: "A or B?",
+      clearing_condition: "when the decision is recorded",
+      decision: %{title: "Pick one", question: "A or B?", why: "Both work.", options: ["**A**: do A", "**B**: do B"], asked_at: nil}
+    }
+
+    test "a Blocked hold records one hold.set, and one hold.cleared when it clears" do
+      attrs = %{reason: "waiting on TP-1", clearing_condition: "when TP-1 is done", waits_on: %{type: "dependency", keys: ["TP-1"]}}
+
+      assert :ok = Hold.set(@repo_key, @issue_id, :blocked, attrs)
+      assert :ok = Hold.set(@repo_key, @issue_id, :blocked, attrs)
+      assert [{"hold.set", %{kind: "blocked", reason: "waiting on TP-1", waits_on: %{type: "dependency", keys: ["TP-1"]}}}] = ticket_events(@repo_key, @issue_id)
+
+      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked)
+      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked)
+      assert [{"hold.set", _set}, {"hold.cleared", %{kind: "blocked"}}] = ticket_events(@repo_key, @issue_id)
+
+      assert :ok = Hold.set(@repo_key, @issue_id, :blocked, attrs)
+      assert :ok = Hold.set(@repo_key, @issue_id, :blocked, %{attrs | reason: "waiting on TP-1 and TP-2"})
+      assert ["hold.set", "hold.cleared", "hold.set", "hold.set"] = Enum.map(ticket_events(@repo_key, @issue_id), &elem(&1, 0))
+    end
+
+    test "a clear with no hold, a failed store write and an unreadable record record nothing" do
+      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked)
+      assert :ok = Hold.clear(@repo_key, @issue_id, :needs_decision)
+      assert {:error, :boom} = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "x"}, store: FailingStore)
+      assert {:error, :boom} = Hold.set(@repo_key, @issue_id, :needs_decision, @request, store: FailingStore)
+
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, %{reason: "x"})
+      assert {:error, :boom} = Hold.clear(@repo_key, @issue_id, :blocked, store: FailingStore)
+      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked, store: UnreadableStore)
+
+      assert ticket_events(@repo_key, @issue_id) == []
+    end
+
+    test "a Needs Decision hold records its decision.requested, once per request, and never a hold event" do
+      assert :ok = Hold.set(@repo_key, @issue_id, :needs_decision, @request)
+      assert :ok = Hold.set(@repo_key, @issue_id, :needs_decision, @request)
+      assert :ok = Hold.set(@repo_key, @issue_id, :needs_decision, put_in(@request, [:decision, :question], " a  or\nB? "))
+
+      assert [{"decision.requested", %{title: "Pick one", question: "A or B?", why: "Both work.", options: ["**A**: do A", "**B**: do B"]}}] =
+               ticket_events(@repo_key, @issue_id)
+
+      confirm = put_in(@request, [:decision, :confirm], "Merging")
+      reworded = put_in(confirm, [:decision, :question], "A, B or C?")
+      assert :ok = Hold.set(@repo_key, @issue_id, :needs_decision, reworded)
+      assert [_first, {"decision.requested", %{question: "A, B or C?", confirm: "Merging"}}] = ticket_events(@repo_key, @issue_id)
+    end
+
+    test "a request with no decision payload is asked by its reason, and one with neither records nothing" do
+      assert :ok = Hold.set(@repo_key, @issue_id, :needs_decision, %{reason: "Approve the dependency?"})
+      assert :ok = Hold.set(@repo_key, "issue-2", :needs_decision, %{})
+
+      assert [{"decision.requested", %{question: "Approve the dependency?"} = payload}] = ticket_events(@repo_key, @issue_id)
+      refute Map.has_key?(payload, :title)
+      assert ticket_events(@repo_key, "issue-2") == []
+    end
+
+    test "a Needs Decision clear is a withdrawal naming the request, unless the caller says it was answered" do
+      :ok = Hold.set(@repo_key, @issue_id, :needs_decision, @request)
+      [%{id: request_id}] = RunStore.list_ticket_events(@repo_key, @issue_id, [])
+
+      assert :ok = Hold.clear(@repo_key, @issue_id, :needs_decision)
+
+      assert [_requested, {"decision.withdrawn", %{title: "Pick one", question: "A or B?", request: ^request_id}}] =
+               ticket_events(@repo_key, @issue_id)
+
+      :ok = Hold.set(@repo_key, "issue-2", :needs_decision, @request)
+      assert :ok = Hold.clear(@repo_key, "issue-2", :needs_decision, answered: true)
+      assert [{"decision.requested", _payload}] = ticket_events(@repo_key, "issue-2")
+
+      :ok = RunStore.set_ticket_hold(@repo_key, "issue-3", :needs_decision, %{})
+      assert :ok = Hold.clear(@repo_key, "issue-3", :needs_decision)
+      assert [{"decision.withdrawn", %{title: "Decision request"} = withdrawn}] = ticket_events(@repo_key, "issue-3")
+      refute Map.has_key?(withdrawn, :request)
     end
   end
 

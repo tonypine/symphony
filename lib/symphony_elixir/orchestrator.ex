@@ -48,6 +48,7 @@ defmodule SymphonyElixir.Orchestrator do
     StatusDashboard,
     SubIssueWait,
     TicketPullRequest,
+    TicketSignals,
     TicketState,
     TicketStateReconciler,
     Tracker,
@@ -7398,8 +7399,9 @@ defmodule SymphonyElixir.Orchestrator do
     :ok
   end
 
-  # Every move the orchestrator makes is recorded in the ticket's signals ledger, best effort: a
-  # store failure must never change a transition, the board or a label.
+  # Every move the orchestrator makes is recorded in the ticket's signals ledger and its event stream
+  # (`TicketSignals.record/4`), best effort: a store failure must never change a transition, the
+  # board or a label.
   defp record_ticket_signal(%Issue{id: issue_id} = issue, name, details) when is_binary(issue_id) do
     case issue_repo_key(issue) do
       repo_key when is_binary(repo_key) -> record_ticket_signal(repo_key, issue_id, name, details)
@@ -7409,13 +7411,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp record_ticket_signal(_issue, _name, _details), do: :ok
 
-  defp record_ticket_signal(repo_key, issue_id, name, details) when is_binary(repo_key) and is_binary(issue_id) do
-    repo_key
-    |> RunStore.record_ticket_signal(issue_id, name, details)
-    |> log_run_store_error("record #{name} signal")
-  end
-
-  defp record_ticket_signal(_repo_key, _issue_id, _name, _details), do: :ok
+  defp record_ticket_signal(repo_key, issue_id, name, details), do: TicketSignals.record(repo_key, issue_id, name, details)
 
   @spec request_refresh() :: map() | :unavailable
   def request_refresh do
