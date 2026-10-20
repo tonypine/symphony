@@ -215,11 +215,21 @@ GitHub or Linear in QA:
     Settings window with the sheet still open behind it, and the row is still there.
   - Look: judge the page, its Details, both sheets and the banner in light and dark against
     `macos/Tests/Snapshots/setup-*.png`.
-- **Add Repo's Check setup and the first launch (TP-911):** pass
-  `macos/Tests/Fixtures/director-app/add-repo-setup` as `api_fixtures`, with the gh and Linear
-  stubs. Copy its `config/symphony.yml` to `qa-evidence/`, `qa_put_file` it, and type the returned
-  path into Settings' config field. Add `acme/widgets` (GitHub URL, key `widgets`), pick
-  `QA Project`, and on WORKFLOW.md pick **Don't create one now**.
+- **Add Repo's Check setup and the first launch (TP-911):**
+  - First launch, before any other launch of the pass: every launch in a pass shares one QA root,
+    and the first one that sees Symphony's setup checked records the app's first run, so only that
+    launch is a first launch. Make the pass's first `qa_launch_app` the one with
+    `macos/Tests/Fixtures/director-app/setup` as `api_fixtures` and `appearance: "dark"`: the
+    Symphony window opens on its own on Setup with "Welcome to Symphony on this Mac…" above
+    "Setup has 1 error and 1 warning." (walkthrough step 6). Judge the welcome by sight there
+    against `macos/Tests/Snapshots/setup-first-launch-dark.png`. No later launch is a first
+    launch, so judge the light welcome from `macos/Tests/Snapshots/setup-first-launch-light.png`
+    alone until a launch can start from a fresh QA root (TP-1121). That a first launch without
+    errors, or a later launch with errors, opens nothing is proved by `SetupOnStartTests`.
+  - Then pass `macos/Tests/Fixtures/director-app/add-repo-setup` as `api_fixtures`, with the gh
+    and Linear stubs. Copy its `config/symphony.yml` to `qa-evidence/`, `qa_put_file` it, and type
+    the returned path into Settings' config field. Add `acme/widgets` (GitHub URL, key `widgets`),
+    pick `QA Project`, and on WORKFLOW.md pick **Don't create one now**.
   - Review's **Route** line reads "Project ID p1 · team QA"; after **Connect**, the file's
     `widgets` entry has `route.projects: [p1]` and `route.team: QA`.
   - Check setup shows "Setup has 1 error for widgets." with `Team QA has no "Blocked" label`
@@ -232,12 +242,7 @@ GitHub or Linear in QA:
     and add the repo the same way: `widgets is not cloned yet` is listed and **Done** is enabled.
   - Symphony stopped: launch without `api_fixtures` and add the repo: "Symphony isn't running, so
     it checks widgets when it starts." with **Start Symphony** and **Done** both enabled.
-  - First launch: a QA root starts without the app's first-run record, so launching with
-    `macos/Tests/Fixtures/director-app/setup` opens the Symphony window on Setup with "Welcome to
-    Symphony on this Mac…" above "Setup has 1 error and 1 warning.". Launching with
-    `add-repo-setup` (no setup error) opens no window.
-  - Look: judge the step in light and dark against `macos/Tests/Snapshots/add-repo-check-*.png`
-    and the welcome against `setup-first-launch-*.png`.
+  - Look: judge the step in light and dark against `macos/Tests/Snapshots/add-repo-check-*.png`.
 
 QA does three things, in this order: (a) the walkthrough steps marked `Proved by: QA` (no test
 can drive them), steps 1 to 7 below; (b) the `Design check` of every UI deliverable, by sight, in
