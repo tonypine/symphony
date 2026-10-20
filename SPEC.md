@@ -917,11 +917,12 @@ Fields:
 
 Review-comment options are ignored when `enabled` is not `true`. CI failure dispatch is driven only
 by failed status checks and ignores comment authorship; the ignored reviewer set above does not
-affect CI escalation. A head whose only failed check is `protected paths` gets no
-flaky re-run, no CI-fix run and no escalation, and uses no fix attempt: only a person clears that
-check, with the `protected-paths-approved` label, so the issue stays where it is until the check
-passes. When another check fails beside it, the CI-fix run's prompt names `protected paths` as not
-the agent's to fix. A red head on an issue parked for a person, outside `tracker.active_states`
+affect CI escalation. A head whose only failed check is `protected paths` is not red: it gets no
+flaky re-run, no CI-fix run and no escalation, and uses no fix attempt, and it reads as its other
+checks, so the reviewer and QA run once they passed. Only a person clears that check, with the
+`protected-paths-approved` label, and the issue is asked about it once it reaches `Merging`. When
+another check fails beside it, the head is red and the CI-fix run's prompt names `protected paths`
+as not the agent's to fix. A red head on an issue parked for a person, outside `tracker.active_states`
 with `needs-human` or another `escalate.labels` label other than `plan` and `breakdown`, gets the
 same: no re-run, CI-fix run, escalation or state move, and no fix attempt used. So does a red head on
 an issue in none of `tracker.active_states`, the review states and `Merging`
@@ -2616,7 +2617,9 @@ Rules:
   `waiting_on_you` in `/api/v1/state`) lists the ticket. A person lifts it with `Unblock` or
   `Restart`, and the count starts again.
 - **Green-head gating.** CI state (`running` / `green` / `red`) is an attribute per PR head, not a
-  state. The reviewer and QA runs MUST dispatch only on a green head, whether the poll, a retry or
+  state. A failed check only a person clears (`protected paths`) does not make a head red: with no
+  other failure, the head is green once its other checks passed. The reviewer and QA runs MUST
+  dispatch only on a green head, whether the poll, a retry or
   the continuation of an earlier run (the reviewer's approve moving the ticket into `QA`) dispatches
   them; a held-back run records `code_review_head_not_green` or `qa_head_not_green` once per head. A
   QA `fail` or block on a head the PR watcher reads as red, missing a required check, or

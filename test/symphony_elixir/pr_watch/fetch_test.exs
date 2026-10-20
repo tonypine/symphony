@@ -303,9 +303,22 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
       cancelled = rollup([check("test", "CANCELLED", run: 300)])
       assert {:ok, %{ci: :red, red_kind: :cancelled}} = read({response(pull(cancelled)), 0})
 
+      # Red only on a check a person clears: what the other checks say is kept for the phases before
+      # Merging, running while no other check reported.
       protected = rollup([check("protected paths", "FAILURE", workflow: "protected-paths")])
-      assert {:ok, %{ci: :red, red_kind: :human_only, failing_check: "protected paths"}} = read({response(pull(protected)), 0})
+
+      assert {:ok, %{ci: :red, red_kind: :human_only, failing_check: "protected paths", past_human_only: :pending}} =
+               read({response(pull(protected)), 0})
+
       refute_received {:gh, ["run", "list" | _rest]}
+
+      passed = rollup([check("protected paths", "FAILURE", workflow: "protected-paths"), check("test", "SUCCESS")])
+      assert {:ok, %{ci: :red, red_kind: :human_only, past_human_only: :green}} = read({response(pull(passed)), 0})
+
+      running = rollup([check("protected paths", "FAILURE", workflow: "protected-paths"), check("test", nil)])
+      assert {:ok, %{ci: :red, red_kind: :human_only, past_human_only: :pending}} = read({response(pull(running)), 0})
+
+      assert {:ok, %{red_kind: :cancelled, past_human_only: nil}} = read({response(pull(cancelled)), 0})
     end
 
     test "TP-1073: a check that passed on the base isn't red there because another job of its workflow failed" do
