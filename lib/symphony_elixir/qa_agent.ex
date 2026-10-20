@@ -30,7 +30,10 @@ defmodule SymphonyElixir.QaAgent do
   gives the emulator back when the pass ends. A pass that runs the
   `web` playbook, or a playbook with `dev_server: true`, starts `verification.dev_server` on a
   pooled port from a second worktree at the PR head, outside the agent's sandbox (a server that
-  fails its health check makes the pass `blocked`). A `web` pass's session alone gets a
+  fails its health check makes the pass `blocked`). A `macos_app` pass on a `worker_host` with
+  `dev_server: true` runs it on the QA host instead, beside the app, before the agent starts
+  (`SymphonyElixir.QaDriver.start_dev_server/2`); one that fails makes the pass `blocked` with
+  `qa_dev_server_failed` and its log. A `web` pass's session alone gets a
   `browser` MCP server: headless Playwright limited to the dev server's localhost origins, or
   the playbook's `browser_mcp`.
   Each pass also gets a private temp folder of its own (see `tmp_dirs/2`), which a Claude
@@ -54,6 +57,7 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.Decisions
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Design
+  alias SymphonyElixir.QaAgent.PlaybookSettings
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
   alias SymphonyElixir.QaPreCheck
   alias SymphonyElixir.Repo.Fetcher
@@ -111,6 +115,7 @@ defmodule SymphonyElixir.QaAgent do
           optional(:token_limit) => pos_integer() | nil,
           optional(:run_profile) => SymphonyElixir.RunKind.profile(),
           optional(:dev_server_url) => String.t() | nil,
+          optional(:qa_host_dev_server_url) => String.t(),
           optional(:host_ports) => [pos_integer()],
           optional(:epic_review) => boolean(),
           optional(:base_ref) => String.t(),
@@ -699,6 +704,17 @@ defmodule SymphonyElixir.QaAgent do
     """
   end
 
+  defp dev_server_section(%{qa_host_dev_server_url: url}) when is_binary(url) do
+    """
+
+    Dev server:
+    Symphony started the project's dev server for this PR head on the QA host, beside the app
+    under test, at #{url}, and stops it when the pass ends. The app reaches it there; it is not on
+    this machine, so your shell cannot. It is the real server built from this PR: do not start a
+    second one, and do not serve a stand-in for it.
+    """
+  end
+
   defp dev_server_section(_job), do: ""
 
   # The `macos_app` playbook says how to use them.
@@ -868,17 +884,14 @@ defmodule SymphonyElixir.QaAgent do
         opts = Keyword.merge(opts, qa_driver: driver, qa_android_driver: android_driver)
 
         try do
-          case QaDriver.host_ports(driver) do
-            {:ok, host_ports} ->
-              job = Map.merge(job, %{host_ports: host_ports, design_files: fetch_design(job, settings, opts)})
-              prompt = prompt(job, fetch_parent(job, worktree, settings, opts))
+          with {:ok, host_ports} <- host_ports(driver),
+               {:ok, job} <- start_qa_host_dev_server(driver, job, settings) do
+            job = Map.merge(job, %{host_ports: host_ports, design_files: fetch_design(job, settings, opts)})
+            prompt = prompt(job, fetch_parent(job, worktree, settings, opts))
 
-              agent_module
-              |> run_tracked_session(job, worktree, qa_settings, prompt, opts)
-              |> limit_wide_pass(driver, QaDriver.wide_pass(driver), job)
-
-            {:error, reason} ->
-              {:error, {:qa_host_tunnel_failed, reason}, empty_tokens()}
+            agent_module
+            |> run_tracked_session(job, worktree, qa_settings, prompt, opts)
+            |> limit_wide_pass(driver, QaDriver.wide_pass(driver), job)
           end
         after
           QaDriver.stop(driver)
@@ -888,6 +901,51 @@ defmodule SymphonyElixir.QaAgent do
       {:error, reason} ->
         {:error, reason, empty_tokens()}
     end
+  end
+
+  defp host_ports(driver) do
+    case QaDriver.host_ports(driver) do
+      {:ok, host_ports} -> {:ok, host_ports}
+      {:error, reason} -> {:error, {:qa_host_tunnel_failed, reason}, empty_tokens()}
+    end
+  end
+
+  # A `macos_app` pass on a `worker_host` with `dev_server: true` runs the project's dev server on
+  # the QA host, beside the app, before the agent starts (TP-1111). A server that does not build,
+  # exits or fails its health check makes the pass `blocked` with its log, and costs no tokens.
+  defp start_qa_host_dev_server(driver, job, settings) do
+    with %{} = playbook <- qa_host_dev_server_playbook(job, settings),
+         {:ok, %{url: url}} <- QaDriver.start_dev_server(driver, qa_host_dev_server_spec(playbook, settings)) do
+      {:ok, Map.put(job, :qa_host_dev_server_url, url)}
+    else
+      {:error, cause, log} -> {:error, {:qa_dev_server_failed, cause, log}, empty_tokens()}
+      _none -> {:ok, job}
+    end
+  end
+
+  defp qa_host_dev_server_playbook(job, settings) do
+    if Verification.dev_server_configured?(settings),
+      do: Enum.find(job.playbooks, &qa_host_dev_server?(&1, settings))
+  end
+
+  defp qa_host_dev_server?(playbook, %Schema{auto_review: auto_review}) do
+    Map.get(playbook, :kind) == "macos_app" and Map.get(playbook, :dev_server) == true and is_binary(auto_review.worker_host)
+  end
+
+  defp qa_host_dev_server_spec(playbook, settings) do
+    dev_server = settings.verification.dev_server
+    port = Map.get(playbook, :dev_server_port) || PlaybookSettings.default_port()
+
+    %{
+      build_cmd: dev_server.build_cmd,
+      start_cmd: dev_server.start_cmd,
+      health_check_url: Verification.interpolate_port(dev_server.health_check_url, port),
+      health_timeout_ms: dev_server.health_timeout_ms,
+      stop_signal: dev_server.stop_signal,
+      stop_timeout_ms: dev_server.stop_timeout_ms,
+      port: port,
+      url: Verification.dev_server_url(port, settings)
+    }
   end
 
   # The `macos_app` playbook's wide pass catches layout crashes that only happen in wide
@@ -931,12 +989,13 @@ defmodule SymphonyElixir.QaAgent do
   end
 
   # Only a pass that runs the `web` playbook, or one with `dev_server: true`, starts the dev
-  # server. It runs from its own worktree at the PR head, so its build output never lands in the
-  # agent's worktree (where `qa_build` refuses untracked files), and outside the agent's sandbox,
-  # which keeps a database such as Postgres from starting (TP-1092). It is stopped, with its port
-  # released, when the pass ends.
+  # server on this host. It runs from its own worktree at the PR head, so its build output never
+  # lands in the agent's worktree (where `qa_build` refuses untracked files), and outside the
+  # agent's sandbox, which keeps a database such as Postgres from starting (TP-1092). It is
+  # stopped, with its port released, when the pass ends. A `macos_app` pass on a `worker_host`
+  # runs its server on the QA host instead (`start_qa_host_dev_server/3`).
   defp with_dev_server(job, worktree, settings, opts, fun) do
-    if Enum.any?(job.playbooks, &dev_server_playbook?/1) do
+    if Enum.any?(job.playbooks, &(dev_server_playbook?(&1) and not qa_host_dev_server?(&1, settings))) do
       git = Keyword.get(opts, :git, &default_git/2)
 
       case add_worktree(job, worktree <> "-dev-server", git) do
@@ -1306,6 +1365,12 @@ defmodule SymphonyElixir.QaAgent do
 
   defp parent_issue(_issue, _worktree, _settings, _opts), do: {:ok, nil}
 
+  defp qa_host_failure({:dev_server_build_failed, :timeout}), do: "did not finish its build_cmd in time"
+  defp qa_host_failure({:dev_server_build_failed, status}), do: "failed its build_cmd (exit #{status})"
+  defp qa_host_failure({:dev_server_exit, status}), do: "exited (status #{status}) before its health check answered 200"
+  defp qa_host_failure(:health_timeout), do: "did not answer its health check with 200 in time"
+  defp qa_host_failure({:dev_server_unreachable, message}), do: "could not be started over SSH: #{message}"
+
   defp resolve_agent_module(opts, kind) do
     case Keyword.get(opts, :qa_agent_module) do
       nil -> agent_module(kind)
@@ -1347,6 +1412,11 @@ defmodule SymphonyElixir.QaAgent do
         "no TCP listener, so it must listen on that unix socket, which Symphony serves on 127.0.0.1:$SYMPHONY_VERIFICATION_PORT"
 
   def blocked_reason({:qa_dev_server_failed, reason}), do: "the dev server did not start: #{inspect(reason)}"
+
+  def blocked_reason({:qa_dev_server_failed, cause, log}) do
+    tail = if log == "", do: "", else: "; its last log lines:\n" <> log
+    "qa_dev_server_failed: the dev server on the QA host #{qa_host_failure(cause)}#{tail}"
+  end
 
   def blocked_reason({:qa_host_tunnel_failed, reason}),
     do: "the tunnel that forwards QA_HOST_PORTS to the QA host could not open, so the app could not reach the host's stubs: #{reason}"

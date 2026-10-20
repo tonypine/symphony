@@ -24,7 +24,9 @@ defmodule SymphonyElixir.QaAgent.Selection do
   optional `browser_mcp` replaces the default Playwright MCP server. Any other
   playbook with `dev_server: true` (a project server and the database it needs,
   which the agent's sandbox cannot start) has Symphony start that dev server for its
-  passes too, and needs it configured the same way. The built-in
+  passes too, and needs it configured the same way; on a `worker_host`, the `macos_app` playbook's
+  dev server runs on the QA host, on its `dev_server_port`, and its `launch_env` reaches the app
+  (see `SymphonyElixir.QaAgent.PlaybookSettings`). The built-in
   `android_app` playbook is on only when its config names the `build` command the
   QA agent runs in its sandbox, the APKs it writes (`apk_paths`, or one
   `apk_path`) and the apps' `application_ids`, and `auto_review.android.avd` names the emulator that the
@@ -32,6 +34,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
   """
 
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.QaAgent.PlaybookSettings
 
   @skip_label "qa:skip"
   @label_prefix "qa:"
@@ -123,6 +126,8 @@ defmodule SymphonyElixir.QaAgent.Selection do
           optional(:build) => String.t(),
           optional(:app) => String.t(),
           optional(:build_timeout_ms) => pos_integer() | nil,
+          optional(:dev_server_port) => pos_integer(),
+          optional(:launch_env) => %{optional(String.t()) => String.t()},
           optional(:apk_paths) => [String.t()],
           optional(:application_ids) => [String.t()],
           optional(:browser_mcp) => map() | nil,
@@ -305,11 +310,15 @@ defmodule SymphonyElixir.QaAgent.Selection do
 
   defp put_host_settings(playbook, "macos_app", override) do
     timeout = Map.get(override, "build_timeout_ms")
+    port = Map.get(override, "dev_server_port")
+    launch_env = Map.get(override, "launch_env")
 
     Map.merge(playbook, %{
       build: Map.fetch!(override, "build"),
       app: Map.fetch!(override, "app"),
-      build_timeout_ms: if(is_integer(timeout) and timeout > 0, do: timeout)
+      build_timeout_ms: if(is_integer(timeout) and timeout > 0, do: timeout),
+      dev_server_port: if(is_integer(port) and port in 1..65_535, do: port, else: PlaybookSettings.default_port()),
+      launch_env: if(is_map(launch_env), do: stringify_keys(launch_env), else: %{})
     })
   end
 

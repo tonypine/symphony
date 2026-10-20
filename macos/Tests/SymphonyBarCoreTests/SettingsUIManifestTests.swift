@@ -93,6 +93,10 @@ final class SettingsUIManifestTests: XCTestCase {
             )
         }, from: yaml)
         yaml = try record("turning off the built-in ticket patterns", { try BuiltInTicketPatterns.setting(false, in: $0) }, from: yaml)
+        let macAppQA = MacAppQAPlaybook(devServer: true, devServerPort: 8091, launchEnv: [LaunchVariable(name: "HUB_OWNER_TOKEN", value: "abc")])
+        yaml = try record("setting the Mac app QA dev server", {
+            try MacAppQAPlaybook.updating($0, from: MacAppQAPlaybook(), to: macAppQA)
+        }, from: yaml)
         _ = try record("removing a repository", { try RepositoriesConfig.removing("api", from: $0) }, from: yaml)
 
         // The acceptance gate's retired mode keys still load, with a deprecation warning, until the schema drops

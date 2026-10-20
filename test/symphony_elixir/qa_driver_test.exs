@@ -1683,13 +1683,15 @@ defmodule SymphonyElixir.QaDriverTest do
     defp remote_git(args, cwd), do: clean_git(args, cwd)
 
     defp remote_driver(worktree, host, git \\ &clean_git/2, opts \\ []) do
+      {playbook, opts} = Keyword.pop(opts, :playbook, %{})
+
       {{:ok, driver}, _log} =
         with_log(fn ->
           QaDriver.start_link(
             [
               worktree: worktree,
               worker_host: "qa@qa-vm",
-              playbook: %{build: "make app", app: @app},
+              playbook: Map.merge(%{build: "make app", app: @app}, playbook),
               host: host,
               git: git
             ] ++ opts
@@ -2248,6 +2250,109 @@ defmodule SymphonyElixir.QaDriverTest do
         refute_received {:cmd, "/bin/sh", [_script, "--use"], _opts}
         QaDriver.stop(driver)
       end
+    end
+
+    # Answers the dev server's scripts on the QA host: each sends the test its arguments, and
+    # `answers` (keyed by the script's first word that tells them apart) says what it prints.
+    defp dev_server_host(answers) do
+      test = self()
+
+      intercept = fn
+        "/bin/sh", ["-c", script, "sh", @run_dir | args], opts -> dev_server_answer(test, answers, script, args, opts)
+        _executable, _args, _opts -> :pass
+      end
+
+      remote_host(%{intercept: intercept})
+    end
+
+    defp dev_server_answer(test, answers, script, args, opts) do
+      case Enum.find(answers, fn {text, _answer} -> String.contains?(script, text) end) do
+        {text, answer} ->
+          send(test, {:dev_server_script, text, args, opts})
+          answer
+
+        nil ->
+          :pass
+      end
+    end
+
+    @healthy_dev_server [
+      {"rm -rf \"$dir\"", {:ok, {"symphony-qa-dev-server-dir:#{@run_dir}/dev-server\n", 0}}},
+      {"case \"$3\"", {:ok, {"symphony-qa-dev-server-pid:4242\n", 0}}},
+      {"end=", {:ok, {"symphony-qa-dev-server:healthy\n", 0}}},
+      {"kill -s \"$3\"", {:ok, {"symphony-qa-dev-server:stopped\n", 0}}}
+    ]
+
+    defp dev_server_spec do
+      %{
+        build_cmd: nil,
+        start_cmd: "server/scripts/dev-server.sh",
+        health_check_url: "http://127.0.0.1:8091/health",
+        health_timeout_ms: 5_000,
+        stop_signal: "TERM",
+        stop_timeout_ms: 1_000,
+        port: 8091,
+        url: "http://127.0.0.1:8091/"
+      }
+    end
+
+    test "starts the project's dev server on the QA host and stops it before the run directory goes", %{worktree: worktree} do
+      driver = remote_driver(worktree, dev_server_host(@healthy_dev_server), &clean_git/2, log_context: "issue_id=i1 issue_identifier=QA-7")
+
+      {result, log} = with_log(fn -> QaDriver.start_dev_server(driver, dev_server_spec()) end)
+      assert result == {:ok, %{url: "http://127.0.0.1:8091/", port: 8091}}
+      assert log =~ "QA dev server started issue_id=i1 issue_identifier=QA-7 worker_host=qa@qa-vm port=8091 pid=4242"
+      assert_received {:ship, _tar, dest}
+      assert dest == @run_dir <> "/dev-server/src"
+      assert_received {:dev_server_script, "case \"$3\"", ["8091", "start", "server/scripts/dev-server.sh"], _opts}
+      assert_received {:dev_server_script, "end=", ["http://127.0.0.1:8091/health", "5", "4242"], _opts}
+
+      {_result, log} = with_log(fn -> QaDriver.stop(driver) end)
+      assert log =~ "QA dev server stopped issue_id=i1 issue_identifier=QA-7 worker_host=qa@qa-vm port=8091 pid=4242 outcome=:stopped"
+      assert_received {:dev_server_script, "kill -s \"$3\"", ["4242", "TERM", "10"], _opts}
+      assert_received {:cleanup, @run_dir}
+    end
+
+    test "a dev server that fails its health check is stopped and reported with its log", %{worktree: worktree} do
+      answers = List.keyreplace(@healthy_dev_server, "end=", 0, {"end=", {:ok, {"symphony-qa-dev-server:timeout\nlistening soon\n", 0}}})
+      driver = remote_driver(worktree, dev_server_host(answers))
+
+      assert QaDriver.start_dev_server(driver, dev_server_spec()) == {:error, :health_timeout, "listening soon"}
+      assert_received {:dev_server_script, "kill -s \"$3\"", ["4242", "TERM", "10"], _opts}
+
+      QaDriver.stop(driver)
+      refute_received {:dev_server_script, "kill -s \"$3\"", _args, _opts}
+    end
+
+    test "starts no dev server on a QA host it refused, or without one", %{worktree: worktree} do
+      driver = remote_driver(worktree, remote_host(%{prepare: {:error, {:unsafe, "has a private key ~/.ssh/id_ed25519"}}}))
+      assert QaDriver.start_dev_server(driver, dev_server_spec()) == {:ok, nil}
+
+      driver = start_driver(worktree)
+      assert QaDriver.start_dev_server(driver, dev_server_spec()) == {:ok, nil}
+      refute_received {:ship, _tar, _dest}
+    end
+
+    test "gives the app the playbook's launch_env after Symphony's own, with the dev server's port", %{worktree: worktree} do
+      launch_env = %{"HUB_OWNER_TOKEN" => "abc", "HUB_URL" => "http://127.0.0.1:$SYMPHONY_VERIFICATION_PORT"}
+      playbook = %{dev_server_port: 8091, launch_env: launch_env}
+      driver = remote_driver(worktree, remote_host(), &clean_git/2, playbook: playbook)
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+
+      {{:ok, %{"pid" => pid}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+      assert_received {:launched, _executable, launch_opts, _port, ^pid}
+
+      assert [{"SYMPHONY_BAR_QA_ROOT", _root}, {"SYMPHONY_QA_OPENROUTER_URL", _url}, {"HUB_OWNER_TOKEN", "abc"}, {"HUB_URL", "http://127.0.0.1:8091"}] =
+               launch_opts[:env]
+    end
+
+    test "refuses to launch an app with a launch_env name Symphony sets itself", %{worktree: worktree} do
+      driver = remote_driver(worktree, remote_host(), &clean_git/2, playbook: %{launch_env: %{"SYMPHONY_BAR_QA_ROOT" => "/tmp/elsewhere"}})
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+
+      assert {:error, {:qa_tool, "qa_launch_env_refused", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{})
+      assert message =~ "SYMPHONY_BAR_QA_ROOT"
+      refute_received {:launched, _executable, _opts, _port, _pid}
     end
 
     test "reports a capture it cannot copy back", %{worktree: worktree} do

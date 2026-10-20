@@ -117,6 +117,12 @@ final class SettingsViewModel: ObservableObject {
     @Published var dispatchLoopLongWindowMinutes = DispatchLoopLimits.minutes(DispatchLoopLimits.defaultLongWindowMs)
     /// Why `symphony check` rejected the changed dispatch-loop limits, shown in their section.
     @Published private(set) var dispatchLoopError: String?
+    /// `auto_review.playbooks.macos_app.dev_server`, `dev_server_port` and `launch_env` in the configured
+    /// symphony.yml: whether a Mac app QA pass on the QA host starts the project's dev server there, on which port,
+    /// and the variables the app under test gets.
+    @Published var macAppQA = MacAppQAPlaybook()
+    /// Why `symphony check` rejected the changed Mac app QA settings, shown in their section.
+    @Published private(set) var macAppQAError: String?
     /// True while Save waits for `symphony check`.
     @Published private(set) var isSaving = false
 
@@ -143,6 +149,10 @@ final class SettingsViewModel: ObservableObject {
     /// The dispatch-loop limits read from symphony.yml, or nil when they couldn't be read. Only a limit whose
     /// stepper moved is written.
     private var loadedDispatchLoopLimits: DispatchLoopLimits?
+
+    /// The Mac app QA settings read from symphony.yml, or nil when they couldn't be read. Only a setting that
+    /// changed is written.
+    private var loadedMacAppQA: MacAppQAPlaybook?
 
     /// The allowed ticket priorities read from symphony.yml, or nil when they couldn't be read. Only
     /// a change from these is written.
@@ -204,6 +214,7 @@ final class SettingsViewModel: ObservableObject {
         loadTimeouts()
         loadGitHubUpdates()
         loadDispatchLoopLimits()
+        loadMacAppQA()
         loadRunProfiles()
         // Off the main thread, so a Keychain prompt can't freeze the app while Settings opens.
         self.secrets.read { [weak self] result in self?.showSecrets(result) }
@@ -390,6 +401,29 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// The Mac app QA controls are off until a symphony.yml has been read, and while Save checks it.
+    var canEditMacAppQA: Bool { loadedMacAppQA != nil && !isSaving }
+
+    private func loadMacAppQA() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let playbook = try SymphonyConfigFile(path: path).readMacAppQAPlaybook()
+            macAppQA = playbook
+            loadedMacAppQA = playbook
+        } catch {
+            configFileError = "Could not read the Mac app QA settings from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
+    func addLaunchVariable() {
+        macAppQA.launchEnv.append(LaunchVariable(name: "", value: ""))
+    }
+
+    func removeLaunchVariable(id: LaunchVariable.ID) {
+        macAppQA.launchEnv.removeAll { $0.id == id }
+    }
+
     /// The model and effort pickers are off until a symphony.yml has been read, and while Save checks it.
     var canEditRunProfiles: Bool { loadedRunProfiles != nil && !isSaving }
 
@@ -490,8 +524,8 @@ final class SettingsViewModel: ObservableObject {
 
     /// Validates and saves, then calls `onSaved` when everything was stored. Changed models, token limits and
     /// timeouts are written only after `symphony check` passes on them; until then the rest isn't saved, and a
-    /// failure shows in `configCheckError`, `tokenLimitsError`, `timeoutsError`, `gitHubUpdatesError` or
-    /// `dispatchLoopError`.
+    /// failure shows in `configCheckError`, `tokenLimitsError`, `timeoutsError`, `gitHubUpdatesError`,
+    /// `dispatchLoopError` or `macAppQAError`.
     func save(onSaved: @escaping () -> Void) {
         guard canSave else { return }
         let settings = settings.trimmed()
@@ -523,6 +557,9 @@ final class SettingsViewModel: ObservableObject {
             longWindowMinutes: dispatchLoopLongWindowMinutes
         )
         let oldLoopLimits = loadedDispatchLoopLimits.flatMap { $0 != loopLimits ? $0 : nil }
+        macAppQAError = nil
+        let qaPlaybook = macAppQA.trimmed()
+        let oldQAPlaybook = loadedMacAppQA.flatMap { $0 != qaPlaybook ? $0 : nil }
         ticketPrioritiesError = nil
         let priorities = ticketPriorities
         let loadedPriorities = loadedTicketPriorities.flatMap { $0 != priorities ? $0 : nil }
@@ -534,7 +571,7 @@ final class SettingsViewModel: ObservableObject {
         let builtInPatternsChanged = loadedTicketPatternsBuiltIn.map { $0 != builtInPatterns } ?? false
 
         guard loadedProfiles != nil || loadedLimits != nil || oldTimeouts != nil || oldUpdates != nil || oldLoopLimits != nil
-            || loadedPriorities != nil || loadedStates != nil || builtInPatternsChanged else {
+            || oldQAPlaybook != nil || loadedPriorities != nil || loadedStates != nil || builtInPatternsChanged else {
             if saveRest(settings, secrets) { onSaved() }
             return
         }
@@ -555,6 +592,9 @@ final class SettingsViewModel: ObservableObject {
             }
             if saved, let loopLimits, let oldLoopLimits {
                 saved = await saveDispatchLoopLimits(loopLimits, from: oldLoopLimits, settings: settings, secrets: secrets)
+            }
+            if saved, let oldQAPlaybook {
+                saved = await saveMacAppQA(qaPlaybook, from: oldQAPlaybook, settings: settings, secrets: secrets)
             }
             if saved, let loadedPriorities {
                 saved = await saveTicketPriorities(priorities, from: loadedPriorities, settings: settings, secrets: secrets)
@@ -733,6 +773,33 @@ final class SettingsViewModel: ObservableObject {
         }
         configFileError = nil
         loadedDispatchLoopLimits = limits
+        return true
+    }
+
+    /// Writes the Mac app QA settings that changed to symphony.yml once `symphony check` passes on the result.
+    private func saveMacAppQA(
+        _ playbook: MacAppQAPlaybook,
+        from loaded: MacAppQAPlaybook,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
+        do {
+            result = try await SymphonyConfigFile(path: settings.configPath).writeMacAppQAPlaybook(playbook, from: loaded) { path in
+                await check(path, settings, secrets)
+            }
+        } catch {
+            configFileError = "Could not save the Mac app QA settings to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            macAppQAError = "symphony check rejected these Mac app QA settings, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
+            return false
+        }
+        configFileError = nil
+        macAppQA = playbook
+        loadedMacAppQA = playbook
         return true
     }
 

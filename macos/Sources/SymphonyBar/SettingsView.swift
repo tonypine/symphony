@@ -345,6 +345,8 @@ struct SettingsView: View {
                 }
                 .disabled(!model.canEditDispatchLoop)
 
+                MacAppQASection(model: model)
+
                 Section {
                     Picker("Scope", selection: $model.runProfilesScope) {
                         Text("All repositories").tag(RunProfilesScope.global)
@@ -507,6 +509,9 @@ struct SettingsView: View {
                 }
                 if model.dispatchLoopError != nil {
                     Text("symphony check rejected the dispatch-loop limits; see Dispatch loops.").foregroundStyle(.red)
+                }
+                if model.macAppQAError != nil {
+                    Text("symphony check rejected the Mac app QA settings; see Mac app QA.").foregroundStyle(.red)
                 }
                 if model.ticketPrioritiesError != nil {
                     Text("symphony check rejected the ticket priorities; see Tickets.").foregroundStyle(.red)
@@ -774,6 +779,63 @@ private struct OpenRouterModelField: View {
 /// A section's help text under the Form. Fixed to its wrapped height: without it the grouped Form can lay a footer
 /// out as one line cut off with an ellipsis.
 /// D14: one switch per kind of notification, kept in the app's defaults and read at each poll.
+/// The `macos_app` QA playbook's dev server on the QA host and the variables the app under test gets
+/// (`auto_review.playbooks.macos_app.dev_server`, `dev_server_port` and `launch_env`).
+private struct MacAppQASection: View {
+    @ObservedObject var model: SettingsViewModel
+
+    var body: some View {
+        Section {
+            Toggle("Start the project's dev server on the QA host", isOn: $model.macAppQA.devServer)
+            Text(
+                "A Mac app QA pass on the QA host runs the project's verification.dev_server there, beside the app, "
+                    + "from the PR head, before the app launches, and stops it when the pass ends."
+            )
+            .foregroundStyle(.secondary)
+            LabeledContent("Dev server port") {
+                TextField("Dev server port", value: $model.macAppQA.devServerPort, format: .number.grouping(.never))
+                    .labelsHidden()
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 80)
+            }
+            Text("App environment")
+            ForEach($model.macAppQA.launchEnv) { $variable in
+                HStack {
+                    TextField("Name", text: $variable.name, prompt: Text("NAME"))
+                        .labelsHidden()
+                    TextField("Value", text: $variable.value, prompt: Text("Value"))
+                        .labelsHidden()
+                    Button {
+                        model.removeLaunchVariable(id: variable.id)
+                    } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Remove this variable")
+                }
+            }
+            Button("Add Variable") { model.addLaunchVariable() }
+            Text(
+                "QA sets these on the app after its own variables; $SYMPHONY_VERIFICATION_PORT becomes the port. "
+                    + "They are saved in plain text, so never put a secret here."
+            )
+            .foregroundStyle(.secondary)
+            if let error = model.macAppQAError {
+                Text(error).foregroundStyle(.red)
+            }
+        } header: {
+            Text("Mac app QA (saved in symphony.yml)")
+        } footer: {
+            SectionFooter(
+                "auto_review.playbooks.macos_app.dev_server (default off), dev_server_port (default 8090) and "
+                    + "launch_env (default none). A repository's WORKFLOW.md can set them too, and wins. Save checks "
+                    + "symphony.yml with symphony check first; the next QA pass uses them."
+            )
+        }
+        .disabled(!model.canEditMacAppQA)
+    }
+}
+
 private struct NotificationsSection: View {
     @State private var preferences = NotificationPreferences.load(from: AppStores.current.defaults)
 
