@@ -1357,16 +1357,29 @@ SHOULD stop before pushing, the reviewer SHOULD receive issue context plus the c
 reviewer SHOULD judge code quality and bugs (correctness, tests for new branches, error handling,
 the repository's code rules) and not the issue's acceptance criteria or scope, and the reviewer
 MUST return a structured verdict of `approve`, `request_changes`, or `block`. Reviewer
-sessions SHOULD expose only read-only scoped Linear/GitHub tools. An `approve` verdict SHOULD keep
+sessions SHOULD expose only read-only scoped Linear/GitHub tools, plus the `review_verdict` tool
+through which the reviewer records its verdict: its input schema is the verdict contract (a
+`verdict` enum, `findings` with `file`, `line_range`, `quoted_snippet`, `summary` and
+`suggested_fix`, `comments` notes and a `reason`), it answers a verdict it cannot read with the
+parser's error so the reviewer can call it again in the same turn, and the last verdict a turn
+recorded wins over the turn's text, even when the turn then failed. A verdict scraped as JSON from
+the reviewer's final message is the fallback for a turn that recorded none. Both are read leniently
+where a slip has one reading: a verdict word in another case or a synonym (`approved`,
+`changes_requested`, `request-changes`, `blocked`), and a line range given as one line (`12`,
+`"12"`), a span (`"12-15"`), a reversed pair or a `{"start", "end"}` object. A turn whose verdict
+Symphony cannot read SHOULD get one repair turn in the same session, carrying the parser's error
+and the contract, before the review counts as inconclusive. An `approve` verdict SHOULD keep
 later executor continuations in push/PR handoff mode rather than reintroducing the pre-push reviewer
 gate. `request_changes` and `block` verdicts SHOULD include evidence-backed findings with file,
-line range, quoted snippet, summary, and suggested fix; Symphony SHOULD reject verdicts whose
-findings cannot be verified against the reviewer diff/context, and SHOULD run one bounded
+line range, quoted snippet, summary, and suggested fix. A finding whose quote cannot be located in
+the reviewer diff/context SHOULD be kept as an unanchored comment marked as one that could not be
+placed, with the verdict standing; Symphony SHOULD treat a verdict as unverifiable only when it is a
+`request_changes` none of whose findings can be placed. Symphony SHOULD run one bounded
 self-check turn before accepting blocking findings. A finding SHOULD be grounded against every
 evidence source for the cited file (the diff, the full file contents and the adjacent windows): the
 cited range first, then the nearest place in the changed file the quote appears (within 10 lines of
 the cited range before anywhere else), moving the finding's line range to where the quote was found.
-When no finding can be grounded, Symphony SHOULD give the same reviewer session one re-quote turn
+When no finding of a `request_changes` can be grounded, Symphony SHOULD give the same reviewer session one re-quote turn
 that shows the text actually at the cited lines. The reviewer prompt SHOULD tell the reviewer to
 review the diff by reading it and not to run the test suite, coverage or static analysis, which CI
 runs after the push. Reviewer token usage SHOULD be tracked separately from the aggregate run token
@@ -4495,6 +4508,10 @@ Minimum endpoints:
     budget stops the pass, the pause) and `since`, when that reason was first seen. A candidate is
     never passed over in silence; the orchestrator also logs `Skipping dispatch:` at debug level once
     per new or changed reason.
+  - `counts.review_inconclusive` counts the inconclusive Code Review runs in `run_history` per
+    cause (`invalid_verdict`, `no_json_object`, `review_agent_unverifiable`, `max_iterations`, ...),
+    and each `run_history` row carries its `review_inconclusive_cause` (null for a run that was not
+    one), so a rise in one cause shows without reading logs.
   - `waiting_on_you` lists what waits on the operator, as `GET /api/v1/inbox` does, in short, and
     `counts.waiting_on_you` is its length: the Mac app's menu bar badge, its Waiting on you menu
     items and the Overview's Waiting on you stage read them. `checks_green` is true for a pull
@@ -4514,7 +4531,8 @@ Minimum endpoints:
         "retrying": 1,
         "forced": 1,
         "shipped_today": 1,
-        "waiting_on_you": 1
+        "waiting_on_you": 1,
+        "review_inconclusive": {"invalid_verdict": 1}
       },
       "repos": ["web", "api"],
       "running": [

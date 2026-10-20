@@ -9,6 +9,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   alias SymphonyElixir.Linear.Usage, as: LinearUsage
   alias SymphonyElixir.QaAndroid.Driver, as: QaAndroidDriver
   alias SymphonyElixir.QaDriver
+  alias SymphonyElixir.ReviewAgent.Verdict
 
   # The decision writing standard (`docs/standards/decision-writing.md`), as the tool states it.
   @decision_writing_standard "Write every field in the Director's words: they decide from the Inbox and do not read code. " <>
@@ -1058,7 +1059,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_android_rotate" => ["orientation"],
     "qa_android_dark_mode" => ["mode"],
     "qa_android_font_scale" => ["scale"],
-    "qa_android_put_file" => ["local_path", "dest"]
+    "qa_android_put_file" => ["local_path", "dest"],
+    "review_verdict" => Verdict.tool_arguments()
   }
   @legacy_tool_aliases %{
     "linear.get_current_issue" => "linear_get_current_issue",
@@ -1136,7 +1138,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   def tool_specs, do: @tool_schemas
 
   @spec tool_specs(:default | :read_only | :qa | nil) :: [map()]
-  def tool_specs(:read_only), do: Enum.filter(@tool_schemas, &(Map.get(&1, "name") in @read_only_tools))
+  # The reviewer (`SymphonyElixir.ReviewAgent`) reads, and records its verdict with `review_verdict`.
+  def tool_specs(:read_only), do: Enum.filter(@tool_schemas, &(Map.get(&1, "name") in @read_only_tools)) ++ [Verdict.tool_spec()]
 
   def tool_specs(:qa) do
     @tool_schemas
@@ -1178,6 +1181,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     do: QaAndroidDriver.call_tool(Keyword.get(opts, :qa_android_driver), tool, args)
 
   defp execute_tool("qa_" <> _rest = tool, _context, args, opts), do: QaDriver.call_tool(Keyword.get(opts, :qa_driver), tool, args)
+  defp execute_tool("review_verdict", _context, args, opts), do: Verdict.record(args, Keyword.get(opts, :review_verdict_sink))
 
   defp execute_authorized_tool(tool, context, args, opts) do
     case authorize_tool_scope(tool, opts) do
@@ -1189,6 +1193,13 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   defp authorize_tool_scope("qa_" <> _rest = tool, opts) do
     case Keyword.get(opts, :tool_scope) do
       :qa -> :ok
+      scope -> {:error, {:tool_scope_rejected, scope, tool}}
+    end
+  end
+
+  defp authorize_tool_scope("review_verdict" = tool, opts) do
+    case Keyword.get(opts, :tool_scope) do
+      :read_only -> :ok
       scope -> {:error, {:tool_scope_rejected, scope, tool}}
     end
   end
@@ -1544,6 +1555,16 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
+  defp tool_error_payload({:tool_scope_rejected, _scope, "review_verdict"}) do
+    %{
+      "error" => %{
+        "code" => "tool_scope_rejected",
+        "message" => "review_verdict records the reviewer's verdict; only a reviewer session may call it.",
+        "tool" => "review_verdict"
+      }
+    }
+  end
+
   defp tool_error_payload({:tool_scope_rejected, :read_only, tool}) do
     %{
       "error" => %{
@@ -1582,6 +1603,24 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "code" => "tool_scope_rejected",
         "message" => "#{tool} drives a macOS app for QA and is only available to the QA agent.",
         "tool" => tool
+      }
+    }
+  end
+
+  defp tool_error_payload({:invalid_review_verdict, reason}) do
+    %{
+      "error" => %{
+        "code" => "invalid_review_verdict",
+        "message" => "Symphony could not read the verdict: #{Verdict.describe_error(reason)} Fix it and call review_verdict again."
+      }
+    }
+  end
+
+  defp tool_error_payload(:review_verdict_unavailable) do
+    %{
+      "error" => %{
+        "code" => "review_verdict_unavailable",
+        "message" => "This session records no review verdict; end your turn with the verdict as your final message instead."
       }
     }
   end
