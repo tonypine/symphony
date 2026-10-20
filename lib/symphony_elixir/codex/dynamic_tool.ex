@@ -540,7 +540,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   @qa_tool_schemas [
     %{
       "name" => "qa_build",
-      "description" => "Run the configured macos_app build command in the QA worktree on the host. Takes no arguments; fails when the worktree has edits outside qa-evidence/.",
+      "description" => "Run the configured macos_app build command on the QA VM, on a copy of the QA worktree's HEAD. Takes no arguments; fails when the worktree has edits outside qa-evidence/.",
       "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
     },
     %{
@@ -816,7 +816,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_put_file",
       "description" =>
-        "Put a fixture file you wrote (a test config, a WORKFLOW.md) where the app can open it, and return the path to give the app. On a separate QA host the app cannot see your files, so always pass it this path. Only a regular file of at most 1 MB under the worktree or $TMPDIR; no symlinks.",
+        "Put a fixture file you wrote (a test config, a WORKFLOW.md) where the app can open it, and return the path to give the app. The app runs on the QA VM and cannot see your files, so always pass it this path. Only a regular file of at most 1 MB under the worktree or $TMPDIR; no symlinks.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,

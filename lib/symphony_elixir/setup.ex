@@ -38,7 +38,8 @@ defmodule SymphonyElixir.Setup do
     Checks.DeprecatedLabels,
     Checks.HoldDrift,
     Checks.Statuses,
-    Checks.StatusUse
+    Checks.StatusUse,
+    Checks.QaHost
   ]
 
   @type not_checked :: %{id: String.t(), title: String.t(), reason: String.t()}

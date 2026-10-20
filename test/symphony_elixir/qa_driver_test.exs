@@ -9,6 +9,9 @@ defmodule SymphonyElixir.QaDriverTest do
   @app "macos/build/Demo.app"
   @helper "/fake/symphony-qa-driver"
   @appearance_library "/fake/symphony-qa-appearance.dylib"
+  # The `IOPlatformUUID`s of the Symphony Mac and of the QA VM.
+  @symphony_mac "1A2B3C4D-0000-1111-2222-333344445555"
+  @qa_vm "99999999-8888-7777-6666-555544443333"
 
   # Stands in for the QA agent's gh stub: it sends the test each call's form
   # fields and answers `api` calls with the default branch, anything else with a
@@ -45,17 +48,24 @@ defmodule SymphonyElixir.QaDriverTest do
     %{root: root, worktree: worktree}
   end
 
-  # A fake host: the build writes the bundle, plutil names its executable, the
-  # helper app answers from `helper_replies` (through `cmd`, so tests see every
-  # helper call as a `{:cmd, @helper, args, opts}` message), and its screenshot
-  # command writes the file it is given.
+  # A fake QA VM. Its run directory is a real temporary directory, so what the
+  # driver copies there (the shipped worktree, bundles, fixtures, checkouts,
+  # captures) can be read back: the build writes the bundle, the bundle script
+  # copies it into `builds/`, plutil names its executable, the helper answers
+  # from `helper_replies` (through `cmd`, so tests see every helper call as a
+  # `{:cmd, @helper, args, opts}` message), and its screenshot command writes
+  # the file it is given. `ioreg` names another machine than this one.
   defp host(overrides \\ %{}) do
     test = self()
     replies = replies(overrides)
 
-    cmd = fn executable, args, opts ->
-      send(test, {:cmd, executable, args, opts})
-      Map.get(overrides, :cmd, &default_cmd(&1, &2, &3, replies)).(executable, args, opts)
+    cmd = fn
+      "/usr/sbin/ioreg", _args, _opts ->
+        Map.get(overrides, :ioreg, ioreg(@qa_vm))
+
+      executable, args, opts ->
+        send(test, {:cmd, executable, args, opts})
+        Map.get(overrides, :cmd, &default_cmd(&1, &2, &3, replies)).(executable, args, opts)
     end
 
     %{
@@ -69,14 +79,59 @@ defmodule SymphonyElixir.QaDriverTest do
           {:ok, port, pid}
         end),
       kill: fn pid -> send(test, {:killed, pid}) && :ok end,
-      helper: Map.get(overrides, :helper, fn -> {:ok, @helper} end),
+      helper: Map.get(overrides, :helper, fn _dir -> {:ok, @helper} end),
       appearance_library:
-        Map.get(overrides, :appearance_library, fn ->
+        Map.get(overrides, :appearance_library, fn _dir ->
           send(test, :appearance_library)
           {:ok, @appearance_library}
-        end)
+        end),
+      read: &take_file/1,
+      prepare: fn _operator_home, _canary -> {:ok, run_dir!()} end,
+      ship: &unpack/2,
+      put: &put_copy/3,
+      tunnel: fn _ports -> open_tunnel() end,
+      cleanup: fn dir -> File.rm_rf!(dir) && :ok end
     }
   end
+
+  defp run_dir! do
+    dir = Path.join(System.tmp_dir!(), "qa-run-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(Path.join(dir, "app-root"))
+    File.mkdir_p!(Path.join(dir, "builds"))
+    {:ok, dir} = PathSafety.canonicalize(dir)
+    dir
+  end
+
+  # As `Remote.read/2`: a regular file, removed once read.
+  defp take_file(path) do
+    with {:ok, %File.Stat{type: :regular}} <- File.lstat(path),
+         {:ok, bytes} <- File.read(path) do
+      File.rm!(path)
+      {:ok, bytes}
+    else
+      _other -> {:error, :unreadable}
+    end
+  end
+
+  # As `Remote.ship/3`: the tar unpacked into a fresh directory. A faked
+  # `git archive` writes no tar, which ships an empty tree.
+  defp unpack(tar, dest) do
+    File.rm_rf!(dest)
+    File.mkdir_p!(dest)
+    if File.exists?(tar), do: :ok = :erl_tar.extract(String.to_charlist(tar), cwd: String.to_charlist(dest))
+    :ok
+  end
+
+  defp put_copy(local, dir, name) do
+    dest = Path.join([dir, "files", name])
+    File.mkdir_p!(Path.dirname(dest))
+    File.cp!(local, dest)
+    {:ok, dest}
+  end
+
+  # Stands in for the tunnel's SSH session: it prints a line as `ssh` may, then
+  # runs until its stdin closes, or exits when the test writes a line to it.
+  defp open_tunnel, do: {:ok, Port.open({:spawn_executable, "/bin/sh"}, [:binary, :exit_status, args: ["-c", "exec 2>/dev/null; echo warning; read line; exit 3"]])}
 
   defp replies(overrides) do
     Map.merge(
@@ -119,14 +174,28 @@ defmodule SymphonyElixir.QaDriverTest do
     end
   end
 
+  defp default_cmd("/bin/mkdir", [path], _opts, _replies) do
+    case File.mkdir(path) do
+      :ok -> {:ok, {"", 0}}
+      {:error, _reason} -> {:ok, {"mkdir: #{path}: File exists\n", 1}}
+    end
+  end
+
   defp default_cmd("/bin/rm", ["-f", path], _opts, _replies) do
     File.rm(path)
     {:ok, {"", 0}}
   end
 
-  # The scripts that work in the driver's own directory (the fake gh, a
-  # checkout) run for real.
-  defp default_cmd("/bin/sh", ["-c", _script, "sh", _dir | _rest] = args, opts, _replies), do: Host.cmd("/bin/sh", args, opts)
+  # The scripts that work in the run directory (the fake gh, a checkout, the
+  # status-menu request) run for real; the bundle copy and the release pair's
+  # clone are played, since they need macOS tools or a real git bundle.
+  defp default_cmd("/bin/sh", ["-c", script, "sh", _dir | rest] = args, opts, _replies) do
+    cond do
+      script =~ "symphony-qa-app:" -> copy_built_bundle(args)
+      script =~ "symphony-qa-pair-src:" -> clone_pair_source(rest, args)
+      true -> Host.cmd("/bin/sh", args, opts)
+    end
+  end
 
   defp default_cmd(@helper, ["screenshot" | _rest] = args, _opts, _replies) do
     File.write!(List.last(args), "png")
@@ -140,12 +209,50 @@ defmodule SymphonyElixir.QaDriverTest do
     end
   end
 
+  defp copy_built_bundle(["-c", _script, "sh", build_dir, app, dest]) do
+    bundle = Path.join(build_dir, app)
+
+    if File.dir?(bundle) do
+      File.mkdir_p!(dest)
+      File.cp_r!(bundle, Path.join(dest, Path.basename(app)))
+      {:ok, {"symphony-qa-app:#{dest}/#{Path.basename(app)}/Contents/MacOS/#{Path.basename(app, ".app")}\n", 0}}
+    else
+      {:ok, {"#{app} is not a directory; run qa_build and check its output\n", 1}}
+    end
+  end
+
+  # The fake `git bundle` (`clean_git/2`) holds the worktree's path; the clone copies it.
+  defp clone_pair_source([dest], ["-c", _script, "sh", bundle_dir, dest]) do
+    worktree = File.read!(Path.join(bundle_dir, "head.bundle"))
+    File.rm_rf!(dest)
+    File.cp_r!(worktree, dest)
+    File.rm_rf!(bundle_dir)
+    {:ok, {"symphony-qa-pair-src:#{dest}\n", 0}}
+  end
+
+  # Runs the app here as the QA host would, with this environment plus the launch's.
+  defp launch_here(executable, opts) do
+    env = for {name, value} <- opts[:env], do: {String.to_charlist(name), String.to_charlist(value)}
+    port = Port.open({:spawn_executable, executable}, [:binary, :exit_status, :stderr_to_stdout, cd: opts[:cd], env: env, args: opts[:args]])
+    {:os_pid, pid} = Port.info(port, :os_pid)
+    {:ok, port, pid}
+  end
+
+  defp ioreg(uuid), do: {:ok, {~s(+-o Mac  <class IOPlatformExpertDevice>\n    {\n      "IOPlatformUUID" = "#{uuid}"\n    }\n), 0}}
+
   defp write_bundle(worktree, contents \\ "binary-v1") do
     macos = Path.join([worktree, @app, "Contents", "MacOS"])
     File.mkdir_p!(macos)
     File.write!(Path.join([worktree, @app, "Contents", "Info.plist"]), "<plist/>")
     File.write!(Path.join(macos, "Demo"), contents)
     {:ok, {"Build complete!\n", 0}}
+  end
+
+  # A clean worktree. Its `git bundle` is a file naming the worktree, which the
+  # release pair's fake clone copies.
+  defp clean_git(["bundle", "create", bundle | _rest], cwd) do
+    File.write!(bundle, cwd)
+    {"", 0}
   end
 
   defp clean_git(_args, _cwd), do: {"", 0}
@@ -159,7 +266,9 @@ defmodule SymphonyElixir.QaDriverTest do
           worktree: worktree,
           playbook: playbook,
           tmp_dir: Keyword.get(opts, :tmp_dir),
+          worker_host: "qa@qa-vm",
           host: Keyword.get(opts, :host, host()),
+          local_uuid: fn -> {:ok, @symphony_mac} end,
           git: Keyword.get(opts, :git, &clean_git/2)
         ] ++ Keyword.take(opts, [:start_stub, :status_menu_poll, :release_pair_timeout_ms, :relaunch_poll_ms, :feed_poll])
       )
@@ -178,9 +287,11 @@ defmodule SymphonyElixir.QaDriverTest do
 
   defp error_code({:error, {:qa_tool, code, _message}}), do: code
 
-  defp stub_url(launch_opts) do
-    {_name, url} = Enum.find(launch_opts[:env], fn {name, _value} -> name == ~c"SYMPHONY_QA_OPENROUTER_URL" end)
-    to_string(url)
+  defp env(launch_opts, name) do
+    case List.keyfind(launch_opts[:env], name, 0) do
+      {^name, value} -> value
+      nil -> nil
+    end
   end
 
   defp wait_until(fun, attempts \\ 50) do
@@ -192,11 +303,12 @@ defmodule SymphonyElixir.QaDriverTest do
   end
 
   describe "tools" do
-    test "hands out three free host ports and opens no tunnel for a local app", %{worktree: worktree} do
+    test "hands out three free host ports and forwards them from the QA host", %{worktree: worktree} do
       driver = start_driver(worktree)
       assert {:ok, [_one, _two, _three] = ports} = QaDriver.host_ports(driver)
       assert length(Enum.uniq(ports)) == 3
-      assert %{tunnel: nil} = :sys.get_state(driver)
+      assert %{tunnel: tunnel} = :sys.get_state(driver)
+      assert is_port(tunnel)
       assert QaDriver.host_ports(nil) == {:ok, []}
     end
 
@@ -210,23 +322,22 @@ defmodule SymphonyElixir.QaDriverTest do
     test "builds, launches in QA mode, drives and quits only the launched app", %{worktree: worktree} do
       {driver, pid} = launched_app(worktree)
 
+      %{scratch_dir: scratch_dir, host_dir: host_dir} = GenServer.call(driver, :config)
       assert_received {:cmd, "/bin/sh", ["-c", "make app"], build_opts}
-      assert build_opts[:cd] == worktree
+      assert build_opts[:cd] == Path.join(host_dir, "src")
       assert build_opts[:timeout_ms] == 900_000
-      refute Enum.any?(build_opts[:env], fn {name, value} -> name == ~c"LINEAR_API_KEY" and value != false end)
+      refute Keyword.has_key?(build_opts, :env)
 
-      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
       {:ok, state_root} = PathSafety.canonicalize(Paths.state_root())
       assert String.starts_with?(scratch_dir, Path.join(state_root, "qa-driver/runs") <> "/")
       assert File.stat!(scratch_dir).mode |> Bitwise.band(0o777) == 0o700
 
       assert_received {:launched, executable, launch_opts, _port, ^pid}
-      assert String.starts_with?(executable, Path.join(scratch_dir, "builds") <> "/")
+      assert String.starts_with?(executable, Path.join(host_dir, "builds") <> "/")
       assert String.ends_with?(executable, "/Demo.app/Contents/MacOS/Demo")
       qa_root = launch_opts[:cd]
-      assert String.starts_with?(qa_root, scratch_dir <> "/")
-      assert {~c"SYMPHONY_BAR_QA_ROOT", String.to_charlist(qa_root)} in launch_opts[:env]
-      assert File.dir?(qa_root)
+      assert qa_root == Path.join(host_dir, "app-root")
+      assert env(launch_opts, "SYMPHONY_BAR_QA_ROOT") == qa_root
 
       assert {:ok, %{"root" => %{"role" => "AXApplication"}}} =
                QaDriver.call_tool(driver, "qa_ax_tree", %{"pid" => pid, "role" => "AXTextField", "max_depth" => 5, "max_nodes" => 50})
@@ -257,6 +368,7 @@ defmodule SymphonyElixir.QaDriverTest do
 
       QaDriver.stop(driver)
       refute File.exists?(scratch_dir)
+      refute File.exists?(host_dir)
       assert error_code(QaDriver.call_tool(driver, "qa_build", %{})) == "qa_driver_unavailable"
     end
 
@@ -270,7 +382,8 @@ defmodule SymphonyElixir.QaDriverTest do
       {_output, 0} = System.cmd("git", ["-C", worktree | identity] ++ ["commit", "--quiet", "-m", "init"])
 
       playbook = %{build: "make app", app: @app, build_timeout_ms: 5_000}
-      {:ok, driver} = QaDriver.start_link(worktree: worktree, playbook: playbook, host: host())
+      opts = [worker_host: "qa@qa-vm", host: host(), local_uuid: fn -> {:ok, @symphony_mac} end]
+      {:ok, driver} = QaDriver.start_link([worktree: worktree, playbook: playbook] ++ opts)
 
       assert {:ok, %{"exit_status" => 0, "app" => @app}} = QaDriver.call_tool(driver, "qa_build", %{})
       assert_received {:cmd, "/bin/sh", _args, opts}
@@ -287,9 +400,14 @@ defmodule SymphonyElixir.QaDriverTest do
     test "gives the build the host ports the QA agent gets", %{worktree: worktree} do
       bundle = "mkdir -p #{@app}/Contents/MacOS && touch #{@app}/Contents/Info.plist #{@app}/Contents/MacOS/Demo"
 
+      # The QA host's build gets `remote_env` added to its login environment.
       cmd = fn
-        "/bin/sh", ["-c", _build] = args, opts -> Host.cmd("/bin/sh", args, opts)
-        executable, args, opts -> default_cmd(executable, args, opts, replies(%{}))
+        "/bin/sh", ["-c", _build] = args, opts ->
+          env = for {name, value} <- opts[:remote_env], do: {String.to_charlist(name), String.to_charlist(value)}
+          Host.cmd("/bin/sh", args, cd: opts[:cd], env: env, timeout_ms: opts[:timeout_ms])
+
+        executable, args, opts ->
+          default_cmd(executable, args, opts, replies(%{}))
       end
 
       driver = start_driver(worktree, host: host(%{cmd: cmd}), playbook: %{build: ~s(echo "$QA_HOST_PORTS" && #{bundle})})
@@ -323,13 +441,23 @@ defmodule SymphonyElixir.QaDriverTest do
       {_output, 0} = System.cmd("git", ["-C", worktree | identity] ++ ["commit", "--quiet", "-m", "init"])
       git = fn args, cwd -> System.cmd("git", ["-C", cwd | args], stderr_to_stdout: true) end
 
+      # Something writes ignored outputs into the worktree while the build runs on the QA host.
+      build = fn
+        "/bin/sh", ["-c", "make app"], opts ->
+          write_bundle(worktree)
+          write_bundle(opts[:cd])
+
+        executable, args, opts ->
+          default_cmd(executable, args, opts, %{})
+      end
+
       # Planted before the first build: the worktree is fresh, so nothing ignored may exist.
       planted = Path.join(worktree, "macos/.build/checkouts/dep/Sources/Dep.swift")
       File.mkdir_p!(Path.dirname(planted))
       File.write!(planted, "evil()")
       File.mkdir_p!(Path.join(worktree, "qa-evidence"))
       File.write!(Path.join(worktree, "qa-evidence/a.png"), "png")
-      driver = start_driver(worktree, git: git)
+      driver = start_driver(worktree, git: git, host: host(%{cmd: build}))
       assert {:error, {:qa_tool, "qa_worktree_modified", message}} = QaDriver.call_tool(driver, "qa_build", %{})
       assert message =~ "macos/.build/checkouts/dep/Sources/Dep.swift"
       refute_received {:cmd, "/bin/sh", _args, _opts}
@@ -350,7 +478,7 @@ defmodule SymphonyElixir.QaDriverTest do
 
       # So is a new ignored file.
       File.write!(plist, "<plist/>")
-      fresh = start_driver(worktree, git: git)
+      fresh = start_driver(worktree, git: git, host: host(%{cmd: build}))
       File.rm_rf!(Path.join(worktree, "macos/build"))
       assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(fresh, "qa_build", %{})
       File.mkdir_p!(Path.dirname(planted))
@@ -437,169 +565,35 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:ok, %{"exit_status" => 1, "output" => "…" <> rest}} = QaDriver.call_tool(noisy, "qa_build", %{})
       assert byte_size(rest) == 8_000
     end
-
-    test "rejects a bundle path outside the QA worktree", %{root: root, worktree: worktree} do
-      outside = start_driver(worktree, playbook: %{app: "../elsewhere/Demo.app"})
-      assert {:error, {:qa_tool, "qa_bundle_outside_worktree", message}} = QaDriver.call_tool(outside, "qa_build", %{})
-      assert message =~ "outside"
-
-      absolute = start_driver(worktree, playbook: %{app: "/Applications/Demo.app"})
-      assert error_code(QaDriver.call_tool(absolute, "qa_build", %{})) == "qa_bundle_outside_worktree"
-
-      # A symlink inside the worktree that points out of it is refused too.
-      target = Path.join(root, "elsewhere/Demo.app")
-      File.mkdir_p!(Path.join(target, "Contents/MacOS"))
-      File.rm_rf!(Path.join(worktree, @app))
-      File.ln_s!(target, Path.join(worktree, @app))
-      symlinked = start_driver(worktree, host: host(%{cmd: fn _exe, _args, _opts -> {:ok, {"", 0}} end}))
-      assert error_code(QaDriver.call_tool(symlinked, "qa_build", %{})) == "qa_bundle_outside_worktree"
-
-      File.write!(Path.join(worktree, "file"), "")
-      unresolvable = start_driver(worktree, playbook: %{app: "file/Demo.app"})
-      assert {:error, {:qa_tool, "qa_bundle_outside_worktree", message}} = QaDriver.call_tool(unresolvable, "qa_build", %{})
-      assert message =~ "could not be resolved"
-    end
-
-    test "checks the bundle and its executable", %{root: root, worktree: worktree} do
-      no_bundle = start_driver(worktree, host: host(%{cmd: fn _exe, _args, _opts -> {:ok, {"", 0}} end}))
-      assert error_code(QaDriver.call_tool(no_bundle, "qa_build", %{})) == "qa_app_missing"
-
-      write_bundle(worktree)
-
-      plutil = fn reply ->
-        host(%{
-          cmd: fn
-            "/usr/bin/plutil", _args, _opts -> reply
-            _exe, _args, _opts -> {:ok, {"", 0}}
-          end
-        })
-      end
-
-      for reply <- [{:ok, {"../Demo\n", 0}}, {:ok, {"\n", 0}}, {:ok, {"..", 0}}, {:ok, {"", 1}}, {:error, :timeout}] do
-        driver = start_driver(worktree, host: plutil.(reply))
-        assert error_code(QaDriver.call_tool(driver, "qa_build", %{})) == "qa_app_missing"
-      end
-
-      escaping = Path.join(root, "evil")
-      File.write!(escaping, "evil")
-      File.rm!(Path.join([worktree, @app, "Contents/MacOS/Demo"]))
-      File.ln_s!(escaping, Path.join([worktree, @app, "Contents/MacOS/Demo"]))
-      driver = start_driver(worktree, host: plutil.({:ok, {"Demo", 0}}))
-      assert error_code(QaDriver.call_tool(driver, "qa_build", %{})) == "qa_executable_outside_bundle"
-
-      File.rm!(Path.join([worktree, @app, "Contents/MacOS/Demo"]))
-      File.mkdir_p!(Path.join([worktree, @app, "Contents/MacOS/Demo"]))
-      driver = start_driver(worktree, host: plutil.({:ok, {"Demo", 0}}))
-      assert error_code(QaDriver.call_tool(driver, "qa_build", %{})) == "qa_app_missing"
-    end
   end
 
   describe "qa_launch_app" do
-    test "launches a private copy of what the last build produced", %{worktree: worktree} do
+    test "launches the run directory's copy of what the last build produced", %{worktree: worktree} do
       driver = start_driver(worktree)
       assert error_code(QaDriver.call_tool(driver, "qa_launch_app", %{})) == "qa_not_built"
 
       assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
-      write_bundle(worktree, "agent-written binary")
+      %{host_dir: host_dir} = GenServer.call(driver, :config)
       {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
       assert {:ok, %{"pid" => _pid}} = result
       assert_received {:launched, executable, _opts, _port, _pid}
-      refute String.starts_with?(executable, worktree)
+      assert String.starts_with?(executable, Path.join(host_dir, "builds") <> "/")
       assert File.read!(executable) == "binary-v1"
-
-      # The copy is checked again before every launch.
-      File.write!(executable, "tampered")
-      assert error_code(QaDriver.call_tool(driver, "qa_launch_app", %{})) == "qa_app_changed"
-      refute_received {:launched, _executable, _opts, _port, _pid}
-    end
-
-    test "copies in-bundle symlinks and refuses links that leave the bundle", %{worktree: worktree} do
-      build_with_link = fn target ->
-        fn
-          "/bin/sh", ["-c", _build], opts ->
-            write_bundle(opts[:cd])
-            framework = Path.join([opts[:cd], @app, "Contents/Frameworks/Dep.framework"])
-            File.mkdir_p!(Path.join(framework, "Versions/A"))
-            File.write!(Path.join(framework, "Versions/A/Dep"), "dylib")
-            link = Path.join(framework, "Dep")
-            File.rm(link)
-            File.ln_s!(target, link)
-            {:ok, {"", 0}}
-
-          executable, args, opts ->
-            default_cmd(executable, args, opts, %{})
-        end
-      end
-
-      driver = start_driver(worktree, host: host(%{cmd: build_with_link.("Versions/A/Dep")}))
-      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
-      {_result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
-      assert_received {:launched, executable, _opts, _port, _pid}
-      copied = Path.join(Path.dirname(Path.dirname(executable)), "Frameworks/Dep.framework/Dep")
-      assert File.read_link!(copied) == "Versions/A/Dep"
-      assert File.read!(copied) == "dylib"
-
-      for target <- [Path.join(worktree, "evil.dylib"), "../../../../../evil.dylib", "Versions/../../Dep"] do
-        driver = start_driver(worktree, host: host(%{cmd: build_with_link.(target)}))
-        assert {:error, {:qa_tool, "qa_bundle_unsafe", message}} = QaDriver.call_tool(driver, "qa_build", %{})
-        assert message =~ "must be relative"
-        assert error_code(QaDriver.call_tool(driver, "qa_launch_app", %{})) == "qa_not_built"
-      end
-
-      # A refused bundle still becomes the baseline and drops the earlier build,
-      # so its outputs do not block the next attempt as agent edits.
-      {:ok, target} = Agent.start_link(fn -> "Versions/A/Dep" end)
-      retry = fn executable, args, opts -> build_with_link.(Agent.get(target, & &1)).(executable, args, opts) end
-      driver = start_driver(worktree, host: host(%{cmd: retry}))
-      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
-      Agent.update(target, fn _target -> Path.join(worktree, "evil.dylib") end)
-      assert error_code(QaDriver.call_tool(driver, "qa_build", %{})) == "qa_bundle_unsafe"
-      assert error_code(QaDriver.call_tool(driver, "qa_launch_app", %{})) == "qa_not_built"
-      Agent.update(target, fn _target -> "Versions/A/Dep" end)
-      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
-    end
-
-    test "refuses a bundle with special files or entries it cannot read", %{worktree: worktree} do
-      resources = Path.join([worktree, @app, "Contents/Resources"])
-
-      build_with = fn prepare ->
-        fn
-          "/bin/sh", _args, opts ->
-            write_bundle(opts[:cd])
-            File.rm_rf!(resources)
-            File.mkdir_p!(resources)
-            prepare.()
-            {:ok, {"", 0}}
-
-          executable, args, opts ->
-            default_cmd(executable, args, opts, %{})
-        end
-      end
-
-      fifo = build_with.(fn -> {_output, 0} = System.cmd("mkfifo", [Path.join(resources, "pipe")]) end)
-      driver = start_driver(worktree, host: host(%{cmd: fifo}))
-      assert {:error, {:qa_tool, "qa_bundle_unsafe", message}} = QaDriver.call_tool(driver, "qa_build", %{})
-      assert message =~ "pipe is not a file, directory or symlink"
-
-      # Listable but not searchable: the entries inside cannot be stat'ed.
-      unsearchable = build_with.(fn -> File.write!(Path.join(resources, "a"), "a") && File.chmod!(resources, 0o600) end)
-      driver = start_driver(worktree, host: host(%{cmd: unsearchable}))
-      assert {:error, {:qa_tool, "qa_bundle_unsafe", message}} = QaDriver.call_tool(driver, "qa_build", %{})
-      assert message =~ ":eacces"
-      File.chmod!(resources, 0o700)
     end
 
     test "starts one OpenRouter stub for the pass and points every app at it", %{worktree: worktree} do
       {driver, _pid} = launched_app(worktree)
       assert_received {:launched, _executable, launch_opts, _port, _pid}
-      assert launch_opts[:reverse_forwards] == []
-      url = stub_url(launch_opts)
-      assert url =~ ~r{\Ahttp://127\.0\.0\.1:\d+/api\z}
-      assert Req.get!(url <> "/v1/models", retry: false).status == 200
+      %{stub: %{port: stub_port}} = :sys.get_state(driver)
+      # The app's SSH session forwards a loopback port on the QA host back to the stub.
+      assert [{"127.0.0.1:" <> remote_port, "127.0.0.1:" <> local_port}] = launch_opts[:reverse_forwards]
+      assert local_port == Integer.to_string(stub_port)
+      assert env(launch_opts, "SYMPHONY_QA_OPENROUTER_URL") == "http://127.0.0.1:#{remote_port}/api"
+      assert Req.get!("http://127.0.0.1:#{stub_port}/api/v1/models", retry: false).status == 200
 
       {_result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
       assert_received {:launched, _executable, second_opts, _port, _pid}
-      assert stub_url(second_opts) == url
+      assert [{_remote, "127.0.0.1:" <> ^local_port}] = second_opts[:reverse_forwards]
 
       # A stub that died is started again for the next launch.
       %{stub: %{pid: stub}} = :sys.get_state(driver)
@@ -610,7 +604,8 @@ defmodule SymphonyElixir.QaDriverTest do
 
       {_result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
       assert_received {:launched, _executable, third_opts, _port, _pid}
-      assert Req.get!(stub_url(third_opts) <> "/v1/models", retry: false).status == 200
+      assert [{_remote, restarted_stub}] = third_opts[:reverse_forwards]
+      assert Req.get!("http://#{restarted_stub}/api/v1/models", retry: false).status == 200
 
       # Stopping the driver stops the stub.
       %{stub: %{pid: restarted}} = :sys.get_state(driver)
@@ -668,13 +663,13 @@ defmodule SymphonyElixir.QaDriverTest do
       write_fixtures(worktree)
       driver = start_driver(worktree)
       assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
-      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
+      %{host_dir: host_dir} = GenServer.call(driver, :config)
 
       {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{"api_fixtures" => @fixtures}) end)
       assert {:ok, %{"pid" => _pid, "api_fixtures" => copy}} = result
       assert_received {:launched, _executable, launch_opts, _port, _pid}
       assert fixtures_env(launch_opts) == copy
-      assert String.starts_with?(copy, scratch_dir <> "/api-fixtures-")
+      assert String.starts_with?(copy, host_dir <> "/api-fixtures-")
       assert File.read!(Path.join(copy, "api/v1/overview.json")) == ~s({"running":2})
       assert File.read!(Path.join(copy, "api/v1/issues.json")) == "[]"
 
@@ -876,7 +871,7 @@ defmodule SymphonyElixir.QaDriverTest do
       assert error_code(QaDriver.call_tool(driver, "qa_ax_tree", %{"pid" => pid})) == "qa_helper_failed"
       assert error_code(QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "x"})) == "qa_helper_timeout"
 
-      unavailable = host(%{helper: fn -> {:error, :swiftc_not_found} end})
+      unavailable = host(%{helper: fn _dir -> {:error, :swiftc_not_found} end})
       {driver, pid} = launched_app(worktree, host: unavailable)
       assert {:error, {:qa_tool, "qa_helper_unavailable", message}} = QaDriver.call_tool(driver, "qa_ax_tree", %{"pid" => pid})
       assert message =~ "swiftc_not_found"
@@ -1206,13 +1201,13 @@ defmodule SymphonyElixir.QaDriverTest do
     end
 
     defp qa_root_env(launch_opts) do
-      {_name, value} = Enum.find(launch_opts[:env], fn {name, _value} -> name == ~c"SYMPHONY_BAR_QA_ROOT" end)
+      {_name, value} = Enum.find(launch_opts[:env], fn {name, _value} -> name == "SYMPHONY_BAR_QA_ROOT" end)
       to_string(value)
     end
 
     test "each fresh_root launch gets a new, empty root with no settings shared, and root reuses one", %{worktree: worktree} do
       driver = built_driver(worktree, host: host(%{helper_replies: %{"ax-ping" => {~s({"ok":true,"responding":true}), 0}}}))
-      %{scratch_dir: scratch_dir, qa_root: first} = GenServer.call(driver, :config)
+      %{host_dir: host_dir, qa_root: first} = GenServer.call(driver, :config)
 
       # The first launch records its first run in root 1, as the app does.
       {{:ok, %{"root" => 1}}, first_opts} = launch(driver, %{})
@@ -1220,7 +1215,7 @@ defmodule SymphonyElixir.QaDriverTest do
       File.write!(Path.join(first, "settings.plist"), "setupFirstRunRecorded")
 
       {{:ok, %{"pid" => second, "root" => 2}}, second_opts} = launch(driver, %{"fresh_root" => true})
-      root_two = Path.join(scratch_dir, "qa-root-2")
+      root_two = Path.join(host_dir, "qa-root-2")
       assert second_opts[:cd] == root_two
       assert qa_root_env(second_opts) == root_two
       assert File.ls!(root_two) == []
@@ -1228,13 +1223,14 @@ defmodule SymphonyElixir.QaDriverTest do
       File.write!(Path.join(root_two, "settings.plist"), "setupFirstRunRecorded")
 
       {{:ok, %{"root" => 3}}, third_opts} = launch(driver, %{"fresh_root" => true, "root" => nil})
-      root_three = Path.join(scratch_dir, "qa-root-3")
+      root_three = Path.join(host_dir, "qa-root-3")
       assert third_opts[:cd] == root_three
       assert qa_root_env(third_opts) == root_three
       assert File.ls!(root_three) == []
 
       # Both arguments keep the launch's other handling: the stub, the playbook's launch_env.
-      assert stub_url(second_opts) == stub_url(third_opts)
+      assert [{_remote, local}] = second_opts[:reverse_forwards]
+      assert [{_remote, ^local}] = third_opts[:reverse_forwards]
 
       assert {:ok, %{"quit" => true}} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => second})
       {{:ok, %{"pid" => again, "root" => 2}}, again_opts} = launch(driver, %{"root" => 2, "fresh_root" => false})
@@ -1265,11 +1261,12 @@ defmodule SymphonyElixir.QaDriverTest do
 
     test "fails a fresh launch whose root can't be made, and keeps a root whose app failed to start", %{worktree: worktree} do
       driver = built_driver(worktree)
-      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
-      File.mkdir!(Path.join(scratch_dir, "qa-root-2"))
+      %{host_dir: host_dir} = GenServer.call(driver, :config)
+      File.mkdir!(Path.join(host_dir, "qa-root-2"))
 
       assert {:error, {:qa_tool, "qa_launch_failed", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"fresh_root" => true})
-      assert message =~ "A fresh QA root could not be made at #{scratch_dir}/qa-root-2: :eexist"
+      assert message =~ "A fresh QA root could not be made on the QA host at #{host_dir}/qa-root-2"
+      assert message =~ "File exists"
       refute_received {:launched, _executable, _opts, _port, _pid}
 
       {:ok, attempts} = Agent.start_link(fn -> 0 end)
@@ -1287,7 +1284,7 @@ defmodule SymphonyElixir.QaDriverTest do
       end
 
       failing = built_driver(worktree, host: host(%{launch: launch}))
-      %{scratch_dir: failing_dir} = GenServer.call(failing, :config)
+      %{host_dir: failing_dir} = GenServer.call(failing, :config)
       assert error_code(QaDriver.call_tool(failing, "qa_launch_app", %{"fresh_root" => true})) == "qa_launch_failed"
       assert File.dir?(Path.join(failing_dir, "qa-root-2"))
 
@@ -1335,19 +1332,23 @@ defmodule SymphonyElixir.QaDriverTest do
       path
     end
 
-    test "returns the path of a fixture in qa-evidence or $TMPDIR without copying it", %{root: root, worktree: worktree} do
+    test "copies a fixture in qa-evidence or $TMPDIR into the run directory's files/", %{root: root, worktree: worktree} do
       tmp_real = Path.join(root, "tmp-real")
       File.mkdir_p!(tmp_real)
       tmp_link = Path.join(root, "tmp-link")
       File.ln_s!(tmp_real, tmp_link)
       driver = start_driver(worktree, tmp_dir: tmp_link)
+      %{host_dir: host_dir} = GenServer.call(driver, :config)
 
       fixture = write_fixture!(Path.join(worktree, "qa-evidence/qa-config/symphony.yml"))
-      assert {:ok, %{"path" => ^fixture, "bytes" => 10}} = put_file(driver, %{"local_path" => "qa-evidence/qa-config/symphony.yml"})
-      assert {:ok, %{"path" => ^fixture}} = put_file(driver, %{"local_path" => fixture, "remote_name" => "other.yml"})
+      copy = Path.join(host_dir, "files/symphony.yml")
+      assert {:ok, %{"path" => ^copy, "bytes" => 10}} = put_file(driver, %{"local_path" => "qa-evidence/qa-config/symphony.yml"})
+      assert File.read!(copy) == "repos: []\n"
+      other = Path.join(host_dir, "files/other.yml")
+      assert {:ok, %{"path" => ^other}} = put_file(driver, %{"local_path" => fixture, "remote_name" => "other.yml"})
 
       write_fixture!(Path.join(tmp_real, "qa/WORKFLOW.md"), "")
-      expected = Path.join(tmp_real, "qa/WORKFLOW.md")
+      expected = Path.join(host_dir, "files/WORKFLOW.md")
       assert {:ok, %{"path" => ^expected, "bytes" => 0}} = put_file(driver, %{"local_path" => Path.join(tmp_link, "qa/WORKFLOW.md")})
     end
 
@@ -1438,7 +1439,7 @@ defmodule SymphonyElixir.QaDriverTest do
           default_cmd(executable, args, opts, %{})
       end
 
-      driver = start_driver(worktree, tmp_dir: root, host: host(%{cmd: build, launch: &Host.launch/2}))
+      driver = start_driver(worktree, tmp_dir: root, host: host(%{cmd: build, launch: &launch_here/2}))
       {:ok, [port | _rest]} = QaDriver.host_ports(driver)
       start_supervised!({Bandit, plug: {GhStub, test: self()}, ip: {127, 0, 0, 1}, port: port, startup_log: false})
 
@@ -1455,8 +1456,8 @@ defmodule SymphonyElixir.QaDriverTest do
       assert output =~ "SYMPHONY_QA_GH_URL is not set\nthird=1\n"
       assert output =~ "couldn't reach the gh stub at http://127.0.0.1:1\nfourth=1\n"
 
-      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
-      assert File.stat!(Path.join(scratch_dir, "bin/gh")).mode |> Bitwise.band(0o777) == 0o700
+      %{host_dir: host_dir} = GenServer.call(driver, :config)
+      assert File.stat!(Path.join(host_dir, "bin/gh")).mode |> Bitwise.band(0o777) == 0o700
     end
 
     test "puts a checkout of a bundle and opens the folder picker in it", %{root: root, worktree: worktree} do
@@ -1466,17 +1467,18 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:ok, %{"path" => path, "remote_url" => "https://github.com/acme/widgets.git"}} =
                put_checkout(driver, %{"local_path" => bundle, "remote_url" => "https://github.com/acme/widgets"})
 
-      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
-      assert path == Path.join(scratch_dir, "checkouts/widgets")
+      %{scratch_dir: scratch_dir, host_dir: host_dir} = GenServer.call(driver, :config)
+      assert path == Path.join(host_dir, "checkouts/widgets")
       assert File.read!(Path.join(path, "package.json")) == "{}\n"
       assert {"https://github.com/acme/widgets.git\n", 0} = System.cmd("git", ["-C", path, "remote", "get-url", "origin"])
       assert {"origin/main\n", 0} = System.cmd("git", ["-C", path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
       assert File.ls!(scratch_dir) |> Enum.filter(&String.ends_with?(&1, ".bundle")) == []
+      assert File.ls!(Path.join(host_dir, "files")) == []
 
       assert {:ok, %{"path" => other}} =
                put_checkout(driver, %{"local_path" => bundle, "remote_url" => "https://github.com/acme/widgets.git", "remote_name" => "with-workflow"})
 
-      assert other == Path.join(scratch_dir, "checkouts/with-workflow")
+      assert other == Path.join(host_dir, "checkouts/with-workflow")
 
       assert {:error, {:qa_tool, "qa_put_checkout_failed", message}} =
                put_checkout(driver, %{"local_path" => bundle, "remote_url" => "https://github.com/acme/widgets"})
@@ -1498,25 +1500,19 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:ok, %{"pid" => _pid}} = result
       assert_received {:launched, _executable, launch_opts, _port, _pid}
       env = Map.new(launch_opts[:env])
-      assert env[~c"SYMPHONY_BAR_GH"] == String.to_charlist(Path.join(scratch_dir, "bin/gh"))
-      assert env[~c"SYMPHONY_QA_GH_URL"] == ~c"http://localhost:#{gh_port}"
-      assert env[~c"SYMPHONY_QA_LINEAR_URL"] == ~c"http://localhost:#{linear_port}/graphql"
-      assert env[~c"SYMPHONY_BAR_QA_OPEN_PANEL_DIR"] == String.to_charlist(path)
-      assert env[~c"SYMPHONY_BAR_UPDATE_URL"] == ~c"http://localhost:#{feed_port}/releases/latest"
-      assert env[~c"SYMPHONY_BAR_UPDATE_CHECK_INTERVAL"] == ~c"30"
+      assert env["SYMPHONY_BAR_GH"] == Path.join(host_dir, "bin/gh")
+      assert env["SYMPHONY_QA_GH_URL"] == "http://localhost:#{gh_port}"
+      assert env["SYMPHONY_QA_LINEAR_URL"] == "http://localhost:#{linear_port}/graphql"
+      assert env["SYMPHONY_BAR_QA_OPEN_PANEL_DIR"] == path
+      assert env["SYMPHONY_BAR_UPDATE_URL"] == "http://localhost:#{feed_port}/releases/latest"
+      assert env["SYMPHONY_BAR_UPDATE_CHECK_INTERVAL"] == "30"
 
       # Without stand-in arguments the app gets none of them.
       {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
       assert {:ok, %{"pid" => _pid}} = result
       assert_received {:launched, _executable, launch_opts, _port, _pid}
 
-      stand_in_names = [
-        ~c"SYMPHONY_BAR_GH",
-        ~c"SYMPHONY_QA_LINEAR_URL",
-        ~c"SYMPHONY_BAR_QA_OPEN_PANEL_DIR",
-        ~c"SYMPHONY_BAR_UPDATE_URL",
-        ~c"SYMPHONY_BAR_UPDATE_CHECK_INTERVAL"
-      ]
+      stand_in_names = ~w(SYMPHONY_BAR_GH SYMPHONY_QA_LINEAR_URL SYMPHONY_BAR_QA_OPEN_PANEL_DIR SYMPHONY_BAR_UPDATE_URL SYMPHONY_BAR_UPDATE_CHECK_INTERVAL)
 
       refute Enum.any?(launch_opts[:env], fn {name, _value} -> name in stand_in_names end)
     end
@@ -1612,17 +1608,17 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
 
       for {args, expected, app_args, library} <- [
-            {%{"appearance" => "dark"}, ~c"dark", [], String.to_charlist(@appearance_library)},
-            {%{"appearance" => "light"}, ~c"light", ["-NSRequiresAquaSystemAppearance", "YES"], String.to_charlist(@appearance_library)},
+            {%{"appearance" => "dark"}, "dark", [], @appearance_library},
+            {%{"appearance" => "light"}, "light", ["-NSRequiresAquaSystemAppearance", "YES"], @appearance_library},
             {%{}, nil, [], nil}
           ] do
         {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", args) end)
         assert {:ok, %{"pid" => pid}} = result
         assert_received {:launched, _executable, launch_opts, _port, ^pid}
         env = Map.new(launch_opts[:env])
-        assert env[~c"SYMPHONY_BAR_QA_APPEARANCE"] == expected
+        assert env["SYMPHONY_BAR_QA_APPEARANCE"] == expected
         # The library sets any AppKit app's appearance from SYMPHONY_BAR_QA_APPEARANCE.
-        assert env[~c"DYLD_INSERT_LIBRARIES"] == library
+        assert env["DYLD_INSERT_LIBRARIES"] == library
         if library, do: assert_received(:appearance_library), else: refute_received(:appearance_library)
         assert launch_opts[:args] == app_args
         assert {:ok, _quit} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
@@ -1630,7 +1626,7 @@ defmodule SymphonyElixir.QaDriverTest do
     end
 
     test "reports an appearance library it cannot build and launches nothing", %{worktree: worktree} do
-      failed = fn -> {:error, {:appearance_build_failed, 1, "clang: command not found"}} end
+      failed = fn _dir -> {:error, {:appearance_build_failed, 1, "clang: command not found"}} end
       driver = start_driver(worktree, host: host(%{appearance_library: failed}))
       assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
 
@@ -1781,7 +1777,7 @@ defmodule SymphonyElixir.QaDriverTest do
         end
       end
 
-      Map.merge(host(%{cmd: cmd}), %{
+      Map.merge(host(Map.merge(%{cmd: cmd}, Map.take(overrides, [:ioreg]))), %{
         prepare: fn home, canary ->
           send(test, {:prepare, home, canary, File.stat!(canary).mode})
           Map.get(overrides, :prepare, {:ok, @run_dir})
@@ -1798,10 +1794,6 @@ defmodule SymphonyElixir.QaDriverTest do
         cleanup: fn dir -> send(test, {:cleanup, dir}) && :ok end
       })
     end
-
-    # Stands in for the tunnel's SSH session: it prints a line as `ssh` may, then
-    # runs until its stdin closes, or exits when the test writes a line to it.
-    defp open_tunnel, do: {:ok, Port.open({:spawn_executable, "/bin/sh"}, [:binary, :exit_status, args: ["-c", "echo warning; read line; exit 3"]])}
 
     # Answers each tunnel request with the next of `results`.
     defp tunnel_results(results) do
@@ -1828,6 +1820,7 @@ defmodule SymphonyElixir.QaDriverTest do
               worker_host: "qa@qa-vm",
               playbook: Map.merge(%{build: "make app", app: @app}, playbook),
               host: host,
+              local_uuid: fn -> {:ok, @symphony_mac} end,
               git: git
             ] ++ opts
           )
@@ -1940,6 +1933,54 @@ defmodule SymphonyElixir.QaDriverTest do
       end
     end
 
+    test "runs nothing without a QA host, and says to set up the QA VM", %{worktree: worktree} do
+      {{:ok, driver}, log} =
+        with_log(fn ->
+          playbook = %{build: "make app", app: @app}
+          QaDriver.start_link(worktree: worktree, playbook: playbook, host: remote_host(), git: &clean_git/2)
+        end)
+
+      assert log =~ "QA driver has no worker_host"
+
+      for tool <- ["qa_build", "qa_launch_app", "qa_build_release_pair", "qa_put_file", "qa_screenshot"] do
+        assert {:error, {:qa_tool, "qa_worker_missing", message}} = QaDriver.call_tool(driver, tool, %{})
+        assert message =~ "No QA VM is set up: `auto_review.worker_host` is unset"
+        assert message =~ "never builds or runs a PR's macOS app on its own host"
+        assert message =~ "answer with verdict `blocked`"
+        assert message =~ "docs/configuration.md#running-qa-in-a-qa-vm"
+      end
+
+      assert {:ok, [_one, _two, _three]} = QaDriver.host_ports(driver)
+      QaDriver.stop(driver)
+      refute_received {:prepare, _home, _canary, _mode}
+      refute_received {:tunnel, _ports}
+      refute_received {:cmd, _executable, _args, _opts}
+      refute_received {:cleanup, _dir}
+    end
+
+    test "refuses a QA host that is this Mac before preparing it, and one it can't tell apart", %{worktree: worktree} do
+      # Under any name: the hardware matches, whatever case ioreg prints it in.
+      driver = remote_driver(worktree, remote_host(%{ioreg: ioreg(String.downcase(@symphony_mac))}))
+
+      for tool <- ["qa_build", "qa_launch_app", "qa_build_release_pair"] do
+        assert {:error, {:qa_tool, "qa_worker_same_machine", message}} = QaDriver.call_tool(driver, tool, %{})
+        assert message =~ "The QA host qa@qa-vm is this Mac (the same IOPlatformUUID): QA must run in a VM, never on the Symphony host"
+        assert message =~ "answer with verdict `blocked`"
+        assert message =~ "docs/configuration.md#running-qa-in-a-qa-vm"
+      end
+
+      QaDriver.stop(driver)
+      refute_received {:prepare, _home, _canary, _mode}
+      refute_received {:tunnel, _ports}
+      refute_received {:cmd, "/bin/sh", ["-c", "make app"], _opts}
+      refute_received {:cleanup, _dir}
+
+      driver = remote_driver(worktree, remote_host(%{ioreg: {:error, :timeout}}))
+      assert {:error, {:qa_tool, "qa_worker_unreachable", message}} = QaDriver.call_tool(driver, "qa_build", %{})
+      assert message =~ "The QA host qa@qa-vm could not be checked: the hardware UUID of the QA host could not be read: ioreg could not run: :timeout."
+      refute_received {:prepare, _home, _canary, _mode}
+    end
+
     test "refuses an unsafe or unreachable QA host", %{worktree: worktree} do
       driver = remote_driver(worktree, remote_host(%{prepare: {:error, {:unsafe, "has a private key ~/.ssh/id_ed25519"}}}))
 
@@ -2002,7 +2043,6 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
       assert_received {:cmd, "/bin/sh", ["-c", "make app"], build_opts}
       assert build_opts[:remote_env] == []
-      refute List.keymember?(build_opts[:env], ~c"QA_HOST_PORTS", 0)
     end
 
     test "opens no tunnel to a QA host it refused", %{worktree: worktree} do
@@ -2396,7 +2436,7 @@ defmodule SymphonyElixir.QaDriverTest do
 
       for {git, overrides, text} <- [
             {&bundle_fails/2, %{}, "git bundle failed (exit 128)"},
-            {&clean_git/2, %{}, "could not be packed for the QA host"},
+            {fn _args, _cwd -> {"", 0} end, %{}, "could not be packed for the QA host"},
             {bundling_git(test), %{ship: {:error, "exit 1: disk full"}}, "could not be copied to the QA host: exit 1: disk full"},
             {bundling_git(test), %{clone: {:ok, {"fatal: bad bundle\n", 128}}}, "git could not clone the checkout on the QA host: exit 128: fatal: bad bundle"},
             {bundling_git(test), %{clone: {:ok, {"cloned\n", 0}}}, "checkout on the QA host was not confirmed"}
@@ -2533,11 +2573,8 @@ defmodule SymphonyElixir.QaDriverTest do
       refute_received {:dev_server_script, "kill -s \"$3\"", _args, _opts}
     end
 
-    test "starts no dev server on a QA host it refused, or without one", %{worktree: worktree} do
+    test "starts no dev server on a QA host it refused", %{worktree: worktree} do
       driver = remote_driver(worktree, remote_host(%{prepare: {:error, {:unsafe, "has a private key ~/.ssh/id_ed25519"}}}))
-      assert QaDriver.start_dev_server(driver, dev_server_spec()) == {:ok, nil}
-
-      driver = start_driver(worktree)
       assert QaDriver.start_dev_server(driver, dev_server_spec()) == {:ok, nil}
       refute_received {:ship, _tar, _dest}
     end
@@ -2699,6 +2736,7 @@ defmodule SymphonyElixir.QaDriverTest do
         else: default_cmd("/bin/sh", ["-c", script | args], opts, replies(%{}))
     end
 
+    defp pair_default("/usr/bin/sudo", ["-n", "true"], _opts, _pair), do: {:ok, {"sudo: a password is required\n", 1}}
     defp pair_default("/bin/ps", _args, _opts, pair), do: pair.ps
     defp pair_default("/bin/kill", _args, _opts, _pair), do: {:ok, {"", 0}}
     defp pair_default(executable, args, opts, _pair) when executable in ["/bin/cat", "/usr/bin/tail"], do: Host.cmd(executable, args, opts)
@@ -2749,24 +2787,25 @@ defmodule SymphonyElixir.QaDriverTest do
 
     test "builds the pair with the QA signing identity where the app runs and returns its manifest", %{worktree: worktree, feed_mode: mode} do
       driver = pair_driver(worktree, mode)
-      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
+      %{host_dir: host_dir} = GenServer.call(driver, :config)
+      source = Path.join(host_dir, "pair-src")
 
       assert {:ok, %{"exit_status" => 0, "manifest" => @manifest, "output" => output, "note" => note}} =
                QaDriver.call_tool(driver, "qa_build_release_pair", %{})
 
-      assert output =~ "release pair in #{scratch_dir}/release-pair"
+      assert output =~ "release pair in #{host_dir}/release-pair"
       assert note =~ "release_pair: true"
-      script = Path.join(worktree, "scripts/qa/install-test-signing-identity.sh")
+      script = Path.join(source, "scripts/qa/install-test-signing-identity.sh")
       assert_received {:cmd, "/bin/sh", [^script, "--use"], identity_opts}
-      assert identity_opts[:cd] == worktree
+      assert identity_opts[:cd] == source
       assert_received {:cmd, "/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", out], build_opts}
-      assert out == Path.join(scratch_dir, "release-pair")
-      assert build_opts[:cd] == worktree
+      assert out == Path.join(host_dir, "release-pair")
+      assert build_opts[:cd] == source
       assert build_opts[:timeout_ms] == 1_800_000
       assert env_value(build_opts, "SYMPHONY_E2E_SIGNING_IDENTITY") == @sha
       assert env_value(build_opts, "SYMPHONY_E2E_KEYCHAIN") == @keychain
       refute env_value(build_opts, "SYMPHONY_E2E_TRUST_CERT")
-      assert File.read!(Path.join(scratch_dir, "update-feed/stubs/update_feed.py")) == "# update_feed.py\n"
+      assert File.read!(Path.join(host_dir, "update-feed/stubs/update_feed.py")) == "# update_feed.py\n"
       assert %{pair: %{manifest: @manifest}} = :sys.get_state(driver)
 
       # The plain build still builds and launches beside the pair.
@@ -2789,8 +2828,6 @@ defmodule SymphonyElixir.QaDriverTest do
         assert message =~ "answer with verdict `blocked`"
         assert message =~ "scripts/qa/install-test-signing-identity.sh once on the QA host"
         refute_received {:cmd, "/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", _out], _opts}
-        # Never on this host: the trust root would land in the operator's System keychain.
-        refute_received {:cmd, "/usr/bin/sudo", _args, _opts}
         refute_received {:cmd, "/bin/sh", ["-c", _installer, "sh"], _opts}
         assert error_code(launch_pair(driver)) == "qa_release_pair_not_built"
         QaDriver.stop(driver)
@@ -2852,21 +2889,21 @@ defmodule SymphonyElixir.QaDriverTest do
 
     test "launches N from a fresh copy beside the pair's feed and drives the app its update helper relaunches", %{worktree: worktree, feed_mode: mode} do
       driver = built_pair(worktree, mode, [], relaunch_poll_ms: 10)
-      %{scratch_dir: scratch_dir, qa_root: qa_root} = GenServer.call(driver, :config)
+      %{scratch_dir: scratch_dir, host_dir: host_dir, qa_root: qa_root} = GenServer.call(driver, :config)
 
       assert {:ok, %{"pid" => pid, "qa_mode" => true, "release_pair" => true, "bundle" => bundle, "note" => note}} =
                launch_pair(driver, %{"update_check_interval_seconds" => 5, "appearance" => "dark"})
 
       assert note =~ "qa_relaunched_app"
-      assert String.starts_with?(bundle, Path.join(scratch_dir, "pair-launches") <> "/")
+      assert String.starts_with?(bundle, Path.join(host_dir, "pair-launches") <> "/")
       assert File.read!(Path.join(bundle, "Contents/MacOS/Demo")) == "release-n"
 
       assert_received {:launched, "/usr/bin/python3", feed_opts, _feed_port, feed_pid}
-      assert feed_opts[:cd] == Path.join(scratch_dir, "update-feed")
+      assert feed_opts[:cd] == Path.join(host_dir, "update-feed")
       assert [script, "--dir", feed_dir, "--port", port, "--log", log] = feed_opts[:args]
-      assert script == Path.join(scratch_dir, "update-feed/stubs/update_feed.py")
-      assert feed_dir == Path.join(scratch_dir, "release-pair/feed")
-      assert log == Path.join(scratch_dir, "update-feed/feed.log")
+      assert script == Path.join(host_dir, "update-feed/stubs/update_feed.py")
+      assert feed_dir == Path.join(host_dir, "release-pair/feed")
+      assert log == Path.join(host_dir, "update-feed/feed.log")
       assert_received {:cmd, "/usr/bin/curl", ["-sS", "-f", "--max-time", "1", ready_url], _opts}
       assert ready_url == "http://127.0.0.1:#{port}/_feed/mode"
 
@@ -2876,7 +2913,7 @@ defmodule SymphonyElixir.QaDriverTest do
       assert env_value(launch_opts, "SYMPHONY_BAR_UPDATE_URL") == "http://127.0.0.1:#{port}/releases/latest"
       assert env_value(launch_opts, "SYMPHONY_BAR_UPDATE_CHECK_INTERVAL") == "5"
       assert env_value(launch_opts, "SYMPHONY_BAR_QA_APPEARANCE") == "dark"
-      assert env_value(launch_opts, "SYMPHONY_UPDATE_OPEN") == Path.join(scratch_dir, "bin/relaunch")
+      assert env_value(launch_opts, "SYMPHONY_UPDATE_OPEN") == Path.join(host_dir, "bin/relaunch")
 
       # A second launch gets its own copy of N and the same feed.
       assert {:ok, %{"pid" => second, "bundle" => other_bundle}} = launch_pair(driver)
@@ -2921,21 +2958,21 @@ defmodule SymphonyElixir.QaDriverTest do
       assert_received {:cmd, "/usr/bin/curl", ["-sS", "-f", "--max-time", "5", "-X", "POST", "--data", "none", _url], _opts}
 
       # Stopping the pass stops the feed and anything left under its directory.
-      host_dir = scratch_dir
       QaDriver.stop(driver)
       assert_received {:killed, ^feed_pid}
       assert_received {:killed, ^relaunched}
       assert_received {:cmd, "/bin/ps", ["-axww", "-o", "pid=,command="], _opts}
       refute File.exists?(host_dir)
+      refute File.exists?(scratch_dir)
     end
 
     test "relaunches the app a fresh-root launch's update helper asks for in that root", %{worktree: worktree, feed_mode: mode} do
       driver = built_pair(worktree, mode, [], relaunch_poll_ms: 10)
-      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
+      %{host_dir: host_dir} = GenServer.call(driver, :config)
       assert {:ok, %{"pid" => _first}} = launch_pair(driver)
       assert {:ok, %{"pid" => pid, "root" => 2, "bundle" => bundle}} = launch_pair(driver, %{"fresh_root" => true})
       assert_received {:launched, _executable, launch_opts, _port, ^pid}
-      root_two = Path.join(scratch_dir, "qa-root-2")
+      root_two = Path.join(host_dir, "qa-root-2")
       assert env_value(launch_opts, "SYMPHONY_BAR_QA_ROOT") == root_two
 
       ask_relaunch(launch_opts, bundle)
@@ -3088,6 +3125,21 @@ defmodule SymphonyElixir.QaDriverTest do
       assert message =~ "could not start: :enoent"
     end
 
+    test "refuses a release N whose CFBundleExecutable it can't read or use", %{worktree: worktree, feed_mode: mode} do
+      for reply <- [{:ok, {"../Demo\n", 0}}, {:ok, {"\n", 0}}, {:ok, {"..", 0}}, {:ok, {"", 1}}, {:error, :timeout}] do
+        plutil = fn
+          "/usr/bin/plutil", ["-extract", "CFBundleExecutable" | _rest], _opts -> reply
+          _executable, _args, _opts -> :pass
+        end
+
+        driver = built_pair(worktree, mode, intercept: plutil)
+        assert {:error, {:qa_tool, "qa_app_missing", message}} = launch_pair(driver)
+        assert message =~ "CFBundleExecutable"
+        refute_received {:launched, _executable, _opts, _port, _pid}
+        QaDriver.stop(driver)
+      end
+    end
+
     test "reports a copy, relaunch stand-in, request or feed call that fails", %{worktree: worktree, feed_mode: mode} do
       driver = built_pair(worktree, mode)
       %{host_dir: host_dir} = GenServer.call(driver, :config)
@@ -3161,24 +3213,9 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:error, _message} = Host.cmd("/nonexistent/qa", [], timeout_ms: 100)
     end
 
-    test "launches and kills a process" do
-      assert {:ok, port, pid} = Host.launch("/bin/cat", cd: System.tmp_dir!(), env: [])
-      assert is_port(port)
-      assert Host.kill(pid) == :ok
-      assert_receive {^port, {:exit_status, _status}}, 5_000
-      assert {:ok, port, _pid} = Host.launch("/bin/echo", cd: System.tmp_dir!(), env: [], args: ["-NSRequiresAquaSystemAppearance", "YES"])
-      assert_receive {^port, {:data, "-NSRequiresAquaSystemAppearance YES\n"}}, 5_000
-      assert {:error, _message} = Host.launch("/nonexistent/qa", cd: System.tmp_dir!(), env: [])
-      host = Host.default()
-      assert %{cmd: _cmd, launch: _launch, kill: _kill, helper: _helper, call_helper: _call_helper} = host
-      assert is_function(host.appearance_library, 0)
+    test "embeds the helper's source, and the appearance library's source and its build script" do
+      assert Host.helper_source() =~ "SYMPHONY_QA_SSH"
 
-      assert {:ok, port, _pid} = Host.launch("/bin/echo", cd: System.tmp_dir!(), env: [], args: ["release", "pair"])
-      assert_receive {^port, {:data, "release pair\n"}}, 5_000
-      assert_receive {^port, {:exit_status, 0}}, 5_000
-    end
-
-    test "embeds the appearance library's source and its build script" do
       {source, build} = Host.appearance_source()
       assert source =~ "SYMPHONY_BAR_QA_APPEARANCE"
       assert source =~ "NSAppearanceNameDarkAqua"
@@ -3322,7 +3359,7 @@ defmodule SymphonyElixir.QaDriverTest do
 
       assert reports == ["Demo-2026-10-06-120000.ips"]
       assert exited =~ ~s[The app exited with status 134 (page "Decide", window 1400×900 pt). Last output: Decide layout: constraint loop]
-      assert crashed == ~s[New crash report (page "Decide", window 1400×900 pt) in ~/Library/Logs/DiagnosticReports: Demo-2026-10-06-120000.ips.]
+      assert crashed == ~s[New crash report (page "Decide", window 1400×900 pt) in ~/Library/Logs/DiagnosticReports on the QA host: Demo-2026-10-06-120000.ips.]
 
       # The other tools still refuse the exited app.
       assert error_code(QaDriver.call_tool(driver, "qa_ax_tree", %{"pid" => pid})) == "qa_app_exited"
@@ -3345,7 +3382,7 @@ defmodule SymphonyElixir.QaDriverTest do
       {driver, pid} = launched_app(worktree, host: host(%{helper_replies: %{"ax-ping" => no_grant}}))
       assert error_code(QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid})) == "qa_permission_missing"
 
-      {driver, pid} = launched_app(worktree, host: host(%{helper: fn -> {:error, :swiftc_not_found} end}))
+      {driver, pid} = launched_app(worktree, host: host(%{helper: fn _dir -> {:error, :swiftc_not_found} end}))
       assert error_code(QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid})) == "qa_helper_unavailable"
 
       assert error_code(QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid + 1})) == "qa_pid_not_launched"
