@@ -82,7 +82,8 @@ forwarding stopped"). Symphony starts it again after 1 second, doubling the wait
 while it keeps failing, and the section counts the restarts and shows the last error. `gh` prints
 its usage text after the error that stopped it, so the error shown is the first of its last 20
 output lines that reads as one (`error`, `failed`, `unable to`), else the line before the usage
-text; the log has all 20 lines, once per stop. A relay that stopped more than twice in ten
+text, else its exit status, or the signal that killed it (`gh webhook forward was killed by signal
+9`); the log has all 20 lines, once per stop. A relay that stopped more than twice in ten
 minutes reads `stable: false` until it has run ten minutes without a stop: meanwhile its
 repository is `degraded` and its watcher polls every `pull_requests.poll_interval_ms`. A second
 `gh webhook forward` on the same repository fails with `Hook already exists`.

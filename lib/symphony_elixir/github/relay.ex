@@ -13,7 +13,9 @@ defmodule SymphonyElixir.GitHub.Relay do
 
   `gh` prints its usage text after the error that stopped it, so the error is the first of the
   last 20 output lines that reads as one (`error`, `failed`, `unable to`), else the line before
-  the usage text, else the last line. Each stop logs one warning with that reason and the 20 lines.
+  the usage text, else the exit status (a signal when it was killed): any other line, such as the
+  greeting `gh` prints when it starts, says nothing about the stop. Each stop logs one warning with
+  that reason and the 20 lines.
 
   A relay that stopped more than twice in ten minutes is not `stable` until it has run ten minutes
   without a stop: its repository reads as degraded and its watcher keeps the normal poll interval
@@ -135,7 +137,7 @@ defmodule SymphonyElixir.GitHub.Relay do
 
   def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
     tail = tail(state.output)
-    error = reason(tail) || "gh webhook forward stopped (exit status #{status})"
+    error = reason(tail) || exit_reason(status)
     {:noreply, dropped(%{state | port: nil, os_pid: nil}, error, tail)}
   end
 
@@ -219,12 +221,16 @@ defmodule SymphonyElixir.GitHub.Relay do
 
   @doc """
   Why `gh` stopped, from its last output lines: the first that reads as an error, else the line
-  before its usage text (`Usage:`), else the last line; nil without output.
+  before its usage text (`Usage:`); nil when no line says (no output, or only its greeting).
   """
   @spec reason([String.t()]) :: String.t() | nil
   def reason(lines) do
-    Enum.find(lines, &Regex.match?(@error_line, &1)) || before_usage(lines) || List.last(lines)
+    Enum.find(lines, &Regex.match?(@error_line, &1)) || before_usage(lines)
   end
+
+  # A port reports a process killed by signal N as exit status 128 + N.
+  defp exit_reason(status) when status > 128, do: "gh webhook forward was killed by signal #{status - 128}"
+  defp exit_reason(status), do: "gh webhook forward stopped (exit status #{status})"
 
   defp before_usage(lines) do
     case Enum.split_while(lines, &(not String.starts_with?(&1, "Usage:"))) do

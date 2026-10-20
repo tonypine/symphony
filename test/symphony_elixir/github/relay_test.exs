@@ -99,13 +99,30 @@ defmodule SymphonyElixir.GitHub.RelayTest do
     refute log =~ @secret
   end
 
-  test "the stop reason is the first error line, else the line before the usage text, else the last line" do
+  test "the stop reason is the first error line, else the line before the usage text, else none" do
     assert Relay.reason(["Forwarding Webhook events from GitHub...", "Failed to connect: EOF", "error: retrying", "-U, --url string"]) == "Failed to connect: EOF"
     assert Relay.reason(["unable to connect to webhooks server, forwarding stopped"]) == "unable to connect to webhooks server, forwarding stopped"
     assert Relay.reason(["unknown flag: --secrett", "Usage:  gh webhook forward [flags]", "-U, --url string"]) == "unknown flag: --secrett"
-    assert Relay.reason(["Usage:  gh webhook forward [flags]", "-U, --url string"]) == "-U, --url string"
-    assert Relay.reason(["Forwarding Webhook events from GitHub...", "bye"]) == "bye"
+    assert Relay.reason(["Usage:  gh webhook forward [flags]", "-U, --url string"]) == nil
+    assert Relay.reason(["Forwarding Webhook events from GitHub..."]) == nil
     assert Relay.reason([]) == nil
+  end
+
+  test "a gh killed after its greeting is reported by the signal, not the greeting", %{dir: dir, spec: spec} do
+    gh = fake_gh(dir, "echo 'Forwarding Webhook events from GitHub...'\necho up > \"#{dir}/greeted\"\nexec sleep 30")
+
+    log =
+      capture_log(fn ->
+        relay = start_relay(spec, executable: gh)
+        assert wait_for_file(Path.join(dir, "greeted"))
+        kill(dir)
+
+        assert_receive {:timer, 1_000, :start}, 2_000
+        assert %{last_error: "gh webhook forward was killed by signal 9"} = Relay.status(relay)
+      end)
+
+    assert log =~ "stopped: gh webhook forward was killed by signal 9"
+    assert log =~ "gh's last output:\nForwarding Webhook events from GitHub..."
   end
 
   test "a relay that stops three times in ten minutes is unstable until it runs ten minutes", %{dir: dir, spec: spec} do

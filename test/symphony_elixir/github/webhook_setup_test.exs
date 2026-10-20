@@ -20,12 +20,12 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf(dir) end)
 
-    # The relays' `gh`: it records its pid and arguments, and fails while `fail` exists.
+    # The relays' `gh`: it greets as gh does, records its pid and arguments, and fails while `fail` exists.
     gh_bin = Path.join(dir, "gh")
 
     File.write!(
       gh_bin,
-      ~s(#!/bin/sh\necho $$ > "#{dir}/pid"\nprintf '%s\\n' "$@" > "#{dir}/args"\nif [ -e "#{dir}/fail" ]; then echo "unable to connect to webhooks server, forwarding stopped"; exit 1; fi\nexec sleep 30\n)
+      ~s(#!/bin/sh\necho "Forwarding Webhook events from GitHub..."\necho $$ > "#{dir}/pid"\nprintf '%s\\n' "$@" > "#{dir}/args"\nif [ -e "#{dir}/fail" ]; then echo "unable to connect to webhooks server, forwarding stopped"; exit 1; fi\nexec sleep 30\n)
     )
 
     File.chmod!(gh_bin, 0o755)
@@ -341,8 +341,8 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     assert wait_for(Path.join(dir, "pid"))
     section = WebhookSetup.section(opts)
     assert section.mode == "degraded"
-    assert %{degraded: true, relay: %{state: "running", stable: false, last_error: "gh webhook forward stopped" <> _status}} = repo(section, "app")
-    assert "The relay stopped more than twice in ten minutes (gh webhook forward stopped" <> _rest = repo(section, "app").degraded_reason
+    assert %{degraded: true, relay: %{state: "running", stable: false, last_error: "gh webhook forward was killed by signal 9"}} = repo(section, "app")
+    assert "The relay stopped more than twice in ten minutes (gh webhook forward was killed by signal 9)" <> _rest = repo(section, "app").degraded_reason
     assert repo(section, "app").poll_interval_ms == section.poll.interval_ms
 
     # Ten minutes up without a stop: steady again, at the safety-net pace.
