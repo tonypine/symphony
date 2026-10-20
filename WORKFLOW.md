@@ -28,6 +28,10 @@ hooks:
             --comment "Closing because the Linear issue for branch $SYMPHONY_BRANCH moved to ${SYMPHONY_ISSUE_STATE:-a terminal state} without merge."
         done
     fi
+# The GitHub check that runs this repo's automated tests. A walkthrough step ending in
+# `Proved by: <test>` is proved by that test passing under this check on the PR head; the
+# implementer records the test, never the check (docs/configuration.md, "Walkthrough proofs").
+proof_check: make-all
 # `github_push_branch` pushes with repo hooks off, so it refuses a push that changes one of
 # `paths` until `command`, run by the agent in its sandbox, records a pass for that commit in
 # `result_file`. Symphony only reads the file; it never runs the command.
