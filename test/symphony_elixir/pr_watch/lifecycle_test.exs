@@ -128,6 +128,7 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
       ci: :green,
       missing_checks: [],
       red_kind: :failure,
+      past_human_only: nil,
       failing_check: nil,
       failed_checks: [],
       check_names: ["specs"],

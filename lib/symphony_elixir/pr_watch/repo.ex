@@ -963,7 +963,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
         result = Apply.apply(action, Map.merge(ctx, %{attempts: attempts, applied: applied, fix: fix, links: entry.links}))
         attempts = result.attempts
-        project_ci(entry, facts, head, now, state)
+        project_ci(entry, facts, read, now, state)
 
         %{
           facts: facts,
@@ -1013,14 +1013,17 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   # What the read alone can't tell: a rerun whose checks haven't reported yet keeps the head
-  # running, and in `Merging` a failed `protected paths` check the ticket's unlock decisions cover
-  # doesn't hold the head back.
+  # running; a failed check only a person clears (`protected paths`) doesn't make the head red
+  # before `Merging`, where the head reads as its other checks so the reviewer, QA and the rework
+  # run go on; and in `Merging` that check holds the head back (R18) unless the ticket's unlock
+  # decisions cover it.
   defp complete(nil, _attempts, _entry, _state), do: nil
 
   defp complete(read, attempts, entry, state) do
     cond do
       read.ci in [:green, :none] and Attempts.rerun_pending?(attempts, read) -> %{read | ci: :pending}
-      entry.phase == :merging and read.ci == :red and read.red_kind == :human_only -> unlocked(read, entry, state)
+      read.ci == :red and read.red_kind == :human_only and entry.phase == :merging -> unlocked(read, entry, state)
+      read.ci == :red and read.red_kind == :human_only -> %{read | ci: read.past_human_only}
       true -> read
     end
   end
@@ -1159,18 +1162,21 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   defp cancel_stale_runs(attempts, _read, _state), do: attempts
 
-  # The ticket's CI label follows its head's checks.
-  defp project_ci(_entry, %Facts{pr: pr}, _head, _now, _state) when pr not in [:open, :draft], do: :ok
+  # The ticket's CI label follows its head's checks. A check only a person clears never shows it
+  # red, in `Merging` either: the label reads the head's other checks.
+  defp project_ci(_entry, %Facts{pr: pr}, _read, _now, _state) when pr not in [:open, :draft], do: :ok
 
-  defp project_ci(entry, facts, head, now, state) do
+  defp project_ci(entry, facts, read, now, state) do
+    ci = if facts.ci == :red and facts.red_kind == :human_only, do: read.past_human_only, else: facts.ci
+
     status =
-      case facts.ci do
+      case ci do
         ci when ci in [:green, :none] -> "green"
         :red -> "red"
         _running -> "running"
       end
 
-    CiState.record(state.repo_key, entry.issue.id, head, status, now, run_store: store(state), tracker: Keyword.get(state.opts, :tracker, Tracker))
+    CiState.record(state.repo_key, entry.issue.id, read[:head_sha], status, now, run_store: store(state), tracker: Keyword.get(state.opts, :tracker, Tracker))
   end
 
   # The decision as the record keeps it: the action, how applying it went, and what a wait is on.

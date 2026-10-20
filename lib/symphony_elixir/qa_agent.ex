@@ -630,7 +630,8 @@ defmodule SymphonyElixir.QaAgent do
     follow-up ticket's identifier in `details`, and do not fail the verdict on it. Without a hand-off,
     mark it `fail` and ask for the follow-up ticket in `findings`. Never skip a criterion that a
     change outside these paths could meet, such as one under `docs/` or to `README.md`: a missing
-    change there is `fail`.\
+    change there is `fail`. A failed `protected paths` check on the PR is not a defect and not a
+    block: only a person clears it, and Symphony asks them before the merge.\
     """
   end
 
