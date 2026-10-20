@@ -63,7 +63,7 @@ defmodule SymphonyElixir.SelfHeal do
   @blocked_hold :blocked
   @needs_decision_hold :needs_decision
 
-  @typedoc "A blocked run's outcome, as `SymphonyElixir.QaVerification` builds it."
+  @typedoc "A blocked run's outcome, as `SymphonyElixir.QaVerification` or `SymphonyElixir.SetupBlock` builds it."
   @type outcome :: map()
 
   @typedoc "What the self-heal lane did with the block."
@@ -413,7 +413,7 @@ defmodule SymphonyElixir.SelfHeal do
 
   defp fix_ticket_hold(ctx, identifier) do
     attrs = %{
-      reason: "waiting on fix ticket #{identifier} for the #{ctx.component} block: #{ctx.signature}",
+      reason: "waiting on fix ticket #{identifier} for the #{ctx.component} block: #{summary(ctx)}",
       clearing_condition: "when the fix ticket #{identifier} is terminal",
       waits_on: %{type: @fix_ticket_type, keys: [identifier]}
     }
@@ -427,6 +427,10 @@ defmodule SymphonyElixir.SelfHeal do
         {:error, reason}
     end
   end
+
+  # The block in words when the outcome gives them (`SymphonyElixir.SetupBlock`), else its signature.
+  defp summary(%{outcome: %{summary: summary}}) when is_binary(summary) and summary != "", do: summary
+  defp summary(ctx), do: ctx.signature
 
   defp previous(repo_key, issue_id, opts) do
     repo_key

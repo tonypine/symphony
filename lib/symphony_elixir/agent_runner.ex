@@ -37,6 +37,7 @@ defmodule SymphonyElixir.AgentRunner do
     ReviewAgent,
     RunKind,
     RunStore,
+    SetupBlock,
     StateMachine,
     SubIssueWait,
     TicketPullRequest,
@@ -117,6 +118,9 @@ defmodule SymphonyElixir.AgentRunner do
 
           exits_as_is?(reason) ->
             exit(reason)
+
+          SetupBlock.setup_block?(reason) ->
+            exit({:setup_block, reason})
 
           linear_unavailable?(reason) ->
             exit({:linear_unavailable, reason})
