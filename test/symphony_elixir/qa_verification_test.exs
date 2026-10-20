@@ -615,7 +615,7 @@ defmodule SymphonyElixir.QaVerificationTest do
     test "retry boundedly on the same head, then file the fix ticket and hold the ticket on it" do
       {workspace, head} = git_workspace!()
 
-      Process.put(:qa_agent_result, {:error, :environment_unreachable, %{}})
+      Process.put(:qa_agent_result, {:error, {:qa_host_tunnel_failed, "ssh exited with status 255"}, %{}})
 
       # The first attempt retries in place, so the next tick picks it up again.
       assert :ok = run(workspace, [])
@@ -639,7 +639,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert attrs.scope == @symphony_repo_key
       assert attrs.component == "qa_environment"
       assert attrs.title == "Self-heal: repair the qa_environment block"
-      assert attrs.description =~ ":environment_unreachable"
+      assert attrs.description =~ ":qa_host_tunnel_failed"
       assert_received {:fixer_block, @fix_ticket}
 
       refute_received {:memory_tracker_state_update, _, _}
@@ -673,7 +673,7 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       assert log =~
                "QA blocked for TP-816 head=#{head} model=~deepseek/deepseek-flash-latest needs_person=false playbooks=cli (attempt 2/2); " <>
-                 "self-healing: the model could not drive the QA tools"
+                 "asking a person: the model could not drive the QA tools"
 
       assert [%{details: %{model: "~deepseek/deepseek-flash-latest"}}, %{details: %{model: "default"}}] = verdicts()
     end
@@ -798,7 +798,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [fix])
       on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_issues) end)
 
-      Process.put(:qa_agent_result, {:error, :environment_unreachable, %{}})
+      Process.put(:qa_agent_result, {:error, {:qa_host_tunnel_failed, "ssh exited with status 255"}, %{}})
 
       # Two attempts on the first ticket file the fix ticket and hold it.
       assert :ok = run(workspace, [])
@@ -820,50 +820,60 @@ defmodule SymphonyElixir.QaVerificationTest do
                Hold.get(@repo_key, @other_issue_id, :blocked)
 
       assert_received {:fixer_attach, @fix_ticket, evidence}
-      assert evidence =~ ":environment_unreachable"
+      assert evidence =~ ":qa_host_tunnel_failed"
     end
 
-    test "a QA agent that rewords the same block on every run is escalated once the fix lands, not retried" do
-      {workspace, _head} = git_workspace!()
+    test "a QA agent's own account of a block files no fix ticket: it retries once, then asks a person" do
+      {workspace, head} = git_workspace!()
       steps = ["Watch the update banner"]
 
-      # The first two runs retry and then file the fix ticket, worded differently each time.
       Process.put(:qa_agent_result, blocked_result(steps, "qa_launch_app cannot set the update feed"))
       assert :ok = run(workspace, [])
+      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+
       Process.put(:qa_agent_result, blocked_result(steps, "The app cannot be pointed at a fake update feed"))
-      assert :ok = run(workspace, [])
-      assert_received {:fixer_create, _attrs}
+      log = capture_log(fn -> assert :ok = run(workspace, []) end)
 
-      # The fix lands and the hold lifts.
-      lift_fix_ticket_hold()
-
-      # The same blocked step with a third wording is the same failure: no new information.
-      Process.put(:qa_agent_result, blocked_result(steps, "Blocked: no way to set the update URL for the launched app"))
-      assert :ok = run(workspace, [])
-
+      assert log =~ "QA for TP-816 could not reach a verdict after 2 run(s); asking a person: The app cannot be pointed at a fake update feed"
       refute_received {:fixer_create, _attrs}
-      assert %{reason: stuck} = Hold.get(@repo_key, @issue_id, :needs_decision)
-      assert stuck =~ "blocked steps: Watch the update banner"
+      refute_received {:fixer_block, _identifier}
+      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      assert SymphonyElixir.TicketState.self_heal(RunStore.get_ticket_state(@repo_key, @issue_id)) == nil
+
+      assert %{decision: decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert decision.title == "QA could not reach a verdict on TP-816"
+      assert decision.question == "QA ran TP-816 (Land the QA state) 2 times on the same change without reaching a verdict. How should it continue?"
+      assert decision.why =~ "The last run ended with: The app cannot be pointed at a fake update feed."
+      assert [%{label: "Run QA again", recommended: true}, %{label: "Send it back to Rework"}, %{label: "Merge without a QA verdict", effect: merge}] = decision.options
+      assert merge =~ "you move TP-816 to Merging"
+
+      assert_received {:memory_tracker_comment, @issue_id, _retrying_report}
+      assert_received {:memory_tracker_comment, @issue_id, _report}
+      assert_received {:memory_tracker_comment, @issue_id, request}
+      assert request =~ "QA could not reach a verdict on TP-816"
+      assert Enum.map(verdicts(), & &1.outcome) == ["blocked", "blocked"]
+      assert Enum.all?(verdicts(), &(&1.head_sha == head))
     end
 
-    test "a block whose blocked steps keep changing retries, until the head runs out of attempts" do
+    test "a QA host block that keeps changing retries, until the head runs out of attempts" do
       {workspace, _head} = git_workspace!()
 
-      Process.put(:qa_agent_result, blocked_result(["Open the window"], "the window would not open"))
+      Process.put(:qa_agent_result, {:error, {:qa_host_missing_tool, ["go"]}, %{}})
       assert :ok = run(workspace, [])
       assert :ok = run(workspace, [])
+      assert_received {:fixer_create, %{component: "worker_host"}}
       lift_fix_ticket_hold()
 
-      # Each run blocks on another step: real progress, so each earns a retry while the head has
+      # Each run misses another tool: real progress, so each earns a retry while the head has
       # attempts left.
-      for step <- ["Watch the update banner", "Restart into the new build"] do
-        Process.put(:qa_agent_result, blocked_result([step], "blocked on #{step}"))
+      for tool <- ["pg_ctl", "node"] do
+        Process.put(:qa_agent_result, {:error, {:qa_host_missing_tool, [tool]}, %{}})
         assert :ok = run(workspace, [])
         refute Hold.held?(@repo_key, @issue_id, :needs_decision)
       end
 
       # The fifth blocked run on the same head escalates however the failure changed.
-      Process.put(:qa_agent_result, blocked_result(["Read the release notes"], "blocked on the notes"))
+      Process.put(:qa_agent_result, {:error, {:qa_host_missing_tool, ["swift"]}, %{}})
       assert :ok = run(workspace, [])
 
       assert %{decision: decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
@@ -981,34 +991,232 @@ defmodule SymphonyElixir.QaVerificationTest do
       {workspace, _head} = git_workspace!()
 
       # The agent is never reached: the worker host blocks the run before the head is read, so the
-      # ticket retries boundedly and then self-heals rather than parking on an unreadable head.
+      # ticket retries boundedly and then asks a person rather than parking on an unreadable head.
+      # Running QA on a worker is not a QA tool's block, so it files no fix ticket.
       assert :ok = run(workspace, worker_host: "worker-1")
       refute_received {:qa_agent_run, _, _}
       refute Hold.held?(@repo_key, @issue_id, :blocked)
 
-      assert :ok = run(workspace, worker_host: "worker-1")
+      capture_log(fn -> assert :ok = run(workspace, worker_host: "worker-1") end)
 
-      assert_received {:fixer_create, attrs}
-      assert attrs.component == "worker_host"
-      assert attrs.scope == @symphony_repo_key
-
-      assert %{waits_on: %{type: "fix_ticket", keys: [@fix_ticket]}} =
-               Hold.get(@repo_key, @issue_id, :blocked)
+      refute_received {:fixer_create, _attrs}
+      assert %{decision: %{why: why}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert why =~ "QA cannot run on the remote worker"
     end
 
     test "a hold that cannot be set is reported" do
       {workspace, _head} = git_workspace!()
-      Process.put(:qa_agent_result, {:error, :nope, %{}})
+      Process.put(:qa_agent_result, {:error, {:qa_host_tunnel_failed, "ssh exited with status 255"}, %{}})
 
       # Both attempts are used on the same call, so the third records "blocked" and takes the hold.
       assert :ok = run(workspace, [])
       assert :ok = run(workspace, [])
 
       assert {:error, {:qa_self_heal_failed, {:self_heal_hold_failed, :disk_full}}} = run(workspace, store: UnusedStore)
+
+      # A block that goes to a person reports a decision hold it could not set the same way.
+      Process.put(:qa_agent_result, {:error, :nope, %{}})
+
+      {result, _log} = with_log(fn -> run(workspace, store: UnusedStore) end)
+      assert {:error, {:qa_escalation_failed, {:decision_hold_failed, :disk_full}}} = result
     end
   end
 
   # The QA pre-check (`SymphonyElixir.QaPreCheck`) on a ticket whose walkthrough steps name tests.
+  describe "a pass with nothing on screen to judge" do
+    defp scope_none_result(app_check) do
+      result = %{
+        verdict: :pass,
+        summary: "Nothing to judge.",
+        steps: [],
+        findings: [],
+        scope: :none,
+        reason: "the change touches no screen; the app built and launched; nothing to judge by sight"
+      }
+
+      result = if app_check, do: Map.put(result, :app_check, app_check), else: result
+      {:ok, %{result: result, tokens: %{}}}
+    end
+
+    test "is a pass once the app built, launched and checked healthy, with the reason in the report" do
+      {workspace, head} = git_workspace!()
+      Process.put(:qa_agent_result, scope_none_result(%{built: true, launched: true, checked: true}))
+
+      log = capture_log(fn -> assert :ok = run(workspace, []) end)
+
+      assert log =~ "QA passed for TP-816 head=#{head} with nothing on screen to judge: the change touches no screen"
+      assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+      assert [%{outcome: "pass", head_sha: ^head, details: %{scope: "none", reason: reason}}] = verdicts()
+      assert reason =~ "nothing to judge by sight"
+
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "**Verdict:** pass (nothing on screen to judge; the app built and launched) → Merging"
+      assert report =~ "Why nothing was judged on screen: the change touches no screen; the app built and launched; nothing to judge by sight"
+      assert report =~ "Nothing to judge."
+      refute_received {:fixer_create, _attrs}
+    end
+
+    test "carries the reason into the merge confirmation with manual review on" do
+      {workspace, _head} = git_workspace!()
+      Process.put(:qa_agent_result, scope_none_result(%{built: true, launched: true, checked: true}))
+
+      assert :ok = run(workspace, settings: settings!(%{"manual_review" => "on"}))
+
+      refute_received {:memory_tracker_state_update, _, _}
+      assert %{decision: decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert decision.why =~ "nothing on screen to judge: the change touches no screen"
+    end
+
+    test "is inconclusive without the launch, the build or a healthy check, naming what did not run" do
+      for {app_check, missing} <- [
+            {%{built: true, launched: false, checked: false}, "qa_launch_app, a healthy qa_check_app did not run"},
+            {%{built: true, launched: true, checked: false}, "a healthy qa_check_app did not run"},
+            {nil, "qa_build, qa_launch_app, a healthy qa_check_app did not run"}
+          ] do
+        RunStore.delete_ticket_state(@repo_key, @issue_id)
+        {workspace, head} = git_workspace!()
+        Process.put(:qa_agent_result, scope_none_result(app_check))
+
+        capture_log(fn -> assert :ok = run(workspace, []) end)
+
+        refute_received {:memory_tracker_state_update, _, _}
+        assert [%{outcome: "inconclusive", head_sha: ^head, details: %{reason: reason}}] = verdicts()
+        assert reason =~ "the pass answered `scope: none` (nothing on screen to judge), but #{missing}"
+
+        assert_received {:memory_tracker_comment, @issue_id, report}
+        assert report =~ "**Verdict:** inconclusive → QA (inconclusive, rerunning)"
+        assert report =~ "Reason: the pass answered `scope: none`"
+      end
+    end
+  end
+
+  describe "inconclusive runs" do
+    defp wide_pass_missing do
+      reason = "the wide pass did not run: no `qa_resize_window` call resized the app's window, so layouts at 1400×900 pt were not checked"
+      result = %{verdict: :inconclusive, summary: "Every journey worked.", steps: [], findings: [], reason: reason}
+      {:ok, %{result: result, tokens: %{}}}
+    end
+
+    test "a missing wide pass reruns once, then asks a person, and never reaches the self-heal lane" do
+      {workspace, head} = git_workspace!()
+      Process.put(:qa_agent_result, wide_pass_missing())
+
+      log = capture_log(fn -> assert :ok = run(workspace, []) end)
+
+      assert log =~ "QA inconclusive for TP-816 head=#{head} model=default playbooks=cli (attempt 1/2); rerunning: the wide pass did not run"
+      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+      assert_received {:memory_tracker_comment, @issue_id, rerunning}
+      assert rerunning =~ "**Verdict:** inconclusive → QA (inconclusive, rerunning)"
+      assert rerunning =~ "Reason: the wide pass did not run"
+
+      log = capture_log(fn -> assert :ok = run(workspace, []) end)
+
+      assert log =~ "(attempt 2/2); asking a person: the wide pass did not run"
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "**Verdict:** inconclusive → QA (inconclusive; a person decides)"
+
+      # The self-heal lane was never asked: no fix ticket, no Blocked hold, no self-heal record.
+      refute_received {:fixer_create, _attrs}
+      refute_received {:fixer_block, _identifier}
+      refute_received {:fixer_attach, _identifier, _body}
+      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      assert SymphonyElixir.TicketState.self_heal(RunStore.get_ticket_state(@repo_key, @issue_id)) == nil
+      refute_received {:memory_tracker_state_update, _, _}
+
+      assert %{decision: decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert decision.why =~ "The last run ended with: the wide pass did not run: no qa_resize_window call resized"
+      assert_received {:memory_tracker_comment, @issue_id, request}
+      assert request =~ "QA could not reach a verdict on TP-816"
+      assert Enum.map(verdicts(), & &1.outcome) == ["inconclusive", "inconclusive"]
+    end
+
+    test "an inconclusive pass on a head CI rejects is the PR watcher's" do
+      {workspace, head} = git_workspace!()
+      watch = [phase: :qa, head_sha: head, facts: %{ci: :red}, decision: :wait]
+      SymphonyElixir.PrWatchSupport.put_watch!(@repo_key, @issue_id, watch)
+      Process.put(:qa_agent_result, wide_pass_missing())
+
+      capture_log(fn -> assert :ok = run(workspace, []) end)
+
+      assert [%{outcome: "blocked", details: %{component: "ci", reason: "CI is red on this head"}}] = verdicts()
+      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+    end
+  end
+
+  describe "the self-heal lane's input" do
+    defp blocked_cause(cause), do: {:ok, %{result: %{verdict: :blocked, summary: "", steps: [], findings: [], reason: "the QA host failed", cause: cause}, tokens: %{}}}
+
+    test "every other QA reason files no fix ticket: it asks a person once its retries are spent" do
+      reasons = [
+        {"the agent's own account", [], blocked_result(["Open the window"], "the QA host has no fake gh")},
+        {"a crashed agent", [], {:error, :environment_unreachable, %{}}},
+        {"the token limit", [], {:error, {:qa_token_limit, 900, 800}, %{}}},
+        {"an unreadable answer", [], {:error, {:malformed_qa_response, :no_verdict_object}, %{}}},
+        {"a worktree that would not check out", [], {:error, {:qa_worktree_failed, 128, "fatal: bad object"}, %{}}},
+        {"a missing wide pass", [], wide_pass_missing()},
+        {"a change no playbook applies to", [qa_policy: NoPlaybookPolicy], nil},
+        {"a remote worker", [worker_host: "worker-1"], nil}
+      ]
+
+      for {name, opts, result} <- reasons do
+        RunStore.delete_ticket_state(@repo_key, @issue_id)
+        {workspace, _head} = git_workspace!()
+        if result, do: Process.put(:qa_agent_result, result), else: Process.delete(:qa_agent_result)
+
+        capture_log(fn ->
+          assert :ok = run(workspace, opts)
+          assert :ok = run(workspace, opts)
+        end)
+
+        refute_received {:fixer_create, _attrs}, "#{name} filed a fix ticket"
+        refute_received {:fixer_block, _identifier}, "#{name} held the ticket on a fix ticket"
+        refute Hold.held?(@repo_key, @issue_id, :blocked), "#{name} took a Blocked hold"
+        assert Hold.held?(@repo_key, @issue_id, :needs_decision), "#{name} did not ask a person"
+      end
+    end
+
+    test "names a ticket with no title by its identifier alone when it asks a person" do
+      {workspace, _head} = git_workspace!()
+      Process.put(:qa_agent_result, {:error, :environment_unreachable, %{}})
+      untitled = issue("QA", %{title: nil})
+      opts = [settings: settings!(), repo_key: @repo_key, qa_policy: RunPolicy, qa_agent: FakeQaAgent, fixer: FakeFixer]
+
+      capture_log(fn ->
+        assert :ok = QaVerification.run(untitled, workspace, opts)
+        assert :ok = QaVerification.run(untitled, workspace, opts)
+      end)
+
+      assert %{decision: %{question: "QA ran TP-816 2 times on the same change without reaching a verdict. How should it continue?"}} =
+               Hold.get(@repo_key, @issue_id, :needs_decision)
+    end
+
+    test "a block the QA tools raise themselves goes to the self-heal lane" do
+      causes = [
+        {{:qa_worker, "qa_worker_unsafe"}, "worker_host"},
+        {{:qa_host_missing_tool, ["go"]}, "worker_host"},
+        {{:qa_host_tool_check_failed, "exit status 2"}, "worker_host"},
+        {{:qa_host_tunnel_failed, "ssh exited with status 255"}, "qa_environment"},
+        {{:qa_dev_server_failed, :health_timeout}, "dev_server"},
+        {{:qa_dev_server_failed, {:dev_server_exit, 1}, "FATAL"}, "dev_server"}
+      ]
+
+      for {cause, component} <- causes do
+        RunStore.delete_ticket_state(@repo_key, @issue_id)
+        {workspace, _head} = git_workspace!()
+        Process.put(:qa_agent_result, blocked_cause(cause))
+
+        capture_log(fn ->
+          assert :ok = run(workspace, [])
+          assert :ok = run(workspace, [])
+        end)
+
+        assert_received {:fixer_create, %{component: ^component}}
+        assert %{waits_on: %{type: "fix_ticket"}} = Hold.get(@repo_key, @issue_id, :blocked)
+        refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+      end
+    end
+  end
+
   describe "a head CI rejects" do
     # The PR and CI watcher's record of the head while the QA run is under way (R9 waits on it).
     defp watch_head!(head, facts) do
