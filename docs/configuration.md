@@ -2013,9 +2013,7 @@ may change. Symphony logs the install with the issue's context, and the tool's r
 `signing_identity_installed: true`, so the QA report shows it. The next pass finds the identity
 and installs nothing.
 
-Symphony never installs it on its own host (QA with no `worker_host`): that would add a
-code-signing trust root to the operator's System keychain, with a key the PR's build can read.
-There, and on a `worker_host` whose `sudo` asks for a password (a separate macOS user), run it by
+On a `worker_host` whose `sudo` asks for a password, run it by
 hand as the QA user on the QA host (the clean image, for a VM you reset), from a checkout of this
 repository:
 
