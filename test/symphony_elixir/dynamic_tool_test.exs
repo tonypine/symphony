@@ -4,6 +4,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.Codex.DynamicTool
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.QaAndroid.Driver, as: QaAndroidDriver
 
@@ -547,17 +548,24 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       client = fn query, variables, _opts ->
         send(test_pid, {:linear_client_called, query, variables})
 
-        if query =~ "SymphonyAgentIssueComments" do
-          reply = %{"id" => "reply", "body" => "Done", "parent" => %{"id" => "c1"}}
-          {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => [reply]}}}}}
-        else
-          {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "reply", "body" => variables.body}}}}}
+        cond do
+          query =~ "SymphonyAgentIssueComments" ->
+            reply = %{"id" => "reply", "body" => "Done", "parent" => %{"id" => "c1"}}
+            {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => [reply]}}}}}
+
+          query =~ "SymphonyAgentCommentBody" ->
+            {:ok, %{"data" => %{"comment" => %{"body" => "Can this be split?"}}}}
+
+          true ->
+            {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "reply", "body" => variables.body}}}}}
         end
       end
 
       opts = [issue: %Issue{id: "issue-current"}, comment_registry: registry, linear_client: client]
 
       assert DynamicTool.execute("linear_add_comment", %{"body" => "Done", "parent_id" => " c1 "}, opts)["success"] == true
+      assert_received {:linear_client_called, parent_query, %{id: "c1"}}
+      assert parent_query =~ "SymphonyAgentCommentBody"
       assert_received {:linear_client_called, query, %{issueId: "issue-current", parentId: "c1", body: "Done"}}
       assert query =~ "SymphonyAgentAddReply"
       assert CommentRegistry.owned?(registry, "reply")
@@ -1538,6 +1546,9 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       assert %{"required" => ["label", "effect"], "properties" => %{"recommended" => %{"type" => "boolean"}, "tradeoffs" => tradeoffs}} = option
       assert %{"maxItems" => 3, "items" => %{"required" => ["kind", "text"], "properties" => %{"kind" => %{"enum" => ["good", "cost", "risk"]}}}} = tradeoffs
+      assert %{"type" => "array", "items" => %{"type" => "string"}, "description" => unlocks} = option["properties"]["unlocks"]
+      assert unlocks =~ "picking it grants each one for this ticket only"
+      assert description =~ "To change an agent-protected file, ask with an option whose `unlocks` names it"
       assert description =~ "a request without options is refused"
       assert description =~ "The question stands alone"
       assert description =~ "No file names or paths, code identifiers, branch names, commit hashes, template syntax or backticks"
@@ -2007,6 +2018,23 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert response["success"] == false
     assert %{"error" => %{"code" => "path_unlock_grant_text", "message" => message}} = Jason.decode!(response["output"])
     assert message =~ "Only a person grants that"
+  end
+
+  test "add_comment refuses a reply under a request whose options unlock a protected path" do
+    options = [%{label: "Allow it", effect: "x", unlocks: ["WORKFLOW.md"]}, %{label: "Keep it", effect: "y"}]
+    request = Request.render_hold(%{title: "Change it", question: "q", why: "w", options: options}, "In Progress")
+
+    client = fn query, _variables, _opts ->
+      if query =~ "SymphonyAgentCommentBody",
+        do: {:ok, %{"data" => %{"comment" => %{"body" => request}}}},
+        else: flunk("an agent's answer to an unlocking request should not be posted")
+    end
+
+    response = DynamicTool.execute("linear_add_comment", %{"body" => "1", "parent_id" => "request-1"}, issue: %Issue{id: "issue-current"}, linear_client: client)
+
+    assert response["success"] == false
+    assert %{"error" => %{"code" => "path_unlock_answer", "message" => message}} = Jason.decode!(response["output"])
+    assert message =~ "Only a person answers it"
   end
 
   test "attach_file rejects paths outside the workspace before upload" do

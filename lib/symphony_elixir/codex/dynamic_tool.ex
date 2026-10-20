@@ -323,7 +323,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_request_human_action",
       "description" =>
-        "Ask a person for a decision only they can make on the current issue: a product call, a missing secret or permission (add it, or drop what needs it), an account to set up. Give one question and 2 to 4 options, each with what it does, one of them recommended; a request without options is refused. Never ask a person to run a check: a check an agent can't run (launching the app, a host crash check, a check on a device) belongs to CI or a QA playbook, and a manual check that could be a test becomes a test. It leaves the issue in its phase on a Needs Decision hold, where the person finds it, and Symphony lists the decision in a Linear project update until the person answers it. It adds no label itself. Never put a secret value in any field. A request with the same title that is still open is not posted again, and one a person already answered (the Decisions section of the description) is not raised again: the result carries the recorded answer, which you apply. Before asking about slow or stuck CI, compute the job's age from the API's UTC timestamps against the current UTC time (`date -u`), never local time; under 30 minutes old, wait for the CI poller's re-run instead. Update the workpad first: the hold ends your run shortly after. " <>
+        "Ask a person for a decision only they can make on the current issue: a product call, a missing secret or permission (add it, or drop what needs it), an account to set up. Give one question and 2 to 4 options, each with what it does, one of them recommended; a request without options is refused. Never ask a person to run a check: a check an agent can't run (launching the app, a host crash check, a check on a device) belongs to CI or a QA playbook, and a manual check that could be a test becomes a test. It leaves the issue in its phase on a Needs Decision hold, where the person finds it, and Symphony lists the decision in a Linear project update until the person answers it. It adds no label itself. Never put a secret value in any field. A request with the same title that is still open is not posted again, and one a person already answered (the Decisions section of the description) is not raised again: the result carries the recorded answer, which you apply. Before asking about slow or stuck CI, compute the job's age from the API's UTC timestamps against the current UTC time (`date -u`), never local time; under 30 minutes old, wait for the CI poller's re-run instead. To change an agent-protected file, ask with an option whose `unlocks` names it: the person's pick grants it, and they never type a path. Update the workpad first: the hold ends your run shortly after. " <>
           @decision_writing_standard,
       "inputSchema" => %{
         "type" => "object",
@@ -365,6 +365,12 @@ defmodule SymphonyElixir.Codex.DynamicTool do
                       "description" => "What will happen to the work once it is picked, in the Director's terms: `TP-612 moves to Done, linked to TP-668`."
                     },
                     "recommended" => %{"type" => "boolean", "description" => "True on the one option you recommend."},
+                    "unlocks" => %{
+                      "type" => "array",
+                      "items" => %{"type" => "string"},
+                      "description" =>
+                        "Agent-protected paths this option lets the ticket change, e.g. `[\"WORKFLOW.md\"]`: picking it grants each one for this ticket only, so the next run may write it and the PR may merge with it. Only paths on the protected list. The Director never sees them: say in the label what the option allows (`Allow this ticket to change the workflow settings file`); Symphony names each file by its plain description in the Why."
+                    },
                     "tradeoffs" => %{
                       "type" => "array",
                       "maxItems" => 3,
@@ -2478,6 +2484,16 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "code" => "path_unlock_grant_text",
         "message" =>
           "The text says to unlock an agent-protected path for a ticket. Only a person grants that, in a decision Symphony records on the ticket, so an agent may not write it. Reword it, or ask the person with `linear_request_human_action`."
+      }
+    }
+  end
+
+  defp tool_error_payload(:path_unlock_answer) do
+    %{
+      "error" => %{
+        "code" => "path_unlock_answer",
+        "message" =>
+          "That comment is a decision request whose options unlock agent-protected paths. Only a person answers it: a reply from you would read as their pick and grant the paths. Leave the answer to the person."
       }
     }
   end

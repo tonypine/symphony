@@ -851,7 +851,7 @@ defmodule SymphonyElixir.PromptBuilder do
 
     [
       "",
-      "#{names} is not yours to fix: it fails because this PR's own commits change an agent-protected path, and only a person clears it by adding the `#{CiPoller.waiver_label()}` label. Do not edit or revert the protected change; fix only the other failed checks."
+      "#{names} is not yours to fix: it fails because this PR's own commits change an agent-protected path, and only a person clears it, by allowing the change in a decision Symphony asks on the ticket. Do not edit or revert the protected change; fix only the other failed checks."
     ]
   end
 

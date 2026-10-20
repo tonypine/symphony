@@ -39,8 +39,9 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   end
 
   @doc """
-  The hold payload a decision request records: the question as the reason, the options, and when
-  the decision is recorded as what clears it. The request is a parsed one
+  The hold payload a decision request records: the question as the reason, the options with the
+  protected paths each unlocks (`SymphonyElixir.PathUnlock`), and when the decision is recorded as
+  what clears it. The request is a parsed one
   (`SymphonyElixir.HumanActions.Request`) or the tool's own request before Linear reads it back,
   which has no `created_at` yet.
   """
@@ -54,6 +55,7 @@ defmodule SymphonyElixir.NeedsDecisionHold do
         question: request.question,
         why: request.why,
         options: request.options,
+        unlocks: Request.option_unlocks(request),
         asked_at: Map.get(request, :created_at)
       }
     }

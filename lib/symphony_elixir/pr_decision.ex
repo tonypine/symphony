@@ -209,7 +209,7 @@ defmodule SymphonyElixir.PrDecision do
         id: "R18",
         phases: @pr_phases,
         when: "Only a check a person must clear is red (`protected paths`)",
-        then: "`decision`: add the waiver label, or drop the change in Rework",
+        then: "`decision`: allow the change (the option unlocks the protected paths the PR changes for the ticket), or drop the change in Rework",
         guard: &human_only_red?/1,
         build: &ask_about_human_only/1
       },
@@ -491,7 +491,7 @@ defmodule SymphonyElixir.PrDecision do
 
   defp ask_about_human_only(facts) do
     decision("R18", "Only #{check(facts)} is red on #{pr(facts)}, and only a person can clear it", [
-      "Add the waiver label",
+      "Allow the change",
       "Drop the change in Rework"
     ])
   end

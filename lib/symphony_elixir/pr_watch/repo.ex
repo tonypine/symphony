@@ -31,8 +31,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   Before deciding, the read is completed with what Symphony knows: the attempts
   (`SymphonyElixir.PrWatch.Attempts`), a rerun whose checks haven't reported yet (the head reads as
-  running), in `Merging` a failed `protected paths` check that the ticket's unlock decisions cover
-  (`SymphonyElixir.ProtectedPathsGate`; the head reads as green), a red head's failure
+  running), a failed `protected paths` check that the ticket's unlock decisions cover
+  (`SymphonyElixir.ProtectedPathsGate`; the head reads as green, in every phase) or, when they don't,
+  the protected paths the PR changes, which R18's question offers to unlock, a red head's failure
   (`SymphonyElixir.PrWatch.Fetch.failure/3`, read once per head, for the same-failure streak), the
   wait on a check that never reported (`SymphonyElixir.PrWatch.Attempts.settle/4`), with the
   person's answer when R17 asked one: a waiver for the head, a rerun of its checks, or Rework, the
@@ -1013,14 +1014,15 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   # What the read alone can't tell: a rerun whose checks haven't reported yet keeps the head
-  # running, and in `Merging` a failed `protected paths` check the ticket's unlock decisions cover
-  # doesn't hold the head back.
+  # running, and a failed `protected paths` check the ticket's unlock decisions cover doesn't hold
+  # the head back, in review as in `Merging`. One they don't cover carries the protected paths the
+  # PR changes, for the question R18 asks.
   defp complete(nil, _attempts, _entry, _state), do: nil
 
   defp complete(read, attempts, entry, state) do
     cond do
       read.ci in [:green, :none] and Attempts.rerun_pending?(attempts, read) -> %{read | ci: :pending}
-      entry.phase == :merging and read.ci == :red and read.red_kind == :human_only -> unlocked(read, entry, state)
+      read.ci == :red and read.red_kind == :human_only -> unlocked(read, entry, state)
       true -> read
     end
   end
@@ -1028,10 +1030,14 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp unlocked(read, entry, state) do
     pr = %{workspace_path: workspace_path(state, entry.issue.id), base_sha: read.base_sha, head_sha: read.head_sha}
     names = Enum.map(read.failed_checks, & &1.name)
+    git = Keyword.take(state.opts, [:git])
 
-    case ProtectedPathsGate.check(names, pr, entry.issue, Keyword.take(state.opts, [:git])) do
+    with {:blocked, _reason} <- ProtectedPathsGate.check(names, pr, entry.issue, git),
+         {:ok, paths} <- ProtectedPathsGate.changed_paths(pr, git) do
+      Map.put(read, :protected_paths, paths)
+    else
       :ok -> %{read | ci: :green}
-      {:blocked, _reason} -> read
+      {:error, _reason} -> read
     end
   end
 

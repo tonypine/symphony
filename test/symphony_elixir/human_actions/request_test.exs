@@ -43,6 +43,7 @@ defmodule SymphonyElixir.HumanActions.RequestTest do
                "**Keep it open**: The next run looks for what TP-668 missed."
              ],
              tradeoffs: [[], []],
+             unlocks: [[], []],
              why: "Nothing is left to build.",
              if_unanswered: nil,
              recommendation_reason: nil,
@@ -106,6 +107,43 @@ defmodule SymphonyElixir.HumanActions.RequestTest do
                []
              ]
            } = Request.parse(body)
+  end
+
+  test "an option's unlocks travel in a hidden line, never in its text, and parse back" do
+    request = %{
+      title: "Change the workflow settings",
+      question: "May TP-1145 change the workflow settings file?",
+      why: "The new hook lives there.",
+      options: [
+        %{label: "Keep it as it is", effect: "nothing changes", recommended: false},
+        %{label: "Allow this ticket to change the workflow settings file", effect: "the next run changes it", recommended: true, unlocks: ["WORKFLOW.md", ".agents/skills"]}
+      ]
+    }
+
+    body = Request.render_hold(request, "In Progress")
+
+    assert body =~ "2. **Allow this ticket to change the workflow settings file** (recommended): the next run changes it\n"
+    assert String.ends_with?(body, "until then._\n\n<!-- symphony:unlocks option=2 WORKFLOW.md .agents/skills -->")
+
+    parsed = Request.parse(body, @created_at)
+    assert parsed.unlocks == [[], ["WORKFLOW.md", ".agents/skills"]]
+    assert parsed.options == ["**Keep it as it is**: nothing changes", "**Allow this ticket to change the workflow settings file** (recommended): the next run changes it"]
+    assert Request.option_unlocks(parsed) == parsed.unlocks
+    assert Request.option_unlocks(request) == [[], ["WORKFLOW.md", ".agents/skills"]]
+    assert Request.option_unlocks(%{options: [%{label: "a", unlocks: [1, "WORKFLOW.md"]}, "**b**: x"]}) == [["WORKFLOW.md"], []]
+    assert Request.option_unlocks(%{unlocks: [nil, ["WORKFLOW.md"]]}) == [[], ["WORKFLOW.md"]]
+    assert Request.option_unlocks(nil) == []
+
+    # A request without unlocking options writes no hidden line; a line naming no option counts for nothing.
+    refute Request.render_hold(%{request | options: Enum.take(request.options, 1)}, nil) =~ "symphony:unlocks"
+    assert Request.parse(body <> "\n<!-- symphony:unlocks option=7 symphony.yml -->", nil).unlocks == parsed.unlocks
+  end
+
+  test "label/1 reads an option's label from its map or its rendered line" do
+    assert Request.label(%{label: "Close as *duplicate*", effect: "x"}) == "Close as duplicate"
+    assert Request.label("**Allow the change** (recommended): TP-7 may change it") == "Allow the change"
+    assert Request.label("Allow the change") == ""
+    assert Request.label(nil) == ""
   end
 
   test "reads an older comment with a time estimate, and ignores the estimate" do

@@ -258,6 +258,23 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       })
   end
 
+  # A run with a workspace, where the watcher reads the protected paths the PR changes.
+  defp protected_workspace!(issue_id) do
+    workspace = Path.join(System.tmp_dir!(), "switch-ws-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(workspace)
+    on_exit(fn -> File.rm_rf(workspace) end)
+    run = %{repo_key: @repo_key, run_id: "run-ws", issue_id: issue_id, status: "success", started_at: now()}
+    :ok = RunStore.put_run(Map.put(run, :workspace_path, workspace))
+  end
+
+  # Every commit is there, and the PR changes `changed` among the protected paths each diff asks about.
+  defp protected_git(changed) do
+    fn
+      ["diff", "--name-only", "--no-renames", _range, "--" | paths], _cwd -> {Enum.join(Enum.filter(changed, &(&1 in paths)), "\n"), 0}
+      _args, _cwd -> {"", 0}
+    end
+  end
+
   # The CI Fix run pushed `head` and handed the ticket back to `origin`, as `AgentRunner` does.
   defp fix_run_returns!(issue_id, id, origin, head, attrs) do
     assert state(issue_id) == "CI Fix"
@@ -1232,10 +1249,13 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
           failed_checks: [%{name: "protected paths", run_id: "5"}]
         )
 
-      pid = start!()
+      protected_workspace!(issue_id)
+      pid = start!(git: protected_git(["WORKFLOW.md"]))
       tick!(pid, 3)
       assert %{decision: %{title: "Protected files changed on TP-1", options: options}} = Hold.get(@repo_key, issue_id, :needs_decision)
-      assert Enum.map(options, & &1.label) == ["Add the waiver label", "Drop the change in Rework"]
+      assert Enum.map(options, & &1.label) == ["Allow the change", "Drop the change in Rework"]
+      assert [%{unlocks: ["WORKFLOW.md"]}, drop] = options
+      refute Map.has_key?(drop, :unlocks)
       assert [_one] = Enum.filter(comments(issue_id), &String.starts_with?(&1, "## Decision needed: Protected files"))
       assert %{rule: "R4", owner: :person} = decision(issue_id)
       assert moves(issue_id) == []
@@ -1252,11 +1272,59 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
           failed_checks: [%{name: "protected paths", run_id: "5"}]
         )
 
-      pid = start!()
+      protected_workspace!(issue_id)
+      pid = start!(git: protected_git(["WORKFLOW.md"]))
       tick!(pid, 3)
       assert World.calls(:disarm) == ["https://github.com/acme/app/pull/1"]
       assert %{decision: %{title: "Protected files changed on TP-1"}} = Hold.get(@repo_key, issue_id, :needs_decision)
       assert [_one] = Enum.filter(comments(issue_id), &String.starts_with?(&1, "## Decision needed: Protected files"))
+    end
+
+    test "R18 in Code Review: picking Allow grants the PR's protected paths, and the head then reads as green for the reviewer" do
+      issue_id =
+        ticket!("1", "Code Review",
+          ci: :red,
+          red_kind: :human_only,
+          failing_check: "protected paths",
+          failed_checks: [%{name: "protected paths", run_id: "5"}]
+        )
+
+      protected_workspace!(issue_id)
+      pid = start!(git: protected_git(["WORKFLOW.md"]))
+      tick!(pid)
+
+      assert %{decision: decision} = Hold.get(@repo_key, issue_id, :needs_decision)
+      unlocks = SymphonyElixir.PathUnlock.picked_paths(decision, ["Allow the change"])
+      assert unlocks == ["WORKFLOW.md"]
+
+      # The person picks Allow: the answer is recorded with its paths, and the hold clears.
+      picked = SymphonyElixir.Decisions.entry("request-1", ~D[2026-10-20], decision.title, decision.question, "Allow the change", unlocks)
+      {:ok, description} = SymphonyElixir.Decisions.put("Ship it.", [picked])
+      World.update(:issues, &Map.update!(&1, issue_id, fn issue -> %{issue | description: description} end))
+      :ok = Hold.clear(@repo_key, issue_id, :needs_decision, tracker: Tracker)
+
+      pr!("1", head_sha: "head-1-2")
+      tick!(pid)
+
+      assert %{ci: :green} = watch(issue_id).facts
+      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+      assert [_one] = Enum.filter(comments(issue_id), &String.starts_with?(&1, "## Decision needed: Protected files"))
+    end
+
+    test "R18 waits to ask until the protected paths the PR changes can be read" do
+      issue_id =
+        ticket!("1", "Code Review",
+          ci: :red,
+          red_kind: :human_only,
+          failing_check: "protected paths",
+          failed_checks: [%{name: "protected paths", run_id: "5"}]
+        )
+
+      pid = start!()
+      capture_log(fn -> tick!(pid, 2) end)
+
+      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+      assert Enum.filter(comments(issue_id), &String.starts_with?(&1, "## Decision needed: Protected files")) == []
     end
 
     test "CiPoller/PrReviewPoller parked_for_person → R4: a held ticket waits, whatever its PR" do

@@ -83,6 +83,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   """
   @type read :: %{
           optional(:failure) => Facts.failure() | nil,
+          optional(:protected_paths) => [String.t()],
           optional(:failed_log) => FailedLog.log(),
           pr_url: String.t(),
           pr_number: pos_integer() | nil,

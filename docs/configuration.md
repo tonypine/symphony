@@ -112,13 +112,13 @@ in neither of these:
 
 Only a person can exempt a setting. The exemption file is an agent-protected path: the agent
 sandbox denies writing it, and the `protected paths` check fails a Symphony PR whose own commits
-change it until a person other than the author adds the `protected-paths-approved` label.
+change it. A person's decision that allows the change clears it for Symphony.
 
 To add a setting: add its control to the app, list its key in the manifest, and extend the line
 editor and its tests. To exempt one, a person adds it to the exemption file with the reason, in the
-same PR, and labels the PR. A person can also let the ticket's next agent run edit the file with a
-decision on the ticket, such as `Decision: Unlock config/settings_ui_exempt.yml for TP-760 to drop
-the stale exemption.` (see [Unlocking a protected path for one run](security.md#unlocking-a-protected-path-for-one-run)). `WORKFLOW.md` front matter (repo-owned settings) is not covered.
+same PR; at Code Review Symphony asks them to allow the change, one pick in the Inbox. A person can
+also let the ticket's next agent run edit the file by picking an option that allows it in the
+ticket's decision request (see [Allowing a change to a protected path](security.md#allowing-a-change-to-a-protected-path)). `WORKFLOW.md` front matter (repo-owned settings) is not covered.
 
 ## Top-Level Sections
 

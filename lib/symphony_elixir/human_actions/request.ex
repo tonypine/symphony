@@ -25,6 +25,11 @@ defmodule SymphonyElixir.HumanActions.Request do
   The fields are written in the Director's words (`docs/standards/decision-writing.md`). Each option
   carries up to three trade-offs, indented under it as `- Good:`, `- Cost:` or `- Risk:` lines.
 
+  An option may also unlock agent-protected paths for the ticket (`SymphonyElixir.PathUnlock`): the
+  paths travel in one hidden line per such option at the end of the comment,
+  `<!-- symphony:unlocks option=1 WORKFLOW.md -->`, which the Director never reads. `parse/2` reads
+  them back into `unlocks`, never into the option's text.
+
   Symphony finds the request again on every poll and after a restart. It also reads the older
   `## Action needed:` comment, with its `**Steps:**` list, which a supervisor or a person may still
   write by hand. Only the heading is required; `parse/1` reads whatever else is there. A request
@@ -47,6 +52,7 @@ defmodule SymphonyElixir.HumanActions.Request do
   @list_item ~r/^\s*(?:\d+[.)]|[-*])\s+(?:\[[ xX]\]\s+)?(.+)$/
   @tradeoff_item ~r/^\s+[-*]\s+(Good|Cost|Risk):\s*(.+)$/i
   @tradeoff_kinds ~w(good cost risk)
+  @unlocks_line ~r/^<!--\s*symphony:unlocks\s+option=(\d+)\s+(.*?)\s*-->$/
 
   @typedoc "What picking an option gains (`good`), costs (`cost`) or risks (`risk`), in one line."
   @type tradeoff :: %{kind: String.t(), text: String.t()}
@@ -59,19 +65,22 @@ defmodule SymphonyElixir.HumanActions.Request do
           required(:label) => String.t(),
           required(:effect) => String.t(),
           optional(:recommended) => boolean(),
-          optional(:tradeoffs) => [tradeoff()]
+          optional(:tradeoffs) => [tradeoff()],
+          optional(:unlocks) => [String.t()]
         }
 
   @typedoc """
   A parsed request. `created_at` is the comment's creation time. A decision has its `question`
   and its `options`, one rendered line each, with each option's trade-offs at the same index of
-  `tradeoffs`; a hand-written `## Action needed:` request has `steps` instead.
+  `tradeoffs` and the protected paths it unlocks at the same index of `unlocks`; a hand-written
+  `## Action needed:` request has `steps` instead.
   """
   @type t :: %{
           title: String.t(),
           question: String.t() | nil,
           options: [String.t()],
           tradeoffs: [[tradeoff()]],
+          unlocks: [[String.t()]],
           why: String.t() | nil,
           if_unanswered: String.t() | nil,
           recommendation_reason: String.t() | nil,
@@ -126,9 +135,17 @@ defmodule SymphonyElixir.HumanActions.Request do
       "",
       recommendation_line(request),
       closing
+      | unlocks_lines(options)
     ]
     |> List.flatten()
     |> Enum.join("\n")
+  end
+
+  # The paths each option unlocks, hidden from the Director: one line per option that unlocks any.
+  defp unlocks_lines(options) do
+    for {paths, index} <- options |> option_unlocks() |> Enum.with_index(1), paths != [] do
+      ["", "<!-- symphony:unlocks option=#{index} #{Enum.join(paths, " ")} -->"]
+    end
   end
 
   defp fields(fields) do
@@ -158,6 +175,42 @@ defmodule SymphonyElixir.HumanActions.Request do
 
   # A label stays plain text inside the bold markers.
   defp option_label(label), do: label |> one_line() |> String.replace("*", "")
+
+  @doc """
+  The label of an option: an option map's `label`, or the bold label a rendered option line opens
+  with (`**Label** (recommended): effect`). Empty for anything else.
+  """
+  @spec label(option() | String.t() | term()) :: String.t()
+  def label(%{label: label}) when is_binary(label), do: option_label(label)
+
+  def label(line) when is_binary(line) do
+    case Regex.run(~r/^\*\*(.+?)\*\*/, String.trim(line)) do
+      [_, label] -> String.trim(label)
+      nil -> ""
+    end
+  end
+
+  def label(_option), do: ""
+
+  @doc """
+  The protected paths each option unlocks, in the order of the options: a parsed request's
+  `unlocks`, or each option map's `unlocks`. An option that unlocks nothing has `[]`.
+  """
+  @spec option_unlocks(map() | [option() | String.t()]) :: [[String.t()]]
+  def option_unlocks(%{unlocks: unlocks}) when is_list(unlocks), do: Enum.map(unlocks, &paths/1)
+  def option_unlocks(%{options: options}), do: option_unlocks(options)
+
+  def option_unlocks(options) when is_list(options) do
+    Enum.map(options, fn
+      %{unlocks: paths} -> paths(paths)
+      _option -> []
+    end)
+  end
+
+  def option_unlocks(_request), do: []
+
+  defp paths(paths) when is_list(paths), do: Enum.filter(paths, &is_binary/1)
+  defp paths(_paths), do: []
 
   @doc "Renders the reply that withdraws a request, with the reason."
   @spec render_withdrawal(String.t()) :: String.t()
@@ -201,6 +254,7 @@ defmodule SymphonyElixir.HumanActions.Request do
       question: present(fields["question"]),
       options: Enum.map(options, &elem(&1, 0)),
       tradeoffs: Enum.map(options, &elem(&1, 1)),
+      unlocks: unlocks(lines, length(options)),
       why: present(fields["why"]),
       if_unanswered: present(fields["if unanswered"]),
       recommendation_reason: present(fields["why recommended"]),
@@ -234,6 +288,16 @@ defmodule SymphonyElixir.HumanActions.Request do
       [_, item] -> [{String.trim(item), []} | acc]
       nil -> acc
     end
+  end
+
+  # The paths each option unlocks, from the hidden lines; an option without one unlocks nothing.
+  defp unlocks(lines, count) do
+    named =
+      for line <- lines, [_, index, paths] <- [Regex.run(@unlocks_line, String.trim(line))], into: %{} do
+        {String.to_integer(index), String.split(paths)}
+      end
+
+    Enum.map(1..count//1, &Map.get(named, &1, []))
   end
 
   # The list items after `**Steps:**`, or anywhere when there is no marker. A hand-written request

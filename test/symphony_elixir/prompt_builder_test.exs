@@ -712,7 +712,8 @@ defmodule SymphonyElixir.PromptBuilderTest do
 
     assert prompt =~ "Failed checks: protected paths, specs"
     assert prompt =~ "`protected paths` is not yours to fix: it fails because this PR's own commits change an agent-protected path"
-    assert prompt =~ "adding the `protected-paths-approved` label"
+    assert prompt =~ "only a person clears it, by allowing the change in a decision Symphony asks on the ticket"
+    refute prompt =~ "protected-paths-approved"
   end
 
   test "compact prompt keeps CI failure context without a log excerpt" do

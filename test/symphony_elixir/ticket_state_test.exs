@@ -85,6 +85,15 @@ defmodule SymphonyElixir.TicketStateTest do
       assert [%{key: "comment-1"}, %{key: "new"}] = again.decisions
     end
 
+    test "keeps the protected paths a picked option unlocks, and only text" do
+      decisions = [Map.put(@decision, :unlocks, ["WORKFLOW.md", 7]), Map.put(%{@decision | key: "k2"}, :unlocks, [nil]), %{@decision | key: "k3"}]
+      record = TicketState.normalize(%{decisions: decisions})
+
+      assert [%{key: "comment-1", unlocks: ["WORKFLOW.md"]}, second, third] = record.decisions
+      refute Map.has_key?(second, :unlocks)
+      refute Map.has_key?(third, :unlocks)
+    end
+
     test "drops malformed entries and fills missing text" do
       decisions = [%{key: "k", date: 3, title: nil}, %{key: "", answer: "x"}, %{answer: "x"}, "junk", %{key: "d", date: "someday"}]
       record = TicketState.normalize(%{decisions: decisions})

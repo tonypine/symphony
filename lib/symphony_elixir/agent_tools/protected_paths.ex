@@ -38,18 +38,49 @@ defmodule SymphonyElixir.AgentTools.ProtectedPaths do
     end
   end
 
+  @doc """
+  The entries of the protected list (`WORKFLOW.md`, `.agents/skills`) that `files`, changed protected
+  files as `verify/5` reports them, fall under: the entry a file is or sits in, and for a file a
+  symlink in a protected path points at, the entry that holds the symlink in `revisions`' trees. A
+  grant of these entries covers the files.
+  """
+  @spec entries([String.t()], [String.t()], git_runner()) :: {:ok, [String.t()]} | {:error, term()}
+  def entries(files, revisions, run_git) do
+    protected = AgentSandboxConfig.workspace_protected_paths()
+    {direct, linked} = Enum.split_with(files, &under(&1, protected))
+
+    with {:ok, linking} <- linking_entries(linked, protected, list_links(revisions, run_git)) do
+      {:ok, Enum.uniq(Enum.map(direct, &under(&1, protected)) ++ linking)}
+    end
+  end
+
+  defp under(file, paths), do: Enum.find(paths, &(file == &1 or String.starts_with?(file, &1 <> "/")))
+
+  defp linking_entries([], _protected, _list_links), do: {:ok, []}
+
+  defp linking_entries(files, protected, list_links) do
+    Enum.reduce_while(protected, {:ok, []}, fn entry, {:ok, entries} ->
+      case AgentSandboxConfig.link_targets([entry], list_links) do
+        {:ok, targets} -> {:cont, {:ok, if(Enum.any?(files, &under(&1, targets)), do: entries ++ [entry], else: entries)}}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
   # The protected paths plus the targets of the symlinks in them, read from each revision's tree.
   defp protected_paths(revisions, run_git, unlocked_paths) do
     paths = AgentSandboxConfig.workspace_protected_paths(unlocked_paths)
 
-    list_links = fn paths ->
+    with {:ok, targets} <- AgentSandboxConfig.link_targets(paths, list_links(revisions, run_git)) do
+      {:ok, paths ++ targets}
+    end
+  end
+
+  defp list_links(revisions, run_git) do
+    fn paths ->
       with {:ok, links} <- revisions |> Enum.map(&tree_links(run_git, &1, paths)) |> all_ok() do
         {:ok, Enum.concat(links)}
       end
-    end
-
-    with {:ok, targets} <- AgentSandboxConfig.link_targets(paths, list_links) do
-      {:ok, paths ++ targets}
     end
   end
 
