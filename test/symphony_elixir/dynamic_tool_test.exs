@@ -26,6 +26,51 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
   end
 
+  describe "review_verdict" do
+    test "only the reviewer's read-only scope lists and runs it" do
+      assert "review_verdict" in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
+      refute "review_verdict" in Enum.map(DynamicTool.tool_specs(), & &1["name"])
+      refute "review_verdict" in Enum.map(DynamicTool.tool_specs(:qa), & &1["name"])
+
+      response = DynamicTool.execute("review_verdict", %{"verdict" => "approve"}, issue: %Issue{id: "issue-current"}, review_verdict_sink: self())
+
+      assert %{"error" => %{"code" => "tool_scope_rejected", "tool" => "review_verdict", "message" => message}} = Jason.decode!(response["output"])
+      assert message =~ "only a reviewer session"
+
+      response =
+        DynamicTool.execute("review_verdict", %{"verdict" => "approve"}, issue: %Issue{id: "issue-current"}, tool_scope: :qa, review_verdict_sink: self())
+
+      assert %{"error" => %{"code" => "tool_scope_rejected"}} = Jason.decode!(response["output"])
+      refute_received {:review_verdict, _result}
+    end
+
+    test "records a readable verdict with the reviewer process and refuses one it cannot read" do
+      opts = [issue: %Issue{id: "issue-current"}, tool_scope: :read_only, review_verdict_sink: self()]
+
+      response = DynamicTool.execute("review_verdict", %{"verdict" => "Approved", "comments" => ["Nit."]}, opts)
+
+      assert response["success"]
+      assert %{"recorded" => true, "verdict" => "approve"} = Jason.decode!(response["output"])
+      assert_received {:review_verdict, %{verdict: :approve, comments: ["Nit."]}}
+
+      response = DynamicTool.execute("review_verdict", %{"verdict" => "looks good"}, opts)
+
+      refute response["success"]
+      assert %{"error" => %{"code" => "invalid_review_verdict", "message" => message}} = Jason.decode!(response["output"])
+      assert message == "Symphony could not read the verdict: `verdict` must be one of approve, request_changes or block. Fix it and call review_verdict again."
+
+      response = DynamicTool.execute("review_verdict", %{"verdict" => "approve", "score" => 3}, opts)
+      assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+      refute_received {:review_verdict, _result}
+    end
+
+    test "is unavailable in a reviewer session with no process to record to" do
+      response = DynamicTool.execute("review_verdict", %{"verdict" => "approve"}, issue: %Issue{id: "issue-current"}, tool_scope: :read_only)
+
+      assert %{"error" => %{"code" => "review_verdict_unavailable"}} = Jason.decode!(response["output"])
+    end
+  end
+
   test "tool_specs advertises scoped Linear tools and not raw GraphQL" do
     tool_names = Enum.map(DynamicTool.tool_specs(), & &1["name"])
 

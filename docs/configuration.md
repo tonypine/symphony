@@ -895,7 +895,7 @@ agent:
 
 - `prompts.include_project_guides` defaults to `true`. Set it to `false` to omit the injected
   `## Project conventions` prompt section. A prompt that ends in an output contract, such as the
-  reviewer's JSON verdict, gets the section above that contract, so the contract stays last.
+  reviewer's verdict, gets the section above that contract, so the contract stays last.
 - `prompts.project_guide_files: null` uses the runner default: `["CLAUDE.md"]` for Claude, `[]`
   for Codex. Codex keeps relying on native workspace `AGENTS.md` discovery unless an explicit list
   is configured.
@@ -1198,6 +1198,17 @@ locally (format, compile, lint, the tests for the changed code; Symphony's own l
 `WORKFLOW.md`), and the full suite, coverage and Dialyzer run only in CI.
 `run_on` defaults to `always`; set it to `first_push` to skip the reviewer on PR follow-up runs while keeping it enabled for initial issue runs.
 Follow-up runs include explicit PR dispatches (`symphony pr`) and automatic rework runs triggered by reviewer comments, CI failures, or PR conflicts; these also omit the review-agent gate from the prompt so the agent can push and exit in a single turn.
+
+The reviewer records its verdict with the `review_verdict` tool, whose input schema is the verdict
+contract (`approve`, `request_changes` or `block`, and findings with file, line range, quoted
+snippet, summary and suggested fix). A reviewer that ends its turn without calling it is read from
+the JSON in its final message instead. Both are read leniently (`Approved`, `changes_requested`, a
+line range `"12-15"`, a reversed pair), and a verdict Symphony still cannot read gets one repair
+turn in the same session, with the error, before the review counts as inconclusive. A finding
+whose quote cannot be found in the diff or the file is kept as a comment marked "could not be
+placed" and the verdict stands; only a change request none of whose findings can be placed is
+unverifiable. `/api/v1/state` counts inconclusive Code Review runs per cause
+(`counts.review_inconclusive`), and the Mac app's ticket page shows the cause on the run's row.
 
 The review-agent gate the prompt carries comes before the push that hands the ticket to
 `Code Review`, and both the gate and the workflow's handoff text say so: the agent stops at the

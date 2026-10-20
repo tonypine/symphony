@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.ReviewAgentTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Codex.DynamicTool
   alias SymphonyElixir.ReviewAgent
   alias SymphonyElixir.ReviewAgent.Context
   alias SymphonyElixir.TestSupport.Snapshot
@@ -51,12 +52,39 @@ defmodule SymphonyElixir.ReviewAgentTest do
       responses = Application.fetch_env!(:symphony_elixir, :review_agent_sequence_responses)
 
       case Enum.at(responses, count - 1) do
+        {:tool_calls, calls, final} -> call_review_verdict(parent, count, calls, final, opts)
         {:error, reason} -> {:error, reason}
         response when is_binary(response) -> {:ok, %{result: response}}
       end
     end
 
+    # The turn calls the `review_verdict` tool the way an agent's tool call reaches it, then ends
+    # with `final`: its text, or a turn error.
+    defp call_review_verdict(parent, count, calls, final, opts) do
+      for args <- calls do
+        response = DynamicTool.execute("review_verdict", args, Keyword.take(opts, [:tool_scope, :review_verdict_sink]))
+        send(parent, {:review_agent_tool_response, count, Jason.decode!(response["output"])})
+      end
+
+      case final do
+        {:error, reason} -> {:error, reason}
+        text when is_binary(text) -> {:ok, %{result: text}}
+      end
+    end
+
     def stop_session(_session), do: :ok
+  end
+
+  # Records a verdict as its session stops, after the turn's verdict was read.
+  defmodule LateVerdictReviewer do
+    def start_session(workspace, opts), do: {:ok, %{workspace: workspace, opts: opts}}
+
+    def run_turn(_session, _prompt, _issue, _opts), do: {:ok, %{result: ~s({"verdict":"approve","comments":["first review"]})}}
+
+    def stop_session(%{opts: opts}) do
+      send(opts[:review_verdict_sink], {:review_verdict, %{verdict: :block, comments: [], reason: "late"}})
+      :ok
+    end
   end
 
   defmodule RuntimeTupleReviewer do
@@ -251,7 +279,7 @@ defmodule SymphonyElixir.ReviewAgentTest do
       end
     end
 
-    test "rejects a block finding whose quoted snippet does not match the cited range" do
+    test "keeps a block whose quote cannot be placed, with the finding as an unanchored comment" do
       test_root = unique_tmp("symphony-elixir-review-agent-validate-bad-snippet")
       repo = git_repo_with_change!(test_root)
 
@@ -265,10 +293,11 @@ defmodule SymphonyElixir.ReviewAgentTest do
           reason: "Unsafe to continue."
         }
 
-        assert {:error, {:review_agent_inconclusive, {:review_agent_unverifiable, payload}}} =
+        assert {:ok, %{verdict: :block, findings: [], reason: "Unsafe to continue.", comments: [comment]}} =
                  ReviewAgent.validate_findings(result, source)
 
-        assert %{verdict: :block, failures: [_failure]} = payload
+        assert comment ==
+                 "[could not be placed] Handle remote guides. (feature.txt:1-1) Suggested fix: Keep the evidence-backed change."
       after
         File.rm_rf(test_root)
       end
@@ -281,12 +310,7 @@ defmodule SymphonyElixir.ReviewAgentTest do
       try do
         source = source_for_repo!(repo)
 
-        result = %{
-          verdict: :block,
-          comments: [],
-          findings: [finding("grounded evidence line", "other.txt")],
-          reason: "Unsafe."
-        }
+        result = %{verdict: :request_changes, comments: [], findings: [finding("grounded evidence line", "other.txt")]}
 
         assert {:error, {:review_agent_inconclusive, {:review_agent_unverifiable, payload}}} =
                  ReviewAgent.validate_findings(result, source)
@@ -319,7 +343,7 @@ defmodule SymphonyElixir.ReviewAgentTest do
       end
     end
 
-    test "drops a finding on a missing file and keeps the verdict with the rest" do
+    test "keeps a finding on a missing file as an unanchored comment and the verdict with the rest" do
       test_root = unique_tmp("symphony-elixir-review-agent-validate-partial")
       repo = git_repo_with_change!(test_root)
 
@@ -332,8 +356,11 @@ defmodule SymphonyElixir.ReviewAgentTest do
           findings: [finding("grounded evidence line", "missing.txt"), finding("# review stream", "README.md")]
         }
 
-        assert {:ok, %{verdict: :request_changes, findings: [%{file: "README.md"}]}} =
+        assert {:ok, %{verdict: :request_changes, findings: [%{file: "README.md"}], comments: [grounded, unplaced]}} =
                  ReviewAgent.validate_findings(result, source)
+
+        assert grounded =~ "(README.md:1-1)"
+        assert unplaced == "[could not be placed] Handle remote guides. (missing.txt:1-1) Suggested fix: Keep the evidence-backed change."
       after
         File.rm_rf(test_root)
       end
@@ -405,7 +432,7 @@ defmodule SymphonyElixir.ReviewAgentTest do
       try do
         source = repo |> source_for_repo!() |> Map.put(:file_contents, %{})
         finding = %{finding("line 17\nline 54") | line_range: {10, 10}}
-        result = %{verdict: :block, comments: [], findings: [finding], reason: "Unsafe."}
+        result = %{verdict: :request_changes, comments: [], findings: [finding]}
 
         assert {:error, {:review_agent_inconclusive, {:review_agent_unverifiable, %{failures: [failure]}}}} =
                  ReviewAgent.validate_findings(result, source)
@@ -422,7 +449,7 @@ defmodule SymphonyElixir.ReviewAgentTest do
 
       try do
         source = source_for_repo!(repo)
-        result = %{verdict: :block, comments: [], findings: [finding("@@ -0,0 +1 @@")], reason: "Unsafe."}
+        result = %{verdict: :request_changes, comments: [], findings: [finding("@@ -0,0 +1 @@")]}
 
         assert {:error, {:review_agent_inconclusive, {:review_agent_unverifiable, %{failures: [failure]}}}} =
                  ReviewAgent.validate_findings(result, source)
@@ -439,7 +466,7 @@ defmodule SymphonyElixir.ReviewAgentTest do
 
       try do
         source = source_for_repo!(repo)
-        result = %{verdict: :block, comments: [], findings: [%{finding("not here") | line_range: {50, 51}}], reason: "Unsafe."}
+        result = %{verdict: :request_changes, comments: [], findings: [%{finding("not here") | line_range: {50, 51}}]}
 
         assert {:error, {:review_agent_inconclusive, {:review_agent_unverifiable, %{failures: [failure]}}}} =
                  ReviewAgent.validate_findings(result, source)
@@ -448,6 +475,12 @@ defmodule SymphonyElixir.ReviewAgentTest do
       after
         File.rm_rf(test_root)
       end
+    end
+
+    test "keeps a block's own comments when it gave no findings" do
+      result = %{verdict: :block, comments: ["Unsafe migration."], findings: [], reason: "Unsafe."}
+
+      assert {:ok, ^result} = ReviewAgent.validate_findings(result, %{})
     end
 
     test "rejects request_changes when all findings fail validation" do
@@ -1013,14 +1046,14 @@ defmodule SymphonyElixir.ReviewAgentTest do
       bad_quote = finding_json(%{"quoted_snippet" => "a misremembered line"})
       outside = finding_json(%{"file" => "other.txt", "summary" => "Outside the diff."})
       past_end = finding_json(%{"quoted_snippet" => "beyond the file", "line_range" => [40, 41], "summary" => "Past the end."})
-      unverifiable = block_response([bad_quote, outside, past_end])
-      put_sequence_responses!([unverifiable, unverifiable, block_response([finding_json()])])
+      unverifiable = request_changes_response([bad_quote, outside, past_end])
+      put_sequence_responses!([unverifiable, unverifiable, request_changes_response([finding_json()])])
 
       write_workflow_file!(Workflow.workflow_file_path(),
         review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
       )
 
-      assert {:error, {:review_agent_blocked, %{findings: [finding]}}} =
+      assert {:ok, %{verdict: :request_changes, findings: [finding]}} =
                ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
 
       assert finding.quoted_snippet == "grounded evidence line"
@@ -1037,7 +1070,9 @@ defmodule SymphonyElixir.ReviewAgentTest do
       assert requote_prompt =~ "- feature.txt:40-41: Past the end."
       assert requote_prompt =~ "(no lines at this range in the diff or the changed file)"
       assert requote_prompt =~ "Previous JSON:"
-      assert requote_prompt =~ ~r/Your final message must be only this JSON object, with no prose before or after it.\n\z/
+      assert requote_prompt =~ "Call the `review_verdict` tool once with the corrected verdict"
+
+      assert requote_prompt =~ ~r/your final message must be only the corrected JSON object, with no prose before or after it.\n\z/
     after
       clear_sequence_responses!()
       File.rm_rf(test_root)
@@ -1049,8 +1084,8 @@ defmodule SymphonyElixir.ReviewAgentTest do
 
     try do
       repo = git_repo_with_change!(test_root)
-      unverifiable = block_response([finding_json(%{"quoted_snippet" => "a misremembered line"})])
-      requoted = block_response([finding_json(%{"quoted_snippet" => "another wrong line"})])
+      unverifiable = request_changes_response([finding_json(%{"quoted_snippet" => "a misremembered line"})])
+      requoted = request_changes_response([finding_json(%{"quoted_snippet" => "another wrong line"})])
       put_sequence_responses!([unverifiable, unverifiable, requoted])
 
       write_workflow_file!(Workflow.workflow_file_path(),
@@ -1073,7 +1108,7 @@ defmodule SymphonyElixir.ReviewAgentTest do
 
     try do
       repo = git_repo_with_change!(test_root)
-      unverifiable = block_response([finding_json(%{"quoted_snippet" => "a misremembered line"})])
+      unverifiable = request_changes_response([finding_json(%{"quoted_snippet" => "a misremembered line"})])
       put_sequence_responses!([unverifiable, unverifiable, {:error, {:turn_failed, "max_iterations reached"}}])
 
       write_workflow_file!(Workflow.workflow_file_path(),
@@ -1098,7 +1133,7 @@ defmodule SymphonyElixir.ReviewAgentTest do
 
     try do
       repo = git_repo_with_change!(test_root)
-      unverifiable = block_response([finding_json(%{"quoted_snippet" => "a misremembered line"})])
+      unverifiable = request_changes_response([finding_json(%{"quoted_snippet" => "a misremembered line"})])
 
       write_workflow_file!(Workflow.workflow_file_path(),
         review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
@@ -1172,7 +1207,9 @@ defmodule SymphonyElixir.ReviewAgentTest do
       assert_receive :review_agent_sequence_session_started
       refute_receive :review_agent_sequence_session_started
       assert_receive {:review_agent_sequence_call, 2, nudge, nudge_opts}
-      assert nudge =~ "Return only the JSON verdict for the review you just did"
+      assert nudge =~ "Symphony could not read your verdict: the reply had no review_verdict call and no JSON object."
+      assert nudge =~ "call the `review_verdict` tool once with it"
+      assert nudge =~ ~s("verdict": "approve" | "request_changes" | "block")
       assert nudge_opts[:max_iterations] == 4
     end
 
@@ -1185,21 +1222,21 @@ defmodule SymphonyElixir.ReviewAgentTest do
                ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
 
       assert_receive {:review_agent_sequence_call, 2, self_check_prompt, _opts}
-      assert self_check_prompt =~ ~r/Your final message must be only this JSON object, with no prose before or after it.\n\z/
+      assert self_check_prompt =~ ~r/your final message must be only the corrected JSON object, with no prose before or after it.\n\z/
       assert_receive {:review_agent_sequence_call, 3, nudge, nudge_opts}
-      assert nudge =~ "Return only the JSON verdict for the review you just did"
+      assert nudge =~ "Symphony could not read your verdict"
       assert nudge_opts[:max_iterations] == 4
     end
 
     test "a prose re-quote reply gets one JSON nudge", %{repo: repo} do
-      unverifiable = block_response([finding_json(%{"quoted_snippet" => "a misremembered line"})])
-      put_sequence_responses!([unverifiable, unverifiable, "The finding holds, so I kept it.", block_response([finding_json()])])
+      unverifiable = request_changes_response([finding_json(%{"quoted_snippet" => "a misremembered line"})])
+      put_sequence_responses!([unverifiable, unverifiable, "The finding holds, so I kept it.", request_changes_response([finding_json()])])
 
-      assert {:error, {:review_agent_blocked, %{findings: [%{quoted_snippet: "grounded evidence line"}]}}} =
+      assert {:ok, %{verdict: :request_changes, findings: [%{quoted_snippet: "grounded evidence line"}]}} =
                ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
 
       assert_receive {:review_agent_sequence_call, 4, nudge, _opts}
-      assert nudge =~ "Return only the JSON verdict"
+      assert nudge =~ "Symphony could not read your verdict: the reply had no review_verdict call and no JSON object."
     end
 
     test "a self-check that stays prose after the nudge is inconclusive", %{repo: repo} do
@@ -1228,6 +1265,230 @@ defmodule SymphonyElixir.ReviewAgentTest do
     end
   end
 
+  describe "the review_verdict tool" do
+    setup do
+      test_root = unique_tmp("symphony-elixir-review-agent-verdict-tool")
+      repo = git_repo_with_change!(test_root)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
+      )
+
+      on_exit(fn ->
+        clear_sequence_responses!()
+        File.rm_rf(test_root)
+      end)
+
+      %{repo: repo}
+    end
+
+    test "a verdict recorded with the tool is the verdict, whatever the final message says", %{repo: repo} do
+      put_sequence_responses!([{:tool_calls, [%{"verdict" => "approve", "comments" => ["Clean."]}], "Done: see the tool call."}])
+
+      assert {:ok, %{verdict: :approve, comments: ["Clean."]}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert_received {:review_agent_sequence_session_opts, session_opts}
+      assert session_opts[:review_verdict_sink] == self()
+      assert session_opts[:tool_scope] == :read_only
+      assert_received {:review_agent_sequence_call, 1, prompt, turn_opts}
+      assert turn_opts[:review_verdict_sink] == self()
+      assert prompt =~ "call the `review_verdict` tool once with your verdict, then end your turn"
+      assert Application.fetch_env!(:symphony_elixir, :review_agent_sequence_count) == 1
+    end
+
+    test "the tool refuses a verdict it cannot read, and the corrected call in the same turn counts", %{repo: repo} do
+      put_sequence_responses!([{:tool_calls, [%{"verdict" => "looks good"}, %{"verdict" => "approve"}], ""}])
+
+      assert {:ok, %{verdict: :approve}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert_received {:review_agent_tool_response, 1, %{"error" => %{"code" => "invalid_review_verdict"}}}
+      assert_received {:review_agent_tool_response, 1, %{"recorded" => true}}
+      assert Application.fetch_env!(:symphony_elixir, :review_agent_sequence_count) == 1
+    end
+
+    test "the last verdict a turn recorded wins", %{repo: repo} do
+      calls = [%{"verdict" => "approve", "comments" => ["first"]}, %{"verdict" => "approve", "comments" => ["second"]}]
+      put_sequence_responses!([{:tool_calls, calls, ""}])
+
+      assert {:ok, %{verdict: :approve, comments: ["second"]}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+    end
+
+    test "a verdict recorded after the last turn's read does not reach the next review", %{repo: repo} do
+      assert {:ok, %{verdict: :approve, comments: ["first review"]}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: LateVerdictReviewer)
+
+      refute_received {:review_verdict, _verdict}
+    end
+
+    test "a verdict recorded before the turn failed still counts", %{repo: repo} do
+      put_sequence_responses!([{:tool_calls, [%{"verdict" => "approve"}], {:error, {:turn_failed, "max_iterations reached"}}}])
+
+      assert {:ok, %{verdict: :approve}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+    end
+
+    test "the self-check reads its corrected verdict from the tool too", %{repo: repo} do
+      response = request_changes_response([finding_json()])
+      put_sequence_responses!([response, {:tool_calls, [%{"verdict" => "request_changes", "findings" => [finding_json()]}], "Kept it."}])
+
+      assert {:ok, %{verdict: :request_changes, findings: [%{file: "feature.txt"}]}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert_received {:review_agent_sequence_call, 2, self_check_prompt, _opts}
+      assert self_check_prompt =~ "Call the `review_verdict` tool once with the corrected verdict"
+    end
+  end
+
+  # TP-1120: each of the slips that cost a Code Review run on 2026-10-19/20 is read in the same
+  # session, and only the repair turn is spent on it.
+  describe "a formatting slip costs no second run" do
+    setup do
+      test_root = unique_tmp("symphony-elixir-review-agent-slips")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
+      )
+
+      on_exit(fn ->
+        clear_sequence_responses!()
+        File.rm_rf(test_root)
+      end)
+
+      %{test_root: test_root}
+    end
+
+    test "a verdict word in another case", %{test_root: test_root} do
+      repo = git_repo_with_change!(test_root)
+      put_sequence_responses!([~s({"verdict":"Approved","comments":[]})])
+
+      assert {:ok, %{verdict: :approve}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert_turns(1)
+    end
+
+    test "a line range written as a span of text", %{test_root: test_root} do
+      original = numbered_lines(1..40)
+      repo = git_repo_with_file_change!(test_root, original, changed_line(original, 13))
+
+      finding =
+        finding_json(%{"line_range" => "12-15", "quoted_snippet" => "line 12\nchanged line 13\nline 14\nline 15", "summary" => "Line 13 changed."})
+
+      response = request_changes_response([finding])
+      put_sequence_responses!([response, response])
+
+      assert {:ok, %{verdict: :request_changes, findings: [%{line_range: {12, 15}}]}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      # The review turn and its self-check.
+      assert_turns(2)
+    end
+
+    test "a prose answer", %{test_root: test_root} do
+      repo = git_repo_with_change!(test_root)
+      put_sequence_responses!(["I reviewed it and it is fine.", ~s({"verdict":"approve"})])
+
+      assert {:ok, %{verdict: :approve}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      # The review turn and the repair turn.
+      assert_turns(2)
+    end
+
+    test "a paraphrased snippet", %{test_root: test_root} do
+      repo = git_repo_with_change!(test_root)
+      paraphrased = finding_json(%{"quoted_snippet" => "the grounded line of evidence", "summary" => "Paraphrased."})
+      response = request_changes_response([finding_json(), paraphrased])
+      put_sequence_responses!([response, response])
+
+      assert {:ok, %{verdict: :request_changes, findings: [%{summary: "Handle remote guides."}], comments: [_grounded, unplaced]}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert unplaced =~ "[could not be placed] Paraphrased. (feature.txt:1-1)"
+      # The review turn and its self-check: no re-quote turn.
+      assert_turns(2)
+    end
+
+    test "a block whose only quote is paraphrased stands", %{test_root: test_root} do
+      repo = git_repo_with_change!(test_root)
+      response = block_response([finding_json(%{"quoted_snippet" => "the grounded line of evidence"})])
+      put_sequence_responses!([response, response])
+
+      assert {:error, {:review_agent_blocked, %{reason: "Unsafe to continue.", findings: [], comments: ["[could not be placed] " <> _rest]}}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert_turns(2)
+    end
+  end
+
+  describe "the repair turn" do
+    setup do
+      test_root = unique_tmp("symphony-elixir-review-agent-repair")
+      repo = git_repo_with_change!(test_root)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
+      )
+
+      on_exit(fn ->
+        clear_sequence_responses!()
+        File.rm_rf(test_root)
+      end)
+
+      %{repo: repo}
+    end
+
+    test "carries the parser's error and the contract, and its verdict counts", %{repo: repo} do
+      put_sequence_responses!([~s({"verdict":"looks good"}), ~s({"verdict":"approve"})])
+
+      assert {:ok, %{verdict: :approve}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert_received {:review_agent_sequence_call, 2, repair, _opts}
+      assert repair =~ "Symphony could not read your verdict: `verdict` must be one of approve, request_changes or block."
+      assert repair =~ "Do not review again."
+      assert repair =~ ~s("line_range": [1, 2])
+      assert_turns(2)
+    end
+
+    test "reads a verdict the repair turn records with the tool", %{repo: repo} do
+      put_sequence_responses!([~s({"verdict":"approve","findings":[{"summary":"x"}]}), {:tool_calls, [%{"verdict" => "approve"}], ""}])
+
+      assert {:ok, %{verdict: :approve}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert_received {:review_agent_sequence_call, 2, repair, _opts}
+      assert repair =~ "each finding needs a non-empty `file`."
+      assert_turns(2)
+    end
+
+    test "a verdict that fails even after it is the only path to inconclusive", %{repo: repo} do
+      put_sequence_responses!([~s({"verdict":"looks good"}), ~s({"verdict":"still unsure"})])
+
+      assert {:error, {:review_agent_inconclusive, {:malformed_review_agent_response, :invalid_verdict}}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert_turns(2)
+      assert_received :review_agent_sequence_session_started
+      refute_received :review_agent_sequence_session_started
+    end
+  end
+
+  test "inconclusive_cause/1 labels each inconclusive cause" do
+    {:error, decode_error} = Jason.decode("{")
+
+    assert ReviewAgent.inconclusive_cause({:malformed_review_agent_response, :invalid_verdict}) == "invalid_verdict"
+    assert ReviewAgent.inconclusive_cause({:malformed_review_agent_response, :no_json_object}) == "no_json_object"
+    assert ReviewAgent.inconclusive_cause({:malformed_review_agent_response, {:invalid_json, decode_error}}) == "invalid_json"
+    assert ReviewAgent.inconclusive_cause({:review_agent_unverifiable, %{failures: []}}) == "review_agent_unverifiable"
+    assert ReviewAgent.inconclusive_cause({:max_iterations, {:turn_failed, "max_iterations"}}) == "max_iterations"
+    assert ReviewAgent.inconclusive_cause(:self_check_retracted_all_findings) == "self_check_retracted_all_findings"
+    assert ReviewAgent.inconclusive_cause("odd") == "other"
+  end
+
   test "the assembled reviewer prompt ends with the JSON rule, after the project conventions" do
     test_root = unique_tmp("symphony-elixir-review-agent-contract-last")
 
@@ -1248,12 +1509,12 @@ defmodule SymphonyElixir.ReviewAgentTest do
       assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
       assert {:ok, assembled} = SymphonyElixir.ProjectGuides.append_to_prompt(prompt, repo, settings, :claude)
 
-      [before_contract, contract] = String.split(assembled, "Return ONLY one JSON object in this shape:")
+      [before_contract, contract] = String.split(assembled, "call the `review_verdict` tool once with your verdict")
       assert before_contract =~ "## Project conventions"
       assert before_contract =~ "Project rule body"
       refute contract =~ "## Project conventions"
       refute assembled =~ SymphonyElixir.ProjectGuides.output_contract_marker()
-      assert String.trim_trailing(contract) =~ ~r/Your final message must be only this JSON object, with no prose before or after it\.$/
+      assert String.trim_trailing(contract) =~ ~r/your final message must be only this JSON object, with no prose before or after it\.$/
     after
       clear_sequence_responses!()
       File.rm_rf(test_root)
@@ -1478,6 +1739,14 @@ defmodule SymphonyElixir.ReviewAgentTest do
       "findings" => findings,
       "reason" => "Unsafe to continue."
     })
+  end
+
+  defp assert_turns(count) do
+    assert Application.fetch_env!(:symphony_elixir, :review_agent_sequence_count) == count
+  end
+
+  defp request_changes_response(findings) do
+    Jason.encode!(%{"verdict" => "request_changes", "findings" => findings})
   end
 
   defp put_sequence_responses!(responses) do
