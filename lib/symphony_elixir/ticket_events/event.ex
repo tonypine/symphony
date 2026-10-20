@@ -8,7 +8,7 @@ defmodule SymphonyElixir.TicketEvents.Event do
   who wrote it: the machine, an agent (its run and run kind) or a person (their name). `parent`
   nests a step under another event, `supersedes` names an earlier event a later fact replaces, and
   `idempotency` is the key a second write is a no-op for. `summary` (`%{title, detail}`) is rendered
-  by Symphony, never written by an agent, and nil until a renderer exists.
+  by Symphony (`SymphonyElixir.TicketEvents.Summary`), never written by an agent.
   """
 
   @type actor ::
