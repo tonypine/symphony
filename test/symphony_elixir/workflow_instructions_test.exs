@@ -180,7 +180,7 @@ defmodule SymphonyElixir.WorkflowInstructionsTest do
     assert prompt =~ "---\nhooks:\n  after_create: echo hi\n---\nText"
   end
 
-  # The symphony repo's WORKFLOW.md with its body replaced by the playbook line.
+  # The symphony repo's WORKFLOW.md, with a playbook section added to its front matter when it has none.
   defp playbook_only(content) do
     ["", front_matter, body] = String.split(content, ~r/^---$/m, parts: 3)
 
