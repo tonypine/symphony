@@ -27,7 +27,8 @@ Webhooks change how soon Symphony acts, never what it does. The timed poll keeps
 catches up on any delivery lost while the Mac sleeps, Symphony restarts or the relay drops. While
 deliveries are healthy it is only a safety net, every `github.webhooks.fallback_poll_interval_ms`
 (5 minutes). When a read finds a change no delivery reported, the deliveries count as unhealthy and
-the watcher polls every `pull_requests.poll_interval_ms` again until the next one arrives.
+the watcher polls every `pull_requests.poll_interval_ms` again until the next one arrives. It
+polls at that interval too while the repository's `gh webhook forward` keeps stopping (below).
 
 ## How deliveries reach Symphony
 
@@ -67,8 +68,10 @@ curl -X POST localhost:4040/api/v1/setup/github_updates/turn_off
 
 A failed step says what is wrong and how to fix it, and a repository whose step fails (no admin
 access, say) stays on polling while the others connect. `mode` is `on` once every connected
-repository's test verified, and `degraded` while a relay can't restart or a repository heard
-nothing for `silence_alert_minutes` after a read found a change no delivery reported. A
+repository's test verified, and `degraded` while a relay can't restart or keeps stopping, or a
+repository heard nothing for `silence_alert_minutes` after a read found a change no delivery
+reported. Each repository says why it is degraded (`degraded_reason`) and how often its watcher
+polls now (`poll_interval_ms`). A
 `symphony.yml` brought from another Mac with webhooks on reads `needs_setup` until the setup runs
 on this Mac. Turning off stops the relays, deletes only the hooks Symphony created and keeps the
 secret.
@@ -76,7 +79,13 @@ secret.
 Symphony restarts a `gh webhook forward` that stops: when its connection to GitHub drops, the
 extension retries three times, 5 seconds apart, then exits ("unable to connect to webhooks server,
 forwarding stopped"). Symphony starts it again after 1 second, doubling the wait up to 5 minutes
-while it keeps failing, and the section counts the restarts and shows the last error. A second
+while it keeps failing, and the section counts the restarts and shows the last error. `gh` prints
+its usage text after the error that stopped it, so the error shown is the first of its last 20
+output lines that reads as one (`error`, `failed`, `unable to`), else the line before the usage
+text, else its exit status, or the signal that killed it (`gh webhook forward was killed by signal
+9`); the log has all 20 lines, once per stop. A relay that stopped more than twice in ten
+minutes reads `stable: false` until it has run ten minutes without a stop: meanwhile its
+repository is `degraded` and its watcher polls every `pull_requests.poll_interval_ms`. A second
 `gh webhook forward` on the same repository fails with `Hook already exists`.
 
 `gh webhook forward` takes the secret only as its `--secret` argument: it reads no environment
