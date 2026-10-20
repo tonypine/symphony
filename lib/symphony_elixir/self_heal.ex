@@ -29,7 +29,8 @@ defmodule SymphonyElixir.SelfHeal do
       and the same failure with no new information escalates to a `Needs Decision` hold, with its
       decision request posted on the ticket. The retries are bounded: a head with
       #{@max_head_attempts} blocked runs escalates however the failure changed, so a run that words
-      the same block differently each time cannot loop.
+      the same block differently each time cannot loop. A block whose fix belongs to another repo
+      than the last one's is a new break, filed in its own repo rather than compared.
 
   A block only a person can clear (`needs_person`: a missing secret, an account, a device this host
   lacks) never reaches the filing path: it keeps the access hold it always had, which a person
@@ -50,14 +51,12 @@ defmodule SymphonyElixir.SelfHeal do
   @dev_server "dev_server"
   @worker_host "worker_host"
   @playbook "qa_playbook"
-  @project_setup "project_setup"
 
   # The components whose fix belongs to the repo that hit the block, rather than to Symphony: its
-  # own build/test/run setup (its dev server, or the setup a QA run named with `project_setup`),
-  # and each of its CI checks (`ci:<check name>`, the red backstop of the PR and CI watcher).
-  # Everything else is structural — orchestration, agent transports, QA coverage — and lands in
-  # Symphony (see §Guards "Fix-ticket scope").
-  @repo_components [@dev_server, @project_setup]
+  # own build/test/run setup, and each of its CI checks (`ci:<check name>`, the red backstop of the
+  # PR and CI watcher). Everything else is structural — orchestration, agent transports, QA
+  # coverage — and lands in Symphony (see §Guards "Fix-ticket scope").
+  @repo_components [@dev_server]
 
   @access_type "access"
   @fix_ticket_type "fix_ticket"
@@ -72,17 +71,13 @@ defmodule SymphonyElixir.SelfHeal do
 
   @doc """
   The broken component an outcome names, the unit a fix ticket is filed per. The causes the flows
-  raise today map to a small closed set; a QA run with no machine cause that says the block is the
-  project's own setup (`project_setup: true`) names `#{@project_setup}`; anything unrecognized is the
-  flow's own environment.
+  raise today map to a small closed set; anything unrecognized is the flow's own environment. A QA
+  run that says the project's own server was missing (`needs_dev_server`) names the `dev_server`,
+  which the project's repo sets up.
   """
   @spec component(outcome() | term()) :: String.t()
-  def component(outcome) when is_map(outcome) do
-    if is_nil(Map.get(outcome, :cause)) and Map.get(outcome, :project_setup) == true,
-      do: @project_setup,
-      else: outcome |> cause() |> component_for()
-  end
-
+  def component(%{needs_dev_server: true}), do: @dev_server
+  def component(outcome) when is_map(outcome), do: outcome |> cause() |> component_for()
   def component(_outcome), do: @default_component
 
   @doc """
@@ -187,10 +182,9 @@ defmodule SymphonyElixir.SelfHeal do
 
       ctx = Map.put(ctx, :covering, covering_ticket(ctx))
 
-      case {ctx.covering, change(previous, component, scope, signature)} do
+      case {ctx.covering, compare(previous_signature(previous, component, scope), signature)} do
         {%{}, _change} -> open(ctx)
         {nil, :first} -> open(ctx)
-        {nil, :moved} -> move(ctx)
         {nil, :same} -> escalate(ctx, :unchanged)
         {nil, change} -> revisit(ctx, change)
       end
@@ -222,23 +216,6 @@ defmodule SymphonyElixir.SelfHeal do
         {:error, {:self_heal_fix_ticket_failed, reason}}
     end
   end
-
-  # How this failure compares with the last recorded one (`compare/2`), or `:moved` when the last
-  # repair was another repo's and this block's fix belongs to `scope`: say a QA run that now names
-  # the project's own setup after a Symphony fix landed. Nothing that repair changed says anything
-  # about this one, so it is filed afresh in its own repo rather than compared, while the head has
-  # attempts left.
-  defp change(previous, component, scope, signature) do
-    case previous_signature(previous, component) do
-      nil -> :first
-      old -> if moved?(previous, scope), do: :moved, else: compare(old, signature)
-    end
-  end
-
-  defp moved?(%{scope: previous_scope}, scope), do: is_binary(previous_scope) and previous_scope != scope
-
-  defp move(%{attempts: attempts} = ctx) when attempts >= @max_head_attempts, do: escalate(ctx, :out_of_attempts)
-  defp move(ctx), do: open(ctx)
 
   # A repair landed and the block came back different: that is new information, so the flow earns
   # another attempt. The new failure is recorded — so the next identical one escalates — and
@@ -486,13 +463,17 @@ defmodule SymphonyElixir.SelfHeal do
   defp pull_request(%{pr_url: pr_url}) when is_binary(pr_url), do: Request.pull_request(pr_url) || pr_url
   defp pull_request(_outcome), do: "the pull request"
 
+  # A block whose fix belongs to another repo than the last one's is a new break: the repair that
+  # landed was made where it could not reach this one (a QA run that finds the project's own server
+  # missing after a fix to Symphony's QA setup, say), so the new owner gets its own fix ticket.
   # A CI check's failure is compared only with the same check's: a backstop on another check is a
   # new break, filed on its own rather than read as progress on the first.
-  defp previous_signature(%{component: component, signature: signature}, component), do: signature
-  defp previous_signature(%{component: @ci_prefix <> _check}, _component), do: nil
-  defp previous_signature(%{signature: _signature}, @ci_prefix <> _check), do: nil
-  defp previous_signature(%{signature: signature}, _component), do: signature
-  defp previous_signature(nil, _component), do: nil
+  defp previous_signature(%{scope: previous}, _component, scope) when is_binary(previous) and previous != scope, do: nil
+  defp previous_signature(%{component: component, signature: signature}, component, _scope), do: signature
+  defp previous_signature(%{component: @ci_prefix <> _check}, _component, _scope), do: nil
+  defp previous_signature(%{signature: _signature}, @ci_prefix <> _check, _scope), do: nil
+  defp previous_signature(%{signature: signature}, _component, _scope), do: signature
+  defp previous_signature(nil, _component, _scope), do: nil
 
   defp fix_title(@ci_prefix <> check), do: "Self-heal: CI keeps failing the #{check} check"
   defp fix_title(component), do: "Self-heal: repair the #{component} block"
@@ -501,6 +482,13 @@ defmodule SymphonyElixir.SelfHeal do
     """
     #{evidence(issue, signature, outcome)}
     CI Fix runs could not make the `#{check}` check pass on #{pull_request(outcome)}. The failure may be that pull request's own rather than this repo's CI: compare it with the check on the base branch and on other pull requests before changing the workflow. Fix the check, or the code it tests, in this repo, and every ticket blocked on this one resumes on its own when this ticket goes terminal — no person has to move anything.
+    """
+  end
+
+  defp fix_description(issue, @dev_server, signature, %{needs_dev_server: true} = outcome) do
+    """
+    #{evidence(issue, signature, outcome)}
+    QA had no running copy of this project's own server: the steps above need it, Symphony started no dev server for the pass, and the QA agent may not stand in for the system under test. That is this repo's own run setup, so the fix belongs here. In this repo's `WORKFLOW.md`, set `verification.enabled: true` and `verification.dev_server` (`build_cmd`, `start_cmd`, `health_check_url`), start any database the server needs from `start_cmd` on a unix socket in the dev server's temp folder, seed the data those steps look at, and set `dev_server: true` on the playbook under `auto_review.playbooks`. Symphony then starts that server outside the QA agent's sandbox for each pass, and every ticket blocked on this one resumes on its own when this ticket goes terminal — no person has to move anything.
     """
   end
 

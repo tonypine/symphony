@@ -170,15 +170,13 @@ defmodule SymphonyElixir.SelfHealTest do
 
       assert SelfHeal.component(%{reason: "no QA playbook applies"}) == "qa_playbook"
 
+      # A QA run that says the project's own server was not running names its dev server, whatever its wording.
+      assert SelfHeal.component(%{reason: "Without a running hub, the app can't show the board", needs_dev_server: true}) == "dev_server"
+      assert SelfHeal.component(%{reason: "Without a running hub, the app can't show the board", needs_dev_server: false}) == "qa_environment"
+
       # The PR and CI watcher's red backstop names the failing check, with or without its error.
       assert SelfHeal.component(%{cause: {:ci_check_failed, "make all"}}) == "ci:make all"
       assert SelfHeal.component(%{cause: {:ci_check_failed, "make all", "ERROR: boom"}}) == "ci:make all"
-    end
-
-    test "a QA run that names the project's own setup is the project_setup component, unless a machine cause says otherwise" do
-      assert SelfHeal.component(%{reason: "no hub with Pipeline data can run", project_setup: true}) == "project_setup"
-      assert SelfHeal.component(%{reason: "no hub with Pipeline data can run", project_setup: false}) == "qa_environment"
-      assert SelfHeal.component(%{cause: :health_timeout, reason: "timeout", project_setup: true}) == "dev_server"
     end
 
     test "falls back to the flow's own environment for anything unrecognized" do
@@ -190,7 +188,6 @@ defmodule SymphonyElixir.SelfHealTest do
   describe "scope/3" do
     test "the affected repo owns its own build/test/run setup, Symphony the rest" do
       assert SelfHeal.scope("dev_server", @repo_key, symphony_repo_key: @symphony_repo_key) == @repo_key
-      assert SelfHeal.scope("project_setup", @repo_key, symphony_repo_key: @symphony_repo_key) == @repo_key
       assert SelfHeal.scope("qa_environment", @repo_key, symphony_repo_key: @symphony_repo_key) == @symphony_repo_key
       assert SelfHeal.scope("worker_host", @repo_key, symphony_repo_key: @symphony_repo_key) == @symphony_repo_key
       assert SelfHeal.scope("qa_playbook", @repo_key, symphony_repo_key: @symphony_repo_key) == @symphony_repo_key
@@ -291,7 +288,8 @@ defmodule SymphonyElixir.SelfHealTest do
 
       for previous <- [
             %{component: "ci:lint", scope: @repo_key, signature: ~s({:ci_check_failed, "lint"})},
-            %{component: "qa_environment", scope: @symphony_repo_key, signature: "an old failure"}
+            %{component: "qa_environment", scope: @symphony_repo_key, signature: "an old failure"},
+            %{component: "dev_server", scope: @repo_key, signature: ~s({:ci_check_failed, "specs"})}
           ] do
         Process.delete(:fixer_create)
         Process.put(:ticket_state, recorded(@repo_key, @issue_id, previous))
@@ -520,6 +518,46 @@ defmodule SymphonyElixir.SelfHealTest do
       assert Process.get(:hold_attrs) == nil
     end
 
+    test "the same blocked steps found to need the project's own server after a Symphony repair file in the project's repo" do
+      steps = [%{name: "Open the Pipeline board", status: "blocked"}, %{name: "Wide pass", status: "blocked"}]
+      first = %{verdict: :blocked, reason: "Without a running hub, the app can't show the board", steps: steps, findings: []}
+      Process.put(:ticket_state, recorded(@repo_key, @issue_id, %{component: "qa_environment", scope: @symphony_repo_key, signature: SelfHeal.signature(first)}))
+
+      # Narrowed to one of the steps, or unchanged: either way the project's repo has never been asked.
+      for again <- [first, %{first | steps: Enum.take(steps, 1)}] do
+        Process.delete(:fixer_create)
+        assert :filed = SelfHeal.heal(issue(), heal_opts(Map.put(again, :needs_dev_server, true), attempts: 3))
+
+        assert %{scope: @repo_key, component: "dev_server", title: "Self-heal: repair the dev_server block", description: description} =
+                 Process.get(:fixer_create)
+
+        assert description =~ "QA had no running copy of this project's own server"
+        assert description =~ "set `verification.enabled: true` and `verification.dev_server`"
+        assert %{component: "dev_server", scope: @repo_key, fix_ticket: @fix_ticket} = Process.get(:recorded_self_heal)
+      end
+
+      # Once the project's repo has its fix ticket, the same block again is unchanged and escalates.
+      again = Map.put(first, :needs_dev_server, true)
+      Process.put(:ticket_state, recorded(@repo_key, @issue_id, %{component: "dev_server", scope: @repo_key, signature: SelfHeal.signature(again)}))
+      assert :escalated = SelfHeal.heal(issue(), heal_opts(again, attempts: 4))
+    end
+
+    test "another component's failure with the same owner is compared, not filed again" do
+      previous = %{component: "worker_host", scope: @symphony_repo_key, signature: ":environment_unreachable on worker-1", fix_ticket: @fix_ticket}
+      Process.put(:ticket_state, recorded(@repo_key, @issue_id, previous))
+
+      assert :retry = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable)))
+      assert Process.get(:fixer_create) == nil
+      assert %{component: "qa_environment", fix_ticket: @fix_ticket} = Process.get(:recorded_self_heal)
+    end
+
+    test "a dev server that fails to start keeps the generic fix description" do
+      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome({:dev_server_exit, 3})))
+      assert %{component: "dev_server", description: description} = Process.get(:fixer_create)
+      assert description =~ "This is the dev_server component"
+      refute description =~ "QA had no running copy"
+    end
+
     test "a reworded QA block with the same blocked steps escalates instead of retrying" do
       steps = [%{name: "Watch the update banner", status: "blocked"}]
       first = %{verdict: :blocked, reason: "qa_launch_app cannot set the update feed", steps: steps, findings: []}
@@ -530,41 +568,6 @@ defmodule SymphonyElixir.SelfHealTest do
       assert :escalated = SelfHeal.heal(issue(), heal_opts(reworded, attempts: 3))
       assert {:needs_decision, %{decision: decision}} = Process.get(:hold_attrs)
       assert decision.question =~ "came back unchanged after 3 attempt(s)"
-    end
-
-    test "a block a QA run names as the project's own setup files its fix ticket in the project's repo" do
-      steps = [%{name: "Design check: Pipeline", status: "blocked"}]
-      outcome = %{verdict: :blocked, reason: "no hub with Pipeline data can run in QA", steps: steps, findings: [], project_setup: true}
-
-      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome))
-
-      assert %{scope: @repo_key, component: "project_setup", title: "Self-heal: repair the project_setup block"} = Process.get(:fixer_create)
-      assert %{component: "project_setup", scope: @repo_key, signature: "blocked steps: Design check: Pipeline"} = Process.get(:recorded_self_heal)
-      assert {:blocked, %{waits_on: %{type: "fix_ticket", keys: [@fix_ticket]}}} = Process.get(:hold_attrs)
-    end
-
-    test "a block whose fix moved to another repo is filed there, not escalated as unchanged, while the head has attempts left" do
-      steps = [%{name: "Design check: Pipeline", status: "blocked"}]
-      outcome = %{verdict: :blocked, reason: "no hub with Pipeline data can run in QA", steps: steps, findings: [], project_setup: true}
-
-      # The Symphony fix for the same blocked step landed (its pointer cleared); the block is the same
-      # by signature, but the run now says the project's own setup is what's missing.
-      symphony_fix = %{component: "qa_environment", scope: @symphony_repo_key, signature: SelfHeal.signature(outcome)}
-      previous = recorded(@repo_key, @issue_id, symphony_fix)
-
-      Process.put(:ticket_state, previous)
-      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome, attempts: 4))
-      assert %{scope: @repo_key, component: "project_setup"} = Process.get(:fixer_create)
-
-      Process.delete(:fixer_create)
-      Process.delete(:hold_attrs)
-      Process.put(:ticket_state, previous)
-
-      capture_log(fn -> assert :escalated = SelfHeal.heal(issue(), heal_opts(outcome, attempts: 5)) end)
-
-      assert Process.get(:fixer_create) == nil
-      assert {:needs_decision, %{decision: decision}} = Process.get(:hold_attrs)
-      assert decision.why =~ "only 5 times for one change"
     end
 
     test "a changed failure retries only while the head has attempts left" do

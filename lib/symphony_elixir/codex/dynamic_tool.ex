@@ -514,6 +514,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   # the `:qa` scope.
   @pid_property %{"type" => "integer", "minimum" => 1, "description" => "A PID qa_launch_app returned."}
   @element_path_property %{"type" => "string", "description" => "An element path from qa_ax_tree, like `0.2.1`."}
+  @screen_x_property %{"type" => "integer", "minimum" => -32_768, "maximum" => 32_768, "description" => "A point's x on screen, with y, instead of path."}
+  @screen_y_property %{"type" => "integer", "minimum" => -32_768, "maximum" => 32_768, "description" => "A point's y on screen, with x, instead of path."}
 
   @qa_tool_schemas [
     %{
@@ -683,7 +685,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_click",
       "description" =>
-        "Click the centre of an element's frame in the launched app, for controls no accessibility action reaches. The app and the element's window come to the front first; fails when the element is off screen or another app would take the click there, naming that app. The click goes to the app alone.",
+        "Click the centre of an element's frame in the launched app, for controls no accessibility action reaches. The app and the element's window come to the front first; fails when the element is off screen or another app would take the click there, naming that app. The pointer moves to the element, then the click goes to the app alone. Returns `under_pointer` (the element the pointer is over) and `changed` (whether the tree or windows changed); when a single click changed nothing and the element answers AXPress, it is pressed that way and `fallback` says AXPress.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -693,6 +695,28 @@ defmodule SymphonyElixir.Codex.DynamicTool do
           "path" => @element_path_property,
           "clicks" => %{"type" => "integer", "minimum" => 1, "maximum" => 2, "default" => 1, "description" => "2 for a double click."}
         }
+      }
+    },
+    %{
+      "name" => "qa_hover",
+      "description" =>
+        "Move the pointer over an element's centre (`path`) or a point on screen (`x`, `y`, in the points of qa_ax_tree's frames) of the launched app and wait for the app to settle, so a hover state (a button that shows on hover, a highlight) can be judged with qa_ax_tree and qa_screenshot. The pointer stays there. Fails like qa_click when the target is off screen or covered.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid"],
+        "properties" => %{"pid" => @pid_property, "path" => @element_path_property, "x" => @screen_x_property, "y" => @screen_y_property}
+      }
+    },
+    %{
+      "name" => "qa_context_menu",
+      "description" =>
+        "Right-click an element's centre (`path`) or a point on screen (`x`, `y`) of the launched app, as a person opens a context menu, and return the menu that opens: its items with their paths, titles, enabled state and shortcuts, and its window_id for qa_screenshot. Press an item with qa_ax_press; close the menu with qa_key and key escape. Use it for a row or control whose AXShowMenu is unsupported.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid"],
+        "properties" => %{"pid" => @pid_property, "path" => @element_path_property, "x" => @screen_x_property, "y" => @screen_y_property}
       }
     },
     %{
@@ -1014,6 +1038,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_ax_set_value" => ["pid", "path", "value"],
     "qa_ax_select" => ["pid", "path"],
     "qa_click" => ["pid", "path", "clicks"],
+    "qa_hover" => ["pid", "path", "x", "y"],
+    "qa_context_menu" => ["pid", "path", "x", "y"],
     "qa_key" => ["pid", "key", "modifiers"],
     "qa_resize_window" => ["pid", "path", "width", "height"],
     "qa_check_app" => ["pid", "page"],

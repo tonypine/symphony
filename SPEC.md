@@ -1503,7 +1503,11 @@ The QA agent:
   `qa_ax_select` selects a table or outline row through accessibility, `qa_click` clicks an
   element's frame centre and `qa_key` presses a key with modifiers in the app's focused window; their
   mouse and key events MUST go to that app alone, and `qa_click` MUST refuse a point where the
-  window in front is not the app's own.
+  window in front is not the app's own. `qa_click` moves the pointer to the point before it clicks
+  and MAY press the element through accessibility when the click changed nothing, saying so in its
+  result; `qa_hover` moves the pointer over an element or point and waits for the app to settle,
+  and `qa_context_menu` right-clicks one and lists the menu that opens. They MUST refuse the same
+  points as `qa_click` before the pointer moves.
   `qa_resize_window` (the playbook's wide pass) sizes a launched app's window to at least 1400×900
   points, or the screen's usable area when that is smaller, through the Accessibility grant alone, and
   `qa_check_app` reports whether the app still runs, answers an accessibility request within 10
@@ -2641,11 +2645,11 @@ Rules:
   is reused only while it is open and was filed for the same failure (the same normalized cause); a
   terminal one, or one for another failure of the same component, gets a new fix ticket instead. A
   QA answer may name an open ticket that already tracks the missing QA tool (`covered_by`); the
-  hold then waits on that ticket, linked as blocked-by, and nothing is filed. A QA answer may also
-  say the block is the project's own build or run setup (`project_setup`: its server cannot build or
-  start, or nothing runs it for the pass); its fix ticket is then filed in the affected ticket's
-  repo, not Symphony's. A block whose fix moves to another repo than the last recorded one is filed
-  there afresh rather than compared with the earlier failure, while its head has attempts left. A missing QA tool or
+  hold then waits on that ticket, linked as blocked-by, and nothing is filed. A QA answer that says
+  a step needs the project's own server and the pass had no dev server (`needs_dev_server`) names
+  the `dev_server` component, whose fix ticket lands in the project's repository. A block whose fix
+  belongs to another repository than the last recorded one is a new break, filed there rather than
+  compared with the old failure. A missing QA tool or
   QA host capability is never `needs_person`: only a secret,
   an account or a device the host lacks is. The hold lifts when the fix ticket is terminal, except
   for a fix merged into the repository the running build comes from: like the app-update hold on a
