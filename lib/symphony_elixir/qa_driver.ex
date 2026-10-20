@@ -75,7 +75,7 @@ defmodule SymphonyElixir.QaDriver do
     root is on the QA VM, so the agent cannot read the log itself.
 
   QA roots: every launch shares the pass's first QA root (root 1, `app-root/` in
-  the private directory, or in the run directory on a `worker_host`), so what a
+  the run directory on the QA host), so what a
   launch saved is there for the next one. `qa_launch_app` with `fresh_root: true`
   makes a new, empty root instead (`qa-root-<n>/` beside the first, numbered from
   2) for a step that needs the app's first run, a reset of its settings, or a
@@ -199,7 +199,7 @@ defmodule SymphonyElixir.QaDriver do
   and every tool then fails with `qa_worker_unsafe`.
 
   Next, the driver looks for each executable the playbook `requires` with `command -v`, in the
-  shell and environment the build gets (over SSH on a `worker_host`). `host_check/1` returns the
+  shell and environment the build gets (over SSH on the QA host). `host_check/1` returns the
   ones missing, and the QA pass is `blocked` before the agent starts: the QA host needs
   provisioning (`scripts/qa-vm/provision.sh`), which is not the project's defect.
 

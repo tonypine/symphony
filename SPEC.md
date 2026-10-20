@@ -796,8 +796,8 @@ Fields:
   - Default: `false`.
   - When false or omitted, no verification port allocation or dev-server supervision is active,
     and no agent run starts a dev server.
-  - A `macos_app` QA pass on a `worker_host` with `dev_server: true` reads only
-    `dev_server.start_cmd`: its server runs on the QA host, with no port allocation here.
+  - A `macos_app` QA pass with `dev_server: true` reads only `dev_server.start_cmd`: its server
+    runs on the `worker_host`, never on the Symphony host, with no port allocation here.
 - `port_allocation.range` (two-integer list)
   - Default: `[4100, 4199]`, which leaves out Symphony's own API port.
   - The implementation allocates the first free port in the inclusive range for each dispatched
@@ -1425,8 +1425,8 @@ Fields:
   `build` (shell command run in the QA worktree), `app` (the `.app` bundle path relative to the
   repo root) and `build_timeout_ms` (default `900000`), and is off unless `build` and `app` are
   set. It also takes `dev_server` (boolean, default `false`, valid on `android_app` and any kind
-  too: the pass starts `verification.dev_server`, on the QA host for a `macos_app` pass on a
-  `worker_host`), `dev_server_port` (1..65535, default `8090`: that QA-host server's
+  too: the pass starts `verification.dev_server`, on the `worker_host` for a `macos_app` pass,
+  never on the Symphony host), `dev_server_port` (1..65535, default `8090`: that QA-host server's
   `SYMPHONY_VERIFICATION_PORT`) and `launch_env` (map of string to string, default `{}`: extra
   variables `qa_launch_app` sets on the app after Symphony's own, `$SYMPHONY_VERIFICATION_PORT`
   replaced by `dev_server_port`; names MUST match `^[A-Z][A-Z0-9_]*$`, and the variables Symphony

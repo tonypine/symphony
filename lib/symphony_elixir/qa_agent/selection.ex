@@ -24,8 +24,8 @@ defmodule SymphonyElixir.QaAgent.Selection do
   in a browser; its optional `browser_mcp` replaces the default Playwright MCP server.
   Any other playbook with `dev_server: true` (a project server and the database it
   needs, which the agent's sandbox cannot start) has Symphony start that dev server for
-  its passes too, and needs it configured the same way. On a `worker_host`, the
-  `macos_app` playbook's dev server runs on the QA host instead, on its
+  its passes too, and needs it configured the same way. The `macos_app` playbook's
+  dev server runs on the QA host instead, never on this host, on its
   `dev_server_port`, and its `launch_env` reaches the app (see
   `SymphonyElixir.QaAgent.PlaybookSettings`); it needs only `verification.dev_server`
   (`dev_server_command?: true`), since `verification.enabled` turns on this host's
@@ -149,7 +149,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
   `dev_server?: true` says `verification` is on and `verification.dev_server` is configured, which
   the `web` playbook and any playbook with `dev_server: true` need for a dev server on this host;
   `dev_server_command?: true` says `verification.dev_server` is configured, which is all the
-  `macos_app` playbook with `dev_server: true` needs on a `worker_host`. The `android_app` playbook
+  `macos_app` playbook with `dev_server: true` needs. The `android_app` playbook
   reads `auto_review.android.avd`.
   """
   @spec decide(Issue.t(), [String.t()], map(), keyword()) :: decision()
@@ -233,7 +233,6 @@ defmodule SymphonyElixir.QaAgent.Selection do
     host = %{
       dev_server?: dev_server?,
       dev_server_command?: Keyword.get(opts, :dev_server_command?, dev_server?),
-      worker_host?: is_binary(Map.get(auto_review, :worker_host)),
       android_avd?: android_avd?(auto_review)
     }
 
@@ -318,14 +317,14 @@ defmodule SymphonyElixir.QaAgent.Selection do
   end
 
   # A playbook that drives the verification dev server (the `web` one, or one with
-  # `dev_server: true`) needs one configured. A `macos_app` one on a `worker_host` runs it on the
-  # QA host and reads only `verification.dev_server`; any other one runs it on this host, which
+  # `dev_server: true`) needs one configured. A `macos_app` one runs it on the QA host, never on
+  # this host, and reads only `verification.dev_server`; any other one runs it on this host, which
   # `verification.enabled` turns on too.
   defp missing_dev_server(kind, override, host) do
     cond do
       not dev_server?(kind, override) -> []
       not host.dev_server_command? -> ["verification.dev_server"]
-      kind == "macos_app" and host.worker_host? -> []
+      kind == "macos_app" -> []
       host.dev_server? -> []
       true -> ["verification.enabled"]
     end

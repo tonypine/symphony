@@ -309,9 +309,9 @@ step you proved, judge what the app shows.
 trusted once, rather than a throwaway one trusted for each pass: a pass that died would leave its
 trust setting behind. On a QA VM (a `worker_host`) whose QA user has passwordless `sudo`,
 `qa_build_release_pair` installs it itself the first time it finds none, or finds it untrusted,
-with Symphony's own copy of the script, and builds the pair in the same call. Anywhere else (QA on
-Symphony's own host, or a QA user whose `sudo` asks for a password) whoever provisions the host
-runs it by hand as the QA user, from a checkout of this repository:
+with Symphony's own copy of the script, and builds the pair in the same call. On a QA VM whose QA
+user's `sudo` asks for a password, whoever provisions the VM runs it by hand as the QA user, from a
+checkout of this repository:
 
 ```sh
 scripts/qa/install-test-signing-identity.sh          # asks for sudo once, to trust the certificate

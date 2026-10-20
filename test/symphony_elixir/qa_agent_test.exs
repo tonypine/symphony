@@ -599,7 +599,7 @@ defmodule SymphonyElixir.QaAgentTest do
       assert {"web", "needs `verification.enabled`"} in Selection.unavailable(config, command_only)
     end
 
-    test "a macos_app playbook with dev_server: true on a worker_host needs only verification.dev_server" do
+    test "a macos_app playbook with dev_server: true needs only verification.dev_server, with or without a worker_host" do
       macos_app = %{"build" => "make app", "app" => "build/App.app", "dev_server" => true}
       config = %{worker_host: "qa-vm", playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => macos_app}}
       command_only = [dev_server?: false, dev_server_command?: true]
@@ -609,8 +609,9 @@ defmodule SymphonyElixir.QaAgentTest do
       assert {"web", "needs `verification.enabled`"} in Selection.unavailable(config, command_only)
       assert {"macos_app", "needs `verification.dev_server`"} in Selection.unavailable(config)
 
-      # Without a worker_host its server runs on this host, which verification.enabled turns on.
-      assert {"macos_app", "needs `verification.enabled`"} in Selection.unavailable(%{config | worker_host: nil}, command_only)
+      # Without a worker_host it still never runs its server on this host, so it does not need
+      # verification.enabled either: the pass runs, and the QA driver's tools say to set up the QA VM.
+      assert [%{kind: "macos_app", dev_server: true}] = Selection.playbooks(%{config | worker_host: nil}, command_only)
       assert [%{kind: "macos_app"}, %{kind: "web"}] = Selection.playbooks(%{config | worker_host: nil}, dev_server?: true)
     end
 
@@ -1696,8 +1697,7 @@ defmodule SymphonyElixir.QaAgentTest do
 
     defp hold_health_check(_test, _pass), do: :ok
 
-    defp qa_host_macos_app do
-      settings = qa_host_settings()
+    defp qa_host_macos_app(settings \\ qa_host_settings()) do
       macos_app = %{"build" => "make app", "app" => "build/App.app", "dev_server" => true}
       config = %{settings.auto_review | playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => macos_app}}
       [macos_app] = Selection.playbooks(config, Verification.selection_opts(settings))
@@ -1735,6 +1735,25 @@ defmodule SymphonyElixir.QaAgentTest do
       assert_received {:qa_host_cleanup, "/Users/qa/.symphony-qa/runs/run.abc"}
       # This host starts no dev server of its own for the pass.
       refute_received {:dev_server_started, _identifier, _run_id, _worktree, _opts}
+    end
+
+    test "starts no dev server for a macos_app pass without a QA host, on this host or another, and reports it blocked" do
+      settings = put_in(qa_host_settings().auto_review.worker_host, nil)
+      Application.put_env(:symphony_elixir, :qa_test_turn_result, {:ok, %{result: FakeSession.pass_json()}})
+
+      {result, _log} =
+        with_log(fn ->
+          QaAgent.run(job(%{playbooks: [qa_host_macos_app(settings)]}), settings,
+            git: fake_git(),
+            qa_agent_module: FakeSession,
+            verification: FakeVerification
+          )
+        end)
+
+      assert {:ok, %{result: %{verdict: :blocked, cause: {:qa_worker, "qa_worker_missing"}, reason: reason}}} = result
+      assert reason =~ "No QA VM is set up"
+      refute_received {:dev_server_started, _identifier, _run_id, _worktree, _opts}
+      refute_received {:qa_host_dev_server, _args}
     end
 
     test "blocks a macos_app pass whose QA-host dev server fails its health check, before the agent starts" do

@@ -1459,13 +1459,13 @@ such as an API and the Postgres it stores in that the app under test talks to. S
 starts `verification.dev_server` for that pass as it does for `web` (from its own worktree at the
 PR head, on a pooled port, outside the agent's sandbox), gives the agent its URL and lets the
 agent's sandbox reach `localhost`; only a `web` pass also gets the `browser` MCP server. The
-`macos_app` playbook takes `dev_server: true` too: on a `worker_host` its server runs on the QA
-host, beside the app (see [macOS app QA](#macos-app-qa)). Each path reads its own flags:
+`macos_app` playbook takes `dev_server: true` too: its server runs on the QA VM, beside the app,
+never on the Symphony host (see [macOS app QA](#macos-app-qa)). Each path reads its own flags:
 
 | Playbook with a dev server | Needs |
 | --- | --- |
-| `macos_app` with `dev_server: true` on a `worker_host` | `verification.dev_server.start_cmd` only; `verification.enabled` may be `false` |
-| `web`, a kind of your own with `dev_server: true`, `macos_app` without a `worker_host` | `verification.enabled: true` and `verification.dev_server.start_cmd` |
+| `macos_app` with `dev_server: true` | `verification.dev_server.start_cmd` only; `verification.enabled` may be `false` |
+| `web`, a kind of your own with `dev_server: true` | `verification.enabled: true` and `verification.dev_server.start_cmd` |
 
 `verification.enabled` also starts the dev server on the Symphony host for every agent run (see
 [`verification`](#verification)), so a repository whose server only runs on the QA host, beside a
@@ -1680,11 +1680,11 @@ auto_review:
 
 | Key | Default | Does |
 | --- | --- | --- |
-| `build` | none (required) | the command `qa_build` runs in the QA worktree, or in `src/` on a `worker_host` |
+| `build` | none (required) | the command `qa_build` runs in `src/` on the QA VM, the copy of the QA worktree it ships there |
 | `app` | none (required) | the `.app` bundle the build writes, relative to the repo root |
 | `build_timeout_ms` | `900000` | how long `qa_build` waits for `build` |
 | `paths` | Swift, `Info.plist`, xib, storyboard, xcassets | the changed paths that select the playbook |
-| `dev_server` | `false` | the pass starts `verification.dev_server`. On a `worker_host` it runs on the QA host, beside the app (see [Running QA on a separate macOS host](#running-qa-on-a-separate-macos-host)); without one, on the Symphony host as for any `dev_server: true` playbook (see [QA passes](#qa-passes)) |
+| `dev_server` | `false` | the pass starts `verification.dev_server` on the QA VM, beside the app (see [Running QA in a QA VM](#running-qa-in-a-qa-vm)), never on the Symphony host: without a `worker_host` no server starts and the `qa_*` tools say to set up the QA VM |
 | `dev_server_port` | `8090` | the port the QA-host dev server listens on, as `SYMPHONY_VERIFICATION_PORT` |
 | `launch_env` | `{}` | extra variables `qa_launch_app` sets on the app, after Symphony's own, with `$SYMPHONY_VERIFICATION_PORT` replaced by `dev_server_port`. Names match `^[A-Z][A-Z0-9_]*$`; the variables Symphony sets itself (`SYMPHONY_BAR_QA_ROOT`, `SYMPHONY_QA_OPENROUTER_URL`, `SYMPHONY_BAR_QA_API_FIXTURES` and the stand-ins below), `PATH`, `HOME` and `DYLD_*` fail the config check, naming the key |
 
@@ -1903,7 +1903,7 @@ the QA agent answers `blocked`. The check fails when the QA host:
 An unreachable host gives `qa_worker_unreachable` and a `blocked` verdict.
 
 Next, Symphony looks for each executable the playbook lists in `requires` with `command -v`, in
-the shell and environment the build gets (a non-login shell over SSH on a `worker_host`):
+the shell and environment the build gets (a non-login shell over SSH on the QA VM):
 
 ```yaml
 auto_review:
@@ -2356,9 +2356,9 @@ port range.
 `enabled: true` starts `dev_server` on the Symphony host before the first turn of every agent run
 (implementation, review and fix runs alike) on a port from `port_allocation.range`, and turns on the
 QA `web` playbook and other `dev_server: true` kinds, whose server runs on this host too. With
-`enabled: false` no agent run starts a dev server or takes a port. A `macos_app` QA pass on a
-`worker_host` with `dev_server: true` reads only `dev_server`, whatever `enabled` says: its server
-runs on the QA host (see [macOS app QA](#macos-app-qa)).
+`enabled: false` no agent run starts a dev server or takes a port. A `macos_app` QA pass with
+`dev_server: true` reads only `dev_server`, whatever `enabled` says: its server runs on the QA VM,
+never on this host (see [macOS app QA](#macos-app-qa)).
 
 The pool hands out the first port in `range` that no other run holds and nothing on the host already
 listens on (on `127.0.0.1`), so a port another program took is skipped rather than failing the run.
