@@ -35,6 +35,7 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
   end
 
   test "a ticket re-dispatched with no progress is held after the limit, with the reason readable in the Inbox" do
+    :ok = RunStore.clear()
     put_observed_head!("sha-same")
 
     # The four runs the limit allows went by on the same state and PR head, each ending quietly.
@@ -63,6 +64,9 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     assert hold.reason =~ "ended normally, no new PR head, no handoff signal"
     assert [%{name: "dispatch_loop", details: %{kind: "implementation", count: 4, window_ms: 600_000}} | _rest] = record.signals
     assert_received {:memory_tracker_label_added, @issue_id, "Blocked"}
+
+    # The hold is one event: the `dispatch_loop` signal next to it is mirrored by the `hold.set`.
+    assert [{"hold.set", %{kind: "blocked", waits_on: %{type: "dispatch_loop", keys: ["implementation"]}}}] = ticket_events(@repo_key, @issue_id)
 
     # The Inbox, and `/api/v1/state`'s `waiting_on_you` built from it, lists the ticket with the reason.
     node = %{"id" => @issue_id, "identifier" => @identifier, "title" => "Loops", "url" => nil, "state" => %{"name" => "In Progress"}}
@@ -140,6 +144,7 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     @runs [%{workflow_name: "release", url: "https://github.com/acme/app/actions/runs/1"}, %{workflow_name: "macos", url: nil, id: 2}]
 
     test "five waits in ten minutes count no run and set no dispatch-loop hold" do
+      :ok = RunStore.clear()
       pid = start_orchestrator(:CiWaitUncounted)
 
       for n <- 1..5 do
@@ -152,6 +157,8 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
       record = RunStore.get_ticket_state(@repo_key, @issue_id)
       assert record.dispatches == []
       assert [%{name: "ci_wait_started", details: %{sha: @sha}}] = Enum.filter(record.signals, &(&1.name =~ "ci_wait"))
+      # The orchestrator's signal also yields its event.
+      assert [{"note", %{text: "Waiting for CI · sha #{@sha} (ci_wait_started)"}}] = ticket_events(@repo_key, @issue_id)
 
       attempt = %{kind: :epic_review, state: "Epic Review", head: nil}
       assert DispatchLoop.check(record.dispatches, attempt, DispatchLoop.limits(Config.settings!().watchdog), DateTime.utc_now()) == :ok

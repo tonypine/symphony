@@ -31,9 +31,13 @@ defmodule SymphonyElixir.WorkflowPreviewSnapshotTest do
     assert {:ok, prompt} = WorkflowPreview.render(file: @repo_workflow, agent_kind: "claude", repo_key: "app")
     flat = String.replace(prompt, ~r/\s+/, " ")
 
-    assert flat =~ "Each walkthrough step names the one place that proves it, on a line at its end: `Proved by: <check> › <test>`"
-    assert flat =~ "copy its numbered steps and expected results into that criterion verbatim, each with its `Proved by:` line"
-    assert flat =~ "Each step of a sub-ticket's `## User walkthrough` names the one place that proves it"
+    assert flat =~ "Write the walkthrough end to end, in plain words from the user's seat, and name no test and no check in it."
+    assert flat =~ "copy its numbered steps and expected results into that criterion verbatim, with any `Proved by:` line a step has"
+    assert flat =~ "Each walkthrough step is proved in one place, and you name it"
+    assert flat =~ "record the proof of every step an automated test in this PR covers, before the handoff push: call `linear_record_walkthrough_proofs`"
+    assert flat =~ "Name only tests in this PR, and never a check name: the repo's `proof_check` in WORKFLOW.md is the check that runs them"
+    assert flat =~ "record the step's proof again with `linear_record_walkthrough_proofs`"
+    refute flat =~ "<check> › <test>` or `Proved by: QA`"
 
     assert flat =~
              "a walkthrough step that judges the macOS app by sight in dark mode, or judges the look of the status-bar menu, is a `Proved by: QA` step"

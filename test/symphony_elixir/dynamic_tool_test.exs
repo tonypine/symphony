@@ -71,6 +71,51 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
   end
 
+  describe "qa_verdict" do
+    test "only the QA scope lists and runs it" do
+      assert "qa_verdict" in Enum.map(DynamicTool.tool_specs(:qa), & &1["name"])
+      refute "qa_verdict" in Enum.map(DynamicTool.tool_specs(), & &1["name"])
+      refute "qa_verdict" in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
+
+      for scope <- [nil, :read_only] do
+        opts = [issue: %Issue{id: "issue-current"}, tool_scope: scope, qa_verdict_sink: self()]
+        response = DynamicTool.execute("qa_verdict", %{"verdict" => "pass"}, opts)
+
+        assert %{"error" => %{"code" => "tool_scope_rejected", "tool" => "qa_verdict", "message" => message}} = Jason.decode!(response["output"])
+        assert message == "qa_verdict records the QA agent's verdict; only a QA session may call it."
+      end
+
+      refute_received {:qa_verdict, _result}
+    end
+
+    test "records a readable verdict with the QA process and refuses one it cannot read" do
+      opts = [issue: %Issue{id: "issue-current"}, tool_scope: :qa, qa_verdict_sink: self()]
+
+      response = DynamicTool.execute("qa_verdict", %{"verdict" => "Pass", "summary" => "Fine."}, opts)
+
+      assert response["success"]
+      assert %{"recorded" => true, "verdict" => "pass", "next" => next} = Jason.decode!(response["output"])
+      assert next =~ "end your turn"
+      assert_received {:qa_verdict, %{verdict: :pass, summary: "Fine."}}
+
+      response = DynamicTool.execute("qa_verdict", %{"verdict" => "fail"}, opts)
+
+      refute response["success"]
+      assert %{"error" => %{"code" => "invalid_qa_verdict", "message" => message}} = Jason.decode!(response["output"])
+      assert message == "Symphony could not read the verdict: a fail needs at least one finding or failing step. Fix it and call qa_verdict again."
+
+      response = DynamicTool.execute("qa_verdict", %{"verdict" => "pass", "score" => 3}, opts)
+      assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+      refute_received {:qa_verdict, _result}
+    end
+
+    test "is unavailable in a QA session with no process to record to" do
+      response = DynamicTool.execute("qa_verdict", %{"verdict" => "pass"}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+
+      assert %{"error" => %{"code" => "qa_verdict_unavailable"}} = Jason.decode!(response["output"])
+    end
+  end
+
   test "tool_specs advertises scoped Linear tools and not raw GraphQL" do
     tool_names = Enum.map(DynamicTool.tool_specs(), & &1["name"])
 
@@ -800,7 +845,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         )
 
       assert %{"error" => %{"code" => "tool_scope_rejected", "scope" => "qa", "message" => message}} = Jason.decode!(response["output"])
-      assert message =~ "JSON verdict"
+      assert message =~ "Report findings in your qa_verdict call instead."
     end
 
     test "only the QA scope lists and runs the host-side qa tools" do
@@ -1335,6 +1380,66 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       response = DynamicTool.execute("linear_update_issue_summary", base, Keyword.put(opts, :linear_client, unterminated))
       assert %{"error" => %{"code" => "summary_block_unterminated"}} = Jason.decode!(response["output"])
+    end
+  end
+
+  describe "linear_record_walkthrough_proofs" do
+    @walkthrough "## Goal\n\nShip it.\n\n## User walkthrough\n\n1. Write a ticket. Expected: saved.\n2. Look at it. Expected: it looks right.\n"
+
+    test "is advertised to both runners with its one field, and not to the read-only or QA scopes" do
+      specs = Map.new(DynamicTool.tool_specs(), &{&1["name"], &1["inputSchema"]})
+
+      assert %{"required" => ["proofs"], "properties" => %{"proofs" => %{"items" => %{"required" => ["step", "test"]}}}} =
+               specs["linear_record_walkthrough_proofs"]
+
+      assert "linear_record_walkthrough_proofs" in Enum.map(SymphonyElixir.McpServer.tool_specs(), & &1["name"])
+
+      for scope <- [:read_only, :qa] do
+        refute "linear_record_walkthrough_proofs" in Enum.map(DynamicTool.tool_specs(scope), & &1["name"])
+      end
+
+      response =
+        DynamicTool.execute("linear_record_walkthrough_proofs", %{"proofs" => [], "description" => "replace it all"},
+          issue: %Issue{id: "issue-current"},
+          linear_client: fn _query, _variables, _opts -> flunk("a smuggled description must not reach Linear") end
+        )
+
+      assert %{"error" => %{"code" => "unexpected_arguments", "arguments" => ["description"]}} = Jason.decode!(response["output"])
+    end
+
+    test "writes the steps' proofs into the walkthrough through AgentTools.Linear" do
+      client = fn query, variables, _opts ->
+        if query =~ "SymphonyAgentIssueDescription" do
+          {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "description" => @walkthrough}}}}
+        else
+          send(self(), {:description, variables.description})
+          {:ok, %{"data" => %{"issueUpdate" => %{"success" => true, "issue" => %{"id" => "issue-current", "url" => "https://linear.app/acme/issue/TP-7"}}}}}
+        end
+      end
+
+      args = %{"proofs" => [%{"step" => 1, "test" => "test/symphony_elixir/walkthrough_test.exs"}]}
+      response = DynamicTool.execute("linear_record_walkthrough_proofs", args, issue: %Issue{id: "issue-current"}, linear_client: client)
+
+      assert %{"issue" => %{"id" => "issue-current"}, "steps" => [1]} = Jason.decode!(response["output"])
+
+      assert_received {:description, description}
+
+      assert description ==
+               String.replace(@walkthrough, "Expected: saved.", "Expected: saved. Proved by: `test/symphony_elixir/walkthrough_test.exs`")
+    end
+
+    test "refuses a check name before writing, with the reason" do
+      client = fn query, _variables, _opts ->
+        if query =~ "SymphonyAgentIssueDescription",
+          do: {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "description" => @walkthrough}}}},
+          else: flunk("a refused proof must not be written")
+      end
+
+      args = %{"proofs" => [%{"step" => 1, "test" => "ci › test/x_test.exs"}]}
+      response = DynamicTool.execute("linear_record_walkthrough_proofs", args, issue: %Issue{id: "issue-current"}, linear_client: client)
+
+      assert %{"error" => %{"code" => "invalid_walkthrough_proof", "message" => "linear_record_walkthrough_proofs: step 1: name the test only, never a check" <> _rest}} =
+               Jason.decode!(response["output"])
     end
   end
 

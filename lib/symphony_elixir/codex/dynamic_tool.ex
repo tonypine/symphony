@@ -7,6 +7,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   alias SymphonyElixir.AgentTools.{GitHub, Linear}
   alias SymphonyElixir.Linear.Usage, as: LinearUsage
+  alias SymphonyElixir.QaAgent.Verdict, as: QaVerdict
   alias SymphonyElixir.QaAndroid.Driver, as: QaAndroidDriver
   alias SymphonyElixir.QaDriver
   alias SymphonyElixir.ReviewAgent.Verdict
@@ -317,6 +318,34 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             }
           },
           "changelog_entry" => %{"type" => "string", "maxLength" => 300, "description" => "One line on what this run changed; Symphony dates it."}
+        }
+      }
+    },
+    %{
+      "name" => "linear_record_walkthrough_proofs",
+      "description" =>
+        "Record which test of this PR proves each `## User walkthrough` step you covered with an automated test: each named step of the current issue's description " <>
+          "ends with `Proved by: <test>` (replacing a test proof it had); every other byte of the description is left as it is. " <>
+          "Name the test as the code has it (its file path, or a test or scenario name as written), never a check: the repo's `proof_check` names that. " <>
+          "Leave a step no test of this PR covers out, for QA; a step its author marked `Proved by: QA` is refused.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["proofs"],
+        "properties" => %{
+          "proofs" => %{
+            "type" => "array",
+            "minItems" => 1,
+            "items" => %{
+              "type" => "object",
+              "additionalProperties" => false,
+              "required" => ["step", "test"],
+              "properties" => %{
+                "step" => %{"type" => "integer", "minimum" => 1, "description" => "The walkthrough step's number."},
+                "test" => %{"type" => "string", "description" => "The test file, or a test or scenario name as written, e.g. `test/symphony_elixir/walkthrough_test.exs`."}
+              }
+            }
+          }
         }
       }
     },
@@ -1040,6 +1069,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "linear_update_document" => ["document_id", "content", "title"],
     "linear_get_document" => ["document_id"],
     "linear_update_issue_summary" => ["status", "links", "changelog_entry"],
+    "linear_record_walkthrough_proofs" => ["proofs"],
     # `est_minutes` left the schema; an older caller that still sends it is not refused, and it is ignored.
     "linear_request_human_action" => ["title", "why", "decision", "unblocks", "if_unanswered", "est_minutes"],
     "linear_withdraw_human_action" => ["reason", "title"],
@@ -1102,7 +1132,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_android_dark_mode" => ["mode"],
     "qa_android_font_scale" => ["scale"],
     "qa_android_put_file" => ["local_path", "dest"],
-    "review_verdict" => Verdict.tool_arguments()
+    "review_verdict" => Verdict.tool_arguments(),
+    "qa_verdict" => QaVerdict.tool_arguments()
   }
   @legacy_tool_aliases %{
     "linear.get_current_issue" => "linear_get_current_issue",
@@ -1189,6 +1220,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     |> Enum.filter(&(Map.get(&1, "name") in @qa_tools))
     |> Enum.map(&qa_tool_spec/1)
     |> Kernel.++(@qa_tool_schemas ++ @qa_android_tool_schemas)
+    |> Kernel.++([QaVerdict.tool_spec()])
   end
 
   def tool_specs(_scope), do: tool_specs()
@@ -1219,6 +1251,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp execute_tool("linear_" <> _rest = tool, context, args, opts), do: execute_linear_tool(tool, context, args, opts)
   defp execute_tool("github_" <> _rest = tool, context, args, opts), do: execute_github_tool(tool, context, args, opts)
+
+  # The QA agent (`SymphonyElixir.QaAgent`) records its verdict with `qa_verdict`.
+  defp execute_tool("qa_verdict", _context, args, opts), do: QaVerdict.record(args, Keyword.get(opts, :qa_verdict_sink))
 
   defp execute_tool("qa_android_" <> _rest = tool, _context, args, opts),
     do: QaAndroidDriver.call_tool(Keyword.get(opts, :qa_android_driver), tool, args)
@@ -1337,6 +1372,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp execute_linear_tool("linear_update_issue_summary", context, args, opts) do
     Linear.update_issue_summary(context, args, opts)
+  end
+
+  defp execute_linear_tool("linear_record_walkthrough_proofs", context, args, opts) do
+    Linear.record_walkthrough_proofs(context, args, opts)
   end
 
   defp execute_linear_tool("linear_request_human_action", context, args, opts) do
@@ -1609,6 +1648,16 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
+  defp tool_error_payload({:tool_scope_rejected, _scope, "qa_verdict"}) do
+    %{
+      "error" => %{
+        "code" => "tool_scope_rejected",
+        "message" => "qa_verdict records the QA agent's verdict; only a QA session may call it.",
+        "tool" => "qa_verdict"
+      }
+    }
+  end
+
   defp tool_error_payload({:tool_scope_rejected, :read_only, tool}) do
     %{
       "error" => %{
@@ -1624,7 +1673,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "tool_scope_rejected",
-        "message" => "The QA tool scope reads the issue and PR and attaches evidence files; #{tool} is not available. Report findings in your JSON verdict instead.",
+        "message" => "The QA tool scope reads the issue and PR and attaches evidence files; #{tool} is not available. Report findings in your qa_verdict call instead.",
         "tool" => tool,
         "scope" => "qa"
       }
@@ -1665,6 +1714,24 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "code" => "review_verdict_unavailable",
         "message" => "This session records no review verdict; end your turn with the verdict as your final message instead."
+      }
+    }
+  end
+
+  defp tool_error_payload({:invalid_qa_verdict, reason}) do
+    %{
+      "error" => %{
+        "code" => "invalid_qa_verdict",
+        "message" => "Symphony could not read the verdict: #{QaVerdict.describe_error(reason)} Fix it and call qa_verdict again."
+      }
+    }
+  end
+
+  defp tool_error_payload(:qa_verdict_unavailable) do
+    %{
+      "error" => %{
+        "code" => "qa_verdict_unavailable",
+        "message" => "This session records no QA verdict; end your turn with the verdict as your final message instead."
       }
     }
   end
@@ -1896,6 +1963,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp tool_error_payload(:document_not_returned) do
     %{"error" => %{"code" => "document_not_returned", "message" => "Linear did not return the created document."}}
+  end
+
+  defp tool_error_payload({:invalid_walkthrough_proof, message}) do
+    %{"error" => %{"code" => "invalid_walkthrough_proof", "message" => "linear_record_walkthrough_proofs: #{message}."}}
   end
 
   defp tool_error_payload(:invalid_summary_status) do

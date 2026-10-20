@@ -560,6 +560,7 @@ Allowed repo-local front matter keys:
 - `hooks`
 - `prompts`
 - `push_check`
+- `proof_check`
 - `verification`
 - `validation`
 - `auto_review`, with only its `playbooks` key
@@ -574,7 +575,7 @@ error that directs the operator to move operator-owned configuration to `symphon
 
 Unless explicitly called out as repo-local, fields in this section live in `symphony.yml` and become
 part of the merged runtime config. Repo-local front matter contributes `hooks`, `push_check`,
-`verification`, `auto_review.playbooks` and `human_actions.enabled` values to the runtime settings for that repo. Nested
+`proof_check`, `verification`, `auto_review.playbooks` and `human_actions.enabled` values to the runtime settings for that repo. Nested
 repo-local maps are merged over the operator config so repos can override only their dev-server
 command while inheriting process-wide verification defaults such as port allocation, or only one
 playbook's settings while inheriting the operator's other playbooks.
@@ -917,11 +918,12 @@ Fields:
 
 Review-comment options are ignored when `enabled` is not `true`. CI failure dispatch is driven only
 by failed status checks and ignores comment authorship; the ignored reviewer set above does not
-affect CI escalation. A head whose only failed check is `protected paths` gets no
-flaky re-run, no CI-fix run and no escalation, and uses no fix attempt: only a person clears that
-check, with the `protected-paths-approved` label, so the issue stays where it is until the check
-passes. When another check fails beside it, the CI-fix run's prompt names `protected paths` as not
-the agent's to fix. A red head on an issue parked for a person, outside `tracker.active_states`
+affect CI escalation. A head whose only failed check is `protected paths` is not red: it gets no
+flaky re-run, no CI-fix run and no escalation, and uses no fix attempt, and it reads as its other
+checks, so the reviewer and QA run once they passed. Only a person clears that check, with the
+`protected-paths-approved` label, and the issue is asked about it once it reaches `Merging`. When
+another check fails beside it, the head is red and the CI-fix run's prompt names `protected paths`
+as not the agent's to fix. A red head on an issue parked for a person, outside `tracker.active_states`
 with `needs-human` or another `escalate.labels` label other than `plan` and `breakdown`, gets the
 same: no re-run, CI-fix run, escalation or state move, and no fix attempt used. So does a red head on
 an issue in none of `tracker.active_states`, the review states and `Merging`
@@ -1028,6 +1030,15 @@ Behavior:
   16 KiB) whose first line is the pushed commit's SHA followed by `pass`. A `fail` result for that
   commit is refused with the recorded failure lines; a missing result, a result for another commit
   or an unreadable file is refused with the command to run.
+
+#### 5.4.8b `proof_check` (string, repo-local)
+
+The GitHub check run or workflow name that proves the repository's automated tests ran (Symphony's
+own repository: `make-all`). It is a property of the repository, so a ticket never repeats it.
+
+- Default: `null`. A repository without it has no named-test proofs: every step of its
+  walkthroughs is a QA step (Section 5.4.17, **Walkthrough proofs**).
+- A blank value fails configuration validation. `symphony.yml` MUST NOT accept the key.
 
 #### 5.4.8 `agent` (object)
 
@@ -1484,6 +1495,19 @@ when that is unset (`repositories[].manual_review`). Its `escalate` rules (and a
 
 The QA agent:
 
+- **Walkthrough proofs.** The person writing a ticket describes the user's flow in plain steps and
+  names no test and no check. The implementer, who writes the tests, ends each step a test of its PR
+  covers with `Proved by: <test>` through `linear_record_walkthrough_proofs`, naming only tests in
+  the PR and never a check. The repository names the check that runs them (`proof_check`, Section
+  5.4.8b). A step ending in `Proved by: <test>` is proved by that test, run by the `proof_check`; the
+  older `Proved by: <check> › <test>` MUST still be read, naming the check itself; `Proved by: QA`, or
+  no line, is a QA step. A `Proved by:` inside inline code is a quotation in the step's prose, not its
+  proof, and MUST NOT be read as one. Without a `proof_check`, every step is a QA step. Before a QA
+  agent starts, Symphony MUST confirm each named-test step on the PR head: the test is in the
+  checkout and its check passed (pass), is still running (pending, waited for boundedly) or failed,
+  did not run or the test is missing (fail to `Rework` with no agent run). A step naming a check that
+  is neither the `proof_check` nor a check on the head MUST fail with a message naming the
+  repository's `proof_check`. QA links a confirmed step's result instead of walking it.
 - QA selection is deterministic and runs before any agent: a `qa:skip` label skips; a
   `qa:<kind>` label selects that playbook; a diff that only touches docs, tests or `skip_globs`
   skips; otherwise playbooks are selected by their trigger paths, and the `cli` playbook also by a
@@ -1640,11 +1664,24 @@ The QA agent:
   `ExitOnForwardFailure`), and only those ports; a pass whose forwards cannot open MUST be
   `blocked` with the reason before the agent starts.
 - The QA agent MUST run in a fresh detached worktree at the PR head SHA, outside the issue
-  workspace, removed afterwards, with a tool scope limited to read-only Linear/GitHub tools and
-  `linear_attach_file`. It answers with JSON: `verdict` (`pass`, `fail` or `blocked`), `summary`,
-  `steps` (`name`, `status`, `details`, `evidence`), `findings`, and `reason`. An answer with no
-  verdict object SHOULD get one follow-up turn in the same session asking for it. A run error or
-  an answer still unreadable after that counts as `blocked`. The session stops at `agent.limits.tokens_per_issue`.
+  workspace, removed afterwards, with a tool scope limited to read-only Linear/GitHub tools,
+  `linear_attach_file`, and the `qa_verdict` tool, offered to QA sessions only, through which the
+  agent records its verdict as its last act: `verdict` (`pass`, `fail` or `blocked`), `summary`,
+  `steps` (`name`, `status`, `details`, `evidence`), `findings` (each with `step`, `viewport`,
+  `expected`, `actual`, `evidence`, rendered to one report line), `reason`, `needs_person`,
+  `needs_dev_server`, `covered_by` and `scope`. The tool answers a verdict it cannot read with the
+  error so the agent can call it again, and the last verdict the session recorded is the pass's
+  verdict the moment it arrives: it wins over the turn's text, even when the turn then ended
+  empty, failed or hit the token limit, and the QA report is rendered from it. The same object as
+  JSON in the agent's final message is the fallback for one release. Both are read leniently: a
+  verdict or step status in any case or a synonym (`PASS`, `failed`, `block`), `findings` and
+  `steps` as a list or a single object, and `needs_person`/`needs_dev_server` as `true` or
+  `"true"`. A turn that ends without a verdict SHOULD get one follow-up turn in the same session
+  asking for the `qa_verdict` call. A follow-up that comes back empty (the agent process exited, or
+  its turn was finalised with no answer) MUST NOT spend one of the pass's attempts: the pass runs
+  again once in the same run, logged as `qa_verdict_missing`, with its tokens added to the run's.
+  A run error or an answer still unreadable after that counts as `blocked`. The session stops at
+  `agent.limits.tokens_per_issue`.
 - The QA prompt and the built-in playbooks MUST tell the agent not to run the test suite, `make all`,
   coverage or static analysis such as Dialyzer: a pass starts only on green CI for the PR head, and
   the epic review judges a criterion that only asks for tests or CI to pass by CI's runs on the
@@ -2416,6 +2453,15 @@ The poller:
   forever. It logs `Ignoring stale check <name> in completed run <id>`. A check in a run that
   completed with any other conclusion stays as reported. To see this, a head whose rollup has no
   failed check and only GitHub Actions checks left unfinished also reads the head's workflow runs.
+- keeps only the newest attempt of each GitHub Actions workflow run: a rerun keeps the run's id and
+  adds an attempt, and the rollup can hold the earlier attempt's checks beside the new one's. A
+  check of an older attempt (a lower attempt number where its details URL names one, or for the
+  same check name a lower job id) is left out, and it logs `Ignoring <n> check(s) of earlier
+  attempts of run(s) <ids>`. A run with a check still queued or in progress is pending, and its
+  cancelled checks are left out while it is: a rerun waiting for a runner reads as pending, not as
+  cancelled, so the watcher waits on it rather than rerunning it again (which would cancel the
+  queued attempt). It logs `Ignoring the cancelled checks of run(s) <ids>: an attempt of the run
+  is queued or running`.
 - keeps only the newest run of each GitHub Actions workflow among the checks on a head, ordered by
   run id (GitHub numbers runs as it creates them and the numbers grow), and leaves out the checks
   of every other run of that workflow: the head reads as the check list GitHub shows. That covers
@@ -2424,8 +2470,8 @@ The poller:
   beside a newer run of the same workflow (a re-run on the same head, such as for an edited pull
   request body); neither starts a rerun or a CI-fix run. It logs `Ignoring the checks of superseded
   run(s) <ids>: only the newest run of their workflow counts`. When every run of the workflow was
-  cancelled, or a cancelled job sits beside live ones in its own run, the cancelled checks still
-  read as a failure.
+  cancelled, or a cancelled job sits beside finished ones in its own run's newest attempt, the
+  cancelled checks still read as a failure.
 - reads a landing's head (the `Merging` wait, the release of a held landing run, and the merge
   tool) against the checks its base branch requires: a head still waiting on a check, with none
   failed, also reads the required status checks of the base branch's rulesets
@@ -2607,7 +2653,9 @@ Rules:
   `waiting_on_you` in `/api/v1/state`) lists the ticket. A person lifts it with `Unblock` or
   `Restart`, and the count starts again.
 - **Green-head gating.** CI state (`running` / `green` / `red`) is an attribute per PR head, not a
-  state. The reviewer and QA runs MUST dispatch only on a green head, whether the poll, a retry or
+  state. A failed check only a person clears (`protected paths`) does not make a head red: with no
+  other failure, the head is green once its other checks passed. The reviewer and QA runs MUST
+  dispatch only on a green head, whether the poll, a retry or
   the continuation of an earlier run (the reviewer's approve moving the ticket into `QA`) dispatches
   them; a held-back run records `code_review_head_not_green` or `qa_head_not_green` once per head. A
   QA `fail` or block on a head the PR watcher reads as red, missing a required check, or
@@ -3795,7 +3843,8 @@ Scoped Linear tool extension contract:
   `linear_attach_url`, `linear_attach_file`, `linear_create_subissue`, `linear_update_subissue`,
   `linear_add_blocked_by`, `linear_create_project_update`, `linear_create_document`,
   `linear_update_document`, `linear_get_document`, `linear_update_issue_summary`,
-  `linear_request_human_action`, and `linear_withdraw_human_action`.
+  `linear_record_walkthrough_proofs`, `linear_request_human_action`, and
+  `linear_withdraw_human_action`.
 - `linear_add_comment` MAY take a `parent_id` naming a comment on the current issue; the comment is
   then posted as a reply under it. `linear_get_comments` SHOULD return each reply's parent id.
 - `linear_get_related_issues` MAY read beyond the current issue, but only inside its family: the
@@ -3876,9 +3925,16 @@ Scoped Linear tool extension contract:
   In the QA scope alone (a QA pass and an epic review), `linear_get_document` MUST also list and
   read the documents the parent issue's runs created (marked by the parent's attachments, listed
   apart from the issue's own); `linear_update_document` still MUST refuse them.
-- `linear_update_issue_summary` is the only tool that writes the current issue's description (the
-  Decisions section is Symphony's own write, outside any tool), and
-  it MUST only write the Symphony summary block between `<!-- symphony:summary:start -->` and
+- `linear_update_issue_summary` and `linear_record_walkthrough_proofs` are the only tools that write
+  the current issue's description (the Decisions section is Symphony's own write, outside any tool).
+  `linear_record_walkthrough_proofs` accepts only `proofs`, a list of a step number and a test; it
+  MUST read the description right before writing and change only the `Proved by:` line of each named
+  step of its `## User walkthrough` (replacing a test proof, or appending one), leaving every other
+  byte unchanged. It MUST refuse, with nothing written, a test holding a ` › ` or ` > ` separator (a
+  check name), `QA`, a step the walkthrough lacks, a step its author ended with `Proved by: QA`, and a
+  test that fails the comments' secret scan; the read-only reviewer and QA scopes MUST NOT advertise
+  or execute it. `linear_update_issue_summary`
+  MUST only write the Symphony summary block between `<!-- symphony:summary:start -->` and
   `<!-- symphony:summary:end -->`. It accepts only a one-line `status`, an optional `links` object
   (`review_brief`, the URL of the review brief comment, and `artifacts`, a list of `label` and
   `url`; URLs MUST be http(s)) and a one-line `changelog_entry`; every field MUST pass the same

@@ -29,7 +29,7 @@ defmodule SymphonyElixir.QaAgent.Report do
   `:fail`, `:blocked`, `:inconclusive` or `:skip`), `:sha`, `:target_state`, and optionally
   `:summary`, `:steps`, `:findings`, `:reason`, `:scope` (`:none` on a pass with nothing on screen
   to judge, which states its reason), `:playbooks`, `:tokens`,
-  `:runtime_seconds`, `:follow_ups`, `:escalated` and `:fix_attempt`/`:max_fix_attempts`.
+  `:runtime_seconds`, `:follow_ups`, `:verdict_retries`, `:escalated` and `:fix_attempt`/`:max_fix_attempts`.
 
   A run on the head of a branch also passes `:ref` (the branch the commit heads, in place of a PR),
   `:target_issue` (the identifier of the verification ticket `:target_state` applies to) and
@@ -84,7 +84,8 @@ defmodule SymphonyElixir.QaAgent.Report do
       playbooks_meta(Map.get(outcome, :playbooks, [])),
       runtime_meta(Map.get(outcome, :runtime_seconds)),
       tokens_meta(Map.get(outcome, :tokens)),
-      follow_ups_meta(Map.get(outcome, :follow_ups))
+      follow_ups_meta(Map.get(outcome, :follow_ups)),
+      verdict_retries_meta(Map.get(outcome, :verdict_retries))
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.map_join(&(" · " <> &1))
@@ -102,6 +103,9 @@ defmodule SymphonyElixir.QaAgent.Report do
   defp follow_ups_meta(1), do: "verdict after 1 follow-up"
   defp follow_ups_meta(count) when is_integer(count) and count > 1, do: "verdict after #{count} follow-ups"
   defp follow_ups_meta(_count), do: nil
+
+  defp verdict_retries_meta(1), do: "pass run again once after a missing verdict"
+  defp verdict_retries_meta(_count), do: nil
 
   defp summary_block(outcome) do
     text =

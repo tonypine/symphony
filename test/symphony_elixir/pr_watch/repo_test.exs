@@ -115,6 +115,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
         ci: :green,
         missing_checks: [],
         red_kind: :failure,
+        past_human_only: nil,
         failing_check: nil,
         rate_limit: %{remaining: 4000, reset_at: ~U[2026-10-16 13:00:00Z]},
         required: nil

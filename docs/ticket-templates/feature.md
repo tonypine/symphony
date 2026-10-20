@@ -26,17 +26,13 @@ _What exists today, related tickets, designs or constraints the work should know
 
 ## User walkthrough
 
-_Steps a machine can reproduce: an end-to-end test in CI, or the QA agent driving the app or CLI
-on its own VM. Never a check only you can make once the change is live. End each step with the one
-place that proves it: `Proved by: <check> › <test>` (the GitHub check, then the suite, scenario or
-test file) or `Proved by: QA`. Name the test as the code has it (its file path, or a test or
-scenario name as written): Symphony looks it up in the PR before QA starts and fails the step when it
-is not there. QA links a named test's result instead of walking its step, and a step without the
-line is a QA step. A step that needs what QA lacks (a signed build, a device, real
-credentials) names an automated harness; a judgment by sight stays with QA._
+_Numbered steps a user takes, end to end, each with `Expected:` and what they see, in plain words
+from the user's seat. Nothing about tests or checks: the implementer records which test proves
+each step. Facts a user never sees (keys, counters, error tuples) go under `Acceptance criteria`.
+Never a check only you can make once the change is live._
 
-1. _A step the user takes._ Expected: _what they see._ Proved by: _`make-all` › `test/path/to/feature_test.exs`._
-2. _The next step._ Expected: _what they see._ Proved by: QA
+1. _A step the user takes._ Expected: _what they see._
+2. _The next step._ Expected: _what they see._
 
 ## After release
 

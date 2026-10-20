@@ -145,6 +145,9 @@ defmodule SymphonyElixir.BlockedHoldTest do
       assert BlockedHold.sync(unblocked, @terminal, settings: designed_settings()) == :clear
       assert stored_hold() == nil
       assert labels() == []
+
+      assert [{"hold.set", %{kind: "blocked", waits_on: %{type: "dependency", keys: ["TP-1"]}}}, {"hold.cleared", %{kind: "blocked"}}] =
+               ticket_events(@repo_key, @issue_id)
     end
 
     test "does nothing when the blockers have not changed" do

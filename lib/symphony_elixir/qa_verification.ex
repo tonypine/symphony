@@ -135,17 +135,20 @@ defmodule SymphonyElixir.QaVerification do
   instruction to derive them. The QA prompt renders this, so the run knows what to verify from the
   user's point of view and which steps a named test proves instead.
 
+  `proof_check` is the repo's `proof_check` (WORKFLOW.md), the check a `Proved by: <test>` step
+  names; with none, every step is QA's to walk.
+
   `label` names whose plan the journeys come from in the source phrase: the ticket for the QA
   state's own run (the default), and the epic for the epic review of a plan parent
   (`SymphonyElixir.EpicReview`), so the prompt reads right about which issue carries them.
   """
-  @spec journey(Issue.t(), String.t()) :: %{source: String.t(), text: String.t() | nil, steps: [Walkthrough.step()]}
-  def journey(issue, label \\ "the ticket"), do: journey_for(issue, label)
+  @spec journey(Issue.t(), String.t() | nil, String.t()) :: %{source: String.t(), text: String.t() | nil, steps: [Walkthrough.step()]}
+  def journey(issue, proof_check, label \\ "the ticket"), do: journey_for(issue, proof_check, label)
 
-  defp journey_for(%Issue{description: description}, label) when is_binary(description) do
+  defp journey_for(%Issue{description: description}, proof_check, label) when is_binary(description) do
     cond do
       text = Walkthrough.section(description) ->
-        %{source: "#{label}'s `## User walkthrough`", text: text, steps: Walkthrough.steps(text)}
+        %{source: "#{label}'s `## User walkthrough`", text: text, steps: Walkthrough.steps(text, proof_check)}
 
       text = section(description, @acceptance_heading) ->
         %{source: "#{label}'s acceptance criteria", text: text, steps: []}
@@ -155,7 +158,7 @@ defmodule SymphonyElixir.QaVerification do
     end
   end
 
-  defp journey_for(_issue, label), do: %{source: "#{label}'s walkthrough and acceptance criteria", text: nil, steps: []}
+  defp journey_for(_issue, _proof_check, label), do: %{source: "#{label}'s walkthrough and acceptance criteria", text: nil, steps: []}
 
   defp verify(issue, workspace, opts, settings) do
     case Keyword.get(opts, :worker_host) do
@@ -225,7 +228,9 @@ defmodule SymphonyElixir.QaVerification do
   # a failed or missing proof fails the pass without an agent run, a check still running waits, and
   # the confirmed steps reach the agent and the report. A walkthrough without one runs as before.
   defp pre_check(issue, workspace, opts, settings, {head, pr_url}, playbooks) do
-    case QaPreCheck.run(journey(issue).steps, pr_url, head, workspace, Keyword.take(opts, [:gh_runner, :git])) do
+    pre_check_opts = [proof_check: settings.proof_check] ++ Keyword.take(opts, [:gh_runner, :git])
+
+    case QaPreCheck.run(journey(issue, settings.proof_check).steps, pr_url, head, workspace, pre_check_opts) do
       :none -> run_agent(issue, workspace, opts, settings, head, playbooks, [])
       {:pass, results} -> run_agent(issue, workspace, opts, settings, head, playbooks, results)
       {:fail, results} -> fail(issue, opts, settings, head, pre_check_failed(results))
@@ -678,7 +683,7 @@ defmodule SymphonyElixir.QaVerification do
       playbooks: playbooks,
       token_limit: settings.agent.max_tokens_per_issue,
       run_profile: Keyword.get(opts, :run_profile),
-      journey: journey(issue),
+      journey: journey(issue, settings.proof_check),
       proofs: proofs
     }
   end
@@ -696,6 +701,7 @@ defmodule SymphonyElixir.QaVerification do
       cause: Map.get(result, :cause),
       scope: Map.get(result, :scope),
       app_check: Map.get(result, :app_check),
+      verdict_retries: Map.get(result, :verdict_retries),
       tokens: tokens,
       playbooks: playbook_kinds(playbooks)
     }

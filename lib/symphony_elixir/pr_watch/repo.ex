@@ -52,7 +52,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
   Each tick also runs the silent-wait detector (`SymphonyElixir.PrWatch.SilentWait`) on every
   watched ticket and keeps its result on the record (`silent`); a ticket that turns silent logs one
   `pr_watch.silent_wait` line. The record keeps since when the decision stands (`decision.since`)
-  and the last five actions applied (`actions`).
+  and the last five actions applied (`actions`). A head red only on a check a person clears
+  (`protected paths`, R18), in any phase, has the protected paths its PR changes read once
+  (`SymphonyElixir.ProtectedPathsGate.changed_paths/2`) and kept on the record (`protected_files`).
 
   GitHub's webhook deliveries come in through `ingest/3` (`SymphonyElixir.PrWatch.Ingest`): a
   delivery patches the records it names (`source: :webhook`) and they are read again 3 seconds
@@ -930,6 +932,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp decided(entry, ticket, read, previous, now, state, settings) do
     new_stay? = new_stay?(previous, entry)
     prior = carried(previous, :attempts, Attempts.new())
+    protected_files = protected_files(read, previous, entry, state)
     read = read |> complete(prior, entry, state) |> with_failure(prior, settings, state)
     observed = Map.merge(ticket, %{new_stay: new_stay?, run_heads: run_heads(entry.record)})
 
@@ -963,7 +966,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
         result = Apply.apply(action, Map.merge(ctx, %{attempts: attempts, applied: applied, fix: fix, links: entry.links}))
         attempts = result.attempts
-        project_ci(entry, facts, head, now, state)
+        project_ci(entry, facts, read, now, state)
 
         %{
           facts: facts,
@@ -972,11 +975,21 @@ defmodule SymphonyElixir.PrWatch.Repo do
           applied: result.applied,
           attempts: attempts,
           fix: result.fix,
-          links: result.links
+          links: result.links,
+          protected_files: protected_files
         }
 
       :none ->
-        %{facts: facts, stay: entry.phase, decision: nil, applied: applied, attempts: attempts, fix: fix, links: entry.links}
+        %{
+          facts: facts,
+          stay: entry.phase,
+          decision: nil,
+          applied: applied,
+          attempts: attempts,
+          fix: fix,
+          links: entry.links,
+          protected_files: protected_files
+        }
     end
   end
 
@@ -1013,14 +1026,17 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   # What the read alone can't tell: a rerun whose checks haven't reported yet keeps the head
-  # running, and in `Merging` a failed `protected paths` check the ticket's unlock decisions cover
-  # doesn't hold the head back.
+  # running; a failed check only a person clears (`protected paths`) doesn't make the head red
+  # before `Merging`, where the head reads as its other checks so the reviewer, QA and the rework
+  # run go on; and in `Merging` that check holds the head back (R18) unless the ticket's unlock
+  # decisions cover it.
   defp complete(nil, _attempts, _entry, _state), do: nil
 
   defp complete(read, attempts, entry, state) do
     cond do
       read.ci in [:green, :none] and Attempts.rerun_pending?(attempts, read) -> %{read | ci: :pending}
-      entry.phase == :merging and read.ci == :red and read.red_kind == :human_only -> unlocked(read, entry, state)
+      read.ci == :red and read.red_kind == :human_only and entry.phase == :merging -> unlocked(read, entry, state)
+      read.ci == :red and read.red_kind == :human_only -> %{read | ci: read.past_human_only}
       true -> read
     end
   end
@@ -1032,6 +1048,34 @@ defmodule SymphonyElixir.PrWatch.Repo do
     case ProtectedPathsGate.check(names, pr, entry.issue, Keyword.take(state.opts, [:git])) do
       :ok -> %{read | ci: :green}
       {:blocked, _reason} -> read
+    end
+  end
+
+  # The protected paths a head red only on a check a person clears changes (R18's evidence), read
+  # once per head in the ticket's workspace; a read that fails lists none and logs why.
+  defp protected_files(%{ci: :red, red_kind: :human_only, head_sha: head} = read, previous, entry, state) do
+    case carried(previous, :protected_files, nil) do
+      %{head_sha: ^head} = known -> known
+      _other -> %{head_sha: head, paths: read_protected_files(read, entry, state)}
+    end
+  end
+
+  defp protected_files(_read, _previous, _entry, _state), do: nil
+
+  defp read_protected_files(read, entry, state) do
+    pr = %{workspace_path: workspace_path(state, entry.issue.id), base_sha: read.base_sha, head_sha: read.head_sha}
+
+    case ProtectedPathsGate.changed_paths(pr, Keyword.take(state.opts, [:git])) do
+      {:ok, paths} ->
+        paths
+
+      {:error, reason} ->
+        Logger.warning(
+          "PR watch couldn't read the protected files a PR changes issue_id=#{entry.issue.id} issue_identifier=#{entry.issue.identifier} " <>
+            "head_sha=#{read.head_sha}: #{reason}"
+        )
+
+        []
     end
   end
 
@@ -1159,18 +1203,21 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   defp cancel_stale_runs(attempts, _read, _state), do: attempts
 
-  # The ticket's CI label follows its head's checks.
-  defp project_ci(_entry, %Facts{pr: pr}, _head, _now, _state) when pr not in [:open, :draft], do: :ok
+  # The ticket's CI label follows its head's checks. A check only a person clears never shows it
+  # red, in `Merging` either: the label reads the head's other checks.
+  defp project_ci(_entry, %Facts{pr: pr}, _read, _now, _state) when pr not in [:open, :draft], do: :ok
 
-  defp project_ci(entry, facts, head, now, state) do
+  defp project_ci(entry, facts, read, now, state) do
+    ci = if facts.ci == :red and facts.red_kind == :human_only, do: read.past_human_only, else: facts.ci
+
     status =
-      case facts.ci do
+      case ci do
         ci when ci in [:green, :none] -> "green"
         :red -> "red"
         _running -> "running"
       end
 
-    CiState.record(state.repo_key, entry.issue.id, head, status, now, run_store: store(state), tracker: Keyword.get(state.opts, :tracker, Tracker))
+    CiState.record(state.repo_key, entry.issue.id, read[:head_sha], status, now, run_store: store(state), tracker: Keyword.get(state.opts, :tracker, Tracker))
   end
 
   # The decision as the record keeps it: the action, how applying it went, and what a wait is on.

@@ -39,11 +39,15 @@ defmodule SymphonyElixir.Decisions do
   (`SymphonyElixir.AgentTools.Linear`). `stored/2` reads a ticket's decisions from the store, and
   `prompt_section/1` renders them for the implementation, reviewer and QA prompts, with no Linear
   read.
+
+  Each decision a write adds to the store is also the Director's `decision.recorded` event
+  (`SymphonyElixir.TicketEvents`), naming the open `decision.requested` it answers; the ones taken
+  from the description's section record none.
   """
 
   require Logger
 
-  alias SymphonyElixir.{Config, IssueSummary, PromptSafety, RunStore, TicketState, Tracker}
+  alias SymphonyElixir.{Config, IssueSummary, PromptSafety, RunStore, TicketSignals, TicketState, Tracker}
   alias SymphonyElixir.HumanActions.Request
 
   @start_marker "<!-- symphony:decisions:start -->"
@@ -67,6 +71,7 @@ defmodule SymphonyElixir.Decisions do
   @ruling_prefix "ruling-"
   @ruling_question "Ruling given in a comment."
   @prompt_limit 10_000
+  @director {:person, "the Director"}
 
   @typedoc "One recorded decision. `key` is the id of the request comment it answers."
   @type entry :: %{
@@ -547,9 +552,29 @@ defmodule SymphonyElixir.Decisions do
 
       case missing(entries, Enum.map(known, & &1.key), known) do
         [] when known == stored -> {:ok, stored}
-        new -> store.record_ticket_decisions(repo_key, issue_id, new, backfill)
+        new -> write_decisions(store, repo_key, issue_id, new, backfill)
       end
     end
+  end
+
+  defp write_decisions(store, repo_key, issue_id, new, backfill) do
+    case store.record_ticket_decisions(repo_key, issue_id, new, backfill) do
+      {:ok, _decisions} = written -> record_events(repo_key, issue_id, new, written)
+      error -> error
+    end
+  end
+
+  # Each decision the write added is the Director's `decision.recorded`, naming the request it
+  # answers while that request is open; a ruling answers none. The ones the description's section
+  # backfilled record nothing. Its key makes a second write of the same answer a no-op.
+  defp record_events(repo_key, issue_id, new, written) do
+    for entry <- new do
+      request = if not ruling_key?(entry.key), do: TicketSignals.open_decision(repo_key, issue_id, entry.title, entry.question)
+      payload = %{answer: entry.answer, title: entry.title, question: entry.question, key: entry.key, request: request && request.id}
+      TicketSignals.record_event(repo_key, issue_id, "decision.recorded", payload, actor: @director)
+    end
+
+    written
   end
 
   defp read_decisions(store, repo_key, issue_id) do

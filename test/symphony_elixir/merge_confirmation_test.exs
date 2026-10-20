@@ -195,6 +195,7 @@ defmodule SymphonyElixir.MergeConfirmationTest do
       assert Hold.held?(@repo_key, @issue_id, :needs_decision)
       assert MergeConfirmation.confirm_target(stored_hold()) == "Merging"
       assert log =~ "manual review is on, so the step into Merging waits"
+      assert [{"decision.requested", %{title: "Merge TP-825", question: "Merge TP-825 (T) into its base branch?", confirm: "Merging"}}] = ticket_events(@repo_key, @issue_id)
     end
 
     test "round-trips through Request.parse, as Linear reads its own comment back" do

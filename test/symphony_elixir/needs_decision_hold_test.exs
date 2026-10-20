@@ -157,6 +157,9 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       assert %{reason: "Add the signing secrets, or ship unsigned builds?"} = stored_hold()
       assert stored_hold().decision.title == "Add the release signing secrets"
       assert labels() == ["Needs Decision"]
+
+      assert [{"decision.requested", %{title: "Add the release signing secrets", question: "Add the signing secrets, or ship unsigned builds?"}}] =
+               ticket_events(@repo_key, @issue_id)
     end
 
     test "clears the hold once the person answers, leaving the ticket in place" do
@@ -167,6 +170,13 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       assert NeedsDecisionHold.sync(@repo_key, answered, settings: designed_settings()) == :clear
       assert stored_hold() == nil
       assert labels() == []
+
+      # The request, then the answer naming it: no hold event, and no withdrawal.
+      assert [%{type: "decision.requested", id: request_id}, %{type: "decision.recorded", payload: %{answer: "Close as duplicate", key: @comment_id, request: request_id}}] =
+               RunStore.list_ticket_events(@repo_key, @issue_id, [])
+
+      assert NeedsDecisionHold.sync(@repo_key, answered, settings: designed_settings()) == :none
+      assert length(ticket_events(@repo_key, @issue_id)) == 2
     end
 
     test "answering a merge confirmation's hold continues the ticket into Merging" do
@@ -349,6 +359,18 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       withdrawn = ticket_node(%{"comments" => %{"nodes" => [request_comment(), reply(@comment_id, Request.render_withdrawal("no longer needed"))]}})
       assert NeedsDecisionHold.sync(@repo_key, withdrawn, settings: designed_settings()) == :clear
       assert stored_hold() == nil
+
+      assert [%{type: "decision.requested", id: request_id}, %{type: "decision.withdrawn", payload: %{title: "Add the release signing secrets", request: request_id}}] =
+               RunStore.list_ticket_events(@repo_key, @issue_id, [])
+    end
+
+    test "a request gone from Linear with no answer ends as a withdrawal naming it" do
+      :set = NeedsDecisionHold.sync(@repo_key, ticket_node(%{"comments" => %{"nodes" => [request_comment()]}}), settings: designed_settings())
+
+      assert NeedsDecisionHold.sync(@repo_key, ticket_node(%{}), settings: designed_settings()) == :clear
+
+      assert [%{type: "decision.requested", id: request_id}, %{type: "decision.withdrawn", payload: %{request: request_id}}] =
+               RunStore.list_ticket_events(@repo_key, @issue_id, [])
     end
 
     test "reads the newest open request, and another still open leaves the hold in place" do
@@ -372,6 +394,7 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       :set = NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings())
 
       assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :none
+      assert [{"decision.requested", _payload}] = ticket_events(@repo_key, @issue_id)
     end
 
     test "resolves the repo's settings from its key when the caller passes none" do
@@ -403,6 +426,7 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       assert log =~ "with no store hold"
       assert labels() == []
       assert stored_hold() == nil
+      assert ticket_events(@repo_key, @issue_id) == []
     end
 
     test "re-projects a store hold whose Needs Decision label is missing" do
@@ -524,6 +548,7 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       assert_received {:commented, @issue_id, body}
       assert body =~ "the ticket stays in Code Review until the decision is recorded"
       assert MergeConfirmation.confirm_target(Hold.get(@repo_key, @issue_id, :needs_decision)) == "QA"
+      assert [{"decision.requested", %{title: "Add the release signing secrets", confirm: "QA"}}] = ticket_events(@repo_key, @issue_id)
     end
 
     test "without a confirmation the ticket continues in place once decided" do
@@ -537,6 +562,9 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       Process.put(:pause_comment_result, {:error, :rate_limited})
       assert {:error, {:decision_request_failed, :rate_limited}} = NeedsDecisionHold.pause(issue(), request(), tracker: CommentTracker)
       assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
+
+      assert [%{type: "decision.requested", id: request_id}, %{type: "decision.withdrawn", payload: %{request: request_id}}] =
+               RunStore.list_ticket_events(@repo_key, @issue_id, [])
 
       Process.delete(:pause_comment_result)
     end
