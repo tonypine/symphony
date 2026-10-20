@@ -76,6 +76,11 @@ final class SettingsViewModel: ObservableObject {
     @Published var ticketPriorities = TicketPriorities()
     /// Why `symphony check` rejected the changed ticket priorities, shown in their section.
     @Published private(set) var ticketPrioritiesError: String?
+    /// `auto_review.playbooks.macos_app.requires` in the configured symphony.yml, as the field shows it: the
+    /// executables a macOS app QA pass needs on the QA host, comma-separated.
+    @Published var qaHostToolsText = ""
+    /// Why `symphony check` rejected the changed QA host tools, shown in their section.
+    @Published private(set) var qaHostToolsError: String?
     /// `issues.states.*` in the configured symphony.yml: the machine-owned phase states the board
     /// creates at startup. Nothing dispatches on them yet.
     @Published var workflowStates = WorkflowStates()
@@ -148,6 +153,10 @@ final class SettingsViewModel: ObservableObject {
     /// a change from these is written.
     private var loadedTicketPriorities: TicketPriorities?
 
+    /// The QA host tools read from symphony.yml, or nil when they couldn't be read. Only a change from these is
+    /// written.
+    private var loadedQAHostTools: QAHostTools?
+
     /// The board states read from symphony.yml, or nil when they couldn't be read. Only a name changed
     /// from these is written.
     private var loadedWorkflowStates: WorkflowStates?
@@ -199,6 +208,7 @@ final class SettingsViewModel: ObservableObject {
         loadMaxConcurrentAgents()
         loadTokenLimits()
         loadTicketPriorities()
+        loadQAHostTools()
         loadWorkflowStates()
         loadTicketPatternsBuiltIn()
         loadTimeouts()
@@ -306,6 +316,21 @@ final class SettingsViewModel: ObservableObject {
             loadedTicketPriorities = priorities
         } catch {
             configFileError = "Could not read the allowed ticket priorities from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
+    /// The QA host tools field is off until a symphony.yml has been read, and while Save checks it.
+    var canEditQAHostTools: Bool { loadedQAHostTools != nil && !isSaving }
+
+    private func loadQAHostTools() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let tools = try SymphonyConfigFile(path: path).readQAHostTools()
+            qaHostToolsText = tools.text
+            loadedQAHostTools = tools
+        } catch {
+            configFileError = "Could not read the QA host tools from symphony.yml: \(error.localizedDescription)"
         }
     }
 
@@ -526,6 +551,9 @@ final class SettingsViewModel: ObservableObject {
         ticketPrioritiesError = nil
         let priorities = ticketPriorities
         let loadedPriorities = loadedTicketPriorities.flatMap { $0 != priorities ? $0 : nil }
+        qaHostToolsError = nil
+        let hostTools = QAHostTools(text: qaHostToolsText)
+        let loadedHostTools = loadedQAHostTools.flatMap { $0 != hostTools ? $0 : nil }
         workflowStatesError = nil
         let states = workflowStates
         let loadedStates = loadedWorkflowStates.flatMap { $0 != states ? $0 : nil }
@@ -534,7 +562,7 @@ final class SettingsViewModel: ObservableObject {
         let builtInPatternsChanged = loadedTicketPatternsBuiltIn.map { $0 != builtInPatterns } ?? false
 
         guard loadedProfiles != nil || loadedLimits != nil || oldTimeouts != nil || oldUpdates != nil || oldLoopLimits != nil
-            || loadedPriorities != nil || loadedStates != nil || builtInPatternsChanged else {
+            || loadedPriorities != nil || loadedHostTools != nil || loadedStates != nil || builtInPatternsChanged else {
             if saveRest(settings, secrets) { onSaved() }
             return
         }
@@ -558,6 +586,9 @@ final class SettingsViewModel: ObservableObject {
             }
             if saved, let loadedPriorities {
                 saved = await saveTicketPriorities(priorities, from: loadedPriorities, settings: settings, secrets: secrets)
+            }
+            if saved, let loadedHostTools {
+                saved = await saveQAHostTools(hostTools, from: loadedHostTools, settings: settings, secrets: secrets)
             }
             if saved, let loadedStates {
                 saved = await saveWorkflowStates(states, from: loadedStates, settings: settings, secrets: secrets)
@@ -759,6 +790,33 @@ final class SettingsViewModel: ObservableObject {
         }
         configFileError = nil
         loadedTicketPriorities = priorities
+        return true
+    }
+
+    /// Writes `auto_review.playbooks.macos_app.requires` to symphony.yml once `symphony check` passes on the result.
+    private func saveQAHostTools(
+        _ tools: QAHostTools,
+        from loaded: QAHostTools,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
+        do {
+            result = try await SymphonyConfigFile(path: settings.configPath).writeQAHostTools(tools, from: loaded) { path in
+                await check(path, settings, secrets)
+            }
+        } catch {
+            configFileError = "Could not save the QA host tools to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            qaHostToolsError = "symphony check rejected these QA host tools, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
+            return false
+        }
+        configFileError = nil
+        loadedQAHostTools = tools
+        qaHostToolsText = tools.text
         return true
     }
 

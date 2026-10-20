@@ -8,6 +8,7 @@ defmodule SymphonyElixir.QaAgentTest do
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaAgent.{Report, Selection}
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
+  alias SymphonyElixir.SelfHeal
 
   @sha "0123456789abcdef0123456789abcdef01234567"
   @env_keys [
@@ -396,6 +397,17 @@ defmodule SymphonyElixir.QaAgentTest do
       assert [_cli, %{kind: "macos_app", build_timeout_ms: nil}] = Selection.playbooks(odd_timeout)
     end
 
+    test "a playbook carries the executables its pass needs on the QA host, trimmed and without repeats" do
+      config = %{playbooks: %{"macos_app" => %{"build" => "make app", "app" => "A.app", "requires" => [" go ", "pg_ctl", "go", "", 7]}}}
+      assert [cli, %{kind: "macos_app", requires: ["go", "pg_ctl"]}] = Selection.playbooks(config)
+      refute Map.has_key?(cli, :requires)
+
+      for unset <- [[], "go", nil] do
+        assert [_cli, macos_app] = Selection.playbooks(put_in(config, [:playbooks, "macos_app", "requires"], unset))
+        refute Map.has_key?(macos_app, :requires)
+      end
+    end
+
     test "a change to a playbook's own instructions or to the host driver behind its tools selects that playbook" do
       config = %{playbooks: %{"macos_app" => %{"build" => "make -C macos app", "app" => "macos/build/Symphony.app"}}}
 
@@ -582,6 +594,8 @@ defmodule SymphonyElixir.QaAgentTest do
             {:qa_dev_server_failed, {:verification_failed, {:dev_server_not_on_socket, "/tmp/serve.sock"}}},
             {:qa_dev_server_failed, :eaddrinuse},
             {:qa_host_tunnel_failed, "ssh exited with status 255"},
+            {:qa_host_missing_tool, ["go", "pg_ctl"]},
+            {:qa_host_tool_check_failed, "exit status 255: Connection refused"},
             {:qa_browser_mcp_unavailable, :no_npx},
             {:qa_browser_mcp_unavailable, "@playwright/mcp"},
             {:qa_browser_mcp_invalid, "command is required"},
@@ -600,6 +614,8 @@ defmodule SymphonyElixir.QaAgentTest do
                "the dev server never listened on $SYMPHONY_VERIFICATION_SOCKET (/tmp/serve.sock)" <> _,
                "the dev server did not start: :eaddrinuse",
                "the tunnel that forwards QA_HOST_PORTS" <> _,
+               "qa_host_missing_tool: go, pg_ctl: the QA host has no `go`, `pg_ctl` on the build's PATH" <> missing_tool,
+               "qa_host_tool_check_failed: could not check the QA host" <> _,
                "`npx` (Node.js) is not on Symphony's PATH" <> _,
                "`@playwright/mcp` is not installed on the Symphony host" <> _,
                "`auto_review.playbooks.web.browser_mcp` is invalid: command is required",
@@ -607,6 +623,8 @@ defmodule SymphonyElixir.QaAgentTest do
                "could not list the PR's changed files: " <> _,
                "the QA agent could not finish: {:git_failed, 128}"
              ] = reasons
+
+      assert missing_tool =~ "scripts/qa-vm/provision.sh"
     end
   end
 
@@ -1457,6 +1475,39 @@ defmodule SymphonyElixir.QaAgentTest do
 
       assert {:error, {:qa_host_tunnel_failed, "ssh exited with status 255: Connection refused"}, %{total_tokens: 0}} = result
       assert log =~ "QA driver could not open the host-port tunnel"
+      refute_received {:qa_session_started, _worktree, _opts}
+    end
+
+    test "blocks a macos_app pass whose QA host lacks a tool the playbook requires, before the agent starts" do
+      [macos_app] =
+        Selection.playbooks(%{
+          playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app", "requires" => ["go", "pg_ctl"]}}
+        })
+
+      test_pid = self()
+
+      host = %{
+        kill: fn _pid -> :ok end,
+        prepare: fn _operator_home, _canary -> {:ok, "/Users/qa/symphony-qa/run-1"} end,
+        cmd: fn "/bin/sh", ["-c", _script, "sh" | tools], _opts ->
+          send(test_pid, {:tool_check, tools})
+          {:ok, {"symphony-qa-missing-tool:go\nsymphony-qa-tools:checked\n", 0}}
+        end,
+        tunnel: fn _ports -> {:ok, nil} end,
+        cleanup: fn _dir -> :ok end
+      }
+
+      result =
+        QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
+          git: fake_git(),
+          qa_agent_module: FakeSession,
+          qa_driver_opts: [worker_host: "qa-vm", host: host]
+        )
+
+      assert {:error, {:qa_host_missing_tool, ["go"]} = cause, %{total_tokens: 0}} = result
+      assert_received {:tool_check, ["go", "pg_ctl"]}
+      assert QaAgent.blocked_reason(cause) =~ "qa_host_missing_tool: go"
+      assert SelfHeal.component(%{verdict: :blocked, cause: cause, reason: QaAgent.blocked_reason(cause)}) == "worker_host"
       refute_received {:qa_session_started, _worktree, _opts}
     end
 

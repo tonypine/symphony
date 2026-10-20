@@ -180,6 +180,11 @@ defmodule SymphonyElixir.QaDriver do
   which fails with `qa_host_tunnel_failed` when it cannot. A QA host that can reach
   the operator's credentials or holds push credentials is refused at start,
   and every tool then fails with `qa_worker_unsafe`.
+
+  Next, the driver looks for each executable the playbook `requires` with `command -v`, in the
+  shell and environment the build gets (over SSH on a `worker_host`). `host_check/1` returns the
+  ones missing, and the QA pass is `blocked` before the agent starts: the QA host needs
+  provisioning (`scripts/qa-vm/provision.sh`), which is not the project's defect.
   """
 
   use GenServer
@@ -219,6 +224,8 @@ defmodule SymphonyElixir.QaDriver do
   @feed_poll {50, 100}
   @feed_attempts 3
   @helper_timeout_ms 30_000
+  # Prints each executable `command -v` cannot find, then a line that says the check ran.
+  @tool_check_script ~S(for tool in "$@"; do command -v "$tool" >/dev/null 2>&1 || printf 'symphony-qa-missing-tool:%s\n' "$tool"; done; printf 'symphony-qa-tools:checked\n')
   @screenshot_timeout_ms 15_000
   @output_limit 8_000
   @app_output_limit 16_000
@@ -338,6 +345,7 @@ defmodule SymphonyElixir.QaDriver do
   @type helper_result :: {:ok, Path.t()} | {:error, term()}
   @type cmd_result :: {:ok, {String.t(), integer()}} | {:error, term()}
   @type tool_error :: {:qa_tool, String.t(), String.t()}
+  @type host_check_error :: {:qa_host_missing_tool, [String.t()]} | {:qa_host_tool_check_failed, String.t()}
 
   @doc "The `qa_*` tool names this driver serves."
   @spec tools() :: [String.t()]
@@ -406,6 +414,16 @@ defmodule SymphonyElixir.QaDriver do
   @spec host_ports(pid() | nil) :: {:ok, [pos_integer()]} | {:error, String.t()}
   def host_ports(nil), do: {:ok, []}
   def host_ports(driver) when is_pid(driver), do: GenServer.call(driver, :host_ports, 30_000)
+
+  @doc """
+  Whether the QA host has every executable the playbook `requires`:
+  `{:error, {:qa_host_missing_tool, names}}` names the missing ones, and
+  `{:error, {:qa_host_tool_check_failed, reason}}` says the check could not run. `:ok` too
+  when the driver refused the QA host, whose tools then fail with `qa_worker_unsafe`.
+  """
+  @spec host_check(pid() | nil) :: :ok | {:error, host_check_error()}
+  def host_check(nil), do: :ok
+  def host_check(driver) when is_pid(driver), do: GenServer.call(driver, :host_check, 30_000)
 
   @doc """
   Runs one `qa_*` tool with the agent's arguments. Returns the tool payload or a
@@ -1758,6 +1776,7 @@ defmodule SymphonyElixir.QaDriver do
       build: Map.fetch!(playbook, :build),
       app: Map.fetch!(playbook, :app),
       build_timeout_ms: Map.get(playbook, :build_timeout_ms) || @default_build_timeout_ms,
+      requires: Map.get(playbook, :requires, []),
       scratch_dir: Checks.private_dir("qa-driver"),
       put_roots: Checks.fixture_roots(worktree, Keyword.get(opts, :tmp_dir)),
       remote?: worker_host != nil,
@@ -1775,7 +1794,33 @@ defmodule SymphonyElixir.QaDriver do
     state = %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil, stub: nil}
     state = Map.merge(state, %{wide_pass: nil, launched_app?: false, host_ports: pick_host_ports(), tunnel: nil, tunnel_error: nil, checkouts: []})
     state = Map.merge(state, %{pair: nil, pair_launches: %{}, feed: nil})
+    state = Map.put(state, :host_check, check_tools(state.config))
     {:ok, open_tunnel(state, @tunnel_attempts)}
+  end
+
+  # After the credentials check, so a refused QA host runs nothing more. The check runs in the
+  # build's shell and environment, so a tool it finds is one the build finds.
+  defp check_tools(%{unavailable: _error}), do: :ok
+  defp check_tools(%{requires: []}), do: :ok
+
+  defp check_tools(config) do
+    opts = [env: AgentEnv.build_with(%{}), remote_env: [], timeout_ms: @helper_timeout_ms, output_limit: @output_limit]
+
+    case config.host.cmd.("/bin/sh", ["-c", @tool_check_script, "sh" | config.requires], opts) do
+      {:ok, {output, 0}} -> tool_check_result(output)
+      {:ok, {output, status}} -> {:error, {:qa_host_tool_check_failed, "exit status #{status}: #{tail(String.trim(output), 500)}"}}
+      {:error, reason} -> {:error, {:qa_host_tool_check_failed, inspect(reason)}}
+    end
+  end
+
+  defp tool_check_result(output) do
+    lines = String.split(output, "\n", trim: true)
+
+    case {"symphony-qa-tools:checked" in lines, for("symphony-qa-missing-tool:" <> name <- lines, do: name)} do
+      {false, _missing} -> {:error, {:qa_host_tool_check_failed, "no answer: #{tail(String.trim(output), 500)}"}}
+      {true, []} -> :ok
+      {true, missing} -> {:error, {:qa_host_missing_tool, missing}}
+    end
   end
 
   # Held open together, so the ports differ; the agent binds them later.
@@ -1854,6 +1899,7 @@ defmodule SymphonyElixir.QaDriver do
 
   def handle_call(:host_ports, _from, %{tunnel_error: nil} = state), do: {:reply, {:ok, state.host_ports}, state}
   def handle_call(:host_ports, _from, state), do: {:reply, {:error, state.tunnel_error}, state}
+  def handle_call(:host_check, _from, state), do: {:reply, state.host_check, state}
   def handle_call(:build, _from, state), do: {:reply, state.build, state}
   def handle_call(:ignored, _from, state), do: {:reply, state.ignored, state}
   def handle_call(:helper, _from, state), do: {:reply, state.helper, state}

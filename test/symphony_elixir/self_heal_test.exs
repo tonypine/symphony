@@ -158,6 +158,8 @@ defmodule SymphonyElixir.SelfHealTest do
         {{:dev_server_not_configured}, "dev_server"},
         {:health_timeout, "dev_server"},
         {{:remote_worker_unsupported, "worker-1"}, "worker_host"},
+        {{:qa_host_missing_tool, ["go"]}, "worker_host"},
+        {{:qa_host_tool_check_failed, "exit status 255"}, "worker_host"},
         {"no QA playbook applies to this change", "qa_playbook"},
         {"QA cannot run on the remote worker \"worker-1\"", "worker_host"},
         {"something else entirely", "qa_environment"},
@@ -264,6 +266,17 @@ defmodule SymphonyElixir.SelfHealTest do
 
       assert {:blocked, %{waits_on: %{type: "fix_ticket", keys: [@fix_ticket]}}} = Process.get(:hold_attrs)
       assert {@issue_id, "Blocked"} = Process.get(:machine_label)
+    end
+
+    test "files a QA host's missing tool in Symphony's repo, where its provisioning script lives" do
+      cause = {:qa_host_missing_tool, ["go"]}
+      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome(cause, %{reason: SymphonyElixir.QaAgent.blocked_reason(cause)})))
+
+      assert %{scope: @symphony_repo_key, component: "worker_host", title: "Self-heal: repair the worker_host block", description: description} =
+               Process.get(:fixer_create)
+
+      assert description =~ "qa_host_missing_tool: go"
+      assert description =~ "scripts/qa-vm/provision.sh"
     end
 
     test "a CI check that keeps failing files a fix ticket in the repo whose CI fails, naming the pull request" do

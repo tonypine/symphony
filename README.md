@@ -132,7 +132,8 @@ branch name Linear suggests for the ticket; a PR on a branch with any other name
 - **QA** — the `QA` state's agent uses each PR the way a user would, with
   built-in playbooks for CLIs (`cli`), web apps in a headless browser (`web`), macOS apps through
   accessibility (`macos_app`) and Android apps on a host-side emulator (`android_app`). See
-  [`auto_review`](docs/configuration.md#auto_review), which keeps the QA settings. The `Auto Review`
+  [`auto_review`](docs/configuration.md#auto_review), which keeps the QA settings;
+  `scripts/qa-vm/provision.sh admin@<vm>` gives a QA VM Go, Postgres and jq. The `Auto Review`
   state and the acceptance gate are retired; the gate's escalation rules now act in Code Review
   (see [docs/acceptance_gate.md](docs/acceptance_gate.md)).
 - **Docker runner** — host Symphony with mounted repos, state, logs, and agent credentials.
