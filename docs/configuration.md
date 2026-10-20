@@ -1248,7 +1248,7 @@ Before any agent runs, Symphony decides whether the PR needs QA and which playbo
 | `qa:<kind>` label (for example `qa:cli`) | that playbook runs |
 | only docs, tests or `skip_globs` paths changed | skipped |
 | `## User walkthrough` in the ticket | `cli` playbook runs |
-| web paths changed and `verification.dev_server` configured | `web` playbook runs |
+| web paths changed, `verification.enabled` on and `verification.dev_server` configured | `web` playbook runs |
 | Android paths changed, `android_app` configured and `auto_review.android.avd` set | `android_app` playbook runs |
 | a playbook's trigger paths changed | that playbook runs |
 | nothing else | skipped (internal changes rely on tests and the pre-push review) |
@@ -1414,8 +1414,18 @@ starts `verification.dev_server` for that pass as it does for `web` (from its ow
 PR head, on a pooled port, outside the agent's sandbox), gives the agent its URL and lets the
 agent's sandbox reach `localhost`; only a `web` pass also gets the `browser` MCP server. The
 `macos_app` playbook takes `dev_server: true` too: on a `worker_host` its server runs on the QA
-host, beside the app (see [macOS app QA](#macos-app-qa)). Without a configured dev server the kind
-is off, and the `QA selection` log line says it needs `verification.dev_server`:
+host, beside the app (see [macOS app QA](#macos-app-qa)). Each path reads its own flags:
+
+| Playbook with a dev server | Needs |
+| --- | --- |
+| `macos_app` with `dev_server: true` on a `worker_host` | `verification.dev_server.start_cmd` only; `verification.enabled` may be `false` |
+| `web`, a kind of your own with `dev_server: true`, `macos_app` without a `worker_host` | `verification.enabled: true` and `verification.dev_server.start_cmd` |
+
+`verification.enabled` also starts the dev server on the Symphony host for every agent run (see
+[`verification`](#verification)), so a repository whose server only runs on the QA host, beside a
+Mac app, leaves it `false`. Without the flags it needs the kind is off, and the `QA selection` log
+line says which one is missing: `` needs `verification.dev_server` `` without a start command,
+`` needs `verification.enabled` `` with one but verification off:
 
 ```yaml
 auto_review:
@@ -1473,10 +1483,11 @@ That repository's `macos_app` playbook builds with `make -C macos app` and trigg
 
 Each QA pass re-reads the repository's `WORKFLOW.md` from its base branch first, after a
 `git fetch origin` when `fetch_before_dispatch` is on, so a playbook merged since the last
-dispatch applies to the next pass. It logs its selection at info level in one line:
+dispatch applies to the next pass. Each QA decision, at Code Review's approve and again when the
+QA state runs, logs its selection at info level in one line:
 
 ```text
-QA selection issue_id=… issue_identifier=MOT-32 sha=… decision=run playbooks=android_app not_selected="cli: not triggered; macos_app: needs `auto_review.playbooks.macos_app.build`, `auto_review.playbooks.macos_app.app`; web: needs `verification.dev_server`" workflow_refresh=:ok
+QA selection issue_id=… issue_identifier=MOT-32 sha=… decision=run playbooks=android_app not_selected="cli: not triggered; macos_app: needs `auto_review.playbooks.macos_app.build`, `auto_review.playbooks.macos_app.app`; web: needs `verification.enabled`"
 ```
 
 `not_selected` names each playbook that did not run: `not triggered` when none of its paths
@@ -1834,7 +1845,8 @@ host and the worktree checks still apply there. Then:
 - `qa_api_requests` moves the app's `api-requests.jsonl` aside in the run directory and copies it
   back over SSH;
 - with `dev_server: true` on the `macos_app` playbook and `verification.dev_server.start_cmd` set,
-  the project's dev server runs on the QA host, beside the app, which cannot reach a server on the
+  whatever `verification.enabled` says (leave it `false` so agent runs start no server on the
+  Symphony host), the project's dev server runs on the QA host, beside the app, which cannot reach a server on the
   Symphony host. When the pass starts, before the agent does, Symphony copies the worktree's `HEAD`
   into `dev-server/src/` in the run directory (a copy of its own, since each `qa_build` unpacks
   `src/` afresh), runs `verification.dev_server.build_cmd` and then `start_cmd` there as the QA user,
@@ -2304,7 +2316,7 @@ Optional dev-server orchestration for verification runs.
 verification:
   enabled: true
   port_allocation:
-    range: [4000, 4099]
+    range: [4100, 4199]
   dev_server:
     build_cmd: "pnpm install"   # optional, runs before start_cmd
     start_cmd: "pnpm dev --port $SYMPHONY_VERIFICATION_PORT"
@@ -2316,6 +2328,18 @@ verification:
 
 `WORKFLOW.md` can override `verification.dev_server` per repo while inheriting the operator-owned
 port range.
+
+`enabled: true` starts `dev_server` on the Symphony host before the first turn of every agent run
+(implementation, review and fix runs alike) on a port from `port_allocation.range`, and turns on the
+QA `web` playbook and other `dev_server: true` kinds, whose server runs on this host too. With
+`enabled: false` no agent run starts a dev server or takes a port. A `macos_app` QA pass on a
+`worker_host` with `dev_server: true` reads only `dev_server`, whatever `enabled` says: its server
+runs on the QA host (see [macOS app QA](#macos-app-qa)).
+
+The pool hands out the first port in `range` that no other run holds and nothing on the host already
+listens on (on `127.0.0.1`), so a port another program took is skipped rather than failing the run.
+The default range, `[4100, 4199]`, leaves out `4000`, Symphony's own API port. When every port is
+taken the dispatch waits for one, logging `Verification port range exhausted`.
 
 `start_cmd` gets `SYMPHONY_VERIFICATION_PORT`. On macOS it also gets `SYMPHONY_VERIFICATION_SOCKET`
 and must listen on that unix socket instead of the port: the dev server's sandbox allows no TCP

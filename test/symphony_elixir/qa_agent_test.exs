@@ -9,6 +9,7 @@ defmodule SymphonyElixir.QaAgentTest do
   alias SymphonyElixir.QaAgent.{Report, Selection}
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
   alias SymphonyElixir.SelfHeal
+  alias SymphonyElixir.Verification
 
   @sha "0123456789abcdef0123456789abcdef01234567"
   @env_keys [
@@ -538,6 +539,27 @@ defmodule SymphonyElixir.QaAgentTest do
       assert {:skip, _reason} = Selection.decide(issue(), ["server/main.go"], config)
       assert {"server", "needs `verification.dev_server`"} in Selection.unavailable(config)
       refute Enum.any?(Selection.unavailable(config, dev_server?: true), &(elem(&1, 0) == "server"))
+
+      # A start command with verification off starts no server on this host, so the kind stays off.
+      command_only = [dev_server?: false, dev_server_command?: true]
+      assert {:skip, _reason} = Selection.decide(issue(), ["server/main.go"], config, command_only)
+      assert {"server", "needs `verification.enabled`"} in Selection.unavailable(config, command_only)
+      assert {"web", "needs `verification.enabled`"} in Selection.unavailable(config, command_only)
+    end
+
+    test "a macos_app playbook with dev_server: true on a worker_host needs only verification.dev_server" do
+      macos_app = %{"build" => "make app", "app" => "build/App.app", "dev_server" => true}
+      config = %{worker_host: "qa-vm", playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => macos_app}}
+      command_only = [dev_server?: false, dev_server_command?: true]
+
+      assert [%{kind: "macos_app", dev_server: true}] = Selection.playbooks(config, command_only)
+      refute Enum.any?(Selection.unavailable(config, command_only), &(elem(&1, 0) == "macos_app"))
+      assert {"web", "needs `verification.enabled`"} in Selection.unavailable(config, command_only)
+      assert {"macos_app", "needs `verification.dev_server`"} in Selection.unavailable(config)
+
+      # Without a worker_host its server runs on this host, which verification.enabled turns on.
+      assert {"macos_app", "needs `verification.enabled`"} in Selection.unavailable(%{config | worker_host: nil}, command_only)
+      assert [%{kind: "macos_app"}, %{kind: "web"}] = Selection.playbooks(%{config | worker_host: nil}, dev_server?: true)
     end
 
     test "unavailable/2 says why each playbook is off" do
@@ -1497,7 +1519,8 @@ defmodule SymphonyElixir.QaAgentTest do
           health_check_url: "http://127.0.0.1:$SYMPHONY_VERIFICATION_PORT/health"
       }
 
-      verification = %{settings.verification | enabled: true, dev_server: dev_server}
+      # Verification stays off: the QA-host server reads only `verification.dev_server` (TP-1115).
+      verification = %{settings.verification | enabled: false, dev_server: dev_server}
       %{settings | auto_review: %{settings.auto_review | worker_host: "qa-vm"}, verification: verification}
     end
 
@@ -1547,8 +1570,10 @@ defmodule SymphonyElixir.QaAgentTest do
     end
 
     defp qa_host_macos_app do
-      config = %{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app", "dev_server" => true}}}
-      [macos_app] = Selection.playbooks(config, dev_server?: true) |> Enum.filter(&(&1.kind == "macos_app"))
+      settings = qa_host_settings()
+      macos_app = %{"build" => "make app", "app" => "build/App.app", "dev_server" => true}
+      config = %{settings.auto_review | playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => macos_app}}
+      [macos_app] = Selection.playbooks(config, Verification.selection_opts(settings))
       macos_app
     end
 
