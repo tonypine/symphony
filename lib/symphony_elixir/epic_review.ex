@@ -34,7 +34,11 @@ defmodule SymphonyElixir.EpicReview do
        reaches the self-heal lane: a review started the moment the last sub-ticket merged would
        otherwise judge a commit CI has not finished with. A run still unfinished after two hours
        is not waited on: the review runs and reports it, so stuck CI blocks and self-heals as any
-       other block does.
+       other block does. A commit whose runs finished with a failed one is not judged yet either:
+       the review reruns its failed jobs once per commit (`SymphonyElixir.EpicReview.CiRerun`)
+       and waits for the rerun the same way, so a flake on the default branch is recorded as a
+       `ci_flake` signal on the epic instead of filed as a gap. Only a run red again reaches the
+       agent as a failure.
     4. The **verdict**, through the one writer `SymphonyElixir.TransitionGuard`:
          * `pass` -> `Done` (`:epic_review_pass`);
          * `fail` (gaps) -> each failing step, or without failing steps each finding, is filed as a
@@ -79,6 +83,7 @@ defmodule SymphonyElixir.EpicReview do
   }
 
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
+  alias SymphonyElixir.EpicReview.CiRerun
   alias SymphonyElixir.GitHub.{CiLog, PullRequest}
   alias SymphonyElixir.Linear.{Issue, TransientRetry}
   alias SymphonyElixir.QaAgent
@@ -292,9 +297,10 @@ defmodule SymphonyElixir.EpicReview do
         Map.merge(outcome, %{ref: context.base_ref, checks: checks, runtime_seconds: System.monotonic_time(:second) - started_at})
 
       nil ->
-        case pending_ci_runs(workspace, context.sha, opts) do
-          [] -> run_qa_agent(issue, workspace, context, settings, opts, checks, started_at)
-          runs -> %{ci_pending: %{sha: context.sha, runs: runs}}
+        case ci_gate(issue, workspace, context.sha, opts) do
+          {:wait, runs} -> %{ci_pending: %{sha: context.sha, runs: runs}}
+          {:proceed, nil} -> run_qa_agent(issue, workspace, context, settings, opts, checks, started_at)
+          {:proceed, check} -> run_qa_agent(issue, workspace, context, settings, opts, checks ++ [check], started_at)
         end
     end
   end
@@ -322,21 +328,30 @@ defmodule SymphonyElixir.EpicReview do
     end
   end
 
-  # The workflow runs on the commit under review that are still going and worth waiting for. The
-  # review judges CI by the commit's runs, and a run without a conclusion cannot be judged, so the
-  # review waits for it (`review_epic/5`). Anything that keeps the wait from being sure is not
-  # waited on, and the review runs as it would without the wait: runs that cannot be read, and a
-  # run still unfinished after `@ci_wait_limit_seconds`, which the agent then reports.
-  defp pending_ci_runs(workspace, sha, opts) do
+  # Whether the agent may judge the commit's CI yet. The review judges CI by the commit's runs, and
+  # a run without a conclusion cannot be judged, so the review waits for it (`review_epic/5`). Once
+  # every run finished, a failed one is rerun once per commit before it can become a gap
+  # (`SymphonyElixir.EpicReview.CiRerun`), and the review waits for that rerun too. Anything that
+  # keeps the wait from being sure is not waited on, and the review runs as it would without the
+  # wait: runs that cannot be read, and a run still unfinished after `@ci_wait_limit_seconds`, which
+  # the agent then reports.
+  defp ci_gate(issue, workspace, sha, opts) do
     case PullRequest.list_commit_runs(sha, [cwd: workspace] ++ Keyword.take(opts, [:gh_runner])) do
       {:ok, runs} ->
-        now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
-        Enum.filter(runs, &(unfinished_run?(&1) and not stuck_run?(&1, now)))
+        case pending_ci_runs(runs, opts) do
+          [] -> CiRerun.check(repo_key(issue, opts), issue.id, sha, runs, [workspace: workspace] ++ Keyword.take(opts, [:gh_runner]))
+          pending -> {:wait, pending}
+        end
 
       {:error, reason} ->
         Logger.warning("Epic review could not read CI on #{short_sha(sha)}; reviewing without waiting for it: #{inspect(reason)}")
-        []
+        {:proceed, nil}
     end
+  end
+
+  defp pending_ci_runs(runs, opts) do
+    now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
+    Enum.filter(runs, &(unfinished_run?(&1) and not stuck_run?(&1, now)))
   end
 
   defp unfinished_run?(%{status: status}), do: is_binary(status) and status != "COMPLETED"

@@ -13,7 +13,8 @@ defmodule SymphonyElixir.CiWait do
   (an hour) the ticket is put on a `Blocked` hold whose reason (`hold_attrs/3`) names the commit,
   the time waited and the workflows still running. A person lifts it with `Unblock`;
   the hold's own `ci_wait` signal makes the next wait on that commit start again from zero. A wait
-  on another commit starts from zero too.
+  on another commit starts from zero too, and so does the wait for the epic review's rerun of a red
+  commit (`SymphonyElixir.EpicReview.CiRerun` records a fresh start when it reruns).
   """
 
   alias SymphonyElixir.TicketState

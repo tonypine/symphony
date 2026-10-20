@@ -858,6 +858,15 @@ defmodule SymphonyElixir.EpicReviewTest do
   describe "run/3 on a red base branch head" do
     @red_run "https://github.com/acme/app/actions/runs/501"
 
+    # The review already reran this commit's failed run once and it failed again, so the agent
+    # judges the red commit (`SymphonyElixir.EpicReview.CiRerun`).
+    setup do
+      RunStore.record_ticket_signal(@repo_key, @issue_id, "ci_rerun", %{
+        sha: @sha,
+        runs: [%{id: "501", workflow: "CI", url: @red_run, jobs: ["verify"], tests: []}]
+      })
+    end
+
     # `gh` on a commit whose `CI` run 501 failed in its `verify` job (601) and whose `release` run
     # passed: the runs, the failed run's jobs, the job's annotations and its failed log.
     defp red_gh(overrides \\ %{}) do
@@ -1020,6 +1029,119 @@ defmodule SymphonyElixir.EpicReviewTest do
 
       assert [ci] = created_subissues()
       refute ci["description"] =~ "## CI log"
+    end
+  end
+
+  describe "run/3 on a red base branch head not rerun yet" do
+    @flaky_test "TestAnAppThatDoesntQuitAbandonsTheInstall"
+
+    # `red_gh/1` whose `gh run list` answers each of `lists` in turn and the last one from then on,
+    # which accepts the rerun, and whose failed job log names a failed Go test.
+    defp rerun_gh(lists) do
+      Process.put(:epic_review_run_lists, lists)
+
+      red_gh(%{
+        "list" => fn _args ->
+          [list | rest] = Process.get(:epic_review_run_lists)
+          Process.put(:epic_review_run_lists, if(rest == [], do: [list], else: rest))
+          {Jason.encode!(list), 0}
+        end,
+        "rerun" => fn _args -> {"", 0} end,
+        "view" => fn
+          ["run", "view", "--job" | _rest] ->
+            {"verify\tgo test\t2026-10-20T06:30:00.000Z --- FAIL: #{@flaky_test} (0.30s)\n" <>
+               "verify\tgo test\t2026-10-20T06:30:01.000Z printf: write error: Broken pipe\n", 0}
+
+          args ->
+            red_answer(args)
+        end
+      })
+    end
+
+    defp red_runs, do: [ci_run("CI", "completed", %{"databaseId" => 501, "conclusion" => "failure", "url" => @red_run}), release_run()]
+
+    defp green_runs, do: [ci_run("CI", "completed", %{"databaseId" => 501, "url" => @red_run}), release_run()]
+
+    defp release_run, do: ci_run("release", "completed", %{"databaseId" => 502})
+
+    defp reruns(messages \\ peek()), do: for({:gh, ["run", "rerun" | _rest] = args, _cwd} <- messages, do: args)
+
+    defp agent_runs(messages \\ peek()), do: for({:qa_agent_run, _job, _settings, _opts} <- messages, do: :run)
+
+    defp signal(name), do: Enum.find(signals(), &(&1.name == name))
+
+    test "reruns the failed jobs once and waits for them: no agent pass, no verdict, no follow-up" do
+      {result, log} = with_log(fn -> run(epic(), gh_runner: rerun_gh([red_runs()])) end)
+
+      assert {:error, {:ci_pending, %{sha: @sha, runs: [%{id: "501"}]}}} = result
+
+      assert reruns() == [["run", "rerun", "501", "--failed", "-R", "acme/app"]]
+      assert agent_runs() == []
+      assert verdicts() == []
+      assert created_subissues() == []
+      assert comments_posted() == []
+      assert log =~ "Epic review reran the failed CI on c0ffee001122: CI (#{@red_run})"
+
+      # The rerun is bound to the commit with what its attempt replaces, and the CI wait starts over.
+      assert [%{name: "ci_wait_started", details: %{sha: @sha}}, %{name: "ci_rerun", details: rerun} | _rest] = signals()
+      assert %{sha: @sha, runs: [%{id: "501", workflow: "CI", url: @red_run, jobs: ["verify"], tests: [@flaky_test]}]} = rerun
+    end
+
+    test "a red run that passes on rerun files no follow-up, records the flake, and the review proceeds" do
+      runner = rerun_gh([red_runs(), green_runs()])
+
+      assert {:error, {:ci_pending, _info}} = run(epic(), gh_runner: runner)
+      assert :ok = run(epic(%{state: "Epic Review"}), gh_runner: runner)
+
+      assert length(reruns()) == 1
+      assert agent_runs() == [:run]
+      assert created_subissues() == []
+      assert [%{kind: "epic_review", head_sha: @sha, outcome: "pass"}] = verdicts()
+
+      assert %{details: %{sha: @sha, runs: [@red_run], workflows: ["CI"], jobs: ["verify"], tests: [@flaky_test]}} = signal("ci_flake")
+
+      assert [{@issue_id, report}] = comments_posted()
+      assert report =~ "- **attention** ci_rerun: CI (#{@red_run}) failed and passed on Symphony's rerun, a flake in verify, #{@flaky_test}"
+    end
+
+    test "a red run that fails twice files a follow-up whose description contains the log tail" do
+      runner = rerun_gh([red_runs()])
+
+      assert {:error, {:ci_pending, _info}} = run(epic(), gh_runner: runner)
+
+      agent_result(:fail, %{steps: [ci_step("The CI workflow failed (#{@red_run}); its verify job is red.")]})
+      assert :ok = run(epic(%{state: "Epic Review"}), gh_runner: runner)
+
+      assert length(reruns()) == 1
+      assert [ci] = created_subissues()
+      assert ci["title"] == "Epic review fails: CI on c0ffee001122"
+      assert ci["description"] =~ "## CI log"
+      assert ci["description"] =~ "--- FAIL: #{@flaky_test} (0.30s)\nprintf: write error: Broken pipe"
+      assert signal("ci_flake") == nil
+
+      assert [{@issue_id, report}] = comments_posted()
+      assert report =~ "- **attention** ci_rerun: CI (#{@red_run}) is not green after Symphony's rerun"
+    end
+
+    test "the rerun is attempted once per head: a third review on the same head does not rerun again" do
+      runner = rerun_gh([red_runs()])
+      agent_result(:fail, %{summary: "Red.", findings: ["The export button is absent"]})
+
+      assert {:error, {:ci_pending, _info}} = run(epic(), gh_runner: runner)
+      assert :ok = run(epic(), gh_runner: runner)
+      assert :ok = run(epic(), gh_runner: runner)
+
+      assert length(reruns()) == 1
+      assert agent_runs() == [:run, :run]
+    end
+
+    test "a carried verdict reads no CI and reruns nothing" do
+      :ok = TicketSignals.record_verdict(@repo_key, @issue_id, "epic_review", @sha, "pass")
+
+      assert :ok = run(epic(), gh_runner: rerun_gh([red_runs()]))
+
+      assert reruns() == []
+      assert signal("ci_rerun") == nil
     end
   end
 
