@@ -51,6 +51,7 @@
     "pr": "open",
     "pr_number": 42,
     "pr_url": "https://github.com/acme/app/pull/42",
+    "protected_files": [],
     "rate_limit": {
       "remaining": 4321,
       "reset_at": "2026-10-16T13:00:00Z"

@@ -35,6 +35,7 @@ final class PRWatchTests: XCTestCase {
         XCTAssertEqual(watch.facts.redAttempts, 0)
         XCTAssertEqual(watch.facts.maxRedAttempts, 10)
         XCTAssertEqual(watch.facts.conflictAttempts, 0)
+        XCTAssertEqual(watch.facts.protectedFiles, [])
         XCTAssertEqual(watch.actions, [WatchBlock.Action(rule: "R21", action: "ci_fix", head: "abc000", at: SymphonyState.parseDate("2026-10-16T11:50:00Z"), source: "poll")])
         XCTAssertEqual(watch.silent, WatchBlock.Silent(
             since: SymphonyState.parseDate("2026-10-16T11:59:30Z"), ticks: 2, bound: nil,

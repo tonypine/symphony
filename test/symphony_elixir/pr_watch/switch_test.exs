@@ -10,6 +10,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
   alias SymphonyElixir.{BlockedHold, CiFix, Hold, PrWatch, TicketPullRequest, TicketState}
   alias SymphonyElixir.PrWatch.{Attempts, Repo}
+  alias SymphonyElixirWeb.WatchPayload
 
   @repo_key "default"
 
@@ -247,6 +248,39 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
   end
 
   defp watch(issue_id), do: @repo_key |> RunStore.get_ticket_state(issue_id) |> TicketState.pr_watch()
+
+  # The workspace of the ticket's run, where the watcher reads the protected paths its PR changes.
+  defp workspace!(issue_id) do
+    workspace = Path.join(System.tmp_dir!(), "switch-ws-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(workspace)
+    on_exit(fn -> File.rm_rf(workspace) end)
+    run = %{repo_key: @repo_key, run_id: "run-#{issue_id}", issue_id: issue_id, status: "success", started_at: now()}
+    :ok = RunStore.put_run(Map.put(run, :workspace_path, workspace))
+    workspace
+  end
+
+  # A git that has every commit and whose PRs change `WORKFLOW.md` only; it tells the test of each diff.
+  defp changes_workflow_md do
+    test_pid = self()
+
+    fn
+      ["diff" | _args], cwd ->
+        send(test_pid, {:diff, cwd})
+        {"WORKFLOW.md\n", 0}
+
+      _args, _cwd ->
+        {"", 0}
+    end
+  end
+
+  defp diffs(workspace, count \\ 0) do
+    receive do
+      {:diff, ^workspace} -> diffs(workspace, count + 1)
+    after
+      0 -> count
+    end
+  end
+
   defp decision(issue_id), do: watch(issue_id).decision
   defp attempts(issue_id), do: watch(issue_id).attempts
 
@@ -1266,6 +1300,46 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       tick!(pid)
       assert moves(issue_id) == ["Code Review"]
       refute Hold.held?(@repo_key, issue_id, :needs_decision)
+    end
+
+    test "R18's evidence: a head red only on protected paths lists the protected files its PR changes, read once per head, in every phase" do
+      for {id, state} <- [{"1", "Code Review"}, {"2", "QA"}, {"3", "Rework"}, {"4", "CI Fix"}, {"5", "Merging"}] do
+        issue_id = ticket!(id, state, human_only(:green))
+        if state == "CI Fix", do: :ok = CiFix.record_origin(@repo_key, issue_id, "Code Review")
+        workspace = workspace!(issue_id)
+        pid = start!(git: changes_workflow_md())
+        tick!(pid, 2)
+
+        assert watch(issue_id).protected_files == %{head_sha: "head-#{id}-1", paths: ["WORKFLOW.md"]}
+        assert %{facts: %{protected_files: ["WORKFLOW.md"]}} = @repo_key |> RunStore.get_ticket_state(issue_id) |> WatchPayload.watch()
+        assert diffs(workspace) == 1
+        stop_supervised!({Repo, @repo_key})
+      end
+    end
+
+    test "R18's evidence is read again on a new head, and a read that fails lists none and says why, once" do
+      issue_id = ticket!("1", "Code Review", human_only(:green))
+      workspace = workspace!(issue_id)
+      pid = start!(git: changes_workflow_md())
+      tick!(pid)
+      pr!("1", head_sha: "head-1-2")
+      tick!(pid, 2)
+      assert watch(issue_id).protected_files == %{head_sha: "head-1-2", paths: ["WORKFLOW.md"]}
+      assert diffs(workspace) == 2
+
+      # A green head lists none.
+      pr!("1", head_sha: "head-1-3", ci: :green, red_kind: :failure, failing_check: nil, failed_checks: [])
+      tick!(pid)
+      assert watch(issue_id).protected_files == nil
+
+      # The ticket's runs had no workspace: the read fails.
+      stop_supervised!({Repo, @repo_key})
+      issue_id = ticket!("2", "QA", human_only(:green))
+      pid = start!(git: changes_workflow_md())
+      log = capture_log(fn -> tick!(pid) end)
+      assert log =~ "PR watch couldn't read the protected files a PR changes issue_id=#{issue_id} issue_identifier=TP-2 head_sha=head-2-1: the ticket has no workspace"
+      assert watch(issue_id).protected_files == %{head_sha: "head-2-1", paths: []}
+      refute capture_log(fn -> tick!(pid) end) =~ "couldn't read the protected files"
     end
 
     test "AutoMerge's protected paths gate → R18 in Merging: auto-merge off and a person asked, once" do

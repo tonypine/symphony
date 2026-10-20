@@ -215,7 +215,11 @@ It leaves the list on the first tick a run is active, a hold is set or a wait is
 `GET /api/v1/<identifier>` carries the same block: the phase, the PR `head`, how the facts arrived
 (`source`), the decision (`rule`, `action`, `reason`, who acts next (`owner`) and what clears it
 (`clears_when`), since when it stands, its `outcome`), the facts in one line (`summary`) and in full (`facts`), the last five actions
-applied (`actions`, each with its `source`) and the ticket's `silent` wait. A wait names its own owner and
+applied (`actions`, each with its `source`) and the ticket's `silent` wait. `facts.protected_files`
+lists the protected paths the PR's own commits change when only the `protected paths` check is red
+on the head (R18), in any phase: the watcher reads them in the ticket's workspace once per head, as
+`mix protected_paths.check` does, and a read that fails lists none and logs why. It is empty for any
+other head. A wait names its own owner and
 clearing condition; an action Symphony carries out names `symphony` until it is done (for
 `dispatch`, `a run starts on the ticket`), so the block always says who acts next. The silent-wait
 detector still counts only waits as recorded: a `dispatch` that no run followed stays quiet.

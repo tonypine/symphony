@@ -76,6 +76,14 @@ defmodule SymphonyElixir.ProtectedPathsGateTest do
     refute listed =~ "WORKFLOW.md"
   end
 
+  test "changed_paths lists every protected path the PR changes, or why it couldn't read them", %{repo: repo, base: base} do
+    head = commit!(repo, %{"WORKFLOW.md" => "v2\n", ".agents/skills/push/SKILL.md" => "push v2\n", "lib/app.ex" => "v2\n"})
+
+    assert ProtectedPathsGate.changed_paths(pr(repo, head, base)) == {:ok, [".agents/skills/push/SKILL.md", "WORKFLOW.md"]}
+    assert ProtectedPathsGate.changed_paths(pr(repo, base, base)) == {:ok, []}
+    assert ProtectedPathsGate.changed_paths(pr(nil, head, base)) == {:error, "the ticket has no workspace"}
+  end
+
   defp pr(workspace, head, base), do: %{workspace_path: workspace, head_sha: head, base_sha: base}
 
   defp issue(rulings) do
