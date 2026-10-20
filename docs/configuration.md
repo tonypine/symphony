@@ -1318,6 +1318,16 @@ Inbox lists it, and `Unblock` starts the wait again from zero. The public API is
 `api.github.com`, which is not in the built-in network allowlist; add it to
 `agent.permissions.network.allowed_domains` for the fallback to work.
 
+A commit whose runs finished with a failed one is not judged at once: Symphony reruns the failed
+jobs of each failed run once per commit (`gh run rerun <id> --failed`, as the PR watcher reruns a
+red PR head before CI Fix) and waits for the rerun the same way, the hour starting again. A run
+green on its rerun is a flake: Symphony records a `ci_flake` signal on the epic with the commit, the
+runs and the failed job and test names it read before the rerun, files nothing, and the review
+judges a green commit. A run red again is judged as before, and its follow-up quotes the second
+failure's log. The review's report names what the rerun found in its `ci_rerun` pre-check. A commit
+is never rerun twice: the rerun is recorded on the epic before it is made, and a review that cannot
+record it does not rerun.
+
 **Which steps QA walks.** Each step of a `## User walkthrough` names the one place that proves it
 ([ADR 0003](adr/0003-automated-tests-first-qa-last-resort.md)), on a line at the end of the step:
 

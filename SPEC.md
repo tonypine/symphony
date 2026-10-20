@@ -1651,6 +1651,15 @@ The QA agent:
   on that commit, recorded in the ticket-state record), the review is not started again and the
   ticket is held `Blocked` with `waits_on.type` `ci_wait` and a reason naming the commit and the
   workflows still running, which a person lifts with `Unblock`; the next wait starts from zero.
+- The epic review MUST NOT judge a failed workflow run on the base branch head it reviews before it
+  reran it once: once every run on the commit finished, it reruns the failed jobs of each failed run
+  (`gh run rerun <id> --failed`) and waits for the rerun as for an unfinished run, the wait on that
+  commit starting from zero again. The rerun MUST be made at most once per commit: it is recorded
+  on the ticket (a `ci_rerun` signal bound to the commit, carrying the failed jobs' and tests' names
+  read before the rerun) before it is made, and a review that cannot record it MUST NOT rerun. A run
+  green on its rerun MUST be recorded as a `ci_flake` signal on the epic (the commit, the runs, the
+  job and test names), once per commit, and files no follow-up; a run red again is judged and filed
+  as any red run. The review's report SHOULD name what the rerun found.
 - The PR QA prompt MUST list the agent-protected paths (`WORKFLOW.md`, `.agents/skills`, the project
   `.claude` settings and the rest an agent's sandbox denies writes to) and tell the agent to mark a
   criterion that only a change to one of them can meet `skipped`, naming the follow-up ticket, when
