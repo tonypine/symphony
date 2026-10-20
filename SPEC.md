@@ -1641,11 +1641,24 @@ The QA agent:
   `ExitOnForwardFailure`), and only those ports; a pass whose forwards cannot open MUST be
   `blocked` with the reason before the agent starts.
 - The QA agent MUST run in a fresh detached worktree at the PR head SHA, outside the issue
-  workspace, removed afterwards, with a tool scope limited to read-only Linear/GitHub tools and
-  `linear_attach_file`. It answers with JSON: `verdict` (`pass`, `fail` or `blocked`), `summary`,
-  `steps` (`name`, `status`, `details`, `evidence`), `findings`, and `reason`. An answer with no
-  verdict object SHOULD get one follow-up turn in the same session asking for it. A run error or
-  an answer still unreadable after that counts as `blocked`. The session stops at `agent.limits.tokens_per_issue`.
+  workspace, removed afterwards, with a tool scope limited to read-only Linear/GitHub tools,
+  `linear_attach_file`, and the `qa_verdict` tool, offered to QA sessions only, through which the
+  agent records its verdict as its last act: `verdict` (`pass`, `fail` or `blocked`), `summary`,
+  `steps` (`name`, `status`, `details`, `evidence`), `findings` (each with `step`, `viewport`,
+  `expected`, `actual`, `evidence`, rendered to one report line), `reason`, `needs_person`,
+  `needs_dev_server`, `covered_by` and `scope`. The tool answers a verdict it cannot read with the
+  error so the agent can call it again, and the last verdict the session recorded is the pass's
+  verdict the moment it arrives: it wins over the turn's text, even when the turn then ended
+  empty, failed or hit the token limit, and the QA report is rendered from it. The same object as
+  JSON in the agent's final message is the fallback for one release. Both are read leniently: a
+  verdict or step status in any case or a synonym (`PASS`, `failed`, `block`), `findings` and
+  `steps` as a list or a single object, and `needs_person`/`needs_dev_server` as `true` or
+  `"true"`. A turn that ends without a verdict SHOULD get one follow-up turn in the same session
+  asking for the `qa_verdict` call. A follow-up that comes back empty (the agent process exited, or
+  its turn was finalised with no answer) MUST NOT spend one of the pass's attempts: the pass runs
+  again once in the same run, logged as `qa_verdict_missing`, with its tokens added to the run's.
+  A run error or an answer still unreadable after that counts as `blocked`. The session stops at
+  `agent.limits.tokens_per_issue`.
 - The QA prompt and the built-in playbooks MUST tell the agent not to run the test suite, `make all`,
   coverage or static analysis such as Dialyzer: a pass starts only on green CI for the PR head, and
   the epic review judges a criterion that only asks for tests or CI to pass by CI's runs on the

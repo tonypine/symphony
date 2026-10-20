@@ -1287,9 +1287,24 @@ including ones detached with `nohup` or `setsid`, such as a server the agent sta
 of the PR under `$TMPDIR`, and logs each one. It can read
 the issue, its parent and the PR, and attach evidence files with `linear_attach_file`; it cannot
 move the issue, comment, push or write to GitHub. The session stops at `timeout_ms`, `max_turns`,
-or `agent.limits.tokens_per_issue`. An agent that ends its turn without the JSON verdict gets one
-follow-up turn in the same session asking for it, and the QA report notes "verdict after 1
-follow-up".
+or `agent.limits.tokens_per_issue`.
+
+The QA agent records its verdict with the `qa_verdict` tool, offered to QA passes (and epic
+reviews) only, as its last act. Its input schema is the verdict contract: `pass`, `fail` or
+`blocked`, the steps, `findings` (each with the step, the viewport, what was expected, what
+happened and the evidence, rendered to one line of the report's `### Findings`), a `reason` for a
+block, and `needs_person`, `needs_dev_server`, `covered_by` and `scope` as before. The call is the
+verdict, recorded the moment it arrives: a pass whose agent then ends its turn without a word
+still has it, and the QA report and the rework run read its findings. A verdict the tool cannot
+read comes back with the error, so the agent fixes it and calls again. It is read leniently
+(`PASS`, `failed`, a single finding object instead of a list). An agent that ends its turn without
+the call is read from the JSON in its final message instead, for one release. A turn with neither
+gets one follow-up turn in the same session asking for the `qa_verdict` call, and the QA report
+notes "verdict after 1 follow-up". When that follow-up comes back empty (the agent process
+exited, or its turn was finalised with no answer), the pass runs again once in the same run, as
+the same attempt: the log says `qa_verdict_missing: ... retrying the pass as the same attempt`, no
+blocked attempt is spent, and the report notes "pass run again once after a missing verdict". A
+pass that misses its verdict again is `blocked` as before.
 
 **The design QA judges a UI against.** A plan keeps its Screens document and `screens.html` on
 the parent, so a QA pass (and an epic review) reads more than the ticket's own documents:
