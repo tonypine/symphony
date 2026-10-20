@@ -103,6 +103,12 @@ Important boundary:
    - Maps issue identifiers to workspace paths.
    - Ensures per-issue workspace directories exist.
    - For PR runs using worktrees, creates the workspace from the PR head branch/ref.
+   - A new worktree for an issue whose `auto/<issue>` branch is already on `origin` (after the
+     dispatch's fetch) starts on that branch, so a workspace removed and made again keeps the
+     pushed work. Only an issue with no branch on `origin`, or whose recorded pull request closed
+     or merged (a Restart, a closed pull request's rework), starts from the base branch. A
+     workspace folder removed by hand is made again: the registrations of worktree folders that
+     are gone are pruned before the add.
    - Runs workspace lifecycle hooks.
    - Cleans workspaces for terminal issues.
 
@@ -2633,13 +2639,18 @@ Rules:
   rework in flight and MUST NOT hold a red head back. A repo with the reviewer off parks its
   `Code Review` tickets with `code_review_reviewer_disabled` recorded and never approves without a
   reviewer.
-- **Verdicts bind to a head.** Code Review and QA verdicts are recorded against the head SHA they
-  judged. A mechanical `CI Fix` re-binds the verdict to the repaired head; `Rework` invalidates it,
+- **Verdicts bind to a head.** Before Code Review reviews or QA selects anything, the workspace is
+  compared with the pull request's head as GitHub has it and, on a mismatch, reset to it (the
+  branch fetched when the commit is missing), logging both heads. Code Review and QA verdicts are
+  recorded against the head SHA they judged. A mechanical `CI Fix` re-binds the verdict to the repaired head; `Rework` invalidates it,
   so the new head is reviewed again.
 - **QA skip.** Code Review's approve carries a recorded run-or-skip decision: a diff whose paths are
   all docs, tests or `auto_review.skip_globs` skips QA; any other diff runs it. A diff with no
   changed path is no change at all and MUST NOT skip QA: the Code Review approve and the QA run pause
-  the ticket on a `Needs Decision` hold instead, with no verdict and no move.
+  the ticket on a `Needs Decision` hold instead, with no verdict and no move. They pause it only when
+  GitHub too lists no changed file on the pull request, and the request says the pull request's
+  latest commit on GitHub is what was compared; an empty workspace diff on a pull request GitHub
+  shows changing files, or one GitHub can't confirm, fails the run instead, to be tried again.
 - **No run without the pull request.** A ticket in `Code Review`, `QA`, `CI Fix`, `Rework` or
   `Merging` whose recorded pull request is closed (a `Backlog` move closes it, and moving the ticket
   back does not reopen it) MUST NOT start a run: it pauses on a `Needs Decision` hold asking to

@@ -97,6 +97,9 @@ Application.put_env(:symphony_elixir, :openrouter_models_request, offline_models
 # needs it passes `:gh_runner` itself.
 Application.put_env(:symphony_elixir, :ticket_pull_request_gh_runner, fn _args, _opts -> {"gh is offline in tests", 1} end)
 
+# Neither does the pull request head read before Code Review and QA (`SymphonyElixir.PrHead`).
+Application.put_env(:symphony_elixir, :pr_head_gh_runner, fn _args, _opts -> {"gh is offline in tests", 1} end)
+
 # QA passes in tests find no leftover processes; a test that needs the real
 # process table passes `:table` itself.
 Application.put_env(:symphony_elixir, :leftover_process_table, fn -> {:ok, []} end)

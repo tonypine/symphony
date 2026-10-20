@@ -314,7 +314,10 @@ repositories:
 - `default`: at most one repo can be the fallback route.
 - `base_branch`: optional branch used for review-agent diff context and as the base a
   new worktree branches off (preferring `origin/<base_branch>`); when unset, a new
-  worktree branches off the source repo's current HEAD.
+  worktree branches off the source repo's current HEAD. A ticket whose `auto/<ticket>`
+  branch is already on `origin` (a workspace removed and made again while its pull request
+  is open) starts on that branch instead; one whose pull request closed or merged starts
+  from the base again.
 - `route`: Linear team, project, label, or assignee selectors.
 - `workspace`: per-repo override for workspace population (`strategy`, `repo`,
   `fetch_before_dispatch`), or `source` for a repo Symphony clones itself (see below).

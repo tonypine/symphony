@@ -79,7 +79,9 @@ defmodule SymphonyElixir.Restart do
     case github.close(pr_url, []) do
       :ok ->
         Logger.info("Restart closed pull request issue_id=#{issue.id} issue_identifier=#{issue.identifier} pr_url=#{pr_url}")
-        :ok
+        # The record says so at once, so the next dispatch starts the branch again from the base
+        # branch even while the old branch is still on origin (`SymphonyElixir.Workspace`).
+        TicketPullRequest.mark_finished(issue.repo_key, pr_url, "closed")
 
       {:error, reason} ->
         failed("GitHub refused to close #{pr_url} (#{inspect(reason)})")

@@ -56,6 +56,7 @@ defmodule SymphonyElixir.QaVerification do
     Handoff,
     MergeConfirmation,
     NeedsDecisionHold,
+    PrHead,
     PrWatch,
     QaPolicy,
     QaPreCheck,
@@ -171,7 +172,16 @@ defmodule SymphonyElixir.QaVerification do
     blocked(issue, opts, settings, nil, blocked_outcome({:remote_worker_unsupported, host}, %{}))
   end
 
+  # The workspace is put on the pull request's head as GitHub has it first (`SymphonyElixir.PrHead`),
+  # so QA selects and verifies the change, not whatever the workspace happened to hold.
   defp read_head(issue, workspace, opts, settings) do
+    case PrHead.sync(issue, workspace, opts |> Keyword.take([:gh_runner]) |> Keyword.put(:repo_key, repo_key(issue, opts))) do
+      {:error, reason} -> {:error, {:qa_verification_failed, reason}}
+      _on_head_or_unknown -> read_synced_head(issue, workspace, opts, settings)
+    end
+  end
+
+  defp read_synced_head(issue, workspace, opts, settings) do
     case WorkspaceHead.read(workspace, nil) do
       nil -> park_unreadable_head(issue, opts)
       head -> verify_head(issue, workspace, opts, settings, head)
@@ -216,7 +226,7 @@ defmodule SymphonyElixir.QaVerification do
 
     case policy.decide(issue, settings, workspace: workspace, repo_key: repo_key(issue, opts)) do
       {:skip, reason} -> skip(issue, opts, settings, head, reason)
-      {:nothing_to_verify, _reason} -> hold(issue, opts, head, {:no_change, pr_url})
+      {:nothing_to_verify, _reason} -> hold_empty_change(issue, opts, head, pr_url)
       {:run, playbooks, _reason} -> pre_check(issue, workspace, opts, settings, {head, pr_url}, playbooks)
     end
   end
@@ -279,6 +289,15 @@ defmodule SymphonyElixir.QaVerification do
     blocked_outcome("the named checks were still running after #{minutes} minutes of waiting: #{steps}", %{
       checks: QaPreCheck.report_checks(results)
     })
+  end
+
+  # An empty local diff is no change only when GitHub too lists no changed file on the pull request:
+  # otherwise the workspace is what is wrong, and the run fails to be tried again.
+  defp hold_empty_change(issue, opts, head, pr_url) do
+    case PrHead.confirm_empty(pr_url, Keyword.take(opts, [:gh_runner])) do
+      :empty -> hold(issue, opts, head, {:no_change, pr_url})
+      {:error, reason} -> {:error, {:qa_verification_failed, reason}}
+    end
   end
 
   # With no open pull request the workspace is built from the base branch, and its head is not the

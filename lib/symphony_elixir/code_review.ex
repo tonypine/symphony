@@ -58,6 +58,7 @@ defmodule SymphonyElixir.CodeReview do
     Handoff,
     MergeConfirmation,
     NeedsDecisionHold,
+    PrHead,
     QaPolicy,
     ReviewAgent,
     RunStore,
@@ -140,7 +141,20 @@ defmodule SymphonyElixir.CodeReview do
   # a deepening still awaiting its routing edge is applied (`apply_deepened/6`), and a carried approve
   # — a mechanical CI Fix re-bound it to the head the repair left — is applied without a review
   # (`carried_approval/3`). Only when neither holds does the reviewer run.
+  #
+  # Before any of it, the workspace is put on the pull request's head as GitHub has it
+  # (`SymphonyElixir.PrHead`), so the head every verdict binds to is the change, not whatever the
+  # workspace happened to hold.
   defp review(issue, workspace, opts, settings) do
+    case PrHead.sync(issue, workspace, pr_head_opts(issue, opts)) do
+      {:error, reason} -> {:error, {:code_review_failed, reason}}
+      _on_head_or_unknown -> review_head(issue, workspace, opts, settings)
+    end
+  end
+
+  defp pr_head_opts(issue, opts), do: opts |> Keyword.take([:worker_host, :gh_runner]) |> Keyword.put(:repo_key, repo_key(issue, opts))
+
+  defp review_head(issue, workspace, opts, settings) do
     cond do
       decided_escalation?(issue, workspace, opts, settings) ->
         continue_decided(issue, opts, settings)
@@ -594,12 +608,20 @@ defmodule SymphonyElixir.CodeReview do
     end
   end
 
-  # An empty diff is no change at all — a workspace built from the base branch, or a branch whose
-  # work already landed — so it neither skips QA into `Merging` nor goes to QA: the ticket pauses
-  # here on a person's decision (`SymphonyElixir.ClosedPullRequest`).
+  # An empty diff is no change at all — a branch whose work already landed, or one that lost it — so
+  # it neither skips QA into `Merging` nor goes to QA: the ticket pauses here on a person's decision
+  # (`SymphonyElixir.ClosedPullRequest`). Only when GitHub too lists no changed file on the pull
+  # request: otherwise the workspace is what is wrong, and the run fails to be tried again.
   defp hold_empty_change(issue, opts) do
     pr_url = TicketPullRequest.current_url(issue, repo_key(issue, opts))
 
+    case PrHead.confirm_empty(pr_url, Keyword.take(opts, [:gh_runner])) do
+      :empty -> pause_empty_change(issue, pr_url, opts)
+      {:error, reason} -> {:error, {:code_review_failed, reason}}
+    end
+  end
+
+  defp pause_empty_change(issue, pr_url, opts) do
     case ClosedPullRequest.pause(issue, {:no_change, pr_url}, hold_opts(issue, opts)) do
       :ok -> :ok
       {:error, error} -> {:error, {:code_review_hold_failed, error}}

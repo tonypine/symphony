@@ -194,6 +194,23 @@ defmodule SymphonyElixir.QaVerificationTest do
 
   defp verdicts, do: Handoff.verdicts(@repo_key, @issue_id, "qa")
 
+  # GitHub's answer to the pull request head read (`SymphonyElixir.PrHead`): `head` on the ticket's
+  # branch, changing `changed_files` files.
+  defp pr_head(head, changed_files) do
+    fn ["pr", "view", @pr_url, "--json", "headRefOid,headRefName,changedFiles"], _opts ->
+      {Jason.encode!(%{"headRefOid" => head, "headRefName" => "auto/TP-816", "changedFiles" => changed_files}), 0}
+    end
+  end
+
+  # A commit on top of the workspace's, which the workspace is then put back behind: the pull
+  # request's head a workspace made again from the base branch lacks.
+  defp commit_ahead!(workspace) do
+    {_out, 0} = System.cmd("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "the work"], cd: workspace)
+    {head, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: workspace)
+    {_out, 0} = System.cmd("git", ["reset", "-q", "--hard", "HEAD~1"], cd: workspace)
+    String.trim(head)
+  end
+
   defp blocked_result(blocked_steps, reason) do
     steps = for name <- blocked_steps, do: %{name: name, status: "blocked", details: reason, evidence: []}
     {:ok, %{result: %{verdict: :blocked, summary: "Blocked.", steps: steps, findings: [], reason: reason}, tokens: %{}}}
@@ -549,9 +566,9 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
 
     test "a head with nothing to verify is held instead of skipped into Merging" do
-      {workspace, _head} = git_workspace!()
+      {workspace, head} = git_workspace!()
 
-      assert :ok = run(workspace, qa_policy: NothingToVerifyPolicy)
+      assert :ok = run(workspace, qa_policy: NothingToVerifyPolicy, gh_runner: pr_head(head, 0))
 
       refute_received {:qa_agent_run, _, _}
       refute_received {:memory_tracker_state_update, _, _}
@@ -561,6 +578,61 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert request =~ "Restart or cancel TP-816"
       assert request =~ "(PR #816) that changes nothing"
       assert %{decision: %{options: [%{label: "Restart"}, %{label: "Cancel"}]}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+    end
+
+    # The workspace diff is empty but GitHub lists changed files on the pull request: the workspace is
+    # what is wrong, so no person is asked to restart the work, and the run fails to be tried again.
+    test "an empty workspace diff on a pull request GitHub shows changing files raises no decision" do
+      {workspace, head} = git_workspace!()
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:qa_verification_failed, {:pull_request_not_empty, 32, ^head}}} =
+                   run(workspace, qa_policy: NothingToVerifyPolicy, gh_runner: pr_head(head, 32))
+        end)
+
+      assert log =~ "GitHub lists changed_files=32 on head=#{head}"
+      refute_received {:memory_tracker_comment, _, _}
+      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+    end
+
+    test "an empty workspace diff GitHub can't confirm raises no decision" do
+      {workspace, _head} = git_workspace!()
+
+      capture_log(fn ->
+        assert {:error, {:qa_verification_failed, {:pull_request_unreadable, _reason}}} =
+                 run(workspace, qa_policy: NothingToVerifyPolicy)
+      end)
+
+      refute_received {:memory_tracker_comment, _, _}
+    end
+
+    # A workspace behind its pull request (made again from the base branch, or a person pushed since)
+    # is put on the head GitHub has before QA selects and verifies anything.
+    test "a workspace behind its pull request head is reset to it before QA runs" do
+      {workspace, behind} = git_workspace!()
+      pr_head = commit_ahead!(workspace)
+
+      log = capture_log(fn -> assert :ok = run(workspace, gh_runner: pr_head(pr_head, 3)) end)
+
+      assert log =~ "workspace_head=#{behind} pr_head=#{pr_head} branch=auto/TP-816"
+      assert {head, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: workspace)
+      assert String.trim(head) == pr_head
+      assert_received {:qa_agent_run, _job, %Schema{}}
+      assert [%{outcome: "pass", head_sha: ^pr_head}] = verdicts()
+    end
+
+    test "a workspace that can't be put on its pull request head is not verified" do
+      {workspace, _head} = git_workspace!()
+      missing = String.duplicate("a", 40)
+
+      capture_log(fn ->
+        assert {:error, {:qa_verification_failed, {:pr_head_reset_failed, {:fetch_failed, _status, _output}}}} =
+                 run(workspace, gh_runner: pr_head(missing, 3))
+      end)
+
+      refute_received {:qa_agent_run, _, _}
+      assert verdicts() == []
     end
 
     test "a hold that cannot be set for a closed pull request is reported" do
@@ -1399,10 +1471,15 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
 
     test "a ticket without Proved by: lines reads no check and gets today's prompt" do
-      {workspace, _head} = git_workspace!()
-      unused = fn args, _opts -> flunk("gh should not run: #{inspect(args)}") end
+      {workspace, head} = git_workspace!()
+      head_read = pr_head(head, 1)
 
-      assert :ok = run_named(workspace, "## User walkthrough\n\n1. Run `symphony check`.\n", gh_runner: unused)
+      no_check = fn
+        ["pr", "view", @pr_url, "--json", "headRefOid,headRefName,changedFiles"] = args, opts -> head_read.(args, opts)
+        args, _opts -> flunk("no check should be read: #{inspect(args)}")
+      end
+
+      assert :ok = run_named(workspace, "## User walkthrough\n\n1. Run `symphony check`.\n", gh_runner: no_check)
 
       assert_received {:qa_agent_run, job, %Schema{}}
       assert job.proofs == []

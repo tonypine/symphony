@@ -9,6 +9,7 @@ defmodule SymphonyElixir.CodeReviewTest do
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.MergeConfirmation
   alias SymphonyElixir.RunStore
+  alias SymphonyElixir.TicketPullRequest
   alias SymphonyElixir.TicketSignals
 
   @repo_key "repo-code-review"
@@ -536,6 +537,93 @@ defmodule SymphonyElixir.CodeReviewTest do
 
       assert [%{name: "code_review", details: %{reason: "reviewer blocked the change"}}] =
                SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
+    end
+  end
+
+  # The reviewer judges the pull request's head as GitHub has it, never whatever the workspace holds:
+  # TP-1144's workspace was made again from main after a person's push, and was approved on main.
+  describe "the pull request head" do
+    @pr_url "https://github.com/acme/repo/pull/815"
+
+    setup do
+      :ok = TicketPullRequest.record_created(@repo_key, @issue_id, @pr_url, "auto/TP-815")
+      on_exit(fn -> TicketPullRequest.mark_finished(@repo_key, @pr_url, "merged") end)
+      :ok
+    end
+
+    defp pr_head(head, changed_files) do
+      fn ["pr", "view", @pr_url, "--json", "headRefOid,headRefName,changedFiles"], _opts ->
+        {Jason.encode!(%{"headRefOid" => head, "headRefName" => "auto/TP-815", "changedFiles" => changed_files}), 0}
+      end
+    end
+
+    defp commit_ahead!(workspace) do
+      {_out, 0} = System.cmd("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "the work"], cd: workspace)
+      {head, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: workspace)
+      {_out, 0} = System.cmd("git", ["reset", "-q", "--hard", "HEAD~1"], cd: workspace)
+      String.trim(head)
+    end
+
+    test "a workspace behind its pull request head is reset to it before the review" do
+      {workspace, behind} = git_workspace!()
+      pr_head = commit_ahead!(workspace)
+
+      github = pr_head(pr_head, 32)
+      log = capture_log(fn -> assert :ok = run(workspace, settings: designed_settings(), gh_runner: github) end)
+
+      assert log =~ "Workspace head differs from its pull request head"
+      assert log =~ "workspace_head=#{behind} pr_head=#{pr_head} branch=auto/TP-815"
+      assert {head, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: workspace)
+      assert String.trim(head) == pr_head
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      assert [%{outcome: "approve", head_sha: ^pr_head}] = verdicts()
+    end
+
+    test "a workspace on its pull request head is reviewed as it is" do
+      {workspace, head} = git_workspace!()
+
+      github = pr_head(head, 32)
+      log = capture_log(fn -> assert :ok = run(workspace, settings: designed_settings(), gh_runner: github) end)
+
+      refute log =~ "Workspace head differs"
+      assert [%{outcome: "approve", head_sha: ^head}] = verdicts()
+    end
+
+    test "a workspace that can't be put on its pull request head is not reviewed" do
+      {workspace, _head} = git_workspace!()
+
+      capture_log(fn ->
+        assert {:error, {:code_review_failed, {:pr_head_reset_failed, {:fetch_failed, _status, _output}}}} =
+                 run(workspace, settings: designed_settings(), gh_runner: pr_head(String.duplicate("a", 40), 32))
+      end)
+
+      refute_received {:reviewed, _, _}
+      assert verdicts() == []
+    end
+
+    test "an empty change is put to a person only when GitHub shows none either, naming what it compared" do
+      {workspace, head} = git_workspace!()
+      Process.put(:fake_qa_policy_result, {:nothing_to_verify, "the head changes no files against its base branch"})
+
+      assert :ok = run(workspace, settings: designed_settings(), gh_runner: pr_head(head, 0))
+
+      assert_received {:commented, @issue_id, request}
+      assert request =~ "## Decision needed: Restart or cancel TP-815"
+      assert request =~ "Symphony compared the latest commit of PR #815, as GitHub has it, with the main branch, and GitHub also shows PR #815 changing no files."
+    end
+
+    test "an empty workspace diff on a pull request GitHub shows changing files raises no decision" do
+      {workspace, head} = git_workspace!()
+      Process.put(:fake_qa_policy_result, {:nothing_to_verify, "the head changes no files against its base branch"})
+
+      capture_log(fn ->
+        assert {:error, {:code_review_failed, {:pull_request_not_empty, 32, ^head}}} =
+                 run(workspace, settings: designed_settings(), gh_runner: pr_head(head, 32))
+      end)
+
+      refute_received {:commented, _, _}
+      refute_received {:moved, _, _}
+      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
     end
   end
 

@@ -122,6 +122,9 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           checks: String.t() | nil
         }
 
+  @typedoc "A pull request's head commit, its branch and the number of files it changes."
+  @type head :: %{head_sha: String.t(), head_ref_name: String.t() | nil, changed_files: non_neg_integer() | nil}
+
   @typedoc "A changed file and its line counts."
   @type changed_file :: %{path: String.t(), additions: non_neg_integer(), deletions: non_neg_integer()}
 
@@ -205,6 +208,25 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   @spec fetch_summary(String.t(), keyword()) :: {:ok, summary()} | {:error, term()}
   def fetch_summary(pr_url, opts \\ []) when is_binary(pr_url) and is_list(opts) do
     with {:ok, summary, _pr, _checks} <- view_pull_request(pr_url, @summary_fields, opts), do: {:ok, summary}
+  end
+
+  @doc """
+  The pull request's head as GitHub has it, in one `gh pr view`: the head commit, its branch and how
+  many files the pull request changes. Review and QA compare their workspace with it
+  (`SymphonyElixir.PrHead`).
+  """
+  @spec fetch_head(String.t(), keyword()) :: {:ok, head()} | {:error, term()}
+  def fetch_head(pr_url, opts \\ []) when is_binary(pr_url) and is_list(opts) do
+    with {:ok, _host, _owner, _repo, _number} <- parse_github_pr_url(pr_url, opts),
+         {:ok, output} <- run_gh(["pr", "view", pr_url, "--json", "headRefOid,headRefName,changedFiles"], opts),
+         {:ok, %{"headRefOid" => sha} = pr} when is_binary(sha) and sha != "" <- Jason.decode(output) do
+      {:ok, %{head_sha: sha, head_ref_name: normalize_id(pr["headRefName"]), changed_files: pr["changedFiles"]}}
+    else
+      :error -> {:error, :invalid_pr_url}
+      {:ok, _decoded} -> {:error, :invalid_pr_payload}
+      {:error, %Jason.DecodeError{} = error} -> {:error, {:invalid_pr_payload, Exception.message(error)}}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   @doc """

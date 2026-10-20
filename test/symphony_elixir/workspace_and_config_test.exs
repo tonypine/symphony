@@ -10,6 +10,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   alias SymphonyElixir.GitHub.Hosts
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.Secret
+  alias SymphonyElixir.TicketPullRequest
 
   test "workspace bootstrap can be implemented in after_create hook" do
     test_root =
@@ -5190,7 +5191,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert trace =~ "symphony_git \"$repo\" fetch --upload-pack=git-upload-pack origin"
       assert trace =~ "*\"cannot lock ref\"*) sleep 1; symphony_git \"$repo\" fetch --upload-pack=git-upload-pack origin ;;"
       assert trace =~ "symphony_git \"$repo\" worktree add"
-      assert trace =~ "symphony_worktree_lock; branch_owner="
+      assert trace =~ "symphony_worktree_lock; symphony_git \"$repo\" worktree prune; branch_owner="
       assert trace =~ "symphony-worktree-add.lock"
       assert trace =~ "trap symphony_worktree_unlock EXIT"
       assert trace =~ "fi; symphony_worktree_unlock"
@@ -5855,6 +5856,54 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert File.read!(Path.join(workspace_path, "hook.saw")) == "base project\n"
       assert String.trim(git!(workspace_path, ["rev-parse", "HEAD"])) == pr_commit
       assert String.trim(git!(workspace_path, ["branch", "--show-current"])) == "feature/pr-head"
+    end)
+  end
+
+  test "a remote worktree for a ticket whose branch is on origin starts on that branch, unless its pull request closed" do
+    with_real_exec_fake_ssh(fn ctx ->
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      primary_repo = Path.join(ctx.test_root, "primary")
+      origin_repo = Path.join(ctx.test_root, "origin.git")
+      peer_repo = Path.join(ctx.test_root, "peer")
+      workspace_path = Path.join([workspace_root, "default", "MT-SSH-1159"])
+
+      create_primary_repo!(primary_repo, origin_repo)
+      base_commit = String.trim(git!(primary_repo, ["rev-parse", "HEAD"]))
+
+      {_output, 0} = System.cmd("git", ["clone", "-q", origin_repo, peer_repo])
+      configure_git_user!(peer_repo)
+      git!(peer_repo, ["checkout", "-b", "auto/MT-SSH-1159"])
+      git!(peer_repo, ["commit", "--allow-empty", "-m", "the ticket's work"])
+      git!(peer_repo, ["push", "-q", "origin", "auto/MT-SSH-1159"])
+      pushed = String.trim(git!(peer_repo, ["rev-parse", "HEAD"]))
+      git!(primary_repo, ["fetch", "origin"])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false,
+        worker_ssh_hosts: ["worker-01"],
+        repos: [%{"key" => "default", "workflow" => Workflow.workflow_file_path(), "team" => "Test", "base_branch" => "main"}]
+      )
+
+      issue = %Issue{id: "issue-ssh-1159", identifier: "MT-SSH-1159", repo_key: "default"}
+
+      capture_log(fn -> assert {:ok, ^workspace_path} = Workspace.create_for_issue(issue, "worker-01") end)
+      assert String.trim(git!(workspace_path, ["rev-parse", "HEAD"])) == pushed
+      assert String.trim(git!(workspace_path, ["branch", "--show-current"])) == "auto/MT-SSH-1159"
+
+      # A workspace folder removed by hand is made again on the branch.
+      File.rm_rf!(workspace_path)
+      capture_log(fn -> assert {:ok, ^workspace_path} = Workspace.create_for_issue(issue, "worker-01") end)
+      assert String.trim(git!(workspace_path, ["rev-parse", "HEAD"])) == pushed
+
+      capture_log(fn -> assert :ok = Workspace.remove_issue_workspaces_checked(issue, "worker-01") end)
+      :ok = TicketPullRequest.record_created("default", issue.id, "https://github.com/acme/repo/pull/1159", "auto/MT-SSH-1159")
+      :ok = TicketPullRequest.mark_finished("default", "https://github.com/acme/repo/pull/1159", "closed")
+
+      capture_log(fn -> assert {:ok, ^workspace_path} = Workspace.create_for_issue(issue, "worker-01") end)
+      assert String.trim(git!(workspace_path, ["rev-parse", "HEAD"])) == base_commit
     end)
   end
 
@@ -6624,6 +6673,111 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       refute File.exists?(Path.join(workspace, "unrelated.txt"))
     after
       File.rm_rf(test_root)
+    end
+  end
+
+  # TP-1144: a ticket's workspace is removed when it leaves the active states (Merging), and made
+  # again when it comes back (a person pushed, so Code Review). Made from main, it held none of the
+  # pull request's work, and the review and QA judged main.
+  describe "a new worktree for a ticket whose branch is already on origin" do
+    setup do
+      test_root = Path.join(System.tmp_dir!(), "symphony-elixir-remote-branch-#{System.unique_integer([:positive])}")
+      primary_repo = Path.join(test_root, "primary")
+      origin_repo = Path.join(test_root, "origin.git")
+      peer_repo = Path.join(test_root, "peer")
+      workflow_path = Path.join([test_root, "workflow", "WORKFLOW.md"])
+
+      create_primary_repo!(primary_repo, origin_repo)
+      base_commit = String.trim(git!(primary_repo, ["rev-parse", "HEAD"]))
+      File.mkdir_p!(Path.dirname(workflow_path))
+      File.write!(workflow_path, "---\n---\nprompt\n")
+
+      # The ticket's branch, pushed by its earlier run and then by a person, after the source clone
+      # last fetched: only the fetch before the dispatch sees the person's commit.
+      {_output, 0} = System.cmd("git", ["clone", "-q", origin_repo, peer_repo])
+      configure_git_user!(peer_repo)
+      git!(peer_repo, ["checkout", "-b", "auto/API-1159"])
+      File.write!(Path.join(peer_repo, "work.txt"), "the ticket's work\n")
+      git!(peer_repo, ["add", "work.txt"])
+      git!(peer_repo, ["commit", "-m", "the ticket's work"])
+      git!(peer_repo, ["commit", "--allow-empty", "-m", "a person's push"])
+      git!(peer_repo, ["push", "-q", "origin", "auto/API-1159"])
+      pushed = String.trim(git!(peer_repo, ["rev-parse", "HEAD"]))
+
+      File.write!(Workflow.symphony_file_path(), """
+      issues:
+        provider: memory
+      workspaces:
+        root: #{Path.join(test_root, "workspaces")}
+      agent:
+        runtime: codex
+        command: codex app-server
+      repositories:
+        - key: api
+          base_branch: main
+          workflow: #{workflow_path}
+          route:
+            team: Test
+          workspace:
+            strategy: worktree
+            repo: #{primary_repo}
+            fetch_before_dispatch: true
+      """)
+
+      assert :ok = Config.validate!()
+      on_exit(fn -> File.rm_rf(test_root) end)
+
+      %{base_commit: base_commit, pushed: pushed, issue: %Issue{id: "api-issue-1159", identifier: "API-1159", repo_key: "api", state: "Code Review"}}
+    end
+
+    test "starts on the branch's head as origin has it, fetched first", %{issue: issue, pushed: pushed} do
+      log = capture_log(fn -> assert {:ok, _workspace} = Workspace.create_for_issue(issue) end)
+
+      workspace = Path.join([Config.settings!().workspace.root, "api", "API-1159"])
+      assert String.trim(git!(workspace, ["rev-parse", "HEAD"])) == pushed
+      assert String.trim(git!(workspace, ["branch", "--show-current"])) == "auto/API-1159"
+      assert File.read!(Path.join(workspace, "work.txt")) == "the ticket's work\n"
+      assert log =~ "Creating the workspace on the branch already on origin"
+    end
+
+    test "a ticket whose pull request closed or merged starts again from the base branch", %{issue: issue, base_commit: base_commit} do
+      pr_url = "https://github.com/acme/api/pull/1159"
+
+      for state <- ["closed", "merged"] do
+        :ok = TicketPullRequest.record_created("api", issue.id, pr_url, "auto/API-1159")
+        :ok = TicketPullRequest.mark_finished("api", pr_url, state)
+
+        assert {:ok, workspace} = Workspace.create_for_issue(issue)
+        assert String.trim(git!(workspace, ["rev-parse", "HEAD"])) == base_commit
+        refute File.exists?(Path.join(workspace, "work.txt"))
+        assert :ok = Workspace.remove_issue_workspaces_checked(issue)
+      end
+    end
+
+    test "a workspace folder removed by hand is made again on the branch's head", %{issue: issue, pushed: pushed} do
+      capture_log(fn -> assert {:ok, _workspace} = Workspace.create_for_issue(issue) end)
+      workspace = Path.join([Config.settings!().workspace.root, "api", "API-1159"])
+      File.rm_rf!(workspace)
+
+      capture_log(fn -> assert {:ok, _workspace} = Workspace.create_for_issue(issue) end)
+      assert String.trim(git!(workspace, ["rev-parse", "HEAD"])) == pushed
+      assert File.read!(Path.join(workspace, "work.txt")) == "the ticket's work\n"
+    end
+
+    test "a ticket whose pull request is open continues the branch", %{issue: issue, pushed: pushed} do
+      :ok = TicketPullRequest.record_created("api", issue.id, "https://github.com/acme/api/pull/1159", "auto/API-1159")
+      on_exit(fn -> TicketPullRequest.mark_finished("api", "https://github.com/acme/api/pull/1159", "merged") end)
+
+      capture_log(fn -> assert {:ok, _workspace} = Workspace.create_for_issue(issue) end)
+      workspace = Path.join([Config.settings!().workspace.root, "api", "API-1159"])
+      assert String.trim(git!(workspace, ["rev-parse", "HEAD"])) == pushed
+    end
+
+    test "a ticket with no branch on origin starts from the base branch", %{base_commit: base_commit} do
+      issue = %Issue{id: "api-issue-new", identifier: "API-NEW", repo_key: "api"}
+
+      assert {:ok, workspace} = Workspace.create_for_issue(issue)
+      assert String.trim(git!(workspace, ["rev-parse", "HEAD"])) == base_commit
     end
   end
 

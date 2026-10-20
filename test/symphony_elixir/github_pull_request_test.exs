@@ -1311,6 +1311,37 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     end
   end
 
+  describe "fetch_head/2" do
+    test "reads the head commit, its branch and the number of changed files in one gh call" do
+      test_pid = self()
+      pr_url = "https://github.com/acme/app/pull/619"
+
+      runner = fn args, _opts ->
+        send(test_pid, {:gh, args})
+        {Jason.encode!(%{"headRefOid" => "0029a1a4", "headRefName" => "auto/TP-1144", "changedFiles" => 32}), 0}
+      end
+
+      assert {:ok, %{head_sha: "0029a1a4", head_ref_name: "auto/TP-1144", changed_files: 32}} =
+               PullRequest.fetch_head(pr_url, gh_runner: runner)
+
+      assert_received {:gh, ["pr", "view", ^pr_url, "--json", "headRefOid,headRefName,changedFiles"]}
+    end
+
+    test "answers an error for a bad URL, a failed gh call or a payload without a head" do
+      pr_url = "https://github.com/acme/app/pull/619"
+      assert {:error, :invalid_pr_url} = PullRequest.fetch_head("https://example.com/x", gh_runner: fn _args, _opts -> flunk("no call") end)
+
+      answering = fn output, status ->
+        PullRequest.fetch_head(pr_url, gh_runner: fn _args, _opts -> {output, status} end)
+      end
+
+      assert {:error, {:gh_failed, _args, 1, "Not Found"}} = answering.("Not Found", 1)
+      assert {:error, :invalid_pr_payload} = answering.("{}", 0)
+      assert {:error, :invalid_pr_payload} = answering.(~s({"headRefOid": ""}), 0)
+      assert {:error, {:invalid_pr_payload, _message}} = answering.("not json", 0)
+    end
+  end
+
   describe "fetch_page/2" do
     test "reads the summary plus dates, changed files, commits and check counts in one gh call" do
       test_pid = self()

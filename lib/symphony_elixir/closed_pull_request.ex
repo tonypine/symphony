@@ -130,8 +130,10 @@ defmodule SymphonyElixir.ClosedPullRequest do
   defp problem(:no_pull_request), do: "has no open pull request"
   defp problem({:no_change, url}), do: "has a pull request#{pr_suffix(url)} that changes nothing against the main branch"
 
-  defp why({:no_change, _url}) do
-    "Its branch has no commit that the main branch lacks. Either the work already reached the main branch another way, or the branch lost it. " <>
+  # It names what was compared: the pull request's latest commit, which GitHub also reads as
+  # changing nothing (`SymphonyElixir.PrHead.confirm_empty/2`), or the branch when there is none.
+  defp why({:no_change, url}) do
+    "#{compared(Request.pull_request(url))} Either the work already reached the main branch another way, or the branch lost it. " <>
       "Symphony does not skip the checks for a change it cannot see."
   end
 
@@ -157,6 +159,11 @@ defmodule SymphonyElixir.ClosedPullRequest do
 
   defp recommendation_reason({:no_change, _url}), do: "Restarting rebuilds the change, so the review and QA see real work."
   defp recommendation_reason(_cause), do: "Reopening keeps the work, the review and the checks already done."
+
+  defp compared(nil), do: "Symphony compared the latest commit of the ticket's branch with the main branch: it has no commit the main branch lacks."
+
+  defp compared(pr),
+    do: "Symphony compared the latest commit of #{pr}, as GitHub has it, with the main branch, and GitHub also shows #{pr} changing no files."
 
   defp pr_or_its({:closed, url}), do: pr(url)
   defp pr_or_its(:no_pull_request), do: "its pull request"

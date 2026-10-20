@@ -96,6 +96,16 @@ defmodule SymphonyElixir.RestartTest do
       assert_received {:close, @pr_url}
     end
 
+    # The old branch may still be on origin: the closed record is what starts the next workspace
+    # from the base branch instead of continuing that branch.
+    test "the pull request it closes is recorded closed at once" do
+      :ok = RunStore.clear()
+      Application.put_env(:symphony_elixir, :restart_test_activity, activity([]))
+
+      assert :ok = Restart.perform(issue(pr_url: @pr_url), opts())
+      assert %{state: "closed", pr_url: @pr_url} = TicketPullRequest.get("repo-a", "issue-restart")
+    end
+
     test "a ticket whose recorded pull request closed or merged has none to close" do
       :ok = RunStore.clear()
 

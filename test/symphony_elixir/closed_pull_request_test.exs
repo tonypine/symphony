@@ -150,5 +150,17 @@ defmodule SymphonyElixir.ClosedPullRequestTest do
       named = ClosedPullRequest.request(%Issue{id: "issue-bare", identifier: "TP-1", title: "", state: ""}, {:no_change, @pr_url})
       assert named.question =~ "TP-1 has a pull request (PR #512) that changes nothing"
     end
+
+    # The empty-change request says what was compared: the pull request's latest commit as GitHub has
+    # it, which GitHub also reads as changing nothing, or the branch of a ticket with no pull request.
+    test "an empty-change request names the head it compared" do
+      issue = %Issue{id: "issue-bare", identifier: "TP-1", title: "", state: ""}
+
+      assert ClosedPullRequest.request(issue, {:no_change, @pr_url}).why =~
+               "Symphony compared the latest commit of PR #512, as GitHub has it, with the main branch, and GitHub also shows PR #512 changing no files."
+
+      assert ClosedPullRequest.request(issue, {:no_change, nil}).why =~
+               "Symphony compared the latest commit of the ticket's branch with the main branch: it has no commit the main branch lacks."
+    end
   end
 end

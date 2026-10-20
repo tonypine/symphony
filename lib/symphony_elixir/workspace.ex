@@ -9,6 +9,7 @@ defmodule SymphonyElixir.Workspace do
   alias SymphonyElixir.Config.Schema.Hooks
   alias SymphonyElixir.GitHub.Repo, as: GitHubRepo
   alias SymphonyElixir.Repo.{Fetcher, FetchLog}
+  alias SymphonyElixir.TicketPullRequest
 
   @remote_workspace_marker "__SYMPHONY_WORKSPACE__"
   # How much of a timed-out hook's output its log line keeps.
@@ -387,7 +388,8 @@ defmodule SymphonyElixir.Workspace do
          :ok <- prepare_worktree_repo(repo, issue_context, settings),
          branch = worktree_branch(issue_context),
          base_ref = worktree_base_ref(issue_context),
-         create_base_ref = worktree_create_base_ref(repo, issue_context, base_ref),
+         remote_branch = remote_branch_ref(repo, issue_context, base_ref, branch),
+         create_base_ref = remote_branch || worktree_create_base_ref(repo, issue_context, base_ref),
          create_base_ref = create_base_ref || managed_clone_base_ref(repo, branch, settings),
          siblings = sibling_release_policy(issue_context),
          {:ok, created?} <-
@@ -431,6 +433,7 @@ defmodule SymphonyElixir.Workspace do
         "symphony_git \"$repo\" rev-parse --git-dir >/dev/null",
         remote_worktree_lock_functions(settings.hooks.timeout_ms),
         remote_fetch_before_dispatch_command(settings),
+        remote_branch_base_ref_command(issue_context, base_ref),
         remote_workspace_parent_containment_preamble(),
         remote_after_create_running_check(),
         "if [ -d \"$workspace\" ]; then",
@@ -590,6 +593,24 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
+  @doc """
+  Puts the local `workspace` on `branch` at `commit`, as a reused worktree's reset does: work only
+  the workspace has (commits no remote has, uncommitted or untracked files) is kept under
+  `refs/symphony/orphaned/<sha>` first. Review and QA use it to judge the pull request's head rather
+  than whatever the workspace holds (`SymphonyElixir.PrHead`).
+  """
+  @spec reset_to_commit(Path.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def reset_to_commit(workspace, branch, commit) when is_binary(workspace) and is_binary(branch) and is_binary(commit) do
+    _ = backup_local_work_before_reset(workspace)
+
+    with :ok <- run_git(workspace, ["reset", "--hard"]),
+         :ok <- run_git(workspace, ["checkout", "-f", "-B", branch, commit]) do
+      :ok
+    else
+      {:error, reason, _output} -> {:error, reason}
+    end
+  end
+
   # Before the reuse reset rewrites the branch to the remote head, snapshot any
   # local-only work so a crashed prior run's commits, uncommitted edits, or
   # untracked files (which a colliding `checkout -f` would clobber) stay
@@ -728,10 +749,15 @@ defmodule SymphonyElixir.Workspace do
   # Under the repo's fetch lock: parallel `worktree add`s of one repo race for its
   # `.git/config` lock and refs, and the loser exits 255 with its branch made but no
   # worktree. `--no-track` keeps the add from writing the branch's upstream config.
+  # A workspace folder removed by hand leaves its worktree registered, and `worktree add`
+  # refuses a registered path, so the registrations of folders that are gone are pruned
+  # first and the workspace is made again.
   defp add_local_worktree(repo, workspace, branch, base_ref, siblings) do
     File.mkdir_p!(Path.dirname(workspace))
 
     Fetcher.with_lock(repo, fn ->
+      _ = run_git(repo, ["worktree", "prune"])
+
       case check_branch_not_checked_out_elsewhere(repo, workspace, branch, siblings) do
         :ok ->
           repo
@@ -878,7 +904,7 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp remote_worktree_add_command do
-    "symphony_worktree_lock; branch_owner=$(symphony_git \"$repo\" worktree list --porcelain | awk -v b=\"$branch\" 'BEGIN { wt = \"\" } /^worktree / { wt = substr($0, 10); next } $0 == \"branch refs/heads/\" b { print wt; exit }'); if [ -n \"$branch_owner\" ] && [ \"$branch_owner\" != \"$workspace\" ]; then printf 'workspace_branch_already_checked_out_elsewhere\\t%s\\t%s\\t%s\\n' \"$branch\" \"$branch_owner\" \"$workspace\"; exit 45; fi; if [ \"$base_ref\" != \"HEAD\" ]; then symphony_git \"$repo\" worktree add --no-track -B \"$branch\" \"$workspace\" \"$base_ref\"; elif symphony_git \"$repo\" rev-parse --verify \"refs/heads/$branch\" >/dev/null 2>&1; then symphony_git \"$repo\" worktree add \"$workspace\" \"$branch\"; else symphony_git \"$repo\" worktree add -b \"$branch\" \"$workspace\" HEAD; fi; symphony_worktree_unlock"
+    "symphony_worktree_lock; symphony_git \"$repo\" worktree prune; branch_owner=$(symphony_git \"$repo\" worktree list --porcelain | awk -v b=\"$branch\" 'BEGIN { wt = \"\" } /^worktree / { wt = substr($0, 10); next } $0 == \"branch refs/heads/\" b { print wt; exit }'); if [ -n \"$branch_owner\" ] && [ \"$branch_owner\" != \"$workspace\" ]; then printf 'workspace_branch_already_checked_out_elsewhere\\t%s\\t%s\\t%s\\n' \"$branch\" \"$branch_owner\" \"$workspace\"; exit 45; fi; if [ \"$base_ref\" != \"HEAD\" ]; then symphony_git \"$repo\" worktree add --no-track -B \"$branch\" \"$workspace\" \"$base_ref\"; elif symphony_git \"$repo\" rev-parse --verify \"refs/heads/$branch\" >/dev/null 2>&1; then symphony_git \"$repo\" worktree add \"$workspace\" \"$branch\"; else symphony_git \"$repo\" worktree add -b \"$branch\" \"$workspace\" HEAD; fi; symphony_worktree_unlock"
   end
 
   # The remote counterpart of the `Fetcher.with_lock/2` the local add runs under:
@@ -1747,6 +1773,42 @@ defmodule SymphonyElixir.Workspace do
 
   defp worktree_base_ref(%{workspace_base_ref: base_ref}) when is_binary(base_ref) and base_ref != "", do: base_ref
   defp worktree_base_ref(_issue_context), do: nil
+
+  # A new worktree for a ticket whose branch is already on origin (its workspace was removed when
+  # the ticket left the active states, or by hand, while its pull request is open) continues that
+  # branch. Starting it again from the base branch would leave the run, the review and QA on a
+  # change of nothing while the work sits on origin. Origin was fetched just before
+  # (`fetch_before_dispatch`). A ticket whose pull request closed or merged starts again from the
+  # base branch, as Restart and a closed pull request's rework promise, and an explicit base ref
+  # (PR runs) wins. The full ref name keeps a local branch called `origin/...` out of it.
+  defp remote_branch_ref(repo, issue_context, nil, branch) do
+    ref = "refs/remotes/origin/#{branch}"
+
+    if continues_remote_branch?(issue_context) and git_ref_exists?(repo, ref) do
+      Logger.info("Creating the workspace on the branch already on origin #{issue_log_context(issue_context)} branch=#{branch}")
+      ref
+    end
+  end
+
+  defp remote_branch_ref(_repo, _issue_context, _base_ref, _branch), do: nil
+
+  # The SSH worker's counterpart, run on the worker after its fetch.
+  defp remote_branch_base_ref_command(issue_context, nil) do
+    if continues_remote_branch?(issue_context) do
+      "if symphony_git \"$repo\" rev-parse --verify -q \"refs/remotes/origin/$branch^{commit}\" >/dev/null; then base_ref=\"refs/remotes/origin/$branch\"; fi"
+    end
+  end
+
+  defp remote_branch_base_ref_command(_issue_context, _base_ref), do: nil
+
+  defp continues_remote_branch?(%{issue_id: issue_id, repo_key: repo_key}) when is_binary(issue_id) do
+    case TicketPullRequest.get(repo_key, issue_id) do
+      %{state: state} when state in ["closed", "merged"] -> false
+      _open_none_or_unreadable -> true
+    end
+  end
+
+  defp continues_remote_branch?(_issue_context), do: true
 
   # Base ref a fresh local worktree branches off. An explicit base_ref (PR runs)
   # wins. Otherwise default to the configured repo base branch, preferring the
