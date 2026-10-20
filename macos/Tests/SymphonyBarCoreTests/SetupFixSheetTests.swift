@@ -96,6 +96,7 @@ final class SetupFixSheetTests: XCTestCase {
     func testAFailedFixKeepsTheSheetWithTheReason() throws {
         var sheet = try XCTUnwrap(SetupFixSheet(problem: label))
         let shown = sheet
+        XCTAssertNil(sheet.failedDestination)
         sheet.start()
         XCTAssertTrue(sheet.isWorking)
         XCTAssertFalse(sheet.canConfirm)
@@ -103,6 +104,8 @@ final class SetupFixSheetTests: XCTestCase {
         XCTAssertEqual(sheet.error, "Linear refused to create the label \"Needs Decision\" in team TP: HTTP 403.")
         XCTAssertEqual(sheet.confirmTitle, "Try Again")
         XCTAssertEqual(sheet.cancelTitle, "Close")
+        XCTAssertEqual(sheet.failedDestination, .settings)
+        XCTAssertEqual(sheet.failedDestination?.title, "Open Settings…")
         XCTAssertTrue(sheet.canConfirm)
         // Everything else the sheet shows stays.
         XCTAssertEqual(sheet.title, shown.title)
@@ -111,6 +114,7 @@ final class SetupFixSheetTests: XCTestCase {
         XCTAssertEqual(sheet.id, shown.id)
         sheet.start()
         XCTAssertNil(sheet.error)
+        XCTAssertNil(sheet.failedDestination)
     }
 
     // MARK: - Config (SU7)

@@ -322,7 +322,11 @@ final class SetupTests: XCTestCase {
         let page = SetupPage(payload: SetupPayload(checkedAt: ISO8601DateFormatter().date(from: "2026-10-19T12:05:00Z")), now: now, timeZone: utc)
         XCTAssertEqual(page.mood, .healthy)
         XCTAssertEqual(page.sentence, "Symphony is set up right.")
-        XCTAssertEqual(page.context, "Checked routing, teams, labels, statuses, keys, secrets and runtime at 12:05.")
+        XCTAssertEqual(
+            page.context,
+            "Checked routing, teams, labels, statuses, keys, secrets and runtime at 12:05. "
+                + "Symphony checks again every 15 minutes and each time symphony.yml changes."
+        )
         XCTAssertNil(page.staleBanner)
     }
 
@@ -330,7 +334,7 @@ final class SetupTests: XCTestCase {
         let payload = SetupPayload(notChecked: [.init(id: "labels", title: "Labels", reason: "No key.")], checkedAt: now)
         let page = SetupPage(payload: payload, now: now, timeZone: utc)
         XCTAssertEqual(page.sentence, "Nothing is wrong in what Symphony could check.")
-        XCTAssertEqual(page.context, "Checked routing, keys, secrets and runtime at 12:10.")
+        XCTAssertEqual(page.context, "Checked routing, keys, secrets and runtime at 12:10. " + SetupPage.recheckNote)
         XCTAssertEqual(SetupPage.checkedAreas(SetupPayload()), "routing, teams, labels, statuses, keys, secrets and runtime")
     }
 

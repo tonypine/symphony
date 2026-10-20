@@ -249,7 +249,7 @@ struct SetupContent: View {
                 }
                 .animation(.standard, value: model.setupBanner)
                 .sheet(item: sheet) { sheet in
-                    SetupFixSheetView(sheet: sheet, cancel: model.cancelSetupSheet, confirm: { model.confirm(sheet) })
+                    SetupFixSheetView(sheet: sheet, cancel: model.cancelSetupSheet, confirm: { model.confirm(sheet) }, open: model.open)
                 }
             }
         }
@@ -523,11 +523,13 @@ struct SetupRowView: View {
 // MARK: - The sheet
 
 /// SU7–SU9 (C17): the fix's question, what happens, the exact change, what stays, how to undo it, and Cancel with
-/// the verb. A spinner shows while it works; a failure shows inline with Try Again and Close.
+/// the verb. A spinner shows while it works; a failure shows inline with Open Settings…, Close and Try Again.
 struct SetupFixSheetView: View {
     let sheet: SetupFixSheet
     let cancel: () -> Void
     let confirm: () -> Void
+    /// Open Settings… on a failed fix; the sheet stays open behind it for Try Again.
+    var open: (SetupDestination) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
@@ -557,6 +559,9 @@ struct SetupFixSheetView: View {
             HStack(spacing: DesignTokens.Space.s2) {
                 if sheet.isWorking {
                     ProgressView().controlSize(.small).accessibilityLabel("Working")
+                }
+                if let destination = sheet.failedDestination {
+                    Button(destination.title) { open(destination) }
                 }
                 Spacer(minLength: 0)
                 Button(sheet.cancelTitle, role: .cancel, action: cancel)

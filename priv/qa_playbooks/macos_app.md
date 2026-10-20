@@ -204,13 +204,15 @@ GitHub or Linear in QA:
     `  enabled: true`); **Remove**: the row leaves and the banner names the
     `symphony.yml.<time>.bak` copy and offers **Undo**. **Undo** within 10 s: the warning row is
     back, and **Remove…** shows the same two lines again (the key is back in the file). **Remove**
-    again, then **Check Again** (⌘R): "Symphony is set up right." with "at 12:05", and no badge.
+    again, then **Check Again** (⌘R): "Symphony is set up right." with "at 12:05" and "Symphony checks again every 15 minutes
+    and each time symphony.yml changes.", and no badge.
     Each of these posts `POST /api/v1/setup/refresh`. That the file loses the key, the backup
     holds the old bytes and Undo restores them byte for byte is proved by
     `SetupConfigEditTests`, not by reading the file.
   - Refused: launch again with `macos/Tests/Fixtures/director-app/setup-refused`. **Create Label…**
     then **Create Label**: the sheet stays open with "Linear refused to create the label …
-    (HTTP 403) …" in red, **Try Again** and **Close**; the row is still there.
+    (HTTP 403) …" in red, **Open Settings…**, **Close** and **Try Again**; **Open Settings…** opens the
+    Settings window with the sheet still open behind it, and the row is still there.
   - Look: judge the page, its Details, both sheets and the banner in light and dark against
     `macos/Tests/Snapshots/setup-*.png`.
 

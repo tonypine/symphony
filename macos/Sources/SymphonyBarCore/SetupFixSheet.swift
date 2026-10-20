@@ -2,8 +2,8 @@ import Foundation
 
 /// SU7–SU9: the consequence sheet of a Setup fix. The title is the question; then what happens, what stays the same
 /// and how to undo it, the exact change (the diff of `symphony.yml`, or what Linear gets), and Cancel with the verb.
-/// Nothing changes until its button is pressed. A fix that fails keeps the sheet open with the reason, **Try Again**
-/// and **Close**.
+/// Nothing changes until its button is pressed. A fix that fails keeps the sheet open with the reason, **Open
+/// Settings…**, **Close** and **Try Again**.
 public struct SetupFixSheet: Equatable, Identifiable {
     public enum Kind: Equatable {
         /// A `config_edit` fix: the diff of `symphony.yml`, nil when the edit can't be made.
@@ -120,6 +120,13 @@ public struct SetupFixSheet: Equatable, Identifiable {
     public var cancelTitle: String {
         if case .failed = phase { return "Close" }
         return "Cancel"
+    }
+
+    /// SU9: once a fix failed, the sheet also goes to Settings, where the Linear key and the `symphony.yml` the app
+    /// edits are set, so a refusal can be answered there and the fix tried again.
+    public var failedDestination: SetupDestination? {
+        if case .failed = phase { return .settings }
+        return nil
     }
 
     public var error: String? {

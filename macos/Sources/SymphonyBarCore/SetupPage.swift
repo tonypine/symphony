@@ -99,6 +99,8 @@ public struct SetupPage: Equatable {
     public static let checkAgainTitle = "Check Again"
     public static let detailsTitle = "Details"
     public static let healthySentence = "Symphony is set up right."
+    /// SU5: when the checks run again by themselves (`Setup`'s interval and its reload hook on the service).
+    public static let recheckNote = "Symphony checks again every 15 minutes and each time symphony.yml changes."
     /// The categories in the order the cards list them; one the app doesn't know goes last.
     public static let categories = ["routing", "teams", "labels", "statuses", "keys", "secrets", "runtime"]
 
@@ -146,7 +148,7 @@ public struct SetupPage: Equatable {
             mood = .healthy
             sentence = payload.notChecked.isEmpty ? Self.healthySentence : "Nothing is wrong in what Symphony could check."
             let checked = Self.checkedAreas(payload)
-            context = "Checked \(checked)" + (time.map { " at \($0)." } ?? ".")
+            context = "Checked \(checked)" + (time.map { " at \($0)." } ?? ".") + " " + Self.recheckNote
         } else {
             mood = .problems
             let errorCount = problems.filter { $0.severity == .error }.count
