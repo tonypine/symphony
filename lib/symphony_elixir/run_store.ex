@@ -8,6 +8,7 @@ defmodule SymphonyElixir.RunStore do
 
   alias SymphonyElixir.{Config, Paths, TicketState}
   alias SymphonyElixir.RunStore.RunIndex
+  alias SymphonyElixir.TicketEvents.Event
 
   @runs_table :symphony_run_store_runs
   @retry_table :symphony_run_store_retries
@@ -15,6 +16,7 @@ defmodule SymphonyElixir.RunStore do
   @pr_review_table :symphony_run_store_pr_reviews
   @ci_check_table :symphony_run_store_ci_checks
   @ticket_state_table :symphony_run_store_ticket_states
+  @ticket_events_table :symphony_run_store_ticket_events
   @ticket_pull_request_table :symphony_run_store_ticket_pull_requests
   @verification_allocation_table :symphony_run_store_verification_allocations
   @eval_logs_table :symphony_run_store_eval_logs
@@ -24,6 +26,8 @@ defmodule SymphonyElixir.RunStore do
   @eval_log_indexes [:repo_key, :outcome, :agent_kind, :issue_label, :date]
   @learning_attributes [:key, :repo_key, :created_at, :record]
   @learning_indexes [:repo_key, :created_at]
+  @ticket_event_attributes [:key, :repo_key, :issue_id, :run_id, :type, :seq, :record]
+  @ticket_event_indexes [:repo_key, :run_id, :type]
   @tables [
     {@runs_table, [:key, :repo_key, :run_id, :record], [index: [:repo_key]]},
     {@retry_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key]]},
@@ -35,7 +39,8 @@ defmodule SymphonyElixir.RunStore do
     {@verification_allocation_table, [:key, :repo_key, :run_id, :record], [index: [:repo_key]]},
     {@pause_table, [:key, :record], []},
     {@eval_logs_table, @eval_log_attributes, [type: :bag, index: @eval_log_indexes]},
-    {@learnings_table, @learning_attributes, [index: @learning_indexes]}
+    {@learnings_table, @learning_attributes, [index: @learning_indexes]},
+    {@ticket_events_table, @ticket_event_attributes, [type: :bag, index: @ticket_event_indexes]}
   ]
   @data_tables Enum.map(@tables, fn {table, _attributes, _opts} -> table end)
   @codex_totals_key :codex_totals
@@ -702,6 +707,53 @@ defmodule SymphonyElixir.RunStore do
       end)
     end
   end
+
+  @doc """
+  Appends `event` (`SymphonyElixir.TicketEvents.Event`) to its ticket's event stream in one durable
+  transaction, and returns the event as stored. The transaction holds the ticket record's write
+  lock, so concurrent appends to one ticket are serialized: the event's `seq` is one past the
+  highest the ticket has used, and the record's `event_seq` takes it (the record is created when
+  none exists). An event with no `phase` takes the record's. An event whose idempotency key an
+  event of the ticket already holds is not written: that event is returned instead.
+  """
+  @spec append_ticket_event(Event.t()) :: {:ok, Event.t()} | {:error, term()}
+  def append_ticket_event(%Event{} = event) do
+    case append_ticket_events([event]) do
+      {:ok, [stored]} -> {:ok, stored}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Appends one ticket's `events`, in order, in one durable transaction (as `append_ticket_event/1`
+  each), and returns them as stored. Events of more than one ticket are refused.
+  """
+  @spec append_ticket_events([Event.t()]) :: {:ok, [Event.t()]} | {:error, term()}
+  def append_ticket_events([]), do: {:ok, []}
+
+  def append_ticket_events([%Event{repo_key: repo_key, issue_id: issue_id} | _] = events) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- one_ticket(events, repo_key, issue_id),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_ticket_events(repo_key, issue_id, events) end)
+    end
+  end
+
+  def append_ticket_events(_events), do: {:error, :invalid_ticket_event}
+
+  @doc """
+  The events of `repo_key`'s ticket `issue_id`, oldest first by `at`, then `seq`. `opts`:
+  `types:` (the types to keep) and `run_id:` (the run to keep).
+  """
+  @spec list_ticket_events(String.t(), String.t(), keyword()) :: [Event.t()] | {:error, term()}
+  def list_ticket_events(repo_key, issue_id, opts) when is_binary(issue_id) and is_list(opts) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      transaction(fn -> repo_key |> read_ticket_events(issue_id) |> filter_ticket_events(opts) end)
+    end
+  end
+
+  def list_ticket_events(_repo_key, _issue_id, _opts), do: {:error, :invalid_issue_id}
 
   @doc """
   Writes the ticket's pull request record (`SymphonyElixir.TicketPullRequest`), replacing the one
@@ -1709,6 +1761,66 @@ defmodule SymphonyElixir.RunStore do
         [] ->
           {:error, :ticket_state_not_found}
       end
+    end)
+  end
+
+  defp one_ticket(events, repo_key, issue_id) do
+    if Enum.all?(events, &match?(%Event{issue_id: ^issue_id}, &1)) and
+         Enum.all?(events, &(normalize_repo_key(&1.repo_key) == {:ok, repo_key})) do
+      :ok
+    else
+      {:error, :mixed_ticket_events}
+    end
+  end
+
+  defp write_ticket_events(repo_key, issue_id, events) do
+    key = scoped_key(repo_key, issue_id)
+
+    record =
+      case :mnesia.read(@ticket_state_table, key, :write) do
+        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> TicketState.normalize(record)
+        [] -> TicketState.new(repo_key, issue_id)
+      end
+
+    stored = read_ticket_events(repo_key, issue_id)
+    last_seq = stored |> Enum.map(& &1.seq) |> Enum.max(fn -> 0 end) |> max(record.event_seq)
+
+    {appended, _stored, last_seq} =
+      Enum.reduce(events, {[], stored, last_seq}, fn event, {appended, stored, last_seq} ->
+        case find_idempotent(stored, event.idempotency) do
+          %Event{} = existing ->
+            {[existing | appended], stored, last_seq}
+
+          nil ->
+            event = %{event | repo_key: repo_key, issue_id: issue_id, seq: last_seq + 1, phase: event.phase || record.phase}
+            :mnesia.write({@ticket_events_table, key, repo_key, issue_id, event.run_id, event.type, event.seq, Event.to_record(event)})
+            {[event | appended], [event | stored], event.seq}
+        end
+      end)
+
+    if last_seq != record.event_seq do
+      :mnesia.write({@ticket_state_table, key, repo_key, issue_id, %{record | event_seq: last_seq}})
+    end
+
+    {:ok, Enum.reverse(appended)}
+  end
+
+  defp find_idempotent(_stored, nil), do: nil
+  defp find_idempotent(stored, key), do: Enum.find(stored, &(&1.idempotency == key))
+
+  defp read_ticket_events(repo_key, issue_id) do
+    @ticket_events_table
+    |> :mnesia.read(scoped_key(repo_key, issue_id))
+    |> Enum.map(fn {@ticket_events_table, _key, _repo_key, _issue_id, _run_id, _type, _seq, record} -> Event.normalize(record) end)
+    |> Enum.sort_by(&{datetime_sort_key(&1.at), &1.seq})
+  end
+
+  defp filter_ticket_events(events, opts) do
+    types = Keyword.get(opts, :types)
+    run_id = Keyword.get(opts, :run_id)
+
+    Enum.filter(events, fn event ->
+      (is_nil(types) or event.type in List.wrap(types)) and (is_nil(run_id) or event.run_id == run_id)
     end)
   end
 

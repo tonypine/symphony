@@ -24,6 +24,7 @@ defmodule SymphonyElixir.TicketStateTest do
                path_unlocks: [],
                decisions: [],
                pr_watch: nil,
+               event_seq: 0,
                updated_at: nil
              }
     end
@@ -112,6 +113,7 @@ defmodule SymphonyElixir.TicketStateTest do
                path_unlocks: [],
                decisions: [],
                pr_watch: nil,
+               event_seq: 0,
                updated_at: nil
              }
     end
@@ -135,6 +137,30 @@ defmodule SymphonyElixir.TicketStateTest do
       assert [%{head_sha: "abc", status: "green"}] = record.ci_states
       assert [%{name: "handoff", details: %{}, at: nil}] = record.signals
       assert record.updated_at == nil
+    end
+
+    test "a record stored before event_seq reads back with event_seq 0 and its other fields unchanged" do
+      stored = %{
+        repo_key: "repo-a",
+        issue_id: "issue-1",
+        issue_identifier: "ACME-1",
+        phase: "QA",
+        signals: [%{name: "handoff", details: %{to: "QA"}, at: @at}],
+        verdicts: [%{kind: "qa", head_sha: "abc", outcome: "pass", recorded_at: @at, details: %{}}],
+        updated_at: @at
+      }
+
+      record = TicketState.normalize(stored)
+
+      assert record.event_seq == 0
+      assert Map.delete(record, :event_seq) == Map.delete(TicketState.normalize(Map.put(stored, :event_seq, 9)), :event_seq)
+      assert Map.take(record, Map.keys(stored)) == stored
+    end
+
+    test "keeps a stored event_seq and reads a malformed one as 0" do
+      assert TicketState.normalize(%{event_seq: 12}).event_seq == 12
+      assert TicketState.normalize(%{event_seq: -1}).event_seq == 0
+      assert TicketState.normalize(%{event_seq: "3"}).event_seq == 0
     end
 
     test "treats non-list collections as empty" do
