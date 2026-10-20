@@ -312,6 +312,22 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(page.timeline[2].duration, "5 min")
     }
 
+    func testAnInconclusiveCodeReviewRunSaysItsCause() {
+        let state = json([
+            "generated_at": "2026-10-07T14:20:00Z",
+            "run_history": [
+                ["issue_identifier": "P-1", "run_id": "r1", "run_kind": "code_review", "status": "failure",
+                 "error": "agent exited: {:code_review_inconclusive, ...}", "review_inconclusive_cause": "invalid_verdict",
+                 "started_at": "2026-10-07T13:00:00Z", "ended_at": "2026-10-07T13:05:00Z"],
+                ["issue_identifier": "P-1", "run_id": "r2", "status": "failure", "error": "boom", "review_inconclusive_cause": " ",
+                 "started_at": "2026-10-07T13:10:00Z"],
+            ],
+        ])
+        let page = TicketPage(identifier: "P-1", sources: TicketPage.Sources(state: state), now: wallClock, timeZone: utc)
+
+        XCTAssertEqual(page.timeline.map(\.detail), ["Review inconclusive: invalid verdict", "boom"])
+    }
+
     func testARunsStatusReadsAsAResult() {
         XCTAssertEqual(TicketPage.result(nil, error: nil).0, .done)
         XCTAssertEqual(TicketPage.result(nil, error: "boom").1, "failed")

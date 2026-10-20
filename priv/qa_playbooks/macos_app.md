@@ -16,7 +16,10 @@ for you on the host. They only act on this worktree's configured app and on apps
   `update_feed_port`, `update_check_interval_seconds`. Pass `appearance` (`light` or `dark`) to
   draw the app in that appearance whatever the host's, for any AppKit app (Symphony injects a
   library that sets the app's appearance); without it the app follows the host. See
-  "Light and dark, and the status-bar menu" below.
+  "Light and dark, and the status-bar menu" below. It also returns the app's QA `root`: every
+  launch shares root 1 and its settings unless you pass `fresh_root: true` (a new, empty root) or
+  `root` (one an earlier launch returned). See "QA roots: a first launch, a reset, a clean state"
+  below.
 - `qa_ax_tree`: the app's accessibility tree with each element's role, title, value, `help`
   and `frame` (`x`, `y`, `w`, `h` in points). Pass `role` or `text` to list only matching elements.
   `help` is the text of the element's tooltip: a step that hovers to read a tooltip reads it
@@ -80,7 +83,8 @@ for you on the host. They only act on this worktree's configured app and on apps
   checkout's `path`. Nothing is fetched from or pushed to GitHub.
 - `qa_api_requests`: returns the `requests` an app launched with `api_fixtures` sent since the
   last call, oldest first: each POST it logged to `api-requests.jsonl` in its QA root, with its
-  `method`, `path` and `body`. The log lives where you cannot read it, so use this instead.
+  `method`, `path` and `body`. It reads one root, the last launch's unless you pass `root`, and
+  names it. The log lives where you cannot read it, so use this instead.
 - `qa_build_release_pair`, `qa_relaunched_app` and `qa_update_feed`, with `qa_launch_app`'s
   `release_pair: true`: build release N and its update N+1 signed, launch N, and drive the app
   after it installed N+1. See "After an update: the signed release pair" below.
@@ -103,6 +107,20 @@ API, which is the system under test. For each one:
   app's requests from that log in the step's `details`.
 - When the server cannot listen on the port, or the app still cannot reach it, mark the steps
   that need it `blocked` with the error in `details`.
+
+QA roots: a first launch, a reset, a clean state. In QA mode the app keeps its settings in a QA
+root, never the real ones, and every `qa_launch_app` of the pass shares root 1: what one launch
+saved (a config path typed in Settings, a first-run record, a dismissed welcome) is there for the
+next, which a flow across launches needs. Never rely on launch order to get a clean state:
+
+- **A first-launch step** (what the app shows the first time it runs on a Mac), **a step that
+  resets the app**, or **a scenario that must not see earlier settings**: launch with
+  `fresh_root: true`. The app starts in a new, empty root, with the same `api_fixtures`,
+  stand-ins and appearance you pass, and the result's `root` is its number (2, then 3, …).
+- **Back to an earlier state:** launch with `root` set to that number (`root: 1` is the first). A
+  root the pass does not have is refused with the roots it has.
+- `qa_api_requests` reads one root's requests; pass `root` when you judge an app other than the
+  last one you launched.
 
 Stand-ins for GitHub, Linear, updates and the folder picker (the Add Repo sheet, update checks
 and anything else that runs `gh`, asks Linear or picks a folder). Never let the app reach real
@@ -340,7 +358,8 @@ anyway: Symphony's tool does it, or it is host setup. Where it can't be installe
 
 1. Run `qa_build`. A non-zero `exit_status` from a change that should build is a failing
    step; quote the end of the output.
-2. Run `qa_launch_app`. In QA mode the app starts with empty settings. When the walkthrough
+2. Run `qa_launch_app`. In QA mode the app starts with empty settings the first time, and later
+   launches share them unless you pass `fresh_root: true` (see "QA roots" above). When the walkthrough
    runs the app with `SYMPHONY_BAR_QA_API_FIXTURES` set to a fixtures directory, pass that
    directory as `api_fixtures`, never by setting the variable yourself: the app reads Symphony's
    API from those files instead of a running Symphony. When the walkthrough checks what the app
