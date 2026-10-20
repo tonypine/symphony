@@ -429,7 +429,9 @@ mise exec -- mix symphony.pr 123 --intent "fix failing CI"
 ```
 
 `Pause` stops new dispatches while in-flight agents continue; `Stop` ends one issue's session and
-records it as `stopped` without changing the Linear issue state.
+records it as `stopped` without changing the Linear issue state. The stopped ticket is not started
+again: it waits in the Inbox as "Stopped by you" until you Unblock or Restart it, or move it on the
+board, and it is let go once a poll finds it closed or out of the workflow.
 
 **Waiting on you.** The Mac app's Inbox (`/api/v1/inbox`), the dashboard's `Waiting on you`
 section, `/api/v1/state`'s `waiting_on_you` list and the menu bar app list everything only you can
@@ -464,7 +466,8 @@ so it starts the plan revision run like any comment of yours.
 Every ticket row opens the ticket's page: what runs now, a timeline of its runs and of your moves, its
 facts and the agent's last message, with **View Transcript** (the run's events, grouped by turn, in their
 own window) and **Stop Run…**. Stop Run says what a stop does before it does it, and can also move the
-ticket to Backlog with a note; a stop writes a `run_stopped` audit record, so the timeline says "Stopped by
+ticket to Backlog with a note; a stopped ticket stays stopped until you Unblock or Restart it from the
+Inbox, or move it on the board; a stop writes a `run_stopped` audit record, so the timeline says "Stopped by
 you".
 
 A run that reports an external block leaves its ticket in place with the `Blocked` machine label and

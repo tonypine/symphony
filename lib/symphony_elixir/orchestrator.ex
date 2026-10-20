@@ -28,6 +28,7 @@ defmodule SymphonyElixir.Orchestrator do
     Hold,
     Initiatives,
     Notifications,
+    OperatorStop,
     PlanComments,
     PlanReview,
     PrReviewPoller,
@@ -166,6 +167,7 @@ defmodule SymphonyElixir.Orchestrator do
       forced_issues: %{},
       slot_waiting: %{},
       dispatch_skipped: %{},
+      operator_stops: %{},
       setup_failed: %{},
       pause: %{paused: false, reason: nil, paused_at: nil},
       operator_pause_logged: false,
@@ -246,6 +248,7 @@ defmodule SymphonyElixir.Orchestrator do
       quality_gate_comment_keys: quality_gate_comment_keys,
       usage_limits: usage_limits,
       forced: forced,
+      operator_stops: OperatorStop.hydrate(configured_repo_keys(repo_key)),
       self_heal_opts: Keyword.get(opts, :self_heal_opts, []),
       clock: Keyword.get(opts, :clock, &DateTime.utc_now/0)
     }
@@ -718,6 +721,108 @@ defmodule SymphonyElixir.Orchestrator do
   defp poll_tick_coalesced?(%State{} = state, now_ms) do
     already_due? = is_integer(state.next_poll_due_at_ms) and state.next_poll_due_at_ms <= now_ms
     state.poll_check_in_progress == true or already_due?
+  end
+
+  # Symphony's copy of a stopped ticket still reads the state it had until a poll reads Linear
+  # again, so the stop marks it (`SymphonyElixir.OperatorStop`): the dispatcher skips it, and a
+  # poll is asked for at once to confirm where it is. The mark's Blocked hold is written in a task,
+  # so Linear never holds up the stop. A PR run has no ticket to mark.
+  defp mark_operator_stop(%State{} = state, issue_id, running_entry, repo_key) do
+    if pr_run_entry?(running_entry) do
+      state
+    else
+      mark = OperatorStop.mark(running_entry.identifier, repo_key, state.clock.())
+      state = %{state | operator_stops: Map.put(state.operator_stops, issue_id, mark)}
+      context = %{kind: :operator_stop_hold, issue_ids: [issue_id], repo_key: repo_key}
+      state = start_tracker_task(state, context, fn -> OperatorStop.set_hold(repo_key, issue_id, mark) end)
+      {_coalesced, state} = request_poll(state)
+      state
+    end
+  end
+
+  # A hold that landed after the mark was cleared (the poll found the ticket gone or moved first)
+  # is cleared again, so it doesn't outlive its mark.
+  defp finish_operator_stop_hold(%State{} = state, %{issue_ids: [issue_id], repo_key: repo_key}, :ok) do
+    case Map.fetch(state.operator_stops, issue_id) do
+      {:ok, mark} ->
+        %{state | operator_stops: Map.put(state.operator_stops, issue_id, %{mark | held: true})}
+
+      :error ->
+        clear_operator_stop_hold(state, issue_id, repo_key)
+    end
+  end
+
+  # The mark still keeps the ticket from running while this Symphony runs; only its persistence and
+  # its Inbox entry are missing.
+  defp finish_operator_stop_hold(%State{} = state, %{issue_ids: [issue_id]}, {:error, reason}) do
+    Logger.warning("Failed to hold a ticket the operator stopped: issue_id=#{issue_id} reason=#{inspect(reason)}")
+    state
+  end
+
+  defp operator_stop_reason(%Issue{id: issue_id}, %State{operator_stops: stops}) do
+    case Map.get(stops, issue_id) do
+      nil -> nil
+      %{held: true, repo_key: repo_key} = mark -> if OperatorStop.held?(repo_key, issue_id), do: OperatorStop.skip_reason(mark)
+      mark -> OperatorStop.skip_reason(mark)
+    end
+  end
+
+  # Each poll reads the marked tickets by id. The marks of tickets stopped after the poll started
+  # are not in `stopped_ids`, so a read from before their stop never judges them.
+  defp apply_operator_stops_result(%State{} = state, [], _result), do: state
+
+  defp apply_operator_stops_result(%State{} = state, stopped_ids, {:ok, issues}) when is_list(issues) do
+    by_id = for %Issue{id: issue_id} = issue <- issues, into: %{}, do: {issue_id, issue}
+    active_states = active_state_set()
+    terminal_states = terminal_state_set()
+
+    Enum.reduce(stopped_ids, state, fn issue_id, acc ->
+      case Map.fetch(acc.operator_stops, issue_id) do
+        {:ok, mark} -> confirm_operator_stop(acc, issue_id, mark, Map.get(by_id, issue_id), active_states, terminal_states)
+        :error -> acc
+      end
+    end)
+  end
+
+  defp apply_operator_stops_result(%State{} = state, _stopped_ids, {:error, reason}) do
+    Logger.warning("Failed to read the tickets the operator stopped; they stay skipped: #{inspect(reason)}")
+    state
+  end
+
+  defp confirm_operator_stop(%State{} = state, issue_id, mark, issue, active_states, terminal_states) do
+    candidate? = match?(%Issue{}, issue) and active_issue_state?(issue.state, active_states) and not terminal_issue_state?(issue.state, terminal_states)
+    held? = mark.held and OperatorStop.held?(mark.repo_key, issue_id)
+
+    case OperatorStop.confirm(mark, issue, candidate?, held?) do
+      {:keep, ^mark} ->
+        state
+
+      {:keep, confirmed} ->
+        Logger.info("Operator stop confirmed: issue_id=#{issue_id} issue_identifier=#{mark.identifier} state=#{inspect(confirmed.state)}; it stays skipped until a person acts")
+        %{state | operator_stops: Map.put(state.operator_stops, issue_id, confirmed)}
+
+      :lifted ->
+        Logger.info("Operator stop lifted by a person: issue_id=#{issue_id} issue_identifier=#{mark.identifier}")
+        %{state | operator_stops: Map.delete(state.operator_stops, issue_id)}
+
+      :clear ->
+        Logger.info("Clearing operator stop: issue_id=#{issue_id} issue_identifier=#{mark.identifier} state=#{inspect(issue && issue.state)}")
+        clear_operator_stop(state, issue_id, mark)
+    end
+  end
+
+  # A mark whose hold is still being written is cleared when that write finishes.
+  defp clear_operator_stop(%State{} = state, issue_id, mark) do
+    state = %{state | operator_stops: Map.delete(state.operator_stops, issue_id)}
+
+    if tracker_task_in_flight?(state, :operator_stop_hold, issue_id),
+      do: state,
+      else: clear_operator_stop_hold(state, issue_id, mark.repo_key)
+  end
+
+  defp clear_operator_stop_hold(%State{} = state, issue_id, repo_key) do
+    context = %{kind: :operator_stop_clear, issue_ids: [issue_id]}
+    start_tracker_task(state, context, fn -> OperatorStop.clear_hold(repo_key, issue_id) end)
   end
 
   defp handle_normal_agent_exit(%State{} = state, issue_id, running_entry, session_id) do
@@ -1417,6 +1522,7 @@ defmodule SymphonyElixir.Orchestrator do
     running_ids = Map.keys(state.running)
     watching_ids = watching_issue_ids(state)
     forced_ids = Map.keys(state.forced)
+    stopped_ids = Map.keys(state.operator_stops)
     update_hold_cache = state.update_hold_cache
 
     case start_async_task(fn ->
@@ -1434,6 +1540,8 @@ defmodule SymphonyElixir.Orchestrator do
               watching_result: fetch_issue_states_if_needed(watching_ids),
               forced_ids: forced_ids,
               forced_result: fetch_issue_states_if_needed(forced_ids),
+              stopped_ids: stopped_ids,
+              stopped_result: fetch_issue_states_if_needed(stopped_ids),
               repo_result: repo_result,
               update_hold_cache: resolve_update_holds(repo_result, update_hold_cache)
             }}
@@ -1502,6 +1610,7 @@ defmodule SymphonyElixir.Orchestrator do
       |> apply_running_issue_states_result(running_ids, running_result)
       |> apply_watching_issue_states_result(watching_ids, watching_result)
       |> apply_forced_poll_result(repo_result, forced_ids, forced_result, now_ms)
+      |> apply_operator_stops_result(Map.get(result, :stopped_ids, []), Map.get(result, :stopped_result, {:ok, []}))
 
     case apply_repo_poll_result(state, repos, repo_result, now_ms) do
       {:ok, %{dispatchable: issues}, state} ->
@@ -1952,6 +2061,11 @@ defmodule SymphonyElixir.Orchestrator do
   def should_dispatch_issue_for_test(%Issue{} = issue, %State{} = state) do
     should_dispatch_issue?(issue, state, active_state_set(), terminal_state_set())
   end
+
+  @doc false
+  @spec apply_operator_stops_result_for_test(State.t(), [String.t()], term()) :: State.t()
+  def apply_operator_stops_result_for_test(%State{} = state, stopped_ids, result) when is_list(stopped_ids),
+    do: state |> apply_operator_stops_result(stopped_ids, result) |> await_tracker_tasks()
 
   @doc false
   @spec dispatch_chosen_issues_for_test([Issue.t() | term()], State.t()) :: State.t()
@@ -3851,6 +3965,7 @@ defmodule SymphonyElixir.Orchestrator do
     repo_key = hold_repo_key(issue)
 
     cond do
+      reason = operator_stop_reason(issue, state) -> reason
       Issue.blocked?(issue, terminal_states) -> "blocked by #{open_blocker_names(issue, terminal_states)}"
       is_nil(repo_key) -> "it has no repo key and several repos are configured, so its holds can't be read"
       (held = Hold.held_kinds(repo_key, issue.id)) != [] -> "on a #{Enum.map_join(held, " and ", &Hold.label/1)} hold"
@@ -6995,6 +7110,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_tracker_task_result(%State{} = state, %{kind: :blocked_hold} = context, result), do: finish_blocked_hold(state, context, result)
+  defp handle_tracker_task_result(%State{} = state, %{kind: :operator_stop_hold} = context, result), do: finish_operator_stop_hold(state, context, result)
   defp handle_tracker_task_result(%State{} = state, %{kind: :setup_block} = context, result), do: finish_setup_block(state, context, result)
   defp handle_tracker_task_result(%State{} = state, %{kind: :breakdown_review} = context, result), do: finish_breakdown_review(state, context, result)
   defp handle_tracker_task_result(%State{} = state, %{kind: :plan_comments} = context, result), do: finish_plan_comments(state, context, result)
@@ -7688,6 +7804,7 @@ defmodule SymphonyElixir.Orchestrator do
             track_completed_run: true,
             remove_reason: :stop
           )
+          |> mark_operator_stop(issue_id, running_entry, repo_key)
 
         notify_dashboard()
 

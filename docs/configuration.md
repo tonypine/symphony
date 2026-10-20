@@ -2305,6 +2305,15 @@ Discovery is automatic: on start the daemon writes `<state-root>/control_url` an
 `<state-root>/control_token` (both `0600`). Override either with `SYMPHONY_CONTROL_URL` or
 `SYMPHONY_CONTROL_TOKEN` for remote setups (e.g. when the daemon is reverse-proxied).
 
+**Stop** (`POST /api/v1/control/stop`, `mix symphony.stop`, the Director's Stop Run) ends one
+ticket's run and leaves its Linear state as it is, but the ticket is not dispatched again: Symphony's
+copy of it still reads the old state until a poll, so the stop marks it, lists it under
+`dispatch_skipped` as `stopped by the operator at <time>; waiting for the next poll`, and asks for a
+poll at once. The mark is a `Blocked` hold of type `operator_stop` in the run store (it survives a
+restart), shown in the Inbox as "Stopped by you". A poll that finds the ticket closed or out of the
+active states clears it; otherwise the ticket waits for a person: **Unblock** runs it again in place,
+**Restart** starts it over from main, and moving it to another state on the board clears the mark.
+
 ### `watchdog`
 
 Progress watchdog for stalled runs. A run waiting out a Linear rate limit or outage is not stalled:

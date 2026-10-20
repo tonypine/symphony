@@ -4536,7 +4536,7 @@ Minimum endpoints:
   - `dispatch_skipped` lists every candidate the last dispatch pass neither started nor left waiting
     for a slot, each with its `repo_key`, `state`, the `reason` (the first closed gate: `blocked by
     MT-2`, `on a Needs Decision hold`, `priority medium is not in tickets.priorities (urgent, high)`,
-    a usage limit, ...; while the operator pause, the workspace free-space pause or the daily token
+    `stopped by the operator at <time>; waiting for the next poll`, a usage limit, ...; while the operator pause, the workspace free-space pause or the daily token
     budget stops the pass, the pause) and `since`, when that reason was first seen. A candidate is
     never passed over in silence; the orchestrator also logs `Skipping dispatch:` at debug level once
     per new or changed reason.
@@ -5284,6 +5284,20 @@ Minimum endpoints:
     }
     ```
 
+- `POST /api/v1/control/stop` (OPTIONAL)
+  - Ends the running agent of `issue_identifier` (the identifier or the Linear id) and records the
+    run as `stopped`, without changing the ticket's Linear state; answers `{"stopped": false}` when
+    nothing runs on it.
+  - A stop is not a restart. Symphony's copy of the ticket still reads the state it had until a poll
+    reads Linear again, so the stop marks the ticket: the dispatcher skips it (listed under
+    `dispatch_skipped` as `stopped by the operator at <time>; waiting for the next poll`), and the
+    stop asks for a poll at once. The mark is kept in the run store as a `Blocked` hold of type
+    `operator_stop`, so it survives a restart and the Inbox lists the ticket as "Stopped by you".
+  - Each poll reads the stopped tickets by id. One that is gone, terminal or no longer in an active
+    state loses the mark and its hold. One still active stays skipped until a person acts: `unblock`
+    runs it again in place, `restart` starts it over, and a move to another state on the board
+    clears the mark too.
+
 - `POST /api/v1/control/<move>` (the Director's moves, OPTIONAL)
   - The Mac app's Inbox makes the Director's Linear moves through Symphony, which holds the Linear
     key and the audit log. Like the other control endpoints they require the control bearer token.
@@ -5300,7 +5314,7 @@ Minimum endpoints:
     | `restart` | any open ticket | `In Progress`, after the reset | `reason` (required), posted before the move; the reset (close the pull requests, remove the workspaces, supersede the workpad) runs first, and a reset that fails answers `502` `restart_incomplete` and makes no move |
     | `decisions` | a plan in `Plan Review` | no move | one comment with `picks` (required, `[{"question", "answer"}]`) |
     | `backlog` | any open ticket | `Backlog` | `note` (optional), posted before the move |
-    | `unblock` | any ticket waiting on an access hold (an agent's block report) | no move; the hold clears and the ticket continues in place | one comment, posted after the hold clears |
+    | `unblock` | any ticket waiting on an access, dispatch-loop or operator-stop hold | no move; the hold clears and the ticket continues in place | one comment, posted after the hold clears |
     | `decide` | any ticket waiting on a `Needs Decision` hold | no move, else the state `move` names (`rework` or `done`), through the guard | the answer, posted as a reply under the request comment `request_comment_id` names; `picks` are required |
     | `undo` | the state the ticket's last move put it in | the state it came from | none |
 
