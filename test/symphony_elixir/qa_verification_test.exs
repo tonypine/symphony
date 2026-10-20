@@ -216,10 +216,10 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
   end
 
-  describe "journey/1" do
+  describe "journey/3" do
     test "is the ticket's `## User walkthrough` when it has one" do
       assert %{source: "the ticket's `## User walkthrough`", text: "1. Run `symphony check`."} =
-               QaVerification.journey(issue())
+               QaVerification.journey(issue(), "make-all")
     end
 
     test "carries the walkthrough's steps with the proof each names" do
@@ -239,30 +239,44 @@ defmodule SymphonyElixir.QaVerificationTest do
                  %{number: 1, proof: %{by: :test, check: "make-all", test: "test/mix/tasks/check_test.exs"}},
                  %{number: 2, proof: %{by: :qa}}
                ]
-             } = QaVerification.journey(issue("QA", %{description: description}))
+             } = QaVerification.journey(issue("QA", %{description: description}), "make-all")
 
-      assert %{steps: []} = QaVerification.journey(issue("QA", %{description: "## Acceptance criteria\n\n- It works.\n"}))
-      assert %{steps: []} = QaVerification.journey(issue("QA", %{description: nil}))
+      assert %{steps: []} = QaVerification.journey(issue("QA", %{description: "## Acceptance criteria\n\n- It works.\n"}), "make-all")
+      assert %{steps: []} = QaVerification.journey(issue("QA", %{description: nil}), "make-all")
+    end
+
+    test "without the repo's proof check every step is QA's to walk" do
+      description = "## User walkthrough\n\n1. Run it. Proved by: `make-all` › `test/mix/tasks/check_test.exs`\n2. Read it. Proved by: test/x_test.exs\n"
+
+      assert %{steps: [%{number: 1, proof: %{by: :qa}}, %{number: 2, proof: %{by: :qa}}]} =
+               QaVerification.journey(issue("QA", %{description: description}), nil)
+    end
+
+    test "a test alone is a test the repo's proof check runs" do
+      description = "## User walkthrough\n\n1. Run it. Proved by: `test/mix/tasks/check_test.exs`\n"
+
+      assert %{steps: [%{proof: %{by: :test, check: "make-all", test: "test/mix/tasks/check_test.exs"}}]} =
+               QaVerification.journey(issue("QA", %{description: description}), "make-all")
     end
 
     test "falls back to the acceptance criteria" do
       description = "Some context.\n\n## Acceptance criteria\n\n- It works.\n- It is fast.\n"
 
       assert %{source: "the ticket's acceptance criteria", text: "- It works.\n- It is fast."} =
-               QaVerification.journey(issue("QA", %{description: description}))
+               QaVerification.journey(issue("QA", %{description: description}), "make-all")
     end
 
     test "asks the run to derive the journeys when the ticket names none" do
       assert %{source: "the ticket's walkthrough and acceptance criteria", text: nil} =
-               QaVerification.journey(issue("QA", %{description: "Just context."}))
+               QaVerification.journey(issue("QA", %{description: "Just context."}), "make-all")
     end
 
     test "handles a heading with no body and a ticket with no description" do
       empty = issue("QA", %{description: "## User walkthrough\n\n## Acceptance criteria\n\n- It works.\n"})
 
-      assert %{source: "the ticket's acceptance criteria", text: "- It works."} = QaVerification.journey(empty)
+      assert %{source: "the ticket's acceptance criteria", text: "- It works."} = QaVerification.journey(empty, "make-all")
 
-      assert %{text: nil} = QaVerification.journey(issue("QA", %{description: nil}))
+      assert %{text: nil} = QaVerification.journey(issue("QA", %{description: nil}), "make-all")
     end
   end
 
@@ -1282,7 +1296,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       capture_log(fn ->
         assert :ok =
                  QaVerification.run(issue("QA", %{description: description}), workspace,
-                   settings: settings!(),
+                   settings: settings!(%{"proof_check" => "make-all"}),
                    repo_key: @repo_key,
                    qa_policy: RunPolicy,
                    qa_agent: FakeQaAgent,
@@ -1351,7 +1365,7 @@ defmodule SymphonyElixir.QaVerificationTest do
         workspace,
         opts ++
           [
-            settings: settings!(),
+            settings: settings!(%{"proof_check" => "make-all"}),
             repo_key: @repo_key,
             qa_policy: RunPolicy,
             qa_agent: FakeQaAgent,
@@ -1398,7 +1412,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert [%{outcome: "pass", head_sha: ^head}] = verdicts()
     end
 
-    test "a ticket without Proved by: lines reads no check and gets today's prompt" do
+    test "a ticket without Proved by: lines reads no check and QA walks every step" do
       {workspace, _head} = git_workspace!()
       unused = fn args, _opts -> flunk("gh should not run: #{inspect(args)}") end
 
@@ -1406,7 +1420,7 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       assert_received {:qa_agent_run, job, %Schema{}}
       assert job.proofs == []
-      assert QaAgent.prompt(job, nil) =~ "gh run list --commit"
+      assert QaAgent.prompt(job, nil) =~ "walk every step, whatever its `Proved by:` line says"
 
       assert_received {:memory_tracker_comment, @issue_id, report}
       refute report =~ "### Pre-checks"
@@ -1432,6 +1446,31 @@ defmodule SymphonyElixir.QaVerificationTest do
         assert report =~ expected
         assert [%{outcome: "fail", head_sha: ^head}] = verdicts()
       end
+    end
+
+    test "a step naming another repo's check fails before any QA session, naming this repo's proof check" do
+      {workspace, head} = git_workspace!()
+      description = "## User walkthrough\n\n1. Run it. Proved by: ci › test/x_test.exs\n2. Open the dashboard → it looks right.\n"
+
+      assert :ok = run_named(workspace, description, gh_runner: gh(head, [make_all("COMPLETED", "SUCCESS")]))
+
+      refute_received {:qa_agent_run, _, _}
+      assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "- **fail** step 1 (Proved by: `ci` › test/x_test.exs)"
+      assert report =~ "this repo's proof check is `make-all` (`proof_check` in WORKFLOW.md)"
+    end
+
+    test "a repo without a proof check reads no check: QA walks every step" do
+      {workspace, _head} = git_workspace!()
+      unused = fn args, _opts -> flunk("gh should not run: #{inspect(args)}") end
+
+      assert :ok = run_named(workspace, @named_walkthrough, gh_runner: unused, settings: settings!())
+
+      assert_received {:qa_agent_run, job, %Schema{}}
+      assert job.proofs == []
+      assert Enum.map(job.journey.steps, & &1.proof) == [%{by: :qa}, %{by: :qa}]
+      assert QaAgent.prompt(job, nil) =~ "walk every step, whatever its `Proved by:` line says"
     end
 
     test "a check still running waits for CI, then reports blocked past the wait's limit" do

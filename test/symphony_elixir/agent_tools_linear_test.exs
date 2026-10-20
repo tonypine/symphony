@@ -2030,6 +2030,37 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     end
   end
 
+  describe "record_walkthrough_proofs/3" do
+    test "rejects a secret-bearing test before calling Linear, and needs the current issue" do
+      workspace = tmp_workspace!("linear-agent-walkthrough-proof-secret")
+      audit_dir = Path.join(workspace, "audit")
+      no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called") end
+      attrs = %{"proofs" => [%{"step" => 1, "test" => "test/" <> openai_fixture()}]}
+      opts = [dir: audit_dir, linear_client: no_linear]
+
+      try do
+        context = secret_context(workspace)
+        assert {:error, :secret_pattern_detected} = Linear.record_walkthrough_proofs(context, attrs, opts)
+
+        assert [%{"tool" => "linear_record_walkthrough_proofs", "reason" => "secret_pattern_detected"} | _rest] = audit_events(audit_dir)
+        assert {:error, :missing_current_issue} = Linear.record_walkthrough_proofs(%{}, attrs)
+      after
+        File.rm_rf(workspace)
+      end
+    end
+
+    test "a failed write is the tool's error" do
+      client = fn query, _variables, _opts ->
+        if query =~ "SymphonyAgentIssueDescription",
+          do: {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "description" => "## User walkthrough\n\n1. Do it."}}}},
+          else: {:ok, %{"data" => %{"issueUpdate" => %{"success" => false}}}}
+      end
+
+      attrs = %{"proofs" => [%{"step" => 1, "test" => "test/x_test.exs"}]}
+      assert {:error, _reason} = Linear.record_walkthrough_proofs(%{issue_id: "issue-current"}, attrs, linear_client: client)
+    end
+  end
+
   defp description_linear(description) do
     {:ok, linear} = Agent.start_link(fn -> description end)
     linear

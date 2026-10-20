@@ -1338,49 +1338,65 @@ steps, so the next review marks them. A failing step that names no defect is a f
 titled after the step. A defect's follow-up answers to every `gap` label of its steps and waits on
 what any of them waits on, except on one another.
 
-**Which steps QA walks.** Each step of a `## User walkthrough` names the one place that proves it
-([ADR 0003](adr/0003-automated-tests-first-qa-last-resort.md)), on a line at the end of the step:
+**Which steps QA walks.** Each step of a `## User walkthrough` is proved in one place
+([ADR 0003](adr/0003-automated-tests-first-qa-last-resort.md)), and three parties share the work:
+
+- the person writing the ticket describes the user's flow in plain steps, each with `Expected:`,
+  and names no test and no check;
+- the implementer, who writes the tests, ends each step a test of the PR covers with
+  `Proved by: <test>`, through the `linear_record_walkthrough_proofs` tool, which edits only those
+  steps' proof lines in the description and refuses a check name;
+- the repo names the check that runs its tests, `proof_check` in its WORKFLOW.md front matter (this
+  repository: `make-all`), and Symphony confirms every named test on the PR head before QA.
+
+A proof is the line at the end of a step:
 
 | Line | Proof | QA |
 | --- | --- | --- |
-| `Proved by: <check> › <test>` | the named automated test: the GitHub check run (or workflow), then the suite, scenario or test file; a plain ` > ` works as the separator, backticks are dropped, and `Proved by: <check>` alone names the check without a test | does not walk the step: Symphony's QA pre-check confirms it on the PR head before the agent starts (below), and the agent links the result |
-| `Proved by: QA` | the QA pass | walks the step |
-| no `Proved by:` line | read as `Proved by: QA`, so tickets written before the rule keep working | walks the step |
+| `Proved by: <test>` | the named automated test, run by the repo's `proof_check`: the suite, scenario or test file as the code has it; backticks are dropped, and the `proof_check`'s own name alone names the check without a test | does not walk the step: Symphony's QA pre-check confirms it on the PR head before the agent starts (below), and the agent links the result |
+| `Proved by: <check> › <test>` | the older form, still read: the GitHub check run (or workflow) the step names, then the test; a plain ` > ` works as the separator | as above |
+| `Proved by: QA` | the QA pass: a judgment by sight the author keeps for QA | walks the step |
+| no `Proved by:` line | read as `Proved by: QA` | walks the step |
 
-`SymphonyElixir.Walkthrough` parses the walkthrough into steps with their proof, and the QA prompt
-lists the steps to link and the steps to walk when the walkthrough names at least one test.
+A repo without `proof_check` has no named-test proofs: QA walks every step of its walkthroughs,
+whatever their `Proved by:` lines say. `SymphonyElixir.Walkthrough` parses the walkthrough into steps
+with their proof, and the QA prompt lists the steps to link and the steps to walk when the
+walkthrough names at least one test.
 
-**The QA pre-check.** Before the QA agent starts, Symphony confirms each `Proved by: <check> ›
-<test>` step itself (`SymphonyElixir.QaPreCheck`), so whether a named test ran is never left to the
-agent reading check runs: a green head does not prove it, since a path-filtered workflow such as
-`macos-e2e` may not run on a PR at all. For each step it:
+**The QA pre-check.** Before the QA agent starts, Symphony confirms each step a named test proves
+itself (`SymphonyElixir.QaPreCheck`), so whether a named test ran is never left to the agent reading
+check runs: a green head does not prove it, since a path-filtered workflow such as `macos-e2e` may
+not run on a PR at all. For each step it:
 
 - looks for the test in the PR's checkout: a part with a `/` (or a file name such as
   `check_test.exs`, with or without a `:line`) must be a tracked file or folder, and any other part,
   such as a test or scenario name, must appear in the tracked files, within the file named before it
   when there is one (`test/foo_test.exs › "does X"`);
-- reads the PR head's status checks with `gh` and finds the ones `<check>` names: a check run, a
-  whole workflow, or `workflow / job`.
+- reads the PR head's status checks with `gh` and finds the ones the step's check names (the
+  `proof_check` for `Proved by: <test>`): a check run, a whole workflow, or `workflow / job`.
 
 | What the pre-check finds | Step | The pass |
 | --- | --- | --- |
 | the check passed and the test is in the checkout | `pass`, linked to the check run | the agent starts; the prompt lists the step as confirmed, with its link, and tells the agent not to walk it |
 | the check failed, did not run on the head, reported only `skipped`, or the named test is not in the checkout | `fail`, naming the step and what is missing | `fail` to `Rework` with no agent run: the ticket's proof is part of its work |
+| the step names a check that is neither the `proof_check` nor a check on the head (a check name copied from another repo, such as `ci`) | `fail`, saying so and naming the repo's `proof_check` | as above |
 | the check is still running | waiting | waits like the epic review waits for CI (above): the pass starts again a minute later, with no verdict; after an hour on the same head it is `blocked` with the reason, retried like any blocked pass, then a person decides (no QA tool raised it, so it never reaches the self-heal lane) |
 | CI on the PR head cannot be read, or the PR head is not the commit QA judges | — | `blocked` with the reason |
 
 The QA report lists every result under `### Pre-checks`, one line per step with the check run's
-link, and a failed step is also one of the report's findings. A walkthrough with no `Proved by:
-<check>` step reads nothing and runs as it always did. The epic review does not run the pre-check:
-its agent reads CI's runs on the base branch head, as above.
+link, and a failed step is also one of the report's findings. A walkthrough with no named-test step
+reads nothing, and QA walks it whole. The epic review does not run the pre-check: its agent reads
+CI's runs on the base branch head, as above.
 
-The instructions that write walkthroughs (the plan pipeline, the plan run, the feature ticket type,
-new issues filed during a run, and the ticket templates) route every step when it is written. A step
-code can drive names its test. A step that needs an environment QA lacks (a signed build, a device,
-real credentials) goes to an automated harness, never to QA. A step that needs a QA tool QA has, or
-one a sibling ticket adds, stays `Proved by: QA`, as does a judgment by sight. A plan never puts one
-journey both in a sub-ticket's walkthrough and in an end-to-end ticket: the end-to-end ticket owns
-it, and the sub-ticket's step names that test.
+The instructions that write walkthroughs (the plan pipeline, the plan run, new issues filed during a
+run, and the ticket templates) ask for plain steps that name no test and no check. A step that needs
+an environment QA lacks (a signed build, a device, real credentials) is an acceptance criterion
+asking for an automated harness; a judgment by sight, or a step that needs a QA tool, ends with
+`Proved by: QA`. A plan never puts one journey both in a sub-ticket's walkthrough and in an
+end-to-end ticket: the end-to-end ticket owns it. The implementation instructions (the feature
+ticket type, the start, execution and rework steps) have the implementer plan a test for every step
+code can drive and record each with `linear_record_walkthrough_proofs` before the handoff push,
+naming only tests in its PR.
 
 **OpenRouter in QA.** QA never uses a real, paid OpenRouter key. OpenRouter flows (Test connection
 in the macOS app's Settings, its Models list and Effort note, `symphony check` on an `openrouter`
@@ -2763,6 +2779,7 @@ prompts:
     You are working on PR {{ pr.url }}.
 push_check:
   command: scripts/push-check
+proof_check: make-all
 verification:
   dev_server:
     start_cmd: "pnpm dev --port $SYMPHONY_VERIFICATION_PORT"
@@ -2778,8 +2795,16 @@ auto_review:
 You are working on {{ issue.identifier }}.
 ```
 
-The front matter accepts only `hooks`, `prompts`, `verification`, `validation` and
-`auto_review.playbooks`; any other key fails the repository's workflow. `hooks`, `verification`
+The front matter accepts only `hooks`, `prompts`, `push_check`, `proof_check`, `verification`,
+`validation`, `human_actions.enabled`, `playbook` and `auto_review.playbooks`; any other key fails
+the repository's workflow.
+
+`proof_check` is the GitHub check run or workflow name that proves the repository's automated tests
+ran (this repository: `make-all`). A walkthrough step the implementer ends with `Proved by: <test>`
+names a test it runs, and the QA pre-check confirms that check passed on the PR head and the test is
+in the checkout (see [Which steps QA walks](#auto_review)). Without it the repository has no
+named-test proofs: QA walks every walkthrough step. It is a non-empty string, read through
+`SymphonyElixir.Config` as the repository's `proof_check` setting; `symphony.yml` has no such key. `hooks`, `verification`
 and `auto_review.playbooks` are merged over `symphony.yml` key by key, with the repository's value
 winning (see [`auto_review`](#auto_review) for playbooks).
 
