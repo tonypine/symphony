@@ -7,6 +7,7 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
 
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Playbook.Assembly
+  alias SymphonyElixir.QaAgent.PlaybookSettings
 
   # Recompile this schema when an embed's defaults change; see SystemSchema.
   require Schema.Hooks
@@ -142,8 +143,14 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
 
   defp validate_playbooks(playbooks) when is_map(playbooks) do
     case Enum.find(playbooks, fn {_kind, playbook} -> not (is_nil(playbook) or is_map(playbook)) end) do
-      nil -> :ok
-      {kind, _playbook} -> {:error, {:invalid_repo_workflow_config, "auto_review.playbooks.#{kind} must be a map"}}
+      nil ->
+        case PlaybookSettings.validate(playbooks) do
+          :ok -> :ok
+          {:error, message} -> {:error, {:invalid_repo_workflow_config, message}}
+        end
+
+      {kind, _playbook} ->
+        {:error, {:invalid_repo_workflow_config, "auto_review.playbooks.#{kind} must be a map"}}
     end
   end
 

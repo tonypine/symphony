@@ -8,6 +8,7 @@ defmodule SymphonyElixir.QaAgentTest do
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaAgent.{Report, Selection}
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
+  alias SymphonyElixir.SelfHeal
 
   @sha "0123456789abcdef0123456789abcdef01234567"
   @env_keys [
@@ -396,6 +397,17 @@ defmodule SymphonyElixir.QaAgentTest do
       assert [_cli, %{kind: "macos_app", build_timeout_ms: nil}] = Selection.playbooks(odd_timeout)
     end
 
+    test "a playbook carries the executables its pass needs on the QA host, trimmed and without repeats" do
+      config = %{playbooks: %{"macos_app" => %{"build" => "make app", "app" => "A.app", "requires" => [" go ", "pg_ctl", "go", "", 7]}}}
+      assert [cli, %{kind: "macos_app", requires: ["go", "pg_ctl"]}] = Selection.playbooks(config)
+      refute Map.has_key?(cli, :requires)
+
+      for unset <- [[], "go", nil] do
+        assert [_cli, macos_app] = Selection.playbooks(put_in(config, [:playbooks, "macos_app", "requires"], unset))
+        refute Map.has_key?(macos_app, :requires)
+      end
+    end
+
     test "a change to a playbook's own instructions or to the host driver behind its tools selects that playbook" do
       config = %{playbooks: %{"macos_app" => %{"build" => "make -C macos app", "app" => "macos/build/Symphony.app"}}}
 
@@ -581,7 +593,13 @@ defmodule SymphonyElixir.QaAgentTest do
             {:qa_dev_server_failed, {:verification_failed, {:dev_server_sandbox_unconfined, :tcp_bind_allowed}}},
             {:qa_dev_server_failed, {:verification_failed, {:dev_server_not_on_socket, "/tmp/serve.sock"}}},
             {:qa_dev_server_failed, :eaddrinuse},
+            {:qa_dev_server_failed, {:dev_server_build_failed, 3}, "go: missing module"},
+            {:qa_dev_server_failed, {:dev_server_build_failed, :timeout}, "build_cmd did not finish within 15 minutes"},
+            {:qa_dev_server_failed, {:dev_server_exit, 1}, ""},
+            {:qa_dev_server_failed, {:dev_server_unreachable, "ssh: Connection refused"}, ""},
             {:qa_host_tunnel_failed, "ssh exited with status 255"},
+            {:qa_host_missing_tool, ["go", "pg_ctl"]},
+            {:qa_host_tool_check_failed, "exit status 255: Connection refused"},
             {:qa_browser_mcp_unavailable, :no_npx},
             {:qa_browser_mcp_unavailable, "@playwright/mcp"},
             {:qa_browser_mcp_invalid, "command is required"},
@@ -599,7 +617,13 @@ defmodule SymphonyElixir.QaAgentTest do
                "the dev server did not start: Seatbelt" <> _,
                "the dev server never listened on $SYMPHONY_VERIFICATION_SOCKET (/tmp/serve.sock)" <> _,
                "the dev server did not start: :eaddrinuse",
+               "qa_dev_server_failed: the dev server on the QA host failed its build_cmd (exit 3); its last log lines:\ngo: missing module",
+               "qa_dev_server_failed: the dev server on the QA host did not finish its build_cmd in time; its last log lines:\n" <> _,
+               "qa_dev_server_failed: the dev server on the QA host exited (status 1) before its health check answered 200",
+               "qa_dev_server_failed: the dev server on the QA host could not be started over SSH: ssh: Connection refused",
                "the tunnel that forwards QA_HOST_PORTS" <> _,
+               "qa_host_missing_tool: go, pg_ctl: the QA host has no `go`, `pg_ctl` on the build's PATH" <> missing_tool,
+               "qa_host_tool_check_failed: could not check the QA host" <> _,
                "`npx` (Node.js) is not on Symphony's PATH" <> _,
                "`@playwright/mcp` is not installed on the Symphony host" <> _,
                "`auto_review.playbooks.web.browser_mcp` is invalid: command is required",
@@ -607,6 +631,8 @@ defmodule SymphonyElixir.QaAgentTest do
                "could not list the PR's changed files: " <> _,
                "the QA agent could not finish: {:git_failed, 128}"
              ] = reasons
+
+      assert missing_tool =~ "scripts/qa-vm/provision.sh"
     end
   end
 
@@ -633,6 +659,14 @@ defmodule SymphonyElixir.QaAgentTest do
 
       assert {:ok, blocked} = QaAgent.parse_response(~s({"verdict":"blocked","reason":"no simulator","needs_person":"yes"}))
       refute Map.has_key?(blocked, :needs_person)
+
+      assert {:ok, %{verdict: :blocked, needs_dev_server: true} = blocked} =
+               QaAgent.parse_response(~s({"verdict":"blocked","reason":"no hub running","needs_dev_server":true}))
+
+      refute Map.has_key?(blocked, :needs_person)
+
+      assert {:ok, blocked} = QaAgent.parse_response(~s({"verdict":"blocked","reason":"no hub running","needs_dev_server":"yes"}))
+      refute Map.has_key?(blocked, :needs_dev_server)
     end
 
     test "keeps a covering ticket the blocked answer names, and drops anything that is not an identifier" do
@@ -747,6 +781,9 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "mark each step that needs it `blocked` with the error in `details`: that is never a reason to write a stub of it"
       assert prompt =~ "a database such as Postgres cannot start inside it"
       assert prompt =~ "A playbook with `dev_server: true` has Symphony run the project's server, and its database, outside your sandbox."
+
+      assert prompt =~
+               "When Symphony started no dev server for this pass and a step is blocked because the project's own server or database is not running, set `needs_dev_server` to true"
     end
 
     test "includes the ticket, the parent's criteria and the playbooks" do
@@ -762,6 +799,7 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ @sha
       assert prompt =~ ~s("verdict": "pass" | "fail" | "blocked")
       assert prompt =~ ~s("needs_person": true | false)
+      assert prompt =~ ~s("needs_dev_server": true | false)
       assert prompt =~ "Set `needs_person` to true only when the block is something only a person can hand over"
       assert prompt =~ ~s("covered_by": )
       assert prompt =~ "Ending your turn ends the session"
@@ -1445,6 +1483,160 @@ defmodule SymphonyElixir.QaAgentTest do
 
       assert {:error, {:qa_host_tunnel_failed, "ssh exited with status 255: Connection refused"}, %{total_tokens: 0}} = result
       assert log =~ "QA driver could not open the host-port tunnel"
+      refute_received {:qa_session_started, _worktree, _opts}
+    end
+
+    # Settings for a macos_app pass on a QA host, with the project's dev server configured.
+    defp qa_host_settings do
+      settings = Config.settings!()
+
+      dev_server = %{
+        settings.verification.dev_server
+        | build_cmd: "make server",
+          start_cmd: "server/scripts/dev-server.sh",
+          health_check_url: "http://127.0.0.1:$SYMPHONY_VERIFICATION_PORT/health"
+      }
+
+      verification = %{settings.verification | enabled: true, dev_server: dev_server}
+      %{settings | auto_review: %{settings.auto_review | worker_host: "qa-vm"}, verification: verification}
+    end
+
+    # A QA host whose dev-server scripts answer from `health` and tell the test what ran.
+    defp qa_host_dev_server_host(health) do
+      test = self()
+
+      cmd = fn "/bin/bash", ["-c", script, "sh", _dir | args], _opts -> qa_host_script(test, script, args, health) end
+
+      %{
+        cmd: cmd,
+        kill: fn _pid -> :ok end,
+        prepare: fn _operator_home, _canary -> {:ok, "/Users/qa/.symphony-qa/runs/run.abc"} end,
+        tunnel: fn _ports -> {:ok, Port.open({:spawn, "cat"}, [:binary])} end,
+        ship: fn _tar, dest -> send(test, {:qa_host_shipped, dest}) && :ok end,
+        cleanup: fn dir -> send(test, {:qa_host_cleanup, dir}) && :ok end
+      }
+    end
+
+    # Whichever of the dev server's health check and the session's start reached the mailbox first.
+    defp health_or_session do
+      receive do
+        {:qa_host_dev_server, :health} = message -> message
+        {:qa_session_started, _worktree, _opts} -> :qa_session_started
+      after
+        0 -> :none
+      end
+    end
+
+    defp qa_host_script(test, script, args, health) do
+      cond do
+        script =~ ~s(rm -rf "$dir") ->
+          {:ok, {"symphony-qa-dev-server-dir:/Users/qa/.symphony-qa/runs/run.abc/dev-server\n", 0}}
+
+        script =~ ~s(case "$3") ->
+          send(test, {:qa_host_dev_server, args})
+          if Enum.at(args, 1) == "start", do: {:ok, {"symphony-qa-dev-server-pid:4242\n", 0}}, else: {:ok, {"", 0}}
+
+        script =~ "end=" ->
+          send(test, {:qa_host_dev_server, :health})
+          health
+
+        script =~ ~s(kill -s "$3") ->
+          send(test, {:qa_host_dev_server, :stopped})
+          {:ok, {"symphony-qa-dev-server:stopped\n", 0}}
+      end
+    end
+
+    defp qa_host_macos_app do
+      config = %{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app", "dev_server" => true}}}
+      [macos_app] = Selection.playbooks(config, dev_server?: true) |> Enum.filter(&(&1.kind == "macos_app"))
+      macos_app
+    end
+
+    test "starts a macos_app pass's dev server on the QA host before the agent, names its URL and stops it after" do
+      health = {:ok, {"symphony-qa-dev-server:healthy\n", 0}}
+
+      {result, log} =
+        with_log(fn ->
+          QaAgent.run(job(%{playbooks: [qa_host_macos_app()]}), qa_host_settings(),
+            git: fake_git(),
+            qa_agent_module: FakeSession,
+            verification: FakeVerification,
+            qa_driver_opts: [host: qa_host_dev_server_host(health)]
+          )
+        end)
+
+      assert {:ok, %{result: %{verdict: :blocked}}} = result
+      assert log =~ ~r/QA dev server started issue_id=\S+ issue_identifier=TP-900 worker_host=qa-vm port=8090 pid=4242/
+      assert log =~ "QA dev server stopped issue_id="
+      assert_received {:qa_host_shipped, "/Users/qa/.symphony-qa/runs/run.abc/dev-server/src"}
+      assert_received {:qa_host_dev_server, ["8090", "build", "make server"]}
+      assert_received {:qa_host_dev_server, ["8090", "start", "server/scripts/dev-server.sh"]}
+
+      # The server answered its health check before the agent's session started.
+      assert health_or_session() == {:qa_host_dev_server, :health}
+      assert_received {:qa_turn, _session, prompt, _issue, _opts}
+      flat = String.replace(prompt, ~r/\s+/, " ")
+      assert flat =~ "dev server for this PR head on the QA host, beside the app under test, at http://127.0.0.1:8090/"
+      assert flat =~ "it is not on this machine, so your shell cannot"
+
+      assert_received {:qa_host_dev_server, :stopped}
+      assert_received {:qa_host_cleanup, "/Users/qa/.symphony-qa/runs/run.abc"}
+      # This host starts no dev server of its own for the pass.
+      refute_received {:dev_server_started, _identifier, _run_id, _worktree, _opts}
+    end
+
+    test "blocks a macos_app pass whose QA-host dev server fails its health check, before the agent starts" do
+      health = {:ok, {"symphony-qa-dev-server:timeout\npostgres: could not bind\n", 0}}
+
+      {result, _log} =
+        with_log(fn ->
+          QaAgent.run(job(%{playbooks: [qa_host_macos_app()]}), qa_host_settings(),
+            git: fake_git(),
+            qa_agent_module: FakeSession,
+            verification: FakeVerification,
+            qa_driver_opts: [host: qa_host_dev_server_host(health)]
+          )
+        end)
+
+      assert {:error, {:qa_dev_server_failed, :health_timeout, "postgres: could not bind"} = cause, %{total_tokens: 0}} = result
+      refute_received {:qa_session_started, _worktree, _opts}
+      assert_received {:qa_host_dev_server, :stopped}
+      assert SelfHeal.component(%{cause: cause}) == "dev_server"
+
+      assert QaAgent.blocked_reason(cause) ==
+               "qa_dev_server_failed: the dev server on the QA host did not answer its health check with 200 in time; its last log lines:\npostgres: could not bind"
+    end
+
+    test "blocks a macos_app pass whose QA host lacks a tool the playbook requires, before the agent starts" do
+      [macos_app] =
+        Selection.playbooks(%{
+          playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app", "requires" => ["go", "pg_ctl"]}}
+        })
+
+      test_pid = self()
+
+      host = %{
+        kill: fn _pid -> :ok end,
+        prepare: fn _operator_home, _canary -> {:ok, "/Users/qa/symphony-qa/run-1"} end,
+        cmd: fn "/bin/sh", ["-c", _script, "sh" | tools], _opts ->
+          send(test_pid, {:tool_check, tools})
+          {:ok, {"symphony-qa-missing-tool:go\nsymphony-qa-tools:checked\n", 0}}
+        end,
+        tunnel: fn _ports -> {:ok, nil} end,
+        cleanup: fn _dir -> :ok end
+      }
+
+      result =
+        QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
+          git: fake_git(),
+          qa_agent_module: FakeSession,
+          qa_driver_opts: [worker_host: "qa-vm", host: host]
+        )
+
+      assert {:error, {:qa_host_missing_tool, ["go"]} = cause, %{total_tokens: 0}} = result
+      assert_received {:tool_check, ["go", "pg_ctl"]}
+      assert QaAgent.blocked_reason(cause) =~ "qa_host_missing_tool: go"
+      assert SelfHeal.component(%{verdict: :blocked, cause: cause, reason: QaAgent.blocked_reason(cause)}) == "worker_host"
       refute_received {:qa_session_started, _worktree, _opts}
     end
 

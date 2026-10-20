@@ -759,6 +759,37 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert %{waits_on: %{type: "fix_ticket", keys: ["TP-716"]}} = Hold.get(@repo_key, @issue_id, :blocked)
     end
 
+    test "a block on the project's own missing server files its fix ticket in the project's repo" do
+      {workspace, _head} = git_workspace!()
+
+      steps = [%{name: "Open the Pipeline board", status: "blocked", details: "no hub", evidence: []}]
+      blocked = %{verdict: :blocked, summary: "", steps: steps, findings: [], reason: "the app has no hub to talk to", needs_dev_server: true}
+      Process.put(:qa_agent_result, {:ok, %{result: blocked, tokens: %{input: 1, output: 1}}})
+
+      assert :ok = run(workspace, [])
+      assert :ok = run(workspace, [])
+
+      assert_received {:fixer_create, %{scope: @repo_key, component: "dev_server", description: description}}
+      assert description =~ "set `dev_server: true` on the playbook"
+    end
+
+    test "a QA-host dev server that fails is reported with its log and files its fix ticket in the project's repo" do
+      {workspace, _head} = git_workspace!()
+      Process.put(:qa_agent_result, {:error, {:qa_dev_server_failed, {:dev_server_exit, 1}, "FATAL: could not create shared memory"}, %{}})
+
+      assert :ok = run(workspace, [])
+      assert_received {:memory_tracker_comment, @issue_id, report}
+
+      assert report =~
+               "Reason: qa_dev_server_failed: the dev server on the QA host exited (status 1) before its health check answered 200; " <>
+                 "its last log lines:\nFATAL: could not create shared memory"
+
+      # The log differs from run to run; the second attempt is the same failure, and files the fix.
+      Process.put(:qa_agent_result, {:error, {:qa_dev_server_failed, {:dev_server_exit, 1}, "FATAL: shared memory again"}, %{}})
+      assert :ok = run(workspace, [])
+      assert_received {:fixer_create, %{scope: @repo_key, component: "dev_server"}}
+    end
+
     test "a second ticket hitting the same break reuses the one fix ticket" do
       {workspace, _head} = git_workspace!()
 

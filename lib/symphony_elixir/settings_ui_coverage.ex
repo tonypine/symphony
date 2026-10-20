@@ -11,7 +11,9 @@ defmodule SymphonyElixir.SettingsUICoverage do
 
   A key is a dotted path from `SymphonyElixir.Config.SystemSchema.operator_key_paths/0`. An
   exemption names a key, or a prefix such as `watchdog.*` that covers every key under it,
-  including ones added later.
+  including ones added later. The manifest may also list a path inside a key that holds a map,
+  such as `auto_review.playbooks.macos_app.requires`: the app edits that one entry, and the key
+  itself stays covered by its own manifest entry or exemption.
   """
 
   @manifest_path "macos/Sources/SymphonyBarCore/SettingsUIManifest.swift"
@@ -97,7 +99,7 @@ defmodule SymphonyElixir.SettingsUICoverage do
   Compares the settings `keys` with the `manifest` key paths and the `exemptions`:
 
     * `uncovered` - keys neither in the manifest nor exempt;
-    * `unknown_manifest_keys` - manifest entries that are not settings;
+    * `unknown_manifest_keys` - manifest entries that are neither settings nor paths inside one;
     * `unused_exemptions` - exemption keys and prefixes that match no setting;
     * `redundant_exemptions` - exempt keys that are in the manifest too.
   """
@@ -108,7 +110,7 @@ defmodule SymphonyElixir.SettingsUICoverage do
 
     %{
       uncovered: Enum.reject(keys, &(&1 in manifest or exempt?.(&1))),
-      unknown_manifest_keys: manifest -- keys,
+      unknown_manifest_keys: Enum.reject(manifest, fn entry -> Enum.any?(keys, &(entry == &1 or String.starts_with?(entry, &1 <> "."))) end),
       unused_exemptions: Enum.reject(patterns, fn pattern -> Enum.any?(keys, &exempts?(pattern, &1)) end),
       redundant_exemptions: Enum.filter(manifest, &(&1 in keys and exempt?.(&1)))
     }

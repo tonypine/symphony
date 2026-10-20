@@ -494,6 +494,7 @@ defmodule SymphonyElixir.QaVerification do
       findings: Map.get(result, :findings, []),
       reason: Map.get(result, :reason),
       needs_person: Map.get(result, :needs_person, false),
+      needs_dev_server: Map.get(result, :needs_dev_server, false),
       covered_by: Map.get(result, :covered_by),
       tokens: tokens,
       playbooks: playbook_kinds(playbooks)
@@ -607,6 +608,7 @@ defmodule SymphonyElixir.QaVerification do
   defp verdict_reason(_outcome), do: "the run could not verify the change"
 
   defp error_reason(reason) when is_binary(reason), do: reason
+  defp error_reason({:qa_dev_server_failed, _cause, _log} = reason), do: QaAgent.blocked_reason(reason)
   defp error_reason({:remote_worker_unsupported, host}), do: "QA cannot run on the remote worker #{inspect(host)}"
   defp error_reason(reason), do: inspect(reason)
 

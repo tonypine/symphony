@@ -1408,18 +1408,36 @@ Fields:
   `enabled`; a new kind needs `paths` and `prompt`. The built-in `macos_app` kind also takes
   `build` (shell command run in the QA worktree), `app` (the `.app` bundle path relative to the
   repo root) and `build_timeout_ms` (default `900000`), and is off unless `build` and `app` are
-  set. The built-in `web` kind also takes `browser_mcp` (an MCP server definition, the shape of
+  set. It also takes `dev_server` (boolean, default `false`, valid on `android_app` and any kind
+  too: the pass starts `verification.dev_server`, on the QA host for a `macos_app` pass on a
+  `worker_host`), `dev_server_port` (1..65535, default `8090`: that QA-host server's
+  `SYMPHONY_VERIFICATION_PORT`) and `launch_env` (map of string to string, default `{}`: extra
+  variables `qa_launch_app` sets on the app after Symphony's own, `$SYMPHONY_VERIFICATION_PORT`
+  replaced by `dev_server_port`; names MUST match `^[A-Z][A-Z0-9_]*$`, and the variables Symphony
+  sets on the app itself, `PATH`, `HOME` and `DYLD_*` fail validation, naming the key). Values are
+  plain text and MUST NOT be secrets. The built-in `web` kind also takes `browser_mcp` (an MCP server definition, the shape of
   an `agent.mcp.servers` entry) and is off unless `verification.enabled` is true and
   `verification.dev_server.start_cmd` is set. The built-in `android_app` kind also takes `build`
   (shell command the QA agent runs in its own sandbox), `apk_paths` (list of the APKs it writes,
   relative to the repo root; `apk_path`, one string, is a one-item list, and both may be set),
   and `application_ids` (list of strings), and is off unless `build`, at least one APK path, a
-  non-empty `application_ids` and `auto_review.android.avd` are set. A repository's
+  non-empty `application_ids` and `auto_review.android.avd` are set. Any kind takes `requires`
+  (list of executable names, default `[]`), the tools its pass needs on the QA host; Symphony
+  checks the `macos_app` kind's. A repository's
   `WORKFLOW.md` MAY set `auto_review.playbooks` too; for that repository's QA passes each kind is
   merged over this map key by key, the repository's value winning.
 - `worker_host` (string, optional): an SSH host (`user@host` or `host:port`, the form
   `workers.ssh_hosts` uses) where the `macos_app` playbook's `qa_*` tools run instead of the
-  Symphony host. It does not need to be, and should not be, listed in `workers.ssh_hosts`.
+  Symphony host. It does not need to be, and should not be, listed in `workers.ssh_hosts`. With
+  `dev_server: true` on that playbook, the pass runs `verification.dev_server` there before the
+  agent starts: from its own copy of the PR head in the pass's run directory, `build_cmd` then
+  `start_cmd` as the QA user, unsandboxed, with `SYMPHONY_VERIFICATION_PORT` set to
+  `dev_server_port`, `HOME` a fresh folder and `TMPDIR` in the run directory, in a process group of
+  its own. The QA host polls `health_check_url` until it answers 200 or `health_timeout_ms`
+  passes; a failed build, an exit or a timeout makes the pass `blocked` with reason
+  `qa_dev_server_failed: …` and the log's last 20 lines, component `dev_server`. The QA prompt
+  names its URL. When the pass ends the group gets `stop_signal`, then is killed after
+  `stop_timeout_ms`, before the run directory is removed.
 - `android` (object, optional): host settings for Android QA. `avd` (AVD name, required for
   Android QA), `sdk_root` (string, default `$ANDROID_HOME`, then `$ANDROID_SDK_ROOT`, then
   `~/Library/Android/sdk`), `boot_timeout_ms` (positive integer, default `180000`) and
@@ -1574,6 +1592,11 @@ The QA agent:
   credentials, a global git credential helper or a forwarded SSH agent); the `qa_*` tools then fail
   with `qa_worker_unsafe` (or `qa_worker_unreachable` when the host cannot be reached) and tell the
   agent to answer `blocked`.
+- After that check, a `macos_app` pass MUST look for each executable in the playbook's `requires`
+  with `command -v`, in the shell and environment the playbook's `build` gets, on the QA host. A
+  missing one MUST make the pass `blocked` before the agent starts, with the reason
+  `qa_host_missing_tool: <name>`, and self-heal MUST file its fix under the `worker_host`
+  component, in Symphony's repo.
 - A `macos_app` pass MUST hand the QA agent the host loopback ports it may serve the app's stubs
   and proxies on (`QA_HOST_PORTS`), and the app reaches them at `http://localhost:<port>`. The
   playbook's `build` MUST get the same `QA_HOST_PORTS` in its environment, unless the forwards
@@ -2645,7 +2668,11 @@ Rules:
   is reused only while it is open and was filed for the same failure (the same normalized cause); a
   terminal one, or one for another failure of the same component, gets a new fix ticket instead. A
   QA answer may name an open ticket that already tracks the missing QA tool (`covered_by`); the
-  hold then waits on that ticket, linked as blocked-by, and nothing is filed. A missing QA tool or
+  hold then waits on that ticket, linked as blocked-by, and nothing is filed. A QA answer that says
+  a step needs the project's own server and the pass had no dev server (`needs_dev_server`) names
+  the `dev_server` component, whose fix ticket lands in the project's repository. A block whose fix
+  belongs to another repository than the last recorded one is a new break, filed there rather than
+  compared with the old failure. A missing QA tool or
   QA host capability is never `needs_person`: only a secret,
   an account or a device the host lacks is. The hold lifts when the fix ticket is terminal, except
   for a fix merged into the repository the running build comes from: like the app-update hold on a
