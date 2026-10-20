@@ -574,6 +574,31 @@ defmodule SymphonyElixir.CiPollerTest do
     assert [%{status: "red", last_observed_conclusion: "FAILURE", failed_checks: [%{conclusion: "STARTUP_FAILURE"}]}] = RunStore.list_ci_checks()
   end
 
+  test "a head whose only failed check is one a person must clear is not red: it reads as its other checks" do
+    now = ~U[2026-10-20 19:30:00Z]
+    issue = in_review_issue()
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+    put_run(issue, now)
+    protected = %{name: "protected paths", status: "COMPLETED", conclusion: "FAILURE", run_id: "988"}
+    specs = fn status, conclusion -> %{name: "specs", status: status, conclusion: conclusion, run_id: "987"} end
+
+    poll = fn checks ->
+      Application.put_env(:symphony_elixir, :ci_test_status, %{failed_status("abc123") | checks: checks})
+      CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+    end
+
+    # The other checks passed: green, with the check a person clears still listed.
+    assert {:ok, %{actions: [{:observed, "issue-2401", "green"}]}} = poll.([protected, specs.("COMPLETED", "SUCCESS")])
+    assert [%{status: "green", failed_checks: [%{name: "protected paths"}]}] = RunStore.list_ci_checks()
+
+    # Another check still runs: watching.
+    assert {:ok, %{actions: [{:observed, "issue-2401", "watching"}]}} = poll.([protected, specs.("IN_PROGRESS", nil)])
+
+    # Another check failed beside it: red.
+    assert {:ok, %{actions: [{:observed, "issue-2401", "red"}]}} = poll.([protected, specs.("COMPLETED", "FAILURE")])
+    assert [%{status: "red", failed_checks: [%{name: "protected paths"}, %{name: "specs"}]}] = RunStore.list_ci_checks()
+  end
+
   describe "with a duplicate run on the head that GitHub cancelled" do
     setup do
       now = ~U[2026-10-06 14:58:00Z]
