@@ -76,8 +76,9 @@ public struct SetupPayload: Equatable {
         /// An edit of `symphony.yml` the app makes through its settings writer once the operator confirms it.
         case configEdit(path: String, action: ConfigAction, value: SetupValue)
         /// A Linear change Symphony makes once the operator confirms it (`POST /api/v1/setup/fixes`), such as
-        /// `create_label`: the `name` in team `team`, of `type` for a status.
-        case linear(action: String, team: String, name: String, type: String?)
+        /// `create_label`: the `name` in team `team`; for a status (`create_state`), of `type`, just `after` the
+        /// status the check names, or first of its type when it names none.
+        case linear(action: String, team: String, name: String, type: String?, after: String? = nil)
         /// Re-syncs each ticket's hold label in repo `repo` from the hold Symphony keeps.
         case resyncHold(repo: String, tickets: [String])
         /// No safe fix: the place where the operator fixes it.
@@ -89,9 +90,11 @@ public struct SetupPayload: Equatable {
         /// `tickets`, the ones the operator picked, or all of them.
         public func descriptor(tickets picked: [String]? = nil) -> [String: Any]? {
             switch self {
-            case let .linear(action, team, name, type):
+            case let .linear(action, team, name, type, after):
+                // The place the sheet showed goes back, so Symphony refuses a status whose place moved since.
                 var descriptor: [String: Any] = ["kind": "linear", "action": action, "team": team, "name": name]
                 if let type { descriptor["type"] = type }
+                if let after { descriptor["after"] = after }
                 return descriptor
             case let .resyncHold(repo, tickets):
                 return ["kind": "linear", "action": "resync_hold", "repo": repo, "tickets": picked ?? tickets]
@@ -285,7 +288,7 @@ public struct SetupPayload: Equatable {
                 return .resyncHold(repo: repo, tickets: tickets)
             }
             guard let action = wire.action, let team = wire.team, let name = wire.name else { return .unknown("linear") }
-            return .linear(action: action, team: team, name: name, type: wire.type)
+            return .linear(action: action, team: team, name: name, type: wire.type, after: wire.after)
         case "open":
             // The app's own `update` is never one Symphony sends.
             guard let target = wire.target.flatMap(OpenTarget.init(rawValue:)), target != .update else { return .unknown("open") }
@@ -333,6 +336,7 @@ public struct SetupPayload: Equatable {
             let team: String?
             let name: String?
             let type: String?
+            let after: String?
             let repo: String?
             let tickets: [String]?
             let target: String?

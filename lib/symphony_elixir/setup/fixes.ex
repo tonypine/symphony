@@ -3,13 +3,14 @@ defmodule SymphonyElixir.Setup.Fixes do
   Runs a `linear` Setup fix the operator confirmed, for `POST /api/v1/setup/fixes`.
 
   A fix runs only as the latest check proposed it: a descriptor that no problem's `fix` names is
-  refused, so nothing is created that the operator wasn't shown. It does exactly what its descriptor
-  says:
+  refused, so nothing is created that the operator wasn't shown, and what runs is the proposed fix:
 
     * `create_label` creates the label `name` in the team `team`;
-    * `create_state` creates the workflow state `name` of the type `type` in the team `team`, at
-      `position` (`SymphonyElixir.Setup.Checks.Statuses` works it out from the team's board);
-    * `resync_hold` re-syncs the hold label of each ticket it names from the store
+    * `create_state` creates the workflow state `name` of the type `type` in the team `team`, at the
+      `position` the check worked out from the team's board (`SymphonyElixir.Setup.Checks.Statuses`).
+      The request names the state and its type; it needn't repeat the place, as the app's doesn't,
+      but a place it names (`after`, `position`) must be the proposed one;
+    * `resync_hold` re-syncs the hold label of each ticket the request names from the store
       (`SymphonyElixir.Hold.resync/4`): one of the tickets the check listed, or all of them.
 
   Then the checks run again with the team cache emptied (`SymphonyElixir.Setup.refresh/1`), and the
@@ -35,33 +36,37 @@ defmodule SymphonyElixir.Setup.Fixes do
   def run(descriptor, opts) do
     server = Keyword.get(opts, :server, Setup)
 
-    if is_map(descriptor) and proposed?(descriptor, Setup.payload(server).problems) do
-      with :ok <- apply_fix(descriptor, Keyword.get(opts, :tracker, Tracker)), do: {:ok, Setup.refresh(server)}
-    else
-      {:error, :not_proposed}
+    case is_map(descriptor) && to_run(descriptor, Setup.payload(server).problems) do
+      %{} = fix -> with :ok <- apply_fix(fix, Keyword.get(opts, :tracker, Tracker)), do: {:ok, Setup.refresh(server)}
+      _not_proposed -> {:error, :not_proposed}
     end
   end
 
-  defp proposed?(descriptor, problems) do
-    Enum.any?(problems, fn %{fix: fix} -> fix && covers?(stringify(fix), descriptor) end)
+  # The fix `descriptor` asks for, as the latest check proposed it; nil when none did.
+  defp to_run(descriptor, problems) do
+    Enum.find_value(problems, fn %{fix: fix} -> fix && covers(stringify(fix), descriptor) end)
   end
 
-  defp covers?(%{"kind" => "linear", "action" => "create_label"} = fix, descriptor) do
-    Map.take(fix, ~w(kind action team name)) == Map.take(descriptor, ~w(kind action team name))
+  defp covers(%{"kind" => "linear", "action" => "create_label"} = fix, descriptor) do
+    if same?(fix, descriptor, ~w(kind action team name)), do: fix
   end
 
-  defp covers?(%{"kind" => "linear", "action" => "create_state"} = fix, descriptor) do
-    Map.take(fix, ~w(kind action team name type after position)) == Map.take(descriptor, ~w(kind action team name type after position))
+  # The place is the check's: the request may leave it out, and one it names must be the proposed one.
+  defp covers(%{"kind" => "linear", "action" => "create_state"} = fix, descriptor) do
+    if same?(fix, descriptor, ~w(kind action team name type) ++ Enum.filter(~w(after position), &Map.has_key?(descriptor, &1))), do: fix
   end
 
-  defp covers?(%{"kind" => "linear", "action" => "resync_hold", "repo" => repo, "tickets" => tickets}, descriptor) do
+  # A re-sync runs for the tickets the request picks, of those the check listed.
+  defp covers(%{"kind" => "linear", "action" => "resync_hold", "repo" => repo, "tickets" => tickets}, descriptor) do
     case descriptor do
-      %{"kind" => "linear", "action" => "resync_hold", "repo" => ^repo, "tickets" => [_ | _] = wanted} -> Enum.all?(wanted, &(&1 in tickets))
-      _other -> false
+      %{"kind" => "linear", "action" => "resync_hold", "repo" => ^repo, "tickets" => [_ | _] = wanted} -> if Enum.all?(wanted, &(&1 in tickets)), do: descriptor
+      _other -> nil
     end
   end
 
-  defp covers?(_fix, _descriptor), do: false
+  defp covers(_fix, _descriptor), do: nil
+
+  defp same?(fix, descriptor, keys), do: Map.take(fix, keys) == Map.take(descriptor, keys)
 
   defp stringify(fix), do: Map.new(fix, fn {key, value} -> {to_string(key), value} end)
 

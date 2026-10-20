@@ -93,12 +93,13 @@ defmodule SymphonyElixir.Setup.Checks.StatusesTest do
     assert problem.fix == %{kind: "linear", action: "create_state", team: "TP", name: "Epic Review", type: "started", after: "Plan Review", position: 7.0}
   end
 
-  test "a missing state goes after the last of its type, before the first, or where Linear puts it" do
-    states!(["CI Fix", "In Progress", "Todo"])
+  test "a missing state goes after the last of its type, first of its type, or where Linear puts it" do
+    # A started state of the team's own sits before Code Review: In Progress still goes first.
+    states!(["CI Fix", "In Progress", "Todo"], [state("Design", "started", 0.5)])
 
     assert %{problems: [todo, in_progress, ci_fix]} = check()
     assert %{name: "Todo", type: "unstarted", after: nil, position: nil} = todo.fix
-    assert %{name: "In Progress", type: "started", after: nil, position: 1} = in_progress.fix
+    assert %{name: "In Progress", type: "started", after: nil, position: -0.5} = in_progress.fix
     assert %{name: "CI Fix", after: "Waiting on sub-tickets", position: 9} = ci_fix.fix
     assert todo.consequence =~ "only from Todo"
   end

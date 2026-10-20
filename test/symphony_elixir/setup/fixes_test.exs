@@ -113,6 +113,8 @@ defmodule SymphonyElixir.Setup.FixesTest do
       {:ok, server: server, fix: fix |> Map.new(fn {key, value} -> {to_string(key), value} end)}
     end
 
+    defp states, do: Application.get_env(:symphony_elixir, :memory_tracker_workflow_states_list)
+
     test "a proposed create_state creates that state, of that type and in that place, and the next check is clean", %{server: server, fix: fix} do
       assert fix == %{
                "kind" => "linear",
@@ -131,8 +133,27 @@ defmodule SymphonyElixir.Setup.FixesTest do
       assert %{type: "started", position: 6.5} = List.last(Application.get_env(:symphony_elixir, :memory_tracker_workflow_states_list))
     end
 
+    # The Mac app's request (`SetupPayload.Fix.descriptor()`) names the place it showed, `after`, and
+    # never the position; one with no place at all still runs where the check put it.
+    test "a create_state that names no position runs at the proposed one", %{server: server, fix: fix} do
+      for descriptor <- [Map.delete(fix, "position"), Map.drop(fix, ["after", "position"])] do
+        Application.put_env(:symphony_elixir, :memory_tracker_workflow_states_list, Enum.reject(states(), &(&1.name == "Epic Review")))
+        Setup.refresh(server)
+
+        assert {:ok, %{problems: []}} = Fixes.run(descriptor, server: server)
+        assert %{name: "Epic Review", type: "started", position: 6.5} = List.last(states())
+      end
+    end
+
     test "a create_state another place, type or team than proposed is refused", %{server: server, fix: fix} do
-      for descriptor <- [%{fix | "position" => 9}, %{fix | "type" => "unstarted"}, %{fix | "team" => "OPS"}, %{fix | "after" => nil}] do
+      for descriptor <- [
+            %{fix | "position" => 9},
+            %{fix | "type" => "unstarted"},
+            %{fix | "team" => "OPS"},
+            %{fix | "after" => nil},
+            Map.delete(%{fix | "after" => "QA"}, "position"),
+            Map.delete(fix, "type")
+          ] do
         assert Fixes.run(descriptor, server: server) == {:error, :not_proposed}
       end
     end

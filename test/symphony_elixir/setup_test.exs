@@ -203,6 +203,21 @@ defmodule SymphonyElixir.SetupTest do
       assert mode.fix == %{kind: "open", target: "symphony_yml", url: nil}
     end
 
+    # One state machine is left (`docs/design/state-machine.md` §Retired): a repo still set to the
+    # legacy one has no In Review handoff to fail, and Setup shows the key as one that does nothing.
+    test "a repo still set to the legacy state machine is a deprecated key with a remove fix" do
+      path = Workflow.symphony_file_path()
+      repos = ~s(repositories: [{"key": "app", "route": {"team": "Test"}, "state_machine": "legacy"}])
+      File.write!(path, String.replace(File.read!(path), ~r/^repositories: .*$/m, repos))
+      Cache.clear()
+
+      assert %{problems: [problem]} = Setup.check()
+      assert problem.id == "deprecated_key:repositories[app].state_machine"
+      assert problem.severity == "warning"
+      assert problem.consequence =~ "there is one ticket state machine"
+      assert problem.fix == %{kind: "config_edit", path: "repositories[app].state_machine", action: "remove", value: nil}
+    end
+
     test "an unknown key keeps the last good config running until the file is fixed" do
       path = Workflow.symphony_file_path()
       good = File.read!(path)

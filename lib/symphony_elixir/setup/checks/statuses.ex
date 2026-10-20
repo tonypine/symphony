@@ -8,8 +8,9 @@ defmodule SymphonyElixir.Setup.Checks.Statuses do
       sub-tickets, CI Fix, Done and Canceled, each of its type. The phase states and the waiting
       state go by the names `issues.states.*` give them, and one turned off with `null` is not
       wanted. A missing state has a `create_state` fix: its name, its type and its place on the
-      board, just after the designed state of the same type before it. A state of the wrong type is
-      its own error; changing a type is the operator's call, so the fix opens Linear.
+      board, just after the designed state of the same type before it, or first of its type when
+      the team has none of those (the app's Create Status sheet says which). A state of the wrong
+      type is its own error; changing a type is the operator's call, so the fix opens Linear.
     * Configured names (S4, error): a name in `issues.states.active` or `issues.states.terminal` that
       no state of the team has. A designed name is left to the designed states, and the default
       terminal list, spellings any one of which will do, is not judged. The fix opens Settings.
@@ -143,15 +144,21 @@ defmodule SymphonyElixir.Setup.Checks.Statuses do
   end
 
   # Just after the nearest designed state of the same type before it that the team has, and before
-  # the team's next state of that type; else just before the nearest one after it; else where Linear
-  # puts it.
+  # the team's next state of that type; else first of its type; else (the team has none of the type,
+  # or a board read without positions) where Linear puts it.
   defp placement(wanted, designed, states) do
-    {before, [_wanted | later]} = designed |> Enum.filter(&(&1.type == wanted.type)) |> Enum.split_while(&(&1 != wanted))
+    before = designed |> Enum.filter(&(&1.type == wanted.type)) |> Enum.take_while(&(&1 != wanted))
 
-    case {before |> Enum.reverse() |> Enum.find_value(&find(states, &1)), Enum.find_value(later, &find(states, &1))} do
-      {%{} = previous, _next} -> {previous.name, after_position(previous, wanted.type, states)}
-      {nil, %{position: position}} when is_number(position) -> {nil, position - 1}
-      _nothing_to_place_by -> {nil, nil}
+    case before |> Enum.reverse() |> Enum.find_value(&find(states, &1)) do
+      %{} = previous -> {previous.name, after_position(previous, wanted.type, states)}
+      nil -> {nil, first_position(wanted.type, states)}
+    end
+  end
+
+  defp first_position(type, states) do
+    case states |> Enum.filter(&(Map.get(&1, :type) == type)) |> Enum.map(&Map.get(&1, :position)) |> Enum.filter(&is_number/1) do
+      [] -> nil
+      positions -> Enum.min(positions) - 1
     end
   end
 

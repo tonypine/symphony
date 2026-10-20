@@ -4884,7 +4884,9 @@ Minimum endpoints:
       confirms, through `POST /api/v1/setup/fixes`. `create_label` creates the label `name` in the
       team `team`; `create_state` (with `after` and `position`) creates the workflow state `name` of
       the type `type` in the team `team`, at `position` on its board, just after the state `after`
-      (`null` when it goes first of its type; a `null` position leaves the place to Linear);
+      (`null` when it goes first of its type; a `null` position leaves the place to Linear). It
+      runs where the check put it: the request may leave `after` and `position` out, and one it
+      names must be the proposed one;
       `{"kind": "linear", "action": "resync_hold", "repo", "tickets"}` re-syncs each ticket's hold
       label from the store.
     - `{"kind": "open", "target": "settings" | "symphony_yml" | "linear" | "drain_report" | "repos",
@@ -4941,7 +4943,8 @@ Minimum endpoints:
     `QA`, `Merging`, `Rework`, `Plan Review`, `Epic Review`, `Waiting on sub-tickets`, `CI Fix`,
     `Done`, `Canceled` or `Cancelled`, the phase and waiting states by their `issues.states.*`
     names, one turned off with `null` not wanted; an `error` saying where tickets stop, with a
-    `create_state` fix of its type, placed just after the machine state of that type before it);
+    `create_state` fix of its type, placed just after the machine state of that type before it, or
+    first of its type);
     one of the wrong type (an `error`, `open` `linear`); a name in `issues.states.active`, or in
     an `issues.states.terminal` that differs from the default list, that no state of the team has
     (an `error` naming the key and the value, `open` `settings`). And, without reading Linear: the

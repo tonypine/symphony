@@ -547,6 +547,18 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
       assert contract == @statuses_fixture |> File.read!() |> Jason.decode!()
     end
 
+    # The request the Mac app's Create Status sheet sends (`SetupPayload.Fix.descriptor()`, checked
+    # against this fixture by `SetupFixSheetTests`): the state, its type and the `after` it showed.
+    test "the app's Create Status request creates the state where the check put it" do
+      refresh()
+      fix = problem(setup_payload(), "statuses:missing:TP:QA")["fix"]
+      request = Map.take(fix, ~w(kind action team name type after))
+
+      assert request == %{"kind" => "linear", "action" => "create_state", "team" => "TP", "name" => "QA", "type" => "started", "after" => "Code Review"}
+      assert post_fix(Jason.encode!(%{fix: request})) |> json_response(200) |> Map.fetch!("problems") == []
+      assert %{name: "QA", type: "started", position: 3.0} = List.last(Application.get_env(:symphony_elixir, :memory_tracker_workflow_states_list))
+    end
+
     test "a create Linear refuses answers its reason and leaves the problem in place" do
       refresh()
       fix = problem(setup_payload(), "statuses:missing:TP:QA")["fix"]
