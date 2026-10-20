@@ -351,7 +351,7 @@ public struct TicketPage: Equatable {
                 time: started, timeText: clock(started), title: "\(name) run \(counts[name] ?? 1)",
                 result: result, resultWord: word,
                 durationSeconds: run.durationSeconds ?? run.ended.map { max(Int($0.timeIntervalSince(started)), 0) },
-                tokens: run.tokens, detail: run.error?.nonEmpty
+                tokens: run.tokens, detail: run.inconclusiveCause.map(Self.inconclusiveDetail) ?? run.error?.nonEmpty
             ))
         }
 
@@ -507,6 +507,11 @@ public struct TicketPage: Equatable {
     }
 
     /// A run's status as a step result and its word.
+    /// A Code Review run that stayed inconclusive, with its cause in words: "Review inconclusive: invalid verdict".
+    static func inconclusiveDetail(_ cause: String) -> String {
+        "Review inconclusive: \(cause.replacingOccurrences(of: "_", with: " "))"
+    }
+
     static func result(_ status: String?, error: String?) -> (Step.Result, String?) {
         switch status?.lowercased() {
         case nil:
@@ -620,6 +625,8 @@ public struct TicketPage: Equatable {
         let status: String?
         let endedAt: String?
         let runtimeSeconds: Int?
+        /// Why a Code Review run stayed inconclusive, such as `invalid_verdict`.
+        let reviewInconclusiveCause: String?
     }
 
     private struct StatePayload: Decodable {
@@ -727,6 +734,7 @@ public struct TicketPage: Equatable {
         var durationSeconds: Int?
         var ended: Date?
         var tokens: Int?
+        var inconclusiveCause: String?
 
         init(history entry: Entry) {
             id = entry.runId
@@ -736,6 +744,7 @@ public struct TicketPage: Equatable {
             durationSeconds = entry.runtimeSeconds.flatMap { $0 > 0 ? $0 : nil }
             ended = entry.endedAt.flatMap(TicketPage.date)
             tokens = entry.tokens?.totalTokens
+            inconclusiveCause = entry.reviewInconclusiveCause?.nonEmpty
         }
 
         init(record: RunsPayload.Run) {

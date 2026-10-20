@@ -62,7 +62,8 @@ defmodule SymphonyElixirWeb.Presenter do
             claimed: length(Map.get(snapshot, :claimed, [])),
             forced: length(Map.get(snapshot, :forced, [])),
             shipped_today: length(shipped_today),
-            waiting_on_you: length(waiting_on_you)
+            waiting_on_you: length(waiting_on_you),
+            review_inconclusive: review_inconclusive_counts(run_history)
           },
           running: Enum.map(snapshot.running, &running_entry_payload/1),
           sessions: sessions_payload(snapshot.running),
@@ -798,8 +799,17 @@ defmodule SymphonyElixirWeb.Presenter do
       transcript_path: Map.get(entry, :transcript_path),
       turn_count: Map.get(entry, :turn_count, 0),
       runtime_seconds: Map.get(entry, :runtime_seconds, 0),
-      tokens: Map.get(entry, :tokens, %{})
+      tokens: Map.get(entry, :tokens, %{}),
+      review_inconclusive_cause: Map.get(entry, :review_inconclusive_cause)
     }
+  end
+
+  # The run history's inconclusive Code Review runs, counted per cause (`ReviewAgent.inconclusive_cause/1`).
+  defp review_inconclusive_counts(run_history) do
+    run_history
+    |> Enum.map(&Map.get(&1, :review_inconclusive_cause))
+    |> Enum.filter(&is_binary/1)
+    |> Enum.frequencies()
   end
 
   # Accepts the in-memory profile (`kind`) and the stored run record form (`run_kind`).
