@@ -834,7 +834,7 @@ defmodule SymphonyElixir.EpicReview do
   end
 
   defp playbooks(issue, settings) do
-    playbooks = Selection.playbooks(settings.auto_review, dev_server?: Verification.dev_server_configured?(settings))
+    playbooks = Selection.playbooks(settings.auto_review, Verification.selection_opts(settings))
     labels = labels(issue)
 
     case Enum.filter(playbooks, &((@label_prefix <> &1.kind) in labels)) do
