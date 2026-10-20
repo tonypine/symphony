@@ -3,13 +3,14 @@
 Use the macOS app the way a user would and judge what is on screen, not what the code says.
 Do not run the project's test suite, `make all`, coverage or static analysis: CI already ran them.
 Your sandbox cannot build Swift, launch apps or read the screen, so Symphony runs these tools
-for you on the host. They only act on this worktree's configured app and on apps you launched:
+for you on the QA VM, a separate macOS machine: never on this host. They only act on this
+worktree's configured app and on apps you launched:
 
 - `qa_build`: runs the configured build command. Call it once, before anything else.
 - `qa_launch_app`: launches the bundle `qa_build` produced, in QA mode (private settings and
   secrets, never the real ones), and returns its `pid`. Pass `api_fixtures`, a directory relative
   to the checkout (for example `macos/Tests/Fixtures/director-app/running`), and Symphony copies
-  it to the machine the app runs on and launches the app with `SYMPHONY_BAR_QA_API_FIXTURES`
+  it to the QA VM and launches the app with `SYMPHONY_BAR_QA_API_FIXTURES`
   pointing at the copy (returned as `api_fixtures`). The directory may hold only regular files,
   at most 5 MB, inside the checkout. Optional stand-ins, see "Stand-ins for GitHub, Linear, updates
   and the folder picker" below: `gh_stub_port`, `linear_stub_port`, `open_panel_dir`,
@@ -96,9 +97,9 @@ Servers the app talks to (a stand-in for an outside service, a proxy to the dev 
 started) run in your shell on this host; never a stub you write of the project's own server or
 API, which is the system under test. For each one:
 - Bind each one to `127.0.0.1` at a port from `QA_HOST_PORTS` (see "Host ports" above), never
-  to `0.0.0.0` or another port, and point the app at `http://localhost:<port>`. The app may run on
-  a separate QA machine: Symphony forwards those ports, and only those, from its `localhost` to
-  this host's `127.0.0.1`.
+  to `0.0.0.0` or another port, and point the app at `http://localhost:<port>`. The app runs on
+  the QA VM: Symphony forwards those ports, and only those, from its `localhost` to this host's
+  `127.0.0.1`.
 - Never give the app this host's LAN or bridge address: the QA machine may not reach it, and
   macOS asks a person for Local Network permission before an app connects to one, which QA
   cannot grant.
@@ -308,9 +309,9 @@ step you proved, judge what the app shows.
 trusted once, rather than a throwaway one trusted for each pass: a pass that died would leave its
 trust setting behind. On a QA VM (a `worker_host`) whose QA user has passwordless `sudo`,
 `qa_build_release_pair` installs it itself the first time it finds none, or finds it untrusted,
-with Symphony's own copy of the script, and builds the pair in the same call. Anywhere else (QA on
-Symphony's own host, or a QA user whose `sudo` asks for a password) whoever provisions the host
-runs it by hand as the QA user, from a checkout of this repository:
+with Symphony's own copy of the script, and builds the pair in the same call. On a QA VM whose QA
+user's `sudo` asks for a password, whoever provisions the VM runs it by hand as the QA user, from a
+checkout of this repository:
 
 ```sh
 scripts/qa/install-test-signing-identity.sh          # asks for sudo once, to trust the certificate
@@ -459,6 +460,8 @@ Verdicts for this playbook:
   could not check `blocked` with the tool's message in `details`. Then continue with the
   steps of the other playbooks offered to you (such as `cli` or `web`) and report each of
   them as `pass` or `fail`. Answer `blocked` with the tool's message as `reason`. Do the same
-  for `qa_helper_unavailable`.
+  for `qa_helper_unavailable`, and for `qa_worker_missing`, `qa_worker_same_machine`,
+  `qa_worker_unsafe` and `qa_worker_unreachable`, which mean there is no QA VM Symphony may use:
+  never try to build or launch the app another way.
 - The app crashing or exiting (`qa_app_exited`) during the walkthrough or the wide pass is a
   failing step; quote its last output and the `qa_check_app` problems.
