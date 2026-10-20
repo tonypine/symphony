@@ -102,10 +102,12 @@ defmodule SymphonyElixir.QaDriver.ReleasePair do
   printf 'symphony-qa-relaunch-script:%s\\n' "$1/bin/relaunch"
   """
 
-  # Takes the oldest relaunch request under the QA root `$1`.
+  # Takes the oldest relaunch request under the first of the QA roots (`$@`) that has one.
   @take_relaunch_script """
-  for request in "$1"/relaunch/[0-9]*; do
-    if [ -f "$request" ]; then printf 'symphony-qa-relaunch:%s\\n' "$(head -n 1 "$request")"; rm -f "$request"; exit 0; fi
+  for root in "$@"; do
+    for request in "$root"/relaunch/[0-9]*; do
+      if [ -f "$request" ]; then printf 'symphony-qa-relaunch:%s\\n' "$(head -n 1 "$request")"; rm -f "$request"; exit 0; fi
+    done
   done
   exit 0
   """
@@ -369,10 +371,13 @@ defmodule SymphonyElixir.QaDriver.ReleasePair do
     end
   end
 
-  @doc "Takes the oldest relaunch request the update helper left: the bundle to start, or `nil`."
-  @spec take_relaunch(map()) :: {:ok, Path.t() | nil} | tool_error()
-  def take_relaunch(config) do
-    case config.host.cmd.("/bin/sh", ["-c", @take_relaunch_script, "sh", config.qa_root], timeout_ms: @timeout_ms, output_limit: @output_limit) do
+  @doc """
+  Takes the oldest relaunch request the update helper left in one of the QA roots of the pass's
+  release_pair launches: the bundle to start, or `nil`.
+  """
+  @spec take_relaunch(map(), [Path.t()]) :: {:ok, Path.t() | nil} | tool_error()
+  def take_relaunch(config, qa_roots) do
+    case config.host.cmd.("/bin/sh", ["-c", @take_relaunch_script, "sh" | qa_roots], timeout_ms: @timeout_ms, output_limit: @output_limit) do
       {:ok, {output, 0}} -> {:ok, marker(output, "symphony-qa-relaunch")}
       other -> tool_error("qa_relaunch_failed", "The update helper's relaunch requests could not be read: #{describe(other)}")
     end

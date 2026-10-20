@@ -845,9 +845,16 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
 
       assert %{"release_pair" => %{"type" => "boolean"}} = launch["inputSchema"]["properties"]
+      assert %{"fresh_root" => %{"type" => "boolean"}, "root" => %{"type" => "integer", "minimum" => 1}} = launch["inputSchema"]["properties"]
+
+      requests = Enum.find(DynamicTool.tool_specs(:qa), &(&1["name"] == "qa_api_requests"))
+      assert %{"root" => %{"type" => "integer", "minimum" => 1}} = requests["inputSchema"]["properties"]
 
       for {tool, args} <- [
             {"qa_launch_app", %{"release_pair" => true}},
+            {"qa_launch_app", %{"fresh_root" => true}},
+            {"qa_launch_app", %{"root" => 2}},
+            {"qa_api_requests", %{"root" => 2}},
             {"qa_build_release_pair", %{}},
             {"qa_relaunched_app", %{"wait_seconds" => 30}},
             {"qa_update_feed", %{"mode" => "none"}}
