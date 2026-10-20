@@ -794,11 +794,14 @@ Fields:
 
 - `enabled` (boolean)
   - Default: `false`.
-  - When false or omitted, no verification port allocation or dev-server supervision is active.
+  - When false or omitted, no verification port allocation or dev-server supervision is active,
+    and no agent run starts a dev server.
+  - A `macos_app` QA pass on a `worker_host` with `dev_server: true` reads only
+    `dev_server.start_cmd`: its server runs on the QA host, with no port allocation here.
 - `port_allocation.range` (two-integer list)
-  - Default: `[4000, 4099]`.
+  - Default: `[4100, 4199]`, which leaves out Symphony's own API port.
   - The implementation allocates the first free port in the inclusive range for each dispatched
-    issue.
+    issue: one no other allocation holds and nothing on the host already listens on.
   - The range is global to the Symphony process across all worker hosts. Operators using SSH worker
     pools should size the range for total verification-enabled concurrency, not per-host
     concurrency.
@@ -1947,7 +1950,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `repositories[].workspace.fetch_before_dispatch`: boolean, defaulting through global
   `workspaces.fetch_before_dispatch` or `true`
 - `verification.enabled`: boolean, default `false`
-- `verification.port_allocation.range`: two-integer inclusive range, default `[4000, 4099]`
+- `verification.port_allocation.range`: two-integer inclusive range, default `[4100, 4199]`
 - `verification.dev_server.build_cmd`: shell command or null
 - `verification.dev_server.start_cmd`: shell command or null
 - `verification.dev_server.health_check_url`: URL template or null

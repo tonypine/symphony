@@ -12,6 +12,7 @@ defmodule SymphonyElixir.Verification.PortPool do
     :run_store,
     :repo_key,
     :process_alive?,
+    :port_free?,
     :reconcile_interval_ms,
     :timer_ref,
     allocations_by_run: %{},
@@ -117,12 +118,29 @@ defmodule SymphonyElixir.Verification.PortPool do
 
   def os_pid_alive?(_pid), do: false
 
+  @doc """
+  Whether nothing listens on `port` on 127.0.0.1: a listen with the loopback bridge's options
+  succeeds there (`SymphonyElixir.Verification.LoopbackBridge`).
+  """
+  @spec port_free?(pos_integer()) :: boolean()
+  def port_free?(port) when is_integer(port) do
+    case :gen_tcp.listen(port, [:binary, active: false, ip: {127, 0, 0, 1}, reuseaddr: true]) do
+      {:ok, socket} ->
+        :gen_tcp.close(socket)
+        true
+
+      {:error, _reason} ->
+        false
+    end
+  end
+
   @impl true
   def init(opts) do
     state = %__MODULE__{
       run_store: Keyword.get(opts, :run_store, RunStore),
       repo_key: Keyword.get(opts, :repo_key, Config.repo_key!()),
       process_alive?: Keyword.get(opts, :process_alive?, &__MODULE__.os_pid_alive?/1),
+      port_free?: Keyword.get(opts, :port_free?, &__MODULE__.port_free?/1),
       reconcile_interval_ms: Keyword.get(opts, :reconcile_interval_ms, @default_reconcile_interval_ms)
     }
 
@@ -224,8 +242,10 @@ defmodule SymphonyElixir.Verification.PortPool do
     end
   end
 
+  # A port another process already listens on (Symphony's own API, say) is skipped: the dev
+  # server's loopback bridge could not listen there.
   defp first_free_port(state, [first, last]) do
-    Enum.find(first..last, fn port -> not Map.has_key?(state.allocations_by_port, port) end)
+    Enum.find(first..last, fn port -> not Map.has_key?(state.allocations_by_port, port) and state.port_free?.(port) end)
   end
 
   defp fetch_run_id(%{run_id: run_id}) when is_binary(run_id) and run_id != "", do: {:ok, run_id}
