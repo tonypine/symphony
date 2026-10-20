@@ -74,7 +74,7 @@ public struct SetupPage: Equatable {
                 case .set: "Change…"
                 case .add: "Add…"
                 }
-            case let .linear(action, _, _, _):
+            case let .linear(action, _, _, _, _):
                 SetupLinearKind(action: action).buttonTitle
             case .resyncHold:
                 "Re-sync…"

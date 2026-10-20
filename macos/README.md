@@ -1132,7 +1132,8 @@ state. The window opens on the Inbox the first time.
   **Open Repos**). Nothing is fixed without its sheet: an edit shows the exact lines it removes and adds, copies
   `symphony.yml` to `symphony.yml.<yyyyMMdd-HHmmss>.bak` next to it (the last 10 are kept), saves through the same
   writer as Settings once `symphony check` passes, and offers **Undo** for 10 seconds; a Linear change names what it
-  creates, in which team, and how to undo it by hand. A fix that fails keeps its sheet open with the reason, **Open
+  creates, in which team (a status also its type and its place: after the status it names, or first of its type), and
+  how to undo it by hand. A fix that fails keeps its sheet open with the reason, **Open
   Settings…** (where the Linear key and the `symphony.yml` path are), **Close** and **Try Again**. **Check Again**
   (⌘R) runs the checks now. Checks that couldn't run (no Linear API key) show under **Not checked**; when Linear
   can't be reached, a banner says when the Linear results are from. A warning also shows when Symphony runs another

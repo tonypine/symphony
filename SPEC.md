@@ -4939,8 +4939,13 @@ Minimum endpoints:
       applies it to `symphony.yml` through its settings writer once the operator confirms.
     - `{"kind": "linear", "action", "team", "name", "type"}`: the service runs it once the operator
       confirms, through `POST /api/v1/setup/fixes`. `create_label` creates the label `name` in the
-      team `team`; `{"kind": "linear", "action": "resync_hold", "repo", "tickets"}` re-syncs each
-      ticket's hold label from the store.
+      team `team`; `create_state` (with `after` and `position`) creates the workflow state `name` of
+      the type `type` in the team `team`, at `position` on its board, just after the state `after`
+      (`null` when it goes first of its type; a `null` position leaves the place to Linear). It
+      runs where the check put it: the request may leave `after` and `position` out, and one it
+      names must be the proposed one;
+      `{"kind": "linear", "action": "resync_hold", "repo", "tickets"}` re-syncs each ticket's hold
+      label from the store.
     - `{"kind": "open", "target": "settings" | "symphony_yml" | "linear" | "drain_report" | "repos",
       "url"}`: no fix is safe; the app shows the button that goes where the operator fixes it.
     Symphony never fixes a problem by itself.
@@ -4990,7 +4995,20 @@ Minimum endpoints:
     `Blocked` or `Needs Decision` label with no hold, or a hold with no label) through two checks
     without a poll putting it right (one `warning` per repo naming the tickets, a `details` line
     each saying which way and since when, and a `resync_hold` fix). The poll logs each drift once
-    per change, not on every poll.
+    per change, not on every poll. The workflow states, in each routed team, from one states read
+    per team: a state of the ticket machine the team lacks (`Todo`, `In Progress`, `Code Review`,
+    `QA`, `Merging`, `Rework`, `Plan Review`, `Epic Review`, `Waiting on sub-tickets`, `CI Fix`,
+    `Done`, `Canceled` or `Cancelled`, the phase and waiting states by their `issues.states.*`
+    names, one turned off with `null` not wanted; an `error` saying where tickets stop, with a
+    `create_state` fix of its type, placed just after the machine state of that type before it, or
+    first of its type);
+    one of the wrong type (an `error`, `open` `linear`); a name in `issues.states.active`, or in
+    an `issues.states.terminal` that differs from the default list, that no state of the team has
+    (an `error` naming the key and the value, `open` `settings`). And, without reading Linear: the
+    waiting state the startup check didn't find and turned off until a restart (a `warning`);
+    tickets the drain report still finds in a retired state (one `warning` per state naming them,
+    `open` `drain_report`); and a phase state Symphony runs by itself listed in
+    `issues.states.active` (a `warning` with a `config_edit` `remove` of it).
     It also checks where `macos_app` QA runs: a repo
     whose playbooks include `macos_app` while `auto_review.worker_host` is unset, and a
     `worker_host` whose `IOPlatformUUID` (read over SSH) is this host's (each an `error` with an

@@ -237,6 +237,8 @@ defmodule SymphonyElixir.Linear.Adapter do
       nodes {
         id
         name
+        type
+        position
         team {
           id
           key
@@ -291,12 +293,14 @@ defmodule SymphonyElixir.Linear.Adapter do
   # A new phase state is a started state: it sits beside In Progress on the board. Linear requires
   # the color.
   @create_workflow_state_mutation """
-  mutation SymphonyCreateWorkflowState($name: String!, $teamId: String!, $color: String!) {
-    workflowStateCreate(input: {name: $name, teamId: $teamId, type: "started", color: $color}) {
+  mutation SymphonyCreateWorkflowState($name: String!, $teamId: String!, $color: String!, $type: String!, $position: Float) {
+    workflowStateCreate(input: {name: $name, teamId: $teamId, type: $type, color: $color, position: $position}) {
       success
       workflowState {
         id
         name
+        type
+        position
         team {
           id
           key
@@ -723,13 +727,13 @@ defmodule SymphonyElixir.Linear.Adapter do
   end
 
   @doc """
-  Creates the started state `state_name` with the hex `color` in the team `team` (a key or an id),
-  and returns it.
+  Creates the state `state_name` with the hex `color` in the team `team` (a key or an id), and
+  returns it. `opts`: `:type` (`started` by default) and `:position` (Linear places it when absent).
   """
-  @spec create_workflow_state(String.t(), String.t(), String.t()) :: {:ok, Tracker.workflow_state()} | {:error, term()}
-  def create_workflow_state(state_name, team, color) when is_binary(state_name) and is_binary(team) and is_binary(color) do
+  @spec create_workflow_state(String.t(), String.t(), String.t(), keyword()) :: Tracker.created_state()
+  def create_workflow_state(state_name, team, color, opts \\ []) when is_binary(state_name) and is_binary(team) and is_binary(color) do
     with {:ok, team_id} <- resolve_team_id(team),
-         {:ok, response} <- create_state(state_name, team_id, color),
+         {:ok, response} <- create_state(state_name, team_id, color, opts),
          true <- get_in(response, ["data", "workflowStateCreate", "success"]) == true,
          %{} = created <- get_in(response, ["data", "workflowStateCreate", "workflowState"]) do
       {:ok, workflow_state(created)}
@@ -740,8 +744,12 @@ defmodule SymphonyElixir.Linear.Adapter do
     end
   end
 
-  defp create_state(state_name, team_id, color) do
-    client_module().graphql(@create_workflow_state_mutation, %{name: state_name, teamId: team_id, color: color})
+  # An absent `position` variable leaves the input field unset, so Linear places the state itself.
+  defp create_state(state_name, team_id, color, opts) do
+    variables = %{name: state_name, teamId: team_id, color: color, type: Keyword.get(opts, :type) || "started"}
+    variables = if is_number(opts[:position]), do: Map.put(variables, :position, opts[:position]), else: variables
+
+    client_module().graphql(@create_workflow_state_mutation, variables)
   end
 
   @doc "Every label in the workspace, workspace-wide and per team."
@@ -818,7 +826,14 @@ defmodule SymphonyElixir.Linear.Adapter do
   end
 
   defp workflow_state(node) do
-    %{id: node["id"], name: node["name"], team_id: get_in(node, ["team", "id"]), team_key: get_in(node, ["team", "key"])}
+    %{
+      id: node["id"],
+      name: node["name"],
+      team_id: get_in(node, ["team", "id"]),
+      team_key: get_in(node, ["team", "key"]),
+      type: node["type"],
+      position: node["position"]
+    }
   end
 
   defp label(node) do

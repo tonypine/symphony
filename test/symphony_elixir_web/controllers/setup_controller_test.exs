@@ -4,7 +4,7 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
   import Phoenix.ConnTest, only: [build_conn: 0, get: 2, post: 3, json_response: 2]
   import Plug.Conn, only: [put_req_header: 3]
 
-  alias SymphonyElixir.{BlockedHold, Setup, StateProvisioning}
+  alias SymphonyElixir.{BlockedHold, RetiredStates, Setup, StateProvisioning, SubIssueWait}
   alias SymphonyElixir.GitHub.{RelaySupervisor, WebhookSetup}
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.PrWatch.Health
@@ -21,6 +21,8 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
   @problems_fixture Path.expand("../../fixtures/api/setup_problems.json", __DIR__)
   # The label problems and their Linear fixes, for the app's Setup confirm sheets.
   @labels_fixture Path.expand("../../fixtures/api/setup_label_problems.json", __DIR__)
+  # The status problems and their fixes, for the app's Statuses rows and its Create Status sheet.
+  @statuses_fixture Path.expand("../../fixtures/api/setup_status_problems.json", __DIR__)
 
   # Answers the snapshot `/api/v1/state` reads: nothing running.
   defmodule IdleOrchestrator do
@@ -41,8 +43,12 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
     FetchLog.record("default", :ok)
     :ets.delete_all_objects(PollLog)
     # So may the labels an earlier test's orchestrator provisioned in the memory tracker: a team with
-    # some labels is one the labels check judges.
+    # some labels is one the labels check judges. Likewise its states, a drain report and a waiting
+    # state turned off at its startup.
     Application.delete_env(:symphony_elixir, :memory_tracker_labels_list)
+    Application.delete_env(:symphony_elixir, :memory_tracker_workflow_states_list)
+    RetiredStates.reset_for_test()
+    SubIssueWait.reset_for_test("Waiting on sub-tickets")
 
     dir = Path.join(System.tmp_dir!(), "setup-controller-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
@@ -448,6 +454,123 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
     test "fixes are refused from another site's page, and take no other method" do
       assert post_fix("{}", [{"content-type", "application/json"}, {"origin", "https://evil.example.com"}]).status == 403
       assert build_conn() |> get("/api/v1/setup/fixes") |> json_response(405)
+    end
+  end
+
+  describe "status fixes" do
+    setup do
+      on_exit(fn ->
+        RetiredStates.reset_for_test()
+
+        for key <- [:memory_tracker_workflow_states_list, :memory_tracker_issues],
+            do: Application.delete_env(:symphony_elixir, key)
+      end)
+
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_team: "TP")
+
+      # Team TP's board, every designed state but QA.
+      board =
+        [
+          {"Todo", "unstarted", 0},
+          {"In Progress", "started", 1},
+          {"Code Review", "started", 2},
+          {"Merging", "started", 4},
+          {"Rework", "started", 5},
+          {"Plan Review", "started", 6},
+          {"Epic Review", "started", 7},
+          {"Waiting on sub-tickets", "started", 8},
+          {"CI Fix", "started", 9},
+          {"Done", "completed", 0},
+          {"Canceled", "canceled", 0}
+        ]
+
+      states =
+        for {name, type, position} <- board,
+            do: %{id: name, name: name, team_key: "TP", type: type, position: position}
+
+      Application.put_env(:symphony_elixir, :memory_tracker_workflow_states_list, states)
+      :ok
+    end
+
+    defp setup_payload, do: build_conn() |> get("/api/v1/setup") |> json_response(200)
+
+    # The user walkthrough: a missing state created by its fix, tickets left in In Review, a misspelt active state.
+    test "a missing state is created by its fix, retired tickets link to the drain report, and an unknown active state names its key" do
+      # 1. Team TP has no QA state: a status error naming the team and QA, with a create_state fix of type started.
+      refresh()
+      missing = problem(setup_payload(), "statuses:missing:TP:QA")
+
+      assert %{
+               "severity" => "error",
+               "category" => "statuses",
+               "title" => ~s(Team TP has no "QA" state),
+               "fix" => %{"kind" => "linear", "action" => "create_state", "team" => "TP", "name" => "QA", "type" => "started"} = fix
+             } = missing
+
+      assert %{"after" => "Code Review", "position" => 3.0} = fix
+
+      # 2. Posting the fix creates the state in the tracker, and the error is gone.
+      payload = post_fix(Jason.encode!(fix)) |> json_response(200)
+      assert payload["problems"] == []
+      assert %{name: "QA", team_key: "TP", type: "started", position: 3.0} = List.last(Application.get_env(:symphony_elixir, :memory_tracker_workflow_states_list))
+
+      # 3. Three tickets left in In Review, as the poll's drain report finds them: a warning naming
+      # them, opening the drain report.
+      issues = for n <- 1..3, do: %Issue{id: "issue-#{n}", identifier: "TP-#{n}", url: "https://linear.app/t/issue/TP-#{n}", state: "In Review"}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
+      capture_log(fn -> RetiredStates.report() end)
+      refresh()
+      retired = problem(setup_payload(), "status_use:retired:In Review")
+
+      assert %{
+               "severity" => "warning",
+               "title" => "3 tickets are still in the retired In Review state",
+               "fix" => %{"kind" => "open", "target" => "drain_report"}
+             } = retired
+
+      assert Enum.map(retired["tickets"], & &1["identifier"]) == ["TP-1", "TP-2", "TP-3"]
+
+      # 4. A misspelt active state: an error naming the key and the value.
+      config = [tracker_kind: "memory", tracker_team: "TP", tracker_active_states: ["Todo", "In Progres"]]
+      write_workflow_file!(Workflow.workflow_file_path(), config)
+      refresh()
+      unknown = problem(setup_payload(), "statuses:unknown:TP:issues.states.active:In Progres")
+
+      assert %{"severity" => "error", "title" => ~s(issues.states.active names "In Progres", which team TP has no state for)} = unknown
+      assert %{"label" => "Key", "value" => "issues.states.active"} in unknown["details"]
+      assert %{"label" => "Value", "value" => "In Progres"} in unknown["details"]
+      assert unknown["fix"] == %{"kind" => "open", "target" => "settings", "url" => nil}
+
+      # The contract the app's Statuses rows and Create Status sheet decode.
+      contract = %{"problems" => [missing, retired, unknown]}
+      if System.get_env("SYMPHONY_WRITE_FIXTURES") == "1", do: File.write!(@statuses_fixture, Jason.encode_to_iodata!(contract, pretty: true))
+      assert contract == @statuses_fixture |> File.read!() |> Jason.decode!()
+    end
+
+    # The request the Mac app's Create Status sheet sends (`SetupPayload.Fix.descriptor()`, checked
+    # against this fixture by `SetupFixSheetTests`): the state, its type and the `after` it showed.
+    test "the app's Create Status request creates the state where the check put it" do
+      refresh()
+      fix = problem(setup_payload(), "statuses:missing:TP:QA")["fix"]
+      request = Map.take(fix, ~w(kind action team name type after))
+
+      assert request == %{"kind" => "linear", "action" => "create_state", "team" => "TP", "name" => "QA", "type" => "started", "after" => "Code Review"}
+      assert post_fix(Jason.encode!(%{fix: request})) |> json_response(200) |> Map.fetch!("problems") == []
+      assert %{name: "QA", type: "started", position: 3.0} = List.last(Application.get_env(:symphony_elixir, :memory_tracker_workflow_states_list))
+    end
+
+    test "a create Linear refuses answers its reason and leaves the problem in place" do
+      refresh()
+      fix = problem(setup_payload(), "statuses:missing:TP:QA")["fix"]
+      forbidden = {:error, {:linear_api_status, 403, nil}}
+      Application.put_env(:symphony_elixir, :memory_tracker_create_workflow_state_result, forbidden)
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_create_workflow_state_result) end)
+
+      payload = post_fix(Jason.encode!(%{fix: fix})) |> json_response(422)
+
+      assert %{"code" => "fix_refused", "message" => message} = payload["error"]
+      assert message =~ ~s[Linear refused to create the state "QA" in team TP: the Linear API key isn't allowed to (HTTP 403).]
+      assert problem(payload, "statuses:missing:TP:QA")
     end
   end
 
