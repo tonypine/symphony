@@ -750,7 +750,11 @@ defmodule SymphonyElixir.QaAgent do
        `pass` when the screenshots match the design. A visible mismatch is `fail`, even when every
        structural check passes: name in `details` and `findings` what differs from which design,
        with the screenshot that shows it. A change with no UI deliverable has no `Design check` step.
-    3. The wide pass and the other checks of the running app the playbooks ask for.
+    3. The wide pass and the other checks of the running app the playbooks ask for. One pass per
+       viewport the repo names (today: the wide pass). A defect is content clipped with no way to
+       reach it, or a mechanism (scroll, collapse, resize) that doesn't work. Horizontal scroll or a
+       collapsed pane at a `functional` viewport is not a defect. A finding names the viewport, the
+       screen, the mechanism expected, the actual, and the evidence file.
     """
   end
 
