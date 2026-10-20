@@ -2440,6 +2440,15 @@ The poller:
   forever. It logs `Ignoring stale check <name> in completed run <id>`. A check in a run that
   completed with any other conclusion stays as reported. To see this, a head whose rollup has no
   failed check and only GitHub Actions checks left unfinished also reads the head's workflow runs.
+- keeps only the newest attempt of each GitHub Actions workflow run: a rerun keeps the run's id and
+  adds an attempt, and the rollup can hold the earlier attempt's checks beside the new one's. A
+  check of an older attempt (a lower attempt number where its details URL names one, or for the
+  same check name a lower job id) is left out, and it logs `Ignoring <n> check(s) of earlier
+  attempts of run(s) <ids>`. A run with a check still queued or in progress is pending, and its
+  cancelled checks are left out while it is: a rerun waiting for a runner reads as pending, not as
+  cancelled, so the watcher waits on it rather than rerunning it again (which would cancel the
+  queued attempt). It logs `Ignoring the cancelled checks of run(s) <ids>: an attempt of the run
+  is queued or running`.
 - keeps only the newest run of each GitHub Actions workflow among the checks on a head, ordered by
   run id (GitHub numbers runs as it creates them and the numbers grow), and leaves out the checks
   of every other run of that workflow: the head reads as the check list GitHub shows. That covers
@@ -2448,8 +2457,8 @@ The poller:
   beside a newer run of the same workflow (a re-run on the same head, such as for an edited pull
   request body); neither starts a rerun or a CI-fix run. It logs `Ignoring the checks of superseded
   run(s) <ids>: only the newest run of their workflow counts`. When every run of the workflow was
-  cancelled, or a cancelled job sits beside live ones in its own run, the cancelled checks still
-  read as a failure.
+  cancelled, or a cancelled job sits beside finished ones in its own run's newest attempt, the
+  cancelled checks still read as a failure.
 - reads a landing's head (the `Merging` wait, the release of a held landing run, and the merge
   tool) against the checks its base branch requires: a head still waiting on a check, with none
   failed, also reads the required status checks of the base branch's rulesets

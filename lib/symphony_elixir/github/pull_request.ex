@@ -51,6 +51,8 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           optional(:details_url) => String.t() | nil,
           optional(:workflow_name) => String.t() | nil,
           optional(:run_id) => String.t() | nil,
+          optional(:run_attempt) => pos_integer() | nil,
+          optional(:job_id) => pos_integer() | nil,
           optional(:completed_at) => DateTime.t() | nil,
           optional(:stale) => boolean()
         }
@@ -300,8 +302,9 @@ defmodule SymphonyElixir.GitHub.PullRequest do
 
   @doc """
   Drops the checks of superseded workflow runs from `ci_status` (`:pr_url`, `:commit_sha`,
-  `:checks`): only the newest run of a workflow that reported a check which wasn't cancelled counts,
-  as GitHub's own check list shows it.
+  `:checks`), as GitHub's own check list shows them: only the newest attempt of a run counts, a run
+  with a check still queued or running is pending and its cancelled checks don't count while it is,
+  and only the newest run of a workflow that reported a check which wasn't cancelled counts.
   """
   @spec drop_superseded(map()) :: map()
   def drop_superseded(%{checks: checks} = ci_status) when is_list(checks), do: drop_superseded_checks(ci_status)
@@ -980,6 +983,72 @@ defmodule SymphonyElixir.GitHub.PullRequest do
     end
   end
 
+  # A rerun keeps its workflow run's id and adds an attempt, and the rollup can hold the checks of
+  # the earlier attempt beside the new one's under that one run id. Only the newest attempt counts,
+  # as GitHub's check list shows it: a check of an older attempt (a lower `run_attempt`, or for the
+  # same check name a lower job id, since GitHub numbers a rerun job above the job it reruns) is
+  # left out. A run with a check still queued or running is pending: its cancelled checks are left
+  # out while it is, so a rerun waiting for a runner never reads as cancelled and is never rerun
+  # again (which would cancel the queued attempt). Then only the newest run of a workflow counts.
+  defp drop_superseded_checks(ci_status) do
+    ci_status
+    |> drop_earlier_attempts()
+    |> drop_cancelled_of_pending_runs()
+    |> drop_superseded_runs()
+  end
+
+  defp drop_earlier_attempts(%{checks: checks} = ci_status) do
+    newest_attempts = newest_by(checks, &Map.get(&1, :run_id), :run_attempt)
+    newest_jobs = newest_by(checks, &{Map.get(&1, :run_id), Map.get(&1, :name)}, :job_id)
+
+    earlier =
+      Enum.filter(checks, fn check ->
+        earlier?(check, :run_attempt, newest_attempts, Map.get(check, :run_id)) or
+          earlier?(check, :job_id, newest_jobs, {Map.get(check, :run_id), Map.get(check, :name)})
+      end)
+
+    case earlier do
+      [] ->
+        ci_status
+
+      earlier ->
+        run_ids = earlier |> Enum.map(&Map.get(&1, :run_id)) |> Enum.uniq()
+
+        Logger.info(
+          "Ignoring #{length(earlier)} check(s) of earlier attempts of run(s) #{Enum.join(run_ids, ", ")}: only the newest attempt of a run counts pr_url=#{ci_status.pr_url} commit_sha=#{ci_status.commit_sha}"
+        )
+
+        %{ci_status | checks: checks -- earlier}
+    end
+  end
+
+  # The highest `field` of the GitHub Actions checks that share a key.
+  defp newest_by(checks, key, field) do
+    for check <- checks, is_binary(Map.get(check, :run_id)), is_integer(Map.get(check, field)), reduce: %{} do
+      newest -> Map.update(newest, key.(check), Map.get(check, field), &max(&1, Map.get(check, field)))
+    end
+  end
+
+  defp earlier?(check, field, newest, key) do
+    value = Map.get(check, field)
+    is_integer(value) and value < Map.get(newest, key, value)
+  end
+
+  defp drop_cancelled_of_pending_runs(%{checks: checks} = ci_status) do
+    pending_runs = for check <- checks, is_binary(Map.get(check, :run_id)), unfinished_check?(check), into: MapSet.new(), do: Map.get(check, :run_id)
+    waiting = Enum.filter(checks, &(Map.get(&1, :run_id) in pending_runs and upcase(Map.get(&1, :conclusion)) == "CANCELLED"))
+
+    case waiting do
+      [] ->
+        ci_status
+
+      waiting ->
+        run_ids = waiting |> Enum.map(&Map.get(&1, :run_id)) |> Enum.uniq()
+        Logger.info("Ignoring the cancelled checks of run(s) #{Enum.join(run_ids, ", ")}: an attempt of the run is queued or running pr_url=#{ci_status.pr_url} commit_sha=#{ci_status.commit_sha}")
+        %{ci_status | checks: checks -- waiting}
+    end
+  end
+
   # GitHub cancels every job of a workflow run a concurrency group drops as a duplicate of another
   # run of the same workflow on the head, which turns its checks red though nothing failed. A head
   # can also carry a completed run beside a newer run of its workflow: an event that runs the
@@ -988,9 +1057,9 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   # only the newest run of a workflow, while the rollup keeps every run, so the head can read red
   # here though GitHub shows it green. So only the newest run of a workflow that reported a check
   # which wasn't cancelled counts, and every other run of that workflow is left out. When every
-  # run of the workflow was cancelled, or a cancelled job sits beside others in its own run, the
-  # cancelled checks still read as a failure.
-  defp drop_superseded_checks(%{checks: checks} = ci_status) do
+  # run of the workflow was cancelled, or a cancelled job sits beside finished others in its own
+  # run's newest attempt, the cancelled checks still read as a failure.
+  defp drop_superseded_runs(%{checks: checks} = ci_status) do
     case superseded_run_ids(checks) do
       [] ->
         ci_status
@@ -1325,6 +1394,8 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       details_url: normalize_id(details_url),
       workflow_name: normalize_id(Map.get(check, "workflowName")),
       run_id: run_id_from_details_url(details_url),
+      run_attempt: details_url_number(details_url, ~r{/actions/runs/\d+/attempts/(\d+)}),
+      job_id: details_url_number(details_url, ~r{/actions/runs/\d+/job/(\d+)}),
       completed_at: parse_datetime(Map.get(check, "completedAt") || Map.get(check, "updatedAt"))
     }
   end
@@ -1339,6 +1410,17 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   end
 
   defp run_id_from_details_url(_url), do: nil
+
+  # The attempt of a workflow run, or the job, a check's details URL names; nil when it names
+  # none. GitHub's rollup carries no attempt of its own.
+  defp details_url_number(url, pattern) when is_binary(url) do
+    case Regex.run(pattern, url) do
+      [_full, number] -> String.to_integer(number)
+      _ -> nil
+    end
+  end
+
+  defp details_url_number(_url, _pattern), do: nil
 
   defp normalize_inline_comment(comment) when is_map(comment) do
     %{

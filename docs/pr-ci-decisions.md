@@ -3,6 +3,10 @@
 What the PR and CI watcher does for a ticket in each phase and PR situation. Rules are checked
 in order and the first that matches decides.
 
+A workflow run counts by its newest attempt only. A run with a check still queued or running is
+pending, even when an earlier attempt's checks were cancelled: a rerun waiting for a runner reads
+as checks running (R24, or R32 in Merging), never as a cancelled run, so R19 never reruns it.
+
 <!-- BEGIN mix pr_decision.table: generated from SymphonyElixir.PrDecision.rules/0, do not edit by hand -->
 
 ## Rules
@@ -29,7 +33,7 @@ in order and the first that matches decides.
 | R16 | Merging | GitHub has not computed whether the PR can merge | `wait` on `github` |
 | R17 | Code Review, QA, Rework, CI Fix, Merging | A required check never reported within `landing_wait_timeout_ms` | `decision`: proceed without it for this PR (this head only), rerun, or fix the workflow in Rework |
 | R18 | Code Review, QA, Rework, CI Fix, Merging | Only a check a person must clear is red (`protected paths`) | `decision`: add the waiver label, or drop the change in Rework |
-| R19 | Code Review, QA, Rework, CI Fix, Merging | Red only because every run of a workflow was cancelled | `rerun_failed`, no attempt spent |
+| R19 | Code Review, QA, Rework, CI Fix, Merging | Red only because every run of a workflow was cancelled, its newest attempt with nothing queued or running | `rerun_failed`, no attempt spent |
 | R20 | Code Review, QA, Rework, CI Fix, Merging | Red, and the same failure 3 fix runs in a row or `red_attempts` at `max_red_attempts` | `file_fix_ticket` for the failing check, waiting on `symphony` until it is terminal |
 | R21 | Code Review, QA, Rework, CI Fix, Merging | Red after a rerun | `ci_fix` for the red head, back to the phase it came from |
 | R22 | Code Review, QA, Rework, CI Fix, Merging | Red, not rerun yet | `rerun_failed` once |
