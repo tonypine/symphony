@@ -27,6 +27,10 @@ public struct StateSnapshot: Equatable {
     /// The kind of every live session (agent runs, QA passes, code review runs), in Symphony's
     /// order; nil when Symphony predates `sessions`.
     public var sessionKinds: [String]?
+    /// The setup problems Symphony found (`setup`), nil when Symphony predates Setup.
+    public var setup: SetupPayload?
+    /// The running Symphony's build (`build.version`), for the app's build warning; nil when it didn't say.
+    public var serviceVersion: String?
 
     /// A ticket waiting on the operator, as `/api/v1/state`'s `waiting_on_you` lists it.
     public struct WaitingTicket: Equatable {
@@ -270,7 +274,9 @@ public struct StateSnapshot: Equatable {
         runs: [Run] = [],
         waitingOnYou: [WaitingTicket] = [],
         inboxRead: Bool = true,
-        sessionKinds: [String]? = nil
+        sessionKinds: [String]? = nil,
+        setup: SetupPayload? = nil,
+        serviceVersion: String? = nil
     ) {
         self.running = running
         self.retrying = retrying
@@ -284,6 +290,8 @@ public struct StateSnapshot: Equatable {
         self.waitingOnYou = waitingOnYou
         self.inboxRead = inboxRead
         self.sessionKinds = sessionKinds
+        self.setup = setup
+        self.serviceVersion = serviceVersion
     }
 }
 
@@ -432,6 +440,8 @@ public enum SymphonyState {
             )
         }
         snapshot.inboxRead = payload.inboxRead ?? true
+        snapshot.setup = SetupPayload.decode(state: data)
+        snapshot.serviceVersion = payload.build?.version
         return .state(snapshot)
     }
 
@@ -535,6 +545,10 @@ public enum SymphonyState {
             let kind: String?
         }
 
+        struct Build: Decodable {
+            let version: String?
+        }
+
         struct Waiting: Decodable {
             let issueId: String?
             let issueIdentifier: String?
@@ -562,6 +576,7 @@ public enum SymphonyState {
         let waitingOnYou: [Waiting]?
         /// Missing before Symphony said whether it had read the Inbox.
         let inboxRead: Bool?
+        let build: Build?
         let error: Failure?
     }
 }

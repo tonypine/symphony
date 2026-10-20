@@ -15,8 +15,8 @@ defmodule SymphonyElixir.QaDriver.DevServer do
   `set -m` makes that group with no terminal; dash, Linux's `/bin/sh`, turns job control off
   without one.
 
-  `stop/2` sends the group `stop_signal`, waits `stop_timeout_ms` and kills what is left of it.
-  The driver's removal of the run directory takes the rest.
+  `stop/2` sends the group `stop_signal`, waits `stop_timeout_ms` and kills what is left of it,
+  then returns once the kill has landed. The driver's removal of the run directory takes the rest.
   """
 
   @build_timeout_ms 900_000
@@ -75,7 +75,8 @@ defmodule SymphonyElixir.QaDriver.DevServer do
   """
 
   # Sends the group `$2` the signal `$3`, waits up to `$4` tenths of a second for it to go, then
-  # kills it.
+  # kills it and waits up to 5 seconds for that kill to land: a killed process answers `kill -0`
+  # until it has exited, and on Linux until its parent has reaped it.
   @stop_script """
   kill -s "$3" -- -"$2" 2> /dev/null || { printf 'symphony-qa-dev-server:gone\\n'; exit 0; }
   i=0
@@ -85,6 +86,11 @@ defmodule SymphonyElixir.QaDriver.DevServer do
     i=$((i + 1))
   done
   kill -s KILL -- -"$2" 2> /dev/null
+  i=0
+  while [ "$i" -lt 50 ] && kill -0 -- -"$2" 2> /dev/null; do
+    sleep 0.1
+    i=$((i + 1))
+  done
   printf 'symphony-qa-dev-server:killed\\n'
   """
 

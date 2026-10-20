@@ -61,6 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private let updateLineItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     /// What the last update or rollback did, which opens the release notes of the version it names.
     private lazy var updateOutcomeItem = menuItem("", action: #selector(showOutcomeNotes(_:)))
+    /// SU2: "Setup: N errors, M warnings", which opens the Setup page; hidden while Setup is healthy.
+    private lazy var setupItem = menuItem("", action: #selector(openSetup(_:)))
     /// Set when the app started Symphony after an update: resume dispatch once it answers.
     private var resumeWhenAnswering = false
     /// True until the dispatch an update paused is resumed: kept across the health check's restarts of Symphony.
@@ -107,6 +109,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 keyEquivalent: StatusMenu.openSymphonyKeyEquivalent
             )
         )
+        setupItem.isHidden = true
+        menu.addItem(setupItem)
         menu.addItem(.separator())
         menu.addItem(menuItem(StatusMenu.startTitle, action: #selector(startSymphony(_:))))
         menu.addItem(menuItem(StatusMenu.stopTitle, action: #selector(stopSymphony(_:))))
@@ -202,6 +206,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         reposWindow.restartNow = { [weak self] in self?.restartNow(nil) }
         reposWindow.cancelRestart = { [weak self] in self?.cancelRestart(nil) }
         symphonyWindow.appVersion = updates.current.version ?? ""
+        symphonyWindow.appBuild = updates.current
+        symphonyWindow.secrets = runner.secrets
         symphonyWindow.stateRoot = poller.stateRoot
         symphonyWindow.onAction = { [weak self] action in self?.perform(action) }
         symphonyWindow.openRepos = { [weak self] key in
@@ -637,6 +643,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         symphonyWindow.show()
     }
 
+    @objc private func openSetup(_ sender: Any?) {
+        symphonyWindow.show(view: .setup)
+    }
+
     /// Acts on a button of the Symphony window's placeholder (D0).
     private func perform(_ action: WindowState.Action) {
         switch action {
@@ -658,6 +668,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             }
         case .openSettings:
             settingsWindow.show()
+        case .checkForUpdates:
+            checkForUpdates(nil)
         case .cancelUpdate:
             if offersCancel { cancelRestart(nil) }
         case .updateNow:
@@ -982,14 +994,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private func showStatus() {
         let status = machine.status
 
+        let setup = StatusMenu.setupSummary(status, app: updates.current)
         if let button = statusItem?.button {
             let badge = StatusMenu.badgeCount(for: status)
-            let label = StatusMenu.iconLabel(for: status, badge: badge)
+            let label = StatusMenu.iconLabel(for: status, badge: badge, setup: setup)
             let image = NSImage(systemSymbolName: StatusMenu.iconSymbolName(for: status), accessibilityDescription: label)
             image?.isTemplate = true
-            button.image = badge == nil ? image : image.map(Self.badged)
+            let dot = StatusMenu.iconDot(badge: badge, setup: setup)
+            button.image = dot.flatMap { dot in image.map { Self.badged($0, dot: dot) } } ?? image
             button.toolTip = label
         }
+        // SU2: "Setup: 1 error, 1 warning", which opens the Setup page; hidden while healthy.
+        setupItem.title = setup.menuTitle ?? ""
+        setupItem.isHidden = setup.menuTitle == nil
+        setupItem.image = setup.badge.map { NSImage(systemSymbolName: SymphonyView.setup.symbol, accessibilityDescription: $0.status.word) } ?? nil
         symphonyWindow.dockBadge = StatusMenu.badgeCount(for: status)
         symphonyWindow.update(
             updateHold: UpdateHold(release: updater.release, downloading: updater.preparing != nil, drain: restarter.machine)
@@ -1052,9 +1070,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         symphonyWindow.showInbox(selecting: sender.representedObject as? String)
     }
 
-    /// The menu bar icon with a dot in its top right corner while the Inbox isn't empty. Drawn per appearance, so
-    /// the symbol keeps the menu bar's text color while the dot keeps `status.you`'s orange.
-    private static func badged(_ symbol: NSImage) -> NSImage {
+    /// The menu bar icon with a dot in its top right corner: `status.problem`'s red while Setup has errors, else
+    /// `status.you`'s orange while the Inbox isn't empty. Drawn per appearance, so the symbol keeps the menu bar's text
+    /// color while the dot keeps its own.
+    private static func badged(_ symbol: NSImage, dot status: DesignTokens.Status) -> NSImage {
         let size = NSSize(width: max(symbol.size.width, 18), height: max(symbol.size.height, 18))
         let image = NSImage(size: size, flipped: false) { rect in
             let symbolRect = NSRect(
@@ -1069,7 +1088,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             }
             tinted.draw(in: symbolRect)
             let dot = NSRect(x: rect.maxX - 7, y: rect.maxY - 7, width: 7, height: 7)
-            NSColor.systemOrange.setFill()
+            (status == .problem ? NSColor.systemRed : NSColor.systemOrange).setFill()
             NSBezierPath(ovalIn: dot).fill()
             return true
         }
