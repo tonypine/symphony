@@ -1010,3 +1010,6 @@ place throughout execution:
 
 - <only include when something was confusing during execution>
 ````
+
+
+Viewports (see `Visual work`) for the Director's `macos_app`: laptop 1440×900 pt `functional`, desktop 2560×1440 pt `optimize`.

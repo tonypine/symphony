@@ -958,6 +958,9 @@ defmodule SymphonyElixir.PromptBuilderTest do
 
     assert flat =~ "If the same class fails for the second time on this ticket, do not push a third attempt of the same kind."
     assert flat =~ "two layout options for a person to choose, and stop."
+
+    assert flat =~
+             "Viewports (see `Visual work`) for the Director's `macos_app`: laptop 1440×900 pt `functional`, desktop 2560×1440 pt `optimize`."
   end
 
   test "prompt builder renders a partial with passed variables" do
