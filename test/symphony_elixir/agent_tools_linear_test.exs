@@ -3206,6 +3206,10 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert %{holds: [%{kind: :needs_decision, decision: %{title: "Add the release signing secrets", question: "Add the signing secrets, or ship unsigned builds?"}}]} =
                SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-24")
 
+      # The request is one event, the decision's own: no hold event.
+      assert [{"decision.requested", %{title: "Add the release signing secrets", question: "Add the signing secrets, or ship unsigned builds?"}}] =
+               ticket_events("repo-a", "issue-24")
+
       assert_received :refreshed
     end
 
@@ -3339,6 +3343,9 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert_received {:machine_label_cleared, "issue-24", "Needs Decision"}
       # Nothing moved: the ticket never left its phase.
       refute_received {:tracker_moved, _issue_id, _state}
+
+      assert [%{type: "decision.requested", id: request_id}, %{type: "decision.withdrawn", payload: %{title: "Add the release signing secrets", request: request_id}}] =
+               SymphonyElixir.RunStore.list_ticket_events("repo-a", "issue-24", [])
     end
 
     defp held_comment(id, title) do

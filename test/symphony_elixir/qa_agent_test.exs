@@ -957,6 +957,21 @@ defmodule SymphonyElixir.QaAgentTest do
       assert epic =~ "QA's three jobs, in this order:"
     end
 
+    test "the viewport passes name the layout defect rule and the finding format" do
+      [_before, jobs] = QaAgent.prompt(job(), nil) |> String.replace(~r/\s+/, " ") |> String.split("3. The wide pass", parts: 2)
+
+      assert jobs =~ "One pass per viewport the repo names (today: the wide pass)."
+
+      assert jobs =~
+               "A defect is content clipped with no way to reach it, or a mechanism (scroll, collapse, resize) that doesn't work."
+
+      assert jobs =~ "Horizontal scroll or a collapsed pane at a `functional` viewport is not a defect."
+      assert jobs =~ "A finding names the viewport, the screen, the mechanism expected, the actual, and the evidence file."
+
+      epic = QaAgent.prompt(job(%{epic_review: true, base_ref: "origin/main"}), nil) |> String.replace(~r/\s+/, " ")
+      assert epic =~ "A finding names the viewport, the screen, the mechanism expected, the actual, and the evidence file."
+    end
+
     test "each UI playbook runs the Design check in light and dark between the walkthrough and its other checks" do
       macos_app = %{build: "make app", app: "build/App.app"}
       android_app = %{build: "./gradlew assembleDebug", apk_path: "app.apk", application_ids: ["com.example.app"]}
