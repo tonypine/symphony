@@ -273,6 +273,29 @@ defmodule SymphonyElixir.SelfHealTest do
       assert {@issue_id, "Blocked"} = Process.get(:machine_label)
     end
 
+    test "a setup block's dev server build files in the project's repo, and the hold gives the cause in words" do
+      outcome = SymphonyElixir.SetupBlock.outcome({:verification_failed, {:dev_server_build_failed, 127}})
+      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome))
+
+      assert %{scope: @repo_key, component: "dev_server", description: description} = Process.get(:fixer_create)
+      assert description =~ "before the agent's first turn"
+
+      assert {:blocked, %{reason: reason}} = Process.get(:hold_attrs)
+
+      assert reason ==
+               "waiting on fix ticket TP-900 for the dev_server block: " <>
+                 "verification.dev_server build failed with exit 127: a command it runs is not on the sandbox PATH"
+    end
+
+    test "a setup block's port collision is Symphony's, a structural cause" do
+      outcome = SymphonyElixir.SetupBlock.outcome({:verification_failed, {:loopback_bridge_unavailable, :eaddrinuse}})
+      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome))
+
+      assert %{scope: @symphony_repo_key, component: "qa_environment"} = Process.get(:fixer_create)
+      assert {:blocked, %{reason: reason}} = Process.get(:hold_attrs)
+      assert reason =~ "the port is already in use (eaddrinuse)"
+    end
+
     test "files a QA host's missing tool in Symphony's repo, where its provisioning script lives" do
       cause = {:qa_host_missing_tool, ["go"]}
       assert :filed = SelfHeal.heal(issue(), heal_opts(outcome(cause, %{reason: SymphonyElixir.QaAgent.blocked_reason(cause)})))

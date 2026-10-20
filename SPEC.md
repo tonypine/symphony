@@ -2679,7 +2679,15 @@ Rules:
   `qa_host_tunnel_failed`, `qa_dev_server_failed`), the `needs_person` access cases, and the QA
   answer's `covered_by` and `needs_dev_server`. Any other blocked QA pass (the agent's own account
   of the block, a crashed or token-limited run, a check that never finished) names nothing broken,
-  so it MUST pause on a Needs Decision hold after its retries instead of filing a fix ticket. Each blocked QA attempt logs, and records on its `blocked` verdict, the block's
+  so it MUST pause on a Needs Decision hold after its retries instead of filing a fix ticket.
+  A run that fails in its own setup before the agent's first turn (any
+  `verification_failed`: the dev server's build, start, health check or the bridge to its port) is a
+  setup block: nothing changes between attempts, so it is not retried as a crash and goes to the
+  same lane straight away, with its hold reason giving the cause in words (`verification.dev_server
+  build failed with exit 127: a command it runs is not on the sandbox PATH`), its log line
+  `Setup block for <ticket>: <component> — <cause>; self-heal holds it on <fix ticket>`, and the
+  ticket listed under `/api/v1/state`'s `blocked` (kind `hold`) while the hold lasts. A lane that
+  asks for another attempt, or cannot record the block, falls back to the crash retry. Each blocked QA attempt logs, and records on its `blocked` verdict, the block's
   reason, whether it needs a person, the model the run used and the playbooks it ran. A new fix ticket takes the affected ticket's priority when that is more urgent than
   High (an Urgent ticket's fix is Urgent, so `tickets.priorities` dispatches it), else High; a
   reused one keeps its priority. A new fix ticket is assigned to the user the fix's repo polls for
@@ -3013,6 +3021,9 @@ Backoff formula:
 
 - Normal continuation retries after a clean worker exit use a short fixed delay of `1000` ms.
 - Failure-driven retries use `delay = min(10000 * 2^(attempt - 1), agent.max_retry_backoff_ms)`.
+  A setup block (a `verification_failed` before the agent's first turn) is not a failure-driven
+  retry: it goes to the self-heal lane (§ Self-heal). An unreachable worker host and a failed
+  workspace hook still retry, since a retry may pick another host or find the hook's cause gone.
 - Power is capped by the configured max retry backoff (default `300000` / 5m).
 
 Retry handling behavior:
@@ -5987,6 +5998,8 @@ infrastructure.
 - Reconciliation with no running issues is a no-op
 - Normal worker exit schedules a short continuation retry (attempt 1)
 - Abnormal worker exit increments retries with 10s-based exponential backoff
+- A setup block (`verification_failed` before the first turn) is not retried: self-heal files or
+  reuses the fix ticket and holds the ticket on it
 - Retry backoff cap uses configured `agent.max_retry_backoff_ms`
 - Retry queue entries include attempt, due time, identifier, and error
 - Completed issues in non-active, non-terminal states appear as watching rows

@@ -5,6 +5,7 @@ defmodule SymphonyElixir.QaDriver.DevServerTest do
   alias SymphonyElixir.QaDriver.{DevServer, Host}
 
   @dev_server Path.expand("../../support/dev_server.py", __DIR__)
+  @late_reaper Path.expand("../../support/late_reaper.py", __DIR__)
 
   # The QA host is this machine: `cmd` runs each script with the local shell, as the QA user's
   # shell runs it over SSH, and `ship` unpacks the tar where `Remote.ship/3` would.
@@ -69,6 +70,17 @@ defmodule SymphonyElixir.QaDriver.DevServerTest do
 
   defp alive?(pid), do: match?({_out, 0}, System.cmd("/bin/sh", ["-c", "kill -0 #{pid}"], stderr_to_stdout: true))
 
+  # Whether a member of the process group still answers `kill -0`: macOS skips a zombie there,
+  # Linux finds it until its parent reaps it.
+  defp group_alive?(pgid), do: match?({_out, 0}, System.cmd("/bin/sh", ["-c", "kill -0 -- -#{pgid}"], stderr_to_stdout: true))
+
+  defp serving?(port) do
+    case :gen_tcp.connect({127, 0, 0, 1}, port, [], 1_000) do
+      {:ok, socket} -> :gen_tcp.close(socket) == :ok
+      {:error, _reason} -> false
+    end
+  end
+
   defp server_pid(run_dir), do: run_dir |> Path.join("dev-server/src/pid") |> File.read!() |> String.trim()
 
   # Waits up to 5 seconds for `start_cmd` to have written its pid.
@@ -117,12 +129,16 @@ defmodule SymphonyElixir.QaDriver.DevServerTest do
     assert DevServer.stop(config, server) == :gone
   end
 
-  test "kills the group when it outlives stop_timeout_ms", %{config: config, run_dir: run_dir} do
-    spec = spec(%{start_cmd: "trap '' TERM; echo $$ > pid; exec python3 #{@dev_server}", stop_timeout_ms: 300})
+  # The server's parent sits outside the group and reaps it only a second after the kill, as a
+  # slow reaper on a loaded runner does: the stop waits for it, and a zombie no longer serves.
+  test "kills the group when it outlives stop_timeout_ms, and returns once the kill has landed", %{config: config} do
+    spec = spec(%{start_cmd: "trap '' TERM; exec python3 #{@late_reaper} #{@dev_server}", stop_timeout_ms: 300})
 
     assert {:ok, server} = DevServer.start(config, spec)
+    assert serving?(spec.port)
     assert DevServer.stop(config, server) == :killed
-    refute alive?(server_pid(run_dir))
+    refute group_alive?(server.pid)
+    refute serving?(spec.port)
   end
 
   test "a failed build_cmd is its exit status and the log's last 20 lines", %{config: config} do
