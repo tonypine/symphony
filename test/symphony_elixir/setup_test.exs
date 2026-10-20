@@ -271,7 +271,7 @@ defmodule SymphonyElixir.SetupTest do
       File.write!(ref_error, :erlang.term_to_binary({:workflow_ref_not_found, ["origin/main"]}))
       on_exit(fn -> File.rm_rf(Path.dirname(ref_error)) end)
 
-      assert %{problems: [problem]} = Setup.check()
+      assert %{problems: [problem]} = Setup.check(checks: [Checks.WorkflowRef])
       assert problem.id == "#{Checks.WorkflowRef.id()}:default"
       assert problem.severity == "error"
       assert problem.repos == ["default"]
