@@ -1076,6 +1076,37 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
     end
   end
 
+  describe "ci_log/3" do
+    test "reads a failed job of the session's origin repository only" do
+      gh_runner = fn
+        ["api", "repos/acme/symphony/actions/jobs/" <> id], opts ->
+          assert opts[:cd] == File.cwd!()
+          url = if id == "1", do: "https://github.com/acme/symphony/actions/runs/9/job/1", else: "https://github.com/other/repo/actions/runs/9/job/2"
+          {Jason.encode!(%{"id" => String.to_integer(id), "run_id" => 9, "name" => "test", "conclusion" => "failure", "html_url" => url}), 0}
+
+        ["api", "repos/acme/symphony/check-runs/1/annotations"], _opts ->
+          {Jason.encode!([%{"annotation_level" => "failure", "message" => "Process completed with exit code 1."}]), 0}
+
+        ["run", "view", "--job", "1", "--log-failed", "-R", "acme/symphony"], _opts ->
+          {"test\tRun mix test\t2026-10-20T06:30:00.000Z printf: write error: Broken pipe\n", 0}
+      end
+
+      context = %{scoped_context(File.cwd!()) | command_security: %{origin_gh_repo: "acme/symphony"}}
+
+      assert {:ok, %{repo: "acme/symphony", jobs: [job]}} = GitHub.ci_log(context, %{"job_id" => 1}, gh_runner: gh_runner)
+      assert job.log == "printf: write error: Broken pipe"
+      assert job.annotations == ["failure Process completed with exit code 1."]
+
+      assert GitHub.ci_log(context, %{"job_id" => "2"}, gh_runner: gh_runner) == {:error, {:job_not_in_repo, "2", "acme/symphony"}}
+    end
+
+    test "refuses a call without a scope, a target or a boolean failed_only" do
+      assert GitHub.ci_log(%{}, %{"run_id" => 1}) == {:error, :missing_github_origin_repo}
+      assert GitHub.ci_log(scoped_context("/tmp"), %{}) == {:error, :missing_ci_log_target}
+      assert GitHub.ci_log(scoped_context("/tmp"), %{"run_id" => 1, "failed_only" => "yes"}) == {:error, :invalid_failed_only}
+    end
+  end
+
   test "get_failed_run_log selects a failed check and clamps log output" do
     workspace = tmp_workspace!("github-agent-failed-run-log")
 

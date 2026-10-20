@@ -12,7 +12,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   alias SymphonyElixir.CiPoller
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
+  alias SymphonyElixir.GitHub.{CiLog, CommentMarker, PullRequest}
   alias SymphonyElixir.Handoff
   alias SymphonyElixir.Repo.Fetcher
   alias SymphonyElixir.TicketPullRequest
@@ -253,6 +253,24 @@ defmodule SymphonyElixir.AgentTools.GitHub do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  @doc """
+  The failed jobs of a workflow run (`run_id`), one job (`job_id`) or a pull request's checks
+  (`pr_number`) in the session's `origin` repository only, with their failed steps, annotations and
+  the last lines of each log (`SymphonyElixir.GitHub.CiLog`). `failed_only` (default true) refuses a
+  job that did not fail and reads only the failed steps' log.
+  """
+  @spec ci_log(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def ci_log(context, args, opts \\ []) when is_map(args) do
+    with {:ok, repo} <- origin_repo(context),
+         {:ok, target} <- CiLog.target(args),
+         {:ok, failed_only} <- failed_only(Map.get(args, "failed_only", true)) do
+      CiLog.read(repo, target, [failed_only: failed_only] ++ Keyword.take(github_opts(context, opts), [:gh_runner, :cwd]))
+    end
+  end
+
+  defp failed_only(value) when is_boolean(value), do: {:ok, value}
+  defp failed_only(_value), do: {:error, :invalid_failed_only}
 
   defp current_pull_request_url(context, opts) do
     with {:ok, pr} <- view_current_pull_request(context, opts) do
