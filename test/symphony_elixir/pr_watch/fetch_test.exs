@@ -1,7 +1,8 @@
 defmodule SymphonyElixir.PrWatch.FetchTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.PrDecision.Facts
+  alias SymphonyElixir.PrDecision
+  alias SymphonyElixir.PrDecision.{Action, Facts}
   alias SymphonyElixir.PrWatch.Fetch
 
   @pr_url "https://github.com/acme/app/pull/42"
@@ -533,6 +534,25 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
     test "takes the review comments to address from the ticket, not from the read" do
       assert {:ok, read} = read({response(pull()), 0})
       assert %Facts{review_comments: :unaddressed} = Fetch.facts(Map.put(@ticket, :review_comments, :unaddressed), read)
+    end
+
+    test "TP-1154: a rerun still waiting for a runner reads as pending, and the watcher waits rather than rerunning it" do
+      # Rule R19 reran the macos workflow's run 300: attempt 1's jobs (1, 2) were cancelled, and
+      # attempt 2's build (3) is queued for a runner, its test job not created yet.
+      attempt_1 = [check("build", "CANCELLED", run: 300, job: 1, workflow: "macos"), check("test", "CANCELLED", run: 300, job: 2, workflow: "macos")]
+      queued = Map.put(check("build", nil, run: 300, job: 3, workflow: "macos"), "status", "QUEUED")
+
+      assert {:ok, read} = read({response(pull(rollup([check("make all", "SUCCESS") | attempt_1] ++ [queued]))), 0})
+      assert %{ci: :pending, failed_checks: [], run_ids: ["100", "300"]} = read
+
+      assert %Action{rule: "R24", kind: :wait, owner: :ci, reason: "Checks are running on PR #42's head"} =
+               @ticket |> Fetch.facts(read) |> PrDecision.decide()
+
+      # Once attempt 2's every check was cancelled too, with nothing queued, R19 reruns the run once.
+      attempt_2 = [check("build", "CANCELLED", run: 300, job: 3, workflow: "macos"), check("test", "CANCELLED", run: 300, job: 4, workflow: "macos")]
+      assert {:ok, read} = read({response(pull(rollup([check("make all", "SUCCESS") | attempt_1] ++ attempt_2))), 0})
+      assert %{ci: :red, red_kind: :cancelled, failed_checks: [%{name: "build", run_id: "300"}, %{name: "test", run_id: "300"}]} = read
+      assert %Action{rule: "R19", kind: :rerun_failed} = @ticket |> Fetch.facts(read) |> PrDecision.decide()
     end
 
     test "keeps the origin only in CI Fix, and reads a ticket without a PR as missing" do
