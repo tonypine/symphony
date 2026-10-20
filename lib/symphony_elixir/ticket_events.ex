@@ -14,9 +14,10 @@ defmodule SymphonyElixir.TicketEvents do
   `decision.recorded` when a person answers it or `decision.withdrawn` when it ends unanswered;
   both name the request in their payload's `request`.
 
-  Nothing writes events yet and nothing reads them: the snapshot fields of
-  `SymphonyElixir.TicketState` (`signals`, `verdicts`, `dispatches`) stay the source of truth until
-  readers move over.
+  The machinery writes events next to the snapshot fields of `SymphonyElixir.TicketState`
+  (`SymphonyElixir.TicketSignals`, `SymphonyElixir.Hold`, `SymphonyElixir.Decisions`), and nothing
+  reads them yet: the snapshot fields (`signals`, `verdicts`, `holds`, `decisions`, `dispatches`)
+  stay the source of truth until readers move over.
   """
 
   alias SymphonyElixir.RunStore

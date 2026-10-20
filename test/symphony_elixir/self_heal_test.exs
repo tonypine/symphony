@@ -2,6 +2,7 @@ defmodule SymphonyElixir.SelfHealTest do
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
+  import SymphonyElixir.TestSupport, only: [ticket_events: 2]
 
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.Collector
@@ -491,6 +492,8 @@ defmodule SymphonyElixir.SelfHealTest do
     end
 
     test "a failure with no new information escalates to a Needs Decision hold" do
+      :ok = SymphonyElixir.RunStore.clear()
+
       previous =
         recorded(@repo_key, @issue_id, %{
           component: "qa_environment",
@@ -507,6 +510,7 @@ defmodule SymphonyElixir.SelfHealTest do
       assert reason =~ "self-heal is stuck on the qa_environment block"
       assert decision.title == "Self-heal is stuck on the qa_environment block"
       assert Enum.map(decision.options, &Map.get(&1, :recommended)) == [true, nil]
+      assert [{"decision.requested", %{title: "Self-heal is stuck on the qa_environment block"}}] = ticket_events(@repo_key, @issue_id)
 
       # TP-1019: the decision is posted as a request, so the Inbox's read of the ticket finds it open
       # and keeps the hold. With no request it cleared the hold, and the ticket dispatched again.
