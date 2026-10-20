@@ -216,6 +216,13 @@ defmodule SymphonyElixir.TicketSignalsTest do
     end
   end
 
+  test "same_text?/2 ignores case and spacing, and a blank text matches nothing" do
+    assert TicketSignals.same_text?(" A  or\nb? ", "a or B?")
+    refute TicketSignals.same_text?("A or B?", "A, B or C?")
+    refute TicketSignals.same_text?(" ", " ")
+    refute TicketSignals.same_text?(nil, nil)
+  end
+
   defp strip_times(snapshot) do
     Map.new(snapshot, fn {key, entries} -> {key, Enum.map(entries, &Map.drop(&1, [:at, :recorded_at]))} end)
   end

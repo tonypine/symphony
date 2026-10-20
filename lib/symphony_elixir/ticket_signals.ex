@@ -138,6 +138,13 @@ defmodule SymphonyElixir.TicketSignals do
     end
   end
 
+  @doc """
+  Whether two texts say the same thing, ignoring case and spacing as `open_decision/4` does; a blank
+  or missing text matches nothing.
+  """
+  @spec same_text?(term(), term()) :: boolean()
+  def same_text?(left, right), do: normalize(left) != nil and normalize(left) == normalize(right)
+
   defp map_signal("handoff", details) do
     if value(details, :move) == true, do: phase_entered("handoff", details), else: attempt("handoff", details)
   end

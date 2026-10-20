@@ -174,6 +174,7 @@ defmodule SymphonyElixir.HoldTest do
     test "a Needs Decision hold records its decision.requested, once per request, and never a hold event" do
       assert :ok = Hold.set(@repo_key, @issue_id, :needs_decision, @request)
       assert :ok = Hold.set(@repo_key, @issue_id, :needs_decision, @request)
+      assert :ok = Hold.set(@repo_key, @issue_id, :needs_decision, put_in(@request, [:decision, :question], " a  or\nB? "))
 
       assert [{"decision.requested", %{title: "Pick one", question: "A or B?", why: "Both work.", options: ["**A**: do A", "**B**: do B"]}}] =
                ticket_events(@repo_key, @issue_id)

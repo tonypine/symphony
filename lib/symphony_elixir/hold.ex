@@ -342,7 +342,7 @@ defmodule SymphonyElixir.Hold do
   defp open_payload(%{type: "hold.set", payload: payload}), do: payload
   defp open_payload(_cleared_or_none), do: nil
 
-  defp same_question?(%{payload: payload}, question), do: normalize(text(payload[:question])) == normalize(question)
+  defp same_question?(%{payload: payload}, question), do: TicketSignals.same_text?(payload[:question], question)
   defp same_question?(nil, _question), do: false
 
   defp decision(attrs) do
