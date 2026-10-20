@@ -212,6 +212,42 @@ defmodule SymphonyElixir.QaPolicyTest do
     end
   end
 
+  describe "the QA selection log line" do
+    test "names the playbooks it runs and why each other one does not, with the flag each reads" do
+      # A Mac app repo: verification off, its dev server run on the QA host beside the app.
+      settings =
+        settings!(%{
+          "verification" => %{"enabled" => false, "dev_server" => %{"start_cmd" => "server/scripts/dev-server.sh", "health_check_url" => "http://127.0.0.1:8090/health"}},
+          "auto_review" => %{
+            "worker_host" => "qa-vm",
+            "playbooks" => %{"macos_app" => %{"build" => "make app", "app" => "build/App.app", "dev_server" => true}}
+          }
+        })
+
+      log =
+        capture_log(fn ->
+          assert {:run, [%{kind: "cli"}], _reason} =
+                   QaPolicy.decide(issue(), settings, workspace: @workspace, repo_key: "repo", git: git(["lib/symphony_elixir/cli.ex"]), sha: @sha)
+        end)
+
+      assert log =~
+               "QA selection issue_id=issue-qa-policy issue_identifier=TP-816 sha=#{@sha} decision=run playbooks=cli " <>
+                 ~s(not_selected="macos_app: not triggered; android_app: needs)
+
+      assert log =~ ~s(web: needs `verification.enabled`")
+
+      log =
+        capture_log(fn ->
+          assert {:skip, _reason} =
+                   QaPolicy.decide(issue(), settings!(), workspace: @workspace, repo_key: "repo", git: git(["docs/a.md"]), sha: @sha)
+        end)
+
+      assert log =~ ~s(decision=skip reason="the PR only changes docs)
+      assert log =~ ~s(playbooks= not_selected="cli: not triggered; macos_app: needs)
+      assert log =~ ~s(web: needs `verification.dev_server`")
+    end
+  end
+
   describe "enabled_playbooks/1" do
     test "is every playbook the repo's config leaves on" do
       kinds = settings!() |> QaPolicy.enabled_playbooks() |> Enum.map(& &1.kind)

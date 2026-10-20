@@ -1007,7 +1007,7 @@ and, in the toolbar, **Back** and **Forward** (⌘[ and ⌘], between the views 
 view's title, Symphony's connection state (quiet while Symphony answers; the time of the last update is in its
 help), the scope pop-up and **Refresh** (⌘R). The sidebar lists the views this
 version has, in the order they will keep as more arrive, on ⌘1 to ⌘8: **Inbox**, **Overview**, **Initiatives**, then under
-**Factory**, **Repos** (which opens the Repos window) and **Diagnostics**. Its foot shows Symphony's version and
+**Factory**, **Repos** (which opens the Repos window), **Setup** and **Diagnostics**. Its foot shows Symphony's version and
 state. The window opens on the Inbox the first time.
 
 - **Inbox** lists everything that waits on you (`/api/v1/inbox`), grouped as Plans, Pull requests, Final
@@ -1104,6 +1104,24 @@ state. The window opens on the Inbox the first time.
   selected record in full. **Export…** saves every record under the filters and the search as NDJSON, one per
   line as Symphony wrote it, from the API's export. With nothing to show it says "No audit records match." with
   **Clear Filters**.
+- **Setup** lists what is wrong with Symphony's setup, from `/api/v1/state`'s `setup`: a sentence ("Setup has 1
+  error and 1 warning.", or "Symphony is set up right." with what was checked, when, and that Symphony checks again
+  every 15 minutes and each time `symphony.yml` changes), then an Errors and a Warnings card, rows grouped by
+  category (routing, teams, labels, statuses, keys, secrets, runtime). Each row says what breaks, the repos and
+  tickets it touches (a ticket opens its page), **Details**, and its fix: **Remove…**, **Change…** or **Add…** for
+  an edit of `symphony.yml`, **Create Label…** (or **Create Status…**) and **Re-sync…** for a Linear change, or the
+  place to fix it by hand (**Open Settings…**, **Open symphony.yml**, **Open in Linear**, **Open Drain Report**,
+  **Open Repos**). Nothing is fixed without its sheet: an edit shows the exact lines it removes and adds, copies
+  `symphony.yml` to `symphony.yml.<yyyyMMdd-HHmmss>.bak` next to it (the last 10 are kept), saves through the same
+  writer as Settings once `symphony check` passes, and offers **Undo** for 10 seconds; a Linear change names what it
+  creates, in which team, and how to undo it by hand. A fix that fails keeps its sheet open with the reason, **Open
+  Settings…** (where the Linear key and the `symphony.yml` path are), **Close** and **Try Again**. **Check Again**
+  (⌘R) runs the checks now. Checks that couldn't run (no Linear API key) show under **Not checked**; when Linear
+  can't be reached, a banner says when the Linear results are from. A warning also shows when Symphony runs another
+  build than the app, with **Check for Updates…**. Its sidebar item counts the errors in red, or the warnings in
+  orange when there are no errors; Overview's Needs attention has one row for the errors, with **Open Setup**; and
+  the menu bar has a "Setup: 1 error, 1 warning" row and a red dot on its icon while there are errors. A Symphony
+  older than Setup shows **Check for Updates…** and no badge.
 - **Diagnostics** shows Symphony's own health in plain words: the connection (version, API URL, uptime, last
   update), capacity (agent slots, landing slots, forced allowance, initiative slots), Linear requests by
   caller over the last hour, the CI and review pollers and GitHub webhooks, and stray processes. **Copy State

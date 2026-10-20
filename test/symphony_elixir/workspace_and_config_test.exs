@@ -3539,7 +3539,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Config.server_port() == 0
     assert Config.server_host() == "127.0.0.1"
     assert config.verification.enabled == false
-    assert config.verification.port_allocation.range == [4000, 4099]
+    assert config.verification.port_allocation.range == [4100, 4199]
     assert config.verification.dev_server.start_cmd == nil
     assert config.verification.dev_server.health_check_url == nil
     assert config.verification.dev_server.health_timeout_ms == 30_000

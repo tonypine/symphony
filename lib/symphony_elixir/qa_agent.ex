@@ -38,8 +38,9 @@ defmodule SymphonyElixir.QaAgent do
   pooled port from a second worktree at the PR head, outside the agent's sandbox (a server that
   fails its health check makes the pass `blocked`). A `macos_app` pass on a `worker_host` with
   `dev_server: true` runs it on the QA host instead, beside the app, before the agent starts
-  (`SymphonyElixir.QaDriver.start_dev_server/2`); one that fails makes the pass `blocked` with
-  `qa_dev_server_failed` and its log. A `web` pass's session alone gets a
+  (`SymphonyElixir.QaDriver.start_dev_server/2`), and needs only `verification.dev_server`, not
+  `verification.enabled`; one that fails makes the pass `blocked` with `qa_dev_server_failed` and
+  its log. A `web` pass's session alone gets a
   `browser` MCP server: headless Playwright limited to the dev server's localhost origins, or
   the playbook's `browser_mcp`.
   Each pass also gets a private temp folder of its own (see `tmp_dirs/2`), which a Claude
@@ -979,7 +980,9 @@ defmodule SymphonyElixir.QaAgent do
 
   # A `macos_app` pass on a `worker_host` with `dev_server: true` runs the project's dev server on
   # the QA host, beside the app, before the agent starts (TP-1111). A server that does not build,
-  # exits or fails its health check makes the pass `blocked` with its log, and costs no tokens.
+  # exits or fails its health check makes the pass `blocked` with its log, and costs no tokens. It
+  # needs only `verification.dev_server`: `verification.enabled` turns on this host's dev server,
+  # for agent runs and `web` passes, which a Mac app repo's server must not start (TP-1115).
   defp start_qa_host_dev_server(driver, job, settings) do
     with %{} = playbook <- qa_host_dev_server_playbook(job, settings),
          {:ok, %{url: url}} <- QaDriver.start_dev_server(driver, qa_host_dev_server_spec(playbook, settings)) do
@@ -991,7 +994,7 @@ defmodule SymphonyElixir.QaAgent do
   end
 
   defp qa_host_dev_server_playbook(job, settings) do
-    if Verification.dev_server_configured?(settings),
+    if Verification.dev_server_command_configured?(settings),
       do: Enum.find(job.playbooks, &qa_host_dev_server?(&1, settings))
   end
 

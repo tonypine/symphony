@@ -24,6 +24,10 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     var canOpenLogs: () -> Bool = { false }
     /// Called once a control request from the window was answered, so the menu follows too.
     var afterControl: () -> Void = {}
+    /// The app's own build, for Setup's build warning.
+    var appBuild = AppBuild(build: 0, isDevelopment: true)
+    /// The app's secrets, for the `symphony check` a Setup settings fix runs.
+    var secrets: SecretsReader?
 
     private var window: NSWindow?
     private var model: SymphonyWindowModel?
@@ -115,6 +119,20 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
                 )
             }
             model.onOpenURL = { url in URLOpener.open(url) }
+            model.appBuild = appBuild
+            model.configPath = { AppStores.current.settingsStore().loadSettings().configPath }
+            model.onSetupRequest = { [weak self] fix in
+                guard let self else { return .failed("") }
+                let result = await SetupAPI.send(
+                    fix: fix, stateRoot: stateRoot(), fallback: AppStores.current.apiFallback, transport: AppStores.current.apiTransport
+                )
+                afterControl()
+                return result
+            }
+            model.onCheckConfig = { [weak self] path in
+                guard let secrets = self?.secrets else { return .failed("The app's secrets aren't available to run symphony check.") }
+                return await ReposWindowController.configCheck(path, secrets: secrets)
+            }
             model.onOpenTranscript = { [weak self] identifier, repoKey, newWindow in
                 self?.transcripts.open(identifier: identifier, repoKey: repoKey, newWindow: newWindow)
             }
@@ -215,7 +233,7 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     }
 
     @objc private func refresh(_ sender: Any?) {
-        client.refresh()
+        if let model { model.refresh() } else { client.refresh() }
     }
 
     @objc private func searchTickets(_ sender: Any?) {

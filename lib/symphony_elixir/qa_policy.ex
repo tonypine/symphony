@@ -18,6 +18,8 @@ defmodule SymphonyElixir.QaPolicy do
   merge stays gated on the app starting (`SymphonyElixir.QaVerification`).
   """
 
+  require Logger
+
   alias SymphonyElixir.Config
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Selection
@@ -43,13 +45,36 @@ defmodule SymphonyElixir.QaPolicy do
     repo_key = Keyword.get(opts, :repo_key) || Map.get(issue, :repo_key)
     sha = Keyword.get(opts, :sha) || "HEAD"
 
-    case changed_paths(workspace, repo_key, sha, opts) do
-      {:ok, paths} ->
-        decision(issue, settings, paths)
+    decision =
+      case changed_paths(workspace, repo_key, sha, opts) do
+        {:ok, paths} ->
+          decision(issue, settings, paths)
 
-      {:error, reason} ->
-        {:run, enabled_playbooks(settings), "the changed paths could not be read (#{format_reason(reason)})"}
-    end
+        {:error, reason} ->
+          {:run, enabled_playbooks(settings), "the changed paths could not be read (#{format_reason(reason)})"}
+      end
+
+    log_selection(issue, sha, decision, settings)
+    decision
+  end
+
+  # One line per decision: the playbooks it runs, and why each other one does not run, which names
+  # the setting an off playbook needs (`verification.enabled` or `verification.dev_server`, say).
+  defp log_selection(issue, sha, decision, settings) do
+    {verdict, selected} =
+      case decision do
+        {:run, playbooks, _reason} -> {"run", Enum.map(playbooks, & &1.kind)}
+        {verdict, reason} -> {"#{verdict} reason=#{inspect(reason)}", []}
+      end
+
+    opts = Verification.selection_opts(settings)
+    untriggered = for %{kind: kind} <- Selection.playbooks(settings.auto_review, opts), kind not in selected, do: "#{kind}: not triggered"
+    off = for {kind, why} <- Selection.unavailable(settings.auto_review, opts), do: "#{kind}: #{why}"
+
+    Logger.info(
+      "QA selection issue_id=#{issue.id} issue_identifier=#{issue.identifier} sha=#{sha} decision=#{verdict} " <>
+        "playbooks=#{Enum.join(selected, ",")} not_selected=#{inspect(Enum.join(untriggered ++ off, "; "))}"
+    )
   end
 
   @doc """
@@ -60,7 +85,7 @@ defmodule SymphonyElixir.QaPolicy do
   def decision(%Issue{}, _settings, []), do: {:nothing_to_verify, "the head changes no files against its base branch"}
 
   def decision(%Issue{} = issue, settings, paths) when is_list(paths) do
-    case Selection.decide(issue, paths, settings.auto_review, dev_server?: dev_server?(settings)) do
+    case Selection.decide(issue, paths, settings.auto_review, Verification.selection_opts(settings)) do
       {:skip, reason} -> {:skip, reason}
       {:run, playbooks} -> run(issue, playbooks, paths)
     end
@@ -86,9 +111,7 @@ defmodule SymphonyElixir.QaPolicy do
 
   @doc "Every enabled playbook, the broad set a run falls back to when the diff cannot be read."
   @spec enabled_playbooks(map()) :: [Selection.playbook()]
-  def enabled_playbooks(settings), do: Selection.playbooks(settings.auto_review, dev_server?: dev_server?(settings))
-
-  defp dev_server?(settings), do: Verification.dev_server_configured?(settings)
+  def enabled_playbooks(settings), do: Selection.playbooks(settings.auto_review, Verification.selection_opts(settings))
 
   @doc """
   The paths `sha` changes against the merge base of `origin/<base>` in `workspace`. `opts[:git]`
