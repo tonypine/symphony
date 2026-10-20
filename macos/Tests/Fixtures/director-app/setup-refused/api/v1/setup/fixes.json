@@ -1,0 +1,68 @@
+{
+  "checked_at": "2026-10-19T12:00:00Z",
+  "error": {
+    "code": "fix_refused",
+    "message": "Linear refused to create the label \"Needs Decision\" in team TP: the Linear API key isn't allowed to (HTTP 403). Ask an admin of the team to do it, or use a key that may."
+  },
+  "linear_checked_at": "2026-10-19T12:00:00Z",
+  "not_checked": [],
+  "problems": [
+    {
+      "category": "labels",
+      "consequence": "Decisions you are asked for can't be marked on the ticket.",
+      "details": [
+        {
+          "label": "Team",
+          "value": "TP"
+        },
+        {
+          "label": "Label",
+          "value": "Needs Decision"
+        }
+      ],
+      "fix": {
+        "action": "create_label",
+        "kind": "linear",
+        "name": "Needs Decision",
+        "team": "TP",
+        "type": null
+      },
+      "id": "labels:missing:TP:Needs Decision",
+      "repos": [
+        "web-shop"
+      ],
+      "severity": "error",
+      "tickets": [],
+      "title": "Team TP has no \"Needs Decision\" label"
+    },
+    {
+      "category": "keys",
+      "consequence": "Nothing uses it any more (Auto Review is retired; QA runs in the QA state), and a later Symphony will refuse to load a symphony.yml that still sets it.",
+      "details": [
+        {
+          "label": "Key",
+          "value": "auto_review.enabled"
+        },
+        {
+          "label": "Replacement",
+          "value": "Auto Review is retired; QA runs in the QA state"
+        },
+        {
+          "label": "Line",
+          "value": "10"
+        }
+      ],
+      "fix": {
+        "action": "remove",
+        "kind": "config_edit",
+        "path": "auto_review.enabled",
+        "value": null
+      },
+      "id": "deprecated_key:auto_review.enabled",
+      "repos": [],
+      "severity": "warning",
+      "tickets": [],
+      "title": "symphony.yml sets auto_review.enabled, which is deprecated"
+    }
+  ]
+}

@@ -8,7 +8,9 @@ defmodule SymphonyElixir.QaAgentTest do
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaAgent.{Report, Selection}
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
+  alias SymphonyElixir.QaDriver.DevServerLease
   alias SymphonyElixir.SelfHeal
+  alias SymphonyElixir.Verification
 
   @sha "0123456789abcdef0123456789abcdef01234567"
   @env_keys [
@@ -109,6 +111,23 @@ defmodule SymphonyElixir.QaAgentTest do
       driver = opts[:qa_driver]
       {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
       {:ok, %{"pid" => _pid}} = QaDriver.call_tool(driver, "qa_launch_app", %{})
+      FakeSession.run_turn(session, prompt, issue, opts)
+    end
+  end
+
+  # Builds, launches and checks the macos_app without a wide pass, as a QA agent does for a change
+  # with nothing on screen to judge, then answers like `FakeSession`.
+  defmodule AppCheckSession do
+    alias SymphonyElixir.QaDriver
+
+    defdelegate start_session(workspace, opts), to: FakeSession
+    defdelegate stop_session(session), to: FakeSession
+
+    def run_turn(session, prompt, issue, opts) do
+      driver = opts[:qa_driver]
+      {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      {:ok, %{"pid" => pid}} = QaDriver.call_tool(driver, "qa_launch_app", %{})
+      {:ok, %{"healthy" => true}} = QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid})
       FakeSession.run_turn(session, prompt, issue, opts)
     end
   end
@@ -248,6 +267,9 @@ defmodule SymphonyElixir.QaAgentTest do
 
       "/fake/helper", ["ax-resize" | _args], _opts ->
         {:ok, {resized, 0}}
+
+      "/fake/helper", ["ax-ping" | _args], _opts ->
+        {:ok, {~s({"ok":true,"responding":true,"ms":2}), 0}}
     end
 
     %{
@@ -538,6 +560,27 @@ defmodule SymphonyElixir.QaAgentTest do
       assert {:skip, _reason} = Selection.decide(issue(), ["server/main.go"], config)
       assert {"server", "needs `verification.dev_server`"} in Selection.unavailable(config)
       refute Enum.any?(Selection.unavailable(config, dev_server?: true), &(elem(&1, 0) == "server"))
+
+      # A start command with verification off starts no server on this host, so the kind stays off.
+      command_only = [dev_server?: false, dev_server_command?: true]
+      assert {:skip, _reason} = Selection.decide(issue(), ["server/main.go"], config, command_only)
+      assert {"server", "needs `verification.enabled`"} in Selection.unavailable(config, command_only)
+      assert {"web", "needs `verification.enabled`"} in Selection.unavailable(config, command_only)
+    end
+
+    test "a macos_app playbook with dev_server: true on a worker_host needs only verification.dev_server" do
+      macos_app = %{"build" => "make app", "app" => "build/App.app", "dev_server" => true}
+      config = %{worker_host: "qa-vm", playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => macos_app}}
+      command_only = [dev_server?: false, dev_server_command?: true]
+
+      assert [%{kind: "macos_app", dev_server: true}] = Selection.playbooks(config, command_only)
+      refute Enum.any?(Selection.unavailable(config, command_only), &(elem(&1, 0) == "macos_app"))
+      assert {"web", "needs `verification.enabled`"} in Selection.unavailable(config, command_only)
+      assert {"macos_app", "needs `verification.dev_server`"} in Selection.unavailable(config)
+
+      # Without a worker_host its server runs on this host, which verification.enabled turns on.
+      assert {"macos_app", "needs `verification.enabled`"} in Selection.unavailable(%{config | worker_host: nil}, command_only)
+      assert [%{kind: "macos_app"}, %{kind: "web"}] = Selection.playbooks(%{config | worker_host: nil}, dev_server?: true)
     end
 
     test "unavailable/2 says why each playbook is off" do
@@ -597,6 +640,8 @@ defmodule SymphonyElixir.QaAgentTest do
             {:qa_dev_server_failed, {:dev_server_build_failed, :timeout}, "build_cmd did not finish within 15 minutes"},
             {:qa_dev_server_failed, {:dev_server_exit, 1}, ""},
             {:qa_dev_server_failed, {:dev_server_unreachable, "ssh: Connection refused"}, ""},
+            {:qa_dev_server_failed, {:dev_server_port_busy, 8090, 6557, "TP-1124"}, ""},
+            {:qa_dev_server_failed, {:dev_server_port_busy, 8090, nil, nil}, ""},
             {:qa_host_tunnel_failed, "ssh exited with status 255"},
             {:qa_host_missing_tool, ["go", "pg_ctl"]},
             {:qa_host_tool_check_failed, "exit status 255: Connection refused"},
@@ -621,6 +666,8 @@ defmodule SymphonyElixir.QaAgentTest do
                "qa_dev_server_failed: the dev server on the QA host did not finish its build_cmd in time; its last log lines:\n" <> _,
                "qa_dev_server_failed: the dev server on the QA host exited (status 1) before its health check answered 200",
                "qa_dev_server_failed: the dev server on the QA host could not be started over SSH: ssh: Connection refused",
+               "qa_dev_server_port_busy: 8090 held by pid 6557 (TP-1124), so the dev server on the QA host did not start",
+               "qa_dev_server_port_busy: 8090 held by a process lsof could not name (not a QA pass's server), so the dev server on the QA host did not start",
                "the tunnel that forwards QA_HOST_PORTS" <> _,
                "qa_host_missing_tool: go, pg_ctl: the QA host has no `go`, `pg_ctl` on the build's PATH" <> missing_tool,
                "qa_host_tool_check_failed: could not check the QA host" <> _,
@@ -669,6 +716,16 @@ defmodule SymphonyElixir.QaAgentTest do
       refute Map.has_key?(blocked, :needs_dev_server)
     end
 
+    test "reads a pass with nothing on screen to judge, and ignores any other scope" do
+      assert {:ok, %{verdict: :pass, scope: :none, reason: "the change touches no screen"}} =
+               QaAgent.parse_response(~s({"verdict":"pass","scope":" None ","reason":"the change touches no screen"}))
+
+      for scope <- [~s("journeys"), ~s(""), "true", "null"] do
+        assert {:ok, pass} = QaAgent.parse_response(~s({"verdict":"pass","scope":#{scope}}))
+        refute Map.has_key?(pass, :scope)
+      end
+    end
+
     test "keeps a covering ticket the blocked answer names, and drops anything that is not an identifier" do
       assert {:ok, %{verdict: :blocked, covered_by: "TP-716"} = blocked} =
                QaAgent.parse_response(~s({"verdict":"blocked","reason":"no fake gh","covered_by":" tp-716 "}))
@@ -710,6 +767,23 @@ defmodule SymphonyElixir.QaAgentTest do
       assert single.blocked_by == ["TP-824"]
       refute Map.has_key?(plain, :gap)
       refute Map.has_key?(plain, :blocked_by)
+    end
+
+    test "keeps the defect a failing step names" do
+      text =
+        Jason.encode!(%{
+          "verdict" => "fail",
+          "steps" => [
+            %{"name" => "Design check: Companies table", "status" => "fail", "defect" => " People column empty "},
+            %{"name" => "Plan level: pages", "status" => "fail", "defect" => "People column empty"},
+            %{"name" => "Nothing named", "status" => "fail", "defect" => " "}
+          ]
+        })
+
+      assert {:ok, %{steps: [design, plan, plain]}} = QaAgent.parse_response(text)
+      assert design.defect == "People column empty"
+      assert plan.defect == "People column empty"
+      refute Map.has_key?(plain, :defect)
     end
 
     test "rejects answers that do not follow the contract" do
@@ -955,6 +1029,13 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ ~s("gap": "<optional: a short label for a failing step>")
       assert prompt =~ ~s("blocked_by": [)
 
+      # One follow-up per defect: steps that fail for one cause name the same defect.
+      assert prompt =~ ~s("defect": "<for a failing step: a few words naming the defect it rests on>")
+      assert flat =~ "Symphony files one follow-up per defect, titled after it, listing every step that rests on it."
+
+      assert flat =~
+               "a plan-level step that fails only because another step (a design check, say) failed names that step's defect, not a defect of its own"
+
       # The epic is its own parent: no parent section and no verification ticket.
       refute prompt =~ "Parent issue (this is a sub-ticket"
       refute prompt =~ "Verification checklist"
@@ -1161,6 +1242,10 @@ defmodule SymphonyElixir.QaAgentTest do
              - A run failed (any conclusion other than `success`, `skipped` or `neutral`): mark the criterion
                `fail`, and in `details` and `findings` name the failing workflow and job (`gh run view <id>
                --json jobs`, or the run's `jobs_url`) with the run URL. A red `origin/main` is a defect.
+               Read the failed job's log with the `github_ci_log` tool (`run_id`, or `job_id`) before you
+               say why it failed, and quote the lines that name the cause (the failing step's last lines and
+               its annotations): never guess the cause from the job's name or the diff. Symphony quotes the
+               same log in the follow-up it files for the run you name.
              - Mark it `skipped` only when no run can be read (the commands are refused, or CI has no run for
                this commit) or a run is still in progress, and say which in `details`, with the run URL when
                there is one.
@@ -1434,7 +1519,7 @@ defmodule SymphonyElixir.QaAgentTest do
       [macos_app] =
         Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
 
-      assert {:ok, %{result: %{verdict: :blocked}}} =
+      assert {:ok, %{result: %{verdict: :inconclusive}}} =
                QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
                  git: fake_git(),
                  qa_agent_module: FakeSession,
@@ -1497,7 +1582,8 @@ defmodule SymphonyElixir.QaAgentTest do
           health_check_url: "http://127.0.0.1:$SYMPHONY_VERIFICATION_PORT/health"
       }
 
-      verification = %{settings.verification | enabled: true, dev_server: dev_server}
+      # Verification stays off: the QA-host server reads only `verification.dev_server` (TP-1115).
+      verification = %{settings.verification | enabled: false, dev_server: dev_server}
       %{settings | auto_review: %{settings.auto_review | worker_host: "qa-vm"}, verification: verification}
     end
 
@@ -1532,6 +1618,9 @@ defmodule SymphonyElixir.QaAgentTest do
         script =~ ~s(rm -rf "$dir") ->
           {:ok, {"symphony-qa-dev-server-dir:/Users/qa/.symphony-qa/runs/run.abc/dev-server\n", 0}}
 
+        script =~ "lsof -nP" ->
+          {:ok, {"symphony-qa-dev-server-port:free\n", 0}}
+
         script =~ ~s(case "$3") ->
           send(test, {:qa_host_dev_server, args})
           if Enum.at(args, 1) == "start", do: {:ok, {"symphony-qa-dev-server-pid:4242\n", 0}}, else: {:ok, {"", 0}}
@@ -1546,9 +1635,46 @@ defmodule SymphonyElixir.QaAgentTest do
       end
     end
 
+    # A QA host's dev-server scripts for one of two passes: each tells the test what ran and when,
+    # and the first pass's health check waits for the test's `:go`, so that pass holds the lease.
+    defp leased_host_cmd(test, pass) do
+      fn "/bin/bash", ["-c", script, "sh", _dir | _args], _opts ->
+        at = System.unique_integer([:monotonic])
+
+        cond do
+          script =~ ~s(rm -rf "$dir") ->
+            send(test, {pass, :prepare, at})
+            {:ok, {"symphony-qa-dev-server-dir:/Users/qa/.symphony-qa/runs/run.abc/dev-server\n", 0}}
+
+          script =~ "lsof -nP" ->
+            {:ok, {"symphony-qa-dev-server-port:free\n", 0}}
+
+          script =~ ~s(case "$3") ->
+            {:ok, {"symphony-qa-dev-server-pid:4242\n", 0}}
+
+          script =~ "end=" ->
+            hold_health_check(test, pass)
+            {:ok, {"symphony-qa-dev-server:healthy\n", 0}}
+
+          script =~ ~s(kill -s "$3") ->
+            send(test, {pass, :stopped, at})
+            {:ok, {"symphony-qa-dev-server:stopped\n", 0}}
+        end
+      end
+    end
+
+    defp hold_health_check(test, :first) do
+      send(test, {:first, :health_check, self()})
+      receive(do: (:go -> :ok))
+    end
+
+    defp hold_health_check(_test, _pass), do: :ok
+
     defp qa_host_macos_app do
-      config = %{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app", "dev_server" => true}}}
-      [macos_app] = Selection.playbooks(config, dev_server?: true) |> Enum.filter(&(&1.kind == "macos_app"))
+      settings = qa_host_settings()
+      macos_app = %{"build" => "make app", "app" => "build/App.app", "dev_server" => true}
+      config = %{settings.auto_review | playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => macos_app}}
+      [macos_app] = Selection.playbooks(config, Verification.selection_opts(settings))
       macos_app
     end
 
@@ -1565,8 +1691,8 @@ defmodule SymphonyElixir.QaAgentTest do
           )
         end)
 
-      assert {:ok, %{result: %{verdict: :blocked}}} = result
-      assert log =~ ~r/QA dev server started issue_id=\S+ issue_identifier=TP-900 worker_host=qa-vm port=8090 pid=4242/
+      assert {:ok, %{result: %{verdict: :inconclusive}}} = result
+      assert log =~ ~r/QA dev server started issue_id=\S+ issue_identifier=TP-900 worker_host=qa-vm port=8090 pid=4242 lease=qa-vm:8090/
       assert log =~ "QA dev server stopped issue_id="
       assert_received {:qa_host_shipped, "/Users/qa/.symphony-qa/runs/run.abc/dev-server/src"}
       assert_received {:qa_host_dev_server, ["8090", "build", "make server"]}
@@ -1605,6 +1731,53 @@ defmodule SymphonyElixir.QaAgentTest do
 
       assert QaAgent.blocked_reason(cause) ==
                "qa_dev_server_failed: the dev server on the QA host did not answer its health check with 200 in time; its last log lines:\npostgres: could not bind"
+    end
+
+    # TP-1123 and TP-1124 ran on one QA host at once: the second's server could not bind the port
+    # the first's held. A second pass now waits for the port's lease, and starts its server only
+    # once the first pass stopped its own.
+    test "a second pass on the same QA host and port starts its server only after the first pass stopped its own" do
+      lease = :"qa_agent_dev_server_lease_#{System.unique_integer([:positive])}"
+      start_supervised!({DevServerLease, name: lease})
+      test = self()
+
+      run = fn pass, issue, opts ->
+        host = %{qa_host_dev_server_host(nil) | cmd: leased_host_cmd(test, pass)}
+
+        QaAgent.run(
+          job(%{issue: issue, playbooks: [qa_host_macos_app()]}),
+          qa_host_settings(),
+          [
+            git: fake_git(),
+            qa_agent_module: FakeSession,
+            verification: FakeVerification,
+            qa_driver_opts: [host: host, dev_server_lease: lease]
+          ] ++ opts
+        )
+      end
+
+      first = Task.async(fn -> run.(:first, issue(), []) end)
+      assert_receive {:first, :health_check, health_check}, 5_000
+
+      second_issue = issue(%{id: "issue-qa-2", identifier: "TP-901"})
+      heartbeat = fn message -> send(test, {:second, :message, message}) end
+      second = Task.async(fn -> run.(:second, second_issue, on_message: heartbeat, dev_server_lease_opts: [heartbeat_ms: 10]) end)
+
+      # The second pass waits, never silently: its heartbeat keeps it from looking stalled, and the
+      # orchestrator can say whom it waits for.
+      assert_receive {:second, :message, %{event: :tool_progress, timestamp: %DateTime{}}}, 5_000
+      assert DevServerLease.waiting(lease, "issue-qa-2") == %{worker_host: "qa-vm", port: 8090, held_by: "TP-900"}
+      refute_received {:second, :prepare, _at}
+
+      send(health_check, :go)
+      assert {:ok, _first} = Task.await(first)
+      assert {:ok, _second} = Task.await(second)
+
+      assert_received {:first, :stopped, stopped_at}
+      assert_received {:second, :prepare, prepared_at}
+      assert stopped_at < prepared_at
+      assert_received {:second, :stopped, _at}
+      assert DevServerLease.waiting(lease, "issue-qa-2") == nil
     end
 
     test "blocks a macos_app pass whose QA host lacks a tool the playbook requires, before the agent starts" do
@@ -1687,7 +1860,7 @@ defmodule SymphonyElixir.QaAgentTest do
       refute Map.has_key?(failed, :needs_person)
     end
 
-    test "reports a macos_app pass that never resized a window as blocked, since its wide pass did not run" do
+    test "reports a macos_app pass that never resized a window as inconclusive, since its wide pass did not run" do
       [macos_app] =
         Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
 
@@ -1701,18 +1874,126 @@ defmodule SymphonyElixir.QaAgentTest do
         )
       end
 
-      assert {:ok, %{result: %{verdict: :blocked, reason: reason, steps: [%{name: "symphony check"}]} = blocked}} =
+      assert {:ok, %{result: %{verdict: :inconclusive, reason: reason, steps: [%{name: "symphony check"}]} = inconclusive}} =
                run.({:ok, %{result: FakeSession.pass_json()}})
 
       assert reason =~ "the wide pass did not run: no `qa_resize_window` call resized the app's window"
-      refute Map.has_key?(blocked, :needs_person)
-      assert Report.render(%{verdict: :blocked, reason: reason, sha: @sha, target_state: "In Review"}) =~ "Reason: the wide pass did not run"
+      refute Map.has_key?(inconclusive, :needs_person)
+      assert Report.render(%{verdict: :inconclusive, reason: reason, sha: @sha, target_state: "QA"}) =~ "Reason: the wide pass did not run"
 
       fail_json = Jason.encode!(%{verdict: "fail", summary: "The app crashed at launch.", steps: [], findings: ["App exits at launch"]})
       assert {:ok, %{result: %{verdict: :fail}}} = run.({:ok, %{result: fail_json}})
 
       Application.delete_env(:symphony_elixir, :qa_test_turn_result)
       assert {:ok, %{result: %{verdict: :pass}}} = QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+    end
+
+    test "a macos_app pass with nothing on screen to judge owes no wide pass and carries what it did with the app" do
+      [macos_app] =
+        Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
+
+      scope_none = Jason.encode!(%{verdict: "pass", summary: "Nothing to judge.", scope: "none", reason: "the change touches no screen; the app built and launched"})
+      Application.put_env(:symphony_elixir, :qa_test_turn_result, {:ok, %{result: scope_none}})
+
+      run = fn session ->
+        {result, _log} =
+          with_log(fn ->
+            QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
+              git: fake_git(),
+              qa_agent_module: session,
+              qa_driver_opts: [host: wide_pass_host({1920, 1200}), git: fn _args, _cwd -> {"", 0} end]
+            )
+          end)
+
+        result
+      end
+
+      assert {:ok, %{result: %{verdict: :pass, scope: :none, reason: "the change touches no screen; the app built and launched", app_check: app_check}}} =
+               run.(AppCheckSession)
+
+      assert app_check == %{built: true, launched: true, checked: true}
+
+      # The agent is told when such a pass applies, and what Symphony accepts it on.
+      assert_received {:qa_turn, _session, prompt, _issue, _turn_opts}
+      assert prompt =~ "Nothing on screen to judge:"
+      assert prompt =~ ~r/Symphony accepts that pass only when the build, the launch and a healthy `qa_check_app` all\s+ran/
+      assert prompt =~ ~s("scope": "<optional: none, on a pass with nothing to judge on screen>")
+
+      # A pass that never checked the app, or never started it, carries that too; QA verification
+      # does not accept it (`SymphonyElixir.QaVerification`).
+      assert {:ok, %{result: %{verdict: :pass, scope: :none, app_check: launched}}} = run.(LaunchOnlySession)
+      assert launched == %{built: true, launched: true, checked: false}
+      assert {:ok, %{result: %{verdict: :pass, scope: :none, app_check: nothing}}} = run.(FakeSession)
+      assert nothing == %{built: false, launched: false, checked: false}
+      assert_received {:qa_turn, _session, _prompt, _issue, _turn_opts}
+      assert_received {:qa_turn, _session, _prompt, _issue, _turn_opts}
+
+      # The QA policy found nothing on screen: the agent is told build and launch are the whole
+      # check, and its pass is one with nothing to judge, whatever its answer said.
+      Application.put_env(:symphony_elixir, :qa_test_turn_result, {:ok, %{result: FakeSession.pass_json()}})
+
+      {result, _log} =
+        with_log(fn ->
+          QaAgent.run(job(%{playbooks: [Map.put(macos_app, :scope, :none)]}), Config.settings!(),
+            git: fake_git(),
+            qa_agent_module: AppCheckSession,
+            qa_driver_opts: [host: wide_pass_host({1920, 1200}), git: fn _args, _cwd -> {"", 0} end]
+          )
+        end)
+
+      assert {:ok, %{result: %{verdict: :pass, scope: :none, reason: reason, app_check: checked}}} = result
+      assert checked == %{built: true, launched: true, checked: true}
+      assert reason =~ "Symphony's QA policy found nothing on screen to judge"
+      assert_received {:qa_turn, _session, policy_prompt, _issue, _turn_opts}
+      assert policy_prompt =~ "so build and launch are the whole check"
+
+      # A pass without the macos_app playbook is told nothing of the kind.
+      Application.delete_env(:symphony_elixir, :qa_test_turn_result)
+      assert {:ok, %{result: %{verdict: :pass} = cli_pass}} = QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+      refute Map.has_key?(cli_pass, :scope)
+      assert_received {:qa_turn, _session, cli_prompt, _issue, _turn_opts}
+      refute cli_prompt =~ "Nothing on screen to judge"
+      refute cli_prompt =~ ~s("scope")
+    end
+
+    test "reports a pass whose QA host Symphony refused as blocked by the QA host, keeping a fail" do
+      [macos_app] =
+        Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
+
+      host = %{
+        kill: fn _pid -> :ok end,
+        prepare: fn _operator_home, _canary -> {:error, {:unsafe, "has a private key ~/.ssh/id_ed25519"}} end,
+        cleanup: fn _dir -> :ok end
+      }
+
+      run = fn turn_result ->
+        Application.put_env(:symphony_elixir, :qa_test_turn_result, turn_result)
+
+        {result, _log} =
+          with_log(fn ->
+            QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
+              git: fake_git(),
+              qa_agent_module: FakeSession,
+              qa_driver_opts: [worker_host: "qa-vm", host: host]
+            )
+          end)
+
+        result
+      end
+
+      assert {:ok, %{result: %{verdict: :blocked, cause: {:qa_worker, "qa_worker_unsafe"}, reason: reason}}} =
+               run.({:ok, %{result: FakeSession.pass_json()}})
+
+      assert reason =~ "The QA host qa-vm has a private key ~/.ssh/id_ed25519."
+
+      blocked_json = Jason.encode!(%{verdict: "blocked", summary: "", reason: "every qa_* tool refused the QA host"})
+
+      assert {:ok, %{result: %{verdict: :blocked, cause: {:qa_worker, "qa_worker_unsafe"}, reason: "every qa_* tool refused the QA host"}}} =
+               run.({:ok, %{result: blocked_json}})
+
+      fail_json = Jason.encode!(%{verdict: "fail", summary: "The CLI failed.", steps: [], findings: ["exit 1"]})
+      assert {:ok, %{result: %{verdict: :fail} = failed}} = run.({:ok, %{result: fail_json}})
+      refute Map.has_key?(failed, :cause)
     end
 
     test "holds an epic review to the wide pass only when it launched an app" do
@@ -1742,13 +2023,38 @@ defmodule SymphonyElixir.QaAgentTest do
       assert reason =~ "the wide pass did not run: no `qa_resize_window` call resized the app's window"
 
       assert {:ok, %{result: %{verdict: :pass}}} = run.(WidePassSession)
+
+      # The epic review judges the merged result: an answer of nothing to judge on screen does not
+      # excuse its wide pass, and its prompt does not offer one.
+      scope_none = Jason.encode!(%{verdict: "pass", summary: "Nothing to judge.", scope: "none", reason: "no screen"})
+      Application.put_env(:symphony_elixir, :qa_test_turn_result, {:ok, %{result: scope_none}})
+      assert {:ok, %{result: %{verdict: :blocked, reason: reason}}} = run.(LaunchOnlySession)
+      assert reason =~ "the wide pass did not run"
+
+      assert {:ok, %{result: %{verdict: :pass}}} =
+               (fn ->
+                  {result, _log} =
+                    with_log(fn ->
+                      QaAgent.run(%{epic_job | playbooks: [Map.put(macos_app, :scope, :none)]}, Config.settings!(),
+                        git: fake_git(),
+                        qa_agent_module: FakeSession,
+                        qa_driver_opts: [host: wide_pass_host({1920, 1200}), git: fn _args, _cwd -> {"", 0} end]
+                      )
+                    end)
+
+                  result
+                end).()
+
+      assert_received {:qa_turn, _session, epic_prompt, _issue, _turn_opts}
+      refute epic_prompt =~ "Nothing on screen to judge:"
+      refute epic_prompt =~ ~s("scope": "<optional)
     end
 
     test "lets the QA driver read fixtures from the pass's own $TMPDIR" do
       [macos_app] =
         Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
 
-      assert {:ok, %{result: %{verdict: :blocked}}} =
+      assert {:ok, %{result: %{verdict: :inconclusive}}} =
                QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
                  git: fake_git(),
                  qa_agent_module: PutFileSession,
@@ -2318,6 +2624,15 @@ defmodule SymphonyElixir.QaAgentTest do
       blocked = Report.render(%{verdict: :blocked, sha: @sha, target_state: "In Review", reason: "no mix", summary: "ignored"})
       assert blocked =~ "Reason: no mix"
       refute blocked =~ "ignored"
+
+      inconclusive = Report.render(%{verdict: :inconclusive, sha: @sha, target_state: "QA (inconclusive, rerunning)", reason: "no wide pass", summary: "ignored"})
+      assert inconclusive =~ "**Verdict:** inconclusive → QA (inconclusive, rerunning)"
+      assert inconclusive =~ "Reason: no wide pass"
+      refute inconclusive =~ "ignored"
+
+      nothing = Report.render(%{verdict: :pass, scope: :none, sha: @sha, target_state: "Merging", reason: "the change touches no screen", summary: ""})
+      assert nothing =~ "**Verdict:** pass (nothing on screen to judge; the app built and launched) → Merging"
+      assert nothing =~ "\nWhy nothing was judged on screen: the change touches no screen\n"
 
       long = Report.render(%{verdict: :pass, sha: @sha, target_state: "In Review", steps: [%{name: "x", status: "pass", details: String.duplicate("a", 2_100), evidence: []}]})
       assert long =~ "[... truncated ...]"

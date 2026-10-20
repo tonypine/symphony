@@ -180,14 +180,19 @@ public struct SymphonyConfigFile {
 
     /// Writes `text` to a new hidden file next to `url`.
     private func writeSibling(of url: URL, _ text: String) throws -> URL {
+        try writeSibling(of: url, data: Data(text.utf8))
+    }
+
+    /// Writes `data` to a new hidden file next to `url`.
+    func writeSibling(of url: URL, data: Data) throws -> URL {
         let temporary = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString)")
-        try Data(text.utf8).write(to: temporary)
+        try data.write(to: temporary)
         return temporary
     }
 
     /// Renames `temporary` over `url`, so Symphony's config watcher never reads a half-written file. The file
     /// keeps its permissions; `temporary` is removed when this fails.
-    private func replace(_ url: URL, with temporary: URL) throws {
+    func replace(_ url: URL, with temporary: URL) throws {
         let files = FileManager.default
         do {
             if let permissions = try files.attributesOfItem(atPath: url.path)[.posixPermissions] {
@@ -202,7 +207,8 @@ public struct SymphonyConfigFile {
         }
     }
 
-    private var url: URL {
+    /// The file itself: a symlinked file is written through the link.
+    var url: URL {
         URL(fileURLWithPath: path).resolvingSymlinksInPath()
     }
 }

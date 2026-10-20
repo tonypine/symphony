@@ -126,6 +126,8 @@ defmodule SymphonyElixir.SetupTest do
     :ets.delete_all_objects(PollLog)
     Application.put_env(:symphony_elixir, :setup_test_pid, self())
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+    # Labels another test seeded and left behind would make the labels check report missing ones.
+    Application.delete_env(:symphony_elixir, :memory_tracker_labels_list)
     # A managed repo has the secrets check ask `gh` whether it is signed in.
     Application.put_env(:symphony_elixir, :setup_gh_runner, fn ["auth", "status"], _opts -> {"Logged in to github.com\n", 0} end)
 
@@ -271,7 +273,7 @@ defmodule SymphonyElixir.SetupTest do
       File.write!(ref_error, :erlang.term_to_binary({:workflow_ref_not_found, ["origin/main"]}))
       on_exit(fn -> File.rm_rf(Path.dirname(ref_error)) end)
 
-      assert %{problems: [problem]} = Setup.check()
+      assert %{problems: [problem]} = Setup.check(checks: [Checks.WorkflowRef])
       assert problem.id == "#{Checks.WorkflowRef.id()}:default"
       assert problem.severity == "error"
       assert problem.repos == ["default"]

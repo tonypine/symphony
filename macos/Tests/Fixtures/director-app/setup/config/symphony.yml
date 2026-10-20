@@ -1,0 +1,22 @@
+# Setup's QA fixture: a deprecated key Setup offers to remove (auto_review.enabled).
+issues:
+  provider: memory
+  memory:
+    issues_file: issues.json
+  states:
+    active: [Todo, In Progress]
+    terminal: [Done]
+auto_review:
+  enabled: true
+repositories:
+  - key: web-shop
+    workflow: WORKFLOW.md
+    route:
+      team: TP
+    workspace:
+      source: https://github.com/acme/web-shop.git
+agent:
+  runtime: claude
+  command: claude
+dashboard:
+  port: 0

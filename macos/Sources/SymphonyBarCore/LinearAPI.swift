@@ -34,6 +34,34 @@ public struct LinearProject: Equatable, Identifiable {
     }
 }
 
+/// A Linear team a project belongs to; its `key` is what `route.team` names.
+public struct LinearTeam: Equatable, Identifiable {
+    public var id: String
+    public var key: String?
+
+    public init(id: String, key: String? = nil) {
+        self.id = id
+        self.key = key
+    }
+}
+
+/// What the Add Repo sheet reads for a picked project: its teams and the labels its issues can carry.
+public struct LinearProjectScope: Equatable {
+    public var teams: [LinearTeam]
+    public var labels: [LinearLabel]
+
+    public init(teams: [LinearTeam] = [], labels: [LinearLabel] = []) {
+        self.teams = teams
+        self.labels = labels
+    }
+
+    /// The key Add Repo writes as `route.team`: the project's one team, nil when it has none or several.
+    public var teamKey: String? {
+        guard teams.count == 1, let key = teams[0].key?.trimmingWhitespace(), !key.isEmpty else { return nil }
+        return key
+    }
+}
+
 /// A Linear issue label a repo's route can require. Group labels are left out: an issue can't carry them.
 public struct LinearLabel: Equatable, Identifiable {
     public var id: String
@@ -101,7 +129,7 @@ public struct LinearClient {
         query SymphonyBarProjectTeams($projectId: String!, $first: Int!, $after: String) {
           project(id: $projectId) {
             teams(first: $first, after: $after) {
-              nodes { id }
+              nodes { id key }
               pageInfo { hasNextPage endCursor }
             }
           }
@@ -138,15 +166,22 @@ public struct LinearClient {
     }
 
     /// The labels an issue in the project can carry: workspace labels and its teams' labels, sorted by name; every label
-    /// of the workspace without a project. Reads the project's teams first, then the labels, so neither request nests
-    /// one connection in another.
+    /// of the workspace without a project.
     public func labels(forProject projectID: String?) async -> Result<[LinearLabel], LinearFailure> {
+        await scope(forProject: projectID).map(\.labels)
+    }
+
+    /// The project's teams and the labels an issue in it can carry; without a project, no team and every label of the
+    /// workspace. Reads the project's teams first, then the labels, so neither request nests one connection in another.
+    public func scope(forProject projectID: String?) async -> Result<LinearProjectScope, LinearFailure> {
         var variables: [String: Any] = [:]
+        var teams: [LinearTeam] = []
         if let projectID {
             switch await fetchAll(Self.projectTeamsQuery, variables: ["projectId": projectID], as: ProjectTeamsData.self, connection: {
                 $0.project?.teams
             }) {
-            case let .success(teams):
+            case let .success(nodes):
+                teams = nodes.map { LinearTeam(id: $0.id, key: $0.key) }
                 variables["filter"] = ["or": [["team": ["null": true]], ["team": ["id": ["in": teams.map(\.id)]]]]]
             case let .failure(failure):
                 return .failure(failure)
@@ -155,10 +190,11 @@ public struct LinearClient {
         return await fetchAll(Self.labelsQuery, variables: variables, as: LabelsData.self) {
             $0.issueLabels
         }.map { nodes in
-            nodes
+            let labels = nodes
                 .filter { !($0.isGroup ?? false) }
                 .map { LinearLabel(id: $0.id, name: $0.name) }
                 .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            return LinearProjectScope(teams: teams, labels: labels)
         }
     }
 
@@ -275,6 +311,7 @@ public struct LinearClient {
 
         struct Team: Decodable {
             let id: String
+            let key: String?
         }
 
         let project: Project?

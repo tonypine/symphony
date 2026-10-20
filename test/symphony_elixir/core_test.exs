@@ -5406,7 +5406,7 @@ defmodule SymphonyElixir.CoreTest do
       assert_receive {:review_agent_start_session, ^repo, start_opts}
       assert start_opts[:tool_scope] == :read_only
       assert_receive {:review_agent_call, 1, _session, review_prompt, _issue, run_opts}
-      assert review_prompt =~ "Return ONLY one JSON object"
+      assert review_prompt =~ "tool once with your verdict, then end your turn"
       assert review_prompt =~ "Diff context:"
       assert run_opts[:tool_scope] == :read_only
 
@@ -5639,7 +5639,7 @@ defmodule SymphonyElixir.CoreTest do
         if [ -z "$socket" ] || [ -S "$socket" ]; then status=connected; fi
       fi
       case "$prompt" in
-        *"Return ONLY one JSON object"*) kind=review ;;
+        *"tool once with your verdict, then end your turn"*) kind=review ;;
         *"Reviewer agent approved the committed diff"*) kind=continuation ;;
         *) kind=turn ;;
       esac

@@ -5,6 +5,7 @@ defmodule SymphonyElixir.QaDriver.DevServerTest do
   alias SymphonyElixir.QaDriver.{DevServer, Host}
 
   @dev_server Path.expand("../../support/dev_server.py", __DIR__)
+  @late_reaper Path.expand("../../support/late_reaper.py", __DIR__)
 
   # The QA host is this machine: `cmd` runs each script with the local shell, as the QA user's
   # shell runs it over SSH, and `ship` unpacks the tar where `Remote.ship/3` would.
@@ -54,7 +55,8 @@ defmodule SymphonyElixir.QaDriver.DevServerTest do
         stop_signal: "TERM",
         stop_timeout_ms: 2_000,
         port: port,
-        url: "http://127.0.0.1:#{port}/"
+        url: "http://127.0.0.1:#{port}/",
+        ticket: "TP-1"
       },
       overrides
     )
@@ -68,6 +70,17 @@ defmodule SymphonyElixir.QaDriver.DevServerTest do
   end
 
   defp alive?(pid), do: match?({_out, 0}, System.cmd("/bin/sh", ["-c", "kill -0 #{pid}"], stderr_to_stdout: true))
+
+  # Whether a member of the process group still answers `kill -0`: macOS skips a zombie there,
+  # Linux finds it until its parent reaps it.
+  defp group_alive?(pgid), do: match?({_out, 0}, System.cmd("/bin/sh", ["-c", "kill -0 -- -#{pgid}"], stderr_to_stdout: true))
+
+  defp serving?(port) do
+    case :gen_tcp.connect({127, 0, 0, 1}, port, [], 1_000) do
+      {:ok, socket} -> :gen_tcp.close(socket) == :ok
+      {:error, _reason} -> false
+    end
+  end
 
   defp server_pid(run_dir), do: run_dir |> Path.join("dev-server/src/pid") |> File.read!() |> String.trim()
 
@@ -85,6 +98,36 @@ defmodule SymphonyElixir.QaDriver.DevServerTest do
         flunk("start_cmd never wrote its pid: #{inspect(not_yet)}")
     end
   end
+
+  # Another server on `port`, outside any pass: it answers every request with 200.
+  defp http_listener(port) do
+    {:ok, socket} = :gen_tcp.listen(port, [:binary, ip: {127, 0, 0, 1}, active: false, reuseaddr: true])
+    acceptor = spawn_link(fn -> answer_200(socket) end)
+    :ok = :gen_tcp.controlling_process(socket, acceptor)
+    socket
+  end
+
+  defp answer_200(socket) do
+    with {:ok, client} <- :gen_tcp.accept(socket) do
+      _request = :gen_tcp.recv(client, 0, 1_000)
+      :gen_tcp.send(client, "HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok")
+      :gen_tcp.close(client)
+      answer_200(socket)
+    end
+  end
+
+  # Waits up to 5 seconds for `start_cmd` to have exited.
+  defp await_exit(run_dir, tries \\ 250) do
+    cond do
+      File.exists?(Path.join(run_dir, "dev-server/exit-status")) -> :ok
+      tries > 0 -> Process.sleep(20) && await_exit(run_dir, tries - 1)
+      true -> flunk("start_cmd never exited")
+    end
+  end
+
+  # The pid `lsof` names as the listener, nil on a host without `lsof`, where the port check
+  # still finds the port busy but cannot tell by whom.
+  defp listener_pid(pid), do: if(System.find_executable("lsof"), do: pid)
 
   defp health(url) do
     {output, 0} = System.cmd("curl", ["-s", "--noproxy", "*", "-o", "/dev/null", "-w", "%{http_code}", url])
@@ -107,6 +150,7 @@ defmodule SymphonyElixir.QaDriver.DevServerTest do
     assert env =~ "SYMPHONY_VERIFICATION_PORT=#{port}\n"
     assert env =~ "HOME=#{dir}/home\n"
     assert env =~ "TMPDIR=#{dir}/tmp/\n"
+    assert File.read!(Path.join(dir, "ticket")) == "TP-1\n"
     assert File.read!(Path.join(dir, "server.log")) =~ "building"
     # The server is a process group's leader's child: the group goes with the stop.
     assert alive?(server_pid(run_dir))
@@ -117,30 +161,16 @@ defmodule SymphonyElixir.QaDriver.DevServerTest do
     assert DevServer.stop(config, server) == :gone
   end
 
-  test "kills the group when it outlives stop_timeout_ms", %{config: config, run_dir: run_dir} do
-    spec = spec(%{start_cmd: "trap '' TERM; echo $$ > pid; exec python3 #{@dev_server}", stop_timeout_ms: 300})
+  # The server's parent sits outside the group and reaps it only a second after the kill, as a
+  # slow reaper on a loaded runner does: the stop waits for it, and a zombie no longer serves.
+  test "kills the group when it outlives stop_timeout_ms, and returns once the kill has landed", %{config: config} do
+    spec = spec(%{start_cmd: "trap '' TERM; exec python3 #{@late_reaper} #{@dev_server}", stop_timeout_ms: 300})
 
     assert {:ok, server} = DevServer.start(config, spec)
+    assert serving?(spec.port)
     assert DevServer.stop(config, server) == :killed
-    refute alive?(server_pid(run_dir))
-  end
-
-  test "a kill that lands late is waited for before the stop says killed", %{config: config, run_dir: run_dir} do
-    spec = spec(%{start_cmd: "trap '' TERM; echo $$ > pid; exec python3 #{@dev_server}", stop_timeout_ms: 300})
-    assert {:ok, server} = DevServer.start(config, spec)
-
-    # The group's KILL lands half a second after the script sends it. The delayed kill runs as a
-    # command of its own: a forked subshell would hold the script's output open until it exits.
-    late_kill = """
-    kill() {
-      if [ "$1 $2" = "-s KILL" ]; then /bin/bash -c 'sleep 0.5; kill "$@"' bash "$@" < /dev/null > /dev/null 2>&1 & return 0; fi
-      builtin kill "$@"
-    }
-    """
-
-    host = local_host(%{cmd: fn executable, ["-c", script | rest], opts -> Host.cmd(executable, ["-c", late_kill <> script | rest], opts) end})
-    assert DevServer.stop(%{config | host: host}, server) == :killed
-    refute alive?(server_pid(run_dir))
+    refute group_alive?(server.pid)
+    refute serving?(spec.port)
   end
 
   test "a failed build_cmd is its exit status and the log's last 20 lines", %{config: config} do
@@ -154,6 +184,67 @@ defmodule SymphonyElixir.QaDriver.DevServerTest do
 
   test "a server that exits before its health check is its exit status", %{config: config} do
     assert {:error, {:dev_server_exit, 4}, "boom"} = DevServer.start(config, spec(%{start_cmd: "echo boom; exit 4"}))
+  end
+
+  describe "the pass's own server" do
+    test "a port something listens on before the start is busy, with its pid, and no server starts", %{config: config, run_dir: run_dir} do
+      spec = spec(%{start_cmd: "echo $$ > pid; exec python3 #{@dev_server}"})
+      {:ok, socket} = :gen_tcp.listen(spec.port, ip: {127, 0, 0, 1})
+      on_exit(fn -> :gen_tcp.close(socket) end)
+
+      os_pid = String.to_integer(System.pid())
+      assert DevServer.start(config, spec) == {:error, {:dev_server_port_busy, spec.port, listener_pid(os_pid), nil}, ""}
+      refute File.exists?(Path.join(run_dir, "dev-server/src/pid"))
+    end
+
+    test "a port another pass's server still holds names that pass's ticket", %{config: config, run_dir: run_dir} do
+      spec = spec(%{start_cmd: "echo $$ > pid; exec python3 #{@dev_server}", ticket: "TP-1124"})
+      assert {:ok, server} = DevServer.start(config, spec)
+      on_exit(fn -> DevServer.stop(config, server) end)
+      holder = run_dir |> server_pid() |> String.to_integer()
+
+      second_run = Path.join(Path.dirname(run_dir), "second-run")
+      File.mkdir_p!(second_run)
+      {pid, ticket} = if System.find_executable("lsof"), do: {holder, "TP-1124"}, else: {nil, nil}
+
+      assert DevServer.start(%{config | host_dir: second_run}, %{spec | ticket: "TP-1123"}) == {:error, {:dev_server_port_busy, spec.port, pid, ticket}, ""}
+      assert DevServer.stop(config, server) == :stopped
+    end
+
+    # TP-1123: its server could not bind the port and exited at once, while another server
+    # answered 200 there. The port check is answered `free` (that server came after it), and the
+    # health check runs once `start_cmd` has exited, so the order is the incident's every time.
+    test "a start_cmd that exited is its exit status and log even when something else answers 200", %{config: config, run_dir: run_dir} do
+      spec = spec(%{start_cmd: "echo bind: address already in use; exit 4"})
+      _listener = http_listener(spec.port)
+      assert health(spec.health_check_url) == "200"
+
+      host = fn executable, ["-c", script | _rest] = args, opts ->
+        cond do
+          String.contains?(script, "lsof -nP") -> {:ok, {"symphony-qa-dev-server-port:free\n", 0}}
+          String.contains?(script, "end=") -> await_exit(run_dir) && Host.cmd(executable, args, opts)
+          true -> Host.cmd(executable, args, opts)
+        end
+      end
+
+      config = %{config | host: local_host(%{cmd: host})}
+      assert DevServer.start(config, spec) == {:error, {:dev_server_exit, 4}, "bind: address already in use"}
+    end
+
+    test "the port check cannot run or answers nothing it knows", %{config: config} do
+      for {answer, expected} <- [
+            {{:ok, {"symphony-qa-dev-server-port:busy::\n", 0}}, {:dev_server_port_busy, 0, nil, nil}},
+            {{:ok, {"symphony-qa-dev-server-port:busy:x1:\n", 0}}, {:dev_server_port_busy, 0, nil, nil}},
+            {{:ok, {"huh\n", 0}}, {:dev_server_unreachable, "huh"}},
+            {{:ok, {"ssh: broken pipe\n", 255}}, {:dev_server_unreachable, "ssh: broken pipe"}},
+            {{:error, :closed}, {:dev_server_unreachable, ":closed"}}
+          ] do
+        config = %{config | host: local_host(%{cmd: fail_script("lsof -nP", answer)})}
+        spec = spec(%{})
+        expected = with {:dev_server_port_busy, 0, pid, ticket} <- expected, do: {:dev_server_port_busy, spec.port, pid, ticket}
+        assert DevServer.start(config, spec) == {:error, expected, ""}
+      end
+    end
   end
 
   test "a health check that never answers 200 times out and stops the server", %{config: config, run_dir: run_dir} do

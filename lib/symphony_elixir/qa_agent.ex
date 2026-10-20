@@ -20,8 +20,13 @@ defmodule SymphonyElixir.QaAgent do
   one follow-up turn in the same session asking for it. A pass that runs the `macos_app`
   playbook also gets the host-side `qa_*` tools of a `SymphonyElixir.QaDriver`,
   stopped (quitting every app it launched) when the pass ends, and its `pass` is
-  `blocked` when no `qa_resize_window` call ran the playbook's wide pass (in an epic review, only
-  when the pass launched an app). It also gets its host ports
+  `inconclusive` when no `qa_resize_window` call ran the playbook's wide pass (in an epic review it
+  is `blocked`, and only when the pass launched an app). A `pass` with `scope: none` (the change has
+  nothing to judge on screen, by the agent's answer or by `SymphonyElixir.QaPolicy`, which marks the
+  playbook `scope: :none`) owes no wide pass: it carries `app_check`, whether the pass built,
+  launched and checked the app (`SymphonyElixir.QaDriver.app_check/1`), for
+  `SymphonyElixir.QaVerification` to accept it on. A pass whose QA host Symphony refused or could not
+  reach is `blocked` with the cause `{:qa_worker, code}`. It also gets its host ports
   (`QA_HOST_PORTS` in the prompt and the session's environment) for the stubs and
   proxies it serves the app; a pass whose host-port tunnel to the QA host cannot
   open is `blocked` with the reason before the agent starts, and so is one whose QA host lacks an
@@ -33,8 +38,11 @@ defmodule SymphonyElixir.QaAgent do
   pooled port from a second worktree at the PR head, outside the agent's sandbox (a server that
   fails its health check makes the pass `blocked`). A `macos_app` pass on a `worker_host` with
   `dev_server: true` runs it on the QA host instead, beside the app, before the agent starts
-  (`SymphonyElixir.QaDriver.start_dev_server/2`); one that fails makes the pass `blocked` with
-  `qa_dev_server_failed` and its log. A `web` pass's session alone gets a
+  (`SymphonyElixir.QaDriver.start_dev_server/3`), and needs only `verification.dev_server`, not
+  `verification.enabled`; one that fails makes the pass `blocked` with `qa_dev_server_failed` and
+  its log, and a port already taken with `qa_dev_server_port_busy`. Such a pass first waits for
+  the QA host port's lease while another pass's server holds it
+  (`SymphonyElixir.QaDriver.DevServerLease`). A `web` pass's session alone gets a
   `browser` MCP server: headless Playwright limited to the dev server's localhost origins, or
   the playbook's `browser_mcp`.
   Each pass also gets a private temp folder of its own (see `tmp_dirs/2`), which a Claude
@@ -83,7 +91,7 @@ defmodule SymphonyElixir.QaAgent do
   # update the install command in docs/configuration.md.
   @playwright_mcp_package "@playwright/mcp@0.0.83"
 
-  @type verdict :: :pass | :fail | :blocked
+  @type verdict :: :pass | :fail | :blocked | :inconclusive
   @type step :: %{
           required(:name) => String.t(),
           required(:status) => String.t(),
@@ -91,7 +99,8 @@ defmodule SymphonyElixir.QaAgent do
           required(:evidence) => [String.t()],
           optional(:checklist) => true,
           optional(:gap) => String.t(),
-          optional(:blocked_by) => [String.t()]
+          optional(:blocked_by) => [String.t()],
+          optional(:defect) => String.t()
         }
   @type result :: %{
           required(:verdict) => verdict(),
@@ -102,6 +111,9 @@ defmodule SymphonyElixir.QaAgent do
           optional(:needs_person) => true,
           optional(:covered_by) => String.t(),
           optional(:needs_dev_server) => true,
+          optional(:scope) => :none,
+          optional(:app_check) => %{built: boolean(), launched: boolean(), checked: boolean()},
+          optional(:cause) => {:qa_worker, String.t()},
           optional(:follow_ups) => pos_integer()
         }
   @type job :: %{
@@ -229,7 +241,7 @@ defmodule SymphonyElixir.QaAgent do
     Description (walkthrough and acceptance criteria):
     #{PromptSafety.linear_issue_body(Decisions.strip(issue.description) || "")}
     #{decisions_rule(issue, job)}#{parent_section(parent)}#{design_section(job, parent)}#{epic_section(job)}#{dev_server_section(job)}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
-    #{qa_jobs_section()}
+    #{qa_jobs_section()}#{scope_section(job)}
     Playbooks to follow:
 
     #{Enum.map_join(job.playbooks, "\n\n", & &1.prompt)}
@@ -248,8 +260,8 @@ defmodule SymphonyElixir.QaAgent do
     Set `needs_person` to true only when the block is something only a person can hand over: a
     missing secret or API key, an account, or a real device this QA host lacks. A missing QA tool or
     QA host capability is never `needs_person`, even when a person could check the step by hand:
-    a fake CLI, a stub service, a checkout, a folder or a driver tool the QA setup lacks is fixed by
-    an agent through a fix ticket. Leave it false too when the cause is the build or the code.
+    a fake CLI, a stub service, a checkout, a folder or a driver tool the QA setup lacks is a gap in
+    the QA setup, not a hand-over. Leave it false too when the cause is the build or the code.
 
     A step whose real path needs a paid AI service, real credentials or another outside service (a
     third-party API, GitHub, Linear) is never `blocked` for want of them, and never gets a real
@@ -299,10 +311,60 @@ defmodule SymphonyElixir.QaAgent do
       "reason": "<required for blocked>",
       "needs_person": true | false,
       "needs_dev_server": true | false,
-      "covered_by": "<optional: the identifier of an open ticket that already tracks the missing QA tool>"
+      "covered_by": "<optional: the identifier of an open ticket that already tracks the missing QA tool>"#{scope_field(job)}
     }
     """
   end
+
+  # A change with nothing to judge on screen (TP-1119): the agent may answer `pass` with
+  # `scope: none` once it built, launched and checked the app, and owes no wide pass. When
+  # `SymphonyElixir.QaPolicy` already found nothing on screen it marks the `macos_app` playbook
+  # `scope: :none`, and the agent is told up front that build and launch are the whole check. The
+  # epic review judges the merged result and keeps its own wide-pass rule.
+  defp scope_section(%{epic_review: true}), do: ""
+
+  defp scope_section(job) do
+    cond do
+      policy_scope_none?(job) ->
+        """
+
+        Nothing on screen to judge:
+        Symphony's QA policy found that this PR changes none of the paths of the playbooks below and
+        the ticket has no `## User walkthrough`, so build and launch are the whole check. Build the
+        app with `qa_build`, launch it with `qa_launch_app`, call `qa_check_app` once it has started,
+        then `qa_quit_app`. Skip the design check and the wide pass. Answer `pass` with
+        `"scope": "none"` when the app built, launched and `qa_check_app` found it healthy, with a
+        `reason` saying so; `fail` when it did not build or start, with what happened in `findings`.
+        """
+
+      macos_app?(job) ->
+        """
+
+        Nothing on screen to judge:
+        When neither the diff nor the ticket names a walkthrough step or a screen (no window, page,
+        panel or menu changes, and no step says `Proved by: QA`), there is nothing to judge by sight.
+        Then build the app with `qa_build`, launch it with `qa_launch_app`, call `qa_check_app` once it
+        has started, then `qa_quit_app`, and answer `pass` with `"scope": "none"` and a `reason` such
+        as "the change touches no screen; the app built and launched; nothing to judge by sight".
+        Symphony accepts that pass only when the build, the launch and a healthy `qa_check_app` all
+        ran; without them it reports the pass `inconclusive`. A pass that judged any screen owes the
+        wide pass, and one without it is `inconclusive` too.
+        """
+
+      true ->
+        ""
+    end
+  end
+
+  defp scope_field(%{epic_review: true}), do: ""
+
+  defp scope_field(job) do
+    if macos_app?(job), do: ~s(,\n      "scope": "<optional: none, on a pass with nothing to judge on screen>"), else: ""
+  end
+
+  defp macos_app?(job), do: Enum.any?(job.playbooks, &(Map.get(&1, :kind) == "macos_app"))
+
+  defp policy_scope_none?(job), do: Enum.any?(job.playbooks, &(Map.get(&1, :scope) == :none))
 
   # The sandbox denies the hypervisor and Mach ports, so an emulator the agent boots dies with
   # SIGILL and leaves crash reports on the host (TP-497). Only Symphony's host-side driver boots one.
@@ -377,6 +439,10 @@ defmodule SymphonyElixir.QaAgent do
     - A run failed (any conclusion other than `success`, `skipped` or `neutral`): mark the criterion
       `fail`, and in `details` and `findings` name the failing workflow and job (`gh run view <id>
       --json jobs`, or the run's `jobs_url`) with the run URL. A red `#{base_ref}` is a defect.
+      Read the failed job's log with the `github_ci_log` tool (`run_id`, or `job_id`) before you
+      say why it failed, and quote the lines that name the cause (the failing step's last lines and
+      its annotations): never guess the cause from the job's name or the diff. Symphony quotes the
+      same log in the follow-up it files for the run you name.
     - Mark it `skipped` only when no run can be read (the commands are refused, or CI has no run for
       this commit) or a run is still in progress, and say which in `details`, with the run URL when
       there is one.
@@ -598,13 +664,21 @@ defmodule SymphonyElixir.QaAgent do
     identifiers of this epic's sub-tickets. Symphony files the gaps in that order and links each
     follow-up to its blockers, so the second one waits until the first has merged and, on Symphony's
     own repository, until the running app includes it.
+
+    Name the defect each failing step rests on in its `"defect"`: a few words that say what is
+    broken, such as "Split view wider than the window on Today". Symphony files one follow-up per
+    defect, titled after it, listing every step that rests on it. Two steps that fail for the same
+    cause carry the same `defect`, word for word; a plan-level step that fails only because another
+    step (a design check, say) failed names that step's defect, not a defect of its own, and its
+    `details` say so. Steps that fail for different causes carry different defects.
     """
   end
 
   defp epic_section(_job), do: ""
 
   defp checklist_field(%{epic_review: true}),
-    do: ~s(,\n      "checklist": true | false,\n      "gap": "<optional: a short label for a failing step>",\n      "blocked_by": ["<optional: gap labels or epic sub-ticket identifiers it waits on>"])
+    do:
+      ~s(,\n      "checklist": true | false,\n      "gap": "<optional: a short label for a failing step>",\n      "blocked_by": ["<optional: gap labels or epic sub-ticket identifiers it waits on>"],\n      "defect": "<for a failing step: a few words naming the defect it rests on>"])
 
   defp checklist_field(_job), do: ""
 
@@ -780,6 +854,7 @@ defmodule SymphonyElixir.QaAgent do
       result = if reason, do: Map.put(result, :reason, reason), else: result
       result = if Map.get(decoded, "needs_person") == true, do: Map.put(result, :needs_person, true), else: result
       result = if Map.get(decoded, "needs_dev_server") == true, do: Map.put(result, :needs_dev_server, true), else: result
+      result = if scope_none_answer?(Map.get(decoded, "scope")), do: Map.put(result, :scope, :none), else: result
       {:ok, put_covered_by(result, Map.get(decoded, "covered_by"))}
     else
       {:error, reason} -> {:error, {:malformed_qa_response, reason}}
@@ -794,6 +869,9 @@ defmodule SymphonyElixir.QaAgent do
   end
 
   defp put_covered_by(result, _covered_by), do: result
+
+  defp scope_none_answer?(scope) when is_binary(scope), do: scope |> String.trim() |> String.downcase() == "none"
+  defp scope_none_answer?(_scope), do: false
 
   defp coerce_verdict("pass"), do: {:ok, :pass}
   defp coerce_verdict("fail"), do: {:ok, :fail}
@@ -825,6 +903,7 @@ defmodule SymphonyElixir.QaAgent do
 
     coerced = if Map.get(step, "checklist") == true, do: Map.put(coerced, :checklist, true), else: coerced
     coerced = put_trimmed(coerced, :gap, Map.get(step, "gap"))
+    coerced = put_trimmed(coerced, :defect, Map.get(step, "defect"))
 
     case step |> Map.get("blocked_by") |> List.wrap() |> string_list() do
       [] -> coerced
@@ -887,12 +966,13 @@ defmodule SymphonyElixir.QaAgent do
         try do
           with :ok <- QaDriver.host_check(driver),
                {:ok, host_ports} <- host_ports(driver),
-               {:ok, job} <- start_qa_host_dev_server(driver, job, settings) do
+               {:ok, job} <- start_qa_host_dev_server(driver, job, settings, opts) do
             job = Map.merge(job, %{host_ports: host_ports, design_files: fetch_design(job, settings, opts)})
             prompt = prompt(job, fetch_parent(job, worktree, settings, opts))
 
             agent_module
             |> run_tracked_session(job, worktree, qa_settings, prompt, opts)
+            |> unavailable_host(driver)
             |> limit_wide_pass(driver, QaDriver.wide_pass(driver), job)
           else
             {:error, cause} -> {:error, cause, empty_tokens()}
@@ -916,10 +996,17 @@ defmodule SymphonyElixir.QaAgent do
 
   # A `macos_app` pass on a `worker_host` with `dev_server: true` runs the project's dev server on
   # the QA host, beside the app, before the agent starts (TP-1111). A server that does not build,
-  # exits or fails its health check makes the pass `blocked` with its log, and costs no tokens.
-  defp start_qa_host_dev_server(driver, job, settings) do
+  # exits or fails its health check makes the pass `blocked` with its log, and costs no tokens. It
+  # needs only `verification.dev_server`: `verification.enabled` turns on this host's dev server,
+  # for agent runs and `web` passes, which a Mac app repo's server must not start (TP-1115). A pass
+  # waits while another pass's server holds the QA host's port (TP-1125), with a heartbeat to the
+  # orchestrator so its first-turn stall check does not stop it.
+  defp start_qa_host_dev_server(driver, job, settings, opts) do
+    lease_opts = Keyword.merge([issue_id: job.issue.id, heartbeat: lease_heartbeat(opts)], Keyword.get(opts, :dev_server_lease_opts, []))
+
     with %{} = playbook <- qa_host_dev_server_playbook(job, settings),
-         {:ok, %{url: url}} <- QaDriver.start_dev_server(driver, qa_host_dev_server_spec(playbook, settings)) do
+         spec = qa_host_dev_server_spec(playbook, settings, job),
+         {:ok, %{url: url}} <- QaDriver.start_dev_server(driver, spec, lease_opts) do
       {:ok, Map.put(job, :qa_host_dev_server_url, url)}
     else
       {:error, cause, log} -> {:error, {:qa_dev_server_failed, cause, log}}
@@ -927,8 +1014,13 @@ defmodule SymphonyElixir.QaAgent do
     end
   end
 
+  defp lease_heartbeat(opts) do
+    on_message = Keyword.get(opts, :on_message) || fn _message -> :ok end
+    fn -> on_message.(%{event: :tool_progress, timestamp: DateTime.utc_now()}) end
+  end
+
   defp qa_host_dev_server_playbook(job, settings) do
-    if Verification.dev_server_configured?(settings),
+    if Verification.dev_server_command_configured?(settings),
       do: Enum.find(job.playbooks, &qa_host_dev_server?(&1, settings))
   end
 
@@ -936,7 +1028,7 @@ defmodule SymphonyElixir.QaAgent do
     Map.get(playbook, :kind) == "macos_app" and Map.get(playbook, :dev_server) == true and is_binary(auto_review.worker_host)
   end
 
-  defp qa_host_dev_server_spec(playbook, settings) do
+  defp qa_host_dev_server_spec(playbook, settings, job) do
     dev_server = settings.verification.dev_server
     port = Map.get(playbook, :dev_server_port) || PlaybookSettings.default_port()
 
@@ -948,29 +1040,50 @@ defmodule SymphonyElixir.QaAgent do
       stop_signal: dev_server.stop_signal,
       stop_timeout_ms: dev_server.stop_timeout_ms,
       port: port,
-      url: Verification.dev_server_url(port, settings)
+      url: Verification.dev_server_url(port, settings),
+      ticket: job.issue.identifier
     }
   end
 
-  # The `macos_app` playbook's wide pass catches layout crashes that only happen in wide
-  # windows (TP-701). A `pass` whose wide pass never resized a window checked none of them, so
-  # it is `blocked` (TP-715). An epic review gets every enabled playbook whatever the epic
-  # shipped, so one that launched no app (a backend-only epic) owes no wide pass (TP-1014). On a
-  # QA screen too small for it the pass proves nothing about them either, so a `pass` there is
-  # `blocked`, and that or the `blocked` the playbook asks for goes to a person, since only one
-  # can enlarge the screen.
-  defp limit_wide_pass(run, nil = _driver, _wide_pass, _job), do: run
-
-  defp limit_wide_pass({:ok, %{result: %{verdict: :pass} = result} = run} = outcome, driver, nil, job) do
-    if wide_pass_owed?(job, driver) do
-      {:ok, %{run | result: Map.merge(result, %{verdict: :blocked, reason: @wide_pass_missing_reason})}}
-    else
-      outcome
+  # A QA host Symphony refused or could not reach answers every `qa_*` tool with the same
+  # `qa_worker_*` error, so no app part of the pass ran: a `pass` or a `blocked` there is the QA
+  # host's block, raised by the QA tools themselves, and carries their code as its cause for the
+  # self-heal lane (`SymphonyElixir.SelfHeal`). A `fail` stays: another playbook found a defect.
+  defp unavailable_host({:ok, %{result: %{verdict: verdict} = result} = run} = outcome, driver) when verdict in [:pass, :blocked] do
+    case QaDriver.unavailable(driver) do
+      {code, message} -> {:ok, %{run | result: Map.merge(result, %{verdict: :blocked, cause: {:qa_worker, code}, reason: Map.get(result, :reason) || message})}}
+      nil -> outcome
     end
   end
 
-  defp limit_wide_pass({:ok, %{result: %{verdict: :pass} = result} = run}, _driver, %{limited: true} = wide_pass, _job) do
-    {:ok, %{run | result: Map.merge(result, %{verdict: :blocked, reason: limited_reason(wide_pass), needs_person: true})}}
+  defp unavailable_host(run, _driver), do: run
+
+  # The `macos_app` playbook's wide pass catches layout crashes that only happen in wide
+  # windows (TP-701). A `pass` whose wide pass never resized a window checked none of them, so it
+  # is not a pass. In the QA state that is the QA run's omission, not its environment's, so it is
+  # `inconclusive`: Symphony reruns it once, then asks a person (TP-1119). The epic review keeps it
+  # `blocked`, and gets every enabled playbook whatever the epic shipped, so one that launched no
+  # app (a backend-only epic) owes no wide pass (TP-1014). A `pass` with `scope: none` has nothing
+  # on screen to judge and owes none either: it carries what the pass did with the app, which is
+  # its whole check. On a QA screen too small for the wide pass the pass proves nothing about wide
+  # layouts either, so a `pass` there is `blocked`, and that or the `blocked` the playbook asks for
+  # goes to a person, since only one can enlarge the screen.
+  defp limit_wide_pass(run, nil = _driver, _wide_pass, _job), do: run
+
+  defp limit_wide_pass({:ok, %{result: %{verdict: :pass} = result} = run} = outcome, driver, wide_pass, job) do
+    cond do
+      scope_none?(result, job) ->
+        {:ok, %{run | result: scope_none(result, job, driver)}}
+
+      is_nil(wide_pass) and wide_pass_owed?(job, driver) ->
+        {:ok, %{run | result: Map.merge(result, %{verdict: missing_wide_pass_verdict(job), reason: @wide_pass_missing_reason})}}
+
+      match?(%{limited: true}, wide_pass) ->
+        {:ok, %{run | result: Map.merge(result, %{verdict: :blocked, reason: limited_reason(wide_pass), needs_person: true})}}
+
+      true ->
+        outcome
+    end
   end
 
   defp limit_wide_pass({:ok, %{result: %{verdict: :blocked, reason: reason} = result} = run}, _driver, %{limited: true} = wide_pass, _job) do
@@ -981,6 +1094,24 @@ defmodule SymphonyElixir.QaAgent do
 
   defp wide_pass_owed?(%{epic_review: true}, driver), do: QaDriver.launched_app?(driver)
   defp wide_pass_owed?(_job, _driver), do: true
+
+  defp missing_wide_pass_verdict(%{epic_review: true}), do: :blocked
+  defp missing_wide_pass_verdict(_job), do: :inconclusive
+
+  defp scope_none?(_result, %{epic_review: true}), do: false
+  defp scope_none?(result, job), do: Map.get(result, :scope) == :none or policy_scope_none?(job)
+
+  defp scope_none(result, job, driver) do
+    result
+    |> Map.merge(%{scope: :none, app_check: QaDriver.app_check(driver)})
+    |> Map.put_new(:reason, scope_none_reason(job))
+  end
+
+  defp scope_none_reason(job) do
+    if policy_scope_none?(job),
+      do: "Symphony's QA policy found nothing on screen to judge: the PR changes none of the playbooks' paths and the ticket has no `## User walkthrough`",
+      else: "the QA agent found nothing on screen to judge"
+  end
 
   defp limited_reason(wide_pass) do
     {sw, sh} = wide_pass.screen
@@ -1416,6 +1547,12 @@ defmodule SymphonyElixir.QaAgent do
         "no TCP listener, so it must listen on that unix socket, which Symphony serves on 127.0.0.1:$SYMPHONY_VERIFICATION_PORT"
 
   def blocked_reason({:qa_dev_server_failed, reason}), do: "the dev server did not start: #{inspect(reason)}"
+
+  # Something listened on the port before the pass started its server: never a healthy server.
+  def blocked_reason({:qa_dev_server_failed, {:dev_server_port_busy, port, pid, ticket}, _log}) do
+    holder = if pid, do: "pid #{pid}", else: "a process lsof could not name"
+    "qa_dev_server_port_busy: #{port} held by #{holder} (#{ticket || "not a QA pass's server"}), so the dev server on the QA host did not start"
+  end
 
   def blocked_reason({:qa_dev_server_failed, cause, log}) do
     tail = if log == "", do: "", else: "; its last log lines:\n" <> log

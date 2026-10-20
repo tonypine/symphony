@@ -2,8 +2,10 @@ import Foundation
 
 /// Symphony's local API served from files, for QA mode with `SYMPHONY_BAR_QA_API_FIXTURES=<dir>`: each GET reads
 /// `<dir>/<path>.json` (for example `api/v1/state.json`) and answers 404 when there is no such file; each POST is
-/// appended to the request log as one JSON line and answered 200. No request leaves the app, so QA walks every view
-/// with fixed data and no Linear or model calls.
+/// appended to the request log as one JSON line and answered 200, with `<dir>/<path>.json` when there is one. A POST
+/// whose answer changes from one request to the next reads `<path>.1.json` the first time, `<path>.2.json` the second,
+/// and the last one there is after that (Setup's fix, Undo, fix again). No request leaves the app, so QA walks every
+/// view with fixed data and no Linear or model calls.
 public struct APIFixtures: Equatable {
     /// The base URL requests are built on while fixtures answer. Never contacted: the transport answers by path.
     public static let baseURL = URL(string: "http://symphony-fixtures.invalid")!
@@ -33,8 +35,9 @@ public struct APIFixtures: Equatable {
         let file = file(forPath: url.path)
         let fixture = file.flatMap { try? Data(contentsOf: $0) }
         if request.httpMethod?.uppercased() == "POST" {
+            let answer = fixture ?? file.flatMap { sequenceFile(of: $0, request: postCount(url.path) + 1) }.flatMap { try? Data(contentsOf: $0) }
             log(request, path: url.path, at: now)
-            return (fixture ?? Data(#"{"ok":true}"#.utf8), response(url, statusCode: 200))
+            return (answer ?? Data(#"{"ok":true}"#.utf8), response(url, statusCode: 200))
         }
         guard let fixture else {
             let body = #"{"error":{"code":"not_found","message":"No fixture for this path"}}"#
@@ -49,6 +52,27 @@ public struct APIFixtures: Equatable {
             let (data, response) = answer(request)
             return (data, response)
         }
+    }
+
+    /// `<path>.<number>.json` next to `file` (`<path>.json`), or the highest-numbered one there is below it; nil when
+    /// there is none.
+    func sequenceFile(of file: URL, request number: Int) -> URL? {
+        let stem = file.deletingPathExtension()
+        let manager = FileManager.default
+        for candidate in stride(from: number, through: 1, by: -1) {
+            let url = stem.appendingPathExtension("\(candidate)").appendingPathExtension("json")
+            if manager.fileExists(atPath: url.path) { return url }
+        }
+        return nil
+    }
+
+    /// The POSTs to `path` the request log holds.
+    func postCount(_ path: String) -> Int {
+        guard let text = try? String(contentsOf: requestLog, encoding: .utf8) else { return 0 }
+        return text.split(separator: "\n").filter { line in
+            guard let entry = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { return false }
+            return entry["path"] as? String == path
+        }.count
     }
 
     private func response(_ url: URL, statusCode: Int) -> HTTPURLResponse {

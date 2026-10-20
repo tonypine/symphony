@@ -308,6 +308,49 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
                refresh() |> json_response(200)
     end
 
+    test "?repo= keeps the problems naming that repo and the global ones, and waits for a repo not loaded yet" do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      File.write!(Workflow.symphony_file_path(), File.read!(Workflow.symphony_file_path()) <> "auto_review:\n  enabled: true\n")
+
+      # Two repos Symphony clones itself and hasn't yet: one warning each, naming its repo.
+      repos =
+        for key <- ["app", "lib"],
+            do: %{"key" => key, "workflow" => "WORKFLOW.md", "route" => %{"labels" => [key]}, "workspace" => %{"source" => "acme/#{key}"}}
+
+      path = Workflow.symphony_file_path()
+      File.write!(path, String.replace(File.read!(path), ~r/^repositories: .*$/m, "repositories: " <> Jason.encode!(repos)))
+      Cache.clear()
+
+      # Whether `gh` is signed in on this machine (a secrets error naming both repos) is left out.
+      ids = fn conn -> conn |> json_response(200) |> Map.fetch!("problems") |> Enum.map(& &1["id"]) |> Enum.reject(&(&1 == "secret:github_auth")) |> Enum.sort() end
+
+      assert ids.(refresh()) == ["deprecated_key:auto_review.enabled", "uncloned_repo:app", "uncloned_repo:lib"]
+      assert ids.(build_conn() |> post("/api/v1/setup/refresh?repo=app", %{})) == ["deprecated_key:auto_review.enabled", "uncloned_repo:app"]
+      assert ids.(build_conn() |> post("/api/v1/setup/refresh?repo=lib", %{})) == ["deprecated_key:auto_review.enabled", "uncloned_repo:lib"]
+      # An empty repo filters nothing.
+      assert length(ids.(build_conn() |> post("/api/v1/setup/refresh?repo=", %{}))) == 3
+
+      # Between the save and the reload that reads it, the repo isn't Symphony's yet: the app asks again.
+      assert %{"error" => %{"code" => "repo_not_loaded", "message" => "Symphony hasn't read the repo web from symphony.yml yet."}} =
+               build_conn() |> post("/api/v1/setup/refresh?repo=web", %{}) |> json_response(404)
+
+      assert %{"error" => %{"code" => "repo_not_loaded"}} = build_conn() |> get("/api/v1/setup?repo=web") |> json_response(404)
+
+      # The GET filters the last result the same way, next to github_updates.
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      File.write!(Workflow.symphony_file_path(), File.read!(Workflow.symphony_file_path()) <> "auto_review:\n  enabled: true\n")
+      refresh()
+      [repo] = Config.system!().repos
+      setup = build_conn() |> get("/api/v1/setup?repo=#{repo.name}")
+      assert ids.(setup) == ["deprecated_key:auto_review.enabled"]
+      assert %{"github_updates" => %{"mode" => "off"}} = json_response(setup, 200)
+
+      # A config that doesn't load has no repo to check yet either.
+      File.write!(Workflow.symphony_file_path(), "repositories: [\n")
+      Cache.clear()
+      assert %{"error" => %{"code" => "repo_not_loaded"}} = build_conn() |> post("/api/v1/setup/refresh?repo=app", %{}) |> json_response(404)
+    end
+
     test "a refresh is refused from another site's page, and takes no other method" do
       assert refresh([{"content-type", "application/json"}, {"origin", "https://evil.example.com"}]).status == 403
       assert build_conn() |> get("/api/v1/setup/refresh") |> json_response(405)

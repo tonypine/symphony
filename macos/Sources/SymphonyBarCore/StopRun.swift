@@ -2,8 +2,9 @@ import Foundation
 
 /// D12c (C17, P5): the consequence sheet of Stop Run. It says what Stop does, from the code: the orchestrator ends
 /// the agent and removes the ticket's workspace (`Orchestrator.terminate_running_issue/4` with cleanup); the ticket
-/// keeps its Linear state, so the next poll dispatches it again. **Also move to Backlog** sends the Director's
-/// `backlog` move with the note after the stop, so the ticket stays put.
+/// keeps its Linear state but stays stopped (`SymphonyElixir.OperatorStop`): it waits in the Inbox as "Stopped by you"
+/// until Unblock or Restart, or a move on the board. **Also move to Backlog** sends the Director's `backlog` move with
+/// the note after the stop.
 public struct StopRunSheet: Equatable, Identifiable {
     /// Where the sheet opened from: Also move to Backlog is on from Needs attention, off from the ticket page.
     public enum Origin: Equatable {
@@ -53,7 +54,8 @@ public struct StopRunSheet: Equatable, Identifiable {
         if alsoBacklog {
             return "Symphony leaves \(identifier) alone while it is in Backlog; move it back to Todo to have it worked again. Its pull request and branch stay as they are."
         }
-        return "\(identifier) \(keeps), so Symphony starts it again on its next poll. Its pull request and branch stay as they are."
+        return "\(identifier) \(keeps), but Symphony doesn't start it again: it waits in the Inbox as stopped by you until "
+            + "you Unblock or Restart it, or move it on the board. Its pull request and branch stay as they are."
     }
 
     /// The button: "Stop Run", or "Move to Backlog" when nothing runs.

@@ -37,6 +37,7 @@ defmodule SymphonyElixir.PrWatch.Sweep do
     {"review_agent.enabled is false", "gate: reviewer off"},
     {"held in Merging until CI settles", "gate: Merging CI wait"},
     {"already running", "gate: run active"},
+    {"waiting for the QA host's dev server port", "gate: QA dev server port"},
     {"claimed by a retry", "gate: claimed"},
     {"token budget is spent", "gate: token budget"},
     {"workspace setup failed", "gate: workspace setup failed"},

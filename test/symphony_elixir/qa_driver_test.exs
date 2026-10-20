@@ -4,7 +4,7 @@ defmodule SymphonyElixir.QaDriverTest do
   import ExUnit.CaptureLog
 
   alias SymphonyElixir.{AgentEnv, Paths, PathSafety, QaDriver}
-  alias SymphonyElixir.QaDriver.{Host, ReleasePair}
+  alias SymphonyElixir.QaDriver.{DevServerLease, Host, ReleasePair}
 
   @app "macos/build/Demo.app"
   @helper "/fake/symphony-qa-driver"
@@ -1144,19 +1144,19 @@ defmodule SymphonyElixir.QaDriverTest do
       %{qa_root: qa_root} = GenServer.call(driver, :config)
 
       # No log yet: the app answered no POST.
-      assert api_requests(driver) == {:ok, %{"requests" => [], "dropped" => 0}}
+      assert api_requests(driver) == {:ok, %{"requests" => [], "dropped" => 0, "root" => 1}}
 
       File.mkdir_p!(qa_root)
       log = Path.join(qa_root, "api-requests.jsonl")
       File.write!(log, ~s({"body":{"id":"TP-1"},"method":"POST","path":"/api/v1/refresh"}\nnot json\n))
 
       assert api_requests(driver) ==
-               {:ok, %{"requests" => [%{"body" => %{"id" => "TP-1"}, "method" => "POST", "path" => "/api/v1/refresh"}, "not json"], "dropped" => 0}}
+               {:ok, %{"requests" => [%{"body" => %{"id" => "TP-1"}, "method" => "POST", "path" => "/api/v1/refresh"}, "not json"], "dropped" => 0, "root" => 1}}
 
       refute File.exists?(log)
       %{host_dir: host_dir} = GenServer.call(driver, :config)
       assert Path.wildcard(Path.join(host_dir, "api-requests-*.jsonl")) == []
-      assert api_requests(driver) == {:ok, %{"requests" => [], "dropped" => 0}}
+      assert api_requests(driver) == {:ok, %{"requests" => [], "dropped" => 0, "root" => 1}}
 
       File.write!(log, Enum.map_join(1..502, &~s({"n":#{&1}}\n)))
       assert {:ok, %{"requests" => [%{"n" => 3} | _rest] = requests, "dropped" => 2}} = api_requests(driver)
@@ -1188,6 +1188,141 @@ defmodule SymphonyElixir.QaDriverTest do
       down = start_driver(worktree, host: host(%{cmd: fn _exe, _args, _opts -> {:error, :closed} end}))
       assert {:error, {:qa_tool, "qa_api_requests_failed", message}} = api_requests(down)
       assert message =~ "could not be taken: :closed"
+    end
+  end
+
+  describe "QA roots" do
+    defp launch(driver, args) do
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", args) end)
+      assert {:ok, %{"pid" => pid}} = result
+      assert_received {:launched, _executable, launch_opts, _port, ^pid}
+      {result, launch_opts}
+    end
+
+    defp built_driver(worktree, opts \\ []) do
+      driver = start_driver(worktree, opts)
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      driver
+    end
+
+    defp qa_root_env(launch_opts) do
+      {_name, value} = Enum.find(launch_opts[:env], fn {name, _value} -> name == ~c"SYMPHONY_BAR_QA_ROOT" end)
+      to_string(value)
+    end
+
+    test "each fresh_root launch gets a new, empty root with no settings shared, and root reuses one", %{worktree: worktree} do
+      driver = built_driver(worktree, host: host(%{helper_replies: %{"ax-ping" => {~s({"ok":true,"responding":true}), 0}}}))
+      %{scratch_dir: scratch_dir, qa_root: first} = GenServer.call(driver, :config)
+
+      # The first launch records its first run in root 1, as the app does.
+      {{:ok, %{"root" => 1}}, first_opts} = launch(driver, %{})
+      assert first_opts[:cd] == first
+      File.write!(Path.join(first, "settings.plist"), "setupFirstRunRecorded")
+
+      {{:ok, %{"pid" => second, "root" => 2}}, second_opts} = launch(driver, %{"fresh_root" => true})
+      root_two = Path.join(scratch_dir, "qa-root-2")
+      assert second_opts[:cd] == root_two
+      assert qa_root_env(second_opts) == root_two
+      assert File.ls!(root_two) == []
+      # The second launch records its own first run.
+      File.write!(Path.join(root_two, "settings.plist"), "setupFirstRunRecorded")
+
+      {{:ok, %{"root" => 3}}, third_opts} = launch(driver, %{"fresh_root" => true, "root" => nil})
+      root_three = Path.join(scratch_dir, "qa-root-3")
+      assert third_opts[:cd] == root_three
+      assert qa_root_env(third_opts) == root_three
+      assert File.ls!(root_three) == []
+
+      # Both arguments keep the launch's other handling: the stub, the playbook's launch_env.
+      assert stub_url(second_opts) == stub_url(third_opts)
+
+      assert {:ok, %{"quit" => true}} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => second})
+      {{:ok, %{"pid" => again, "root" => 2}}, again_opts} = launch(driver, %{"root" => 2, "fresh_root" => false})
+      assert again_opts[:cd] == root_two
+      assert File.read!(Path.join(root_two, "settings.plist")) == "setupFirstRunRecorded"
+
+      assert {:ok, %{"healthy" => true, "root" => 2}} = QaDriver.call_tool(driver, "qa_check_app", %{"pid" => again})
+    end
+
+    test "refuses an unknown root, naming the pass's roots, and arguments that don't fit", %{worktree: worktree} do
+      driver = built_driver(worktree)
+      {{:ok, %{"root" => 2}}, _opts} = launch(driver, %{"fresh_root" => true})
+
+      for root <- [3, 0, "2", false] do
+        assert {:error, {:qa_tool, "qa_unknown_root", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"root" => root})
+        assert message =~ "QA root #{inspect(root)} is not one of this pass's QA roots (1, 2)"
+        assert message =~ "fresh_root: true"
+      end
+
+      assert {:error, {:qa_tool, "invalid_arguments", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"fresh_root" => true, "root" => 1})
+      assert message =~ "not both"
+      assert {:error, {:qa_tool, "invalid_arguments", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"fresh_root" => "yes"})
+      assert message =~ "`fresh_root` must be true or false"
+      refute_received {:launched, _executable, _opts, _port, _pid}
+      assert %{roots: roots} = :sys.get_state(driver)
+      assert Map.keys(roots) == [1, 2]
+    end
+
+    test "fails a fresh launch whose root can't be made, and keeps a root whose app failed to start", %{worktree: worktree} do
+      driver = built_driver(worktree)
+      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
+      File.mkdir!(Path.join(scratch_dir, "qa-root-2"))
+
+      assert {:error, {:qa_tool, "qa_launch_failed", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"fresh_root" => true})
+      assert message =~ "A fresh QA root could not be made at #{scratch_dir}/qa-root-2: :eexist"
+      refute_received {:launched, _executable, _opts, _port, _pid}
+
+      {:ok, attempts} = Agent.start_link(fn -> 0 end)
+      test = self()
+
+      launch = fn executable, opts ->
+        if Agent.get_and_update(attempts, &{&1, &1 + 1}) == 0 do
+          {:error, "exec format error"}
+        else
+          port = Port.open({:spawn, "cat"}, [:binary])
+          pid = System.unique_integer([:positive]) + 100_000
+          send(test, {:launched, executable, opts, port, pid})
+          {:ok, port, pid}
+        end
+      end
+
+      failing = built_driver(worktree, host: host(%{launch: launch}))
+      %{scratch_dir: failing_dir} = GenServer.call(failing, :config)
+      assert error_code(QaDriver.call_tool(failing, "qa_launch_app", %{"fresh_root" => true})) == "qa_launch_failed"
+      assert File.dir?(Path.join(failing_dir, "qa-root-2"))
+
+      {{:ok, %{"root" => 3}}, opts} = launch(failing, %{"fresh_root" => true})
+      assert opts[:cd] == Path.join(failing_dir, "qa-root-3")
+      {{:ok, %{"root" => 2}}, opts} = launch(failing, %{"root" => 2})
+      assert opts[:cd] == Path.join(failing_dir, "qa-root-2")
+    end
+
+    test "qa_api_requests reads only the named root's log, the last launch's by default", %{worktree: worktree} do
+      driver = built_driver(worktree)
+      %{qa_root: first} = GenServer.call(driver, :config)
+      assert QaDriver.call_tool(driver, "qa_api_requests", %{}) == {:ok, %{"requests" => [], "dropped" => 0, "root" => 1}}
+
+      {{:ok, %{"root" => 2}}, opts} = launch(driver, %{"fresh_root" => true})
+      File.write!(Path.join(first, "api-requests.jsonl"), ~s({"path":"/api/v1/one"}\n))
+      File.write!(Path.join(opts[:cd], "api-requests.jsonl"), ~s({"path":"/api/v1/two"}\n))
+
+      assert QaDriver.call_tool(driver, "qa_api_requests", %{"root" => 1}) ==
+               {:ok, %{"requests" => [%{"path" => "/api/v1/one"}], "dropped" => 0, "root" => 1}}
+
+      assert QaDriver.call_tool(driver, "qa_api_requests", %{}) ==
+               {:ok, %{"requests" => [%{"path" => "/api/v1/two"}], "dropped" => 0, "root" => 2}}
+
+      assert {:error, {:qa_tool, "qa_unknown_root", message}} = QaDriver.call_tool(driver, "qa_api_requests", %{"root" => 5})
+      assert message =~ "(1, 2)"
+    end
+
+    test "qa_open_status_menu asks the app in its own root", %{worktree: worktree} do
+      driver = built_driver(worktree, host: host(%{cmd: opening_app_cmd(self())}), status_menu_poll: {5, 1})
+      {{:ok, %{"pid" => pid, "root" => 2}}, opts} = launch(driver, %{"fresh_root" => true})
+
+      assert {:ok, %{"window_id" => 21}} = QaDriver.call_tool(driver, "qa_open_status_menu", %{"pid" => pid})
+      expected = Path.join([opts[:cd], "status-menu", "open-#{pid}"])
+      assert_received {:request_taken, ^expected}
     end
   end
 
@@ -1753,6 +1888,30 @@ defmodule SymphonyElixir.QaDriverTest do
       refute File.exists?(scratch_dir)
     end
 
+    test "makes each fresh QA root in the run directory on the QA host", %{worktree: worktree} do
+      mkdir = fn
+        "/bin/mkdir", [@run_dir <> "/qa-root-3"], _opts -> {:ok, {"mkdir: Permission denied\n", 1}}
+        "/bin/mkdir", [_path], _opts -> {:ok, {"", 0}}
+        _executable, _args, _opts -> :pass
+      end
+
+      driver = remote_driver(worktree, remote_host(%{intercept: mkdir}))
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{"fresh_root" => true}) end)
+      assert {:ok, %{"pid" => pid, "root" => 2}} = result
+      assert_received {:cmd, "/bin/mkdir", [@run_dir <> "/qa-root-2"], _opts}
+      assert_received {:launched, _executable, launch_opts, _port, ^pid}
+      assert launch_opts[:cd] == @run_dir <> "/qa-root-2"
+      assert [{"SYMPHONY_BAR_QA_ROOT", @run_dir <> "/qa-root-2"}, {"SYMPHONY_QA_OPENROUTER_URL", _url}] = launch_opts[:env]
+
+      assert {:error, {:qa_tool, "qa_launch_failed", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"fresh_root" => true})
+      assert message =~ "A fresh QA root could not be made on the QA host at #{@run_dir}/qa-root-3"
+      assert message =~ "Permission denied"
+      assert %{roots: roots} = :sys.get_state(driver)
+      assert Map.keys(roots) == [1, 2]
+    end
+
     test "builds the appearance library in the run directory and injects it", %{worktree: worktree} do
       driver = remote_driver(worktree, remote_host())
       assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
@@ -1789,12 +1948,21 @@ defmodule SymphonyElixir.QaDriverTest do
         assert message =~ "The QA host qa@qa-vm has a private key ~/.ssh/id_ed25519."
       end
 
+      # The QA agent reads the refusal back to give the pass's block its cause.
+      assert {"qa_worker_unsafe", message} = QaDriver.unavailable(driver)
+      assert message =~ "The QA host qa@qa-vm has a private key ~/.ssh/id_ed25519."
+
       QaDriver.stop(driver)
       refute_received {:cleanup, _dir}
+      assert QaDriver.unavailable(driver) == nil
 
       driver = remote_driver(worktree, remote_host(%{prepare: {:error, {:unreachable, "ssh exited with status 255"}}}))
       assert {:error, {:qa_tool, "qa_worker_unreachable", message}} = QaDriver.call_tool(driver, "qa_build", %{})
       assert message =~ "could not be prepared: ssh exited with status 255"
+      assert {"qa_worker_unreachable", ^message} = QaDriver.unavailable(driver)
+
+      assert QaDriver.unavailable(remote_driver(worktree, remote_host())) == nil
+      assert QaDriver.unavailable(nil) == nil
     end
 
     test "forwards the host ports from the QA host for the whole pass", %{worktree: worktree} do
@@ -2278,6 +2446,7 @@ defmodule SymphonyElixir.QaDriverTest do
 
     @healthy_dev_server [
       {"rm -rf \"$dir\"", {:ok, {"symphony-qa-dev-server-dir:#{@run_dir}/dev-server\n", 0}}},
+      {"lsof -nP", {:ok, {"symphony-qa-dev-server-port:free\n", 0}}},
       {"case \"$3\"", {:ok, {"symphony-qa-dev-server-pid:4242\n", 0}}},
       {"end=", {:ok, {"symphony-qa-dev-server:healthy\n", 0}}},
       {"kill -s \"$3\"", {:ok, {"symphony-qa-dev-server:stopped\n", 0}}}
@@ -2292,25 +2461,65 @@ defmodule SymphonyElixir.QaDriverTest do
         stop_signal: "TERM",
         stop_timeout_ms: 1_000,
         port: 8091,
-        url: "http://127.0.0.1:8091/"
+        url: "http://127.0.0.1:8091/",
+        ticket: "QA-7"
       }
     end
 
-    test "starts the project's dev server on the QA host and stops it before the run directory goes", %{worktree: worktree} do
-      driver = remote_driver(worktree, dev_server_host(@healthy_dev_server), &clean_git/2, log_context: "issue_id=i1 issue_identifier=QA-7")
+    # Waits up to 5 seconds for the pass of `issue_id` to queue for a lease.
+    defp wait_for_waiting(lease, issue_id, tries \\ 250) do
+      cond do
+        DevServerLease.waiting(lease, issue_id) -> :ok
+        tries > 0 -> Process.sleep(20) && wait_for_waiting(lease, issue_id, tries - 1)
+        true -> flunk("#{issue_id} never queued for the lease")
+      end
+    end
 
-      {result, log} = with_log(fn -> QaDriver.start_dev_server(driver, dev_server_spec()) end)
+    # A lease manager of the test's own, so no other test's pass waits on its leases.
+    defp lease_manager do
+      name = :"dev_server_lease_#{System.unique_integer([:positive])}"
+      start_supervised!({DevServerLease, name: name})
+      name
+    end
+
+    test "starts the project's dev server on the QA host and stops it before the run directory goes", %{worktree: worktree} do
+      lease = lease_manager()
+      opts = [log_context: "issue_id=i1 issue_identifier=QA-7", dev_server_lease: lease]
+      driver = remote_driver(worktree, dev_server_host(@healthy_dev_server), &clean_git/2, opts)
+
+      {result, log} = with_log(fn -> QaDriver.start_dev_server(driver, dev_server_spec(), issue_id: "i1") end)
       assert result == {:ok, %{url: "http://127.0.0.1:8091/", port: 8091}}
-      assert log =~ "QA dev server started issue_id=i1 issue_identifier=QA-7 worker_host=qa@qa-vm port=8091 pid=4242"
+      assert log =~ "QA dev server started issue_id=i1 issue_identifier=QA-7 worker_host=qa@qa-vm port=8091 pid=4242 lease=qa@qa-vm:8091"
       assert_received {:ship, _tar, dest}
       assert dest == @run_dir <> "/dev-server/src"
+      assert_received {:dev_server_script, "rm -rf \"$dir\"", ["QA-7"], _opts}
+      assert_received {:dev_server_script, "lsof -nP", ["8091"], _opts}
       assert_received {:dev_server_script, "case \"$3\"", ["8091", "start", "server/scripts/dev-server.sh"], _opts}
       assert_received {:dev_server_script, "end=", ["http://127.0.0.1:8091/health", "5", "4242"], _opts}
+
+      # The driver holds the port's lease while its server runs: another pass's driver waits for it.
+      other = spawn_link(fn -> Process.sleep(:infinity) end)
+      waiter = Task.async(fn -> DevServerLease.acquire(lease, {"qa@qa-vm", 8091}, %{pid: other, issue_id: "i2", ticket: "QA-8"}, heartbeat_ms: 60_000) end)
+      wait_for_waiting(lease, "i2")
 
       {_result, log} = with_log(fn -> QaDriver.stop(driver) end)
       assert log =~ "QA dev server stopped issue_id=i1 issue_identifier=QA-7 worker_host=qa@qa-vm port=8091 pid=4242 outcome=:stopped"
       assert_received {:dev_server_script, "kill -s \"$3\"", ["4242", "TERM", "10"], _opts}
       assert_received {:cleanup, @run_dir}
+      assert Task.await(waiter) == :ok
+    end
+
+    test "a dev server that does not start gives the port's lease back at once", %{worktree: worktree} do
+      lease = lease_manager()
+      answers = List.keyreplace(@healthy_dev_server, "lsof -nP", 0, {"lsof -nP", {:ok, {"symphony-qa-dev-server-port:busy:777:QA-6\n", 0}}})
+      driver = remote_driver(worktree, dev_server_host(answers), &clean_git/2, dev_server_lease: lease)
+
+      assert {:error, {:dev_server_port_busy, 8091, 777, "QA-6"}, ""} = QaDriver.start_dev_server(driver, dev_server_spec())
+      refute_received {:dev_server_script, "case \"$3\"", _args, _opts}
+
+      other = spawn_link(fn -> Process.sleep(:infinity) end)
+      assert DevServerLease.acquire(lease, {"qa@qa-vm", 8091}, %{pid: other, issue_id: "i2", ticket: "QA-8"}) == :ok
+      QaDriver.stop(driver)
     end
 
     test "a dev server that fails its health check is stopped and reported with its log", %{worktree: worktree} do
@@ -2720,6 +2929,27 @@ defmodule SymphonyElixir.QaDriverTest do
       refute File.exists?(host_dir)
     end
 
+    test "relaunches the app a fresh-root launch's update helper asks for in that root", %{worktree: worktree, feed_mode: mode} do
+      driver = built_pair(worktree, mode, [], relaunch_poll_ms: 10)
+      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
+      assert {:ok, %{"pid" => _first}} = launch_pair(driver)
+      assert {:ok, %{"pid" => pid, "root" => 2, "bundle" => bundle}} = launch_pair(driver, %{"fresh_root" => true})
+      assert_received {:launched, _executable, launch_opts, _port, ^pid}
+      root_two = Path.join(scratch_dir, "qa-root-2")
+      assert env_value(launch_opts, "SYMPHONY_BAR_QA_ROOT") == root_two
+
+      ask_relaunch(launch_opts, bundle)
+      assert File.ls!(Path.join(root_two, "relaunch")) != []
+
+      assert {:ok, %{"pid" => relaunched, "root" => 2, "bundle" => ^bundle}} =
+               with_log(fn -> QaDriver.call_tool(driver, "qa_relaunched_app", %{"wait_seconds" => 5}) end) |> elem(0)
+
+      assert_received {:launched, _executable, relaunch_opts, _port, ^relaunched}
+      assert relaunch_opts[:cd] == root_two
+      assert env_value(relaunch_opts, "SYMPHONY_BAR_QA_ROOT") == root_two
+      assert File.ls!(Path.join(root_two, "relaunch")) == []
+    end
+
     test "stops what a pass left under its directory", %{worktree: worktree, feed_mode: mode} do
       ps = fn host_dir ->
         {:ok,
@@ -2999,6 +3229,8 @@ defmodule SymphonyElixir.QaDriverTest do
       assert QaDriver.wide_pass(nil) == nil
       assert QaDriver.launched_app?(driver) == false
       assert QaDriver.launched_app?(nil) == false
+      assert QaDriver.app_check(driver) == %{built: false, launched: false, checked: false}
+      assert QaDriver.app_check(nil) == %{built: false, launched: false, checked: false}
     end
 
     test "says the wide pass is limited on a screen under 1400×900 pt", %{worktree: worktree} do
@@ -3071,16 +3303,22 @@ defmodule SymphonyElixir.QaDriverTest do
       end
 
       {driver, pid} = launched_app(worktree, host: host(%{cmd: cmd, launch: launch}))
+      assert QaDriver.app_check(driver) == %{built: true, launched: true, checked: false}
 
       # At the default size the build is healthy.
       assert {:ok, %{"healthy" => true, "running" => true, "responding" => true, "crash_reports" => [], "window" => nil}} =
                QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid, "page" => "Decide"})
+
+      assert QaDriver.app_check(driver) == %{built: true, launched: true, checked: true}
 
       assert {:ok, %{"window" => %{"w" => 1400, "h" => 900}}} = QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid})
       wait_until(fn -> match?({:ok, %{"running" => false}}, QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid})) end)
 
       assert {:ok, %{"healthy" => false, "running" => false, "responding" => nil, "crash_reports" => reports, "problems" => [exited, crashed]}} =
                QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid, "page" => "Decide"})
+
+      # The last answer found the app unhealthy, so the pass no longer proves it starts.
+      assert %{checked: false} = QaDriver.app_check(driver)
 
       assert reports == ["Demo-2026-10-06-120000.ips"]
       assert exited =~ ~s[The app exited with status 134 (page "Decide", window 1400×900 pt). Last output: Decide layout: constraint loop]
