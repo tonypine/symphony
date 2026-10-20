@@ -125,6 +125,24 @@ defmodule SymphonyElixir.QaDriver.DevServerTest do
     refute alive?(server_pid(run_dir))
   end
 
+  test "a kill that lands late is waited for before the stop says killed", %{config: config, run_dir: run_dir} do
+    spec = spec(%{start_cmd: "trap '' TERM; echo $$ > pid; exec python3 #{@dev_server}", stop_timeout_ms: 300})
+    assert {:ok, server} = DevServer.start(config, spec)
+
+    # The group's KILL lands half a second after the script sends it. The delayed kill runs as a
+    # command of its own: a forked subshell would hold the script's output open until it exits.
+    late_kill = """
+    kill() {
+      if [ "$1 $2" = "-s KILL" ]; then /bin/bash -c 'sleep 0.5; kill "$@"' bash "$@" < /dev/null > /dev/null 2>&1 & return 0; fi
+      builtin kill "$@"
+    }
+    """
+
+    host = local_host(%{cmd: fn executable, ["-c", script | rest], opts -> Host.cmd(executable, ["-c", late_kill <> script | rest], opts) end})
+    assert DevServer.stop(%{config | host: host}, server) == :killed
+    refute alive?(server_pid(run_dir))
+  end
+
   test "a failed build_cmd is its exit status and the log's last 20 lines", %{config: config} do
     spec = spec(%{build_cmd: "for i in $(seq 30); do echo line $i; done; exit 3"})
 
