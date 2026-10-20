@@ -1752,7 +1752,7 @@ defmodule SymphonyElixir.Config.Schema do
 
       @primary_key false
       embedded_schema do
-        field(:range, {:array, :integer}, default: [4000, 4099])
+        field(:range, {:array, :integer}, default: [4100, 4199])
       end
 
       @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
