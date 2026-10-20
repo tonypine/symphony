@@ -14,12 +14,19 @@ defmodule SymphonyElixir.Hold do
   force and is reported, rather than losing the pause. `drift/2` compares the store against the
   board — a hold label with no store record (a hand-added label) or a store hold missing its
   label — so the projection can be reported and repaired.
+
+  Each hold write that lands in the store is also recorded in the ticket's event stream
+  (`SymphonyElixir.TicketEvents`), best-effort. A Blocked hold is `hold.set` and `hold.cleared`. A
+  Needs Decision hold is the projection of its decision, never a hold event: setting it records
+  `decision.requested` (unless that request is already open), and clearing it records
+  `decision.withdrawn`, unless the caller passes `answered: true` because the answer's
+  `decision.recorded` (`SymphonyElixir.Decisions`) ends the request.
   """
 
   require Logger
 
   alias SymphonyElixir.Hold.Drift
-  alias SymphonyElixir.{RunStore, TicketState, Tracker}
+  alias SymphonyElixir.{RunStore, TicketSignals, TicketState, Tracker}
 
   @kind_labels %{blocked: "Blocked", needs_decision: "Needs Decision"}
   @kinds [:blocked, :needs_decision]
@@ -109,9 +116,9 @@ defmodule SymphonyElixir.Hold do
   def dispatch_loop?(_hold), do: false
 
   @doc """
-  Sets the hold of `kind` on `issue_id`: the store record first, then the machine label. Returns
-  `{:error, reason}` only when the store write failed (the hold did not land); a failed label
-  write is reported and does not undo the hold.
+  Sets the hold of `kind` on `issue_id`: the store record first, then its event, then the machine
+  label. Returns `{:error, reason}` only when the store write failed (the hold did not land); a
+  failed label write is reported and does not undo the hold.
   """
   @spec set(String.t() | nil, String.t() | nil, kind(), map(), keyword()) :: :ok | {:error, term()}
   def set(repo_key, issue_id, kind, attrs \\ %{}, opts \\ []) do
@@ -120,6 +127,7 @@ defmodule SymphonyElixir.Hold do
 
       with :ok <- require_repo_key(repo_key, issue_id),
            :ok <- store.set_ticket_hold(repo_key, issue_id, kind, attrs) do
+        record_set(repo_key, issue_id, kind, attrs)
         project(Keyword.get(opts, :tracker, Tracker), issue_id, kind, :set)
       end
     else
@@ -128,8 +136,10 @@ defmodule SymphonyElixir.Hold do
   end
 
   @doc """
-  Clears the hold of `kind` from `issue_id`: the store record first, then the machine label. The
-  ticket continues in place. Returns `{:error, reason}` only when the store write failed.
+  Clears the hold of `kind` from `issue_id`: the store record first, then its event when a hold was
+  there, then the machine label. The ticket continues in place. `opts[:answered]` says a person's
+  answer ends the Needs Decision hold, so its clear records no withdrawal. Returns
+  `{:error, reason}` only when the store write failed.
   """
   @spec clear(String.t() | nil, String.t() | nil, kind(), keyword()) :: :ok | {:error, term()}
   def clear(repo_key, issue_id, kind, opts \\ []) do
@@ -137,7 +147,9 @@ defmodule SymphonyElixir.Hold do
       store = Keyword.get(opts, :store, RunStore)
 
       with :ok <- require_repo_key(repo_key, issue_id),
+           previous = stored_hold(store, repo_key, issue_id, kind),
            :ok <- store.clear_ticket_hold(repo_key, issue_id, kind) do
+        record_clear(repo_key, issue_id, previous, Keyword.get(opts, :answered) == true)
         project(Keyword.get(opts, :tracker, Tracker), issue_id, kind, :clear)
       end
     else
@@ -258,6 +270,90 @@ defmodule SymphonyElixir.Hold do
         :ok
     end
   end
+
+  # A Blocked hold set again with the reason and wait it already has is the same fact, so it records
+  # no second `hold.set`.
+  defp record_set(repo_key, issue_id, :blocked, attrs) do
+    hold = %{} |> TicketState.normalize() |> TicketState.set_hold(:blocked, attrs) |> TicketState.get_hold(:blocked)
+    payload = Map.reject(%{kind: "blocked", reason: hold.reason, waits_on: hold.waits_on}, fn {_key, value} -> is_nil(value) end)
+
+    if open_blocked(repo_key, issue_id) == payload,
+      do: :ok,
+      else: TicketSignals.record_event(repo_key, issue_id, "hold.set", payload)
+  end
+
+  # A Needs Decision hold is its decision: the request, unless the same one (title and question) is
+  # still open, as when the Inbox's reconciliation or a retry sets the hold again.
+  defp record_set(repo_key, issue_id, :needs_decision, attrs) do
+    decision = decision(attrs)
+    title = text(decision[:title])
+    question = text(decision[:question]) || title || text(attrs[:reason])
+
+    cond do
+      is_nil(question) ->
+        :ok
+
+      same_question?(TicketSignals.open_decision(repo_key, issue_id, title, question), question) ->
+        :ok
+
+      true ->
+        options = if is_list(decision[:options]) and decision[:options] != [], do: decision[:options]
+
+        TicketSignals.record_event(repo_key, issue_id, "decision.requested", %{
+          question: question,
+          title: title,
+          why: decision[:why],
+          options: options,
+          confirm: decision[:confirm]
+        })
+    end
+  end
+
+  defp record_clear(_repo_key, _issue_id, nil, _answered?), do: :ok
+  defp record_clear(repo_key, issue_id, %{kind: :blocked}, _answered?), do: TicketSignals.record_event(repo_key, issue_id, "hold.cleared", %{kind: "blocked"})
+  defp record_clear(_repo_key, _issue_id, %{kind: :needs_decision}, true = _answered?), do: :ok
+
+  # A request that ends with no answer: the tool's withdrawal, a request gone from Linear, one that
+  # could not be posted.
+  defp record_clear(repo_key, issue_id, %{kind: :needs_decision} = hold, false = _answered?) do
+    decision = decision(hold)
+    question = text(decision[:question])
+    title = text(decision[:title]) || question || text(hold.reason) || "Decision request"
+    request = TicketSignals.open_decision(repo_key, issue_id, text(decision[:title]), question)
+
+    TicketSignals.record_event(repo_key, issue_id, "decision.withdrawn", %{title: title, question: question, request: request && request.id})
+  end
+
+  # The store's hold before a clear, read without a warning: a read that fails records no event.
+  defp stored_hold(store, repo_key, issue_id, kind) do
+    case store.get_ticket_state(repo_key, issue_id) do
+      {:error, _reason} -> nil
+      record -> TicketState.get_hold(record, kind)
+    end
+  end
+
+  # The payload of the ticket's newest Blocked hold event when it is a `hold.set` (the hold it
+  # records is still on), else nil.
+  defp open_blocked(repo_key, issue_id) do
+    events = RunStore.list_ticket_events(repo_key, issue_id, types: ["hold.set", "hold.cleared"])
+    if is_list(events), do: open_payload(List.last(events))
+  end
+
+  defp open_payload(%{type: "hold.set", payload: payload}), do: payload
+  defp open_payload(_cleared_or_none), do: nil
+
+  defp same_question?(%{payload: payload}, question), do: TicketSignals.same_text?(payload[:question], question)
+  defp same_question?(nil, _question), do: false
+
+  defp decision(attrs) do
+    case Map.get(attrs, :decision) do
+      decision when is_map(decision) -> decision
+      _none -> %{}
+    end
+  end
+
+  defp text(value) when is_binary(value), do: if(String.trim(value) == "", do: nil, else: value)
+  defp text(_value), do: nil
 
   defp record(_repo_key, nil, _opts), do: TicketState.normalize(nil)
 

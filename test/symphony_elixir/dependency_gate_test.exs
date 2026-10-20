@@ -40,6 +40,7 @@ defmodule SymphonyElixir.DependencyGateTest do
   test "pause/4 asks for the package changes in plain words, whatever the audit found" do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
     issue = %{id: "issue-dependency-gate-words", identifier: "ACME-GATE-WORDS", state: "In Progress"}
+    :ok = RunStore.clear()
     on_exit(fn -> RunStore.delete_ticket_state("repo-dep-words", issue.id) end)
 
     for finding <- [{:hold, [%{package: "left_pad", reason: "new package"}]}, {:error, {:enoent, "/tmp/mix.lock"}}] do
@@ -50,6 +51,10 @@ defmodule SymphonyElixir.DependencyGateTest do
       assert body =~ "**Why recommended:**"
       assert PlainWords.tokens(body) == []
     end
+
+    # The second pause asks the same question, so it is the request already open: one event.
+    assert [{"decision.requested", %{title: "Approve the dependency changes on ACME-GATE-WORDS"}}] =
+             ticket_events("repo-dep-words", issue.id, ["decision.requested", "hold.set"])
   end
 
   test "react_to_hold and react_to_audit_error never move a terminal issue" do
