@@ -36,6 +36,12 @@ defmodule SymphonyElixir.SelfHeal do
   lacks) never reaches the filing path: it keeps the access hold it always had, which a person
   lifts.
 
+  The QA state sends only the blocks a fix can repair (`SymphonyElixir.QaVerification`): the ones
+  the QA tools raise themselves (a refused or unreachable QA host, a tool it lacks, its host-port
+  tunnel, a dev server that fails), the `needs_person` access cases, and the QA agent's structured
+  `covered_by` and `needs_dev_server` answers. A QA run's own omission (an `inconclusive` pass) or
+  any other block names nothing broken, so it goes to a person instead of a fix ticket here.
+
   Every effect is injectable: `opts[:store]` (the run store), `opts[:tracker]` and `opts[:fixer]`
   (the fix-ticket filer) default to the real ones and are fakes in tests.
   """
@@ -559,6 +565,8 @@ defmodule SymphonyElixir.SelfHeal do
   defp component_for({:dev_server_not_configured}), do: @dev_server
   defp component_for(:health_timeout), do: @dev_server
   defp component_for({:remote_worker_unsupported, _host}), do: @worker_host
+  # Symphony refused the QA host or could not reach it (`qa_worker_unsafe`, `qa_worker_unreachable`).
+  defp component_for({:qa_worker, _code}), do: @worker_host
   # The QA host lacks a tool the playbook needs: Symphony's provisioning script installs it.
   defp component_for({:qa_host_missing_tool, _names}), do: @worker_host
   defp component_for({:qa_host_tool_check_failed, _reason}), do: @worker_host

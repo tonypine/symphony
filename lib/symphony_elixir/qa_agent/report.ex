@@ -17,14 +17,18 @@ defmodule SymphonyElixir.QaAgent.Report do
   @details_limit 2_000
   @comment_limit 100
 
+  # The verdicts whose report states their reason in place of the agent's summary.
+  @reason_verdicts [:skip, :blocked, :inconclusive]
+
   @doc "The heading that identifies the QA report comment."
   @spec heading() :: String.t()
   def heading, do: @heading
 
   @doc """
   Renders the report for a QA outcome. `outcome` carries `:verdict` (`:pass`,
-  `:fail`, `:blocked` or `:skip`), `:sha`, `:target_state`, and optionally
-  `:summary`, `:steps`, `:findings`, `:reason`, `:playbooks`, `:tokens`,
+  `:fail`, `:blocked`, `:inconclusive` or `:skip`), `:sha`, `:target_state`, and optionally
+  `:summary`, `:steps`, `:findings`, `:reason`, `:scope` (`:none` on a pass with nothing on screen
+  to judge, which states its reason), `:playbooks`, `:tokens`,
   `:runtime_seconds`, `:follow_ups`, `:escalated` and `:fix_attempt`/`:max_fix_attempts`.
 
   A run on the head of a branch also passes `:ref` (the branch the commit heads, in place of a PR),
@@ -64,6 +68,7 @@ defmodule SymphonyElixir.QaAgent.Report do
     do: "fail (fix attempt #{attempt} of #{max})"
 
   defp verdict_label(%{verdict: :skip}), do: "skipped"
+  defp verdict_label(%{verdict: :pass, scope: :none}), do: "pass (nothing on screen to judge; the app built and launched)"
   defp verdict_label(%{verdict: verdict}), do: Atom.to_string(verdict)
 
   defp target_label(%{target_issue: identifier, target_state: state}) when is_binary(identifier), do: "#{identifier} #{state}"
@@ -101,12 +106,16 @@ defmodule SymphonyElixir.QaAgent.Report do
   defp summary_block(outcome) do
     text =
       case outcome do
-        %{verdict: verdict, reason: reason} when verdict in [:skip, :blocked] and is_binary(reason) -> "Reason: " <> reason
+        %{verdict: verdict, reason: reason} when verdict in @reason_verdicts and is_binary(reason) -> "Reason: " <> reason
+        %{verdict: :pass, scope: :none, reason: reason} when is_binary(reason) -> scope_none_text(reason, Map.get(outcome, :summary))
         _outcome -> Map.get(outcome, :summary)
       end
 
     if is_binary(text) and String.trim(text) != "", do: "\n" <> String.trim(text) <> "\n", else: ""
   end
+
+  defp scope_none_text(reason, summary) when is_binary(summary) and summary != "", do: "Why nothing was judged on screen: #{reason}\n\n#{summary}"
+  defp scope_none_text(reason, _summary), do: "Why nothing was judged on screen: #{reason}"
 
   defp checks_block([]), do: nil
 

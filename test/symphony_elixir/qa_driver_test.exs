@@ -1789,12 +1789,21 @@ defmodule SymphonyElixir.QaDriverTest do
         assert message =~ "The QA host qa@qa-vm has a private key ~/.ssh/id_ed25519."
       end
 
+      # The QA agent reads the refusal back to give the pass's block its cause.
+      assert {"qa_worker_unsafe", message} = QaDriver.unavailable(driver)
+      assert message =~ "The QA host qa@qa-vm has a private key ~/.ssh/id_ed25519."
+
       QaDriver.stop(driver)
       refute_received {:cleanup, _dir}
+      assert QaDriver.unavailable(driver) == nil
 
       driver = remote_driver(worktree, remote_host(%{prepare: {:error, {:unreachable, "ssh exited with status 255"}}}))
       assert {:error, {:qa_tool, "qa_worker_unreachable", message}} = QaDriver.call_tool(driver, "qa_build", %{})
       assert message =~ "could not be prepared: ssh exited with status 255"
+      assert {"qa_worker_unreachable", ^message} = QaDriver.unavailable(driver)
+
+      assert QaDriver.unavailable(remote_driver(worktree, remote_host())) == nil
+      assert QaDriver.unavailable(nil) == nil
     end
 
     test "forwards the host ports from the QA host for the whole pass", %{worktree: worktree} do
@@ -2999,6 +3008,8 @@ defmodule SymphonyElixir.QaDriverTest do
       assert QaDriver.wide_pass(nil) == nil
       assert QaDriver.launched_app?(driver) == false
       assert QaDriver.launched_app?(nil) == false
+      assert QaDriver.app_check(driver) == %{built: false, launched: false, checked: false}
+      assert QaDriver.app_check(nil) == %{built: false, launched: false, checked: false}
     end
 
     test "says the wide pass is limited on a screen under 1400×900 pt", %{worktree: worktree} do
@@ -3071,16 +3082,22 @@ defmodule SymphonyElixir.QaDriverTest do
       end
 
       {driver, pid} = launched_app(worktree, host: host(%{cmd: cmd, launch: launch}))
+      assert QaDriver.app_check(driver) == %{built: true, launched: true, checked: false}
 
       # At the default size the build is healthy.
       assert {:ok, %{"healthy" => true, "running" => true, "responding" => true, "crash_reports" => [], "window" => nil}} =
                QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid, "page" => "Decide"})
+
+      assert QaDriver.app_check(driver) == %{built: true, launched: true, checked: true}
 
       assert {:ok, %{"window" => %{"w" => 1400, "h" => 900}}} = QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid})
       wait_until(fn -> match?({:ok, %{"running" => false}}, QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid})) end)
 
       assert {:ok, %{"healthy" => false, "running" => false, "responding" => nil, "crash_reports" => reports, "problems" => [exited, crashed]}} =
                QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid, "page" => "Decide"})
+
+      # The last answer found the app unhealthy, so the pass no longer proves it starts.
+      assert %{checked: false} = QaDriver.app_check(driver)
 
       assert reports == ["Demo-2026-10-06-120000.ips"]
       assert exited =~ ~s[The app exited with status 134 (page "Decide", window 1400×900 pt). Last output: Decide layout: constraint loop]

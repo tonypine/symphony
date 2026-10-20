@@ -10,6 +10,12 @@ defmodule SymphonyElixir.QaPolicy do
   and records the outcome with its reason — and the QA state's own run re-checks it
   (`SymphonyElixir.QaVerification`), so a skipped ticket never starts an agent and every skip is
   auditable in the ticket's ledger.
+
+  A run can have nothing on screen to judge: a `macos_app` pass selected although no changed path
+  matches any selected playbook's `paths` (a `qa:macos_app` label on a backend change, say) and the
+  ticket has no `## User walkthrough`. Its `macos_app` playbook is then marked `scope: :none`, so
+  the QA agent is told up front that building and launching the app are the whole check, and the
+  merge stays gated on the app starting (`SymphonyElixir.QaVerification`).
   """
 
   alias SymphonyElixir.Config
@@ -56,9 +62,27 @@ defmodule SymphonyElixir.QaPolicy do
   def decision(%Issue{} = issue, settings, paths) when is_list(paths) do
     case Selection.decide(issue, paths, settings.auto_review, dev_server?: dev_server?(settings)) do
       {:skip, reason} -> {:skip, reason}
-      {:run, playbooks} -> {:run, playbooks, "the change delivers or updates a user journey"}
+      {:run, playbooks} -> run(issue, playbooks, paths)
     end
   end
+
+  defp run(issue, playbooks, paths) do
+    if nothing_on_screen?(issue, playbooks, paths) do
+      {:run, Enum.map(playbooks, &scope_none/1),
+       "nothing on screen to judge: the PR changes none of the selected playbooks' paths and the ticket has no `## User walkthrough`, " <>
+         "so building and launching the app are the whole check"}
+    else
+      {:run, playbooks, "the change delivers or updates a user journey"}
+    end
+  end
+
+  defp nothing_on_screen?(issue, playbooks, paths) do
+    Enum.any?(playbooks, &(&1.kind == "macos_app")) and not Selection.user_walkthrough?(issue) and
+      not Enum.any?(paths, fn path -> Enum.any?(playbooks, fn playbook -> Enum.any?(playbook.paths, &Selection.glob_match?(path, &1)) end) end)
+  end
+
+  defp scope_none(%{kind: "macos_app"} = playbook), do: Map.put(playbook, :scope, :none)
+  defp scope_none(playbook), do: playbook
 
   @doc "Every enabled playbook, the broad set a run falls back to when the diff cannot be read."
   @spec enabled_playbooks(map()) :: [Selection.playbook()]
