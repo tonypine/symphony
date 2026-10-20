@@ -26,6 +26,51 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
   end
 
+  describe "review_verdict" do
+    test "only the reviewer's read-only scope lists and runs it" do
+      assert "review_verdict" in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
+      refute "review_verdict" in Enum.map(DynamicTool.tool_specs(), & &1["name"])
+      refute "review_verdict" in Enum.map(DynamicTool.tool_specs(:qa), & &1["name"])
+
+      response = DynamicTool.execute("review_verdict", %{"verdict" => "approve"}, issue: %Issue{id: "issue-current"}, review_verdict_sink: self())
+
+      assert %{"error" => %{"code" => "tool_scope_rejected", "tool" => "review_verdict", "message" => message}} = Jason.decode!(response["output"])
+      assert message =~ "only a reviewer session"
+
+      response =
+        DynamicTool.execute("review_verdict", %{"verdict" => "approve"}, issue: %Issue{id: "issue-current"}, tool_scope: :qa, review_verdict_sink: self())
+
+      assert %{"error" => %{"code" => "tool_scope_rejected"}} = Jason.decode!(response["output"])
+      refute_received {:review_verdict, _result}
+    end
+
+    test "records a readable verdict with the reviewer process and refuses one it cannot read" do
+      opts = [issue: %Issue{id: "issue-current"}, tool_scope: :read_only, review_verdict_sink: self()]
+
+      response = DynamicTool.execute("review_verdict", %{"verdict" => "Approved", "comments" => ["Nit."]}, opts)
+
+      assert response["success"]
+      assert %{"recorded" => true, "verdict" => "approve"} = Jason.decode!(response["output"])
+      assert_received {:review_verdict, %{verdict: :approve, comments: ["Nit."]}}
+
+      response = DynamicTool.execute("review_verdict", %{"verdict" => "looks good"}, opts)
+
+      refute response["success"]
+      assert %{"error" => %{"code" => "invalid_review_verdict", "message" => message}} = Jason.decode!(response["output"])
+      assert message == "Symphony could not read the verdict: `verdict` must be one of approve, request_changes or block. Fix it and call review_verdict again."
+
+      response = DynamicTool.execute("review_verdict", %{"verdict" => "approve", "score" => 3}, opts)
+      assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+      refute_received {:review_verdict, _result}
+    end
+
+    test "is unavailable in a reviewer session with no process to record to" do
+      response = DynamicTool.execute("review_verdict", %{"verdict" => "approve"}, issue: %Issue{id: "issue-current"}, tool_scope: :read_only)
+
+      assert %{"error" => %{"code" => "review_verdict_unavailable"}} = Jason.decode!(response["output"])
+    end
+  end
+
   test "tool_specs advertises scoped Linear tools and not raw GraphQL" do
     tool_names = Enum.map(DynamicTool.tool_specs(), & &1["name"])
 
@@ -44,6 +89,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert "github_list_pr_review_comments" in tool_names
     assert "github_list_pr_reviews" in tool_names
     assert "github_get_failed_run_log" in tool_names
+    assert "github_ci_log" in tool_names
     refute "linear_graphql" in tool_names
     refute "linear_set_assignee" in tool_names
     refute "linear.get_current_issue" in tool_names
@@ -789,10 +835,20 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       for {tool, args} <- [
             {"qa_ax_select", %{"pid" => 1, "path" => "0.1"}},
             {"qa_click", %{"pid" => 1, "path" => "0.1", "clicks" => 2}},
+            {"qa_hover", %{"pid" => 1, "x" => -20, "y" => 340}},
+            {"qa_context_menu", %{"pid" => 1, "path" => "0.1"}},
             {"qa_key", %{"pid" => 1, "key" => "[", "modifiers" => ["command"]}}
           ] do
         response = DynamicTool.execute(tool, args, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
         assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
+      end
+
+      response = DynamicTool.execute("qa_hover", %{"pid" => 1, "path" => "0.1", "clicks" => 2}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+      assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+
+      for name <- ["qa_hover", "qa_context_menu"] do
+        spec = Enum.find(DynamicTool.tool_specs(:qa), &(&1["name"] == name))
+        assert %{"x" => %{"type" => "integer"}, "y" => %{"type" => "integer"}, "path" => %{"type" => "string"}} = spec["inputSchema"]["properties"]
       end
 
       key = Enum.find(DynamicTool.tool_specs(:qa), &(&1["name"] == "qa_key"))
@@ -835,9 +891,16 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
 
       assert %{"release_pair" => %{"type" => "boolean"}} = launch["inputSchema"]["properties"]
+      assert %{"fresh_root" => %{"type" => "boolean"}, "root" => %{"type" => "integer", "minimum" => 1}} = launch["inputSchema"]["properties"]
+
+      requests = Enum.find(DynamicTool.tool_specs(:qa), &(&1["name"] == "qa_api_requests"))
+      assert %{"root" => %{"type" => "integer", "minimum" => 1}} = requests["inputSchema"]["properties"]
 
       for {tool, args} <- [
             {"qa_launch_app", %{"release_pair" => true}},
+            {"qa_launch_app", %{"fresh_root" => true}},
+            {"qa_launch_app", %{"root" => 2}},
+            {"qa_api_requests", %{"root" => 2}},
             {"qa_build_release_pair", %{}},
             {"qa_relaunched_app", %{"wait_seconds" => 30}},
             {"qa_update_feed", %{"mode" => "none"}}
@@ -3159,6 +3222,60 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     after
       File.rm_rf(workspace)
     end
+  end
+
+  test "github_ci_log reads a failed job for every run kind and refuses another repository's run" do
+    gh_runner = fn
+      ["run", "view", "77", "-R", "acme/symphony", "--json", _fields], _opts ->
+        {Jason.encode!(%{"url" => "https://github.com/someone/else/actions/runs/77", "jobs" => []}), 0}
+
+      ["run", "view", "78", "-R", "acme/symphony", "--json", _fields], _opts ->
+        {Jason.encode!(%{
+           "url" => "https://github.com/acme/symphony/actions/runs/78",
+           "workflowName" => "CI",
+           "jobs" => [%{"databaseId" => 5, "name" => "test", "conclusion" => "failure", "url" => "https://github.com/acme/symphony/actions/runs/78/job/5"}]
+         }), 0}
+
+      ["run", "view", "79", "-R", "acme/symphony", "--json", _fields], _opts ->
+        {Jason.encode!(%{"url" => "https://github.com/acme/symphony/actions/runs/79", "jobs" => []}), 0}
+
+      ["api", "repos/acme/symphony/actions/jobs/" <> id], _opts ->
+        repo = if id == "6", do: "someone/else", else: "acme/symphony"
+        conclusion = if id == "7", do: "success"
+        {Jason.encode!(%{"id" => id, "conclusion" => conclusion, "html_url" => "https://github.com/#{repo}/actions/runs/1/job/#{id}"}), 0}
+
+      ["api", "repos/acme/symphony/check-runs/5/annotations"], _opts ->
+        {"[]", 0}
+
+      ["run", "view", "--job", "5", "--log-failed", "-R", "acme/symphony"], _opts ->
+        {"test\tRun mix test\t2026-10-20T06:30:00.000Z printf: write error: Broken pipe", 0}
+    end
+
+    opts = github_tool_opts("/tmp", gh_runner: gh_runner)
+
+    for scope <- [nil, :read_only, :qa] do
+      assert "github_ci_log" in Enum.map(DynamicTool.tool_specs(scope), & &1["name"])
+      response = DynamicTool.execute("github_ci_log", %{"run_id" => 78}, Keyword.put(opts, :tool_scope, scope))
+      assert response["success"] == true
+      assert %{"workflow" => "CI", "jobs" => [%{"log" => "printf: write error: Broken pipe"}]} = Jason.decode!(response["output"])
+    end
+
+    error = fn args ->
+      response = DynamicTool.execute("github_ci_log", args, opts)
+      assert response["success"] == false
+      Jason.decode!(response["output"])["error"]
+    end
+
+    assert %{"code" => "run_not_in_repo", "message" => "Workflow run 77 is not in acme/symphony" <> _rest} = error.(%{"run_id" => "77"})
+    assert %{"code" => "job_not_in_repo", "message" => "Job 6 is not in acme/symphony" <> _rest} = error.(%{"job_id" => 6})
+    assert %{"code" => "job_not_failed", "message" => "Job 7 did not fail (SUCCESS)." <> _rest} = error.(%{"job_id" => 7})
+    assert %{"code" => "job_not_failed", "message" => "Job 8 did not fail (no conclusion yet)." <> _rest} = error.(%{"job_id" => 8})
+    assert %{"code" => "no_failed_jobs"} = error.(%{"run_id" => 79})
+    assert %{"code" => "missing_ci_log_target"} = error.(%{})
+    assert %{"code" => "ambiguous_ci_log_target"} = error.(%{"run_id" => 1, "job_id" => 2})
+    assert %{"code" => "invalid_ci_log_target"} = error.(%{"run_id" => "../1"})
+    assert %{"code" => "invalid_failed_only"} = error.(%{"run_id" => 78, "failed_only" => "no"})
+    assert %{"code" => "scope_argument_rejected"} = error.(%{"run_id" => 78, "repo" => "someone/else"})
   end
 
   test "github.get_failed_run_log surfaces no failed run cleanly" do

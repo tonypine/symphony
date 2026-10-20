@@ -126,6 +126,8 @@ defmodule SymphonyElixir.SetupTest do
     :ets.delete_all_objects(PollLog)
     Application.put_env(:symphony_elixir, :setup_test_pid, self())
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+    # Labels another test seeded and left behind would make the labels check report missing ones.
+    Application.delete_env(:symphony_elixir, :memory_tracker_labels_list)
     # A managed repo has the secrets check ask `gh` whether it is signed in.
     Application.put_env(:symphony_elixir, :setup_gh_runner, fn ["auth", "status"], _opts -> {"Logged in to github.com\n", 0} end)
 
@@ -271,7 +273,7 @@ defmodule SymphonyElixir.SetupTest do
       File.write!(ref_error, :erlang.term_to_binary({:workflow_ref_not_found, ["origin/main"]}))
       on_exit(fn -> File.rm_rf(Path.dirname(ref_error)) end)
 
-      assert %{problems: [problem]} = Setup.check()
+      assert %{problems: [problem]} = Setup.check(checks: [Checks.WorkflowRef])
       assert problem.id == "#{Checks.WorkflowRef.id()}:default"
       assert problem.severity == "error"
       assert problem.repos == ["default"]
@@ -313,13 +315,26 @@ defmodule SymphonyElixir.SetupTest do
       end)
     end
 
-    test "every check names itself, and only the routing check reads Linear" do
+    test "every check names itself, and only the routing, teams and labels checks read Linear" do
       # Each check's id starts each of its problems' ids.
-      assert Enum.map(Setup.checks(), & &1.id()) == ["deprecated_key", "failed_reload", "workflow_ref", "workflow_fetch", "uncloned_repo", "routing", "secret", "qa_host"]
+      assert Enum.map(Setup.checks(), & &1.id()) == [
+               "deprecated_key",
+               "failed_reload",
+               "workflow_ref",
+               "workflow_fetch",
+               "uncloned_repo",
+               "routing",
+               "secret",
+               "teams",
+               "labels",
+               "deprecated_label",
+               "hold_drift",
+               "qa_host"
+             ]
 
       for check <- Setup.checks() do
         assert is_binary(check.id()) and is_binary(check.title())
-        assert check.needs_linear?() == (check == Checks.Routing)
+        assert check.needs_linear?() == check in [Checks.Routing, Checks.Teams, Checks.Labels]
       end
     end
 
@@ -363,7 +378,9 @@ defmodule SymphonyElixir.SetupTest do
       on_exit(fn -> restore_env("LINEAR_API_KEY", previous) end)
       write_workflow_file!(Workflow.workflow_file_path(), tracker_api_token: nil)
 
-      assert %{problems: [%{id: "secret:LINEAR_API_KEY"}], not_checked: [not_checked, routing]} = Setup.check(checks: [LinearStub | Setup.checks()])
+      assert %{problems: [%{id: "secret:LINEAR_API_KEY"}], not_checked: [not_checked, routing, %{id: "teams"}, %{id: "labels"}]} =
+               Setup.check(checks: [LinearStub | Setup.checks()])
+
       assert not_checked.id == "linear_stub"
       assert not_checked.reason =~ "No Linear API key"
       assert routing.id == "routing"
@@ -391,7 +408,7 @@ defmodule SymphonyElixir.SetupTest do
       File.write!(Workflow.symphony_file_path(), "pull_request: 1\n")
       Cache.clear()
 
-      # Nor the routing check: it has no repos to read.
+      # Nor the routing and teams checks: they have no repos to read.
       assert %{problems: [], not_checked: []} = Setup.check(linear_api_key?: true)
     end
   end
@@ -557,9 +574,21 @@ defmodule SymphonyElixir.SetupTest do
     end
   end
 
+  # A run's task sends its result to the server before it exits, so once it is down the next state
+  # read comes after the server took the result. A pending reload starts one more run.
   defp await_idle(server, attempts) when attempts > 0 do
-    state = :sys.get_state(server)
-    if state.task || state.reload_timer, do: await_idle(server, attempts - 1), else: :ok
+    case :sys.get_state(server) do
+      %{task: %Task{pid: pid}} ->
+        ref = Process.monitor(pid)
+        assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 5_000
+        await_idle(server, attempts - 1)
+
+      %{reload_timer: timer} when is_reference(timer) ->
+        await_idle(server, attempts - 1)
+
+      _idle ->
+        :ok
+    end
   end
 
   defp wait_until_queued(server, attempts) when attempts > 0 do

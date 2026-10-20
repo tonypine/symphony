@@ -188,7 +188,7 @@ defmodule SymphonyElixir.BlockedHold do
   defp with_repo_key(issue, _repo_key), do: issue
 
   defp sync_issue(%Issue{id: issue_id, repo_key: repo_key} = issue, terminal_states, cache, opts) do
-    repair_drift(repo_key, issue_id, issue.labels, opts)
+    repair_drift(repo_key, issue_id, issue, opts)
     current = Hold.get(repo_key, issue_id, :blocked, opts)
 
     case action(issue, terminal_states, current, cache, opts) do
@@ -375,8 +375,8 @@ defmodule SymphonyElixir.BlockedHold do
   # hand — is re-projected from the store, so a hold that is pausing dispatch is never silently
   # invisible. The Inbox reads held tickets from the store, not by their label, so this poll is what
   # keeps a `Needs Decision` label in line with its hold.
-  defp repair_drift(repo_key, issue_id, labels, opts) do
-    case Hold.report_drift(repo_key, issue_id, labels, opts) do
+  defp repair_drift(repo_key, issue_id, %Issue{} = issue, opts) do
+    case Hold.report_drift(repo_key, issue_id, issue.labels, Keyword.merge(opts, identifier: issue.identifier, url: issue.url)) do
       {:stray_label, kind} -> clear_label(repo_key, issue_id, kind, opts)
       {:missing_label, kind} -> reproject_label(repo_key, issue_id, kind, opts)
       :ok -> :ok

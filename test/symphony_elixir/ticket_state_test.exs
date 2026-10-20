@@ -263,6 +263,16 @@ defmodule SymphonyElixir.TicketStateTest do
       assert [%{kind: "review verdict", head_sha: "abc123", outcome: "approve", recorded_at: @at}] = record.verdicts
     end
 
+    test "keeps the details a verdict carries, and none for a record from before details" do
+      details = %{reason: "the sandbox refused the build", model: "claude-opus"}
+      record = TicketState.new("repo-a", "issue-1") |> TicketState.record_verdict("qa", "abc123", "blocked", @at, details)
+      assert [%{outcome: "blocked", details: ^details}] = record.verdicts
+
+      old = %{TicketState.new("repo-a", "issue-1") | verdicts: [%{kind: "qa", head_sha: "abc123", outcome: "pass", recorded_at: @at}]}
+      assert [%{outcome: "pass", details: %{}}] = TicketState.normalize(old).verdicts
+      assert [%{details: %{}}] = TicketState.record_verdict(TicketState.new("repo-a", "issue-1"), "qa", "abc123", "pass", @at, nil).verdicts
+    end
+
     test "defaults a blank outcome and head SHA" do
       record = TicketState.new("repo-a", "issue-1") |> TicketState.record_verdict("QA verdict", nil, nil, @at)
       assert [%{kind: "QA verdict", head_sha: nil, outcome: ""}] = record.verdicts

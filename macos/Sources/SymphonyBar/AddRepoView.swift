@@ -57,6 +57,24 @@ final class AddRepoViewModel: ObservableObject {
     @Published private(set) var landedWorkflow: PendingWorkflow?
     /// What Save is doing while `isSaving`.
     @Published private(set) var savingMessage: String?
+    /// SU11: the Check setup step, once Connect saved the repo.
+    @Published private(set) var setupCheck: AddRepoSetupCheck?
+    /// The open fix sheet of a problem the step lists, nil while none is.
+    @Published private(set) var fixSheet: SetupFixSheet?
+    /// What the last fix did.
+    @Published private(set) var fixMessage: String?
+    /// Checks the setup of the repo saved, once Symphony has read it (`SetupAPI.checkRepo`).
+    var checkRepo: (_ key: String) async -> SetupAPI.Result = { _ in .failed("") }
+    /// Sends a Linear fix to Symphony (`POST /api/v1/setup/fixes`).
+    var setupRequest: (_ fix: [String: Any]) async -> SetupAPI.Result = { _ in .failed("") }
+    /// Starts Symphony, and whether it can now.
+    var startSymphony: () -> Void = {}
+    var canStartSymphony: () -> Bool = { false }
+    /// Goes where an `open` fix sends the operator.
+    var openDestination: (SetupDestination) -> Void = { _ in }
+    /// Closes the sheet.
+    var close: () -> Void = {}
+    private var checkTask: Task<Void, Never>?
 
     /// Why the sheet can't add a repo at all: no `symphony.yml` is set, or its repos can't be read.
     let configProblem: String?
@@ -267,7 +285,7 @@ final class AddRepoViewModel: ObservableObject {
 
     /// Goes on to the next page, or connects the repo on Review.
     func goForward() {
-        guard stepProblem == nil, !isSaving else { return }
+        guard stepProblem == nil, !isSaving, step != .check else { return }
         if let next = flow.step(after: step) {
             step = next
         } else {
@@ -306,11 +324,15 @@ final class AddRepoViewModel: ObservableObject {
 
     /// Loads the labels an issue in the picked project can carry, then drops the picked labels it lacks, which would
     /// never match. A new repo needs a project first; the edited repo's route can take any label without one, or with
-    /// a project Linear doesn't list.
+    /// a project Linear doesn't list. A new repo's route names the project by its ID, and its team when it has one.
     func loadLabels() {
         labels = []
         let picked = draft.project
         let projectID = picked.flatMap { name in projects.first { $0.name == name }?.id }
+        if editing == nil {
+            draft.projectID = projectID
+            draft.team = nil
+        }
         guard let client, projectID != nil || editing != nil else {
             labelsState = .loaded
             pruneLabels()
@@ -318,12 +340,13 @@ final class AddRepoViewModel: ObservableObject {
         }
         labelsState = .loading
         Task {
-            let result = await client.labels(forProject: projectID)
+            let result = await client.scope(forProject: projectID)
             // Another project was picked meanwhile; its own load fills the labels.
             guard draft.project == picked else { return }
             switch result {
-            case let .success(labels):
-                self.labels = labels
+            case let .success(scope):
+                labels = scope.labels
+                if editing == nil { draft.team = scope.teamKey }
                 labelsState = .loaded
             case let .failure(failure):
                 labelsState = .failed(failure.message)
@@ -392,10 +415,104 @@ final class AddRepoViewModel: ObservableObject {
             } else {
                 let madeDefault = try file.connectRepository(entry)
                 saveError = nil
+                let reached = apply()
                 onSaved(.added(key: entry.key, madeDefault: madeDefault, workflow: landedWorkflow))
+                startCheck(AddRepoSetupCheck(key: entry.key, route: entry.route, apply: reached))
             }
         } catch {
             saveError = "Couldn't save symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: Check setup
+
+    /// Goes to Check setup, and checks unless Symphony isn't running.
+    private func startCheck(_ check: AddRepoSetupCheck) {
+        step = .check
+        setupCheck = check
+        if check.phase == .checking { runCheck() }
+    }
+
+    /// Check Again, and the check after a settings fix.
+    func checkAgain() {
+        guard var check = setupCheck, check.phase != .onNextStart else { return }
+        check.phase = .checking
+        setupCheck = check
+        runCheck()
+    }
+
+    private func runCheck() {
+        checkTask?.cancel()
+        guard let key = setupCheck?.key else { return }
+        let check = checkRepo
+        checkTask = Task {
+            let result = await check(key)
+            guard !Task.isCancelled, setupCheck?.key == key else { return }
+            switch result {
+            case let .checked(payload):
+                setupCheck?.phase = .checked(payload)
+            case let .failed(message):
+                setupCheck?.phase = .failed(message)
+            }
+        }
+    }
+
+    /// Start Symphony: it checks the repo as it starts, and opens Setup if something is wrong.
+    func startSymphonyAndClose() {
+        startSymphony()
+        finish()
+    }
+
+    /// Done, or Close: the repo stays saved, and the errors stay on the Setup page.
+    func finish() {
+        checkTask?.cancel()
+        close()
+    }
+
+    /// A row's button: a fix opens its sheet; an `open` fix goes where the operator fixes it.
+    func perform(_ action: SetupPage.Action, on row: SetupPage.Row, ticket: String? = nil) {
+        switch action {
+        case let .fix(.configEdit(path, action, value)):
+            guard fixSheet?.isWorking != true else { return }
+            fixSheet = SetupFixRunner.configSheet(row.problem, path: path, action: action, value: value, configPath: configPath)
+        case .fix:
+            guard fixSheet?.isWorking != true else { return }
+            fixSheet = SetupFixSheet(problem: row.problem, ticket: ticket)
+        case let .open(destination):
+            openDestination(destination)
+        }
+    }
+
+    func cancelFix() {
+        guard fixSheet?.isWorking != true else { return }
+        fixSheet = nil
+    }
+
+    /// The fix sheet's verb: makes the fix, then shows the repo's problems after it.
+    func confirmFix(_ sheet: SetupFixSheet) {
+        guard !sheet.isWorking, sheet.canConfirm, let key = setupCheck?.key else { return }
+        var working = sheet
+        working.start()
+        fixSheet = working
+        fixMessage = nil
+        Task {
+            switch await SetupFixRunner.run(working, configPath: configPath, checkConfig: configCheck, request: setupRequest) {
+            case let .fixed(payload, backup):
+                fixSheet = nil
+                fixMessage = SetupBanner.fixed(working, backup: backup).text
+                if let payload, setupCheck?.key == key {
+                    setupCheck?.phase = .checked(payload.forRepo(key))
+                } else {
+                    checkAgain()
+                }
+            case .unchanged:
+                fixSheet = nil
+                checkAgain()
+            case let .failed(message):
+                guard fixSheet?.id == working.id else { return }
+                working.fail(message)
+                fixSheet = working
+            }
         }
     }
 
@@ -572,10 +689,43 @@ struct AddRepoView: View {
             workflowPage
         case .review:
             reviewPage(flow)
+        case .check:
+            if let check = model.setupCheck {
+                ScrollView {
+                    AddRepoCheckPage(check: check, fixMessage: model.fixMessage, actions: SetupPageActions(
+                        perform: { action, row, ticket in model.perform(action, on: row, ticket: ticket) }
+                    ))
+                }
+                .sheet(item: fixSheet) { sheet in
+                    SetupFixSheetView(sheet: sheet, cancel: model.cancelFix, confirm: { model.confirmFix(sheet) }, open: model.openDestination)
+                }
+            }
         }
     }
 
-    private var footer: some View {
+    private var fixSheet: Binding<SetupFixSheet?> {
+        Binding(get: { model.fixSheet }, set: { if $0 == nil { model.cancelFix() } })
+    }
+
+    @ViewBuilder private var footer: some View {
+        if model.step == .check, let check = model.setupCheck {
+            checkFooter(check)
+        } else {
+            stepFooter
+        }
+    }
+
+    private func checkFooter(_ check: AddRepoSetupCheck) -> some View {
+        AddRepoCheckFooter(
+            check: check,
+            canStart: model.canStartSymphony(),
+            checkAgain: model.checkAgain,
+            start: model.startSymphonyAndClose,
+            finish: model.finish
+        )
+    }
+
+    private var stepFooter: some View {
         let problem = model.stepProblem
         let isLast = model.step == .review
         return HStack {
@@ -713,6 +863,7 @@ struct AddRepoView: View {
             Section {
                 LabeledContent("Source") { summary(flow.sourceSummary) }
                 LabeledContent("Linear") { summary(flow.routePreview) }
+                LabeledContent("Route") { summary(flow.routeWritten) }
                 LabeledContent(WorkflowTemplate.fileName) { summary(flow.workflowSummary) }
             }
             Section {
@@ -748,6 +899,144 @@ struct AddRepoView: View {
             .font(.caption)
             .foregroundStyle(.red)
             .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// SU11, the Check setup page: "Checking setup for <repo>…", then the repo's problems with their fixes, as on the Setup
+/// page, and once no error is left, the route Connect wrote. Outside the sheet's model and its scroll view so it also
+/// renders offscreen.
+struct AddRepoCheckPage: View {
+    let check: AddRepoSetupCheck
+    var fixMessage: String?
+    var actions = SetupPageActions()
+    var now = Date()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
+            sentence
+            if let page = check.page(now: now) {
+                groups(page.errors, severity: .error)
+                groups(page.warnings, severity: .warning)
+            }
+            if !check.written.isEmpty {
+                VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                    Text("Written to symphony.yml")
+                        .font(DesignTokens.TypeStyle.label.font)
+                        .foregroundStyle(.secondary)
+                        .accessibilityAddTraits(.isHeader)
+                    Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: DesignTokens.Space.s3, verticalSpacing: DesignTokens.Space.s1) {
+                        ForEach(check.written, id: \.self) { line in
+                            GridRow {
+                                Text(line.label).foregroundStyle(.secondary)
+                                Text(line.value)
+                                    .font(DesignTokens.TypeStyle.mono.font)
+                                    .textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+            }
+            if let fixMessage {
+                Label(fixMessage, systemImage: DesignTokens.Status.done.symbol)
+                    .font(DesignTokens.TypeStyle.callout.font)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(DesignTokens.Space.s4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var sentence: some View {
+        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s3) {
+            mark
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                Text(check.headline)
+                    .font(DesignTokens.TypeStyle.rowTitle.font)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+                if let detail = check.detail {
+                    Text(detail)
+                        .font(DesignTokens.TypeStyle.callout.font)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder private var mark: some View {
+        switch check.phase {
+        case .checking:
+            ProgressView().controlSize(.small).accessibilityLabel("Checking")
+        case .failed:
+            Image(systemName: "exclamationmark.triangle").foregroundStyle(DesignTokens.Status.you.tint).accessibilityHidden(true)
+        case .onNextStart:
+            Image(systemName: "clock").foregroundStyle(.secondary).accessibilityHidden(true)
+        case let .checked(payload):
+            if !payload.errors.isEmpty {
+                Image(systemName: SetupSeverityMark.error.symbol).foregroundStyle(SetupSeverityMark.error.tint).accessibilityHidden(true)
+            } else if !payload.warnings.isEmpty {
+                Image(systemName: SetupSeverityMark.warning.symbol).foregroundStyle(SetupSeverityMark.warning.tint).accessibilityHidden(true)
+            } else {
+                Image(systemName: DesignTokens.Status.done.symbol).foregroundStyle(DesignTokens.Status.done.tint).accessibilityHidden(true)
+            }
+        }
+    }
+
+    @ViewBuilder private func groups(_ groups: [SetupPage.Group], severity: SetupPayload.Severity) -> some View {
+        if !groups.isEmpty {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                Text(severity == .error ? SetupPage.errorsTitle : SetupPage.warningsTitle)
+                    .font(DesignTokens.TypeStyle.label.font)
+                    .foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.isHeader)
+                ForEach(groups.flatMap(\.rows)) { row in
+                    SetupRowView(row: row, severity: severity, actions: actions)
+                    Divider()
+                }
+            }
+        }
+    }
+}
+
+/// SU11's footer: Close, then Check Again or Start Symphony, and Done, off with its reason while the repo has an error.
+/// Closing keeps the repo saved.
+struct AddRepoCheckFooter: View {
+    let check: AddRepoSetupCheck
+    var canStart = false
+    var checkAgain: () -> Void = {}
+    var start: () -> Void = {}
+    var finish: () -> Void = {}
+
+    var body: some View {
+        HStack {
+            Button("Close", role: .cancel, action: finish)
+                .keyboardShortcut(.cancelAction)
+            Spacer()
+            if let problem = check.doneProblem {
+                Text(problem)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if check.offersCheckAgain {
+                Button(AddRepoSetupCheck.checkAgainTitle, action: checkAgain)
+            }
+            if check.offersStart {
+                Button(AddRepoSetupCheck.startTitle, action: start)
+                    .disabled(!canStart)
+            }
+            Button(AddRepoSetupCheck.doneTitle, action: finish)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!check.canFinish)
+                .help(check.doneProblem ?? "")
+        }
+        .padding(12)
     }
 }
 

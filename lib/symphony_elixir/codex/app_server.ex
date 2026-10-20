@@ -410,7 +410,8 @@ defmodule SymphonyElixir.Codex.AppServer do
     :tool_scope,
     :qa_driver,
     :qa_android_driver,
-    :unlocked_paths
+    :unlocked_paths,
+    :review_verdict_sink
   ]
 
   defp dynamic_tool_executor(issue, workspace, command_security, dependency_gate, on_message, metadata, opts) do
@@ -746,7 +747,18 @@ defmodule SymphonyElixir.Codex.AppServer do
 
   defp tool_opts(opts) do
     opts
-    |> Keyword.take([:linear_client, :upload_client, :gh_runner, :git_runner, :settings, :tool_scope, :qa_driver, :qa_android_driver, :unlocked_paths])
+    |> Keyword.take([
+      :linear_client,
+      :upload_client,
+      :gh_runner,
+      :git_runner,
+      :settings,
+      :tool_scope,
+      :qa_driver,
+      :qa_android_driver,
+      :unlocked_paths,
+      :review_verdict_sink
+    ])
   end
 
   defp install_remote_shim(_mcp_session, nil), do: {:ok, nil}

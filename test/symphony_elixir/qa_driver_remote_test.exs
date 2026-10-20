@@ -285,9 +285,50 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
 
       # The app's request log is read back from its QA root on the QA host, and taken away.
       assert QaDriver.call_tool(driver, "qa_api_requests", %{}) ==
-               {:ok, %{"requests" => [%{"method" => "POST", "path" => "/api/v1/refresh"}], "dropped" => 0}}
+               {:ok, %{"requests" => [%{"method" => "POST", "path" => "/api/v1/refresh"}], "dropped" => 0, "root" => 1}}
 
-      assert QaDriver.call_tool(driver, "qa_api_requests", %{}) == {:ok, %{"requests" => [], "dropped" => 0}}
+      assert QaDriver.call_tool(driver, "qa_api_requests", %{}) == {:ok, %{"requests" => [], "dropped" => 0, "root" => 1}}
+
+      QaDriver.stop(driver)
+      refute File.exists?(run_dir)
+    end
+
+    test "gives each fresh_root launch its own QA root on the QA host, where the app records its own first run", %{root: root, ssh_host: ssh_host} do
+      # Stands in for the app's first-run record (settings.plist) and its request log.
+      first_run = ~S"""
+      if [ -f "$SYMPHONY_BAR_QA_ROOT/settings.plist" ]; then echo "settings seen in $SYMPHONY_BAR_QA_ROOT"; else echo recorded > "$SYMPHONY_BAR_QA_ROOT/settings.plist"; echo "first run in $SYMPHONY_BAR_QA_ROOT"; fi
+      echo "{\"root\":\"$SYMPHONY_BAR_QA_ROOT\"}" >> "$SYMPHONY_BAR_QA_ROOT/api-requests.jsonl"
+      """
+
+      worktree = git_worktree!(root, first_run)
+      prepare = fn _operator_home, _canary -> Remote.prepare(ssh_host, Path.join(root, "operator"), Path.join(root, "no-canary")) end
+      opts = [worktree: worktree, worker_host: ssh_host, playbook: %{build: "sh build.sh", app: @app}, host: %{prepare: prepare}]
+      {:ok, driver} = QaDriver.start_link(opts)
+      %{host_dir: run_dir} = GenServer.call(driver, :config)
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+
+      launch_and_quit = fn args ->
+        {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", args) end)
+        assert {:ok, %{"pid" => pid, "root" => number}} = result
+        wait_until(fn -> Enum.any?(:sys.get_state(driver).apps, fn {app_pid, app} -> app_pid == pid and app.output =~ " in " end) end)
+        assert {:ok, %{"output" => output}} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
+        {number, String.trim(output)}
+      end
+
+      assert launch_and_quit.(%{}) == {1, "first run in #{run_dir}/app-root"}
+      assert launch_and_quit.(%{"fresh_root" => true}) == {2, "first run in #{run_dir}/qa-root-2"}
+      assert launch_and_quit.(%{"fresh_root" => true}) == {3, "first run in #{run_dir}/qa-root-3"}
+      assert launch_and_quit.(%{"root" => 2}) == {2, "settings seen in #{run_dir}/qa-root-2"}
+
+      # Each root's request log holds only its own apps' requests.
+      root_two = %{"root" => "#{run_dir}/qa-root-2"}
+      assert QaDriver.call_tool(driver, "qa_api_requests", %{}) == {:ok, %{"requests" => [root_two, root_two], "dropped" => 0, "root" => 2}}
+
+      assert QaDriver.call_tool(driver, "qa_api_requests", %{"root" => 3}) ==
+               {:ok, %{"requests" => [%{"root" => "#{run_dir}/qa-root-3"}], "dropped" => 0, "root" => 3}}
+
+      assert QaDriver.call_tool(driver, "qa_api_requests", %{"root" => 1}) ==
+               {:ok, %{"requests" => [%{"root" => "#{run_dir}/app-root"}], "dropped" => 0, "root" => 1}}
 
       QaDriver.stop(driver)
       refute File.exists?(run_dir)

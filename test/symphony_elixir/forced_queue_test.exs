@@ -189,8 +189,8 @@ defmodule SymphonyElixir.ForcedQueueTest do
       wait_until(fn -> :sys.get_state(pid).forced == %{} end)
       assert RunStore.get_forced(Config.repo_key!()) == %{}
 
-      audit = Presenter.audit_payload(%{"issue" => "MT-F1"}, name, 1_000)
-      types = audit |> Map.fetch!(:events) |> Enum.map(& &1.event_type)
+      assert {:ok, audit} = AuditLog.query(issue: "MT-F1")
+      types = Enum.map(audit, & &1["event_type"])
       assert "forced_start" in types
       assert "forced_end" in types
 

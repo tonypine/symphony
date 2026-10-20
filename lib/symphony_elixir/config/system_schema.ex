@@ -120,6 +120,14 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "dashboard" => ~w(enabled host port refresh_ms render_interval_ms snapshot_publish_ms transcript_buffer_size)
   }
 
+  # `auto_review.playbooks` is a free-form map of playbook kinds, one setting; these keys under it
+  # have a control in the app too (`SymphonyElixir.QaAgent.PlaybookSettings` checks them).
+  @playbook_key_paths ~w(
+    auto_review.playbooks.macos_app.dev_server
+    auto_review.playbooks.macos_app.dev_server_port
+    auto_review.playbooks.macos_app.launch_env
+  )
+
   # The sections passed to their `Config.Schema` embed as they are: their keys are its fields.
   @schema_sections %{
     "github" => Schema.GitHub,
@@ -557,11 +565,12 @@ defmodule SymphonyElixir.Config.SystemSchema do
   @doc """
   Every setting `symphony.yml` accepts, as a sorted dotted key path such as
   `auto_review.acceptance_gate.mode`. An item of a list adds `[]`: `repositories[].route.team`.
-  A key that holds a free-form map (`agent.run_profiles`) is one setting.
+  A key that holds a free-form map (`agent.run_profiles`) is one setting; `auto_review.playbooks` also
+  lists the `macos_app` keys the app's Settings edits.
   """
   @spec operator_key_paths() :: [String.t()]
   def operator_key_paths do
-    @allowed_keys |> Enum.flat_map(&operator_key_paths/1) |> Enum.sort()
+    (Enum.flat_map(@allowed_keys, &operator_key_paths/1) ++ @playbook_key_paths) |> Enum.sort()
   end
 
   @doc """
@@ -1617,7 +1626,10 @@ defmodule SymphonyElixir.Config.SystemSchema do
   defp format_error(nil, error), do: rewrite_operator_error_message(error)
 
   defp format_error(prefix, error) do
-    operator_error_path(prefix) <> " " <> rewrite_operator_error_message(error)
+    message = rewrite_operator_error_message(error)
+
+    # A message that names its own key below the field (`auto_review.playbooks.macos_app...`) needs no prefix.
+    if String.starts_with?(message, prefix <> "."), do: message, else: operator_error_path(prefix) <> " " <> message
   end
 
   defp operator_error_path(prefix) do

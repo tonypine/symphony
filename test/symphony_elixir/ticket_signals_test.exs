@@ -30,6 +30,13 @@ defmodule SymphonyElixir.TicketSignalsTest do
              RunStore.get_ticket_state(@repo_key, "issue-1")
   end
 
+  test "records the details a verdict carries" do
+    assert :ok = TicketSignals.record_verdict(@repo_key, "issue-1", "qa", "abc123", "blocked", %{reason: "no emulator", model: "claude-opus"})
+
+    assert %{verdicts: [%{outcome: "blocked", details: %{reason: "no emulator", model: "claude-opus"}}]} =
+             RunStore.get_ticket_state(@repo_key, "issue-1")
+  end
+
   test "no-ops when the ticket carries no repo key" do
     assert :ok = TicketSignals.record(nil, "issue-1", "handoff", %{})
     assert :ok = TicketSignals.record(@repo_key, nil, "handoff", %{})

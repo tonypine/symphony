@@ -1,20 +1,11 @@
 defmodule SymphonyElixirWeb.Router do
   @moduledoc """
-  Router for Symphony's observability dashboard and API.
+  Router for Symphony's observability and control API.
   """
 
   use Phoenix.Router
-  import Phoenix.LiveView.Router
 
   alias SymphonyElixirWeb.Plugs.{BearerToken, SameOriginOrAllowlisted}
-
-  pipeline :browser do
-    plug(:fetch_session)
-    plug(:fetch_live_flash)
-    plug(:put_root_layout, html: {SymphonyElixirWeb.Layouts, :root})
-    plug(:protect_from_forgery)
-    plug(:put_secure_browser_headers)
-  end
 
   pipeline :api_state_changing do
     plug(SameOriginOrAllowlisted)
@@ -27,24 +18,6 @@ defmodule SymphonyElixirWeb.Router do
 
   pipeline :control_api do
     plug(BearerToken)
-  end
-
-  scope "/", SymphonyElixirWeb do
-    get("/dashboard.css", StaticAssetController, :dashboard_css)
-    get("/vendor/phoenix_html/phoenix_html.js", StaticAssetController, :phoenix_html_js)
-    get("/vendor/phoenix/phoenix.js", StaticAssetController, :phoenix_js)
-    get("/vendor/phoenix_live_view/phoenix_live_view.js", StaticAssetController, :phoenix_live_view_js)
-  end
-
-  scope "/", SymphonyElixirWeb do
-    pipe_through(:browser)
-
-    live("/", DashboardLive, :index)
-    live("/audit", AuditLive, :index)
-    live("/quality", QualityLive, :index)
-    live("/learnings", LearningsLive, :index)
-    live("/repos/:repo_key/issues/:identifier/transcript", TranscriptLive, :show)
-    live("/issues/:identifier/transcript", TranscriptLive, :show)
   end
 
   scope "/", SymphonyElixirWeb do
@@ -61,6 +34,7 @@ defmodule SymphonyElixirWeb.Router do
     # The app's Setup turns instant GitHub updates on and off, and curl may too.
     post("/api/v1/setup/github_updates/:action", SetupController, :github_updates)
     post("/api/v1/setup/refresh", SetupController, :refresh)
+    post("/api/v1/setup/fixes", SetupController, :fixes)
   end
 
   # GitHub webhook deliveries authenticate with their HMAC signature, not a browser origin.
@@ -104,11 +78,11 @@ defmodule SymphonyElixirWeb.Router do
     get("/api/v1/repos/:repo_key/issues/:identifier/transcript", ObservabilityApiController, :transcript)
     get("/api/v1/issues/:identifier/transcript", ObservabilityApiController, :transcript)
 
-    match(:*, "/", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/state", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/setup", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/setup/github_updates/:action", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/setup/refresh", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/setup/fixes", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/runs", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/history", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/shipped", ObservabilityApiController, :method_not_allowed)

@@ -2,7 +2,7 @@ import Foundation
 
 /// D4: a run's transcript from the transcript endpoint, grouped by turn: the agent's messages, each tool call with its
 /// result and duration, and errors. Events come as the agent wrote them (Codex's app-server methods, or the ones
-/// Symphony maps Claude Code's stream to), so each is read loosely, as the web dashboard's transcript reads them.
+/// Symphony maps Claude Code's stream to), so each is read loosely.
 public struct Transcript: Equatable {
     /// All / Messages / Tools / Errors.
     public enum Filter: String, CaseIterable, Equatable, Identifiable {
@@ -252,7 +252,7 @@ public struct Transcript: Equatable {
         return line.count > 200 ? String(line.prefix(199)) + "…" : line
     }
 
-    /// One transcript event, read the way `SymphonyElixirWeb.TranscriptLive` reads it.
+    /// One transcript event, read loosely from whichever keys the agent wrote.
     struct Event {
         enum Kind {
             case message(String, delta: Bool)

@@ -12,6 +12,9 @@ public struct StateSnapshot: Equatable {
     public var budget: Budget?
     /// Tickets held only until the running Symphony includes a fix that merged: updating releases them.
     public var updateUnblocks: Int
+    /// The newest published release of the repository the app updates from, as Symphony last heard of it; nil when
+    /// Symphony knows none, or predates `app_update.latest_release`.
+    public var latestRelease: ReportedRelease?
     /// Tickets forced past the dispatch limits, in queue order; empty when none is, or when Symphony predates them.
     public var forced: [ForcedTicket]
     /// The running agents, in Symphony's order; empty when none runs.
@@ -24,6 +27,10 @@ public struct StateSnapshot: Equatable {
     /// The kind of every live session (agent runs, QA passes, code review runs), in Symphony's
     /// order; nil when Symphony predates `sessions`.
     public var sessionKinds: [String]?
+    /// The setup problems Symphony found (`setup`), nil when Symphony predates Setup.
+    public var setup: SetupPayload?
+    /// The running Symphony's build (`build.version`), for the app's build warning; nil when it didn't say.
+    public var serviceVersion: String?
 
     /// A ticket waiting on the operator, as `/api/v1/state`'s `waiting_on_you` lists it.
     public struct WaitingTicket: Equatable {
@@ -262,11 +269,14 @@ public struct StateSnapshot: Equatable {
         usageLimits: [UsageLimit] = [],
         budget: Budget? = nil,
         updateUnblocks: Int = 0,
+        latestRelease: ReportedRelease? = nil,
         forced: [ForcedTicket] = [],
         runs: [Run] = [],
         waitingOnYou: [WaitingTicket] = [],
         inboxRead: Bool = true,
-        sessionKinds: [String]? = nil
+        sessionKinds: [String]? = nil,
+        setup: SetupPayload? = nil,
+        serviceVersion: String? = nil
     ) {
         self.running = running
         self.retrying = retrying
@@ -274,11 +284,34 @@ public struct StateSnapshot: Equatable {
         self.usageLimits = usageLimits
         self.budget = budget
         self.updateUnblocks = updateUnblocks
+        self.latestRelease = latestRelease
         self.forced = forced
         self.runs = runs
         self.waitingOnYou = waitingOnYou
         self.inboxRead = inboxRead
         self.sessionKinds = sessionKinds
+        self.setup = setup
+        self.serviceVersion = serviceVersion
+    }
+}
+
+/// The newest published release Symphony reports under `/api/v1/state`'s `app_update`, from GitHub's `release`
+/// delivery or its own timed read. The app checks for an update at once when it is newer than the build it runs
+/// (`UpdateCheckSchedule.checksAtOnce`).
+public struct ReportedRelease: Equatable {
+    /// For example `v0.0.1.583`.
+    public var tag: String
+    /// When GitHub published it; nil when Symphony didn't say.
+    public var publishedAt: Date?
+
+    public init(tag: String, publishedAt: Date? = nil) {
+        self.tag = tag
+        self.publishedAt = publishedAt
+    }
+
+    /// The tag without its `v`, as `Release.version` and `AppBuild.version` read it: `0.0.1.583`.
+    public var version: String {
+        tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
     }
 }
 
@@ -339,6 +372,9 @@ public enum SymphonyState {
         var snapshot = StateSnapshot(
             running: counts.running, retrying: counts.retrying ?? 0, updateUnblocks: payload.appUpdate?.unblocks ?? 0
         )
+        if let release = payload.appUpdate?.latestRelease, let tag = release.tag, !tag.isEmpty {
+            snapshot.latestRelease = ReportedRelease(tag: tag, publishedAt: release.publishedAt.flatMap(parseDate))
+        }
         if let pause = payload.pause, pause.paused {
             snapshot.pause = .init(reason: pause.reason, since: pause.pausedAt.flatMap(parseDate))
         }
@@ -404,6 +440,8 @@ public enum SymphonyState {
             )
         }
         snapshot.inboxRead = payload.inboxRead ?? true
+        snapshot.setup = SetupPayload.decode(state: data)
+        snapshot.serviceVersion = payload.build?.version
         return .state(snapshot)
     }
 
@@ -468,7 +506,14 @@ public enum SymphonyState {
         }
 
         struct AppUpdate: Decodable {
+            struct LatestRelease: Decodable {
+                let tag: String?
+                let publishedAt: String?
+            }
+
             let unblocks: Int?
+            /// Missing before Symphony reported the newest release.
+            let latestRelease: LatestRelease?
         }
 
         struct Forced: Decodable {
@@ -500,6 +545,10 @@ public enum SymphonyState {
             let kind: String?
         }
 
+        struct Build: Decodable {
+            let version: String?
+        }
+
         struct Waiting: Decodable {
             let issueId: String?
             let issueIdentifier: String?
@@ -527,6 +576,7 @@ public enum SymphonyState {
         let waitingOnYou: [Waiting]?
         /// Missing before Symphony said whether it had read the Inbox.
         let inboxRead: Bool?
+        let build: Build?
         let error: Failure?
     }
 }

@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.Learnings.Feed do
   @moduledoc """
   Every configured repo's learnings, for `GET /api/v1/learnings` and the Mac app's Learnings tab,
-  read from `SymphonyElixir.Learnings.Store` (what the web dashboard's `/learnings` reads).
+  read from `SymphonyElixir.Learnings.Store`.
 
   Records come newest first, each with its ticket and its PR. Links are built only from trusted
   coordinates: a PR link on a canonical GitHub host, a ticket link on `linear.app` over HTTPS.

@@ -86,12 +86,12 @@ final class SymphonyWindowTests: XCTestCase {
 
     func testSidebarListsOnlyBuiltViewsInTheDesignsOrder() {
         let sidebar = Sidebar()
-        XCTAssertEqual(sidebar.views, [.inbox, .overview, .initiatives, .tickets, .quality, .usage, .shipped, .audit, .repos, .diagnostics])
+        XCTAssertEqual(sidebar.views, [.inbox, .overview, .initiatives, .tickets, .quality, .usage, .shipped, .audit, .repos, .setup, .diagnostics])
         XCTAssertEqual(sidebar.sections.map(\.section), [.main, .insights, .records, .factory])
         XCTAssertEqual(sidebar.sections.first?.views, [.inbox, .overview, .initiatives, .tickets])
         XCTAssertEqual(sidebar.sections[1].views, [.quality, .usage])
         XCTAssertEqual(sidebar.sections[2].views, [.shipped, .audit])
-        XCTAssertEqual(sidebar.sections.last?.views, [.repos, .diagnostics])
+        XCTAssertEqual(sidebar.sections.last?.views, [.repos, .setup, .diagnostics])
         XCTAssertEqual(SidebarSection.records.title, "Records")
         XCTAssertEqual(SidebarSection.factory.title, "Factory")
         XCTAssertEqual(SymphonyView.shipped.symbol, "shippingbox")
@@ -119,6 +119,7 @@ final class SymphonyWindowTests: XCTestCase {
         XCTAssertEqual(sidebar.shortcut(for: .shipped), 7)
         XCTAssertEqual(sidebar.shortcut(for: .audit), 8)
         XCTAssertNil(sidebar.shortcut(for: .repos))
+        XCTAssertNil(sidebar.shortcut(for: .setup))
         XCTAssertNil(sidebar.shortcut(for: .diagnostics))
         XCTAssertEqual(sidebar.view(forShortcut: 7), .shipped)
         XCTAssertEqual(sidebar.view(forShortcut: 8), .audit)
@@ -126,7 +127,7 @@ final class SymphonyWindowTests: XCTestCase {
         XCTAssertNil(sidebar.view(forShortcut: 0))
 
         let all = Sidebar(built: SymphonyView.allCases)
-        XCTAssertEqual(all.views.count, 10)
+        XCTAssertEqual(all.views.count, 11)
         XCTAssertEqual(all.views.compactMap(all.shortcut(for:)), Array(1...8))
         XCTAssertEqual(all.view(forShortcut: 8), .audit)
     }

@@ -285,6 +285,7 @@ final class RepoHealthTests: XCTestCase {
         let question = RepoHealth.stopQuestion(issueIdentifier: "TP-7")
         XCTAssertEqual(question.title, "Stop the run on TP-7?")
         XCTAssertTrue(question.message.hasPrefix("Symphony stops the agent now."))
+        XCTAssertTrue(question.message.hasSuffix("doesn't start it again until you Unblock or Restart it from the Inbox, or move it on the board."))
         XCTAssertEqual(RepoHealth.stoppedMessage(issueIdentifier: "TP-7"), "Stopped the run on TP-7.")
     }
 

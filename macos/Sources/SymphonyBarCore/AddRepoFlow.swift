@@ -1,11 +1,13 @@
 import Foundation
 
-/// The pages of the Add Repo sheet, in order. The WORKFLOW.md page shows only for a repo that has none.
+/// The pages of the Add Repo sheet, in order. The WORKFLOW.md page shows only for a repo that has none. Connect, on
+/// Review, saves the repo and goes on to Check setup, which has no way back.
 public enum AddRepoStep: String, CaseIterable, Equatable {
     case source = "Source"
     case linear = "Linear"
     case workflow = "WORKFLOW.md"
     case review = "Review"
+    case check = "Check setup"
 
     fileprivate var order: Int {
         Self.allCases.firstIndex(of: self) ?? 0
@@ -113,14 +115,16 @@ public struct AddRepoFlow: Equatable {
         AddRepoStep.allCases.filter { $0 != .workflow || hasNoWorkflow }
     }
 
-    /// The step Continue goes to from `step`, nil on Review.
+    /// The step Continue goes to from `step`, nil on Review, where Connect saves first, and on Check setup.
     public func step(after step: AddRepoStep) -> AddRepoStep? {
-        steps.first { $0.order > step.order }
+        guard step.order < AddRepoStep.review.order else { return nil }
+        return steps.first { $0.order > step.order }
     }
 
-    /// The step Back goes to from `step`, nil on Source.
+    /// The step Back goes to from `step`, nil on Source and on Check setup, once the repo is saved.
     public func step(before step: AddRepoStep) -> AddRepoStep? {
-        steps.last { $0.order < step.order }
+        guard step != .check else { return nil }
+        return steps.last { $0.order < step.order }
     }
 
     /// Why Continue (Connect, on Review) is off on `step`, nil while it is on. Its help says the same.
@@ -137,12 +141,14 @@ public struct AddRepoFlow: Equatable {
             if let problem = AddRepo.baseBranchProblem(draft.baseBranch) { return problem }
             if case let .failure(problem) = entry { return problem }
             return nil
+        case .check:
+            return nil
         }
     }
 
     /// The entry Connect writes, or the first thing any step says stops it.
     public var entry: Result<RepositoryEntry, AddRepoProblem> {
-        for step in steps where step != .review {
+        for step in steps where step.order < AddRepoStep.review.order {
             if let problem = problem(at: step) { return .failure(problem) }
         }
         return AddRepo.entry(for: draft, existing: existing)
@@ -275,7 +281,7 @@ public struct AddRepoFlow: Equatable {
 
     /// "Issues in Billing with label backend go to billing-api.", updated as the route and key change.
     public var routePreview: String {
-        guard let route = AddRepo.route(of: draft), let project = route.projects?.first else {
+        guard let route = AddRepo.route(of: draft), let project = draft.project?.trimmingWhitespace() else {
             return "Pick a project: its issues go to this repo."
         }
         let key = draft.key.trimmingWhitespace()
@@ -304,6 +310,16 @@ public struct AddRepoFlow: Equatable {
             let path = (checkout.path as NSString).abbreviatingWithTildeInPath
             return "\(path) (\(checkout.gitHub)). Agents work in worktrees of it."
         }
+    }
+
+    /// The Review page's Route line: what Connect writes, the project by its ID and its team, as
+    /// "Project ID 8e6f0c39-… · team TP".
+    public var routeWritten: String {
+        guard let route = AddRepo.route(of: draft), let project = route.projects?.first else { return "" }
+        let id = draft.projectID?.trimmingWhitespace() ?? ""
+        let projectPart = id.isEmpty ? "Project \(project), by name: Linear didn't give its ID" : "Project ID \(id)"
+        guard let team = route.team else { return "\(projectPart) · no team: the project isn't in exactly one team" }
+        return "\(projectPart) · team \(team)"
     }
 
     /// The Review page's WORKFLOW.md line: what Connect does about the file.

@@ -21,11 +21,13 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     var onAction: (WindowState.Action) -> Void = { _ in }
     /// Opens the Repos window; with a repo key, on that repo's Review sheet.
     var openRepos: (String?) -> Void = { _ in }
-    var openWebDashboard: () -> Void = {}
-    var canOpenWebDashboard: () -> Bool = { false }
     var canOpenLogs: () -> Bool = { false }
     /// Called once a control request from the window was answered, so the menu follows too.
     var afterControl: () -> Void = {}
+    /// The app's own build, for Setup's build warning.
+    var appBuild = AppBuild(build: 0, isDevelopment: true)
+    /// The app's secrets, for the `symphony check` a Setup settings fix runs.
+    var secrets: SecretsReader?
 
     private var window: NSWindow?
     private var model: SymphonyWindowModel?
@@ -61,6 +63,12 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     func show(view: SymphonyView) {
         show()
         model?.show(view)
+    }
+
+    /// SU12: opens the window on the Setup page, with the first launch's welcome line when `welcome` is given.
+    func showSetup(welcome: String?) {
+        show(view: .setup)
+        model?.setupWelcome = welcome
     }
 
     /// Opens the window on the Inbox, with the item of issue id `id` selected when it is listed.
@@ -99,11 +107,9 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             model.appVersion = appVersion
             model.apiURL = { [weak self] in self.flatMap { StateRoot.controlURL(in: $0.stateRoot(), fallback: AppStores.current.apiFallback) } }
             model.canOpenLogs = { [weak self] in self?.canOpenLogs() ?? false }
-            model.canOpenWebDashboard = { [weak self] in self?.canOpenWebDashboard() ?? false }
             model.onSelect = { view in AppStores.current.defaults.set(view.rawValue, forKey: Self.viewKey) }
             model.onAction = { [weak self] action in self?.onAction(action) }
             model.onOpenRepos = { [weak self] key in self?.openRepos(key) }
-            model.onOpenWebDashboard = { [weak self] in self?.openWebDashboard() }
             model.scope = OverviewScope.load(from: AppStores.current.defaults)
             model.onScopeChange = { scope in scope.save(to: AppStores.current.defaults) }
             model.onControl = { [weak self] action in
@@ -119,6 +125,20 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
                 )
             }
             model.onOpenURL = { url in URLOpener.open(url) }
+            model.appBuild = appBuild
+            model.configPath = { AppStores.current.settingsStore().loadSettings().configPath }
+            model.onSetupRequest = { [weak self] fix in
+                guard let self else { return .failed("") }
+                let result = await SetupAPI.send(
+                    fix: fix, stateRoot: stateRoot(), fallback: AppStores.current.apiFallback, transport: AppStores.current.apiTransport
+                )
+                afterControl()
+                return result
+            }
+            model.onCheckConfig = { [weak self] path in
+                guard let secrets = self?.secrets else { return .failed("The app's secrets aren't available to run symphony check.") }
+                return await ReposWindowController.configCheck(path, secrets: secrets)
+            }
             model.onOpenTranscript = { [weak self] identifier, repoKey, newWindow in
                 self?.transcripts.open(identifier: identifier, repoKey: repoKey, newWindow: newWindow)
             }
@@ -219,7 +239,7 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     }
 
     @objc private func refresh(_ sender: Any?) {
-        client.refresh()
+        if let model { model.refresh() } else { client.refresh() }
     }
 
     @objc private func searchTickets(_ sender: Any?) {

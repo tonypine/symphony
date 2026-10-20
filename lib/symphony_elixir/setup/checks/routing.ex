@@ -24,7 +24,7 @@ defmodule SymphonyElixir.Setup.Checks.Routing do
 
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Routing.{PollLog, Resolver}
-  alias SymphonyElixir.Setup.{Problem, TeamCache}
+  alias SymphonyElixir.Setup.{NearMatch, Problem, TeamCache}
 
   @idle_after_s 24 * 60 * 60
   @listed_tickets 5
@@ -186,48 +186,10 @@ defmodule SymphonyElixir.Setup.Checks.Routing do
 
   # The one item one of whose names is a near match of `value`, or nil when none or several are.
   defp near(value, items, names) do
-    case Enum.filter(items, fn item -> item |> names.() |> Enum.any?(&near?(value, &1)) end) do
+    case Enum.filter(items, fn item -> item |> names.() |> Enum.any?(&NearMatch.near?(value, &1)) end) do
       [item] -> item
       _none_or_many -> nil
     end
-  end
-
-  defp near?(_value, nil), do: false
-
-  defp near?(value, name) do
-    {value, name} = {fold(value), fold(name)}
-    value == name or distance(value, name) <= allowed_distance(name)
-  end
-
-  defp fold(text), do: text |> String.downcase() |> String.replace(~r/\s+/u, "")
-
-  # A short name is near only when it matches but for case and spaces: two edits turn any two-letter
-  # team key into any other.
-  defp allowed_distance(name) do
-    case String.length(name) do
-      length when length >= 6 -> 2
-      length when length >= 3 -> 1
-      _short -> 0
-    end
-  end
-
-  # The Levenshtein distance, a row at a time.
-  defp distance(left, right) do
-    right = String.graphemes(right)
-
-    left
-    |> String.graphemes()
-    |> Enum.with_index(1)
-    |> Enum.reduce(Enum.to_list(0..length(right)), fn {char, row}, previous ->
-      previous
-      |> Enum.zip(tl(previous))
-      |> Enum.zip(right)
-      |> Enum.reduce([row], fn {{diagonal, above}, other}, [left_cell | _rest] = cells ->
-        [Enum.min([left_cell + 1, above + 1, diagonal + if(char == other, do: 0, else: 1)]) | cells]
-      end)
-      |> Enum.reverse()
-    end)
-    |> List.last()
   end
 
   # R4: each polled issue more than one non-default repo takes, grouped by those repos. A repo takes

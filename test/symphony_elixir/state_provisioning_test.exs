@@ -14,6 +14,14 @@ defmodule SymphonyElixir.StateProvisioningTest do
     {"issues.states.ci_fix", "CI Fix"}
   ]
 
+  @symphony_project %{id: "p1", name: "Symphony", slug_id: "s1", team_keys: ["TP"]}
+  @memory_keys [
+    :memory_tracker_recipient,
+    :memory_tracker_projects_list,
+    :memory_tracker_workflow_states_list,
+    :memory_tracker_labels_list
+  ]
+
   defmodule FakeTracker do
     def workflow_states, do: Process.get({__MODULE__, :states}, {:ok, []})
     def labels, do: Process.get({__MODULE__, :labels}, {:ok, []})
@@ -89,6 +97,43 @@ defmodule SymphonyElixir.StateProvisioningTest do
       {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory", "team" => "TP"}})
 
       assert StateProvisioning.configured_teams(settings, [%{team: "TP"}, %{team: "APP"}, %{team: " "}, %{}]) == ["TP", "APP"]
+    end
+
+    test "a repo routed only by project adds its project's team, and with route.team set nothing is looked up" do
+      {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}})
+      lookup = fn -> send(self(), :lookup) && {:ok, [@symphony_project]} end
+      repos = [%{name: "app", team: "APP"}, %{name: "web", projects: ["Symphony"]}]
+
+      assert StateProvisioning.configured_teams(settings, repos, projects: lookup) == ["APP", "TP"]
+
+      assert_received :lookup
+      assert StateProvisioning.configured_teams(settings, [%{name: "app", team: "APP"}], projects: lookup) == ["APP"]
+      refute_received :lookup
+    end
+
+    # Walkthrough 1: the memory tracker, a repo routed only by a project of team TP, no route.team.
+    test "startup provisioning creates a state missing from a project-routed repo's team" do
+      path = Workflow.workflow_file_path()
+      repos = [%{key: "app", workflow: path, projects: ["Symphony"]}]
+      write_workflow_file!(path, tracker_kind: "memory", tracker_project_slug: nil, repos: repos)
+      code_review = %{id: "s1", name: "Code Review", team_id: "t1", team_key: "TP"}
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      Application.put_env(:symphony_elixir, :memory_tracker_projects_list, [@symphony_project])
+      Application.put_env(:symphony_elixir, :memory_tracker_workflow_states_list, [code_review])
+
+      on_exit(fn ->
+        for key <- @memory_keys, do: Application.delete_env(:symphony_elixir, key)
+      end)
+
+      settings = Config.settings!()
+      {:ok, repos} = Config.repos()
+      teams = StateProvisioning.configured_teams(settings, repos)
+      assert teams == ["TP"]
+
+      capture_log(fn -> assert :ok = StateProvisioning.provision(settings, teams) end)
+
+      assert_received {:memory_tracker_created_workflow_state, "QA", "TP"}
+      refute_received {:memory_tracker_created_workflow_state, "Code Review", _team}
     end
   end
 
@@ -236,6 +281,30 @@ defmodule SymphonyElixir.StateProvisioningTest do
 
     test "labels/0 names the machine-owned labels" do
       assert StateProvisioning.labels() == ["Blocked", "Needs Decision", "CI green", "CI red", "CI running"]
+    end
+
+    test "machine_labels/2 lists every label Symphony applies or reads, once each, without human-action" do
+      labels = StateProvisioning.machine_labels("Rush ", ["needs-human", "plan", "Human-Action", "security", "SECURITY", nil, " "])
+
+      assert Enum.map(labels, & &1.names) == [
+               ["Blocked"],
+               ["Needs Decision"],
+               ["CI green"],
+               ["CI red"],
+               ["CI running"],
+               ["plan", "breakdown"],
+               ["qa:skip"],
+               ["protected-paths-approved"],
+               ["skip-update-hold"],
+               ["Rush"],
+               ["needs-human"],
+               ["security"]
+             ]
+
+      assert %{severity: :error, exact?: true, shows: "Decisions you are asked for can't be marked on the ticket."} = Enum.at(labels, 1)
+      assert %{severity: :warning, exact?: false} = List.last(labels)
+      assert length(StateProvisioning.machine_labels(nil, [])) == 9
+      assert StateProvisioning.deprecated_labels() == ["human-action"]
     end
 
     test "machine_states/1 is empty for settings that are not a Schema" do

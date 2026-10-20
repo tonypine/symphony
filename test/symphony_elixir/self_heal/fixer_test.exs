@@ -1,10 +1,13 @@
 defmodule SymphonyElixir.SelfHeal.FixerTest do
   use ExUnit.Case, async: false
 
+  alias SymphonyElixir.{Linear, RepoTeams}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.SelfHeal.Fixer
 
   @scope "repo-symphony"
+  # `issues` settings with no team and no project, whatever the test config names.
+  @no_issues_scope %{team: nil, project_slug: nil}
 
   # The tracker the fixer reads the fix ticket from and comments on.
   defmodule Tracker do
@@ -26,6 +29,7 @@ defmodule SymphonyElixir.SelfHeal.FixerTest do
         query =~ "SymphonyCreateIssueScope" -> Process.get(:scope_result, {:ok, scope_response()})
         query =~ "SymphonyCreateIssueRelation" -> Process.get(:relation_result, {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => true}}}})
         query =~ "SymphonyCreateIssue" -> Process.get(:create_result, {:ok, create_response()})
+        query =~ "SymphonyProjectsAndTeams" -> Process.get(:projects_result, {:ok, %{"data" => %{"projects" => %{"nodes" => []}, "teams" => %{"nodes" => []}}}})
         query =~ "SymphonyIssueId" -> Process.get(:issue_id_result, {:ok, %{"data" => %{"issue" => %{"id" => "blocker-id"}}}})
         true -> flunk("unexpected query: #{query}")
       end
@@ -201,8 +205,36 @@ defmodule SymphonyElixir.SelfHeal.FixerTest do
       assert input["projectId"] == "p1"
     end
 
+    test "a repo routed only by project files in its project's team when the affected ticket carries none" do
+      project = %{"id" => "p1", "name" => "Fix Project", "slugId" => "a1abb875ac02", "teams" => %{"nodes" => [%{"key" => "TP"}]}}
+      Process.put(:projects_result, {:ok, %{"data" => %{"projects" => %{"nodes" => [project]}, "teams" => %{"nodes" => []}}}})
+
+      # Through the Linear adapter's projects lookup, whichever tracker the test config names.
+      lookup = fn -> with {:ok, %{projects: projects}} <- Linear.Adapter.projects_and_teams(), do: {:ok, projects} end
+      routed_teams = &RepoTeams.routed_teams(&1, tracker: @no_issues_scope, projects: lookup)
+      opts = Keyword.put(repo(nil, ["a1abb875ac02"]), :routed_teams, routed_teams)
+
+      assert {:ok, %{identifier: "TP-900"}} = Fixer.create(Map.merge(create_attrs(), %{issue: %Issue{id: "affected-id"}}), opts)
+
+      {_query, %{input: input}} = Enum.find(Process.get(:graphql_calls), &(elem(&1, 0) =~ "SymphonyCreateIssue("))
+      assert input["teamId"] == "t1"
+      assert input["projectId"] == "p1"
+    end
+
+    test "the first routed team counts, as `RepoTeams` resolves it" do
+      opts = Keyword.put(repo(nil, []), :routed_teams, fn _repo -> ["TP", "OPS"] end)
+
+      assert {:ok, %{identifier: "TP-900"}} = Fixer.create(create_attrs(), opts)
+
+      {_query, %{input: input}} = Enum.find(Process.get(:graphql_calls), &(elem(&1, 0) =~ "SymphonyCreateIssue("))
+      assert input["teamId"] == "t1"
+    end
+
     test "reports a repo that cannot own a fix ticket, or one that cannot be resolved" do
-      assert {:error, {:self_heal_team_unknown, @scope}} = Fixer.create(create_attrs(), repo(nil, []))
+      # No route team, no `issues` team or project, no project and no polled issue to find one in.
+      routed_teams = &RepoTeams.routed_teams(&1, tracker: @no_issues_scope)
+      opts = Keyword.put(repo(nil, []), :routed_teams, routed_teams)
+      assert {:error, {:self_heal_team_unknown, @scope}} = Fixer.create(create_attrs(), opts)
 
       assert {:error, :repo_not_found} = Fixer.create(create_attrs(), repo: fn _scope -> {:error, :repo_not_found} end)
     end

@@ -8,6 +8,7 @@ defmodule SymphonyElixir.PrWatch.ReleaseTest do
 
   alias SymphonyElixir.PrWatch.{Ingest, Release}
   alias SymphonyElixir.PrWatchParity, as: Parity
+  alias SymphonyElixirWeb.WatchPayload
 
   @published ~U[2026-10-16 08:00:00Z]
   @release %{repo: "tonypine/symphony", tag: "v1.4.0", published_at: @published, prerelease: false}
@@ -63,6 +64,32 @@ defmodule SymphonyElixir.PrWatch.ReleaseTest do
     assert_received {:gh, ["api", "--include", "-H", ~s(If-None-Match: "e1"), "repos/tonypine/symphony/releases/latest"]}
     refute_received {:gh, _args}
     assert Release.latest() == polled
+  end
+
+  # What `GET /api/v1/state` tells the app under `app_update`, without how the release arrived.
+  defp reported_to_app do
+    [] |> WatchPayload.app_update(Release.latest()) |> Map.fetch!(:latest_release) |> Map.delete(:source)
+  end
+
+  test "with webhooks off, one safety-net tick reports the release to the app as a delivery does" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      pr_review_mode: "polling",
+      ci: %{enabled: true},
+      github: %{webhooks: %{enabled: false}}
+    )
+
+    :ok = Ingest.deliver({:release, @release}, "https://github.com/tonypine/symphony", watchers: [])
+    delivered = reported_to_app()
+
+    clear_run_store!()
+    assert WatchPayload.app_update([], Release.latest()).latest_release == nil
+    Parity.tickets!(%{tickets: [{"1", "Code Review", []}]})
+    pid = Parity.start!(app_release: true, gh_runner: gh([ok("v1.4.0", "2026-10-16T08:00:00Z", ~s("e1"))]))
+    Parity.tick!(pid)
+
+    assert delivered == %{repo: "tonypine/symphony", tag: "v1.4.0", published_at: "2026-10-16T08:00:00Z"}
+    assert reported_to_app() == delivered
   end
 
   test "a watcher without app_release never reads the release" do

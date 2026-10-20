@@ -261,20 +261,32 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
   end
 
   describe "projects_and_teams/0" do
-    test "reads every project and team in one request" do
+    test "reads every project, with its teams' keys, and every team in one request" do
       put(
         :projects_and_teams,
         {:ok,
          %{
            "data" => %{
-             "projects" => %{"nodes" => [%{"id" => "p1", "name" => "Symphony", "slugId" => "a1abb875ac02"}]},
+             "projects" => %{
+               "nodes" => [
+                 %{"id" => "p1", "name" => "Symphony", "slugId" => "a1abb875ac02", "teams" => %{"nodes" => [%{"key" => "TP"}, %{"key" => nil}]}},
+                 %{"id" => "p2", "name" => "Teamless", "slugId" => "b2"}
+               ]
+             },
              "teams" => %{"nodes" => [%{"id" => "t1", "key" => "TP", "name" => "Tony Pine"}]}
            }
          }}
       )
 
       assert Adapter.projects_and_teams() ==
-               {:ok, %{projects: [%{id: "p1", name: "Symphony", slug_id: "a1abb875ac02"}], teams: [%{id: "t1", key: "TP", name: "Tony Pine"}]}}
+               {:ok,
+                %{
+                  projects: [
+                    %{id: "p1", name: "Symphony", slug_id: "a1abb875ac02", team_keys: ["TP"]},
+                    %{id: "p2", name: "Teamless", slug_id: "b2", team_keys: []}
+                  ],
+                  teams: [%{id: "t1", key: "TP", name: "Tony Pine"}]
+                }}
     end
 
     test "reports a tracker error and an unusable response" do
