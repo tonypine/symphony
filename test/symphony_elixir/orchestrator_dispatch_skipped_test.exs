@@ -143,6 +143,10 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     unkeyed = %{polled | repo_key: nil}
     fetcher = fn ["held"] -> {:ok, [unkeyed]} end
 
+    # A green head, so the QA ticket's own gate is open and only the hold holds it back.
+    SymphonyElixir.PrWatchSupport.put_watch!("default", "held", phase: :qa)
+    on_exit(fn -> RunStore.delete_ticket_state("default", "held") end)
+
     :ok = RunStore.set_ticket_hold("default", "held", :needs_decision, %{reason: "Investigate the qa_environment by hand?"})
     on_exit(fn -> RunStore.clear_ticket_hold("default", "held", :needs_decision) end)
 

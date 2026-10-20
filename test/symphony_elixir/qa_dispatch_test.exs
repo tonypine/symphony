@@ -25,6 +25,13 @@ defmodule SymphonyElixir.QaDispatchTest do
 
   defp state, do: %Orchestrator.State{}
 
+  defp retry_state do
+    %Orchestrator.State{
+      max_concurrent_agents: 3,
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}
+    }
+  end
+
   defp issue(repo_key, issue_state) do
     %Issue{id: @issue_id, identifier: "TP-816", title: "QA", state: issue_state, repo_key: repo_key}
   end
@@ -100,6 +107,45 @@ defmodule SymphonyElixir.QaDispatchTest do
 
       refute Orchestrator.should_dispatch_issue_for_test(issue, state())
       assert head_signals(@designed_repo) == []
+    end
+
+    test "the continuation of an approve on a red head leaves the ticket in QA with no run" do
+      # The reviewer approved and moved the ticket to QA; its run ended and the continuation retry
+      # reads the ticket again, now in QA. The head is red, so QA must not start on it: the PR
+      # watcher routes the red head to CI Fix.
+      record_ci!(@designed_repo, "abc123", "red")
+      qa_ticket = issue(@designed_repo, "QA")
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [qa_ticket])
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_issues) end)
+
+      retrying = %{retry_state() | claimed: MapSet.new([@issue_id])}
+      metadata = %{identifier: "TP-816", continuation: true, repo_key: @designed_repo}
+
+      log =
+        capture_log(fn ->
+          fetcher = fn _ids -> {:ok, [qa_ticket]} end
+          assert {:noreply, next} = Orchestrator.handle_retry_issue_for_test(retrying, @issue_id, 1, metadata, fetcher)
+          send(self(), {:state, next})
+        end)
+
+      assert_received {:state, next}
+      refute Map.has_key?(next.running, @issue_id)
+      assert next.claimed == MapSet.new()
+      assert log =~ "Not dispatching QA for"
+      assert [%{details: %{head: "abc123", status: "red"}}] = head_signals(@designed_repo)
+    end
+
+    test "the continuation into QA on a green head is not held by the gate" do
+      record_ci!(@designed_repo, "abc123", "green")
+      qa_ticket = issue(@designed_repo, "QA")
+
+      assert Orchestrator.dispatch_revalidated_issue_for_test(qa_ticket, true)
+      assert Orchestrator.dispatch_revalidated_issue_for_test(qa_ticket, false)
+
+      record_ci!(@designed_repo, "def456", "red")
+
+      refute Orchestrator.dispatch_revalidated_issue_for_test(qa_ticket, true)
+      refute Orchestrator.dispatch_revalidated_issue_for_test(qa_ticket, false)
     end
 
     test "a QA ticket whose run is missing is dispatched exactly once" do
