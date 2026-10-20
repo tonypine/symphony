@@ -305,6 +305,7 @@ defmodule SymphonyElixir.CodeReviewTest do
     end
 
     test "manual review on pauses an approve-skip on a merge confirmation instead of moving to Merging" do
+      :ok = RunStore.clear()
       {workspace, _head} = git_workspace!()
       Process.put(:fake_qa_policy_result, {:skip, "the PR only changes docs, tests or `auto_review.skip_globs` paths"})
 
@@ -323,6 +324,9 @@ defmodule SymphonyElixir.CodeReviewTest do
 
       assert [%{name: "code_review", details: %{signal: "merge_confirmation", target: "Merging", qa_decision: "skip"}}] =
                SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
+
+      # The ticket did not move: the confirmation is its request, and no phase was entered.
+      assert [{"decision.requested", %{confirm: "Merging"}}] = ticket_events(@repo_key, @issue_id, ["decision.requested", "phase.entered", "hold.set"])
     end
 
     test "a merge confirmation that cannot be posted is reported" do
@@ -445,6 +449,7 @@ defmodule SymphonyElixir.CodeReviewTest do
     end
 
     test "a block verdict pauses the ticket on a Needs Decision hold, recommending Rework" do
+      :ok = RunStore.clear()
       Process.put(:fake_review_result, {:ok, %{verdict: :block, comments: [], reason: "touches protected files"}})
 
       assert :ok = run("/tmp/workspace", settings: designed_settings())
@@ -454,6 +459,10 @@ defmodule SymphonyElixir.CodeReviewTest do
 
       assert [%{name: "code_review", details: %{signal: "code_review_escalate", reason: "touches protected files"}}] =
                SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
+
+      # The verdict, then the escalation's request: the escalation signal is no phase move.
+      assert [{"verdict.recorded", %{kind: "code_review", outcome: "block"}}, {"decision.requested", %{title: "Code Review escalated TP-815"}}] =
+               ticket_events(@repo_key, @issue_id)
     end
 
     test "a reviewer block error pauses the ticket on a Needs Decision hold" do

@@ -42,6 +42,8 @@ defmodule SymphonyElixir.TestSupport do
           stop_orchestrator_agent_tasks: 0,
           stop_verification_port_pool: 0,
           clear_run_store!: 0,
+          ticket_events: 2,
+          ticket_events: 3,
           unix_socket_bind_probe: 0,
           unix_socket_bind_probe: 1,
           unix_socket_bind_supported?: 0,
@@ -237,6 +239,14 @@ defmodule SymphonyElixir.TestSupport do
   def ensure_config_cache_started! do
     ensure_application_started()
     ensure_named_supervised_child_started!(Cache, Cache)
+  end
+
+  # The events recorded on a ticket (`SymphonyElixir.TicketEvents`), oldest first, as `{type,
+  # payload}`; with `types`, only those types.
+  def ticket_events(repo_key, issue_id, types \\ nil) do
+    for event <- SymphonyElixir.RunStore.list_ticket_events(repo_key, issue_id, []),
+        is_nil(types) or event.type in List.wrap(types),
+        do: {event.type, event.payload}
   end
 
   def clear_run_store! do

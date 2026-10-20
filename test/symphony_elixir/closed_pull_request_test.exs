@@ -60,6 +60,7 @@ defmodule SymphonyElixir.ClosedPullRequestTest do
       assert %{reason: reason, decision: %{options: options}} = Hold.get(@repo_key, issue_id, :needs_decision)
       assert reason =~ "PR #512 closed"
       assert Enum.map(options, &{&1.label, &1.recommended}) == [{"Reopen", true}, {"Restart", false}, {"Cancel", false}]
+      assert [{"decision.requested", %{title: "Reopen the pull request of TP-983"}}] = ticket_events(@repo_key, issue_id)
     end
 
     test "holds every phase that judges, repairs or lands the existing pull request", %{issue_id: issue_id} do
