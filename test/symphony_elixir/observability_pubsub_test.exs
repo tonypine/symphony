@@ -44,8 +44,10 @@ defmodule SymphonyElixir.ObservabilityPubSubTest do
   end
 
   test "repo_key falls back to nil when config cannot resolve a primary repo" do
+    # The cache keeps the last good `symphony.yml` when a reload is rejected, and any config read
+    # since setup may have cached it; drop it so the rejected file leaves no repo to resolve.
     File.write!(Workflow.symphony_file_path(), "repos: []\n")
-    if Process.whereis(SymphonyElixir.WorkflowStore), do: SymphonyElixir.WorkflowStore.force_reload()
+    :ok = Cache.invalidate(Workflow.symphony_file_path())
 
     assert :ok = ObservabilityPubSub.subscribe()
     assert :ok = ObservabilityPubSub.broadcast_update()
