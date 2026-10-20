@@ -31,6 +31,14 @@ defmodule SymphonyElixir.ProtectedPathsGate do
   @spec check([String.t()], map(), map() | nil, keyword()) :: result()
   def check(failed, pr, issue, opts \\ []), do: if(failed == [], do: :ok, else: covered(pr, issue, Enum.join(failed, ", "), opts))
 
+  @doc """
+  Every protected path the PR's own commits change, read as `check/4` reads them but with no
+  path left out: the evidence a person reads behind rule R18. `pr` and `opts` are as for `check/4`;
+  a read that fails says why.
+  """
+  @spec changed_paths(map(), keyword()) :: {:ok, [String.t()]} | {:error, String.t()}
+  def changed_paths(pr, opts \\ []), do: uncovered(pr, [], Keyword.get(opts, :git, &default_git/2))
+
   defp covered(pr, issue, names, opts) do
     case granted_paths(issue) do
       [] ->
