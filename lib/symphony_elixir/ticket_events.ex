@@ -20,7 +20,7 @@ defmodule SymphonyElixir.TicketEvents do
   """
 
   alias SymphonyElixir.RunStore
-  alias SymphonyElixir.TicketEvents.{Event, Types}
+  alias SymphonyElixir.TicketEvents.{Event, Summary, Types}
 
   @default_limit 50
   @max_limit 200
@@ -58,7 +58,8 @@ defmodule SymphonyElixir.TicketEvents do
   @doc """
   Records an event of `type` with `payload` on `repo_key`'s ticket `issue_id` (see
   `t:record_opt/0` for `opts`). An event with the idempotency key of one the ticket already holds
-  returns that event and writes nothing.
+  returns that event and writes nothing. The event carries the summary
+  `SymphonyElixir.TicketEvents.Summary` renders from its type and payload.
   """
   @spec record(String.t(), String.t(), String.t(), map(), [record_opt()]) :: {:ok, Event.t()} | {:error, Types.error() | term()}
   def record(repo_key, issue_id, type, payload, opts \\ []) do
@@ -67,7 +68,7 @@ defmodule SymphonyElixir.TicketEvents do
          {:ok, options} <- options(opts) do
       at = Map.get(options, :at) || DateTime.utc_now()
 
-      RunStore.append_ticket_event(%Event{
+      %Event{
         id: Event.ulid(at),
         repo_key: repo_key,
         issue_id: issue_id,
@@ -82,7 +83,9 @@ defmodule SymphonyElixir.TicketEvents do
         idempotency: Types.idempotency_key(type, payload, options.idempotency),
         payload: payload,
         artifacts: options.artifacts
-      })
+      }
+      |> then(&%{&1 | summary: Summary.render(&1)})
+      |> RunStore.append_ticket_event()
     end
   end
 

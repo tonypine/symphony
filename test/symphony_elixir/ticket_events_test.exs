@@ -2,7 +2,7 @@ defmodule SymphonyElixir.TicketEventsTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.TicketEvents
-  alias SymphonyElixir.TicketEvents.Event
+  alias SymphonyElixir.TicketEvents.{Event, Summary}
 
   @repo_key "repo-a"
   @issue_id "issue-1"
@@ -63,7 +63,7 @@ defmodule SymphonyElixir.TicketEventsTest do
                supersedes: nil,
                idempotency: nil,
                payload: %{caption: "After"},
-               summary: nil,
+               summary: %{title: "Evidence recorded", detail: "After"},
                artifacts: ["artifact-1"],
                at: @at,
                seq: 1
@@ -83,6 +83,34 @@ defmodule SymphonyElixir.TicketEventsTest do
       assert event.run_id == "run-2"
       assert DateTime.diff(DateTime.utc_now(), event.at) < 60
       assert %{phase: "Code Review", event_seq: 1} = RunStore.get_ticket_state(@repo_key, @issue_id)
+    end
+
+    test "a recorded QA finding carries the summary Symphony renders, and reads back with it" do
+      payload = %{
+        class: "content clipped",
+        viewport: "laptop (1440×900)",
+        step: "Activity with a job open",
+        severity: "major",
+        description: "The job row is cut\nat the right edge"
+      }
+
+      assert {:ok, event} = TicketEvents.record(@repo_key, @issue_id, "finding.recorded", payload, actor: {:agent, "run-4", "qa"}, at: @at)
+
+      summary = %{
+        title: "QA found content clipped at laptop (1440×900): Activity with a job open",
+        detail: "The job row is cut at the right edge"
+      }
+
+      assert event.summary == summary
+      assert [%Event{summary: ^summary}] = TicketEvents.query(@repo_key, @issue_id)
+    end
+
+    test "a legacy event of a type the renderer does not know reads back with its type as the title" do
+      legacy = %Event{id: "01LEGACY", repo_key: @repo_key, issue_id: @issue_id, at: @at, type: "legacy.signal"}
+      assert {:ok, _event} = RunStore.append_ticket_event(legacy)
+
+      assert [%Event{type: "legacy.signal", summary: nil} = event] = TicketEvents.query(@repo_key, @issue_id)
+      assert Summary.render(event) == %{title: "legacy.signal", detail: nil}
     end
 
     test "records a person's answer" do
