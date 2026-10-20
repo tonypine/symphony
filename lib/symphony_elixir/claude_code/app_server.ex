@@ -671,7 +671,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       :qa_driver,
       :qa_android_driver,
       :unlocked_paths,
-      :review_verdict_sink
+      :review_verdict_sink,
+      :qa_verdict_sink
     ])
   end
 
