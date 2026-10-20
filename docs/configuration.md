@@ -230,7 +230,7 @@ issues:
   new name, and is then recreated, so a name is never silently duplicated. The
   machine enters them and dispatch picks them up — `Code Review` for the reviewer run, `QA` for the
   QA pass, `CI Fix` for mechanical repair, and `Epic Review` for the automatic close of a plan
-  parent whose sub-issues are all terminal (pass -> `Done`; gaps -> each one filed as a follow-up
+  parent whose sub-issues are all terminal (pass -> `Done`; gaps -> each defect filed as a follow-up
   sub-ticket in `Todo` under the same epic with the epic's priority, with the parent back in
   `Waiting on sub-tickets`). They sit in Linear's `started` group, beside `In Progress`, so they
   read as active columns;
@@ -1327,6 +1327,16 @@ judges a green commit. A run red again is judged as before, and its follow-up qu
 failure's log. The review's report names what the rerun found in its `ci_rerun` pre-check. A commit
 is never rerun twice: the rerun is recorded on the epic before it is made, and a review that cannot
 record it does not rerun.
+
+**One follow-up per defect.** The epic review's agent names, for each failing step, the defect it
+rests on (`"defect"` in its answer: a few words saying what is broken). Steps that fail for the same
+cause carry the same defect, matched without regard to case or surrounding spaces, and a plan-level
+step that fails only because a design-check step failed names that step's defect. Symphony files one
+follow-up per defect: titled `Epic review fails: <defect>`, its description lists every step that
+rests on it, each with its details and evidence, and its acceptance criteria list every one of those
+steps, so the next review marks them. A failing step that names no defect is a follow-up of its own,
+titled after the step. A defect's follow-up answers to every `gap` label of its steps and waits on
+what any of them waits on, except on one another.
 
 **Which steps QA walks.** Each step of a `## User walkthrough` names the one place that proves it
 ([ADR 0003](adr/0003-automated-tests-first-qa-last-resort.md)), on a line at the end of the step:

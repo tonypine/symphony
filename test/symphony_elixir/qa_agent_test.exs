@@ -769,6 +769,23 @@ defmodule SymphonyElixir.QaAgentTest do
       refute Map.has_key?(plain, :blocked_by)
     end
 
+    test "keeps the defect a failing step names" do
+      text =
+        Jason.encode!(%{
+          "verdict" => "fail",
+          "steps" => [
+            %{"name" => "Design check: Companies table", "status" => "fail", "defect" => " People column empty "},
+            %{"name" => "Plan level: pages", "status" => "fail", "defect" => "People column empty"},
+            %{"name" => "Nothing named", "status" => "fail", "defect" => " "}
+          ]
+        })
+
+      assert {:ok, %{steps: [design, plan, plain]}} = QaAgent.parse_response(text)
+      assert design.defect == "People column empty"
+      assert plan.defect == "People column empty"
+      refute Map.has_key?(plain, :defect)
+    end
+
     test "rejects answers that do not follow the contract" do
       for {text, reason} <- [
             {"no json here", :no_verdict_object},
@@ -1011,6 +1028,13 @@ defmodule SymphonyElixir.QaAgentTest do
       assert flat =~ "name what a gap waits on in its `\"blocked_by\"`: the `gap` labels of failing steps in this answer, or the identifiers of this epic's sub-tickets"
       assert prompt =~ ~s("gap": "<optional: a short label for a failing step>")
       assert prompt =~ ~s("blocked_by": [)
+
+      # One follow-up per defect: steps that fail for one cause name the same defect.
+      assert prompt =~ ~s("defect": "<for a failing step: a few words naming the defect it rests on>")
+      assert flat =~ "Symphony files one follow-up per defect, titled after it, listing every step that rests on it."
+
+      assert flat =~
+               "a plan-level step that fails only because another step (a design check, say) failed names that step's defect, not a defect of its own"
 
       # The epic is its own parent: no parent section and no verification ticket.
       refute prompt =~ "Parent issue (this is a sub-ticket"

@@ -41,8 +41,10 @@ defmodule SymphonyElixir.EpicReview do
        agent as a failure.
     4. The **verdict**, through the one writer `SymphonyElixir.TransitionGuard`:
          * `pass` -> `Done` (`:epic_review_pass`);
-         * `fail` (gaps) -> each failing step, or without failing steps each finding, is filed as a
-           sub-issue in `Todo` inside the epic, and the parent returns to the waiting state
+         * `fail` (gaps) -> each defect the failing steps rest on, or without failing steps each
+           finding, is filed as a sub-issue in `Todo` inside the epic — failing steps that name the
+           same `defect` are one follow-up listing them all, a step that names none is one of its
+           own — and the parent returns to the waiting state
            (`:epic_review_gaps`), where the follow-up holds it until it lands. The review runs
            again when it does, so the epic closes itself once it is whole; the loop ends at the
            first pass. A gap that can only be checked once another change has merged is two
@@ -527,8 +529,9 @@ defmodule SymphonyElixir.EpicReview do
   defp needs_person?(_outcome), do: false
 
   # Each gap the review found becomes one follow-up sub-issue of the epic, in `Todo`: the failing
-  # steps when there are any, else the findings. They are filed through the machine-side child
-  # creator (`SymphonyElixir.AgentTools.Linear.create_subissue_in_state/4`), the one the executor's
+  # steps when there are any, grouped by the defect they rest on, else the findings. They are filed
+  # through the machine-side child creator
+  # (`SymphonyElixir.AgentTools.Linear.create_subissue_in_state/4`), the one the executor's
   # `linear_create_subissue` tool is built on, so a follow-up is scoped exactly like any other
   # sub-ticket of the epic — same team, project, assignee, parent and priority, so
   # `tickets.priorities` dispatches it like the epic — and never lands in `Backlog`, where it would
@@ -542,7 +545,7 @@ defmodule SymphonyElixir.EpicReview do
   defp create_gaps(issue, outcome, opts) do
     {:ok, registry} = CommentRegistry.start_link()
     gaps = gap_tickets(outcome, issue, opts)
-    labels = gaps |> Enum.flat_map(&List.wrap(&1.gap)) |> MapSet.new(&gap_label/1)
+    labels = gap_labels(gaps)
     context = %{issue: issue, comment_registry: registry, epic_tickets: epic_tickets(issue), labels: labels}
 
     try do
@@ -558,7 +561,7 @@ defmodule SymphonyElixir.EpicReview do
   defp file_in_order([], _context, _opts, _settled, filed), do: Enum.reverse(filed)
 
   defp file_in_order(gaps, context, opts, settled, filed) do
-    labels = gaps |> Enum.flat_map(&List.wrap(&1.gap)) |> MapSet.new(&gap_label/1)
+    labels = gap_labels(gaps)
 
     {ready, waiting} =
       case Enum.split_with(gaps, fn gap -> not Enum.any?(gap.blocked_by, &MapSet.member?(labels, gap_label(&1))) end) do
@@ -577,8 +580,9 @@ defmodule SymphonyElixir.EpicReview do
     file_in_order(waiting, context, opts, settled, filed)
   end
 
-  defp settle(settled, %{gap: nil}, _identifier), do: settled
-  defp settle(settled, %{gap: gap}, identifier), do: Map.put(settled, gap_label(gap), identifier)
+  defp settle(settled, %{gaps: gaps}, identifier), do: Enum.reduce(gaps, settled, &Map.put(&2, gap_label(&1), identifier))
+
+  defp gap_labels(gaps), do: gaps |> Enum.flat_map(& &1.gaps) |> MapSet.new(&gap_label/1)
 
   defp file_gap(gap, %{issue: issue} = context, opts, settled) do
     blocked_by = gap.blocked_by |> Enum.flat_map(&resolve_blocker(&1, gap, context, settled)) |> Enum.uniq()
@@ -660,9 +664,30 @@ defmodule SymphonyElixir.EpicReview do
   defp gap_tickets(outcome, issue, opts) do
     case Enum.filter(Map.get(outcome, :steps, []), &(&1.status == "fail")) do
       [] -> tickets(Map.get(outcome, :findings, []), &to_string/1, &finding_ticket(&1, outcome, issue, &2), outcome, opts)
-      failed -> tickets(failed, &step_text/1, &step_ticket(&1, outcome, issue, &2), outcome, opts)
+      failed -> tickets(defect_groups(failed), &group_text/1, &group_ticket(&1, outcome, issue, &2), outcome, opts)
     end
   end
+
+  # The failing steps, grouped by the defect each one rests on, in the order the answer lists them:
+  # steps that name the same defect (a design check and the plan-level step that fails because of
+  # it) are one gap, filed as one follow-up, so one cause is never two tickets with two runs on the
+  # same files (TP-1143). A step that names no defect is a gap of its own.
+  defp defect_groups(steps) do
+    keyed = steps |> Enum.with_index() |> Enum.map(fn {step, index} -> {defect_key(step, index), step} end)
+
+    keyed
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.uniq()
+    |> Enum.map(fn key -> for {^key, step} <- keyed, do: step end)
+  end
+
+  defp defect_key(%{defect: defect}, _index) when is_binary(defect), do: {:defect, gap_label(defect)}
+  defp defect_key(_step, index), do: {:step, index}
+
+  defp group_text(steps), do: Enum.map_join(steps, "\n", &step_text/1)
+
+  defp group_ticket([step], outcome, issue, ci_log) when not is_map_key(step, :defect), do: step_ticket(step, outcome, issue, ci_log)
+  defp group_ticket(steps, outcome, issue, ci_log), do: defect_ticket(steps, outcome, issue, ci_log)
 
   defp tickets(gaps, text, ticket, outcome, opts) do
     Enum.zip_with(gaps, gaps |> Enum.map(text) |> ci_logs(outcome, opts), ticket)
@@ -780,9 +805,58 @@ defmodule SymphonyElixir.EpicReview do
     %{
       title: title("Epic review fails: " <> step.name),
       description: body,
-      gap: Map.get(step, :gap),
+      gaps: List.wrap(Map.get(step, :gap)),
       blocked_by: Map.get(step, :blocked_by, [])
     }
+  end
+
+  # One follow-up for every failing step that rests on one defect: titled after the defect, with
+  # each step's text and evidence, and each step an acceptance criterion, so the next review marks
+  # them. It answers to every gap label its steps carry and waits on what any of them waits on,
+  # except on one another.
+  defp defect_ticket([first | _] = steps, outcome, issue, ci_log) do
+    body = """
+    #{ticket_intro(outcome, issue)}
+
+    ## Defect
+
+    #{first.defect}
+
+    #{length(steps)} failing step(s) of the review rest on this defect: fixing it fixes each of them.
+
+    ## Failing steps
+
+    #{Enum.map_join(steps, "\n", &defect_step_section/1)}
+    #{ci_log}## Acceptance criteria
+
+    #{Enum.map_join(steps, "\n", &~s(- [ ] The step "#{&1.name}" behaves as #{issue.identifier} describes on the default branch.))}
+    - [ ] The epic's review passes these steps when it runs #{issue.identifier} again.
+    """
+
+    gaps = steps |> Enum.flat_map(&List.wrap(Map.get(&1, :gap))) |> Enum.uniq_by(&gap_label/1)
+    own = MapSet.new(gaps, &gap_label/1)
+
+    blocked_by =
+      steps
+      |> Enum.flat_map(&Map.get(&1, :blocked_by, []))
+      |> Enum.reject(&MapSet.member?(own, gap_label(&1)))
+      |> Enum.uniq_by(&gap_label/1)
+
+    %{title: title("Epic review fails: " <> first.defect), description: body, gaps: gaps, blocked_by: blocked_by}
+  end
+
+  defp defect_step_section(step) do
+    """
+    ### #{step.name}
+
+    ```text
+    #{fence_safe(step.details)}
+    ```
+
+    Evidence:
+
+    #{evidence_list(step.evidence)}
+    """
   end
 
   defp finding_ticket(finding, outcome, issue, ci_log) do
@@ -803,7 +877,7 @@ defmodule SymphonyElixir.EpicReview do
     - [ ] The epic's review passes when it runs #{issue.identifier} again.
     """
 
-    %{title: title("Epic review finding: " <> first_line(finding)), description: body, gap: nil, blocked_by: []}
+    %{title: title("Epic review finding: " <> first_line(finding)), description: body, gaps: [], blocked_by: []}
   end
 
   defp ticket_intro(outcome, issue) do

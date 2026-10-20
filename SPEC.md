@@ -2748,7 +2748,11 @@ Rules:
   PR before it merges: a gap whose check needs another unmerged ticket, or the change running in
   Symphony, is filed as two follow-ups, the second blocked by the first (a gap names its blocker,
   another gap of the same answer or a sub-ticket of the epic; any other blocker is logged and left
-  out). No `Final verification:` ticket or close-out run is created.
+  out). The review files one follow-up per defect, not per failing step: each failing step names
+  the defect it rests on, steps that fail for one cause (a plan-level step that fails only because
+  a design check failed, and that check) name the same defect, and their follow-up lists every one
+  of those steps with its evidence and makes each an acceptance criterion. A failing step that names
+  no defect is a follow-up of its own. No `Final verification:` ticket or close-out run is created.
 - **Prompt.** The rendered prompt MUST NOT name Auto Review, `In Review`, the Human Review state,
   supervisor checks or `Final verification:` tickets. Prompt assembly still passes `state_machine`,
   always `designed`, so an instruction file that branches on it keeps rendering.
