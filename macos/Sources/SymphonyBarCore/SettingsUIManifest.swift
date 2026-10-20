@@ -8,7 +8,7 @@ import Foundation
 /// nor in `config/settings_ui_exempt.yml`, so a new setting ships with a control. `SettingsUIManifestTests`
 /// checks that every key the line editors (`RepositoriesConfig`, `RunProfilesConfig`, `MaxConcurrentAgents`,
 /// `TokenLimits`, `OperationTimeouts`, `GitHubUpdates`, `DispatchLoopLimits`, `BuiltInTicketPatterns`,
-/// `MacAppQAPlaybook`) write is here. Keep one string literal per line, sorted.
+/// `QAHostTools`, `MacAppQAPlaybook`) write is here. Keep one string literal per line, sorted.
 public enum SettingsUIManifest {
     public static let keyPaths: [String] = [
         "agent.command",
@@ -29,6 +29,7 @@ public enum SettingsUIManifest {
         "auto_review.playbooks.macos_app.dev_server",
         "auto_review.playbooks.macos_app.dev_server_port",
         "auto_review.playbooks.macos_app.launch_env",
+        "auto_review.playbooks.macos_app.requires",
         "github.webhooks.fallback_poll_interval_ms",
         "github.webhooks.silence_alert_minutes",
         "issues.states.ci_fix",

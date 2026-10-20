@@ -24,7 +24,8 @@ defmodule SymphonyElixir.QaAgent do
   when the pass launched an app). It also gets its host ports
   (`QA_HOST_PORTS` in the prompt and the session's environment) for the stubs and
   proxies it serves the app; a pass whose host-port tunnel to the QA host cannot
-  open is `blocked` with the reason before the agent starts. A pass that runs the
+  open is `blocked` with the reason before the agent starts, and so is one whose QA host lacks an
+  executable the playbook `requires` (`qa_host_missing_tool: <name>`). A pass that runs the
   `android_app` playbook gets the `qa_android_*` tools of a
   `SymphonyElixir.QaAndroid.Driver` in the same way, which uninstalls its apps and
   gives the emulator back when the pass ends. A pass that runs the
@@ -884,7 +885,8 @@ defmodule SymphonyElixir.QaAgent do
         opts = Keyword.merge(opts, qa_driver: driver, qa_android_driver: android_driver)
 
         try do
-          with {:ok, host_ports} <- host_ports(driver),
+          with :ok <- QaDriver.host_check(driver),
+               {:ok, host_ports} <- host_ports(driver),
                {:ok, job} <- start_qa_host_dev_server(driver, job, settings) do
             job = Map.merge(job, %{host_ports: host_ports, design_files: fetch_design(job, settings, opts)})
             prompt = prompt(job, fetch_parent(job, worktree, settings, opts))
@@ -892,6 +894,8 @@ defmodule SymphonyElixir.QaAgent do
             agent_module
             |> run_tracked_session(job, worktree, qa_settings, prompt, opts)
             |> limit_wide_pass(driver, QaDriver.wide_pass(driver), job)
+          else
+            {:error, cause} -> {:error, cause, empty_tokens()}
           end
         after
           QaDriver.stop(driver)
@@ -906,7 +910,7 @@ defmodule SymphonyElixir.QaAgent do
   defp host_ports(driver) do
     case QaDriver.host_ports(driver) do
       {:ok, host_ports} -> {:ok, host_ports}
-      {:error, reason} -> {:error, {:qa_host_tunnel_failed, reason}, empty_tokens()}
+      {:error, reason} -> {:error, {:qa_host_tunnel_failed, reason}}
     end
   end
 
@@ -918,7 +922,7 @@ defmodule SymphonyElixir.QaAgent do
          {:ok, %{url: url}} <- QaDriver.start_dev_server(driver, qa_host_dev_server_spec(playbook, settings)) do
       {:ok, Map.put(job, :qa_host_dev_server_url, url)}
     else
-      {:error, cause, log} -> {:error, {:qa_dev_server_failed, cause, log}, empty_tokens()}
+      {:error, cause, log} -> {:error, {:qa_dev_server_failed, cause, log}}
       _none -> {:ok, job}
     end
   end
@@ -1420,6 +1424,14 @@ defmodule SymphonyElixir.QaAgent do
 
   def blocked_reason({:qa_host_tunnel_failed, reason}),
     do: "the tunnel that forwards QA_HOST_PORTS to the QA host could not open, so the app could not reach the host's stubs: #{reason}"
+
+  def blocked_reason({:qa_host_missing_tool, names}),
+    do:
+      "qa_host_missing_tool: #{Enum.join(names, ", ")}: the QA host has no #{Enum.map_join(names, ", ", &"`#{&1}`")} on the build's PATH, " <>
+        "which the macos_app playbook `requires`; provision it with Symphony's scripts/qa-vm/provision.sh"
+
+  def blocked_reason({:qa_host_tool_check_failed, reason}),
+    do: "qa_host_tool_check_failed: could not check the QA host for the tools the macos_app playbook `requires`: #{reason}"
 
   def blocked_reason({:qa_browser_mcp_unavailable, :no_npx}),
     do: "`npx` (Node.js) is not on Symphony's PATH, so the web playbook's browser could not start"

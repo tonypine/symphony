@@ -2361,6 +2361,69 @@ defmodule SymphonyElixir.QaDriverTest do
       {{:ok, %{"pid" => pid}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
       assert error_code(QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "settings"})) == "qa_screenshot_failed"
     end
+
+    # A driver whose playbook requires `go` and `pg_ctl`, with the tool check answered by `reply`.
+    defp tool_check_driver(worktree, reply, overrides \\ %{}) do
+      test = self()
+
+      intercept = fn
+        "/bin/sh", ["-c", "for tool in" <> _script, "sh" | tools], opts ->
+          send(test, {:tool_check, tools, opts})
+          reply
+
+        _executable, _args, _opts ->
+          :pass
+      end
+
+      {{:ok, driver}, _log} =
+        with_log(fn ->
+          QaDriver.start_link(
+            worktree: worktree,
+            worker_host: "qa@qa-vm",
+            playbook: %{build: "make app", app: @app, requires: ["go", "pg_ctl"]},
+            host: remote_host(Map.put(overrides, :intercept, intercept)),
+            git: &clean_git/2
+          )
+        end)
+
+      on_exit(fn -> QaDriver.stop(driver) end)
+      driver
+    end
+
+    test "checks the executables the playbook requires on the QA host, in the build's environment", %{worktree: worktree} do
+      driver = tool_check_driver(worktree, {:ok, {"symphony-qa-tools:checked\n", 0}})
+      assert QaDriver.host_check(driver) == :ok
+      assert_received {:prepare, _home, _canary, _mode}
+      assert_received {:tool_check, ["go", "pg_ctl"], opts}
+      assert opts[:remote_env] == []
+      assert is_list(opts[:env])
+
+      driver = tool_check_driver(worktree, {:ok, {"symphony-qa-missing-tool:go\nsymphony-qa-tools:checked\n", 0}})
+      assert QaDriver.host_check(driver) == {:error, {:qa_host_missing_tool, ["go"]}}
+    end
+
+    test "says when the tool check could not run", %{worktree: worktree} do
+      for {reply, expected} <- [
+            {{:ok, {"ssh: connect to host qa-vm port 22: Connection refused\n", 255}}, "exit status 255: ssh: connect to host qa-vm"},
+            {{:error, :timeout}, ":timeout"},
+            {{:ok, {"", 0}}, "no answer: "}
+          ] do
+        driver = tool_check_driver(worktree, reply)
+        assert {:error, {:qa_host_tool_check_failed, reason}} = QaDriver.host_check(driver)
+        assert String.starts_with?(reason, expected)
+      end
+    end
+
+    test "checks no tools on a QA host it refused, or when the playbook requires none", %{worktree: worktree} do
+      driver = tool_check_driver(worktree, {:ok, {"symphony-qa-missing-tool:go\n", 0}}, %{prepare: {:error, {:unsafe, "has a private key ~/.ssh/id_ed25519"}}})
+      assert QaDriver.host_check(driver) == :ok
+      refute_received {:tool_check, _tools, _opts}
+
+      driver = remote_driver(worktree, remote_host())
+      assert QaDriver.host_check(driver) == :ok
+      refute_received {:cmd, "/bin/sh", ["-c", "for tool in" <> _script, "sh" | _tools], _opts}
+      assert QaDriver.host_check(nil) == :ok
+    end
   end
 
   describe "release pair" do
@@ -2855,6 +2918,11 @@ defmodule SymphonyElixir.QaDriverTest do
   end
 
   describe "Host" do
+    test "the tool check finds an executable on the build's PATH and names a missing one", %{worktree: worktree} do
+      driver = start_driver(worktree, playbook: %{requires: ["sh", "symphony-qa-no-such-tool"]}, host: host(%{cmd: &Host.cmd/3}))
+      assert QaDriver.host_check(driver) == {:error, {:qa_host_missing_tool, ["symphony-qa-no-such-tool"]}}
+    end
+
     test "runs commands with an output cap and a timeout" do
       assert {:ok, {"hello\n", 0}} = Host.cmd("/bin/echo", ["hello"], timeout_ms: 5_000)
       assert {:ok, {"lo\n", 0}} = Host.cmd("/bin/echo", ["hello"], timeout_ms: 5_000, output_limit: 3)

@@ -559,6 +559,9 @@ defmodule SymphonyElixir.SelfHeal do
   defp component_for({:dev_server_not_configured}), do: @dev_server
   defp component_for(:health_timeout), do: @dev_server
   defp component_for({:remote_worker_unsupported, _host}), do: @worker_host
+  # The QA host lacks a tool the playbook needs: Symphony's provisioning script installs it.
+  defp component_for({:qa_host_missing_tool, _names}), do: @worker_host
+  defp component_for({:qa_host_tool_check_failed, _reason}), do: @worker_host
   defp component_for(reason) when is_binary(reason), do: binary_component(reason)
   defp component_for(_cause), do: @default_component
 
