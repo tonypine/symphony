@@ -98,6 +98,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
           awaiting_checks: boolean(),
           missing_checks: [String.t()],
           red_kind: :failure | :cancelled | :human_only | :also_red_on_base,
+          past_human_only: :green | :pending | nil,
           base_red: Facts.base_red() | nil,
           failing_check: String.t() | nil,
           failed_checks: [check()],
@@ -316,6 +317,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       awaiting_checks: false,
       missing_checks: [],
       red_kind: :failure,
+      past_human_only: nil,
       base_red: nil,
       failing_check: nil,
       failed_checks: [],
@@ -359,6 +361,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       awaiting_checks: checks == [] and elem(ci, 0) == :pending,
       missing_checks: elem(ci, 1),
       red_kind: red_kind,
+      past_human_only: past_human_only(red_kind, checks),
       base_red: base_red,
       failing_check: failing |> Enum.map(& &1.name) |> List.first(),
       failed_checks: Enum.map(failing, &Map.take(&1, [:name, :run_id, :workflow_name, :conclusion])),
@@ -532,6 +535,14 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   end
 
   defp red(_ci, _failing, _base_ref, _repo, _opts), do: {:failure, nil, %{}}
+
+  # What a head red only on checks a person must clear reads as outside `Merging`: what its other
+  # checks say, `:pending` while one runs or none has reported yet, else `:green`.
+  defp past_human_only(:human_only, checks) do
+    checks |> Enum.reject(&CiPoller.human_only_check?/1) |> ci([], true) |> elem(0)
+  end
+
+  defp past_human_only(_red_kind, _checks), do: nil
 
   # Each failing check is red on the base too: the job of the same name failed in its workflow's
   # latest finished run on the base and, when the head's failed log names failing tests, failed every

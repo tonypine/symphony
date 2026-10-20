@@ -1310,6 +1310,7 @@ defmodule SymphonyElixir.QaAgentTest do
 
       assert prompt =~ ~r/Without a hand-off,\s+mark it `fail`/
       assert prompt =~ ~r/Never skip a criterion that a\s+change outside these paths could meet, such as one under `docs\/` or to `README.md`: a missing\s+change there is `fail`\./
+      assert prompt =~ ~r/A failed `protected paths` check on the PR is not a defect and not a\s+block: only a person clears it, and Symphony asks them before the merge\./
 
       for path <- AgentSandboxConfig.workspace_protected_paths(), do: assert(prompt =~ "`#{path}`")
 
