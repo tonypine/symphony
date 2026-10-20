@@ -194,6 +194,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       ci: :green,
       missing_checks: [],
       red_kind: :failure,
+      past_human_only: nil,
       failing_check: nil,
       failed_checks: [],
       check_names: ["specs"],
@@ -207,6 +208,12 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
   defp red, do: [ci: :red, failing_check: "specs", failed_checks: [%{name: "specs", run_id: "77", workflow_name: "ci", conclusion: "FAILURE"}]]
   defp dirty, do: [mergeable: :dirty]
+
+  # Red only on `protected paths`, which a person clears; `past` is what the other checks say.
+  defp human_only(past) do
+    failed = [%{name: "protected paths", run_id: "5"}]
+    [ci: :red, red_kind: :human_only, past_human_only: past, failing_check: "protected paths", failed_checks: failed]
+  end
 
   defp pr!(id, attrs), do: World.update(:prs, &Map.update!(&1, "https://github.com/acme/app/pull/#{id}", fn pr -> Map.merge(pr, Map.new(attrs)) end))
   defp pr(id), do: Map.fetch!(World.get(:prs), "https://github.com/acme/app/pull/#{id}")
@@ -1223,23 +1230,42 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert %{red: 2} = attempts(issue_id)
     end
 
-    test "CiPoller.await_waiver → R18: a protected paths check that only a person clears asks a person outside Merging too (G10)" do
-      issue_id =
-        ticket!("1", "QA",
-          ci: :red,
-          red_kind: :human_only,
-          failing_check: "protected paths",
-          failed_checks: [%{name: "protected paths", run_id: "5"}]
-        )
+    test "CiPoller.await_waiver: a protected paths check that only a person clears doesn't make the head red before Merging" do
+      for {id, state, rule} <- [{"1", "Code Review", "R27"}, {"2", "QA", "R27"}, {"3", "Rework", "R26"}] do
+        issue_id = ticket!(id, state, human_only(:green))
+        pid = start!()
+        tick!(pid, 3)
+        assert %{rule: ^rule, kind: :dispatch} = decision(issue_id)
+        assert PrWatch.dispatch_reason(Map.fetch!(World.get(:issues), issue_id), Config.settings!()) == nil
+        refute Hold.held?(@repo_key, issue_id, :needs_decision)
+        assert {issue_id, "CI green"} in World.calls(:label)
+        assert %{facts: %{ci: :green, failing_check: "protected paths"}} = watch(issue_id)
+        assert moves(issue_id) == []
+        stop_supervised!({Repo, @repo_key})
+      end
 
-      pid = start!()
-      tick!(pid, 3)
-      assert %{decision: %{title: "Protected files changed on TP-1", options: options}} = Hold.get(@repo_key, issue_id, :needs_decision)
-      assert Enum.map(options, & &1.label) == ["Add the waiver label", "Drop the change in Rework"]
-      assert [_one] = Enum.filter(comments(issue_id), &String.starts_with?(&1, "## Decision needed: Protected files"))
-      assert %{rule: "R4", owner: :person} = decision(issue_id)
-      assert moves(issue_id) == []
       assert World.calls(:rerun) == []
+    end
+
+    test "a protected paths check that only a person clears, with another check still running → R24: the reviewer waits for it" do
+      issue_id = ticket!("1", "Code Review", human_only(:pending))
+      pid = start!()
+      tick!(pid)
+      assert %{rule: "R24", kind: :wait} = decision(issue_id)
+      assert {issue_id, "CI running"} in World.calls(:label)
+
+      pr!("1", past_human_only: :green)
+      tick!(pid)
+      assert %{rule: "R27", kind: :dispatch} = decision(issue_id)
+    end
+
+    test "a CI Fix head left red only by a protected paths check → R25: back to its origin" do
+      issue_id = ticket!("1", "CI Fix", human_only(:green))
+      :ok = CiFix.record_origin(@repo_key, issue_id, "Code Review")
+      pid = start!()
+      tick!(pid)
+      assert moves(issue_id) == ["Code Review"]
+      refute Hold.held?(@repo_key, issue_id, :needs_decision)
     end
 
     test "AutoMerge's protected paths gate → R18 in Merging: auto-merge off and a person asked, once" do
@@ -1247,6 +1273,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
         ticket!("1", "Merging",
           ci: :red,
           red_kind: :human_only,
+          past_human_only: :green,
           auto_merge: :armed,
           failing_check: "protected paths",
           failed_checks: [%{name: "protected paths", run_id: "5"}]
@@ -1255,8 +1282,13 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       pid = start!()
       tick!(pid, 3)
       assert World.calls(:disarm) == ["https://github.com/acme/app/pull/1"]
-      assert %{decision: %{title: "Protected files changed on TP-1"}} = Hold.get(@repo_key, issue_id, :needs_decision)
+      assert %{decision: %{title: "Protected files changed on TP-1", options: options}} = Hold.get(@repo_key, issue_id, :needs_decision)
+      assert Enum.map(options, & &1.label) == ["Add the waiver label", "Drop the change in Rework"]
       assert [_one] = Enum.filter(comments(issue_id), &String.starts_with?(&1, "## Decision needed: Protected files"))
+      assert moves(issue_id) == []
+      # The check holds the merge back, yet the head's other checks passed: the label stays green.
+      assert {issue_id, "CI green"} in World.calls(:label)
+      refute {issue_id, "CI red"} in World.calls(:label)
     end
 
     test "CiPoller/PrReviewPoller parked_for_person → R4: a held ticket waits, whatever its PR" do
@@ -1465,6 +1497,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
         ticket!("1", "Merging",
           ci: :red,
           red_kind: :human_only,
+          past_human_only: :green,
           mergeable: :unstable,
           failing_check: "protected paths",
           failed_checks: [%{name: "protected paths", run_id: "5"}]

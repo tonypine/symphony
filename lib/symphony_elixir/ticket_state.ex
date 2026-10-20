@@ -8,7 +8,8 @@ defmodule SymphonyElixir.TicketState do
   signals ledger (the timeline both the machinery and agents read) and the runs dispatched since it
   last made progress, which `SymphonyElixir.DispatchLoop` counts, and the decisions a person recorded
   on it (`SymphonyElixir.Decisions`), which the description's Decisions section projects, and
-  the PR and CI watcher's fact record (`pr_watch`, written by `SymphonyElixir.PrWatch.Repo`).
+  the PR and CI watcher's fact record (`pr_watch`, written by `SymphonyElixir.PrWatch.Repo`), and
+  the sequence number of the last event in its event stream (`event_seq`, `SymphonyElixir.TicketEvents`).
 
   The record is persisted by `SymphonyElixir.RunStore`; this module owns its shape and the
   operations that move it. It is inert by design: nothing dispatches on a record yet. It exists so
@@ -184,6 +185,7 @@ defmodule SymphonyElixir.TicketState do
           path_unlocks: [path_unlock()],
           decisions: [decision()],
           pr_watch: pr_watch() | nil,
+          event_seq: non_neg_integer(),
           updated_at: DateTime.t() | nil
         }
 
@@ -221,6 +223,7 @@ defmodule SymphonyElixir.TicketState do
       path_unlocks: normalize_path_unlocks(Map.get(record, :path_unlocks)),
       decisions: normalize_decisions(Map.get(record, :decisions)),
       pr_watch: normalize_pr_watch(Map.get(record, :pr_watch)),
+      event_seq: normalize_event_seq(Map.get(record, :event_seq)),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -241,6 +244,7 @@ defmodule SymphonyElixir.TicketState do
       path_unlocks: [],
       decisions: [],
       pr_watch: nil,
+      event_seq: 0,
       updated_at: nil
     }
   end
@@ -861,6 +865,9 @@ defmodule SymphonyElixir.TicketState do
   end
 
   defp normalize_keys(_keys), do: []
+
+  defp normalize_event_seq(seq) when is_integer(seq) and seq >= 0, do: seq
+  defp normalize_event_seq(_seq), do: 0
 
   defp map_string(map, key), do: normalize_string(Map.get(map, key))
 

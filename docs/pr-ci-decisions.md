@@ -3,6 +3,10 @@
 What the PR and CI watcher does for a ticket in each phase and PR situation. Rules are checked
 in order and the first that matches decides.
 
+A workflow run counts by its newest attempt only. A run with a check still queued or running is
+pending, even when an earlier attempt's checks were cancelled: a rerun waiting for a runner reads
+as checks running (R24, or R32 in Merging), never as a cancelled run, so R19 never reruns it.
+
 <!-- BEGIN mix pr_decision.table: generated from SymphonyElixir.PrDecision.rules/0, do not edit by hand -->
 
 ## Rules
@@ -29,7 +33,7 @@ in order and the first that matches decides.
 | R16 | Merging | GitHub has not computed whether the PR can merge | `wait` on `github` |
 | R17 | Code Review, QA, Rework, CI Fix, Merging | A required check never reported within `landing_wait_timeout_ms` | `decision`: proceed without it for this PR (this head only), rerun, or fix the workflow in Rework |
 | R18 | Code Review, QA, Rework, CI Fix, Merging | Only a check a person must clear is red (`protected paths`) | `decision`: add the waiver label, or drop the change in Rework |
-| R19 | Code Review, QA, Rework, CI Fix, Merging | Red only because every run of a workflow was cancelled | `rerun_failed`, no attempt spent |
+| R19 | Code Review, QA, Rework, CI Fix, Merging | Red only because every run of a workflow was cancelled, its newest attempt with nothing queued or running | `rerun_failed`, no attempt spent |
 | R20 | Code Review, QA, Rework, CI Fix, Merging | Red, and the same failure 3 fix runs in a row or `red_attempts` at `max_red_attempts` | `file_fix_ticket` for the failing check, waiting on `symphony` until it is terminal |
 | R21 | Code Review, QA, Rework, CI Fix, Merging | Red after a rerun | `ci_fix` for the red head, back to the phase it came from |
 | R22 | Code Review, QA, Rework, CI Fix, Merging | Red, not rerun yet | `rerun_failed` once |
@@ -105,8 +109,11 @@ Before deciding, the watcher completes the read with what it keeps between reads
 ticket's record): the CI Fix runs counted, the heads whose failed checks it reran, whether a rerun's
 checks have reported yet (a head whose rerun hasn't reported reads as running), since when a
 `Merging` head has been blocked by branch protection on green checks (the merge wait), and the last
-head Symphony put on a `Merging` PR (any other one is a person's push). In `Merging`, a failed
-`protected paths` check that the ticket's unlock decisions cover doesn't hold the head back. The
+head Symphony put on a `Merging` PR (any other one is a person's push). A failed check only a person
+clears (`protected paths`) doesn't make a head red before `Merging`: when it is the only failure,
+the head reads as its other checks (green once they passed, running while one runs), so the
+reviewer, QA and the rework run go on and a CI Fix head returns to its origin. In `Merging`, that
+check holds the head back unless the ticket's unlock decisions cover it. The
 review comments still to address come from the PR review poller's record: reviewer comments left on
 the current head, once `pull_requests.review_comments.rework_delay_minutes` has passed since the
 latest one (a push that addresses them moves the head, so they never send the fix back twice).
@@ -127,9 +134,12 @@ Rework** moves the ticket to Rework, where nothing is asked again on that head. 
 the answer from the ticket's recorded decisions once the hold clears; an answer that picks no option
 starts the wait over, and the question comes again.
 
-A red head whose only failure is `protected paths`, which only a person clears, asks in every phase
-(R18): add the waiver label to the PR (the check runs again and passes), or drop the change in
-Rework. A check that is red on the base branch too (R23) is a wait on CI, with no CI Fix spent:
+A head whose only failure is `protected paths`, which only a person clears, is not red: the CI
+poller records it `green` with the check under `failed_checks`, the ticket's label is `CI green`, and
+the reviewer and QA run on it. Only the landing asks (R18, reached in `Merging`): add the waiver label
+to the PR (the check runs again and passes), or drop the change in Rework. A head with another failed
+check beside it is red as usual, and its CI Fix prompt names `protected paths` as not the agent's to
+fix. A check that is red on the base branch too (R23) is a wait on CI, with no CI Fix spent:
 logged once per base and check, listed under `red_bases` in `/api/v1/state`, and cleared once the
 base is green. A failing check counts as red on the base only when the job of the same name failed
 in its workflow's latest finished run there, not when another job of that workflow did; and when the

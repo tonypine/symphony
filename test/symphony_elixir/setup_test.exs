@@ -328,7 +328,8 @@ defmodule SymphonyElixir.SetupTest do
                "teams",
                "labels",
                "deprecated_label",
-               "hold_drift"
+               "hold_drift",
+               "qa_host"
              ]
 
       for check <- Setup.checks() do
