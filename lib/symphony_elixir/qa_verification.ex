@@ -696,6 +696,7 @@ defmodule SymphonyElixir.QaVerification do
       cause: Map.get(result, :cause),
       scope: Map.get(result, :scope),
       app_check: Map.get(result, :app_check),
+      verdict_retries: Map.get(result, :verdict_retries),
       tokens: tokens,
       playbooks: playbook_kinds(playbooks)
     }

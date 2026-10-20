@@ -7,6 +7,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   alias SymphonyElixir.AgentTools.{GitHub, Linear}
   alias SymphonyElixir.Linear.Usage, as: LinearUsage
+  alias SymphonyElixir.QaAgent.Verdict, as: QaVerdict
   alias SymphonyElixir.QaAndroid.Driver, as: QaAndroidDriver
   alias SymphonyElixir.QaDriver
   alias SymphonyElixir.ReviewAgent.Verdict
@@ -1102,7 +1103,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_android_dark_mode" => ["mode"],
     "qa_android_font_scale" => ["scale"],
     "qa_android_put_file" => ["local_path", "dest"],
-    "review_verdict" => Verdict.tool_arguments()
+    "review_verdict" => Verdict.tool_arguments(),
+    "qa_verdict" => QaVerdict.tool_arguments()
   }
   @legacy_tool_aliases %{
     "linear.get_current_issue" => "linear_get_current_issue",
@@ -1189,6 +1191,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     |> Enum.filter(&(Map.get(&1, "name") in @qa_tools))
     |> Enum.map(&qa_tool_spec/1)
     |> Kernel.++(@qa_tool_schemas ++ @qa_android_tool_schemas)
+    |> Kernel.++([QaVerdict.tool_spec()])
   end
 
   def tool_specs(_scope), do: tool_specs()
@@ -1219,6 +1222,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp execute_tool("linear_" <> _rest = tool, context, args, opts), do: execute_linear_tool(tool, context, args, opts)
   defp execute_tool("github_" <> _rest = tool, context, args, opts), do: execute_github_tool(tool, context, args, opts)
+
+  # The QA agent (`SymphonyElixir.QaAgent`) records its verdict with `qa_verdict`.
+  defp execute_tool("qa_verdict", _context, args, opts), do: QaVerdict.record(args, Keyword.get(opts, :qa_verdict_sink))
 
   defp execute_tool("qa_android_" <> _rest = tool, _context, args, opts),
     do: QaAndroidDriver.call_tool(Keyword.get(opts, :qa_android_driver), tool, args)
@@ -1609,6 +1615,16 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
+  defp tool_error_payload({:tool_scope_rejected, _scope, "qa_verdict"}) do
+    %{
+      "error" => %{
+        "code" => "tool_scope_rejected",
+        "message" => "qa_verdict records the QA agent's verdict; only a QA session may call it.",
+        "tool" => "qa_verdict"
+      }
+    }
+  end
+
   defp tool_error_payload({:tool_scope_rejected, :read_only, tool}) do
     %{
       "error" => %{
@@ -1624,7 +1640,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "tool_scope_rejected",
-        "message" => "The QA tool scope reads the issue and PR and attaches evidence files; #{tool} is not available. Report findings in your JSON verdict instead.",
+        "message" => "The QA tool scope reads the issue and PR and attaches evidence files; #{tool} is not available. Report findings in your qa_verdict call instead.",
         "tool" => tool,
         "scope" => "qa"
       }
@@ -1665,6 +1681,24 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "code" => "review_verdict_unavailable",
         "message" => "This session records no review verdict; end your turn with the verdict as your final message instead."
+      }
+    }
+  end
+
+  defp tool_error_payload({:invalid_qa_verdict, reason}) do
+    %{
+      "error" => %{
+        "code" => "invalid_qa_verdict",
+        "message" => "Symphony could not read the verdict: #{QaVerdict.describe_error(reason)} Fix it and call qa_verdict again."
+      }
+    }
+  end
+
+  defp tool_error_payload(:qa_verdict_unavailable) do
+    %{
+      "error" => %{
+        "code" => "qa_verdict_unavailable",
+        "message" => "This session records no QA verdict; end your turn with the verdict as your final message instead."
       }
     }
   end

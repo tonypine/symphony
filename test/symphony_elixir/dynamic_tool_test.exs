@@ -71,6 +71,51 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
   end
 
+  describe "qa_verdict" do
+    test "only the QA scope lists and runs it" do
+      assert "qa_verdict" in Enum.map(DynamicTool.tool_specs(:qa), & &1["name"])
+      refute "qa_verdict" in Enum.map(DynamicTool.tool_specs(), & &1["name"])
+      refute "qa_verdict" in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
+
+      for scope <- [nil, :read_only] do
+        opts = [issue: %Issue{id: "issue-current"}, tool_scope: scope, qa_verdict_sink: self()]
+        response = DynamicTool.execute("qa_verdict", %{"verdict" => "pass"}, opts)
+
+        assert %{"error" => %{"code" => "tool_scope_rejected", "tool" => "qa_verdict", "message" => message}} = Jason.decode!(response["output"])
+        assert message == "qa_verdict records the QA agent's verdict; only a QA session may call it."
+      end
+
+      refute_received {:qa_verdict, _result}
+    end
+
+    test "records a readable verdict with the QA process and refuses one it cannot read" do
+      opts = [issue: %Issue{id: "issue-current"}, tool_scope: :qa, qa_verdict_sink: self()]
+
+      response = DynamicTool.execute("qa_verdict", %{"verdict" => "Pass", "summary" => "Fine."}, opts)
+
+      assert response["success"]
+      assert %{"recorded" => true, "verdict" => "pass", "next" => next} = Jason.decode!(response["output"])
+      assert next =~ "end your turn"
+      assert_received {:qa_verdict, %{verdict: :pass, summary: "Fine."}}
+
+      response = DynamicTool.execute("qa_verdict", %{"verdict" => "fail"}, opts)
+
+      refute response["success"]
+      assert %{"error" => %{"code" => "invalid_qa_verdict", "message" => message}} = Jason.decode!(response["output"])
+      assert message == "Symphony could not read the verdict: a fail needs at least one finding or failing step. Fix it and call qa_verdict again."
+
+      response = DynamicTool.execute("qa_verdict", %{"verdict" => "pass", "score" => 3}, opts)
+      assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+      refute_received {:qa_verdict, _result}
+    end
+
+    test "is unavailable in a QA session with no process to record to" do
+      response = DynamicTool.execute("qa_verdict", %{"verdict" => "pass"}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+
+      assert %{"error" => %{"code" => "qa_verdict_unavailable"}} = Jason.decode!(response["output"])
+    end
+  end
+
   test "tool_specs advertises scoped Linear tools and not raw GraphQL" do
     tool_names = Enum.map(DynamicTool.tool_specs(), & &1["name"])
 
@@ -800,7 +845,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         )
 
       assert %{"error" => %{"code" => "tool_scope_rejected", "scope" => "qa", "message" => message}} = Jason.decode!(response["output"])
-      assert message =~ "JSON verdict"
+      assert message =~ "Report findings in your qa_verdict call instead."
     end
 
     test "only the QA scope lists and runs the host-side qa tools" do
