@@ -99,7 +99,8 @@ defmodule SymphonyElixir.QaAgent do
           required(:evidence) => [String.t()],
           optional(:checklist) => true,
           optional(:gap) => String.t(),
-          optional(:blocked_by) => [String.t()]
+          optional(:blocked_by) => [String.t()],
+          optional(:defect) => String.t()
         }
   @type result :: %{
           required(:verdict) => verdict(),
@@ -663,13 +664,21 @@ defmodule SymphonyElixir.QaAgent do
     identifiers of this epic's sub-tickets. Symphony files the gaps in that order and links each
     follow-up to its blockers, so the second one waits until the first has merged and, on Symphony's
     own repository, until the running app includes it.
+
+    Name the defect each failing step rests on in its `"defect"`: a few words that say what is
+    broken, such as "Split view wider than the window on Today". Symphony files one follow-up per
+    defect, titled after it, listing every step that rests on it. Two steps that fail for the same
+    cause carry the same `defect`, word for word; a plan-level step that fails only because another
+    step (a design check, say) failed names that step's defect, not a defect of its own, and its
+    `details` say so. Steps that fail for different causes carry different defects.
     """
   end
 
   defp epic_section(_job), do: ""
 
   defp checklist_field(%{epic_review: true}),
-    do: ~s(,\n      "checklist": true | false,\n      "gap": "<optional: a short label for a failing step>",\n      "blocked_by": ["<optional: gap labels or epic sub-ticket identifiers it waits on>"])
+    do:
+      ~s(,\n      "checklist": true | false,\n      "gap": "<optional: a short label for a failing step>",\n      "blocked_by": ["<optional: gap labels or epic sub-ticket identifiers it waits on>"],\n      "defect": "<for a failing step: a few words naming the defect it rests on>"])
 
   defp checklist_field(_job), do: ""
 
@@ -894,6 +903,7 @@ defmodule SymphonyElixir.QaAgent do
 
     coerced = if Map.get(step, "checklist") == true, do: Map.put(coerced, :checklist, true), else: coerced
     coerced = put_trimmed(coerced, :gap, Map.get(step, "gap"))
+    coerced = put_trimmed(coerced, :defect, Map.get(step, "defect"))
 
     case step |> Map.get("blocked_by") |> List.wrap() |> string_list() do
       [] -> coerced

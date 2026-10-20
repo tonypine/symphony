@@ -578,6 +578,108 @@ defmodule SymphonyElixir.EpicReviewTest do
       assert report =~ "could not file any follow-up for them"
     end
 
+    test "failing steps that rest on one defect are one follow-up listing every step and its evidence" do
+      agent_result(:fail, %{
+        summary: "The split view overflows on Today; Settings lacks the key field.",
+        steps: [
+          @checked_row,
+          %{
+            name: "Design check: app shell, Today with the inspector open",
+            status: "fail",
+            details: "The split view grows to 1523 pt in a 1400 pt window.",
+            evidence: ["https://uploads.linear.test/today-wide.png"],
+            defect: "Split view wider than the window on Today"
+          },
+          %{name: "Settings shows the API key field", status: "fail", details: "No field.", evidence: ["https://uploads.linear.test/s2.png"], checklist: true},
+          %{
+            name: "Plan level: the overall app wrapper",
+            status: "fail",
+            details: "Fails on Today (see the design check).",
+            evidence: ["https://uploads.linear.test/today-inspector.png"],
+            checklist: true,
+            defect: " split view wider than the window on today "
+          }
+        ]
+      })
+
+      assert :ok = run(epic())
+
+      assert [shared, single] = created_subissues()
+
+      assert shared["title"] == "Epic review fails: Split view wider than the window on Today"
+      description = shared["description"]
+      assert description =~ "## Defect\n\nSplit view wider than the window on Today\n"
+      assert description =~ "2 failing step(s) of the review rest on this defect"
+      assert description =~ "### Design check: app shell, Today with the inspector open\n"
+      assert description =~ "The split view grows to 1523 pt in a 1400 pt window."
+      assert description =~ "- https://uploads.linear.test/today-wide.png"
+      assert description =~ "### Plan level: the overall app wrapper\n"
+      assert description =~ "Fails on Today (see the design check)."
+      assert description =~ "- https://uploads.linear.test/today-inspector.png"
+      assert description =~ ~s(- [ ] The step "Design check: app shell, Today with the inspector open" behaves as TP-823 describes)
+      assert description =~ ~s(- [ ] The step "Plan level: the overall app wrapper" behaves as TP-823 describes)
+      assert description =~ "- [ ] The epic's review passes these steps when it runs TP-823 again."
+      refute description =~ "Settings shows the API key field"
+
+      # A step with no defect is filed as it always was.
+      assert single["title"] == "Epic review fails: Settings shows the API key field"
+      assert single["description"] =~ "## Failing step\n\nSettings shows the API key field"
+      refute single["description"] =~ "## Defect"
+
+      assert [%{name: "epic_review", details: %{signal: "epic_review_gaps", filed: 2}} | _] = signals()
+    end
+
+    test "a plan-level step that names a design check's defect files no ticket of its own" do
+      agent_result(:fail, %{
+        summary: "The Companies table's People column is empty.",
+        steps: [
+          %{name: "Plan level: redesign individual pages", status: "fail", details: "Companies fails (see the design check).", evidence: [], defect: "People column empty"},
+          %{name: "Design check: Companies table", status: "fail", details: "Reads – while the pages list contacts.", evidence: [], defect: "People column empty"}
+        ]
+      })
+
+      assert :ok = run(epic())
+
+      assert [input] = created_subissues()
+      assert input["title"] == "Epic review fails: People column empty"
+      assert input["description"] =~ "### Plan level: redesign individual pages"
+      assert input["description"] =~ "### Design check: Companies table"
+      assert input["description"] =~ "The review recorded no evidence for this; see the step details."
+      assert [%{name: "epic_review", details: %{signal: "epic_review_gaps", filed: 1}} | _] = signals()
+    end
+
+    test "a defect's follow-up answers to its steps' gap labels and waits on what they wait on, not on itself" do
+      agent_result(:fail, %{
+        summary: "The walkthrough needs a QA tool that is not there.",
+        steps: [
+          %{name: "Record the walkthrough", status: "fail", details: "", evidence: [], defect: "No walkthrough", gap: "G2", blocked_by: ["G1"]},
+          %{name: "Plan level: walkthrough", status: "fail", details: "", evidence: [], defect: "No walkthrough", gap: "G3", blocked_by: ["g2", "G1"]},
+          %{name: "Check the walkthrough", status: "fail", details: "", evidence: [], blocked_by: ["G3"]},
+          %{name: "QA can serve a prepared checkout", status: "fail", details: "", evidence: [], gap: "G1"}
+        ]
+      })
+
+      client =
+        linear_client(
+          create:
+            create_by_title(%{
+              "Epic review fails: QA can serve a prepared checkout" => {"tool-id", "TP-950"},
+              "Epic review fails: No walkthrough" => {"walk-id", "TP-951"},
+              "Epic review fails: Check the walkthrough" => {"check-id", "TP-952"}
+            })
+        )
+
+      assert :ok = run(epic(), linear_client: client)
+
+      assert Enum.map(created_subissues(), & &1["title"]) == [
+               "Epic review fails: QA can serve a prepared checkout",
+               "Epic review fails: No walkthrough",
+               "Epic review fails: Check the walkthrough"
+             ]
+
+      assert relations() == [{"tool-id", "walk-id"}, {"walk-id", "check-id"}]
+    end
+
     test "a gap that waits on another gap of the same answer is filed after it, blocked by it" do
       agent_result(:fail, %{
         summary: "The walkthrough needs a QA tool that is not there.",
