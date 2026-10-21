@@ -17,7 +17,7 @@ extension SymphonyWindowModel {
     /// Reads Shipped's merged tickets for its period and every learning while Shipped shows. Symphony answers both
     /// from its own records, with no Linear request.
     func readShippedIfDue() {
-        guard selection == .shipped, shownTicket == nil, !readingShipped, state.countsKnown,
+        guard selection == .shipped, !showsPage, !readingShipped, state.countsKnown,
             shippedReadAt.map({ Date().timeIntervalSince($0) >= Self.historyInterval }) ?? true
         else { return }
         readingShipped = true

@@ -31,7 +31,7 @@ extension SymphonyWindowModel {
     /// Reads Audit's records under the filters the API applies, and the chain verification of their days, while
     /// Audit shows. Symphony answers both from its local audit files, with no Linear request.
     func readAuditIfDue() {
-        guard selection == .audit, shownTicket == nil, !readingAudit, state.countsKnown,
+        guard selection == .audit, !showsPage, !readingAudit, state.countsKnown,
             auditReadAt.map({ Date().timeIntervalSince($0) >= Self.ticketSlowInterval }) ?? true
         else { return }
         readingAudit = true

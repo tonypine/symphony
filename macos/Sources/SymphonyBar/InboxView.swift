@@ -19,7 +19,9 @@ struct InboxContent: View {
                 openTicket: model.openTicket,
                 openMention: model.openPeek,
                 openMentionDirectly: model.openMentionDirectly,
-                watches: model.watchState.watches
+                watches: model.watchState.watches,
+                scrollOffset: { model.inboxScroll[$0] },
+                rememberScroll: { model.inboxScroll[$1] = $0 }
             )
             // N4: a chip opens its peek beside the review, or over the window when that would leave it too narrow.
             .modifier(PeekPresenter(model: model))
@@ -68,6 +70,10 @@ struct InboxView: View {
     var openMentionDirectly: (Mention) -> Void = { _ in }
     /// The PR and CI watcher's block on each ticket, by identifier, for a watcher decision's evidence (S16).
     var watches: [String: WatchBlock] = [:]
+    /// Where each review was scrolled to, by issue id, and keeping it: a page opened from the review and left with ⌘[
+    /// finds it where it was.
+    var scrollOffset: (String) -> Double? = { _ in nil }
+    var rememberScroll: (Double, String) -> Void = { _, _ in }
     /// True while the review is narrower than `narrowReviewWidth`.
     @State private var narrow = false
 
@@ -102,6 +108,7 @@ struct InboxView: View {
                             }
                         }
                     }
+                    .modifier(RememberedScroll(offset: scrollOffset(item.id), remember: { rememberScroll($0, item.id) }))
                     // A new item starts with its own picks (the recommended options).
                     .id(item.id)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -122,6 +129,24 @@ struct InboxView: View {
                 return .handled
             }
         }
+    }
+}
+
+/// A review's scroll view that starts where the review was left, and keeps where it is.
+private struct RememberedScroll: ViewModifier {
+    let offset: Double?
+    let remember: (Double) -> Void
+    @State private var position = ScrollPosition()
+
+    func body(content: Content) -> some View {
+        content
+            .scrollPosition($position)
+            .onScrollGeometryChange(for: Double.self) { $0.contentOffset.y } action: { _, offset in remember(offset) }
+            .onAppear {
+                guard let offset else { return }
+                // Once the review is laid out.
+                DispatchQueue.main.async { position.scrollTo(y: offset) }
+            }
     }
 }
 

@@ -73,13 +73,20 @@ public struct StopRunSheet: Equatable, Identifiable {
     }
 }
 
-/// Where the Symphony window is: a sidebar view or a ticket page.
+/// Where the Symphony window is: a sidebar view, a ticket page (D3) or a pull request page (D15).
 public enum WindowPlace: Equatable, Hashable {
     case view(SymphonyView)
     case ticket(String)
+    case pullRequest(PullRequestPlace)
+
+    /// True on a page, which no sidebar item selects.
+    public var isPage: Bool {
+        if case .view = self { return false }
+        return true
+    }
 }
 
-/// P10: ⌘[ and ⌘] go back and forward between the views and the ticket pages the window showed, as a browser does.
+/// P10: ⌘[ and ⌘] go back and forward between the views and the pages the window showed, as a browser does.
 public struct NavigationHistory: Equatable {
     public static let backTitle = "Back"
     public static let forwardTitle = "Forward"

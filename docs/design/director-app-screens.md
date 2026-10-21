@@ -129,7 +129,8 @@ later journeys point back to it. The mock draws every screen under its ID.
   request the question, What happened and the options mention is a chip (N1) inside the sentence, its short name
   joined when the text gives one ("TP-891 · Remove the retired review states"); resting the pointer on it for half a
   second opens its popover (N2 for a ticket, N3 for a PR, "Symphony can't see TP-999." for one Symphony couldn't
-  read), and a click opens its peek (N4, below); ⌘-click or ⌘Return opens the ticket page or the PR on GitHub. The
+  read), and a click opens its peek (N4, below); ⌘-click or ⌘Return opens the ticket page (D3) or the PR's page
+  (D15), or the link of a PR whose repo Symphony doesn't know. The
   text wraps, selects and copies like any Mac text (DD-5). The chips' offscreen snapshots, the review at 1200 pt and in the narrow pane and the three popovers, light
   and dark, are in `macos/Tests/Snapshots`. The banner at the bottom is the Undo after D12d.
 - **Actions:** **Send Decision…** (prominent, ⌘↩), **Open in Linear**, ⋯ **Send to Rework…**. A number key picks the
@@ -157,14 +158,43 @@ later journeys point back to it. The mock draws every screen under its ID.
   and for how long, what it waits on, its PR as a chip), **Connected** (its parent with the sub-tickets' progress
   strip, N10; sub-tickets, blocked by, blocks, related) and its latest review brief's headline; one Symphony doesn't
   track shows only the reference's facts (Part of, Work, Waiting on). Then **Open Ticket Page** (D3, pushed in the
-  window, ⌘[ returns to the decision) and **Open in Linear**. A **pull request** shows N3's head and figures and
-  **Open on GitHub**; a mention Symphony can't see says so, with its link. Connected comes from the Inbox's
+  window, ⌘[ returns to the decision) and **Open in Linear**. A **pull request** shows N3's head and figures,
+  **Open Pull Request Page** (D15, pushed in the window, ⌘[ returns to the decision) and **Open on GitHub**; a mention Symphony can't see says so, with its link. Connected comes from the Inbox's
   `context` of a ticket that waits on you, then the `connected` of its `/api/v1/:issue_identifier` (a ticket Symphony
   runs or watches, TP-1001; a blocker or sub-ticket it names without a title takes the Inbox reference's), then
   `/api/v1/initiatives` (a plan's sub-tickets, a sub-ticket's parent and blockers) and the reference's parent, each
   group from the first source that has it. When the review would be under 560 pt beside the inspector (a 1200 pt
   window's Inbox leaves it about 260 pt), the peek is a sheet over the window instead. The ticket peek, the PR peek and the peek beside the review are offscreen snapshots,
   light and dark, in `macos/Tests/Snapshots` (`peek-ticket`, `peek-pr`, `peek-beside-review`).
+
+#### D15 · Pull request page
+
+- **Reached from (DD-3, links only, no sidebar item):** ⌘-click or ⌘Return on any PR chip (N1); **Open Pull Request
+  Page** in the PR peek (N4); the ticket page's Pull request fact (D3, J3). Pushed in the window like D3: ⌘[ returns
+  to where it opened, the Inbox with the same item, picks and scroll position.
+- **Toolbar:** back, `#448 · <title>` (the title without the ticket identifier it starts with), `<repo> · for
+  <ticket>` under it (`· merged 2 h ago`, `· closed`), each on one line cut short past 260 pt, so the window's own
+  items (scope, dispatch, Refresh) never go to the toolbar's overflow menu; the header shows the title whole.
+- **Actions:** **Open on GitHub** (from the link the page was opened from while it reads) and **Open Ticket**, in the
+  header beside the review state, as on D3: beside a pull request's title and the window's own items, the toolbar
+  moved them into its overflow menu at 1200 and 1400 pt. When the header is too narrow for both, they take a row of
+  their own under the badge.
+- **Shows:** the review state as C7 with when it opened and was last pushed, then the title. Left column: **What it
+  does** (the `## This PR` summary); **Review history** (each Code Review and QA verdict oldest first: time, the
+  verdict as C7 in words, "Changes asked", "Approved", "Passed", "Failed", and its reason with mentions as chips);
+  **What it changes** (each area with its files and `+added −removed`, then "Grouped by area, not by file. Open on
+  GitHub for the diff."). Right column: **Health** (checks with symbol and counts, Code Review's verdict and round,
+  QA, overlaps as PR chips); **Size** (files, lines, commits); **Ticket** (its chip, its stage as C7, what it waits
+  on). Below 776 pt of content (a 960 pt window) the right column goes under the left. No file name, branch or commit
+  hash: the diff stays on GitHub.
+- **States:** loading (placeholder cards, a spinner in the subtitle); merged ("merged 2 h ago", the history ends
+  with Merged); closed; GitHub unavailable (the cards that need GitHub say "GitHub didn't answer." with **Try
+  Again**; the history, verdicts, overlaps and ticket still show); untracked, a PR no ticket Symphony sees owns (the
+  title and **Open on GitHub** only); not found (C20 with **Open on GitHub**); an older Symphony (C20, update it).
+- **Data:** `GET /api/v1/pull_requests/:repo_key/:number` (TP-959), read on open, ⌘R and Try Again; chips take the
+  Inbox's `references` where it has them. Offscreen snapshots, light and dark, in `macos/Tests/Snapshots`:
+  `pr-page` (1200 pt), `pr-page-960`, and `pr-page-loading`, `-merged`, `-closed`, `-github-unavailable`,
+  `-untracked`, `-not-found`.
 
 #### D2d · Inbox: a ticket to clarify
 
@@ -221,7 +251,7 @@ later journeys point back to it. The mock draws every screen under its ID.
 | Step | The Director | Screen |
 | --- | --- | --- |
 | 1 | Gets "SHOP-305 looks stuck", or sees Needs attention on the Overview | D14, D1 (attention) |
-| 2 | Opens the ticket: run 2, no activity for 14 min; run 1 failed on the same test | D3 |
+| 2 | Opens the ticket: run 2, no activity for 14 min; run 1 failed on the same test; its PR fact opens the PR's page | D3 → D15 |
 | 3 | Reads the transcript: a test that hangs | D4 |
 | 4 | Stops the run and moves it to Backlog with a note | D12c |
 | 5 | The attention row leaves on the next poll; the timeline says what was done | D1, D3 |
@@ -253,7 +283,7 @@ later journeys point back to it. The mock draws every screen under its ID.
 - **States:** working, waiting (says on what: you, CI, a blocker, a slot, a retry at a time), in review (gate and QA
   results), done (PR and when it merged).
 - **Conventions:** opens from any row with Return or a double-click, ⌘[ goes back; a single click shows the same facts
-  in the inspector (D6).
+  in the inspector (D6). The Pull request fact and the done line open the PR's page (D15).
 - **Data:** `/api/v1/:issue_identifier`, `run_history`, `/api/v1/runs`; the brief, earlier decisions and `references`
   from the ticket's `/api/v1/inbox` item.
 

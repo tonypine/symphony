@@ -145,7 +145,7 @@
           "review_state": "changes_requested",
           "summary": "The Final verification and Supervisor check steps are gone, so a ticket goes from QA straight to Merging.",
           "ticket": "TP-892",
-          "title": "TP-892 Retire two old review steps",
+          "title": "TP-892 Remove the Final verification and Supervisor check flows",
           "url": "https://github.com/tonypine/symphony/pull/448"
         },
         "TP-880": {

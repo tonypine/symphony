@@ -43,6 +43,6 @@
     "title": "Retire two old review steps",
     "waiting_on": "you"
   },
-  "title": "TP-892 Retire two old review steps",
+  "title": "TP-892 Remove the Final verification and Supervisor check flows",
   "url": "https://github.com/tonypine/symphony/pull/448"
 }
