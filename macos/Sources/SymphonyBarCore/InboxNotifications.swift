@@ -122,7 +122,7 @@ public struct InboxNotifier: Equatable {
             key: "\(kind.rawValue):\(ticket.issueID ?? ticket.identifier)",
             kind: kind,
             title: "\(ticket.identifier) waits on you",
-            body: [ticket.kind.inboxKind?.word, what].compactMap { $0 }.joined(separator: ": "),
+            body: [ticket.isDecision ? "Decision" : ticket.kind.inboxKind?.word, what].compactMap { $0 }.joined(separator: ": "),
             issueID: ticket.issueID ?? ticket.identifier,
             offersApproveAndMerge: kind == .pr && ticket.checksGreen
         )

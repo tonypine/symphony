@@ -2952,7 +2952,8 @@ An issue is dispatch-eligible only if all are true:
     fail to load as an unknown key.
   - The state API reports `waiting_on_you`, the Inbox's items (`GET /api/v1/inbox`) in short:
     oldest first, each with its identifier, repo, title, URL, kind (`action`, `plan`, `clarify`
-    or `blocked`), its one-line ask as `headline` and how long it has waited, and
+    or `blocked`), `decision` (true for a request with options, so a client names it a decision as
+    the Inbox does), its one-line ask as `headline` and how long it has waited, and
     `counts.waiting_on_you` is their number. It MUST drop an issue the orchestrator sees running or
     watches outside `Plan Review`, unless a hold pauses it. `inbox_read` is false until Symphony's
     first successful Linear read for the Inbox, so a client can tell an empty list from one not

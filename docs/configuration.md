@@ -2596,7 +2596,9 @@ comments again only when the ticket changed, and adds the quality gate's holds a
 `issue_identifier`, `repo_key`, `title`, `url`, `state`, `kind` (`action` for an open request,
 `plan` for a `plan` or `breakdown` parent in `Plan Review`; `clarify` for a quality gate hold or
 skip; `blocked` for a ticket an access hold pauses in place, with the reason the hold
-recorded and what clears it), `headline` (its one-line ask: the text after `**What to review:**` in the latest
+recorded and what clears it), `decision` (true for a request with options, which the app calls a
+Decision as the Inbox does; false for an older hand-written request with steps and every other
+kind), `headline` (its one-line ask: the text after `**What to review:**` in the latest
 `## Review brief` comment, the request's title, or what the quality gate asks), `waiting_since` and
 `waiting_seconds`; `counts.waiting_on_you` is their number. A ticket the orchestrator sees running,
 or watches outside `Plan Review`, is dropped — unless a hold pauses it, which is what waits on the

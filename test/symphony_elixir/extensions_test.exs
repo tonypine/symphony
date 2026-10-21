@@ -2305,8 +2305,10 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     inbox = {:test, make_ref()}
 
+    options = [%{label: "Ship it", effect: "It merges", recommended: true, tradeoffs: []}]
+
     :persistent_term.put({SymphonyElixir.Inbox, :items, inbox}, [
-      entry.("MT-PR", :action, 1, "The retry fix"),
+      %{entry.("MT-PR", :action, 1, "The retry fix") | review: %{options: options, steps: []}},
       entry.("MT-UNKNOWN", :blocked, nil, nil),
       entry.("MT-PLAN", :plan, 3, "The split into four sub-tickets"),
       entry.("MT-ACTION", :action, 2, nil),
@@ -2348,12 +2350,13 @@ defmodule SymphonyElixir.ExtensionsTest do
                "url" => "https://linear.app/example/issue/MT-PLAN",
                "state" => "Plan Review",
                "kind" => "plan",
+               "decision" => false,
                "headline" => "The split into four sub-tickets",
                "waiting_since" => waiting_since,
                "waiting_seconds" => waiting_seconds
              },
-             %{"kind" => "action", "headline" => nil},
-             %{"kind" => "action", "state" => "Plan Review", "headline" => "The retry fix"},
+             %{"kind" => "action", "decision" => false, "headline" => nil},
+             %{"kind" => "action", "decision" => true, "state" => "Plan Review", "headline" => "The retry fix"},
              %{"kind" => "blocked", "waiting_since" => nil, "waiting_seconds" => nil}
            ] = waiting
 

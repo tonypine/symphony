@@ -85,6 +85,9 @@ public struct StateSnapshot: Equatable {
         /// The ticket in Linear.
         public var url: URL?
         public var kind: Kind
+        /// A request that offers options to answer with: it reads "Decision", as the Inbox's does (DD-7). An older
+        /// hand-written request with steps, or a Symphony that doesn't say, stays an action.
+        public var isDecision: Bool
         /// The `**What to review:**` line of its review brief, nil when it has none.
         public var headline: String?
         /// How long it has waited, nil when Symphony couldn't tell.
@@ -99,6 +102,7 @@ public struct StateSnapshot: Equatable {
             title: String? = nil,
             url: URL? = nil,
             kind: Kind = .pr,
+            isDecision: Bool = false,
             headline: String? = nil,
             waitingSeconds: Int? = nil,
             checksGreen: Bool = false
@@ -109,6 +113,7 @@ public struct StateSnapshot: Equatable {
             self.title = title
             self.url = url
             self.kind = kind
+            self.isDecision = isDecision
             self.headline = headline
             self.waitingSeconds = waitingSeconds
             self.checksGreen = checksGreen
@@ -434,6 +439,7 @@ public enum SymphonyState {
                 title: ticket.title,
                 url: ticket.url.flatMap(URL.init(string:)),
                 kind: .init(ticket.kind),
+                isDecision: ticket.decision ?? false,
                 headline: ticket.headline,
                 waitingSeconds: ticket.waitingSeconds,
                 checksGreen: ticket.checksGreen ?? false
@@ -556,6 +562,7 @@ public enum SymphonyState {
             let title: String?
             let url: String?
             let kind: String?
+            let decision: Bool?
             let headline: String?
             let waitingSeconds: Int?
             let checksGreen: Bool?
