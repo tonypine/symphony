@@ -201,6 +201,19 @@ extension SymphonyWindowModel {
 
 // MARK: - GitHub updates
 
+/// The guided setup reaches Symphony, the secret item, Terminal and the restart through the window controller's hooks.
+extension SymphonyWindowModel: GitHubUpdatesSetupHost {
+    func sendGitHubUpdatesRequest(_ action: GitHubUpdatesAPI.Action, _ params: [String: String]) async -> GitHubUpdatesAPI.Result {
+        await onGitHubUpdatesRequest(action, params)
+    }
+
+    func readGitHubUpdatesSection() async -> GitHubUpdatesAPI.Result { await onGitHubUpdatesRead() }
+    func moveHandedOffWebhookSecret() -> WebhookSecret.Move { onMoveWebhookSecret() }
+    func webhookSecretIsStored() -> Bool { onWebhookSecretStored() }
+    func openGitHubTerminal(_ ghArguments: [String]) -> String? { onOpenGitHubTerminal(ghArguments) }
+    func restartSymphony() { onRestartSymphony() }
+}
+
 extension SymphonyWindowModel {
     /// Drops an action's answer once the state poll reports something new, so it never comes back later.
     func settleGitHubUpdatesAnswer() {
@@ -226,15 +239,7 @@ extension SymphonyWindowModel {
 
     private func openGitHubUpdatesSetup(_ purpose: GitHubUpdatesSetup.Purpose, section: GitHubUpdatesSection) {
         guard githubUpdatesSetup == nil else { return }
-        let services = GitHubUpdatesSetupController.Services(
-            send: { [weak self] action, params in await self?.onGitHubUpdatesRequest(action, params) ?? .failed("") },
-            read: { [weak self] in await self?.onGitHubUpdatesRead() ?? .failed("") },
-            moveSecret: { [weak self] in self?.onMoveWebhookSecret() ?? .nothingHandedOff },
-            secretStored: { [weak self] in self?.onWebhookSecretStored() ?? false },
-            openTerminal: { [weak self] arguments in self?.onOpenGitHubTerminal(arguments) ?? "" },
-            restartSymphony: { [weak self] in self?.onRestartSymphony() }
-        )
-        let controller = GitHubUpdatesSetupController(purpose: purpose, section: section, services: services)
+        let controller = GitHubUpdatesSetupController(purpose: purpose, section: section, services: .init(host: self))
         controller.onChange = { [weak self] setup in
             guard let self, githubUpdatesSetupController === controller else { return }
             githubUpdatesSetup = setup

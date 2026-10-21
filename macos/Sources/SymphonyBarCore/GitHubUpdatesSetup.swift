@@ -192,6 +192,14 @@ public struct GitHubUpdatesSetup: Equatable, Identifiable {
 
     public var option: GitHubUpdatesSheet.RelayOption? { relayOptions.first { $0.id == relay } }
 
+    /// How VoiceOver reads a relay's card (N7): "Option 2 of 4, smee.io. Free, no account. …", with Recommended after
+    /// the recommended one's name; the card adds "selected" while it is picked.
+    public func accessibilityLabel(_ option: GitHubUpdatesSheet.RelayOption) -> String {
+        let number = (relayOptions.firstIndex { $0.id == option.id } ?? 0) + 1
+        let name = option.recommended ? "\(option.label), \(Self.recommended)" : option.label
+        return "Option \(number) of \(relayOptions.count), \(name). \(option.summary)"
+    }
+
     /// A URL relay needs its public URL before it can turn on.
     public var needsURL: Bool { option?.needsURL == true }
 
@@ -630,6 +638,44 @@ public final class GitHubUpdatesSetupController {
             if setup.section.step(step)?.status == .done { return }
         }
         setup.awaiting.remove(step)
+    }
+}
+
+/// What the window that opens the guided setup gives it: Symphony's API, the app's secret item, Terminal and the restart.
+@MainActor
+public protocol GitHubUpdatesSetupHost: AnyObject {
+    func sendGitHubUpdatesRequest(_ action: GitHubUpdatesAPI.Action, _ params: [String: String]) async -> GitHubUpdatesAPI.Result
+    func readGitHubUpdatesSection() async -> GitHubUpdatesAPI.Result
+    func moveHandedOffWebhookSecret() -> WebhookSecret.Move
+    func webhookSecretIsStored() -> Bool
+    /// Opens Terminal on `gh` with these arguments: nil once it opened, else why it couldn't.
+    func openGitHubTerminal(_ ghArguments: [String]) -> String?
+    func restartSymphony()
+}
+
+extension GitHubUpdatesSetupController.Services {
+    /// What every call answers once the window that opened the setup is gone.
+    public static let windowClosed = "The Symphony window closed."
+
+    /// The window's services, held weakly so the sheet never keeps the window alive. Each answer passes through as the
+    /// window gave it (Terminal that opened answers nil); once the window is gone, each call answers `windowClosed`.
+    @MainActor
+    public init(
+        host: GitHubUpdatesSetupHost,
+        sleep: @escaping (TimeInterval) async -> Void = { try? await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) }
+    ) {
+        self.init(
+            send: { [weak host] action, params in await host?.sendGitHubUpdatesRequest(action, params) ?? .failed(Self.windowClosed) },
+            read: { [weak host] in await host?.readGitHubUpdatesSection() ?? .failed(Self.windowClosed) },
+            moveSecret: { [weak host] in host?.moveHandedOffWebhookSecret() ?? .nothingHandedOff },
+            secretStored: { [weak host] in host?.webhookSecretIsStored() ?? false },
+            openTerminal: { [weak host] arguments in
+                guard let host else { return Self.windowClosed }
+                return host.openGitHubTerminal(arguments)
+            },
+            restartSymphony: { [weak host] in host?.restartSymphony() },
+            sleep: sleep
+        )
     }
 }
 

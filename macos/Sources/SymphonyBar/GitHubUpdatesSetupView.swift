@@ -72,10 +72,16 @@ struct GitHubUpdatesSetupView: View {
 
     private var relays: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            ForEach(setup.relayOptions) { option in
-                RelayOptionRow(option: option, selected: option.id == setup.relay) { actions.pick(option.id) }
-                    .disabled(setup.running.contains("turn_on"))
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                ForEach(setup.relayOptions) { option in
+                    RelayOptionRow(option: option, label: setup.accessibilityLabel(option), selected: option.id == setup.relay) {
+                        actions.pick(option.id)
+                    }
+                }
             }
+            .disabled(setup.running.contains("turn_on"))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(GitHubUpdatesSetup.Page.relay.title)
             if setup.needsURL {
                 TextField("Public URL", text: Binding(get: { setup.url }, set: actions.setURL), prompt: Text("https://smee.io/…"))
                     .textFieldStyle(.roundedBorder)
@@ -157,8 +163,11 @@ struct GitHubUpdatesSetupIndicator: View {
 }
 
 /// One relay on S2 (as an N7 option card): a radio, the label with Recommended on the recommended one, and what it takes.
+/// The whole card is the button.
 private struct RelayOptionRow: View {
     let option: GitHubUpdatesSheet.RelayOption
+    /// N7's reading, "Option 2 of 4, smee.io. Free, no account. …".
+    let label: String
     let selected: Bool
     let choose: () -> Void
 
@@ -192,9 +201,9 @@ private struct RelayOptionRow: View {
             .contentShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous))
         }
         .buttonStyle(.plain)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel([option.label, option.recommended ? GitHubUpdatesSetup.recommended : nil, option.summary].compactMap { $0 }.joined(separator: ", "))
-        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        // Labelled on the button itself, which keeps its own press: AXPress and a click both pick the relay.
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 

@@ -300,9 +300,10 @@ GitHub or Linear in QA:
     `api_fixtures`. Open **Setup**.
   - Step 1: **Turn On Instant Updates…** opens a 520 pt sheet, "Step 1 of 5", "Choose how
     GitHub reaches this Mac", with "GitHub CLI forwarding" selected and its **Recommended** badge,
-    then smee.io, Cloudflare Tunnel and Tailscale Funnel, each with what it takes. Picking smee.io
-    shows a "Public URL" field and turns **Continue** off with "Paste the relay's public URL.";
-    pick GitHub CLI forwarding again.
+    then smee.io, Cloudflare Tunnel and Tailscale Funnel, each with what it takes. Each card is one
+    button ("Option 2 of 4, smee.io. Free, no account. …"): `qa_click` it, or `qa_ax_press` it.
+    Picking smee.io moves the selection ring to it, shows a "Public URL" field and turns
+    **Continue** off with "Paste the relay's public URL."; pick GitHub CLI forwarding again.
   - Step 2: **Continue** (`POST …/github_updates/turn_on` with `relay` `gh_webhook_forward`, then
     `run_step` `relay` and `run_step` `gh_ready`): "Step 2 of 5", "GitHub CLI and its forwarding
     extension" Done, "Permission to manage webhooks" Failed with the missing scope in plain words
@@ -338,7 +339,9 @@ GitHub or Linear in QA:
     acme/widgets as Instant.
   - Keyboard and VoiceOver: with Full Keyboard Access on, Tab reaches each relay, each row's
     buttons, **Back** and **Continue**; Return presses **Continue** (or **Done**) and Escape
-    cancels. VoiceOver reads the step indicator as "Step 2 of 5: GitHub CLI. Done: Relay" and a
+    cancels. VoiceOver reads the relays as a group "Choose how GitHub reaches this Mac", the first
+    as "Option 1 of 4, GitHub CLI forwarding, Recommended. …" and selected while it is picked, the
+    step indicator as "Step 2 of 5: GitHub CLI. Done: Relay" and a
     failed row as one element ("acme/docs, Failed, You need admin access to acme/docs to add a
     webhook., …"), and each row button with its repo ("Leave on Polling, acme/docs").
   - Look: judge each page and Add Repo's last step in light and dark against

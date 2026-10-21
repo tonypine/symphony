@@ -151,6 +151,32 @@ final class FakeGitHubUpdates {
     }
 }
 
+/// The Symphony window as the guided setup reaches it, answering from a fake Symphony: Terminal that opened answers nil,
+/// as the window controller's does.
+@MainActor
+final class FakeSetupWindow: GitHubUpdatesSetupHost {
+    let fake: FakeGitHubUpdates
+
+    init(_ fake: FakeGitHubUpdates) {
+        self.fake = fake
+    }
+
+    func sendGitHubUpdatesRequest(_ action: GitHubUpdatesAPI.Action, _ params: [String: String]) async -> GitHubUpdatesAPI.Result {
+        await fake.send(action, params)
+    }
+
+    func readGitHubUpdatesSection() async -> GitHubUpdatesAPI.Result { fake.read() }
+    func moveHandedOffWebhookSecret() -> WebhookSecret.Move { fake.moves[0] }
+    func webhookSecretIsStored() -> Bool { fake.stored }
+
+    func openGitHubTerminal(_ ghArguments: [String]) -> String? {
+        fake.terminals.append(ghArguments)
+        return fake.terminalProblem
+    }
+
+    func restartSymphony() { fake.restarts += 1 }
+}
+
 @MainActor
 final class GitHubUpdatesSetupTests: XCTestCase {
     private let scope = (
@@ -193,6 +219,10 @@ final class GitHubUpdatesSetupTests: XCTestCase {
         XCTAssertEqual(setup.option?.label, "GitHub CLI forwarding")
         XCTAssertEqual(setup.relayOptions.filter(\.recommended).map(\.id), ["gh_webhook_forward"])
         XCTAssertEqual(setup.relayOptions.map(\.label), ["GitHub CLI forwarding", "smee.io", "Cloudflare Tunnel", "Tailscale Funnel"])
+        XCTAssertEqual(setup.relayOptions.prefix(2).map(setup.accessibilityLabel), [
+            "Option 1 of 4, GitHub CLI forwarding, Recommended. Symphony runs it with your GitHub CLI; no account to create.",
+            "Option 2 of 4, smee.io. Free, no account. Anyone with the channel URL can read the updates.",
+        ])
         XCTAssertTrue(setup.explanation.contains("every 30 s"), setup.explanation)
         XCTAssertTrue(setup.rows.isEmpty)
         XCTAssertTrue(setup.canContinue)
@@ -322,6 +352,66 @@ final class GitHubUpdatesSetupTests: XCTestCase {
         XCTAssertEqual([failed.word, failed.detail], ["Failed", "Terminal.app was not found."])
         XCTAssertEqual(failed.buttons, [.retry])
         XCTAssertEqual(fake.calls, [])
+    }
+
+    /// The services the window hands the sheet (`Services(host:)`): Terminal that opened answers nil, and that must reach
+    /// the row as "opened", so it checks again by itself rather than failing.
+    func testTheWindowsServicesLetGrantPermissionCheckAgainUntilTheRowIsDone() async throws {
+        let fake = FakeGitHubUpdates(FakeGitHubUpdates.section())
+        let missing = FakeGitHubUpdates.Answer.status(.failed, detail: scope.detail, fix: scope.fix, action: .grantPermission)
+        fake.runs["gh_ready"] = [missing, .status(.done)]
+        let window = FakeSetupWindow(fake)
+        let controller = GitHubUpdatesSetupController(
+            purpose: .turnOn, section: fake.section, services: .init(host: window, sleep: { fake.sleeps.append($0) })
+        )
+        await controller.goForward()
+        XCTAssertEqual(try row(controller.setup, "gh_ready").buttons, [.grantPermission])
+        fake.calls = []
+
+        await controller.perform(.grantPermission, on: "gh_ready")
+
+        XCTAssertEqual(fake.terminals, [GitHubUpdatesSetupController.grantArguments])
+        XCTAssertNil(controller.setup.failures["gh_ready"])
+        XCTAssertEqual(fake.sleeps, [3])
+        XCTAssertEqual(fake.calls, ["run_step step=gh_ready"])
+        let permission = try row(controller.setup, "gh_ready")
+        XCTAssertEqual([permission.word, permission.detail], ["Done", "The GitHub CLI can add webhooks to your repos."])
+        XCTAssertTrue(controller.setup.canContinue)
+    }
+
+    func testTheWindowsServicesPassEachAnswerThroughAndAnswerSoOnceTheWindowIsGone() async {
+        let fake = FakeGitHubUpdates(FakeGitHubUpdates.section())
+        fake.moves = [.failed("The Keychain refused it.")]
+        fake.stored = true
+        fake.terminalProblem = "Terminal.app was not found."
+        var window: FakeSetupWindow? = FakeSetupWindow(fake)
+        let services = GitHubUpdatesSetupController.Services(host: window!)
+
+        let sent = await services.send(.runStep, ["step": "relay"])
+        let read = await services.read()
+        XCTAssertEqual(sent, .updated(fake.section))
+        XCTAssertEqual(read, .updated(fake.section))
+        XCTAssertEqual(services.moveSecret(), .failed("The Keychain refused it."))
+        XCTAssertTrue(services.secretStored())
+        XCTAssertEqual(services.openTerminal(["auth", "status"]), "Terminal.app was not found.")
+        services.restartSymphony()
+        XCTAssertEqual(fake.calls, ["run_step step=relay", "read"])
+        XCTAssertEqual(fake.terminals, [["auth", "status"]])
+        XCTAssertEqual(fake.restarts, 1)
+
+        window = nil
+        let closed = GitHubUpdatesSetupController.Services.windowClosed
+        let sentAfter = await services.send(.runStep, ["step": "relay"])
+        let readAfter = await services.read()
+        XCTAssertEqual(sentAfter, .failed(closed))
+        XCTAssertEqual(readAfter, .failed(closed))
+        XCTAssertEqual(services.moveSecret(), .nothingHandedOff)
+        XCTAssertFalse(services.secretStored())
+        XCTAssertEqual(services.openTerminal(["auth", "status"]), closed)
+        services.restartSymphony()
+        XCTAssertEqual(fake.calls.count, 2)
+        XCTAssertEqual(fake.terminals.count, 1)
+        XCTAssertEqual(fake.restarts, 1)
     }
 
     func testARequestThatFailsFailsItsRowWithRetry() async throws {
