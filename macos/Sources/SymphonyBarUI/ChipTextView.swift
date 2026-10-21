@@ -80,9 +80,13 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         didSet { if hoveredChip != oldValue { redrawChips() } }
     }
 
-    /// The chip the keyboard is on, after Tab entered the paragraph.
+    /// The chip the keyboard is on, after Tab entered the paragraph. A chip that takes the keyboard scrolls into view.
     public private(set) var focusedChip: Int? {
-        didSet { if focusedChip != oldValue { redrawChips() } }
+        didSet {
+            guard focusedChip != oldValue else { return }
+            redrawChips()
+            if let focusedChip { scrollChipToVisible(focusedChip) }
+        }
     }
 
     private var pressedChip: Int?
@@ -395,12 +399,23 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
 
     // MARK: - Popover and opening
 
-    /// Opens a chip's popover (N2, N3, or the "can't see" line).
+    /// Opens a chip's popover (N2, N3, or the "can't see" line), on screen: the chip scrolls into view first.
     public func showDetails(_ index: Int, hover: Bool = false) {
-        guard content.mentions.indices.contains(index), let rect = chipRects(index).first else { return }
+        guard content.mentions.indices.contains(index) else { return }
+        scrollChipToVisible(index)
+        guard let rect = chipRects(index).first else { return }
         popoverChip = index
         popover?.show(content.mentions[index], relativeTo: rect, of: self, hover: hover)
     }
+
+    /// Scrolls the review so a chip and its focus ring are in view; outside a scroll view, nothing moves.
+    func scrollChipToVisible(_ index: Int) {
+        guard let rect = chipRects(index).first else { return }
+        scrollToVisible(rect.insetBy(dx: -Self.focusRingMargin, dy: -Self.focusRingMargin))
+    }
+
+    /// Room around a chip for its focus ring, which is drawn 3 pt outside the tint.
+    static let focusRingMargin: CGFloat = 4
 
     /// The popover closed.
     public func popoverClosed() {

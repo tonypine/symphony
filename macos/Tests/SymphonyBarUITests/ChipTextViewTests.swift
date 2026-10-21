@@ -391,6 +391,52 @@ final class ChipTextViewTests: XCTestCase {
         XCTAssertNil(plain.focusedChip)
     }
 
+    func testAChipTheKeyboardMovesToScrollsIntoViewWithItsFocusRing() throws {
+        let view = try storyView()
+        let popover = PopoverSpy()
+        view.popover = popover
+        // The paragraph below the fold of a 1400×900 review, as in TP-892's Where this ticket sits.
+        let (scroll, documentHeight) = try belowTheFold(view, at: 1009)
+        let clip = scroll.contentView
+        let last = view.content.mentions.count - 1
+        let visible = { (index: Int) throws -> Bool in
+            let ring = try XCTUnwrap(view.chipRects(index).first).insetBy(dx: -3, dy: -3)
+            return clip.documentVisibleRect.contains(view.convert(ring, to: scroll.documentView))
+        }
+        XCTAssertFalse(try visible(0), "below the fold to start with")
+
+        XCTAssertTrue(view.handle(.tab))
+        XCTAssertTrue(try visible(0), "Tab into the paragraph")
+        clip.scroll(to: .zero)
+        XCTAssertTrue(view.handle(.tab))
+        XCTAssertTrue(try visible(1), "Tab to the next chip")
+        clip.scroll(to: .zero)
+        XCTAssertTrue(view.handle(.backtab))
+        XCTAssertTrue(try visible(0), "Shift-Tab back")
+        view.handle(.backtab)
+        clip.scroll(to: .zero)
+        view.enterChips(forward: false)
+        XCTAssertTrue(try visible(last), "Shift-Tab into the paragraph from the one after")
+
+        clip.scroll(to: CGPoint(x: 0, y: documentHeight - clip.bounds.height))
+        XCTAssertTrue(view.handle(.space))
+        XCTAssertTrue(try visible(last), "Space shows the popover of a chip in view")
+        let anchor = try XCTUnwrap(popover.shown.last?.rect)
+        XCTAssertTrue(clip.documentVisibleRect.contains(view.convert(anchor, to: scroll.documentView)), "anchored on screen")
+
+        clip.scroll(to: .zero)
+        view.showDetails(0)
+        XCTAssertTrue(try visible(0), "VoiceOver's Show Details")
+    }
+
+    func testAChipAlreadyInViewDoesNotScrollTheReview() throws {
+        let view = try storyView()
+        let (scroll, _) = try belowTheFold(view, at: 20)
+        XCTAssertTrue(view.handle(.tab))
+        XCTAssertTrue(view.handle(.tab))
+        XCTAssertEqual(scroll.contentView.bounds.origin, .zero)
+    }
+
     func testAChipsMenuCopiesAndOpensItsLink() throws {
         let view = try storyView()
         var opened: [URL] = []
@@ -516,6 +562,18 @@ final class ChipTextViewTests: XCTestCase {
         ))
     }
 
+    /// The paragraph 600 pt wide at `y` in a review 1,400 pt tall, scrolled in a window-less scroll view 300 pt tall.
+    private func belowTheFold(_ view: ChipTextView, at y: CGFloat) throws -> (NSScrollView, CGFloat) {
+        let documentHeight: CGFloat = 1400
+        let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 640, height: 300))
+        let document = FlippedView(frame: CGRect(x: 0, y: 0, width: 640, height: documentHeight))
+        scroll.documentView = document
+        view.frame = CGRect(x: 20, y: y, width: 600, height: view.height(forWidth: 600))
+        document.addSubview(view)
+        XCTAssertEqual(scroll.contentView.bounds.origin, .zero)
+        return (scroll, documentHeight)
+    }
+
     private func storyView() throws -> ChipTextView {
         let item = try decision()
         let action = try XCTUnwrap(item.review.action)
@@ -550,6 +608,11 @@ final class ChipTextViewTests: XCTestCase {
         else { return }
         try png.write(to: URL(fileURLWithPath: folder).appendingPathComponent("\(name).png"))
     }
+}
+
+/// A review's content, top-down like SwiftUI's.
+private final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
 }
 
 /// Records what the view asks of its popover.
