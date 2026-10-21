@@ -241,6 +241,20 @@ public struct InboxPicks: Equatable {
     }
 }
 
+/// How far each Inbox review is scrolled, by issue id: a page opened from the review (D3, D15) and left with ⌘[ finds
+/// the review where it was, as the peek (N4) does.
+public struct InboxScrollOffsets: Equatable {
+    private var byItem: [String: Double] = [:]
+
+    public init() {}
+
+    /// The review's offset from its top in points; nil for a review not scrolled yet.
+    public subscript(itemID: String) -> Double? {
+        get { byItem[itemID] }
+        set { byItem[itemID] = newValue.flatMap { $0 > 0 ? $0 : nil } }
+    }
+}
+
 /// The consequence sheet of a move (C17, P5, D12d): the question as its title, what happens in Linear, what stays
 /// the same, the options (Rework's required reason), and Cancel with the verb.
 public struct ConsequenceSheet: Equatable, Identifiable {

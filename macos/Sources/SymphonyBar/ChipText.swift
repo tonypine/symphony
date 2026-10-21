@@ -16,7 +16,8 @@ extension EnvironmentValues {
         set { self[OpenMentionKey.self] = newValue }
     }
 
-    /// ⌘-click or ⌘Return on a chip: the ticket's page (D3), or the pull request on GitHub; nil opens it as a click.
+    /// ⌘-click or ⌘Return on a chip: the ticket's page (D3) or the pull request's (D15) (`MentionTarget`); nil opens it
+    /// as a click.
     var openMentionDirectly: OpenMentionAction? {
         get { self[OpenMentionDirectlyKey.self] }
         set { self[OpenMentionDirectlyKey.self] = newValue }
@@ -75,16 +76,6 @@ struct ChipText: View {
             .alignmentGuide(.lastTextBaseline) { dimensions in dimensions.height - baseline.descent }
         } else {
             PlainText(text: text, lead: lead, font: font, color: color, selectable: selectable)
-        }
-    }
-
-    /// What ⌘-click on a chip opens, past the peek, until the pull request page (TP-961): a ticket Symphony sees opens
-    /// its page, anything else its link.
-    static func open(_ mention: Mention, openTicket: (String) -> Void, openURL: (URL) -> Void) {
-        if mention.kind == .ticket, !mention.isMissing {
-            openTicket(mention.key)
-        } else if let url = mention.reference.url {
-            openURL(url)
         }
     }
 }

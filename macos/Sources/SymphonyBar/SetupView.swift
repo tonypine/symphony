@@ -50,11 +50,12 @@ extension SymphonyWindowModel {
     }
 
     /// Setup's toolbar button is Check Again rather than Refresh.
-    var showsSetupCheck: Bool { selection == .setup && shownTicket == nil && state.countsKnown }
+    var showsSetupCheck: Bool { selection == .setup && !showsPage && state.countsKnown }
 
     /// ⌘R and the toolbar's button: reads Symphony's state again, and on Setup runs its checks again.
     func refresh() {
         if showsSetupCheck, overviewState?.snapshot.setup != nil { checkSetupAgain() }
+        readPullRequest()
         client.refresh()
     }
 

@@ -137,6 +137,14 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var history: NavigationHistory
     /// What the ticket page shown last read from its own endpoints; the state comes from the client's poll.
     @Published var ticketSources = TicketPage.Sources()
+    /// What the pull request page shown read from its endpoint, nil while it reads (D15).
+    @Published var pullRequestResult: PullRequestPageResult?
+    var readingPullRequest = false
+    /// The link each pull request page was opened from, for Open on GitHub before Symphony answers.
+    var pullRequestLinks: [PullRequestPlace: URL] = [:]
+    /// How far each Inbox review is scrolled, so ⌘[ from a page finds it where it was. Not `@Published`: a scroll
+    /// redraws nothing else.
+    var inboxScroll = InboxScrollOffsets()
     /// The Stop Run sheet shown (D12c); nothing stops until its button is pressed.
     @Published var stopSheet: StopRunSheet?
     /// True while the sheet's requests are on their way to Symphony.
@@ -543,7 +551,7 @@ final class SymphonyWindowModel: ObservableObject {
     private func showDepartures(from previous: [InboxItem], to current: [InboxItem]) {
         let banners = WatcherDeparture.banners(previous: previous, current: current, answered: answeredItems, watches: watchState.watches)
         answeredItems.subtract(previous.map(\.id).filter { id in !current.contains { $0.id == id } })
-        if let banner = banners.first, selection == .inbox, shownTicket == nil { showBanner(banner) }
+        if let banner = banners.first, selection == .inbox, !showsPage { showBanner(banner) }
     }
 
     /// Opens Usage and reads the history at once.
@@ -555,7 +563,7 @@ final class SymphonyWindowModel: ObservableObject {
 
     /// Reads the history while Usage shows; Symphony answers from its run records, with no Linear request.
     private func readHistoryIfDue() {
-        guard selection == .usage, shownTicket == nil, !readingHistory, state.countsKnown,
+        guard selection == .usage, !showsPage, !readingHistory, state.countsKnown,
             historyReadAt.map({ Date().timeIntervalSince($0) >= Self.historyInterval }) ?? true
         else { return }
         readingHistory = true
@@ -574,7 +582,7 @@ final class SymphonyWindowModel: ObservableObject {
 
     /// Reads Quality's history and runs while Quality shows, for its period.
     private func readQualityIfDue() {
-        guard selection == .quality, shownTicket == nil, !readingQuality, state.countsKnown,
+        guard selection == .quality, !showsPage, !readingQuality, state.countsKnown,
             qualityReadAt.map({ Date().timeIntervalSince($0) >= Self.historyInterval }) ?? true
         else { return }
         readingQuality = true
@@ -624,11 +632,13 @@ final class SymphonyWindowModel: ObservableObject {
         }
     }
 
-    /// The toolbar's title: the view's, or the ticket's identifier on its page.
-    var toolbarTitle: String { shownTicket ?? selection.title }
+    /// The toolbar's title: the view's, the ticket's identifier on its page, or "#448 · <title>" on a pull request's.
+    var toolbarTitle: String { shownTicket ?? pullRequestScreen?.title ?? selection.title }
 
-    /// The toolbar's line under the title: the view's, or the ticket's title on its page.
+    /// The toolbar's line under the title: the view's, the ticket's title on its page, or "<repo> · for <ticket>" on a
+    /// pull request's.
     var toolbarSubtitle: String {
+        if let screen = pullRequestScreen { return screen.subtitle }
         guard shownTicket != nil else { return selection.subtitle }
         return ticketPage?.title ?? "Ticket"
     }
@@ -688,7 +698,13 @@ struct SymphonyWindowView: View {
                         }
                         VStack(alignment: .leading, spacing: 0) {
                             Text(model.toolbarTitle).font(.headline)
-                            Text(model.toolbarSubtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                            HStack(spacing: DesignTokens.Space.s1) {
+                                Text(model.toolbarSubtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                                // D15 reading: the spinner in the subtitle, over its placeholder cards.
+                                if model.pullRequestScreen?.isLoading == true {
+                                    ProgressView().controlSize(.mini).accessibilityLabel("Reading")
+                                }
+                            }
                         }
                         .accessibilityElement(children: .combine)
                     }
@@ -702,7 +718,7 @@ struct SymphonyWindowView: View {
                         DispatchControlButton(model: model, client: client)
                     }
                     .sharedBackgroundVisibility(.hidden)
-                    if model.selection == .shipped, model.shownTicket == nil {
+                    if model.selection == .shipped, !model.showsPage {
                         ToolbarItem(placement: .principal) {
                             Picker("Shipped or Learnings", selection: $model.shippedTab) {
                                 ForEach(Shipped.Tab.allCases) { Text($0.title).tag($0) }
@@ -711,7 +727,7 @@ struct SymphonyWindowView: View {
                             .fixedSize()
                         }
                     }
-                    if model.selection == .audit, model.shownTicket == nil {
+                    if model.selection == .audit, !model.showsPage {
                         ToolbarItem(placement: .automatic) {
                             Button { model.exportAudit() } label: {
                                 Label(Audit.exportTitle, systemImage: "square.and.arrow.up")
@@ -720,7 +736,7 @@ struct SymphonyWindowView: View {
                             .disabled(model.auditExporting || model.auditRecords == nil)
                         }
                     }
-                    if model.selection == .tickets, model.shownTicket == nil {
+                    if model.selection == .tickets, !model.showsPage {
                         ToolbarItem(placement: .automatic) {
                             Button { model.openForceSheet() } label: {
                                 Label(DispatchControl.forceTitle, systemImage: DesignTokens.Status.forced.symbol)
@@ -729,7 +745,26 @@ struct SymphonyWindowView: View {
                             .disabled(!model.dispatchControl.canForce)
                         }
                     }
-                    if model.selection == .inbox, model.shownTicket == nil {
+                    if let screen = model.pullRequestScreen {
+                        // D15: Open on GitHub and Open Ticket.
+                        ToolbarItemGroup(placement: .automatic) {
+                            if let url = screen.gitHubURL {
+                                Button { model.onOpenURL(url) } label: {
+                                    Label(PullRequestScreen.openOnGitHubTitle, systemImage: "arrow.up.right.square")
+                                        .labelStyle(.titleAndIcon)
+                                }
+                                .help("Open #\(screen.place.number) on GitHub, where its diff is")
+                            }
+                            if let ticket = screen.ticket {
+                                Button { model.openPullRequestTicket() } label: {
+                                    Label(PullRequestScreen.openTicketTitle, systemImage: "doc.text")
+                                        .labelStyle(.titleAndIcon)
+                                }
+                                .help("Open \(ticket)'s page")
+                            }
+                        }
+                    }
+                    if model.selection == .inbox, !model.showsPage {
                         ToolbarItem(placement: .primaryAction) {
                             // N4: closes the peek, or shows it again.
                             Button { model.togglePeek() } label: {
@@ -840,8 +875,8 @@ struct SymphonySidebar: View {
     /// The list's selection, which opens the Repos window instead of selecting it.
     private var selection: Binding<SymphonyView?> {
         Binding(
-            // On a ticket page no view is selected, so choosing the view the page came from goes back to it.
-            get: { model.shownTicket == nil ? model.selection : nil },
+            // On a page no view is selected, so choosing the view the page came from goes back to it.
+            get: { model.showsPage ? nil : model.selection },
             set: { view in
                 guard let view else { return }
                 model.show(view)
@@ -907,6 +942,8 @@ struct SymphonyDetail: View {
             )
         } else if model.shownTicket != nil {
             TicketPageContent(model: model, client: client)
+        } else if model.shownPullRequest != nil {
+            PullRequestPageContent(model: model)
         } else {
             switch model.selection {
             case .inbox:

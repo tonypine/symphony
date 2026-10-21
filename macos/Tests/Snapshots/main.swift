@@ -362,6 +362,74 @@ func addRepoSixSteps() -> some View {
     .background(DesignTokens.Surface.window.color)
 }
 
+// The pull request page (TP-961, D15): #448 from its QA fixture, and its states from variants of it.
+let pullRequestAPI = here.appendingPathComponent("../Fixtures/director-app/pull-request/api/v1").standardizedFileURL
+let pullRequestPlace = PullRequestPlace(repoKey: "symphony", number: 448)
+
+/// #448 as the fixture serves it, with `change` applied to its JSON.
+func pullRequest(_ change: (inout [String: Any]) -> Void = { _ in }) -> PullRequestPageResult {
+    let data = try! Data(contentsOf: pullRequestAPI.appendingPathComponent("pull_requests/symphony/448.json"))
+    var json = try! JSONSerialization.jsonObject(with: data) as! [String: Any]
+    change(&json)
+    return PullRequestPageResult(.answered(try! JSONSerialization.data(withJSONObject: json), statusCode: 200))
+}
+
+/// The page in a `window` pt wide window beside the sidebar, with the toolbar's title and subtitle above it.
+@MainActor
+func pullRequestPage(_ result: PullRequestPageResult?, window: CGFloat = DesignTokens.Layout.windowWidth) -> some View {
+    let inbox = InboxPayload.decode(try! Data(contentsOf: pullRequestAPI.appendingPathComponent("inbox.json")))
+    let references = (inbox?.items ?? []).reduce(into: [String: Reference]()) { $0.merge($1.references) { kept, _ in kept } }
+    let screen = PullRequestScreen(
+        pullRequestPlace, result: result, url: URL(string: "https://github.com/tonypine/symphony/pull/448"),
+        references: references, now: now, timeZone: TimeZone(identifier: "UTC")!
+    )
+    let width = window - DesignTokens.Layout.sidebarWidth
+    return VStack(alignment: .leading, spacing: 0) {
+        // The window's toolbar: title, subtitle (with its spinner while it reads), Open on GitHub, Open Ticket.
+        HStack(spacing: DesignTokens.Space.s2) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(screen.title).font(.headline)
+                HStack(spacing: DesignTokens.Space.s1) {
+                    Text(screen.subtitle).font(.subheadline).foregroundStyle(.secondary)
+                    // `ImageRenderer` can't draw a spinner: its symbol stands in.
+                    if screen.isLoading { Image(systemName: "progress.indicator").font(.caption).foregroundStyle(.secondary) }
+                }
+            }
+            Spacer()
+            if screen.gitHubURL != nil { Button(PullRequestScreen.openOnGitHubTitle) {} }
+            if screen.ticket != nil { Button(PullRequestScreen.openTicketTitle) {} }
+        }
+        .padding(DesignTokens.Space.s3)
+        Divider()
+        PullRequestPageBody(screen: screen, actions: PullRequestPageActions(), width: width)
+            .frame(minHeight: 360)
+    }
+    .frame(width: width)
+    .background(DesignTokens.Surface.window.color)
+}
+
+let mergedPullRequest = pullRequest {
+    $0["state"] = "merged"
+    $0["review_state"] = "merged"
+    $0["merged_at"] = "2026-10-07T12:20:00Z"
+    $0["review_history"] = ($0["review_history"] as? [Any] ?? []) + [
+        ["at": "2026-10-07T11:00:00Z", "kind": "code_review", "verdict": "approve", "reason": "Only the new flow is left."],
+        ["at": "2026-10-07T12:00:00Z", "kind": "qa", "verdict": "pass", "reason": "Every journey passed."],
+    ]
+    $0["health"] = ["checks": ["state": "passed", "passed": 9], "code_review": ["verdict": "approve", "round": 3], "qa": "pass"]
+}
+let closedPullRequest = pullRequest {
+    $0["state"] = "closed"
+    $0["review_state"] = "closed"
+}
+let unavailablePullRequest = pullRequest {
+    $0["github"] = "unavailable"
+    for key in ["state", "summary", "size", "url", "opened_at", "last_pushed_at"] { $0[key] = NSNull() }
+    $0["areas"] = []
+    $0["health"] = ["checks": NSNull(), "code_review": ["verdict": "request_changes", "round": 2], "qa": NSNull(), "overlaps": [["number": 446, "ticket": "TP-891"]]]
+}
+let untrackedPullRequest = pullRequest { $0["ticket"] = NSNull() }
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -441,5 +509,14 @@ MainActor.assumeIsolated {
         render(addRepoInstantUpdates(), scheme, to: "add-repo-instant-updates-\(suffix).png")
         render(addRepoInstantUpdates(steps: AddRepoStep.allCases), scheme, to: "add-repo-instant-updates-six-steps-\(suffix).png")
         render(addRepoSixSteps(), scheme, to: "add-repo-six-steps-\(suffix).png")
+        // The pull request page (TP-961): #448 at 1200 and 960 pt, then its states.
+        render(pullRequestPage(pullRequest()), scheme, to: "pr-page-\(suffix).png")
+        render(pullRequestPage(pullRequest(), window: 960), scheme, to: "pr-page-960-\(suffix).png")
+        render(pullRequestPage(nil), scheme, to: "pr-page-loading-\(suffix).png")
+        render(pullRequestPage(mergedPullRequest), scheme, to: "pr-page-merged-\(suffix).png")
+        render(pullRequestPage(closedPullRequest), scheme, to: "pr-page-closed-\(suffix).png")
+        render(pullRequestPage(unavailablePullRequest), scheme, to: "pr-page-github-unavailable-\(suffix).png")
+        render(pullRequestPage(untrackedPullRequest), scheme, to: "pr-page-untracked-\(suffix).png")
+        render(pullRequestPage(.notFound), scheme, to: "pr-page-not-found-\(suffix).png")
     }
 }
