@@ -134,22 +134,40 @@ struct InboxView: View {
     }
 }
 
-/// A review's scroll view that starts where the review was left, and keeps where it is.
+/// A review's scroll view that starts where the review was left, and keeps where it is. A chip the keyboard moves to
+/// scrolls the review through its position: the scroll view keeps its offset itself, and its next layout puts back a
+/// scroll made from AppKit alone (the write-in, picked last, back at the bottom).
 private struct RememberedScroll: ViewModifier {
     let offset: Double?
     let remember: (Double) -> Void
     @State private var position = ScrollPosition()
+    /// The offset the scroll view reported last, or the one a chip's scroll goes to; kept where a scroll redraws
+    /// nothing.
+    @State private var reported = ReportedOffset()
 
     func body(content: Content) -> some View {
         content
             .scrollPosition($position)
-            .onScrollGeometryChange(for: Double.self) { $0.contentOffset.y } action: { _, offset in remember(offset) }
+            .onScrollGeometryChange(for: Double.self) { $0.contentOffset.y } action: { _, offset in
+                reported.y = offset
+                remember(offset)
+            }
+            .environment(\.scrollReview, ScrollReviewAction { distance in
+                // From where the last scroll goes, so a second Tab before the scroll view reports adds to the first.
+                reported.y += distance
+                position.scrollTo(y: reported.y)
+            })
             .onAppear {
                 guard let offset else { return }
                 // Once the review is laid out.
                 DispatchQueue.main.async { position.scrollTo(y: offset) }
             }
     }
+}
+
+/// A review's offset, in a box: setting it redraws nothing.
+private final class ReportedOffset {
+    var y: Double = 0
 }
 
 /// D2e: good news, and the way back to the Overview. A scope that hides items says so (P6).

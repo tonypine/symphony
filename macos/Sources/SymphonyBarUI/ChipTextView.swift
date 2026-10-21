@@ -74,6 +74,9 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     public var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
     public var popover: ChipPopoverPresenting?
     public var hoverDelay: TimeInterval = DesignTokens.Chip.hoverDelay
+    /// Scrolls the review a distance down, in points, through its SwiftUI scroll view's own position: that scroll view
+    /// keeps its offset itself, and its next layout puts back a scroll made from AppKit alone. Nil outside one.
+    public var scrollReview: ((CGFloat) -> Void)?
 
     /// The chip under the pointer.
     public private(set) var hoveredChip: Int? {
@@ -408,10 +411,34 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         popover?.show(content.mentions[index], relativeTo: rect, of: self, hover: hover)
     }
 
-    /// Scrolls the review so a chip and its focus ring are in view; outside a scroll view, nothing moves.
+    /// Scrolls the review so a chip and its focus ring are in view; outside a scroll view, nothing moves. With
+    /// `scrollReview`, the review scrolls through it, and its clip view moves the same distance at once, so a popover
+    /// opened next is anchored on screen.
     func scrollChipToVisible(_ index: Int) {
         guard let rect = chipRects(index).first else { return }
-        scrollToVisible(rect.insetBy(dx: -Self.focusRingMargin, dy: -Self.focusRingMargin))
+        let ringed = rect.insetBy(dx: -Self.focusRingMargin, dy: -Self.focusRingMargin)
+        guard let scrollReview, let scrollView = enclosingScrollView, scrollView.contentView.isFlipped else {
+            scrollToVisible(ringed)
+            return
+        }
+        let clip = scrollView.contentView
+        let insets = clip.contentInsets
+        let visible = CGRect(
+            x: clip.bounds.minX, y: clip.bounds.minY + insets.top,
+            width: clip.bounds.width, height: clip.bounds.height - insets.top - insets.bottom
+        )
+        let distance = Self.distance(showing: convert(ringed, to: clip), in: visible)
+        guard distance != 0 else { return }
+        scrollReview(distance)
+        clip.scroll(to: CGPoint(x: clip.bounds.minX, y: clip.bounds.minY + distance))
+        scrollView.reflectScrolledClipView(clip)
+    }
+
+    /// How far down a top-down review scrolls for `visible` to show `rect`: the least distance, or to its top when it
+    /// is taller.
+    static func distance(showing rect: CGRect, in visible: CGRect) -> CGFloat {
+        if rect.minY < visible.minY || rect.height > visible.height { return rect.minY - visible.minY }
+        return max(0, rect.maxY - visible.maxY)
     }
 
     /// Room around a chip for its focus ring, which is drawn 3 pt outside the tint.
