@@ -5148,19 +5148,17 @@ defmodule SymphonyElixir.Orchestrator do
 
   # The run's `run.started` event, next to its dispatch, keyed by its run id. Its number counts the
   # ticket's earlier runs of the same kind.
-  defp record_run_started(repo_key, issue_id, %{kind: kind, run_id: run_id, state: issue_state, head: head}) when is_binary(repo_key) do
+  defp record_run_started(repo_key, issue_id, %{kind: kind, run_id: run_id, state: issue_state, head: head}) do
     run_kind = to_string(kind)
     run_number = length(run_events(repo_key, issue_id, "run.started", &(&1[:run_kind] == run_kind))) + 1
     payload = %{run_id: run_id, run_kind: run_kind, run_number: run_number, state: issue_state, head: head}
     TicketSignals.record_event(repo_key, issue_id, "run.started", payload, phase: issue_state, run_id: run_id)
   end
 
-  defp record_run_started(_repo_key, _issue_id, _dispatch), do: :ok
-
   # The run's `run.ended` event, keyed by its run id, with how it ended, how long it ran and the
   # tokens it spent. A run a usage limit, an unreachable model API or a CI wait stopped records
   # `counted: false`, as its dispatch outcome is dropped.
-  defp record_run_ended(repo_key, issue_id, run_id, running_entry, reason) when is_binary(repo_key) do
+  defp record_run_ended(repo_key, issue_id, run_id, running_entry, reason) do
     head = pr_head(issue_id, repo_key)
     started = run_events(repo_key, issue_id, "run.started", &(&1[:run_id] == run_id)) |> List.first() || %{}
 
@@ -5177,8 +5175,6 @@ defmodule SymphonyElixir.Orchestrator do
 
     TicketSignals.record_event(repo_key, issue_id, "run.ended", payload, run_id: run_id)
   end
-
-  defp record_run_ended(_repo_key, _issue_id, _run_id, _running_entry, _reason), do: :ok
 
   defp run_events(repo_key, issue_id, type, keep?) do
     case RunStore.list_ticket_events(repo_key, issue_id, types: [type]) do
