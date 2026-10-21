@@ -251,11 +251,19 @@ defmodule SymphonyElixir.Tracker.Memory do
     end
   end
 
-  @spec create_workflow_state(String.t(), String.t(), String.t()) :: {:ok, Tracker.workflow_state()} | {:error, term()}
-  def create_workflow_state(state_name, team, _color) when is_binary(state_name) and is_binary(team) do
+  @spec create_workflow_state(String.t(), String.t(), String.t(), keyword()) :: Tracker.created_state()
+  def create_workflow_state(state_name, team, _color, opts \\ []) when is_binary(state_name) and is_binary(team) do
     case next_result(:memory_tracker_create_workflow_state_result) do
       :ok ->
-        state = %{id: "state:#{team}:#{state_name}", name: state_name, team_id: team, team_key: team}
+        state = %{
+          id: "state:#{team}:#{state_name}",
+          name: state_name,
+          team_id: team,
+          team_key: team,
+          type: Keyword.get(opts, :type) || "started",
+          position: Keyword.get(opts, :position)
+        }
+
         put_env_list(:memory_tracker_workflow_states_list, state)
         send_event({:memory_tracker_created_workflow_state, state_name, team})
         {:ok, state}

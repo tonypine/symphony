@@ -25,6 +25,12 @@ defmodule SymphonyElixir.DecisionsTest do
     def get_ticket_state(_repo_key, _issue_id), do: {:error, :down}
   end
 
+  # A run store that reads, but refuses to record a decision.
+  defmodule WriteFailingStore do
+    def get_ticket_state(repo_key, issue_id), do: RunStore.get_ticket_state(repo_key, issue_id)
+    def record_ticket_decisions(_repo_key, _issue_id, _entries, _backfill), do: {:error, :disk_full}
+  end
+
   # Answers the description query and the update mutation by operation name.
   defmodule FakeClient do
     def graphql(query, variables) do
@@ -346,6 +352,55 @@ defmodule SymphonyElixir.DecisionsTest do
                "missing_repo_key"
 
       refute_received {:description_written, _issue_id, _description}
+    end
+  end
+
+  describe "the events an answer records" do
+    test "a reply records one decision.recorded by the Director, naming its request, however often it is synced" do
+      decision = %{title: "Keep the legacy partials", question: "Remove the legacy partials here, or leave them for TP-891?"}
+      :ok = SymphonyElixir.Hold.set(@repo_key, @issue_id, :needs_decision, %{reason: decision.question, decision: decision})
+      [%{id: request_id}] = RunStore.list_ticket_events(@repo_key, @issue_id, [])
+      node = ticket([comment("c1", request_body()), comment("r1", "Defer to TP-891", nil, "c1")])
+
+      assert :ok = Decisions.sync(node, tracker: FakeTracker, repo_key: @repo_key)
+      assert :ok = Decisions.sync(node, tracker: FakeTracker, repo_key: @repo_key)
+      assert :ok = Decisions.record(@issue_id, Decisions.answered(node), tracker: FakeTracker, repo_key: @repo_key)
+
+      assert [_requested, %{type: "decision.recorded", actor: %{kind: :person, name: "the Director"}, idempotency: "decision.recorded:c1"} = recorded] =
+               RunStore.list_ticket_events(@repo_key, @issue_id, [])
+
+      assert %{answer: "Defer to TP-891 (option: **Defer to TP-891** (recommended): The partials stay; TP-891 removes them.)", key: "c1", request: ^request_id} =
+               recorded.payload
+
+      assert recorded.payload.title == "Keep the legacy partials"
+    end
+
+    test "a ruling records its decision.recorded naming no request" do
+      :ok = SymphonyElixir.Hold.set(@repo_key, @issue_id, :needs_decision, %{decision: %{title: "Keep the flag", question: "Keep it?"}})
+
+      assert :ok = Decisions.sync(ticket([comment("c2", "Ruling: Keep the flag")]), tracker: FakeTracker, repo_key: @repo_key)
+
+      assert [{"decision.requested", _requested}, {"decision.recorded", %{answer: "Keep the flag", key: "ruling-c2"} = ruling}] =
+               ticket_events(@repo_key, @issue_id)
+
+      refute Map.has_key?(ruling, :request)
+    end
+
+    test "the decisions backfilled from the description and a write the store refuses record nothing" do
+      {:ok, description} = Decisions.put("Fix it.", [entry()])
+      assert [%{key: "comment-1"}] = Decisions.stored(%{id: @issue_id, description: description}, repo_key: @repo_key)
+
+      log =
+        capture_log(fn ->
+          assert {:error, :down} = Decisions.record("issue-2", [entry()], tracker: FakeTracker, repo_key: @repo_key, store: DownStore)
+          assert {:error, :disk_full} = Decisions.record("issue-2", [entry()], tracker: FakeTracker, repo_key: @repo_key, store: WriteFailingStore)
+        end)
+
+      assert log =~ ":down"
+      assert log =~ ":disk_full"
+
+      assert ticket_events(@repo_key, @issue_id) == []
+      assert ticket_events(@repo_key, "issue-2") == []
     end
   end
 

@@ -391,7 +391,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   end
 
   # R18 offers to unlock the protected paths the PR changes, as the PR watch read them
-  # (`SymphonyElixir.ProtectedPathsGate.changed_paths/2`). A read without them waits for the next
+  # (`SymphonyElixir.ProtectedPathsGate.changed_entries/2`). A read without them waits for the next
   # tick rather than asking a question whose Allow would unlock nothing.
   defp perform(%Action{kind: :decision}, ctx) do
     with {:ok, paths} <- changed_protected_paths(ctx),

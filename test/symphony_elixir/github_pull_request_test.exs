@@ -448,6 +448,52 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     assert {:failure, [%{name: "smoke"}]} = CiPoller.ci_action(status)
   end
 
+  test "TP-1154: only the newest attempt of a run counts, and a run with a queued attempt is pending" do
+    check = fn name, url, status, conclusion ->
+      %{"name" => name, "status" => status, "conclusion" => conclusion, "workflowName" => "macos", "detailsUrl" => "https://github.com/org/repo/actions/runs/#{url}"}
+    end
+
+    drop = fn rollup ->
+      PullRequest.drop_superseded(%{pr_url: "u", commit_sha: "abc", checks: PullRequest.normalize_checks(rollup)})
+    end
+
+    # A rerun of run 300 keeps its id: attempt 1's cancelled jobs (1, 2) sit beside attempt 2's
+    # build (3), still waiting for a runner, whose test job isn't created yet.
+    attempt_1 = [check.("build", "300/job/1", "COMPLETED", "CANCELLED"), check.("test", "300/job/2", "COMPLETED", "CANCELLED")]
+    queued = check.("build", "300/job/3", "QUEUED", nil)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert %{checks: [%{name: "build", job_id: 3, run_id: "300", run_attempt: nil}] = checks} = drop.(attempt_1 ++ [queued])
+        assert PullRequest.checks_outcome(checks) == "pending"
+      end)
+
+    assert log =~ "Ignoring 1 check(s) of earlier attempts of run(s) 300: only the newest attempt of a run counts pr_url=u commit_sha=abc"
+    assert log =~ "Ignoring the cancelled checks of run(s) 300: an attempt of the run is queued or running pr_url=u commit_sha=abc"
+
+    # Once attempt 2 finished green, attempt 1's cancelled jobs don't count either.
+    green = [check.("build", "300/job/3", "COMPLETED", "SUCCESS"), check.("test", "300/job/4", "COMPLETED", "SUCCESS")]
+    assert %{checks: checks} = drop.(attempt_1 ++ green)
+    assert Enum.map(checks, & &1.job_id) == [3, 4]
+    assert PullRequest.checks_outcome(checks) == "passed"
+
+    # A newest attempt whose every check was cancelled, with nothing queued, still fails the head.
+    cancelled_again = [check.("build", "300/job/3", "COMPLETED", "CANCELLED"), check.("test", "300/job/4", "COMPLETED", "CANCELLED")]
+    assert %{checks: checks} = drop.(attempt_1 ++ cancelled_again)
+    assert Enum.map(checks, &{&1.job_id, &1.conclusion}) == [{3, "CANCELLED"}, {4, "CANCELLED"}]
+    assert PullRequest.checks_outcome(checks) == "failed"
+
+    # A details URL that names the run's attempt orders the checks by it.
+    by_attempt = [check.("macos", "301/attempts/1", "COMPLETED", "CANCELLED"), check.("macos", "301/attempts/2", "IN_PROGRESS", nil)]
+    assert %{checks: [%{run_id: "301", run_attempt: 2, job_id: nil}]} = drop.(by_attempt)
+
+    # A pending check of another run, or one outside GitHub Actions, leaves the cancelled checks.
+    other_run = [check.("build", "302/job/9", "COMPLETED", "CANCELLED"), %{"context" => "deploy", "state" => "PENDING"}]
+
+    assert %{checks: [%{run_id: "302", conclusion: "CANCELLED"}, %{name: "deploy", job_id: nil}, %{run_id: "300", status: "QUEUED"}]} =
+             drop.(other_run ++ [Map.put(queued, "workflowName", "release")])
+  end
+
   test "parse_url, required_checks, normalize_checks, drop_superseded and check_result" do
     assert {:ok, %{host: "github.com", owner: "org", repo: "repo", number: 7}} = PullRequest.parse_url("https://github.com/org/repo/pull/7")
     assert PullRequest.parse_url("https://example.com/org/repo/pull/7") == :error

@@ -565,7 +565,8 @@ defmodule SymphonyElixir.TicketStateTest do
             fix: %{ci_failure: %{commit_sha: "abc"}, pr_conflict: :junk},
             links: :junk,
             actions: [%{rule: "R1"}, :junk, %{rule: "R2"}, %{rule: "R3"}, %{rule: "R4"}, %{rule: "R5"}, %{rule: "R6"}],
-            silent: %{since: @at, ticks: 2, bound: " ", reason: "quiet", extra: 1}
+            silent: %{since: @at, ticks: 2, bound: " ", reason: "quiet", extra: 1},
+            protected_files: %{head_sha: "abc", paths: ["WORKFLOW.md", :junk]}
           },
           @at
         )
@@ -599,7 +600,8 @@ defmodule SymphonyElixir.TicketStateTest do
                fix: %{ci_failure: %{commit_sha: "abc"}, pr_conflict: nil},
                links: [],
                actions: [%{rule: "R1"}, %{rule: "R2"}, %{rule: "R3"}, %{rule: "R4"}, %{rule: "R5"}],
-               silent: %{since: @at, ticks: 2, bound: nil, reason: "quiet"}
+               silent: %{since: @at, ticks: 2, bound: nil, reason: "quiet"},
+               protected_files: %{head_sha: "abc", paths: ["WORKFLOW.md"]}
              }
 
       assert TicketState.normalize(record) == record
@@ -624,7 +626,8 @@ defmodule SymphonyElixir.TicketStateTest do
                applied: [],
                links: [],
                actions: [],
-               silent: nil
+               silent: nil,
+               protected_files: nil
              } =
                TicketState.pr_watch(sparse)
 

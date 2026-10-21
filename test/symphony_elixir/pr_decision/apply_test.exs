@@ -728,6 +728,8 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
 
   test "a Merging PR whose only red check is one a person clears asks a person, auto-merge off first (R18)" do
     action = action("R18", :decision, args: %{question: "Only the `protected paths` check is red", options: []}, owner: :person)
+    :ok = RunStore.clear()
+    :ok = TicketPullRequest.record_created(@repo_key, @issue_id, @pr_url, "auto/TP-7")
     read = read(protected_paths: ["config/settings_ui_exempt.yml"])
 
     assert %{outcome: :applied} = Apply.apply(action, ctx(:merging, facts: %{auto_merge: :armed}, read: read))
@@ -738,6 +740,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     assert question =~ "changes the list of settings that need no control in the Mac app. Agents may change these only with a person's permission."
     signals = TicketState.recent_signals(RunStore.get_ticket_state(@repo_key, @issue_id))
     assert [%{name: "decision requested", details: %{reason: "protected_paths"}} | _] = signals
+    assert [{"decision.requested", %{title: "Protected files changed on TP-7"}}] = ticket_events(@repo_key, @issue_id, ["decision.requested", "hold.set"])
 
     Process.put(:comment_result, {:error, :linear_down})
     capture_log(fn -> assert %{outcome: {:error, {:decision_request_failed, :linear_down}}} = Apply.apply(action, ctx(:merging, read: read)) end)

@@ -546,7 +546,16 @@ lower when the section is missing. For example, for a fix to the menu bar app's 
 ```
 
 Write each result as something a person can check on screen or in the terminal, not as an
-implementation detail. Tickets with no user-facing change can leave the section out.
+implementation detail, and name no test and no check: facts a user never sees (keys, counters, error
+tuples) go under the acceptance criteria. Tickets with no user-facing change can leave the section
+out.
+
+Proving the walkthrough is split three ways. You write the flows. The agent that implements the
+ticket writes the tests, and ends each step a test covers with `Proved by: <test>` in the ticket's
+description. The repository names the check that runs its tests, `proof_check` in its `WORKFLOW.md`
+(`make-all` here). Before QA starts, Symphony confirms every named test exists and passed on the PR
+head, then QA links those results and walks only the steps no test covers. A repository without
+`proof_check` has every step walked by QA.
 
 ## Documentation
 

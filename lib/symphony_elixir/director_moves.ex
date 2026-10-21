@@ -525,8 +525,10 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
+  # The decision is answered, so its clear records no withdrawal: the answer's `decision.recorded`
+  # ends the request.
   defp clear_decision_hold(issue, to_state, comment, opts) do
-    case Hold.clear(issue.repo_key, issue.id, :needs_decision, store_opts(opts)) do
+    case Hold.clear(issue.repo_key, issue.id, :needs_decision, [answered: true] ++ store_opts(opts)) do
       :ok -> decision_finish(issue, to_state, comment, opts)
       {:error, reason} -> {:error, {:store, "couldn't clear the hold on #{issue.identifier}: #{inspect(reason)}"}}
     end

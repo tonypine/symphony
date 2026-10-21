@@ -28,7 +28,7 @@ defmodule SymphonyElixir.QaPreCheckTest do
     output
   end
 
-  defp steps(text), do: Walkthrough.steps(text)
+  defp steps(text), do: Walkthrough.steps(text, "make-all")
 
   # Answers `gh pr view` with the head `head` and its `checks`, and the head's workflow runs with none.
   defp gh(head, checks) do
@@ -53,7 +53,7 @@ defmodule SymphonyElixir.QaPreCheckTest do
   end
 
   defp run(text, context, gh, opts \\ []) do
-    QaPreCheck.run(steps(text), @pr_url, context.head, context.workspace, [gh_runner: gh] ++ opts)
+    QaPreCheck.run(steps(text), @pr_url, context.head, context.workspace, Keyword.merge([gh_runner: gh, proof_check: "make-all"], opts))
   end
 
   describe "run/5" do
@@ -132,22 +132,65 @@ defmodule SymphonyElixir.QaPreCheckTest do
     test "a status context with no workflow is named by its context", context do
       checks = [%{"context" => "protected paths", "state" => "SUCCESS", "targetUrl" => @run_url}]
 
-      assert {:pass, [%{url: @run_url}]} = run("1. One. Proved by: `protected paths`", context, gh(context.head, checks))
-      assert {:fail, [%{detail: detail}]} = run("1. One. Proved by: `protected-paths / protected paths`", context, gh(context.head, checks))
-      assert detail =~ "did not run"
+      assert {:pass, [%{url: @run_url}]} = run("1. One. Proved by: `protected paths` ›", context, gh(context.head, checks))
+      assert {:fail, [%{detail: detail}]} = run("1. One. Proved by: `protected-paths / protected paths` ›", context, gh(context.head, checks))
+      assert detail =~ "is not a check run or workflow on"
     end
 
-    test "a check that never ran on the head fails the step", context do
-      text = "1. One. Proved by: `macos-e2e` › update, restart and rollback"
+    test "the proof check that never ran on the head fails the step", context do
+      text = "1. One. Proved by: `check_test.exs`"
 
-      assert {:fail, [result]} = run(text, context, gh(context.head, [check("make-all", "COMPLETED", "SUCCESS")]))
-      assert result.detail == "`macos-e2e` did not run on `#{String.slice(context.head, 0, 12)}`"
+      assert {:fail, [result]} = run(text, context, gh(context.head, [check("lint", "COMPLETED", "SUCCESS")]))
+      assert result.detail == "`make-all` did not run on `#{String.slice(context.head, 0, 12)}`"
       assert result.url == nil
       assert QaPreCheck.linked(result) == result.detail
     end
 
+    test "a test alone is run by the proof check", context do
+      text = "1. One. Proved by: `test/symphony_elixir/check_test.exs`"
+
+      assert {:pass, [result]} = run(text, context, gh(context.head, [check("make-all", "COMPLETED", "SUCCESS")]))
+      assert result.detail == "`make-all` passed on `#{String.slice(context.head, 0, 12)}` and `test/symphony_elixir/check_test.exs` is in the checkout"
+    end
+
+    test "a check that is neither the proof check nor on the head fails naming the proof check", context do
+      short = String.slice(context.head, 0, 12)
+      checks = [check("make-all", "COMPLETED", "SUCCESS")]
+
+      assert {:fail, [result]} = run("1. One. Proved by: `ci` › `test/symphony_elixir/check_test.exs`", context, gh(context.head, checks))
+
+      assert result.detail ==
+               "`ci` is not a check run or workflow on `#{short}`: this repo's proof check is `make-all` (`proof_check` in WORKFLOW.md)"
+
+      assert [finding] = QaPreCheck.findings([result])
+      assert finding =~ "this repo's proof check is `make-all`"
+
+      # The check is diagnosed even when the named test is missing too, so CI is read for it.
+      assert {:fail, [missing]} = run("1. One. Proved by: ci › test/x_test.exs", context, gh(context.head, checks))
+      assert_received :gh_pr_view
+
+      assert missing.detail ==
+               "`test/x_test.exs` is not in the checkout, and `ci` is not a check run or workflow on `#{short}`: " <>
+                 "this repo's proof check is `make-all` (`proof_check` in WORKFLOW.md)"
+
+      # Another check that ran on the head is that check's proof.
+      macos = [check("update, restart and rollback", "COMPLETED", "SUCCESS", %{"workflowName" => "macos-e2e"})]
+      assert {:pass, _results} = run("1. One. Proved by: `macos-e2e` › update, restart and rollback", context, gh(context.head, macos))
+      assert {:fail, [%{detail: "`missing_test.exs` is not in the checkout"}]} = run("1. One. Proved by: `macos-e2e` › missing_test.exs", context, gh(context.head, macos))
+    end
+
+    test "without a proof check a check that never ran is named as before", context do
+      text = "1. One. Proved by: `macos-e2e` › update, restart and rollback"
+
+      assert {:fail, [result]} = run(text, context, gh(context.head, [check("make-all", "COMPLETED", "SUCCESS")]), proof_check: nil)
+      assert result.detail == "`macos-e2e` did not run on `#{String.slice(context.head, 0, 12)}`"
+
+      assert {:fail, [%{detail: "`missing_test.exs` is not in the checkout"}]} =
+               run("1. One. Proved by: `macos-e2e` › missing_test.exs", context, unused_gh(), proof_check: nil)
+    end
+
     test "a check that only reported skipped did not run its test", context do
-      text = "1. One. Proved by: `macos-e2e`"
+      text = "1. One. Proved by: `macos-e2e` ›"
       checks = [check("e2e", "COMPLETED", "SKIPPED", %{"workflowName" => "macos-e2e"})]
 
       assert {:fail, [result]} = run(text, context, gh(context.head, checks))
@@ -155,7 +198,7 @@ defmodule SymphonyElixir.QaPreCheckTest do
     end
 
     test "a check still running is pending, and the worst step decides", context do
-      pending = "1. One. Proved by: `macos-e2e`\n2. Two. Proved by: `make-all`\n"
+      pending = "1. One. Proved by: `macos-e2e` ›\n2. Two. Proved by: `make-all`\n"
       checks = [check("macos-e2e", "IN_PROGRESS", nil), check("make-all", "COMPLETED", "SUCCESS")]
 
       assert {:pending, [running, passed]} = run(pending, context, gh(context.head, checks))

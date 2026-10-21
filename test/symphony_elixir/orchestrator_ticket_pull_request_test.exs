@@ -27,16 +27,15 @@ defmodule SymphonyElixir.OrchestratorTicketPullRequestTest do
       assert %{running: [%{issue_identifier: "MT-1012", pull_request_url: @pr_url}]} = state_payload(name, pid)
     end
 
-    test "shows no PR once that PR closed or merged" do
-      for finished <- ["closed", "merged"] do
+    for finished <- ["closed", "merged"] do
+      test "shows no PR once that PR #{finished}" do
         :ok = TicketPullRequest.record_created(Config.repo_key!(), "issue-running-pr", @pr_url, "auto/MT-1012")
-        :ok = TicketPullRequest.mark_finished(Config.repo_key!(), @pr_url, finished)
-        {name, pid} = start_orchestrator(:"RunningFinishedPr#{finished}")
+        :ok = TicketPullRequest.mark_finished(Config.repo_key!(), @pr_url, unquote(finished))
+        {name, pid} = start_orchestrator(:"RunningFinishedPr#{unquote(finished)}")
         put_running(pid, issue("issue-running-pr", "In Progress"))
 
         assert %{running: [%{pull_request_url: nil}]} = GenServer.call(pid, :snapshot)
         assert %{running: [%{pull_request_url: nil}]} = state_payload(name, pid)
-        stop_process(pid)
       end
     end
 
@@ -100,14 +99,23 @@ defmodule SymphonyElixir.OrchestratorTicketPullRequestTest do
     name = Module.concat(__MODULE__, suffix)
     {:ok, pid} = Orchestrator.start_link(name: name)
     on_exit(fn -> if Process.alive?(pid), do: stop_process(pid) end)
+    wait_for_poll_idle(pid)
     {name, pid}
   end
 
+  # The entry runs a stand-in agent, not the test process: a poll that stops the run
+  # shuts its agent down, and must never shut the test down with it. The tracker
+  # reports the issue as active, and one poll runs before the test asserts, so the
+  # entry is proved to survive the orchestrator's reconciliation.
   defp put_running(pid, %Issue{} = issue, extra \\ %{}) do
+    agent = spawn(fn -> receive do: (:stop -> :ok) end)
+    on_exit(fn -> Process.exit(agent, :kill) end)
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+
     entry =
       Map.merge(
         %{
-          pid: self(),
+          pid: agent,
           ref: make_ref(),
           run_id: "run-#{issue.id}",
           repo_key: Config.repo_key!(),
@@ -126,6 +134,9 @@ defmodule SymphonyElixir.OrchestratorTicketPullRequestTest do
     :sys.replace_state(pid, fn state ->
       %{state | running: %{issue.id => entry}, claimed: MapSet.put(state.claimed, issue.id)}
     end)
+
+    send(pid, :run_poll_cycle)
+    wait_for_poll_idle(pid)
   end
 
   defp put_completed(pid, issue_id) do
@@ -146,6 +157,20 @@ defmodule SymphonyElixir.OrchestratorTicketPullRequestTest do
     send(pid, :publish_snapshot)
     :sys.get_state(pid)
     Presenter.state_payload(name, 1_000)
+  end
+
+  defp wait_for_poll_idle(pid, attempts \\ 400)
+  defp wait_for_poll_idle(_pid, 0), do: flunk("the orchestrator's poll did not finish")
+
+  defp wait_for_poll_idle(pid, attempts) do
+    case :sys.get_state(pid) do
+      %{poll_check_in_progress: false, repo_poll_task_ref: nil} ->
+        :ok
+
+      _state ->
+        Process.sleep(5)
+        wait_for_poll_idle(pid, attempts - 1)
+    end
   end
 
   defp wait_for_watching(pid) do

@@ -32,13 +32,21 @@ defmodule SymphonyElixir.ProtectedPathsGate do
   def check(failed, pr, issue, opts \\ []), do: if(failed == [], do: :ok, else: covered(pr, issue, Enum.join(failed, ", "), opts))
 
   @doc """
-  The protected paths `pr` changes, as the protected list names them (`WORKFLOW.md`,
-  `.agents/skills`): what a person's grant must cover for it to land, and what Symphony's question
-  about the change (rule R18) offers to unlock. Read like `check/4`, without the grants;
-  `{:error, reason}` when they can't be read.
+  Every protected path the PR's own commits change, read as `check/4` reads them but with no
+  path left out: the evidence a person reads behind rule R18. `pr` and `opts` are as for `check/4`;
+  a read that fails says why.
   """
   @spec changed_paths(map(), keyword()) :: {:ok, [String.t()]} | {:error, String.t()}
-  def changed_paths(pr, opts \\ []) do
+  def changed_paths(pr, opts \\ []), do: uncovered(pr, [], Keyword.get(opts, :git, &default_git/2))
+
+  @doc """
+  The entries of the protected list (`WORKFLOW.md`, `.agents/skills`) the PR's own commits change:
+  what a person's grant must name for it to land, and what Symphony's question about the change
+  (rule R18) offers to unlock. Read like `changed_paths/2`; `{:error, reason}` when they can't be
+  read.
+  """
+  @spec changed_entries(map(), keyword()) :: {:ok, [String.t()]} | {:error, String.t()}
+  def changed_entries(pr, opts \\ []) do
     git = Keyword.get(opts, :git, &default_git/2)
 
     with {:ok, workspace, base, head} <- commits(pr),

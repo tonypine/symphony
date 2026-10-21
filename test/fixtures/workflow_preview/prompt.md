@@ -255,8 +255,8 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
     - Do not include metadata already inferable from Linear issue fields (`issue ID`, `status`, `branch`, `PR link`).
 6.  Add explicit acceptance criteria and TODOs in checklist form in the same comment.
     - If changes are user-facing, include a UI walkthrough acceptance criterion that describes the end-to-end user path to validate.
-      When the ticket has a `## User walkthrough` section, copy its numbered steps and expected results into that criterion verbatim, each with its `Proved by:` line.
-    - Each walkthrough step is proved in one place. A step ending in `Proved by: <check> › <test>` is met by that named test passing on the PR head: plan the test in this PR unless the step names another ticket's. A step ending in `Proved by: QA`, or with no `Proved by:` line, is walked by QA; when code could drive it, plan a test anyway. When this run writes a walkthrough (a sub-ticket, a follow-up), route each step as `Splitting work and out-of-scope improvements` says.
+      When the ticket has a `## User walkthrough` section, copy its numbered steps and expected results into that criterion verbatim, with any `Proved by:` line a step has.
+    - Each walkthrough step is proved in one place, and you name it: plan an automated test in this PR for every step code can drive, and write in the plan which test covers which step. Once the test exists, record it on the step (Step 2 says how). A step ending in `Proved by: <test>` (or the older `Proved by: <check> › <test>`) is met by that named test passing on the PR head; the repo's `proof_check` in WORKFLOW.md is the check that runs a `Proved by: <test>`. A step ending in `Proved by: QA`, or one no test covers, is walked by QA. When this run writes a walkthrough (a sub-ticket, a follow-up), write plain steps that name no test and no check, as `Splitting work and out-of-scope improvements` says.
     - If changes touch app files or app behavior, add explicit app-specific flow checks to `Acceptance Criteria` in the workpad (for example: launch path, changed interaction path, and expected result path).
     - If the ticket description/comment context includes `Validation`, `Test Plan`, or `Testing` sections, copy those requirements into the workpad `Acceptance Criteria` and `Validation` sections as required checkboxes (no optional downgrade).
     - If the ticket adds a `symphony.yml` setting, the plan includes its control in the macOS app: in the same PR (add the control, list the key in `SettingsUIManifest.keyPaths`, extend the line editor and its tests), or in a sub-ticket filed with `linear_create_subissue` that the parent's epic review checks and has a `## User walkthrough` for the new control. `mix settings.ui_coverage` fails CI for a setting with neither a control nor an exemption. Never add an exemption yourself: `config/settings_ui_exempt.yml` is agent-protected. If the setting should have no control, say so in the workpad `Confusions` and leave the exemption to a person. See `docs/configuration.md#settings-in-the-macos-app`.
@@ -558,11 +558,11 @@ Which plan run this is:
    criteria and a line naming any earlier sub-ticket it depends on. For every
    sub-ticket it depends on, pass that identifier in `blocked_by` too, so Linear
    records the blocked-by link and Symphony's dependency gate holds it back. Each
-   step of a sub-ticket's `## User walkthrough` names the one place that proves it
-   (`Proved by: <check> › <test>` or `Proved by: QA`, as `Splitting work and
-   out-of-scope improvements` says), and one journey never sits both in a
-   sub-ticket's walkthrough and in an end-to-end sub-ticket: the end-to-end
-   sub-ticket owns it, and the other's step names that test.
+   step of a sub-ticket's `## User walkthrough` is a plain step a user takes with
+   the result they should see, naming no test and no check, as `Splitting work and
+   out-of-scope improvements` says: the implementer names each step's test. One
+   journey never sits both in a sub-ticket's walkthrough and in an end-to-end
+   sub-ticket: the end-to-end sub-ticket owns it, and the other leaves it out.
 3. Keep the parent's own description the definition of done the epic review resolves:
    its requirement rows and, when it has one, its `## User walkthrough`. The review
    reads them off the parent, so a requirement no sub-ticket delivers is a plan gap —
@@ -701,6 +701,7 @@ In this repository, a walkthrough step that judges the macOS app by sight in dar
     - Revert every temporary proof edit before commit/push.
     - Document these temporary proof steps and outcomes in the workpad `Validation`/`Notes` sections so reviewers can follow the evidence.
 6.  Re-check all acceptance criteria and close any gaps.
+    - When the ticket has a `## User walkthrough`, record the proof of every step an automated test in this PR covers, before the handoff push: call `linear_record_walkthrough_proofs` with each step's number and its test, and Symphony ends that step in the ticket description with `Proved by: <test>`. Name the test as the code has it: its file path, or a test or scenario name as written. Name only tests in this PR, and never a check name: the repo's `proof_check` in WORKFLOW.md is the check that runs them, and the tool refuses a ` › ` separator. Leave a step no test covers as it is, for QA; the tool refuses a step its author marked `Proved by: QA`. The QA pre-check then confirms each named test on the PR head, and QA links its result instead of walking the step.
 7.  Before every `git push` attempt, run the targeted pre-push checks for your scope and confirm they pass; if one fails, address it and rerun until green.
     - Targeted pre-push checks: `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix specs.check`, `mix credo --strict <changed files>`, `mix cover.changed`, `mix settings.ui_coverage`, and every new or changed test file plus the test files of the modules you changed.
     - Do not run `make all`, `make check`, `make coverage`, the full `mix test`, `mix test --stale` or Dialyzer before a push (see `Command and output hygiene` for the optional `make all` on shared infrastructure). CI is the gate for the full suite, the 100% coverage report and Dialyzer.
@@ -748,6 +749,19 @@ In this repository, a walkthrough step that judges the macOS app by sight in dar
     - Ensure all existing PR feedback was reviewed and resolved, including inline review comments (code changes or explicit, justified pushback response).
     - Then push the updates to the same branch; that push is the handoff to `Code Review`.
 
+### Visual work
+
+Apply this whenever a ticket adds or changes a screen or pane.
+
+- Viewports are inputs to any layout change; the repo's `WORKFLOW.md` names them with a goal each: `functional` (every control reachable; scroll and collapse allowed; nothing clipped) or `optimize` (use the space). Where a repo names none, the QA wide pass size (1400×900 pt) is the functional viewport.
+- Design before code, recorded in the workpad under `### Design`:
+  1. Layout: the top-level sections and, per viewport, what shows, what collapses, what scrolls, what hides. Persistent chrome (navigation, side panels, detail panes) is part of the budget: when one opens, content gives way by a mechanism, never by being pushed off-screen or truncated to unreadability.
+  2. Each section designed on its own, then reviewed together.
+  3. Responsiveness pass, answered in writing: Is horizontal scroll needed, and where? Which panes resize or collapse? Is every control reachable at each viewport?
+  4. Interactivity pass: hover, pressed, focused, disabled and loading states for every control; keyboard reachability.
+  5. Accessibility pass: AX labels on every control; contrast per the repo's design system.
+- Offscreen renders (`ImageRenderer`) per viewport where the view renders offscreen; where it doesn't (`Table`, `NavigationSplitView`, `Form`), say so in the workpad and leave the sight check to QA.
+
 ## Step 3: Code Review, QA and merge handling
 
 1. After the handoff push the machine runs the review: do not code or change ticket content while the ticket is in `Code Review`, `QA` or `Merging`, or while a hold is set. Holds are requested, never performed: ask for a person with `linear_request_human_action` (a `Needs Decision` hold) or report a block (a `Blocked` hold), and Symphony sets and clears the label.
@@ -766,9 +780,12 @@ In this repository, a walkthrough step that judges the macOS app by sight in dar
 1. `Rework` means the work came back for changes. Continue on the **same** pull request and the same branch: never close the PR, never cut a new branch, and never move the workpad's prior plan aside.
 2. Read what sent it back — the reviewer's verdict and reasons, the failing assertions, the user journey QA ran — and address it directly. The old verdict does not survive the change: the new head is reviewed again from scratch.
    - When the report names a red check without its failing assertion, read the check's log with `github_ci_log` (`job_id` or `run_id` from the check's URL, or `pr_number` for the PR's failed checks) before changing anything: it returns the failed steps, their annotations and the last lines of their log.
-3. Keep the single workpad comment; extend its `Plan`, `Acceptance Criteria` and `Validation` with what the verdict adds instead of superseding what is there.
-4. Push the changes to the same branch. That push is the handoff: it moves the ticket to `Code Review` for a review of the new head. Do not ask for the state by hand.
-5. `Restart` is the full reset — close the pull request, a fresh branch from main, the prior attempt superseded in the workpad. It is a person's move from the Director app; an agent can neither request nor perform it. If you judge that the approach itself is wrong, say so plainly in the workpad and ask for a person with an `## Action needed:` request rather than starting over on your own.
+   - When the change adds, renames or moves a test that proves a walkthrough step, record the step's proof again with `linear_record_walkthrough_proofs` (`Proved by: <test>`, never a check name). A QA pre-check finding on a step's `Proved by:` line is fixed by making that test run and pass on the PR head, or by recording the test that does.
+3. Before planning, read every prior QA report and the workpad's superseded attempts, and list the findings by class (clipped, truncated, mechanism broken, state missing) in the workpad, with the head each was found on.
+   - If the same class fails for the second time on this ticket, do not push a third attempt of the same kind. Write `## Action needed:` with the finding history and two layout options for a person to choose, and stop.
+4. Keep the single workpad comment; extend its `Plan`, `Acceptance Criteria` and `Validation` with what the verdict adds instead of superseding what is there.
+5. Push the changes to the same branch. That push is the handoff: it moves the ticket to `Code Review` for a review of the new head. Do not ask for the state by hand.
+6. `Restart` is the full reset — close the pull request, a fresh branch from main, the prior attempt superseded in the workpad. It is a person's move from the Director app; an agent can neither request nor perform it. If you judge that the approach itself is wrong, say so plainly in the workpad and ask for a person with an `## Action needed:` request rather than starting over on your own.
 
 ## Review brief
 
@@ -911,23 +928,22 @@ change is live (on their own machine, in production, with their account) is not 
 walkthrough step: put it under `## After release`, which QA skips and which never
 blocks the ticket.
 
-Each walkthrough step names the one place that proves it, on a line at its end:
-`Proved by: <check> › <test>` (the GitHub check run, then the suite, scenario or
-test file that proves the step on the PR head) or `Proved by: QA`. A step with no
-`Proved by:` line is read as `Proved by: QA`. Name the test as the code has it: its
-file path, or a test or scenario name as it is written. Symphony's QA pre-check
-looks it up in the PR's checkout and fails the step when it is not there. Route
-each step when you write it:
+Write the walkthrough end to end, in plain words from the user's seat, and name no
+test and no check in it. The implementer, who writes the tests, records which test
+proves each step it covers (`Proved by: <test>`), and the repo names the check that
+runs them (`proof_check` in its WORKFLOW.md). Symphony's QA pre-check confirms each
+named test on the PR head, and QA walks every step without one. Unit-level facts
+(keys, counters, error tuples) are acceptance criteria, not walkthrough steps.
+Shape each step when you write it:
 
-- A step code can drive names its test. QA does not walk it: QA links that test's
-  result on the PR head.
 - A step that needs an environment QA lacks (a signed build, a device, real
-  credentials) goes to an automated harness and names it, never to QA.
-- A step that needs a QA tool QA has, or one a sibling ticket adds, stays
-  `Proved by: QA`, and so does a judgment by sight of what the user sees.
-- One journey is proved in one place. When an end-to-end ticket covers it, that
-  ticket owns the journey, and the other tickets' steps name its test instead of
-  repeating the journey for QA.
+  credentials) needs an automated harness: say so under `## Acceptance criteria`,
+  so the implementer covers it with a test.
+- A judgment by sight of what the user sees ends with `Proved by: QA`, so the
+  implementer leaves it to QA, and so does a step that needs a QA tool QA has, or
+  one a sibling ticket adds.
+- One journey sits in one walkthrough. When an end-to-end ticket covers it, that
+  ticket owns the journey, and the other tickets leave it out.
 
 Record the new issue
 identifiers in the current workpad's `Notes`. If the tool refuses, list the
@@ -996,3 +1012,6 @@ place throughout execution:
 
 - <only include when something was confusing during execution>
 ````
+
+
+Viewports (see `Visual work`) for the Director's `macos_app`: laptop 1440×900 pt `functional`, desktop 2560×1440 pt `optimize`.

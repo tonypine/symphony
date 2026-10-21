@@ -4,6 +4,7 @@ defmodule SymphonyElixir.QaAgentTest do
   import ExUnit.CaptureLog
 
   alias SymphonyElixir.AgentSandboxConfig
+  alias SymphonyElixir.Codex.DynamicTool
   alias SymphonyElixir.LeftoverProcesses.Table
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaAgent.{Report, Selection}
@@ -19,6 +20,7 @@ defmodule SymphonyElixir.QaAgentTest do
     :qa_test_messages,
     :qa_test_turn_result,
     :qa_test_turn_results,
+    :qa_test_verdict_calls,
     :qa_test_dev_server_result
   ]
 
@@ -34,6 +36,7 @@ defmodule SymphonyElixir.QaAgentTest do
 
     def run_turn(session, prompt, issue, opts) do
       send(recipient(), {:qa_turn, session, prompt, issue, opts})
+      call_qa_verdict(opts)
       on_message = Keyword.fetch!(opts, :on_message)
       Enum.each(Application.get_env(:symphony_elixir, :qa_test_messages, []), on_message)
 
@@ -54,6 +57,23 @@ defmodule SymphonyElixir.QaAgentTest do
     def stop_session(session) do
       send(recipient(), {:qa_session_stopped, session})
       :ok
+    end
+
+    # `:qa_test_verdict_calls` lists, per turn, the `qa_verdict` calls the turn makes, the way an
+    # agent's tool call reaches the tool.
+    defp call_qa_verdict(opts) do
+      case Application.get_env(:symphony_elixir, :qa_test_verdict_calls) do
+        [calls | rest] ->
+          Application.put_env(:symphony_elixir, :qa_test_verdict_calls, rest)
+
+          Enum.each(calls, fn args ->
+            response = DynamicTool.execute("qa_verdict", args, Keyword.take(opts, [:tool_scope, :qa_verdict_sink]))
+            send(recipient(), {:qa_verdict_response, Jason.decode!(response["output"])})
+          end)
+
+        _none ->
+          :ok
+      end
     end
 
     def pass_json do
@@ -957,6 +977,21 @@ defmodule SymphonyElixir.QaAgentTest do
       assert epic =~ "QA's three jobs, in this order:"
     end
 
+    test "the viewport passes name the layout defect rule and the finding format" do
+      [_before, jobs] = QaAgent.prompt(job(), nil) |> String.replace(~r/\s+/, " ") |> String.split("3. The wide pass", parts: 2)
+
+      assert jobs =~ "One pass per viewport the repo names (today: the wide pass)."
+
+      assert jobs =~
+               "A defect is content clipped with no way to reach it, or a mechanism (scroll, collapse, resize) that doesn't work."
+
+      assert jobs =~ "Horizontal scroll or a collapsed pane at a `functional` viewport is not a defect."
+      assert jobs =~ "A finding names the viewport, the screen, the mechanism expected, the actual, and the evidence file."
+
+      epic = QaAgent.prompt(job(%{epic_review: true, base_ref: "origin/main"}), nil) |> String.replace(~r/\s+/, " ")
+      assert epic =~ "A finding names the viewport, the screen, the mechanism expected, the actual, and the evidence file."
+    end
+
     test "each UI playbook runs the Design check in light and dark between the walkthrough and its other checks" do
       macos_app = %{build: "make app", app: "build/App.app"}
       android_app = %{build: "./gradlew assembleDebug", apk_path: "app.apk", application_ids: ["com.example.app"]}
@@ -1024,7 +1059,11 @@ defmodule SymphonyElixir.QaAgentTest do
             issue: epic,
             epic_review: true,
             base_ref: "origin/main",
-            journey: %{source: "the epic's acceptance criteria", text: "- [ ] The settings window opens"}
+            journey: %{
+              source: "the epic's acceptance criteria",
+              text: "- [ ] The settings window opens",
+              steps: SymphonyElixir.Walkthrough.steps("1. Open the settings window. Proved by: `test/settings_test.exs`", "make-all")
+            }
           }),
           nil
         )
@@ -1155,10 +1194,12 @@ defmodule SymphonyElixir.QaAgentTest do
       """
 
       ticket = issue(%{description: description})
-      prompt = QaAgent.prompt(job(%{issue: ticket, journey: SymphonyElixir.QaVerification.journey(ticket)}), nil)
+      prompt = QaAgent.prompt(job(%{issue: ticket, journey: SymphonyElixir.QaVerification.journey(ticket, "make-all")}), nil)
       flat = String.replace(prompt, ~r/\s+/, " ")
 
-      assert flat =~ "A step ending in `Proved by: <check> › <test>` is proved by that named automated test: do not walk it."
+      assert flat =~
+               "A step ending in `Proved by: <test>` (run by the repo's proof check) or `Proved by: <check> › <test>` is proved by that named automated test, run by the check listed with it below: do not walk it."
+
       assert flat =~ "Walk every step that says `Proved by: QA` or names no proof."
       assert flat =~ "and walk yourself every step that no named test proves"
       assert flat =~ "gh run list --commit #{job().sha}"
@@ -1180,7 +1221,7 @@ defmodule SymphonyElixir.QaAgentTest do
       journey = %{
         source: "the ticket's `## User walkthrough`",
         text: "1. Parse it. Proved by: `make-all`",
-        steps: SymphonyElixir.Walkthrough.steps("1. Parse it. Proved by: `make-all`")
+        steps: SymphonyElixir.Walkthrough.steps("1. Parse it. Proved by: `make-all`", "make-all")
       }
 
       prompt = QaAgent.prompt(job(%{journey: journey}), nil)
@@ -1189,11 +1230,13 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "Steps to walk (`Proved by: QA`, or no proof named):\n- none\n"
     end
 
-    test "a walkthrough without Proved by: lines states the rule but lists no steps, so QA walks them all" do
-      journey = %{source: "the ticket's `## User walkthrough`", text: "1. Run `symphony check`.", steps: SymphonyElixir.Walkthrough.steps("1. Run `symphony check`.")}
+    test "a walkthrough with no named-test step is walked whole, whatever its Proved by: lines say" do
+      text = "1. Run `symphony check`. Proved by: test/check_test.exs"
+      journey = %{source: "the ticket's `## User walkthrough`", text: text, steps: SymphonyElixir.Walkthrough.steps(text, nil)}
       prompt = QaAgent.prompt(job(%{journey: journey}), nil)
 
-      assert prompt =~ "Walk every step that says `Proved by: QA` or names no proof."
+      assert prompt =~ "No walkthrough step names a test that a check of this repo runs: walk every step, whatever its `Proved by:` line says."
+      refute prompt =~ "gh run list --commit"
       refute prompt =~ "Steps a named test proves"
       refute prompt =~ "Steps to walk"
     end
@@ -1302,6 +1345,7 @@ defmodule SymphonyElixir.QaAgentTest do
 
       assert prompt =~ ~r/Without a hand-off,\s+mark it `fail`/
       assert prompt =~ ~r/Never skip a criterion that a\s+change outside these paths could meet, such as one under `docs\/` or to `README.md`: a missing\s+change there is `fail`\./
+      assert prompt =~ ~r/A failed `protected paths` check on the PR is not a defect and not a\s+block: only a person clears it, and Symphony asks them before the merge\./
 
       for path <- AgentSandboxConfig.workspace_protected_paths(), do: assert(prompt =~ "`#{path}`")
 
@@ -2390,13 +2434,14 @@ defmodule SymphonyElixir.QaAgentTest do
                    QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
         end)
 
-      assert log =~ "QA agent answered without a verdict for TP-900"
+      assert log =~ "QA agent answered without a verdict for TP-900; asking for the qa_verdict call (follow-up 1)"
       assert_receive {:qa_turn, session, first_prompt, _issue, first_opts}
       assert first_prompt =~ "### Playbook: cli"
       assert first_opts[:resume_session_id] == nil
       assert_receive {:qa_turn, ^session, follow_up, _issue, follow_up_opts}
-      assert follow_up == QaAgent.follow_up_prompt()
-      assert follow_up =~ ~r/Return only the JSON\s+verdict object/
+      assert follow_up == QaAgent.follow_up_prompt(:no_verdict_object)
+      assert follow_up =~ "Symphony did not get your verdict: the answer had no qa_verdict call and no JSON verdict object."
+      assert follow_up =~ ~r/Call the\s+`qa_verdict` tool once with your verdict/
       assert follow_up_opts[:resume_session_id] == "sess-qa"
       refute_receive {:qa_turn, _session, _prompt, _issue, _opts}
       assert_receive {:qa_session_stopped, ^session}
@@ -2412,11 +2457,169 @@ defmodule SymphonyElixir.QaAgentTest do
 
       assert_receive {:qa_turn, _session, _prompt, _issue, _opts}
       assert_receive {:qa_turn, _session, follow_up, _issue, follow_up_opts}
-      assert follow_up == QaAgent.follow_up_prompt()
+      assert follow_up == QaAgent.follow_up_prompt(:no_verdict_object)
       assert follow_up_opts[:resume_session_id] == nil
       refute_receive {:qa_turn, _session, _prompt, _issue, _opts}
 
       Application.put_env(:symphony_elixir, :qa_test_turn_results, [{:ok, %{result: "Still waiting."}}, {:error, :turn_timeout}])
+
+      capture_log(fn ->
+        assert {:error, {:qa_agent_failed, :turn_timeout}, _tokens} =
+                 QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+      end)
+    end
+
+    test "a qa_verdict call is the verdict even when the final message is empty, and the report lists its findings" do
+      findings = [
+        %{
+          "step" => "Step 2",
+          "viewport" => "1400×900 pt",
+          "summary" => "The header still says Choose a model after choosing one",
+          "expected" => "the chosen model's name",
+          "actual" => "\"Choose a model\"",
+          "evidence" => ["https://uploads.linear.test/header.png"]
+        },
+        %{"step" => "Step 3", "actual" => "the row still says Choose a model", "evidence" => "qa-evidence/row.png"}
+      ]
+
+      Application.put_env(:symphony_elixir, :qa_test_verdict_calls, [[%{"verdict" => "FAIL", "summary" => "Two defects.", "findings" => findings}]])
+      Application.put_env(:symphony_elixir, :qa_test_turn_result, {:ok, %{result: ""}})
+
+      assert {:ok, %{result: %{verdict: :fail, findings: [header, row]} = result}} =
+               QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+
+      assert header ==
+               "Step 2 at 1400×900 pt: The header still says Choose a model after choosing one. Expected: the chosen model's name. " <>
+                 "Actual: \"Choose a model\". Evidence: https://uploads.linear.test/header.png."
+
+      assert row == "Step 3: Actual: the row still says Choose a model. Evidence: qa-evidence/row.png."
+      refute Map.has_key?(result, :follow_ups)
+
+      assert_receive {:qa_session_started, _worktree, session_opts}
+      assert session_opts[:qa_verdict_sink] == self()
+      assert_receive {:qa_turn, session, prompt, _issue, turn_opts}
+      assert turn_opts[:qa_verdict_sink] == self()
+      assert prompt =~ ~r/call the `qa_verdict` tool once with it, then end your\s+turn/
+      assert prompt =~ ~r/If the `qa_verdict` tool is\s+not available, your final message must be only this JSON object/
+      assert_receive {:qa_verdict_response, %{"recorded" => true, "verdict" => "fail"}}
+      refute_receive {:qa_turn, _session, _prompt, _issue, _opts}
+      assert_receive {:qa_session_stopped, ^session}
+
+      report = Report.render(Map.merge(result, %{sha: @sha, target_state: "Rework"}))
+      assert report =~ "- " <> header
+      assert report =~ "- " <> row
+    end
+
+    test "the last qa_verdict call wins over the turn's text and over a turn that then failed" do
+      Application.put_env(:symphony_elixir, :qa_test_verdict_calls, [
+        [%{"verdict" => "maybe"}, %{"verdict" => "blocked"}, %{"verdict" => "pass"}, %{"verdict" => "Blocked", "reason" => "no key", "needs_person" => "true"}]
+      ])
+
+      Application.put_env(:symphony_elixir, :qa_test_turn_result, {:error, :turn_timeout})
+
+      assert {:ok, %{result: %{verdict: :blocked, reason: "no key", needs_person: true}}} =
+               QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+
+      assert_receive {:qa_verdict_response, %{"error" => %{"code" => "invalid_qa_verdict", "message" => invalid}}}
+      assert invalid == "Symphony could not read the verdict: `verdict` must be one of pass, fail or blocked. Fix it and call qa_verdict again."
+      assert_receive {:qa_verdict_response, %{"error" => %{"code" => "invalid_qa_verdict", "message" => missing_reason}}}
+      assert missing_reason =~ "a blocked verdict needs a non-empty `reason`."
+
+      # The final message's JSON is the fallback, and a verdict call wins over it.
+      Application.put_env(:symphony_elixir, :qa_test_verdict_calls, [[%{"verdict" => "pass", "summary" => "From the tool."}]])
+      Application.put_env(:symphony_elixir, :qa_test_turn_result, {:ok, %{result: ~s({"verdict":"fail","findings":["From the text."]})}})
+
+      assert {:ok, %{result: %{verdict: :pass, summary: "From the tool."}}} =
+               QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+    end
+
+    test "a verdict the follow-up records with qa_verdict counts the follow-up" do
+      Application.put_env(:symphony_elixir, :qa_test_verdict_calls, [[], [%{"verdict" => "pass"}]])
+      Application.put_env(:symphony_elixir, :qa_test_turn_results, [{:ok, %{result: "Done testing."}}, {:ok, %{result: ""}}])
+
+      capture_log(fn ->
+        assert {:ok, %{result: %{verdict: :pass, follow_ups: 1}}} =
+                 QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+      end)
+    end
+
+    test "a verdict recorded before the token limit stopped the turn stands" do
+      Application.put_env(:symphony_elixir, :qa_test_verdict_calls, [[%{"verdict" => "pass"}]])
+
+      Application.put_env(:symphony_elixir, :qa_test_messages, [
+        %{event: :token_count, payload: %{method: "token_count", usage: %{"input_tokens" => 900, "output_tokens" => 200, "total_tokens" => 1_100}}}
+      ])
+
+      assert {:ok, %{result: %{verdict: :pass}, tokens: %{total_tokens: 1_100}}} =
+               QaAgent.run(job(%{token_limit: 1_000}), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+    end
+
+    test "an empty follow-up retries the pass once as the same attempt, logged as qa_verdict_missing" do
+      Application.put_env(:symphony_elixir, :qa_test_messages, [
+        %{event: :token_count, payload: %{method: "token_count", usage: %{"input_tokens" => 90, "output_tokens" => 10, "total_tokens" => 100}}}
+      ])
+
+      Application.put_env(:symphony_elixir, :qa_test_turn_results, [
+        {:ok, %{result: "I walked every step."}},
+        {:ok, %{result: ""}},
+        {:ok, %{result: FakeSession.pass_json()}}
+      ])
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{result: %{verdict: :pass, verdict_retries: 1} = result, tokens: tokens}} =
+                   QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+
+          assert %{total_tokens: 200, output_tokens: 20} = tokens
+
+          refute Map.has_key?(result, :follow_ups)
+        end)
+
+      assert log =~
+               "qa_verdict_missing: the QA agent for TP-900 ended without a verdict (the follow-up asking for it came back empty); " <>
+                 "retrying the pass as the same attempt"
+
+      assert_receive {:qa_session_started, _worktree, _opts}
+      assert_receive {:qa_turn, first, first_prompt, _issue, _opts}
+      assert_receive {:qa_turn, ^first, follow_up, _issue, _opts}
+      assert follow_up == QaAgent.follow_up_prompt(:no_verdict_object)
+      assert_receive {:qa_session_stopped, ^first}
+      assert_receive {:qa_session_started, _worktree, _opts}
+      assert_receive {:qa_turn, _second, ^first_prompt, _issue, _opts}
+      refute_receive {:qa_turn, _session, _prompt, _issue, _opts}
+    end
+
+    test "a follow-up whose agent process exited retries the pass once, then reports the exit" do
+      Application.put_env(:symphony_elixir, :qa_test_turn_results, [
+        {:ok, %{result: ""}},
+        {:error, {:exit_status, 1}},
+        {:ok, %{result: "Testing."}},
+        {:error, {:port_exit, 143}}
+      ])
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:qa_agent_failed, {:port_exit, 143}}, _tokens} =
+                   QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+        end)
+
+      assert log =~ "ended without a verdict (the agent process exited during the follow-up asking for it: {:exit_status, 1})"
+      assert_receive {:qa_turn, _session, _prompt, _issue, _opts}
+      assert_receive {:qa_turn, _session, empty_follow_up, _issue, _opts}
+      assert empty_follow_up == QaAgent.follow_up_prompt(:empty_response)
+      assert empty_follow_up =~ "Symphony did not get your verdict: the answer was empty."
+
+      # A retried pass that misses its verdict again ends as a missing one did before this change.
+      Application.put_env(:symphony_elixir, :qa_test_turn_results, [{:ok, %{result: "Testing."}}, {:ok, %{}}])
+
+      capture_log(fn ->
+        assert {:error, {:malformed_qa_response, :empty_response}, _tokens} =
+                 QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+      end)
+
+      # A retried pass that fails for another reason reports that reason.
+      turns = [{:ok, %{result: "Testing."}}, {:ok, %{}}, {:error, :turn_timeout}]
+      Application.put_env(:symphony_elixir, :qa_test_turn_results, turns)
 
       capture_log(fn ->
         assert {:error, {:qa_agent_failed, :turn_timeout}, _tokens} =
@@ -2662,6 +2865,8 @@ defmodule SymphonyElixir.QaAgentTest do
       assert followed_up =~ "`0123456789ab` · verdict after 2 follow-ups"
 
       assert Report.render(%{verdict: :pass, sha: @sha, target_state: "Merging", follow_ups: 1}) =~ "verdict after 1 follow-up"
+      assert Report.render(%{verdict: :pass, sha: @sha, target_state: "Merging", verdict_retries: 1}) =~ " · pass run again once after a missing verdict"
+      refute Report.render(%{verdict: :pass, sha: @sha, target_state: "Merging", verdict_retries: nil}) =~ "missing verdict"
 
       skip = Report.render(%{verdict: :skip, sha: nil, target_state: "In Review", reason: "docs only"})
       assert skip =~ "**Verdict:** skipped → In Review"

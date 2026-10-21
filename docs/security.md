@@ -126,9 +126,10 @@ turns auto-merge off if it is already on. The ticket stays where it is on a Need
 that asks a person to allow the change or drop it in `Rework` (see below), and the Inbox shows it
 waiting for a person. Symphony checks again on every poll and lands the pull request as usual
 once the check passes on the head, or once the ticket's unlock decisions (see below) cover every
-protected path the pull request changes. The same holds in review: a head whose only red check is
-`protected paths` reads as green to the reviewer and QA once those decisions cover it. Symphony reads those paths with git in the ticket's
-workspace, as the CI job does; a read that fails keeps the merge blocked. The landing agent's
+protected path the pull request changes. Before `Merging` a head whose only red check is
+`protected paths` reads as its other checks, so the reviewer and QA run on it. Symphony reads those
+paths with git in the ticket's workspace, as the CI job does; a read that fails keeps the merge
+blocked. The landing agent's
 `github_merge_pull_request` refuses a pull request with any failed check, so it can't merge past it
 either. Only a person merging by hand does.
 
@@ -149,8 +150,8 @@ instructions").
   the workflow settings file"). The tool refuses a path outside the protected list and names the
   list.
 - **Symphony asks.** When a pull request's only red check is `protected paths` and no decision
-  covers it, in review or in `Merging`, Symphony asks "Allow the change" or "Drop the change in
-  Rework". "Allow the change" carries the protected paths the pull request changes, read with git
+  covers it, Symphony asks once the ticket reaches `Merging`: "Allow the change" or "Drop the
+  change in Rework". "Allow the change" carries the protected paths the pull request changes, read with git
   as the merge gate reads them. It is recommended when the ticket's description or a person's
   ruling names one of those paths; otherwise dropping it is.
 

@@ -6,9 +6,10 @@ defmodule SymphonyElixir.PrWatch.Health do
 
   Deliveries count as healthy (D12) once one arrived after the last change they missed: the
   watcher then ticks every `github.webhooks.fallback_poll_interval_ms` (the safety net, D6).
-  Otherwise, as with webhooks off, it ticks every `pull_requests.poll_interval_ms`. A repository
-  that heard nothing for `github.webhooks.silence_alert_minutes` is `silent`: a warning for the
-  app, not a change of pace, since a quiet repository sends nothing either.
+  Otherwise, as with webhooks off, or while the repository's relay keeps stopping, it ticks every
+  `pull_requests.poll_interval_ms`. A repository that heard nothing for
+  `github.webhooks.silence_alert_minutes` is `silent`: a warning for the app, not a change of
+  pace, since a quiet repository sends nothing either.
 
   The record is kept in the run store per repository (`RunStore.put_github_updates/2`), so a
   restart keeps it. Everything here but `load/2` and `save/3` is pure.
@@ -101,11 +102,14 @@ defmodule SymphonyElixir.PrWatch.Health do
     DateTime.diff(now, last, :second) >= minutes * 60
   end
 
-  @doc "How long the watcher waits between ticks: the safety net while healthy, else `poll_interval_ms`."
-  @spec interval_ms(t(), Webhooks.t(), pos_integer()) :: pos_integer()
-  def interval_ms(health, webhooks, poll_interval_ms) do
-    if healthy?(health, webhooks), do: webhooks.fallback_poll_interval_ms, else: poll_interval_ms
-  end
+  @doc """
+  How long the watcher waits between ticks: the safety net while healthy, else `poll_interval_ms`.
+  A `gh webhook forward` relay that keeps stopping (`relay`, its `SymphonyElixir.GitHub.Relay.status/2`,
+  not `stable`) keeps `poll_interval_ms` until it runs steadily again.
+  """
+  @spec interval_ms(t(), Webhooks.t(), pos_integer(), map() | nil) :: pos_integer()
+  def interval_ms(_health, _webhooks, poll_interval_ms, %{stable: false}), do: poll_interval_ms
+  def interval_ms(health, webhooks, poll_interval_ms, _relay), do: if(healthy?(health, webhooks), do: webhooks.fallback_poll_interval_ms, else: poll_interval_ms)
 
   @doc "The signature failures of the 24 hours before `now`."
   @spec signature_failures(t(), DateTime.t()) :: non_neg_integer()

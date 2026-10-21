@@ -570,6 +570,9 @@ defmodule SymphonyElixir.DirectorMovesTest do
                DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1", move: "rework"}, opts)
 
       refute Hold.held?("repo-director", "pr", :needs_decision)
+
+      # A Decide that moves the ticket is its answer and the phase it entered.
+      assert ["decision.requested", "decision.recorded", "phase.entered"] = Enum.map(ticket_events("repo-director", "pr"), &elem(&1, 0))
     end
 
     test "records the decision in place: the reply goes under the request and the hold clears", %{opts: opts} do
@@ -596,6 +599,13 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute_received {:memory_tracker_state_update, _issue_id, _state}
       assert [%{name: "decision returned", details: %{move: "decide", from: "In Progress", to: "In Progress"}}] = RunStore.get_ticket_state("repo-director", "pr").signals
       assert [%{"move" => "decide", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
+
+      # The request, then the Director's answer naming it: the clear is no withdrawal, and the
+      # Decide that moved nothing has no event of its own.
+      assert [
+               %{type: "decision.requested", id: request_id},
+               %{type: "decision.recorded", actor: %{kind: :person, name: "the Director"}, payload: %{answer: "Add the secrets", key: "comment-1", request: request_id}}
+             ] = RunStore.list_ticket_events("repo-director", "pr", [])
     end
 
     test "writes the answer into the description's Decisions section, so the next run reads it", %{opts: opts} do

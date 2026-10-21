@@ -11,13 +11,18 @@ defmodule SymphonyElixir.QaAgent do
   verdict.
 
   The agent follows the selected playbooks (see `SymphonyElixir.QaAgent.Selection`),
-  writes evidence under `qa-evidence/`, and answers with one JSON object:
-  `pass | fail | blocked` with per-step results, and `needs_person` when only a person can do what
-  is left (`SymphonyElixir.SelfHeal` then keeps the ticket on an access hold a person lifts),
-  `needs_dev_server` when the project's own server was not running for the pass (self-heal then
-  files the fix in the project's repo), or `covered_by` naming an open ticket that already tracks
-  a missing QA tool (self-heal then holds the ticket on that one instead of filing a fix ticket). An answer without that object gets
-  one follow-up turn in the same session asking for it. A pass that runs the `macos_app`
+  writes evidence under `qa-evidence/`, and records its verdict with the `qa_verdict` tool
+  (`SymphonyElixir.QaAgent.Verdict`) as its last act, the call recorded the moment it arrives and
+  winning over whatever the turn then says (the same object as its final message's JSON is the
+  fallback for one release): `pass | fail | blocked` with per-step results and findings, and
+  `needs_person` when only a person can do what is left (`SymphonyElixir.SelfHeal` then keeps the
+  ticket on an access hold a person lifts), `needs_dev_server` when the project's own server was
+  not running for the pass (self-heal then files the fix in the project's repo), or `covered_by`
+  naming an open ticket that already tracks a missing QA tool (self-heal then holds the ticket on
+  that one instead of filing a fix ticket). A turn that ends without a verdict gets one follow-up
+  turn in the same session asking for the `qa_verdict` call; a follow-up that comes back empty (the
+  agent process exited, or the turn was finalised with no answer) runs the pass again once in the
+  same run, as the same attempt, logged as `qa_verdict_missing`. A pass that runs the `macos_app`
   playbook also gets the host-side `qa_*` tools of a `SymphonyElixir.QaDriver`,
   stopped (quitting every app it launched) when the pass ends, and its `pass` is
   `inconclusive` when no `qa_resize_window` call ran the playbook's wide pass (in an epic review it
@@ -68,6 +73,7 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Design
   alias SymphonyElixir.QaAgent.PlaybookSettings
+  alias SymphonyElixir.QaAgent.Verdict
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
   alias SymphonyElixir.QaPreCheck
   alias SymphonyElixir.Repo.Fetcher
@@ -79,11 +85,11 @@ defmodule SymphonyElixir.QaAgent do
   @worktree_dir ".qa"
   @tmp_dir_prefix "symphony-qa-"
   @token_keys [:uncached_input, :cached_input, :cache_creation_input, :output, :total]
-  @step_statuses ["pass", "fail", "blocked", "skipped"]
-  @max_verdict_follow_ups 1
+  @max_follow_ups 1
+  # The parse errors of a turn that ended without any verdict, as against one that gave a bad one.
+  @missing_verdict [:no_verdict_object, :empty_response]
   @browser_mcp_name "browser"
   @localhost_domains ["localhost", "127.0.0.1"]
-  @identifier_pattern ~r/\A[A-Za-z][A-Za-z0-9]*-\d+\z/
   @wide_pass_missing_reason "the wide pass did not run: no `qa_resize_window` call resized the app's window, " <>
                               "so layouts at 1400×900 pt were not checked"
   # The default browser MCP server runs on the Symphony host, outside the agent sandbox, so it
@@ -115,7 +121,8 @@ defmodule SymphonyElixir.QaAgent do
           optional(:scope) => :none,
           optional(:app_check) => %{built: boolean(), launched: boolean(), checked: boolean()},
           optional(:cause) => {:qa_worker, String.t()},
-          optional(:follow_ups) => pos_integer()
+          optional(:follow_ups) => pos_integer(),
+          optional(:verdict_retries) => 1
         }
   @type job :: %{
           required(:issue) => Issue.t(),
@@ -296,7 +303,10 @@ defmodule SymphonyElixir.QaAgent do
     work running in the background. Run each command in the foreground with a timeout, or poll it
     until it finishes, before you answer.
 
-    Return ONLY one JSON object in this shape:
+    Your last act is to record the verdict: call the `qa_verdict` tool once with it, then end your
+    turn. The call is the verdict, recorded the moment it arrives, so nothing you write after it
+    counts. If the tool refuses the verdict, it says why: fix it and call the tool again. The verdict
+    has this shape:
     {
       "verdict": "pass" | "fail" | "blocked",
       "summary": "<one or two sentences>",
@@ -308,12 +318,23 @@ defmodule SymphonyElixir.QaAgent do
           "evidence": ["<linear_attach_file URL or qa-evidence/ path>"]#{checklist_field(job)}
         }
       ],
-      "findings": ["<required for fail: one actionable defect per entry>"],
+      "findings": [
+        {
+          "step": "<the step it was found on>",
+          "viewport": "<the window size it shows at, when it is about layout>",
+          "expected": "<what the ticket says should happen>",
+          "actual": "<what happened instead>",
+          "evidence": ["<linear_attach_file URL or qa-evidence/ path>"]
+        }
+      ],
       "reason": "<required for blocked>",
       "needs_person": true | false,
       "needs_dev_server": true | false,
       "covered_by": "<optional: the identifier of an open ticket that already tracks the missing QA tool>"#{scope_field(job)}
     }
+    `findings` is required for `fail`: one actionable defect per entry. If the `qa_verdict` tool is
+    not available, your final message must be only this JSON object, with no prose before or after
+    it.
     """
   end
 
@@ -393,7 +414,7 @@ defmodule SymphonyElixir.QaAgent do
     from the user's point of view, and report what happened. You are in a fresh, disposable worktree
     checked out at `#{job.sha}`, the head of `#{Map.get(job, :base_ref)}`. Do not edit tracked files,
     commit, push, open PRs, move issues, or post comments: Symphony writes the review report from
-    your answer, files every gap as a follow-up sub-ticket in `Todo`, and moves the epic itself.\
+    your verdict, files every gap as a follow-up sub-ticket in `Todo`, and moves the epic itself.\
     """
   end
 
@@ -404,7 +425,7 @@ defmodule SymphonyElixir.QaAgent do
     The executor agent opened a PR for this Linear issue and CI is green. Test the change the way a
     user would and report what happened. You are in a fresh, disposable worktree checked out at the
     PR head `#{job.sha}`. Do not edit tracked files, commit, push, open PRs, move the issue, or post
-    comments: Symphony moves the issue and writes the QA report from your answer.\
+    comments: Symphony moves the issue and writes the QA report from your verdict.\
     """
   end
 
@@ -542,17 +563,30 @@ defmodule SymphonyElixir.QaAgent do
     """
   end
 
+  # A walkthrough with no named-test step is QA's to walk whole: in a repo without a proof check
+  # its `Proved by:` lines name nothing a check of the repo runs (`SymphonyElixir.Walkthrough`).
   defp proof_routing(job, journey) do
-    """
-    Each walkthrough step names the one place that proves it. A step ending in
-    `Proved by: <check> › <test>` is proved by that named automated test: do not walk it. Report it
-    as its own step, named after the walkthrough step, with that check's result on `#{job.sha}` and
-    the check run's URL in `details` and `evidence`. #{check_runs_hint(job)} The check passed: `pass`.
-    It failed, or never ran on `#{job.sha}`: `fail`, naming the step and the check in `findings`, since
-    the ticket's proof is part of its work. It is still running: poll it for at most 10 minutes, then
-    `blocked` with the reason. Walk every step that says `Proved by: QA` or names no proof.
-    #{routed_steps(Map.get(journey, :steps, []))}\
-    """
+    case Enum.split_with(Map.get(journey, :steps, []), &Walkthrough.named_test?/1) do
+      {[], _qa_steps} ->
+        "No walkthrough step names a test that a check of this repo runs: walk every step, whatever its `Proved by:` line says.\n"
+
+      {test_steps, qa_steps} ->
+        """
+        Each walkthrough step names the one place that proves it. A step ending in
+        `Proved by: <test>` (run by the repo's proof check) or `Proved by: <check> › <test>` is proved
+        by that named automated test, run by the check listed with it below: do not walk it. Report it
+        as its own step, named after the walkthrough step, with that check's result on `#{job.sha}` and
+        the check run's URL in `details` and `evidence`. #{check_runs_hint(job)} The check passed: `pass`.
+        It failed, or never ran on `#{job.sha}`: `fail`, naming the step and the check in `findings`, since
+        the ticket's proof is part of its work. It is still running: poll it for at most 10 minutes, then
+        `blocked` with the reason. Walk every step that says `Proved by: QA` or names no proof.
+
+        Steps a named test proves (link the check run, do not walk them):
+        #{step_lines(test_steps, true)}
+        Steps to walk (`Proved by: QA`, or no proof named):
+        #{step_lines(qa_steps, false)}\
+        """
+    end
   end
 
   defp check_runs_hint(%{epic_review: true}), do: "Read the check the way the CI rule above reads CI's runs."
@@ -562,22 +596,6 @@ defmodule SymphonyElixir.QaAgent do
       "and its check runs with `gh api repos/<owner>/<repo>/commits/#{job.sha}/check-runs` where `gh` is allowed, " <>
       "else `curl -fsS \"https://api.github.com/repos/<owner>/<repo>/commits/#{job.sha}/check-runs\"`, " <>
       "with `<owner>/<repo>` from `git remote get-url origin`."
-  end
-
-  defp routed_steps(steps) do
-    case Enum.split_with(steps, &Walkthrough.named_test?/1) do
-      {[], _qa_steps} ->
-        ""
-
-      {test_steps, qa_steps} ->
-        """
-
-        Steps a named test proves (link the check run, do not walk them):
-        #{step_lines(test_steps, true)}
-        Steps to walk (`Proved by: QA`, or no proof named):
-        #{step_lines(qa_steps, false)}
-        """
-    end
   end
 
   defp confirmed_line(%{step: step} = proof) do
@@ -630,7 +648,8 @@ defmodule SymphonyElixir.QaAgent do
     follow-up ticket's identifier in `details`, and do not fail the verdict on it. Without a hand-off,
     mark it `fail` and ask for the follow-up ticket in `findings`. Never skip a criterion that a
     change outside these paths could meet, such as one under `docs/` or to `README.md`: a missing
-    change there is `fail`.\
+    change there is `fail`. A failed `protected paths` check on the PR is not a defect and not a
+    block: only a person clears it, and Symphony asks them before the merge.\
     """
   end
 
@@ -749,7 +768,11 @@ defmodule SymphonyElixir.QaAgent do
        `pass` when the screenshots match the design. A visible mismatch is `fail`, even when every
        structural check passes: name in `details` and `findings` what differs from which design,
        with the screenshot that shows it. A change with no UI deliverable has no `Design check` step.
-    3. The wide pass and the other checks of the running app the playbooks ask for.
+    3. The wide pass and the other checks of the running app the playbooks ask for. One pass per
+       viewport the repo names (today: the wide pass). A defect is content clipped with no way to
+       reach it, or a mechanism (scroll, collapse, resize) that doesn't work. Horizontal scroll or a
+       collapsed pane at a `functional` viewport is not a defect. A finding names the viewport, the
+       screen, the mechanism expected, the actual, and the evidence file.
     """
   end
 
@@ -846,85 +869,11 @@ defmodule SymphonyElixir.QaAgent do
   end
 
   defp coerce_result(decoded) do
-    with {:ok, verdict} <- coerce_verdict(Map.get(decoded, "verdict")),
-         {:ok, steps} <- coerce_steps(Map.get(decoded, "steps")),
-         findings = string_list(Map.get(decoded, "findings")),
-         reason = trimmed(Map.get(decoded, "reason")),
-         :ok <- validate_verdict(verdict, steps, findings, reason) do
-      result = %{verdict: verdict, summary: trimmed(Map.get(decoded, "summary")) || "", steps: steps, findings: findings}
-      result = if reason, do: Map.put(result, :reason, reason), else: result
-      result = if Map.get(decoded, "needs_person") == true, do: Map.put(result, :needs_person, true), else: result
-      result = if Map.get(decoded, "needs_dev_server") == true, do: Map.put(result, :needs_dev_server, true), else: result
-      result = if scope_none_answer?(Map.get(decoded, "scope")), do: Map.put(result, :scope, :none), else: result
-      {:ok, put_covered_by(result, Map.get(decoded, "covered_by"))}
-    else
+    case Verdict.from_map(decoded) do
+      {:ok, result} -> {:ok, result}
       {:error, reason} -> {:error, {:malformed_qa_response, reason}}
     end
   end
-
-  # The open ticket the agent says already tracks the missing QA tool; anything that is not a
-  # ticket identifier is dropped, so self-heal files its own fix ticket as before.
-  defp put_covered_by(result, covered_by) when is_binary(covered_by) do
-    identifier = String.trim(covered_by)
-    if identifier =~ @identifier_pattern, do: Map.put(result, :covered_by, String.upcase(identifier)), else: result
-  end
-
-  defp put_covered_by(result, _covered_by), do: result
-
-  defp scope_none_answer?(scope) when is_binary(scope), do: scope |> String.trim() |> String.downcase() == "none"
-  defp scope_none_answer?(_scope), do: false
-
-  defp coerce_verdict("pass"), do: {:ok, :pass}
-  defp coerce_verdict("fail"), do: {:ok, :fail}
-  defp coerce_verdict("blocked"), do: {:ok, :blocked}
-  defp coerce_verdict(_verdict), do: {:error, :invalid_verdict}
-
-  defp coerce_steps(nil), do: {:ok, []}
-
-  defp coerce_steps(steps) when is_list(steps) do
-    if Enum.all?(steps, &valid_step?/1),
-      do: {:ok, Enum.map(steps, &coerce_step/1)},
-      else: {:error, :invalid_steps}
-  end
-
-  defp coerce_steps(_steps), do: {:error, :invalid_steps}
-
-  defp valid_step?(%{"name" => name, "status" => status}) when is_binary(name) and status in @step_statuses,
-    do: String.trim(name) != ""
-
-  defp valid_step?(_step), do: false
-
-  defp coerce_step(step) do
-    coerced = %{
-      name: String.trim(step["name"]),
-      status: step["status"],
-      details: trimmed(Map.get(step, "details")) || "",
-      evidence: string_list(Map.get(step, "evidence"))
-    }
-
-    coerced = if Map.get(step, "checklist") == true, do: Map.put(coerced, :checklist, true), else: coerced
-    coerced = put_trimmed(coerced, :gap, Map.get(step, "gap"))
-    coerced = put_trimmed(coerced, :defect, Map.get(step, "defect"))
-
-    case step |> Map.get("blocked_by") |> List.wrap() |> string_list() do
-      [] -> coerced
-      blocked_by -> Map.put(coerced, :blocked_by, blocked_by)
-    end
-  end
-
-  defp put_trimmed(map, key, value) do
-    case trimmed(value) do
-      nil -> map
-      trimmed -> Map.put(map, key, trimmed)
-    end
-  end
-
-  defp validate_verdict(:fail, steps, findings, _reason) do
-    if findings != [] or Enum.any?(steps, &(&1.status == "fail")), do: :ok, else: {:error, :missing_fail_findings}
-  end
-
-  defp validate_verdict(:blocked, _steps, _findings, nil), do: {:error, :missing_blocked_reason}
-  defp validate_verdict(_verdict, _steps, _findings, _reason), do: :ok
 
   @doc "Findings for the continuation prompt: explicit findings, else the failing steps."
   @spec failure_findings(result()) :: [String.t()]
@@ -1272,12 +1221,41 @@ defmodule SymphonyElixir.QaAgent do
     Enum.map_join(changeset.errors, "; ", fn {field, {message, _opts}} -> "#{field} #{message}" end)
   end
 
+  # A pass whose follow-up came back empty (the agent process exited, or its turn was finalised
+  # with no answer) never reached a verdict through no fault of the change or the environment, so it
+  # is run again once in the same run, as the same attempt: no blocked verdict is recorded for the
+  # first one. A second miss ends the run with the error as before.
   defp run_tracked_session(agent_module, job, worktree, qa_settings, prompt, opts) do
+    case run_tracked_pass(agent_module, job, worktree, qa_settings, prompt, opts, empty_tokens()) do
+      {:error, {:qa_verdict_missing, reason}, tokens} ->
+        Logger.warning(
+          "qa_verdict_missing: the QA agent for #{job.issue.identifier} ended without a verdict (#{missing_verdict_text(reason)}); " <>
+            "retrying the pass as the same attempt"
+        )
+
+        case run_tracked_pass(agent_module, job, worktree, qa_settings, prompt, opts, tokens) do
+          {:ok, run} -> {:ok, %{run | result: Map.put(run.result, :verdict_retries, 1)}}
+          {:error, {:qa_verdict_missing, reason}, tokens} -> {:error, missing_verdict_error(reason), tokens}
+          {:error, _reason, _tokens} = error -> error
+        end
+
+      outcome ->
+        outcome
+    end
+  end
+
+  defp missing_verdict_text(:empty_response), do: "the follow-up asking for it came back empty"
+  defp missing_verdict_text({:agent_exited, reason}), do: "the agent process exited during the follow-up asking for it: #{inspect(reason)}"
+
+  defp missing_verdict_error(:empty_response), do: {:malformed_qa_response, :empty_response}
+  defp missing_verdict_error({:agent_exited, reason}), do: {:qa_agent_failed, reason}
+
+  defp run_tracked_pass(agent_module, job, worktree, qa_settings, prompt, opts, spent) do
     {:ok, tracker} = Agent.start_link(fn -> %{tokens: empty_tokens(), messages: []} end)
 
     try do
-      result = run_session(agent_module, job, worktree, qa_settings, prompt, tracker, opts)
-      tokens = Agent.get(tracker, & &1.tokens)
+      result = run_session(agent_module, job, worktree, qa_settings, prompt, {tracker, spent}, opts)
+      tokens = add_tokens(spent, Agent.get(tracker, & &1.tokens))
 
       case result do
         {:ok, parsed} -> {:ok, %{result: parsed, tokens: tokens}}
@@ -1288,7 +1266,9 @@ defmodule SymphonyElixir.QaAgent do
     end
   end
 
-  defp run_session(agent_module, job, worktree, qa_settings, prompt, tracker, opts) do
+  defp add_tokens(spent, tokens), do: Map.merge(spent, tokens, fn _key, left, right -> left + right end)
+
+  defp run_session(agent_module, job, worktree, qa_settings, prompt, {tracker, spent}, opts) do
     tmp_dir = Keyword.fetch!(opts, :qa_tmp_dir)
     qa_settings = AgentTmpDir.allow_write(qa_settings, tmp_dir)
 
@@ -1302,12 +1282,13 @@ defmodule SymphonyElixir.QaAgent do
       tool_scope: :qa,
       qa_driver: Keyword.get(opts, :qa_driver),
       qa_android_driver: Keyword.get(opts, :qa_android_driver),
+      qa_verdict_sink: self(),
       extra_env: Map.merge(AgentTmpDir.env(qa_settings.agent.kind, tmp_dir), host_ports_env(Map.get(job, :host_ports, [])))
     ]
 
     case agent_module.start_session(worktree, session_opts) do
       {:ok, session} ->
-        on_message = on_message(tracker, Map.get(job, :token_limit), self(), Keyword.get(opts, :on_message))
+        on_message = on_message(tracker, Map.get(job, :token_limit), spent.total_tokens, self(), Keyword.get(opts, :on_message))
         run_turn(agent_module, session, prompt, job.issue, Keyword.put(session_opts, :on_message, on_message), tracker)
 
       {:error, reason} ->
@@ -1318,36 +1299,80 @@ defmodule SymphonyElixir.QaAgent do
   defp host_ports_env([]), do: %{}
   defp host_ports_env(ports), do: %{"QA_HOST_PORTS" => Enum.join(ports, ",")}
 
+  # A verdict the agent recorded with `qa_verdict` before the token limit stopped it still stands.
   defp run_turn(agent_module, session, prompt, issue, turn_opts, tracker) do
     run_turns(agent_module, session, prompt, issue, turn_opts, tracker, 0)
   catch
-    :throw, {:qa_token_limit, total, limit} -> {:error, {:qa_token_limit, total, limit}}
+    :throw, {:qa_token_limit, total, limit} ->
+      case recorded_verdict(nil) do
+        %{} = result -> {:ok, result}
+        nil -> {:error, {:qa_token_limit, total, limit}}
+      end
   after
     agent_module.stop_session(session)
+    # A verdict recorded after the last read must not reach a retried pass or a later run here.
+    recorded_verdict(nil)
   end
 
-  # An agent that ends its turn without the verdict object (for example while waiting on
-  # something it left running) is asked for it in a follow-up turn of the same session.
+  # The verdict the agent recorded with the `qa_verdict` tool during the turn wins, even over a
+  # turn that then failed or ended without a word; without one, the verdict is read from the turn's
+  # text. An agent that ends its turn without a verdict (for example while waiting on something it
+  # left running) is asked for the `qa_verdict` call in a follow-up turn of the same session.
   defp run_turns(agent_module, session, prompt, issue, turn_opts, tracker, follow_ups) do
-    case agent_module.run_turn(session, prompt, issue, turn_opts) do
-      {:ok, turn_result} ->
-        messages = Agent.get_and_update(tracker, &{Enum.reverse(&1.messages), %{&1 | messages: []}})
+    turn_result = agent_module.run_turn(session, prompt, issue, turn_opts)
+    messages = Agent.get_and_update(tracker, &{Enum.reverse(&1.messages), %{&1 | messages: []}})
 
-        case parse_turn(turn_result, messages) do
+    case recorded_verdict(nil) do
+      %{} = result ->
+        {:ok, put_follow_ups(result, follow_ups)}
+
+      nil ->
+        case read_turn(turn_result, messages, follow_ups) do
+          {:follow_up, reason} ->
+            Logger.info("QA agent answered without a verdict for #{issue.identifier}; asking for the qa_verdict call (follow-up #{follow_ups + 1})")
+            turn_opts = Keyword.put(turn_opts, :resume_session_id, session_id(messages) || turn_opts[:resume_session_id])
+            run_turns(agent_module, session, follow_up_prompt(reason), issue, turn_opts, tracker, follow_ups + 1)
+
           {:ok, result} ->
             {:ok, put_follow_ups(result, follow_ups)}
-
-          {:error, {:malformed_qa_response, :no_verdict_object}} when follow_ups < @max_verdict_follow_ups ->
-            Logger.info("QA agent answered without a verdict for #{issue.identifier}; asking for it (follow-up #{follow_ups + 1})")
-            turn_opts = Keyword.put(turn_opts, :resume_session_id, session_id(messages) || turn_opts[:resume_session_id])
-            run_turns(agent_module, session, follow_up_prompt(), issue, turn_opts, tracker, follow_ups + 1)
 
           {:error, _reason} = error ->
             error
         end
+    end
+  end
 
-      {:error, reason} ->
-        {:error, {:qa_agent_failed, reason}}
+  defp read_turn({:ok, turn_result}, messages, follow_ups) do
+    case parse_turn(turn_result, messages) do
+      {:error, {:malformed_qa_response, reason}} when reason in @missing_verdict and follow_ups < @max_follow_ups ->
+        {:follow_up, reason}
+
+      {:error, {:malformed_qa_response, :empty_response}} when follow_ups > 0 ->
+        {:error, {:qa_verdict_missing, :empty_response}}
+
+      parsed ->
+        parsed
+    end
+  end
+
+  defp read_turn({:error, reason}, _messages, follow_ups) when follow_ups > 0 do
+    if process_exit?(reason),
+      do: {:error, {:qa_verdict_missing, {:agent_exited, reason}}},
+      else: {:error, {:qa_agent_failed, reason}}
+  end
+
+  defp read_turn({:error, reason}, _messages, _follow_ups), do: {:error, {:qa_agent_failed, reason}}
+
+  # The agent process ended without a turn: Claude's `claude -p` exit, Codex's app-server exit.
+  defp process_exit?(reason) when is_tuple(reason), do: elem(reason, 0) in [:exit_status, :port_exit]
+  defp process_exit?(_reason), do: false
+
+  # The last verdict the session's `qa_verdict` calls recorded (`Verdict.record/2`), or `last`.
+  defp recorded_verdict(last) do
+    receive do
+      {:qa_verdict, result} -> recorded_verdict(result)
+    after
+      0 -> last
     end
   end
 
@@ -1363,14 +1388,16 @@ defmodule SymphonyElixir.QaAgent do
     end)
   end
 
-  @doc "The follow-up prompt for an answer that has no verdict object."
-  @spec follow_up_prompt() :: String.t()
-  def follow_up_prompt do
+  @doc "The follow-up prompt for a turn that ended without a verdict, with why it is missing."
+  @spec follow_up_prompt(term()) :: String.t()
+  def follow_up_prompt(reason) do
     """
-    Your last answer did not include the JSON verdict object, and ending your turn ends the session.
-    Finish now: do not start new work or wait for anything still running. Return only the JSON
-    verdict object, in the shape from the first message, for what you have tested so far. Mark each
-    step you could not finish `skipped` and say why.
+    Symphony did not get your verdict: #{Verdict.describe_error(reason)} Ending your turn ends the
+    session. Finish now: do not start new work or wait for anything still running. Call the
+    `qa_verdict` tool once with your verdict for what you have tested so far, in the shape from the
+    first message, then end your turn. Mark each step you could not finish `skipped` and say why.
+    If the `qa_verdict` tool is not available, your final message must be only the JSON verdict
+    object, with no prose before or after it.
     """
   end
 
@@ -1388,10 +1415,10 @@ defmodule SymphonyElixir.QaAgent do
   defp prefer_error({:error, {:malformed_qa_response, :empty_response}}, error), do: error
   defp prefer_error(fallback, _error), do: fallback
 
-  # Records the session's cumulative token usage and stops the turn once it reaches
-  # the per-issue limit. The stop is a throw, so it only fires in the process that
-  # runs the turn.
-  defp on_message(tracker, token_limit, owner, forward) do
+  # Records the session's cumulative token usage and stops the turn once the run's tokens (`spent`
+  # by an earlier pass of the same run, plus this session's) reach the per-issue limit. The stop is
+  # a throw, so it only fires in the process that runs the turn.
+  defp on_message(tracker, token_limit, spent, owner, forward) do
     fn message ->
       usage = AgentTelemetry.extract_token_usage(message)
 
@@ -1403,8 +1430,10 @@ defmodule SymphonyElixir.QaAgent do
 
       if is_function(forward, 1), do: forward.(message)
 
-      if is_integer(token_limit) and tokens.total_tokens >= token_limit and self() == owner do
-        throw({:qa_token_limit, tokens.total_tokens, token_limit})
+      total = spent + tokens.total_tokens
+
+      if is_integer(token_limit) and total >= token_limit and self() == owner do
+        throw({:qa_token_limit, total, token_limit})
       end
 
       :ok
@@ -1635,16 +1664,4 @@ defmodule SymphonyElixir.QaAgent do
   end
 
   defp default_git(args, cwd), do: Workspace.safe_git(["-C", cwd | args], stderr_to_stdout: true)
-
-  defp trimmed(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> nil
-      trimmed -> trimmed
-    end
-  end
-
-  defp trimmed(_value), do: nil
-
-  defp string_list(values) when is_list(values), do: values |> Enum.map(&trimmed/1) |> Enum.reject(&is_nil/1)
-  defp string_list(_values), do: []
 end

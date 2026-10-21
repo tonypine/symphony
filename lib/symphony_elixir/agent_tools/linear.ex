@@ -31,6 +31,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.SensitivePath
   alias SymphonyElixir.Tracker
   alias SymphonyElixir.TransitionGuard
+  alias SymphonyElixir.Walkthrough
 
   @comment_limit_default 50
   @comment_limit_max 100
@@ -1878,6 +1879,33 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, response} <- check_mutation_success(response, "issueUpdate") do
       {:ok, %{"issue" => get_in(response, ["data", "issueUpdate", "issue"]), "descriptionLength" => String.length(description)}}
     end
+  end
+
+  @doc """
+  Records which test proves each walkthrough step the implementer covered: each named step of the
+  current issue's `## User walkthrough` ends with `Proved by: <test>` (`SymphonyElixir.Walkthrough.record_proofs/2`).
+  The description is read right before the write, and every byte outside those steps' proof lines
+  stays as it is. A test naming a check, a step the walkthrough lacks, and a step its author marked
+  `Proved by: QA` are refused before the write; a test holding a secret pattern before any Linear call.
+  """
+  @spec record_walkthrough_proofs(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def record_walkthrough_proofs(context, attrs, opts \\ []) when is_map(attrs) do
+    proofs = Map.get(attrs, "proofs")
+
+    with {:ok, issue_id} <- current_issue_id(context),
+         :ok <- SecretScanner.reject_fields_if_secret_pattern(proof_secret_fields(proofs), context, "linear_record_walkthrough_proofs", opts),
+         {:ok, body} <- graphql(@issue_description_query, %{id: issue_id}, opts),
+         {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found),
+         {:ok, description} <- Walkthrough.record_proofs(issue["description"], proofs),
+         variables = %{id: issue_id, description: description},
+         {:ok, response} <- graphql(@update_issue_description_mutation, variables, opts),
+         {:ok, response} <- check_mutation_success(response, "issueUpdate") do
+      {:ok, %{"issue" => get_in(response, ["data", "issueUpdate", "issue"]), "steps" => Enum.map(proofs, & &1["step"])}}
+    end
+  end
+
+  defp proof_secret_fields(proofs) do
+    for %{"test" => test} when is_binary(test) <- List.wrap(proofs), do: {:test, test}
   end
 
   defp summary_secret_fields(summary) do

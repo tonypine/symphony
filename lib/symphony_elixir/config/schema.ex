@@ -2427,6 +2427,10 @@ defmodule SymphonyElixir.Config.Schema do
     # key is absent (`SymphonyElixir.SystemSchema.manual_review_for_gate_mode/1`). With it `on`, the
     # last step into `Merging` waits for a person's confirmation.
     field(:manual_review, :string, default: "off")
+    # The repo's `proof_check` (WORKFLOW.md): the check that runs its automated tests, which a
+    # walkthrough step's `Proved by: <test>` names (`SymphonyElixir.Walkthrough`). Nil: no step is
+    # proved by a named test.
+    field(:proof_check, :string)
     embeds_one(:tracker, Tracker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:tickets, Tickets, on_replace: :update, defaults_to_struct: true)
     embeds_one(:polling, Polling, on_replace: :update, defaults_to_struct: true)
@@ -2643,7 +2647,7 @@ defmodule SymphonyElixir.Config.Schema do
 
   defp changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, [:manual_review], empty_values: [])
+    |> cast(attrs, [:manual_review, :proof_check], empty_values: [])
     |> validate_inclusion(:manual_review, ["on", "off"])
     |> cast_embed(:tracker, with: &Tracker.changeset/2)
     |> cast_embed(:tickets, with: &Tickets.changeset/2)

@@ -10,6 +10,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
   alias SymphonyElixir.{BlockedHold, CiFix, Hold, PrWatch, TicketPullRequest, TicketState}
   alias SymphonyElixir.PrWatch.{Attempts, Repo}
+  alias SymphonyElixirWeb.WatchPayload
 
   @repo_key "default"
 
@@ -194,6 +195,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       ci: :green,
       missing_checks: [],
       red_kind: :failure,
+      past_human_only: nil,
       failing_check: nil,
       failed_checks: [],
       check_names: ["specs"],
@@ -207,6 +209,12 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
   defp red, do: [ci: :red, failing_check: "specs", failed_checks: [%{name: "specs", run_id: "77", workflow_name: "ci", conclusion: "FAILURE"}]]
   defp dirty, do: [mergeable: :dirty]
+
+  # Red only on `protected paths`, which a person clears; `past` is what the other checks say.
+  defp human_only(past) do
+    failed = [%{name: "protected paths", run_id: "5"}]
+    [ci: :red, red_kind: :human_only, past_human_only: past, failing_check: "protected paths", failed_checks: failed]
+  end
 
   defp pr!(id, attrs), do: World.update(:prs, &Map.update!(&1, "https://github.com/acme/app/pull/#{id}", fn pr -> Map.merge(pr, Map.new(attrs)) end))
   defp pr(id), do: Map.fetch!(World.get(:prs), "https://github.com/acme/app/pull/#{id}")
@@ -240,6 +248,39 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
   end
 
   defp watch(issue_id), do: @repo_key |> RunStore.get_ticket_state(issue_id) |> TicketState.pr_watch()
+
+  # The workspace of the ticket's run, where the watcher reads the protected paths its PR changes.
+  defp workspace!(issue_id) do
+    workspace = Path.join(System.tmp_dir!(), "switch-ws-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(workspace)
+    on_exit(fn -> File.rm_rf(workspace) end)
+    run = %{repo_key: @repo_key, run_id: "run-#{issue_id}", issue_id: issue_id, status: "success", started_at: now()}
+    :ok = RunStore.put_run(Map.put(run, :workspace_path, workspace))
+    workspace
+  end
+
+  # A git that has every commit and whose PRs change `WORKFLOW.md` only; it tells the test of each diff.
+  defp changes_workflow_md do
+    test_pid = self()
+
+    fn
+      ["diff" | _args], cwd ->
+        send(test_pid, {:diff, cwd})
+        {"WORKFLOW.md\n", 0}
+
+      _args, _cwd ->
+        {"", 0}
+    end
+  end
+
+  defp diffs(workspace, count \\ 0) do
+    receive do
+      {:diff, ^workspace} -> diffs(workspace, count + 1)
+    after
+      0 -> count
+    end
+  end
+
   defp decision(issue_id), do: watch(issue_id).decision
   defp attempts(issue_id), do: watch(issue_id).attempts
 
@@ -256,15 +297,6 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
         started_at: now(),
         workspace_path: "/tmp/ws"
       })
-  end
-
-  # A run with a workspace, where the watcher reads the protected paths the PR changes.
-  defp protected_workspace!(issue_id) do
-    workspace = Path.join(System.tmp_dir!(), "switch-ws-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(workspace)
-    on_exit(fn -> File.rm_rf(workspace) end)
-    run = %{repo_key: @repo_key, run_id: "run-ws", issue_id: issue_id, status: "success", started_at: now()}
-    :ok = RunStore.put_run(Map.put(run, :workspace_path, workspace))
   end
 
   # Every commit is there, and the PR changes `changed` among the protected paths each diff asks about.
@@ -1240,26 +1272,83 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert %{red: 2} = attempts(issue_id)
     end
 
-    test "CiPoller.await_waiver → R18: a protected paths check that only a person clears asks a person outside Merging too (G10)" do
-      issue_id =
-        ticket!("1", "QA",
-          ci: :red,
-          red_kind: :human_only,
-          failing_check: "protected paths",
-          failed_checks: [%{name: "protected paths", run_id: "5"}]
-        )
+    test "CiPoller.await_waiver: a protected paths check that only a person clears doesn't make the head red before Merging" do
+      for {id, state, rule} <- [{"1", "Code Review", "R27"}, {"2", "QA", "R27"}, {"3", "Rework", "R26"}] do
+        issue_id = ticket!(id, state, human_only(:green))
+        pid = start!()
+        tick!(pid, 3)
+        assert %{rule: ^rule, kind: :dispatch} = decision(issue_id)
+        assert PrWatch.dispatch_reason(Map.fetch!(World.get(:issues), issue_id), Config.settings!()) == nil
+        refute Hold.held?(@repo_key, issue_id, :needs_decision)
+        assert {issue_id, "CI green"} in World.calls(:label)
+        assert %{facts: %{ci: :green, failing_check: "protected paths"}} = watch(issue_id)
+        assert moves(issue_id) == []
+        stop_supervised!({Repo, @repo_key})
+      end
 
-      protected_workspace!(issue_id)
-      pid = start!(git: protected_git(["WORKFLOW.md"]))
-      tick!(pid, 3)
-      assert %{decision: %{title: "Protected files changed on TP-1", options: options}} = Hold.get(@repo_key, issue_id, :needs_decision)
-      assert Enum.map(options, & &1.label) == ["Allow the change", "Drop the change in Rework"]
-      assert [%{unlocks: ["WORKFLOW.md"]}, drop] = options
-      refute Map.has_key?(drop, :unlocks)
-      assert [_one] = Enum.filter(comments(issue_id), &String.starts_with?(&1, "## Decision needed: Protected files"))
-      assert %{rule: "R4", owner: :person} = decision(issue_id)
-      assert moves(issue_id) == []
       assert World.calls(:rerun) == []
+    end
+
+    test "a protected paths check that only a person clears, with another check still running → R24: the reviewer waits for it" do
+      issue_id = ticket!("1", "Code Review", human_only(:pending))
+      pid = start!()
+      tick!(pid)
+      assert %{rule: "R24", kind: :wait} = decision(issue_id)
+      assert {issue_id, "CI running"} in World.calls(:label)
+
+      pr!("1", past_human_only: :green)
+      tick!(pid)
+      assert %{rule: "R27", kind: :dispatch} = decision(issue_id)
+    end
+
+    test "a CI Fix head left red only by a protected paths check → R25: back to its origin" do
+      issue_id = ticket!("1", "CI Fix", human_only(:green))
+      :ok = CiFix.record_origin(@repo_key, issue_id, "Code Review")
+      pid = start!()
+      tick!(pid)
+      assert moves(issue_id) == ["Code Review"]
+      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+    end
+
+    test "R18's evidence: a head red only on protected paths lists the protected files its PR changes, read once per head, in every phase" do
+      for {id, state} <- [{"1", "Code Review"}, {"2", "QA"}, {"3", "Rework"}, {"4", "CI Fix"}, {"5", "Merging"}] do
+        issue_id = ticket!(id, state, human_only(:green))
+        if state == "CI Fix", do: :ok = CiFix.record_origin(@repo_key, issue_id, "Code Review")
+        workspace = workspace!(issue_id)
+        pid = start!(git: changes_workflow_md())
+        tick!(pid, 2)
+
+        assert watch(issue_id).protected_files == %{head_sha: "head-#{id}-1", paths: ["WORKFLOW.md"]}
+        assert %{facts: %{protected_files: ["WORKFLOW.md"]}} = @repo_key |> RunStore.get_ticket_state(issue_id) |> WatchPayload.watch()
+        # In Merging R18 asks too, and reads once the protected-list entries its Allow option unlocks.
+        assert diffs(workspace) == if(state == "Merging", do: 2, else: 1)
+        stop_supervised!({Repo, @repo_key})
+      end
+    end
+
+    test "R18's evidence is read again on a new head, and a read that fails lists none and says why, once" do
+      issue_id = ticket!("1", "Code Review", human_only(:green))
+      workspace = workspace!(issue_id)
+      pid = start!(git: changes_workflow_md())
+      tick!(pid)
+      pr!("1", head_sha: "head-1-2")
+      tick!(pid, 2)
+      assert watch(issue_id).protected_files == %{head_sha: "head-1-2", paths: ["WORKFLOW.md"]}
+      assert diffs(workspace) == 2
+
+      # A green head lists none.
+      pr!("1", head_sha: "head-1-3", ci: :green, red_kind: :failure, failing_check: nil, failed_checks: [])
+      tick!(pid)
+      assert watch(issue_id).protected_files == nil
+
+      # The ticket's runs had no workspace: the read fails.
+      stop_supervised!({Repo, @repo_key})
+      issue_id = ticket!("2", "QA", human_only(:green))
+      pid = start!(git: changes_workflow_md())
+      log = capture_log(fn -> tick!(pid) end)
+      assert log =~ "PR watch couldn't read the protected files a PR changes issue_id=#{issue_id} issue_identifier=TP-2 head_sha=head-2-1: the ticket has no workspace"
+      assert watch(issue_id).protected_files == %{head_sha: "head-2-1", paths: []}
+      refute capture_log(fn -> tick!(pid) end) =~ "couldn't read the protected files"
     end
 
     test "AutoMerge's protected paths gate → R18 in Merging: auto-merge off and a person asked, once" do
@@ -1267,29 +1356,38 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
         ticket!("1", "Merging",
           ci: :red,
           red_kind: :human_only,
+          past_human_only: :green,
           auto_merge: :armed,
           failing_check: "protected paths",
           failed_checks: [%{name: "protected paths", run_id: "5"}]
         )
 
-      protected_workspace!(issue_id)
+      workspace!(issue_id)
       pid = start!(git: protected_git(["WORKFLOW.md"]))
       tick!(pid, 3)
       assert World.calls(:disarm) == ["https://github.com/acme/app/pull/1"]
-      assert %{decision: %{title: "Protected files changed on TP-1"}} = Hold.get(@repo_key, issue_id, :needs_decision)
+      assert %{decision: %{title: "Protected files changed on TP-1", options: options}} = Hold.get(@repo_key, issue_id, :needs_decision)
+      assert Enum.map(options, & &1.label) == ["Allow the change", "Drop the change in Rework"]
+      assert [%{unlocks: ["WORKFLOW.md"]}, drop] = options
+      refute Map.has_key?(drop, :unlocks)
       assert [_one] = Enum.filter(comments(issue_id), &String.starts_with?(&1, "## Decision needed: Protected files"))
+      assert moves(issue_id) == []
+      # The check holds the merge back, yet the head's other checks passed: the label stays green.
+      assert {issue_id, "CI green"} in World.calls(:label)
+      refute {issue_id, "CI red"} in World.calls(:label)
     end
 
-    test "R18 in Code Review: picking Allow grants the PR's protected paths, and the head then reads as green for the reviewer" do
+    test "R18 in Merging: picking Allow grants the PR's protected paths, and the head then reads as green to land" do
       issue_id =
-        ticket!("1", "Code Review",
+        ticket!("1", "Merging",
           ci: :red,
           red_kind: :human_only,
+          past_human_only: :green,
           failing_check: "protected paths",
           failed_checks: [%{name: "protected paths", run_id: "5"}]
         )
 
-      protected_workspace!(issue_id)
+      workspace!(issue_id)
       pid = start!(git: protected_git(["WORKFLOW.md"]))
       tick!(pid)
 
@@ -1313,9 +1411,10 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
     test "R18 waits to ask until the protected paths the PR changes can be read" do
       issue_id =
-        ticket!("1", "Code Review",
+        ticket!("1", "Merging",
           ci: :red,
           red_kind: :human_only,
+          past_human_only: :green,
           failing_check: "protected paths",
           failed_checks: [%{name: "protected paths", run_id: "5"}]
         )
@@ -1533,6 +1632,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
         ticket!("1", "Merging",
           ci: :red,
           red_kind: :human_only,
+          past_human_only: :green,
           mergeable: :unstable,
           failing_check: "protected paths",
           failed_checks: [%{name: "protected paths", run_id: "5"}]

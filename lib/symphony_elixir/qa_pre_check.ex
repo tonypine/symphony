@@ -5,8 +5,8 @@ defmodule SymphonyElixir.QaPreCheck do
 
   A green head does not prove a named test ran: a path-filtered workflow such as `macos-e2e` may
   not run on a PR at all, or may still be running. So before the QA agent starts,
-  `SymphonyElixir.QaVerification` confirms each step that ends in `Proved by: <check> › <test>`
-  (`SymphonyElixir.Walkthrough`):
+  `SymphonyElixir.QaVerification` confirms each step that ends in `Proved by: <test>` (the repo's
+  `proof_check` runs it) or `Proved by: <check> › <test>` (`SymphonyElixir.Walkthrough`):
 
     * the named test is in the checkout: each path part of `<test>` (a file or folder, with or
       without a `:line` suffix) is a tracked file, and each other part (a scenario or test name) is
@@ -19,7 +19,9 @@ defmodule SymphonyElixir.QaPreCheck do
     * `pass`: the check passed and the test exists. QA links it and does not walk it.
     * `pending`: the check is still running. QA waits for it, boundedly.
     * `fail`: the check failed, did not run on the head (or only reported skipped), or the named
-      test is not in the checkout. The ticket's proof is part of its work, so QA fails to `Rework`,
+      test is not in the checkout. A step naming a check that is neither the repo's `proof_check`
+      nor a check on the head says so and names the `proof_check`, so a check name copied from
+      another repo is diagnosed in one line. The ticket's proof is part of its work, so QA fails to `Rework`,
       unless the PR and CI watcher reads the head as red or conflicting: then the pass is blocked on
       CI and the watcher routes the head (`SymphonyElixir.QaVerification`).
 
@@ -44,8 +46,9 @@ defmodule SymphonyElixir.QaPreCheck do
   from the pull request at `pr_url`. The overall status is the worst step's: `:fail`, then
   `:pending`, then `:pass`.
 
-  `opts[:gh_runner]` runs `gh` and `opts[:git]` runs git (`fn args, dir -> {output, status} end`).
-  CI is only read for a step whose test is in the checkout, and not at all when none is.
+  `opts[:proof_check]` is the repo's `proof_check`, `opts[:gh_runner]` runs `gh` and `opts[:git]`
+  runs git (`fn args, dir -> {output, status} end`). CI is only read for a step whose test is in
+  the checkout or whose check is not the `proof_check`, and not at all when there is none.
   """
   @spec run([Walkthrough.step()], String.t(), String.t(), Path.t(), keyword()) :: outcome()
   def run(steps, pr_url, head, workspace, opts \\ []) when is_list(steps) do
@@ -57,37 +60,50 @@ defmodule SymphonyElixir.QaPreCheck do
 
   defp confirm(steps, pr_url, head, workspace, opts) do
     git = Keyword.get(opts, :git, &git/2)
+    proof_check = Keyword.get(opts, :proof_check)
     files = tracked_files(git, workspace)
     tested = Enum.map(steps, &{&1, missing_test(&1, files, git, workspace)})
 
-    with {:ok, checks} <- head_checks(tested, pr_url, head, workspace, opts) do
-      results = Enum.map(tested, &result(&1, checks, head))
+    with {:ok, checks} <- head_checks(tested, proof_check, pr_url, head, workspace, opts) do
+      results = Enum.map(tested, &result(&1, checks, head, proof_check))
       {overall(results), results}
     end
   end
 
-  # The head's checks, read once, and only when a step still needs them.
-  defp head_checks(tested, pr_url, head, workspace, opts) do
-    if Enum.all?(tested, &match?({_step, missing} when is_binary(missing), &1)) do
-      {:ok, []}
-    else
+  # The head's checks, read once, and only when a step still needs them: its test is in the
+  # checkout, or it names a check other than the proof check, which may not be on the head.
+  defp head_checks(tested, proof_check, pr_url, head, workspace, opts) do
+    if Enum.any?(tested, &needs_checks?(&1, proof_check)) do
       case PullRequest.fetch_ci_status(pr_url, [cwd: workspace] ++ Keyword.take(opts, [:gh_runner])) do
         {:ok, %{commit_sha: ^head, checks: checks}} -> {:ok, checks}
         {:ok, %{commit_sha: other}} -> {:error, {:pr_head_moved, other}}
         {:error, reason} -> {:error, reason}
       end
+    else
+      {:ok, []}
     end
   end
 
-  defp result({step, missing}, _checks, _head) when is_binary(missing) do
-    %{step: step, status: :fail, detail: "#{code(missing)} is not in the checkout", url: nil}
+  defp needs_checks?({_step, nil}, _proof_check), do: true
+  defp needs_checks?({step, _missing}, proof_check), do: foreign_check?(step, proof_check)
+
+  defp result({step, missing}, checks, head, proof_check) when is_binary(missing) do
+    detail = "#{code(missing)} is not in the checkout#{unknown_check(step, checks, head, proof_check, ", and ")}"
+    %{step: step, status: :fail, detail: detail, url: nil}
   end
 
-  defp result({%{proof: %{check: check}} = step, nil}, checks, head) do
+  defp result({%{proof: %{check: check}} = step, nil}, checks, head, proof_check) do
     {state, run} = check_state(Enum.filter(checks, &check_named?(&1, check)))
     url = run && Map.get(run, :details_url)
     on = "on #{code(String.slice(head, 0, 12))}"
 
+    case unknown_check(step, checks, head, proof_check, "") do
+      "" -> check_result(step, state, url, on)
+      unknown -> %{step: step, status: :fail, detail: unknown, url: nil}
+    end
+  end
+
+  defp check_result(%{proof: %{check: check}} = step, state, url, on) do
     case state do
       :passed -> %{step: step, status: :pass, detail: "#{code(check)} passed #{on}#{test_found(step)}", url: url}
       :pending -> %{step: step, status: :pending, detail: "#{code(check)} is still running #{on}", url: url}
@@ -96,6 +112,21 @@ defmodule SymphonyElixir.QaPreCheck do
       :not_run -> %{step: step, status: :fail, detail: "#{code(check)} did not run #{on}", url: nil}
     end
   end
+
+  # What a step naming a check that is neither the repo's proof check nor a check on the head says,
+  # naming the proof check; "" for any other step.
+  defp unknown_check(%{proof: %{check: check}} = step, checks, head, proof_check, prefix) do
+    if foreign_check?(step, proof_check) and not Enum.any?(checks, &check_named?(&1, check)) do
+      "#{prefix}#{code(check)} is not a check run or workflow on #{code(String.slice(head, 0, 12))}: " <>
+        "this repo's proof check is #{code(proof_check)} (`proof_check` in WORKFLOW.md)"
+    else
+      ""
+    end
+  end
+
+  # A step naming a check other than the repo's proof check (none when the repo has no proof check).
+  defp foreign_check?(%{proof: %{check: check}}, proof_check) when is_binary(proof_check), do: normalize(check) != normalize(proof_check)
+  defp foreign_check?(_step, _proof_check), do: false
 
   defp test_found(%{proof: %{test: nil}}), do: ""
   defp test_found(%{proof: %{test: test}}), do: " and #{code(test)} is in the checkout"

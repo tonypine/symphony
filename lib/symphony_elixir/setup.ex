@@ -37,6 +37,8 @@ defmodule SymphonyElixir.Setup do
     Checks.Labels,
     Checks.DeprecatedLabels,
     Checks.HoldDrift,
+    Checks.Statuses,
+    Checks.StatusUse,
     Checks.QaHost
   ]
 

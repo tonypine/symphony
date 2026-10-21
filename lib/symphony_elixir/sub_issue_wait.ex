@@ -22,7 +22,8 @@ defmodule SymphonyElixir.SubIssueWait do
 
   At startup Symphony checks that the Linear team has the state. When it is
   missing, the state is turned off for the life of the process and a warning is
-  logged, so parents keep waiting `In Progress` as before.
+  logged, so parents keep waiting `In Progress` as before. Setup lists it as a problem too
+  (`disabled_teams/1`).
   """
 
   require Logger
@@ -45,9 +46,17 @@ defmodule SymphonyElixir.SubIssueWait do
   def enabled?(settings) do
     case state(settings) do
       nil -> false
-      state -> not :persistent_term.get(disabled_key(state), false)
+      state -> is_nil(:persistent_term.get(disabled_key(state), nil))
     end
   end
+
+  @doc """
+  The teams the startup check found without the waiting state `state` when it turned the state off
+  (empty when it looked in every team), for the Setup check that lists it; nil while it is on.
+  """
+  @spec disabled_teams(String.t() | nil) :: [String.t()] | nil
+  def disabled_teams(state) when is_binary(state), do: :persistent_term.get(disabled_key(state), nil)
+  def disabled_teams(nil), do: nil
 
   @doc """
   Checks that the given Linear teams have the waiting state. With no teams, any
@@ -77,7 +86,7 @@ defmodule SymphonyElixir.SubIssueWait do
             "breakdown parents stay #{@parked_from_state}. Add it as a started state after In Progress, then restart Symphony"
         )
 
-        :persistent_term.put(disabled_key(state), true)
+        :persistent_term.put(disabled_key(state), teams)
         :disabled
 
       {:error, reason} ->

@@ -71,14 +71,14 @@ public struct SetupFixSheet: Equatable, Identifiable {
                 phase = .failed("The app couldn't read \(fileName).")
             }
 
-        case let .linear(action, team, name, type):
+        case let .linear(action, team, name, type, after):
             let what = SetupLinearKind(action: action)
             let typeWord = type.map(Self.stateTypeWord)
             title = what.noun == "change" ? "Fix this in team \(team)?" : "Create the \(what.noun) “\(name)” in team \(team)?"
             verb = what.noun == "change" ? "Fix" : "Create \(what.noun.capitalized)"
             var created = ["Kind: \(what.noun.capitalized)", "Name: \(name)", "Team: \(team)"]
             if let typeWord { created.append("Type: \(typeWord)") }
-            if what.isStatus { created.append("Position: last of the \(typeWord ?? "team's") statuses") }
+            if what.isStatus { created.append(after.map { "Position: after “\($0)”" } ?? "Position: first of the \(typeWord ?? "team's") statuses") }
             kind = .linear(created)
             happens = what.noun == "change"
                 ? "Symphony makes this change in Linear in team \(team). Why: \(problem.consequence)"
@@ -327,7 +327,7 @@ public struct SetupBanner: Equatable, Identifiable {
             case (.add, _): done = "Added \(value.display) to \(path)."
             }
             text = done + (backup.map { " The old file is \($0.url.lastPathComponent)." } ?? "")
-        case let .linear(action, team, name, _):
+        case let .linear(action, team, name, _, _):
             let noun = SetupLinearKind(action: action).noun
             text = noun == "change" ? "Symphony made the change in team \(team)." : "Created the \(noun) “\(name)” in team \(team)."
         case .resyncHold:

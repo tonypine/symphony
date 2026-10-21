@@ -84,13 +84,13 @@ defmodule SymphonyElixir.ProtectedPathsGateTest do
     assert ProtectedPathsGate.check(@failed, pr(repo, head, base), %{issue([]) | description: description}) == :ok
   end
 
-  describe "changed_paths/2" do
+  describe "changed_entries/2" do
     test "names the protected paths the PR changes as the protected list names them", %{repo: repo, base: base} do
       head = commit!(repo, %{"WORKFLOW.md" => "v2\n", ".agents/skills/push/SKILL.md" => "push v2\n", "lib/app.ex" => "v2\n"})
-      assert ProtectedPathsGate.changed_paths(pr(repo, head, base)) == {:ok, [".agents/skills", "WORKFLOW.md"]}
+      assert ProtectedPathsGate.changed_entries(pr(repo, head, base)) == {:ok, [".agents/skills", "WORKFLOW.md"]}
 
       unprotected = commit!(repo, %{"lib/app.ex" => "v3\n"})
-      assert ProtectedPathsGate.changed_paths(pr(repo, unprotected, head)) == {:ok, []}
+      assert ProtectedPathsGate.changed_entries(pr(repo, unprotected, head)) == {:ok, []}
     end
 
     test "names the protected path whose symlink points at a changed file", %{repo: repo} do
@@ -101,13 +101,13 @@ defmodule SymphonyElixir.ProtectedPathsGateTest do
       linked = commit!(repo, %{})
       head = commit!(repo, %{"priv/skills/pull/SKILL.md" => "pull v2\n"})
 
-      assert ProtectedPathsGate.changed_paths(pr(repo, head, linked)) == {:ok, [".agents/skills"]}
+      assert ProtectedPathsGate.changed_entries(pr(repo, head, linked)) == {:ok, [".agents/skills"]}
     end
 
     test "can't be read without a workspace, a base, or a git that answers", %{repo: repo} do
-      assert ProtectedPathsGate.changed_paths(pr(nil, "head-1", "base-1")) == {:error, "the ticket has no workspace"}
-      assert ProtectedPathsGate.changed_paths(pr(repo, "head-1", nil)) == {:error, "the PR's base commit is unknown"}
-      assert {:error, "git fetch origin base-1 exited " <> _detail} = ProtectedPathsGate.changed_paths(pr(repo, "head-1", "base-1"))
+      assert ProtectedPathsGate.changed_entries(pr(nil, "head-1", "base-1")) == {:error, "the ticket has no workspace"}
+      assert ProtectedPathsGate.changed_entries(pr(repo, "head-1", nil)) == {:error, "the PR's base commit is unknown"}
+      assert {:error, "git fetch origin base-1 exited " <> _detail} = ProtectedPathsGate.changed_entries(pr(repo, "head-1", "base-1"))
 
       diff_fails = fn
         ["cat-file" | _args], ^repo -> {"", 0}
@@ -116,7 +116,7 @@ defmodule SymphonyElixir.ProtectedPathsGateTest do
       end
 
       assert {:error, "git diff --name-only --no-renames base-1...head-1 -- " <> detail} =
-               ProtectedPathsGate.changed_paths(pr(repo, "head-1", "base-1"), git: diff_fails)
+               ProtectedPathsGate.changed_entries(pr(repo, "head-1", "base-1"), git: diff_fails)
 
       assert String.ends_with?(detail, "exited 128: bad revision")
 
@@ -128,8 +128,16 @@ defmodule SymphonyElixir.ProtectedPathsGateTest do
         ["diff" | _args], ^repo -> {"priv/skills/pull/SKILL.md\n", 0}
       end
 
-      assert {:error, "git ls-tree -r -z base-1 -- WORKFLOW.md exited 128"} = ProtectedPathsGate.changed_paths(pr(repo, "head-1", "base-1"), git: links_fail)
+      assert {:error, "git ls-tree -r -z base-1 -- WORKFLOW.md exited 128"} = ProtectedPathsGate.changed_entries(pr(repo, "head-1", "base-1"), git: links_fail)
     end
+  end
+
+  test "changed_paths lists every protected path the PR changes, or why it couldn't read them", %{repo: repo, base: base} do
+    head = commit!(repo, %{"WORKFLOW.md" => "v2\n", ".agents/skills/push/SKILL.md" => "push v2\n", "lib/app.ex" => "v2\n"})
+
+    assert ProtectedPathsGate.changed_paths(pr(repo, head, base)) == {:ok, [".agents/skills/push/SKILL.md", "WORKFLOW.md"]}
+    assert ProtectedPathsGate.changed_paths(pr(repo, base, base)) == {:ok, []}
+    assert ProtectedPathsGate.changed_paths(pr(nil, head, base)) == {:error, "the ticket has no workspace"}
   end
 
   defp pr(workspace, head, base), do: %{workspace_path: workspace, head_sha: head, base_sha: base}

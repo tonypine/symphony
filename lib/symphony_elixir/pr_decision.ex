@@ -216,7 +216,7 @@ defmodule SymphonyElixir.PrDecision do
       %{
         id: "R19",
         phases: @pr_phases,
-        when: "Red only because every run of a workflow was cancelled",
+        when: "Red only because every run of a workflow was cancelled, its newest attempt with nothing queued or running",
         then: "`rerun_failed`, no attempt spent",
         guard: &cancelled_red?/1,
         build: &rerun_cancelled/1

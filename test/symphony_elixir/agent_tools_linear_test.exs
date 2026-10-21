@@ -2078,6 +2078,37 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     end
   end
 
+  describe "record_walkthrough_proofs/3" do
+    test "rejects a secret-bearing test before calling Linear, and needs the current issue" do
+      workspace = tmp_workspace!("linear-agent-walkthrough-proof-secret")
+      audit_dir = Path.join(workspace, "audit")
+      no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called") end
+      attrs = %{"proofs" => [%{"step" => 1, "test" => "test/" <> openai_fixture()}]}
+      opts = [dir: audit_dir, linear_client: no_linear]
+
+      try do
+        context = secret_context(workspace)
+        assert {:error, :secret_pattern_detected} = Linear.record_walkthrough_proofs(context, attrs, opts)
+
+        assert [%{"tool" => "linear_record_walkthrough_proofs", "reason" => "secret_pattern_detected"} | _rest] = audit_events(audit_dir)
+        assert {:error, :missing_current_issue} = Linear.record_walkthrough_proofs(%{}, attrs)
+      after
+        File.rm_rf(workspace)
+      end
+    end
+
+    test "a failed write is the tool's error" do
+      client = fn query, _variables, _opts ->
+        if query =~ "SymphonyAgentIssueDescription",
+          do: {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "description" => "## User walkthrough\n\n1. Do it."}}}},
+          else: {:ok, %{"data" => %{"issueUpdate" => %{"success" => false}}}}
+      end
+
+      attrs = %{"proofs" => [%{"step" => 1, "test" => "test/x_test.exs"}]}
+      assert {:error, _reason} = Linear.record_walkthrough_proofs(%{issue_id: "issue-current"}, attrs, linear_client: client)
+    end
+  end
+
   defp description_linear(description) do
     {:ok, linear} = Agent.start_link(fn -> description end)
     linear
@@ -3276,6 +3307,10 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert %{holds: [%{kind: :needs_decision, decision: %{title: "Add the release signing secrets", question: "Add the signing secrets, or ship unsigned builds?"}}]} =
                SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-24")
 
+      # The request is one event, the decision's own: no hold event.
+      assert [{"decision.requested", %{title: "Add the release signing secrets", question: "Add the signing secrets, or ship unsigned builds?"}}] =
+               ticket_events("repo-a", "issue-24")
+
       assert_received :refreshed
     end
 
@@ -3409,6 +3444,9 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert_received {:machine_label_cleared, "issue-24", "Needs Decision"}
       # Nothing moved: the ticket never left its phase.
       refute_received {:tracker_moved, _issue_id, _state}
+
+      assert [%{type: "decision.requested", id: request_id}, %{type: "decision.withdrawn", payload: %{title: "Add the release signing secrets", request: request_id}}] =
+               SymphonyElixir.RunStore.list_ticket_events("repo-a", "issue-24", [])
     end
 
     defp held_comment(id, title) do
