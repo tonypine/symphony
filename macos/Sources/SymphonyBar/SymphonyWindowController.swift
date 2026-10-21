@@ -259,7 +259,7 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             menu.addItem(item)
         }
         menu.addItem(.separator())
-        let back = NSMenuItem(title: NavigationHistory.backTitle, action: #selector(goBack(_:)), keyEquivalent: "[")
+        let back = NSMenuItem(title: NavigationHistory.backTitle, action: #selector(goBack(_:)), keyEquivalent: String(NavigationHistory.backKey))
         back.target = self
         menu.addItem(back)
         let forward = NSMenuItem(title: NavigationHistory.forwardTitle, action: #selector(goForward(_:)), keyEquivalent: "]")
