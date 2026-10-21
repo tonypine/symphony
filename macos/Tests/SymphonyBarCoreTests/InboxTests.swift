@@ -161,6 +161,34 @@ final class InboxTests: XCTestCase {
         XCTAssertTrue(InboxList(items: try payload("inbox-empty").items).isEmpty)
     }
 
+    func testTheMenuAndItsNotificationCallARequestWithOptionsADecisionAsTheInboxDoes() throws {
+        for name in ["inbox", "inbox-decision", "pull-request", "pr-watch"] {
+            let inbox = try payload(name)
+            let data = try Data(contentsOf: fixture(name).appendingPathComponent("state.json"))
+            guard case let .state(snapshot) = SymphonyState.poll(data: data, statusCode: 200) else { return XCTFail("\(name) not a state") }
+            for ticket in snapshot.waitingOnYou {
+                let item = try XCTUnwrap(inbox.items.first { $0.identifier == ticket.identifier }, "\(name) \(ticket.identifier)")
+                XCTAssertEqual(ticket.isDecision, item.isDecision, "\(name) \(ticket.identifier)")
+                if ticket.kind == .action {
+                    XCTAssertEqual(StatusMenu.kindLabel(ticket), item.kindWord, "\(name) \(ticket.identifier)")
+                }
+            }
+        }
+
+        let data = try Data(contentsOf: fixture("inbox-decision").appendingPathComponent("state.json"))
+        guard case let .state(snapshot) = SymphonyState.poll(data: data, statusCode: 200) else { return XCTFail("not a state") }
+        let decision = try XCTUnwrap(snapshot.waitingOnYou.first { $0.identifier == "TP-892" })
+        XCTAssertEqual(StatusMenu.waitingLine(decision), "TP-892 · Decision · Update the old workflow's instructions now, or leave them t… · 1h")
+        XCTAssertEqual(InboxNotifier.notice(decision)?.body, "Decision: Update the old workflow's instructions now, or leave them to TP-891?")
+
+        // An older hand-written request with steps, or a Symphony that doesn't say, stays an action.
+        let older = waiting("NOTE-90", .action, headline: "Add the signing certificate to the release workflow")
+        XCTAssertFalse(older.isDecision)
+        XCTAssertEqual(StatusMenu.kindLabel(older), "Action")
+        XCTAssertEqual(StatusMenu.waitingLine(older), "NOTE-90 · Action · Add the signing certificate to the release workflow")
+        XCTAssertEqual(InboxNotifier.notice(older)?.body, "Action: Add the signing certificate to the release workflow")
+    }
+
     func testTheMenuListsTheOldestFiveWithTheirKindSymbolAndAge() throws {
         let data = try Data(contentsOf: fixture("inbox").appendingPathComponent("state.json"))
         guard case let .state(snapshot) = SymphonyState.poll(data: data, statusCode: 200) else { return XCTFail("not a state") }

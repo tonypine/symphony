@@ -657,11 +657,17 @@ defmodule SymphonyElixirWeb.Presenter do
       url: URLUtils.present_url(item.url),
       state: item.state,
       kind: Atom.to_string(item.kind),
+      decision: decision?(item),
       headline: item.ask,
       waiting_since: iso8601(item.waiting_since),
       waiting_seconds: waiting_seconds(item.waiting_since, now)
     }
   end
+
+  # A request with options reads "Decision" in the app, as the Inbox's does; an older hand-written
+  # one with steps stays an action.
+  defp decision?(%{kind: :action, review: %{options: [_ | _]}}), do: true
+  defp decision?(_item), do: false
 
   defp waiting_seconds(%DateTime{} = since, now), do: max(DateTime.diff(now, since, :second), 0)
   defp waiting_seconds(_since, _now), do: nil

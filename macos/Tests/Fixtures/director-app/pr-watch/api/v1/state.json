@@ -915,6 +915,7 @@
   "usage_limits": [],
   "waiting_on_you": [
     {
+      "decision": true,
       "headline": "Let symphony.yml name the review agent's model",
       "issue_id": "i-703",
       "issue_identifier": "TP-703",
@@ -927,6 +928,7 @@
       "waiting_since": "2026-10-16T11:00:00Z"
     },
     {
+      "decision": true,
       "headline": "Run the macOS checks on every pull request",
       "issue_id": "i-706",
       "issue_identifier": "TP-706",

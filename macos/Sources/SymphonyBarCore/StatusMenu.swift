@@ -132,12 +132,17 @@ public enum StatusMenu {
             .compactMap { $0?.trimmingWhitespace() }
             .first { !$0.isEmpty }
             .map(shortened)
-        return [ticket.identifier, kindLabel(ticket.kind), headline, ticket.waitingSeconds.map(waitedLabel)]
+        return [ticket.identifier, kindLabel(ticket), headline, ticket.waitingSeconds.map(waitedLabel)]
             .compactMap { $0 }
             .joined(separator: " · ")
     }
 
-    /// How the menu names what a ticket waits for.
+    /// How the menu names what a ticket waits for: "Decision" for a request with options, as the Inbox does.
+    public static func kindLabel(_ ticket: StateSnapshot.WaitingTicket) -> String {
+        ticket.isDecision ? "Decision" : kindLabel(ticket.kind)
+    }
+
+    /// How the menu names a kind of wait.
     public static func kindLabel(_ kind: StateSnapshot.WaitingTicket.Kind) -> String {
         switch kind {
         case .plan:
