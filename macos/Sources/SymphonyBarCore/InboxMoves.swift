@@ -335,7 +335,7 @@ public struct ConsequenceSheet: Equatable, Identifiable {
             if let request, let option = item.review.action?.confirmingOption {
                 self.picks = [.init(question: request.question.isEmpty ? id : request.question, answer: option.label)]
             }
-            happens = "Records your answer on \(id) as a reply to its merge request, clears the `Needs Decision` label and moves \(id) to \(confirm): Symphony turns on auto-merge, and GitHub merges the pull request once checks pass."
+            happens = "Records your answer on \(id) as a reply to its merge request, clears the Needs Decision label and moves \(id) to \(confirm): Symphony turns on auto-merge, and GitHub merges the pull request once checks pass."
             stays = "Nothing merges while a check is red or pending, and the diff stays on GitHub."
         case .sendToRework:
             title = "Send \(id) to Rework?"
@@ -369,17 +369,17 @@ public struct ConsequenceSheet: Equatable, Identifiable {
                 // Words that pick none of a confirmation's options ask for a change: Symphony moves the ticket to
                 // In Progress, where its next run takes them up on the same pull request.
                 targetState = "In Progress"
-                happens = "Records your answer on \(id) as a reply to its request, clears the `Needs Decision` label and moves \(id) to In Progress, where its next run takes up your answer."
+                happens = "Records your answer on \(id) as a reply to its request, clears the Needs Decision label and moves \(id) to In Progress, where its next run takes up your answer."
                 stays = "Nothing merges, and the pull request stays open."
             } else if let confirm = action?.confirm {
                 // A merge confirmation continues into the state its hold names. An ordinary decision moves nothing.
                 targetState = confirm
-                happens = "Records your answer on \(id) as a reply to its request, clears the `Needs Decision` label and moves \(id) to \(confirm)."
+                happens = "Records your answer on \(id) as a reply to its request, clears the Needs Decision label and moves \(id) to \(confirm)."
                 stays = "Nothing merges while a check is red or pending. Your answer stays on the ticket as the recorded decision."
             } else {
                 targetState = nil
                 happens = picked?.effect
-                    ?? "Records your answer on \(id) as a reply to its request and clears the `Needs Decision` label."
+                    ?? "Records your answer on \(id) as a reply to its request and clears the Needs Decision label."
                 stays = "\(id) stays in \(item.state ?? "its phase") until its next run picks up your answer."
             }
         case .unblock:
