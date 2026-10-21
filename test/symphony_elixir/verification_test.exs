@@ -784,14 +784,7 @@ defmodule SymphonyElixir.VerificationTest do
           assert :ok = Verification.stop_qa_dev_server(dev_server)
 
         {:error, reason} ->
-          # The confined server logs to its own rotating file, which the start's output never
-          # shows; print the tail of each so a server that hangs at boot says where.
-          server_logs =
-            [System.tmp_dir!(), worktree]
-            |> Enum.flat_map(&Path.wildcard(Path.join(&1, "**/symphony-qa-dashboard.*/logs/symphony.log*")))
-            |> Enum.map_join("\n", fn path -> "== #{path}\n" <> tail_of(path) end)
-
-          IO.puts(:stderr, "qa dashboard dev server failed to start: #{inspect(reason)}\n#{log}\n#{server_logs}")
+          IO.puts(:stderr, "qa dashboard dev server failed to start: #{inspect(reason)}\n#{log}")
           flunk("qa dashboard dev server failed to start: #{inspect(reason)}")
       end
     end
@@ -1184,13 +1177,6 @@ defmodule SymphonyElixir.VerificationTest do
 
   # Polls `url` until it answers 200, the way the dev server's own health check waits, and fails
   # with the last status or exception once `timeout_ms` has passed.
-  defp tail_of(path) do
-    case File.read(path) do
-      {:ok, text} -> String.slice(text, -6_000, 6_000)
-      other -> inspect(other)
-    end
-  end
-
   defp assert_http_ok_within(url, timeout_ms) do
     await_http_ok(url, System.monotonic_time(:millisecond) + timeout_ms, timeout_ms)
   end
