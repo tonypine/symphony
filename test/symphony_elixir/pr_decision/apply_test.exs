@@ -5,6 +5,8 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
   alias SymphonyElixir.PrDecision.{Action, Apply, Facts}
   alias SymphonyElixir.PrWatch.Attempts
 
+  import ExUnit.CaptureLog, only: [capture_log: 1, with_log: 1]
+
   @repo_key "default"
   @issue_id "issue-apply"
   @pr_url "https://github.com/acme/app/pull/7"
@@ -491,7 +493,10 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       action = action("R20", :file_fix_ticket, args: %{check: "specs", evidence: failures}, reason: "CI keeps failing: waiting on a fix ticket for the `specs` check")
       ctx = ctx(:code_review, facts: %{red_attempts: 10, max_red_attempts: 10, fix_failures: failures})
 
-      assert %{outcome: :applied, attempts: %{fix_ticket: "TP-90"}, action: recorded} = Apply.apply(action, ctx)
+      {result, log} = with_log(fn -> Apply.apply(action, ctx) end)
+      assert %{outcome: :applied, attempts: %{fix_ticket: "TP-90"}, action: recorded} = result
+      assert log =~ "pr_watch.ci_fix_ticket issue_id=#{@issue_id}"
+      assert log =~ "outcome=filed component=ci:specs fix_ticket=TP-90 red_attempts=10"
       assert recorded.reason == "CI keeps failing: waiting on TP-90, a fix ticket for the `specs` check"
       assert recorded.args.fix_ticket == "TP-90"
 
@@ -524,7 +529,10 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       attempts = %{Attempts.new() | red: 10}
 
       Process.put(:heal_result, :escalated)
-      assert %{outcome: :applied, action: %{owner: :person, reason: reason}} = Apply.apply(action, ctx(:qa, attempts: attempts))
+      {result, log} = with_log(fn -> Apply.apply(action, ctx(:qa, attempts: attempts)) end)
+      assert %{outcome: :applied, action: %{owner: :person, reason: reason}} = result
+      assert log =~ "pr_watch.ci_fix_ticket"
+      assert log =~ "outcome=escalated component=ci:specs fix_ticket=none"
       assert reason =~ "after its fix ticket landed: a person decides"
 
       Process.put(:heal_result, :retry)

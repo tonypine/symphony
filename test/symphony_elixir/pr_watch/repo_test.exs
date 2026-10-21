@@ -191,8 +191,12 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     # A record written before the watcher kept its stay reads its facts' phase.
     SymphonyElixir.PrWatchSupport.put_watch!(repo_key, "1", phase: :code_review)
     reads!(%{})
-    assert {:ok, _summary} = Repo.poll(pid)
+    log = capture_log(fn -> assert {:ok, _summary} = Repo.poll(pid) end)
     assert %{decision: %{rule: "R27"}, stay: :code_review} = watch(repo_key, "1")
+
+    # A new decision logs one line; the same decision on the next tick logs none.
+    assert log =~ "pr_watch.decision issue_id=1 issue_identifier=TP-1 repo_key=#{repo_key} phase=code_review rule=R27 action=dispatch"
+    refute capture_log(fn -> assert {:ok, _summary} = Repo.poll(pid) end) =~ "pr_watch.decision"
   end
 
   test "a ticket moved into Code Review by hand, with no run, is watched from the next tick", %{repo_key: repo_key} do
