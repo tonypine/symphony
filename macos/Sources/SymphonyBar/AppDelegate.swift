@@ -411,12 +411,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         DispatchQueue.main.async { [weak self] in self?.notify(notice) }
     }
 
-    /// Quitting stops an owned Symphony first, after confirming when agent runs are active.
+    /// Quitting stops an owned Symphony first, after confirming when agent runs are active. An Inbox answer held for
+    /// Undo is sent before, while Symphony still runs to take it.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard runner.isRunning else { return .terminateNow }
+        guard runner.isRunning || symphonyWindow.holdsAnswer else { return .terminateNow }
 
         Task {
-            if !runner.isStopping, let message = StatusMenu.quitConfirmation(activeRuns: await runner.activeRunCount()) {
+            if runner.isRunning, !runner.isStopping, let message = StatusMenu.quitConfirmation(activeRuns: await runner.activeRunCount()) {
                 let alert = NSAlert()
                 alert.messageText = "Quit Symphony?"
                 alert.informativeText = message
@@ -427,6 +428,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                     return
                 }
             }
+            await symphonyWindow.sendHeldAnswer()
+            guard runner.isRunning else { return sender.reply(toApplicationShouldTerminate: true) }
             runner.stop { sender.reply(toApplicationShouldTerminate: true) }
         }
         return .terminateLater

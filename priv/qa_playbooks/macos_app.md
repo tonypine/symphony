@@ -200,7 +200,8 @@ GitHub or Linear in QA:
   - Inbox, Decisions: TP-703's review has **What the watcher found** above its options, with the
     failing check `protected paths` and the files `WORKFLOW.md` and
     `config/settings_ui_exempt.yml`; "Drop the change in Rework" is marked Recommended. Send
-    Decision posts `POST /api/v1/control/decide` and the selection moves to TP-706.
+    Decision moves the selection to TP-706 and shows "TP-703 Sending your decision" with **Undo**;
+    10 s later it posts `POST /api/v1/control/decide` and the banner reads "Sent your decision".
   - TP-704 (Merging): "Waiting on TP-705 to land · they change the same file (SPEC.md)" with
     **Open TP-705**. TP-707: "CI keeps failing: waiting on TP-708, a fix ticket for the test
     check" with **Open TP-708**. TP-709: "PR #709 was closed without merging. Sent back to

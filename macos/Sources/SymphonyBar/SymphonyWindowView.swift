@@ -256,6 +256,11 @@ final class SymphonyWindowModel: ObservableObject {
     /// The runs and audit records are read again at most this often.
     static let ticketSlowInterval: TimeInterval = 10
     private var bannerTask: Task<Void, Never>?
+    /// An answer the app holds for the banner's Undo before it sends it (`ConsequenceSheet.holdsForUndo`), with the
+    /// banner that offers the Undo and the wait that sends it.
+    private var held: (sheet: ConsequenceSheet, action: ControlAction, bannerID: UUID, wait: Task<Void, Never>)?
+    /// Whether an answer waits for the banner's Undo, still to send.
+    var holdsAnswer: Bool { held != nil }
     /// The Inbox items the Director answered, by issue id: they leave the Inbox without a banner of their own.
     private var answeredItems = Set<String>()
     /// The tickets a Check Now is on its way for.
@@ -380,9 +385,16 @@ final class SymphonyWindowModel: ObservableObject {
         }
     }
 
-    /// Opens the consequence sheet of `move` on `item`.
+    /// Opens the consequence sheet of `move` on `item`. An answer on `item` the app still holds is taken back first:
+    /// the Director is answering again, with the picks it left.
     func open(_ move: InboxMove, on item: InboxItem) {
         guard !inboxMoveInFlight else { return }
+        if let held, held.sheet.itemID == item.id {
+            held.wait.cancel()
+            self.held = nil
+            answeredItems.remove(item.id)
+            if inboxBanner?.id == held.bannerID { dismissBanner() }
+        }
         inboxMoveError = nil
         inboxSheet = ConsequenceSheet(move: move, item: item, picks: picks(for: item.id))
     }
@@ -399,6 +411,7 @@ final class SymphonyWindowModel: ObservableObject {
     /// sheet says why.
     func confirm(_ sheet: ConsequenceSheet, reason: String) {
         guard !inboxMoveInFlight, let action = sheet.action(reason: reason) else { return }
+        if sheet.holdsForUndo { return hold(action, of: sheet) }
         inboxMoveInFlight = true
         inboxMoveError = nil
         Task {
@@ -420,10 +433,62 @@ final class SymphonyWindowModel: ObservableObject {
         }
     }
 
-    /// Undo on the banner: takes the move back, and selects the item again.
+    /// Holds an answer that moves nothing for the banner's Undo (DS10): the sheet closes, the selection moves to the
+    /// next item after a request's answer and the banner offers Undo; the answer is sent once the banner's time is up. An answer held already
+    /// is sent at once, so only the newest waits.
+    private func hold(_ action: ControlAction, of sheet: ConsequenceSheet) {
+        sendHeldNow()
+        inboxSheet = nil
+        answeredItems.insert(sheet.itemID)
+        if sheet.selectsNext(after: sheet.expectedOutcome) { inboxSelection = inboxList?.neighbor(of: sheet.itemID)?.id }
+        let banner = sheet.heldBanner
+        showBanner(banner)
+        let wait = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(InboxBanner.duration))
+            guard !Task.isCancelled else { return }
+            self?.sendHeldNow()
+        }
+        held = (sheet, action, banner.id, wait)
+    }
+
+    /// Sends the answer the app holds, if any, without waiting for the banner's time: when its time is up, when
+    /// another answer is held, and when the window closes or the app quits. Its banner then says how it went, unless
+    /// another banner took its place; a failure always shows, and keeps the picks to send again.
+    @discardableResult
+    func sendHeldNow() -> Task<Void, Never>? {
+        guard let held else { return nil }
+        self.held = nil
+        held.wait.cancel()
+        return Task {
+            let result = await onControl(held.action)
+            let sheet = held.sheet
+            switch result {
+            case .done, .moved:
+                inboxPicks.clear(sheet.itemID)
+                if inboxBanner == nil || inboxBanner?.id == held.bannerID {
+                    showBanner(sheet.banner(after: result.moveOutcome ?? sheet.expectedOutcome))
+                }
+            case let .failed(message):
+                answeredItems.remove(sheet.itemID)
+                showBanner(.failed(itemID: sheet.itemID, identifier: sheet.identifier, message: message))
+            }
+            client.refresh()
+        }
+    }
+
+    /// Undo on the banner: takes the move back, and selects the item again. An answer the app still holds is
+    /// never sent.
     func undo(_ banner: InboxBanner) {
         guard banner.undo else { return }
         dismissBanner()
+        if let held, held.bannerID == banner.id {
+            held.wait.cancel()
+            self.held = nil
+            answeredItems.remove(banner.itemID)
+            inboxSelection = banner.itemID
+            showBanner(.unsent(itemID: banner.itemID, identifier: banner.identifier))
+            return
+        }
         Task {
             switch await onControl(.undo(banner.identifier)) {
             case .done, .moved:

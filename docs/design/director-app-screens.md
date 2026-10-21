@@ -92,6 +92,9 @@ later journeys point back to it. The mock draws every screen under its ID.
   "TP-892 stays in Rework until its next run picks up your answer." For a write-in answer: "Send your answer?" and
   the Director's words quoted under it.
 - **Conventions:** sheet with a default button; afterwards a banner "Moved to Merging · Undo" for 10 s (seen on D2c).
+  Send Decision and Send Decisions move nothing, so the app holds the answer for those 10 s: the banner reads
+  "TP-892 Sending your decision · Undo", the answer goes to Symphony when the 10 s end (then "Sent your decision"),
+  and Undo selects TP-892 again with its pick and sends nothing ("Not sent; your pick is kept").
 - **Data:** writes through Symphony's control API (decision DD4).
 
 #### D2b · Inbox: a pull request to approve

@@ -348,8 +348,18 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         window?.saveFrame(to: frame, after: notification)
     }
 
+    /// Whether the Inbox holds an answer for Undo, still to send.
+    var holdsAnswer: Bool { model?.holdsAnswer ?? false }
+
+    /// Sends the Inbox answer held for Undo at once, and waits for Symphony's answer: the app is quitting.
+    func sendHeldAnswer() async {
+        await model?.sendHeldNow()?.value
+    }
+
     func windowWillClose(_ notification: Notification) {
         window?.saveFrame(to: frame, after: notification)
+        // An Inbox answer held for Undo goes now: its banner closes with the window.
+        model?.sendHeldNow()
         window = nil
         model = nil
         client.isVisible = false

@@ -250,8 +250,11 @@ Every action that changes Linear, a run or dispatch opens a small sheet:
 - the options that change the outcome (a checkbox, a reason field);
 - **Cancel** and the action, named with its verb; destructive actions use the destructive style.
 
-A Linear move made from the app shows a banner with **Undo** for 10 seconds. Resume Dispatch needs no sheet: it
-changes nothing that is already running.
+A Linear move made from the app shows a banner with **Undo** for 10 seconds. An answer that leaves the ticket in
+place (Send Decision, Send Decisions) has no move to take back, so the app holds it for those 10 seconds instead: the
+banner reads "Sending your decision · Undo", the answer is sent when they end, and Undo keeps it from ever being sent
+("Not sent; your pick is kept"). Closing the window or quitting the app sends it at once. Resume Dispatch needs no
+sheet: it changes nothing that is already running.
 
 ### P6. Scope
 
