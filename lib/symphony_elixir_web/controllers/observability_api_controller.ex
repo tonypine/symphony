@@ -27,7 +27,8 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   end
 
   def state(conn, _params) do
-    json(conn, Presenter.state_payload(orchestrator(), snapshot_timeout_ms(), stray_processes(), inbox(), setup(), github_updates()))
+    timeout = snapshot_timeout_ms()
+    json(conn, Presenter.state_payload(orchestrator(), timeout, stray_processes(), inbox(), setup(), github_updates()))
   end
 
   @spec inbox(Conn.t(), map()) :: Conn.t()
