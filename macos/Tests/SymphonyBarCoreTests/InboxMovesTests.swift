@@ -134,6 +134,9 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome).text, "Sent your decision")
         XCTAssertEqual(sheet.expectedOutcome, MoveOutcome(moved: false, toState: nil))
         XCTAssertEqual(sheet.id, "id-X-1:decide")
+        // The answer moves nothing, so the app holds it for the banner's 10 s and its Undo takes it back unsent (DS10).
+        XCTAssertTrue(sheet.holdsForUndo)
+        XCTAssertEqual(sheet.heldBanner, InboxBanner(itemID: "id-X-1", identifier: "X-1", text: "Sending your decision", undo: true))
 
         // A merge confirmation's Decide moves the ticket to the state its hold names.
         var merge = action
@@ -145,6 +148,8 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(confirm.expectedOutcome, MoveOutcome(moved: true, toState: "Merging"))
         XCTAssertEqual(confirm.banner(after: confirm.expectedOutcome).text, "Moved to Merging")
         XCTAssertEqual(confirm.action(), sheet.action())
+        // Its move is Symphony's to undo, so it goes at once.
+        XCTAssertFalse(confirm.holdsForUndo)
 
         // The redirect is the same answer with the move Rework named.
         let redirect = ConsequenceSheet(move: .sendToRework, item: action)
@@ -157,6 +162,7 @@ final class InboxMovesTests: XCTestCase {
             .decide("X-1", requestCommentID: "c-1", picks: [.init(question: "Close TP-612 as a duplicate?", answer: "Send it back")], move: "rework")
         )
         XCTAssertEqual(redirect.banner(after: redirect.expectedOutcome).text, "Moved to Rework")
+        XCTAssertFalse(redirect.holdsForUndo)
 
         // A PR with no request to answer has nothing to reply under either.
         XCTAssertEqual(ConsequenceSheet(move: .sendToRework, item: item(.pr)).isDecision, false)
@@ -420,6 +426,8 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertFalse(sheet.isDestructive)
         XCTAssertEqual(sheet.action(), .approvePlan("SHOP-330"))
         XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome), InboxBanner(itemID: "i-330", identifier: "SHOP-330", text: "Moved to Waiting on sub-tickets", undo: true))
+        // A move is Symphony's to undo, so the app sends it at once.
+        XCTAssertFalse(sheet.holdsForUndo)
         XCTAssertEqual(sheet.id, "i-330:approvePlan")
 
         XCTAssertTrue(ConsequenceSheet(move: .approvePlan, item: plan, picks: DecisionPicks(picks: [0: 1])).stays.contains("your changed picks are not sent"))
@@ -442,6 +450,8 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertTrue(sheet.listsPicks)
         XCTAssertEqual(sheet.action(), .decisions("SHOP-330", picks: sheet.picks))
         XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome), InboxBanner(itemID: "i-330", identifier: "SHOP-330", text: "Sent your decisions", undo: false))
+        XCTAssertTrue(sheet.holdsForUndo)
+        XCTAssertEqual(sheet.heldBanner, InboxBanner(itemID: "i-330", identifier: "SHOP-330", text: "Sending your decisions", undo: true))
         XCTAssertEqual(sheet.stays, "The plan stays in Plan Review and isn't approved: it comes back to the Inbox once Symphony has revised it.")
 
         // The workflow's Plan Review state under another name; the sheet names the state the plan is in.
@@ -604,6 +614,11 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertFalse(undone.undo)
         XCTAssertEqual(InboxBanner.failed(itemID: "i-1", identifier: "BIL-206", message: "No").style, .error)
         XCTAssertNotEqual(moved, undone)
+        // Undo on an answer the app still held: nothing was sent.
+        let unsent = InboxBanner.unsent(itemID: "i-1", identifier: "TP-892")
+        XCTAssertEqual(unsent.announcement, "TP-892: Not sent; your pick is kept")
+        XCTAssertEqual(unsent.style, .info)
+        XCTAssertFalse(unsent.undo)
     }
 
     // MARK: - The list after a move

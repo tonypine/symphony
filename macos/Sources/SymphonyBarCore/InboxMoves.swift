@@ -438,6 +438,18 @@ public struct ConsequenceSheet: Equatable, Identifiable {
     /// request was answered, which leaves the Inbox with the next poll even when the ticket stays in its phase.
     public func selectsNext(after outcome: MoveOutcome) -> Bool { outcome.moved || isDecision }
 
+    /// Whether the app holds the request for `InboxBanner.duration` before it sends it, with Undo on the banner
+    /// (DS10). An answer that leaves the ticket in place has no move for Symphony's Undo to take back, and once
+    /// Symphony posted it and cleared the hold the next run is on its way, so the answer waits in the app and Undo
+    /// keeps it from ever reaching Linear. An answer that moves the ticket (a merge confirmation) is sent at once:
+    /// its move is undone as any other.
+    public var holdsForUndo: Bool { (move == .decide || move == .sendDecisions) && targetState == nil }
+
+    /// The banner while the app holds the answer (`holdsForUndo`): its Undo takes the answer back before it is sent.
+    public var heldBanner: InboxBanner {
+        InboxBanner(itemID: itemID, identifier: identifier, text: move == .decide ? "Sending your decision" : "Sending your decisions", undo: true)
+    }
+
     /// The banner once the move is made (C18), from Symphony's answer: Undo only after the ticket moved.
     /// A restart offers no Undo: it closed the pull request, deleted the workspace and superseded the
     /// workpad, and Symphony can't take any of that back. Unblock moves nothing, so it says what it did
@@ -489,6 +501,11 @@ public struct InboxBanner: Equatable, Identifiable {
     /// The banner after Undo took a move back.
     public static func undone(itemID: String, identifier: String) -> InboxBanner {
         InboxBanner(itemID: itemID, identifier: identifier, text: "Moved back", undo: false, style: .info)
+    }
+
+    /// The banner after Undo took back an answer the app still held: nothing was sent, and the picks stay.
+    public static func unsent(itemID: String, identifier: String) -> InboxBanner {
+        InboxBanner(itemID: itemID, identifier: identifier, text: "Not sent; your pick is kept", undo: false, style: .info)
     }
 
     /// The banner for a request that failed, with Symphony's message.
