@@ -477,8 +477,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             return forceInFlight == nil && StatusMenu.canForce(machine.status)
         case #selector(openTerminalDashboard(_:)):
             return isAnswering
-        case #selector(openWaitingTicket(_:)):
-            return menuItem.representedObject is URL
         case #selector(openLogs(_:)):
             return canOpenLogs
         case #selector(checkForUpdates(_:)):
