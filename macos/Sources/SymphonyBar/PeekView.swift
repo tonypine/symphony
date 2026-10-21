@@ -186,6 +186,8 @@ struct PeekPage: View {
                 if canGoBack {
                     Button(action: actions.back) { Label(PeekNavigation.backTitle, systemImage: "chevron.left") }
                         .buttonStyle(PeekHeaderButtonStyle())
+                        // Its own ⌘[: a sheet is key while it shows, which turns off the View menu's Back.
+                        .keyboardShortcut(KeyEquivalent(NavigationHistory.backKey), modifiers: .command)
                         .help("Back (⌘[)")
                 }
                 Text(entry.title)
