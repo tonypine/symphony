@@ -111,6 +111,13 @@ defmodule SymphonyElixir.ForceIssueTest do
 
       assert {:ok, events} = SymphonyElixir.AuditLog.query(event_type: "forced_end")
       assert [%{"issue_identifier" => "MT-2", "reason" => "label_removed"}] = Enum.to_list(events)
+
+      # Each force is the Director's action on the ticket's events; a clear records none.
+      repo_key = Config.repo_key!()
+      force_action = {"person.action", %{action: "force"}}
+      assert ticket_events(repo_key, "id-1", "person.action") == [force_action, force_action]
+      assert ticket_events(repo_key, "id-2", "person.action") == [force_action]
+      assert [%{actor: %{kind: :person, name: "the Director"}} | _rest] = RunStore.list_ticket_events(repo_key, "id-1", types: ["person.action"])
     end
 
     test "says a Backlog ticket is not promoted and keeps it out of the queue", %{pid: pid} do
@@ -132,6 +139,7 @@ defmodule SymphonyElixir.ForceIssueTest do
     test "an unknown, closed or failing ticket gives a clear message and a non-zero exit" do
       assert {{:error, "MT-404 was not found in Linear"}, ""} = force(["MT-404"])
       assert {{:error, "MT-4 is Done; only an open ticket can be forced"}, ""} = force(["MT-4"])
+      assert ticket_events(Config.repo_key!(), "id-4", "person.action") == []
 
       Application.put_env(:symphony_elixir, :memory_tracker_add_issue_label_result, {:error, :boom})
       assert {{:error, "Linear request failed: :boom"}, ""} = force(["MT-5"])

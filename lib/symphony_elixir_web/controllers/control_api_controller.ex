@@ -4,7 +4,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
   dispatch, and forcing a ticket. Used by `bin/symphony pr`,
   `bin/symphony force` and the `mix symphony.*` tasks via
   `SymphonyElixir.ControlClient`. A stop that ends a run writes a `run_stopped`
-  audit record.
+  audit record and a `person.action` event (`stop`) on the ticket.
 
   The Director's moves from the Mac app's Inbox (`approve_plan`, `rework`, `restart`, `decisions`,
   `backlog`, `unblock`, `decide` and `undo`) are made by
@@ -21,7 +21,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
   require Logger
 
   alias Plug.Conn
-  alias SymphonyElixir.{AuditLog, DirectorMoves, Orchestrator}
+  alias SymphonyElixir.{AuditLog, DirectorMoves, Orchestrator, TicketSignals}
   alias SymphonyElixirWeb.Endpoint
 
   @spec pause(Conn.t(), map()) :: Conn.t()
@@ -122,9 +122,18 @@ defmodule SymphonyElixirWeb.ControlApiController do
       :ok -> :ok
       {:error, reason} -> Logger.warning("Failed to record run_stopped audit event: issue_identifier=#{payload[:issue_identifier]} reason=#{inspect(reason)}")
     end
+
+    record_stop_action(Map.get(payload, :repo_key), Map.get(payload, :issue_id))
   end
 
   defp record_stop(_conn, _result), do: :ok
+
+  # The stop is also the Director's action on the ticket's events, best effort. The control API
+  # authenticates one shared token, so the actor is the Director, not a named person.
+  defp record_stop_action(repo_key, issue_id) when is_binary(repo_key) and is_binary(issue_id),
+    do: TicketSignals.record_event(repo_key, issue_id, "person.action", %{action: "stop"}, actor: {:person, "the Director"})
+
+  defp record_stop_action(_repo_key, _issue_id), do: :ok
 
   defp director_move(conn, move, params, input) do
     case string_param(params["issue_identifier"]) do
