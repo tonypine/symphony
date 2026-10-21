@@ -16,6 +16,60 @@ public enum AddRepoStep: String, CaseIterable, Equatable {
     }
 }
 
+/// One step in the Add Repo sheet's step indicator: a tick once done, else its number, and its name, as much as the
+/// sheet's width lets show.
+public struct AddRepoStepMark: Equatable {
+    public var step: AddRepoStep
+    public var isDone: Bool
+    public var isCurrent: Bool
+    /// Its number, nil once done (its tick shows instead) and where it shows by name alone.
+    public var number: Int?
+    /// Its name, nil where it shows by its tick or number alone.
+    public var name: String?
+
+    public init(step: AddRepoStep, isDone: Bool = false, isCurrent: Bool = false, number: Int? = nil, name: String? = nil) {
+        self.step = step
+        self.isDone = isDone
+        self.isCurrent = isCurrent
+        self.number = number
+        self.name = name
+    }
+}
+
+/// How much of each step the Add Repo sheet's step indicator shows, from the most to the least. The indicator shows
+/// the first that fits on one line, so a name never wraps.
+public enum AddRepoStepIndicatorFit: CaseIterable, Equatable {
+    /// "✓ Source › ✓ Linear › 3 Review › 4 Check setup": each step's tick or number, and its name.
+    case full
+    /// "✓ › ✓ › WORKFLOW.md › Review › Check setup › Instant updates": the steps done by their tick alone, the others by
+    /// name alone. All six steps fit this way on every page of the 520 pt sheet.
+    case compact
+    /// "✓ › ✓ › 3 WORKFLOW.md › 4 › 5 › 6": only the current step named.
+    case currentOnly
+
+    /// The indicator's steps, done up to `current`.
+    public func marks(_ steps: [AddRepoStep], current: AddRepoStep) -> [AddRepoStepMark] {
+        let index = steps.firstIndex(of: current) ?? 0
+        return steps.enumerated().map { position, step in
+            let isDone = position < index
+            let isCurrent = step == current
+            let named: Bool
+            let numbered: Bool
+            switch self {
+            case .full:
+                (named, numbered) = (true, !isDone)
+            case .compact:
+                (named, numbered) = (!isDone, false)
+            case .currentOnly:
+                (named, numbered) = (isCurrent, !isDone)
+            }
+            return AddRepoStepMark(
+                step: step, isDone: isDone, isCurrent: isCurrent, number: numbered ? position + 1 : nil, name: named ? step.rawValue : nil
+            )
+        }
+    }
+}
+
 /// How a list the sheet asks Linear for loads.
 public enum LinearLoad: Equatable {
     case loading

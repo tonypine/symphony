@@ -332,11 +332,14 @@ GitHub or Linear in QA:
     `macos/Tests/Fixtures/director-app/github-updates-add-repo` (instant updates on). Copy its
     `config/symphony.yml` to `qa-evidence/`, `qa_put_file` it, type the path into Settings' config
     field, then add `acme/widgets` as for Add Repo's Check setup above. The step indicator ends
-    with "Instant updates"; Check setup reads "widgets is set up right." and its button reads
-    **Continue**. **Continue** (`run_step` `repo:widgets`, then `test` with `repo` `widgets`):
-    "Instant updates for acme/widgets" with "Webhook added" Done and "Test update" Done ("Received
-    and verified"), and **Done** enabled. **Done** closes the sheet; Setup's card lists
-    acme/widgets as Instant.
+    with "Instant updates" and stays on one line on every page: acme/widgets has no WORKFLOW.md, so
+    the sheet has six steps, and the indicator shows the steps done by their tick alone and the
+    others by name alone ("✓ › ✓ › ✓ › Review › Check setup › Instant updates"), never a name
+    wrapped or broken; VoiceOver still reads "Step 4 of 6: Review". Check setup reads "widgets is
+    set up right." and its button reads **Continue**. **Continue** (`run_step` `repo:widgets`,
+    then `test` with `repo` `widgets`): "Instant updates for acme/widgets" with "Webhook added"
+    Done and "Test update" Done ("Received and verified"), and **Done** enabled. **Done** closes
+    the sheet; Setup's card lists acme/widgets as Instant.
   - Keyboard and VoiceOver: with Full Keyboard Access on, Tab reaches each relay, each row's
     buttons, **Back** and **Continue**; Return presses **Continue** (or **Done**) and Escape
     cancels. VoiceOver reads the relays as a group "Choose how GitHub reaches this Mac", the first
@@ -345,9 +348,10 @@ GitHub or Linear in QA:
     failed row as one element ("acme/docs, Failed, You need admin access to acme/docs to add a
     webhook., …"), and each row button with its repo ("Leave on Polling, acme/docs").
   - Look: judge each page and Add Repo's last step in light and dark against
-    `macos/Tests/Snapshots/github-setup-*.png` and `add-repo-instant-updates-*.png`, at the
-    laptop viewport (1440×900 pt): the sheet keeps its footer in place on every page, and nothing
-    is clipped.
+    `macos/Tests/Snapshots/github-setup-*.png`, `add-repo-instant-updates-*.png` (six steps:
+    `add-repo-instant-updates-six-steps-*.png`, and `add-repo-six-steps-*.png` for every page's
+    step indicator), at the laptop viewport (1440×900 pt): the sheet keeps its footer in place on
+    every page, and nothing is clipped.
 
 QA does three things, in this order: (a) the walkthrough steps marked `Proved by: QA` (no test
 can drive them), steps 1 to 7 below; (b) the `Design check` of every UI deliverable, by sight, in

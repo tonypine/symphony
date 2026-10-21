@@ -1122,36 +1122,49 @@ struct AddRepoCheckFooter: View {
     }
 }
 
-/// "1 Source › 2 Linear › 3 WORKFLOW.md › 4 Review", the page shown in bold and those done checked.
+/// "1 Source › 2 Linear › 3 WORKFLOW.md › 4 Review", the page shown in bold and those done checked, on one line: with
+/// more steps than fit, the steps done show by their tick alone, and the others by name alone (`AddRepoStepIndicatorFit`).
 struct AddRepoStepIndicator: View {
     let steps: [AddRepoStep]
     let current: AddRepoStep
 
     var body: some View {
         let index = steps.firstIndex(of: current) ?? 0
+        ViewThatFits(in: .horizontal) {
+            row(.full)
+            row(.compact)
+            row(.currentOnly)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Step \(index + 1) of \(steps.count): \(current.rawValue)")
+    }
+
+    private func row(_ fit: AddRepoStepIndicatorFit) -> some View {
         HStack(spacing: 6) {
-            ForEach(Array(steps.enumerated()), id: \.element) { position, step in
+            ForEach(Array(fit.marks(steps, current: current).enumerated()), id: \.element.step) { position, mark in
                 if position > 0 {
                     Image(systemName: "chevron.right")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
                 HStack(spacing: 3) {
-                    if position < index {
+                    if mark.isDone {
                         Image(systemName: "checkmark.circle.fill").foregroundStyle(.secondary)
-                    } else {
-                        Text("\(position + 1)")
+                    } else if let number = mark.number {
+                        Text("\(number)")
                             .monospacedDigit()
                     }
-                    Text(step.rawValue)
+                    if let name = mark.name {
+                        Text(name)
+                    }
                 }
                 .font(.callout)
-                .fontWeight(step == current ? .semibold : .regular)
-                .foregroundStyle(step == current ? .primary : .secondary)
+                .fontWeight(mark.isCurrent ? .semibold : .regular)
+                .foregroundStyle(mark.isCurrent ? .primary : .secondary)
+                .lineLimit(1)
+                .help(mark.name == nil ? mark.step.rawValue : "")
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Step \(index + 1) of \(steps.count): \(current.rawValue)")
     }
 }
 

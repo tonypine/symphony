@@ -326,13 +326,13 @@ func githubSetup(_ page: GitHubUpdatesSetup.Page, answer: String? = nil, change:
 }
 
 @MainActor
-func addRepoInstantUpdates() -> some View {
+func addRepoInstantUpdates(steps: [AddRepoStep] = [.source, .linear, .review, .check, .instantUpdates]) -> some View {
     var step = AddRepoInstantUpdates(key: "widgets")
     step.accept(githubAnswer("github-updates-add-repo", "github_updates/test.json"))
     return VStack(alignment: .leading, spacing: 0) {
         VStack(alignment: .leading, spacing: 8) {
             Text(AddRepo.sheetTitle).font(.headline)
-            AddRepoStepIndicator(steps: [.source, .linear, .review, .check, .instantUpdates], current: .instantUpdates)
+            AddRepoStepIndicator(steps: steps, current: .instantUpdates)
         }
         .padding([.top, .horizontal], 16)
         .padding(.bottom, 8)
@@ -343,6 +343,22 @@ func addRepoInstantUpdates() -> some View {
         AddRepoInstantUpdatesFooter(step: step)
     }
     .frame(width: AddRepoView.size.width, height: AddRepoView.size.height)
+    .background(DesignTokens.Surface.window.color)
+}
+
+/// Add Repo's step indicator on each page of the six steps a repo without a WORKFLOW.md has while instant updates are on,
+/// as wide as the sheet's header: the steps done by their tick alone, so each line fits.
+@MainActor
+func addRepoSixSteps() -> some View {
+    VStack(alignment: .leading, spacing: 0) {
+        ForEach(AddRepoStep.allCases, id: \.self) { current in
+            AddRepoStepIndicator(steps: AddRepoStep.allCases, current: current)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+            Divider()
+        }
+    }
+    .frame(width: AddRepoView.size.width)
     .background(DesignTokens.Surface.window.color)
 }
 
@@ -423,5 +439,7 @@ MainActor.assumeIsolated {
         render(githubSetup(.test, answer: "github_updates/test.json") { $0.secretSave = .saved; $0.leftOnPolling = ["docs"] }, scheme,
                to: "github-setup-test-\(suffix).png")
         render(addRepoInstantUpdates(), scheme, to: "add-repo-instant-updates-\(suffix).png")
+        render(addRepoInstantUpdates(steps: AddRepoStep.allCases), scheme, to: "add-repo-instant-updates-six-steps-\(suffix).png")
+        render(addRepoSixSteps(), scheme, to: "add-repo-six-steps-\(suffix).png")
     }
 }
