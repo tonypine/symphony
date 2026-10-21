@@ -419,6 +419,67 @@ final class ChipTextViewTests: XCTestCase {
         XCTAssertNil(plain.focusedChip)
     }
 
+    /// TP-1177: after Tab and Shift-Tab through a paragraph, every chip the keyboard had visited kept its ring.
+    func testOnlyTheChipWithTheKeyboardHasAFocusRing() throws {
+        let view = try storyView()
+        view.setFrameSize(CGSize(width: 600, height: view.height(forWidth: 600)))
+        let ring = view.focusRing
+        let ringed = { () -> Int? in
+            guard !ring.isHidden else { return nil }
+            return view.content.mentions.indices.first { view.chipRects($0).first == ring.frame }
+        }
+        view.layoutSubtreeIfNeeded()
+        XCTAssertTrue(view.subviews.first === ring, "under the text, as the tint is")
+        XCTAssertNil(ringed(), "no chip has the keyboard yet")
+
+        view.handle(.tab)
+        XCTAssertEqual(ringed(), 0)
+        view.handle(.tab)
+        XCTAssertEqual(ringed(), 1, "the ring moves to the next chip and leaves the first")
+        view.handle(.backtab)
+        XCTAssertEqual(ringed(), 0, "Shift-Tab takes it back")
+        view.handle(.backtab)
+        XCTAssertNil(ringed(), "Shift-Tab out of the paragraph")
+        view.enterChips(forward: false)
+        XCTAssertEqual(ringed(), view.content.mentions.count - 1)
+        XCTAssertTrue(view.resignFirstResponder())
+        XCTAssertNil(ringed(), "the keyboard went elsewhere, to the Sidebar")
+
+        view.handle(.tab)
+        view.setFrameSize(CGSize(width: 240, height: view.height(forWidth: 240)))
+        XCTAssertEqual(ringed(), 0, "the ring follows its chip when the text reflows")
+        view.update(content: ChipTextContent("Unblocks TP-893.", references: try decision().references), style: view.style)
+        XCTAssertNil(ringed(), "new chips, none with the keyboard")
+    }
+
+    /// TP-1177: the ring was cut to two brackets at the sides of "Unblocks TP-893," that sat on the comma.
+    func testTheFocusRingIsDrawnWholeInTheRoomAroundItsChip() throws {
+        let view = ChipTextView(content: ChipTextContent("Unblocks TP-893, then TP-880", references: try decision().references), style: ChipTextStyle(font: font))
+        view.setFrameSize(CGSize(width: 600, height: view.height(forWidth: 600)))
+        for index in view.content.mentions.indices {
+            view.handle(.tab)
+            let ring = view.focusRing.frame
+            XCTAssertEqual(ring, try XCTUnwrap(view.chipRects(index).first), "on the chip's tint, in the room the kerning makes")
+            XCTAssertTrue(view.bounds.contains(ring), "inside the paragraph, which cuts off what is drawn outside it")
+        }
+
+        // Drawn, the tint's edge carries the ring on the focused chip only.
+        let edge = { (bitmap: NSBitmapImageRep, index: Int) throws -> CGFloat in
+            let chip = try XCTUnwrap(view.chipRects(index).first)
+            return try XCTUnwrap(bitmap.colorAt(x: Int(chip.minX * 2) + 1, y: Int(chip.midY * 2))).alphaComponent
+        }
+        view.handle(.backtab)
+        let focused = try draw(view)
+        XCTAssertGreaterThan(try edge(focused, 0), 0.3, "the ring on TP-893")
+        XCTAssertLessThan(try edge(focused, 1), 0.3, "TP-880 left by Shift-Tab: its tint alone")
+        view.handle(.backtab)
+        let left = try draw(view)
+        XCTAssertLessThan(try edge(left, 0), 0.3, "the keyboard left the paragraph: no ring")
+        let image = NSImage(size: view.bounds.size)
+        image.addRepresentation(focused)
+        try write(image, "chip-focus-ring")
+    }
+
     func testAChipTheKeyboardMovesToScrollsIntoViewWithItsFocusRing() throws {
         let view = try storyView()
         let popover = PopoverSpy()
@@ -646,6 +707,8 @@ final class ChipTextViewTests: XCTestCase {
         XCTAssertNotEqual(text.size.height, 0)
         XCTAssertTrue(view.image(width: 860, scale: 1) === text)
         view.handle(.tab)
+        XCTAssertTrue(view.image(width: 860, scale: 1) === text, "the focus ring isn't the text's")
+        view.showDetails(0)
         XCTAssertFalse(view.image(width: 860, scale: 1) === text, "a chip's look changed")
     }
 
@@ -698,6 +761,18 @@ final class ChipTextViewTests: XCTestCase {
         let item = try decision()
         let action = try XCTUnwrap(item.review.action)
         return ChipTextView(content: ChipTextContent(action.whyParagraphs.joined(separator: " "), references: item.references), style: ChipTextStyle(font: font))
+    }
+
+    /// The view as it draws itself in a window, its subviews with it, at 2×.
+    private func draw(_ view: NSView) throws -> NSBitmapImageRep {
+        let rep = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: Int(view.bounds.width * 2), pixelsHigh: Int(view.bounds.height * 2),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        rep.size = view.bounds.size
+        view.cacheDisplay(in: view.bounds, to: rep)
+        return rep
     }
 
     private func textKitHeight(of text: NSAttributedString, width: CGFloat) -> CGFloat {

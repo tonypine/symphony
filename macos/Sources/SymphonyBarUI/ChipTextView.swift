@@ -98,10 +98,14 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     public private(set) var focusedChip: Int? {
         didSet {
             guard focusedChip != oldValue else { return }
-            redrawChips()
+            placeFocusRing()
             if let focusedChip { scrollChipToVisible(focusedChip) }
         }
     }
+
+    /// The focused chip's ring: a view of its own under the text, so it moves and hides with the keyboard. Drawn by
+    /// the layout fragment, it was cut to the text's height and its old pixels stayed after the keyboard moved on.
+    let focusRing = ChipFocusRing()
 
     private var pressedChip: Int?
     private var hoverWork: DispatchWorkItem?
@@ -128,6 +132,7 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         textContainerInset = .zero
         isVerticallyResizable = false
         isHorizontallyResizable = false
+        addSubview(focusRing, positioned: .below, relativeTo: nil)
         apply()
     }
 
@@ -206,6 +211,7 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         textStorage?.setAttributedString(attributedText())
         needsLayout = true
         needsDisplay = true
+        placeFocusRing()
     }
 
     /// The room before a chip's characters: its padding, and the pull request symbol with a gap. A missing
@@ -298,6 +304,7 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         let width = max(1, newSize.width)
         if textContainer?.size.width != width {
             textContainer?.size = CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+            placeFocusRing()
         }
     }
 
@@ -352,7 +359,7 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     }
 
     /// Draws the chips that sit in a layout fragment, under its text: tinted, or dotted-underlined when missing (the
-    /// underline is a text attribute); hovered, tinted more with a hairline; focused, with a focus ring.
+    /// underline is a text attribute); hovered, tinted more with a hairline. The focus ring is `focusRing`'s.
     func drawChips(of fragment: NSTextLayoutFragment, at point: CGPoint, context: CGContext) {
         guard let manager = fragment.textLayoutManager else { return }
         let fragmentFrame = fragment.layoutFragmentFrame
@@ -374,12 +381,6 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
                     NSColor.controlAccentColor.withAlphaComponent(0.5).setStroke()
                     hairline.stroke()
                 }
-                if index == focusedChip {
-                    let ring = NSBezierPath(roundedRect: chip.insetBy(dx: -1.5, dy: -1.5), xRadius: radius + 1.5, yRadius: radius + 1.5)
-                    ring.lineWidth = 3
-                    NSColor.keyboardFocusIndicatorColor.setStroke()
-                    ring.stroke()
-                }
                 if mention.kind == .pullRequest {
                     let symbol = symbolImage()
                     let size = symbol.size
@@ -395,6 +396,17 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     /// The chip whose popover is open, which stays lit.
     public private(set) var popoverChip: Int? {
         didSet { if popoverChip != oldValue { redrawChips() } }
+    }
+
+    /// Puts the ring on the focused chip's tint, or hides it when no chip has the keyboard.
+    private func placeFocusRing() {
+        guard let focusedChip, let rect = chipRects(focusedChip).first else {
+            focusRing.isHidden = true
+            return
+        }
+        focusRing.frame = rect
+        focusRing.isHidden = false
+        focusRing.needsDisplay = true
     }
 
     private func redrawChips() {
@@ -454,7 +466,7 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         return max(0, rect.maxY - visible.maxY)
     }
 
-    /// Room around a chip for its focus ring, which is drawn 3 pt outside the tint.
+    /// Room kept in view around a chip the keyboard moves to.
     static let focusRingMargin: CGFloat = 3
 
     /// The popover closed.
@@ -821,6 +833,34 @@ final class ChipLayoutFragment: NSTextLayoutFragment {
     override func draw(at point: CGPoint, in context: CGContext) {
         owner?.drawChips(of: self, at: point, context: context)
         super.draw(at: point, in: context)
+    }
+}
+
+/// The focus ring of the chip the keyboard is on, framed on its tint: the ring runs along the tint's edge inside it,
+/// so it stays in the paragraph's bounds and in the room around the chip, off the characters on either side. It
+/// takes no clicks and reads as nothing for VoiceOver; the chip's link is focused instead.
+final class ChipFocusRing: NSView {
+    static let lineWidth: CGFloat = 2
+
+    override init(frame: NSRect = .zero) {
+        super.init(frame: frame)
+        isHidden = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let inset = Self.lineWidth / 2
+        let radius = min(DesignTokens.Chip.radius, bounds.height / 2) - inset
+        let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: inset, dy: inset), xRadius: radius, yRadius: radius)
+        ring.lineWidth = Self.lineWidth
+        NSColor.keyboardFocusIndicatorColor.setStroke()
+        ring.stroke()
     }
 }
 
