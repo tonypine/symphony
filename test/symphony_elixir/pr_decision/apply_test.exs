@@ -118,6 +118,8 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
         title: "Add it",
         state: Keyword.get(attrs, :state, phase_name(phase)),
         url: "https://linear.app/i/TP-7",
+        description: Keyword.get(attrs, :description),
+        rulings: Keyword.get(attrs, :rulings, []),
         blocked_by: Keyword.get(attrs, :blocked_by, [])
       },
       read: Keyword.get(attrs, :read, read()),
@@ -591,17 +593,51 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert %{attempts: %{unreported: %{asked: %{prior: 0}}}} = Apply.apply(action, Map.delete(ctx, :decisions))
     end
 
-    test "only protected paths red asks a person in any phase: the waiver label, or Rework (R18, G10)" do
+    test "only protected paths red asks a person in any phase: allow the change, or Rework (R18, G10)" do
       action = action("R18", :decision, args: %{question: "q", options: []}, owner: :person)
+      read = read(protected_paths: ["WORKFLOW.md", ".agents/skills"])
 
-      assert %{outcome: :applied} = Apply.apply(action, ctx(:code_review, facts: %{failing_check: "protected paths"}))
+      assert %{outcome: :applied} = Apply.apply(action, ctx(:code_review, facts: %{failing_check: "protected paths"}, read: read))
 
       assert_received {:comment, @issue_id, "## Decision needed: Protected files changed on TP-7" <> body}
-      assert body =~ "**Add the waiver label**: you add the protected-paths-approved label to PR #7"
-      assert body =~ "the ticket continues in Code Review"
+      files = "the workflow settings file, which runs commands on your Mac and the agents' instructions"
+      assert body =~ "**Question:** PR #7 of TP-7 changes #{files}. Agents may change these only with a person's permission. Allow the change?"
+      assert body =~ "Nothing on the ticket asks for this change."
+      assert body =~ "**Allow the change**: TP-7 may change #{files}; PR #7 goes on through review and merges with the change, and the ticket continues in Code Review"
       assert body =~ "**Drop the change in Rework** (recommended): the ticket moves to Rework"
-      assert %{decision: %{confirm: "Rework"}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert body =~ "<!-- symphony:unlocks option=1 WORKFLOW.md .agents/skills -->"
+      refute body =~ ~r/label/i
+      assert %{decision: %{confirm: "Rework", unlocks: [["WORKFLOW.md", ".agents/skills"], []]}} = Hold.get(@repo_key, @issue_id, :needs_decision)
       refute_received {:disable_auto_merge, _url, _node, _opts}
+    end
+
+    test "R18 recommends allowing the change the ticket's description or a person's ruling asks for" do
+      action = action("R18", :decision, args: %{question: "q", options: []}, owner: :person)
+      read = read(protected_paths: ["WORKFLOW.md"])
+
+      for asked <- [[description: "Add the hook to `WORKFLOW.md`."], [rulings: [%{answer: "Change workflow.md too."}]]] do
+        Hold.clear(@repo_key, @issue_id, :needs_decision)
+        assert %{outcome: :applied} = Apply.apply(action, ctx(:qa, [read: read] ++ asked))
+
+        assert_received {:comment, @issue_id, "## Decision needed: Protected files changed on TP-7" <> body}
+        assert body =~ "**Allow the change** (recommended): TP-7 may change the workflow settings file"
+        assert body =~ "The ticket itself asks for this change."
+        assert body =~ "**Why recommended:** The ticket's description or a person's ruling asks for the change."
+        assert body =~ "**Drop the change in Rework**: the ticket moves to Rework"
+      end
+    end
+
+    test "R18 waits for the protected paths the PR changes before asking" do
+      action = action("R18", :decision, args: %{question: "q", options: []}, owner: :person)
+
+      capture_log(fn ->
+        for read <- [read(), read(protected_paths: [])] do
+          assert %{outcome: {:error, :protected_paths_unread}} = Apply.apply(action, ctx(:code_review, read: read))
+        end
+      end)
+
+      refute_received {:comment, @issue_id, _body}
+      assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
     end
 
     test "an answer to R17 picks an option by its number or label, or none" do
@@ -694,19 +730,20 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     action = action("R18", :decision, args: %{question: "Only the `protected paths` check is red", options: []}, owner: :person)
     :ok = RunStore.clear()
     :ok = TicketPullRequest.record_created(@repo_key, @issue_id, @pr_url, "auto/TP-7")
+    read = read(protected_paths: ["config/settings_ui_exempt.yml"])
 
-    assert %{outcome: :applied} = Apply.apply(action, ctx(:merging, facts: %{auto_merge: :armed}))
+    assert %{outcome: :applied} = Apply.apply(action, ctx(:merging, facts: %{auto_merge: :armed}, read: read))
 
     assert_received {:disable_auto_merge, @pr_url, "PR_node", _opts}
     assert_received {:comment, @issue_id, "## Decision needed: Protected files changed on TP-7" <> _rest}
     assert %{decision: %{question: question}} = Hold.get(@repo_key, @issue_id, :needs_decision)
-    assert question =~ "changes files that agents may only change with a person's permission"
+    assert question =~ "changes the list of settings that need no control in the Mac app. Agents may change these only with a person's permission."
     signals = TicketState.recent_signals(RunStore.get_ticket_state(@repo_key, @issue_id))
     assert [%{name: "decision requested", details: %{reason: "protected_paths"}} | _] = signals
     assert [{"decision.requested", %{title: "Protected files changed on TP-7"}}] = ticket_events(@repo_key, @issue_id, ["decision.requested", "hold.set"])
 
     Process.put(:comment_result, {:error, :linear_down})
-    capture_log(fn -> assert %{outcome: {:error, {:decision_request_failed, :linear_down}}} = Apply.apply(action, ctx(:merging)) end)
+    capture_log(fn -> assert %{outcome: {:error, {:decision_request_failed, :linear_down}}} = Apply.apply(action, ctx(:merging, read: read)) end)
   end
 
   describe "the PR's lifecycle (TP-944)" do

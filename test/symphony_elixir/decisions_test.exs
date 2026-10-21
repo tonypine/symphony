@@ -65,6 +65,21 @@ defmodule SymphonyElixir.DecisionsTest do
     )
   end
 
+  defp unlock_request_body do
+    Request.render_hold(
+      %{
+        title: "Change the workflow settings",
+        question: "May TP-1 change the workflow settings file?",
+        why: "The new hook lives there.",
+        options: [
+          %{label: "Allow this ticket to change the workflow settings file", effect: "the next run changes it", recommended: true, unlocks: ["WORKFLOW.md"]},
+          %{label: "Keep it as it is", effect: "nothing changes"}
+        ]
+      },
+      "In Progress"
+    )
+  end
+
   # What Linear stores of a written description: `*` bullets, nested ones indented by four.
   defp linear_stored(description), do: description |> String.replace("\n  - ", "\n    * ") |> String.replace("\n- ", "\n* ")
 
@@ -428,6 +443,40 @@ defmodule SymphonyElixir.DecisionsTest do
       assert Decisions.answered(ticket([comment("c1", "Just a note"), comment("r1", "Reply", nil, "c1")])) == []
       assert Decisions.answered(%{"id" => @issue_id}) == []
       assert Decisions.answered(nil) == []
+    end
+  end
+
+  describe "an answer that picks an option unlocking protected paths" do
+    test "a reply that picks it records the paths, in a hidden line of the entry that reads back, and in the store" do
+      node = ticket([comment("c1", unlock_request_body()), comment("r1", "1", nil, "c1")])
+
+      assert [%{key: "c1", unlocks: ["WORKFLOW.md"]}] = Decisions.answered(node)
+      assert :ok = Decisions.sync(node, tracker: FakeTracker, repo_key: @repo_key)
+
+      assert_received {:description_written, @issue_id, description}
+      assert description =~ "  - **Scope:** As answered\n  <!-- symphony:unlocks WORKFLOW.md -->\n"
+      refute description =~ "WORKFLOW.md\n  - "
+      assert [%{id: "D1", key: "c1", unlocks: ["WORKFLOW.md"]}] = Decisions.recorded(description)
+      assert [%{id: "D1", key: "c1", unlocks: ["WORKFLOW.md"]}] = Decisions.recorded(linear_stored(description))
+      assert [%{key: "c1", unlocks: ["WORKFLOW.md"]}] = RunStore.get_ticket_state(@repo_key, @issue_id).decisions
+    end
+
+    test "a reply that picks another option, or none, records no paths" do
+      for reply <- ["Keep it as it is", "Not sure yet"] do
+        node = ticket([comment("c1", unlock_request_body()), comment("r1", reply, nil, "c1")])
+        assert [decision] = Decisions.answered(node)
+        refute Map.has_key?(decision, :unlocks), reply
+      end
+    end
+
+    test "only protected paths are kept, and a hidden line naming none adds nothing" do
+      assert Decisions.entry("c1", @date, "t", "q", "a", ["lib/app.ex", "WORKFLOW.md"]).unlocks == ["WORKFLOW.md"]
+      refute Map.has_key?(Decisions.entry("c1", @date, "t", "q", "a", ["lib/app.ex"]), :unlocks)
+
+      {:ok, description} = Decisions.put("Fix it.", [entry()])
+      tampered = String.replace(description, "  - **Scope:** Deferred to TP-891", "  - **Scope:** Deferred to TP-891\n  <!-- symphony:unlocks lib/app.ex -->\n  stray text")
+      assert [decision] = Decisions.recorded(tampered)
+      refute Map.has_key?(decision, :unlocks)
     end
   end
 

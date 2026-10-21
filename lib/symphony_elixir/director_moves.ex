@@ -62,6 +62,7 @@ defmodule SymphonyElixir.DirectorMoves do
     MergeConfirmation,
     OperatorStop,
     Orchestrator,
+    PathUnlock,
     PlanReview,
     PrWatch,
     Restart,
@@ -496,11 +497,16 @@ defmodule SymphonyElixir.DirectorMoves do
 
   # The answer goes into the ticket's scope now, so the run the cleared hold lets through reads it.
   # Best-effort: the decision is already recorded under the request, and the Inbox's next read
-  # writes it from there when this write fails (`SymphonyElixir.Decisions.sync/2`).
+  # writes it from there when this write fails (`SymphonyElixir.Decisions.sync/2`). A pick of an
+  # option that unlocks protected paths records them, read from the hold's decision
+  # (`SymphonyElixir.PathUnlock.picked_paths/2`).
   defp record_decision(issue, request_comment_id, hold, picks) do
-    title = get_in(hold, [:decision, :title])
-    question = get_in(hold, [:decision, :question]) || Enum.map_join(picks, " / ", & &1.question)
-    entry = Decisions.entry(request_comment_id, Date.utc_today(), title, question, Enum.map_join(picks, " / ", & &1.answer))
+    decision = Map.get(hold, :decision) || %{}
+    title = Map.get(decision, :title)
+    question = Map.get(decision, :question) || Enum.map_join(picks, " / ", & &1.question)
+    answers = Enum.map(picks, & &1.answer)
+    unlocks = PathUnlock.picked_paths(decision, answers)
+    entry = Decisions.entry(request_comment_id, Date.utc_today(), title, question, Enum.join(answers, " / "), unlocks)
     _ = Decisions.record(issue.id, [entry], repo_key: issue.repo_key)
     :ok
   end

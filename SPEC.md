@@ -920,10 +920,11 @@ Review-comment options are ignored when `enabled` is not `true`. CI failure disp
 by failed status checks and ignores comment authorship; the ignored reviewer set above does not
 affect CI escalation. A head whose only failed check is `protected paths` is not red: it gets no
 flaky re-run, no CI-fix run and no escalation, and uses no fix attempt, and it reads as its other
-checks, so the reviewer and QA run once they passed. Only a person clears that check, with the
-`protected-paths-approved` label, and the issue is asked about it once it reaches `Merging`. When
-another check fails beside it, the head is red and the CI-fix run's prompt names `protected paths`
-as not the agent's to fix. A red head on an issue parked for a person, outside `tracker.active_states`
+checks, so the reviewer and QA run once they passed. Only a person clears that check, by a decision
+that allows the change (an option whose `unlocks` grants the protected paths the PR changes), and
+the issue is asked about it once it reaches `Merging`, where it waits until such a decision covers
+it. When another check fails beside it, the head is red and the CI-fix run's prompt names
+`protected paths` as not the agent's to fix. A red head on an issue parked for a person, outside `tracker.active_states`
 with `needs-human` or another `escalate.labels` label other than `plan` and `breakdown`, gets the
 same: no re-run, CI-fix run, escalation or state move, and no fix attempt used. So does a red head on
 an issue in none of `tracker.active_states`, the review states and `Merging`
@@ -2525,7 +2526,11 @@ holds through the Needs Decision hold and the self-heal lane, GitHub calls throu
   before a `CI Fix` run, a fix-ticket hold, a conflict wait or a person's question, and whenever the
   ticket is outside `Merging`. A head a person pushed in `Merging` sends the ticket back to the
   Code Review state. A `protected paths` check that only a person clears asks a person once per
-  stay unless the ticket's `PathUnlock` grants cover every protected path the PR changes. Each
+  stay in `Merging`, unless the ticket's `PathUnlock` grants cover every protected path the PR
+  changes, in which case the head reads as green. The question offers "Allow the
+  change", whose `unlocks` carry the protected paths the PR changes (recommended when the ticket's
+  description or a person's ruling names one), and "Drop the change in Rework"; it names each file
+  by its plain description, never its path, and no option asks for a label. Each
   turn-off writes an `auto_merge_disabled` audit event and a ticket comment.
 - The orchestrator starts a Code Review or QA run only on the watcher's decision `dispatch`, and,
   with auto-merge on, a `Merging` landing agent only on `land_agent` (or when the ticket has no
@@ -2721,16 +2726,24 @@ Rules:
   (`ruling-<id>`), titled by its first sentence and scoped by its text the same way; a ruling whose
   answer the section already records MUST NOT be written again. The agents' comment tools MUST
   refuse a body that opens that way, so only a person writes a ruling.
-- **Unlocking a protected path for one run.** A recorded decision (or a ruling the poll read) that
-  says `Unlock <path> for <ticket>` MUST unlock that path only when the path is one of the
-  workspace's agent-protected paths and the ticket is the one the decision is on. The ticket's next
+- **Unlocking a protected path for one run.** A decision request's option MAY carry `unlocks`, the
+  agent-protected paths picking it grants; `linear_request_human_action` MUST refuse a path outside
+  the protected list, naming the list, and MUST keep refusing file names in labels, the question
+  and the Why, which names each file by its plain description. The request comment carries the
+  paths in a hidden line per option, never in the option's text. A pick of that option, by a reply
+  under the request or in the Inbox, MUST record the paths with the decision (a hidden line of its
+  Decisions entry) and grant each one for that ticket; an answer that picks no option, or more than
+  one, grants nothing. A recorded decision (or a ruling the poll read) that says
+  `Unlock <path> for <ticket>` MUST unlock that path only when the path is one of the workspace's
+  agent-protected paths and the ticket is the one the decision is on. The ticket's next
   implementation run MUST claim the grant in the ticket's store record before its session starts,
   and only an unclaimed grant unlocks: the run's sandbox write-deny lists (Claude `denyWrite` and
   `Edit` rules, Codex filesystem permissions, SRT `denyWrite`) MUST leave the path out, its prompt
   MUST name the path and the decision, and its `github_sync_base` and `github_push_branch` MUST
   accept the branch's change to it. Every later run and every other ticket MUST keep the
   protection. A store that cannot record the claim MUST unlock nothing. The agents' comment and
-  sub-issue tools MUST refuse text that reads as such a grant.
+  sub-issue tools MUST refuse text that reads as such a grant or carries an option's hidden paths,
+  and a reply under a request whose options unlock a path.
 - **Escalation rules.** Code Review applies the repo's escalation rules (`EscalationRules`, the
   retired acceptance gate's deterministic rules, read from `auto_review.acceptance_gate.escalate`
   during its deprecation window) to an approval. A person rule — an `escalate.labels` label other

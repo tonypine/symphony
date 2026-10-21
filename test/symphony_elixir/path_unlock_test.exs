@@ -4,6 +4,7 @@ defmodule SymphonyElixir.PathUnlockTest do
   alias SymphonyElixir.{AgentSandboxConfig, Decisions, PathUnlock}
   alias SymphonyElixir.ClaudeCode.AppServer, as: ClaudeAppServer
   alias SymphonyElixir.Config.Schema.Agent.NetworkAccess
+  alias SymphonyElixir.HumanActions.PlainWords
 
   @path "config/settings_ui_exempt.yml"
   @grant "Unlock config/settings_ui_exempt.yml for TP-760 so the run can drop the human_actions.label exemption."
@@ -66,6 +67,73 @@ defmodule SymphonyElixir.PathUnlockTest do
       assert PathUnlock.grant_text?(@grant)
       refute PathUnlock.grant_text?("Only a person edits config/settings_ui_exempt.yml.")
       refute PathUnlock.grant_text?(nil)
+    end
+  end
+
+  describe "grants by option" do
+    test "an option with unlocks picked from the Inbox grants its paths for that ticket, so the next run may write them" do
+      request = %{options: [%{label: "Allow this ticket to change the workflow settings file", unlocks: ["WORKFLOW.md"]}, %{label: "Keep it as it is"}]}
+      unlocks = PathUnlock.picked_paths(request, ["Allow this ticket to change the workflow settings file"])
+      picked = Decisions.entry("comment-1", ~D[2026-10-20], "Change the workflow settings", "Allow it?", "Allow this ticket to change the workflow settings file", unlocks)
+      issue = issue("TP-760", description([picked]))
+
+      assert [%{id: "comment-1:WORKFLOW.md", decision: "D1", path: "WORKFLOW.md"}] = PathUnlock.grants(issue)
+      assert PathUnlock.grants(%{issue | identifier: "TP-761"}) == PathUnlock.grants(issue)
+
+      granted = PathUnlock.claim(issue, "repo-a", run_id: "run-1")
+      assert PathUnlock.paths(granted) == ["WORKFLOW.md"]
+      refute "./WORKFLOW.md" in AgentSandboxConfig.deny_write_paths(PathUnlock.paths(granted))
+    end
+
+    test "only the protected paths a recorded option names count" do
+      picked = Map.put(Decisions.entry("comment-1", ~D[2026-10-20], "t", "q", "Allow it"), :unlocks, ["lib/app.ex", ".git", "WORKFLOW.md"])
+      assert [%{path: "WORKFLOW.md"}] = PathUnlock.grants(issue("TP-760", description([picked])))
+    end
+
+    test "picked_paths/2 reads the one option an answer picks, by label or by number alone" do
+      request = %{
+        options: ["**Allow the change** (recommended): TP-7 may change it", "**Drop the change in Rework**: the ticket moves to Rework"],
+        unlocks: [["WORKFLOW.md", "lib/app.ex"], []]
+      }
+
+      for answer <- ["Allow the change", "**allow the change**, thanks", "1", "Option 1", "#1.", "1. Allow?\n   **Decision:** Allow the change"] do
+        assert PathUnlock.picked_paths(request, [answer]) == ["WORKFLOW.md"], answer
+      end
+
+      for answer <- ["Drop the change in Rework", "2", "3", "0", "Don't allow the change", "no, never allow the change", "Something else", nil] do
+        assert PathUnlock.picked_paths(request, [answer]) == [], inspect(answer)
+      end
+
+      # An answer that picks both options, or answers that disagree, pick none.
+      assert PathUnlock.picked_paths(request, ["Allow the change or drop the change in Rework"]) == []
+      assert PathUnlock.picked_paths(request, ["Allow the change", "2"]) == []
+      assert PathUnlock.picked_paths(%{options: [%{label: "Allow", unlocks: ["WORKFLOW.md"]}, 42]}, ["allow"]) == ["WORKFLOW.md"]
+    end
+
+    test "grant_text?/1 also catches the hidden line that carries an option's paths" do
+      assert PathUnlock.grant_text?("<!-- symphony:unlocks option=1 WORKFLOW.md -->")
+      assert PathUnlock.grant_text?("text\n  <!--symphony:UNLOCKS WORKFLOW.md -->")
+      refute PathUnlock.grant_text?("<!-- symphony:decision:c1 -->")
+    end
+
+    test "protected/1 and unprotected/1 split paths by the protected list" do
+      assert PathUnlock.protected(["./WORKFLOW.md", " .agents/skills ", "lib/app.ex", "WORKFLOW.md", 3]) == ["WORKFLOW.md", ".agents/skills"]
+      assert PathUnlock.protected(nil) == []
+      assert PathUnlock.unprotected(["./WORKFLOW.md", "lib/app.ex", ".git", "~/.zshrc"]) == ["lib/app.ex", ".git", "~/.zshrc"]
+    end
+
+    test "every protected path has a plain description, which names no file" do
+      for path <- AgentSandboxConfig.workspace_protected_paths() do
+        description = PathUnlock.describe(path)
+        refute description == PathUnlock.describe("lib/unknown.ex"), path
+        assert PlainWords.tokens(description) == [], description
+      end
+
+      assert PathUnlock.describe("lib/unknown.ex") == "a file agents may change only with your permission"
+      assert PathUnlock.describe_all(["WORKFLOW.md"]) == "the workflow settings file, which runs commands on your Mac"
+
+      assert PathUnlock.describe_all([".agents/skills", "mise.toml", ".agents/skills", "symphony.yml"]) ==
+               "the agents' instructions; the tool versions file, which picks the language versions the repo builds with and the repo's Symphony settings"
     end
   end
 

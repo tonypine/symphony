@@ -181,7 +181,7 @@ defmodule SymphonyElixir.PrDecisionTest do
     test "G10: only protected paths red asks a person instead of waiting silently (R18)" do
       action = decide(phase: :code_review, ci: :red, red_kind: :human_only, failing_check: "protected paths")
       assert %Action{rule: "R18", kind: :decision, owner: :person} = action
-      assert action.args.options == ["Add the waiver label", "Drop the change in Rework"]
+      assert action.args.options == ["Allow the change", "Drop the change in Rework"]
     end
 
     test "G11: a draft waits on a person, a changed base asks one, a deleted branch counts as closed" do
