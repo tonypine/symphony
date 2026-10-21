@@ -56,7 +56,9 @@ struct ChipText: View {
     var selectable = true
     @Environment(\.mentionReferences) private var references
     /// `ImageRenderer` can't draw an AppKit view, so a snapshot shows the text view drawn into an image, offscreen.
-    @Environment(\.offscreenSnapshot) private var rendersImage
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+    /// True while the window has a sheet over it: the paragraph is drawn as that image too, so it dims with the window.
+    @State private var covered = false
 
     var body: some View {
         if let content = ChipTextContent.chips(text, references: references, lead: lead) {
@@ -64,7 +66,7 @@ struct ChipText: View {
             // An AppKit view gives SwiftUI no text baselines, so they come from TextKit's line for the font.
             let baseline = ChipTextView.baseline(of: font)
             Group {
-                if rendersImage {
+                if offscreenSnapshot || covered {
                     ChipTextImage(content: content, style: style)
                 } else {
                     ChipTextRepresentable(content: content, style: style)
@@ -72,6 +74,7 @@ struct ChipText: View {
                         .accessibilityHidden(!selectable)
                 }
             }
+            .sheetCover($covered)
             .alignmentGuide(.firstTextBaseline) { _ in baseline.ascent }
             .alignmentGuide(.lastTextBaseline) { dimensions in dimensions.height - baseline.descent }
         } else {
@@ -170,5 +173,50 @@ private struct ChipTextSizing: Layout {
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+    }
+}
+
+extension View {
+    /// Keeps `covered` true while the view's window has a sheet over it (N4's peek, C17). SwiftUI dims the window behind
+    /// a sheet in its own drawing, which an AppKit view draws above, so an AppKit view is drawn by SwiftUI meanwhile.
+    func sheetCover(_ covered: Binding<Bool>) -> some View {
+        modifier(SheetCoverModifier(covered: covered))
+    }
+}
+
+/// The reader is an AppKit view of no size: SwiftUI lifts what it draws over an AppKit view above its own drawing,
+/// so one the size of the content would put that content above the window's dimming. A snapshot has no window, and
+/// `ImageRenderer` draws an AppKit view as a placeholder, so it goes without.
+private struct SheetCoverModifier: ViewModifier {
+    @Binding var covered: Bool
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+
+    func body(content: Content) -> some View {
+        if offscreenSnapshot {
+            content
+        } else {
+            content.background(alignment: .topLeading) {
+                SheetCoverReader(covered: $covered)
+                    .frame(width: 0, height: 0)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+}
+
+private struct SheetCoverReader: NSViewRepresentable {
+    @Binding var covered: Bool
+
+    func makeNSView(context: Context) -> SheetCoverView {
+        SheetCoverView()
+    }
+
+    func updateNSView(_ view: SheetCoverView, context: Context) {
+        let covered = $covered
+        // The window can report its sheet while SwiftUI updates its views, so the state changes after.
+        view.cover.changed = { value in DispatchQueue.main.async { covered.wrappedValue = value } }
+        if view.cover.covered != covered.wrappedValue {
+            view.cover.changed(view.cover.covered)
+        }
     }
 }
