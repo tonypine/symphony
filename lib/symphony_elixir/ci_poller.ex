@@ -27,9 +27,9 @@ defmodule SymphonyElixir.CiPoller do
   @status_table :ci_poller_status
   @settled_conclusions ["SUCCESS", "FAILURE"]
   # Checks only a person can clear: the `protected-paths` workflow's job fails a PR whose own
-  # commits change an agent-protected path until a person adds the waiver label.
+  # commits change an agent-protected path; a person's decision that allows the change clears it
+  # (`SymphonyElixir.ProtectedPathsGate`).
   @human_only_checks ["protected paths"]
-  @waiver_label "protected-paths-approved"
 
   defmodule State do
     @moduledoc false
@@ -660,10 +660,6 @@ defmodule SymphonyElixir.CiPoller do
   @doc "Whether only a person can clear this failed check, so a CI-fix run must leave it alone."
   @spec human_only_check?(map()) :: boolean()
   def human_only_check?(check) when is_map(check), do: Map.get(check, :name) in @human_only_checks
-
-  @doc "The label a person adds to waive the `protected paths` check."
-  @spec waiver_label() :: String.t()
-  def waiver_label, do: @waiver_label
 
   defp failed_checks(ci_status) do
     ci_status

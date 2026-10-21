@@ -39,6 +39,30 @@ defmodule SymphonyElixir.ProtectedPathsGate do
   @spec changed_paths(map(), keyword()) :: {:ok, [String.t()]} | {:error, String.t()}
   def changed_paths(pr, opts \\ []), do: uncovered(pr, [], Keyword.get(opts, :git, &default_git/2))
 
+  @doc """
+  The entries of the protected list (`WORKFLOW.md`, `.agents/skills`) the PR's own commits change:
+  what a person's grant must name for it to land, and what Symphony's question about the change
+  (rule R18) offers to unlock. Read like `changed_paths/2`; `{:error, reason}` when they can't be
+  read.
+  """
+  @spec changed_entries(map(), keyword()) :: {:ok, [String.t()]} | {:error, String.t()}
+  def changed_entries(pr, opts \\ []) do
+    git = Keyword.get(opts, :git, &default_git/2)
+
+    with {:ok, workspace, base, head} <- commits(pr),
+         :ok <- ensure_commits(workspace, [base, head], git) do
+      run = fn args -> run_git(git, args, workspace) end
+
+      with {:ok, files} <- diff(base, head, [], run),
+           {:ok, entries} <- ProtectedPaths.entries(files, [base, head], run) do
+        {:ok, entries}
+      else
+        {:error, {:git_failed, args, status, output}} -> {:error, git_error(args, status, output)}
+        {:error, reason} when is_binary(reason) -> {:error, reason}
+      end
+    end
+  end
+
   defp covered(pr, issue, names, opts) do
     case granted_paths(issue) do
       [] ->
@@ -57,14 +81,19 @@ defmodule SymphonyElixir.ProtectedPathsGate do
   defp granted_paths(issue), do: issue |> PathUnlock.grants() |> PathUnlock.paths()
 
   defp uncovered(pr, granted, git) do
+    with {:ok, workspace, base, head} <- commits(pr) do
+      read_uncovered(workspace, base, head, granted, git)
+    end
+  end
+
+  defp commits(pr) do
     workspace = Map.get(pr, :workspace_path)
     base = Map.get(pr, :base_sha)
-    head = Map.get(pr, :head_sha)
 
     cond do
       not (is_binary(workspace) and File.dir?(workspace)) -> {:error, "the ticket has no workspace"}
       not is_binary(base) -> {:error, "the PR's base commit is unknown"}
-      true -> read_uncovered(workspace, base, head, granted, git)
+      true -> {:ok, workspace, base, Map.get(pr, :head_sha)}
     end
   end
 

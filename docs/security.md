@@ -99,8 +99,12 @@ The `protected-paths` CI workflow covers that gap. On a pull request from an `au
 runs `mix protected_paths.check`, which fails when the pull request's own commits since the
 merge-base with the base branch change one of those paths or a symlink's target. Changes merged
 from the base branch pass. It runs only on `pull_request_target`, so the workflow and the check
-come from the base branch and the pull request can't change them. A person who made such a change
-on purpose waives it for the current head commit in one of two ways, so a later push is checked
+come from the base branch and the pull request can't change them. In a repository where Symphony
+opens pull requests as the operator's own GitHub account, as it usually does, the check stays red
+and a person clears it for Symphony by allowing the change in a decision on the ticket (see
+[Allowing a change to a protected path](#allowing-a-change-to-a-protected-path)); Symphony then
+lets the head through review and lands it. On GitHub, a person who made such a change on purpose
+can also waive it for the current head commit in one of two ways, so a later push is checked
 again. Adding the `protected-paths-approved` label waives the head the pull request has at that
 moment; to waive a later head, remove and re-add it. It counts only when a person other than the
 pull request's author adds it, since an agent may act as the author. An approving review of the
@@ -108,7 +112,7 @@ current head commit counts too, but only from a reviewer with write access (an o
 collaborator), since anyone who can read the repository can approve. A review doesn't start a run,
 so after approving, re-run the job. Bots count for neither. Since no agent can clear this check,
 Symphony's CI poller dispatches no CI-fix run and spends no fix attempt while it is the only red
-check; the issue waits for the waiver. The workflow tells Symphony's pull requests apart only by
+check; the issue waits for a person's decision. The workflow tells Symphony's pull requests apart only by
 the `auto/` branch prefix. So it skips the case where a person's own open pull request on another
 branch is attached to the issue, and Symphony keeps working on that branch.
 
@@ -118,12 +122,14 @@ The base branch doesn't require the `protected paths` check, so GitHub on its ow
 it: auto-merge waits only for required checks. What blocks the merge is Symphony's landing of a
 `Merging` ticket. While the CI poller has seen `protected paths` fail on the pull request's head,
 Symphony doesn't turn GitHub auto-merge on, squash-merge the pull request or update its branch, and
-turns auto-merge off if it is already on. The ticket stays in `Merging` on a Needs Decision hold
-that asks a person whether to send it to `Rework` or merge it themselves, and the dashboard shows
-it waiting for a person. Symphony checks again on every poll and lands the pull request as usual
+turns auto-merge off if it is already on. The ticket stays where it is on a Needs Decision hold
+that asks a person to allow the change or drop it in `Rework` (see below), and the Inbox shows it
+waiting for a person. Symphony checks again on every poll and lands the pull request as usual
 once the check passes on the head, or once the ticket's unlock decisions (see below) cover every
-protected path the pull request changes. Symphony reads those paths with git in the ticket's
-workspace, as the CI job does; a read that fails keeps the merge blocked. The landing agent's
+protected path the pull request changes. Before `Merging` a head whose only red check is
+`protected paths` reads as its other checks, so the reviewer and QA run on it. Symphony reads those
+paths with git in the ticket's workspace, as the CI job does; a read that fails keeps the merge
+blocked. The landing agent's
 `github_merge_pull_request` refuses a pull request with any failed check, so it can't merge past it
 either. Only a person merging by hand does.
 
@@ -131,19 +137,37 @@ The waiver itself needs someone other than the pull request's author, so it can'
 Symphony opens pull requests as the operator's own GitHub account; an unlock decision is then the
 way to let Symphony land such a change.
 
-#### Unlocking a protected path for one run
+#### Allowing a change to a protected path
 
-A person can let the agent edit one of the workspace's protected paths, such as removing a line
-from `config/settings_ui_exempt.yml`, by recording a decision on the ticket that names the path and
-the ticket: a comment that opens with `Decision:` (or `Ruling:`), or the answer to the ticket's
-decision request, saying `Unlock <path> for <ticket>`:
+A person allows a change to one of the workspace's protected paths with one pick of a plain-words
+option in a decision request, from the Inbox or by a reply under the request. The paths travel in
+a field of the option the person never reads; the request names each file by a plain description
+instead ("the workflow settings file, which runs commands on your Mac", "the agents'
+instructions").
+
+- **An agent asks.** A run that needs such a change asks with `linear_request_human_action`, before
+  its handoff push, with an option whose `unlocks` names the paths ("Allow this ticket to change
+  the workflow settings file"). The tool refuses a path outside the protected list and names the
+  list.
+- **Symphony asks.** When a pull request's only red check is `protected paths` and no decision
+  covers it, Symphony asks once the ticket reaches `Merging`: "Allow the change" or "Drop the
+  change in Rework". "Allow the change" carries the protected paths the pull request changes, read with git
+  as the merge gate reads them. It is recommended when the ticket's description or a person's
+  ruling names one of those paths; otherwise dropping it is.
+
+Picking an option that carries `unlocks` records the paths with the decision, in a hidden line of
+the ticket's Decisions section, and grants each of them for that ticket only. A person can also
+type the grant, in a comment that opens with `Decision:` (or `Ruling:`) or the answer to the
+ticket's decision request, saying `Unlock <path> for <ticket>`:
 
 ```text
 Decision: Unlock config/settings_ui_exempt.yml for TP-760 to drop the human_actions.label exemption.
 ```
 
-Symphony records it in the ticket's Decisions section, and the ticket's next implementation run
-(In Progress, Rework, CI Fix) claims it before its session starts:
+#### Unlocking a protected path for one run
+
+Symphony records a grant in the ticket's Decisions section, and the ticket's next implementation
+run (In Progress, Rework, CI Fix) claims it before its session starts:
 
 - The run's sandbox leaves the path out of its write-deny list: Claude's `denyWrite` and `Edit`
   rules, Codex's filesystem permissions and SRT's `denyWrite`. For a skill directory, the files its
@@ -161,11 +185,11 @@ recorded).
 Only the paths in the list above count: `.git`, the home-folder files and any other path stay
 protected whatever a decision says. A decision copied onto another ticket unlocks nothing there,
 since the ticket it names must be the one it is recorded on. Agents post as the operator's Linear
-user, so their comment and sub-issue tools refuse text that reads as such a grant: only a person
-grants one. The pull request still fails the `protected-paths` CI job until a person waives it, as
-above, but Symphony lands it: the merge gate above lets a pull request through when the ticket's
-decisions unlock every protected path it changes. A decision that leaves one of them out keeps it
-waiting for a person.
+user, so their comment and sub-issue tools refuse text that reads as such a grant or carries an
+option's hidden paths, and refuse a reply under a request whose options unlock a path: only a
+person grants one. The pull request still fails the `protected-paths` CI job, but Symphony lands
+it: the merge gate above lets a pull request through when the ticket's decisions unlock every
+protected path it changes. A decision that leaves one of them out keeps it waiting for a person.
 
 Every local agent may also write one per-user cache folder, `~/Library/Caches/symphony/agent` on
 macOS, which holds its Hex home, its `elixir_make` cache and Dialyxir's core PLTs (see

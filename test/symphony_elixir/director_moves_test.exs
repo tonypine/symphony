@@ -628,6 +628,45 @@ defmodule SymphonyElixir.DirectorMovesTest do
              ] = SymphonyElixir.Decisions.recorded(description)
     end
 
+    test "a pick of an option that unlocks a protected path records the path, which grants it for the ticket", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director", description: "Add the hook."}])
+
+      request = %{
+        title: "Change the workflow settings",
+        question: "May MOT-40 change the workflow settings file?",
+        why: "The hook lives there.",
+        options: [
+          %{label: "Allow this ticket to change the workflow settings file", effect: "the next run changes it", recommended: true, unlocks: ["WORKFLOW.md"]},
+          %{label: "Keep it as it is", effect: "nothing changes"}
+        ]
+      }
+
+      :ok = Hold.set("repo-director", "pr", :needs_decision, SymphonyElixir.NeedsDecisionHold.attrs(request))
+      pick = [%{question: request.question, answer: "Allow this ticket to change the workflow settings file"}]
+
+      assert {:ok, %{move: "decide", moved: false}} = DirectorMoves.move(:decide, "MOT-40", %{picks: pick, request_comment_id: "comment-1"}, opts)
+
+      assert_received {:memory_tracker_description_update, "pr", description}
+      refute description =~ "**Unlocks"
+      assert [%{key: "comment-1", unlocks: ["WORKFLOW.md"]}] = SymphonyElixir.Decisions.recorded(description)
+      assert [%{key: "comment-1", unlocks: ["WORKFLOW.md"]}] = RunStore.get_ticket_state("repo-director", "pr").decisions
+      assert [%{path: "WORKFLOW.md", decision: "D1"}] = SymphonyElixir.PathUnlock.grants(%{pr("In Progress") | description: description})
+    end
+
+    test "a pick of an option that unlocks nothing records no path", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director", description: "Add the hook."}])
+
+      options = [%{label: "Allow it", effect: "x", unlocks: ["WORKFLOW.md"]}, %{label: "Keep it as it is", effect: "nothing changes"}]
+      :ok = Hold.set("repo-director", "pr", :needs_decision, %{reason: "q", decision: %{title: "t", question: "q", options: options}})
+      pick = [%{question: "q", answer: "Keep it as it is"}]
+
+      assert {:ok, %{move: "decide"}} = DirectorMoves.move(:decide, "MOT-40", %{picks: pick, request_comment_id: "comment-1"}, opts)
+
+      assert_received {:memory_tracker_description_update, "pr", description}
+      assert [decision] = SymphonyElixir.Decisions.recorded(description)
+      refute Map.has_key?(decision, :unlocks)
+    end
+
     test "a description Linear refuses to write still records the decision under the request", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       set_decision_hold()

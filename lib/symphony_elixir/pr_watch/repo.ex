@@ -31,8 +31,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   Before deciding, the read is completed with what Symphony knows: the attempts
   (`SymphonyElixir.PrWatch.Attempts`), a rerun whose checks haven't reported yet (the head reads as
-  running), in `Merging` a failed `protected paths` check that the ticket's unlock decisions cover
-  (`SymphonyElixir.ProtectedPathsGate`; the head reads as green), a red head's failure
+  running), a failed `protected paths` check (before `Merging` the head reads as its other checks; in
+  `Merging` as green when the ticket's unlock decisions cover it, `SymphonyElixir.ProtectedPathsGate`),
+  a red head's failure
   (`SymphonyElixir.PrWatch.Fetch.failure/3`, read once per head, for the same-failure streak), the
   wait on a check that never reported (`SymphonyElixir.PrWatch.Attempts.settle/4`), with the
   person's answer when R17 asked one: a waiver for the head, a rerun of its checks, or Rework, the
@@ -55,6 +56,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
   and the last five actions applied (`actions`). A head red only on a check a person clears
   (`protected paths`, R18), in any phase, has the protected paths its PR changes read once
   (`SymphonyElixir.ProtectedPathsGate.changed_paths/2`) and kept on the record (`protected_files`).
+  When R18 asks, the protected-list entries the PR changes are read for its Allow option to unlock
+  (`SymphonyElixir.ProtectedPathsGate.changed_entries/2`).
 
   GitHub's webhook deliveries come in through `ingest/3` (`SymphonyElixir.PrWatch.Ingest`): a
   delivery patches the records it names (`source: :webhook`) and they are read again 3 seconds
@@ -957,6 +960,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
     case decide(facts, entry) do
       {:ok, action} ->
+        read = with_protected_entries(read, action, entry, state)
+
         ctx = %{
           repo_key: state.repo_key,
           settings: settings,
@@ -1046,14 +1051,27 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   defp unlocked(read, entry, state) do
-    pr = %{workspace_path: workspace_path(state, entry.issue.id), base_sha: read.base_sha, head_sha: read.head_sha}
     names = Enum.map(read.failed_checks, & &1.name)
 
-    case ProtectedPathsGate.check(names, pr, entry.issue, Keyword.take(state.opts, [:git])) do
+    case ProtectedPathsGate.check(names, gate_pr(read, entry, state), entry.issue, Keyword.take(state.opts, [:git])) do
       :ok -> %{read | ci: :green}
       {:blocked, _reason} -> read
     end
   end
+
+  # R18's question offers to unlock the protected-list entries the PR changes, read when R18 is the
+  # action to apply; a read that fails leaves them out, and R18 waits for the next tick.
+  defp with_protected_entries(read, %Action{rule: "R18"}, entry, state) do
+    case ProtectedPathsGate.changed_entries(gate_pr(read, entry, state), Keyword.take(state.opts, [:git])) do
+      {:ok, paths} -> Map.put(read, :protected_paths, paths)
+      {:error, _reason} -> read
+    end
+  end
+
+  defp with_protected_entries(read, _action, _entry, _state), do: read
+
+  # The ticket's workspace and the PR's commits, where the protected paths gate reads with git.
+  defp gate_pr(read, entry, state), do: %{workspace_path: workspace_path(state, entry.issue.id), base_sha: read.base_sha, head_sha: read.head_sha}
 
   # The protected paths a head red only on a check a person clears changes (R18's evidence), read
   # once per head in the ticket's workspace; a read that fails lists none and logs why.
@@ -1067,9 +1085,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp protected_files(_read, _previous, _entry, _state), do: nil
 
   defp read_protected_files(read, entry, state) do
-    pr = %{workspace_path: workspace_path(state, entry.issue.id), base_sha: read.base_sha, head_sha: read.head_sha}
-
-    case ProtectedPathsGate.changed_paths(pr, Keyword.take(state.opts, [:git])) do
+    case ProtectedPathsGate.changed_paths(gate_pr(read, entry, state), Keyword.take(state.opts, [:git])) do
       {:ok, paths} ->
         paths
 
