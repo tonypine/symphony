@@ -19,6 +19,7 @@ struct GitHubUpdatesSetupView: View {
 
     let setup: GitHubUpdatesSetup
     var actions = GitHubUpdatesSetupActions()
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -26,25 +27,32 @@ struct GitHubUpdatesSetupView: View {
                 .padding([.top, .horizontal], DesignTokens.Space.s4)
                 .padding(.bottom, DesignTokens.Space.s3)
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
-                    Text(setup.explanation)
-                        .font(DesignTokens.TypeStyle.body.font)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if setup.page == .relay {
-                        relays
-                    } else {
-                        GitHubUpdatesSetupRows(rows: setup.rows, perform: actions.perform)
-                    }
-                }
-                .padding(DesignTokens.Space.s4)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // A scroll view draws nothing offscreen: the snapshots show the page as it starts.
+            if offscreenSnapshot {
+                page.frame(maxHeight: .infinity, alignment: .top)
+            } else {
+                ScrollView { page }
             }
             Divider()
             footer
         }
         .frame(width: Self.size.width, height: Self.size.height)
+    }
+
+    private var page: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
+            Text(setup.explanation)
+                .font(DesignTokens.TypeStyle.body.font)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if setup.page == .relay {
+                relays
+            } else {
+                GitHubUpdatesSetupRows(rows: setup.rows, perform: actions.perform)
+            }
+        }
+        .padding(DesignTokens.Space.s4)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var header: some View {

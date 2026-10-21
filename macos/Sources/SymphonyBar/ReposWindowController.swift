@@ -90,6 +90,8 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     var checkForUpdates: () -> Void = {}
     /// Opens the Symphony window on the Setup page.
     var openSetup: () -> Void = {}
+    /// Hands Setup's GitHub updates card the section Add Repo's Instant updates step left, so it lists the repo at once.
+    var showGitHubUpdates: (GitHubUpdatesSection) -> Void = { _ in }
 
     private let secrets: SecretsReader
     /// The `WORKFLOW.md` files Add Repo added that Symphony can't read yet.
@@ -277,6 +279,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
                 action, params: params, stateRoot: stateRoot(), fallback: AppStores.current.apiFallback, transport: AppStores.current.apiTransport
             )
         }
+        sheet.onGitHubUpdates = { [weak self] section in self?.showGitHubUpdates(section) }
         sheet.loadInstantUpdates()
         sheet.startSymphony = { [weak self] in self?.start() }
         sheet.canStartSymphony = { [weak self] in self?.canStart() ?? false }

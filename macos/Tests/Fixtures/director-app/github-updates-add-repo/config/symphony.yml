@@ -1,0 +1,20 @@
+# Add Repo's Check setup QA fixture: one repo, web-shop, routed to team TP. Add acme/widgets.
+issues:
+  provider: memory
+  memory:
+    issues_file: issues.json
+  states:
+    active: [Todo, In Progress]
+    terminal: [Done]
+repositories:
+  - key: web-shop
+    workflow: WORKFLOW.md
+    route:
+      team: TP
+    workspace:
+      source: https://github.com/acme/web-shop.git
+agent:
+  runtime: claude
+  command: claude
+dashboard:
+  port: 0

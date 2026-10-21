@@ -41,6 +41,8 @@ COMMITTED_CALLS = [
       "--body", "Symphony's Add Repo sheet drafted this `WORKFLOW.md`…\n\nSymphony reads `WORKFLOW.md` from `main`."],
      "https://github.com/acme/widgets/pull/1\n"),
     (["api", "-X", "DELETE", f"repos/acme/widgets/git/refs/heads/{BRANCH}"], ""),
+    # The instant updates setup's Grant Permission…, which the app runs in Terminal.
+    (["auth", "refresh", "-h", "github.com", "-s", "admin:repo_hook"], "✓ Authentication complete.\n"),
 ]
 
 

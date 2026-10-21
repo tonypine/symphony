@@ -99,6 +99,11 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     }
 
     /// Opens the window, or brings it to the front.
+    /// The GitHub updates card shows `section` until the state poll reports something new (Add Repo's Instant updates).
+    func showGitHubUpdates(_ section: GitHubUpdatesSection) {
+        model?.acceptGitHubUpdates(section)
+    }
+
     /// Grant Permission… and Sign In…: Terminal runs the app's `gh` with `arguments` from a `.command` script in the
     /// app's temporary folder, so the person approves in gh's own words. Answers why it couldn't.
     static func openGitHubTerminal(_ arguments: [String]) -> String? {

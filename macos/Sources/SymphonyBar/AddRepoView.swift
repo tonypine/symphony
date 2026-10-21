@@ -76,6 +76,8 @@ final class AddRepoViewModel: ObservableObject {
     @Published private(set) var instantUpdates: AddRepoInstantUpdates?
     /// Why Skip couldn't take the repo back to polling.
     @Published private(set) var instantSkipError: String?
+    /// Done on Instant updates: the section as the step left it, so Setup's card lists the repo at once.
+    var onGitHubUpdates: (GitHubUpdatesSection) -> Void = { _ in }
     private var instantController: AddRepoInstantUpdatesController?
     /// Starts Symphony, and whether it can now.
     var startSymphony: () -> Void = {}
@@ -504,6 +506,12 @@ final class AddRepoViewModel: ObservableObject {
         Task { await controller.retry(rowID) }
     }
 
+    /// Done: the card shows the repo connected, and the sheet closes.
+    func finishInstantUpdates() {
+        if let section = instantUpdates?.section { onGitHubUpdates(section) }
+        finish()
+    }
+
     /// Skip: the repo stays on polling, and the sheet closes; a repo Symphony couldn't take back keeps it open with why.
     func skipInstantUpdates() {
         guard let controller = instantController else { return finish() }
@@ -776,7 +784,7 @@ struct AddRepoView: View {
 
     @ViewBuilder private var footer: some View {
         if model.step == .instantUpdates, let instant = model.instantUpdates {
-            AddRepoInstantUpdatesFooter(step: instant, skip: model.skipInstantUpdates, finish: model.finish)
+            AddRepoInstantUpdatesFooter(step: instant, skip: model.skipInstantUpdates, finish: model.finishInstantUpdates)
         } else if model.step == .check, let check = model.setupCheck {
             checkFooter(check)
         } else {

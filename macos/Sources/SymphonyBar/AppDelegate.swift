@@ -211,6 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         reposWindow.checkAtStart = { [weak self] key in self?.setupOnStart.addPending(key) }
         reposWindow.checkForUpdates = { [weak self] in self?.checkForUpdates(nil) }
         reposWindow.openSetup = { [weak self] in self?.symphonyWindow.show(view: .setup) }
+        reposWindow.showGitHubUpdates = { [weak self] section in self?.symphonyWindow.showGitHubUpdates(section) }
         symphonyWindow.appVersion = updates.current.version ?? ""
         symphonyWindow.appBuild = updates.current
         symphonyWindow.secrets = runner.secrets

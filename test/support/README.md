@@ -151,8 +151,9 @@ The committed answers:
   default branch `main` and the top-level files `README.md`, `mix.exs` (with Credo) and `mix.lock`;
   opening the `WORKFLOW.md` pull request answers the base commit, the `symphony/add-workflow`
   branch, the commit, the pull request `https://github.com/acme/widgets/pull/1`, and deleting the
-  branch after a failure. Each entry is `{"args": [...], "status": 200, "output": "..."}`; `status`
-  defaults to 200.
+  branch after a failure. It also answers the instant updates setup's Grant Permission…
+  (`gh auth refresh -h github.com -s admin:repo_hook`), which the app runs in Terminal. Each entry
+  is `{"args": [...], "status": 200, "output": "..."}`; `status` defaults to 200.
 - `answers/linear.json`: `SymphonyBarProjects` (one project, `QA Project`),
   `SymphonyBarProjectTeams` (one team) and `SymphonyBarLabels` (one label, `macos`), under
   `{"answers": {"<operation name>": <the response body>}}`.

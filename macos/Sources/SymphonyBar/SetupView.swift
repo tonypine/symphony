@@ -367,6 +367,11 @@ extension SymphonyWindowModel {
         return true
     }
 
+    /// An answer from outside the window (Add Repo's Instant updates) the card shows until the state poll catches up.
+    func acceptGitHubUpdates(_ section: GitHubUpdatesSection) {
+        accept(section)
+    }
+
     private func accept(_ section: GitHubUpdatesSection) {
         githubUpdatesAnswer = GitHubUpdatesAnswer(section: section, baseline: overviewState?.snapshot.setup?.githubUpdates)
     }

@@ -650,3 +650,154 @@ final class GitHubUpdatesSetupTests: XCTestCase {
         XCTAssertTrue(qa.contains("'/tmp/qa gh/gh' auth login\n"), qa)
     }
 }
+
+/// The user walkthrough, end to end, against the QA fixtures that stand for Symphony (`github-updates-setup`,
+/// `github-updates-add-repo`): the same requests and answers the QA pass drives the app through.
+@MainActor
+final class GitHubUpdatesWalkthroughTests: XCTestCase {
+    private let now = ISO8601DateFormatter().date(from: "2026-10-19T12:00:00Z")!
+    private var dir: URL!
+
+    override func setUpWithError() throws {
+        dir = uniqueTemporaryDirectory("github-updates-walkthrough")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: dir)
+    }
+
+    /// A copy of the fixture, so moving its hand-off never touches the committed one.
+    private func fixtures(_ name: String) throws -> APIFixtures {
+        let copy = dir.appendingPathComponent(name)
+        try FileManager.default.copyItem(at: GitHubUpdatesCardTests.fixture(name), to: copy)
+        return APIFixtures(directory: copy, requestLog: dir.appendingPathComponent("api-requests.jsonl"))
+    }
+
+    private func requests(_ fixtures: APIFixtures) throws -> [String] {
+        let log = try String(contentsOf: fixtures.requestLog, encoding: .utf8)
+        return log.split(separator: "\n").compactMap { line in
+            guard let entry = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                let path = (entry["path"] as? String)?.replacingOccurrences(of: "/api/v1/setup/github_updates/", with: "")
+            else { return nil }
+            let body = (entry["body"] as? [String: String] ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
+            return ([path] + body).joined(separator: " ")
+        }
+    }
+
+    private func send(_ fixtures: APIFixtures) -> (GitHubUpdatesAPI.Action, [String: String]) async -> GitHubUpdatesAPI.Result {
+        let root = dir!
+        return { action, params in
+            await GitHubUpdatesAPI.send(action, params: params, stateRoot: root, fallback: APIFixtures.baseURL, transport: fixtures.transport)
+        }
+    }
+
+    private func read(_ fixtures: APIFixtures) -> () async -> GitHubUpdatesAPI.Result {
+        let root = dir!
+        return { await GitHubUpdatesAPI.read(stateRoot: root, fallback: APIFixtures.baseURL, transport: fixtures.transport) }
+    }
+
+    private func row(_ setup: GitHubUpdatesSetup, _ id: String) throws -> GitHubUpdatesSetup.Row {
+        try XCTUnwrap(setup.rows.first { $0.id == id })
+    }
+
+    func testTurningOnInstantUpdatesStepByStepFromPollingOnlyToInstant() async throws {
+        let fixtures = try fixtures("github-updates-setup")
+        let state = try XCTUnwrap(GitHubUpdatesSection.decode(state: Data(contentsOf: fixtures.directory.appendingPathComponent("api/v1/state.json"))))
+        let handOff = fixtures.directory.appendingPathComponent(WebhookSecret.handOffFileName)
+        let keychain = MemorySecretStore()
+        var terminals: [[String]] = []
+        let services = GitHubUpdatesSetupController.Services(
+            send: send(fixtures), read: read(fixtures),
+            moveSecret: { WebhookSecret.moveHandOff(from: handOff, into: keychain) },
+            secretStored: { WebhookSecret.isStored(in: keychain) },
+            openTerminal: { terminals.append($0); return nil },
+            restartSymphony: {},
+            sleep: { _ in }
+        )
+
+        // 1. Setup's card offers Turn On Instant Updates…, which opens step 1 of 5 with the recommended relay picked.
+        XCTAssertEqual(GitHubUpdatesCard(section: state, now: now).primary, .turnOn)
+        XCTAssertEqual(GitHubUpdatesCard.Action.turnOn.title, "Turn On Instant Updates…")
+        let controller = GitHubUpdatesSetupController(purpose: .turnOn, section: state, services: services)
+        XCTAssertEqual(controller.setup.page.title, "Choose how GitHub reaches this Mac")
+        XCTAssertEqual(controller.setup.stepLabel, "Step 1 of 5")
+        XCTAssertEqual(controller.setup.option?.label, "GitHub CLI forwarding")
+        XCTAssertTrue(controller.setup.option?.recommended == true)
+
+        // 2. Continue: the GitHub CLI and the forwarding extension check out; the permission is missing.
+        await controller.goForward()
+        XCTAssertEqual(controller.setup.stepLabel, "Step 2 of 5")
+        XCTAssertEqual(try row(controller.setup, "relay").word, "Done")
+        XCTAssertEqual(try row(controller.setup, "gh_ready").buttons, [.grantPermission])
+
+        // 3. Grant Permission… opens Terminal on gh auth refresh; the row turns done by itself and Continue enables.
+        await controller.perform(.grantPermission, on: "gh_ready")
+        XCTAssertEqual(terminals, [GitHubUpdatesSetupController.grantArguments])
+        XCTAssertTrue(try row(controller.setup, "gh_ready").isDone)
+        XCTAssertTrue(controller.setup.canContinue)
+
+        // 4. Secret and port: both done, the secret in the app's secret item and nowhere else.
+        await controller.goForward()
+        XCTAssertEqual(controller.setup.page.title, "Secret and port")
+        XCTAssertEqual(controller.setup.rows.map(\.detail), ["Secret created and saved in your Keychain", "Fixing Symphony's port at 4040"])
+        XCTAssertEqual(keychain.values, [WebhookSecret.item: "qa-made-up-webhook-secret-not-a-real-key"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: handOff.path))
+        XCTAssertFalse(String(describing: controller.setup).contains("qa-made-up-webhook-secret"), "the secret is never in the sheet's state")
+
+        // 5. Connect your repos: acme/docs needs admin access and offers Leave on Polling; the others are done.
+        await controller.goForward()
+        XCTAssertEqual(controller.setup.page.title, "Connect your repos")
+        let docs = try row(controller.setup, "repo:docs")
+        XCTAssertEqual(docs.detail, "You need admin access to acme/docs to add a webhook.")
+        XCTAssertEqual(docs.buttons, [.retry, .leaveOnPolling])
+        XCTAssertTrue(try row(controller.setup, "repo:web-shop").isDone)
+        XCTAssertTrue(try row(controller.setup, "repo:api").isDone)
+
+        // 6. Leave on Polling, Continue, the test: connected repos received and verified; Done reads Instant.
+        await controller.perform(.leaveOnPolling, on: "repo:docs")
+        await controller.goForward()
+        XCTAssertEqual(controller.setup.page.title, "Send a test update")
+        XCTAssertEqual(try row(controller.setup, "test:web-shop").detail, "Received and verified")
+        XCTAssertEqual(try row(controller.setup, "test:api").detail, "Received and verified")
+        XCTAssertEqual(controller.setup.continueTitle, "Done")
+        var finished: GitHubUpdatesSection?
+        controller.onFinish = { finished = $0 }
+        await controller.goForward()
+        let card = GitHubUpdatesCard(section: try XCTUnwrap(finished), now: now)
+        XCTAssertEqual(card.word, "Instant")
+        XCTAssertEqual(card.repos.map(\.word), ["Instant", "Instant", "Polling only"])
+
+        XCTAssertEqual(try requests(fixtures), [
+            "turn_on relay=gh_webhook_forward",
+            "run_step step=relay", "run_step step=gh_ready", "run_step step=gh_ready",
+            "run_step step=secret",
+            "run_step step=repo:web-shop", "run_step step=repo:api", "run_step step=repo:docs",
+            "leave_on_polling repo=docs",
+            "test",
+        ])
+    }
+
+    func testAddRepoEndsByConnectingAndTestingTheNewRepo() async throws {
+        let fixtures = try fixtures("github-updates-add-repo")
+        let state = try XCTUnwrap(GitHubUpdatesSection.decode(state: Data(contentsOf: fixtures.directory.appendingPathComponent("api/v1/state.json"))))
+        XCTAssertTrue(state.isInstant, "the step shows only while instant updates are on")
+        XCTAssertTrue(AddRepoFlow(instantUpdates: state.isInstant).steps.contains(.instantUpdates))
+
+        // 7. The last step connects and tests widgets; Done hands the card a section that lists it.
+        let controller = AddRepoInstantUpdatesController(key: "widgets", services: AddRepoInstantUpdatesController.Services(
+            send: send(fixtures), read: read(fixtures), sleep: { _ in }
+        ))
+        await controller.start()
+
+        XCTAssertEqual(controller.step.title, "Instant updates for acme/widgets")
+        XCTAssertEqual(controller.step.rows.map(\.title), ["Webhook added", "Test update"])
+        XCTAssertEqual(controller.step.rows.map(\.word), ["Done", "Done"])
+        XCTAssertTrue(controller.step.canFinish)
+        let card = GitHubUpdatesCard(section: try XCTUnwrap(controller.step.section), now: now)
+        XCTAssertEqual(card.word, "Instant")
+        XCTAssertEqual(card.repos.last?.name, "acme/widgets")
+        XCTAssertEqual(card.repos.last?.word, "Instant")
+        XCTAssertEqual(try requests(fixtures), ["run_step step=repo:widgets", "test repo=widgets"])
+    }
+}

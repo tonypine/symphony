@@ -266,9 +266,9 @@ GitHub or Linear in QA:
   Each launch's `qa_api_requests` starts empty.
   - Off (walkthrough step 1): pass `macos/Tests/Fixtures/director-app/github-updates-off` as
     `api_fixtures`. In the Symphony window, **Setup** shows the **GitHub updates** card reading
-    "Polling only" with **Turn On Instant Updates…**. That button opens "Turn on instant GitHub
-    updates?" with GitHub CLI forwarding picked; **Cancel** closes it and `qa_api_requests` lists
-    nothing (the guided flow behind it is TP-954's).
+    "Polling only" with **Turn On Instant Updates…**. That button opens the guided setup (TP-954,
+    below) on "Choose how GitHub reaches this Mac"; **Cancel** closes it and `qa_api_requests`
+    lists nothing.
   - On (step 2): launch with `macos/Tests/Fixtures/director-app/github-updates`. The card reads
     "Instant": acme/web-shop "Last update 2 min ago", acme/api "Last update 19 min ago", and
     acme/docs "Polling only" with "You need admin access to acme/docs to add a webhook.".
@@ -290,6 +290,61 @@ GitHub or Linear in QA:
     Instant" and each repo row as one element ("acme/web-shop, Instant, Last update 2 min ago").
   - Look: judge the card in each state and both sheets in light and dark against
     `macos/Tests/Snapshots/github-updates-*.png`.
+- **Turn on instant updates, step by step, and Add Repo's last step (TP-954):** two fixtures stand
+  for Symphony. Each answers a setup request in the order the walkthrough sends them
+  (`run_step.1.json`, `run_step.2.json`…), so drive the steps in order and quote each request
+  from `qa_api_requests`. Nothing reaches GitHub: the fixture's answers stand for Symphony's `gh`,
+  and the gh stub stands for the app's.
+  - Start the gh stub (see "Stand-ins" above) and launch with `fresh_root: true`,
+    `gh_stub_port`, and `macos/Tests/Fixtures/director-app/github-updates-setup` as
+    `api_fixtures`. Open **Setup**.
+  - Step 1: **Turn On Instant Updates…** opens a 520 pt sheet, "Step 1 of 5", "Choose how
+    GitHub reaches this Mac", with "GitHub CLI forwarding" selected and its **Recommended** badge,
+    then smee.io, Cloudflare Tunnel and Tailscale Funnel, each with what it takes. Picking smee.io
+    shows a "Public URL" field and turns **Continue** off with "Paste the relay's public URL.";
+    pick GitHub CLI forwarding again.
+  - Step 2: **Continue** (`POST …/github_updates/turn_on` with `relay` `gh_webhook_forward`, then
+    `run_step` `relay` and `run_step` `gh_ready`): "Step 2 of 5", "GitHub CLI and its forwarding
+    extension" Done, "Permission to manage webhooks" Failed with the missing scope in plain words
+    and **Grant Permission…**; **Continue** is off with "Continue is available once every row is
+    done.".
+  - Step 3: **Grant Permission…** opens Terminal running the fake `gh` (the gh stub's log has
+    `auth refresh -h github.com -s admin:repo_hook`), which prints "✓ Authentication complete.".
+    Come back to the app without clicking anything in the sheet: within 3 seconds the row reads
+    Done ("The GitHub CLI can add webhooks to your repos.") and **Continue** enables; exactly one
+    more `run_step` `gh_ready` was sent. Close the Terminal window.
+  - Step 4: **Continue** (`run_step` `secret`; the port is already pinned, so nothing is sent for
+    it): "Webhook secret" Done, "Secret created and saved in your Keychain", and "Symphony's port"
+    Done, "Fixing Symphony's port at 4040". The secret's value shows nowhere in the sheet.
+  - Step 5: **Continue** (`run_step` for `repo:web-shop`, `repo:api`, `repo:docs`): acme/web-shop
+    and acme/api read "Forwarding through the GitHub CLI"; acme/docs reads "You need admin access
+    to acme/docs to add a webhook." with **Retry** and **Leave on Polling**, and **Continue** is
+    off with "Retry each failed repo, or leave it on polling.".
+  - Step 6: **Leave on Polling** (`leave_on_polling` with `repo` `docs`): acme/docs reads
+    "Left on polling: Symphony checks it every 30 s." and **Continue** enables. **Continue**
+    (`POST …/github_updates/test`): acme/web-shop and acme/api read "Received and verified",
+    acme/docs "Polling", every step in the indicator is ticked, and the button reads **Done**.
+    **Done** closes the sheet; the card reads "Instant" with a banner "Instant updates are on.…".
+  - Back and Cancel: launch again with `fresh_root: true`, go to step 2 and press **Back**: step 1
+    shows with the relay still picked and nothing sent. **Cancel** closes the sheet.
+  - Step 7: start the Linear stub too, and launch with `fresh_root: true`, both stubs, and
+    `macos/Tests/Fixtures/director-app/github-updates-add-repo` (instant updates on). Copy its
+    `config/symphony.yml` to `qa-evidence/`, `qa_put_file` it, type the path into Settings' config
+    field, then add `acme/widgets` as for Add Repo's Check setup above. The step indicator ends
+    with "Instant updates"; Check setup reads "widgets is set up right." and its button reads
+    **Continue**. **Continue** (`run_step` `repo:widgets`, then `test` with `repo` `widgets`):
+    "Instant updates for acme/widgets" with "Webhook added" Done and "Test update" Done ("Received
+    and verified"), and **Done** enabled. **Done** closes the sheet; Setup's card lists
+    acme/widgets as Instant.
+  - Keyboard and VoiceOver: with Full Keyboard Access on, Tab reaches each relay, each row's
+    buttons, **Back** and **Continue**; Return presses **Continue** (or **Done**) and Escape
+    cancels. VoiceOver reads the step indicator as "Step 2 of 5: GitHub CLI. Done: Relay" and a
+    failed row as one element ("acme/docs, Failed, You need admin access to acme/docs to add a
+    webhook., …"), and each row button with its repo ("Leave on Polling, acme/docs").
+  - Look: judge each page and Add Repo's last step in light and dark against
+    `macos/Tests/Snapshots/github-setup-*.png` and `add-repo-instant-updates-*.png`, at the
+    laptop viewport (1440×900 pt): the sheet keeps its footer in place on every page, and nothing
+    is clipped.
 
 QA does three things, in this order: (a) the walkthrough steps marked `Proved by: QA` (no test
 can drive them), steps 1 to 7 below; (b) the `Design check` of every UI deliverable, by sight, in
