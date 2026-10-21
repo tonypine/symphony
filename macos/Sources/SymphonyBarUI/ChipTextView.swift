@@ -415,7 +415,7 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     }
 
     /// Room around a chip for its focus ring, which is drawn 3 pt outside the tint.
-    static let focusRingMargin: CGFloat = 4
+    static let focusRingMargin: CGFloat = 3
 
     /// The popover closed.
     public func popoverClosed() {
