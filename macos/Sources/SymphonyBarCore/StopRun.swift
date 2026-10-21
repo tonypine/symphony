@@ -90,6 +90,9 @@ public enum WindowPlace: Equatable, Hashable {
 public struct NavigationHistory: Equatable {
     public static let backTitle = "Back"
     public static let forwardTitle = "Forward"
+    /// Back's key with ⌘: the View menu's item, and the peek's Back button, which a sheet's peek needs because the menu
+    /// item only acts while the window itself is key.
+    public static let backKey: Character = "["
 
     public private(set) var current: WindowPlace
     public private(set) var back: [WindowPlace] = []
