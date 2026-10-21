@@ -2271,8 +2271,8 @@ Important nuance:
   that `HEAD` differs from the one the run started on and has checks that are still running or
   have all passed, MUST end the run and move to the post-PR state, even while the review, CI, QA
   or conflict signal that started the run is still pending. Such a signal is only cleared once the
-  run ends, so without this a fix run on an open PR never ends on its own. The CI poller then owns
-  that head: QA on green, a flaky re-run or a CI-fix run on red. A head with no checks reported yet
+  run ends, so without this a fix run on an open PR never ends on its own. The PR and CI watcher
+  then owns that head (Section 7.5.1): QA on green, a re-run or a CI-fix run on red. A head with no checks reported yet
   or a failed check does not end the run this way, nor does a head the pre-push reviewer applies to
   and has not yet passed: the run continues so the reviewer runs on it first.
 - A run on an active issue with an attached PR and no pending review, CI, QA or conflict signal
@@ -2487,6 +2487,25 @@ The poller:
 
 #### 7.5.1 PR and CI watcher
 
+The watcher is the one place a PR's situation turns into an action. Its rules:
+
+- **Sources only write facts.** The timed poll, GitHub's webhook deliveries (Section 5.4.7,
+  `github.webhooks`) and Check Now record what they learned about a PR on the ticket's state
+  record, and the agent's PR tool, the CI poller and the PR review poller record only that the
+  ticket has a PR and how it ended (Section 4.1.10) or the review comments still to address; none
+  of them decides a CI, conflict or landing case. A delivery patches the facts and asks for a read;
+  only that read decides.
+- **One pure decision.** `PrDecision.decide/1` maps the facts to exactly one action by the first
+  matching row of one table (`docs/pr-ci-decisions.md`, generated from `PrDecision.rules/0` by
+  `mix pr_decision.table`); a fact set no row matches is a defect, logged, never a silent default.
+  Every decision that changes logs one `pr_watch.decision` line.
+- **Every wait has an owner.** A decision that leaves the ticket where it is names who acts next
+  (`agent`, `ci`, `github`, `person` or `symphony`) and what ends the wait. A conflict and a check
+  that keeps failing never ask a person: they wait on the competing PRs, a fix ticket, or go to
+  `Rework`.
+- **Silent waits are reported.** A ticket waiting with no owner, or past its bound, is listed and
+  logged (below), so nothing parks unnoticed.
+
 With `pull_requests.enabled`, one `PrWatch.Repo` per repository reads, every poll interval, every
 ticket of the repository in the Code Review, QA, `Rework`, `CI Fix` or `Merging` state, and in
 `In Progress` once it has a PR, with its PR in one GitHub query. For each it decides the one action
@@ -2511,11 +2530,14 @@ holds through the Needs Decision hold and the self-heal lane, GitHub calls throu
   ticket at once and returns its `watch` (`docs/pr-ci-decisions.md#silent-waits`).
 - A CI Fix run sent for a red head spends a red attempt, held against
   `pull_requests.checks.max_fix_attempts` (default 10); one sent for a conflict spends a conflict
-  attempt, against a fixed 3. Both reset only when the PR is green and conflict-free. At the red
-  backstop the watcher turns auto-merge off and the self-heal lane files or reuses one fix ticket
-  for the failing check in the repo whose CI fails, links it as a blocker and holds the ticket on
-  it in place; the count restarts when that hold clears. A conflict back after 3 fix runs with no
-  PR ahead of it goes to `Rework`.
+  attempt, against a fixed 3. Both reset only when the PR is green and conflict-free. The red
+  backstop also fires after 3 CI Fix runs in a row met the same failure (the same check and first
+  error line), whatever the count. At the backstop the watcher turns auto-merge off and the
+  self-heal lane files or reuses one fix ticket for the failing check (component `ci:<check>`) in
+  the repo whose CI fails, links it as a blocker and holds the ticket on it in place, logging
+  `pr_watch.ci_fix_ticket`; no person is asked, and the count restarts when that hold clears. A
+  conflict back after 3 fix runs waits on the open PRs that share its files (below), or goes to
+  `Rework` when none does.
 - In `Merging`, with `pull_requests.auto_merge` on: a CLEAN, green PR is squash-merged at once; a
   PR with checks running or branch protection holding it gets GitHub auto-merge (squash, the PR
   title as `<title> (#<number>)` and its body, `expectedHeadOid` the read head) once per head; a
@@ -2669,8 +2691,9 @@ Rules:
   `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its
   origin recorded, whether or not the PR also conflicts. A `Code Review` or `QA` ticket back from
   `CI Fix` on the same red head or the same conflict (a repair that pushed nothing) MUST enter
-  `CI Fix` again, until the fix attempts run out and the failure or conflict escalates to a
-  `Needs Decision` hold in place. Reviewer comments left on a PR in `Code Review` or `QA` are not a
+  `CI Fix` again, until the fix attempts run out. Then neither asks a person: a red head gets a
+  fix ticket for its failing check and a `Blocked` hold on it, and a conflict waits on the PRs
+  that share its files, or goes to `Rework` when none does (Section 7.5.1). Reviewer comments left on a PR in `Code Review` or `QA` are not a
   rework in flight and MUST NOT hold a red head back. A repo with the reviewer off parks its
   `Code Review` tickets with `code_review_reviewer_disabled` recorded and never approves without a
   reviewer.
@@ -2690,7 +2713,9 @@ Rules:
   ticket-state store and projected as machine-owned labels, which only the machine writes. A held
   ticket MUST NOT dispatch and MUST NOT move because of the hold. `Blocked` is set by an open
   blocked-by dependency on a `Todo` ticket, an agent's request to park in `Backlog` from
-  `In Progress` or `Rework` (its block report), or a self-heal fix ticket, and clears by itself when
+  `In Progress` or `Rework` (its block report), a self-heal fix ticket (including the PR and CI
+  watcher's fix ticket for a check that keeps failing), or the watcher's wait on competing PRs (its
+  `landing` kind), and clears by itself when
   what it waits on goes terminal (an access hold clears on a person's `Unblock`). A block report
   from a ticket with open blocked-by blockers MUST record a dependency hold on those blockers, which
   clears by itself once every one is terminal, in whatever phase the ticket is, and the ticket
@@ -2768,7 +2793,10 @@ Rules:
   confirming continues into `Merging`. Rework verdicts never wait on a person.
 - **Self-heal.** A QA or epic review blocked by tooling or environment retries boundedly, then files
   (or reuses) one fix ticket per broken component and sets a `Blocked` hold on the affected ticket
-  waiting on it. From the `QA` state only these blocks reach it: the ones the QA tools raise
+  waiting on it. The PR and CI watcher's red backstop is such a block: a check still failing after
+  `pull_requests.checks.max_fix_attempts` CI Fix runs, or after 3 in a row with the same failure,
+  names the component `ci:<check>` (one fix ticket per failing check per repository, filed in the
+  repository whose CI fails), and the affected ticket waits on it in place instead of asking. From the `QA` state only these blocks reach it: the ones the QA tools raise
   themselves (`qa_worker_*`, `qa_host_missing_tool`, `qa_host_tool_check_failed`,
   `qa_host_tunnel_failed`, `qa_dev_server_failed`), the `needs_person` access cases, and the QA
   answer's `covered_by` and `needs_dev_server`. Any other blocked QA pass (the agent's own account

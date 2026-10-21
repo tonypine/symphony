@@ -1102,13 +1102,18 @@ pull_requests:
   agent PR send the issue back to work on the same PR. Symphony ends every PR comment it posts
   with a hidden `<!-- symphony:agent -->` marker and skips those.
 - `checks.retry_failed_once` reruns the failed jobs of a red head once before a `CI Fix` run.
-- `checks.max_fix_attempts` (default 10) is a backstop, not a budget: once that many `CI Fix` runs
-  were sent for red heads, or 3 in a row met the same failure (the same check and first error line),
-  Symphony files a fix ticket for the failing check (or reuses the open one) and holds the ticket on
-  it, in place, until the fix ticket is done; then the count restarts. A
-  conflict gets 3 fix runs whatever this says, then, with no open PR competing for its files, goes
-  to `Rework`. The counts reset once the PR is green and conflict-free. `checks.escalate_to_state`
-  is deprecated: it loads with a warning and does nothing.
+- `checks.max_fix_attempts` (default 10) is a backstop for the `CI Fix` runs sent for failed
+  checks, not a budget. Once that many were sent for red heads, or 3 runs in a row met the same
+  failure (the same check and first error line) whatever the count, the backstop stops them: it
+  files a fix ticket for the failing check (self-heal component `ci:<check>`), or reuses the open
+  one, and holds the ticket on it with a `Blocked` hold, in place, instead of asking anyone (D15).
+  The hold clears by itself once the fix ticket is done, and the count restarts. Conflicts have no
+  limit that asks: a conflict gets 3 fix runs whatever this says; back after those, the ticket waits
+  on the open PRs that share its files, as a `Blocked` hold and Linear blocked-by links (D14), or
+  goes to `Rework` when none does (D16). Both counts reset once the PR is green and conflict-free.
+  See [When CI keeps failing](pr-ci-decisions.md#when-ci-keeps-failing) and
+  [Competing PRs](pr-ci-decisions.md#competing-prs). `checks.escalate_to_state` is deprecated: it
+  loads with a warning and does nothing.
 - `checks.landing_wait_timeout_ms` bounds how long a `Merging` PR may stay `BLOCKED` by branch
   protection on a green head before a landing agent takes it over, and how long a landing run that
   ended on pending checks waits for its head to settle. In any phase it is also how long a head waits
@@ -2070,7 +2075,7 @@ toolchain for `make release`. Without the identity, where QA cannot install it,
 `qa_signing_identity_untrusted`, and the QA agent answers `blocked` with that message.
 
 QA needs `pull_requests.enabled: true` and `pull_requests.checks.enabled: true`: the `QA` run only
-dispatches on a head the CI poller has seen green.
+dispatches on a head the PR and CI watcher reads as green ([rule R27](pr-ci-decisions.md)).
 
 #### Android app QA
 

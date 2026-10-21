@@ -33,9 +33,18 @@ When logging Codex execution lifecycle events, include:
   A callback that takes 1 s or more logs `Orchestrator slow handle_call|handle_info duration_ms= message=` (the message inspected with limits), and a snapshot build that does logs `Orchestrator snapshot build slow build_ms=` with `<part>_ms=` for its parts.
   A run that failed in its own setup before the first turn logs `Setup block for <issue_identifier>: <component> — <cause>; self-heal holds it on <fix ticket> issue_id=` (or `self-heal asks a person to decide`, or `self-heal answered <result>, scheduling retry` when it falls back to the crash retry).
   The Linear calls the orchestrator needs an answer from run in tasks; one that dies logs `Async Linear task <kind> exited before replying:`, and one that cannot start logs `Failed to start async Linear task <kind>:`.
-- `PrWatch`: a wait on competing PRs logs `pr_watch.competitors_linked` (`linked=` the tickets
-  Symphony linked as blockers, `waits_on=`, `step_behind=`) and an unlink
-  `pr_watch.competitors_unlinked` (`unlinked=`), both with issue context.
+- `PrWatch` (the PR and CI watcher, `docs/pr-ci-decisions.md`), every line with issue context:
+  - `pr_watch.decision`: once each time a ticket's decision changes (its rule, action or head), with
+    `repo_key=`, `phase=`, `rule=`, `action=`, `owner=` (`none` for an action Symphony carries
+    out), `head_sha=`, `outcome=` (`applied`, `recorded` or `error`) and `reason=`. The same decision
+    on the next tick logs nothing.
+  - `pr_watch.competitors_linked`: a wait on competing PRs, with `linked=` (the tickets Symphony
+    linked as blockers), `waits_on=` and `step_behind=`; `pr_watch.competitors_unlinked`
+    (`unlinked=`) when a competitor that left the race loses the link Symphony added.
+  - `pr_watch.ci_fix_ticket`: the red backstop handed the failing check to the self-heal lane, with
+    `outcome=` (`filed`, a fix ticket filed or reused; `escalated`, the same failure came back after
+    its fix landed), `component=ci:<check>`, `fix_ticket=`, `red_attempts=`,
+    `same_failure_streak=`, `pr_url=` and `head_sha=`.
 - `WorkspaceCleanup`: removes ended issues' workspaces outside the orchestrator. A removal task that crashes logs `Workspace cleanup failed:`, and one that cannot start logs `Failed to start workspace cleanup:`, both with issue context, `worker_host=` and `reason=`.
 - `PrWatch.Repo`: a ticket that turns silent logs one `pr_watch.silent_wait` line with issue context, `repo_key=`, `phase=`, `since=`, `rule=`, `bound=` and `reason=` (`docs/pr-ci-decisions.md#silent-waits`); a read that leaves under a tenth of GitHub's rate limit logs `pr_watch.rate_limit_low`.
 - `QaVerification`: a blocked QA pass logs `QA blocked for` with issue context, `head=`, `model=`,

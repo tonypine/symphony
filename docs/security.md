@@ -111,8 +111,8 @@ pull request's author adds it, since an agent may act as the author. An approvin
 current head commit counts too, but only from a reviewer with write access (an owner, member or
 collaborator), since anyone who can read the repository can approve. A review doesn't start a run,
 so after approving, re-run the job. Bots count for neither. Since no agent can clear this check,
-Symphony's CI poller dispatches no CI-fix run and spends no fix attempt while it is the only red
-check; the issue waits for a person's decision. The workflow tells Symphony's pull requests apart only by
+Symphony's PR and CI watcher dispatches no CI-fix run and spends no fix attempt while it is the
+only red check; the issue waits for a person's decision ([rule R18](pr-ci-decisions.md)). The workflow tells Symphony's pull requests apart only by
 the `auto/` branch prefix. So it skips the case where a person's own open pull request on another
 branch is attached to the issue, and Symphony keeps working on that branch.
 
@@ -120,7 +120,7 @@ branch is attached to the issue, and Symphony keeps working on that branch.
 
 The base branch doesn't require the `protected paths` check, so GitHub on its own would merge past
 it: auto-merge waits only for required checks. What blocks the merge is Symphony's landing of a
-`Merging` ticket. While the CI poller has seen `protected paths` fail on the pull request's head,
+`Merging` ticket. While the PR and CI watcher reads `protected paths` as failed on the pull request's head,
 Symphony doesn't turn GitHub auto-merge on, squash-merge the pull request or update its branch, and
 turns auto-merge off if it is already on. The ticket stays where it is on a Needs Decision hold
 that asks a person to allow the change or drop it in `Rework` (see below), and the Inbox shows it

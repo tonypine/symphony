@@ -833,6 +833,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
           base_ref: base_ref(read, previous)
         })
         |> settled(previous)
+        |> tap(&log_decision(&1, previous, entry, state))
       else
         previous
       end
@@ -879,11 +880,27 @@ defmodule SymphonyElixir.PrWatch.Repo do
     |> Map.put(:actions, actions(watch, previous))
   end
 
+  # A decision that changed (its rule, action or head) logs one `pr_watch.decision` line; the same
+  # decision on the next tick logs none.
+  defp log_decision(%{decision: %{} = decision} = watch, previous, entry, state) do
+    unless same_decision?(decision, previous && previous.decision) do
+      Logger.info(
+        "pr_watch.decision issue_id=#{entry.issue.id} issue_identifier=#{entry.issue.identifier} repo_key=#{state.repo_key} " <>
+          "phase=#{watch.facts.phase} rule=#{decision.rule} action=#{decision.kind} owner=#{decision.owner || "none"} " <>
+          "head_sha=#{decision.head_sha || "none"} outcome=#{decision.outcome} reason=#{inspect(decision.reason)}"
+      )
+    end
+  end
+
+  defp log_decision(_watch, _previous, _entry, _state), do: :ok
+
+  defp same_decision?(decision, %{} = previous), do: Map.take(previous, [:rule, :kind, :head_sha]) == Map.take(decision, [:rule, :kind, :head_sha])
+  defp same_decision?(_decision, _previous), do: false
+
   defp since(nil, _previous), do: nil
 
   defp since(decision, %{since: %DateTime{} = since} = previous) do
-    same? = Map.take(previous, [:rule, :kind, :head_sha]) == Map.take(decision, [:rule, :kind, :head_sha])
-    Map.put(decision, :since, if(same?, do: since, else: decision.decided_at))
+    Map.put(decision, :since, if(same_decision?(decision, previous), do: since, else: decision.decided_at))
   end
 
   defp since(decision, _previous), do: Map.put(decision, :since, decision.decided_at)

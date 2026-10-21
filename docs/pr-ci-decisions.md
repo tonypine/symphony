@@ -83,6 +83,28 @@ Owners: `agent`, `ci`, `github`, `person`, `symphony`.
 
 <!-- END mix pr_decision.table -->
 
+## How to read a wait
+
+Every decision that leaves a ticket where it is names who acts next (its owner) and what ends the
+wait, so a waiting ticket is never a mystery. The app's PR and CI section, the Inbox and the
+`watch` block in `/api/v1/state` show both (`owner` and `clears_when`), with the rule that decided
+and since when it stands.
+
+| Owner | Who acts next | The wait ends when |
+| --- | --- | --- |
+| `agent` | A run that is working, or the agent that opens the PR (R5, R8, R9) | The run ends, or the PR is opened |
+| `ci` | GitHub Actions running the head's checks, or the base branch's (R23, R24, R32) | The checks report, or the base goes green |
+| `github` | GitHub itself: its rate limit, a mergeability it hasn't computed, branch protection (R1, R16, R33) | The limit resets, GitHub computes it, or the merge wait passes |
+| `person` | A person: a Needs Decision hold, a draft PR, a question the watcher asked (R4, R6, R7, R10, R17, R18) | The decision is recorded, or the PR is marked ready |
+| `symphony` | Symphony itself: a Blocked hold, a fix ticket it filed, a competing PR it waits on (R4, R14a, R15, R20, R28) | The fix ticket or the competitors are done, and the hold clears by itself |
+
+An action Symphony carries out at once (`dispatch`, `ci_fix`, `update_branch` and the like) names
+`symphony` until it is done, so the block always says who acts next. A wait with no owner that
+nothing follows, or one past its bound, is reported as a silent wait (see
+[Silent waits](#silent-waits)). Only `person` waits ask anything of a person, and only R6, R7, R17
+and R18 ask a question. A conflict never does, and a check that keeps failing gets a fix ticket
+instead (see [When CI keeps failing](#when-ci-keeps-failing)).
+
 ## Where the facts come from
 
 The watcher reads them by polling, one watcher per repository whose pull requests are polled,
@@ -236,7 +258,7 @@ decide at once and returns its new `watch` block; 404 when the watcher doesn't w
 A client that sends no `Origin` header (curl, the app) may call it; a browser on another origin is
 refused.
 
-### Fix runs and their limits
+## When CI keeps failing
 
 A CI Fix run sent for a red head spends a **red** attempt, held against
 `pull_requests.checks.max_fix_attempts` (default 10). Its prompt lists the earlier runs' failures
@@ -257,32 +279,45 @@ lands compares like with like.
 At the red backstop (R20) the watcher turns auto-merge off and hands the failing check to the
 self-heal lane, which files one fix ticket per failing check per repo (component `ci:<check>`) or
 reuses the open one, attaches each fix run's failing check, first error line and head, the red
-count ("3 of 10 CI Fix runs"), the PR and its head as evidence, links it as a blocker and holds the ticket on it, in place. No question is asked and
-the ticket doesn't move. The hold clears by itself once the fix ticket is terminal, the red count
-restarts, and the head gets CI Fix runs again. The same failure reaching the backstop again after its
-fix landed is the self-heal lane's own escalation to a person.
+count ("3 of 10 CI Fix runs"), the PR and its head as evidence, links it as a blocker and holds the
+ticket on it, in place, and logs `pr_watch.ci_fix_ticket`. No question is asked and the ticket
+doesn't move: the wait is on `symphony` ("CI keeps failing: waiting on TP-90, a fix ticket for the
+`specs` check"). The hold clears by itself once the fix ticket is terminal, the red count restarts,
+and the head gets CI Fix runs again. The same failure reaching the backstop again after its fix
+landed is the self-heal lane's own escalation to a person, as for any fix ticket that didn't fix
+its component.
 
-A conflict back after its 3 fix runs with no open PR competing goes to `Rework` (R15a), where a
-run can change as much as the conflict needs.
+## Competing PRs
 
-### Waiting on competing PRs
+Two open PRs compete when they change a file in common. The watcher finds them in the read
+described under [Where the facts come from](#where-the-facts-come-from): when two or more watched
+PRs are open, or one conflicts or waits on its competitors, it lists the repository's open PRs and
+their files once per tick. The landing order (`SymphonyElixir.LandingOrder`, below the table in
+SPEC.md) puts the PRs that share files in line: `ahead` lists the competitors ahead of this one,
+and `competing` every open PR sharing a file, with its ticket when the watcher watches it. A PR on a
+hold or idle two hours drops out of both, and neither names a PR whose wait would close a cycle of
+blocked-by links.
 
 A conflict while a PR that shares its files is ahead in the landing order waits for that one to
 land (R14a); a conflict back after its 3 fix runs while open PRs share its files waits on all of
-them and steps behind them in the landing order, so none of them waits for it (R15). The wait is a
-visible dependency (`SymphonyElixir.PrWatch.Competitors`): auto-merge off in `Merging`, a `Blocked`
-hold of the landing kind in place ("Waiting on TP-1 and PR #12 (Docs pass) to land: they change the
-same files (SPEC.md)"), never a move, and a Linear blocked-by link from each competitor's ticket
-that Linear doesn't have yet. A person's PR gets no link. The ticket's record keeps the competitors
-under `links`, with whether Symphony added each link, and `/api/v1/state` lists them under
-`watch.waits_on`.
+them and steps behind them in the landing order, so none of them waits for it (R15). With nobody
+competing, the same conflict goes to `Rework` (R15a, D16), where a run can change as much as the
+conflict needs. None of them asks a person.
+
+The wait is a visible dependency (`SymphonyElixir.PrWatch.Competitors`): auto-merge off in
+`Merging`, a `Blocked` hold of the landing kind in place ("Waiting on TP-1 and PR #12 (Docs pass)
+to land: they change the same files (SPEC.md)"), never a move, and a Linear blocked-by link from
+each competitor's ticket that Linear doesn't have yet. A person's PR gets no link. The ticket's
+record keeps the competitors under `links`, with whether Symphony added each link, and
+`/api/v1/state` lists them under `watch.waits_on`. Linking logs `pr_watch.competitors_linked`.
 
 Each read judges the wait before deciding. A competitor that lands stays linked, as history; one
 that leaves the race (its PR closed, on a hold, idle two hours, or no longer sharing a file) is
-unlinked when Symphony added the link. The hold clears once no competitor is left, and the same
-read decides on the conflict: CI Fix, with the approvals carried forward. The R15 wait restarts the
-conflict count. A person's `Unblock` clears the hold and removes Symphony's links, and the ticket no
-longer waits on those PRs while they stay open.
+unlinked when Symphony added the link, which logs `pr_watch.competitors_unlinked`. The hold clears
+once no competitor is left, and the same read decides on the conflict: CI Fix, with the approvals
+carried forward. The R15 wait restarts the conflict count. A person's `Unblock` clears the hold and
+removes Symphony's links, and the ticket no longer waits on those PRs while they stay open; a
+forced ticket waits on none.
 
 ## Replayed incidents and the skip-reason sweep
 

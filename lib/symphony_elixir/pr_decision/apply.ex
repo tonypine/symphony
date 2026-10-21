@@ -537,11 +537,14 @@ defmodule SymphonyElixir.PrDecision.Apply do
     case self_heal.heal(ctx.issue, heal_opts(ctx, outcome)) do
       :filed ->
         identifier = fix_ticket(ctx)
+        log_fix_ticket(:filed, check, identifier, ctx)
         reason = "CI keeps failing: waiting on #{identifier || "a fix ticket"}, a fix ticket for the `#{check}` check"
         args = Map.put(action.args, :fix_ticket, identifier)
         {:ok, %{attempts: Attempts.filed(ctx.attempts, identifier), action: %{action | reason: reason, args: args}}}
 
       :escalated ->
+        log_fix_ticket(:escalated, check, nil, ctx)
+
         {:ok, %{action: %{action | reason: "CI keeps failing on the `#{check}` check after its fix ticket landed: a person decides", owner: :person}}}
 
       :retry ->
@@ -553,6 +556,14 @@ defmodule SymphonyElixir.PrDecision.Apply do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp log_fix_ticket(outcome, check, identifier, ctx) do
+    Logger.info(
+      "pr_watch.ci_fix_ticket issue_id=#{ctx.issue.id} issue_identifier=#{ctx.issue.identifier} outcome=#{outcome} " <>
+        "component=ci:#{check} fix_ticket=#{identifier || "none"} red_attempts=#{ctx.facts.red_attempts} " <>
+        "same_failure_streak=#{ctx.facts.same_failure_streak} pr_url=#{pr_url(ctx)} head_sha=#{head(ctx)}"
+    )
   end
 
   @doc """
