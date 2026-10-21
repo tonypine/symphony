@@ -261,6 +261,53 @@ func firstLaunchSetup() -> some View {
         .background(DesignTokens.Surface.window.color)
 }
 
+// GitHub updates (TP-953): S1, S7 with Details, S8, S10, S14 and the S12 and S11 sheets, from the card's QA fixtures.
+let githubNow = ISO8601DateFormatter().date(from: "2026-10-19T12:00:00Z")!
+
+func githubSection(_ name: String) -> GitHubUpdatesSection {
+    let state = here.appendingPathComponent("../Fixtures/director-app/\(name)/api/v1/state.json").standardizedFileURL
+    guard let section = GitHubUpdatesSection.decode(state: try! Data(contentsOf: state)) else { fatalError("\(name) has no GitHub updates") }
+    return section
+}
+
+/// A healthy Setup page with the GitHub updates card for `section`, beside the sidebar of a 1200 pt window.
+@MainActor
+func githubUpdatesPage(_ section: GitHubUpdatesSection, expanded: Bool = false) -> some View {
+    let width = DesignTokens.Layout.windowWidth - DesignTokens.Layout.sidebarWidth
+    let utc = TimeZone(identifier: "UTC")!
+    return SetupPageBody(
+        page: SetupPage(payload: SetupPayload(checkedAt: githubNow), now: githubNow, timeZone: utc),
+        githubUpdates: GitHubUpdatesCard(section: section, now: githubNow, timeZone: utc),
+        githubExpanded: expanded
+    )
+    .frame(width: width)
+    .background(DesignTokens.Surface.window.color)
+}
+
+/// S10: no webhook secret on this Mac while instant updates are on.
+func githubSecretFailing() -> GitHubUpdatesSection {
+    var section = githubSection("github-updates")
+    section.secret.present = false
+    return section
+}
+
+/// S14: a symphony.yml from another Mac turns instant updates on, and this Mac never ran the setup.
+func githubNeedsSetup() -> GitHubUpdatesSection {
+    var section = githubSection("github-updates-off")
+    section.mode = .needsSetup
+    section.enabled = true
+    for index in section.steps.indices where ["gh_ready", "port"].contains(section.steps[index].id) {
+        section.steps[index].status = .done
+    }
+    return section
+}
+
+@MainActor
+func githubSheet(_ action: GitHubUpdatesCard.Action) -> some View {
+    GitHubUpdatesSheetView(sheet: GitHubUpdatesSheet(action, section: githubSection("github-updates"))!, cancel: {}, confirm: {})
+        .background(DesignTokens.Surface.window.color)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -322,5 +369,13 @@ MainActor.assumeIsolated {
         render(addRepoCheck(.checked(addRepoAnswer("add-repo-setup-warning", "refresh.1.json"))), scheme, to: "add-repo-check-warning-\(suffix).png")
         render(addRepoCheck(.onNextStart), scheme, to: "add-repo-check-stopped-\(suffix).png")
         render(firstLaunchSetup(), scheme, to: "setup-first-launch-\(suffix).png")
+        // GitHub updates (TP-953).
+        render(githubUpdatesPage(githubSection("github-updates-off")), scheme, to: "github-updates-off-\(suffix).png")
+        render(githubUpdatesPage(githubSection("github-updates"), expanded: true), scheme, to: "github-updates-on-\(suffix).png")
+        render(githubUpdatesPage(githubSection("github-updates-degraded")), scheme, to: "github-updates-degraded-\(suffix).png")
+        render(githubUpdatesPage(githubSecretFailing()), scheme, to: "github-updates-secret-\(suffix).png")
+        render(githubUpdatesPage(githubNeedsSetup()), scheme, to: "github-updates-needs-setup-\(suffix).png")
+        render(githubSheet(.turnOff), scheme, to: "github-updates-turn-off-sheet-\(suffix).png")
+        render(githubSheet(.recreateSecret), scheme, to: "github-updates-recreate-secret-sheet-\(suffix).png")
     }
 }

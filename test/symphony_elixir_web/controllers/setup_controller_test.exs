@@ -228,8 +228,14 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
       assert %{"problems" => [%{"id" => "deprecated_key:auto_review.enabled", "severity" => "warning", "fix" => %{"kind" => "config_edit", "action" => "remove"}}]} =
                problems
 
-      assert build_conn() |> get("/api/v1/setup") |> json_response(200) |> Map.delete("github_updates") == problems
-      assert build_conn() |> get("/api/v1/state") |> json_response(200) |> Map.fetch!("setup") == problems
+      setup = build_conn() |> get("/api/v1/setup") |> json_response(200)
+      assert Map.delete(setup, "github_updates") == problems
+
+      # The state carries the same, GitHub updates included, so the app's Setup card follows the state poll.
+      state_setup = build_conn() |> get("/api/v1/state") |> json_response(200) |> Map.fetch!("setup")
+      assert Map.delete(state_setup, "github_updates") == problems
+      assert %{"mode" => "off"} = state_setup["github_updates"]
+      assert state_setup["github_updates"] == setup["github_updates"]
     end
 
     test "a slug route whose tickets carry only the project id is a routing error until its fix is applied" do

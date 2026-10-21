@@ -1141,6 +1141,18 @@ state. The window opens on the Inbox the first time.
   orange when there are no errors; Overview's Needs attention has one row for the errors, with **Open Setup**; and
   the menu bar has a "Setup: 1 error, 1 warning" row and a red dot on its icon while there are errors. A Symphony
   older than Setup shows **Check for Updates…** and no badge.
+  Its **GitHub updates** card says how GitHub's CI and pull request changes reach Symphony, from `setup.github_updates`
+  ([GitHub webhooks](../docs/github-webhooks.md)): "Polling only" with **Turn On Instant Updates…**; "Needs setup on
+  this Mac" (a `symphony.yml` brought from another Mac) or "Setting up", each with its steps and **Finish Setup…**;
+  "Instant", with each repo and its last update; "Polling while the relay is down" with **Restart Relay**, while
+  Overview's Needs attention has a row for it; and "Secret check failing" with **Re-create Secret…**. A row says when
+  GitHub's request limit is low or spent. **Details** shows the relay (**Change Relay…**), the secret (**Re-create
+  Secret…**), Settings' two GitHub update intervals, the events Symphony asks GitHub for and the address deliveries go
+  to. **Turn Off…** and **Re-create Secret…** confirm in a sheet that says what happens and that polling goes on;
+  Turn On, Finish Setup and Change Relay pick the relay in a sheet. Symphony makes each change
+  (`POST /api/v1/setup/github_updates/<action>`), and the card shows its answer until the next state poll reports
+  something new. The QA fixtures `github-updates-off`, `github-updates` and `github-updates-degraded` show the card
+  off, on and degraded; the last two answer Turn Off, and the degraded one Restart Relay, with the card after it.
 - **Diagnostics** shows Symphony's own health in plain words: the connection (version, API URL, uptime, last
   update), capacity (agent slots, landing slots, forced allowance, initiative slots), Linear requests by
   caller over the last hour, the CI and review pollers and GitHub webhooks, and stray processes. **Copy State

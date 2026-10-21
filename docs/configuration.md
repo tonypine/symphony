@@ -2528,6 +2528,9 @@ pins `dashboard.port`; turning them off writes `enabled: false`. With `relay: gh
 Symphony runs one `gh webhook forward` per connected repository and restarts it when it drops; the
 other relays need their public URL, and Symphony adds a hook to each repository with
 `gh api repos/:repo/hooks`.
+The app's Setup page drives it from its **GitHub updates** card: **Turn On Instant Updates…** and
+**Turn Off…** (`enabled`), **Change Relay…** (`relay`), **Re-create Secret…** (`secret`), and the
+events (`events`) listed under Details; the two intervals there are the same as in Settings.
 
 ### `notifications`
 

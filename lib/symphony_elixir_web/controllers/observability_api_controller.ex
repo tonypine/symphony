@@ -27,7 +27,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   end
 
   def state(conn, _params) do
-    json(conn, Presenter.state_payload(orchestrator(), snapshot_timeout_ms(), stray_processes(), inbox(), setup()))
+    json(conn, Presenter.state_payload(orchestrator(), snapshot_timeout_ms(), stray_processes(), inbox(), setup(), github_updates()))
   end
 
   @spec inbox(Conn.t(), map()) :: Conn.t()
@@ -226,6 +226,11 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
 
   defp setup do
     Endpoint.config(:setup) || SymphonyElixir.Setup
+  end
+
+  # The setup's collaborators, as `GET /api/v1/setup` reads them (tests name fakes in the endpoint's config).
+  defp github_updates do
+    Endpoint.config(:github_updates) || []
   end
 
   defp initiatives do
