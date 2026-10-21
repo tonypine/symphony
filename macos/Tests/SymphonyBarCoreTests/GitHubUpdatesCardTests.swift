@@ -357,42 +357,34 @@ final class GitHubUpdatesCardTests: XCTestCase {
         XCTAssertNil(GitHubUpdatesSheet(.restartRelay, section: try section("github-updates")), "Restart Relay needs no sheet")
     }
 
-    func testTheRelaySheetTurnsOnOrChangesTheRelayPicked() throws {
-        var sheet = try XCTUnwrap(GitHubUpdatesSheet(.turnOn, section: try section("github-updates-off")))
-        XCTAssertEqual(sheet.title, "Turn on instant GitHub updates?")
-        XCTAssertEqual(sheet.verb, "Turn On")
-        XCTAssertTrue(sheet.picksRelay)
-        XCTAssertEqual(sheet.relay, "gh_webhook_forward")
-        XCTAssertEqual(sheet.option?.label, "GitHub CLI forwarding")
-        XCTAssertTrue(sheet.option?.note.hasPrefix("Recommended.") == true)
-        XCTAssertFalse(sheet.needsURL)
-        XCTAssertTrue(sheet.canConfirm)
-        XCTAssertEqual(sheet.request.action, .turnOn)
-        XCTAssertEqual(sheet.request.params, ["relay": "gh_webhook_forward"])
-
-        // A URL relay needs its public URL before it can turn on.
-        sheet.relay = "smee"
-        XCTAssertTrue(sheet.needsURL)
-        XCTAssertFalse(sheet.canConfirm)
-        sheet.url = "  https://smee.io/abc "
-        XCTAssertTrue(sheet.canConfirm)
-        XCTAssertEqual(sheet.request.params, ["relay": "smee", "url": "https://smee.io/abc"])
-
-        let finish = try XCTUnwrap(GitHubUpdatesSheet(.finishSetup, section: try section("github-updates")))
-        XCTAssertEqual(finish.title, "Finish setting up instant updates on this Mac?")
-        XCTAssertEqual(finish.verb, "Finish Setup")
-        XCTAssertEqual(finish.request.action, .turnOn)
-        XCTAssertEqual(finish.id, "finish_setup")
+    func testTheRelaySheetChangesTheRelayPickedAndTurningOnOpensTheGuidedSetup() throws {
+        // Turn On Instant Updates… and Finish Setup… open the guided setup (GitHubUpdatesSetup), not a sheet of their own.
+        XCTAssertNil(GitHubUpdatesSheet(.turnOn, section: try section("github-updates-off")))
+        XCTAssertNil(GitHubUpdatesSheet(.finishSetup, section: try section("github-updates")))
 
         var change = try XCTUnwrap(GitHubUpdatesSheet(.changeRelay, section: try section("github-updates")))
         XCTAssertEqual(change.title, "Change how GitHub reaches this Mac?")
         XCTAssertEqual(change.verb, "Change Relay")
+        XCTAssertTrue(change.picksRelay)
+        XCTAssertEqual(change.relay, "gh_webhook_forward")
+        XCTAssertEqual(change.option?.label, "GitHub CLI forwarding")
+        XCTAssertTrue(change.option?.note.hasPrefix("Recommended.") == true)
+        XCTAssertTrue(change.option?.recommended == true)
+        XCTAssertFalse(change.needsURL)
+        XCTAssertTrue(change.canConfirm)
+        XCTAssertEqual(change.request.params, ["relay": "gh_webhook_forward"])
+
+        // A URL relay needs its public URL before it can change.
+        change.relay = "smee"
+        XCTAssertTrue(change.needsURL)
+        XCTAssertFalse(change.canConfirm)
+        XCTAssertEqual(change.option?.note, "Free, no account. Anyone with the channel URL can read the updates.")
         change.relay = "cloudflare_tunnel"
-        change.url = "https://hooks.example.com"
+        change.url = "  https://hooks.example.com "
+        XCTAssertTrue(change.canConfirm)
         XCTAssertEqual(change.request.action, .changeRelay)
         XCTAssertEqual(change.request.params, ["relay": "cloudflare_tunnel", "url": "https://hooks.example.com"])
         XCTAssertEqual(change.id, "change_relay")
-        XCTAssertEqual(sheet.id, "turn_on")
 
         XCTAssertEqual(GitHubUpdatesSheet.relays.map(\.id), ["gh_webhook_forward", "smee", "cloudflare_tunnel", "tailscale_funnel"])
         XCTAssertEqual(GitHubUpdatesSheet.relayLabel("tailscale_funnel"), "Tailscale Funnel")

@@ -83,6 +83,7 @@
     },
     "steps": [
       {
+        "action": null,
         "checked_at": "2026-10-17T09:00:00Z",
         "detail": "Through GitHub CLI forwarding",
         "fix": null,
@@ -93,6 +94,7 @@
         "title": "Choose how GitHub's updates reach this Mac"
       },
       {
+        "action": null,
         "checked_at": "2026-10-17T09:00:00Z",
         "detail": null,
         "fix": null,
@@ -103,6 +105,7 @@
         "title": "GitHub CLI signed in, with access to webhooks"
       },
       {
+        "action": null,
         "checked_at": "2026-10-17T09:00:00Z",
         "detail": null,
         "fix": null,
@@ -113,6 +116,7 @@
         "title": "Webhook secret saved"
       },
       {
+        "action": null,
         "checked_at": "2026-10-17T09:00:00Z",
         "detail": null,
         "fix": null,
@@ -123,6 +127,7 @@
         "title": "Symphony's port pinned"
       },
       {
+        "action": null,
         "checked_at": "2026-10-17T09:00:00Z",
         "detail": null,
         "fix": null,
@@ -133,6 +138,7 @@
         "title": "Webhook on acme/app"
       },
       {
+        "action": null,
         "checked_at": "2026-10-17T09:00:00Z",
         "detail": "You need admin access to acme/lib to add a webhook.",
         "fix": "Ask an owner of acme/lib for admin access, or leave lib on polling.",
@@ -143,6 +149,7 @@
         "title": "Webhook on acme/lib"
       },
       {
+        "action": null,
         "checked_at": "2026-10-17T09:00:00Z",
         "detail": "received and verified",
         "fix": null,
@@ -153,6 +160,7 @@
         "title": "Test delivery from acme/app"
       },
       {
+        "action": null,
         "checked_at": null,
         "detail": null,
         "fix": null,

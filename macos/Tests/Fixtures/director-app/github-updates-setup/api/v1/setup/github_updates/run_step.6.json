@@ -1,0 +1,218 @@
+{
+  "github_updates": {
+    "enabled": true,
+    "events": [
+      "check_suite",
+      "check_run",
+      "workflow_run",
+      "pull_request",
+      "push",
+      "release"
+    ],
+    "mode": "setting_up",
+    "poll": {
+      "fallback_interval_ms": 300000,
+      "interval_ms": 30000,
+      "silence_alert_minutes": 10
+    },
+    "rate_limit": {
+      "limit": 5000,
+      "remaining": 4321,
+      "reset_at": "2026-10-19T12:40:00Z"
+    },
+    "relay": {
+      "kind": "gh_webhook_forward",
+      "label": "GitHub CLI forwarding",
+      "local_url": "http://127.0.0.1:4040/api/v1/github/webhook",
+      "payload_url": null,
+      "runs_in_symphony": true,
+      "url": null
+    },
+    "repos": [
+      {
+        "connection": "webhook",
+        "degraded": false,
+        "degraded_reason": null,
+        "deliveries": 0,
+        "github": "acme/web-shop",
+        "healthy": false,
+        "hook": null,
+        "key": "web-shop",
+        "last_delivery_at": null,
+        "missed_at": null,
+        "poll_interval_ms": 300000,
+        "relay": {
+          "failures": 0,
+          "last_error": null,
+          "restarts": 0,
+          "stable": true,
+          "state": "running"
+        },
+        "relay_restarts": 0,
+        "signature_failures_24h": 0,
+        "silent": true,
+        "test": null
+      },
+      {
+        "connection": "webhook",
+        "degraded": false,
+        "degraded_reason": null,
+        "deliveries": 0,
+        "github": "acme/api",
+        "healthy": false,
+        "hook": null,
+        "key": "api",
+        "last_delivery_at": null,
+        "missed_at": null,
+        "poll_interval_ms": 300000,
+        "relay": {
+          "failures": 0,
+          "last_error": null,
+          "restarts": 0,
+          "stable": true,
+          "state": "running"
+        },
+        "relay_restarts": 0,
+        "signature_failures_24h": 0,
+        "silent": true,
+        "test": null
+      },
+      {
+        "connection": "polling",
+        "degraded": false,
+        "degraded_reason": null,
+        "deliveries": 0,
+        "github": "acme/docs",
+        "healthy": false,
+        "hook": null,
+        "key": "docs",
+        "last_delivery_at": null,
+        "missed_at": null,
+        "poll_interval_ms": 30000,
+        "relay": null,
+        "relay_restarts": 0,
+        "signature_failures_24h": 0,
+        "silent": true,
+        "test": null
+      }
+    ],
+    "secret": {
+      "env": "SYMPHONY_GITHUB_WEBHOOK_SECRET",
+      "item": "symphony-github-webhook",
+      "present": true
+    },
+    "steps": [
+      {
+        "action": null,
+        "checked_at": "2026-10-19T12:00:00Z",
+        "detail": "Through GitHub CLI forwarding",
+        "fix": null,
+        "id": "relay",
+        "kind": "relay",
+        "repo": null,
+        "status": "done",
+        "title": "Choose how GitHub's updates reach this Mac"
+      },
+      {
+        "action": null,
+        "checked_at": "2026-10-19T12:00:00Z",
+        "detail": null,
+        "fix": null,
+        "id": "gh_ready",
+        "kind": "gh_ready",
+        "repo": null,
+        "status": "done",
+        "title": "GitHub CLI signed in, with access to webhooks"
+      },
+      {
+        "action": null,
+        "checked_at": "2026-10-19T12:00:00Z",
+        "detail": null,
+        "fix": null,
+        "id": "secret",
+        "kind": "secret",
+        "repo": null,
+        "status": "done",
+        "title": "Webhook secret saved"
+      },
+      {
+        "action": null,
+        "checked_at": "2026-10-19T09:00:00Z",
+        "detail": null,
+        "fix": null,
+        "id": "port",
+        "kind": "port",
+        "repo": null,
+        "status": "done",
+        "title": "Symphony's port pinned"
+      },
+      {
+        "action": null,
+        "checked_at": "2026-10-19T12:00:00Z",
+        "detail": null,
+        "fix": null,
+        "id": "repo:web-shop",
+        "kind": "repo",
+        "repo": "web-shop",
+        "status": "done",
+        "title": "Webhook on acme/web-shop"
+      },
+      {
+        "action": null,
+        "checked_at": "2026-10-19T12:00:00Z",
+        "detail": null,
+        "fix": null,
+        "id": "repo:api",
+        "kind": "repo",
+        "repo": "api",
+        "status": "done",
+        "title": "Webhook on acme/api"
+      },
+      {
+        "action": null,
+        "checked_at": null,
+        "detail": null,
+        "fix": null,
+        "id": "repo:docs",
+        "kind": "repo",
+        "repo": "docs",
+        "status": "pending",
+        "title": "Webhook on acme/docs"
+      },
+      {
+        "action": null,
+        "checked_at": null,
+        "detail": null,
+        "fix": null,
+        "id": "test:web-shop",
+        "kind": "test",
+        "repo": "web-shop",
+        "status": "pending",
+        "title": "Test delivery from acme/web-shop"
+      },
+      {
+        "action": null,
+        "checked_at": null,
+        "detail": null,
+        "fix": null,
+        "id": "test:api",
+        "kind": "test",
+        "repo": "api",
+        "status": "pending",
+        "title": "Test delivery from acme/api"
+      },
+      {
+        "action": null,
+        "checked_at": null,
+        "detail": null,
+        "fix": null,
+        "id": "test:docs",
+        "kind": "test",
+        "repo": "docs",
+        "status": "pending",
+        "title": "Test delivery from acme/docs"
+      }
+    ],
+    "turned_on_at": "2026-10-19T12:00:00Z"
+  }
+}

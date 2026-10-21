@@ -422,7 +422,56 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     assert section.turned_on_at == nil
   end
 
+  test "leave on polling stops a connected repository's relay and forgets its steps, so the setup finishes without it",
+       %{opts: opts, relays: relays} = ctx do
+    set_up_forwarding(ctx)
+    section = WebhookSetup.section(opts)
+    assert %{status: "waiting"} = step(section, "test:app")
+    assert %{status: "failed"} = step(section, "repo:lib")
+    assert RelaySupervisor.repo_keys(relays) == ["app"]
+
+    # lib never connected: its failed step goes, and the mode still needs app's test.
+    section = act("leave_on_polling", %{"repo" => "lib"}, opts)
+    assert %{status: "pending", detail: nil, fix: nil, action: nil} = step(section, "repo:lib")
+    assert section.mode == "setting_up"
+
+    # app connected but its test never came: back on polling, with nothing left to finish.
+    section = act("leave_on_polling", %{"repo" => "app"}, opts)
+    assert RelaySupervisor.repo_keys(relays) == []
+    assert %{status: "pending"} = step(section, "repo:app")
+    assert %{status: "pending"} = step(section, "test:app")
+    assert repo(section, "app").connection == "polling"
+    assert repo(section, "app").test == nil
+    assert section.mode == "setting_up"
+
+    assert {:error, {:unprocessable, "Name the repository in repo."}} = WebhookSetup.action("leave_on_polling", %{}, opts)
+    assert {:error, {:not_found, ~s(There is no repository named "nope".)}} = WebhookSetup.action("leave_on_polling", %{"repo" => "nope"}, opts)
+    act("turn_off", %{}, opts)
+    assert {:error, {:conflict, "Instant GitHub updates are off. Turn them on first."}} = WebhookSetup.action("leave_on_polling", %{"repo" => "app"}, opts)
+  end
+
   ## URL relays
+
+  test "leave on polling deletes the hook Symphony created, and keeps one GitHub wouldn't delete", %{opts: opts, gh: gh} do
+    act("turn_on", %{"relay" => "smee", "url" => "https://smee.io/AbC"}, opts)
+    for step <- ["secret", "port", "repo:app"], do: act("run_step", %{"step" => step}, opts)
+    gh_calls()
+
+    gh_respond(gh, ["api", "repos/acme/app/hooks/11", "--method", "DELETE"], {:error, {:gh_failed, [], 1, "HTTP 502"}})
+    section = act("leave_on_polling", %{"repo" => "app"}, opts)
+    assert [{["api", "repos/acme/app/hooks/11", "--method", "DELETE"], nil}] = gh_calls()
+    # Turning off tries it again.
+    assert repo(section, "app").hook == %{id: 11, created_by_symphony: true}
+    assert repo(section, "app").connection == "polling"
+
+    gh_respond(gh, ["api", "repos/acme/app/hooks/11", "--method", "DELETE"], {:ok, ""})
+    section = act("leave_on_polling", %{"repo" => "app"}, opts)
+    assert repo(section, "app").hook == nil
+
+    # Nothing left to delete.
+    act("leave_on_polling", %{"repo" => "app"}, opts)
+    assert gh_calls() == [{["api", "repos/acme/app/hooks/11", "--method", "DELETE"], nil}]
+  end
 
   test "a URL relay registers a hook per repository, pings it, and turn off deletes only the hooks Symphony created", %{opts: opts} do
     section = act("turn_on", %{"relay" => "smee", "url" => "https://smee.io/AbC/"}, opts)
@@ -636,15 +685,20 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
 
   test "gh_ready: signed out, no gh, no webhook scope, or a token gh can't list scopes for", %{opts: opts, gh: gh} do
     gh_respond(gh, ["auth", "status"], {:error, {:gh_failed, ["auth", "status"], 1, "You are not logged into any GitHub hosts."}})
-    assert {:error, %{detail: "The GitHub CLI isn't signed in.", fix: "Run gh auth login in Terminal, then run this step again."}} = WebhookSetup.check("gh_ready", opts)
+    assert {:error, %{detail: "The GitHub CLI isn't signed in.", fix: "Run gh auth login in Terminal, then run this step again.", action: "sign_in"}} = WebhookSetup.check("gh_ready", opts)
 
     gh_respond(gh, ["auth", "status"], {:error, {:gh_unavailable, "enoent"}})
     assert {:error, %{detail: "The GitHub CLI (gh) isn't installed."}} = WebhookSetup.run("gh_ready", %{}, opts)
 
     gh_respond(gh, ["auth", "status"], {:ok, "  - Token scopes: 'gist', 'read:org'\n"})
 
-    assert {:error, %{detail: "The GitHub CLI is signed in, but can't add webhooks" <> _, fix: "Run gh auth refresh -h github.com -s admin:repo_hook in Terminal" <> _}} =
+    assert {:error, %{detail: "The GitHub CLI is signed in, but can't add webhooks" <> _, fix: "Run gh auth refresh -h github.com -s admin:repo_hook in Terminal" <> _, action: "grant_permission"}} =
              WebhookSetup.check("gh_ready", opts)
+
+    # The section names the app's button for it, and a step the app can't help with names none.
+    act("turn_on", %{}, opts)
+    assert %{status: "failed", action: "grant_permission"} = step(act("run_step", %{"step" => "gh_ready"}, opts), "gh_ready")
+    assert %{status: "failed", action: nil} = step(WebhookSetup.section(opts), "relay")
 
     gh_respond(gh, ["auth", "status"], {:ok, "  ✓ Logged in to github.com using token (GH_TOKEN)\n"})
     assert WebhookSetup.check("gh_ready", opts) == :ok
@@ -696,7 +750,9 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     Agent.update(port, fn _port -> 4040 end)
     assert WebhookSetup.run("port", %{}, opts) == :ok
     Agent.update(port, fn _port -> 5050 end)
-    assert {:error, %{detail: "symphony.yml pins dashboard.port to 4040, but Symphony listens on another port.", fix: "Restart Symphony so it listens on 4040."}} = WebhookSetup.check("port", opts)
+
+    assert {:error, %{detail: "symphony.yml pins dashboard.port to 4040, but Symphony listens on another port.", fix: "Restart Symphony so it listens on 4040.", action: "restart_symphony"}} =
+             WebhookSetup.check("port", opts)
   end
 
   test "repo: no secret or port yet, a hook GitHub refuses or doesn't name, and unknown repositories", %{opts: opts, secret: secret, port: port, gh: gh} do
@@ -776,7 +832,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     assert {:error, {:conflict, "Symphony couldn't save the webhook secret (permission denied)."}} =
              WebhookSetup.action("recreate_secret", %{}, Keyword.put(opts, :hand_off, fn _secret -> {:error, :eacces} end))
 
-    assert WebhookSetup.actions() == ~w(turn_on run_step test restart_relay recreate_secret change_relay turn_off)
+    assert WebhookSetup.actions() == ~w(turn_on run_step test leave_on_polling restart_relay recreate_secret change_relay turn_off)
     assert hd(WebhookSetup.relays()) == "gh_webhook_forward"
   end
 

@@ -13,8 +13,8 @@ defmodule SymphonyElixirWeb.SetupController do
   that name that repo and those that name none (`SymphonyElixir.Setup.for_repo/2`), and answer 404
   `repo_not_loaded` while the running config has no such repo, as between an Add Repo save and the
   reload or restart that reads it. `POST /api/v1/setup/github_updates/:action` runs an action (`turn_on`,
-  `run_step`, `test`, `restart_relay`, `recreate_secret`, `change_relay`, `turn_off`) and answers with
-  the section as it leaves it.
+  `run_step`, `test`, `leave_on_polling`, `restart_relay`, `recreate_secret`, `change_relay`,
+  `turn_off`) and answers with the section as it leaves it.
   """
 
   use Phoenix.Controller, formats: [:json]

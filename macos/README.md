@@ -646,6 +646,15 @@ shows the project ID and team written. **Close** keeps the repo saved and its er
 Symphony stopped, the step says it checks the repo when it starts, with **Start Symphony** and **Done**; the
 Setup page opens at that start if the repo has an error.
 
+#### Instant updates
+
+While instant GitHub updates are on, **Check setup**'s button reads **Continue** and the sheet ends on
+**Instant updates**: "Instant updates for acme/widgets" waits for Symphony to read the repo, connects it the way
+the other repos are (`run_step` `repo:<key>`) and asks GitHub for a test update (`test` with `repo`), with
+"Webhook added" and "Test update" each done, working or failed with **Retry**. **Done** closes the sheet and
+Setup's GitHub updates card lists the repo at once; **Skip** leaves it on polling (`leave_on_polling` when it
+had connected). With Symphony stopped the step doesn't show: Finish Setup… connects the repo later.
+
 The first time Symphony runs and checks its setup on a Mac (the app keeps a record, so a new Mac with a copied
 `symphony.yml` counts), setup errors open the Symphony window on the Setup page with a welcome line. A later
 launch opens nothing: the sidebar badge and the menu bar say so.
@@ -1149,10 +1158,21 @@ state. The window opens on the Inbox the first time.
   GitHub's request limit is low or spent. **Details** shows the relay (**Change Relay…**), the secret (**Re-create
   Secret…**), Settings' two GitHub update intervals, the events Symphony asks GitHub for and the address deliveries go
   to. **Turn Off…** and **Re-create Secret…** confirm in a sheet that says what happens and that polling goes on;
-  Turn On, Finish Setup and Change Relay pick the relay in a sheet. Symphony makes each change
+  Change Relay picks the relay in a sheet. Symphony makes each change
   (`POST /api/v1/setup/github_updates/<action>`), and the card shows its answer until the next state poll reports
   something new. The QA fixtures `github-updates-off`, `github-updates` and `github-updates-degraded` show the card
   off, on and degraded; the last two answer Turn Off, and the degraded one Restart Relay, with the card after it.
+  **Turn On Instant Updates…** and **Finish Setup…** open a guided sheet of five steps, each saying what it does and
+  why, that runs its steps as it opens and shows each done, working or failed with its fix: the relay (GitHub CLI
+  forwarding picked and Recommended); the GitHub CLI and its permission to manage webhooks, where **Grant
+  Permission…** (or **Sign In…**) opens Terminal on `gh auth refresh -h github.com -s admin:repo_hook` (or
+  `gh auth login`) and the row checks again every 3 seconds and when the app comes back to the front; the secret,
+  which the app moves from the file Symphony hands it off in (`github_webhook_secret` in the state folder) into its
+  secret item `symphony-github-webhook` and passes at each start as `SYMPHONY_GITHUB_WEBHOOK_SECRET`, never shown,
+  and the port, with **Restart Symphony** when `symphony.yml` pins another one than Symphony listens on; each repo,
+  with **Retry** and **Leave on Polling**; and a test update from each connected repo. **Done** works with repos
+  left on polling. Finish Setup… ticks the steps already done. The QA fixture `github-updates-setup` answers the
+  walkthrough request by request, and `github-updates-add-repo` Add Repo's Instant updates step.
 - **Diagnostics** shows Symphony's own health in plain words: the connection (version, API URL, uptime, last
   update), capacity (agent slots, landing slots, forced allowance, initiative slots), Linear requests by
   caller over the last hour, the CI and review pollers and GitHub webhooks, and stray processes. **Copy State

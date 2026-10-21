@@ -181,6 +181,9 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var githubUpdatesSheet: GitHubUpdatesSheet?
     /// True while Restart Relay is on its way.
     @Published var restartingRelay = false
+    /// S2–S6: the guided setup behind Turn On Instant Updates… and Finish Setup…, nil while it is closed.
+    @Published var githubUpdatesSetup: GitHubUpdatesSetup?
+    var githubUpdatesSetupController: GitHubUpdatesSetupController?
     var setupBannerTask: Task<Void, Never>?
     /// The app's own build, for the build warning (J11).
     var appBuild = AppBuild(build: 0, isDevelopment: true)
@@ -192,6 +195,15 @@ final class SymphonyWindowModel: ObservableObject {
     var onCheckConfig: (String) async -> ConfigCheckResult = { _ in .passed }
     /// `POST /api/v1/setup/github_updates/<action>`, to Symphony or the API fixtures.
     var onGitHubUpdatesRequest: (GitHubUpdatesAPI.Action, [String: String]) async -> GitHubUpdatesAPI.Result = { _, _ in .failed("") }
+    /// `GET /api/v1/setup`'s GitHub updates section, which the guided setup reads while a test update is on its way.
+    var onGitHubUpdatesRead: () async -> GitHubUpdatesAPI.Result = { .failed("") }
+    /// Moves the webhook secret Symphony handed off into the app's secret item, and whether the item holds one.
+    var onMoveWebhookSecret: () -> WebhookSecret.Move = { .nothingHandedOff }
+    var onWebhookSecretStored: () -> Bool = { false }
+    /// Opens Terminal on `gh` with these arguments; the reason when it couldn't.
+    var onOpenGitHubTerminal: (_ arguments: [String]) -> String? = { _ in "Terminal isn't available." }
+    /// The app's graceful restart of Symphony.
+    var onRestartSymphony: () -> Void = {}
     /// The app's version, for the sidebar footer while Symphony doesn't say its own.
     var appVersion = ""
     /// Where the client reads Symphony from, for Diagnostics.

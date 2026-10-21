@@ -5063,12 +5063,17 @@ Minimum endpoints:
     Check Now.
 - `POST /api/v1/setup/github_updates/<action>`
   - `turn_on` (`relay`, `url`), `run_step` (`step`, and `url` for a URL relay's `relay` step),
-    `test` (`repo` optional), `restart_relay`, `recreate_secret`, `change_relay` (`relay`, `url`)
-    and `turn_off`; each answers with the section as it leaves it. Same-origin like Check Now: a
+    `test` (`repo` optional), `leave_on_polling` (`repo`), `restart_relay`, `recreate_secret`,
+    `change_relay` (`relay`, `url`) and `turn_off`; each answers with the section as it leaves it. Same-origin like Check Now: a
     client that sends no `Origin` may call it. `404` for an unknown action or step, `422` for bad
     params or a `symphony.yml` it can't edit, `409` while updates are off or nothing is connected.
   - Turning off stops the relays, deletes only the hooks Symphony created (their ids are kept per
-    Mac in the run store) and keeps the secret. Polling never depends on any of it.
+    Mac in the run store) and keeps the secret. `leave_on_polling` does the same for one
+    repository and forgets its steps and test, so the setup finishes without it. Polling never
+    depends on any of it.
+  - A failed step's `action` names the app's button for a fix only the person makes:
+    `grant_permission` (`gh` lacks the webhook scope), `sign_in` (`gh` is signed out) or
+    `restart_symphony` (`dashboard.port` pins another port than the one Symphony listens on).
 
 - `GET /api/v1/inbox`
   - Returns everything that waits on the operator, oldest first (an item whose wait is unknown

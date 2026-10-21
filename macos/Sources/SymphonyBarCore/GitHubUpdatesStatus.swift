@@ -54,6 +54,16 @@ public struct GitHubUpdatesSection: Equatable {
             case done, failed, waiting, pending
         }
 
+        /// The fix only the person can make, which the app offers as a button.
+        public enum Action: String, Equatable {
+            /// `gh` lacks the webhook scope: `gh auth refresh` with it, in Terminal.
+            case grantPermission = "grant_permission"
+            /// `gh` is signed out: `gh auth login`, in Terminal.
+            case signIn = "sign_in"
+            /// `symphony.yml` pins another port than the one Symphony listens on.
+            case restartSymphony = "restart_symphony"
+        }
+
         /// `relay`, `gh_ready`, `secret`, `port`, `repo:<key>`, `test:<key>`.
         public var id: String
         public var kind: String
@@ -64,8 +74,13 @@ public struct GitHubUpdatesSection: Equatable {
         public var detail: String?
         /// What fixes a failed step.
         public var fix: String?
+        /// The button for a fix only the person can make; nil when running the step again is the fix.
+        public var action: Action?
 
-        public init(id: String, kind: String, repo: String? = nil, title: String, status: Status, detail: String? = nil, fix: String? = nil) {
+        public init(
+            id: String, kind: String, repo: String? = nil, title: String, status: Status, detail: String? = nil, fix: String? = nil,
+            action: Action? = nil
+        ) {
             self.id = id
             self.kind = kind
             self.repo = repo
@@ -73,6 +88,7 @@ public struct GitHubUpdatesSection: Equatable {
             self.status = status
             self.detail = detail
             self.fix = fix
+            self.action = action
         }
     }
 
@@ -177,6 +193,15 @@ public struct GitHubUpdatesSection: Equatable {
     /// The step named `id`, such as `repo:web-shop`.
     public func step(_ id: String) -> Step? { steps.first { $0.id == id } }
 
+    /// The repo named `key`.
+    public func repo(_ key: String) -> Repo? { repos.first { $0.key == key } }
+
+    /// True once instant updates are set up on this Mac and on: GitHub's updates arrive, or should and don't.
+    public var isInstant: Bool { enabled && [.on, .degraded].contains(mode) }
+
+    /// The port Symphony listens on, from the address the relay forwards to.
+    public var listeningPort: Int? { relay.localURL.flatMap(URL.init(string:))?.port }
+
     // MARK: Decoding
 
     /// The section of a `GET /api/v1/setup` payload, or of an action's answer (`{"github_updates": …}`); nil when there
@@ -220,7 +245,8 @@ public struct GitHubUpdatesSection: Equatable {
             guard let id = step.id else { return nil }
             return Step(
                 id: id, kind: step.kind ?? id, repo: step.repo, title: step.title ?? id,
-                status: step.status.flatMap(Step.Status.init(rawValue:)) ?? .pending, detail: step.detail, fix: step.fix
+                status: step.status.flatMap(Step.Status.init(rawValue:)) ?? .pending, detail: step.detail, fix: step.fix,
+                action: step.action.flatMap(Step.Action.init(rawValue:))
             )
         }
         repos = (wire.repos ?? []).compactMap { repo in
@@ -268,6 +294,7 @@ public struct GitHubUpdatesSection: Equatable {
             let status: String?
             let detail: String?
             let fix: String?
+            let action: String?
         }
 
         struct RepoRelay: Decodable {
@@ -331,12 +358,19 @@ public struct GitHubUpdatesAnswer: Equatable {
     }
 }
 
-/// `POST /api/v1/setup/github_updates/<action>`: turn instant updates on or off, restart the relay, re-create the
-/// secret, change the relay. Symphony answers with the section as the action leaves it. It needs no control token:
-/// Symphony takes it from a client that sends no `Origin` header, as the app doesn't.
+/// `POST /api/v1/setup/github_updates/<action>`: turn instant updates on or off, run a setup step, send a test, leave a
+/// repo on polling, restart the relay, re-create the secret, change the relay. Symphony answers with the section as the
+/// action leaves it. It needs no control token: Symphony takes it from a client that sends no `Origin` header, as the
+/// app doesn't. `read` is `GET /api/v1/setup`'s section.
 public enum GitHubUpdatesAPI {
     public enum Action: String, Equatable {
         case turnOn = "turn_on"
+        /// `step`: `relay`, `gh_ready`, `secret`, `port` or `repo:<key>`.
+        case runStep = "run_step"
+        /// `repo` optional: every connected repo without it.
+        case test
+        /// `repo`.
+        case leaveOnPolling = "leave_on_polling"
         case restartRelay = "restart_relay"
         case recreateSecret = "recreate_secret"
         case changeRelay = "change_relay"
@@ -346,6 +380,9 @@ public enum GitHubUpdatesAPI {
         var failurePrefix: String {
             switch self {
             case .turnOn: "Couldn't turn on instant updates"
+            case .runStep: "Couldn't run the setup step"
+            case .test: "Couldn't send a test update"
+            case .leaveOnPolling: "Couldn't leave the repo on polling"
             case .restartRelay: "Couldn't restart the relay"
             case .recreateSecret: "Couldn't re-create the webhook secret"
             case .changeRelay: "Couldn't change the relay"
@@ -394,8 +431,37 @@ public enum GitHubUpdatesAPI {
         return result(action, statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0, data: data)
     }
 
+    /// `GET /api/v1/setup`, for the section alone: the test step reads it while a test delivery is on its way.
+    public static let setupPath = "api/v1/setup"
+    static let readFailurePrefix = "Couldn't read the setup"
+
+    public static func readRequest(base: URL) -> URLRequest {
+        var request = URLRequest(url: LiveAPIClient.url(setupPath, base: base) ?? base, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return request
+    }
+
+    /// Reads the section from the control URL in `stateRoot` (or `fallback` while Symphony hasn't written one).
+    public static func read(
+        stateRoot: URL,
+        fallback: URL? = SymphonyState.defaultBaseURL,
+        transport: ControlAPI.Transport = { try await URLSession.shared.data(for: $0) }
+    ) async -> Result {
+        guard let base = StateRoot.controlURL(in: stateRoot, fallback: fallback) else {
+            return .failed("\(readFailurePrefix): Symphony hasn't said where it listens.")
+        }
+        guard let (data, response) = try? await transport(readRequest(base: base)) else {
+            return .failed("\(readFailurePrefix): nothing answered at \(base.absoluteString).")
+        }
+        return result(prefix: readFailurePrefix, statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0, data: data)
+    }
+
     /// Symphony's answer: the section, or the reason it names.
     public static func result(_ action: Action, statusCode: Int, data: Data) -> Result {
+        result(prefix: action.failurePrefix, statusCode: statusCode, data: data)
+    }
+
+    static func result(prefix: String, statusCode: Int, data: Data) -> Result {
         struct Failure: Decodable {
             struct Error: Decodable {
                 let message: String?
@@ -407,12 +473,12 @@ public enum GitHubUpdatesAPI {
             return .updated(section)
         }
         if let message = (try? JSONDecoder().decode(Failure.self, from: data))?.error?.message?.trimmingWhitespace(), !message.isEmpty {
-            return .failed("\(action.failurePrefix): \(message)")
+            return .failed("\(prefix): \(message)")
         }
         switch statusCode {
-        case 200: return .failed("\(action.failurePrefix): Symphony's answer couldn't be read.")
-        case 404: return .failed("\(action.failurePrefix): this Symphony predates instant updates. Update it.")
-        default: return .failed("\(action.failurePrefix): Symphony answered with HTTP \(statusCode).")
+        case 200: return .failed("\(prefix): Symphony's answer couldn't be read.")
+        case 404: return .failed("\(prefix): this Symphony predates instant updates. Update it.")
+        default: return .failed("\(prefix): Symphony answered with HTTP \(statusCode).")
         }
     }
 }

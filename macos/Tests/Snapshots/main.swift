@@ -308,6 +308,60 @@ func githubSheet(_ action: GitHubUpdatesCard.Action) -> some View {
         .background(DesignTokens.Surface.window.color)
 }
 
+// The guided setup (TP-954): S2, S3 with the permission missing, S4, S5 with one repo failed, S6, and Add Repo's S13,
+// from the walkthrough's QA fixtures.
+func githubAnswer(_ fixture: String, _ file: String) -> GitHubUpdatesSection {
+    let url = here.appendingPathComponent("../Fixtures/director-app/\(fixture)/api/v1/setup/\(file)").standardizedFileURL
+    guard let section = GitHubUpdatesSection.decode(try! Data(contentsOf: url)) else { fatalError("\(url.path) has no GitHub updates") }
+    return section
+}
+
+@MainActor
+func githubSetup(_ page: GitHubUpdatesSetup.Page, answer: String? = nil, change: (inout GitHubUpdatesSetup) -> Void = { _ in }) -> some View {
+    var setup = GitHubUpdatesSetup(purpose: .turnOn, section: githubSection("github-updates-off"))
+    if let answer { setup.accept(githubAnswer("github-updates-setup", answer)) }
+    setup.show(page)
+    change(&setup)
+    return GitHubUpdatesSetupView(setup: setup).background(DesignTokens.Surface.window.color)
+}
+
+@MainActor
+func addRepoInstantUpdates(steps: [AddRepoStep] = [.source, .linear, .review, .check, .instantUpdates]) -> some View {
+    var step = AddRepoInstantUpdates(key: "widgets")
+    step.accept(githubAnswer("github-updates-add-repo", "github_updates/test.json"))
+    return VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(AddRepo.sheetTitle).font(.headline)
+            AddRepoStepIndicator(steps: steps, current: .instantUpdates)
+        }
+        .padding([.top, .horizontal], 16)
+        .padding(.bottom, 8)
+        Divider()
+        AddRepoInstantUpdatesPage(step: step)
+            .frame(maxHeight: .infinity, alignment: .top)
+        Divider()
+        AddRepoInstantUpdatesFooter(step: step)
+    }
+    .frame(width: AddRepoView.size.width, height: AddRepoView.size.height)
+    .background(DesignTokens.Surface.window.color)
+}
+
+/// Add Repo's step indicator on each page of the six steps a repo without a WORKFLOW.md has while instant updates are on,
+/// as wide as the sheet's header: the steps done by their tick alone, so each line fits.
+@MainActor
+func addRepoSixSteps() -> some View {
+    VStack(alignment: .leading, spacing: 0) {
+        ForEach(AddRepoStep.allCases, id: \.self) { current in
+            AddRepoStepIndicator(steps: AddRepoStep.allCases, current: current)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+            Divider()
+        }
+    }
+    .frame(width: AddRepoView.size.width)
+    .background(DesignTokens.Surface.window.color)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -377,5 +431,15 @@ MainActor.assumeIsolated {
         render(githubUpdatesPage(githubNeedsSetup()), scheme, to: "github-updates-needs-setup-\(suffix).png")
         render(githubSheet(.turnOff), scheme, to: "github-updates-turn-off-sheet-\(suffix).png")
         render(githubSheet(.recreateSecret), scheme, to: "github-updates-recreate-secret-sheet-\(suffix).png")
+        // The guided setup and Add Repo's Instant updates (TP-954).
+        render(githubSetup(.relay), scheme, to: "github-setup-relay-\(suffix).png")
+        render(githubSetup(.gitHubCLI, answer: "github_updates/run_step.2.json"), scheme, to: "github-setup-permission-\(suffix).png")
+        render(githubSetup(.secretAndPort, answer: "github_updates/run_step.4.json") { $0.secretSave = .saved }, scheme, to: "github-setup-secret-\(suffix).png")
+        render(githubSetup(.repos, answer: "github_updates/run_step.7.json"), scheme, to: "github-setup-repos-\(suffix).png")
+        render(githubSetup(.test, answer: "github_updates/test.json") { $0.secretSave = .saved; $0.leftOnPolling = ["docs"] }, scheme,
+               to: "github-setup-test-\(suffix).png")
+        render(addRepoInstantUpdates(), scheme, to: "add-repo-instant-updates-\(suffix).png")
+        render(addRepoInstantUpdates(steps: AddRepoStep.allCases), scheme, to: "add-repo-instant-updates-six-steps-\(suffix).png")
+        render(addRepoSixSteps(), scheme, to: "add-repo-six-steps-\(suffix).png")
     }
 }

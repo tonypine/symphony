@@ -75,8 +75,8 @@ public final class SettingsStore {
         defaults.set(settings.releaseCheckMinutes, forKey: Key.releaseCheckMinutes)
     }
 
-    /// Reads the Linear and OpenRouter API keys, and every other account in the secret store as an extra
-    /// variable.
+    /// Reads the Linear and OpenRouter API keys, the GitHub webhook secret, and every other account in the secret store
+    /// as an extra variable.
     public func loadSecrets() throws -> SecretSettings {
         let extra = try secrets.accounts()
             .filter { !SecretSettings.reservedNames.contains($0) }
@@ -86,19 +86,28 @@ public final class SettingsStore {
         return SecretSettings(
             linearAPIKey: try secrets.value(forAccount: SecretSettings.linearAPIKeyName) ?? "",
             openRouterAPIKey: try secrets.value(forAccount: SecretSettings.openRouterAPIKeyName) ?? "",
-            extraEnvironment: extra
+            extraEnvironment: extra,
+            githubWebhookSecret: try secrets.value(forAccount: SecretSettings.githubWebhookSecretItem) ?? ""
         )
     }
 
+    /// Moves a GitHub webhook secret Symphony handed off at `file` into the secret store (`WebhookSecret`).
+    public func moveWebhookSecret(handedOffAt file: URL) -> WebhookSecret.Move {
+        WebhookSecret.moveHandOff(from: file, into: secrets)
+    }
+
+    /// True when the secret store holds a GitHub webhook secret.
+    public var hasWebhookSecret: Bool { WebhookSecret.isStored(in: secrets) }
+
     /// Writes the secrets, then removes the named extra variables. Only names in `removing` are ever
-    /// deleted, so a list that failed to load or is stale can't wipe stored variables. Names still listed
-    /// and the Linear API key are never removed. A blank OpenRouter key is removed only when `removing`
-    /// names it, like an extra variable.
+    /// deleted, so a list that failed to load or is stale can't wipe stored variables. Names still listed,
+    /// the Linear API key and the GitHub webhook secret (which Settings never edits) are never removed. A
+    /// blank OpenRouter key is removed only when `removing` names it, like an extra variable.
     public func saveSecrets(_ settings: SecretSettings, removing removed: Set<String> = []) throws {
         let keyName = SecretSettings.linearAPIKeyName
         try secrets.setValue(settings.linearAPIKey, forAccount: keyName)
 
-        var kept = Set(settings.extraEnvironment.map(\.name)).union([keyName])
+        var kept = Set(settings.extraEnvironment.map(\.name)).union([keyName, SecretSettings.githubWebhookSecretItem])
         if !settings.openRouterAPIKey.isEmpty {
             try secrets.setValue(settings.openRouterAPIKey, forAccount: SecretSettings.openRouterAPIKeyName)
             kept.insert(SecretSettings.openRouterAPIKeyName)

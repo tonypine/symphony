@@ -90,6 +90,8 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     var checkForUpdates: () -> Void = {}
     /// Opens the Symphony window on the Setup page.
     var openSetup: () -> Void = {}
+    /// Hands Setup's GitHub updates card the section Add Repo's Instant updates step left, so it lists the repo at once.
+    var showGitHubUpdates: (GitHubUpdatesSection) -> Void = { _ in }
 
     private let secrets: SecretsReader
     /// The `WORKFLOW.md` files Add Repo added that Symphony can't read yet.
@@ -266,6 +268,19 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
             await SetupAPI.checkRepo(key) { repo in await self?.setupRequest(repo: repo) ?? .failed("") }
         }
         sheet.setupRequest = { [weak self] fix in await self?.setupRequest(fix: fix) ?? .failed("") }
+        // S13: while instant updates are on, the sheet ends by connecting and testing the repo.
+        sheet.readGitHubUpdates = { [weak self] in
+            guard let self else { return .failed("") }
+            return await GitHubUpdatesAPI.read(stateRoot: stateRoot(), fallback: AppStores.current.apiFallback, transport: AppStores.current.apiTransport)
+        }
+        sheet.gitHubUpdatesRequest = { [weak self] action, params in
+            guard let self else { return .failed("") }
+            return await GitHubUpdatesAPI.send(
+                action, params: params, stateRoot: stateRoot(), fallback: AppStores.current.apiFallback, transport: AppStores.current.apiTransport
+            )
+        }
+        sheet.onGitHubUpdates = { [weak self] section in self?.showGitHubUpdates(section) }
+        sheet.loadInstantUpdates()
         sheet.startSymphony = { [weak self] in self?.start() }
         sheet.canStartSymphony = { [weak self] in self?.canStart() ?? false }
         sheet.openDestination = { [weak self] destination in self?.open(destination) }
