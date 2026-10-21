@@ -136,7 +136,8 @@ struct InboxView: View {
 
 /// A review's scroll view that starts where the review was left, and keeps where it is. A chip the keyboard moves to
 /// scrolls the review through its position: the scroll view keeps its offset itself, and its next layout puts back a
-/// scroll made from AppKit alone (the write-in, picked last, back at the bottom).
+/// scroll made from AppKit alone (the write-in, picked last, back at the bottom). Offsets count from the review's top,
+/// below the toolbar, as its position does.
 private struct RememberedScroll: ViewModifier {
     let offset: Double?
     let remember: (Double) -> Void
@@ -148,7 +149,9 @@ private struct RememberedScroll: ViewModifier {
     func body(content: Content) -> some View {
         content
             .scrollPosition($position)
-            .onScrollGeometryChange(for: Double.self) { $0.contentOffset.y } action: { _, offset in
+            .onScrollGeometryChange(for: Double.self) {
+                InboxScrollOffsets.fromTop(contentOffset: $0.contentOffset.y, topInset: $0.contentInsets.top)
+            } action: { _, offset in
                 reported.y = offset
                 remember(offset)
             }
