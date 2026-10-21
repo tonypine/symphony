@@ -8,30 +8,32 @@ struct InboxContent: View {
 
     var body: some View {
         if let list = model.inboxList {
-            InboxView(
-                list: list,
-                selection: $model.inboxSelection,
-                picks: model.picks(for:),
-                pick: model.pick,
-                writeIn: model.writeIn,
-                perform: { model.perform($0, on: $1) },
-                openOverview: { model.show(.overview) },
-                openTicket: model.openTicket,
-                openMention: model.openPeek,
-                openMentionDirectly: model.openMentionDirectly,
-                watches: model.watchState.watches,
-                scrollOffset: { model.inboxScroll[$0] },
-                rememberScroll: { model.inboxScroll[$1] = $0 }
-            )
-            // N4: a chip opens its peek beside the review, or over the window when that would leave it too narrow.
-            .modifier(PeekPresenter(model: model))
-            .safeAreaInset(edge: .bottom) {
+            // C18: the banner sits under the review, never over it: an AppKit view in the review (the write-in's editor)
+            // draws above any SwiftUI view laid over it.
+            VStack(spacing: 0) {
+                InboxView(
+                    list: list,
+                    selection: $model.inboxSelection,
+                    picks: model.picks(for:),
+                    pick: model.pick,
+                    writeIn: model.writeIn,
+                    perform: { model.perform($0, on: $1) },
+                    openOverview: { model.show(.overview) },
+                    openTicket: model.openTicket,
+                    openMention: model.openPeek,
+                    openMentionDirectly: model.openMentionDirectly,
+                    watches: model.watchState.watches,
+                    scrollOffset: { model.inboxScroll[$0] },
+                    rememberScroll: { model.inboxScroll[$1] = $0 }
+                )
                 if let banner = model.inboxBanner {
                     InboxBannerView(banner: banner, undo: { model.undo(banner) }, close: model.dismissBanner)
                         .padding(DesignTokens.Space.s3)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
+            // N4: a chip opens its peek beside the review, or over the window when that would leave it too narrow.
+            .modifier(PeekPresenter(model: model))
             .animation(.default, value: model.inboxBanner)
             .sheet(item: $model.inboxSheet) { sheet in
                 ConsequenceSheetView(
@@ -918,12 +920,16 @@ private struct OptionCardView: View {
 /// N11's field, under the write-in card once it is picked: a `TextEditor` three lines tall that grows with the
 /// text to eight, then scrolls, over the hint that says how the agent reads it. The editor types into the field's own
 /// draft, handed to `commit` on each change: bound straight to the window model, a redraw between fast keystrokes put
-/// an older text back and lost what was typed.
+/// an older text back and lost what was typed. While a sheet covers the window (Send Decision, a peek) the text is a
+/// `Text`, which dims with the window as the editor's AppKit view doesn't, and the editor gets the keyboard back after.
 private struct WriteInField: View {
     @State private var text: String
     var commit: (String) -> Void
     var focused: FocusState<Bool>.Binding
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+    @State private var covered = false
+    /// Whether the editor had the keyboard before the sheet came up: taking the editor out takes its focus.
+    @State private var hadFocus = false
 
     /// The height of one line of `type.body`.
     private static let lineHeight = NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: NSFont.systemFontSize))
@@ -948,7 +954,7 @@ private struct WriteInField: View {
                 .frame(maxWidth: .infinity, minHeight: Self.lineHeight * 3, alignment: .topLeading)
                 .hidden()
                 .overlay(alignment: .topLeading) {
-                    if offscreenSnapshot {
+                    if offscreenSnapshot || covered {
                         Text(text).font(DesignTokens.TypeStyle.body.font).padding(.horizontal, Self.inset)
                     } else {
                         editor
@@ -965,6 +971,15 @@ private struct WriteInField: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityHidden(true)
+        }
+        .sheetCover($covered)
+        .onChange(of: focused.wrappedValue) { _, isFocused in
+            if !covered { hadFocus = isFocused }
+        }
+        .onChange(of: covered) { _, covered in
+            guard !covered, hadFocus else { return }
+            // Once the editor is back in the field.
+            DispatchQueue.main.async { focused.wrappedValue = true }
         }
     }
 
