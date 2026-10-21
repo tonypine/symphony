@@ -15,8 +15,9 @@ defmodule SymphonyElixir.TicketEvents do
   both name the request in their payload's `request`.
 
   The machinery writes events next to the snapshot fields of `SymphonyElixir.TicketState`
-  (`SymphonyElixir.TicketSignals`, `SymphonyElixir.Hold`, `SymphonyElixir.Decisions`), and nothing
-  reads them yet: the snapshot fields (`signals`, `verdicts`, `holds`, `decisions`, `dispatches`)
+  (`SymphonyElixir.TicketSignals`, `SymphonyElixir.Hold`, `SymphonyElixir.Decisions`, and the
+  orchestrator's `run.started` and `run.ended` next to its dispatches) and next to the audit records
+  of the Director's stop, force and Inbox moves (`person.action`), and nothing reads them yet: the snapshot fields (`signals`, `verdicts`, `holds`, `decisions`, `dispatches`)
   stay the source of truth until readers move over.
   """
 
