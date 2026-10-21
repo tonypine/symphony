@@ -128,8 +128,12 @@ public struct SecretSettings: Equatable {
     /// Environment variable name, and secret store account, of the OpenRouter API key.
     public static let openRouterAPIKeyName = "OPENROUTER_API_KEY"
 
+    /// Secret store account of the GitHub webhook secret instant updates sign with (`WebhookSecret`), passed to Symphony
+    /// as `SYMPHONY_GITHUB_WEBHOOK_SECRET`. The app keeps it; Settings never shows it.
+    public static let githubWebhookSecretItem = WebhookSecret.item
+
     /// Names set by their own fields, never as extra variables.
-    public static let reservedNames: Set<String> = [linearAPIKeyName, openRouterAPIKeyName]
+    public static let reservedNames: Set<String> = [linearAPIKeyName, openRouterAPIKeyName, githubWebhookSecretItem]
 
     public var linearAPIKey: String
 
@@ -139,10 +143,17 @@ public struct SecretSettings: Equatable {
     /// Extra environment variables, sorted by name when loaded.
     public var extraEnvironment: [EnvironmentVariable]
 
-    public init(linearAPIKey: String = "", openRouterAPIKey: String = "", extraEnvironment: [EnvironmentVariable] = []) {
+    /// The webhook secret instant GitHub updates made, read for the launch only: Settings never edits or saves it.
+    /// Empty when there is none.
+    public var githubWebhookSecret: String
+
+    public init(
+        linearAPIKey: String = "", openRouterAPIKey: String = "", extraEnvironment: [EnvironmentVariable] = [], githubWebhookSecret: String = ""
+    ) {
         self.linearAPIKey = linearAPIKey
         self.openRouterAPIKey = openRouterAPIKey
         self.extraEnvironment = extraEnvironment
+        self.githubWebhookSecret = githubWebhookSecret
     }
 
     /// The same secrets with whitespace trimmed from the keys and names, and fully blank extra rows dropped.
@@ -155,7 +166,8 @@ public struct SecretSettings: Equatable {
                 let name = variable.name.trimmingWhitespace()
                 if name.isEmpty && variable.value.isEmpty { return nil }
                 return EnvironmentVariable(name: name, value: variable.value)
-            }
+            },
+            githubWebhookSecret: githubWebhookSecret
         )
     }
 }

@@ -28,7 +28,12 @@ final class SymphonyRunner {
 
     init(store: SettingsStore = AppStores.current.settingsStore()) {
         self.store = store
-        secrets = SecretsReader(load: store.loadSecrets)
+        secrets = SecretsReader {
+            // A webhook secret Symphony handed off while no setup sheet was there to move it goes into the app's secret
+            // item first, so a launch passes the newest one.
+            _ = store.moveWebhookSecret(handedOffAt: WebhookSecret.handOffFile(stateRoot: StateRoot.locate(environment: AppStores.current.environment)))
+            return try store.loadSecrets()
+        }
     }
 
     var isRunning: Bool { child != nil }

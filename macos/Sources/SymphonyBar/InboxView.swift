@@ -955,7 +955,7 @@ private struct WriteInField: View {
 }
 
 /// The word "Recommended" in an accent capsule.
-private struct RecommendedBadge: View {
+struct RecommendedBadge: View {
     var body: some View {
         Text("Recommended")
             .font(DesignTokens.TypeStyle.label.font)

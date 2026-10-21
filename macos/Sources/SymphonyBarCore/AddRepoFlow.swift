@@ -1,13 +1,15 @@
 import Foundation
 
 /// The pages of the Add Repo sheet, in order. The WORKFLOW.md page shows only for a repo that has none. Connect, on
-/// Review, saves the repo and goes on to Check setup, which has no way back.
+/// Review, saves the repo and goes on to Check setup, which has no way back. Instant updates (S13) shows only while
+/// they are on, after Check setup.
 public enum AddRepoStep: String, CaseIterable, Equatable {
     case source = "Source"
     case linear = "Linear"
     case workflow = "WORKFLOW.md"
     case review = "Review"
     case check = "Check setup"
+    case instantUpdates = "Instant updates"
 
     fileprivate var order: Int {
         Self.allCases.firstIndex(of: self) ?? 0
@@ -81,6 +83,8 @@ public struct AddRepoFlow: Equatable {
     public var labels: LinearLoad
     /// True for the Source sheet of a connected repo, which has no WORKFLOW.md step to offer.
     public var editing: Bool
+    /// True while instant GitHub updates are on, so the sheet ends by connecting the repo to them (S13).
+    public var instantUpdates: Bool
 
     public init(
         draft: AddRepoDraft = AddRepoDraft(),
@@ -93,7 +97,8 @@ public struct AddRepoFlow: Equatable {
         landedWorkflow: PendingWorkflow? = nil,
         projects: LinearLoad = .loaded,
         labels: LinearLoad = .loaded,
-        editing: Bool = false
+        editing: Bool = false,
+        instantUpdates: Bool = false
     ) {
         self.draft = draft
         self.existing = existing
@@ -106,13 +111,15 @@ public struct AddRepoFlow: Equatable {
         self.projects = projects
         self.labels = labels
         self.editing = editing
+        self.instantUpdates = instantUpdates
     }
 
     // MARK: Steps
 
-    /// The steps the sheet shows: WORKFLOW.md only once the repo is known to have none.
+    /// The steps the sheet shows: WORKFLOW.md only once the repo is known to have none, Instant updates only while they
+    /// are on.
     public var steps: [AddRepoStep] {
-        AddRepoStep.allCases.filter { $0 != .workflow || hasNoWorkflow }
+        AddRepoStep.allCases.filter { ($0 != .workflow || hasNoWorkflow) && ($0 != .instantUpdates || instantUpdates) }
     }
 
     /// The step Continue goes to from `step`, nil on Review, where Connect saves first, and on Check setup.
@@ -121,9 +128,9 @@ public struct AddRepoFlow: Equatable {
         return steps.first { $0.order > step.order }
     }
 
-    /// The step Back goes to from `step`, nil on Source and on Check setup, once the repo is saved.
+    /// The step Back goes to from `step`, nil on Source, and on Check setup and Instant updates, once the repo is saved.
     public func step(before step: AddRepoStep) -> AddRepoStep? {
-        guard step != .check else { return nil }
+        guard step.order < AddRepoStep.check.order else { return nil }
         return steps.last { $0.order < step.order }
     }
 
@@ -141,7 +148,7 @@ public struct AddRepoFlow: Equatable {
             if let problem = AddRepo.baseBranchProblem(draft.baseBranch) { return problem }
             if case let .failure(problem) = entry { return problem }
             return nil
-        case .check:
+        case .check, .instantUpdates:
             return nil
         }
     }

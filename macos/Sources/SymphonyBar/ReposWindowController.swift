@@ -266,6 +266,18 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
             await SetupAPI.checkRepo(key) { repo in await self?.setupRequest(repo: repo) ?? .failed("") }
         }
         sheet.setupRequest = { [weak self] fix in await self?.setupRequest(fix: fix) ?? .failed("") }
+        // S13: while instant updates are on, the sheet ends by connecting and testing the repo.
+        sheet.readGitHubUpdates = { [weak self] in
+            guard let self else { return .failed("") }
+            return await GitHubUpdatesAPI.read(stateRoot: stateRoot(), fallback: AppStores.current.apiFallback, transport: AppStores.current.apiTransport)
+        }
+        sheet.gitHubUpdatesRequest = { [weak self] action, params in
+            guard let self else { return .failed("") }
+            return await GitHubUpdatesAPI.send(
+                action, params: params, stateRoot: stateRoot(), fallback: AppStores.current.apiFallback, transport: AppStores.current.apiTransport
+            )
+        }
+        sheet.loadInstantUpdates()
         sheet.startSymphony = { [weak self] in self?.start() }
         sheet.canStartSymphony = { [weak self] in self?.canStart() ?? false }
         sheet.openDestination = { [weak self] destination in self?.open(destination) }

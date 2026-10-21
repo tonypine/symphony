@@ -170,8 +170,9 @@ public enum ChildLaunchBuilder {
         )
     }
 
-    /// The app's environment with PATH fallbacks, the extra variables and the Linear and OpenRouter API keys on top.
-    /// The OpenRouter key is passed only when set, and the QA driver helper only when it is there.
+    /// The app's environment with PATH fallbacks, the extra variables, the Linear and OpenRouter API keys and the GitHub
+    /// webhook secret on top. The OpenRouter key and the webhook secret are passed only when set, and the QA driver
+    /// helper only when it is there.
     static func environment(
         base: [String: String],
         secrets: SecretSettings,
@@ -196,6 +197,9 @@ public enum ChildLaunchBuilder {
         }
         if !secrets.openRouterAPIKey.isEmpty {
             environment[SecretSettings.openRouterAPIKeyName] = secrets.openRouterAPIKey
+        }
+        if !secrets.githubWebhookSecret.isEmpty {
+            environment[WebhookSecret.environmentKey] = secrets.githubWebhookSecret
         }
         return environment
     }

@@ -15,8 +15,11 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
   | `repo:<key>` | the repository's relay runs (`gh_webhook_forward`), or the hook Symphony created exists | checks admin access, then starts the relay or creates the hook with `gh api repos/:repo/hooks` |
   | `test:<key>` | a delivery from the repository reached Symphony and verified after the test started | starts the relay again (a new forwarding hook is pinged) or pings the hook |
 
-  A failure says what is wrong and what fixes it, in plain words (`detail`, `fix`). A repository
-  whose step fails stays on polling; the others connect.
+  A failure says what is wrong and what fixes it, in plain words (`detail`, `fix`), and names the
+  app's button for a fix only the person can make (`action`): `grant_permission` (`gh auth refresh`
+  with the webhook scope), `sign_in` (`gh auth login`) or `restart_symphony` (the pinned port isn't
+  the one Symphony listens on). A repository whose step fails stays on polling; the others connect,
+  and `leave_on_polling` takes a connected one back to polling.
 
   ## Mode
 
@@ -57,9 +60,9 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
     "cloudflare_tunnel" => "Cloudflare Tunnel",
     "tailscale_funnel" => "Tailscale Funnel"
   }
-  @actions ~w(turn_on run_step test restart_relay recreate_secret change_relay turn_off)
+  @actions ~w(turn_on run_step test leave_on_polling restart_relay recreate_secret change_relay turn_off)
 
-  @type failure :: %{detail: String.t(), fix: String.t()}
+  @type failure :: %{required(:detail) => String.t(), required(:fix) => String.t(), optional(:action) => String.t()}
   @type result :: :ok | {:pending, String.t()} | {:error, failure()}
   @type action_error :: {:not_found | :unprocessable | :conflict | :config, String.t()}
 
@@ -346,6 +349,30 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
     end
   end
 
+  # One repository back to polling: its relay stops, the hook Symphony created goes, and its steps
+  # and test are forgotten, so the setup can finish without it.
+  defp apply_action("leave_on_polling", params, ctx) do
+    with :ok <- enabled(ctx),
+         {:ok, repo} <- repo_param(params, ctx) do
+      RelaySupervisor.stop(ctx.relays, repo.key)
+
+      deleted =
+        case Map.get(load(ctx).hooks, repo.key) do
+          nil -> false
+          hook -> delete_hook(hook, ctx) == :ok
+        end
+
+      update(ctx, fn record ->
+        %{
+          record
+          | steps: Map.drop(record.steps, ["repo:" <> repo.key, "test:" <> repo.key]),
+            tests: Map.delete(record.tests, repo.key),
+            hooks: if(deleted, do: Map.delete(record.hooks, repo.key), else: record.hooks)
+        }
+      end)
+    end
+  end
+
   defp apply_action("restart_relay", params, ctx) do
     with :ok <- enabled(ctx),
          :ok <- runs_relay(ctx),
@@ -434,7 +461,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
       case result do
         :ok -> %{status: "done", detail: nil, fix: nil}
         {:pending, detail} -> %{status: "waiting", detail: detail, fix: nil}
-        {:error, failure} -> %{status: "failed", detail: failure.detail, fix: failure.fix}
+        {:error, failure} -> %{status: "failed", detail: failure.detail, fix: failure.fix, action: Map.get(failure, :action)}
       end
 
     update(ctx, &put_in(&1, [:steps, step], Map.put(entry, :checked_at, ctx.now.())))
@@ -681,6 +708,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
       status: status.status,
       detail: Map.get(status, :detail) || done_detail(kind, status.status, ctx),
       fix: Map.get(status, :fix),
+      action: Map.get(status, :action),
       checked_at: stored && stored.checked_at
     }
   end
@@ -698,7 +726,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
 
   defp entry_of(:ok), do: %{status: "done"}
   defp entry_of({:pending, detail}), do: %{status: "waiting", detail: detail}
-  defp entry_of({:error, failure}), do: %{status: "failed", detail: failure.detail, fix: failure.fix}
+  defp entry_of({:error, failure}), do: %{status: "failed", detail: failure.detail, fix: failure.fix, action: Map.get(failure, :action)}
 
   defp step_kind("repo:" <> key), do: {"repo", key}
   defp step_kind("test:" <> key), do: {"test", key}
@@ -808,13 +836,14 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
 
   defp failure(:extension), do: {:error, %{detail: "The GitHub CLI's webhook extension isn't installed.", fix: "Run this step: Symphony installs it with gh extension install #{@extension}."}}
   defp failure(:no_gh), do: {:error, %{detail: "The GitHub CLI (gh) isn't installed.", fix: "Install it with brew install gh, sign in with gh auth login, then run this step again."}}
-  defp failure(:signed_out), do: {:error, %{detail: "The GitHub CLI isn't signed in.", fix: "Run gh auth login in Terminal, then run this step again."}}
+  defp failure(:signed_out), do: {:error, %{detail: "The GitHub CLI isn't signed in.", fix: "Run gh auth login in Terminal, then run this step again.", action: "sign_in"}}
 
   defp failure(:scope) do
     {:error,
      %{
        detail: "The GitHub CLI is signed in, but can't add webhooks to repositories (it lacks the admin:repo_hook scope).",
-       fix: "Run gh auth refresh -h github.com -s admin:repo_hook in Terminal, then run this step again."
+       fix: "Run gh auth refresh -h github.com -s admin:repo_hook in Terminal, then run this step again.",
+       action: "grant_permission"
      }}
   end
 
@@ -831,7 +860,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
   end
 
   defp failure(:port_moved, pinned) do
-    {:error, %{detail: "symphony.yml pins dashboard.port to #{pinned}, but Symphony listens on another port.", fix: "Restart Symphony so it listens on #{pinned}."}}
+    {:error, %{detail: "symphony.yml pins dashboard.port to #{pinned}, but Symphony listens on another port.", fix: "Restart Symphony so it listens on #{pinned}.", action: "restart_symphony"}}
   end
 
   defp failure(:admin, repo) do
@@ -920,6 +949,15 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
       key -> connected |> Enum.filter(&(&1.key == key)) |> one_repo(key)
     end
   end
+
+  defp repo_param(%{"repo" => key}, ctx) when is_binary(key) do
+    case Enum.find(ctx.repos.(), &(&1.key == key)) do
+      nil -> {:error, {:not_found, "There is no repository named #{inspect(key)}."}}
+      repo -> {:ok, repo}
+    end
+  end
+
+  defp repo_param(_params, _ctx), do: {:error, {:unprocessable, "Name the repository in repo."}}
 
   defp one_repo([], key), do: {:error, {:not_found, "#{inspect(key)} isn't a connected repository."}}
   defp one_repo(repos, _key), do: {:ok, repos}

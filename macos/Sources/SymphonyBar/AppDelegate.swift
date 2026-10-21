@@ -214,6 +214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         symphonyWindow.appVersion = updates.current.version ?? ""
         symphonyWindow.appBuild = updates.current
         symphonyWindow.secrets = runner.secrets
+        symphonyWindow.restartSymphony = { [weak self] in self?.restart() }
         symphonyWindow.stateRoot = poller.stateRoot
         symphonyWindow.onAction = { [weak self] action in self?.perform(action) }
         symphonyWindow.openRepos = { [weak self] key in

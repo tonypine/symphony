@@ -4,7 +4,8 @@ import Foundation
 /// `<dir>/<path>.json` (for example `api/v1/state.json`) and answers 404 when there is no such file; each POST is
 /// appended to the request log as one JSON line and answered 200, with `<dir>/<path>.json` when there is one. A POST
 /// whose answer changes from one request to the next reads `<path>.1.json` the first time, `<path>.2.json` the second,
-/// and the last one there is after that (Setup's fix, Undo, fix again). No request leaves the app, so QA walks every
+/// and the last one there is after that (Setup's fix, Undo, fix again). `<dir>/github_webhook_secret` stands for the
+/// webhook secret Symphony hands off (`WebhookSecret`), a made-up value. No request leaves the app, so QA walks every
 /// view with fixed data and no Linear or model calls.
 public struct APIFixtures: Equatable {
     /// The base URL requests are built on while fixtures answer. Never contacted: the transport answers by path.

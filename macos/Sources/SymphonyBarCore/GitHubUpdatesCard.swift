@@ -307,15 +307,14 @@ public struct GitHubUpdatesCard: Equatable {
     }
 }
 
-/// The consequence sheets of the card (P5, C17): S12 Turn Off, S11 Re-create Secret, and the relay sheet behind Turn On
-/// Instant Updates…, Finish Setup… and Change Relay…. The title is the question; then what happens, what stays, and
-/// Cancel with the verb. Nothing changes until its button is pressed; a failure stays in the sheet with the reason.
+/// The consequence sheets of the card (P5, C17): S12 Turn Off, S11 Re-create Secret, and the relay sheet behind Change
+/// Relay…. The title is the question; then what happens, what stays, and Cancel with the verb. Nothing changes until its
+/// button is pressed; a failure stays in the sheet with the reason. Turn On Instant Updates… and Finish Setup… open the
+/// guided setup instead (`GitHubUpdatesSetup`).
 public struct GitHubUpdatesSheet: Equatable, Identifiable {
     public enum Kind: Equatable {
         case turnOff
         case recreateSecret
-        case turnOn
-        case finishSetup
         case changeRelay
     }
 
@@ -329,17 +328,22 @@ public struct GitHubUpdatesSheet: Equatable, Identifiable {
     public struct RelayOption: Equatable, Identifiable {
         public var id: String
         public var label: String
-        public var note: String
+        /// What it takes and what it costs, in a sentence.
+        public var summary: String
+        /// The relay Symphony recommends (D1).
+        public var recommended = false
         /// A URL relay needs its public URL.
         public var needsURL: Bool { id != "gh_webhook_forward" }
+        /// The summary, after "Recommended." on the recommended one.
+        public var note: String { recommended ? "Recommended. " + summary : summary }
     }
 
     /// The relays Symphony can run updates through, the recommended one first (D1).
     public static let relays: [RelayOption] = [
-        RelayOption(id: "gh_webhook_forward", label: "GitHub CLI forwarding", note: "Recommended. Symphony runs it with your GitHub CLI; no account to create."),
-        RelayOption(id: "smee", label: "smee.io", note: "Free, no account. Anyone with the channel URL can read the updates."),
-        RelayOption(id: "cloudflare_tunnel", label: "Cloudflare Tunnel", note: "Needs a Cloudflare account and a domain."),
-        RelayOption(id: "tailscale_funnel", label: "Tailscale Funnel", note: "Needs a Tailscale account."),
+        RelayOption(id: "gh_webhook_forward", label: "GitHub CLI forwarding", summary: "Symphony runs it with your GitHub CLI; no account to create.", recommended: true),
+        RelayOption(id: "smee", label: "smee.io", summary: "Free, no account. Anyone with the channel URL can read the updates."),
+        RelayOption(id: "cloudflare_tunnel", label: "Cloudflare Tunnel", summary: "Needs a Cloudflare account and a domain."),
+        RelayOption(id: "tailscale_funnel", label: "Tailscale Funnel", summary: "Needs a Tailscale account."),
     ]
 
     public static func relayLabel(_ kind: String) -> String {
@@ -354,7 +358,7 @@ public struct GitHubUpdatesSheet: Equatable, Identifiable {
     public var verb: String
     /// Turn Off is destructive: it removes webhooks.
     public var isDestructive: Bool
-    /// The relay picked, for Turn On, Finish Setup and Change Relay.
+    /// The relay picked, for Change Relay.
     public var relay: String
     /// A URL relay's public URL.
     public var url: String
@@ -364,13 +368,12 @@ public struct GitHubUpdatesSheet: Equatable, Identifiable {
         switch kind {
         case .turnOff: "turn_off"
         case .recreateSecret: "recreate_secret"
-        case .turnOn: "turn_on"
-        case .finishSetup: "finish_setup"
         case .changeRelay: "change_relay"
         }
     }
 
-    /// The sheet a card button opens; nil for Restart Relay, which needs none.
+    /// The sheet a card button opens; nil for Restart Relay, which needs none, and for Turn On Instant Updates… and Finish
+    /// Setup…, which open the guided setup.
     public init?(_ action: GitHubUpdatesCard.Action, section: GitHubUpdatesSection) {
         let polling = GitHubUpdatesCard.interval(section.poll.intervalMs)
         let connected = section.connected.count
@@ -380,7 +383,7 @@ public struct GitHubUpdatesSheet: Equatable, Identifiable {
         isDestructive = false
 
         switch action {
-        case .restartRelay:
+        case .restartRelay, .turnOn, .finishSetup:
             return nil
         case .turnOff:
             kind = .turnOff
@@ -400,13 +403,6 @@ public struct GitHubUpdatesSheet: Equatable, Identifiable {
                 + "Updates signed with the old secret are refused from then on."
             stays = "Symphony goes on checking GitHub every \(polling) while the repos connect again, so no change is missed."
             verb = "Re-create Secret"
-        case .turnOn, .finishSetup:
-            kind = action == .turnOn ? .turnOn : .finishSetup
-            title = action == .turnOn ? "Turn on instant GitHub updates?" : "Finish setting up instant updates on this Mac?"
-            happens = "Symphony turns instant updates on in symphony.yml through the relay you pick, and checks each setup step. "
-                + "A step that needs you shows what to do on the card."
-            stays = "Symphony goes on checking GitHub every \(polling) until GitHub's updates arrive."
-            verb = action == .turnOn ? "Turn On" : "Finish Setup"
         case .changeRelay:
             kind = .changeRelay
             title = "Change how GitHub reaches this Mac?"
@@ -417,7 +413,7 @@ public struct GitHubUpdatesSheet: Equatable, Identifiable {
     }
 
     /// True when the sheet picks a relay.
-    public var picksRelay: Bool { [.turnOn, .finishSetup, .changeRelay].contains(kind) }
+    public var picksRelay: Bool { kind == .changeRelay }
 
     public var option: RelayOption? { Self.relays.first { $0.id == relay } }
 
@@ -452,7 +448,6 @@ public struct GitHubUpdatesSheet: Equatable, Identifiable {
         switch kind {
         case .turnOff: return (.turnOff, params)
         case .recreateSecret: return (.recreateSecret, params)
-        case .turnOn, .finishSetup: return (.turnOn, params)
         case .changeRelay: return (.changeRelay, params)
         }
     }

@@ -250,6 +250,12 @@ public struct AppStores {
     public func settingsStore() -> SettingsStore {
         SettingsStore(defaults: defaults, secrets: secrets)
     }
+
+    /// Where Symphony hands the GitHub webhook secret off: its state root's file, or the fixtures' while they stand for
+    /// Symphony (`APIFixtures`).
+    public func webhookSecretHandOff(stateRoot: URL) -> URL {
+        apiFixtures.map { $0.directory.appendingPathComponent(WebhookSecret.handOffFileName) } ?? WebhookSecret.handOffFile(stateRoot: stateRoot)
+    }
 }
 
 /// A key-value store in a property list file, read on every lookup so separate instances agree.
