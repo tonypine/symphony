@@ -1253,6 +1253,7 @@ struct AddRepoInstantUpdatesFooter: View {
         HStack {
             Button(AddRepoInstantUpdates.skipTitle, action: skip)
                 .keyboardShortcut(.cancelAction)
+                .disabled(!step.canSkip)
                 .help("Leaves \(step.key) on polling.")
             Spacer()
             if let problem = step.doneProblem {

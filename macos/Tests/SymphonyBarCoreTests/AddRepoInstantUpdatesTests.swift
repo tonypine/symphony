@@ -56,6 +56,8 @@ final class AddRepoInstantUpdatesTests: XCTestCase {
         XCTAssertNil(step.doneProblem)
         XCTAssertTrue(step.explanation.contains("Skip leaves it on polling: Symphony checks it every 30 s."), step.explanation)
         XCTAssertTrue(seen.contains { $0.rows.last?.word == "Waiting" }, "the test row waits while the update is on its way")
+        XCTAssertTrue(seen.contains { !$0.canSkip && $0.rows.first?.word == "Checking…" }, "Skip waits while the webhook request is out")
+        XCTAssertTrue(step.canSkip)
         XCTAssertTrue(fake.section.repo("widgets")?.connected == true)
     }
 

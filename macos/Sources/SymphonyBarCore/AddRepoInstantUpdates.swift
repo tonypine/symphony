@@ -65,6 +65,9 @@ public struct AddRepoInstantUpdates: Equatable {
     /// True once the repo connected, so Skip has something to take back to polling.
     public var isConnected: Bool { section?.step(connectStep)?.status == .done }
 
+    /// Skip waits for a request that is out, so a repo never connects after it was skipped.
+    public var canSkip: Bool { running.isEmpty }
+
     private func row(_ id: String, title: String, done: String) -> GitHubUpdatesSetup.Row {
         typealias Row = GitHubUpdatesSetup.Row
         if running.contains(id) { return Row(id: id, title: title, tone: .working, word: "Checking…", buttons: []) }
