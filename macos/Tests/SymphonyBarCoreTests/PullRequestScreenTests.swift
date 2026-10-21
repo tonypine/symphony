@@ -354,4 +354,17 @@ final class PullRequestNavigationTests: XCTestCase {
         scroll["b"] = nil
         XCTAssertNil(scroll["b"])
     }
+
+    /// The scroll view's content offset counts from under the 52 pt toolbar; the review's position, which a chip's
+    /// scroll and ⌘[ go to, from its top below it. Taken as it is, every scroll fell 52 pt short (TP-1171).
+    func testAReviewsOffsetCountsFromItsTopBelowTheToolbar() {
+        XCTAssertEqual(InboxScrollOffsets.fromTop(contentOffset: -52, topInset: 52), 0)
+        XCTAssertEqual(InboxScrollOffsets.fromTop(contentOffset: 448, topInset: 52), 500)
+        XCTAssertEqual(InboxScrollOffsets.fromTop(contentOffset: 30, topInset: 0), 30)
+        var scroll = InboxScrollOffsets()
+        scroll["a"] = InboxScrollOffsets.fromTop(contentOffset: -52, topInset: 52)
+        XCTAssertNil(scroll["a"], "a review at its top, under the toolbar, starts at its top")
+        scroll["a"] = InboxScrollOffsets.fromTop(contentOffset: -22, topInset: 52)
+        XCTAssertEqual(scroll["a"], 30, "a review scrolled 30 pt is remembered")
+    }
 }

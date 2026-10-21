@@ -22,6 +22,13 @@ extension EnvironmentValues {
         get { self[OpenMentionDirectlyKey.self] }
         set { self[OpenMentionDirectlyKey.self] = newValue }
     }
+
+    /// Scrolls the review a distance down, through its scroll view's position, to show the chip the keyboard is on
+    /// (`ChipTextView.scrollReview`); nil outside the review's scroll view.
+    var scrollReview: ScrollReviewAction? {
+        get { self[ScrollReviewKey.self] }
+        set { self[ScrollReviewKey.self] = newValue }
+    }
 }
 
 private struct MentionReferencesKey: EnvironmentKey {
@@ -36,11 +43,22 @@ private struct OpenMentionDirectlyKey: EnvironmentKey {
     static let defaultValue: OpenMentionAction? = nil
 }
 
+private struct ScrollReviewKey: EnvironmentKey {
+    static let defaultValue: ScrollReviewAction? = nil
+}
+
 /// What a click on a chip opens, as `OpenURLAction` is for a link.
 struct OpenMentionAction {
     let handler: (Mention) -> Void
 
     func callAsFunction(_ mention: Mention) { handler(mention) }
+}
+
+/// What scrolls the review a distance down, in points.
+struct ScrollReviewAction {
+    let handler: (CGFloat) -> Void
+
+    func callAsFunction(_ distance: CGFloat) { handler(distance) }
 }
 
 /// A paragraph of an Inbox item's text in native Mac text, each ticket and pull request it mentions a chip (N1) with
@@ -155,6 +173,7 @@ private struct ChipTextRepresentable: NSViewRepresentable {
         let openMention = context.environment.openMention
         view.openMention = { openMention($0) }
         view.openMentionDirectly = context.environment.openMentionDirectly.map { direct in { direct($0) } }
+        view.scrollReview = context.environment.scrollReview.map { scroll in { scroll($0) } }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView view: ChipTextView, context: Context) -> CGSize? {

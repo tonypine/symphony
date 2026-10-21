@@ -253,6 +253,12 @@ public struct InboxScrollOffsets: Equatable {
         get { byItem[itemID] }
         set { byItem[itemID] = newValue.flatMap { $0 > 0 ? $0 : nil } }
     }
+
+    /// A review's offset from its top, from its scroll view's content offset, which counts from under the window's
+    /// toolbar (−52 at the top): the offset `ScrollPosition.scrollTo(y:)` takes.
+    public static func fromTop(contentOffset: Double, topInset: Double) -> Double {
+        contentOffset + topInset
+    }
 }
 
 /// The consequence sheet of a move (C17, P5, D12d): the question as its title, what happens in Linear, what stays

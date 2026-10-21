@@ -190,10 +190,11 @@ public struct LinearClient {
         return await fetchAll(Self.labelsQuery, variables: variables, as: LabelsData.self) {
             $0.issueLabels
         }.map { nodes in
-            let labels = nodes
-                .filter { !($0.isGroup ?? false) }
-                .map { LinearLabel(id: $0.id, name: $0.name) }
-                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            let plain = nodes.filter { !($0.isGroup ?? false) }
+            let unsorted: [LinearLabel] = plain.map { LinearLabel(id: $0.id, name: $0.name) }
+            let labels = unsorted.sorted { (a: LinearLabel, b: LinearLabel) -> Bool in
+                a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
             return LinearProjectScope(teams: teams, labels: labels)
         }
     }
