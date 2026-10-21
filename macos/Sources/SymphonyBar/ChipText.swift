@@ -83,13 +83,28 @@ struct ChipText: View {
             let style = ChipTextStyle(font: font, color: color, selectable: selectable)
             // An AppKit view gives SwiftUI no text baselines, so they come from TextKit's line for the font.
             let baseline = ChipTextView.baseline(of: font)
-            Group {
-                if offscreenSnapshot || covered {
+            // One view whatever the paragraph draws: on a `Group` the sheet reader would go to each branch, and a new
+            // reader with each change of branch.
+            ZStack(alignment: .topLeading) {
+                if offscreenSnapshot {
                     ChipTextImage(content: content, style: style)
+                } else if covered && !selectable {
+                    // A control's text under a sheet: with no AppKit view in the control, what the control draws over
+                    // it (a picked option card's stroke) dims with the window too. The control reads for its text.
+                    ChipTextImage(content: content, style: style)
+                        .accessibilityHidden(true)
                 } else {
-                    ChipTextRepresentable(content: content, style: style)
+                    // Under a sheet the text view stays and draws nothing, so assistive apps read the window as they do
+                    // without one, and the image under it dims with the window.
+                    ChipTextRepresentable(content: content, style: style, drawsText: !covered)
                         // In a control (an option card) the control reads for its text.
                         .accessibilityHidden(!selectable)
+                        .background(alignment: .topLeading) {
+                            if covered {
+                                ChipTextImage(content: content, style: style)
+                                    .accessibilityHidden(true)
+                            }
+                        }
                 }
             }
             .sheetCover($covered)
@@ -128,6 +143,8 @@ private struct PlainText: View {
 private struct ChipTextRepresentable: NSViewRepresentable {
     let content: ChipTextContent
     let style: ChipTextStyle
+    /// False under a sheet (`ChipTextView.drawsText`).
+    var drawsText = true
 
     final class Coordinator {
         var openURL: (URL) -> Void = { _ in }
@@ -149,6 +166,7 @@ private struct ChipTextRepresentable: NSViewRepresentable {
 
     func updateNSView(_ view: ChipTextView, context: Context) {
         view.update(content: content, style: style)
+        view.drawsText = drawsText
         let openURL = context.environment.openURL
         context.coordinator.openURL = { openURL($0) }
         view.openURL = { openURL($0) }
@@ -163,15 +181,17 @@ private struct ChipTextRepresentable: NSViewRepresentable {
     }
 }
 
-/// The paragraph in a snapshot: the text view draws itself into an image at the width SwiftUI gives it.
+/// The paragraph in a snapshot, or under a sheet: the text view draws itself into an image at the width SwiftUI
+/// gives it.
 private struct ChipTextImage: View {
     let content: ChipTextContent
     let style: ChipTextStyle
     @Environment(\.colorScheme) private var colorScheme
+    /// One text view for as long as the image shows.
+    @State private var source = ChipTextImageSource()
 
     var body: some View {
-        let view = ChipTextView(content: content, style: style)
-        view.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
+        let view = source.view(content: content, style: style, appearance: colorScheme == .dark ? .darkAqua : .aqua)
         return ChipTextSizing(view: view) {
             Canvas { context, size in
                 context.draw(Image(nsImage: view.image(width: size.width)), in: CGRect(origin: .zero, size: size))
@@ -234,7 +254,8 @@ private struct SheetCoverReader: NSViewRepresentable {
         let covered = $covered
         // The window can report its sheet while SwiftUI updates its views, so the state changes after.
         view.cover.changed = { value in DispatchQueue.main.async { covered.wrappedValue = value } }
-        if view.cover.covered != covered.wrappedValue {
+        // A reader not in its window yet knows of no sheet: it says once it gets there.
+        if view.cover.watching, view.cover.covered != covered.wrappedValue {
             view.cover.changed(view.cover.covered)
         }
     }

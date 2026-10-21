@@ -78,6 +78,17 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     /// keeps its offset itself, and its next layout puts back a scroll made from AppKit alone. Nil outside one.
     public var scrollReview: ((CGFloat) -> Void)?
 
+    /// False while a sheet covers the window: the view draws nothing and opens no popover on hover, and SwiftUI draws
+    /// the paragraph's image under it, which dims with the window. The view stays in the window, so assistive apps read
+    /// it as they do without a sheet.
+    public var drawsText = true {
+        didSet {
+            guard drawsText != oldValue else { return }
+            alphaValue = drawsText ? 1 : 0
+            if !drawsText { pointerMoved(to: nil) }
+        }
+    }
+
     /// The chip under the pointer.
     public private(set) var hoveredChip: Int? {
         didSet { if hoveredChip != oldValue { redrawChips() } }
@@ -190,6 +201,7 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
 
     private func apply() {
         measured = []
+        drawn = nil
         setAccessibilityElement(style.selectable)
         textStorage?.setAttributedString(attributedText())
         needsLayout = true
@@ -386,6 +398,7 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     }
 
     private func redrawChips() {
+        drawn = nil
         guard let manager = textLayoutManager else { return }
         manager.invalidateLayout(for: manager.documentRange)
         manager.textViewportLayoutController.layoutViewport()
@@ -459,9 +472,9 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     }
 
     /// The pointer moved to `point` in the view, or left it: the chip under it lights, and its popover opens after
-    /// the pointer rests there for `hoverDelay`.
+    /// the pointer rests there for `hoverDelay`. Under a sheet (`drawsText` false) no chip lights.
     public func pointerMoved(to point: CGPoint?) {
-        let chip = point.flatMap(chipIndex(at:))
+        let chip = drawsText ? point.flatMap(chipIndex(at:)) : nil
         guard chip != hoveredChip else { return }
         hoveredChip = chip
         hoverWork?.cancel()
@@ -731,9 +744,23 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
 
     // MARK: - Snapshots
 
+    /// The image drawn last, kept until the text, the chips' look, the width, the scale or the appearance changes.
+    private var drawn: (width: CGFloat, scale: CGFloat, appearance: NSAppearance.Name, image: NSImage)?
+
     /// The paragraph drawn at `width` into an image, offscreen and without a window, for `ImageRenderer` snapshots
-    /// (which can't draw an AppKit view). It draws exactly what the view's layout fragments draw.
+    /// (which can't draw an AppKit view) and for the paragraph under a sheet. It draws exactly what the view's layout
+    /// fragments draw, once: a redraw at the same width gets the same image.
     public func image(width: CGFloat, scale: CGFloat = 2) -> NSImage {
+        let appearance = effectiveAppearance.name
+        if let drawn, drawn.width == width, drawn.scale == scale, drawn.appearance == appearance {
+            return drawn.image
+        }
+        let image = drawImage(width: width, scale: scale)
+        drawn = (width, scale, appearance, image)
+        return image
+    }
+
+    private func drawImage(width: CGFloat, scale: CGFloat) -> NSImage {
         let manager = layout(width: width)
         let size = CGSize(width: max(1, width), height: max(1, ceil(manager.usageBoundsForTextContainer.height)))
         let rep = NSBitmapImageRep(
@@ -759,6 +786,26 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         let image = NSImage(size: size)
         image.addRepresentation(rep)
         return image
+    }
+}
+
+/// The text view a paragraph's image is drawn from, made on first use and kept up to date after, so drawing the
+/// paragraph again (a redraw, an accessibility read that lays the window out) makes no text view and draws no image
+/// again.
+public final class ChipTextImageSource {
+    private var made: ChipTextView?
+
+    public init() {}
+
+    /// The text view showing `content` in `style` and `appearance`.
+    public func view(content: ChipTextContent, style: ChipTextStyle, appearance: NSAppearance.Name) -> ChipTextView {
+        let view = made ?? ChipTextView(content: content, style: style)
+        made = view
+        view.update(content: content, style: style)
+        if view.appearance?.name != appearance {
+            view.appearance = NSAppearance(named: appearance)
+        }
+        return view
     }
 }
 
