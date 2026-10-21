@@ -144,15 +144,17 @@ private struct ChipTextRepresentable: NSViewRepresentable {
     }
 }
 
-/// The paragraph in a snapshot: the text view draws itself into an image at the width SwiftUI gives it.
+/// The paragraph in a snapshot, or under a sheet: the text view draws itself into an image at the width SwiftUI
+/// gives it.
 private struct ChipTextImage: View {
     let content: ChipTextContent
     let style: ChipTextStyle
     @Environment(\.colorScheme) private var colorScheme
+    /// One text view for as long as the image shows.
+    @State private var source = ChipTextImageSource()
 
     var body: some View {
-        let view = ChipTextView(content: content, style: style)
-        view.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
+        let view = source.view(content: content, style: style, appearance: colorScheme == .dark ? .darkAqua : .aqua)
         return ChipTextSizing(view: view) {
             Canvas { context, size in
                 context.draw(Image(nsImage: view.image(width: size.width)), in: CGRect(origin: .zero, size: size))

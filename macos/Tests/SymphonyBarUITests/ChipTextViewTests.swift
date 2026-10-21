@@ -499,6 +499,42 @@ final class ChipTextViewTests: XCTestCase {
         }
     }
 
+    func testItDrawsTheImageOnceUntilWhatItShowsChanges() throws {
+        let view = try storyView()
+        view.appearance = NSAppearance(named: .aqua)
+        let image = view.image(width: 320)
+        XCTAssertTrue(view.image(width: 320) === image, "the same width draws nothing again")
+        let wider = view.image(width: 860)
+        XCTAssertFalse(wider === image)
+        view.appearance = NSAppearance(named: .darkAqua)
+        let dark = view.image(width: 860)
+        XCTAssertFalse(dark === wider, "a new appearance")
+        XCTAssertTrue(view.image(width: 860) === dark)
+        XCTAssertFalse(view.image(width: 860, scale: 1) === dark, "a new scale")
+        view.update(content: ChipTextContent("Ask TP-891 first.", references: try decision().references), style: view.style)
+        let text = view.image(width: 860, scale: 1)
+        XCTAssertNotEqual(text.size.height, 0)
+        XCTAssertTrue(view.image(width: 860, scale: 1) === text)
+        view.handle(.tab)
+        XCTAssertFalse(view.image(width: 860, scale: 1) === text, "a chip's look changed")
+    }
+
+    func testTheImageSourceKeepsOneTextViewUpToDate() throws {
+        let item = try decision()
+        let source = ChipTextImageSource()
+        let style = ChipTextStyle(font: font)
+        let view = source.view(content: ChipTextContent("Ask TP-891 first.", references: item.references), style: style, appearance: .aqua)
+        XCTAssertEqual(view.appearance?.name, .aqua)
+        let image = view.image(width: 320)
+        XCTAssertTrue(source.view(content: view.content, style: style, appearance: .aqua) === view)
+        XCTAssertTrue(view.image(width: 320) === image, "drawing it again draws nothing")
+        let changed = ChipTextContent("Leave them to TP-891.", references: item.references)
+        XCTAssertTrue(source.view(content: changed, style: style, appearance: .darkAqua) === view)
+        XCTAssertEqual(view.content, changed)
+        XCTAssertEqual(view.appearance?.name, .darkAqua)
+        XCTAssertFalse(view.image(width: 320) === image)
+    }
+
     // MARK: - Helpers
 
     /// The What happened paragraph about #448, TP-880 and TP-891, at the body size.
