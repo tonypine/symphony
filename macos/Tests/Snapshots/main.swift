@@ -385,20 +385,17 @@ func pullRequestPage(_ result: PullRequestPageResult?, window: CGFloat = DesignT
     )
     let width = window - DesignTokens.Layout.sidebarWidth
     return VStack(alignment: .leading, spacing: 0) {
-        // The window's toolbar: title, subtitle (with its spinner while it reads), Open on GitHub, Open Ticket.
-        HStack(spacing: DesignTokens.Space.s2) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text(screen.title).font(.headline)
-                HStack(spacing: DesignTokens.Space.s1) {
-                    Text(screen.subtitle).font(.subheadline).foregroundStyle(.secondary)
-                    // `ImageRenderer` can't draw a spinner: its symbol stands in.
-                    if screen.isLoading { Image(systemName: "progress.indicator").font(.caption).foregroundStyle(.secondary) }
-                }
+        // The window's toolbar holds the page's title and subtitle (with its spinner while it reads), cut short as the
+        // window cuts them; the page's buttons are in its header, below.
+        VStack(alignment: .leading, spacing: 0) {
+            Text(screen.title).font(.headline).lineLimit(1)
+            HStack(spacing: DesignTokens.Space.s1) {
+                Text(screen.subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                // `ImageRenderer` can't draw a spinner: its symbol stands in.
+                if screen.isLoading { Image(systemName: "progress.indicator").font(.caption).foregroundStyle(.secondary) }
             }
-            Spacer()
-            if screen.gitHubURL != nil { Button(PullRequestScreen.openOnGitHubTitle) {} }
-            if screen.ticket != nil { Button(PullRequestScreen.openTicketTitle) {} }
         }
+        .frame(maxWidth: DesignTokens.Layout.toolbarTitleMaxWidth, alignment: .leading)
         .padding(DesignTokens.Space.s3)
         Divider()
         PullRequestPageBody(screen: screen, actions: PullRequestPageActions(), width: width)

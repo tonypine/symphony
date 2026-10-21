@@ -148,6 +148,20 @@ public struct PullRequestScreen: Equatable {
         public var references: [String: Reference]
     }
 
+    /// A button in the page's header, beside the review state as on the ticket page (D3): the window's toolbar can't
+    /// hold it beside a pull request's title and the window's own items.
+    public enum Action: Equatable {
+        case openOnGitHub(URL)
+        case openTicket(String)
+
+        public var title: String {
+            switch self {
+            case .openOnGitHub: PullRequestScreen.openOnGitHubTitle
+            case .openTicket: PullRequestScreen.openTicketTitle
+            }
+        }
+    }
+
     public enum Content: Equatable {
         /// Placeholder cards, with the spinner in the subtitle.
         case loading
@@ -163,7 +177,7 @@ public struct PullRequestScreen: Equatable {
     }
 
     public var place: PullRequestPlace
-    /// The toolbar's title: "#448 · Remove the Final verification and Supervisor check flows".
+    /// The toolbar's title, and the header's: "#448 · Remove the Final verification and Supervisor check flows".
     public var title: String
     /// The toolbar's line under it: "symphony · for TP-892", "symphony · for TP-892 · merged 2 h ago".
     public var subtitle: String
@@ -216,14 +230,24 @@ public struct PullRequestScreen: Equatable {
         }
     }
 
-    /// Every string the page shows, in reading order: the toolbar's, then each card's.
+    /// The header's buttons, each when known: Open on GitHub (from the link the page was opened from while it reads) and
+    /// Open Ticket. The states without a page are C20, with their own button.
+    public var actions: [Action] {
+        switch content {
+        case .loading, .page: [gitHubURL.map(Action.openOnGitHub), ticket.map(Action.openTicket)].compactMap { $0 }
+        case .untracked, .notFound, .unsupported, .failed: []
+        }
+    }
+
+    /// Every string the page shows, in reading order: the toolbar's, then the header's and each card's.
     public var renderedStrings: [String] {
         var strings = [title, subtitle]
         switch content {
         case .loading:
             strings.append(Self.readingTitle)
+            strings += actions.map(\.title)
         case let .page(page):
-            strings += [page.badge?.word, page.dates].compactMap { $0 }
+            strings += [page.badge?.word, page.dates].compactMap { $0 } + actions.map(\.title)
             strings += [Self.whatItDoesTitle, page.summary ?? Self.gitHubUnavailable]
             strings.append(Self.reviewHistoryTitle)
             strings += page.history.isEmpty ? [Self.noHistory] : page.history.flatMap { [$0.timeText, $0.title, $0.badge.word, $0.reason].compactMap { $0 } }

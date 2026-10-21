@@ -173,7 +173,12 @@ later journeys point back to it. The mock draws every screen under its ID.
   Page** in the PR peek (N4); the ticket page's Pull request fact (D3, J3). Pushed in the window like D3: ⌘[ returns
   to where it opened, the Inbox with the same item, picks and scroll position.
 - **Toolbar:** back, `#448 · <title>` (the title without the ticket identifier it starts with), `<repo> · for
-  <ticket>` under it (`· merged 2 h ago`, `· closed`); **Open on GitHub**, **Open Ticket**.
+  <ticket>` under it (`· merged 2 h ago`, `· closed`), each on one line cut short past 260 pt, so the window's own
+  items (scope, dispatch, Refresh) never go to the toolbar's overflow menu; the header shows the title whole.
+- **Actions:** **Open on GitHub** (from the link the page was opened from while it reads) and **Open Ticket**, in the
+  header beside the review state, as on D3: beside a pull request's title and the window's own items, the toolbar
+  moved them into its overflow menu at 1200 and 1400 pt. When the header is too narrow for both, they take a row of
+  their own under the badge.
 - **Shows:** the review state as C7 with when it opened and was last pushed, then the title. Left column: **What it
   does** (the `## This PR` summary); **Review history** (each Code Review and QA verdict oldest first: time, the
   verdict as C7 in words, "Changes asked", "Approved", "Passed", "Failed", and its reason with mentions as chips);

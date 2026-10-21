@@ -45,12 +45,6 @@ extension SymphonyWindowModel {
         }
     }
 
-    /// Open Ticket: the page of the ticket the pull request belongs to.
-    func openPullRequestTicket() {
-        guard let ticket = pullRequestScreen?.ticket else { return }
-        openTicket(ticket)
-    }
-
     /// ⌘-click or ⌘Return on a chip, past the peek: a ticket's page (D3), a pull request's page (D15), or its link.
     func openDirectly(_ mention: Mention) {
         switch MentionTarget(mention) {
@@ -67,6 +61,8 @@ extension SymphonyWindowModel {
 /// What the page's buttons and chips do.
 struct PullRequestPageActions {
     var openURL: (URL) -> Void = { _ in }
+    /// Open Ticket: the page of the ticket the pull request belongs to.
+    var openTicket: (String) -> Void = { _ in }
     var tryAgain: () -> Void = {}
     /// A click on a chip: the ticket's or the other pull request's page.
     var openMention: (Mention) -> Void = { _ in }
@@ -80,7 +76,10 @@ struct PullRequestPageContent: View {
         if let screen = model.pullRequestScreen {
             PullRequestPageView(
                 screen: screen,
-                actions: PullRequestPageActions(openURL: model.onOpenURL, tryAgain: model.readPullRequest, openMention: model.openDirectly)
+                actions: PullRequestPageActions(
+                    openURL: model.onOpenURL, openTicket: model.openTicket, tryAgain: model.readPullRequest,
+                    openMention: model.openDirectly
+                )
             )
         }
     }
@@ -166,7 +165,7 @@ struct PullRequestPageBody: View {
 
     private func columns(page: PullRequestScreen.Page?) -> some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s5) {
-            PullRequestHeader(screen: screen, page: page)
+            PullRequestHeader(screen: screen, page: page, actions: actions)
             let layout = sideBySide
                 ? AnyLayout(HStackLayout(alignment: .top, spacing: DesignTokens.Space.s4))
                 : AnyLayout(VStackLayout(alignment: .leading, spacing: DesignTokens.Space.s4))
@@ -238,20 +237,26 @@ struct PullRequestPageBody: View {
     }
 }
 
-/// The title as a sentence, with the state's badge and its dates.
+/// The state's badge and its dates with the page's buttons, then the title as a sentence. The buttons sit here, as on
+/// the ticket page (D3), rather than in the window's toolbar, whose own items leave them no room beside a long title.
 private struct PullRequestHeader: View {
     let screen: PullRequestScreen
     let page: PullRequestScreen.Page?
+    let actions: PullRequestPageActions
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            if let page, page.badge != nil || page.dates != nil {
-                HStack(spacing: DesignTokens.Space.s2) {
-                    if let badge = page.badge { StatusBadge(status: badge.status, word: badge.word).fixedSize() }
-                    if let dates = page.dates {
-                        Text(dates)
-                            .font(DesignTokens.TypeStyle.callout.font)
-                            .foregroundStyle(.secondary)
+            if page?.badge != nil || page?.dates != nil || !screen.actions.isEmpty {
+                // The buttons share the badge's row while it fits, and take a row of their own below it when it doesn't.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: DesignTokens.Space.s2) {
+                        badges
+                        Spacer(minLength: DesignTokens.Space.s2)
+                        buttons
+                    }
+                    VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                        HStack(spacing: DesignTokens.Space.s2) { badges }
+                        buttons
                     }
                 }
             }
@@ -261,6 +266,32 @@ private struct PullRequestHeader: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
         }
+    }
+
+    @ViewBuilder private var badges: some View {
+        if let badge = page?.badge { StatusBadge(status: badge.status, word: badge.word).fixedSize() }
+        if let dates = page?.dates {
+            Text(dates)
+                .font(DesignTokens.TypeStyle.callout.font)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Open on GitHub and Open Ticket, each when known.
+    private var buttons: some View {
+        HStack(spacing: DesignTokens.Space.s2) {
+            ForEach(screen.actions, id: \.title) { action in
+                switch action {
+                case let .openOnGitHub(url):
+                    Button(action.title) { actions.openURL(url) }
+                        .help("Open #\(screen.place.number) on GitHub, where its diff is")
+                case let .openTicket(ticket):
+                    Button(action.title) { actions.openTicket(ticket) }
+                        .help("Open \(ticket)'s page")
+                }
+            }
+        }
+        .fixedSize()
     }
 }
 

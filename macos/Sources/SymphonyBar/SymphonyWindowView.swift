@@ -697,15 +697,18 @@ struct SymphonyWindowView: View {
                                 .help("Forward (⌘])")
                         }
                         VStack(alignment: .leading, spacing: 0) {
-                            Text(model.toolbarTitle).font(.headline)
+                            Text(model.toolbarTitle).font(.headline).lineLimit(1)
                             HStack(spacing: DesignTokens.Space.s1) {
                                 Text(model.toolbarSubtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                                 // D15 reading: the spinner in the subtitle, over its placeholder cards.
                                 if model.pullRequestScreen?.isLoading == true {
-                                    ProgressView().controlSize(.mini).accessibilityLabel("Reading")
+                                    ProgressView().controlSize(.mini).accessibilityLabel(PullRequestScreen.readingTitle)
                                 }
                             }
                         }
+                        // A pull request's long title is cut short here, so the window's items stay out of the
+                        // toolbar's overflow; its page's header shows it whole.
+                        .frame(maxWidth: DesignTokens.Layout.toolbarTitleMaxWidth, alignment: .leading)
                         .accessibilityElement(children: .combine)
                     }
                     ToolbarItem(placement: .status) {
@@ -743,25 +746,6 @@ struct SymphonyWindowView: View {
                             }
                             .help("Force a ticket (⇧⌘F)")
                             .disabled(!model.dispatchControl.canForce)
-                        }
-                    }
-                    if let screen = model.pullRequestScreen {
-                        // D15: Open on GitHub and Open Ticket.
-                        ToolbarItemGroup(placement: .automatic) {
-                            if let url = screen.gitHubURL {
-                                Button { model.onOpenURL(url) } label: {
-                                    Label(PullRequestScreen.openOnGitHubTitle, systemImage: "arrow.up.right.square")
-                                        .labelStyle(.titleAndIcon)
-                                }
-                                .help("Open #\(screen.place.number) on GitHub, where its diff is")
-                            }
-                            if let ticket = screen.ticket {
-                                Button { model.openPullRequestTicket() } label: {
-                                    Label(PullRequestScreen.openTicketTitle, systemImage: "doc.text")
-                                        .labelStyle(.titleAndIcon)
-                                }
-                                .help("Open \(ticket)'s page")
-                            }
                         }
                     }
                     if model.selection == .inbox, !model.showsPage {

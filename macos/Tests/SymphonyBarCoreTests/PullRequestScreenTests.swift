@@ -38,10 +38,17 @@ final class PullRequestScreenTests: XCTestCase {
         XCTAssertFalse(screen.isLoading)
         XCTAssertEqual(screen.gitHubURL, URL(string: "https://github.com/tonypine/symphony/pull/448"))
         XCTAssertEqual(screen.ticket, "TP-892")
+        // The header's buttons, beside the review state: the toolbar has no room for them beside the title.
+        XCTAssertEqual(screen.actions, [.openOnGitHub(URL(string: "https://github.com/tonypine/symphony/pull/448")!), .openTicket("TP-892")])
+        XCTAssertEqual(screen.actions.map(\.title), ["Open on GitHub", "Open Ticket"])
 
         let page = try page(screen)
         XCTAssertEqual(page.badge, .init(status: .you, word: "Changes asked"))
         XCTAssertEqual(page.dates, "Opened 1 day ago · last push 4 h 50 min ago")
+        XCTAssertEqual(
+            Array(screen.renderedStrings.prefix(7)),
+            [screen.title, screen.subtitle, "Changes asked", "Opened 1 day ago · last push 4 h 50 min ago", "Open on GitHub", "Open Ticket", "What it does"]
+        )
         XCTAssertTrue(page.gitHubAvailable)
         XCTAssertEqual(page.summary?.hasPrefix("The Final verification and Supervisor check steps are gone"), true)
 
@@ -111,7 +118,10 @@ final class PullRequestScreenTests: XCTestCase {
         // Open on GitHub works before Symphony answers.
         XCTAssertEqual(screen.gitHubURL, URL(string: "https://github.com/tonypine/symphony/pull/448"))
         XCTAssertNil(screen.ticket)
-        XCTAssertEqual(screen.renderedStrings, ["#448", "symphony", PullRequestScreen.readingTitle])
+        XCTAssertEqual(screen.actions, [.openOnGitHub(URL(string: "https://github.com/tonypine/symphony/pull/448")!)])
+        XCTAssertEqual(screen.renderedStrings, ["#448", "symphony", PullRequestScreen.readingTitle, "Open on GitHub"])
+        // Opened without its link, it has no button until Symphony answers.
+        XCTAssertEqual(PullRequestScreen(place, result: nil, now: now).actions, [])
     }
 
     func testMerged() throws {
@@ -151,6 +161,7 @@ final class PullRequestScreenTests: XCTestCase {
         XCTAssertEqual(page.badge, .init(status: .idle, word: "Closed"))
         XCTAssertEqual(page.dates, "Closed without merging")
         XCTAssertEqual(page.history.count, 2, "a closed pull request's history has no Merged")
+        XCTAssertEqual(screen.actions.map(\.title), ["Open on GitHub", "Open Ticket"])
     }
 
     func testGitHubUnavailableKeepsWhatIsKnown() throws {
@@ -164,6 +175,7 @@ final class PullRequestScreenTests: XCTestCase {
         XCTAssertEqual(screen.subtitle, "symphony · for TP-892")
         // The link the page was opened from.
         XCTAssertEqual(screen.gitHubURL, URL(string: "https://github.com/tonypine/symphony/pull/448"))
+        XCTAssertEqual(screen.actions, [.openOnGitHub(URL(string: "https://github.com/tonypine/symphony/pull/448")!), .openTicket("TP-892")])
         let page = try page(screen)
         XCTAssertFalse(page.gitHubAvailable)
         XCTAssertEqual(page.badge, .init(status: .you, word: "Changes asked"))
@@ -230,7 +242,9 @@ final class PullRequestScreenTests: XCTestCase {
         XCTAssertEqual(screen.subtitle, "symphony")
         XCTAssertNil(screen.ticket)
         XCTAssertEqual(screen.content, .untracked("Symphony doesn't track #448: no ticket it sees owns it."))
+        // C20's own Open on GitHub, and no header.
         XCTAssertNotNil(screen.gitHubURL)
+        XCTAssertEqual(screen.actions, [])
     }
 
     func testNotFoundUnsupportedAndFailed() throws {
@@ -244,10 +258,13 @@ final class PullRequestScreenTests: XCTestCase {
         XCTAssertEqual(notFound.content, .notFound("Symphony can't find #9 in symphony."))
         XCTAssertEqual(notFound.gitHubURL, URL(string: "https://github.com/tonypine/symphony/pull/9"))
         XCTAssertEqual(notFound.renderedStrings.last, "Symphony can't find #9 in symphony.")
+        XCTAssertEqual(notFound.actions, [], "C20 has its own Open on GitHub")
 
         XCTAssertEqual(screen(.unsupported).content, .unsupported)
         XCTAssertEqual(screen(.unsupported).renderedStrings.last, EndpointPlaceholder.updateSymphony)
+        XCTAssertEqual(screen(.unsupported).actions, [])
         XCTAssertEqual(screen(.failed("Symphony isn't answering")).content, .failed("Symphony isn't answering"))
+        XCTAssertEqual(screen(.failed("Symphony isn't answering")).actions, [])
     }
 
     func testTitleDropsTheTicketItStartsWith() {
