@@ -66,6 +66,15 @@ defmodule SymphonyElixir.TicketEvents do
   """
   @spec record(String.t(), String.t(), String.t(), map(), [record_opt()]) :: {:ok, Event.t()} | {:error, Types.error() | term()}
   def record(repo_key, issue_id, type, payload, opts \\ []) do
+    with {:ok, event} <- build(repo_key, issue_id, type, payload, opts), do: RunStore.append_ticket_event(event)
+  end
+
+  @doc """
+  The event `record/5` would write, validated and with its summary, without writing it: for a
+  writer that appends a ticket's events in one transaction (`RunStore.append_ticket_events/1`).
+  """
+  @spec build(String.t(), String.t(), String.t(), map(), [record_opt()]) :: {:ok, Event.t()} | {:error, Types.error() | term()}
+  def build(repo_key, issue_id, type, payload, opts) do
     with {:ok, actor} <- actor(opts),
          {:ok, payload} <- Types.validate(type, payload, actor.kind, Map.get(actor, :run_kind)),
          {:ok, options} <- options(opts) do
@@ -87,8 +96,7 @@ defmodule SymphonyElixir.TicketEvents do
         payload: payload,
         artifacts: options.artifacts
       }
-      |> then(&%{&1 | summary: Summary.render(&1)})
-      |> RunStore.append_ticket_event()
+      |> then(&{:ok, %{&1 | summary: Summary.render(&1)}})
     end
   end
 

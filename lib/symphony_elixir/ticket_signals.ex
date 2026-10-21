@@ -73,13 +73,17 @@ defmodule SymphonyElixir.TicketSignals do
   def record_verdict(repo_key, issue_id, kind, head_sha, outcome, details \\ %{}) do
     if is_binary(repo_key) and is_binary(issue_id) do
       case RunStore.record_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome, details) do
-        :ok -> record_mapped(repo_key, issue_id, verdict(kind, outcome, head_sha, nil))
+        :ok -> record_mapped(repo_key, issue_id, verdict_event(kind, outcome, head_sha))
         error -> log_error(error, "record #{kind} verdict")
       end
     else
       :ok
     end
   end
+
+  @doc "The `verdict.recorded` event `record_verdict/6` records for a verdict of `kind` with `outcome` on `head_sha`."
+  @spec verdict_event(String.t(), String.t() | nil, String.t() | nil) :: mapping()
+  def verdict_event(kind, outcome, head_sha), do: verdict(kind, outcome, head_sha, nil)
 
   @doc """
   The event a signal `name` with `details` maps to: its type, payload and `TicketEvents.record/5`
