@@ -698,7 +698,13 @@ defmodule SymphonyElixir.ExtensionsTest do
                }
              ],
              "drain_report" => state_payload["drain_report"],
-             "setup" => %{"problems" => [], "not_checked" => [], "checked_at" => "2026-10-19T09:00:00Z", "linear_checked_at" => nil},
+             "setup" => %{
+               "problems" => [],
+               "not_checked" => [],
+               "checked_at" => "2026-10-19T09:00:00Z",
+               "linear_checked_at" => nil,
+               "github_updates" => state_payload["setup"]["github_updates"]
+             },
              "awaiting_clarification" => [],
              "skipped" => [],
              "run_history" => [

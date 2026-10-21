@@ -145,6 +145,8 @@ public struct Overview: Equatable {
         case openTicket(String)
         /// Opens the Setup page (SU1).
         case openSetup
+        /// S9: Symphony starts the relay of instant GitHub updates again (`restart_relay`).
+        case restartRelay
 
         public var title: String {
             switch self {
@@ -157,6 +159,7 @@ public struct Overview: Equatable {
             case .stopForcing: "Stop Forcing"
             case .stopRun: StopRunSheet.buttonTitle
             case .openSetup: "Open Setup"
+            case .restartRelay: GitHubUpdatesCard.Action.restartRelay.title
             }
         }
     }
@@ -179,6 +182,8 @@ public struct Overview: Equatable {
         case silentWait
         /// Setup found errors (SU1): one row for all of them.
         case setup
+        /// S9: instant GitHub updates are on but don't arrive, so Symphony polls.
+        case githubUpdates
     }
 
     public enum Severity: Int, Comparable {
@@ -570,6 +575,14 @@ public struct Overview: Equatable {
             findings.append(Finding(
                 subject: "setup", kind: .setup, severity: .problem, sentence: sentence,
                 note: "Symphony may skip tickets or fail quietly until they are fixed.", fixes: [.openSetup]
+            ))
+        }
+
+        // S9: instant updates that stopped arriving, whatever the scope: they are the whole factory's.
+        if let attention = GitHubUpdatesCard.attention(state.snapshot.setup?.githubUpdates) {
+            findings.append(Finding(
+                subject: "github-updates", kind: .githubUpdates, severity: .warning, sentence: attention.sentence,
+                note: attention.note, fixes: (attention.restart ? [.restartRelay] : []) + [.openSetup]
             ))
         }
 

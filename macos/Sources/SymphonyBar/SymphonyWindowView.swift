@@ -175,6 +175,12 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var setupBanner: SetupBanner?
     /// SU12: the welcome line above the Setup page when the first launch opened it, nil otherwise.
     @Published var setupWelcome: String?
+    /// The last GitHub updates action's answer: the card shows it until the state poll reports something new.
+    @Published var githubUpdatesAnswer: GitHubUpdatesAnswer?
+    /// The GitHub updates card's consequence sheet (S11, S12, the relay sheet); nothing changes until its button.
+    @Published var githubUpdatesSheet: GitHubUpdatesSheet?
+    /// True while Restart Relay is on its way.
+    @Published var restartingRelay = false
     var setupBannerTask: Task<Void, Never>?
     /// The app's own build, for the build warning (J11).
     var appBuild = AppBuild(build: 0, isDevelopment: true)
@@ -184,6 +190,8 @@ final class SymphonyWindowModel: ObservableObject {
     var onSetupRequest: (_ fix: [String: Any]?) async -> SetupAPI.Result = { _ in .failed("") }
     /// `symphony check` on a copy of `symphony.yml`, as the settings writer runs it.
     var onCheckConfig: (String) async -> ConfigCheckResult = { _ in .passed }
+    /// `POST /api/v1/setup/github_updates/<action>`, to Symphony or the API fixtures.
+    var onGitHubUpdatesRequest: (GitHubUpdatesAPI.Action, [String: String]) async -> GitHubUpdatesAPI.Result = { _, _ in .failed("") }
     /// The app's version, for the sidebar footer while Symphony doesn't say its own.
     var appVersion = ""
     /// Where the client reads Symphony from, for Diagnostics.
@@ -246,6 +254,7 @@ final class SymphonyWindowModel: ObservableObject {
                 overviewState = data.flatMap(OverviewState.decode)
                 watchState = data.map(WatchState.decode) ?? WatchState()
                 holdSetupOrder()
+                settleGitHubUpdatesAnswer()
                 readReposIfDue()
                 readInbox()
                 readInitiatives()
@@ -489,6 +498,8 @@ final class SymphonyWindowModel: ObservableObject {
             openTicket(identifier)
         case .openSetup:
             show(.setup)
+        case .restartRelay:
+            restartRelay()
         }
     }
 

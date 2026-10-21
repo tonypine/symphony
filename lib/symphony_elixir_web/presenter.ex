@@ -24,6 +24,7 @@ defmodule SymphonyElixirWeb.Presenter do
   }
 
   alias SymphonyElixir.Codex.MessageHumanizer
+  alias SymphonyElixir.GitHub.WebhookSetup
   alias SymphonyElixir.Repo.Status, as: RepoStatus
   alias SymphonyElixirWeb.WatchPayload
 
@@ -37,8 +38,8 @@ defmodule SymphonyElixirWeb.Presenter do
     seconds_running: 0
   }
 
-  @spec state_payload(GenServer.name(), timeout(), GenServer.server(), GenServer.name(), GenServer.server()) :: map()
-  def state_payload(orchestrator, snapshot_timeout_ms, stray_processes \\ StrayProcesses, inbox \\ Inbox, setup \\ Setup) do
+  @spec state_payload(GenServer.name(), timeout(), GenServer.server(), GenServer.name(), GenServer.server(), keyword()) :: map()
+  def state_payload(orchestrator, snapshot_timeout_ms, stray_processes \\ StrayProcesses, inbox \\ Inbox, setup \\ Setup, github_updates \\ []) do
     now = DateTime.utc_now()
     generated_at = now |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
@@ -73,7 +74,7 @@ defmodule SymphonyElixirWeb.Presenter do
           conflicts: snapshot |> Map.get(:conflicts, []) |> Enum.map(&conflict_entry_payload/1),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
           drain_report: drain_report_payload(RetiredStates.drain_report()),
-          setup: Setup.payload(setup),
+          setup: setup |> Setup.payload() |> Map.put(:github_updates, WebhookSetup.state_section(github_updates)),
           awaiting_clarification:
             snapshot
             |> Map.get(:awaiting_clarification, [])

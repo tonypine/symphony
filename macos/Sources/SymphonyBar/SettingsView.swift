@@ -970,8 +970,9 @@ private struct TimeoutRow: View {
     }
 }
 
-/// A number of minutes, shown as "5 min", with a stepper over `GitHubUpdates.minuteRange`.
-private struct MinutesRow: View {
+/// A number of minutes, shown as "5 min", with a stepper over `GitHubUpdates.minuteRange`; Settings and Setup's GitHub
+/// updates card both use it.
+struct MinutesRow: View {
     let title: String
     @Binding var minutes: Int
 

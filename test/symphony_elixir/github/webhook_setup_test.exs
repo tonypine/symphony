@@ -183,6 +183,12 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     assert {:error, {:conflict, "Instant GitHub updates are off. Turn them on first."}} = WebhookSetup.action("run_step", %{"step" => "relay"}, opts)
   end
 
+  test "the state's section is the setup's, or nil when it can't be read", %{opts: opts} do
+    assert WebhookSetup.state_section(opts) == WebhookSetup.section(opts)
+    assert WebhookSetup.state_section(Keyword.put(opts, :settings, fn -> raise ArgumentError, "no config" end)) == nil
+    assert WebhookSetup.state_section(Keyword.put(opts, :repos, fn -> exit(:noproc) end)) == nil
+  end
+
   ## J1–J3: turn on through gh webhook forward
 
   test "turn on, run each step, test: a repository without admin access fails alone and the mode is on", %{opts: opts, dir: dir, clock: clock} do

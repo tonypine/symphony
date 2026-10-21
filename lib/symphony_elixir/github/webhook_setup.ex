@@ -117,6 +117,25 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
   end
 
   @doc """
+  The section for `/api/v1/state`'s `setup`, so the app's Setup card and its Overview row follow the
+  state poll. Nil when it can't be read (a configuration that doesn't load, a run store that isn't
+  up), so the state payload never fails on it.
+  """
+  @spec state_section(keyword()) :: map() | nil
+  def state_section(opts \\ []) do
+    section(opts)
+  rescue
+    error -> section_unavailable(Exception.message(error))
+  catch
+    kind, reason -> section_unavailable(Exception.format_banner(kind, reason))
+  end
+
+  defp section_unavailable(reason) do
+    Logger.debug("Instant GitHub updates left out of the state: #{String.slice(reason, 0, 300)}")
+    nil
+  end
+
+  @doc """
   A delivery that verified, about the repository at `repo_url`: it completes that repository's
   running test. Called by the webhook controller for every verified delivery.
 

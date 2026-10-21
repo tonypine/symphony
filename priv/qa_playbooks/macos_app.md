@@ -262,6 +262,34 @@ GitHub or Linear in QA:
   - Symphony stopped: launch without `api_fixtures` and add the repo: "Symphony isn't running, so
     it checks widgets when it starts." with **Start Symphony** and **Done** both enabled.
   - Look: judge the step in light and dark against `macos/Tests/Snapshots/add-repo-check-*.png`.
+- **GitHub updates card (TP-953):** three fixtures stand for the QA harness API in each state.
+  Each launch's `qa_api_requests` starts empty.
+  - Off (walkthrough step 1): pass `macos/Tests/Fixtures/director-app/github-updates-off` as
+    `api_fixtures`. In the Symphony window, **Setup** shows the **GitHub updates** card reading
+    "Polling only" with **Turn On Instant Updates…**. That button opens "Turn on instant GitHub
+    updates?" with GitHub CLI forwarding picked; **Cancel** closes it and `qa_api_requests` lists
+    nothing (the guided flow behind it is TP-954's).
+  - On (step 2): launch with `macos/Tests/Fixtures/director-app/github-updates`. The card reads
+    "Instant": acme/web-shop "Last update 2 min ago", acme/api "Last update 19 min ago", and
+    acme/docs "Polling only" with "You need admin access to acme/docs to add a webhook.".
+    **Details** shows Relay "GitHub CLI forwarding" with **Change Relay…**, Secret "Saved in
+    your Keychain as symphony-github-webhook" with **Re-create Secret…**, "Safety-net check every
+    5 min", "Warn me after no updates for 10 min", the six events and the address.
+    **Re-create Secret…** opens "Re-create the webhook secret?"; **Cancel** sends nothing.
+  - Degraded (steps 3 to 5): launch with `macos/Tests/Fixtures/director-app/github-updates-degraded`,
+    which stands for the relay stopped past the threshold. The card reads "Polling while the relay
+    is down" with **Restart Relay**, and Overview's Needs attention has "Instant GitHub updates
+    stopped: the relay is down." with **Restart Relay** and **Open Setup** (step 3). **Restart
+    Relay** on the card (`qa_api_requests` lists `POST /api/v1/setup/github_updates/restart_relay`):
+    the card reads "Instant" and the Overview row is gone (step 4). **Turn Off…** opens "Turn off
+    instant GitHub updates?", which says Symphony goes on checking GitHub every 30 s; **Turn Off**
+    (`POST /api/v1/setup/github_updates/turn_off`): the card reads "Polling only" (step 5).
+  - Keyboard and VoiceOver: with Full Keyboard Access on, Tab reaches each card button,
+    **Details**, **Change Relay…**, **Re-create Secret…** and both steppers; in a sheet Return
+    presses the verb and Escape cancels. VoiceOver reads the card's state as "GitHub updates,
+    Instant" and each repo row as one element ("acme/web-shop, Instant, Last update 2 min ago").
+  - Look: judge the card in each state and both sheets in light and dark against
+    `macos/Tests/Snapshots/github-updates-*.png`.
 
 QA does three things, in this order: (a) the walkthrough steps marked `Proved by: QA` (no test
 can drive them), steps 1 to 7 below; (b) the `Design check` of every UI deliverable, by sight, in

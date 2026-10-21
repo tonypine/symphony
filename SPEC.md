@@ -5039,6 +5039,8 @@ Minimum endpoints:
     that stopped more than twice in ten minutes and hasn't run ten minutes since (its watcher
     keeps the normal poll interval meanwhile), or no delivery for `silence_alert_minutes` after a
     read found a change none reported.
+    `/api/v1/state` carries the same section under `setup.github_updates`, so the app's Setup card
+    and its Overview row follow the state poll; it is `null` there when it can't be read.
   - `?repo=<key>` keeps only the problems whose `repos` name that repository, and those that name
     none (keys, secrets and the rest of the global setup); `not_checked` and the times are as
     they are. While the running config has no repository `<key>` (between an Add Repo save and

@@ -135,6 +135,14 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
                 afterControl()
                 return result
             }
+            model.onGitHubUpdatesRequest = { [weak self] action, params in
+                guard let self else { return .failed("") }
+                let result = await GitHubUpdatesAPI.send(
+                    action, params: params, stateRoot: stateRoot(), fallback: AppStores.current.apiFallback, transport: AppStores.current.apiTransport
+                )
+                afterControl()
+                return result
+            }
             model.onCheckConfig = { [weak self] path in
                 guard let secrets = self?.secrets else { return .failed("The app's secrets aren't available to run symphony check.") }
                 return await ReposWindowController.configCheck(path, secrets: secrets)
