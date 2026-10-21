@@ -746,7 +746,7 @@ defmodule SymphonyElixir.VerificationTest do
             build_cmd: "scripts/qa-dashboard-build.sh",
             start_cmd: "scripts/qa-dashboard-server.sh",
             health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state",
-            health_timeout_ms: 300_000,
+            health_timeout_ms: 600_000,
             stop_timeout_ms: 5_000
           }
         }
@@ -757,23 +757,10 @@ defmodule SymphonyElixir.VerificationTest do
       # The app logs to the rotating disk file (`SymphonyElixir.LogFile` drops the console
       # handler), so on CI a dev server that fails to start leaves no output in the job log.
       # Capture it here and print it on failure, where the diagnosis would otherwise be lost.
-      # A confined server that never answers on a shared runner is a lost start, not a verdict on
-      # the build: start a fresh one once, within the same bounded budget, before failing.
-      start = fn ->
+      {result, log} =
         ExUnit.CaptureLog.with_log(fn ->
           Verification.start_qa_dev_server(issue, "qa-dashboard-seatbelt-run", worktree, settings: Config.settings!())
         end)
-      end
-
-      {result, log} =
-        case start.() do
-          {{:error, {:verification_failed, :health_timeout}}, first_log} ->
-            {retried, retry_log} = start.()
-            {retried, first_log <> retry_log}
-
-          first ->
-            first
-        end
 
       case result do
         {:ok, dev_server} ->
