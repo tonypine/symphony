@@ -47,7 +47,6 @@ defmodule SymphonyElixir.Orchestrator do
     StateProvisioning,
     StatusDashboard,
     SubIssueWait,
-    TicketEvents,
     TicketPullRequest,
     TicketSignals,
     TicketState,
@@ -260,8 +259,6 @@ defmodule SymphonyElixir.Orchestrator do
     mark_interrupted_runs_for_configured_repos(repo_key)
     TicketStateReconciler.reconcile_all()
     TicketPullRequest.Backfill.run(configured_repo_keys(repo_key))
-    # The ledger's one-time history backfill runs in a task: startup never waits for it.
-    TicketEvents.Backfill.start()
     tick_token = make_ref()
     send(self(), {:tick, tick_token})
     schedule_snapshot_publish(config.observability.snapshot_publish_ms)
