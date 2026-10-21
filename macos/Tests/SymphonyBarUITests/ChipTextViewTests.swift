@@ -261,6 +261,34 @@ final class ChipTextViewTests: XCTestCase {
         XCTAssertTrue(popover.shown.isEmpty)
     }
 
+    func testUnderASheetItDrawsNothingAndHoverOpensNothing() throws {
+        let view = try storyView()
+        let popover = PopoverSpy()
+        view.popover = popover
+        view.hoverDelay = 0.05
+        view.setFrameSize(CGSize(width: 600, height: view.height(forWidth: 600)))
+        let rect = try XCTUnwrap(view.chipRects(0).first)
+        view.pointerMoved(to: CGPoint(x: rect.midX, y: rect.midY))
+        XCTAssertEqual(view.hoveredChip, 0)
+
+        view.drawsText = false
+        XCTAssertEqual(view.alphaValue, 0)
+        XCTAssertNil(view.hoveredChip, "the sheet takes the pointer off the chip")
+        XCTAssertEqual(popover.leftChip, 1)
+        view.pointerMoved(to: CGPoint(x: rect.midX, y: rect.midY))
+        XCTAssertNil(view.hoveredChip)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertTrue(popover.shown.isEmpty)
+        XCTAssertTrue(view.isAccessibilityElement(), "assistive apps still read it")
+        let links = view.accessibilityChildren()?.compactMap { $0 as? NSAccessibilityElement } ?? []
+        XCTAssertTrue(links.elementsEqual(view.chipAccessibilityElements, by: ===), "and its chips")
+
+        view.drawsText = true
+        XCTAssertEqual(view.alphaValue, 1)
+        view.pointerMoved(to: CGPoint(x: rect.midX, y: rect.midY))
+        XCTAssertEqual(view.hoveredChip, 0)
+    }
+
     func testMovingFromOneChipToTheNextKeepsTheNextPopoverOpen() throws {
         let view = try storyView()
         view.hoverDelay = 0.05

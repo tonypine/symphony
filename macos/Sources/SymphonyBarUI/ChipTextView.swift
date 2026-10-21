@@ -75,6 +75,17 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     public var popover: ChipPopoverPresenting?
     public var hoverDelay: TimeInterval = DesignTokens.Chip.hoverDelay
 
+    /// False while a sheet covers the window: the view draws nothing and opens no popover on hover, and SwiftUI draws
+    /// the paragraph's image under it, which dims with the window. The view stays in the window, so assistive apps read
+    /// it as they do without a sheet.
+    public var drawsText = true {
+        didSet {
+            guard drawsText != oldValue else { return }
+            alphaValue = drawsText ? 1 : 0
+            if !drawsText { pointerMoved(to: nil) }
+        }
+    }
+
     /// The chip under the pointer.
     public private(set) var hoveredChip: Int? {
         didSet { if hoveredChip != oldValue { redrawChips() } }
@@ -419,9 +430,9 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     }
 
     /// The pointer moved to `point` in the view, or left it: the chip under it lights, and its popover opens after
-    /// the pointer rests there for `hoverDelay`.
+    /// the pointer rests there for `hoverDelay`. Under a sheet (`drawsText` false) no chip lights.
     public func pointerMoved(to point: CGPoint?) {
-        let chip = point.flatMap(chipIndex(at:))
+        let chip = drawsText ? point.flatMap(chipIndex(at:)) : nil
         guard chip != hoveredChip else { return }
         hoveredChip = chip
         hoverWork?.cancel()

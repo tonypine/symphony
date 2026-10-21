@@ -5,8 +5,10 @@ import AppKit
 /// to SwiftUI while its window is covered.
 public final class SheetCover {
     public private(set) var covered = false
-    /// Called when `covered` changes.
+    /// Called when `covered` changes while it follows a window.
     public var changed: (Bool) -> Void = { _ in }
+    /// Whether it follows a window: until then (a view not in its window yet) it knows of no sheet.
+    public var watching: Bool { !observers.isEmpty }
     private var observers: [NSObjectProtocol] = []
     private weak var sender: AnyObject?
 
@@ -14,7 +16,8 @@ public final class SheetCover {
 
     deinit { stop() }
 
-    /// Follows `window`'s sheets, starting from whether it has one now. Out of a window, nothing covers it.
+    /// Follows `window`'s sheets, starting from whether it has one now. Out of a window nothing covers it, and it says
+    /// nothing: its view is going away, and the view that replaces it may still see the window covered.
     public func watch(_ window: NSWindow?) {
         watch(window, hasSheet: { [weak window] in window?.attachedSheet != nil })
     }
@@ -25,7 +28,7 @@ public final class SheetCover {
         stop()
         self.sender = sender
         guard let sender else {
-            set(false)
+            covered = false
             return
         }
         let center = NotificationCenter.default
