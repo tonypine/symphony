@@ -53,15 +53,17 @@ final class SheetCoverTests: XCTestCase {
         XCTAssertEqual(changes, [])
     }
 
-    func testOutOfTheWindowNothingCoversIt() {
+    func testOutOfTheWindowNothingCoversItAndItSaysNothing() {
         let cover = cover()
+        XCTAssertTrue(cover.watching)
         hasSheet = true
         post(NSWindow.willBeginSheetNotification)
         cover.watch(nil, hasSheet: { true })
         XCTAssertFalse(cover.covered)
+        XCTAssertFalse(cover.watching)
         post(NSWindow.willBeginSheetNotification)
         XCTAssertFalse(cover.covered, "it stopped following the old window")
-        XCTAssertEqual(changes, [true, false])
+        XCTAssertEqual(changes, [true], "the view that replaces it may still see the window covered")
     }
 
     func testWatchingTheSameWindowAgainChangesNothing() {
@@ -76,7 +78,9 @@ final class SheetCoverTests: XCTestCase {
     func testTheViewTakesNoClicksAndIsUncoveredOutOfAWindow() {
         let view = SheetCoverView(frame: CGRect(x: 0, y: 0, width: 100, height: 40))
         XCTAssertNil(view.hitTest(CGPoint(x: 10, y: 10)))
+        XCTAssertFalse(view.cover.watching, "not in its window yet, it knows of no sheet")
         view.viewDidMoveToWindow()
         XCTAssertFalse(view.cover.covered)
+        XCTAssertFalse(view.cover.watching)
     }
 }
