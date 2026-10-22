@@ -37,6 +37,20 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
     refute_received {:memory_tracker_state_update, _issue_id, _state}
   end
 
+  test "each read of a plan's comments logs what it saw, so a comment the poll passed over can be traced" do
+    parent = parent("Plan Review", [%{id: "child-1", identifier: "MOT-31", state: "Backlog"}], [~U[2026-10-04 12:10:00Z]])
+
+    put_feedback("parent", [change(~U[2026-10-04 12:00:00Z], "In Progress", "Plan Review")], [
+      comment("brief", "## Review brief\n\n**What to review:** the plan", ~U[2026-10-04 12:05:00Z]),
+      comment("c1", "Split MOT-31 in two", ~U[2026-10-04 12:10:00Z])
+    ])
+
+    log = capture_log([level: :debug], fn -> act(state(), parent) end)
+
+    assert log =~
+             "Read breakdown parent's plan comments: issue_id=parent issue_identifier=MOT-30 action=revise comments=2 pending=1 owned=0 since=~U[2026-10-04 12:00:00Z]"
+  end
+
   test "records a plan verdict signal when a person's comment sends the plan back for revision" do
     repo_key = "default"
     RunStore.delete_ticket_state(repo_key, "parent")

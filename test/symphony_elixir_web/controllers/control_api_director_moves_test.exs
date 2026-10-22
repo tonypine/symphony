@@ -29,8 +29,8 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
 
   test "each move answers with the states it moved between", %{moves: moves} do
     for {action, params, identifier, to_state} <- [
-          {:decisions, %{"picks" => [%{"question" => "Where?", "answer" => "B"}]}, "MOT-30", "Plan Review"},
-          {:changes, %{"reason" => "Ask it in plain words"}, "MOT-30", "Plan Review"},
+          {:decisions, %{"picks" => [%{"question" => "Where?", "answer" => "B"}]}, "MOT-30", "Rework"},
+          {:changes, %{"reason" => "Ask it in plain words"}, "MOT-30", "Rework"},
           {:rework, %{"reason" => "Split it differently"}, "MOT-30", "Rework"},
           {:backlog, %{"note" => "Later"}, "MOT-40", "Backlog"}
         ] do

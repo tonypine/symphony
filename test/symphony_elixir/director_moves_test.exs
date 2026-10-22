@@ -35,6 +35,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   defmodule UnwritableStore do
     def get_ticket_state(repo_key, issue_id), do: RunStore.get_ticket_state(repo_key, issue_id)
     def clear_ticket_hold(_repo_key, _issue_id, _kind), do: {:error, :boom}
+    def put_own_state_move(_issue_id, _at), do: {:error, :boom}
   end
 
   setup do
@@ -338,20 +339,69 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   describe "decisions" do
-    test "posts one comment with the picks on a plan in Plan Review, and leaves it there", %{opts: opts} do
+    test "posts one comment with the picks on a plan in Plan Review, then starts its revision", %{opts: opts} do
       put_issues([plan("Plan Review")])
       picks = [%{question: " Where are gift cards bought? ", answer: "B. In the app only"}, %{question: "Who pays?", answer: "A. The buyer"}]
 
-      assert {:ok, %{moved: false, commented: true, to_state: "Plan Review", undo_window_ms: nil}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: picks}, opts)
+      assert {:ok, %{moved: true, commented: true, from_state: "Plan Review", to_state: "Rework", undo_window_ms: nil}} =
+               DirectorMoves.move(:decisions, "MOT-30", %{picks: picks}, opts)
 
       assert_received {:memory_tracker_comment, "plan", body}
 
       assert body ==
                "Decisions on the plan, from the Director:\n\n1. Where are gift cards bought?\n   **Pick:** B. In the app only\n\n2. Who pays?\n   **Pick:** A. The buyer"
 
-      refute_received {:memory_tracker_state_update, _id, _state}
-      # Nothing moved, so there is nothing to undo.
+      assert_received {:memory_tracker_state_update, "plan", "Rework"}
+      # The revision move is Symphony's own, so the plan's sub-tickets are kept.
+      assert %DateTime{} = RunStore.get_own_state_move("plan")
+      # Moving the plan back to review would leave the answers unapplied, so there is nothing to undo.
+      put_issues([plan("Rework")])
       assert {:error, {:conflict, "there is no move on MOT-30 to undo"}} = DirectorMoves.undo("MOT-30", opts)
+    end
+
+    test "starts the revision on every round of answers, without waiting for the comment poll", %{opts: opts} do
+      put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
+
+      for request <- ["q1", "q2"] do
+        assert {:ok, %{to_state: "Rework"}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: [%{question: "Q", answer: "B", request_comment_id: request}]}, opts)
+        assert_received {:memory_tracker_reply, "plan", ^request, _reply}
+        assert_received {:memory_tracker_state_update, "plan", "Rework"}
+      end
+
+      # The ledger names what started each revision: the plan's verdict and the move into Rework.
+      events = ticket_events("repo-director", "plan", ["verdict.recorded", "phase.entered", "person.action"])
+
+      assert [
+               {"verdict.recorded", %{kind: "plan_review", outcome: "changes"}},
+               {"phase.entered", %{to: "Rework", from: "Plan Review", via: "decisions"}},
+               {"person.action", %{action: "move", move: "decisions", from: "Plan Review", to: "Rework"}},
+               {"verdict.recorded", _second_verdict},
+               {"phase.entered", _second_move},
+               {"person.action", _second_action}
+             ] = events
+    end
+
+    test "an approved plan gets the answers in place: it is not revised from comments", %{opts: opts} do
+      put_issues([%{plan("Plan Review") | sub_issues: [%{id: "s1", identifier: "MOT-31", state: "Todo"}]}])
+
+      assert {:ok, %{moved: false, to_state: "Plan Review"}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: [%{question: "Q", answer: "B"}]}, opts)
+      assert_received {:memory_tracker_comment, "plan", _body}
+      refute_received {:memory_tracker_state_update, _id, _state}
+    end
+
+    test "a revision Linear refuses to start says so, and the answers stand", %{opts: opts} do
+      put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :state_failed}])
+
+      assert {:error, {:partial, message}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: [%{question: "Q", answer: "B", request_comment_id: "q1"}]}, opts)
+
+      assert message ==
+               "posted your answers on MOT-30, but Linear refused the move to Rework that starts the plan's revision (:state_failed); " <>
+                 "MOT-30 stays in Plan Review with them not yet applied, so don't approve it yet"
+
+      assert_received {:memory_tracker_reply, "plan", "q1", _reply}
+      assert [%{"move" => "decisions", "from_state" => "Plan Review", "to_state" => "Plan Review", "failed" => "revise"}] = audit_records()
+      assert ticket_events("repo-director", "plan", "verdict.recorded") == []
     end
 
     test "needs picks, on a plan in Plan Review", %{opts: opts} do
@@ -374,22 +424,22 @@ defmodule SymphonyElixir.DirectorMovesTest do
         %{question: "Which currency?", answer: " The buyer's, converted at checkout ", request_comment_id: "q2"}
       ]
 
-      assert {:ok, %{move: "decisions", moved: false, commented: true, to_state: "Plan Review"}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: picks}, opts)
+      assert {:ok, %{move: "decisions", moved: true, commented: true, to_state: "Rework"}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: picks}, opts)
 
       assert_received {:memory_tracker_reply, "plan", "q1", first}
       assert first == "Decision from the Director:\n\n1. Where are gift cards bought?\n   **Decision:** In the checkout"
       assert_received {:memory_tracker_reply, "plan", "q2", second}
       assert second =~ "**Decision:** The buyer's, converted at checkout"
       refute_received {:memory_tracker_comment, _id, _body}
-      refute_received {:memory_tracker_state_update, _id, _state}
+      assert_received {:memory_tracker_state_update, "plan", "Rework"}
 
       # The answers are the ticket's decisions before the revision run reads it.
       assert_received {:memory_tracker_description_update, "plan", description}
       assert [%{key: "q1", answer: "In the checkout"}, %{key: "q2", answer: "The buyer's, converted at checkout"}] = SymphonyElixir.Decisions.recorded(description)
       refute Hold.held?("repo-director", "plan", :needs_decision)
 
-      # The replies are the Director's comments on a plan under review: they start the revision run,
-      # which keeps the plan's sub-tickets, and approve nothing.
+      # The replies are the Director's comments on a plan under review: a reply written in Linear
+      # starts the same revision through the comment poll.
       assert PlanComments.human?(%{bot?: false, body: first})
       assert [%{"move" => "decisions", "comment" => comment}] = audit_records()
       assert comment =~ "Where are gift cards bought?"
@@ -423,6 +473,9 @@ defmodule SymphonyElixir.DirectorMovesTest do
         end)
 
       assert log =~ "Failed to clear the Needs Decision hold on MOT-30 after its plan's answers"
+      # The revision still starts: the store is best effort, as the comment poll's own record is.
+      assert log =~ "Failed to record Symphony's own move of MOT-30 to revise its plan: :boom"
+      assert_received {:memory_tracker_state_update, "plan", "Rework"}
       assert_received {:memory_tracker_reply, "plan", "q1", _reply}
     end
 
@@ -436,17 +489,26 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   describe "changes" do
-    test "posts the Director's reason on a plan in Plan Review, in place, which revises it and keeps its sub-tickets", %{opts: opts} do
-      put_issues([plan("Plan Review")])
+    test "posts the Director's reason on a plan in Plan Review, then starts its revision, which keeps its sub-tickets", %{opts: opts} do
+      put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
 
-      assert {:ok, %{move: "changes", moved: false, commented: true, to_state: "Plan Review", undo_window_ms: nil}} =
+      assert {:ok, %{move: "changes", moved: true, commented: true, to_state: "Rework", undo_window_ms: nil}} =
                DirectorMoves.move(:changes, "MOT-30", %{reason: "  Ask the questions in plain words  "}, opts)
 
       assert_received {:memory_tracker_comment, "plan", body}
       assert body == "Changes asked by the Director:\n\nAsk the questions in plain words"
       assert PlanComments.human?(%{bot?: false, body: body})
-      refute_received {:memory_tracker_state_update, _id, _state}
-      assert [%{"move" => "changes"}] = audit_records()
+      assert_received {:memory_tracker_state_update, "plan", "Rework"}
+      assert [%{"move" => "changes", "to_state" => "Rework"}] = audit_records()
+      assert [{"phase.entered", %{via: "changes", to: "Rework"}}] = ticket_events("repo-director", "plan", "phase.entered")
+    end
+
+    test "a revision Linear refuses to start says the changes are posted but not applied", %{opts: opts} do
+      put_issues([plan("Plan Review")])
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :state_failed}])
+
+      assert {:error, {:partial, "posted your changes on MOT-30, but Linear refused the move to Rework" <> _rest}} =
+               DirectorMoves.move(:changes, "MOT-30", %{reason: "x"}, opts)
     end
 
     test "needs a reason and a plan in Plan Review", %{opts: opts} do

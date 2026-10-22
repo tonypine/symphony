@@ -76,13 +76,17 @@ later journeys point back to it. The mock draws every screen under its ID.
   request the ask, What to review, What changed, the decisions and the moves mention is a chip (N1) with its popover,
   as on D2c; a line that is only a link stays a link. An item without `references` shows its text as plain text.
 - **Actions:** with open questions **Send Decisions** (prominent, enabled once every question has an answer; each
-  answer goes under its question and into the Decisions section, and starts Symphony's plan revision run, which keeps
-  the sub-tickets and brings the plan back for approval), then **Approve Plan…**, **Ask for Changes…** (a required
+  answer goes under its question and into the Decisions section, and the move itself starts Symphony's plan revision,
+  on every round: the plan goes to Rework, the revision keeps the sub-tickets and brings the plan back for approval),
+  then **Approve Plan…**, **Ask for Changes…** (a required
   reason, posted as a comment: the same revision, sub-tickets kept), **Open in Linear**, ⋯ **Reject Plan…** (a
   required reason, destructive: its sheet names the sub-tickets still in Backlog it cancels) and **Restart…**. Without
   open questions **Approve Plan…** is the prominent one.
-- **States:** a scope that hides items says "2 more in other repos". (The final verification item and its
-  **Sign Off…** were retired with `Final verification:` tickets: an epic closes in its epic review.)
+- **States:** a scope that hides items says "2 more in other repos". A plan with answers no revision has applied yet
+  (the revision didn't start, or hasn't brought the plan back) says "2 answers not yet applied" above its questions
+  (a status.you triangle before text in the primary colour, like "If you don't answer:"), and **Approve Plan…**'s
+  sheet says approving now approves the plan without them. (The final verification item and its **Sign Off…** were
+  retired with `Final verification:` tickets: an epic closes in its epic review.)
 - **Conventions:** three-column `NavigationSplitView` like Mail; after an answer the selection moves to the next item;
   ↑↓ and Return work in the list.
 - **Data:** the Inbox list and the review brief (section 2).
@@ -97,9 +101,10 @@ later journeys point back to it. The mock draws every screen under its ID.
   "TP-892 stays in Rework until its next run picks up your answer." For a write-in answer: "Send your answer?" and
   the Director's words quoted under it.
 - **Conventions:** sheet with a default button; afterwards a banner "Moved to Merging · Undo" for 10 s (seen on D2c).
-  Send Decision and Send Decisions move nothing, so the app holds the answer for those 10 s: the banner reads
-  "TP-892 Sending your decision · Undo", the answer goes to Symphony when the 10 s end (then "Sent your decision"),
-  and Undo selects TP-892 again with its pick and sends nothing ("Not sent; your pick is kept").
+  Send Decision and Send Decisions have no move to take back, so the app holds the answer for those 10 s: the banner
+  reads "TP-892 Sending your decision · Undo", the answer goes to Symphony when the 10 s end (then "Sent your
+  decision"; for a plan's answers, "Sent your decisions: revising the plan in Rework", with no Undo), and Undo selects
+  TP-892 again with its pick and sends nothing ("Not sent; your pick is kept").
 - **Data:** writes through Symphony's control API (decision DD4).
 
 #### D2b · Inbox: a pull request to approve

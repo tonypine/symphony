@@ -22,13 +22,14 @@ defmodule SymphonyElixir.DirectorMoves do
   - `:decisions`: a plan in `Plan Review` gets the Director's answers to its questions, in place:
     each pick naming its `request_comment_id` is replied under that request and written into the
     Decisions section (`SymphonyElixir.Decisions`), and the Needs Decision hold the requests set is
-    cleared; a pick without one goes into one comment with the picked options. The replies are a
-    person's comments on a plan under review, so they start Symphony's plan revision run, which keeps
-    the plan's sub-tickets (`SymphonyElixir.PlanComments`). Nothing is approved: the plan comes back
-    to `Plan Review`;
-  - `:changes`: a plan in `Plan Review` gets the Director's reason as a comment, in place, which starts
-    the same revision run: the plan is changed and keeps its sub-tickets. `:rework` is the
-    rejection that cancels them;
+    cleared; a pick without one goes into one comment with the picked options. The move itself then
+    starts Symphony's plan revision, on every round: a plan under review moves to `Rework` through the
+    `:plan_revise` transition, recorded as Symphony's own move, so the revision run keeps the plan's
+    sub-tickets (`SymphonyElixir.PlanComments` sends a comment written in Linear the same way).
+    Nothing is approved: the plan comes back to `Plan Review`. An approved plan stays where it is;
+  - `:changes`: a plan in `Plan Review` gets the Director's reason as a comment, which starts the same
+    revision the same way: the plan is changed and keeps its sub-tickets. `:rework` is the
+    rejection that cancels them. Neither `:decisions` nor `:changes` is taken back by `undo/2`;
   - `:backlog`: an open ticket gets the note as a comment when there is one, then moves to `Backlog`;
   - `:unblock`: a ticket waiting on an **access** hold — an agent's block report — on a
     dispatch-loop hold (`SymphonyElixir.DispatchLoop`) or on an operator's stop
@@ -43,8 +44,8 @@ defmodule SymphonyElixir.DirectorMoves do
     optional `:move` names a state the decision directs — `rework` or `done` — and the move goes
     through `SymphonyElixir.TransitionGuard`. A ticket with no such hold is refused.
 
-  The comments are the Director's: none starts like one of Symphony's own, so the plan revision
-  trigger counts them as a person's comment.
+  The comments are the Director's: none starts like one of Symphony's own, so the plan comment
+  poll counts them as a person's comment too.
 
   When Linear takes the first of a move's two writes and refuses the second, the move answers
   `{:error, {:partial, message}}` saying what was already done, and still writes the audit record of
@@ -73,9 +74,11 @@ defmodule SymphonyElixir.DirectorMoves do
     OperatorStop,
     Orchestrator,
     PathUnlock,
+    PlanComments,
     PlanReview,
     PrWatch,
     Restart,
+    RunStore,
     SubIssueWait,
     TicketSignals,
     Tracker,
@@ -86,6 +89,9 @@ defmodule SymphonyElixir.DirectorMoves do
   alias SymphonyElixir.Routing.Resolver
 
   @undo_window_ms 10_000
+  # The moves that start a plan's revision. They are not taken back: the app holds them for its own
+  # Undo before sending, and moving the plan back to review would leave the answers unapplied.
+  @revision_moves [:decisions, :changes]
   @in_progress_state "In Progress"
   @merging_state "Merging"
   @rework_state "Rework"
@@ -171,7 +177,8 @@ defmodule SymphonyElixir.DirectorMoves do
     settings = Config.settings!()
 
     with {:ok, to_state} <- target(move, issue, settings),
-         {:ok, comment} <- apply_move(move, issue, to_state, input, opts) do
+         {:ok, comment} <- apply_move(move, issue, to_state, input, opts),
+         {:ok, to_state} <- start_revision(move, issue, to_state, comment, settings, opts) do
       finish(move, issue, to_state, comment, opts)
     end
   end
@@ -327,7 +334,7 @@ defmodule SymphonyElixir.DirectorMoves do
       else: {:ok, @in_progress_state}
   end
 
-  # The comment goes in place: a person's comment on a plan under review starts its revision run.
+  # The comment goes first, in place; `start_revision/6` then moves a plan under review to its revision.
   defp target(move, issue, settings) when move in [:decisions, :changes] do
     with :ok <- require_plan(issue, Atom.to_string(move)),
          :ok <- require_plan_review(issue, settings),
@@ -405,6 +412,52 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   defp apply_move(move, issue, to_state, _input, opts), do: comment_then_move(move, issue, nil, to_state, opts)
+
+  # The answers or the changes are posted, so the move itself starts the plan's revision rather than
+  # wait for the comment poll to notice its own comments: the parent goes to `Rework`, as
+  # `PlanComments` sends it there for a comment written in Linear. The move is recorded as
+  # Symphony's own before it is made, so `BreakdownReview` never reads it as the Director's
+  # rejection, which would cancel the plan's sub-tickets. An approved plan is not revised from
+  # comments, so it stays in place.
+  defp start_revision(move, issue, nil, comment, settings, opts) when move in @revision_moves do
+    if PlanComments.action(issue, settings.tracker.terminal_states, settings) == :revise,
+      do: revise(move, issue, comment, opts),
+      else: {:ok, nil}
+  end
+
+  defp start_revision(_move, _issue, to_state, _comment, _settings, _opts), do: {:ok, to_state}
+
+  defp revise(move, issue, comment, opts) do
+    store = Keyword.get(opts, :store, RunStore)
+    _ = log_own_move_error(store.put_own_state_move(issue.id, DateTime.utc_now()), issue)
+    ctx = %{repo_key: issue.repo_key}
+    to_state = TransitionGuard.target(:plan_revise, ctx)
+
+    case TransitionGuard.perform(issue.id, :plan_revise, ctx) do
+      :ok ->
+        TicketSignals.record(issue.repo_key, issue.id, "plan verdict", %{outcome: "changes", to: to_state})
+        record_move_signal(issue, move, to_state)
+        Logger.info("Director move #{move} starts the plan's revision issue_id=#{issue.id} issue_identifier=#{issue.identifier} to=#{to_state}")
+        {:ok, to_state}
+
+      {:error, reason} ->
+        record_audit(Atom.to_string(move), issue, issue.state, issue.state, comment, %{failed: "revise"})
+        request_refresh(opts)
+
+        partial(
+          "posted #{sent(move)} on #{issue.identifier}, but Linear refused the move to #{to_state} that starts the plan's revision " <>
+            "(#{inspect(reason)}); #{issue.identifier} stays in #{issue.state} with them not yet applied, so don't approve it yet"
+        )
+    end
+  end
+
+  defp sent(:decisions), do: "your answers"
+  defp sent(:changes), do: "your changes"
+
+  defp log_own_move_error(:ok, _issue), do: :ok
+
+  defp log_own_move_error({:error, reason}, issue),
+    do: Logger.warning("Failed to record Symphony's own move of #{issue.identifier} to revise its plan: #{inspect(reason)}")
 
   defp reply_to_requests(issue, answers) do
     Enum.reduce_while(answers, {:ok, []}, fn answer, {:ok, replies} ->
@@ -735,7 +788,7 @@ defmodule SymphonyElixir.DirectorMoves do
     record_audit(name, issue, issue.state, to_state || issue.state, comment)
     Logger.info("Director move #{name} issue_id=#{issue.id} issue_identifier=#{issue.identifier} from=#{issue.state} to=#{to_state || issue.state}")
 
-    if to_state, do: remember_move(move, issue, to_state, opts)
+    if to_state && move not in @revision_moves, do: remember_move(move, issue, to_state, opts)
     request_refresh(opts)
 
     {:ok,
@@ -747,7 +800,7 @@ defmodule SymphonyElixir.DirectorMoves do
        to_state: to_state || issue.state,
        moved: to_state != nil,
        commented: comment != nil,
-       undo_window_ms: if(to_state && move != :restart, do: @undo_window_ms)
+       undo_window_ms: if(to_state && move not in [:restart | @revision_moves], do: @undo_window_ms)
      }}
   end
 
