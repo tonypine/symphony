@@ -3,6 +3,7 @@ defmodule SymphonyElixir.TicketEventsTest do
 
   alias SymphonyElixir.TicketEvents
   alias SymphonyElixir.TicketEvents.{Event, Summary}
+  alias SymphonyElixirWeb.ObservabilityPubSub
 
   @repo_key "repo-a"
   @issue_id "issue-1"
@@ -139,6 +140,63 @@ defmodule SymphonyElixir.TicketEventsTest do
       assert {:error, :invalid_ticket_event} = TicketEvents.record(@repo_key, nil, "note", %{text: "x"})
 
       assert TicketEvents.query(@repo_key, @issue_id) == []
+    end
+  end
+
+  describe "record/5's notice" do
+    defmodule FailingPubSubAdapter do
+      def broadcast(_adapter_name, _topic, _message, _dispatcher), do: {:error, :forced_failure}
+    end
+
+    setup do
+      :ok = ObservabilityPubSub.subscribe_ticket_events()
+    end
+
+    test "a written event sends its notice, with the ticket's identifier when its record knows it" do
+      :ok = RunStore.put_ticket_state(%{repo_key: @repo_key, issue_id: @issue_id, issue_identifier: "TP-1"})
+
+      assert {:ok, event} = TicketEvents.record(@repo_key, @issue_id, "note", %{text: "x"}, at: @at)
+
+      assert_receive {:ticket_event, notice}
+
+      assert notice == %{
+               repo_key: @repo_key,
+               issue_id: @issue_id,
+               issue_identifier: "TP-1",
+               event_id: event.id,
+               type: "note",
+               at: @at
+             }
+
+      assert {:ok, _event} = TicketEvents.record(@repo_key, "issue-2", "note", %{text: "y"})
+      assert_receive {:ticket_event, %{issue_id: "issue-2", issue_identifier: nil}}
+    end
+
+    test "a duplicate or a refused write sends no notice" do
+      assert {:ok, _first} = TicketEvents.record(@repo_key, @issue_id, "note", %{text: "x"}, idempotency: "k")
+      assert_receive {:ticket_event, %{issue_id: @issue_id}}
+
+      assert {:ok, _first} = TicketEvents.record(@repo_key, @issue_id, "note", %{text: "x"}, idempotency: "k")
+      assert {:error, {:unknown_type, "nope"}} = TicketEvents.record(@repo_key, @issue_id, "nope", %{})
+      assert {:error, :invalid_repo_key} = TicketEvents.record(" ", @issue_id, "note", %{text: "x"})
+
+      refute_receive {:ticket_event, _notice}, 100
+    end
+
+    test "a broadcast that fails is logged and does not fail the write" do
+      {:ok, original_meta} = Registry.meta(SymphonyElixir.PubSub, :pubsub)
+      on_exit(fn -> :ok = Registry.put_meta(SymphonyElixir.PubSub, :pubsub, original_meta) end)
+      failing_meta = original_meta |> put_elem(0, FailingPubSubAdapter) |> put_elem(1, :failing_adapter)
+      :ok = Registry.put_meta(SymphonyElixir.PubSub, :pubsub, failing_meta)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, event} = TicketEvents.record(@repo_key, @issue_id, "note", %{text: "x"})
+          assert [^event] = TicketEvents.query(@repo_key, @issue_id)
+        end)
+
+      assert log =~ "failed to broadcast ticket event: :forced_failure"
+      refute_received {:ticket_event, _notice}
     end
   end
 
