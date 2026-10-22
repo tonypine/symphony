@@ -4,6 +4,7 @@ defmodule SymphonyElixirWeb.Presenter do
   """
 
   alias SymphonyElixir.{
+    Artifacts,
     BuildInfo,
     Config,
     ForcedStatus,
@@ -26,6 +27,7 @@ defmodule SymphonyElixirWeb.Presenter do
   alias SymphonyElixir.Codex.MessageHumanizer
   alias SymphonyElixir.GitHub.WebhookSetup.Cache, as: WebhookSetupCache
   alias SymphonyElixir.Repo.Status, as: RepoStatus
+  alias SymphonyElixir.TicketEvents.Event
   alias SymphonyElixirWeb.WatchPayload
 
   @empty_codex_totals %{
@@ -406,6 +408,167 @@ defmodule SymphonyElixirWeb.Presenter do
 
       payload ->
         {:ok, Map.update!(payload, :requested_at, &DateTime.to_iso8601/1)}
+    end
+  end
+
+  @doc """
+  A page of `repo_key`'s ticket `issue_id`'s events (`SymphonyElixir.TicketEvents`), as the events
+  feed answers them: each with its summary, and its artifacts as
+  `{id, kind, mime, label, available, url}`. `available` says whether `url` (the artifact route,
+  relative to the server) serves the bytes: false for an artifact the store marks expired, and for
+  an id the store doesn't know, whose other fields are null. The page's artifacts are read in one
+  `SymphonyElixir.Artifacts.list/1` call.
+  """
+  @spec ticket_events_json(String.t(), String.t(), [Event.t()]) :: [map()]
+  def ticket_events_json(repo_key, issue_id, events) do
+    artifacts = ticket_artifacts(repo_key, issue_id, events)
+    Enum.map(events, &ticket_event_json(&1, artifacts))
+  end
+
+  @doc """
+  The page `events` grouped by run, oldest first: each entry an event (`ticket_events_json/3`'s
+  shape, with its `children`) or a run, placed where its first event on the page falls.
+
+  An event whose `parent` names an earlier event on the page sits in that event's `children`, at any
+  depth. Otherwise an event whose `run_id` names a run of `history` sits in that run's `events`, and
+  any other event stays at the top level. A run is `{kind: "run", run_id, run_kind, run_number,
+  status, verdict, started_at, ended_at, exit, head, summary, events}`, its header read from
+  `history` (the ticket's `run.started`, `run.ended` and `verdict.recorded` events, oldest first),
+  not from the page: `status` is `running` until its `run.ended`, then `ended`, and `verdict` is the
+  newest verdict naming the run (`{kind, outcome, head, at}`), else null.
+  """
+  @spec ticket_timeline_json(String.t(), String.t(), [Event.t()], [Event.t()]) :: [map()]
+  def ticket_timeline_json(repo_key, issue_id, events, history) do
+    runs = run_headers(history)
+
+    {placed, _seen} =
+      Enum.map_reduce(events, MapSet.new(), fn event, seen ->
+        {{event, timeline_place(event, seen, runs)}, MapSet.put(seen, event.id)}
+      end)
+
+    timeline = %{
+      artifacts: ticket_artifacts(repo_key, issue_id, events),
+      runs: runs,
+      members: Enum.group_by(placed, &elem(&1, 1), &elem(&1, 0))
+    }
+
+    placed
+    |> Enum.flat_map(fn
+      {event, :top} -> [{:event, event}]
+      {_event, {:run, run_id}} -> [{:run, run_id}]
+      {_event, {:event, _parent}} -> []
+    end)
+    |> Enum.uniq()
+    |> Enum.map(&timeline_entry(&1, timeline))
+  end
+
+  # A parent must come earlier on the page, so a `parent` chain never loops.
+  defp timeline_place(%Event{parent: parent, run_id: run_id}, seen, runs) do
+    cond do
+      is_binary(parent) and MapSet.member?(seen, parent) -> {:event, parent}
+      is_binary(run_id) and is_map_key(runs, run_id) -> {:run, run_id}
+      true -> :top
+    end
+  end
+
+  defp timeline_entry({:event, event}, timeline) do
+    event
+    |> ticket_event_json(timeline.artifacts)
+    |> Map.put(:children, timeline_members({:event, event.id}, timeline))
+  end
+
+  defp timeline_entry({:run, run_id}, timeline) do
+    Map.put(Map.fetch!(timeline.runs, run_id), :events, timeline_members({:run, run_id}, timeline))
+  end
+
+  defp timeline_members(place, timeline) do
+    timeline.members |> Map.get(place, []) |> Enum.map(&timeline_entry({:event, &1}, timeline))
+  end
+
+  defp run_headers(history) do
+    verdicts =
+      history
+      |> Enum.filter(&(&1.type == "verdict.recorded" and is_binary(&1.run_id)))
+      |> Map.new(&{&1.run_id, &1})
+
+    history
+    |> Enum.filter(&(&1.type in ["run.started", "run.ended"] and is_binary(&1.run_id)))
+    |> Enum.group_by(& &1.run_id)
+    |> Map.new(fn {run_id, events} -> {run_id, run_header(run_id, events, Map.get(verdicts, run_id))} end)
+  end
+
+  defp run_header(run_id, events, verdict) do
+    started = Enum.find(events, &(&1.type == "run.started"))
+    ended = events |> Enum.filter(&(&1.type == "run.ended")) |> List.last()
+
+    %{
+      kind: "run",
+      run_id: run_id,
+      run_kind: payload_field(started, :run_kind) || payload_field(ended, :run_kind),
+      run_number: payload_field(started, :run_number) || payload_field(ended, :run_number),
+      status: if(ended, do: "ended", else: "running"),
+      verdict: verdict && run_verdict_json(verdict),
+      started_at: started && DateTime.to_iso8601(started.at),
+      ended_at: ended && DateTime.to_iso8601(ended.at),
+      exit: payload_field(ended, :exit),
+      head: payload_field(ended, :head) || payload_field(started, :head),
+      summary: (ended || started).summary
+    }
+  end
+
+  defp run_verdict_json(%Event{payload: payload} = verdict) do
+    %{
+      kind: Map.get(payload, :kind),
+      outcome: Map.get(payload, :outcome),
+      head: Map.get(payload, :head) || verdict.head_sha,
+      at: DateTime.to_iso8601(verdict.at)
+    }
+  end
+
+  defp payload_field(nil, _key), do: nil
+  defp payload_field(%Event{payload: payload}, key), do: Map.get(payload, key)
+
+  # One read of the ticket's artifacts for the whole page, skipped when the page names none. A store
+  # that can't be read answers an error, which `Map.new/2` raises on, as the feed's other reads do.
+  defp ticket_artifacts(repo_key, issue_id, events) do
+    if Enum.any?(events, &(&1.artifacts != [])),
+      do: [repo_key: repo_key, issue_id: issue_id] |> Artifacts.list() |> Map.new(&{&1.id, &1}),
+      else: %{}
+  end
+
+  defp ticket_event_json(%Event{} = event, artifacts) do
+    %{
+      id: event.id,
+      seq: event.seq,
+      at: event.at && DateTime.to_iso8601(event.at),
+      type: event.type,
+      phase: event.phase,
+      actor: event.actor,
+      run_id: event.run_id,
+      head_sha: event.head_sha,
+      parent: event.parent,
+      supersedes: event.supersedes,
+      idempotency: event.idempotency,
+      payload: event.payload,
+      summary: event.summary,
+      artifacts: Enum.map(event.artifacts, &ticket_artifact_json(&1, artifacts))
+    }
+  end
+
+  defp ticket_artifact_json(id, artifacts) do
+    case Map.fetch(artifacts, id) do
+      {:ok, artifact} ->
+        %{
+          id: id,
+          kind: artifact.kind,
+          mime: artifact.mime,
+          label: artifact.label,
+          available: not Map.get(artifact, :expired, false),
+          url: "/api/v1/artifacts/" <> id
+        }
+
+      :error ->
+        %{id: id, kind: nil, mime: nil, label: nil, available: false, url: nil}
     end
   end
 
