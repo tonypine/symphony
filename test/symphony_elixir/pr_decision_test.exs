@@ -81,7 +81,7 @@ defmodule SymphonyElixir.PrDecisionTest do
 
     test "rule ids are unique and each rule names its phases and a line for the docs" do
       assert Enum.uniq(@ids) == @ids
-      assert length(@ids) == 35
+      assert length(@ids) == 36
 
       for rule <- PrDecision.rules() do
         assert rule.phases != [] and rule.phases -- Facts.phases() == []
@@ -125,6 +125,9 @@ defmodule SymphonyElixir.PrDecisionTest do
                "No check reported on the head within the wait: counts as green, so the QA agent runs"
 
       assert %Action{rule: "R27", reason: "The head is green, so the QA agent runs"} = decide(phase: :qa)
+
+      assert decide(phase: :code_review, ci: :green, mergeable: :clean, set_aside: ["install script"]).reason ==
+               "The head is green on the checks the base requires, so the reviewer runs; `install script`, cancelled again after 2 reruns, is set aside"
     end
 
     test "G2: a required check that never reports asks a person (R17, D3)" do
@@ -301,6 +304,21 @@ defmodule SymphonyElixir.PrDecisionTest do
       assert %Action{rule: "R22", kind: :rerun_failed} = red(rerun_done: false)
       assert %Action{rule: "R19", kind: :rerun_failed} = red(red_kind: :cancelled)
       assert %Action{rule: "R23", kind: :wait, owner: :ci} = red(red_kind: :also_red_on_base)
+    end
+
+    test "a cancelled run is rerun twice on a head, spending nothing, then a person is asked (R19, R19a)" do
+      assert PrDecision.max_cancel_reruns() == 2
+
+      assert %Action{rule: "R19", kind: :rerun_failed, reason: reason} = red(red_kind: :cancelled, failing_check: "install script")
+      assert reason == "Every run of the `install script` check was cancelled: rerunning it (rerun 1 of 2), no attempt spent"
+      assert %Action{rule: "R19", reason: "Every run of a check was cancelled: rerunning it (rerun 2 of 2), no attempt spent"} = red(red_kind: :cancelled, cancel_reruns: 1, failing_check: nil)
+
+      # Neither the red count nor the rerun of R22 bears on a cancellation.
+      assert %Action{rule: "R19"} = red(red_kind: :cancelled, red_attempts: 10, rerun_done: true, same_failure_streak: 3)
+
+      action = red(red_kind: :cancelled, cancel_reruns: 2, failing_check: "install script", pr_number: 640)
+      assert %Action{rule: "R19a", kind: :decision, owner: :person, clears_when: "a person answers"} = action
+      assert action.args == %{question: "GitHub cancelled the `install script` check on PR #640 again after 2 reruns", options: ["Keep retrying", "Wait"]}
     end
 
     test "R23 names the base's run and commit it compared the check with, and how" do

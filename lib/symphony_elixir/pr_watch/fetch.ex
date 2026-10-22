@@ -8,7 +8,8 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   closed. Its base is compared with the repo's `base_branch` when the caller names one, else with
   the repository's default branch. Run through `gh api --include`, so the response's
   `X-RateLimit-Remaining` and `X-RateLimit-Reset` headers come back with it. Three more reads happen
-  only when needed: the checks the base branch requires (unless the caller already knows them;
+  only when needed: the checks the base branch requires, for a head whose checks all passed or whose
+  only failures are cancellations (unless the caller already knows them;
   `SymphonyElixir.PrWatch.Repo` keeps them 10 minutes per base); for a head with no check at all,
   whether the base branch has workflow files (kept the same way): without them the head has no CI
   (`ci: :none`, D2), with them it waits for its first check (`awaiting_checks`); and, for a red
@@ -100,6 +101,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
           missing_checks: [String.t()],
           red_kind: :failure | :cancelled | :human_only | :also_red_on_base,
           past_human_only: :green | :pending | nil,
+          past_cancelled: :green | :pending | :required_missing | nil,
           base_red: Facts.base_red() | nil,
           failing_check: String.t() | nil,
           failed_checks: [check()],
@@ -119,10 +121,14 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   @typedoc "A comparison of failed logs: the head check's job (its details URL) and the base job's id."
   @type comparison_key :: {String.t() | nil, String.t() | nil}
 
-  @typedoc "A failed check of the head: its name, the workflow run it belongs to and how it ended."
+  @typedoc """
+  A failed check of the head: its name, the workflow run and job it belongs to (a rerun's attempt
+  gives its jobs new ids) and how it ended.
+  """
   @type check :: %{
           name: String.t() | nil,
           run_id: String.t() | nil,
+          job_id: pos_integer() | nil,
           workflow_name: String.t() | nil,
           conclusion: String.t() | nil
         }
@@ -176,7 +182,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
     pr_facts =
       case read do
         nil -> %{pr: :missing}
-        read -> Map.take(read, [:pr, :pr_number, :base, :base_ref, :auto_merge, :ci, :no_ci, :missing_checks, :red_kind, :base_red, :failing_check, :mergeable])
+        read -> Map.take(read, [:pr, :pr_number, :base, :base_ref, :auto_merge, :ci, :no_ci, :missing_checks, :red_kind, :base_red, :failing_check, :set_aside, :mergeable])
       end
 
     ticket
@@ -319,6 +325,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       missing_checks: [],
       red_kind: :failure,
       past_human_only: nil,
+      past_cancelled: nil,
       base_red: nil,
       failing_check: nil,
       failed_checks: [],
@@ -341,7 +348,8 @@ defmodule SymphonyElixir.PrWatch.Fetch do
     base_branch = Keyword.get(opts, :base_branch) || get_in(repository, ["defaultBranchRef", "name"])
     head_sha = pull["headRefOid"]
     checks = checks(pr_url, head_sha, pull)
-    {names, required} = required(pr_url, base_ref, checks, opts)
+    {known, required} = required(pr_url, base_ref, checks, opts)
+    names = known || []
     {workflows?, workflows} = workflows(pr_url, base_ref, checks, names, opts)
     ci = ci(checks, names, workflows?)
     failing = Enum.filter(checks, &(PullRequest.check_result(&1) == :failed))
@@ -363,9 +371,10 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       missing_checks: elem(ci, 1),
       red_kind: red_kind,
       past_human_only: past_human_only(red_kind, checks),
+      past_cancelled: past_cancelled(red_kind, checks, known),
       base_red: base_red,
-      failing_check: failing |> Enum.map(& &1.name) |> List.first(),
-      failed_checks: Enum.map(failing, &Map.take(&1, [:name, :run_id, :workflow_name, :conclusion])),
+      failing_check: failing |> Enum.sort_by(&cancelled?/1) |> Enum.map(& &1.name) |> List.first(),
+      failed_checks: Enum.map(failing, &Map.take(&1, [:name, :run_id, :job_id, :workflow_name, :conclusion])),
       check_names: checks |> Enum.map(& &1.name) |> Enum.uniq(),
       run_ids: run_ids(checks),
       pr_node_id: pull["id"],
@@ -413,14 +422,16 @@ defmodule SymphonyElixir.PrWatch.Fetch do
     |> Map.fetch!(:checks)
   end
 
-  # The required checks matter only once nothing failed and nothing runs: then a required check
-  # that never reported is what keeps the head from green. `{names, read}`: `read` is
-  # `{base, names}` when they were read now rather than known.
+  # The required checks matter once nothing failed and nothing runs: then a required check that
+  # never reported is what keeps the head from green. They matter too when the only failures are
+  # cancellations: a cancelled check the base doesn't require is set aside once its reruns are spent
+  # (`past_cancelled`). `{names, read}`: `read` is `{base, names}` when they were read now rather
+  # than known; `names` is nil when they couldn't be read.
   defp required(pr_url, base_ref, checks, opts) when is_binary(base_ref) do
     known = Keyword.get(opts, :required_checks, %{})
 
     cond do
-      not Enum.all?(checks, &(PullRequest.check_result(&1) == :passed)) -> {[], nil}
+      not required_matters?(checks) -> {[], nil}
       Map.has_key?(known, base_ref) -> {Map.fetch!(known, base_ref), nil}
       true -> read_required(pr_url, base_ref, opts)
     end
@@ -435,9 +446,20 @@ defmodule SymphonyElixir.PrWatch.Fetch do
 
       {:error, reason} ->
         Logger.warning("PR watch could not read the checks #{base_ref} requires pr_url=#{pr_url} reason=#{inspect(reason)}")
-        {[], nil}
+        {nil, nil}
     end
   end
+
+  defp required_matters?(checks) do
+    {failed, others} = Enum.split_with(checks, &(PullRequest.check_result(&1) == :failed))
+
+    case failed do
+      [] -> Enum.all?(others, &(PullRequest.check_result(&1) == :passed))
+      failed -> Enum.all?(failed, &cancelled?/1)
+    end
+  end
+
+  defp cancelled?(check), do: check.conclusion == "CANCELLED"
 
   # A head with no check at all and nothing required: whether the base has workflow files tells no
   # CI from CI that hasn't started yet. `{workflows?, read}`, as `required/4`. A base that can't be
@@ -497,7 +519,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   def failure(read, _known, _opts), do: Map.put(read, :failure, nil)
 
   defp read_failure(read, head, opts) do
-    run_ids = run_ids(Map.get(read, :failed_checks, []))
+    run_ids = read |> Map.get(:failed_checks, []) |> failures() |> run_ids()
     log_opts = Keyword.take(opts, [:github, :gh_runner]) ++ repo_opts(read.pr_url, opts)
 
     case FailedLog.read(run_ids, Keyword.get(opts, :line_limit, @log_lines), log_opts) do
@@ -509,6 +531,19 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       {:error, reason} ->
         Logger.warning("PR watch could not read the failed log of #{head} pr_url=#{read.pr_url} reason=#{inspect(reason)}")
         Map.put(read, :failure, nil)
+    end
+  end
+
+  @doc """
+  The failed checks that failed rather than being cancelled, or all of them when every one was
+  cancelled: what a red head's failure is read from, so a cancellation beside a real failure is
+  never taken for it.
+  """
+  @spec failures([check()]) :: [check()]
+  def failures(checks) do
+    case Enum.reject(checks, &(Map.get(&1, :conclusion) == "CANCELLED")) do
+      [] -> checks
+      failed -> failed
     end
   end
 
@@ -544,6 +579,21 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   end
 
   defp past_human_only(_red_kind, _checks), do: nil
+
+  # What a head red only on cancelled checks the base branch doesn't require reads as once they are
+  # set aside: what its other checks say, green when there are none. Nil when one of them is
+  # required, or the required checks couldn't be read: that one waits on a person past its reruns.
+  defp past_cancelled(:cancelled, checks, names) when is_list(names) do
+    {cancelled, rest} = Enum.split_with(checks, &(PullRequest.check_result(&1) == :failed))
+
+    cond do
+      Enum.any?(cancelled, &(&1.name in names)) -> nil
+      rest == [] -> :green
+      true -> rest |> ci(names, true) |> elem(0)
+    end
+  end
+
+  defp past_cancelled(_red_kind, _checks, _names), do: nil
 
   # Each failing check is red on the base too: the job of the same name failed in its workflow's
   # latest finished run on the base and, when the head's failed log names failing tests, failed every
