@@ -52,7 +52,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   Each tick also runs the silent-wait detector (`SymphonyElixir.PrWatch.SilentWait`) on every
   watched ticket and keeps its result on the record (`silent`); a ticket that turns silent logs one
-  `pr_watch.silent_wait` line. The record keeps since when the decision stands (`decision.since`)
+  `pr_watch.silent_wait` line, naming the rule, its action and the decision's own reason. The record keeps since when the decision stands (`decision.since`)
   and the last five actions applied (`actions`). A head red only on a check a person clears
   (`protected paths`, R18), in any phase, has the protected paths its PR changes read once
   (`SymphonyElixir.ProtectedPathsGate.changed_paths/2`) and kept on the record (`protected_files`).
@@ -928,7 +928,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
     if SilentWait.listed?(silent) and not SilentWait.listed?(before) do
       Logger.warning(
         "pr_watch.silent_wait issue_id=#{entry.issue.id} issue_identifier=#{entry.issue.identifier} repo_key=#{state.repo_key} " <>
-          "phase=#{entry.phase} since=#{DateTime.to_iso8601(silent.since)} rule=#{rule(watch)} bound=#{silent.bound || "none"} reason=#{inspect(silent.reason)}"
+          "phase=#{entry.phase} since=#{DateTime.to_iso8601(silent.since)} rule=#{rule(watch)} bound=#{silent.bound || "none"} reason=#{inspect(silent.reason)}" <>
+          decided(watch)
       )
     end
 
@@ -937,6 +938,10 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   defp rule(%{decision: %{rule: rule}}), do: rule
   defp rule(_watch), do: "none"
+
+  # What the stuck decision says it does or waits for, so the line names what a person can act on.
+  defp decided(%{decision: %{kind: kind, reason: reason}}) when is_binary(reason), do: " action=#{kind} decision=#{inspect(reason)}"
+  defp decided(_watch), do: ""
 
   # A read GitHub refused keeps what the record held, its facts marked rate limited: R1 waits.
   defp rate_limited(entry, ticket, previous, limited, now) do
@@ -1055,16 +1060,30 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # running; a failed check only a person clears (`protected paths`) doesn't make the head red
   # before `Merging`, where the head reads as its other checks so the reviewer, QA and the rework
   # run go on; and in `Merging` that check holds the head back (R18) unless the ticket's unlock
-  # decisions cover it.
+  # decisions cover it. A check the base branch doesn't require, cancelled again after R19's reruns,
+  # is set aside: the head reads as its other checks, never held on it.
   defp complete(nil, _attempts, _entry, _state), do: nil
 
   defp complete(read, attempts, entry, state) do
     cond do
       read.ci in [:green, :none] and Attempts.rerun_pending?(attempts, read) -> %{read | ci: :pending}
-      read.ci == :red and read.red_kind == :human_only and entry.phase == :merging -> unlocked(read, entry, state)
-      read.ci == :red and read.red_kind == :human_only -> %{read | ci: read.past_human_only}
+      read.ci == :red -> complete_red(read, attempts, entry, state)
       true -> read
     end
+  end
+
+  defp complete_red(%{red_kind: :human_only} = read, _attempts, %{phase: :merging} = entry, state), do: unlocked(read, entry, state)
+  defp complete_red(%{red_kind: :human_only} = read, _attempts, _entry, _state), do: %{read | ci: read.past_human_only}
+  defp complete_red(%{red_kind: :cancelled} = read, attempts, _entry, _state), do: if(set_aside?(read, attempts), do: set_aside(read), else: read)
+  defp complete_red(read, _attempts, _entry, _state), do: read
+
+  defp set_aside?(read, attempts) do
+    Map.get(read, :past_cancelled) != nil and Attempts.cancel_reruns(attempts, read) >= PrDecision.max_cancel_reruns()
+  end
+
+  defp set_aside(read) do
+    names = for %{name: name} <- read.failed_checks, is_binary(name), uniq: true, do: name
+    read |> Map.put(:ci, read.past_cancelled) |> Map.put(:set_aside, names)
   end
 
   defp unlocked(read, entry, state) do
@@ -1151,21 +1170,41 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   # The person's answer to the question R17 asked about the head, once the hold it set has cleared:
   # a waiver for the head, a rerun of its checks (the question may come again, so R17 leaves the
-  # ledger), or Rework, which the hold's answer already moved it to.
+  # ledger), or Rework, which the hold's answer already moved it to. Then the answer to R19a's
+  # question about a run GitHub keeps cancelling: keep retrying starts the run's reruns again (R19
+  # reruns it on this tick, and R19a may ask again), wait leaves it.
   defp take_answer(attempts, applied, %{ticket: %{hold: :none}} = entry, read, now, state) do
-    with %{title: title, prior: prior} <- Attempts.open_question(attempts),
-         %{answer: answer} <- entry.record |> decisions() |> Enum.filter(&Apply.same_title?(&1, title)) |> Enum.at(prior) do
-      pick = Apply.unreported_answer(answer)
-      Logger.info("PR watch read the answer to #{title}: #{pick} issue_id=#{entry.issue.id} issue_identifier=#{entry.issue.identifier}")
-      if pick == :rerun, do: rerun_head(read, state)
-      applied = if pick in [:rerun, :other], do: Enum.reject(applied, &(&1.rule == "R17")), else: applied
-      {Attempts.answer(attempts, pick, now), applied}
+    {attempts, applied} =
+      with %{title: title, prior: prior} <- Attempts.open_question(attempts),
+           %{answer: answer} <- answer_to(entry, title, prior) do
+        pick = Apply.unreported_answer(answer)
+        log_answer(title, pick, entry)
+        if pick == :rerun, do: rerun_head(read, state)
+        applied = if pick in [:rerun, :other], do: Enum.reject(applied, &(&1.rule == "R17")), else: applied
+        {Attempts.answer(attempts, pick, now), applied}
+      else
+        _unanswered -> {attempts, applied}
+      end
+
+    with %{title: title, prior: prior} <- Attempts.cancel_question(attempts),
+         %{answer: answer} <- answer_to(entry, title, prior) do
+      pick = Apply.cancelled_answer(answer)
+      log_answer(title, pick, entry)
+      applied = if pick == :rerun, do: Enum.reject(applied, &(&1.rule == "R19a")), else: applied
+      {Attempts.cancel_answer(attempts, pick), applied}
     else
       _unanswered -> {attempts, applied}
     end
   end
 
   defp take_answer(attempts, applied, _entry, _read, _now, _state), do: {attempts, applied}
+
+  # The answer to the question titled `title`, after the `prior` ones the ticket held when it was asked.
+  defp answer_to(entry, title, prior), do: entry.record |> decisions() |> Enum.filter(&Apply.same_title?(&1, title)) |> Enum.at(prior)
+
+  defp log_answer(title, pick, entry) do
+    Logger.info("PR watch read the answer to #{title}: #{pick} issue_id=#{entry.issue.id} issue_identifier=#{entry.issue.identifier}")
+  end
 
   # Reruns every workflow run of the head, so a check that never reported gets another chance.
   defp rerun_head(read, state) do

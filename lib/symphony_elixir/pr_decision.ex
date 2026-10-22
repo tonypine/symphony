@@ -39,6 +39,8 @@ defmodule SymphonyElixir.PrDecision do
   @max_conflict_attempts 3
   # The same failure this many CI Fix runs in a row reaches the red backstop (D15 (c)).
   @max_same_failures 3
+  # A cancelled run is rerun this many times on a head; its next cancellation asks a person (R19a).
+  @max_cancel_reruns 2
 
   @all Facts.phases()
   @pr_phases [:code_review, :qa, :rework, :ci_fix, :merging]
@@ -59,6 +61,10 @@ defmodule SymphonyElixir.PrDecision do
   @doc "The fixed number of CI Fix runs a conflict gets before it waits on its competitors or goes to Rework."
   @spec max_conflict_attempts() :: pos_integer()
   def max_conflict_attempts, do: @max_conflict_attempts
+
+  @doc "How many times R19 reruns a cancelled workflow run on one head before R19a asks a person."
+  @spec max_cancel_reruns() :: pos_integer()
+  def max_cancel_reruns, do: @max_cancel_reruns
 
   @doc "A phase's Linear state name."
   @spec phase_name(Facts.phase()) :: String.t()
@@ -216,10 +222,20 @@ defmodule SymphonyElixir.PrDecision do
       %{
         id: "R19",
         phases: @pr_phases,
-        when: "Red only because every run of a workflow was cancelled, its newest attempt with nothing queued or running",
-        then: "`rerun_failed`, no attempt spent",
+        when:
+          "Red only because every run of a workflow was cancelled, its newest attempt with nothing queued or running, " <>
+            "and that run was rerun fewer than #{@max_cancel_reruns} times on the head",
+        then: "`rerun_failed` each new cancellation, no attempt spent; a rerun not yet reported: `wait` on `ci`",
         guard: &cancelled_red?/1,
         build: &rerun_cancelled/1
+      },
+      %{
+        id: "R19a",
+        phases: @pr_phases,
+        when: "Red only because a workflow run was cancelled again after #{@max_cancel_reruns} reruns on the head",
+        then: "`decision`: keep retrying it, or wait",
+        guard: &cancelled_again?/1,
+        build: &ask_about_cancelled/1
       },
       %{
         id: "R20",
@@ -344,7 +360,8 @@ defmodule SymphonyElixir.PrDecision do
   defp mergeable_unknown?(facts), do: not_red?(facts) and facts.mergeable == :unknown
   defp required_missing?(facts), do: clean_pr?(facts) and facts.ci == :required_missing
   defp human_only_red?(facts), do: red?(facts, :human_only)
-  defp cancelled_red?(facts), do: red?(facts, :cancelled)
+  defp cancelled_red?(facts), do: red?(facts, :cancelled) and facts.cancel_reruns < @max_cancel_reruns
+  defp cancelled_again?(facts), do: red?(facts, :cancelled) and facts.cancel_reruns >= @max_cancel_reruns
 
   defp red_backstop?(facts) do
     repeating? = facts.same_failure_streak >= @max_same_failures
@@ -439,6 +456,12 @@ defmodule SymphonyElixir.PrDecision do
   defp dispatch_reason(%{phase: :in_progress}), do: {"R12", "The agent continues the PR"}
   defp dispatch_reason(%{phase: :rework}), do: {"R26", "The rework run continues the PR"}
   defp dispatch_reason(%{ci: :none} = facts), do: {"R27", "#{no_ci(facts)}: counts as green, so #{reviewer(facts)} runs"}
+
+  defp dispatch_reason(%{set_aside: [_ | _] = names} = facts) do
+    checks = Enum.map_join(names, ", ", &"`#{&1}`")
+    {"R27", "The head is green on the checks the base requires, so #{reviewer(facts)} runs; #{checks}, cancelled again after #{@max_cancel_reruns} reruns, is set aside"}
+  end
+
   defp dispatch_reason(facts), do: {"R27", "The head is green, so #{reviewer(facts)} runs"}
 
   defp wait_for_ahead(facts) do
@@ -496,7 +519,16 @@ defmodule SymphonyElixir.PrDecision do
     ])
   end
 
-  defp rerun_cancelled(facts), do: Action.new!("R19", :rerun_failed, reason: "Every run of #{check(facts)} was cancelled: rerunning it, no attempt spent")
+  defp rerun_cancelled(facts) do
+    Action.new!("R19", :rerun_failed, reason: "Every run of #{check(facts)} was cancelled: rerunning it (rerun #{facts.cancel_reruns + 1} of #{@max_cancel_reruns}), no attempt spent")
+  end
+
+  defp ask_about_cancelled(facts) do
+    decision("R19a", "GitHub cancelled #{check(facts)} on #{pr(facts)} again after #{@max_cancel_reruns} reruns", [
+      "Keep retrying",
+      "Wait"
+    ])
+  end
 
   defp file_fix_ticket(facts) do
     Action.new!("R20", :file_fix_ticket,

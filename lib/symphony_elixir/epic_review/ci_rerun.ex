@@ -16,6 +16,11 @@ defmodule SymphonyElixir.EpicReview.CiRerun do
        `ci_wait_started` (`SymphonyElixir.CiWait`) so the rerun gets a wait of its own, and returns
        `{:wait, runs}`: the review waits for the rerun as for any unfinished run.
 
+  A run GitHub cancelled is not red: GitHub cancels a run it can't find a machine for. Each review
+  that finds one reruns it, recording a `ci_cancel_rerun` signal (the commit and the run) first, and
+  waits for it, up to twice per run and commit; it never spends the one rerun of a failed run.
+  Past that the review goes on, and the agent reads a cancelled run as not run, never as a defect.
+
   A review that finds the rerun recorded proceeds, whatever the runs say. A run green on its rerun
   is recorded on the epic as a `ci_flake` signal (the commit, the runs, their job and test names),
   once per commit, so repeated flakes on the default branch show in the ticket's ledger; the agent
@@ -31,6 +36,9 @@ defmodule SymphonyElixir.EpicReview.CiRerun do
 
   @rerun_signal "ci_rerun"
   @flake_signal "ci_flake"
+  @cancel_signal "ci_cancel_rerun"
+  # A cancelled run is rerun this many times on a commit, as the PR watcher's R19 does on a head.
+  @max_cancel_reruns 2
   @passing_conclusions ["SUCCESS", "NEUTRAL", "SKIPPED"]
   @test_names_limit 10
   # A failed test's name, as the runners this repo's CI uses print it.
@@ -56,11 +64,15 @@ defmodule SymphonyElixir.EpicReview.CiRerun do
   @spec flake_signal() :: String.t()
   def flake_signal, do: @flake_signal
 
+  @doc "The signal recorded on the epic each time the review reruns a run GitHub cancelled."
+  @spec cancel_signal() :: String.t()
+  def cancel_signal, do: @cancel_signal
+
   @doc """
   Decides what the review does with the finished `runs` of commit `sha` on the epic `issue_id`.
 
-  `{:wait, runs}` when it just reran the failed ones; `{:proceed, nil}` when nothing failed and no
-  rerun was made; `{:proceed, check}` with the pre-check (`%{name: :ci_rerun, …}`) that names what an
+  `{:wait, runs}` when it just reran the failed ones, or the cancelled ones; `{:proceed, nil}` when
+  nothing failed and no rerun was made; `{:proceed, check}` with the pre-check (`%{name: :ci_rerun, …}`) that names what an
   earlier rerun on `sha` found, or why none could start. Options: `:workspace` (where `gh` runs) and
   `:gh_runner`.
   """
@@ -68,9 +80,11 @@ defmodule SymphonyElixir.EpicReview.CiRerun do
   def check(repo_key, issue_id, sha, runs, opts) when is_binary(sha) and is_list(runs) do
     signals = Handoff.signals(repo_key, issue_id)
 
-    case signal_for(signals, @rerun_signal, sha) do
-      nil -> first_red(repo_key, issue_id, sha, Enum.filter(runs, &failed?/1), opts)
-      rerun -> {:proceed, after_rerun(repo_key, issue_id, sha, runs, rerun, signals)}
+    with :none <- rerun_cancelled(repo_key, issue_id, sha, runs, signals, opts) do
+      case signal_for(signals, @rerun_signal, sha) do
+        nil -> first_red(repo_key, issue_id, sha, Enum.filter(runs, &failed?/1), opts)
+        rerun -> {:proceed, after_rerun(repo_key, issue_id, sha, runs, rerun, signals)}
+      end
     end
   end
 
@@ -81,6 +95,38 @@ defmodule SymphonyElixir.EpicReview.CiRerun do
     |> Enum.flat_map(fn pattern -> for [_line, name] <- Regex.scan(pattern, log), do: String.trim(name) end)
     |> Enum.uniq()
     |> Enum.take(@test_names_limit)
+  end
+
+  # The commit's cancelled runs still under their reruns, each recorded before it is rerun; a rerun
+  # that can't be recorded is not made, so a run is never rerun past its bound.
+  defp rerun_cancelled(repo_key, issue_id, sha, runs, signals, opts) do
+    due = Enum.filter(runs, &(cancelled?(&1) and cancel_reruns(signals, sha, &1.id) < @max_cancel_reruns))
+    recorded = Enum.filter(due, &(record_cancel_rerun(repo_key, issue_id, sha, &1) == :ok))
+
+    case Enum.filter(recorded, &rerun_started?(&1, sha, opts)) do
+      [] ->
+        :none
+
+      started ->
+        TicketSignals.record(repo_key, issue_id, CiWait.start_signal(), %{sha: sha})
+        Logger.info("Epic review reran the cancelled CI on #{short_sha(sha)}: #{runs_text(started)}; GitHub cancelled it, which is no failure")
+        {:wait, started}
+    end
+  end
+
+  defp cancel_reruns(signals, sha, run_id) do
+    Enum.count(signals, &(&1.name == @cancel_signal and value(&1.details, :sha) == sha and value(&1.details, :run) == run_id))
+  end
+
+  defp record_cancel_rerun(repo_key, issue_id, sha, run) do
+    case RunStore.record_ticket_signal(repo_key, issue_id, @cancel_signal, %{sha: sha, run: run.id, workflow: run.workflow_name}) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Epic review did not rerun the cancelled run #{run.id} on #{short_sha(sha)}: it could not record the rerun: #{inspect(reason)}")
+        :error
+    end
   end
 
   defp first_red(_repo_key, _issue_id, _sha, [], _opts), do: {:proceed, nil}
@@ -176,7 +222,10 @@ defmodule SymphonyElixir.EpicReview.CiRerun do
 
   defp runs_text(runs), do: Enum.map_join(runs, ", ", &"#{&1.workflow_name || "run #{&1.id}"} (#{&1.url || &1.id})")
 
-  defp failed?(run), do: is_binary(run.id) and CiLog.failed?(run.conclusion)
+  # A cancelled run is rerun on its own (`rerun_cancelled/6`), never as a failure.
+  defp failed?(run), do: is_binary(run.id) and CiLog.failed?(run.conclusion) and not cancelled?(run)
+
+  defp cancelled?(run), do: is_binary(run.id) and is_binary(run.conclusion) and String.upcase(run.conclusion) == "CANCELLED"
 
   defp passing?(%{status: "COMPLETED", conclusion: conclusion}), do: conclusion in @passing_conclusions
   defp passing?(_run), do: false

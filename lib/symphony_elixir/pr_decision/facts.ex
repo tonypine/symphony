@@ -11,7 +11,8 @@ defmodule SymphonyElixir.PrDecision.Facts do
     proves that every situation has exactly one rule.
   - **Carried.** Names and numbers the action quotes back (the PR number, the base branch, why a
     head reads as having no CI, the phase a CI Fix run returns to, the failing check, the evidence
-    of each fix run, what a check red on the base too was compared with). They never choose a rule.
+    of each fix run, what a check red on the base too was compared with, the cancelled checks the
+    base doesn't require that were set aside past their reruns). They never choose a rule.
     `ahead` and `competing` are both: a rule reads them only as empty or not, and the action names
     the PRs in them.
 
@@ -72,7 +73,9 @@ defmodule SymphonyElixir.PrDecision.Facts do
           red_kind: :failure | :cancelled | :human_only | :also_red_on_base,
           base_red: base_red() | nil,
           failing_check: String.t() | nil,
+          set_aside: [String.t()],
           rerun_done: boolean(),
+          cancel_reruns: non_neg_integer(),
           red_attempts: non_neg_integer(),
           max_red_attempts: pos_integer(),
           same_failure_streak: non_neg_integer(),
@@ -108,7 +111,9 @@ defmodule SymphonyElixir.PrDecision.Facts do
             red_kind: :failure,
             base_red: nil,
             failing_check: nil,
+            set_aside: [],
             rerun_done: false,
+            cancel_reruns: 0,
             red_attempts: 0,
             max_red_attempts: 10,
             same_failure_streak: 0,
@@ -126,7 +131,8 @@ defmodule SymphonyElixir.PrDecision.Facts do
   @competitor %{issue_identifier: "TP-0", pr_number: 1, files: ["SPEC.md"]}
 
   # In enumeration order: a condition only names a fact listed before it. Each count lists the
-  # value just under its limit and the limit itself (`max_red_attempts` is 10; conflicts stop at 3).
+  # value just under its limit and the limit itself (`max_red_attempts` is 10; conflicts stop at 3;
+  # a cancelled run is rerun twice).
   @domains [
     {:phase, @phases},
     {:github, [:ok, :rate_limited]},
@@ -139,6 +145,7 @@ defmodule SymphonyElixir.PrDecision.Facts do
     {:review_comments, [:none, :unaddressed], @with_pr},
     {:ci, [:pending, :green, :none, :red, :required_missing], @with_pr},
     {:red_kind, [:failure, :cancelled, :human_only, :also_red_on_base], [ci: [:red]]},
+    {:cancel_reruns, [1, 2], [ci: [:red], red_kind: [:cancelled]]},
     {:rerun_done, [false, true], @red_failure},
     {:red_attempts, [9, 10], @red_failure},
     {:same_failure_streak, [2, 3], @red_failure},
