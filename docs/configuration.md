@@ -2595,13 +2595,15 @@ human_actions:
 ### `ledger`
 
 How long the ticket ledger keeps a finished ticket's artifact files (QA screenshots, run
-transcripts), and the largest file it stores. Both have a control in the Mac app's Settings, under
-Ledger.
+transcripts), the largest file it stores, and the summary of a ticket's history that agents start
+from. Each has a control in the Mac app's Settings, under Ledger.
 
 ```yaml
 ledger:
   artifact_retention_days: 14
   artifact_max_bytes: 26214400
+  prompt_brief_enabled: true
+  prompt_brief_max_tokens: 50000
 ```
 
 - `artifact_retention_days` (default `14`): once a ticket has been in a terminal state for this many
@@ -2614,8 +2616,24 @@ ledger:
 - `artifact_max_bytes` (default `26214400`, 25 MB): the largest file Symphony stores as an
   artifact; a larger one is refused.
 
-Each must be a whole number above 0. Symphony reads them on each run and each stored file, so a
-change applies without a restart.
+- `prompt_brief_enabled` (default `true`): every agent prompt that carries the ticket's state also
+  carries a summary of the ticket's whole history, read from its ledger, after the ticket state:
+  its phase and holds; every decision (each request with its answer or withdrawal, every open
+  request, every ruling); every open finding, grouped by class with a count, each with its
+  viewport, commit, when it was last seen and its whole description; every note, a person's shown
+  as the Director's; one line per run, with the latest run's events in full; and every other event
+  outside a run, newest first. Nothing is left out to fit a size, and the same ledger renders the
+  same summary. The summary replaces the ticket state's "Recent signals" lines, and it is wrapped
+  as untrusted input, since it carries agents' and people's text. `false` leaves the prompt as it
+  was before the summary existed. `symphony workflow preview` shows it for a sample ticket.
+- `prompt_brief_max_tokens` (default `50000`, about 200 decisions and open findings with their whole
+  text): a guard against a summary that grew absurdly, not a budget. A summary over it (its size in
+  tokens is its bytes / 4) is still given to the agent whole, and Symphony logs one warning naming
+  the ticket and the size.
+
+`prompt_brief_enabled` is `true` or `false`; the other three must each be a whole number above 0.
+Symphony reads them on each run, each prompt and each stored file, so a change applies without a
+restart.
 
 **Waiting on you.** The list `/api/v1/state` returns as `waiting_on_you`, which the dashboard and
 the menu bar app show, is the Mac app's Inbox (`GET /api/v1/inbox`) in short. Symphony builds it on

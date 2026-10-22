@@ -368,6 +368,24 @@ struct SettingsView: View {
                             + "file larger than the cap."
                     )
                     .foregroundStyle(.secondary)
+                    Toggle("Give agents the ticket's history summary", isOn: $model.promptBriefEnabled)
+                    LabeledContent("Summary size limit") {
+                        HStack {
+                            TextField("Summary size limit in tokens", value: $model.promptBriefMaxTokens, format: .number)
+                                .labelsHidden()
+                                .monospacedDigit()
+                                .frame(width: 90)
+                                .accessibilityLabel("Summary size limit in tokens")
+                            Text("tokens")
+                        }
+                    }
+                    .disabled(!model.promptBriefEnabled)
+                    Text(
+                        "Every agent starts from a summary of the ticket's whole history: every decision, open finding "
+                            + "and note in full. Nothing is left out: a summary over the limit is still given whole, and "
+                            + "Symphony logs a warning."
+                    )
+                    .foregroundStyle(.secondary)
                     if let error = model.ledgerError {
                         Text(error).foregroundStyle(.red)
                     }
@@ -375,9 +393,10 @@ struct SettingsView: View {
                     Text("Ledger (saved in symphony.yml)")
                 } footer: {
                     SectionFooter(
-                        "ledger.artifact_retention_days (default 14 days) and ledger.artifact_max_bytes (default 25 MB). "
-                            + "Save checks symphony.yml with symphony check first; Symphony reads them on its next cleanup "
-                            + "and its next stored file, no restart needed."
+                        "ledger.artifact_retention_days (default 14 days), ledger.artifact_max_bytes (default 25 MB), "
+                            + "ledger.prompt_brief_enabled (default on) and ledger.prompt_brief_max_tokens (default 50,000 "
+                            + "tokens). Save checks symphony.yml with symphony check first; Symphony reads them on its next "
+                            + "cleanup, stored file and agent prompt, no restart needed."
                     )
                 }
                 .disabled(!model.canEditLedger)

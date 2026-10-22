@@ -118,7 +118,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "issue_gate" => ~w(enabled provider model pass_threshold clarification_floor max_clarification_rounds on_error),
     "dependency_audit" => ~w(allow_registries allow_git_sources allow_path_sources),
     "human_actions" => ~w(enabled interval_ms min_update_interval_ms),
-    "ledger" => ~w(artifact_retention_days artifact_max_bytes),
+    "ledger" => ~w(artifact_retention_days artifact_max_bytes prompt_brief_enabled prompt_brief_max_tokens),
     "dashboard" => ~w(enabled host port refresh_ms render_interval_ms snapshot_publish_ms transcript_buffer_size)
   }
 

@@ -78,3 +78,47 @@ defmodule SymphonyElixir.WorkflowPreviewTest do
     assert message =~ path
   end
 end
+
+defmodule SymphonyElixir.WorkflowPreviewLedgerTest do
+  use SymphonyElixir.TestSupport
+
+  alias SymphonyElixir.TicketEvents.Brief
+  alias SymphonyElixir.WorkflowPreview
+
+  setup do
+    :ok = RunStore.clear()
+    write_workflow_file!(Workflow.workflow_file_path(), prompt: "You are working on `{{ issue.identifier }}`")
+    %{workflow: Workflow.workflow_file_path()}
+  end
+
+  test "carries the sample ticket's history summary, with every decision, open finding and note in full", %{workflow: file} do
+    assert {:ok, prompt} = WorkflowPreview.render(file: file)
+    brief = Brief.build(WorkflowPreview.sample_ticket_state(), WorkflowPreview.sample_ticket_events())
+
+    assert %{runs: 3, open_findings: 12, decisions: 2, notes: 3} = brief
+    assert prompt =~ "Ticket state:\n\n- Phase: Rework"
+    refute prompt =~ "Recent signals:"
+    assert prompt =~ "<ticket_ledger>\n" <> String.replace(brief.text, "&", "&amp;") <> "\n</ticket_ledger>"
+    assert prompt =~ "Open findings (12):\n- clipped (5):"
+    assert prompt =~ "- truncated (4):"
+    assert prompt =~ "- state missing (3):"
+    assert prompt =~ "the Director (Sam): The export button stays where it is: users know it there."
+    assert prompt =~ "- Rework run 1 (latest): running in Rework"
+    assert RunStore.list_ticket_events("your-repo", "issue_sample_0001", []) == []
+  end
+
+  test "turned off, the prompt is the one rendered without a ticket state", %{workflow: file} do
+    path = Workflow.symphony_file_path()
+    File.write!(path, File.read!(path) <> "ledger:\n  prompt_brief_enabled: false\n")
+    Cache.clear()
+
+    assert {:ok, prompt} = WorkflowPreview.render(file: file)
+    {:ok, workflow} = Workflow.load(file)
+
+    opts = [workflow: workflow, prompt_mode: :issue, agent_kind: "codex", repo_key: nil]
+
+    assert prompt == PromptBuilder.build_prompt(WorkflowPreview.sample_issue(), opts)
+    refute prompt =~ "Ticket history"
+    refute prompt =~ "Ticket state:"
+  end
+end

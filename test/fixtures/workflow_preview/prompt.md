@@ -1030,3 +1030,62 @@ place throughout execution:
 
 
 Viewports (see `Visual work`) for the Director's `macos_app`: laptop 1440×900 pt `functional`, desktop 2560×1440 pt `optimize`.
+
+Ticket state:
+
+- Phase: Rework
+- Holds: none
+- CI: unknown
+
+Ticket history (every decision, open finding and note in full; earlier runs one line each, the latest run in full):
+<ticket_ledger>
+Phase and holds:
+- Phase: Rework
+- Holds: none
+
+Decisions (2):
+- Asked 2026-01-05T11:50:00Z by an agent (QA run): Large exports: Should an export over 10,000 rows run in the background?
+  Option: In the background: The export runs on its own and notifies the user.
+  Option: Wait: The user waits.
+  Answered 2026-01-05T13:00:00Z by the Director (Sam): In the background, with a notification when it is done.
+- Asked 2026-01-05T13:05:00Z by Symphony: CSV header: Should the export keep its CSV header row?
+  Open: it waits on the Director's answer.
+
+Open findings (12):
+- clipped (5):
+  - major, at laptop 1440×900, step Open the export dialog, commit 4f1c2a9, last seen 2026-01-05T11:10:00Z: The Export button is cut off at the dialog's bottom edge; no scroll reaches it.
+  - major, at laptop 1440×900, step Pick the columns, commit 4f1c2a9, last seen 2026-01-05T11:13:00Z: The column list's last three rows are hidden behind the footer.
+  - major, at desktop 2560×1440, step Open the export dialog, commit 4f1c2a9, last seen 2026-01-05T11:16:00Z: The dialog's right edge is cut off when the sidebar is open.
+  - major, at laptop 1440×900, step Choose the format, commit 4f1c2a9, last seen 2026-01-05T11:19:00Z: The format menu opens past the window's bottom edge.
+  - major, at laptop 1440×900, step Review the summary, commit 4f1c2a9, last seen 2026-01-05T11:22:00Z: The summary's totals row is hidden under the toolbar.
+- truncated (4):
+  - major, at laptop 1440×900, step Pick the columns, commit 4f1c2a9, last seen 2026-01-05T11:25:00Z: Long column names end in an ellipsis with no way to read them.
+  - major, at desktop 2560×1440, step Pick the columns, commit 4f1c2a9, last seen 2026-01-05T11:28:00Z: The column type labels are cut to three letters.
+  - major, at laptop 1440×900, step Review the summary, commit 4f1c2a9, last seen 2026-01-05T11:31:00Z: The file name is truncated in the middle.
+  - major, at laptop 1440×900, step Choose the format, commit 4f1c2a9, last seen 2026-01-05T11:34:00Z: The format descriptions are cut to one line.
+- state missing (3):
+  - major, at laptop 1440×900, step Start the export, commit 4f1c2a9, last seen 2026-01-05T11:37:00Z: No progress shows while the export runs.
+  - major, at laptop 1440×900, step Start the export, commit 4f1c2a9, last seen 2026-01-05T11:40:00Z: A failed export shows no error.
+  - major, at desktop 2560×1440, step Open the export dialog, commit 4f1c2a9, last seen 2026-01-05T11:43:00Z: The dialog shows no empty state when there are no rows.
+
+Notes (3):
+- 2026-01-05T09:25:00Z, an agent (Implementation run): The export spends most of its time writing rows one by one; batching them is the plan.
+- 2026-01-05T13:10:00Z, the Director (Sam): The export button stays where it is: users know it there.
+- 2026-01-05T13:50:00Z, an agent (Rework run): The truncated labels come from a fixed column width; the next step makes it flexible.
+
+Runs (3):
+- Implementation run 1: ended: success, at 4f1c2a9, started 2026-01-05T09:01:00Z
+- QA run 1: ended: failed, at 4f1c2a9, started 2026-01-05T11:05:00Z
+- Rework run 1 (latest): running in Rework, at 4f1c2a9, started 2026-01-05T13:15:00Z
+  - 2026-01-05T13:20:00Z Step started: Fix the clipped export dialog at the laptop viewport
+  - 2026-01-05T13:40:00Z Evidence recorded with 1 file: The export dialog at 1440×900 after the fix (files: art_sample_1)
+  - 2026-01-05T13:45:00Z Step completed: Fix the clipped export dialog at the laptop viewport
+  - 2026-01-05T13:50:00Z Note added: The truncated labels come from a fixed column width; the next step makes it flexible.
+
+Other events, newest first (5):
+- 2026-01-05T12:02:00Z Entered Rework from QA
+- 2026-01-05T12:01:00Z QA verdict: fail: on 4f1c2a9
+- 2026-01-05T11:00:00Z Code Review verdict: approve: on 4f1c2a9
+- 2026-01-05T10:31:00Z Attempt 1 pushed 4f1c2a9: handoff
+- 2026-01-05T09:00:00Z Entered In Progress from Todo
+</ticket_ledger>
