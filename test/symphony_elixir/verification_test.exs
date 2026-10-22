@@ -745,7 +745,8 @@ defmodule SymphonyElixir.VerificationTest do
           dev_server: %{
             build_cmd: "scripts/qa-dashboard-build.sh",
             start_cmd: "scripts/qa-dashboard-server.sh",
-            health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state",
+            # The liveness route, which reads nothing, for a probe that gives each request 250 ms.
+            health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/health",
             health_timeout_ms: 600_000,
             stop_timeout_ms: 5_000
           }
@@ -765,8 +766,8 @@ defmodule SymphonyElixir.VerificationTest do
       case result do
         {:ok, dev_server} ->
           assert File.exists?(Path.join(worktree, "bin/symphony"))
-          # The health check answered on `/api/v1/state` through the bridge; ask it once more, with
-          # room for a fresh server, in the sandbox, on a shared runner.
+          # The health check answered on `/api/v1/health` through the bridge; ask `/api/v1/state`, the
+          # app's poll, with room for a fresh server, in the sandbox, on a shared runner.
           assert_http_ok_within("http://127.0.0.1:#{port}/api/v1/state", 10_000)
           assert :ok = Verification.stop_qa_dev_server(dev_server)
 

@@ -6,6 +6,7 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
 
   alias SymphonyElixir.{BlockedHold, RetiredStates, Setup, StateProvisioning, SubIssueWait}
   alias SymphonyElixir.GitHub.{RelaySupervisor, WebhookSetup}
+  alias SymphonyElixir.GitHub.WebhookSetup.Cache, as: WebhookSetupCache
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.PrWatch.Health
   alias SymphonyElixir.Repo.FetchLog
@@ -64,6 +65,9 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
 
     test = self()
     secret = start_supervised!({Agent, fn -> nil end}, id: :secret)
+    # The state poll's section cache, by a name of the test's own: not running, so the state builds
+    # the section with these collaborators, until a test starts one.
+    cache = Module.concat(__MODULE__, "SectionCache#{System.unique_integer([:positive])}")
 
     opts = [
       gh: &fake_gh/1,
@@ -75,7 +79,8 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
       relays: relays,
       now: fn -> @t0 end,
       repos: fn -> [%{key: "app", github: "acme/app"}, %{key: "lib", github: "acme/lib"}] end,
-      port: fn -> 4040 end
+      port: fn -> 4040 end,
+      cache: cache
     ]
 
     setup_server = Module.concat(__MODULE__, "Setup#{System.unique_integer([:positive])}")
@@ -104,7 +109,7 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
       Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, Keyword.drop(endpoint_config, [:github_updates, :setup, :orchestrator, :snapshot_timeout_ms]))
     end)
 
-    :ok
+    %{cache: cache, opts: opts}
   end
 
   defp refresh(headers \\ [{"content-type", "application/json"}]) do
@@ -133,6 +138,15 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
   end
 
   defp section(conn, status \\ 200), do: json_response(conn, status)["github_updates"]
+  defp state_section, do: build_conn() |> get("/api/v1/state") |> json_response(200) |> get_in(["setup", "github_updates"])
+
+  # Waits for the build the section's cache runs, if it runs one.
+  defp await_build(cache) do
+    with %{task: %Task{pid: pid}} <- :sys.get_state(cache) do
+      ref = Process.monitor(pid)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 5_000
+    end
+  end
 
   # Turns updates on through gh webhook forward and connects `app`; `lib` lacks admin access.
   defp turn_on! do
@@ -148,8 +162,13 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
     assert Enum.map(section["repos"], &{&1["key"], &1["connection"]}) == [{"app", "polling"}, {"lib", "polling"}]
   end
 
-  test "turn on through the API, step by step, then test: the repository verified is on, the one without admin fails alone" do
+  # The state poll reads the section's cache: it shows each action's answer, and builds again
+  # once a delivery verifies.
+  test "turn on through the API, step by step, then test: the repository verified is on, the one without admin fails alone",
+       %{cache: cache, opts: opts} do
+    start_supervised!({WebhookSetupCache, name: cache, section_opts: opts, interval_ms: 60_000})
     section = turn_on!()
+    assert state_section() == section
 
     steps = Map.new(section["steps"], &{&1["id"], &1})
     assert %{"status" => "done"} = steps["repo:app"]
@@ -177,10 +196,14 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
     section = build_conn() |> get("/api/v1/setup") |> section()
     assert section["mode"] == "on"
     assert %{"status" => "done", "detail" => "received and verified"} = Enum.find(section["steps"], &(&1["id"] == "test:app"))
+    await_build(cache)
+    assert %{"mode" => "on", "steps" => steps} = state_section()
+    assert %{"status" => "done", "detail" => "received and verified"} = Enum.find(steps, &(&1["id"] == "test:app"))
 
     section = section(post_action("turn_off", "{}"))
     assert section["mode"] == "off"
     assert Enum.all?(section["repos"], &(&1["connection"] == "polling"))
+    assert state_section() == section
   end
 
   test "the github_updates section matches the contract the app decodes" do

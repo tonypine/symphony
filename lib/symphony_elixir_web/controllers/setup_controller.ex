@@ -22,6 +22,7 @@ defmodule SymphonyElixirWeb.SetupController do
   alias Plug.Conn
   alias SymphonyElixir.Config
   alias SymphonyElixir.GitHub.WebhookSetup
+  alias SymphonyElixir.GitHub.WebhookSetup.Cache, as: WebhookSetupCache
   alias SymphonyElixir.Setup
   alias SymphonyElixir.Setup.Fixes
   alias SymphonyElixirWeb.Endpoint
@@ -59,11 +60,22 @@ defmodule SymphonyElixirWeb.SetupController do
   @spec github_updates(Conn.t(), map()) :: Conn.t()
   def github_updates(conn, %{"action" => action} = params) do
     case WebhookSetup.action(action, params |> Map.drop(["action"]) |> json_form(), opts()) do
-      {:ok, section} -> json(conn, %{github_updates: section})
-      {:error, {:not_found, message}} -> error_response(conn, 404, "not_found", message)
-      {:error, {:unprocessable, message}} -> error_response(conn, 422, "invalid_params", message)
-      {:error, {:conflict, message}} -> error_response(conn, 409, "conflict", message)
-      {:error, {:config, message}} -> error_response(conn, 422, "config_not_written", message)
+      {:ok, section} ->
+        # The state poll reads the section's cache: the next one shows what the action did.
+        WebhookSetupCache.put(section, opts())
+        json(conn, %{github_updates: section})
+
+      {:error, {:not_found, message}} ->
+        error_response(conn, 404, "not_found", message)
+
+      {:error, {:unprocessable, message}} ->
+        error_response(conn, 422, "invalid_params", message)
+
+      {:error, {:conflict, message}} ->
+        error_response(conn, 409, "conflict", message)
+
+      {:error, {:config, message}} ->
+        error_response(conn, 422, "config_not_written", message)
     end
   rescue
     error in ArgumentError -> config_unavailable(conn, error)
