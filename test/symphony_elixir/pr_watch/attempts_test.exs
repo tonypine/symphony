@@ -291,4 +291,107 @@ defmodule SymphonyElixir.PrWatch.AttemptsTest do
       assert %{unreported: nil} = Attempts.normalize(%{unreported: %{since: :bad}})
     end
   end
+
+  describe "cancelled runs Symphony reran (R19, R19a)" do
+    @e2e %{name: "e2e", run_id: "21", job_id: 201, conclusion: "CANCELLED"}
+    @install %{name: "install script", run_id: "22", job_id: "202", conclusion: "CANCELLED"}
+
+    defp cancelled(checks, attrs \\ %{}), do: read(Map.merge(%{red_kind: :cancelled, failed_checks: checks, check_names: ["make all", "e2e", "install script"]}, Map.new(attrs)))
+
+    test "each cancellation is new until Symphony reruns it, and a rerun cancelled again is new once more" do
+      read = cancelled([@e2e, @install, %{name: "make all", run_id: "23", conclusion: "FAILURE"}])
+      assert Attempts.new_cancellations(Attempts.new(), read) == [@e2e, @install]
+      assert Attempts.cancel_reruns(Attempts.new(), read) == 0
+
+      attempts = Attempts.cancel_rerun(Attempts.new(), "head-1", [@e2e])
+      assert Attempts.new_cancellations(attempts, read) == [@install]
+      assert Attempts.cancel_reruns(attempts, read) == 0
+      assert Attempts.cancels_due(attempts, read, 2) == [@install]
+
+      # Both reran: nothing is new, and nothing is due.
+      attempts = Attempts.cancel_rerun(attempts, "head-1", [@install])
+      assert Attempts.new_cancellations(attempts, read) == []
+      assert Attempts.cancel_reruns(attempts, read) == 0
+
+      # The e2e rerun is cancelled again: new job ids, one rerun spent on its run.
+      again = cancelled([%{@e2e | job_id: 211}, @install])
+      assert Attempts.new_cancellations(attempts, again) == [%{@e2e | job_id: 211}]
+      assert Attempts.cancel_reruns(attempts, again) == 1
+
+      attempts = Attempts.cancel_rerun(attempts, "head-1", [%{@e2e | job_id: 211}])
+      third = cancelled([%{@e2e | job_id: 221}])
+      assert Attempts.cancel_reruns(attempts, third) == 2
+      assert Attempts.cancels_due(attempts, third, 2) == []
+      assert %{"21" => %{reruns: 2, jobs: ["201", "211"], checks: ["e2e"]}, "22" => %{reruns: 1, jobs: ["202"]}} = attempts.cancels.runs
+
+      # The fewest reruns among the new ones: a run under the bound is rerun before a person is asked.
+      mixed = cancelled([%{@e2e | job_id: 221}, %{@install | job_id: "203"}])
+      assert Attempts.cancel_reruns(attempts, mixed) == 1
+      assert Attempts.cancels_due(attempts, mixed, 2) == [%{@install | job_id: "203"}]
+
+      assert %{cancel_reruns: 2} = Attempts.facts(attempts, third, @settings, @now)
+    end
+
+    test "a check outside GitHub Actions, or with no job id, is known by its name" do
+      status = %{name: "deploy", run_id: nil, conclusion: "CANCELLED"}
+      attempts = Attempts.cancel_rerun(Attempts.new(), "head-1", [status, %{@e2e | job_id: ""}])
+      assert %{"check:deploy" => %{jobs: ["check:deploy"]}, "21" => %{jobs: ["check:e2e"]}} = attempts.cancels.runs
+      assert Attempts.new_cancellations(attempts, cancelled([status, %{@e2e | job_id: nil}])) == []
+    end
+
+    test "only the current head's reruns are kept, and a read without a head has none" do
+      attempts = Attempts.cancel_rerun(Attempts.new(), "head-1", [@e2e])
+      assert %{cancels: %{head_sha: "head-1"}} = Attempts.observe(attempts, cancelled([@e2e]), ticket(), @now)
+      assert %{cancels: nil} = Attempts.observe(attempts, cancelled([@e2e], head_sha: "head-2"), ticket(), @now)
+      assert %{cancels: nil} = Attempts.observe(attempts, nil, ticket(), @now)
+
+      assert Attempts.new_cancellations(attempts, nil) == []
+      assert Attempts.cancel_reruns(attempts, nil) == 0
+      assert Attempts.cancels_due(attempts, nil, 2) == []
+      assert Attempts.cancel_rerun(Attempts.new(), nil, [@e2e]) == Attempts.new()
+      assert Attempts.cancel_asked(Attempts.new(), nil, "title", 0) == Attempts.new()
+    end
+
+    test "a rerun whose checks dropped out of the rollup keeps the head running" do
+      attempts = Attempts.cancel_rerun(Attempts.new(), "head-1", [@install])
+      assert Attempts.rerun_pending?(attempts, read(check_names: ["make all"]))
+      refute Attempts.rerun_pending?(attempts, read(check_names: ["make all", "install script"]))
+      refute Attempts.rerun_pending?(attempts, read(head_sha: "head-2"))
+      # Not R22's rerun: a later failure still gets its one rerun before CI Fix.
+      assert %{rerun_done: false} = Attempts.facts(attempts, read(), @settings, @now)
+    end
+
+    test "R19a's question and its answer: keep retrying starts the counts again, wait leaves them" do
+      attempts = Attempts.cancel_rerun(Attempts.new(), "head-1", [@e2e])
+      attempts = Attempts.cancel_rerun(attempts, "head-1", [%{@e2e | job_id: 211}])
+      assert Attempts.cancel_question(attempts) == nil
+
+      asked = Attempts.cancel_asked(attempts, "head-1", "Check e2e keeps being cancelled on TP-1", 1)
+      assert Attempts.cancel_question(asked) == %{title: "Check e2e keeps being cancelled on TP-1", prior: 1}
+
+      retried = Attempts.cancel_answer(asked, :rerun)
+      assert %{runs: %{"21" => %{reruns: 0, jobs: ["201", "211"]}}, asked: nil, answer: nil} = retried.cancels
+      assert Attempts.cancel_reruns(retried, cancelled([%{@e2e | job_id: 221}])) == 0
+
+      for pick <- [:wait, :other] do
+        waited = Attempts.cancel_answer(asked, pick)
+        assert %{runs: %{"21" => %{reruns: 2}}, answer: :wait} = waited.cancels
+        assert Attempts.cancel_question(waited) == nil
+      end
+
+      assert Attempts.cancel_answer(Attempts.new(), :rerun) == Attempts.new()
+    end
+
+    test "normalize/1 keeps well-formed reruns and drops the rest" do
+      runs = %{"21" => %{reruns: 1, jobs: ["201", 7], checks: :bad}, nil => %{}, "22" => :bad}
+      cancels = %{head_sha: "head-1", runs: runs, asked: %{title: "t"}, answer: :maybe}
+
+      assert %{cancels: %{head_sha: "head-1", runs: runs, asked: %{title: "t", prior: 0}, answer: nil}} =
+               Attempts.normalize(%{cancels: cancels})
+
+      assert runs == %{"21" => %{reruns: 1, jobs: ["201"], checks: []}}
+      assert %{cancels: nil} = Attempts.normalize(%{cancels: %{runs: :bad}})
+      assert %{cancels: %{answer: :wait}} = Attempts.normalize(%{cancels: %{cancels | answer: :wait}})
+    end
+  end
 end

@@ -653,16 +653,154 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert %{rule: "R22"} = decision(first)
     end
 
-    test "a workflow whose every run was cancelled is rerun once, with no attempt spent (R19)" do
+    test "a workflow whose every run was cancelled is rerun once per cancellation, with no attempt spent (R19)" do
       cancelled = [red_kind: :cancelled, failed_checks: [%{name: "specs", run_id: "77", workflow_name: "ci", conclusion: "CANCELLED"}]]
       issue_id = ticket!("1", "Code Review", red() ++ cancelled)
       pid = start!()
-      tick!(pid, 3)
+      tick!(pid)
+      assert %{rule: "R19", kind: :rerun_failed, outcome: :applied} = decision(issue_id)
 
+      # Reads before GitHub queues the rerun wait on it, and never rerun the same cancellation again.
+      tick!(pid, 2)
       assert World.calls(:rerun) == ["77"]
-      assert %{rule: "R19", kind: :rerun_failed} = decision(issue_id)
+      assert %{rule: "R19", kind: :wait, owner: :ci, clears_when: "the rerun reports"} = decision(issue_id)
       assert %{red: 0, fix_failures: []} = attempts(issue_id)
       assert moves(issue_id) == []
+
+      # A rerun that never reports is a silent wait past the CI bound, its line naming what is stuck.
+      advance!(Config.settings!().ci.merging_wait_timeout_ms + 1)
+      log = capture_log(fn -> tick!(pid) end)
+      assert log =~ "pr_watch.silent_wait issue_id=#{issue_id} issue_identifier=TP-1"
+      assert log =~ "rule=R19 bound=ci.merging_wait_timeout_ms"
+      assert log =~ ~s(action=wait decision="Symphony reran the `specs` check after GitHub cancelled it: waiting for the rerun to report")
+    end
+
+    # The head red only on `checks`, cancelled by GitHub; `names` are every check the head reports.
+    defp cancelled(checks, names) do
+      [ci: :red, red_kind: :cancelled, failing_check: hd(checks).name, failed_checks: checks]
+      |> Keyword.merge(check_names: names, past_cancelled: nil)
+    end
+
+    test "walkthrough 1: two workflows cancelled minutes apart on one head are each rerun as they are cancelled (R19)" do
+      e2e = %{name: "update, restart and rollback", run_id: "39571199789", job_id: 1, workflow_name: "macos-e2e", conclusion: "CANCELLED"}
+      install = %{name: "install script", run_id: "39571199843", job_id: 2, workflow_name: "macos", conclusion: "CANCELLED"}
+      names = ["specs", e2e.name, install.name]
+      running = [ci: :pending, red_kind: :failure, failing_check: nil, failed_checks: []]
+      issue_id = ticket!("1", "Code Review", cancelled([e2e], names))
+      pid = start!()
+
+      tick!(pid)
+      assert World.calls(:rerun) == ["39571199789"]
+      assert %{rule: "R19", kind: :rerun_failed, outcome: :applied} = decision(issue_id)
+
+      # GitHub queues the rerun: the head reads as running.
+      pr!("1", running)
+      tick!(pid)
+      assert %{rule: "R24", kind: :wait} = decision(issue_id)
+
+      # Minutes later the other workflow's run is cancelled on the same head: rerun at the next read.
+      pr!("1", cancelled([install], names))
+      tick!(pid)
+      assert World.calls(:rerun) == ["39571199789", "39571199843"]
+      assert %{rule: "R19", kind: :rerun_failed, outcome: :applied} = decision(issue_id)
+
+      # The first rerun is cancelled again by GitHub: a new attempt, so new job ids, rerun once more.
+      pr!("1", cancelled([%{e2e | job_id: 3}], names))
+      tick!(pid)
+      assert World.calls(:rerun) == ["39571199789", "39571199843", "39571199789"]
+
+      # Both pass: the reviewer runs, and no CI Fix attempt was spent.
+      pr!("1", ci: :green, red_kind: :failure, failing_check: nil, failed_checks: [])
+      tick!(pid)
+      assert %{rule: "R27", kind: :dispatch} = decision(issue_id)
+      assert %{red: 0, fix_failures: []} = attempts(issue_id)
+      assert moves(issue_id) == []
+    end
+
+    test "a rerun of a cancelled check that dropped out of the rollup keeps the head running" do
+      install = %{name: "install script", run_id: "22", job_id: 2, workflow_name: "macos", conclusion: "CANCELLED"}
+      issue_id = ticket!("1", "QA", cancelled([install], ["specs", "install script"]))
+      pid = start!()
+      tick!(pid)
+
+      pr!("1", ci: :green, red_kind: :failure, failing_check: nil, failed_checks: [], check_names: ["specs"])
+      tick!(pid)
+      assert %{rule: "R24", kind: :wait} = decision(issue_id)
+      refute watch(issue_id).attempts.reruns |> Map.has_key?("head-1-1")
+    end
+
+    test "walkthrough 2: a check cancelled a third time in a row asks to keep retrying or wait, naming the check and the cause (R19a)" do
+      install = %{name: "install script", run_id: "39571199843", job_id: 2, workflow_name: "macos", conclusion: "CANCELLED"}
+      names = ["specs", "install script"]
+      title = "Check install script keeps being cancelled on TP-1"
+      cancel! = fn job -> pr!("1", cancelled([%{install | job_id: job}], names)) end
+      issue_id = ticket!("1", "QA", cancelled([install], names))
+      pid = start!()
+
+      # Cancelled twice: rerun twice.
+      tick!(pid)
+      cancel!.(3)
+      tick!(pid)
+      assert World.calls(:rerun) == ["39571199843", "39571199843"]
+
+      # A third time: the person is asked, and nothing is rerun or spent.
+      cancel!.(4)
+      tick!(pid, 2)
+      assert World.calls(:rerun) == ["39571199843", "39571199843"]
+      assert %{decision: %{title: ^title, question: question, why: why, options: options}} = Hold.get(@repo_key, issue_id, :needs_decision)
+      assert question == "GitHub cancelled the install script check on PR #1 of TP-1 3 times in a row without running it. Should Symphony keep retrying it, or wait?"
+      assert why =~ "GitHub cancels a check it can't find a machine for, as happens when its macOS machines are busy."
+      assert Enum.map(options, & &1.label) == ["Keep retrying", "Wait"]
+      assert asked(issue_id, title) == 1
+      assert %{rule: "R4", owner: :person} = decision(issue_id)
+      assert %{red: 0} = attempts(issue_id)
+      assert state(issue_id) == "QA"
+
+      # Keep retrying: rerun at once, and the bound starts again.
+      answer!(issue_id, "c1", title, "Keep retrying")
+      tick!(pid)
+      assert length(World.calls(:rerun)) == 3
+      cancel!.(5)
+      tick!(pid)
+      assert length(World.calls(:rerun)) == 4
+      cancel!.(6)
+      tick!(pid)
+      assert asked(issue_id, title) == 2
+      assert length(World.calls(:rerun)) == 4
+
+      # Wait: nothing more is rerun or asked on the head, even when a person's rerun is cancelled again.
+      answer!(issue_id, "c2", title, "Wait")
+      tick!(pid)
+      cancel!.(7)
+      tick!(pid, 2)
+      assert length(World.calls(:rerun)) == 4
+      assert asked(issue_id, title) == 2
+      assert %{rule: "R19a", kind: :wait, owner: :person} = decision(issue_id)
+
+      # A new head starts afresh.
+      pr!("1", [head_sha: "head-1-2"] ++ cancelled([%{install | job_id: 8}], names))
+      tick!(pid)
+      assert length(World.calls(:rerun)) == 5
+    end
+
+    test "a check the base doesn't require, cancelled again after its reruns, is set aside instead of holding the ticket" do
+      install = %{name: "install script", run_id: "22", job_id: 2, workflow_name: "macos", conclusion: "CANCELLED"}
+      names = ["specs", "install script"]
+      issue_id = ticket!("1", "Code Review", cancelled([install], names) ++ [past_cancelled: :green])
+      pid = start!()
+
+      for job <- [3, 4] do
+        tick!(pid)
+        assert %{rule: "R19", kind: :rerun_failed} = decision(issue_id)
+        pr!("1", cancelled([%{install | job_id: job}], names) ++ [past_cancelled: :green])
+      end
+
+      tick!(pid)
+      assert %{rule: "R27", kind: :dispatch, reason: reason} = decision(issue_id)
+      assert reason =~ "`install script`, cancelled again after 2 reruns, is set aside"
+      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+      assert World.calls(:rerun) == ["22", "22"]
+      assert %{ci: :green, set_aside: ["install script"]} = watch(issue_id).facts
     end
 
     test "walkthrough 4: the same failure 3 CI Fix runs in a row files a fix ticket and holds the ticket, with no question (D15 (c))" do

@@ -31,6 +31,7 @@
     "base": "ok",
     "base_red": null,
     "base_ref": null,
+    "cancel_reruns": 0,
     "ci": "green",
     "competing": [],
     "conflict_attempts": 0,
@@ -63,6 +64,7 @@
     "review_comments": "none",
     "run": "none",
     "same_failure_streak": 0,
+    "set_aside": [],
     "source": "poll"
   },
   "head": "abc123",
