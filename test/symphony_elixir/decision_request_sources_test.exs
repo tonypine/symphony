@@ -10,6 +10,8 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
 
   # Each source, and what it asks.
   @sources %{
+    # A ticket summary over its size limit, before the run's agent starts.
+    "lib/symphony_elixir/agent_runner.ex" => [:ask],
     # An agent's `linear_request_human_action`: a run's own question, a plan's open choices, a
     # rework that failed the same way twice.
     "lib/symphony_elixir/agent_tools/linear.ex" => [:ask, :project],
