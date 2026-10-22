@@ -228,6 +228,11 @@ public struct AppStores {
         apiFixtures?.transport ?? { try await URLSession.shared.data(for: $0) }
     }
 
+    /// What opens Symphony's live channel (`EventStream`): the fixtures when they answer, else a stream from the network.
+    public var apiStreamTransport: EventStream.Connect {
+        apiFixtures.map { EventStream.buffered($0.transport) } ?? EventStream.streaming()
+    }
+
     /// The base URL used while Symphony hasn't written a control URL: the fixtures' when they answer.
     public var apiFallback: URL? {
         apiFixtures == nil ? controlURLFallback : APIFixtures.baseURL

@@ -24,6 +24,7 @@ defmodule SymphonyElixir.TicketEvents do
 
   alias SymphonyElixir.RunStore
   alias SymphonyElixir.TicketEvents.{Event, Summary, Types}
+  alias SymphonyElixirWeb.ObservabilityPubSub
 
   @default_limit 50
   @max_limit 200
@@ -63,10 +64,21 @@ defmodule SymphonyElixir.TicketEvents do
   `t:record_opt/0` for `opts`). An event with the idempotency key of one the ticket already holds
   returns that event and writes nothing. The event carries the summary
   `SymphonyElixir.TicketEvents.Summary` renders from its type and payload.
+
+  Once the event is written, a notice of it goes to the subscribers of
+  `SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_events/0` (the live channel,
+  `GET /api/v1/stream`): its `repo_key`, `issue_id`, the ticket's `issue_identifier` when its record
+  knows it, `event_id`, `type` and `at`. The notice is best-effort and never fails the write; a
+  refused write or an idempotent no-op sends none.
   """
   @spec record(String.t(), String.t(), String.t(), map(), [record_opt()]) :: {:ok, Event.t()} | {:error, Types.error() | term()}
   def record(repo_key, issue_id, type, payload, opts \\ []) do
-    with {:ok, event} <- build(repo_key, issue_id, type, payload, opts), do: RunStore.append_ticket_event(event)
+    with {:ok, event} <- build(repo_key, issue_id, type, payload, opts),
+         {:ok, stored} <- RunStore.append_ticket_event(event) do
+      # A no-op returns the event the ticket already held, which has another id than the one built.
+      if stored.id == event.id, do: notify(stored)
+      {:ok, stored}
+    end
   end
 
   @doc """
@@ -123,6 +135,24 @@ defmodule SymphonyElixir.TicketEvents do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp notify(%Event{} = event) do
+    ObservabilityPubSub.broadcast_ticket_event(%{
+      repo_key: event.repo_key,
+      issue_id: event.issue_id,
+      issue_identifier: issue_identifier(event.repo_key, event.issue_id),
+      event_id: event.id,
+      type: event.type,
+      at: event.at
+    })
+  end
+
+  defp issue_identifier(repo_key, issue_id) do
+    case RunStore.get_ticket_state(repo_key, issue_id) do
+      %{issue_identifier: identifier} when is_binary(identifier) -> identifier
+      _none -> nil
     end
   end
 

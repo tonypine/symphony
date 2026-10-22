@@ -10,6 +10,7 @@ defmodule SymphonyElixirWeb.ObservabilityPubSub do
   @pubsub SymphonyElixir.PubSub
   @dashboard_topic "observability:dashboard"
   @transcript_topic "observability:transcript"
+  @ticket_events_topic "ticket_events"
   @update_message :observability_updated
 
   @spec subscribe() :: :ok | {:error, term()}
@@ -58,6 +59,37 @@ defmodule SymphonyElixirWeb.ObservabilityPubSub do
 
   @spec transcript_topic() :: String.t()
   def transcript_topic, do: @transcript_topic
+
+  @doc """
+  Subscribes the caller to the notices of events written to tickets' histories
+  (`SymphonyElixir.TicketEvents.record/5`): each arrives as `{:ticket_event, notice}`.
+  """
+  @spec subscribe_ticket_events() :: :ok | {:error, term()}
+  def subscribe_ticket_events do
+    Phoenix.PubSub.subscribe(@pubsub, @ticket_events_topic)
+  end
+
+  @spec unsubscribe_ticket_events() :: :ok
+  def unsubscribe_ticket_events do
+    Phoenix.PubSub.unsubscribe(@pubsub, @ticket_events_topic)
+  end
+
+  @doc """
+  Broadcasts `notice` to the subscribers of `subscribe_ticket_events/0`, best-effort: with no PubSub
+  running, or when the broadcast fails (logged), it is `:ok` all the same.
+  """
+  @spec broadcast_ticket_event(map()) :: :ok
+  def broadcast_ticket_event(notice) when is_map(notice) do
+    with pid when is_pid(pid) <- Process.whereis(@pubsub),
+         {:error, reason} <- Phoenix.PubSub.broadcast(@pubsub, @ticket_events_topic, {:ticket_event, notice}) do
+      Logger.warning("failed to broadcast ticket event: #{inspect(reason)}")
+    end
+
+    :ok
+  end
+
+  @spec ticket_events_topic() :: String.t()
+  def ticket_events_topic, do: @ticket_events_topic
 
   defp repo_key(repo_key) when is_binary(repo_key) do
     case String.trim(repo_key) do

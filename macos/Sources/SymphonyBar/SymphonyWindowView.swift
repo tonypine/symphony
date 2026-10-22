@@ -22,7 +22,17 @@ final class SymphonyWindowModel: ObservableObject {
     }
 
     /// Whether Symphony answers, or which placeholder every view shows instead (D0).
-    @Published var state: WindowState = .stopped
+    @Published var state: WindowState = .stopped {
+        didSet {
+            guard state != oldValue else { return }
+            followConnection()
+        }
+    }
+    /// The live channel: Symphony's notice of each event written to a ticket's history, open while the window is
+    /// connected to Symphony. The ticket page reads only what is new when one names its ticket.
+    let eventStream: EventStream
+    /// The build of the Symphony the window last read, to tell a restart onto another build.
+    private var symphonyBuild: DiagnosticsPayload.Build?
     @Published var paused = false
     /// The app's update under way, which the dispatch control and the Overview show (S3a, S3b).
     @Published var updateHold: UpdateHold?
@@ -269,8 +279,9 @@ final class SymphonyWindowModel: ObservableObject {
     private var pendingSheet: (id: String, move: InboxMove)?
     private var cancellables = Set<AnyCancellable>()
 
-    init(client: LiveAPIClient, selection: SymphonyView) {
+    init(client: LiveAPIClient, eventStream: EventStream, selection: SymphonyView) {
         self.client = client
+        self.eventStream = eventStream
         self.selection = selection
         history = NavigationHistory(current: .view(selection))
         client.$stateJSON
@@ -291,6 +302,25 @@ final class SymphonyWindowModel: ObservableObject {
                 readPeek()
             }
             .store(in: &cancellables)
+        client.$diagnostics
+            .map { $0?.build }
+            .removeDuplicates()
+            .sink { [weak self] build in self?.symphonyBuildChanged(build) }
+            .store(in: &cancellables)
+    }
+
+    /// Opens the live channel while Symphony answers and closes it otherwise, so a channel an older Symphony lacked
+    /// is tried again each time the window connects.
+    private func followConnection() {
+        if state == .connected { eventStream.start() } else { eventStream.stop() }
+    }
+
+    /// Symphony restarted onto another build between two polls: the channel opens again on the new one.
+    private func symphonyBuildChanged(_ build: DiagnosticsPayload.Build?) {
+        defer { symphonyBuild = build ?? symphonyBuild }
+        guard let build, let symphonyBuild, build != symphonyBuild, state == .connected else { return }
+        eventStream.stop()
+        eventStream.start()
     }
 
     /// The Overview item's badge: what needs attention in every repo, whatever the scope; 0 hides it, as do
