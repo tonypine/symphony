@@ -35,7 +35,7 @@ defmodule SymphonyElixir.Inbox.MentionsTest do
              ]
     end
 
-    test "reads a plan's parsed brief, the markdown of one that didn't parse, and nothing without a brief" do
+    test "reads a plan's parsed brief and its questions, the markdown of a brief that didn't parse, and nothing without a brief" do
       brief =
         ReviewBrief.parse("""
         ## Review brief
@@ -59,8 +59,9 @@ defmodule SymphonyElixir.Inbox.MentionsTest do
         - Approve: move TP-923 on.
         """)
 
-      texts = Mentions.texts(%{kind: :plan, ask: "Approve the plan", review: %{brief: brief}})
-      assert Mentions.scan(texts) == ["TP-923", "TP-947", "TP-988", "TP-952", "#12"]
+      question = %{question: "Chips for TP-952?", options: [%{label: "A", effect: "Like PR #13."}], recommendation_reason: "See #12"}
+      texts = Mentions.texts(%{kind: :plan, ask: "Approve the plan", review: %{brief: brief, decisions: [question]}})
+      assert Mentions.scan(texts) == ["TP-923", "TP-947", "TP-988", "TP-952", "PR #13", "#12"]
 
       assert Mentions.texts(%{kind: :plan, ask: "Approve the plan", review: %{brief: %{format: "raw", markdown: "See TP-1"}}}) == ["Approve the plan", "See TP-1"]
       assert Mentions.texts(%{kind: :plan, ask: "Approve the plan", review: %{brief: nil}}) == ["Approve the plan"]

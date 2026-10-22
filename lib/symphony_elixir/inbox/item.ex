@@ -8,14 +8,17 @@ defmodule SymphonyElixir.Inbox.Item do
     whatever else the ticket is; its review is the request: why, what waits until it is answered,
     the steps or the options (each with its trade-offs), why the recommended one, what it unblocks;
   - `:plan`: a plan parent (label `plan` or `breakdown`) in `Plan Review` whose plan waits for
-    approval, with its sub-tickets in landing order;
+    approval, with its sub-tickets in landing order and its open choices: the requests the plan run
+    raised (`SymphonyElixir.DecisionRequest`), each shown as an `:action`'s request is, oldest
+    first;
   - `:clarify`: a ticket the quality gate holds for clarification or skipped, with its score, its
     round and what the gate found;
   - `:blocked`: a ticket an access or dispatch-loop hold pauses in place (`SymphonyElixir.Hold`),
     with the reason the hold recorded and what clears it; the Director lifts it with `Unblock`.
 
   A plan carries its `## Review brief` comment parsed (`SymphonyElixir.Inbox.ReviewBrief`) as
-  `review.brief`, nil when it has none.
+  `review.brief`, nil when it has none. Its questions are never read from the brief: the brief
+  links to the requests, and `review.decisions` lists them.
 
   A hold only becomes a `:blocked` item when nothing else already waits on the ticket: `from_node/4`
   reads the store's hold after `SymphonyElixir.HumanActions.Waiting` found no entry, so an open
@@ -113,6 +116,17 @@ defmodule SymphonyElixir.Inbox.Item do
   defp review(:action, node, repo_key, settings, lookups) do
     {comment_id, request} = Collector.newest_open_request(node, settings)
 
+    comment_id
+    |> request_review(request)
+    |> Map.merge(%{requested_at: request.created_at, confirm: MergeConfirmation.confirm_target(store_hold(repo_key, node["id"], lookups))})
+  end
+
+  defp review(:plan, node, _repo_key, settings, _lookups), do: %{brief: brief(node), sub_tickets: sub_tickets(node), decisions: plan_decisions(node, settings)}
+
+  # A request as the Inbox shows it, an action's or a plan's: what it asks, why, what waits until it
+  # is answered, the options with their trade-offs and why the recommended one. `comment_id` is what
+  # the answer replies under.
+  defp request_review(comment_id, request) do
     %{
       comment_id: comment_id,
       title: request.title,
@@ -122,13 +136,20 @@ defmodule SymphonyElixir.Inbox.Item do
       unblocks: request.unblocks,
       steps: request.steps,
       options: request.options |> Enum.zip(request.tradeoffs) |> Enum.map(fn {text, tradeoffs} -> Map.put(option(text), :tradeoffs, tradeoffs) end),
-      recommendation_reason: request.recommendation_reason,
-      requested_at: request.created_at,
-      confirm: MergeConfirmation.confirm_target(store_hold(repo_key, node["id"], lookups))
+      recommendation_reason: request.recommendation_reason
     }
   end
 
-  defp review(:plan, node, _repo_key, _settings, _lookups), do: %{brief: brief(node), sub_tickets: sub_tickets(node)}
+  # A plan's open choices are requests like any other, raised through the writer: each one with
+  # options, oldest first, in the order the plan raised them. A hand-written request with only steps
+  # is no choice to answer.
+  defp plan_decisions(node, settings) do
+    node
+    |> Collector.open_requests(settings)
+    |> Enum.filter(fn {_comment_id, request} -> request.options != [] end)
+    |> Enum.sort_by(fn {_comment_id, request} -> request.created_at && DateTime.to_unix(request.created_at, :microsecond) end)
+    |> Enum.map(fn {comment_id, request} -> request_review(comment_id, request) end)
+  end
 
   @doc "A rendered request option (`**Label** (recommended): effect`) as its label, effect and whether it is recommended."
   @spec option(String.t()) :: %{label: String.t(), effect: String.t() | nil, recommended: boolean()}

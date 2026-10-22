@@ -6,9 +6,11 @@ defmodule SymphonyElixir.Inbox.ReviewBrief do
   - `headline`: the line after `**What to review:**`;
   - `what_to_review`: the bullets under it, each with its text and the links it holds;
   - `what_changed`: the bullets under `**What changed since the last brief:**`;
-  - `decisions`: each numbered question under `**Decisions needed:**`, with its options, the
-    recommendation and the index of the recommended option when it can be told (`None.` is none);
   - `moves`: the `Approve:`, `Change:` and `Reject:` lines under `**How to approve / change / reject:**`.
+
+  The brief's `**Decisions needed:**` are not read: a plan's questions are requests raised through
+  `SymphonyElixir.DecisionRequest`, which the brief links to and the Inbox lists from the requests
+  themselves (`SymphonyElixir.Inbox.Item`).
 
   A body without the `**What to review:**` line doesn't parse: it comes back as `raw` markdown,
   for the app to show as text.
@@ -17,28 +19,17 @@ defmodule SymphonyElixir.Inbox.ReviewBrief do
   @heading "## Review brief"
   @section ~r/^\s*\*\*(.+?):\*\*\s*(.*)$/
   @list_item ~r/^\s*(?:[-*]|\d+[.)])\s+(.*)$/
-  @numbered_item ~r/^\s*\d+[.)]\s+(.*)$/
   @sub_item ~r/^\s+[-*]\s+(.*)$/
-  @options_field ~r/^Options?:\s*(.*)$/i
-  @recommendation_field ~r/^Recommend(?:ation|ed):\s*(.*)$/i
   @move_field ~r/^(Approve|Change|Reject):\s*(.*)$/i
   @markdown_link ~r/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/
   @bare_url ~r/(?<![(\[])\bhttps?:\/\/[^\s)>\]]+/
-  @option_letter ~r/^(?:option\s+)?([A-Z])(?:\b|[.):])/i
 
   @type link :: %{label: String.t(), url: String.t()}
-  @type decision :: %{
-          question: String.t(),
-          options: [String.t()],
-          recommendation: String.t() | nil,
-          recommended: non_neg_integer() | nil
-        }
   @type parsed :: %{
           format: String.t(),
           headline: String.t() | nil,
           what_to_review: [%{text: String.t(), links: [link()]}],
           what_changed: [String.t()],
-          decisions: [decision()],
           moves: [%{move: String.t(), text: String.t()}]
         }
   @type raw :: %{format: String.t(), markdown: String.t()}
@@ -60,7 +51,6 @@ defmodule SymphonyElixir.Inbox.ReviewBrief do
           headline: blank_to_nil(headline),
           what_to_review: lines |> items() |> Enum.map(&%{text: plain(&1), links: links(&1)}),
           what_changed: sections |> section_lines("what changed since the last brief") |> items() |> Enum.map(&plain/1),
-          decisions: sections |> section_lines("decisions needed") |> decisions(),
           moves: sections |> section_lines("how to approve / change / reject") |> moves()
         }
 
@@ -115,83 +105,6 @@ defmodule SymphonyElixir.Inbox.ReviewBrief do
     end)
     |> Enum.reverse()
     |> Enum.reject(&(&1 == "" or none?(&1)))
-  end
-
-  defp decisions(lines) do
-    lines
-    |> Enum.reduce([], fn line, acc ->
-      cond do
-        Regex.match?(@numbered_item, line) and not Regex.match?(@sub_item, line) ->
-          [_, question] = Regex.run(@numbered_item, line)
-          [%{question: String.trim(question), options: [], recommendation: nil} | acc]
-
-        acc != [] and Regex.match?(@sub_item, line) ->
-          [_, field] = Regex.run(@sub_item, line)
-          [decision | rest] = acc
-          [decision_field(decision, String.trim(field)) | rest]
-
-        true ->
-          acc
-      end
-    end)
-    |> Enum.reverse()
-    |> Enum.map(&Map.put(&1, :recommended, recommended_index(&1.options, &1.recommendation)))
-  end
-
-  defp decision_field(decision, field) do
-    cond do
-      match = Regex.run(@options_field, field) ->
-        options = match |> List.last() |> String.split(";") |> Enum.map(&plain/1) |> Enum.reject(&(&1 == ""))
-        %{decision | options: decision.options ++ options}
-
-      match = Regex.run(@recommendation_field, field) ->
-        %{decision | recommendation: match |> List.last() |> plain() |> blank_to_nil()}
-
-      true ->
-        decision
-    end
-  end
-
-  @doc """
-  The index of the option `recommendation` names: an option whose text it starts with or holds
-  (the longest such), else the option of the letter it starts with (`A`, `Option B`), else nil.
-  """
-  @spec recommended_index([String.t()], String.t() | nil) :: non_neg_integer() | nil
-  def recommended_index(_options, nil), do: nil
-  def recommended_index([], _recommendation), do: nil
-
-  def recommended_index(options, recommendation) do
-    wanted = String.downcase(recommendation)
-
-    by_text =
-      options
-      |> Enum.with_index()
-      |> Enum.filter(fn {option, _index} -> names?(wanted, option_key(option)) end)
-      |> Enum.max_by(fn {option, _index} -> String.length(option_key(option)) end, fn -> nil end)
-
-    case by_text do
-      {_option, index} -> index
-      nil -> letter_index(options, recommendation)
-    end
-  end
-
-  # Whether `text` holds `key` as whole words.
-  defp names?(_text, ""), do: false
-  defp names?(text, key), do: Regex.match?(~r/(?<![\p{L}\p{N}])#{Regex.escape(key)}(?![\p{L}\p{N}])/u, text)
-
-  # An option's name: the text before its first `:` or ` (`, which is where a description starts.
-  defp option_key(option) do
-    option |> String.split([":", " (", " — ", " - "], parts: 2) |> hd() |> String.trim() |> String.downcase()
-  end
-
-  defp letter_index(options, recommendation) do
-    with [_, letter] <- Regex.run(@option_letter, recommendation),
-         index = :binary.first(String.upcase(letter)) - ?A,
-         true <- index < length(options) do
-      index
-    else
-      _no_letter -> nil
-    end
   end
 
   defp moves(lines) do

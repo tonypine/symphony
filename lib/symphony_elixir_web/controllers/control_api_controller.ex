@@ -7,13 +7,14 @@ defmodule SymphonyElixirWeb.ControlApiController do
   audit record and a `person.action` event (`stop`) on the ticket.
 
   The Director's moves from the Mac app's Inbox (`approve_plan`, `rework`, `restart`, `decisions`,
-  `backlog`, `unblock`, `decide` and `undo`) are made by
+  `changes`, `backlog`, `unblock`, `decide` and `undo`) are made by
   `SymphonyElixir.DirectorMoves`:
   each takes `issue_identifier`, answers 409 when the ticket's state doesn't allow the move, 502
   `move_incomplete` when Linear took one of the move's two writes and refused the other, 502
   `restart_incomplete` when the reset behind `restart` stopped partway, and 200 with the states it
   moved between. `decide` answers a decision request: it takes the `picks`, the
-  `request_comment_id` they answer and the optional `move` the decision directs.
+  `request_comment_id` they answer and the optional `move` the decision directs. `decisions` takes
+  a plan's `picks`, each with the `request_comment_id` of the question it answers.
   """
 
   use Phoenix.Controller, formats: [:json]
@@ -85,6 +86,9 @@ defmodule SymphonyElixirWeb.ControlApiController do
   @spec decisions(Conn.t(), map()) :: Conn.t()
   def decisions(conn, params), do: director_move(conn, :decisions, params, %{picks: picks(params["picks"])})
 
+  @spec changes(Conn.t(), map()) :: Conn.t()
+  def changes(conn, params), do: director_move(conn, :changes, params, %{reason: string_param(params["reason"])})
+
   @spec backlog(Conn.t(), map()) :: Conn.t()
   def backlog(conn, params), do: director_move(conn, :backlog, params, %{note: string_param(params["note"])})
 
@@ -142,11 +146,18 @@ defmodule SymphonyElixirWeb.ControlApiController do
     end
   end
 
+  # A plan's pick also names the request it answers, so the answer goes under it.
   defp picks(picks) when is_list(picks) do
-    for pick <- picks, do: %{question: string_param(pick_field(pick, "question")), answer: string_param(pick_field(pick, "answer"))}
+    for pick <- picks do
+      %{question: string_param(pick_field(pick, "question")), answer: string_param(pick_field(pick, "answer"))}
+      |> put_request_comment_id(string_param(pick_field(pick, "request_comment_id")))
+    end
   end
 
   defp picks(_picks), do: nil
+
+  defp put_request_comment_id(pick, nil), do: pick
+  defp put_request_comment_id(pick, id), do: Map.put(pick, :request_comment_id, id)
 
   defp pick_field(pick, key) when is_map(pick), do: pick[key]
   defp pick_field(_pick, _key), do: nil

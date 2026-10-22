@@ -176,8 +176,52 @@ defmodule SymphonyElixir.InboxTest do
       refute Map.has_key?(Item.from_node(plan, "shop", %Schema{}, lookups()), :state_machine)
     end
 
+    test "a plan's open choices are its requests, oldest first, each with what the Inbox shows of a request" do
+      second =
+        Request.render_hold(
+          %{
+            title: "Card lifetime",
+            question: "How long does a gift card last?",
+            why: "The screens need it.",
+            if_unanswered: "SHOP-331 waits.",
+            options: [%{label: "One year", effect: "Cards expire after a year.", recommended: true}, %{label: "Two years", effect: "Cards last two years."}],
+            recommendation_reason: "Most shops pick one year."
+          },
+          "In Progress"
+        )
+
+      steps_only = "## Action needed: Check the screens\n\n**Steps:**\n1. Open them."
+
+      plan =
+        issue_node("SHOP-330", %{
+          "history" => %{"nodes" => [moved("Plan Review", "2026-10-01T10:00:00Z")]},
+          "comments" => %{
+            "nodes" => [
+              comment("brief", @brief, "2026-10-01T09:59:00Z"),
+              comment("q2", second, "2026-10-01T09:58:00Z"),
+              comment("q1", request_body(), "2026-10-01T09:57:00Z"),
+              comment("steps", steps_only, "2026-10-01T09:56:00Z")
+            ]
+          }
+        })
+
+      assert %{kind: :plan, review: %{brief: %{format: "parsed"}, decisions: [first, card]} = review} = Item.from_node(plan, "shop", %Schema{}, lookups())
+      refute Map.has_key?(review.brief, :decisions)
+
+      assert %{
+               comment_id: "q1",
+               question: "Add the secret?",
+               why: "Releases fail to sign.",
+               if_unanswered: "Every release stays unsigned.",
+               recommendation_reason: "Signing is a one-time setup.",
+               options: [%{label: "Add it", recommended: true, tradeoffs: [%{kind: "good"}]}, %{label: "Drop signing", recommended: false}]
+             } = first
+
+      assert %{comment_id: "q2", question: "How long does a gift card last?"} = card
+    end
+
     test "a plan without a brief asks for its approval" do
-      assert %{kind: :plan, ask: "Approve the plan", review: %{brief: nil, sub_tickets: []}} =
+      assert %{kind: :plan, ask: "Approve the plan", review: %{brief: nil, sub_tickets: [], decisions: []}} =
                Item.from_node(issue_node("SHOP-331"), "shop", %Schema{}, lookups())
     end
 

@@ -30,6 +30,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   test "each move answers with the states it moved between", %{moves: moves} do
     for {action, params, identifier, to_state} <- [
           {:decisions, %{"picks" => [%{"question" => "Where?", "answer" => "B"}]}, "MOT-30", "Plan Review"},
+          {:changes, %{"reason" => "Ask it in plain words"}, "MOT-30", "Plan Review"},
           {:rework, %{"reason" => "Split it differently"}, "MOT-30", "Rework"},
           {:backlog, %{"note" => "Later"}, "MOT-40", "Backlog"}
         ] do
@@ -47,6 +48,16 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     conn = post(:approve_plan, %{"issue_identifier" => "MOT-30"}, moves)
     assert conn.status == 200
     assert %{"move" => "approve_plan", "to_state" => "Waiting on sub-tickets"} = Jason.decode!(conn.resp_body)
+  end
+
+  test "decisions answers each of a plan's questions under the request its pick names", %{moves: moves} do
+    picks = [%{"question" => "Where?", "answer" => "In the checkout", "request_comment_id" => "q1"}, %{"question" => "Who?", "answer" => "The buyer"}]
+
+    conn = post(:decisions, %{"issue_identifier" => "MOT-30", "picks" => picks}, moves)
+
+    assert conn.status == 200
+    assert_received {:memory_tracker_reply, "plan", "q1", "Decision from the Director:\n\n1. Where?\n   **Decision:** In the checkout"}
+    assert_received {:memory_tracker_comment, "plan", "Decisions on the plan, from the Director:\n\n1. Who?\n   **Pick:** The buyer"}
   end
 
   test "unblock clears an access hold in place, and refuses one that isn't an access hold", %{moves: moves} do
@@ -224,6 +235,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
       :rework,
       :restart,
       :decisions,
+      :changes,
       :backlog,
       :unblock,
       :decide,
@@ -236,6 +248,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
 
     assert error(post(:rework, %{"issue_identifier" => "MOT-40"}, moves)) == {422, "invalid_request", "reason is required"}
     assert error(post(:restart, %{"issue_identifier" => "MOT-40"}, moves)) == {422, "invalid_request", "reason is required"}
+    assert error(post(:changes, %{"issue_identifier" => "MOT-30"}, moves)) == {422, "invalid_request", "reason is required"}
 
     for picks <- [nil, "B", [%{"question" => "Where?"}], ["B"]] do
       assert {422, "invalid_request", _message} = error(post(:decisions, %{"issue_identifier" => "MOT-30", "picks" => picks}, moves))

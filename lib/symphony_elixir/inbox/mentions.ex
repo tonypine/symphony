@@ -11,9 +11,9 @@ defmodule SymphonyElixir.Inbox.Mentions do
 
   The text scanned is what the app shows of each kind: an action's title, question, why, what waits
   if nobody answers, what it unblocks, its steps, each option's label, effect and trade-offs and why
-  the recommended one; a plan's parsed brief (headline, what to review, what changed, its decisions
-  and moves, or the raw markdown of a brief that didn't parse); a clarify item's findings and
-  questions; a blocked item's reason and what clears it.
+  the recommended one; a plan's parsed brief (headline, what to review, what changed and moves, or
+  the raw markdown of a brief that didn't parse) and each of its questions as an action's; a
+  clarify item's findings and questions; a blocked item's reason and what clears it.
   """
 
   @mention ~r/(?<![\w-])PR\s?#\d+(?![\w-])|(?<![\w&#\/])#\d+(?![\w-])|(?<![\w-])[A-Z][A-Z0-9]*-\d+(?![\w-])/
@@ -30,7 +30,14 @@ defmodule SymphonyElixir.Inbox.Mentions do
     |> Enum.filter(&is_binary/1)
   end
 
-  defp review_texts(:action, review) do
+  defp review_texts(:action, review), do: request_texts(review)
+
+  defp review_texts(:plan, review), do: [brief_texts(review[:brief]) | Enum.map(review[:decisions] || [], &request_texts/1)]
+  defp review_texts(:clarify, review), do: [review[:found], review[:questions]]
+  defp review_texts(:blocked, review), do: [review[:reason], review[:clearing_condition]]
+  defp review_texts(_kind, _review), do: []
+
+  defp request_texts(review) do
     [
       review[:title],
       review[:question],
@@ -43,11 +50,6 @@ defmodule SymphonyElixir.Inbox.Mentions do
     ]
   end
 
-  defp review_texts(:plan, review), do: brief_texts(review[:brief])
-  defp review_texts(:clarify, review), do: [review[:found], review[:questions]]
-  defp review_texts(:blocked, review), do: [review[:reason], review[:clearing_condition]]
-  defp review_texts(_kind, _review), do: []
-
   defp option_texts(option), do: [option[:label], option[:effect], Enum.map(option[:tradeoffs] || [], & &1[:text])]
 
   defp brief_texts(%{format: "parsed"} = brief) do
@@ -55,7 +57,6 @@ defmodule SymphonyElixir.Inbox.Mentions do
       brief.headline,
       Enum.map(brief.what_to_review, & &1.text),
       brief.what_changed,
-      Enum.map(brief.decisions, &[&1.question, &1.options, &1.recommendation]),
       Enum.map(brief.moves, & &1.text)
     ]
   end

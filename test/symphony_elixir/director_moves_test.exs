@@ -365,12 +365,100 @@ defmodule SymphonyElixir.DirectorMovesTest do
                DirectorMoves.move(:decisions, "MOT-40", %{picks: [%{question: "Q", answer: "B"}]}, opts)
     end
 
+    test "answers each of the plan's questions under its request, records them, and clears the hold, in place", %{opts: opts} do
+      put_issues([%{plan("Plan Review") | repo_key: "repo-director", description: "Plan the MVP."}])
+      :ok = Hold.set("repo-director", "plan", :needs_decision, %{reason: "Which currency?", decision: %{title: "Card currency", question: "Which currency?"}})
+
+      picks = [
+        %{question: "Where are gift cards bought?", answer: "In the checkout", request_comment_id: "q1"},
+        %{question: "Which currency?", answer: " The buyer's, converted at checkout ", request_comment_id: "q2"}
+      ]
+
+      assert {:ok, %{move: "decisions", moved: false, commented: true, to_state: "Plan Review"}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: picks}, opts)
+
+      assert_received {:memory_tracker_reply, "plan", "q1", first}
+      assert first == "Decision from the Director:\n\n1. Where are gift cards bought?\n   **Decision:** In the checkout"
+      assert_received {:memory_tracker_reply, "plan", "q2", second}
+      assert second =~ "**Decision:** The buyer's, converted at checkout"
+      refute_received {:memory_tracker_comment, _id, _body}
+      refute_received {:memory_tracker_state_update, _id, _state}
+
+      # The answers are the ticket's decisions before the revision run reads it.
+      assert_received {:memory_tracker_description_update, "plan", description}
+      assert [%{key: "q1", answer: "In the checkout"}, %{key: "q2", answer: "The buyer's, converted at checkout"}] = SymphonyElixir.Decisions.recorded(description)
+      refute Hold.held?("repo-director", "plan", :needs_decision)
+
+      # The replies are the Director's comments on a plan under review: they start the revision run,
+      # which keeps the plan's sub-tickets, and approve nothing.
+      assert PlanComments.human?(%{bot?: false, body: first})
+      assert [%{"move" => "decisions", "comment" => comment}] = audit_records()
+      assert comment =~ "Where are gift cards bought?"
+    end
+
+    test "a pick with no request goes into the one decisions comment, next to the answered ones", %{opts: opts} do
+      put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
+      picks = [%{question: "Q1", answer: "A", request_comment_id: "q1"}, %{question: "Q2", answer: "B", request_comment_id: " "}]
+
+      assert {:ok, %{commented: true}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: picks}, opts)
+      assert_received {:memory_tracker_reply, "plan", "q1", _reply}
+      assert_received {:memory_tracker_comment, "plan", "Decisions on the plan, from the Director:\n\n1. Q2\n   **Pick:** B"}
+    end
+
+    test "an answer Linear refuses stops the move with Linear's error", %{opts: opts} do
+      put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [{:error, :reply_failed}])
+
+      assert {:error, {:linear, :reply_failed}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: [%{question: "Q", answer: "B", request_comment_id: "q1"}]}, opts)
+      assert audit_records() == []
+    end
+
+    test "a hold the store refuses to clear is reported, and the answers stand", %{opts: opts} do
+      put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
+      :ok = Hold.set("repo-director", "plan", :needs_decision, %{reason: "Q", decision: %{title: "Q", question: "Q"}})
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{move: "decisions"}} =
+                   DirectorMoves.move(:decisions, "MOT-30", %{picks: [%{question: "Q", answer: "B", request_comment_id: "q1"}]}, Keyword.put(opts, :store, UnwritableStore))
+        end)
+
+      assert log =~ "Failed to clear the Needs Decision hold on MOT-30 after its plan's answers"
+      assert_received {:memory_tracker_reply, "plan", "q1", _reply}
+    end
+
     test "a comment Linear refuses is Linear's error alone", %{opts: opts} do
       put_issues([plan("Plan Review")])
       Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [{:error, :comment_failed}])
       assert {:error, {:linear, :comment_failed}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: [%{question: "Q", answer: "B"}]}, opts)
       refute_received {:memory_tracker_state_update, _id, _state}
       assert audit_records() == []
+    end
+  end
+
+  describe "changes" do
+    test "posts the Director's reason on a plan in Plan Review, in place, which revises it and keeps its sub-tickets", %{opts: opts} do
+      put_issues([plan("Plan Review")])
+
+      assert {:ok, %{move: "changes", moved: false, commented: true, to_state: "Plan Review", undo_window_ms: nil}} =
+               DirectorMoves.move(:changes, "MOT-30", %{reason: "  Ask the questions in plain words  "}, opts)
+
+      assert_received {:memory_tracker_comment, "plan", body}
+      assert body == "Changes asked by the Director:\n\nAsk the questions in plain words"
+      assert PlanComments.human?(%{bot?: false, body: body})
+      refute_received {:memory_tracker_state_update, _id, _state}
+      assert [%{"move" => "changes"}] = audit_records()
+    end
+
+    test "needs a reason and a plan in Plan Review", %{opts: opts} do
+      put_issues([plan("Waiting on sub-tickets"), pr("Plan Review")])
+
+      assert {:error, {:invalid, "reason is required"}} = DirectorMoves.move(:changes, "MOT-30", %{reason: " "}, opts)
+      assert {:error, {:conflict, "MOT-40 is not a plan; changes is for a plan"}} = DirectorMoves.move(:changes, "MOT-40", %{reason: "x"}, opts)
+      assert {:error, {:conflict, _message}} = DirectorMoves.move(:changes, "MOT-30", %{reason: "x"}, opts)
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [plan("Plan Review")])
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [{:error, :comment_failed}])
+      assert {:error, {:linear, :comment_failed}} = DirectorMoves.move(:changes, "MOT-30", %{reason: "x"}, opts)
     end
   end
 
@@ -1027,7 +1115,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   test "lists its moves and its undo window" do
-    assert DirectorMoves.moves() == [:approve_plan, :rework, :restart, :decisions, :backlog, :unblock, :decide]
+    assert DirectorMoves.moves() == [:approve_plan, :rework, :restart, :decisions, :changes, :backlog, :unblock, :decide]
     assert DirectorMoves.undo_window_ms() == 10_000
   end
 
