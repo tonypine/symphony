@@ -12,6 +12,8 @@ defmodule SymphonyElixir.Artifacts do
 
   `expire/1` removes the bytes and keeps the row, marked `expired`; so does `path/1` when it finds
   the file gone. Ingesting the same bytes again writes them back and clears `expired`.
+  `SymphonyElixir.Artifacts.Retention` expires a finished ticket's artifacts once
+  `ledger.artifact_retention_days` have passed.
   """
 
   alias SymphonyElixir.{AgentTmpDir, Config, PathSafety, RunStore}
@@ -19,7 +21,6 @@ defmodule SymphonyElixir.Artifacts do
 
   @kinds ~w(screenshot transcript log report diff file)
   @kind_mimes %{"screenshot" => ["image/png", "image/jpeg"], "transcript" => ["application/x-ndjson"]}
-  @default_max_bytes 26_214_400
 
   @typedoc "One of `screenshot`, `transcript`, `log`, `report`, `diff` and `file`."
   @type kind :: String.t()
@@ -58,7 +59,7 @@ defmodule SymphonyElixir.Artifacts do
   @typedoc """
   `ingest/3`'s options: `roots:` (the folders the source may sit under; default the repo's
   workspace root, `AgentTmpDir.default_bases/0` and `System.tmp_dir!/0`) and `max_bytes:` (default
-  #{@default_max_bytes}).
+  `ledger.artifact_max_bytes`, `Config.artifact_max_bytes/0`, read on each ingest).
   """
   @type ingest_opt :: {:roots, [Path.t()]} | {:max_bytes, pos_integer()}
 
@@ -75,7 +76,7 @@ defmodule SymphonyElixir.Artifacts do
   """
   @spec ingest(Path.t(), meta(), [ingest_opt()]) :: {:ok, artifact()} | {:error, ingest_error()}
   def ingest(path, meta, opts \\ []) when is_binary(path) and is_list(opts) do
-    max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
+    max_bytes = Keyword.get_lazy(opts, :max_bytes, &Config.artifact_max_bytes/0)
 
     with {:ok, meta} <- validate_meta(meta),
          {:ok, source} <- PathSafety.canonicalize(path),

@@ -183,6 +183,20 @@ defmodule SymphonyElixir.ArtifactsTest do
       assert Artifacts.list() == []
       assert {:ok, %{bytes: 11}} = Artifacts.ingest(path, %{@meta | kind: "log"}, roots: roots, max_bytes: 11)
     end
+
+    test "without max_bytes the cap is ledger.artifact_max_bytes, read on each ingest", %{workspace: workspace, roots: roots} do
+      write_workflow_file!(Workflow.workflow_file_path())
+      path = write!(workspace, "big.log", :binary.copy("x", 11))
+      symphony_yml = Workflow.symphony_file_path()
+
+      File.write!(symphony_yml, File.read!(symphony_yml) <> "ledger:\n  artifact_max_bytes: 10\n")
+      Cache.clear()
+      assert {:error, :too_large} = Artifacts.ingest(path, %{@meta | kind: "log"}, roots: roots)
+
+      File.write!(symphony_yml, String.replace(File.read!(symphony_yml), "artifact_max_bytes: 10", "artifact_max_bytes: 11"))
+      Cache.clear()
+      assert {:ok, %{bytes: 11}} = Artifacts.ingest(path, %{@meta | kind: "log"}, roots: roots)
+    end
   end
 
   describe "the mime" do

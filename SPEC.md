@@ -545,7 +545,7 @@ An ingest names a source file and the ticket, run, label and kind. The source mu
 file, not a symlink, whose resolved path is under one of the folders an agent writes (by default
 the repo's workspace root and the agent temp folders); anything else is refused before a byte is
 read, because an agent chooses the source and Symphony runs outside the agent sandbox. A file over
-the size cap (25 MiB) is refused. The mime comes from the bytes: PNG and JPEG by their magic bytes;
+the size cap (`ledger.artifact_max_bytes`, 25 MiB by default, read on each ingest) is refused. The mime comes from the bytes: PNG and JPEG by their magic bytes;
 a UTF-8 `.jsonl` file whose first line is a JSON object is `application/x-ndjson`; UTF-8 `.md` is
 `text/markdown`; UTF-8 `.txt` and `.log` are `text/plain`; anything else is
 `application/octet-stream`. A `screenshot` that is not PNG or JPEG, or a `transcript` that is not
@@ -556,6 +556,18 @@ new ticket. Expiring an artifact removes its bytes and keeps its row with `expir
 the path of an artifact whose file is gone answers that it expired and marks the row so. Ingesting
 the same bytes again writes the file back and clears `expired`. An ingest, an expiry and that check
 of one id hold the row's lock while they touch its file, so they never interleave.
+
+Retention removes the bytes of a finished ticket's artifacts once `ledger.artifact_retention_days`
+(14 by default) have passed. It runs every `workspaces.cleanup.interval_ms` and reads the retention
+on each run. A run looks only at the artifacts that are not expired and were captured longer than
+the retention ago, and asks the tracker for their tickets' current states, one request per 50
+tickets and none when no artifact is old enough: Symphony's stored phase is refreshed only at
+startup, so it can't say whether a ticket is finished. A ticket is finished when the tracker says it
+is in one of its repository's terminal states and its newest ledger event is older than the
+retention. An artifact expires only when every ticket in its `tickets` is finished, so a file a
+finished ticket shares with an active one keeps its bytes. A ticket the tracker doesn't return, and
+every ticket of a request that failed, keeps its artifacts, and the run logs why. Expiring keeps the
+row and the events that name the id; the artifacts API answers 410 with the metadata.
 
 ### 4.2 Stable Identifiers and Normalization Rules
 

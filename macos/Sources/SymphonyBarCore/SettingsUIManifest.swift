@@ -7,9 +7,9 @@ import Foundation
 /// `mix settings.ui_coverage` reads this list from this file and fails CI for a setting that is neither here
 /// nor in `config/settings_ui_exempt.yml`, so a new setting ships with a control. `SettingsUIManifestTests`
 /// checks that every key the line editors (`RepositoriesConfig`, `RunProfilesConfig`, `MaxConcurrentAgents`,
-/// `TokenLimits`, `OperationTimeouts`, `GitHubUpdates`, `DispatchLoopLimits`, `BuiltInTicketPatterns`,
-/// `QAHostTools`, `MacAppQAPlaybook`) write is here, and that the rest are `writtenBySymphony`. Keep one string literal
-/// per line, sorted.
+/// `TokenLimits`, `OperationTimeouts`, `GitHubUpdates`, `DispatchLoopLimits`, `LedgerSettings`,
+/// `BuiltInTicketPatterns`, `QAHostTools`, `MacAppQAPlaybook`) write is here, and that the rest are
+/// `writtenBySymphony`. Keep one string literal per line, sorted.
 public enum SettingsUIManifest {
     public static let keyPaths: [String] = [
         "agent.command",
@@ -42,6 +42,8 @@ public enum SettingsUIManifest {
         "issues.states.epic_review",
         "issues.states.plan_review",
         "issues.states.qa",
+        "ledger.artifact_max_bytes",
+        "ledger.artifact_retention_days",
         "pre_push_review.command",
         "pre_push_review.effort",
         "pre_push_review.model",

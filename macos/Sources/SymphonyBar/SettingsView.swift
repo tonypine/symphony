@@ -345,6 +345,43 @@ struct SettingsView: View {
                 }
                 .disabled(!model.canEditDispatchLoop)
 
+                Section {
+                    LabeledContent("Keep artifact files for") {
+                        HStack {
+                            Text(model.artifactRetentionDays == 1 ? "1 day" : "\(model.artifactRetentionDays) days")
+                                .monospacedDigit()
+                            Stepper("Keep artifact files for days", value: $model.artifactRetentionDays, in: LedgerSettings.dayRange)
+                                .labelsHidden()
+                        }
+                    }
+                    LabeledContent("Largest artifact") {
+                        HStack {
+                            Text("\(model.artifactMaxMegabytes) MB")
+                                .monospacedDigit()
+                            Stepper("Largest artifact in MB", value: $model.artifactMaxMegabytes, in: LedgerSettings.megabyteRange)
+                                .labelsHidden()
+                        }
+                    }
+                    Text(
+                        "Once a ticket has been finished this long, Symphony deletes its artifact files (screenshots, "
+                            + "transcripts) and keeps their details and the events that name them. It refuses to store a "
+                            + "file larger than the cap."
+                    )
+                    .foregroundStyle(.secondary)
+                    if let error = model.ledgerError {
+                        Text(error).foregroundStyle(.red)
+                    }
+                } header: {
+                    Text("Ledger (saved in symphony.yml)")
+                } footer: {
+                    SectionFooter(
+                        "ledger.artifact_retention_days (default 14 days) and ledger.artifact_max_bytes (default 25 MB). "
+                            + "Save checks symphony.yml with symphony check first; Symphony reads them on its next cleanup "
+                            + "and its next stored file, no restart needed."
+                    )
+                }
+                .disabled(!model.canEditLedger)
+
                 MacAppQASection(model: model)
 
                 Section {
@@ -509,6 +546,9 @@ struct SettingsView: View {
                 }
                 if model.dispatchLoopError != nil {
                     Text("symphony check rejected the dispatch-loop limits; see Dispatch loops.").foregroundStyle(.red)
+                }
+                if model.ledgerError != nil {
+                    Text("symphony check rejected the ledger settings; see Ledger.").foregroundStyle(.red)
                 }
                 if model.macAppQAError != nil {
                     Text("symphony check rejected the macOS app QA settings; see macOS app QA.").foregroundStyle(.red)
