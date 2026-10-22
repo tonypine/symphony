@@ -31,6 +31,11 @@ final class SymphonyWindowModel: ObservableObject {
     /// The live channel: Symphony's notice of each event written to a ticket's history, open while the window is
     /// connected to Symphony. The ticket page reads only what is new when one names its ticket.
     let eventStream: EventStream
+    /// Reads the shown ticket's events feed: all of it when the page opens, then what is new when the channel names
+    /// the ticket, when it reconnects, or after a state poll while it is down.
+    let ticketFeed: TicketEventsReader
+    /// The screenshots the ticket page shows, read through `client` and kept by artifact id.
+    let artifactImages: ArtifactImages
     /// The build of the Symphony the window last read, to tell a restart onto another build.
     private var symphonyBuild: DiagnosticsPayload.Build?
     @Published var paused = false
@@ -283,7 +288,11 @@ final class SymphonyWindowModel: ObservableObject {
         self.client = client
         self.eventStream = eventStream
         self.selection = selection
+        ticketFeed = TicketEventsReader(get: { [client] path in await client.get(path) })
+        artifactImages = ArtifactImages(get: { [client] path in await client.answer(path) })
         history = NavigationHistory(current: .view(selection))
+        ticketFeed.listen(to: eventStream)
+        ticketFeed.onChange = { [weak self] events in self?.ticketEventsChanged(events) }
         client.$stateJSON
             .sink { [weak self] data in
                 guard let self else { return }
@@ -299,6 +308,7 @@ final class SymphonyWindowModel: ObservableObject {
                 readShippedIfDue()
                 readAuditIfDue()
                 readTicket()
+                followTicketFeed(afterPoll: true)
                 readPeek()
             }
             .store(in: &cancellables)

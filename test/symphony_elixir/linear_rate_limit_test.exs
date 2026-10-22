@@ -18,6 +18,8 @@ defmodule SymphonyElixir.LinearRateLimitTest do
   # running calls Linear on the real clock, so it would claim a probe against
   # this module's fixed-clock pauses: stop such tasks before resetting.
   setup do
+    # Other tests terminate the shared supervisor to prove the unavailable path: bring it back.
+    ensure_symphony_started!()
     terminate_task_supervisor_children()
     RateLimit.reset()
     on_exit(&RateLimit.reset/0)

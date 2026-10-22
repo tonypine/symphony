@@ -45,6 +45,38 @@ final class APIFixturesTests: XCTestCase {
         XCTAssertEqual(fixtures.answer(request("api/v1/inbox")).1.statusCode, 404)
     }
 
+    func testGetAnswersAScreenshotsBytesWithItsImageType() throws {
+        let artifacts = root.appendingPathComponent("fixtures/api/v1/artifacts", isDirectory: true)
+        try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+        let png = try TicketEventsTests.png()
+        try png.write(to: artifacts.appendingPathComponent("a1.png"))
+        try Data([0xFF, 0xD8, 0xFF]).write(to: artifacts.appendingPathComponent("b2.jpg"))
+        try Data(#"{"error":{"code":"artifact_expired"}}"#.utf8).write(to: artifacts.appendingPathComponent("c3.410.json"))
+        // A `.json` answers first, as for any other path.
+        try Data(#"{"id":"d4"}"#.utf8).write(to: artifacts.appendingPathComponent("d4.json"))
+        try png.write(to: artifacts.appendingPathComponent("d4.png"))
+
+        let image = fixtures.answer(request("api/v1/artifacts/a1"))
+        XCTAssertEqual(image.1.statusCode, 200)
+        XCTAssertEqual(image.1.value(forHTTPHeaderField: "Content-Type"), "image/png")
+        XCTAssertEqual(image.0, png)
+        let jpeg = fixtures.answer(request("api/v1/artifacts/b2"))
+        XCTAssertEqual(jpeg.1.statusCode, 200)
+        XCTAssertEqual(jpeg.1.value(forHTTPHeaderField: "Content-Type"), "image/jpeg")
+        let gone = fixtures.answer(request("api/v1/artifacts/c3"))
+        XCTAssertEqual(gone.1.statusCode, 410)
+        XCTAssertEqual(String(decoding: gone.0, as: UTF8.self), #"{"error":{"code":"artifact_expired"}}"#)
+        XCTAssertEqual(fixtures.answer(request("api/v1/artifacts/d4")).1.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        XCTAssertEqual(fixtures.answer(request("api/v1/artifacts/e5")).1.statusCode, 404)
+    }
+
+    func testTheLiveChannelWithoutAFixtureIsUnavailable() async throws {
+        // No `api/v1/stream.json`: a 404, so the window reads the ticket's feed after each state poll.
+        let connect = EventStream.buffered(fixtures.transport)
+        let response = try await connect(request(EventStream.path))
+        XCTAssertEqual(response.statusCode, 404)
+    }
+
     func testPathsCantLeaveTheDirectory() {
         XCTAssertNil(fixtures.file(forPath: "/api/../../secrets"))
         XCTAssertNil(fixtures.file(forPath: "/"))

@@ -53,6 +53,8 @@ extension SymphonyWindowModel {
 
     /// Shows the history's current place: a view takes the sidebar's selection; a page reads its endpoints.
     func showPlace() {
+        // A page that opens reads its ticket's feed from the start.
+        ticketFeed.follow(identifier: nil, repoKey: nil)
         switch history.current {
         case let .view(view):
             selection = view
@@ -60,10 +62,28 @@ extension SymphonyWindowModel {
             ticketSources = TicketPage.Sources()
             ticketSlowReadAt = nil
             readTicket(force: true)
+            followTicketFeed(afterPoll: false)
         case .pullRequest:
             pullRequestResult = nil
             readPullRequest()
         }
+    }
+
+    /// Follows the shown ticket's events feed once its repo is known (the reader reads it all then), and after a state
+    /// poll reads what is new while the live channel isn't there to say so.
+    func followTicketFeed(afterPoll: Bool) {
+        guard let identifier = shownTicket else {
+            ticketFeed.follow(identifier: nil, repoKey: nil)
+            return
+        }
+        let started = ticketFeed.follow(identifier: identifier, repoKey: ticketPage?.repoKey)
+        if afterPoll, !started { ticketFeed.statePolled() }
+    }
+
+    /// The feed's reader read: the page shows what it holds, or today's timeline without it.
+    func ticketEventsChanged(_ events: TicketEventsPayload?) {
+        guard let identifier = shownTicket, identifier == ticketFeed.identifier else { return }
+        ticketSources.events = events
     }
 
     /// Reads the shown ticket's endpoints: `/api/v1/:issue_identifier` after each state poll, its runs and audit
@@ -91,9 +111,11 @@ extension SymphonyWindowModel {
             readingTicket = false
             // A page left while its reads were out doesn't take them.
             guard shownTicket == identifier else { return }
-            // A Check Now answer that came in meanwhile stays.
+            // A Check Now answer and the feed's events that came in meanwhile stay.
             sources.check = ticketSources.check
+            sources.events = ticketSources.events
             ticketSources = sources
+            followTicketFeed(afterPoll: false)
         }
     }
 
@@ -251,7 +273,8 @@ struct TicketPageContent: View {
                     openInInbox: { model.openInInbox(page.identifier) },
                     openTicket: model.openTicket,
                     checking: model.checkingNow.contains(page.identifier)
-                )
+                ),
+                images: model.artifactImages
             )
         } else {
             EmptyState(title: "Reading the ticket…", symbol: "doc.text.magnifyingglass", showsSpinner: true)
@@ -264,13 +287,25 @@ struct TicketPageView: View {
     let page: TicketPage
     var brief: TicketPage.Brief?
     let actions: TicketPageActions
+    /// The timeline's screenshots, read through the window's client.
+    var images: ArtifactImages?
     @State private var width: CGFloat = DesignTokens.Layout.windowWidth - DesignTokens.Layout.sidebarWidth
+    /// The run groups folded, by run id: they stay folded as the feed is read again.
+    @State private var folded = Set<String>()
+    /// The screenshot shown full size.
+    @State private var fullScreenshot: TicketScreenshot?
 
     var body: some View {
         ScrollView {
-            TicketPageBody(page: page, brief: brief, actions: actions, width: width)
+            TicketPageBody(
+                page: page, brief: brief, actions: actions, width: width, folded: $folded, images: images,
+                openScreenshot: { fullScreenshot = $0 }
+            )
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .sheet(item: $fullScreenshot) { shot in
+            ScreenshotSheet(shot: shot, images: images, close: { fullScreenshot = nil })
+        }
     }
 }
 
@@ -281,6 +316,9 @@ struct TicketPageBody: View {
     var brief: TicketPage.Brief?
     let actions: TicketPageActions
     let width: CGFloat
+    var folded: Binding<Set<String>> = .constant([])
+    var images: ArtifactImages?
+    var openScreenshot: (TicketScreenshot) -> Void = { _ in }
 
     static let sideColumnWidth: CGFloat = 300
     static let mainColumnMinWidth: CGFloat = 460
@@ -308,7 +346,7 @@ struct TicketPageBody: View {
                         if page.timeline.isEmpty {
                             Text("No runs yet.").font(DesignTokens.TypeStyle.body.font).foregroundStyle(.secondary)
                         } else {
-                            RunTimeline(steps: page.timeline)
+                            RunTimeline(steps: page.timeline, folded: folded, images: images, openScreenshot: openScreenshot)
                         }
                     }
                 }
@@ -590,14 +628,23 @@ private struct FactsGrid: View {
 
 // MARK: - C14: the run timeline
 
-/// Steps down a connecting line: time, symbol, step, result, duration and tokens; the current step live.
+/// Steps down a connecting line: time, symbol, step, result, duration and tokens; the current step live. A run is a
+/// group that folds, its events inside it; an event's replies sit under it, and a finding shows its screenshots.
 struct RunTimeline: View {
     let steps: [TicketPage.Step]
+    var folded: Binding<Set<String>> = .constant([])
+    var images: ArtifactImages?
+    var openScreenshot: (TicketScreenshot) -> Void = { _ in }
+    /// Inside a run or under an event: the time sits at the line's end, so each level doesn't spend a column on it.
+    var nested = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
-                TimelineRow(step: step, first: index == 0, last: index == steps.count - 1)
+                TimelineRow(
+                    step: step, first: index == 0, last: index == steps.count - 1, folded: folded, images: images,
+                    openScreenshot: openScreenshot, nested: nested
+                )
             }
         }
     }
@@ -607,16 +654,28 @@ private struct TimelineRow: View {
     let step: TicketPage.Step
     let first: Bool
     let last: Bool
+    let folded: Binding<Set<String>>
+    let images: ArtifactImages?
+    let openScreenshot: (TicketScreenshot) -> Void
+    let nested: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private var isFolded: Bool { step.runID.map(folded.wrappedValue.contains) ?? false }
+
+    /// A plain step reads as one element; a group, a step with screenshots or with replies keeps its controls.
+    private var isPlain: Bool { !step.isGroup && step.children.isEmpty && step.screenshots.isEmpty }
+
     var body: some View {
-        HStack(alignment: .top, spacing: DesignTokens.Space.s3) {
-            Text(step.timeText)
-                .font(DesignTokens.TypeStyle.callout.font)
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .frame(width: 88, alignment: .trailing)
-                .padding(.top, DesignTokens.Space.s2)
+        let row = HStack(alignment: .top, spacing: nested ? DesignTokens.Space.s2 : DesignTokens.Space.s3) {
+            if !nested {
+                Text(step.timeText)
+                    .font(DesignTokens.TypeStyle.callout.font)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(width: 88, alignment: .trailing)
+                    .padding(.top, DesignTokens.Space.s2)
+                    .accessibilityHidden(!isPlain)
+            }
             ZStack(alignment: .top) {
                 // The connecting line, from the step above to the one below.
                 VStack(spacing: 0) {
@@ -631,39 +690,100 @@ private struct TimelineRow: View {
             .frame(width: 20)
             .frame(maxHeight: .infinity, alignment: .top)
             VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
-                HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                    Text(step.title).font(DesignTokens.TypeStyle.rowTitle.font)
-                    if let word = step.resultWord {
-                        Text(word)
-                            .font(DesignTokens.TypeStyle.callout.font)
-                            .foregroundStyle(step.result == .failed ? AnyShapeStyle(status.tint) : AnyShapeStyle(.secondary))
+                if step.isGroup {
+                    Button(action: toggle) {
+                        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+                            Image(systemName: isFolded ? "chevron.right" : "chevron.down")
+                                .font(DesignTokens.TypeStyle.callout.font.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 12)
+                            summary
+                        }
+                        .contentShape(Rectangle())
                     }
-                    Spacer(minLength: DesignTokens.Space.s2)
-                    if let duration = step.duration {
-                        Text(duration).font(DesignTokens.TypeStyle.callout.font).monospacedDigit()
-                    }
-                    if let tokens = step.tokensText {
-                        Text(tokens)
-                            .font(DesignTokens.TypeStyle.callout.font)
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                            .frame(minWidth: 44, alignment: .trailing)
-                    }
+                    .buttonStyle(.plain)
+                    .help(isFolded ? "Show what happened in this run" : "Hide what happened in this run")
+                    .accessibilityLabel(step.foldAccessibilityLabel(folded: isFolded))
+                    .accessibilityValue(step.accessibilityLabel)
+                } else if isPlain {
+                    summary
+                } else {
+                    summary
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(spokenLabel)
                 }
-                if let detail = step.detail {
-                    Text(detail)
-                        .font(DesignTokens.TypeStyle.callout.font)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                        .textSelection(.enabled)
+                if !step.screenshots.isEmpty {
+                    ScreenshotThumbnails(shots: step.screenshots, images: images, open: openScreenshot)
+                        .padding(.top, DesignTokens.Space.s1)
+                }
+                if !step.children.isEmpty, !isFolded {
+                    RunTimeline(steps: step.children, folded: folded, images: images, openScreenshot: openScreenshot, nested: true)
+                        .padding(.top, DesignTokens.Space.s1)
                 }
             }
             .padding(.vertical, DesignTokens.Space.s2)
         }
         // The line column takes the row's full height, so the line runs unbroken from step to step.
         .fixedSize(horizontal: false, vertical: true)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(step.accessibilityLabel + (step.detail.map { ". \($0)" } ?? ""))
+        if isPlain {
+            row
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(spokenLabel)
+        } else {
+            row.accessibilityElement(children: .contain)
+        }
+    }
+
+    private var spokenLabel: String { step.accessibilityLabel + (step.detail.map { ". \($0)" } ?? "") }
+
+    /// The title, its result, duration and tokens, then the detail.
+    private var summary: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
+            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+                Text(step.title).font(DesignTokens.TypeStyle.rowTitle.font)
+                if let word = step.resultWord {
+                    Text(word)
+                        .font(DesignTokens.TypeStyle.callout.font)
+                        .foregroundStyle(step.result == .failed ? AnyShapeStyle(status.tint) : AnyShapeStyle(.secondary))
+                }
+                Spacer(minLength: DesignTokens.Space.s2)
+                if nested, !step.timeText.isEmpty {
+                    Text(step.timeText)
+                        .font(DesignTokens.TypeStyle.callout.font)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                }
+                if let duration = step.duration {
+                    Text(duration).font(DesignTokens.TypeStyle.callout.font).monospacedDigit()
+                }
+                if let tokens = step.tokensText {
+                    Text(tokens)
+                        .font(DesignTokens.TypeStyle.callout.font)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .frame(minWidth: 44, alignment: .trailing)
+                }
+            }
+            if let detail = step.detail {
+                Text(detail)
+                    .font(DesignTokens.TypeStyle.callout.font)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    private func toggle() {
+        guard let runID = step.runID else { return }
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
+            if folded.wrappedValue.contains(runID) {
+                folded.wrappedValue.remove(runID)
+            } else {
+                folded.wrappedValue.insert(runID)
+            }
+        }
     }
 
     private var status: DesignTokens.Status {
@@ -678,13 +798,187 @@ private struct TimelineRow: View {
     @ViewBuilder private var symbol: some View {
         let image = Image(systemName: step.result == .stopped ? "stop.circle.fill" : status.symbol)
             .foregroundStyle(status.tint)
-            .accessibilityHidden(true)
         if step.result == .current {
             // motion.live: only the current step, and only while drawn; Reduce Motion stops the loop.
-            image.symbolEffect(.variableColor.iterative, isActive: !reduceMotion)
-        } else {
             image
+                .symbolEffect(.variableColor.iterative, isActive: !reduceMotion)
+                .accessibilityLabel(TicketPage.runningTitle)
+                .accessibilityHidden(isPlain)
+        } else {
+            image.accessibilityHidden(true)
         }
+    }
+}
+
+/// A finding's screenshots, wrapping onto more lines when the column is narrow.
+private struct ScreenshotThumbnails: View {
+    let shots: [TicketScreenshot]
+    let images: ArtifactImages?
+    let open: (TicketScreenshot) -> Void
+
+    var body: some View {
+        WrappingStack(spacing: DesignTokens.Space.s2) {
+            ForEach(shots) { shot in
+                if let images {
+                    ScreenshotThumbnail(shot: shot, images: images, open: open)
+                } else {
+                    ScreenshotTile(shot: shot, image: shot.available ? .loading : .unavailable, open: open)
+                }
+            }
+        }
+    }
+}
+
+/// A thumbnail that reads its image through the window's cache when it shows.
+private struct ScreenshotThumbnail: View {
+    let shot: TicketScreenshot
+    @ObservedObject var images: ArtifactImages
+    let open: (TicketScreenshot) -> Void
+
+    var body: some View {
+        ScreenshotTile(shot: shot, image: images.image(shot), open: open)
+            .onAppear { images.load(shot) }
+    }
+}
+
+/// The thumbnail itself: the image, opening full size; a quiet tile while it reads; the placeholder when Symphony no
+/// longer has it or it isn't an image.
+private struct ScreenshotTile: View {
+    let shot: TicketScreenshot
+    let image: ArtifactImages.Image
+    let open: (TicketScreenshot) -> Void
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+
+    static let size = CGSize(width: 128, height: 80)
+
+    var body: some View {
+        switch image {
+        case let .loaded(data):
+            if let picture = NSImage(data: data) {
+                Button { open(shot) } label: {
+                    Image(nsImage: picture)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: Self.size.width, height: Self.size.height)
+                        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.mark))
+                        .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.mark).strokeBorder(DesignTokens.Surface.separator.color))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(shot.label)
+                .accessibilityLabel(shot.accessibilityLabel)
+            } else {
+                unavailable
+            }
+        case .loading:
+            tile {
+                if offscreenSnapshot {
+                    // `ImageRenderer` can't draw a spinner: its symbol stands in.
+                    Image(systemName: "photo").foregroundStyle(.tertiary)
+                } else {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Screenshot \(shot.label), loading")
+        case .unavailable, .failed:
+            unavailable
+        }
+    }
+
+    private var unavailable: some View {
+        tile {
+            VStack(spacing: DesignTokens.Space.s1) {
+                Image(systemName: "eye.slash").foregroundStyle(.secondary)
+                Text(TicketScreenshot.unavailableTitle)
+                    .font(DesignTokens.TypeStyle.callout.font)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(DesignTokens.Space.s1)
+        }
+        .help(shot.label)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(shot.unavailableAccessibilityLabel)
+    }
+
+    private func tile(@ViewBuilder _ content: () -> some View) -> some View {
+        RoundedRectangle(cornerRadius: DesignTokens.Radius.mark)
+            .fill(DesignTokens.Surface.raised.color)
+            .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.mark).strokeBorder(DesignTokens.Surface.separator.color))
+            .overlay(content())
+            .frame(width: Self.size.width, height: Self.size.height)
+    }
+}
+
+/// A screenshot full size, over the window; Close or Esc closes it.
+struct ScreenshotSheet: View {
+    let shot: TicketScreenshot
+    let images: ArtifactImages?
+    let close: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+                Text(shot.label)
+                    .font(DesignTokens.TypeStyle.sentence.font)
+                    .textSelection(.enabled)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: DesignTokens.Space.s2)
+                Button("Close", action: close)
+                    .keyboardShortcut(.cancelAction)
+            }
+            Group {
+                if case let .loaded(data)? = images?.image(shot), let picture = NSImage(data: data) {
+                    Image(nsImage: picture)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .accessibilityLabel("Screenshot \(shot.label)")
+                } else {
+                    Label(TicketScreenshot.unavailableTitle, systemImage: "eye.slash")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .padding(DesignTokens.Space.s5)
+        .frame(minWidth: 480, idealWidth: 1000, maxWidth: 1800, minHeight: 360, idealHeight: 680, maxHeight: 1300)
+        .onExitCommand(perform: close)
+    }
+}
+
+/// Lays its views out in lines, left to right, starting a new line when the next one doesn't fit.
+struct WrappingStack: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(width: proposal.width, subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let places = arrange(width: bounds.width, subviews: subviews).places
+        for (subview, place) in zip(subviews, places) {
+            subview.place(at: CGPoint(x: bounds.minX + place.x, y: bounds.minY + place.y), proposal: .unspecified)
+        }
+    }
+
+    private func arrange(width: CGFloat?, subviews: Subviews) -> (places: [CGPoint], size: CGSize) {
+        let maxWidth = width ?? .infinity
+        var places: [CGPoint] = []
+        var x: CGFloat = 0, y: CGFloat = 0, lineHeight: CGFloat = 0, widest: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                x = 0
+                y += lineHeight + spacing
+                lineHeight = 0
+            }
+            places.append(CGPoint(x: x, y: y))
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+            widest = max(widest, x - spacing)
+        }
+        return (places, CGSize(width: widest, height: y + lineHeight))
     }
 }
 

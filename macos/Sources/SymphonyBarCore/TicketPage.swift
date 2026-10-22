@@ -74,6 +74,14 @@ public struct TicketPage: Equatable {
         public var tokens: Int?
         /// The run's error, the note posted with a move.
         public var detail: String?
+        /// A run's group: the run's id, its events in `children`.
+        public var runID: String? = nil
+        /// What happened inside it: a run's events, the replies to an event.
+        public var children: [Step] = []
+        /// The screenshots the event carries.
+        public var screenshots: [TicketScreenshot] = []
+
+        public var isGroup: Bool { runID != nil }
 
         public var duration: String? { durationSeconds.map(Overview.duration) }
         public var tokensText: String? { tokens.flatMap { $0 > 0 ? Overview.tokens($0) : nil } }
@@ -84,6 +92,11 @@ public struct TicketPage: Equatable {
             return [timeText, title, resultWord, durationSeconds.map(Overview.spokenDuration)]
                 .compactMap { $0 }
                 .joined(separator: ", ")
+        }
+
+        /// A run group's fold button: "Collapse QA run 2, failed", "Expand QA run 2, running".
+        public func foldAccessibilityLabel(folded: Bool) -> String {
+            ([(folded ? "Expand " : "Collapse ") + title] + [resultWord].compactMap { $0 }).joined(separator: ", ")
         }
     }
 
@@ -114,10 +127,12 @@ public struct TicketPage: Equatable {
         public var check: Data?
         /// Whether the Inbox holds a decision on the ticket, so the PR and CI card offers Open in Inbox.
         public var inboxDecision: Bool
+        /// The ticket's events feed, merged from every page read; nil while Symphony doesn't serve it.
+        public var events: TicketEventsPayload?
 
         public init(
             state: Data? = nil, issue: Data? = nil, runs: Data? = nil, audit: [Data] = [], stops: [LocalStop] = [],
-            check: Data? = nil, inboxDecision: Bool = false
+            check: Data? = nil, inboxDecision: Bool = false, events: TicketEventsPayload? = nil
         ) {
             self.state = state
             self.issue = issue
@@ -126,10 +141,15 @@ public struct TicketPage: Equatable {
             self.stops = stops
             self.check = check
             self.inboxDecision = inboxDecision
+            self.events = events
         }
     }
 
     public static let stoppedByYou = "Stopped by you"
+    /// The running indicator's word for VoiceOver.
+    public static let runningTitle = "Running"
+    /// A note the Director wrote on the ticket.
+    public static let noteByYou = "Note by you"
     public static let movedToBacklog = "moved to Backlog"
     public static let viewTranscriptTitle = "View Transcript"
     public static let openInLinearTitle = "Open in Linear"
@@ -194,6 +214,18 @@ public struct TicketPage: Equatable {
     public static func transcriptPath(_ identifier: String, repoKey: String?) -> String {
         guard let repoKey, !repoKey.isEmpty else { return "api/v1/issues/\(identifier)/transcript" }
         return "api/v1/repos/\(repoKey)/issues/\(identifier)/transcript"
+    }
+
+    /// The ticket's events feed grouped by run, after `since` (exclusive) when given.
+    public static func eventsPath(_ identifier: String, repoKey: String, since: String? = nil, limit: Int? = nil) -> String {
+        func encoded(_ text: String, _ allowed: CharacterSet, except reserved: String) -> String {
+            text.addingPercentEncoding(withAllowedCharacters: allowed.subtracting(CharacterSet(charactersIn: reserved))) ?? text
+        }
+        func segment(_ text: String) -> String { encoded(text, .urlPathAllowed, except: "/?#") }
+        var query = ["group=run"]
+        if let limit { query.append("limit=\(limit)") }
+        if let since { query.append("since=" + encoded(since, .urlQueryAllowed, except: "+&=#")) }
+        return "api/v1/repos/\(segment(repoKey))/tickets/\(segment(identifier))/events?" + query.joined(separator: "&")
     }
 
     /// The audit queries the timeline reads: one per type, over the last `auditDays` days (UTC, as Symphony's files).
@@ -401,13 +433,20 @@ public struct TicketPage: Equatable {
                 result: .done, resultWord: nil, durationSeconds: nil, tokens: nil, detail: pullRequest?.absoluteString
             ))
         }
-        // The current run stays last, the step that is live.
-        timeline = steps.enumerated().sorted { lhs, rhs in
-            let left = lhs.element, right = rhs.element
-            if (left.result == .current) != (right.result == .current) { return right.result == .current }
-            if left.time != right.time { return left.time < right.time }
-            return lhs.offset < rhs.offset
-        }.map(\.element)
+        if let feed = sources.events, !feed.isEmpty {
+            // The feed tells every run and event itself; a stop made from the app shows until the feed has caught up.
+            let newest = feed.newestEventAt ?? .distantPast
+            let stops = sources.stops.filter { $0.identifier == identifier && $0.at > newest }
+            timeline = feed.steps(reference: reference, clock: clock) + Self.eventSteps(audit: [], stops: stops, clock: clock)
+        } else {
+            // The current run stays last, the step that is live.
+            timeline = steps.enumerated().sorted { lhs, rhs in
+                let left = lhs.element, right = rhs.element
+                if (left.result == .current) != (right.result == .current) { return right.result == .current }
+                if left.time != right.time { return left.time < right.time }
+                return lhs.offset < rhs.offset
+            }.map(\.element)
+        }
 
         var facts: [Fact] = []
         if let ticketState { facts.append(Fact(label: "State", value: ticketState)) }

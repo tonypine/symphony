@@ -142,6 +142,11 @@ public final class LiveAPIClient: ObservableObject {
         EndpointResult(await fetch(path))
     }
 
+    /// A GET's answer as it came, status code and all: what a screenshot's read tells apart (a 410 from a failure).
+    public func answer(_ path: String) async -> APIAnswer {
+        await fetch(path)
+    }
+
     /// A pull request's page (D15), with a 404 of the page's own (an unknown repo or pull request) told apart from a
     /// Symphony that predates it.
     public func pullRequestPage(repoKey: String, number: Int) async -> PullRequestPageResult {

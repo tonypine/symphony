@@ -1,7 +1,9 @@
 import Foundation
 
 /// Symphony's local API served from files, for QA mode with `SYMPHONY_BAR_QA_API_FIXTURES=<dir>`: each GET reads
-/// `<dir>/<path>.json` (for example `api/v1/state.json`) and answers 404 when there is no such file; each POST is
+/// `<dir>/<path>.json` (for example `api/v1/state.json`); without one it answers `<path>.png` or `<path>.jpg` with its
+/// image type (a screenshot's bytes), `<path>.410.json` with a 410 (a screenshot Symphony no longer keeps), and 404
+/// when there is none of them (the live channel, so the app reads after each state poll); each POST is
 /// appended to the request log as one JSON line and answered 200, with `<dir>/<path>.json` when there is one. A POST
 /// whose answer changes from one request to the next reads `<path>.1.json` the first time, `<path>.2.json` the second,
 /// and the last one there is after that (Setup's fix, Undo, fix again). `<dir>/github_webhook_secret` stands for the
@@ -41,10 +43,27 @@ public struct APIFixtures: Equatable {
             return (answer ?? Data(#"{"ok":true}"#.utf8), response(url, statusCode: 200))
         }
         guard let fixture else {
+            if let file, let other = otherFixture(of: file) {
+                return (other.data, response(url, statusCode: other.statusCode, contentType: other.contentType))
+            }
             let body = #"{"error":{"code":"not_found","message":"No fixture for this path"}}"#
             return (Data(body.utf8), response(url, statusCode: 404))
         }
         return (fixture, response(url, statusCode: 200))
+    }
+
+    /// The GET answer `<path>.png`, `<path>.jpg` or `<path>.410.json` gives next to `file` (`<path>.json`).
+    func otherFixture(of file: URL) -> (data: Data, statusCode: Int, contentType: String)? {
+        let stem = file.deletingPathExtension()
+        let candidates = [
+            (stem.appendingPathExtension("png"), 200, "image/png"),
+            (stem.appendingPathExtension("jpg"), 200, "image/jpeg"),
+            (stem.appendingPathExtension("410").appendingPathExtension("json"), 410, "application/json"),
+        ]
+        for (url, statusCode, contentType) in candidates {
+            if let data = try? Data(contentsOf: url) { return (data, statusCode, contentType) }
+        }
+        return nil
     }
 
     /// A transport for `ControlAPI`, `ReposAPI` and the window's client that answers from the fixtures.
@@ -76,13 +95,13 @@ public struct APIFixtures: Equatable {
         }.count
     }
 
-    private func response(_ url: URL, statusCode: Int) -> HTTPURLResponse {
+    private func response(_ url: URL, statusCode: Int, contentType: String = "application/json") -> HTTPURLResponse {
         // HTTPURLResponse's initializer only fails for a malformed HTTP version.
         HTTPURLResponse(
             url: url,
             statusCode: statusCode,
             httpVersion: "HTTP/1.1",
-            headerFields: ["Content-Type": "application/json"]
+            headerFields: ["Content-Type": contentType]
         )!
     }
 
