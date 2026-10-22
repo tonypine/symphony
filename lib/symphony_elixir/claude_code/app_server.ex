@@ -22,10 +22,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   @agent_runtime_env_value AgentEnv.runtime_marker_value()
   @settings_dir_prefix "symphony-claude-settings-"
   @port_line_bytes 1_048_576
-  @approval_handoff_markers [
-    "Reviewer agent approved the committed diff.",
-    "Review-agent gate status:"
-  ]
+  # A continuation turn (`SymphonyElixir.AgentRunner`'s "Continuation guidance" prompt) may be the
+  # one that pushes and opens the PR, so it needs the Symphony MCP server's tools: without them the
+  # turn fails, and the runner retries it once in a fresh session.
+  @handoff_markers ["Continuation guidance:"]
   @handoff_required_mcp_server "symphony"
   @missing_required_mcp_tools_code "missing_required_mcp_tools"
   @mcp_log_files_scanned 5
@@ -1583,7 +1583,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   end
 
   defp required_mcp_server_for_prompt(prompt) when is_binary(prompt) do
-    if Enum.any?(@approval_handoff_markers, &String.contains?(prompt, &1)) do
+    if Enum.any?(@handoff_markers, &String.contains?(prompt, &1)) do
       @handoff_required_mcp_server
     else
       nil

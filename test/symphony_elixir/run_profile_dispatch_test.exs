@@ -199,7 +199,7 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
       {sub_run, log} =
         with_log(fn ->
           send(pid, :run_poll_cycle)
-          assert [_first, second | _reviewer] = wait_for_argv_lines(ctx.argv_trace, 2)
+          assert [_first, second | _rest] = wait_for_argv_lines(ctx.argv_trace, 2)
           assert String.ends_with?(second, "--print --effort low")
           refute second =~ "--model"
           wait_for_run("issue-profile-sub")
@@ -207,12 +207,10 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
 
       assert log =~ ~r/Dispatching issue to agent: issue_id=issue-profile-sub .* run_kind=implementation model=default effort=low\n/
 
-      assert %{
-               run_kind: "implementation",
-               model: nil,
-               effort: "low",
-               reviewer_profile: %{run_kind: "pre_push_review", model: "claude-sonnet-5-5", effort: "medium"}
-             } = sub_run
+      assert %{run_kind: "implementation", model: nil, effort: "low"} = sub_run
+
+      # Code Review's reviewer runs only in a Code Review run: an implementation run has none.
+      refute Map.has_key?(sub_run, :reviewer_profile)
     end
 
     test "dispatches a `plan` ticket as a breakdown run with the breakdown run profile", ctx do

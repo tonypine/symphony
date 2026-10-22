@@ -350,7 +350,7 @@ final class ScopedRunProfilesTests: XCTestCase {
         let yaml = """
             agent:
               command: claude --model claude-opus-5-5
-            pre_push_review:
+            code_review:
               command: claude --effort high
             repositories:
               - key: web
@@ -363,8 +363,8 @@ final class ScopedRunProfilesTests: XCTestCase {
               command: claude
               model: claude-opus-5-5
               run_profiles:
-                pre_push_review: { effort: high }
-            pre_push_review:
+                code_review: { effort: high }
+            code_review:
               command: claude
             repositories:
               - key: web

@@ -1104,13 +1104,6 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert :ok = run(workspace, settings: designed_settings())
       assert_received {:moved, @issue_id, "QA"}
     end
-
-    test "Code Review asks the reviewer to judge the ticket's acceptance criteria and scope" do
-      assert :ok = CodeReview.run(issue(), "/tmp/workspace", settings: designed_settings(), review_agent: OptsReviewAgent, tracker: FakeTracker)
-
-      assert_received {:review_opts, opts}
-      assert opts[:review_scope] == :code_review
-    end
   end
 
   describe "the verdict's run" do

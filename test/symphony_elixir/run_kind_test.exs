@@ -12,7 +12,7 @@ defmodule SymphonyElixir.RunKindTest do
     issue(Keyword.merge([labels: ["Breakdown"]], attrs))
   end
 
-  test "lists every kind, including the reserved pre-push reviewer and QA kinds" do
+  test "lists every kind, including the QA kind and no pre-push reviewer kind" do
     assert RunKind.kinds() == [
              :implementation,
              :breakdown,
@@ -23,22 +23,20 @@ defmodule SymphonyElixir.RunKindTest do
              :epic_review,
              :ci_fix,
              :review_feedback,
-             :pre_push_review,
              :qa
            ]
 
     assert RunKind.names() == Enum.map(RunKind.kinds(), &Atom.to_string/1)
   end
 
-  test "the moduledoc names exactly the reserved and retired kinds as never returned by classify/2" do
+  test "the moduledoc names exactly the retired kinds as never returned by classify/2" do
     {:docs_v1, _, _, _, %{"en" => doc}, _, _} = Code.fetch_docs(RunKind)
 
-    assert RunKind.reserved_kinds() == [:pre_push_review]
-    assert doc =~ "`pre_push_review` is never returned by `classify/2`"
-    assert doc =~ "Neither is `close_out`"
+    assert doc =~ "`close_out` is never returned by `classify/2`"
+    refute doc =~ "pre_push_review"
   end
 
-  test "classify/2 can return every kind except the reserved and retired ones" do
+  test "classify/2 can return every kind except the retired ones" do
     samples = [
       {:implementation, issue(), []},
       {:breakdown, breakdown_parent(sub_issues: []), []},
@@ -56,7 +54,7 @@ defmodule SymphonyElixir.RunKindTest do
     end
 
     assert Enum.map(samples, &elem(&1, 0)) |> Enum.sort() ==
-             Enum.sort(RunKind.kinds() -- (RunKind.reserved_kinds() ++ [:close_out]))
+             Enum.sort(RunKind.kinds() -- [:close_out])
   end
 
   describe "classify/2" do

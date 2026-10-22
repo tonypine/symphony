@@ -21,7 +21,7 @@ Common optional sections:
 - `tickets`
 - `workspaces`
 - `pull_requests`
-- `pre_push_review`
+- `code_review`
 - `auto_review`
 - `dashboard`
 - `issue_gate`
@@ -313,8 +313,8 @@ repositories:
   - `local` reads `workflow` from disk and reloads it when it changes. Use it while developing
     a workflow. A `workflow` path outside any git checkout is always read this way.
 - `default`: at most one repo can be the fallback route.
-- `base_branch`: optional branch used for review-agent diff context and as the base a
-  new worktree branches off (preferring `origin/<base_branch>`); when unset, a new
+- `base_branch`: optional branch used for the Code Review reviewer's diff context and as the
+  base a new worktree branches off (preferring `origin/<base_branch>`); when unset, a new
   worktree branches off the source repo's current HEAD.
 - `route`: Linear team, project, label, or assignee selectors.
 - `workspace`: per-repo override for workspace population (`strategy`, `repo`,
@@ -332,7 +332,7 @@ repositories:
   phase states (`states.code_review`, `states.qa`, `states.epic_review`, `states.ci_fix`), never
   `states.plan_review`: it is the epic path's person-owned plan review — where a plan parent's
   handoff lands, and where the person reviewing the plan approves it or sends it back. Work is
-  reviewed in the `Code Review` state, so the reviewer must be on: with `review_agent.enabled`
+  reviewed in the `Code Review` state, so the reviewer must be on: with `code_review.enabled`
   off, `Code Review` tickets are parked (a `code_review_reviewer_disabled` signal is recorded)
   instead of being dispatched. A
   `Code Review` run also reads the repo's `auto_review.acceptance_gate.escalate` rules on an
@@ -457,8 +457,8 @@ they cannot be expanded safely on the orchestrator host.
 
 Each run on the local host gets a private temp folder, `/tmp/symphony-run-<hash of the workspace>`
 (Symphony's own temp folder when it can't write to `/tmp`), passed to a Claude agent as
-`CLAUDE_CODE_TMPDIR` and to a Codex agent as `TMPDIR`, and writable in its sandbox. The pre-push
-reviewer of the run gets it too. So the agent's `$TMPDIR` is the run's own, and concurrent runs no
+`CLAUDE_CODE_TMPDIR` and to a Codex agent as `TMPDIR`, and writable in its sandbox. A Code Review
+run's reviewer gets it too. So the agent's `$TMPDIR` is the run's own, and concurrent runs no
 longer share the `/tmp/claude-<uid>` every Claude session uses or Symphony's own temp folder. The
 folder is removed when the run succeeds and kept, with a log line naming it, when the run fails, so
 you can look at what the agent left there; the issue's next run starts with an empty one. A run that
@@ -661,7 +661,7 @@ agent:
   `supported_parameters` on OpenRouter's models API (`GET https://openrouter.ai/api/v1/models`, the
   QA stub's in QA mode, read without the key and cached in process for an hour). When `OPENROUTER_API_KEY` is set,
   `symphony check` asks that API and reports, naming the key that set the model or effort
-  (`pre_push_review.model`, `auto_review.model`, `repositories[<key>].agent.run_profiles.<kind>.model`,
+  (`code_review.model`, `auto_review.model`, `repositories[<key>].agent.run_profiles.<kind>.model`,
   `repositories[<key>].agent.model`, `agent.run_profiles.<kind>.model`, `agent.model`, and the
   matching `effort` keys; the first one set, in the order a run resolves them):
   - an error for a model id OpenRouter does not list, for example
@@ -694,15 +694,16 @@ agent:
   `landing` (`Merging`), `code_review` (`Code Review`), `qa` (`QA`), `rework` (`Rework`), `ci_fix`
   (continuation after red CI), `review_feedback` (continuation after PR review comments), and
   `implementation` (everything else). `close_out` named the retired legacy machine's close-out
-  run: it still loads and matches no run. `pre_push_review` names the pre-push reviewer run, and
-  `qa` the QA agent's runs. `acceptance_gate` is deprecated with the retired gate, and
-  `final_verification` with the retired `Final verification:` tickets: each loads with a warning
-  and does nothing.
+  run: it still loads and matches no run. `code_review` names the Code Review run and its
+  reviewer, and `qa` the QA agent's runs. `pre_push_review` named the removed pre-push reviewer:
+  it is refused at load (see [`code_review`](#code_review)). `acceptance_gate` is deprecated with
+  the retired gate, and `final_verification` with the retired `Final verification:` tickets: each
+  loads with a warning and does nothing.
 - Resolution per field, for the repository the issue is routed to:
   `repositories[].agent.run_profiles.<kind>`, then `repositories[].agent.<field>`, then
   `agent.run_profiles.<kind>`, then `agent.<field>`, else nothing is added (provider:
-  `anthropic`). A repository without an `agent` block resolves from the `agent` section alone. The
-  pre-push reviewer and the QA agent check their own section first: `pre_push_review.model` /
+  `anthropic`). A repository without an `agent` block resolves from the `agent` section alone. Code
+  Review's reviewer and the QA agent check their own section first: `code_review.model` /
   `.effort` and `auto_review.model` / `.effort`.
 - `WORKFLOW.md` front matter cannot set any of these: `symphony.yml` owns the agent runtime, so a
   per-repository profile goes under that repository's `repositories[].agent`.
@@ -713,7 +714,7 @@ agent:
   on the local host only). `symphony check` reports them and names the key that picked
   `openrouter` (`agent.run_profiles.<kind>.provider`, else `agent.provider`). A
   `repositories[].agent` block is checked the same way against the `agent` section, including the
-  `--model` / `--effort` flags in `agent.command`, `pre_push_review.command` and
+  `--model` / `--effort` flags in `agent.command`, `code_review.command` and
   `auto_review.command`, and its errors name `repositories[<key>].agent...`.
 - The kind and profile are chosen once, when the run is dispatched, from the current workflow
   config: an edit applies to the next dispatch without a restart. Every continuation turn of a run
@@ -721,11 +722,12 @@ agent:
 - The run history record keeps `run_kind`, `model` and `effort`, and the dispatch log line shows
   `run_kind=… model=… effort=…` (`default` when nothing is added). A `review_feedback` dispatch
   also names the latest pending PR comment it answers: `trigger_comment_id=…
-  trigger_comment_author=… trigger_comment="<first line>" pending_comments=<n>`. The pre-push
-  reviewer runs inside the run it reviews, so that run's record also keeps `reviewer_profile` next to
-  `reviewer_tokens`. A QA run's record keeps its own `run_kind: qa`, `model` and `effort`.
+  trigger_comment_author=… trigger_comment="<first line>" pending_comments=<n>`. Code
+  Review's reviewer runs inside the Code Review run, so that run's record also keeps
+  `reviewer_profile` next to `reviewer_tokens`; other runs record no reviewer profile. A QA run's
+  record keeps its own `run_kind: qa`, `model` and `effort`.
 - The Mac app and the terminal status dashboard show the kind, model and effort of each
-  running run (and its reviewer's, when the pre-push review is on) and of the recent runs.
+  running run (and its reviewer's, for a Code Review run) and of the recent runs.
 - Codex runtime: `model` and `effort` are ignored; Codex keeps the model and reasoning effort
   from its own config (set them in `command`, for example `codex -c model_reasoning_effort=high
   app-server`). Symphony logs one warning when a run starts with a profile that resolves to a model or effort.
@@ -1176,37 +1178,37 @@ pull_requests:
     **Allow squash merging** must be on. Every required check must report on every PR (a
     path-filtered required check that never runs keeps the PR `BLOCKED` until the fallback).
 
-### `pre_push_review`
+### `code_review`
 
-Optional reviewer pass before pushing agent work.
+Code Review's reviewer: the read-only agent the `Code Review` state runs on the pull request's
+diff (see [`design/state-machine.md`](design/state-machine.md)).
 
 ```yaml
-pre_push_review:
+code_review:
   enabled: true
   runtime: codex
   command: codex app-server
   model: claude-opus-5-5
   effort: high
-  max_iterations: 1
-  run_on: always
 ```
 
 `model` and `effort` (optional) set the reviewer's `--model` / `--effort` with the Claude runtime.
-Each one falls back to the `pre_push_review` run profile (the routed repository's
-`repositories[].agent`, then `agent.run_profiles.pre_push_review`, then `agent.model` / `agent.effort`);
-with none set the reviewer command is unchanged. They take the same values as `agent.model` /
-`agent.effort`, and `command` must not pass `--model` / `--effort` while any of them is set.
+Each one falls back to the `code_review` run profile (the routed repository's
+`repositories[].agent.run_profiles.code_review`, then `repositories[].agent`, then
+`agent.run_profiles.code_review`, then `agent.model` / `agent.effort`); with none set the reviewer
+command is unchanged. They take the same values as `agent.model` / `agent.effort`, and `command`
+must not pass `--model` / `--effort` while any of them resolves. With `enabled: false` no reviewer
+exists, so Symphony parks the repo's `Code Review` tickets with the reason recorded
+(`code_review_reviewer_disabled`) and dispatches no run.
 
-When enabled, Symphony runs an executor/reviewer loop in the same workspace before push. The
-reviewer reads the committed diff for code quality and bugs: correctness, tests for new branches,
-error handling, and the repo's code rules from its `AGENTS.md` / `CLAUDE.md`. It doesn't judge the
-ticket's acceptance criteria or scope; the `Code Review` run of the same reviewer
-does, on the pull request. Its prompt tells it not to run the
-test suite, coverage or Dialyzer, which CI runs after the push. Checks are split by cost: agents run cheap, targeted checks
-locally (format, compile, lint, the tests for the changed code; Symphony's own list is in its
-`WORKFLOW.md`), and the full suite, coverage and Dialyzer run only in CI.
-`run_on` defaults to `always`; set it to `first_push` to skip the reviewer on PR follow-up runs while keeping it enabled for initial issue runs.
-Follow-up runs include explicit PR dispatches (`symphony pr`) and automatic rework runs triggered by reviewer comments, CI failures, or PR conflicts; these also omit the review-agent gate from the prompt so the agent can push and exit in a single turn.
+The reviewer reads the pull request's committed diff for code quality and bugs: correctness, tests
+for new branches, error handling, and the repo's code rules from its `AGENTS.md` / `CLAUDE.md`. It
+also judges the change against the ticket: each acceptance criterion, its scope and its intent, and
+it follows the decisions a person recorded on the ticket. Its prompt tells it not to run the test
+suite, coverage or Dialyzer, which CI runs. Checks are split by cost: agents run cheap, targeted
+checks locally (format, compile, lint, the tests for the changed code; Symphony's own list is in
+its `WORKFLOW.md`), and the full suite, coverage and Dialyzer run only in CI. An implementation run
+writes its code, runs its checks and pushes; no reviewer runs before the push.
 
 The reviewer records its verdict with the `review_verdict` tool, whose input schema is the verdict
 contract (`approve`, `request_changes` or `block`, and findings with file, line range, quoted
@@ -1219,9 +1221,12 @@ placed" and the verdict stands; only a change request none of whose findings can
 unverifiable. `/api/v1/state` counts inconclusive Code Review runs per cause
 (`counts.review_inconclusive`), and the Mac app's ticket page shows the cause on the run's row.
 
-The review-agent gate the prompt carries comes before the push that hands the ticket to
-`Code Review`, and both the gate and the workflow's handoff text say so: the agent stops at the
-gate, and the same run pushes once the reviewer approves.
+The pre-push reviewer that used to review an implementation run's commits before its first push
+is removed. A `symphony.yml` that still has `pre_push_review:` is refused at load: "`pre_push_review`
+is not valid; the pre-push reviewer is removed and Code Review owns the review of the code now; set
+Code Review's reviewer in `code_review` (enabled, runtime, command, model, effort) and its run
+profile in `agent.run_profiles.code_review`". The same reason refuses
+`agent.run_profiles.pre_push_review` and `repositories[].agent.run_profiles.pre_push_review`.
 
 ### `auto_review`
 
@@ -1248,7 +1253,7 @@ auto_review:
 `model` and `effort` (optional) set the QA agent's `--model` / `--effort` with the Claude runtime,
 falling back to the `qa` run profile (the routed repository's `repositories[].agent`, then
 `agent.run_profiles.qa`, then `agent.model` / `agent.effort`). Validation is the same
-as for `pre_push_review`; when `command` is not set the QA agent uses `agent.command`, which must
+as for `code_review`; when `command` is not set the QA agent uses `agent.command`, which must
 then not pass the flag that `auto_review.model` / `auto_review.effort` sets.
 
 The old Auto Review keys still load, each with one deprecation warning per config naming what
@@ -1271,7 +1276,7 @@ Before any agent runs, Symphony decides whether the PR needs QA and which playbo
 | web paths changed, `verification.enabled` on and `verification.dev_server` configured | `web` playbook runs |
 | Android paths changed, `android_app` configured and `auto_review.android.avd` set | `android_app` playbook runs |
 | a playbook's trigger paths changed | that playbook runs |
-| nothing else | skipped (internal changes rely on tests and the pre-push review) |
+| nothing else | skipped (internal changes rely on tests and Code Review) |
 
 The built-in `cli` playbook triggers on `bin/**`, `lib/symphony_elixir/cli.ex` and
 `lib/mix/tasks/**`. Every built-in playbook also triggers on its own instructions,

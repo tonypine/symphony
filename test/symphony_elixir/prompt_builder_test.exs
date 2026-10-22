@@ -286,7 +286,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
     assert prompt =~ "CI failures are delivered by Symphony re-activating you"
   end
 
-  test "review-agent instructions override active retry guidance" do
+  test "an implementation run's prompt has no reviewer gate before its push, with Code Review's reviewer on" do
     write_workflow_file!(
       Workflow.workflow_file_path(),
       prompt: """
@@ -295,89 +295,28 @@ defmodule SymphonyElixir.PromptBuilderTest do
       {% endif %}
       Ticket {{ issue.identifier }}
       """,
-      review_agent: %{
-        enabled: true,
-        kind: "codex",
-        command: "codex app-server",
-        max_iterations: 1
-      }
+      review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
     )
 
     issue = %Issue{
       identifier: "ACME-3709",
-      title: "Gate pre-push review",
-      description: "Retry prompt must not bypass the reviewer",
+      title: "Push without a pre-push review",
+      description: "Code Review reviews the pull request",
       state: "In Progress",
       url: "https://example.org/issues/ACME-3709",
       labels: []
     }
 
-    prompt = PromptBuilder.build_prompt(issue, attempt: 2, settings: Config.settings!())
+    for opts <- [[], [attempt: 2]] do
+      prompt = PromptBuilder.build_prompt(issue, [settings: Config.settings!()] ++ opts)
 
-    assert prompt =~ "Do not end the turn while the issue remains in an active state."
-    assert prompt =~ "Review-agent gate:"
-    assert prompt =~ "It comes before the handoff push the workflow describes"
-    assert prompt =~ "Ending your turn at this gate does not end the run"
-    refute prompt =~ "move the issue to review"
-    assert prompt =~ "This overrides retry or continuation guidance"
-    assert prompt =~ "Only continue to push/PR after an explicit reviewer-agent approval prompt"
-    assert prompt =~ "Do not treat missing reviewer comments as approval."
-  end
+      refute prompt =~ ~r/review-agent gate/i
+      refute prompt =~ "reviewer-agent"
+      refute prompt =~ "pre-push reviewer"
+    end
 
-  test "review-agent gate is omitted on first_push rework prompts" do
-    write_workflow_file!(
-      Workflow.workflow_file_path(),
-      prompt: "Ticket {{ issue.identifier }}",
-      review_agent: %{
-        enabled: true,
-        kind: "codex",
-        command: "codex app-server",
-        max_iterations: 1,
-        run_on: "first_push"
-      }
-    )
-
-    issue = %Issue{
-      identifier: "ACME-3710",
-      title: "Skip the gate on rework",
-      description: "Rework runs answer human review feedback",
-      state: "In Progress",
-      url: "https://example.org/issues/ACME-3710",
-      labels: []
-    }
-
-    first_push_prompt = PromptBuilder.build_prompt(issue, settings: Config.settings!())
-    assert first_push_prompt =~ "Review-agent gate:"
-
-    rework_prompt =
-      PromptBuilder.build_prompt(issue,
-        settings: Config.settings!(),
-        reviewer_comments: [
-          %{
-            id: "comment-1",
-            kind: "inline_comment",
-            author: "Reviewer",
-            body: "Please rename this function.",
-            path: "lib/example.ex",
-            line: 7,
-            url: "https://github.com/example/repo/pull/1#discussion_r1"
-          }
-        ]
-      )
-
-    refute rework_prompt =~ "Review-agent gate:"
-
-    ci_prompt =
-      PromptBuilder.build_prompt(issue,
-        settings: Config.settings!(),
-        ci_failure: %{
-          workflow: "ci",
-          run_url: "https://github.com/example/repo/actions/runs/1",
-          log_excerpt: "test failed"
-        }
-      )
-
-    refute ci_prompt =~ "Review-agent gate:"
+    assert PromptBuilder.build_prompt(issue, attempt: 2, settings: Config.settings!()) =~
+             "Do not end the turn while the issue remains in an active state."
   end
 
   test "prompt builder sanitizes linked issue title and state before rendering" do

@@ -248,29 +248,7 @@ struct SettingsView: View {
                 }
                 .disabled(!model.canEditWorkflowStates)
 
-                Section {
-                    Toggle(BuiltInTicketPatterns.toggleTitle, isOn: $model.ticketPatternsBuiltIn)
-                    Text(
-                        model.ticketPatternsBuiltIn
-                            ? BuiltInTicketPatternsChoice.on.explanation
-                            : BuiltInTicketPatternsChoice.off.explanation
-                    )
-                    .foregroundStyle(.secondary)
-                    if model.ticketPatternsBuiltInError != nil {
-                        CheckErrorPointer(subject: "this setting")
-                    }
-                } header: {
-                    Text("Code Review (saved in symphony.yml)")
-                } footer: {
-                    SectionFooter(
-                        "auto_review.acceptance_gate.escalate.ticket_patterns_builtin. The built-in ticket patterns "
-                            + "match a title or description asking for a human or manual review, saying it must not be "
-                            + "auto-approved, or that it needs a human. Turn them off when they misfire on your tickets; "
-                            + "a repo can override this in its Review sheet in Repos. Save checks symphony.yml with symphony check "
-                            + "first; Symphony reads it on its next poll, no restart needed."
-                    )
-                }
-                .disabled(!model.canEditTicketPatternsBuiltIn)
+                CodeReviewSection(model: model)
 
                 Section {
                     TimeoutRow(title: "Git network timeout", minutes: $model.gitNetworkTimeoutMinutes)
@@ -442,8 +420,8 @@ struct SettingsView: View {
                     if model.commandProfile != RunProfile() {
                         Text(
                             "agent.command passes --model or --effort. Saving any model or effort moves them "
-                                + "to the Default row, and any in pre_push_review.command or auto_review.command "
-                                + "(or that section's model and effort) to the Pre-push review or QA row, so runs "
+                                + "to the Default row, and any in code_review.command or auto_review.command "
+                                + "(or that section's model and effort) to the Code review or QA row, so runs "
                                 + "keep the same model and effort."
                         )
                         .font(.callout)
@@ -579,6 +557,9 @@ struct SettingsView: View {
                     CheckErrorText(message: error)
                 }
                 if let error = model.ticketPatternsBuiltInError {
+                    CheckErrorText(message: error)
+                }
+                if let error = model.codeReviewError {
                     CheckErrorText(message: error)
                 }
                 if let loginItemError = model.loginItemError {
@@ -835,6 +816,73 @@ private struct OpenRouterModelField: View {
     private func choose(_ id: String?) {
         selection = id
         isPicking = false
+    }
+}
+
+/// Code Review: its reviewer, the read-only agent that judges each pull request (`code_review.enabled` and
+/// `code_review.runtime`; its command, model and effort are the Models section's Code review row), and the built-in
+/// ticket patterns that send a ticket to a person
+/// (`auto_review.acceptance_gate.escalate.ticket_patterns_builtin`).
+private struct CodeReviewSection: View {
+    @ObservedObject var model: SettingsViewModel
+
+    var body: some View {
+        Section {
+            Group {
+                Toggle("Code Review's reviewer", isOn: $model.codeReview.enabled)
+                    .help(
+                        "code_review.enabled: on, a read-only agent reviews each pull request in Code Review. Off, "
+                            + "Code Review tickets wait and nothing reviews the PR."
+                    )
+                Text(
+                    model.codeReview.enabled
+                        ? "A read-only agent reviews each pull request in Code Review, with the command in "
+                            + "code_review.command and the Code review row's model and effort."
+                        : "Off: Code Review tickets wait, and nothing reviews the PR, until it is turned on."
+                )
+                .foregroundStyle(.secondary)
+                Picker("Runtime", selection: $model.codeReview.runtime) {
+                    if model.codeReview.runtime == nil {
+                        Text("Not set").tag(CodeReviewRuntime?.none)
+                    }
+                    ForEach(CodeReviewRuntime.allCases) { runtime in
+                        Text(runtime.title).tag(CodeReviewRuntime?.some(runtime))
+                    }
+                }
+                .help("code_review.runtime: the agent runtime the reviewer runs on, Codex or Claude. Required while the reviewer is on.")
+                .accessibilityLabel("Code Review's reviewer runtime")
+                .disabled(!model.codeReview.enabled)
+                if model.codeReviewError != nil {
+                    CheckErrorPointer(subject: "the reviewer settings")
+                }
+            }
+            .disabled(!model.canEditCodeReview)
+            Group {
+                Toggle(BuiltInTicketPatterns.toggleTitle, isOn: $model.ticketPatternsBuiltIn)
+                Text(
+                    model.ticketPatternsBuiltIn
+                        ? BuiltInTicketPatternsChoice.on.explanation
+                        : BuiltInTicketPatternsChoice.off.explanation
+                )
+                .foregroundStyle(.secondary)
+                if model.ticketPatternsBuiltInError != nil {
+                    CheckErrorPointer(subject: "this setting")
+                }
+            }
+            .disabled(!model.canEditTicketPatternsBuiltIn)
+        } header: {
+            Text("Code Review (saved in symphony.yml)")
+        } footer: {
+            SectionFooter(
+                "code_review.enabled (default off) and code_review.runtime (codex or claude); with the reviewer on, "
+                    + "symphony check also needs code_review.command. "
+                    + "auto_review.acceptance_gate.escalate.ticket_patterns_builtin: the built-in ticket patterns "
+                    + "match a title or description asking for a human or manual review, saying it must not be "
+                    + "auto-approved, or that it needs a human. Turn them off when they misfire on your tickets; "
+                    + "a repo can override this in its Review sheet in Repos. Save checks symphony.yml with symphony check "
+                    + "first; Symphony reads them on its next poll, no restart needed."
+            )
+        }
     }
 }
 

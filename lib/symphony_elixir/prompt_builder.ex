@@ -10,7 +10,6 @@ defmodule SymphonyElixir.PromptBuilder do
     Decisions,
     LandingOrder,
     PromptSafety,
-    ReviewAgent,
     TicketState,
     Workflow
   }
@@ -127,7 +126,6 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_ticket_ledger(opts)
     |> append_decisions(Keyword.get(opts, :decisions))
     |> append_path_unlocks(Keyword.get(opts, :path_unlocks, []))
-    |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
     |> append_feedback_protocol(Keyword.get(opts, :settings))
     |> append_linear_input_warnings(linear_input_warnings)
     |> append_codex_transport_output_guard(agent_context, opts)
@@ -193,7 +191,6 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_ticket_ledger(opts)
     |> append_decisions(Keyword.get(opts, :decisions))
     |> append_path_unlocks(Keyword.get(opts, :path_unlocks, []))
-    |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
     |> append_feedback_protocol(Keyword.get(opts, :settings))
     |> append_linear_input_warnings(linear_input_warnings)
     |> append_codex_transport_output_guard(agent_context, opts)
@@ -791,33 +788,6 @@ defmodule SymphonyElixir.PromptBuilder do
         details -> line <> " " <> details
       end
     end)
-  end
-
-  defp append_review_agent_instructions(prompt, %{review_agent: %{enabled: true} = config}, opts) do
-    if ReviewAgent.skip_for_run?(config, opts) do
-      prompt
-    else
-      append_review_agent_instructions(prompt)
-    end
-  end
-
-  defp append_review_agent_instructions(prompt, _settings, _opts), do: prompt
-
-  defp append_review_agent_instructions(prompt) do
-    prompt <>
-      """
-
-      Review-agent gate:
-
-      - This run has a pre-push reviewer. It comes before the handoff push the workflow describes: that push still hands the ticket to `Code Review`, but only after this reviewer approves.
-      - After implementation, validation, commit, and committed-diff review are complete, stop before `git push`.
-      - Do not push or open a PR until Symphony injects the reviewer-agent verdict.
-      - Ending your turn at this gate does not end the run: Symphony runs the reviewer and continues this same run with its verdict. The rule that a run ending without its push never advances is about a run that stops for good, not a turn that stops here.
-      - This overrides retry or continuation guidance that says to keep working while the issue remains active; stopping at this gate is expected.
-      - Only continue to push/PR after an explicit reviewer-agent approval prompt. Do not treat missing reviewer comments as approval.
-      - If the reviewer requests changes, address those comments in the same workspace and stop before push again.
-      - If the reviewer approves, follow the injected continuation prompt and complete the normal push/PR handoff.
-      """
   end
 
   # Poller-aware PR-feedback / CI posture. Symphony knows from config whether its

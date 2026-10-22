@@ -314,7 +314,7 @@ defmodule SymphonyElixir.CLICheckTest do
                 """}
     end
 
-    test "names the pre-push reviewer and QA agent keys", %{root: root} do
+    test "names Code Review's reviewer and QA agent keys", %{root: root} do
       System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
       stub_models_api()
 
@@ -324,7 +324,7 @@ defmodule SymphonyElixir.CLICheckTest do
           command: claude
           provider: openrouter
           model: anthropic/claude-haiku-4.5
-        pre_push_review:
+        code_review:
           model: acme/chat-only
         auto_review:
           model: acme/tools-only
@@ -334,7 +334,7 @@ defmodule SymphonyElixir.CLICheckTest do
       path = write_symphony!(root, content)
 
       assert check(["--config", path]) ==
-               {{:error, "Config error in #{path}: pre_push_review.model: OpenRouter model `acme/chat-only` does not support tools; Symphony runs need tool use"},
+               {{:error, "Config error in #{path}: code_review.model: OpenRouter model `acme/chat-only` does not support tools; Symphony runs need tool use"},
                 "Warning: auto_review.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort low\n"}
     end
 
@@ -531,11 +531,11 @@ defmodule SymphonyElixir.CLICheckTest do
     """)
   end
 
-  test "reports pre-push reviewer and QA agent profile errors naming the key", %{root: root} do
+  test "reports Code Review's reviewer and QA agent profile errors naming the key", %{root: root} do
     cases = [
-      {"pre_push_review:\n  effort: extreme\n", "pre_push_review.effort must be one of: low, medium, high, xhigh, max"},
+      {"code_review:\n  effort: extreme\n", "code_review.effort must be one of: low, medium, high, xhigh, max"},
       {"auto_review:\n  effort: extreme\n", "auto_review.effort must be one of: low, medium, high, xhigh, max"},
-      {"pre_push_review:\n  command: claude --model x\n  effort: low\n", "pre_push_review.command must not pass --model"},
+      {"code_review:\n  command: claude --model x\n  effort: low\n", "code_review.command must not pass --model"},
       {"auto_review:\n  command: claude --effort high\n  model: y\n", "auto_review.command must not pass --effort"}
     ]
 
@@ -547,6 +547,14 @@ defmodule SymphonyElixir.CLICheckTest do
       assert message =~ "Config error in #{path}: "
       assert message =~ expected
     end
+  end
+
+  test "refuses a pre_push_review section: Code Review owns the review of the code now", %{root: root} do
+    path = write_symphony!(root, valid_symphony(root) <> "pre_push_review:\n  enabled: true\n  run_on: first_push\n")
+
+    assert {{:error, message}, ""} = check(["--config", path])
+    assert message =~ "Config error in #{path}: "
+    assert message =~ "`pre_push_review` is not valid; the pre-push reviewer is removed and Code Review owns the review of the code now"
   end
 
   test "reports a broken repo WORKFLOW.md", %{root: root} do

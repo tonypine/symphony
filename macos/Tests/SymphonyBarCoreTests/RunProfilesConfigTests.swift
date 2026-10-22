@@ -339,7 +339,7 @@ final class RunProfilesConfigTests: XCTestCase {
         XCTAssertEqual(RunProfilesConfig.scopes.count, 10)
         XCTAssertEqual(RunKind.allCases.map(\.title), [
             "Breakdown", "Close-out", "Implementation", "Rework", "CI fix",
-            "Review feedback", "Landing", "Pre-push review", "QA",
+            "Review feedback", "Landing", "Code review", "QA",
         ])
         XCTAssertEqual(RunKind.ciFix.id, "ci_fix")
     }
@@ -458,11 +458,10 @@ final class RunProfilesConfigTests: XCTestCase {
               runtime: claude
               command: claude --model claude-opus-5-5 --dangerously-skip-permissions --verbose
 
-            pre_push_review:
+            code_review:
               enabled: true
               runtime: claude
               command: claude --model claude-opus-5-5 --effort=high --dangerously-skip-permissions  # reviewer
-              max_iterations: 1
 
             """
         let old = try RunProfilesConfig.profiles(in: yaml)
@@ -476,49 +475,48 @@ final class RunProfilesConfigTests: XCTestCase {
               model: claude-opus-5-5
               run_profiles:
                 breakdown: { effort: high }
-                pre_push_review: { model: claude-opus-5-5, effort: high }
+                code_review: { model: claude-opus-5-5, effort: high }
 
-            pre_push_review:
+            code_review:
               enabled: true
               runtime: claude
               command: claude --dangerously-skip-permissions  # reviewer
-              max_iterations: 1
 
             """)
     }
 
-    func testLeavesThePrePushCommandWhenNothingResolvesForIt() throws {
-        let yaml = "agent:\n  command: claude\npre_push_review:\n  command: claude --model claude-opus-5-5\n"
+    func testLeavesTheCodeReviewCommandWhenNothingResolvesForIt() throws {
+        let yaml = "agent:\n  command: claude\ncode_review:\n  command: claude --model claude-opus-5-5\n"
         var new = RunProfiles()
         new[.breakdown].effort = "high"
 
         XCTAssertEqual(
             try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new),
-            "agent:\n  command: claude\n  run_profiles:\n    breakdown: { effort: high }\npre_push_review:\n  command: claude --model claude-opus-5-5\n"
+            "agent:\n  command: claude\n  run_profiles:\n    breakdown: { effort: high }\ncode_review:\n  command: claude --model claude-opus-5-5\n"
         )
     }
 
-    func testSettingThePrePushKindMovesTheSectionIntoItsRowAndWinsOverTheSection() throws {
-        let yaml = "agent:\n  command: claude\npre_push_review:\n  command: 'claude --model claude-opus-5-5 --effort low'\n  effort: max\n"
+    func testSettingTheCodeReviewKindMovesTheSectionIntoItsRowAndWinsOverTheSection() throws {
+        let yaml = "agent:\n  command: claude\ncode_review:\n  command: 'claude --model claude-opus-5-5 --effort low'\n  effort: max\n"
         var new = RunProfiles()
-        new[.prePushReview].effort = "high"
+        new[.codeReview].effort = "high"
 
         XCTAssertEqual(
             try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new),
-            "agent:\n  command: claude\n  run_profiles:\n    pre_push_review: { model: claude-opus-5-5, effort: high }\n"
-                + "pre_push_review:\n  command: 'claude'\n"
+            "agent:\n  command: claude\n  run_profiles:\n    code_review: { model: claude-opus-5-5, effort: high }\n"
+                + "code_review:\n  command: 'claude'\n"
         )
     }
 
     func testTheSectionsKeysOutrankItsFlagsWhenTheyMove() throws {
-        let yaml = "agent:\n  command: claude\npre_push_review:\n  command: claude --model claude-opus-5-5 --effort low\n  effort: max\n"
+        let yaml = "agent:\n  command: claude\ncode_review:\n  command: claude --model claude-opus-5-5 --effort low\n  effort: max\n"
         var new = RunProfiles()
         new.defaults.model = "claude-sonnet-5-5"
 
         XCTAssertEqual(
             try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new),
             "agent:\n  command: claude\n  model: claude-sonnet-5-5\n  run_profiles:\n"
-                + "    pre_push_review: { model: claude-opus-5-5, effort: max }\npre_push_review:\n  command: claude\n"
+                + "    code_review: { model: claude-opus-5-5, effort: max }\ncode_review:\n  command: claude\n"
         )
     }
 
@@ -527,7 +525,7 @@ final class RunProfilesConfigTests: XCTestCase {
             agent:
               runtime: claude
               command: claude --model claude-opus-4-7 --dangerously-skip-permissions
-            pre_push_review:
+            code_review:
               enabled: true
               runtime: claude
               command: claude --model claude-opus-4-7 --dangerously-skip-permissions
@@ -544,8 +542,8 @@ final class RunProfilesConfigTests: XCTestCase {
               provider: openrouter
               model: openai/gpt-oss-120b
               run_profiles:
-                pre_push_review: { provider: anthropic, model: claude-opus-4-7 }
-            pre_push_review:
+                code_review: { provider: anthropic, model: claude-opus-4-7 }
+            code_review:
               enabled: true
               runtime: claude
               command: claude --dangerously-skip-permissions
@@ -566,44 +564,44 @@ final class RunProfilesConfigTests: XCTestCase {
     }
 
     func testChangingTheRowsProviderDropsTheSectionsModel() throws {
-        let yaml = "agent:\n  command: claude\n  model: x/y\npre_push_review:\n  command: claude --model claude-opus-4-7\n"
+        let yaml = "agent:\n  command: claude\n  model: x/y\ncode_review:\n  command: claude --model claude-opus-4-7\n"
         let old = try RunProfilesConfig.profiles(in: yaml)
         var new = old
-        new[.prePushReview].provider = "openrouter"
+        new[.codeReview].provider = "openrouter"
 
         XCTAssertEqual(
             try RunProfilesConfig.updating(yaml, from: old, to: new),
-            "agent:\n  command: claude\n  model: x/y\n  run_profiles:\n    pre_push_review: { provider: openrouter }\n"
-                + "pre_push_review:\n  command: claude\n"
+            "agent:\n  command: claude\n  model: x/y\n  run_profiles:\n    code_review: { provider: openrouter }\n"
+                + "code_review:\n  command: claude\n"
         )
     }
 
     func testAMovedModelOverwritesTheRowItOutranked() throws {
-        let yaml = "agent:\n  command: claude\n  run_profiles:\n    pre_push_review: { model: claude-haiku-4-5-20251001 }\n"
-            + "pre_push_review:\n  model: claude-opus-4-7\n"
+        let yaml = "agent:\n  command: claude\n  run_profiles:\n    code_review: { model: claude-haiku-4-5-20251001 }\n"
+            + "code_review:\n  model: claude-opus-4-7\n"
         let old = try RunProfilesConfig.profiles(in: yaml)
         var new = old
         new.defaults.effort = "high"
 
         XCTAssertEqual(
             try RunProfilesConfig.updating(yaml, from: old, to: new),
-            "agent:\n  command: claude\n  effort: high\n  run_profiles:\n    pre_push_review: { model: claude-opus-4-7 }\n"
-                + "pre_push_review:\n"
+            "agent:\n  command: claude\n  effort: high\n  run_profiles:\n    code_review: { model: claude-opus-4-7 }\n"
+                + "code_review:\n"
         )
     }
 
-    func testAOneLinePrePushSectionFailsOnlyWithFlags() throws {
+    func testAOneLineCodeReviewSectionFailsOnlyWithFlags() throws {
         var new = RunProfiles()
         new.defaults.effort = "high"
-        let plain = "agent:\n  command: claude\npre_push_review: { enabled: true, command: claude, model: x }\n"
+        let plain = "agent:\n  command: claude\ncode_review: { enabled: true, command: claude, model: x }\n"
 
         XCTAssertEqual(
             try RunProfilesConfig.updating(plain, from: RunProfiles(), to: new),
-            "agent:\n  command: claude\n  effort: high\npre_push_review: { enabled: true, command: claude, model: x }\n"
+            "agent:\n  command: claude\n  effort: high\ncode_review: { enabled: true, command: claude, model: x }\n"
         )
-        let flagged = "agent:\n  command: claude\npre_push_review: { command: claude --model x }\n"
+        let flagged = "agent:\n  command: claude\ncode_review: { command: claude --model x }\n"
         XCTAssertThrowsError(try RunProfilesConfig.updating(flagged, from: RunProfiles(), to: new)) { error in
-            XCTAssertEqual(error as? RunProfilesConfigError, .unsupported(line: 3, reason: "`pre_push_review:` should be an indented block"))
+            XCTAssertEqual(error as? RunProfilesConfigError, .unsupported(line: 3, reason: "`code_review:` should be an indented block"))
         }
     }
 
@@ -638,11 +636,11 @@ final class RunProfilesConfigTests: XCTestCase {
     func testLeavesTheQACommandWhenNothingResolvesForIt() throws {
         let yaml = "agent:\n  command: claude\nauto_review:\n  command: claude --model claude-opus-5-5\n"
         var new = RunProfiles()
-        new[.prePushReview].effort = "high"
+        new[.codeReview].effort = "high"
 
         XCTAssertEqual(
             try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new),
-            "agent:\n  command: claude\n  run_profiles:\n    pre_push_review: { effort: high }\nauto_review:\n  command: claude --model claude-opus-5-5\n"
+            "agent:\n  command: claude\n  run_profiles:\n    code_review: { effort: high }\nauto_review:\n  command: claude --model claude-opus-5-5\n"
         )
     }
 

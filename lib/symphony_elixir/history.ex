@@ -3,10 +3,9 @@ defmodule SymphonyElixir.History do
   What the crew used and shipped over the last days, for `GET /api/v1/history`, from the run
   records alone (no Linear request).
 
-  Days are UTC, the day the daily token budget resets on. A run counts on the day it started; its
-  tokens include its pre-push reviewer's. A ticket counts as merged on the day Symphony noted its
-  `issue_completed` event. The provider is the one the run recorded, else the one its model
-  names.
+  Days are UTC, the day the daily token budget resets on. A run counts on the day it started. A
+  ticket counts as merged on the day Symphony noted its `issue_completed` event. The provider is the
+  one the run recorded, else the one its model names.
   """
 
   alias SymphonyElixir.{Config, ReviewQuality, RunStore}

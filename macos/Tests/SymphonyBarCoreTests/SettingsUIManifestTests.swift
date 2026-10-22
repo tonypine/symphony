@@ -9,7 +9,7 @@ final class SettingsUIManifestTests: XCTestCase {
         # Symphony operator config.
         agent:
           command: claude --model claude-opus-5-5 --effort high  # flags
-        pre_push_review:
+        code_review:
           command: claude --model claude-haiku-4-5-20251001 --effort low
           model: claude-haiku-4-5-20251001
           effort: low
@@ -88,6 +88,9 @@ final class SettingsUIManifestTests: XCTestCase {
                 from: LedgerSettings(),
                 to: LedgerSettings(retentionDays: 7, maxBytes: 52_428_800, briefEnabled: false, briefMaxTokens: 80_000)
             )
+        }, from: yaml)
+        yaml = try record("turning Code Review's reviewer on and choosing its runtime", {
+            try CodeReviewSettings.updating($0, from: CodeReviewSettings(), to: CodeReviewSettings(enabled: true, runtime: .claude))
         }, from: yaml)
         yaml = try record("setting allowed ticket priorities", {
             try TicketPriorities.updating($0, from: TicketPriorities(), to: TicketPriorities(priorities: [.urgent, .high]))

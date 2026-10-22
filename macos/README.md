@@ -221,12 +221,20 @@ set (or, in Development mode, no checkout folder).
   row. Values are saved in plain text, so they hold documented QA values only, never a secret. Save runs
   `symphony check` first, which refuses a name Symphony sets itself, `PATH`, `HOME` or `DYLD_*`, and writes only
   the changed lines.
+- **Code Review** turns Code Review's reviewer on or off and picks the runtime it runs on. **Code Review's
+  reviewer** is `code_review.enabled` (off by default): on, a read-only agent reviews each pull request in Code
+  Review; off, Code Review tickets wait and nothing reviews the PR. **Runtime** is `code_review.runtime`
+  (**Codex** or **Claude**, **Not set** while the key is missing), editable while the reviewer is on.
+  `code_review.command` is required once the reviewer is on, and its model and effort are the Models section's
+  Code review row. **Built-in ticket patterns** (`auto_review.acceptance_gate.escalate.ticket_patterns_builtin`)
+  sits in the same section. Save runs `symphony check` first and writes only the changed lines, adding
+  `code_review:` when it is missing and keeping its other keys and comments.
 - **Models** sets the provider, model and effort for each kind of run, also in the `symphony.yml` itself.
   The **Scope** picker chooses which `agent` block the rows edit: **All repositories** is the top-level
   `agent` section, and each `repositories[]` key edits that repository's `repositories[<key>].agent`
   overrides. The Default row is `agent.provider` / `agent.model` / `agent.effort`, and each run kind row
   (breakdown, close-out, implementation, rework, CI fix, review feedback, landing,
-  pre-push review, QA) is `agent.run_profiles.<kind>.provider` / `.model` / `.effort` (the same keys under
+  code review, QA) is `agent.run_profiles.<kind>.provider` / `.model` / `.effort` (the same keys under
   the repository's `agent` for a repository scope). A field left unset shows, greyed out, the value it
   inherits, resolved the way Symphony does: the repository's kind, the repository's Default row, the
   All repositories kind, the All repositories Default row, then `agent.command` and the `anthropic` provider.
@@ -253,9 +261,9 @@ set (or, in Development mode, no checkout folder).
   the Default row shows their values (for example "Opus 5.5, from command"), and the first save that sets a
   model or effort moves them out of the command (keeping the rest of the line and its comment) into
   `agent.model` / `agent.effort`, unless you set the Default row in the same save. In the same way, once a
-  save sets the Default row or the pre-push review row, `pre_push_review.model` / `pre_push_review.effort`, or
-  else `--model` / `--effort` in `pre_push_review.command`, move into the pre-push review row
-  (`agent.run_profiles.pre_push_review`), and once it sets the Default row or the QA row, those of
+  save sets the Default row or the code review row, `code_review.model` / `code_review.effort`, or
+  else `--model` / `--effort` in `code_review.command`, move into the code review row
+  (`agent.run_profiles.code_review`), and once it sets the Default row or the QA row, those of
   `auto_review` move into the QA row. Those section keys outrank the rows and name no provider, so left in
   place they would hide the row's choice, and an OpenRouter Default row would make Symphony look their Claude
   model up on OpenRouter. A moved model keeps the provider it ran on, and a value you change in that row in

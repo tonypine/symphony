@@ -499,115 +499,6 @@ defmodule SymphonyElixir.ReviewAgentTest do
     end
   end
 
-  describe "unverified_notes/1" do
-    test "lists each dropped finding as an unverified note" do
-      payload = %{failures: [%{finding: finding("missing"), reason: :quoted_snippet_not_found}], comments: ["ignored"]}
-
-      assert ReviewAgent.unverified_notes(payload) == [
-               "[unverified] Handle remote guides. (feature.txt:1-1) Suggested fix: Keep the evidence-backed change."
-             ]
-    end
-
-    test "falls back to the reviewer's comments when it gave no findings" do
-      assert ReviewAgent.unverified_notes(%{failures: [], comments: ["Consider a test."]}) == ["Consider a test."]
-      assert ReviewAgent.unverified_notes(%{failures: []}) == []
-    end
-  end
-
-  describe "approval_prompt/2" do
-    test "lists the reviewer's disagreements with recorded decisions as notes, not changes" do
-      prompt = ReviewAgent.approval_prompt(%{verdict: :approve, comments: [], decision_notes: ["Against decision D1: keep it."]})
-
-      assert prompt =~ "The reviewer disagreed with the ticket's recorded decisions below. The decisions stand: do not\nchange code for them."
-      assert prompt =~ "1. Against decision D1: keep it."
-      refute ReviewAgent.approval_prompt(%{verdict: :approve, comments: []}) =~ "recorded decisions"
-    end
-
-    test "lists advisory notes without asking for code changes" do
-      prompt = ReviewAgent.approval_prompt(%{verdict: :approve, comments: [], advisory_notes: ["[unverified] First.", "[unverified] Second."]})
-
-      assert prompt =~ "Reviewer agent approved the committed diff."
-      assert prompt =~ "advisory notes: do not change code for them before\nthe push"
-      assert prompt =~ "1. [unverified] First.\n2. [unverified] Second."
-      refute ReviewAgent.approval_prompt(%{verdict: :approve, comments: []}) =~ "advisory notes"
-    end
-
-    test "says the push goes ahead without reviewer approval when the reviewer stayed inconclusive" do
-      inconclusive = %{verdict: :approve, comments: [], inconclusive: "reviewer did not converge: request-change limit reached"}
-      prompt = ReviewAgent.approval_prompt(Map.put(inconclusive, :advisory_notes, ["Still not acceptable."]))
-
-      assert prompt =~ "Reviewer agent stayed inconclusive twice on the committed diff (reviewer did not converge: request-change limit reached)."
-      assert prompt =~ "CI, QA and the supervisor still\ngate the PR"
-      assert prompt =~ "in the PR body that the pre-push reviewer"
-      assert prompt =~ "The reviewer's last pass still raised the findings below"
-      assert prompt =~ "1. Still not acceptable."
-      refute prompt =~ "Reviewer agent approved the committed diff."
-      refute prompt =~ "quoted lines could not be found"
-
-      refute ReviewAgent.approval_prompt(inconclusive) =~ "advisory notes"
-    end
-
-    test "uses bare scoped GitHub tools for Codex executors" do
-      write_workflow_file!(Workflow.workflow_file_path(), agent_kind: "codex")
-
-      prompt =
-        ReviewAgent.approval_prompt(%{verdict: :approve, comments: []},
-          settings: Config.settings!()
-        )
-
-      assert prompt =~ "`github_get_pull_request`"
-      assert prompt =~ "`github_push_branch`"
-      assert prompt =~ "`github_create_pull_request`"
-      assert prompt =~ "`linear_attach_url`"
-      assert prompt =~ "`linear_update_comment`"
-      assert prompt =~ "do not use `linear_add_comment`"
-      assert prompt =~ "record the gap"
-      assert prompt =~ "posting a summary comment"
-      assert prompt =~ "If these scoped tools are not visible"
-      assert prompt =~ "Avoid raw `gh` or `git push`"
-    end
-
-    test "uses prefixed Symphony MCP GitHub tools for Claude executors" do
-      write_workflow_file!(Workflow.workflow_file_path(),
-        agent_kind: "claude",
-        agent_command: "claude --print"
-      )
-
-      prompt =
-        ReviewAgent.approval_prompt(%{verdict: :approve, comments: []},
-          settings: Config.settings!()
-        )
-
-      assert prompt =~ "`mcp__symphony__github_get_pull_request`"
-      assert prompt =~ "`mcp__symphony__github_push_branch`"
-      assert prompt =~ "`mcp__symphony__github_create_pull_request`"
-      assert prompt =~ "`mcp__symphony__linear_attach_url`"
-      assert prompt =~ "`mcp__symphony__linear_update_comment`"
-      assert prompt =~ "do not use `mcp__symphony__linear_add_comment`"
-      assert prompt =~ "record the gap"
-      assert prompt =~ "posting a summary comment"
-      assert prompt =~ "Do not search for these with ToolSearch"
-      assert prompt =~ "Avoid raw"
-      assert prompt =~ "`gh` or `git push`"
-    end
-
-    for {kind, attach_tool} <- [{"codex", "`linear_attach_url`"}, {"claude", "`mcp__symphony__linear_attach_url`"}] do
-      test "tells a #{kind} run the push is the handoff and to leave the state alone" do
-        write_workflow_file!(Workflow.workflow_file_path(), agent_kind: unquote(kind), agent_command: "#{unquote(kind)} app-server")
-
-        settings = Config.settings!()
-        prompt = ReviewAgent.approval_prompt(%{verdict: :approve, comments: []}, settings: settings)
-
-        assert prompt =~ "attach the PR URL with #{unquote(attach_tool)}; the push is the handoff"
-        assert prompt =~ "Symphony moves the ticket to Code Review itself, so do not change the issue's state"
-        refute prompt =~ "moving the issue to review"
-        refute prompt =~ "In Review"
-        refute prompt =~ "linear_update_state"
-        assert ReviewAgent.approval_handoff_tool_guidance(settings) =~ "the push is the handoff"
-      end
-    end
-  end
-
   test "evaluate parses Codex reviewer verdicts from streamed agent-message deltas" do
     test_root =
       Path.join(
@@ -723,7 +614,7 @@ defmodule SymphonyElixir.ReviewAgentTest do
     end
   end
 
-  test "evaluate prompt reviews code quality and bugs, not the ticket's acceptance criteria or scope" do
+  test "evaluate prompt reviews code quality and bugs, and the change against the ticket's acceptance criteria and scope" do
     test_root = unique_tmp("symphony-elixir-review-agent-rubric")
 
     try do
@@ -744,30 +635,12 @@ defmodule SymphonyElixir.ReviewAgentTest do
       assert prompt =~ "Error handling:"
       assert prompt =~ "The repo's code rules: read the repo's agent instructions (`AGENTS.md`, `CLAUDE.md`)"
       assert prompt =~ "Narrow scope is a code rule"
-      assert prompt =~ "Do not judge whether the diff meets the ticket's acceptance criteria or matches the ticket's scope"
+      assert prompt =~ "This is the pull request's Code Review, so also judge the change against the ticket"
+      assert prompt =~ "You are the reviewer agent in Symphony's Code Review of a pull request."
+      refute prompt =~ "Do not judge whether the diff meets the ticket's acceptance criteria"
+      refute prompt =~ "executor"
       refute prompt =~ "Workflow review criteria"
       refute prompt =~ "Executor workflow"
-    after
-      clear_sequence_responses!()
-      File.rm_rf(test_root)
-    end
-  end
-
-  test "evaluate prompt for Code Review also judges the change against the ticket's acceptance criteria and scope" do
-    test_root = unique_tmp("symphony-elixir-review-agent-code-review")
-
-    try do
-      repo = git_repo_with_change!(test_root)
-      put_sequence_responses!([~s({"verdict":"approve","comments":[]})])
-
-      write_workflow_file!(Workflow.workflow_file_path(), review_agent: %{enabled: true, kind: "codex", command: "codex app-server"})
-
-      opts = [review_agent_module: SequenceReviewer, review_scope: :code_review]
-      assert {:ok, %{verdict: :approve}} = ReviewAgent.evaluate(issue(), repo, Config.settings!(), opts)
-
-      assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
-      assert prompt =~ "This is the pull request's Code Review, so also judge the change against the ticket"
-      refute prompt =~ "Do not judge whether the diff meets the ticket's acceptance criteria"
     after
       clear_sequence_responses!()
       File.rm_rf(test_root)
@@ -804,7 +677,7 @@ defmodule SymphonyElixir.ReviewAgentTest do
         put_sequence_responses!([~s({"verdict":"approve","comments":[]})])
         write_workflow_file!(Workflow.workflow_file_path(), review_agent: %{enabled: true, kind: "codex", command: "codex app-server"})
 
-        opts = [review_agent_module: SequenceReviewer, review_scope: :code_review]
+        opts = [review_agent_module: SequenceReviewer]
         assert {:ok, %{verdict: :approve}} = ReviewAgent.evaluate(decided_issue(), repo, Config.settings!(), opts)
 
         assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
@@ -853,7 +726,7 @@ defmodule SymphonyElixir.ReviewAgentTest do
         put_sequence_responses!([~s({"verdict":"approve","comments":[]})])
         write_workflow_file!(Workflow.workflow_file_path(), review_agent: %{enabled: true, kind: "codex", command: "codex app-server"})
 
-        opts = [review_agent_module: SequenceReviewer, review_scope: :code_review]
+        opts = [review_agent_module: SequenceReviewer]
         # The issue the reviewer gets has no section: the prompt reads the store, not Linear.
         assert {:ok, %{verdict: :approve}} = ReviewAgent.evaluate(issue(), repo, Config.settings!(), opts)
 
@@ -881,7 +754,7 @@ defmodule SymphonyElixir.ReviewAgentTest do
 
         write_workflow_file!(Workflow.workflow_file_path(), review_agent: %{enabled: true, kind: "codex", command: "codex app-server"})
 
-        opts = [review_agent_module: SequenceReviewer, review_scope: :code_review]
+        opts = [review_agent_module: SequenceReviewer]
 
         assert {:ok, %{verdict: :approve, findings: [], decision_notes: [note], comments: [note]}} =
                  ReviewAgent.evaluate(decided_issue(), repo, Config.settings!(), opts)
@@ -934,7 +807,7 @@ defmodule SymphonyElixir.ReviewAgentTest do
     end
   end
 
-  test "evaluate gives the reviewer the executor run's temp folder as its $TMPDIR" do
+  test "evaluate gives the reviewer its run's temp folder as its $TMPDIR" do
     test_root = unique_tmp("symphony-elixir-review-agent-tmp-dir")
 
     try do

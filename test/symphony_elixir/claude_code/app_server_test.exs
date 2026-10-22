@@ -2082,7 +2082,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end
     end
 
-    test "approved handoff fails fast when Symphony MCP server is missing" do
+    test "a continuation turn fails fast when Symphony MCP server is missing" do
       test_root =
         Path.join(
           System.tmp_dir!(),
@@ -2114,7 +2114,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         test_pid = self()
         on_message = fn msg -> send(test_pid, {:turn_msg, msg}) end
 
-        prompt = "Reviewer agent approved the committed diff.\n\nContinue the PR handoff."
+        prompt = "Continuation guidance:\n\n- Push the branch and open the PR."
 
         assert {:error, {:turn_failed, reason}} =
                  AppServer.run_turn(session, prompt, %{}, on_message: on_message)
@@ -2127,7 +2127,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end
     end
 
-    test "approved handoff continues when Symphony MCP server is loaded" do
+    test "a continuation turn continues when Symphony MCP server is loaded" do
       test_root =
         Path.join(
           System.tmp_dir!(),
@@ -2156,7 +2156,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         )
 
         session = local_session(workspace, test_root)
-        prompt = "Reviewer agent approved the committed diff.\n\nContinue the PR handoff."
+        prompt = "Continuation guidance:\n\n- Push the branch and open the PR."
 
         assert {:ok, result} = AppServer.run_turn(session, prompt, %{}, [])
         assert result.input_tokens == 10
@@ -2230,7 +2230,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       assert AppServer.default_claude_cache_root({:unix, :linux}, nil) == Path.join([home, ".cache", "claude-cli-nodejs"])
     end
 
-    test "approved handoff ignores system events that arrive before init" do
+    test "a continuation turn ignores system events that arrive before init" do
       test_root =
         Path.join(
           System.tmp_dir!(),
@@ -2260,7 +2260,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         )
 
         session = local_session(workspace, test_root)
-        prompt = "Reviewer agent approved the committed diff.\n\nContinue the PR handoff."
+        prompt = "Continuation guidance:\n\n- Push the branch and open the PR."
 
         assert {:ok, result} = AppServer.run_turn(session, prompt, %{}, [])
         assert result.output_tokens == 5
@@ -2720,21 +2720,21 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end)
     end
 
-    test "names the key that set the model when a pre_push_review run model lacks tools" do
+    test "names the key that set the model when a code_review run model lacks tools" do
       with_openrouter_key("sk-or-v1-REDACTED", fn ->
         with_models_api(fn ->
           with_provider_env_fake_claude("ACME-OPENROUTER-REVIEW-NOTOOLS", fn workspace ->
             settings = Config.settings!()
             settings = %{settings | review_agent: %{settings.review_agent | model: "acme/chat-only"}}
-            profile = %{kind: :pre_push_review, model: "acme/chat-only", effort: nil, provider: "openrouter"}
+            profile = %{kind: :code_review, model: "acme/chat-only", effort: nil, provider: "openrouter"}
 
             log =
               capture_log(fn ->
                 assert AppServer.start_session(workspace, run_profile: profile, settings: settings) ==
-                         {:error, {:openrouter_model_unsupported, "acme/chat-only", :pre_push_review, :tools}}
+                         {:error, {:openrouter_model_unsupported, "acme/chat-only", :code_review, :tools}}
               end)
 
-            assert log =~ "run_kind=pre_push_review; set pre_push_review.model to a model that lists tools"
+            assert log =~ "run_kind=code_review; set code_review.model to a model that lists tools"
           end)
         end)
       end)

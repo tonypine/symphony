@@ -8,8 +8,8 @@ import Foundation
 /// nor in `config/settings_ui_exempt.yml`, so a new setting ships with a control. `SettingsUIManifestTests`
 /// checks that every key the line editors (`RepositoriesConfig`, `RunProfilesConfig`, `MaxConcurrentAgents`,
 /// `TokenLimits`, `OperationTimeouts`, `GitHubUpdates`, `DispatchLoopLimits`, `LedgerSettings`,
-/// `BuiltInTicketPatterns`, `QAHostTools`, `MacAppQAPlaybook`) write is here, and that the rest are
-/// `writtenBySymphony`. Keep one string literal per line, sorted.
+/// `CodeReviewSettings`, `BuiltInTicketPatterns`, `QAHostTools`, `MacAppQAPlaybook`) write is here, and that the
+/// rest are `writtenBySymphony`. Keep one string literal per line, sorted.
 public enum SettingsUIManifest {
     public static let keyPaths: [String] = [
         "agent.command",
@@ -31,6 +31,11 @@ public enum SettingsUIManifest {
         "auto_review.playbooks.macos_app.dev_server_port",
         "auto_review.playbooks.macos_app.launch_env",
         "auto_review.playbooks.macos_app.requires",
+        "code_review.command",
+        "code_review.effort",
+        "code_review.enabled",
+        "code_review.model",
+        "code_review.runtime",
         "github.webhooks.enabled",
         "github.webhooks.events",
         "github.webhooks.fallback_poll_interval_ms",
@@ -46,9 +51,6 @@ public enum SettingsUIManifest {
         "ledger.artifact_retention_days",
         "ledger.prompt_brief_enabled",
         "ledger.prompt_brief_max_tokens",
-        "pre_push_review.command",
-        "pre_push_review.effort",
-        "pre_push_review.model",
         "repositories[].acceptance_gate.escalate.ticket_patterns_builtin",
         "repositories[].acceptance_gate.mode",
         "repositories[].agent.effort",

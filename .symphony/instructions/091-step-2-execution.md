@@ -66,7 +66,6 @@ In this repository, a walkthrough step that judges the macOS app by sight in dar
 12. Then hand off: push the branch and open the PR (or update it). That push is the handoff signal; Symphony moves the ticket to `Code Review` itself.
     - Do not ask for `Code Review` (or `QA`, `Merging`) with `linear_update_state`: it is refused, because those states are the handoff's and the verdicts' to enter.
     - A run that ends without pushing its head and opening its PR never advances: the ticket stays where it is and the run is retried.
-    - When the prompt has a `Review-agent gate` section, this push waits on it: stop at the gate after item 7's diff review, and push once Symphony brings back the reviewer's approval in the same run.
     - A block is not a handoff: follow the blocked-access escape hatch, which sets a `Blocked` or `Needs Decision` hold and leaves the ticket in its phase.
     - After the handoff push, end the turn. CI runs on the pushed head: a red head comes back to you through `CI Fix`, and the reviewer runs once the head is green. Do not continue ordinary implementation work unless Symphony injects reviewer, QA, CI or operator context.
 13. For `Todo` tickets that already had a PR attached at kickoff:

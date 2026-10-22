@@ -274,12 +274,12 @@ defmodule SymphonyElixir.Config do
   def run_profile(%Schema{agent: agent}, kind), do: Schema.RepoAgent.resolve(agent.repository, agent, to_string(kind))
 
   @doc """
-  The profile the pre-push reviewer starts with: `pre_push_review.model` / `.effort`, else the
-  `pre_push_review` run profile as resolved by `run_profile/2`. The provider resolves as in
+  The profile Code Review's reviewer starts with: `code_review.model` / `.effort`, else the
+  `code_review` run profile as resolved by `run_profile/2`. The provider resolves as in
   `run_profile/2`.
   """
-  @spec pre_push_review_profile(Schema.t()) :: RunKind.profile()
-  def pre_push_review_profile(%Schema{review_agent: config} = settings), do: own_run_profile(settings, :pre_push_review, config)
+  @spec code_review_profile(Schema.t()) :: RunKind.profile()
+  def code_review_profile(%Schema{review_agent: config} = settings), do: own_run_profile(settings, :code_review, config)
 
   @doc """
   The profile the QA agent starts with: `auto_review.model` / `.effort`, else the `qa` run profile
@@ -468,14 +468,14 @@ defmodule SymphonyElixir.Config do
     end
   end
 
-  defp effective_run_profile(settings, "pre_push_review"), do: pre_push_review_profile(settings)
+  defp effective_run_profile(settings, "code_review"), do: code_review_profile(settings)
   defp effective_run_profile(settings, "qa"), do: qa_profile(settings)
   defp effective_run_profile(settings, kind), do: run_profile(settings, kind)
 
   @doc """
   The config key that sets `field` (`:model` or `:effort`) for run kind `kind`, for messages that
   tell the operator what to change. Keys are tried in the order `run_profile/2` resolves them:
-  `pre_push_review.model`, `repositories[web].agent.run_profiles.landing.effort`,
+  `code_review.model`, `repositories[web].agent.run_profiles.landing.effort`,
   `repositories[web].agent.model`, `agent.run_profiles.landing.effort`, then `agent.model`.
   """
   @spec run_profile_key(Schema.t(), atom() | String.t(), :model | :effort) :: String.t()
@@ -524,7 +524,7 @@ defmodule SymphonyElixir.Config do
     end)
   end
 
-  defp own_profile_setting(settings, "pre_push_review", field), do: {"pre_push_review", Map.get(settings.review_agent, field)}
+  defp own_profile_setting(settings, "code_review", field), do: {"code_review", Map.get(settings.review_agent, field)}
   defp own_profile_setting(settings, "qa", field), do: {"auto_review", Map.get(settings.auto_review, field)}
 
   defp own_profile_setting(_settings, _kind, _field), do: nil

@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.ReviewAgent.Context do
   @moduledoc """
-  Builds structured source material for the reviewer-agent gate.
+  Builds structured source material for Code Review's reviewer: the pull request's diff and the
+  files around it.
   """
 
   require Logger

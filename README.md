@@ -512,9 +512,9 @@ When Claude or Codex can't reach its API at all (the network or DNS is down, so 
 on `API Error: Can't reach the API server … (ENOTFOUND)` or Codex gives up on
 `error sending request … dns error`), Symphony holds that provider's runs the same way,
 `auto_pause` or not, instead of reading the turn as finished: no idle turn is counted and no issue
-is parked. The pre-push reviewer and QA hold too, so a push never goes ahead
-without a review and no verdict is recorded. One held run probes the API after a minute, then after
-twice as long each time it still fails (up to `unknown_reset_retry_seconds`). The log says
+is parked. Code Review's reviewer and QA hold too, so no verdict is recorded. One held run probes
+the API after a minute, then after twice as long each time it still fails (up to
+`unknown_reset_retry_seconds`). The log says
 `Model API unreachable (ENOTFOUND); holding dispatch` once, and the dashboards show
 `Paused: Claude API unreachable (ENOTFOUND), retries ~14:05`; `/api/v1/state` lists the hold
 under `usage_limits` with `reason: model_api_unreachable`.

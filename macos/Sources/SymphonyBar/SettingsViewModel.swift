@@ -91,6 +91,11 @@ final class SettingsViewModel: ObservableObject {
     @Published var ticketPatternsBuiltIn = BuiltInTicketPatterns.defaultIsOn
     /// Why `symphony check` rejected the changed built-in ticket patterns setting, shown above Save.
     @Published private(set) var ticketPatternsBuiltInError: String?
+    /// `code_review.enabled` and `code_review.runtime` in the configured symphony.yml: whether Code Review's reviewer
+    /// runs on each pull request (with it off, Code Review tickets wait), and the runtime it runs on.
+    @Published var codeReview = CodeReviewSettings()
+    /// Why `symphony check` rejected the changed Code Review reviewer settings, shown above Save.
+    @Published private(set) var codeReviewError: String?
     /// Today's tokens from Symphony's latest state, nil while it isn't answering.
     @Published var budget: StateSnapshot.Budget?
     /// Why this copy can't install updates with Development mode on or off, nil when it can.
@@ -189,6 +194,10 @@ final class SettingsViewModel: ObservableObject {
     /// written only when the toggle moved away from it.
     private var loadedTicketPatternsBuiltIn: Bool?
 
+    /// The Code Review reviewer settings read from symphony.yml, or nil when they couldn't be read. Only a setting
+    /// that changed is written.
+    private var loadedCodeReview: CodeReviewSettings?
+
     /// The pending or running `symphony check` on the changed token limits.
     private var tokenLimitsCheck: Task<Void, Never>?
 
@@ -235,6 +244,7 @@ final class SettingsViewModel: ObservableObject {
         loadQAHostTools()
         loadWorkflowStates()
         loadTicketPatternsBuiltIn()
+        loadCodeReview()
         loadTimeouts()
         loadGitHubUpdates()
         loadDispatchLoopLimits()
@@ -387,6 +397,21 @@ final class SettingsViewModel: ObservableObject {
             loadedTicketPatternsBuiltIn = isOn
         } catch {
             configFileError = "Could not read the built-in ticket patterns setting from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
+    /// The Code Review reviewer controls are off until a symphony.yml has been read, and while Save checks it.
+    var canEditCodeReview: Bool { loadedCodeReview != nil && !isSaving }
+
+    private func loadCodeReview() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let reviewer = try SymphonyConfigFile(path: path).readCodeReviewSettings()
+            codeReview = reviewer
+            loadedCodeReview = reviewer
+        } catch {
+            configFileError = "Could not read Code Review's reviewer settings from symphony.yml: \(error.localizedDescription)"
         }
     }
 
@@ -584,7 +609,7 @@ final class SettingsViewModel: ObservableObject {
     /// Validates and saves, then calls `onSaved` when everything was stored. Changed models, token limits and
     /// timeouts are written only after `symphony check` passes on them; until then the rest isn't saved, and a
     /// failure shows in `configCheckError`, `tokenLimitsError`, `timeoutsError`, `gitHubUpdatesError`,
-    /// `dispatchLoopError`, `ledgerError` or `macAppQAError`.
+    /// `dispatchLoopError`, `ledgerError`, `macAppQAError` or `codeReviewError`.
     func save(onSaved: @escaping () -> Void) {
         guard canSave else { return }
         let settings = settings.trimmed()
@@ -636,10 +661,13 @@ final class SettingsViewModel: ObservableObject {
         ticketPatternsBuiltInError = nil
         let builtInPatterns = ticketPatternsBuiltIn
         let builtInPatternsChanged = loadedTicketPatternsBuiltIn.map { $0 != builtInPatterns } ?? false
+        codeReviewError = nil
+        let reviewer = codeReview
+        let oldReviewer = loadedCodeReview.flatMap { $0 != reviewer ? $0 : nil }
 
         guard loadedProfiles != nil || loadedLimits != nil || oldTimeouts != nil || oldUpdates != nil || oldLoopLimits != nil
             || oldLedger != nil || oldQAPlaybook != nil || loadedPriorities != nil || loadedHostTools != nil || loadedStates != nil
-            || builtInPatternsChanged else {
+            || builtInPatternsChanged || oldReviewer != nil else {
             if saveRest(settings, secrets) { onSaved() }
             return
         }
@@ -678,6 +706,9 @@ final class SettingsViewModel: ObservableObject {
             }
             if saved, builtInPatternsChanged {
                 saved = await saveTicketPatternsBuiltIn(builtInPatterns, settings: settings, secrets: secrets)
+            }
+            if saved, let oldReviewer {
+                saved = await saveCodeReview(reviewer, from: oldReviewer, settings: settings, secrets: secrets)
             }
             isSaving = false
             if saved && saveRest(settings, secrets) { onSaved() }
@@ -1002,6 +1033,34 @@ final class SettingsViewModel: ObservableObject {
         }
         configFileError = nil
         loadedTicketPatternsBuiltIn = isOn
+        return true
+    }
+
+    /// Writes the Code Review reviewer settings that changed to symphony.yml once `symphony check` passes on the
+    /// result.
+    private func saveCodeReview(
+        _ reviewer: CodeReviewSettings,
+        from loaded: CodeReviewSettings,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
+        do {
+            result = try await SymphonyConfigFile(path: settings.configPath).writeCodeReviewSettings(reviewer, from: loaded) { path in
+                await check(path, settings, secrets)
+            }
+        } catch {
+            configFileError = "Could not save Code Review's reviewer settings to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            codeReviewError = "symphony check rejected Code Review's reviewer settings, so nothing was saved: "
+                + ConfigCheck.reasonFirst(message)
+            return false
+        }
+        configFileError = nil
+        loadedCodeReview = reviewer
         return true
     }
 
