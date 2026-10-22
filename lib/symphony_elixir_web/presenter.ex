@@ -24,7 +24,7 @@ defmodule SymphonyElixirWeb.Presenter do
   }
 
   alias SymphonyElixir.Codex.MessageHumanizer
-  alias SymphonyElixir.GitHub.WebhookSetup
+  alias SymphonyElixir.GitHub.WebhookSetup.Cache, as: WebhookSetupCache
   alias SymphonyElixir.Repo.Status, as: RepoStatus
   alias SymphonyElixirWeb.WatchPayload
 
@@ -74,7 +74,7 @@ defmodule SymphonyElixirWeb.Presenter do
           conflicts: snapshot |> Map.get(:conflicts, []) |> Enum.map(&conflict_entry_payload/1),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
           drain_report: drain_report_payload(RetiredStates.drain_report()),
-          setup: setup |> Setup.payload() |> Map.put(:github_updates, WebhookSetup.state_section(github_updates)),
+          setup: setup |> Setup.payload() |> Map.put(:github_updates, WebhookSetupCache.state_section(github_updates)),
           awaiting_clarification:
             snapshot
             |> Map.get(:awaiting_clarification, [])

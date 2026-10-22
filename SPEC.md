@@ -4886,6 +4886,11 @@ Minimum endpoints:
     }
     ```
 
+- `GET /api/v1/health`
+  - Answers `200` `{"ok": true}` as soon as the endpoint serves, reading nothing else: the
+    liveness route for a dev server's health check (`verification.dev_server.health_check_url`),
+    which gives each request 250 ms. `/api/v1/state` stays the app's poll.
+
 - `GET /api/v1/repos`
   - Returns one entry per configured repository, in config order: its key, `default` and
     `base_branch`, where its code comes from, its GitHub repository, its Linear routing, whether
@@ -5069,7 +5074,14 @@ Minimum endpoints:
     keeps the normal poll interval meanwhile), or no delivery for `silence_alert_minutes` after a
     read found a change none reported.
     `/api/v1/state` carries the same section under `setup.github_updates`, so the app's Setup card
-    and its Overview row follow the state poll; it is `null` there when it can't be read.
+    and its Overview row follow the state poll; it is `null` there when it can't be read. The
+    Elixir implementation builds that copy in the background
+    (`SymphonyElixir.GitHub.WebhookSetup.Cache`): at startup, after a config reload, after each
+    verified delivery, and every 5 seconds, and it keeps the section each setup action answers
+    with. `/api/v1/state` serves the last one built, so a slow git, run store or relay makes it a
+    few seconds stale, not the poll slow; each repository's GitHub name, which git reads, is read
+    at startup and after a config reload only. `GET /api/v1/setup` builds the section on each
+    request.
   - `?repo=<key>` keeps only the problems whose `repos` name that repository, and those that name
     none (keys, secrets and the rest of the global setup); `not_checked` and the times are as
     they are. While the running config has no repository `<key>` (between an Add Repo save and

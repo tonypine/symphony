@@ -13,6 +13,11 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   # The frame is padded to the requested width inside StatusDashboard; cap it.
   @max_terminal_columns 1_000
 
+  # A dev server's health check (`verification.dev_server.health_check_url`) gives each probe
+  # 250 ms: this answers once the endpoint serves, and reads nothing.
+  @spec health(Conn.t(), map()) :: Conn.t()
+  def health(conn, _params), do: json(conn, %{ok: true})
+
   @spec state(Conn.t(), map()) :: Conn.t()
   def state(conn, %{"format" => "terminal"} = params) do
     case StatusDashboard.frame(terminal_columns(params), status_dashboard()) do

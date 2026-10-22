@@ -3,6 +3,8 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
   Instant GitHub updates, set up by Symphony itself: the steps that get GitHub's webhook
   deliveries to this Mac, their health, and the actions the app's Setup takes
   (`GET /api/v1/setup` → `github_updates`, `POST /api/v1/setup/github_updates/:action`).
+  `/api/v1/state` reads the section `SymphonyElixir.GitHub.WebhookSetup.Cache` last built, rather
+  than build it on every poll.
 
   ## Steps
 
@@ -88,7 +90,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
 
   def action(action, _params, _opts), do: {:error, {:not_found, "There is no GitHub updates action named #{inspect(action)}."}}
 
-  @doc "The `github_updates` section of `GET /api/v1/setup`."
+  @doc "The `github_updates` section of `GET /api/v1/setup`, built now."
   @spec section() :: map()
   def section, do: section([])
 
@@ -121,9 +123,10 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
   end
 
   @doc """
-  The section for `/api/v1/state`'s `setup`, so the app's Setup card and its Overview row follow the
-  state poll. Nil when it can't be read (a configuration that doesn't load, a run store that isn't
-  up), so the state payload never fails on it.
+  The section for `/api/v1/state`'s `setup`, built now, so the app's Setup card and its Overview
+  row follow the state poll (which reads the last one its cache built). Nil when it can't be read
+  (a configuration that doesn't load, a run store that isn't up), so the state payload never fails
+  on it.
   """
   @spec state_section(keyword()) :: map() | nil
   def state_section(opts \\ []) do
@@ -135,8 +138,8 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
   end
 
   # Every step, repository and relay entry asks for the settings and the repositories again, and
-  # each read parses symphony.yml and WORKFLOW.md: the section reads them, the port and the secret
-  # once. It rides on every `/api/v1/state` poll, which a dev server's health check gives 250 ms.
+  # each read parses symphony.yml and WORKFLOW.md (and the repositories run git): the section reads
+  # them, the port and the secret once.
   defp read_once(ctx) do
     settings = ctx.settings.()
     repos = ctx.repos.()
@@ -1077,6 +1080,10 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
     settings = ctx.settings.()
     settings.pr_review.poll_interval_ms || settings.polling.interval_ms
   end
+
+  @doc "The repositories the section lists, each with its key and GitHub name (`owner/name`, read with git)."
+  @spec repositories(keyword()) :: [%{key: String.t(), github: String.t() | nil}]
+  def repositories(opts \\ []), do: context(opts).repos.()
 
   defp context(opts) do
     gh_opts = Keyword.take(opts, [:gh_runner])

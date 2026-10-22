@@ -25,11 +25,13 @@ on:
       - "lib/symphony_elixir/http_server.ex"
       - "scripts/qa-dashboard-server.sh"
       - "scripts/qa-dashboard-build.sh"
-      # The e2e test's health check is `GET /api/v1/state`, which the dev server answers within the
-      # health poll's 250 ms: the code that builds that answer runs it too.
+      # The e2e test's health check is `GET /api/v1/health`, which the dev server answers within the
+      # health poll's 250 ms, and then it asks `GET /api/v1/state`: the code behind both runs it too.
+      - "lib/symphony_elixir_web/router.ex"
       - "lib/symphony_elixir_web/presenter.ex"
       - "lib/symphony_elixir_web/controllers/observability_api_controller.ex"
       - "lib/symphony_elixir/github/webhook_setup.ex"
+      - "lib/symphony_elixir/github/webhook_setup/**"
       - "test/support/dev_server.py"
       - "test/symphony_elixir/verification/dev_server_sandbox_test.exs"
       - "test/symphony_elixir/verification_test.exs"
@@ -44,11 +46,13 @@ on:
       - "lib/symphony_elixir/http_server.ex"
       - "scripts/qa-dashboard-server.sh"
       - "scripts/qa-dashboard-build.sh"
-      # The e2e test's health check is `GET /api/v1/state`, which the dev server answers within the
-      # health poll's 250 ms: the code that builds that answer runs it too.
+      # The e2e test's health check is `GET /api/v1/health`, which the dev server answers within the
+      # health poll's 250 ms, and then it asks `GET /api/v1/state`: the code behind both runs it too.
+      - "lib/symphony_elixir_web/router.ex"
       - "lib/symphony_elixir_web/presenter.ex"
       - "lib/symphony_elixir_web/controllers/observability_api_controller.ex"
       - "lib/symphony_elixir/github/webhook_setup.ex"
+      - "lib/symphony_elixir/github/webhook_setup/**"
       - "test/support/dev_server.py"
       - "test/symphony_elixir/verification/dev_server_sandbox_test.exs"
       - "test/symphony_elixir/verification_test.exs"
