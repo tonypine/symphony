@@ -17,6 +17,7 @@ defmodule SymphonyElixir.RunStore do
   @ci_check_table :symphony_run_store_ci_checks
   @ticket_state_table :symphony_run_store_ticket_states
   @ticket_events_table :symphony_run_store_ticket_events
+  @artifacts_table :symphony_run_store_artifacts
   @ticket_pull_request_table :symphony_run_store_ticket_pull_requests
   @verification_allocation_table :symphony_run_store_verification_allocations
   @eval_logs_table :symphony_run_store_eval_logs
@@ -40,7 +41,8 @@ defmodule SymphonyElixir.RunStore do
     {@pause_table, [:key, :record], []},
     {@eval_logs_table, @eval_log_attributes, [type: :bag, index: @eval_log_indexes]},
     {@learnings_table, @learning_attributes, [index: @learning_indexes]},
-    {@ticket_events_table, @ticket_event_attributes, [type: :bag, index: @ticket_event_indexes]}
+    {@ticket_events_table, @ticket_event_attributes, [type: :bag, index: @ticket_event_indexes]},
+    {@artifacts_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key]]}
   ]
   @data_tables Enum.map(@tables, fn {table, _attributes, _opts} -> table end)
   @codex_totals_key :codex_totals
@@ -754,6 +756,57 @@ defmodule SymphonyElixir.RunStore do
   end
 
   def list_ticket_events(_repo_key, _issue_id, _opts), do: {:error, :invalid_issue_id}
+
+  @doc """
+  Writes the artifact row (`SymphonyElixir.Artifacts`) keyed by its `id`, replacing the one the id
+  held. The row's `repo_key` and `issue_id` are the artifact's: its first ingest's ticket.
+  """
+  @spec put_artifact(map()) :: :ok | {:error, term()}
+  def put_artifact(%{id: id, issue_id: issue_id} = artifact) when is_binary(id) and is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(Map.get(artifact, :repo_key)),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_artifact(%{artifact | repo_key: repo_key}) end)
+    end
+  end
+
+  def put_artifact(_artifact), do: {:error, :invalid_artifact}
+
+  @doc "The artifact row keyed by `id`, or nil."
+  @spec get_artifact(String.t()) :: map() | nil | {:error, term()}
+  def get_artifact(id) when is_binary(id) do
+    with :ok <- ensure_started() do
+      transaction(fn -> read_artifact(id, :read) end)
+    end
+  end
+
+  @doc """
+  Runs `fun` on the artifact row keyed by `id` (nil when there is none) in one durable transaction
+  that holds the row's write lock, so concurrent updates of one id are serialized. `{:ok, artifact}`
+  writes the artifact and returns it; `{:error, reason}` writes nothing and is returned. `fun` may run
+  more than once when the transaction restarts, so its side effects must be idempotent.
+  """
+  @spec update_artifact(String.t(), (map() | nil -> {:ok, map()} | {:error, term()})) :: {:ok, map()} | {:error, term()}
+  def update_artifact(id, fun) when is_binary(id) and is_function(fun, 1) do
+    with :ok <- ensure_started() do
+      durable_transaction(fn -> write_updated_artifact(id, fun) end)
+    end
+  end
+
+  @doc """
+  The artifact rows, oldest `captured_at` first. `opts`: `repo_key:` and `issue_id:` keep the rows a
+  ticket of that repo (and of that issue) ingested, whether or not it was the first; `expired:` keeps
+  the rows whose `expired` is that boolean.
+  """
+  @spec list_artifacts(keyword()) :: [map()] | {:error, term()}
+  def list_artifacts(opts) when is_list(opts) do
+    with :ok <- ensure_started() do
+      transaction(fn ->
+        all_artifact_records()
+        |> Enum.filter(&artifact_matches?(&1, opts))
+        |> Enum.sort_by(&{datetime_sort_key(Map.get(&1, :captured_at)), &1.id})
+      end)
+    end
+  end
 
   @doc """
   Writes the ticket's pull request record (`SymphonyElixir.TicketPullRequest`), replacing the one
@@ -1833,6 +1886,39 @@ defmodule SymphonyElixir.RunStore do
 
   defp find_idempotent(_stored, nil), do: nil
   defp find_idempotent(stored, key), do: Enum.find(stored, &(&1.idempotency == key))
+
+  defp write_artifact(%{id: id, repo_key: repo_key, issue_id: issue_id} = artifact) do
+    :mnesia.write({@artifacts_table, id, repo_key, issue_id, Map.new(artifact)})
+  end
+
+  defp write_updated_artifact(id, fun) do
+    with {:ok, artifact} <- fun.(read_artifact(id, :write)),
+         {:ok, repo_key} <- normalize_repo_key(Map.get(artifact, :repo_key)),
+         artifact = Map.merge(artifact, %{id: id, repo_key: repo_key}),
+         :ok <- write_artifact(artifact) do
+      {:ok, artifact}
+    end
+  end
+
+  defp all_artifact_records do
+    :mnesia.match_object({@artifacts_table, :_, :_, :_, :_})
+    |> Enum.map(fn {@artifacts_table, _key, _repo_key, _issue_id, record} -> record end)
+  end
+
+  defp read_artifact(id, lock) do
+    case :mnesia.read(@artifacts_table, id, lock) do
+      [{@artifacts_table, ^id, _repo_key, _issue_id, record}] -> record
+      [] -> nil
+    end
+  end
+
+  defp artifact_matches?(artifact, opts) do
+    {expired, opts} = Keyword.pop(opts, :expired)
+    ticket = opts |> Keyword.take([:repo_key, :issue_id]) |> Map.new()
+
+    (is_nil(expired) or Map.get(artifact, :expired, false) == expired) and
+      (ticket == %{} or Enum.any?(Map.get(artifact, :tickets, []), &(Map.take(&1, Map.keys(ticket)) == ticket)))
+  end
 
   defp read_ticket_events(repo_key, issue_id) do
     @ticket_events_table

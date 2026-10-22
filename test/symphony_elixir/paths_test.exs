@@ -110,6 +110,7 @@ defmodule SymphonyElixir.PathsTest do
     root = Path.expand("tmp/symphony-state")
 
     assert Paths.run_store_dir() == Path.join(root, "run_store")
+    assert Paths.artifacts_dir() == Path.join(root, "artifacts")
     assert Paths.audit_dir() == Path.join(root, "audit")
     assert Paths.secret_key_base_file() == Path.join(root, "secret_key_base")
     assert Paths.erlang_cookie_file() == Path.join(root, "erlang_cookie")
