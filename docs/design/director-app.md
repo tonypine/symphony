@@ -350,7 +350,7 @@ D10); see the build plan in [Screens](director-app-screens.md#5-build-plan).
 | Destructive actions confirmed and named | Stop Run, Send to Rework, Pause (**D12**) |
 | Notification control | Notifications are on per kind in Settings; macOS Focus respected (**D14**) |
 | Search | ⌘F on Tickets, Inbox, Audit, Learnings, transcript |
-| Undo where a move can be undone | A Linear move from the app shows "Moved to Merging · Undo" for 10 s (**D2c**, **D12d**) |
+| Undo where a move can be undone | A Linear move from the app shows "Moved to Merging · Undo" for 10 s; an answer that moves nothing waits in the app for those 10 s ("Sending your decision · Undo") and is sent when they end (**D2c**, **D12d**) |
 | Privacy | The app talks to the local Symphony API (and to Linear, as Settings and Repos already do); nothing else leaves the Mac |
 
 ## 7. Out of scope

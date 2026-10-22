@@ -98,22 +98,31 @@ defmodule SymphonyElixir.PlaybookTest do
       assert body =~ "State: only `Plan Review`"
     end
 
-    test "the partials that write walkthroughs route each step to the one place that proves it" do
+    test "the partials that write walkthroughs write plain steps: the implementer names the test, the repo the check" do
       assert {:ok, backlog} = Playbook.fetch("out_of_scope_backlog")
       backlog = String.replace(backlog, ~r/\s+/, " ")
 
-      assert backlog =~ "Each walkthrough step names the one place that proves it, on a line at its end: `Proved by: <check> › <test>`"
-      assert backlog =~ "or `Proved by: QA`. A step with no `Proved by:` line is read as `Proved by: QA`."
-      assert backlog =~ "A step code can drive names its test. QA does not walk it"
-      assert backlog =~ "A step that needs an environment QA lacks (a signed build, a device, real credentials) goes to an automated harness"
-      assert backlog =~ "A step that needs a QA tool QA has, or one a sibling ticket adds, stays `Proved by: QA`"
-      assert backlog =~ "One journey is proved in one place."
+      assert backlog =~ "Write the walkthrough end to end, in plain words from the user's seat, and name no test and no check in it."
+      assert backlog =~ "The implementer, who writes the tests, records which test proves each step it covers (`Proved by: <test>`)"
+      assert backlog =~ "the repo names the check that runs them (`proof_check` in its WORKFLOW.md)"
+      assert backlog =~ "Unit-level facts (keys, counters, error tuples) are acceptance criteria, not walkthrough steps."
+      assert backlog =~ "A step that needs an environment QA lacks (a signed build, a device, real credentials) needs an automated harness"
+      assert backlog =~ "A judgment by sight of what the user sees ends with `Proved by: QA`"
+      assert backlog =~ "One journey sits in one walkthrough."
+
+      for partial <- ["out_of_scope_backlog", "parent_tickets", "plan_pipeline", "ticket_types"] do
+        assert {:ok, body} = Playbook.fetch(partial)
+        refute body =~ "<check> › <test>", "#{partial} still asks for a check name"
+      end
 
       assert {:ok, parent} = Playbook.fetch("parent_tickets")
       parent = String.replace(parent, ~r/\s+/, " ")
 
-      assert parent =~ "Each step of a sub-ticket's `## User walkthrough` names the one place that proves it"
-      assert parent =~ "one journey never sits both in a sub-ticket's walkthrough and in an end-to-end sub-ticket"
+      assert parent =~ "the result they should see, naming no test and no check"
+      assert parent =~ "One journey never sits both in a sub-ticket's walkthrough and in an end-to-end sub-ticket"
+
+      assert {:ok, types} = Playbook.fetch("ticket_types")
+      assert String.replace(types, ~r/\s+/, " ") =~ "record it on the step with `linear_record_walkthrough_proofs` (`Proved by: <test>`, never a check name)"
     end
 
     test "plan_pipeline files no verification sub-ticket: the epic closes itself" do
@@ -404,8 +413,9 @@ defmodule SymphonyElixir.PlaybookTest do
       assert_sends_back(prompt)
       assert prompt =~ "One PR that meets every item under `Acceptance criteria`."
       assert prompt =~ "every step works end to end as written"
-      assert prompt =~ "is proved where its `Proved by:` line says"
-      assert prompt =~ "QA walks a `Proved by: QA` step and a step with no `Proved by:` line"
+      flat = String.replace(prompt, ~r/\s+/, " ")
+      assert flat =~ "Cover every step code can drive with a test in this PR, and record it on the step with `linear_record_walkthrough_proofs`"
+      assert flat =~ "QA walks a `Proved by: QA` step and a step no test covers."
       assert prompt =~ "Nothing listed under `Out of scope`."
       refute prompt =~ "## Ticket type: bug"
     end
@@ -517,12 +527,14 @@ defmodule SymphonyElixir.PlaybookTest do
       assert prompt =~ "File the Must-be tickets first, then Performance, then Attractive"
     end
 
-    test "each sub-ticket's walkthrough step names its proof, and one journey sits in one place" do
+    test "each sub-ticket's walkthrough is plain steps naming no test or check, and one journey sits in one place" do
       prompt = render_plan_pipeline(["plan"])
+      flat = String.replace(prompt, ~r/\s+/, " ")
 
-      assert prompt =~ "and the one place that proves it, `Proved by: <check> › <test>` or `Proved by: QA`"
-      assert prompt =~ "Never put one journey both in a sub-ticket's walkthrough and in an end-to-end ticket"
-      assert prompt =~ "`## User walkthrough` whose every step names its proof"
+      assert flat =~ "each with the result they should see, in plain words and naming no test and no check"
+      refute prompt =~ "<check> › <test>"
+      assert flat =~ "Never put one journey both in a sub-ticket's walkthrough and in an end-to-end ticket"
+      assert flat =~ "`## User walkthrough` of plain steps that name no test and no check"
       refute prompt =~ "written so an end-to-end test or the QA agent can reproduce it"
     end
 

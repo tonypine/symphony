@@ -4,7 +4,7 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
   import Plug.Conn
   import Plug.Test
 
-  alias SymphonyElixir.AuditLog
+  alias SymphonyElixir.{AuditLog, RunStore}
   alias SymphonyElixirWeb.ControlApiController
 
   defmodule StubOrchestrator do
@@ -118,16 +118,23 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
       |> send_to(:stop, pid, %{"issue_identifier" => "ACME-7"})
     end
 
-    test "records run_stopped when a run stopped", %{tmp_dir: tmp_dir} do
-      reply = {:ok, %{stopped: true, issue_id: "issue-7", issue_identifier: "ACME-7", repo_key: "web", session_id: "s-7"}}
+    test "records run_stopped when a run stopped, and the Director's stop on the ticket's events", %{tmp_dir: tmp_dir} do
+      issue_id = "issue-#{System.unique_integer([:positive])}"
+      reply = {:ok, %{stopped: true, issue_id: issue_id, issue_identifier: "ACME-7", repo_key: "web", session_id: "s-7"}}
 
       conn = stop_with_audit(reply, tmp_dir)
 
       assert conn.status == 200
+      assert json_body(conn) == %{"stopped" => true, "issue_id" => issue_id, "issue_identifier" => "ACME-7", "repo_key" => "web", "session_id" => "s-7"}
       {:ok, stream} = AuditLog.query(dir: tmp_dir, event_type: "run_stopped")
 
-      assert [%{"issue_id" => "issue-7", "issue_identifier" => "ACME-7", "repo_key" => "web", "session_id" => "s-7"}] =
+      assert [%{"issue_id" => ^issue_id, "issue_identifier" => "ACME-7", "repo_key" => "web", "session_id" => "s-7"}] =
                Enum.to_list(stream)
+
+      assert [%{type: "person.action", payload: %{action: "stop"}, actor: %{kind: :person, name: "the Director"}} = event] =
+               RunStore.list_ticket_events("web", issue_id, [])
+
+      assert event.summary.title == "The Director stopped the run"
     end
 
     test "records nothing when no run was stopped", %{tmp_dir: tmp_dir} do
@@ -136,12 +143,14 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
       assert conn.status == 200
       {:ok, stream} = AuditLog.query(dir: tmp_dir)
       assert Enum.to_list(stream) == []
+      assert RunStore.list_ticket_events("web", "ACME-7", []) == []
     end
 
     test "still answers when the record can't be written", %{tmp_dir: tmp_dir} do
       blocker = Path.join(tmp_dir, "blocker")
       File.write!(blocker, "")
-      reply = {:ok, %{stopped: true, issue_id: "issue-7", issue_identifier: "ACME-7", session_id: "s-7"}}
+      issue_id = "issue-#{System.unique_integer([:positive])}"
+      reply = {:ok, %{stopped: true, issue_id: issue_id, issue_identifier: "ACME-7", session_id: "s-7"}}
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->
@@ -150,6 +159,20 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
         end)
 
       assert log =~ "Failed to record run_stopped audit event: issue_identifier=ACME-7"
+    end
+
+    test "still answers, with the audit record, when the event can't be written", %{tmp_dir: tmp_dir} do
+      reply = {:ok, %{stopped: true, issue_id: "issue-7", issue_identifier: "ACME-7", repo_key: "  ", session_id: "s-7"}}
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          conn = stop_with_audit(reply, tmp_dir)
+          assert conn.status == 200
+        end)
+
+      assert log =~ "Failed to record the person.action event on issue_id=issue-7"
+      {:ok, stream} = AuditLog.query(dir: tmp_dir, event_type: "run_stopped")
+      assert [%{"issue_id" => "issue-7"}] = Enum.to_list(stream)
     end
   end
 

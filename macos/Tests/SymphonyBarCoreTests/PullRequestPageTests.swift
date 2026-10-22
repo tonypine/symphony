@@ -15,7 +15,7 @@ final class PullRequestPageTests: XCTestCase {
 
         XCTAssertEqual(page.number, 448)
         XCTAssertEqual(page.url, URL(string: "https://github.com/tonypine/symphony/pull/448"))
-        XCTAssertEqual(page.title, "TP-892 Retire two old review steps")
+        XCTAssertEqual(page.title, "TP-892 Remove the Final verification and Supervisor check flows")
         XCTAssertEqual(page.repoKey, "symphony")
         XCTAssertEqual(page.ticket, .init(identifier: "TP-892", title: "Retire two old review steps", state: "Rework", waitingOn: "you"))
         XCTAssertTrue(page.gitHubAvailable)

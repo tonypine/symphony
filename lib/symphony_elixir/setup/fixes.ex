@@ -3,24 +3,27 @@ defmodule SymphonyElixir.Setup.Fixes do
   Runs a `linear` Setup fix the operator confirmed, for `POST /api/v1/setup/fixes`.
 
   A fix runs only as the latest check proposed it: a descriptor that no problem's `fix` names is
-  refused, so nothing is created that the operator wasn't shown. It does exactly what its descriptor
-  says:
+  refused, so nothing is created that the operator wasn't shown, and what runs is the proposed fix:
 
     * `create_label` creates the label `name` in the team `team`;
-    * `resync_hold` re-syncs the hold label of each ticket it names from the store
+    * `create_state` creates the workflow state `name` of the type `type` in the team `team`, at the
+      `position` the check worked out from the team's board (`SymphonyElixir.Setup.Checks.Statuses`).
+      The request names the state and its type; it needn't repeat the place, as the app's doesn't,
+      but a place it names (`after`, `position`) must be the proposed one;
+    * `resync_hold` re-syncs the hold label of each ticket the request names from the store
       (`SymphonyElixir.Hold.resync/4`): one of the tickets the check listed, or all of them.
 
   Then the checks run again with the team cache emptied (`SymphonyElixir.Setup.refresh/1`), and the
   new payload is returned. When Linear refuses (permissions, a name already taken), the error says
   so in plain words with what to do, the checks are not re-run, and the problem stays where it was.
-  A create is one Linear write,
+  A create (a label or a state) is one Linear write,
   so it lands whole or not at all; a re-sync of several tickets puts right the ones Linear accepts
   and names the rest.
   """
 
   alias SymphonyElixir.{Hold, Setup, Tracker}
   alias SymphonyElixir.Hold.Drift
-  alias SymphonyElixir.Setup.Checks.HoldDrift
+  alias SymphonyElixir.Setup.Checks.{HoldDrift, Statuses}
 
   @doc """
   Runs `descriptor` (a fix as the payload lists it, with string keys). Options: `:server` (the Setup
@@ -33,29 +36,37 @@ defmodule SymphonyElixir.Setup.Fixes do
   def run(descriptor, opts) do
     server = Keyword.get(opts, :server, Setup)
 
-    if is_map(descriptor) and proposed?(descriptor, Setup.payload(server).problems) do
-      with :ok <- apply_fix(descriptor, Keyword.get(opts, :tracker, Tracker)), do: {:ok, Setup.refresh(server)}
-    else
-      {:error, :not_proposed}
+    case is_map(descriptor) && to_run(descriptor, Setup.payload(server).problems) do
+      %{} = fix -> with :ok <- apply_fix(fix, Keyword.get(opts, :tracker, Tracker)), do: {:ok, Setup.refresh(server)}
+      _not_proposed -> {:error, :not_proposed}
     end
   end
 
-  defp proposed?(descriptor, problems) do
-    Enum.any?(problems, fn %{fix: fix} -> fix && covers?(stringify(fix), descriptor) end)
+  # The fix `descriptor` asks for, as the latest check proposed it; nil when none did.
+  defp to_run(descriptor, problems) do
+    Enum.find_value(problems, fn %{fix: fix} -> fix && covers(stringify(fix), descriptor) end)
   end
 
-  defp covers?(%{"kind" => "linear", "action" => "create_label"} = fix, descriptor) do
-    Map.take(fix, ~w(kind action team name)) == Map.take(descriptor, ~w(kind action team name))
+  defp covers(%{"kind" => "linear", "action" => "create_label"} = fix, descriptor) do
+    if same?(fix, descriptor, ~w(kind action team name)), do: fix
   end
 
-  defp covers?(%{"kind" => "linear", "action" => "resync_hold", "repo" => repo, "tickets" => tickets}, descriptor) do
+  # The place is the check's: the request may leave it out, and one it names must be the proposed one.
+  defp covers(%{"kind" => "linear", "action" => "create_state"} = fix, descriptor) do
+    if same?(fix, descriptor, ~w(kind action team name type) ++ Enum.filter(~w(after position), &Map.has_key?(descriptor, &1))), do: fix
+  end
+
+  # A re-sync runs for the tickets the request picks, of those the check listed.
+  defp covers(%{"kind" => "linear", "action" => "resync_hold", "repo" => repo, "tickets" => tickets}, descriptor) do
     case descriptor do
-      %{"kind" => "linear", "action" => "resync_hold", "repo" => ^repo, "tickets" => [_ | _] = wanted} -> Enum.all?(wanted, &(&1 in tickets))
-      _other -> false
+      %{"kind" => "linear", "action" => "resync_hold", "repo" => ^repo, "tickets" => [_ | _] = wanted} -> if Enum.all?(wanted, &(&1 in tickets)), do: descriptor
+      _other -> nil
     end
   end
 
-  defp covers?(_fix, _descriptor), do: false
+  defp covers(_fix, _descriptor), do: nil
+
+  defp same?(fix, descriptor, keys), do: Map.take(fix, keys) == Map.take(descriptor, keys)
 
   defp stringify(fix), do: Map.new(fix, fn {key, value} -> {to_string(key), value} end)
 
@@ -63,6 +74,13 @@ defmodule SymphonyElixir.Setup.Fixes do
     case tracker.create_label(name, team) do
       {:ok, _label} -> :ok
       {:error, reason} -> {:error, {:refused, refusal(~s(create the label "#{name}" in team #{team}), reason)}}
+    end
+  end
+
+  defp apply_fix(%{"action" => "create_state", "team" => team, "name" => name, "type" => type} = fix, tracker) do
+    case tracker.create_workflow_state(name, team, Statuses.color(type), type: type, position: fix["position"]) do
+      {:ok, _state} -> :ok
+      {:error, reason} -> {:error, {:refused, refusal(~s(create the state "#{name}" in team #{team}), reason)}}
     end
   end
 
@@ -89,6 +107,9 @@ defmodule SymphonyElixir.Setup.Fixes do
 
   defp describe(:label_create_failed),
     do: "a label with that name may already exist in the team or the workspace. Rename or remove it in Linear, then check again."
+
+  defp describe(:workflow_state_create_failed),
+    do: "a state with that name may already exist in the team. Rename or remove it in Linear, then check again."
 
   defp describe({:linear_api_status, status, _body}) when status in [401, 403],
     do: "the Linear API key isn't allowed to (HTTP #{status}). Ask an admin of the team to do it, or use a key that may."

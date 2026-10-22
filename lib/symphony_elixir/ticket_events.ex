@@ -14,9 +14,12 @@ defmodule SymphonyElixir.TicketEvents do
   `decision.recorded` when a person answers it or `decision.withdrawn` when it ends unanswered;
   both name the request in their payload's `request`.
 
-  Nothing writes events yet and nothing reads them: the snapshot fields of
-  `SymphonyElixir.TicketState` (`signals`, `verdicts`, `dispatches`) stay the source of truth until
-  readers move over.
+  The machinery writes events next to the snapshot fields of `SymphonyElixir.TicketState`
+  (`SymphonyElixir.TicketSignals`, `SymphonyElixir.Hold`, `SymphonyElixir.Decisions`, and the
+  orchestrator's `run.started` and `run.ended` next to its dispatches) and next to the audit records
+  of the Director's stop, force and Inbox moves (`person.action`), and nothing reads them yet: the
+  snapshot fields (`signals`, `verdicts`, `holds`, `decisions`, `dispatches`) stay the source of
+  truth until readers move over.
   """
 
   alias SymphonyElixir.RunStore
@@ -63,6 +66,15 @@ defmodule SymphonyElixir.TicketEvents do
   """
   @spec record(String.t(), String.t(), String.t(), map(), [record_opt()]) :: {:ok, Event.t()} | {:error, Types.error() | term()}
   def record(repo_key, issue_id, type, payload, opts \\ []) do
+    with {:ok, event} <- build(repo_key, issue_id, type, payload, opts), do: RunStore.append_ticket_event(event)
+  end
+
+  @doc """
+  The event `record/5` would write, validated and with its summary, without writing it: for a
+  writer that appends a ticket's events in one transaction (`RunStore.append_ticket_events/1`).
+  """
+  @spec build(String.t(), String.t(), String.t(), map(), [record_opt()]) :: {:ok, Event.t()} | {:error, Types.error() | term()}
+  def build(repo_key, issue_id, type, payload, opts) do
     with {:ok, actor} <- actor(opts),
          {:ok, payload} <- Types.validate(type, payload, actor.kind, Map.get(actor, :run_kind)),
          {:ok, options} <- options(opts) do
@@ -84,8 +96,7 @@ defmodule SymphonyElixir.TicketEvents do
         payload: payload,
         artifacts: options.artifacts
       }
-      |> then(&%{&1 | summary: Summary.render(&1)})
-      |> RunStore.append_ticket_event()
+      |> then(&{:ok, %{&1 | summary: Summary.render(&1)}})
     end
   end
 

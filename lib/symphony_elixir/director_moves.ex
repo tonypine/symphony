@@ -5,7 +5,8 @@ defmodule SymphonyElixir.DirectorMoves do
 
   Each move reads the ticket, refuses one the workflow doesn't allow from its current state
   (`{:error, {:conflict, message}}`, a 409), posts its comment when it has one, makes the Linear
-  move, writes a `director_move` audit record and answers with the states it moved between:
+  move, writes a `director_move` audit record and a `person.action` event on the ticket (a Decide's
+  event is its `decision.recorded`), and answers with the states it moved between:
 
   - `:approve_plan`: a plan (label `plan` or `breakdown`) in `Plan Review` moves to the waiting
     state (`Waiting on sub-tickets`). It is a person's move, so Symphony promotes the plan's
@@ -62,6 +63,7 @@ defmodule SymphonyElixir.DirectorMoves do
     MergeConfirmation,
     OperatorStop,
     Orchestrator,
+    PathUnlock,
     PlanReview,
     PrWatch,
     Restart,
@@ -82,6 +84,7 @@ defmodule SymphonyElixir.DirectorMoves do
   @backlog_state "Backlog"
   @todo_state "Todo"
   @comment_preview_chars 500
+  @director {:person, "the Director"}
 
   @type move ::
           :approve_plan
@@ -496,11 +499,16 @@ defmodule SymphonyElixir.DirectorMoves do
 
   # The answer goes into the ticket's scope now, so the run the cleared hold lets through reads it.
   # Best-effort: the decision is already recorded under the request, and the Inbox's next read
-  # writes it from there when this write fails (`SymphonyElixir.Decisions.sync/2`).
+  # writes it from there when this write fails (`SymphonyElixir.Decisions.sync/2`). A pick of an
+  # option that unlocks protected paths records them, read from the hold's decision
+  # (`SymphonyElixir.PathUnlock.picked_paths/2`).
   defp record_decision(issue, request_comment_id, hold, picks) do
-    title = get_in(hold, [:decision, :title])
-    question = get_in(hold, [:decision, :question]) || Enum.map_join(picks, " / ", & &1.question)
-    entry = Decisions.entry(request_comment_id, Date.utc_today(), title, question, Enum.map_join(picks, " / ", & &1.answer))
+    decision = Map.get(hold, :decision) || %{}
+    title = Map.get(decision, :title)
+    question = Map.get(decision, :question) || Enum.map_join(picks, " / ", & &1.question)
+    answers = Enum.map(picks, & &1.answer)
+    unlocks = PathUnlock.picked_paths(decision, answers)
+    entry = Decisions.entry(request_comment_id, Date.utc_today(), title, question, Enum.join(answers, " / "), unlocks)
     _ = Decisions.record(issue.id, [entry], repo_key: issue.repo_key)
     :ok
   end
@@ -519,8 +527,10 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
+  # The decision is answered, so its clear records no withdrawal: the answer's `decision.recorded`
+  # ends the request.
   defp clear_decision_hold(issue, to_state, comment, opts) do
-    case Hold.clear(issue.repo_key, issue.id, :needs_decision, store_opts(opts)) do
+    case Hold.clear(issue.repo_key, issue.id, :needs_decision, [answered: true] ++ store_opts(opts)) do
       :ok -> decision_finish(issue, to_state, comment, opts)
       {:error, reason} -> {:error, {:store, "couldn't clear the hold on #{issue.identifier}: #{inspect(reason)}"}}
     end
@@ -715,7 +725,21 @@ defmodule SymphonyElixir.DirectorMoves do
       :ok -> :ok
       {:error, reason} -> Logger.warning("Failed to record director_move audit event: issue_id=#{issue.id} reason=#{inspect(reason)}")
     end
+
+    record_person_action(move, issue, from_state, to_state)
   end
+
+  # Each move the audit records is also the Director's action on the ticket's events, best effort.
+  # A Decide records none: its answer is the `decision.recorded` that `SymphonyElixir.Decisions`
+  # writes. The control API authenticates one shared token, so the actor is the Director.
+  defp record_person_action("decide", _issue, _from_state, _to_state), do: :ok
+
+  defp record_person_action(move, %Issue{repo_key: repo_key, id: issue_id}, from_state, to_state) when is_binary(repo_key) do
+    payload = if move in ["unblock", "restart"], do: %{action: move}, else: %{action: "move", move: move}
+    TicketSignals.record_event(repo_key, issue_id, "person.action", Map.merge(payload, %{from: from_state, to: to_state}), actor: @director)
+  end
+
+  defp record_person_action(_move, _issue, _from_state, _to_state), do: :ok
 
   # The orchestrator polls again at once, so the Inbox and the dashboard follow the move. The move is
   # already made, so the request goes from a task: an orchestrator busy past the call's timeout

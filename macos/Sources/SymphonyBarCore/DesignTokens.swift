@@ -141,6 +141,10 @@ public enum DesignTokens {
         public static let sidebarWidth: Double = 200
         public static let minSidebarWidth: Double = 180
         public static let maxSidebarWidth: Double = 260
+        /// The toolbar's title and subtitle at most, each on one line cut at the end. The widest view's (Setup's) is
+        /// about 240 pt; a pull request's title (D15) runs past 400, which would push the window's own toolbar items
+        /// into its overflow menu. The page's header shows the title whole.
+        public static let toolbarTitleMaxWidth: Double = 260
         /// The list column of the Inbox (and later Initiatives).
         public static let listColumnWidth: Double = 340
         public static let minListColumnWidth: Double = 300

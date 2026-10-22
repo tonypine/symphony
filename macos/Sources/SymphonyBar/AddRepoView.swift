@@ -67,6 +67,18 @@ final class AddRepoViewModel: ObservableObject {
     var checkRepo: (_ key: String) async -> SetupAPI.Result = { _ in .failed("") }
     /// Sends a Linear fix to Symphony (`POST /api/v1/setup/fixes`).
     var setupRequest: (_ fix: [String: Any]) async -> SetupAPI.Result = { _ in .failed("") }
+    /// Instant GitHub updates: `GET /api/v1/setup`'s section, and an action (`POST /api/v1/setup/github_updates/…`).
+    var readGitHubUpdates: () async -> GitHubUpdatesAPI.Result = { .failed("") }
+    var gitHubUpdatesRequest: (GitHubUpdatesAPI.Action, [String: String]) async -> GitHubUpdatesAPI.Result = { _, _ in .failed("") }
+    /// True while instant GitHub updates are on, so the sheet ends by connecting the repo to them (S13).
+    @Published private(set) var instantUpdatesOn = false
+    /// S13: the Instant updates step, once Check setup is done.
+    @Published private(set) var instantUpdates: AddRepoInstantUpdates?
+    /// Why Skip couldn't take the repo back to polling.
+    @Published private(set) var instantSkipError: String?
+    /// Done on Instant updates: the section as the step left it, so Setup's card lists the repo at once.
+    var onGitHubUpdates: (GitHubUpdatesSection) -> Void = { _ in }
+    private var instantController: AddRepoInstantUpdatesController?
     /// Starts Symphony, and whether it can now.
     var startSymphony: () -> Void = {}
     var canStartSymphony: () -> Bool = { false }
@@ -173,7 +185,9 @@ final class AddRepoViewModel: ObservableObject {
             landedWorkflow: landedWorkflow,
             projects: linear,
             labels: labelsState,
-            editing: editing != nil
+            editing: editing != nil,
+            // A Symphony that isn't running can't connect the repo now: it stays on polling until Finish Setup….
+            instantUpdates: instantUpdatesOn && setupCheck?.phase != .onNextStart
         )
     }
 
@@ -285,7 +299,7 @@ final class AddRepoViewModel: ObservableObject {
 
     /// Goes on to the next page, or connects the repo on Review.
     func goForward() {
-        guard stepProblem == nil, !isSaving, step != .check else { return }
+        guard stepProblem == nil, !isSaving, step != .check, step != .instantUpdates else { return }
         if let next = flow.step(after: step) {
             step = next
         } else {
@@ -457,6 +471,60 @@ final class AddRepoViewModel: ObservableObject {
         }
     }
 
+    // MARK: Instant updates (S13)
+
+    /// Asks Symphony whether instant updates are on, so the sheet ends with them. Only when adding a repo.
+    func loadInstantUpdates() {
+        guard editing == nil else { return }
+        let read = readGitHubUpdates
+        Task {
+            if case let .updated(section) = await read() { instantUpdatesOn = section.isInstant }
+        }
+    }
+
+    /// Check setup's Done: on to Instant updates while they are on, else the sheet closes.
+    func finishCheck() {
+        guard let check = setupCheck, flow.steps.contains(.instantUpdates) else { return finish() }
+        checkTask?.cancel()
+        step = .instantUpdates
+        let send = gitHubUpdatesRequest
+        let read = readGitHubUpdates
+        let controller = AddRepoInstantUpdatesController(key: check.key, services: AddRepoInstantUpdatesController.Services(
+            send: { await send($0, $1) }, read: { await read() }
+        ))
+        controller.onChange = { [weak self, weak controller] step in
+            guard let self, let controller, instantController === controller else { return }
+            instantUpdates = step
+        }
+        instantController = controller
+        instantUpdates = controller.step
+        Task { await controller.start() }
+    }
+
+    func retryInstantUpdates(_ rowID: String) {
+        guard let controller = instantController else { return }
+        Task { await controller.retry(rowID) }
+    }
+
+    /// Done: the card shows the repo connected, and the sheet closes.
+    func finishInstantUpdates() {
+        if let section = instantUpdates?.section { onGitHubUpdates(section) }
+        finish()
+    }
+
+    /// Skip: the repo stays on polling, and the sheet closes; a repo Symphony couldn't take back keeps it open with why.
+    func skipInstantUpdates() {
+        guard let controller = instantController else { return finish() }
+        instantSkipError = nil
+        Task {
+            if let problem = await controller.skip() {
+                instantSkipError = problem
+            } else {
+                finish()
+            }
+        }
+    }
+
     /// Start Symphony: it checks the repo as it starts, and opens Setup if something is wrong.
     func startSymphonyAndClose() {
         startSymphony()
@@ -466,6 +534,7 @@ final class AddRepoViewModel: ObservableObject {
     /// Done, or Close: the repo stays saved, and the errors stay on the Setup page.
     func finish() {
         checkTask?.cancel()
+        instantController?.close()
         close()
     }
 
@@ -689,6 +758,12 @@ struct AddRepoView: View {
             workflowPage
         case .review:
             reviewPage(flow)
+        case .instantUpdates:
+            if let instant = model.instantUpdates {
+                ScrollView {
+                    AddRepoInstantUpdatesPage(step: instant, skipError: model.instantSkipError, retry: model.retryInstantUpdates)
+                }
+            }
         case .check:
             if let check = model.setupCheck {
                 ScrollView {
@@ -708,7 +783,9 @@ struct AddRepoView: View {
     }
 
     @ViewBuilder private var footer: some View {
-        if model.step == .check, let check = model.setupCheck {
+        if model.step == .instantUpdates, let instant = model.instantUpdates {
+            AddRepoInstantUpdatesFooter(step: instant, skip: model.skipInstantUpdates, finish: model.finishInstantUpdates)
+        } else if model.step == .check, let check = model.setupCheck {
             checkFooter(check)
         } else {
             stepFooter
@@ -719,9 +796,11 @@ struct AddRepoView: View {
         AddRepoCheckFooter(
             check: check,
             canStart: model.canStartSymphony(),
+            doneTitle: model.flow.steps.contains(.instantUpdates) ? AddRepoInstantUpdates.continueTitle : AddRepoSetupCheck.doneTitle,
             checkAgain: model.checkAgain,
             start: model.startSymphonyAndClose,
-            finish: model.finish
+            finish: model.finishCheck,
+            close: model.finish
         )
     }
 
@@ -1008,13 +1087,16 @@ struct AddRepoCheckPage: View {
 struct AddRepoCheckFooter: View {
     let check: AddRepoSetupCheck
     var canStart = false
+    /// Done, or Continue while Instant updates follow.
+    var doneTitle = AddRepoSetupCheck.doneTitle
     var checkAgain: () -> Void = {}
     var start: () -> Void = {}
     var finish: () -> Void = {}
+    var close: () -> Void = {}
 
     var body: some View {
         HStack {
-            Button("Close", role: .cancel, action: finish)
+            Button("Close", role: .cancel, action: close)
                 .keyboardShortcut(.cancelAction)
             Spacer()
             if let problem = check.doneProblem {
@@ -1031,7 +1113,7 @@ struct AddRepoCheckFooter: View {
                 Button(AddRepoSetupCheck.startTitle, action: start)
                     .disabled(!canStart)
             }
-            Button(AddRepoSetupCheck.doneTitle, action: finish)
+            Button(doneTitle, action: finish)
                 .keyboardShortcut(.defaultAction)
                 .disabled(!check.canFinish)
                 .help(check.doneProblem ?? "")
@@ -1040,36 +1122,49 @@ struct AddRepoCheckFooter: View {
     }
 }
 
-/// "1 Source › 2 Linear › 3 WORKFLOW.md › 4 Review", the page shown in bold and those done checked.
+/// "1 Source › 2 Linear › 3 WORKFLOW.md › 4 Review", the page shown in bold and those done checked, on one line: with
+/// more steps than fit, the steps done show by their tick alone, and the others by name alone (`AddRepoStepIndicatorFit`).
 struct AddRepoStepIndicator: View {
     let steps: [AddRepoStep]
     let current: AddRepoStep
 
     var body: some View {
         let index = steps.firstIndex(of: current) ?? 0
+        ViewThatFits(in: .horizontal) {
+            row(.full)
+            row(.compact)
+            row(.currentOnly)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Step \(index + 1) of \(steps.count): \(current.rawValue)")
+    }
+
+    private func row(_ fit: AddRepoStepIndicatorFit) -> some View {
         HStack(spacing: 6) {
-            ForEach(Array(steps.enumerated()), id: \.element) { position, step in
+            ForEach(Array(fit.marks(steps, current: current).enumerated()), id: \.element.step) { position, mark in
                 if position > 0 {
                     Image(systemName: "chevron.right")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
                 HStack(spacing: 3) {
-                    if position < index {
+                    if mark.isDone {
                         Image(systemName: "checkmark.circle.fill").foregroundStyle(.secondary)
-                    } else {
-                        Text("\(position + 1)")
+                    } else if let number = mark.number {
+                        Text("\(number)")
                             .monospacedDigit()
                     }
-                    Text(step.rawValue)
+                    if let name = mark.name {
+                        Text(name)
+                    }
                 }
                 .font(.callout)
-                .fontWeight(step == current ? .semibold : .regular)
-                .foregroundStyle(step == current ? .primary : .secondary)
+                .fontWeight(mark.isCurrent ? .semibold : .regular)
+                .foregroundStyle(mark.isCurrent ? .primary : .secondary)
+                .lineLimit(1)
+                .help(mark.name == nil ? mark.step.rawValue : "")
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Step \(index + 1) of \(steps.count): \(current.rawValue)")
     }
 }
 
@@ -1127,5 +1222,65 @@ struct AddRepoWarningBox<Actions: View>: View {
 extension AddRepoWarningBox where Actions == EmptyView {
     init(message: String) {
         self.init(message: message, showsActions: false) { EmptyView() }
+    }
+}
+
+/// S13, the Instant updates page: "Instant updates for <repo>", what it does and why, then the webhook and the test
+/// update, each done, working or failed with Retry. Outside the sheet's model so it also renders offscreen.
+struct AddRepoInstantUpdatesPage: View {
+    let step: AddRepoInstantUpdates
+    var skipError: String?
+    var retry: (_ rowID: String) -> Void = { _ in }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
+            Text(step.title)
+                .font(DesignTokens.TypeStyle.rowTitle.font)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
+            Text(step.explanation)
+                .font(DesignTokens.TypeStyle.body.font)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            GitHubUpdatesSetupRows(rows: step.rows) { _, rowID in retry(rowID) }
+            if let skipError {
+                Label(skipError, systemImage: DesignTokens.Status.problem.symbol)
+                    .font(DesignTokens.TypeStyle.callout.font)
+                    .foregroundStyle(DesignTokens.Status.problem.tint)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(DesignTokens.Space.s4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// S13's footer: Skip (the repo stays on polling), then Done, off with its reason until the test update arrived.
+struct AddRepoInstantUpdatesFooter: View {
+    let step: AddRepoInstantUpdates
+    var skip: () -> Void = {}
+    var finish: () -> Void = {}
+
+    var body: some View {
+        HStack {
+            Button(AddRepoInstantUpdates.skipTitle, action: skip)
+                .keyboardShortcut(.cancelAction)
+                .disabled(!step.canSkip)
+                .help("Leaves \(step.key) on polling.")
+            Spacer()
+            if let problem = step.doneProblem {
+                Text(problem)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button(AddRepoInstantUpdates.doneTitle, action: finish)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!step.canFinish)
+                .help(step.doneProblem ?? "")
+        }
+        .padding(12)
     }
 }

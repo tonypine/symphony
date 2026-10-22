@@ -8,7 +8,8 @@ import Foundation
 /// nor in `config/settings_ui_exempt.yml`, so a new setting ships with a control. `SettingsUIManifestTests`
 /// checks that every key the line editors (`RepositoriesConfig`, `RunProfilesConfig`, `MaxConcurrentAgents`,
 /// `TokenLimits`, `OperationTimeouts`, `GitHubUpdates`, `DispatchLoopLimits`, `BuiltInTicketPatterns`,
-/// `QAHostTools`, `MacAppQAPlaybook`) write is here. Keep one string literal per line, sorted.
+/// `QAHostTools`, `MacAppQAPlaybook`) write is here, and that the rest are `writtenBySymphony`. Keep one string literal
+/// per line, sorted.
 public enum SettingsUIManifest {
     public static let keyPaths: [String] = [
         "agent.command",
@@ -30,7 +31,11 @@ public enum SettingsUIManifest {
         "auto_review.playbooks.macos_app.dev_server_port",
         "auto_review.playbooks.macos_app.launch_env",
         "auto_review.playbooks.macos_app.requires",
+        "github.webhooks.enabled",
+        "github.webhooks.events",
         "github.webhooks.fallback_poll_interval_ms",
+        "github.webhooks.relay",
+        "github.webhooks.secret",
         "github.webhooks.silence_alert_minutes",
         "issues.states.ci_fix",
         "issues.states.code_review",
@@ -66,5 +71,15 @@ public enum SettingsUIManifest {
         "watchdog.dispatch_loop_window_ms",
         "watchdog.pending_tool_report_after_ms",
         "workspaces.git_network_timeout_ms",
+    ]
+
+    /// The keys of `keyPaths` the app changes through Symphony rather than a line editor: Setup's GitHub updates card
+    /// asks Symphony (`POST /api/v1/setup/github_updates/<action>`), which writes them as it sets the relay, the
+    /// secret and the hooks up, and lists the events it asks GitHub for.
+    public static let writtenBySymphony: Set<String> = [
+        "github.webhooks.enabled",
+        "github.webhooks.events",
+        "github.webhooks.relay",
+        "github.webhooks.secret",
     ]
 }

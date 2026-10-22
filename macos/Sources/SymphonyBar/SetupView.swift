@@ -8,8 +8,17 @@ extension SymphonyWindowModel {
     /// What Setup shows: the state poll's payload, or a fix's or Check Again's answer while it is newer. Nil from a
     /// Symphony that predates Setup.
     var setupPayload: SetupPayload? {
-        guard let state = overviewState?.snapshot.setup else { return nil }
-        return SetupPayload.newest(state, setupAnswer)
+        guard let state = overviewState?.snapshot.setup, var payload = SetupPayload.newest(state, setupAnswer) else { return nil }
+        // Check Again's and the fixes' answers leave GitHub updates out: they come from the state poll, or an action's
+        // answer while it is newer.
+        payload.githubUpdates = githubUpdates
+        return payload
+    }
+
+    /// Instant GitHub updates as the card shows them: the state poll's, or the last action's answer until the state
+    /// poll reports something new.
+    var githubUpdates: GitHubUpdatesSection? {
+        GitHubUpdatesAnswer.shown(state: overviewState?.snapshot.setup?.githubUpdates, answer: githubUpdatesAnswer)
     }
 
     /// The state the Overview reads, with Setup's newest payload, so its Setup row follows a fix at once.
@@ -30,17 +39,23 @@ extension SymphonyWindowModel {
         return SetupSummary(payload: payload, buildWarning: setupBuildWarning)
     }
 
+    /// The card, its ages counted from the state's time, as the Overview counts them.
+    func githubUpdatesCard(now: Date = Date()) -> GitHubUpdatesCard? {
+        githubUpdates.map { GitHubUpdatesCard(section: $0, now: overviewState?.generatedAt ?? now) }
+    }
+
     func setupPage(now: Date = Date()) -> SetupPage {
         let payload = setupPayload
         return SetupPage(payload: payload, buildWarning: payload == nil ? nil : setupBuildWarning, order: setupOrder, now: now)
     }
 
     /// Setup's toolbar button is Check Again rather than Refresh.
-    var showsSetupCheck: Bool { selection == .setup && shownTicket == nil && state.countsKnown }
+    var showsSetupCheck: Bool { selection == .setup && !showsPage && state.countsKnown }
 
     /// ⌘R and the toolbar's button: reads Symphony's state again, and on Setup runs its checks again.
     func refresh() {
         if showsSetupCheck, overviewState?.snapshot.setup != nil { checkSetupAgain() }
+        readPullRequest()
         client.refresh()
     }
 
@@ -169,7 +184,7 @@ extension SymphonyWindowModel {
         setupBanner = nil
     }
 
-    private func showSetupBanner(_ banner: SetupBanner) {
+    func showSetupBanner(_ banner: SetupBanner) {
         setupBannerTask?.cancel()
         setupBanner = banner
         NSAccessibility.post(
@@ -181,6 +196,197 @@ extension SymphonyWindowModel {
             try? await Task.sleep(for: .seconds(SetupBanner.duration))
             guard !Task.isCancelled, let self, setupBanner?.id == banner.id else { return }
             setupBanner = nil
+        }
+    }
+}
+
+// MARK: - GitHub updates
+
+/// The guided setup reaches Symphony, the secret item, Terminal and the restart through the window controller's hooks.
+extension SymphonyWindowModel: GitHubUpdatesSetupHost {
+    func sendGitHubUpdatesRequest(_ action: GitHubUpdatesAPI.Action, _ params: [String: String]) async -> GitHubUpdatesAPI.Result {
+        await onGitHubUpdatesRequest(action, params)
+    }
+
+    func readGitHubUpdatesSection() async -> GitHubUpdatesAPI.Result { await onGitHubUpdatesRead() }
+    func moveHandedOffWebhookSecret() -> WebhookSecret.Move { onMoveWebhookSecret() }
+    func webhookSecretIsStored() -> Bool { onWebhookSecretStored() }
+    func openGitHubTerminal(_ ghArguments: [String]) -> String? { onOpenGitHubTerminal(ghArguments) }
+    func restartSymphony() { onRestartSymphony() }
+}
+
+extension SymphonyWindowModel {
+    /// Drops an action's answer once the state poll reports something new, so it never comes back later.
+    func settleGitHubUpdatesAnswer() {
+        guard let answer = githubUpdatesAnswer, answer.baseline != overviewState?.snapshot.setup?.githubUpdates else { return }
+        githubUpdatesAnswer = nil
+    }
+
+    /// A card button: Restart Relay at once, Turn On Instant Updates… and Finish Setup… through the guided setup, the
+    /// others through their consequence sheet.
+    func perform(_ action: GitHubUpdatesCard.Action) {
+        guard let section = githubUpdates else { return }
+        switch action {
+        case .restartRelay: return restartRelay()
+        case .turnOn: return openGitHubUpdatesSetup(.turnOn, section: section)
+        case .finishSetup: return openGitHubUpdatesSetup(.finishSetup, section: section)
+        case .turnOff, .recreateSecret, .changeRelay: break
+        }
+        guard githubUpdatesSheet?.isWorking != true else { return }
+        githubUpdatesSheet = GitHubUpdatesSheet(action, section: section)
+    }
+
+    // MARK: The guided setup (S2–S6)
+
+    private func openGitHubUpdatesSetup(_ purpose: GitHubUpdatesSetup.Purpose, section: GitHubUpdatesSection) {
+        guard githubUpdatesSetup == nil else { return }
+        let controller = GitHubUpdatesSetupController(purpose: purpose, section: section, services: .init(host: self))
+        controller.onChange = { [weak self] setup in
+            guard let self, githubUpdatesSetupController === controller else { return }
+            githubUpdatesSetup = setup
+        }
+        controller.onFinish = { [weak self] section in self?.finishGitHubUpdatesSetup(section) }
+        githubUpdatesSetupController = controller
+        githubUpdatesSetup = controller.setup
+    }
+
+    /// Continue, or Done on the last page.
+    func githubUpdatesSetupForward() {
+        guard let controller = githubUpdatesSetupController else { return }
+        Task { await controller.goForward() }
+    }
+
+    func githubUpdatesSetupBack() {
+        githubUpdatesSetupController?.goBack()
+    }
+
+    func githubUpdatesSetupPerform(_ button: GitHubUpdatesSetup.Button, on rowID: String) {
+        guard let controller = githubUpdatesSetupController else { return }
+        Task { await controller.perform(button, on: rowID) }
+    }
+
+    func githubUpdatesSetupPick(relay: String) {
+        githubUpdatesSetupController?.pick(relay: relay)
+    }
+
+    func githubUpdatesSetupURL(_ url: String) {
+        githubUpdatesSetupController?.setURL(url)
+    }
+
+    /// The app came back to the front, as after Terminal: a row waiting on it checks at once.
+    func githubUpdatesSetupActivated() {
+        guard let controller = githubUpdatesSetupController else { return }
+        Task { await controller.appActivated() }
+    }
+
+    /// Cancel: what the setup did stays, and the card shows where it stopped, with Finish Setup….
+    func cancelGitHubUpdatesSetup() {
+        guard let controller = githubUpdatesSetupController else { return }
+        controller.close()
+        closeGitHubUpdatesSetup(controller.setup.section)
+    }
+
+    private func finishGitHubUpdatesSetup(_ section: GitHubUpdatesSection) {
+        closeGitHubUpdatesSetup(section)
+        let text = section.isInstant
+            ? "Instant updates are on. GitHub tells Symphony about CI and pull requests at once."
+            : "Setup saved. Finish Setup… on the card picks up where it stopped."
+        showSetupBanner(SetupBanner(style: .success, text: text))
+    }
+
+    private func closeGitHubUpdatesSetup(_ section: GitHubUpdatesSection) {
+        githubUpdatesSetupController = nil
+        githubUpdatesSetup = nil
+        accept(section)
+        client.refresh()
+    }
+
+    /// S9 and S8: Symphony starts the relay again; the card follows its answer.
+    func restartRelay() {
+        guard !restartingRelay else { return }
+        restartingRelay = true
+        Task {
+            switch await onGitHubUpdatesRequest(.restartRelay, [:]) {
+            case let .updated(section):
+                accept(section)
+            case let .failed(message):
+                showSetupBanner(.failed(message))
+            }
+            restartingRelay = false
+            client.refresh()
+        }
+    }
+
+    func cancelGitHubUpdatesSheet() {
+        guard githubUpdatesSheet?.isWorking != true else { return }
+        githubUpdatesSheet = nil
+    }
+
+    /// The sheet's verb, or Try Again: sends its action. On success the sheet closes and the card shows the answer; on
+    /// failure the sheet stays with the reason.
+    func confirm(_ sheet: GitHubUpdatesSheet) {
+        guard sheet.canConfirm else { return }
+        var working = sheet
+        working.start()
+        githubUpdatesSheet = working
+        let request = working.request
+        Task {
+            switch await onGitHubUpdatesRequest(request.action, request.params) {
+            case let .updated(section):
+                githubUpdatesSheet = nil
+                // A new secret: the app keeps it from now on.
+                if working.kind == .recreateSecret { _ = onMoveWebhookSecret() }
+                accept(section)
+                showSetupBanner(SetupBanner(style: .success, text: Self.done(working.kind, section: section)))
+            case let .failed(message):
+                if githubUpdatesSheet?.id == working.id {
+                    var failed = working
+                    failed.fail(message)
+                    githubUpdatesSheet = failed
+                }
+            }
+            client.refresh()
+        }
+    }
+
+    /// The two intervals under Details: written to symphony.yml once `symphony check` passes on the result, as
+    /// Settings writes them; Symphony reads them on its next check.
+    func saveGitHubUpdateIntervals(safetyNetMinutes: Int, silenceAlertMinutes: Int) async -> Bool {
+        guard let file = SymphonyConfigFile(settingsPath: configPath()) else {
+            showSetupBanner(.failed("Settings names no symphony.yml, so nothing was saved."))
+            return false
+        }
+        do {
+            let loaded = try file.readGitHubUpdates()
+            let updates = loaded.settingMinutes(fallbackPoll: safetyNetMinutes, silenceAlert: silenceAlertMinutes)
+            let check = onCheckConfig
+            if case let .failed(message) = try await file.writeGitHubUpdates(updates, from: loaded, checkingWith: { await check($0) }) {
+                showSetupBanner(.failed("symphony check refused the change, so nothing was saved: \(ConfigCheck.reasonFirst(message))"))
+                return false
+            }
+        } catch {
+            showSetupBanner(.failed("Couldn't change symphony.yml, so nothing was saved: \(error.localizedDescription)"))
+            return false
+        }
+        showSetupBanner(SetupBanner(style: .success, text: "Saved. Symphony uses the new intervals on its next check."))
+        client.refresh()
+        return true
+    }
+
+    /// An answer from outside the window (Add Repo's Instant updates) the card shows until the state poll catches up.
+    func acceptGitHubUpdates(_ section: GitHubUpdatesSection) {
+        accept(section)
+    }
+
+    private func accept(_ section: GitHubUpdatesSection) {
+        githubUpdatesAnswer = GitHubUpdatesAnswer(section: section, baseline: overviewState?.snapshot.setup?.githubUpdates)
+    }
+
+    private static func done(_ kind: GitHubUpdatesSheet.Kind, section: GitHubUpdatesSection) -> String {
+        switch kind {
+        case .turnOff: "Instant updates are off. Symphony checks GitHub every \(GitHubUpdatesCard.interval(section.poll.intervalMs))."
+        case .recreateSecret: "Symphony made a new webhook secret and connected the repos again."
+        case .changeRelay: "Symphony now uses \(section.relay.label)."
         }
     }
 }
@@ -290,7 +496,26 @@ struct SetupContent: View {
                 EmptyState(title: page.sentence, symbol: SymphonyView.setup.symbol, showsSpinner: true)
             case .healthy, .problems:
                 ScrollView {
-                    SetupPageBody(page: page, actions: actions, welcome: model.setupWelcome)
+                    SetupPageBody(
+                        page: page, actions: actions, welcome: model.setupWelcome,
+                        githubUpdates: model.githubUpdatesCard(), githubActions: githubActions
+                    )
+                    .sheet(item: githubSheet) { sheet in
+                        GitHubUpdatesSheetView(
+                            sheet: sheet,
+                            change: { model.githubUpdatesSheet = $0 },
+                            cancel: model.cancelGitHubUpdatesSheet,
+                            confirm: { model.confirm(sheet) }
+                        )
+                    }
+                }
+                .sheet(item: githubSetup) { setup in
+                    GitHubUpdatesSetupView(setup: setup, actions: githubSetupActions)
+                        .interactiveDismissDisabled()
+                }
+                // Back from Terminal after Grant Permission…: the row checks at once.
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                    model.githubUpdatesSetupActivated()
                 }
                 .overlay(alignment: .bottom) {
                     if let banner = model.setupBanner {
@@ -317,6 +542,33 @@ struct SetupContent: View {
     private var sheet: Binding<SetupFixSheet?> {
         Binding(get: { model.setupSheet }, set: { if $0 == nil { model.cancelSetupSheet() } })
     }
+
+    private var githubActions: GitHubUpdatesCardActions {
+        GitHubUpdatesCardActions(
+            perform: model.perform,
+            saveIntervals: { await model.saveGitHubUpdateIntervals(safetyNetMinutes: $0, silenceAlertMinutes: $1) },
+            restarting: model.restartingRelay
+        )
+    }
+
+    private var githubSheet: Binding<GitHubUpdatesSheet?> {
+        Binding(get: { model.githubUpdatesSheet }, set: { if $0 == nil { model.cancelGitHubUpdatesSheet() } })
+    }
+
+    private var githubSetup: Binding<GitHubUpdatesSetup?> {
+        Binding(get: { model.githubUpdatesSetup }, set: { if $0 == nil { model.cancelGitHubUpdatesSetup() } })
+    }
+
+    private var githubSetupActions: GitHubUpdatesSetupActions {
+        GitHubUpdatesSetupActions(
+            pick: model.githubUpdatesSetupPick(relay:),
+            setURL: model.githubUpdatesSetupURL,
+            perform: model.githubUpdatesSetupPerform,
+            back: model.githubUpdatesSetupBack,
+            forward: model.githubUpdatesSetupForward,
+            cancel: model.cancelGitHubUpdatesSetup
+        )
+    }
 }
 
 struct SetupPageActions {
@@ -332,6 +584,11 @@ struct SetupPageBody: View {
     var expanded: Set<String> = []
     /// SU12: the first launch's welcome line, above the sentence.
     var welcome: String?
+    /// The GitHub updates card; nil from a Symphony that doesn't report them.
+    var githubUpdates: GitHubUpdatesCard?
+    var githubActions = GitHubUpdatesCardActions()
+    /// The card's Details start open (S7's snapshot).
+    var githubExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
@@ -363,6 +620,9 @@ struct SetupPageBody: View {
             }
             if !page.warnings.isEmpty {
                 SetupCard(title: SetupPage.warningsTitle, severity: .warning, groups: page.warnings, actions: actions, expanded: expanded)
+            }
+            if let githubUpdates {
+                GitHubUpdatesCardView(card: githubUpdates, actions: githubActions, startsExpanded: githubExpanded)
             }
             if !page.notChecked.isEmpty {
                 Card(title: SetupPage.notCheckedTitle) {

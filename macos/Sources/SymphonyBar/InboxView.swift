@@ -8,28 +8,32 @@ struct InboxContent: View {
 
     var body: some View {
         if let list = model.inboxList {
-            InboxView(
-                list: list,
-                selection: $model.inboxSelection,
-                picks: model.picks(for:),
-                pick: model.pick,
-                writeIn: model.writeIn,
-                perform: { model.perform($0, on: $1) },
-                openOverview: { model.show(.overview) },
-                openTicket: model.openTicket,
-                openMention: model.openPeek,
-                openMentionDirectly: model.openMentionDirectly,
-                watches: model.watchState.watches
-            )
-            // N4: a chip opens its peek beside the review, or over the window when that would leave it too narrow.
-            .modifier(PeekPresenter(model: model))
-            .safeAreaInset(edge: .bottom) {
+            // C18: the banner sits under the review, never over it: an AppKit view in the review (the write-in's editor)
+            // draws above any SwiftUI view laid over it.
+            VStack(spacing: 0) {
+                InboxView(
+                    list: list,
+                    selection: $model.inboxSelection,
+                    picks: model.picks(for:),
+                    pick: model.pick,
+                    writeIn: model.writeIn,
+                    perform: { model.perform($0, on: $1) },
+                    openOverview: { model.show(.overview) },
+                    openTicket: model.openTicket,
+                    openMention: model.openPeek,
+                    openMentionDirectly: model.openMentionDirectly,
+                    watches: model.watchState.watches,
+                    scrollOffset: { model.inboxScroll[$0] },
+                    rememberScroll: { model.inboxScroll[$1] = $0 }
+                )
                 if let banner = model.inboxBanner {
                     InboxBannerView(banner: banner, undo: { model.undo(banner) }, close: model.dismissBanner)
                         .padding(DesignTokens.Space.s3)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
+            // N4: a chip opens its peek beside the review, or over the window when that would leave it too narrow.
+            .modifier(PeekPresenter(model: model))
             .animation(.default, value: model.inboxBanner)
             .sheet(item: $model.inboxSheet) { sheet in
                 ConsequenceSheetView(
@@ -68,6 +72,10 @@ struct InboxView: View {
     var openMentionDirectly: (Mention) -> Void = { _ in }
     /// The PR and CI watcher's block on each ticket, by identifier, for a watcher decision's evidence (S16).
     var watches: [String: WatchBlock] = [:]
+    /// Where each review was scrolled to, by issue id, and keeping it: a page opened from the review and left with ⌘[
+    /// finds it where it was.
+    var scrollOffset: (String) -> Double? = { _ in nil }
+    var rememberScroll: (Double, String) -> Void = { _, _ in }
     /// True while the review is narrower than `narrowReviewWidth`.
     @State private var narrow = false
 
@@ -102,6 +110,7 @@ struct InboxView: View {
                             }
                         }
                     }
+                    .modifier(RememberedScroll(offset: scrollOffset(item.id), remember: { rememberScroll($0, item.id) }))
                     // A new item starts with its own picks (the recommended options).
                     .id(item.id)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -123,6 +132,45 @@ struct InboxView: View {
             }
         }
     }
+}
+
+/// A review's scroll view that starts where the review was left, and keeps where it is. A chip the keyboard moves to
+/// scrolls the review through its position: the scroll view keeps its offset itself, and its next layout puts back a
+/// scroll made from AppKit alone (the write-in, picked last, back at the bottom). Offsets count from the review's top,
+/// below the toolbar, as its position does.
+private struct RememberedScroll: ViewModifier {
+    let offset: Double?
+    let remember: (Double) -> Void
+    @State private var position = ScrollPosition()
+    /// The offset the scroll view reported last, or the one a chip's scroll goes to; kept where a scroll redraws
+    /// nothing.
+    @State private var reported = ReportedOffset()
+
+    func body(content: Content) -> some View {
+        content
+            .scrollPosition($position)
+            .onScrollGeometryChange(for: Double.self) {
+                InboxScrollOffsets.fromTop(contentOffset: $0.contentOffset.y, topInset: $0.contentInsets.top)
+            } action: { _, offset in
+                reported.y = offset
+                remember(offset)
+            }
+            .environment(\.scrollReview, ScrollReviewAction { distance in
+                // From where the last scroll goes, so a second Tab before the scroll view reports adds to the first.
+                reported.y += distance
+                position.scrollTo(y: reported.y)
+            })
+            .onAppear {
+                guard let offset else { return }
+                // Once the review is laid out.
+                DispatchQueue.main.async { position.scrollTo(y: offset) }
+            }
+    }
+}
+
+/// A review's offset, in a box: setting it redraws nothing.
+private final class ReportedOffset {
+    var y: Double = 0
 }
 
 /// D2e: good news, and the way back to the Overview. A scope that hides items says so (P6).
@@ -893,12 +941,16 @@ private struct OptionCardView: View {
 /// N11's field, under the write-in card once it is picked: a `TextEditor` three lines tall that grows with the
 /// text to eight, then scrolls, over the hint that says how the agent reads it. The editor types into the field's own
 /// draft, handed to `commit` on each change: bound straight to the window model, a redraw between fast keystrokes put
-/// an older text back and lost what was typed.
+/// an older text back and lost what was typed. While a sheet covers the window (Send Decision, a peek) the text is a
+/// `Text`, which dims with the window as the editor's AppKit view doesn't, and the editor gets the keyboard back after.
 private struct WriteInField: View {
     @State private var text: String
     var commit: (String) -> Void
     var focused: FocusState<Bool>.Binding
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+    @State private var covered = false
+    /// Whether the editor had the keyboard before the sheet came up: taking the editor out takes its focus.
+    @State private var hadFocus = false
 
     /// The height of one line of `type.body`.
     private static let lineHeight = NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: NSFont.systemFontSize))
@@ -923,7 +975,7 @@ private struct WriteInField: View {
                 .frame(maxWidth: .infinity, minHeight: Self.lineHeight * 3, alignment: .topLeading)
                 .hidden()
                 .overlay(alignment: .topLeading) {
-                    if offscreenSnapshot {
+                    if offscreenSnapshot || covered {
                         Text(text).font(DesignTokens.TypeStyle.body.font).padding(.horizontal, Self.inset)
                     } else {
                         editor
@@ -941,6 +993,15 @@ private struct WriteInField: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityHidden(true)
         }
+        .sheetCover($covered)
+        .onChange(of: focused.wrappedValue) { _, isFocused in
+            if !covered { hadFocus = isFocused }
+        }
+        .onChange(of: covered) { _, covered in
+            guard !covered, hadFocus else { return }
+            // Once the editor is back in the field.
+            DispatchQueue.main.async { focused.wrappedValue = true }
+        }
     }
 
     private var editor: some View {
@@ -955,7 +1016,7 @@ private struct WriteInField: View {
 }
 
 /// The word "Recommended" in an accent capsule.
-private struct RecommendedBadge: View {
+struct RecommendedBadge: View {
     var body: some View {
         Text("Recommended")
             .font(DesignTokens.TypeStyle.label.font)

@@ -1,5 +1,5 @@
 {
-  "about": "The gh stand-in's answers (test/support/stubs/gh.py) for the repo acme/widgets, the Add Repo sheet's calls: its probe (default branch, top-level files, mix.exs), then the WORKFLOW.md pull request (base commit, branch, commit, pull request, and deleting the branch after a failure). The first entry whose args match a call answers it; a * inside an argument matches any text. status (default 200) and output are what the fake gh prints: stdout with exit status 0 for a 200, stderr with exit status 1 otherwise. See test/support/README.md.",
+  "about": "The gh stand-in's answers (test/support/stubs/gh.py) for the repo acme/widgets, the Add Repo sheet's calls: its probe (default branch, top-level files, mix.exs), then the WORKFLOW.md pull request (base commit, branch, commit, pull request, and deleting the branch after a failure), and the guided instant updates setup's Grant Permission… (gh auth refresh with the webhook scope). The first entry whose args match a call answers it; a * inside an argument matches any text. status (default 200) and output are what the fake gh prints: stdout with exit status 0 for a 200, stderr with exit status 1 otherwise. See test/support/README.md.",
   "answers": [
     {
       "args": [
@@ -90,6 +90,17 @@
         "repos/acme/widgets/git/refs/heads/symphony/add-workflow"
       ],
       "output": ""
+    },
+    {
+      "args": [
+        "auth",
+        "refresh",
+        "-h",
+        "github.com",
+        "-s",
+        "admin:repo_hook"
+      ],
+      "output": "✓ Authentication complete.\n"
     }
   ]
 }

@@ -1284,6 +1284,32 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
+  @doc """
+  Marks the one-time job `name` (such as `ticket_events_backfill_v1`) done at `at`, so a restart
+  does not run it again.
+  """
+  @spec put_marker(String.t(), DateTime.t()) :: :ok | {:error, term()}
+  def put_marker(name, %DateTime{} = at) when is_binary(name) do
+    with :ok <- ensure_started() do
+      durable_transaction(fn -> :mnesia.write({@totals_table, {:marker, name}, at}) end)
+    end
+  end
+
+  @doc "When `put_marker/2` marked the one-time job `name` done, or nil."
+  @spec get_marker(String.t()) :: DateTime.t() | nil | {:error, term()}
+  def get_marker(name) when is_binary(name) do
+    with :ok <- ensure_started() do
+      transaction(fn -> read_marker(name) end)
+    end
+  end
+
+  defp read_marker(name) do
+    case :mnesia.read(@totals_table, {:marker, name}) do
+      [{@totals_table, _key, %DateTime{} = at}] -> at
+      _none -> nil
+    end
+  end
+
   @spec clear() :: :ok | {:error, term()}
   def clear do
     with :ok <- ensure_started() do

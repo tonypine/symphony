@@ -411,7 +411,8 @@ defmodule SymphonyElixir.Codex.AppServer do
     :qa_driver,
     :qa_android_driver,
     :unlocked_paths,
-    :review_verdict_sink
+    :review_verdict_sink,
+    :qa_verdict_sink
   ]
 
   defp dynamic_tool_executor(issue, workspace, command_security, dependency_gate, on_message, metadata, opts) do
@@ -757,7 +758,8 @@ defmodule SymphonyElixir.Codex.AppServer do
       :qa_driver,
       :qa_android_driver,
       :unlocked_paths,
-      :review_verdict_sink
+      :review_verdict_sink,
+      :qa_verdict_sink
     ])
   end
 

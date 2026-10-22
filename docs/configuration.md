@@ -112,13 +112,13 @@ in neither of these:
 
 Only a person can exempt a setting. The exemption file is an agent-protected path: the agent
 sandbox denies writing it, and the `protected paths` check fails a Symphony PR whose own commits
-change it until a person other than the author adds the `protected-paths-approved` label.
+change it. A person's decision that allows the change clears it for Symphony.
 
 To add a setting: add its control to the app, list its key in the manifest, and extend the line
 editor and its tests. To exempt one, a person adds it to the exemption file with the reason, in the
-same PR, and labels the PR. A person can also let the ticket's next agent run edit the file with a
-decision on the ticket, such as `Decision: Unlock config/settings_ui_exempt.yml for TP-760 to drop
-the stale exemption.` (see [Unlocking a protected path for one run](security.md#unlocking-a-protected-path-for-one-run)). `WORKFLOW.md` front matter (repo-owned settings) is not covered.
+same PR; when the ticket reaches Merging Symphony asks them to allow the change, one pick in the Inbox. A person can
+also let the ticket's next agent run edit the file by picking an option that allows it in the
+ticket's decision request (see [Allowing a change to a protected path](security.md#allowing-a-change-to-a-protected-path)). `WORKFLOW.md` front matter (repo-owned settings) is not covered.
 
 ## Top-Level Sections
 
@@ -1102,13 +1102,18 @@ pull_requests:
   agent PR send the issue back to work on the same PR. Symphony ends every PR comment it posts
   with a hidden `<!-- symphony:agent -->` marker and skips those.
 - `checks.retry_failed_once` reruns the failed jobs of a red head once before a `CI Fix` run.
-- `checks.max_fix_attempts` (default 10) is a backstop, not a budget: once that many `CI Fix` runs
-  were sent for red heads, or 3 in a row met the same failure (the same check and first error line),
-  Symphony files a fix ticket for the failing check (or reuses the open one) and holds the ticket on
-  it, in place, until the fix ticket is done; then the count restarts. A
-  conflict gets 3 fix runs whatever this says, then, with no open PR competing for its files, goes
-  to `Rework`. The counts reset once the PR is green and conflict-free. `checks.escalate_to_state`
-  is deprecated: it loads with a warning and does nothing.
+- `checks.max_fix_attempts` (default 10) is a backstop for the `CI Fix` runs sent for failed
+  checks, not a budget. Once that many were sent for red heads, or 3 runs in a row met the same
+  failure (the same check and first error line) whatever the count, the backstop stops them: it
+  files a fix ticket for the failing check (self-heal component `ci:<check>`), or reuses the open
+  one, and holds the ticket on it with a `Blocked` hold, in place, instead of asking anyone (D15).
+  The hold clears by itself once the fix ticket is done, and the count restarts. Conflicts have no
+  limit that asks: a conflict gets 3 fix runs whatever this says; back after those, the ticket waits
+  on the open PRs that share its files, as a `Blocked` hold and Linear blocked-by links (D14), or
+  goes to `Rework` when none does (D16). Both counts reset once the PR is green and conflict-free.
+  See [When CI keeps failing](pr-ci-decisions.md#when-ci-keeps-failing) and
+  [Competing PRs](pr-ci-decisions.md#competing-prs). `checks.escalate_to_state` is deprecated: it
+  loads with a warning and does nothing.
 - `checks.landing_wait_timeout_ms` bounds how long a `Merging` PR may stay `BLOCKED` by branch
   protection on a green head before a landing agent takes it over, and how long a landing run that
   ended on pending checks waits for its head to settle. In any phase it is also how long a head waits
@@ -1287,9 +1292,24 @@ including ones detached with `nohup` or `setsid`, such as a server the agent sta
 of the PR under `$TMPDIR`, and logs each one. It can read
 the issue, its parent and the PR, and attach evidence files with `linear_attach_file`; it cannot
 move the issue, comment, push or write to GitHub. The session stops at `timeout_ms`, `max_turns`,
-or `agent.limits.tokens_per_issue`. An agent that ends its turn without the JSON verdict gets one
-follow-up turn in the same session asking for it, and the QA report notes "verdict after 1
-follow-up".
+or `agent.limits.tokens_per_issue`.
+
+The QA agent records its verdict with the `qa_verdict` tool, offered to QA passes (and epic
+reviews) only, as its last act. Its input schema is the verdict contract: `pass`, `fail` or
+`blocked`, the steps, `findings` (each with the step, the viewport, what was expected, what
+happened and the evidence, rendered to one line of the report's `### Findings`), a `reason` for a
+block, and `needs_person`, `needs_dev_server`, `covered_by` and `scope` as before. The call is the
+verdict, recorded the moment it arrives: a pass whose agent then ends its turn without a word
+still has it, and the QA report and the rework run read its findings. A verdict the tool cannot
+read comes back with the error, so the agent fixes it and calls again. It is read leniently
+(`PASS`, `failed`, a single finding object instead of a list). An agent that ends its turn without
+the call is read from the JSON in its final message instead, for one release. A turn with neither
+gets one follow-up turn in the same session asking for the `qa_verdict` call, and the QA report
+notes "verdict after 1 follow-up". When that follow-up comes back empty (the agent process
+exited, or its turn was finalised with no answer), the pass runs again once in the same run, as
+the same attempt: the log says `qa_verdict_missing: ... retrying the pass as the same attempt`, no
+blocked attempt is spent, and the report notes "pass run again once after a missing verdict". A
+pass that misses its verdict again is `blocked` as before.
 
 **The design QA judges a UI against.** A plan keeps its Screens document and `screens.html` on
 the parent, so a QA pass (and an epic review) reads more than the ticket's own documents:
@@ -1340,49 +1360,69 @@ steps, so the next review marks them. A failing step that names no defect is a f
 titled after the step. A defect's follow-up answers to every `gap` label of its steps and waits on
 what any of them waits on, except on one another.
 
-**Which steps QA walks.** Each step of a `## User walkthrough` names the one place that proves it
-([ADR 0003](adr/0003-automated-tests-first-qa-last-resort.md)), on a line at the end of the step:
+**Which steps QA walks.** Each step of a `## User walkthrough` is proved in one place
+([ADR 0003](adr/0003-automated-tests-first-qa-last-resort.md)), and three parties share the work:
+
+- the person writing the ticket describes the user's flow in plain steps, each with `Expected:`,
+  and names no test and no check;
+- the implementer, who writes the tests, ends each step a test of the PR covers with
+  `Proved by: <test>`, through the `linear_record_walkthrough_proofs` tool, which edits only those
+  steps' proof lines in the description and refuses a check name;
+- the repo names the check that runs its tests, `proof_check` in its WORKFLOW.md front matter (this
+  repository: `make-all`), and Symphony confirms every named test on the PR head before QA.
+
+A proof is the line at the end of a step:
 
 | Line | Proof | QA |
 | --- | --- | --- |
-| `Proved by: <check> › <test>` | the named automated test: the GitHub check run (or workflow), then the suite, scenario or test file; a plain ` > ` works as the separator, backticks are dropped, and `Proved by: <check>` alone names the check without a test | does not walk the step: Symphony's QA pre-check confirms it on the PR head before the agent starts (below), and the agent links the result |
-| `Proved by: QA` | the QA pass | walks the step |
-| no `Proved by:` line | read as `Proved by: QA`, so tickets written before the rule keep working | walks the step |
+| `Proved by: <test>` | the named automated test, run by the repo's `proof_check`: the suite, scenario or test file as the code has it; backticks are dropped, and the `proof_check`'s own name alone names the check without a test | does not walk the step: Symphony's QA pre-check confirms it on the PR head before the agent starts (below), and the agent links the result |
+| `Proved by: <check> › <test>` | the older form, still read: the GitHub check run (or workflow) the step names, then the test; a plain ` > ` works as the separator | as above |
+| `Proved by: QA` | the QA pass: a judgment by sight the author keeps for QA | walks the step |
+| no `Proved by:` line | read as `Proved by: QA` | walks the step |
 
-`SymphonyElixir.Walkthrough` parses the walkthrough into steps with their proof, and the QA prompt
-lists the steps to link and the steps to walk when the walkthrough names at least one test.
+A `Proved by:` inside inline code (between backticks) is a quotation, not a proof: a step that
+describes proof lines quotes them, keeps its text whole, and is proved by its own last unquoted
+`Proved by:`, or is a QA step when it has none.
 
-**The QA pre-check.** Before the QA agent starts, Symphony confirms each `Proved by: <check> ›
-<test>` step itself (`SymphonyElixir.QaPreCheck`), so whether a named test ran is never left to the
-agent reading check runs: a green head does not prove it, since a path-filtered workflow such as
-`macos-e2e` may not run on a PR at all. For each step it:
+A repo without `proof_check` has no named-test proofs: QA walks every step of its walkthroughs,
+whatever their `Proved by:` lines say. `SymphonyElixir.Walkthrough` parses the walkthrough into steps
+with their proof, and the QA prompt lists the steps to link and the steps to walk when the
+walkthrough names at least one test.
+
+**The QA pre-check.** Before the QA agent starts, Symphony confirms each step a named test proves
+itself (`SymphonyElixir.QaPreCheck`), so whether a named test ran is never left to the agent reading
+check runs: a green head does not prove it, since a path-filtered workflow such as `macos-e2e` may
+not run on a PR at all. For each step it:
 
 - looks for the test in the PR's checkout: a part with a `/` (or a file name such as
   `check_test.exs`, with or without a `:line`) must be a tracked file or folder, and any other part,
   such as a test or scenario name, must appear in the tracked files, within the file named before it
   when there is one (`test/foo_test.exs › "does X"`);
-- reads the PR head's status checks with `gh` and finds the ones `<check>` names: a check run, a
-  whole workflow, or `workflow / job`.
+- reads the PR head's status checks with `gh` and finds the ones the step's check names (the
+  `proof_check` for `Proved by: <test>`): a check run, a whole workflow, or `workflow / job`.
 
 | What the pre-check finds | Step | The pass |
 | --- | --- | --- |
 | the check passed and the test is in the checkout | `pass`, linked to the check run | the agent starts; the prompt lists the step as confirmed, with its link, and tells the agent not to walk it |
 | the check failed, did not run on the head, reported only `skipped`, or the named test is not in the checkout | `fail`, naming the step and what is missing | `fail` to `Rework` with no agent run: the ticket's proof is part of its work |
+| the step names a check that is neither the `proof_check` nor a check on the head (a check name copied from another repo, such as `ci`) | `fail`, saying so and naming the repo's `proof_check` | as above |
 | the check is still running | waiting | waits like the epic review waits for CI (above): the pass starts again a minute later, with no verdict; after an hour on the same head it is `blocked` with the reason, retried like any blocked pass, then a person decides (no QA tool raised it, so it never reaches the self-heal lane) |
 | CI on the PR head cannot be read, or the PR head is not the commit QA judges | — | `blocked` with the reason |
 
 The QA report lists every result under `### Pre-checks`, one line per step with the check run's
-link, and a failed step is also one of the report's findings. A walkthrough with no `Proved by:
-<check>` step reads nothing and runs as it always did. The epic review does not run the pre-check:
-its agent reads CI's runs on the base branch head, as above.
+link, and a failed step is also one of the report's findings. A walkthrough with no named-test step
+reads nothing, and QA walks it whole. The epic review does not run the pre-check: its agent reads
+CI's runs on the base branch head, as above.
 
-The instructions that write walkthroughs (the plan pipeline, the plan run, the feature ticket type,
-new issues filed during a run, and the ticket templates) route every step when it is written. A step
-code can drive names its test. A step that needs an environment QA lacks (a signed build, a device,
-real credentials) goes to an automated harness, never to QA. A step that needs a QA tool QA has, or
-one a sibling ticket adds, stays `Proved by: QA`, as does a judgment by sight. A plan never puts one
-journey both in a sub-ticket's walkthrough and in an end-to-end ticket: the end-to-end ticket owns
-it, and the sub-ticket's step names that test.
+The instructions that write walkthroughs (the plan pipeline, the plan run, new issues filed during a
+run, and the ticket templates) ask for plain steps that name no test and no check. A step that needs
+an environment QA lacks (a signed build, a device, real credentials) is an acceptance criterion
+asking for an automated harness; a judgment by sight, or a step that needs a QA tool, ends with
+`Proved by: QA`. A plan never puts one journey both in a sub-ticket's walkthrough and in an
+end-to-end ticket: the end-to-end ticket owns it. The implementation instructions (the feature
+ticket type, the start, execution and rework steps) have the implementer plan a test for every step
+code can drive and record each with `linear_record_walkthrough_proofs` before the handoff push,
+naming only tests in its PR.
 
 **OpenRouter in QA.** QA never uses a real, paid OpenRouter key. OpenRouter flows (Test connection
 in the macOS app's Settings, its Models list and Effort note, `symphony check` on an `openrouter`
@@ -2035,7 +2075,7 @@ toolchain for `make release`. Without the identity, where QA cannot install it,
 `qa_signing_identity_untrusted`, and the QA agent answers `blocked` with that message.
 
 QA needs `pull_requests.enabled: true` and `pull_requests.checks.enabled: true`: the `QA` run only
-dispatches on a head the CI poller has seen green.
+dispatches on a head the PR and CI watcher reads as green ([rule R27](pr-ci-decisions.md)).
 
 #### Android app QA
 
@@ -2389,6 +2429,11 @@ build lock takes one too, both refused by the no-TCP-listener profile. Build the
 in `build_cmd` and point `start_cmd` at that prebuilt artifact, so the dev server's sandbox only
 starts the artifact and never Mix (`scripts/qa-dashboard-server.sh` does this).
 
+The health check asks `health_check_url` every 250 ms and gives each request 250 ms, until one
+answers 200 or `health_timeout_ms` passes. Point it at a route that answers at once, not a page the
+server builds on each request: in the sandbox, on a shared runner, a page that takes 300 ms fails
+every probe. Symphony's own API has `GET /api/v1/health` for this.
+
 `build_cmd` (optional) runs with `sh -lc` in the same checkout before `start_cmd`, every time the
 dev server starts: in an agent run before the first turn, and in a QA `web` pass in its
 fresh worktree at the PR head, which has no `deps/`, `_build/` or build output yet. It gets the dev
@@ -2493,6 +2538,9 @@ pins `dashboard.port`; turning them off writes `enabled: false`. With `relay: gh
 Symphony runs one `gh webhook forward` per connected repository and restarts it when it drops; the
 other relays need their public URL, and Symphony adds a hook to each repository with
 `gh api repos/:repo/hooks`.
+The app's Setup page drives it from its **GitHub updates** card: **Turn On Instant Updates…** and
+**Turn Off…** (`enabled`), **Change Relay…** (`relay`), **Re-create Secret…** (`secret`), and the
+events (`events`) listed under Details; the two intervals there are the same as in Settings.
 
 ### `notifications`
 
@@ -2553,7 +2601,9 @@ comments again only when the ticket changed, and adds the quality gate's holds a
 `issue_identifier`, `repo_key`, `title`, `url`, `state`, `kind` (`action` for an open request,
 `plan` for a `plan` or `breakdown` parent in `Plan Review`; `clarify` for a quality gate hold or
 skip; `blocked` for a ticket an access hold pauses in place, with the reason the hold
-recorded and what clears it), `headline` (its one-line ask: the text after `**What to review:**` in the latest
+recorded and what clears it), `decision` (true for a request with options, which the app calls a
+Decision as the Inbox does; false for an older hand-written request with steps and every other
+kind), `headline` (its one-line ask: the text after `**What to review:**` in the latest
 `## Review brief` comment, the request's title, or what the quality gate asks), `waiting_since` and
 `waiting_seconds`; `counts.waiting_on_you` is their number. A ticket the orchestrator sees running,
 or watches outside `Plan Review`, is dropped — unless a hold pauses it, which is what waits on the
@@ -2711,6 +2761,7 @@ prompts:
     You are working on PR {{ pr.url }}.
 push_check:
   command: scripts/push-check
+proof_check: make-all
 verification:
   dev_server:
     start_cmd: "pnpm dev --port $SYMPHONY_VERIFICATION_PORT"
@@ -2726,8 +2777,16 @@ auto_review:
 You are working on {{ issue.identifier }}.
 ```
 
-The front matter accepts only `hooks`, `prompts`, `verification`, `validation` and
-`auto_review.playbooks`; any other key fails the repository's workflow. `hooks`, `verification`
+The front matter accepts only `hooks`, `prompts`, `push_check`, `proof_check`, `verification`,
+`validation`, `human_actions.enabled`, `playbook` and `auto_review.playbooks`; any other key fails
+the repository's workflow.
+
+`proof_check` is the GitHub check run or workflow name that proves the repository's automated tests
+ran (this repository: `make-all`). A walkthrough step the implementer ends with `Proved by: <test>`
+names a test it runs, and the QA pre-check confirms that check passed on the PR head and the test is
+in the checkout (see [Which steps QA walks](#auto_review)). Without it the repository has no
+named-test proofs: QA walks every walkthrough step. It is a non-empty string, read through
+`SymphonyElixir.Config` as the repository's `proof_check` setting; `symphony.yml` has no such key. `hooks`, `verification`
 and `auto_review.playbooks` are merged over `symphony.yml` key by key, with the repository's value
 winning (see [`auto_review`](#auto_review) for playbooks).
 

@@ -3,6 +3,8 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
   Instant GitHub updates, set up by Symphony itself: the steps that get GitHub's webhook
   deliveries to this Mac, their health, and the actions the app's Setup takes
   (`GET /api/v1/setup` → `github_updates`, `POST /api/v1/setup/github_updates/:action`).
+  `/api/v1/state` reads the section `SymphonyElixir.GitHub.WebhookSetup.Cache` last built, rather
+  than build it on every poll.
 
   ## Steps
 
@@ -15,16 +17,22 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
   | `repo:<key>` | the repository's relay runs (`gh_webhook_forward`), or the hook Symphony created exists | checks admin access, then starts the relay or creates the hook with `gh api repos/:repo/hooks` |
   | `test:<key>` | a delivery from the repository reached Symphony and verified after the test started | starts the relay again (a new forwarding hook is pinged) or pings the hook |
 
-  A failure says what is wrong and what fixes it, in plain words (`detail`, `fix`). A repository
-  whose step fails stays on polling; the others connect.
+  A failure says what is wrong and what fixes it, in plain words (`detail`, `fix`), and names the
+  app's button for a fix only the person can make (`action`): `grant_permission` (`gh auth refresh`
+  with the webhook scope), `sign_in` (`gh auth login`) or `restart_symphony` (the pinned port isn't
+  the one Symphony listens on). A repository whose step fails stays on polling; the others connect,
+  and `leave_on_polling` takes a connected one back to polling.
 
   ## Mode
 
   `off` while `github.webhooks.enabled` is false. `needs_setup` while it is on but this Mac was
   never set up (a `symphony.yml` brought from another Mac: J6); the steps already done show done.
   `setting_up` until every step is done and each connected repository's test verified. Then `on`,
-  or `degraded` (D12) while a relay can't restart or a repository heard nothing for
-  `github.webhooks.silence_alert_minutes` since a read found a change no delivery reported.
+  or `degraded` (D12) while a relay can't restart or stopped more than twice in ten minutes and
+  hasn't run ten minutes since, or a repository heard nothing for
+  `github.webhooks.silence_alert_minutes` since a read found a change no delivery reported. Each
+  repository says why (`degraded_reason`) and the interval its watcher polls at now
+  (`poll_interval_ms`).
 
   What this Mac's setup did is kept in the run store (`{:setup, :webhooks}`): when it was turned
   on, a URL relay's public URL, the hooks Symphony created (so turning off deletes only those), each
@@ -54,9 +62,9 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
     "cloudflare_tunnel" => "Cloudflare Tunnel",
     "tailscale_funnel" => "Tailscale Funnel"
   }
-  @actions ~w(turn_on run_step test restart_relay recreate_secret change_relay turn_off)
+  @actions ~w(turn_on run_step test leave_on_polling restart_relay recreate_secret change_relay turn_off)
 
-  @type failure :: %{detail: String.t(), fix: String.t()}
+  @type failure :: %{required(:detail) => String.t(), required(:fix) => String.t(), optional(:action) => String.t()}
   @type result :: :ok | {:pending, String.t()} | {:error, failure()}
   @type action_error :: {:not_found | :unprocessable | :conflict | :config, String.t()}
 
@@ -82,7 +90,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
 
   def action(action, _params, _opts), do: {:error, {:not_found, "There is no GitHub updates action named #{inspect(action)}."}}
 
-  @doc "The `github_updates` section of `GET /api/v1/setup`."
+  @doc "The `github_updates` section of `GET /api/v1/setup`, built now."
   @spec section() :: map()
   def section, do: section([])
 
@@ -90,6 +98,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
   def section(opts) when is_list(opts), do: section(context(opts))
 
   def section(%{} = ctx) do
+    ctx = read_once(ctx)
     record = load(ctx)
     webhooks = ctx.settings.().github.webhooks
     steps = Enum.map(step_ids(ctx), &step_entry(&1, record, ctx))
@@ -111,6 +120,37 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
       },
       rate_limit: PrWatch.rate_limit(run_store: ctx.store)
     }
+  end
+
+  @doc """
+  The section for `/api/v1/state`'s `setup`, built now, so the app's Setup card and its Overview
+  row follow the state poll (which reads the last one its cache built). Nil when it can't be read
+  (a configuration that doesn't load, a run store that isn't up), so the state payload never fails
+  on it.
+  """
+  @spec state_section(keyword()) :: map() | nil
+  def state_section(opts \\ []) do
+    section(opts)
+  rescue
+    error -> section_unavailable(Exception.message(error))
+  catch
+    kind, reason -> section_unavailable(Exception.format_banner(kind, reason))
+  end
+
+  # Every step, repository and relay entry asks for the settings and the repositories again, and
+  # each read parses symphony.yml and WORKFLOW.md (and the repositories run git): the section reads
+  # them, the port and the secret once.
+  defp read_once(ctx) do
+    settings = ctx.settings.()
+    repos = ctx.repos.()
+    port = ctx.port.()
+    secret = ctx.secret.()
+    %{ctx | settings: fn -> settings end, repos: fn -> repos end, port: fn -> port end, secret: fn -> secret end}
+  end
+
+  defp section_unavailable(reason) do
+    Logger.debug("Instant GitHub updates left out of the state: #{String.slice(reason, 0, 300)}")
+    nil
   end
 
   @doc """
@@ -324,6 +364,30 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
     end
   end
 
+  # One repository back to polling: its relay stops, the hook Symphony created goes, and its steps
+  # and test are forgotten, so the setup can finish without it.
+  defp apply_action("leave_on_polling", params, ctx) do
+    with :ok <- enabled(ctx),
+         {:ok, repo} <- repo_param(params, ctx) do
+      RelaySupervisor.stop(ctx.relays, repo.key)
+
+      deleted =
+        case Map.get(load(ctx).hooks, repo.key) do
+          nil -> false
+          hook -> delete_hook(hook, ctx) == :ok
+        end
+
+      update(ctx, fn record ->
+        %{
+          record
+          | steps: Map.drop(record.steps, ["repo:" <> repo.key, "test:" <> repo.key]),
+            tests: Map.delete(record.tests, repo.key),
+            hooks: if(deleted, do: Map.delete(record.hooks, repo.key), else: record.hooks)
+        }
+      end)
+    end
+  end
+
   defp apply_action("restart_relay", params, ctx) do
     with :ok <- enabled(ctx),
          :ok <- runs_relay(ctx),
@@ -412,7 +476,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
       case result do
         :ok -> %{status: "done", detail: nil, fix: nil}
         {:pending, detail} -> %{status: "waiting", detail: detail, fix: nil}
-        {:error, failure} -> %{status: "failed", detail: failure.detail, fix: failure.fix}
+        {:error, failure} -> %{status: "failed", detail: failure.detail, fix: failure.fix, action: Map.get(failure, :action)}
       end
 
     update(ctx, &put_in(&1, [:steps, step], Map.put(entry, :checked_at, ctx.now.())))
@@ -659,6 +723,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
       status: status.status,
       detail: Map.get(status, :detail) || done_detail(kind, status.status, ctx),
       fix: Map.get(status, :fix),
+      action: Map.get(status, :action),
       checked_at: stored && stored.checked_at
     }
   end
@@ -676,7 +741,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
 
   defp entry_of(:ok), do: %{status: "done"}
   defp entry_of({:pending, detail}), do: %{status: "waiting", detail: detail}
-  defp entry_of({:error, failure}), do: %{status: "failed", detail: failure.detail, fix: failure.fix}
+  defp entry_of({:error, failure}), do: %{status: "failed", detail: failure.detail, fix: failure.fix, action: Map.get(failure, :action)}
 
   defp step_kind("repo:" <> key), do: {"repo", key}
   defp step_kind("test:" <> key), do: {"test", key}
@@ -702,6 +767,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
     connected? = match?(%{status: "done"}, Map.get(record.steps, "repo:" <> repo.key))
     relay = RelaySupervisor.status(ctx.relays, repo.key)
     test = Map.get(record.tests, repo.key)
+    degraded_reason = if connected?, do: degraded_reason(health, relay, webhooks, now)
 
     %{
       key: repo.key,
@@ -717,19 +783,31 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
       signature_failures_24h: Health.signature_failures(health, now),
       missed_at: health.missed_at,
       relay_restarts: (relay && relay.restarts) || 0,
-      degraded: connected? and degraded?(health, relay, webhooks, now)
+      degraded: degraded_reason != nil,
+      degraded_reason: degraded_reason,
+      poll_interval_ms: Health.interval_ms(health, webhooks, poll_interval_ms(ctx), relay)
     }
   end
 
   defp hook_entry(%{id: id}), do: %{id: id, created_by_symphony: true}
   defp hook_entry(nil), do: nil
 
-  # D12: a relay that can't restart, or nothing heard for the alert's minutes since a read found a
-  # change no delivery reported.
-  defp degraded?(health, relay, webhooks, now) do
-    relay_down = match?(%{state: :restarting, failures: failures} when failures >= 2, relay)
+  # D12: a relay that can't restart or keeps stopping, or nothing heard for the alert's minutes
+  # since a read found a change no delivery reported. Why, in plain words; nil while it isn't.
+  defp degraded_reason(_health, %{state: :restarting, failures: failures} = relay, _webhooks, _now) when failures >= 2 do
+    "The relay can't start again: #{relay.last_error}"
+  end
+
+  defp degraded_reason(_health, %{stable: false} = relay, _webhooks, _now) do
+    "The relay stopped more than twice in ten minutes (#{relay.last_error}). Symphony polls at the normal interval until it runs ten minutes without a stop."
+  end
+
+  defp degraded_reason(health, _relay, webhooks, now) do
     missed = health.missed_at != nil and (health.last_delivery_at == nil or DateTime.after?(health.missed_at, health.last_delivery_at))
-    relay_down or (missed and Health.silent?(health, webhooks, now))
+
+    if missed and Health.silent?(health, webhooks, now) do
+      "No delivery for #{webhooks.silence_alert_minutes} minutes after a read found a change none reported."
+    end
   end
 
   defp relay_entry(webhooks, record, ctx) do
@@ -773,13 +851,14 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
 
   defp failure(:extension), do: {:error, %{detail: "The GitHub CLI's webhook extension isn't installed.", fix: "Run this step: Symphony installs it with gh extension install #{@extension}."}}
   defp failure(:no_gh), do: {:error, %{detail: "The GitHub CLI (gh) isn't installed.", fix: "Install it with brew install gh, sign in with gh auth login, then run this step again."}}
-  defp failure(:signed_out), do: {:error, %{detail: "The GitHub CLI isn't signed in.", fix: "Run gh auth login in Terminal, then run this step again."}}
+  defp failure(:signed_out), do: {:error, %{detail: "The GitHub CLI isn't signed in.", fix: "Run gh auth login in Terminal, then run this step again.", action: "sign_in"}}
 
   defp failure(:scope) do
     {:error,
      %{
        detail: "The GitHub CLI is signed in, but can't add webhooks to repositories (it lacks the admin:repo_hook scope).",
-       fix: "Run gh auth refresh -h github.com -s admin:repo_hook in Terminal, then run this step again."
+       fix: "Run gh auth refresh -h github.com -s admin:repo_hook in Terminal, then run this step again.",
+       action: "grant_permission"
      }}
   end
 
@@ -796,7 +875,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
   end
 
   defp failure(:port_moved, pinned) do
-    {:error, %{detail: "symphony.yml pins dashboard.port to #{pinned}, but Symphony listens on another port.", fix: "Restart Symphony so it listens on #{pinned}."}}
+    {:error, %{detail: "symphony.yml pins dashboard.port to #{pinned}, but Symphony listens on another port.", fix: "Restart Symphony so it listens on #{pinned}.", action: "restart_symphony"}}
   end
 
   defp failure(:admin, repo) do
@@ -885,6 +964,15 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
       key -> connected |> Enum.filter(&(&1.key == key)) |> one_repo(key)
     end
   end
+
+  defp repo_param(%{"repo" => key}, ctx) when is_binary(key) do
+    case Enum.find(ctx.repos.(), &(&1.key == key)) do
+      nil -> {:error, {:not_found, "There is no repository named #{inspect(key)}."}}
+      repo -> {:ok, repo}
+    end
+  end
+
+  defp repo_param(_params, _ctx), do: {:error, {:unprocessable, "Name the repository in repo."}}
 
   defp one_repo([], key), do: {:error, {:not_found, "#{inspect(key)} isn't a connected repository."}}
   defp one_repo(repos, _key), do: {:ok, repos}
@@ -992,6 +1080,10 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
     settings = ctx.settings.()
     settings.pr_review.poll_interval_ms || settings.polling.interval_ms
   end
+
+  @doc "The repositories the section lists, each with its key and GitHub name (`owner/name`, read with git)."
+  @spec repositories(keyword()) :: [%{key: String.t(), github: String.t() | nil}]
+  def repositories(opts \\ []), do: context(opts).repos.()
 
   defp context(opts) do
     gh_opts = Keyword.take(opts, [:gh_runner])

@@ -231,6 +231,34 @@ defmodule SymphonyElixir.ConfigSplitTest do
     assert settings.hooks.after_create == "echo setup"
     assert settings.verification.enabled == true
     assert settings.push_check == %Schema.PushCheck{}
+    assert settings.proof_check == nil
+  end
+
+  test "repo workflow names its proof check, read through Config for that repo", %{root: root} do
+    repo =
+      write_repo!(root, "app", """
+      ---
+      proof_check: make-all
+      ---
+      Repo prompt
+      """)
+
+    write_symphony!(root, [repo])
+    SymphonyElixir.Workflow.set_symphony_file_path(Path.join(root, "symphony.yml"))
+
+    assert {:ok, settings} = Config.settings_for_repo("app")
+    assert settings.proof_check == "make-all"
+    assert {:ok, %{config: %{"proof_check" => "make-all"}}} = Config.workflow_for_repo("app")
+  end
+
+  test "repo workflow rejects a blank proof check" do
+    for blank <- ["", "  "] do
+      assert {:error, {:invalid_repo_workflow_config, message}} = RepoWorkflowSchema.parse(%{"proof_check" => blank})
+      assert message =~ "proof_check must be a non-empty check name"
+    end
+
+    assert {:error, {:invalid_repo_workflow_config, message}} = RepoWorkflowSchema.parse(%{"proof_check" => ["make-all"]})
+    assert message =~ "proof_check is invalid"
   end
 
   test "repo workflow configures the push check", %{root: root} do

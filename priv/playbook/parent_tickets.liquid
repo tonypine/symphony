@@ -76,11 +76,11 @@ Which plan run this is:
    criteria and a line naming any earlier sub-ticket it depends on. For every
    sub-ticket it depends on, pass that identifier in `blocked_by` too, so Linear
    records the blocked-by link and Symphony's dependency gate holds it back. Each
-   step of a sub-ticket's `## User walkthrough` names the one place that proves it
-   (`Proved by: <check> › <test>` or `Proved by: QA`, as `Splitting work and
-   out-of-scope improvements` says), and one journey never sits both in a
-   sub-ticket's walkthrough and in an end-to-end sub-ticket: the end-to-end
-   sub-ticket owns it, and the other's step names that test.
+   step of a sub-ticket's `## User walkthrough` is a plain step a user takes with
+   the result they should see, naming no test and no check, as `Splitting work and
+   out-of-scope improvements` says: the implementer names each step's test. One
+   journey never sits both in a sub-ticket's walkthrough and in an end-to-end
+   sub-ticket: the end-to-end sub-ticket owns it, and the other leaves it out.
 3. Keep the parent's own description the definition of done the epic review resolves:
    its requirement rows and, when it has one, its `## User walkthrough`. The review
    reads them off the parent, so a requirement no sub-ticket delivers is a plan gap —

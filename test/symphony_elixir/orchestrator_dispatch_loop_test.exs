@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{CiWait, DispatchLoop, Hold, TicketState}
+  alias SymphonyElixir.{CiWait, DispatchLoop, Handoff, Hold, TicketEvents, TicketState}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Inbox.Item
 
@@ -35,6 +35,7 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
   end
 
   test "a ticket re-dispatched with no progress is held after the limit, with the reason readable in the Inbox" do
+    :ok = RunStore.clear()
     put_observed_head!("sha-same")
 
     # The four runs the limit allows went by on the same state and PR head, each ending quietly.
@@ -64,6 +65,9 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     assert [%{name: "dispatch_loop", details: %{kind: "implementation", count: 4, window_ms: 600_000}} | _rest] = record.signals
     assert_received {:memory_tracker_label_added, @issue_id, "Blocked"}
 
+    # The hold is one event: the `dispatch_loop` signal next to it is mirrored by the `hold.set`.
+    assert [{"hold.set", %{kind: "blocked", waits_on: %{type: "dispatch_loop", keys: ["implementation"]}}}] = ticket_events(@repo_key, @issue_id)
+
     # The Inbox, and `/api/v1/state`'s `waiting_on_you` built from it, lists the ticket with the reason.
     node = %{"id" => @issue_id, "identifier" => @identifier, "title" => "Loops", "url" => nil, "state" => %{"name" => "In Progress"}}
     lookups = %{hold: &Hold.get(&1, &2, :blocked)}
@@ -75,6 +79,9 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     put_observed_head!("sha-now")
     old_run = %{kind: :implementation, run_id: "run-old", state: "In Progress", head: "sha-before"}
     :ok = RunStore.record_ticket_dispatch(@repo_key, @issue_id, old_run)
+    # The ticket's earlier runs: one implementation run, and a run of another kind its number skips.
+    {:ok, _event} = TicketEvents.record(@repo_key, @issue_id, "run.started", %{run_id: "run-old", run_kind: "implementation", run_number: 1})
+    {:ok, _event} = TicketEvents.record(@repo_key, @issue_id, "run.started", %{run_id: "run-review", run_kind: "code_review", run_number: 1})
 
     capture_log(fn ->
       pid = start_retry(:LoopUnder)
@@ -83,6 +90,12 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
 
       assert [%{kind: "implementation", run_id: ^run_id, state: "In Progress", head: "sha-now", outcome: nil} | _older] =
                RunStore.get_ticket_state(@repo_key, @issue_id).dispatches
+
+      # The run's `run.started` event, next to its dispatch, numbered after the earlier implementation run.
+      assert [_old, _review, started] = RunStore.list_ticket_events(@repo_key, @issue_id, types: ["run.started"])
+
+      assert %{run_id: ^run_id, phase: "In Progress", actor: %{kind: :machine}, idempotency: "run.started:" <> ^run_id} = started
+      assert started.payload == %{run_id: run_id, run_kind: "implementation", run_number: 2, state: "In Progress", head: "sha-now"}
 
       refute Hold.held?(@repo_key, @issue_id, :blocked)
     end)
@@ -120,6 +133,8 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
 
       assert [%{run_id: "run-1", outcome: %{exit: "ended normally", head: "sha-pushed"}}] =
                RunStore.get_ticket_state(@repo_key, @issue_id).dispatches
+
+      assert [{"run.ended", %{run_id: "run-1", exit: "ended normally", head: "sha-pushed", counted: true}}] = ticket_events(@repo_key, @issue_id)
     end
 
     test "a failure is recorded with its reason" do
@@ -127,11 +142,67 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
 
       assert [%{run_id: "run-1", outcome: %{exit: "failed (:boom)", head: nil}}] =
                RunStore.get_ticket_state(@repo_key, @issue_id).dispatches
+
+      assert [{"run.ended", %{run_id: "run-1", exit: "failed (:boom)", counted: true} = payload}] = ticket_events(@repo_key, @issue_id)
+      refute Map.has_key?(payload, :head)
     end
 
     test "a run an unreachable model API stopped counts no attempt" do
       down(:DownUnreachable, {:model_api_unreachable, %{provider: "anthropic", error: "connection refused"}})
       assert RunStore.get_ticket_state(@repo_key, @issue_id).dispatches == []
+
+      assert [{"run.ended", %{run_id: "run-1", exit: "model API unreachable", counted: false}}] = ticket_events(@repo_key, @issue_id)
+    end
+
+    test "a run a usage limit stopped records its end uncounted" do
+      down(:DownUsageLimited, {:usage_limited, %{provider: "anthropic"}})
+      assert [{"run.ended", %{exit: "usage limit", counted: false}}] = ticket_events(@repo_key, @issue_id)
+    end
+
+    test "a run that handed off its head ends with exit handoff, its duration, tokens and run number" do
+      put_observed_head!("sha-handed-off")
+      {:ok, _event} = TicketEvents.record(@repo_key, @issue_id, "run.started", %{run_id: "run-1", run_kind: "implementation", run_number: 3})
+      :ok = Handoff.emit(@repo_key, @issue_id, %{head: "sha-handed-off"})
+
+      pid = start_orchestrator(:DownHandoff)
+      send_down(pid, "run-1", "In Progress", :normal, started_at: DateTime.add(DateTime.utc_now(), -90, :second), total_tokens: 12_345)
+
+      assert [%{payload: payload, run_id: "run-1", idempotency: "run.ended:run-1", actor: %{kind: :machine}} = ended] =
+               RunStore.list_ticket_events(@repo_key, @issue_id, types: ["run.ended"], run_id: "run-1")
+
+      assert %{run_id: "run-1", run_kind: "implementation", run_number: 3, exit: "handoff", head: "sha-handed-off", tokens: 12_345, counted: true} = payload
+      assert payload.duration_ms >= 90_000
+      assert ended.summary.title == "Implementation run 3 ended: handoff"
+
+      # The same run's end delivered again is the same event.
+      :ok = RunStore.record_ticket_dispatch(@repo_key, @issue_id, %{kind: :implementation, run_id: "run-1", state: "In Progress"})
+      send_down(pid, "run-1", "In Progress", :normal)
+      assert [%{id: id}] = RunStore.list_ticket_events(@repo_key, @issue_id, types: ["run.ended"], run_id: "run-1")
+      assert id == ended.id
+    end
+
+    test "a run with no start time or token count records neither" do
+      pid = start_orchestrator(:DownNoStart)
+      send_down(pid, "run-1", "In Progress", :boom, started_at: nil, total_tokens: nil)
+
+      assert [{"run.ended", payload}] = ticket_events(@repo_key, @issue_id)
+      refute Map.has_key?(payload, :duration_ms)
+      refute Map.has_key?(payload, :tokens)
+    end
+
+    test "a run.ended the ledger refuses is logged, and the run's end is still recorded as before" do
+      pid = start_orchestrator(:DownRefused)
+      log = send_down(pid, "run-1", "In Progress", :boom, total_tokens: -1)
+
+      assert log =~ "Failed to record the run.ended event on issue_id=#{@issue_id}"
+      assert [%{run_id: "run-1", outcome: %{exit: "failed (:boom)"}}] = RunStore.get_ticket_state(@repo_key, @issue_id).dispatches
+      assert ticket_events(@repo_key, @issue_id) == []
+    end
+
+    test "a PR run records no run event" do
+      pid = start_orchestrator(:DownPrRun)
+      send_down(pid, "run-1", "In Progress", :normal, run_kind: :pr)
+      assert ticket_events(@repo_key, @issue_id) == []
     end
   end
 
@@ -140,6 +211,7 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     @runs [%{workflow_name: "release", url: "https://github.com/acme/app/actions/runs/1"}, %{workflow_name: "macos", url: nil, id: 2}]
 
     test "five waits in ten minutes count no run and set no dispatch-loop hold" do
+      :ok = RunStore.clear()
       pid = start_orchestrator(:CiWaitUncounted)
 
       for n <- 1..5 do
@@ -152,6 +224,11 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
       record = RunStore.get_ticket_state(@repo_key, @issue_id)
       assert record.dispatches == []
       assert [%{name: "ci_wait_started", details: %{sha: @sha}}] = Enum.filter(record.signals, &(&1.name =~ "ci_wait"))
+      # The orchestrator's signal also yields its event.
+      assert [{"note", %{text: "Waiting for CI · sha #{@sha} (ci_wait_started)"}}] = ticket_events(@repo_key, @issue_id, "note")
+      # Each run still records its end, uncounted.
+      ended = ticket_events(@repo_key, @issue_id, "run.ended")
+      assert Enum.map(ended, fn {_type, payload} -> {payload.run_id, payload.exit, payload.counted} end) == for(n <- 1..5, do: {"run-#{n}", "waiting for CI", false})
 
       attempt = %{kind: :epic_review, state: "Epic Review", head: nil}
       assert DispatchLoop.check(record.dispatches, attempt, DispatchLoop.limits(Config.settings!().watchdog), DateTime.utc_now()) == :ok
@@ -257,18 +334,22 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     pid
   end
 
-  defp send_down(pid, run_id, issue_state, reason) do
+  defp send_down(pid, run_id, issue_state, reason, entry \\ []) do
     ref = make_ref()
 
-    running_entry = %{
-      pid: self(),
-      ref: ref,
-      run_id: run_id,
-      repo_key: @repo_key,
-      identifier: @identifier,
-      issue: %Issue{id: @issue_id, identifier: @identifier, state: issue_state, repo_key: @repo_key},
-      started_at: DateTime.utc_now()
-    }
+    running_entry =
+      Map.merge(
+        %{
+          pid: self(),
+          ref: ref,
+          run_id: run_id,
+          repo_key: @repo_key,
+          identifier: @identifier,
+          issue: %Issue{id: @issue_id, identifier: @identifier, state: issue_state, repo_key: @repo_key},
+          started_at: DateTime.utc_now()
+        },
+        Map.new(entry)
+      )
 
     :sys.replace_state(pid, fn state -> %{state | running: %{@issue_id => running_entry}, claimed: MapSet.new([@issue_id])} end)
 

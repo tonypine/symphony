@@ -13,6 +13,11 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   # The frame is padded to the requested width inside StatusDashboard; cap it.
   @max_terminal_columns 1_000
 
+  # A dev server's health check (`verification.dev_server.health_check_url`) gives each probe
+  # 250 ms: this answers once the endpoint serves, and reads nothing.
+  @spec health(Conn.t(), map()) :: Conn.t()
+  def health(conn, _params), do: json(conn, %{ok: true})
+
   @spec state(Conn.t(), map()) :: Conn.t()
   def state(conn, %{"format" => "terminal"} = params) do
     case StatusDashboard.frame(terminal_columns(params), status_dashboard()) do
@@ -27,7 +32,8 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   end
 
   def state(conn, _params) do
-    json(conn, Presenter.state_payload(orchestrator(), snapshot_timeout_ms(), stray_processes(), inbox(), setup()))
+    timeout = snapshot_timeout_ms()
+    json(conn, Presenter.state_payload(orchestrator(), timeout, stray_processes(), inbox(), setup(), github_updates()))
   end
 
   @spec inbox(Conn.t(), map()) :: Conn.t()
@@ -226,6 +232,11 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
 
   defp setup do
     Endpoint.config(:setup) || SymphonyElixir.Setup
+  end
+
+  # The setup's collaborators, as `GET /api/v1/setup` reads them (tests name fakes in the endpoint's config).
+  defp github_updates do
+    Endpoint.config(:github_updates) || []
   end
 
   defp initiatives do

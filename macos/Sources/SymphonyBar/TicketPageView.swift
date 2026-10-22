@@ -11,6 +11,9 @@ extension SymphonyWindowModel {
         return nil
     }
 
+    /// True on a ticket's or a pull request's page, where no sidebar view is selected.
+    var showsPage: Bool { history.current.isPage }
+
     /// The page of the ticket shown, from the client's last state and what the page read itself.
     var ticketPage: TicketPage? {
         guard let identifier = shownTicket else { return nil }
@@ -40,7 +43,7 @@ extension SymphonyWindowModel {
 
     var canGoBack: Bool { peekCanGoBack || history.canGoBack }
 
-    private var peekCanGoBack: Bool { shownTicket == nil && selection == .inbox && peek.canGoBack }
+    private var peekCanGoBack: Bool { !showsPage && selection == .inbox && peek.canGoBack }
 
     /// ⌘].
     func goForward() {
@@ -48,8 +51,8 @@ extension SymphonyWindowModel {
         showPlace()
     }
 
-    /// Shows the history's current place: a view takes the sidebar's selection; a ticket page reads its endpoints.
-    private func showPlace() {
+    /// Shows the history's current place: a view takes the sidebar's selection; a page reads its endpoints.
+    func showPlace() {
         switch history.current {
         case let .view(view):
             selection = view
@@ -57,6 +60,9 @@ extension SymphonyWindowModel {
             ticketSources = TicketPage.Sources()
             ticketSlowReadAt = nil
             readTicket(force: true)
+        case .pullRequest:
+            pullRequestResult = nil
+            readPullRequest()
         }
     }
 
@@ -191,12 +197,23 @@ struct TicketPageActions {
     var stopForcing: () -> Void = {}
     /// A click on a ticket or pull request chip in the page's text.
     var openMention: (Mention) -> Void = { _ in }
+    /// The Pull request fact and the done line: the pull request's page (D15), with its link.
+    var openPullRequest: (PullRequestPlace, URL?) -> Void = { _, _ in }
     /// The PR and CI card's Check Now, Open in Inbox and Open TP-x.
     var checkNow: () -> Void = {}
     var openInInbox: () -> Void = {}
     var openTicket: (String) -> Void = { _ in }
     /// True while a Check Now is on its way.
     var checking = false
+
+    /// A pull request link of the ticket's repo: its page (D15) when it is one, else the link.
+    func open(pullRequest url: URL, repoKey: String?) {
+        if let place = PullRequestPlace(repoKey: repoKey, url: url) {
+            openPullRequest(place, url)
+        } else {
+            openURL(url)
+        }
+    }
 
     /// Acts on a PR and CI card's button.
     func perform(_ button: PRWatchCard.Button) {
@@ -228,7 +245,8 @@ struct TicketPageContent: View {
                     revealWorktree: model.revealWorktree,
                     force: { model.openForceSheet(page.identifier) },
                     stopForcing: { model.stopForcing(page.identifier) },
-                    openMention: { ChipText.open($0, openTicket: model.openTicket, openURL: model.onOpenURL) },
+                    openMention: model.openDirectly,
+                    openPullRequest: model.openPullRequest,
                     checkNow: { model.checkNow(page.identifier) },
                     openInInbox: { model.openInInbox(page.identifier) },
                     openTicket: model.openTicket,
@@ -296,7 +314,7 @@ struct TicketPageBody: View {
                 }
                 .frame(minWidth: sideBySide ? Self.mainColumnMinWidth : nil, maxWidth: .infinity, alignment: .topLeading)
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
-                    Card(title: "Ticket") { FactsGrid(facts: page.facts, openURL: actions.openURL) }
+                    Card(title: "Ticket") { FactsGrid(facts: page.facts, open: { actions.open(pullRequest: $0, repoKey: page.repoKey) }) }
                     if let message = page.lastMessage {
                         Card(title: "Last message") { ChipText(text: message) }
                     }
@@ -387,7 +405,7 @@ private struct TicketHeader: View {
                 .foregroundStyle(.secondary)
             if let summary { ChipText(text: summary, color: .secondaryLabelColor) }
             if case let .done(pullRequest, _) = page.phase, pullRequest != nil || page.mergedText != nil {
-                DoneLine(pullRequest: pullRequest, merged: page.mergedText, openURL: actions.openURL)
+                DoneLine(pullRequest: pullRequest, merged: page.mergedText, open: { actions.open(pullRequest: $0, repoKey: page.repoKey) })
             }
         }
     }
@@ -415,7 +433,7 @@ private struct TicketHeader: View {
 private struct DoneLine: View {
     let pullRequest: URL?
     let merged: String?
-    let openURL: (URL) -> Void
+    let open: (URL) -> Void
 
     var body: some View {
         HStack(spacing: DesignTokens.Space.s2) {
@@ -426,7 +444,7 @@ private struct DoneLine: View {
                 Text("Merged \(merged)").font(DesignTokens.TypeStyle.body.font)
             }
             if let pullRequest {
-                Button(TicketPage.pullRequestName(pullRequest)) { openURL(pullRequest) }
+                Button(TicketPage.pullRequestName(pullRequest)) { open(pullRequest) }
                     .buttonStyle(.link)
             }
         }
@@ -543,7 +561,8 @@ private struct NowGrid: View {
 /// The Ticket card: state, type, initiative, PR, gate verdict, forced.
 private struct FactsGrid: View {
     let facts: [TicketPage.Fact]
-    let openURL: (URL) -> Void
+    /// The PR fact's link: its page (D15).
+    let open: (URL) -> Void
 
     var body: some View {
         Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: DesignTokens.Space.s4, verticalSpacing: DesignTokens.Space.s2) {
@@ -554,7 +573,7 @@ private struct FactsGrid: View {
                         .foregroundStyle(.secondary)
                         .gridColumnAlignment(.leading)
                     if let url = fact.url {
-                        Button(fact.value) { openURL(url) }
+                        Button(fact.value) { open(url) }
                             .buttonStyle(.link)
                             .help(url.absoluteString)
                     } else {

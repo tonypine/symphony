@@ -17,7 +17,7 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
   @primary_key false
   # `playbook` shapes the prompt only: `SymphonyElixir.Workflow` expands it before parsing,
   # so it is checked here and never reaches the config map.
-  @allowed_keys ~w(hooks prompts push_check verification validation auto_review human_actions playbook)
+  @allowed_keys ~w(hooks prompts push_check proof_check verification validation auto_review human_actions playbook)
 
   embedded_schema do
     field(:configured_paths, :map, virtual: true, default: %{})
@@ -25,6 +25,9 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
     embeds_one(:push_check, Schema.PushCheck, on_replace: :update, defaults_to_struct: true)
     embeds_one(:verification, Schema.Verification, on_replace: :update, defaults_to_struct: true)
     field(:prompts, :map, default: %{})
+    # The GitHub check run or workflow that proves the repo's automated tests ran: a walkthrough
+    # step's `Proved by: <test>` names a test it runs (`SymphonyElixir.Walkthrough`).
+    field(:proof_check, :string)
     field(:validation, {:array, :string}, default: [])
     field(:auto_review, :map, default: %{})
     # Only `enabled`: a repo can turn the human-action project updates off for its issues.
@@ -61,6 +64,7 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
     |> maybe_put("hooks", configured_map(configured_paths, "hooks", &hooks_to_map(workflow.hooks, &1)))
     |> maybe_put("prompts", workflow.prompts)
     |> maybe_put("push_check", configured_map(configured_paths, "push_check", fn _paths -> push_check_to_map(workflow.push_check) end))
+    |> maybe_put("proof_check", workflow.proof_check)
     |> maybe_put("verification", configured_map(configured_paths, "verification", &verification_to_map(workflow.verification, &1)))
     |> maybe_put("validation", workflow.validation)
     |> maybe_put("auto_review", workflow.auto_review)
@@ -69,13 +73,20 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
 
   defp changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, [:prompts, :validation, :auto_review, :human_actions], empty_values: [])
+    |> cast(attrs, [:prompts, :proof_check, :validation, :auto_review, :human_actions], empty_values: [])
     |> cast_embed(:hooks, with: &Schema.Hooks.changeset/2)
     |> cast_embed(:push_check, with: &Schema.PushCheck.changeset/2)
     |> cast_embed(:verification, with: &Schema.Verification.changeset/2)
     |> validate_prompts()
     |> validate_string_list(:validation)
+    |> validate_proof_check()
     |> validate_human_actions()
+  end
+
+  defp validate_proof_check(changeset) do
+    validate_change(changeset, :proof_check, fn :proof_check, check ->
+      if String.trim(check) == "", do: [proof_check: "must be a non-empty check name"], else: []
+    end)
   end
 
   defp validate_human_actions(changeset) do

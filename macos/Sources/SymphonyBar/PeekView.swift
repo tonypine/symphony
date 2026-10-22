@@ -17,10 +17,9 @@ extension SymphonyWindowModel {
         readPeek()
     }
 
-    /// ⌘-click or ⌘Return: the ticket's page (D3), from which ⌘[ returns to the decision, or the pull request on
-    /// GitHub.
+    /// ⌘-click or ⌘Return: the ticket's page (D3) or the pull request's (D15), from which ⌘[ returns to the decision.
     func openMentionDirectly(_ mention: Mention) {
-        ChipText.open(mention, openTicket: openTicket, openURL: onOpenURL)
+        openDirectly(mention)
     }
 
     /// Esc, Close, the toolbar's toggle.
@@ -58,6 +57,7 @@ extension SymphonyWindowModel {
             push: { [weak self] in self?.pushPeek($0) },
             openDirectly: { [weak self] in self?.openMentionDirectly($0) },
             openTicketPage: { [weak self] in self?.openTicket($0) },
+            openPullRequestPage: { [weak self] in self?.openPullRequest($0, url: $1) },
             openURL: { [weak self] in self?.onOpenURL($0) }
         )
     }
@@ -99,6 +99,8 @@ struct PeekActions {
     /// ⌘-click on a chip inside the peek.
     var openDirectly: (Mention) -> Void = { _ in }
     var openTicketPage: (String) -> Void = { _ in }
+    /// Open Pull Request Page (D15).
+    var openPullRequestPage: (PullRequestPlace, URL?) -> Void = { _, _ in }
     var openURL: (URL) -> Void = { _ in }
 }
 
@@ -184,6 +186,8 @@ struct PeekPage: View {
                 if canGoBack {
                     Button(action: actions.back) { Label(PeekNavigation.backTitle, systemImage: "chevron.left") }
                         .buttonStyle(PeekHeaderButtonStyle())
+                        // Its own ⌘[: a sheet is key while it shows, which turns off the View menu's Back.
+                        .keyboardShortcut(KeyEquivalent(NavigationHistory.backKey), modifiers: .command)
                         .help("Back (⌘[)")
                 }
                 Text(entry.title)
@@ -216,7 +220,7 @@ struct PeekPage: View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
             switch content {
             case let .ticket(peek): TicketPeekBody(peek: peek, actions: actions)
-            case let .other(popover): OtherPeekBody(popover: popover, openURL: actions.openURL)
+            case let .other(popover): OtherPeekBody(popover: popover, page: PullRequestPlace(entry.reference), actions: actions)
             }
         }
         .padding(DesignTokens.Space.s4)
@@ -350,11 +354,13 @@ private struct ParentRow: View {
     }
 }
 
-/// A pull request's page (N3's head and figures) with Open on GitHub, or the line for a mention Symphony can't see
-/// with its link.
+/// A pull request's page (N3's head and figures) with Open Pull Request Page (D15) and Open on GitHub, or the line for
+/// a mention Symphony can't see with its link.
 private struct OtherPeekBody: View {
     let popover: ReferencePopover
-    let openURL: (URL) -> Void
+    /// The pull request's page, nil when Symphony doesn't know its repo.
+    let page: PullRequestPlace?
+    let actions: PeekActions
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
@@ -367,11 +373,23 @@ private struct OtherPeekBody: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        if let link = popover.link {
+        if page != nil || popover.link != nil {
             Divider()
-            Button(link.title) { openURL(link.url) }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+            HStack(spacing: DesignTokens.Space.s2) {
+                if let page {
+                    Button(PullRequestScreen.openPageTitle) { actions.openPullRequestPage(page, popover.link?.url) }
+                        .buttonStyle(.borderedProminent)
+                        .help("Open #\(page.number)'s page; ⌘[ comes back here")
+                }
+                if let link = popover.link {
+                    if page == nil {
+                        Button(link.title) { actions.openURL(link.url) }.buttonStyle(.borderedProminent)
+                    } else {
+                        Button(link.title) { actions.openURL(link.url) }
+                    }
+                }
+            }
+            .controlSize(.small)
         }
     }
 }

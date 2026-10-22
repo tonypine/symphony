@@ -440,6 +440,62 @@ spec says a run's or a ticket's "attached PR", it means the PR the record answer
   one-shot run records, issue notifications and the epic review's pull-request check carry the
   recorded PR.
 
+#### 4.1.11 Ticket Event Ledger
+
+Each ticket has one durable, typed, append-only event stream, kept in the durable run store per
+`repo_key` and issue ID. It is Symphony's record of the ticket's history; the tracker is a projection
+of it. Until readers move over, the snapshot fields of the ticket's state record (`signals`,
+`verdicts`, `dispatches`, `holds`, `decisions`) stay the source of truth and keep being written:
+every write to them also records its event (dual-write), and nothing user-facing reads the stream
+yet.
+
+The event:
+
+- `id` (a ULID, so ids sort by time), `seq` (the ticket's own monotonic number, assigned on append),
+  `at` (when it happened), `type`, `phase` (the ticket's phase then), `actor` (the machine, an agent
+  with its run and run kind, or a person by name), `run_id`, `head_sha`, `parent` (a step nested
+  under another event), `supersedes` (an earlier event a later fact replaces), `idempotency`,
+  `payload`, `artifacts` and `summary`.
+- `summary` (`title`, `detail`) is rendered by Symphony from the type and payload, never written by
+  an agent: the title says what happened in at most 120 characters, and an agent's free text only
+  ever lands in the one-line detail.
+- A second append with the idempotency key of an event the ticket already holds writes nothing and
+  returns that event.
+
+The catalog is closed. Each type names who may write it (machine, agent, person), which agent run
+kinds may, its payload schema and its idempotency rule; a payload outside its schema, or a writer the
+type does not allow, is refused. The types: `phase.entered`, `hold.set` and `hold.cleared` (kind
+`blocked` only), `run.started` and `run.ended` (keyed by run id), `attempt.pushed`,
+`verdict.recorded` (machine only: an agent never records a verdict), `decision.requested`,
+`decision.recorded`, `decision.withdrawn`, `person.action` (`stop`, `move`, `force`, `unblock`,
+`restart`), `step.started`, `step.completed`, `step.skipped`, `evidence`, `finding.recorded` (QA
+runs), `finding.resolved`, `checklist.answered` and `note`.
+
+A decision a person must make has one representation, whoever asks it: `decision.requested`, then
+the person's `decision.recorded` (keyed `decision.recorded:<key>`, the request comment it answers)
+or `decision.withdrawn` when it ends unanswered; both name the request in `request`. The Needs
+Decision hold is the projection of an open request, never a hold event. A query with
+`open_decisions` lists the requests no answer or withdrawal names; `open_findings` the findings no
+unsuperseded resolution names.
+
+At startup the ledger's backfill converts each ticket's history from before the stream existed,
+once, in a task the startup does not wait for (a failure is logged). For every ticket record of
+every repo it converts the snapshot's signals (through the same mapping as the live writes),
+verdicts and dispatches, and the last 14 days of `run_stopped` and `director_move` audit records,
+older than the ticket's first live event, into events keyed `backfill:<source>:<hash>` at their
+original time. A signal live writes leave to a hold write becomes that write's event (a held block,
+a dispatch loop or CI wait is `hold.set`, an unblock `hold.cleared`). A decision-requested signal,
+which carries no question, becomes a `note`, so no request from before the ledger stays open. Each
+recorded decision becomes `decision.recorded` under its live key, so an answer already recorded live
+is not recorded twice; a hold still set that the stream doesn't show open becomes its opening event
+(`hold.set`, or `decision.requested` with the hold's question, which its live answer closes). Each
+ticket's events are appended oldest first in one transaction and end with one note saying until when
+the history was backfilled. A run store marker (`ticket_events_backfill_v1`) makes a later start a
+no-op.
+
+The stream is read through `GET /api/v1/repos/<repo_key>/tickets/<issue_identifier>/events`
+(Section 13.8.2).
+
 ### 4.2 Stable Identifiers and Normalization Rules
 
 - `Issue ID`
@@ -560,6 +616,7 @@ Allowed repo-local front matter keys:
 - `hooks`
 - `prompts`
 - `push_check`
+- `proof_check`
 - `verification`
 - `validation`
 - `auto_review`, with only its `playbooks` key
@@ -574,7 +631,7 @@ error that directs the operator to move operator-owned configuration to `symphon
 
 Unless explicitly called out as repo-local, fields in this section live in `symphony.yml` and become
 part of the merged runtime config. Repo-local front matter contributes `hooks`, `push_check`,
-`verification`, `auto_review.playbooks` and `human_actions.enabled` values to the runtime settings for that repo. Nested
+`proof_check`, `verification`, `auto_review.playbooks` and `human_actions.enabled` values to the runtime settings for that repo. Nested
 repo-local maps are merged over the operator config so repos can override only their dev-server
 command while inheriting process-wide verification defaults such as port allocation, or only one
 playbook's settings while inheriting the operator's other playbooks.
@@ -917,11 +974,13 @@ Fields:
 
 Review-comment options are ignored when `enabled` is not `true`. CI failure dispatch is driven only
 by failed status checks and ignores comment authorship; the ignored reviewer set above does not
-affect CI escalation. A head whose only failed check is `protected paths` gets no
-flaky re-run, no CI-fix run and no escalation, and uses no fix attempt: only a person clears that
-check, with the `protected-paths-approved` label, so the issue stays where it is until the check
-passes. When another check fails beside it, the CI-fix run's prompt names `protected paths` as not
-the agent's to fix. A red head on an issue parked for a person, outside `tracker.active_states`
+affect CI escalation. A head whose only failed check is `protected paths` is not red: it gets no
+flaky re-run, no CI-fix run and no escalation, and uses no fix attempt, and it reads as its other
+checks, so the reviewer and QA run once they passed. Only a person clears that check, by a decision
+that allows the change (an option whose `unlocks` grants the protected paths the PR changes), and
+the issue is asked about it once it reaches `Merging`, where it waits until such a decision covers
+it. When another check fails beside it, the head is red and the CI-fix run's prompt names
+`protected paths` as not the agent's to fix. A red head on an issue parked for a person, outside `tracker.active_states`
 with `needs-human` or another `escalate.labels` label other than `plan` and `breakdown`, gets the
 same: no re-run, CI-fix run, escalation or state move, and no fix attempt used. So does a red head on
 an issue in none of `tracker.active_states`, the review states and `Merging`
@@ -1028,6 +1087,15 @@ Behavior:
   16 KiB) whose first line is the pushed commit's SHA followed by `pass`. A `fail` result for that
   commit is refused with the recorded failure lines; a missing result, a result for another commit
   or an unreadable file is refused with the command to run.
+
+#### 5.4.8b `proof_check` (string, repo-local)
+
+The GitHub check run or workflow name that proves the repository's automated tests ran (Symphony's
+own repository: `make-all`). It is a property of the repository, so a ticket never repeats it.
+
+- Default: `null`. A repository without it has no named-test proofs: every step of its
+  walkthroughs is a QA step (Section 5.4.17, **Walkthrough proofs**).
+- A blank value fails configuration validation. `symphony.yml` MUST NOT accept the key.
 
 #### 5.4.8 `agent` (object)
 
@@ -1484,6 +1552,19 @@ when that is unset (`repositories[].manual_review`). Its `escalate` rules (and a
 
 The QA agent:
 
+- **Walkthrough proofs.** The person writing a ticket describes the user's flow in plain steps and
+  names no test and no check. The implementer, who writes the tests, ends each step a test of its PR
+  covers with `Proved by: <test>` through `linear_record_walkthrough_proofs`, naming only tests in
+  the PR and never a check. The repository names the check that runs them (`proof_check`, Section
+  5.4.8b). A step ending in `Proved by: <test>` is proved by that test, run by the `proof_check`; the
+  older `Proved by: <check> › <test>` MUST still be read, naming the check itself; `Proved by: QA`, or
+  no line, is a QA step. A `Proved by:` inside inline code is a quotation in the step's prose, not its
+  proof, and MUST NOT be read as one. Without a `proof_check`, every step is a QA step. Before a QA
+  agent starts, Symphony MUST confirm each named-test step on the PR head: the test is in the
+  checkout and its check passed (pass), is still running (pending, waited for boundedly) or failed,
+  did not run or the test is missing (fail to `Rework` with no agent run). A step naming a check that
+  is neither the `proof_check` nor a check on the head MUST fail with a message naming the
+  repository's `proof_check`. QA links a confirmed step's result instead of walking it.
 - QA selection is deterministic and runs before any agent: a `qa:skip` label skips; a
   `qa:<kind>` label selects that playbook; a diff that only touches docs, tests or `skip_globs`
   skips; otherwise playbooks are selected by their trigger paths, and the `cli` playbook also by a
@@ -1640,11 +1721,24 @@ The QA agent:
   `ExitOnForwardFailure`), and only those ports; a pass whose forwards cannot open MUST be
   `blocked` with the reason before the agent starts.
 - The QA agent MUST run in a fresh detached worktree at the PR head SHA, outside the issue
-  workspace, removed afterwards, with a tool scope limited to read-only Linear/GitHub tools and
-  `linear_attach_file`. It answers with JSON: `verdict` (`pass`, `fail` or `blocked`), `summary`,
-  `steps` (`name`, `status`, `details`, `evidence`), `findings`, and `reason`. An answer with no
-  verdict object SHOULD get one follow-up turn in the same session asking for it. A run error or
-  an answer still unreadable after that counts as `blocked`. The session stops at `agent.limits.tokens_per_issue`.
+  workspace, removed afterwards, with a tool scope limited to read-only Linear/GitHub tools,
+  `linear_attach_file`, and the `qa_verdict` tool, offered to QA sessions only, through which the
+  agent records its verdict as its last act: `verdict` (`pass`, `fail` or `blocked`), `summary`,
+  `steps` (`name`, `status`, `details`, `evidence`), `findings` (each with `step`, `viewport`,
+  `expected`, `actual`, `evidence`, rendered to one report line), `reason`, `needs_person`,
+  `needs_dev_server`, `covered_by` and `scope`. The tool answers a verdict it cannot read with the
+  error so the agent can call it again, and the last verdict the session recorded is the pass's
+  verdict the moment it arrives: it wins over the turn's text, even when the turn then ended
+  empty, failed or hit the token limit, and the QA report is rendered from it. The same object as
+  JSON in the agent's final message is the fallback for one release. Both are read leniently: a
+  verdict or step status in any case or a synonym (`PASS`, `failed`, `block`), `findings` and
+  `steps` as a list or a single object, and `needs_person`/`needs_dev_server` as `true` or
+  `"true"`. A turn that ends without a verdict SHOULD get one follow-up turn in the same session
+  asking for the `qa_verdict` call. A follow-up that comes back empty (the agent process exited, or
+  its turn was finalised with no answer) MUST NOT spend one of the pass's attempts: the pass runs
+  again once in the same run, logged as `qa_verdict_missing`, with its tokens added to the run's.
+  A run error or an answer still unreadable after that counts as `blocked`. The session stops at
+  `agent.limits.tokens_per_issue`.
 - The QA prompt and the built-in playbooks MUST tell the agent not to run the test suite, `make all`,
   coverage or static analysis such as Dialyzer: a pass starts only on green CI for the PR head, and
   the epic review judges a criterion that only asks for tests or CI to pass by CI's runs on the
@@ -2233,8 +2327,8 @@ Important nuance:
   that `HEAD` differs from the one the run started on and has checks that are still running or
   have all passed, MUST end the run and move to the post-PR state, even while the review, CI, QA
   or conflict signal that started the run is still pending. Such a signal is only cleared once the
-  run ends, so without this a fix run on an open PR never ends on its own. The CI poller then owns
-  that head: QA on green, a flaky re-run or a CI-fix run on red. A head with no checks reported yet
+  run ends, so without this a fix run on an open PR never ends on its own. The PR and CI watcher
+  then owns that head (Section 7.5.1): QA on green, a re-run or a CI-fix run on red. A head with no checks reported yet
   or a failed check does not end the run this way, nor does a head the pre-push reviewer applies to
   and has not yet passed: the run continues so the reviewer runs on it first.
 - A run on an active issue with an attached PR and no pending review, CI, QA or conflict signal
@@ -2416,6 +2510,15 @@ The poller:
   forever. It logs `Ignoring stale check <name> in completed run <id>`. A check in a run that
   completed with any other conclusion stays as reported. To see this, a head whose rollup has no
   failed check and only GitHub Actions checks left unfinished also reads the head's workflow runs.
+- keeps only the newest attempt of each GitHub Actions workflow run: a rerun keeps the run's id and
+  adds an attempt, and the rollup can hold the earlier attempt's checks beside the new one's. A
+  check of an older attempt (a lower attempt number where its details URL names one, or for the
+  same check name a lower job id) is left out, and it logs `Ignoring <n> check(s) of earlier
+  attempts of run(s) <ids>`. A run with a check still queued or in progress is pending, and its
+  cancelled checks are left out while it is: a rerun waiting for a runner reads as pending, not as
+  cancelled, so the watcher waits on it rather than rerunning it again (which would cancel the
+  queued attempt). It logs `Ignoring the cancelled checks of run(s) <ids>: an attempt of the run
+  is queued or running`.
 - keeps only the newest run of each GitHub Actions workflow among the checks on a head, ordered by
   run id (GitHub numbers runs as it creates them and the numbers grow), and leaves out the checks
   of every other run of that workflow: the head reads as the check list GitHub shows. That covers
@@ -2424,8 +2527,8 @@ The poller:
   beside a newer run of the same workflow (a re-run on the same head, such as for an edited pull
   request body); neither starts a rerun or a CI-fix run. It logs `Ignoring the checks of superseded
   run(s) <ids>: only the newest run of their workflow counts`. When every run of the workflow was
-  cancelled, or a cancelled job sits beside live ones in its own run, the cancelled checks still
-  read as a failure.
+  cancelled, or a cancelled job sits beside finished ones in its own run's newest attempt, the
+  cancelled checks still read as a failure.
 - reads a landing's head (the `Merging` wait, the release of a held landing run, and the merge
   tool) against the checks its base branch requires: a head still waiting on a check, with none
   failed, also reads the required status checks of the base branch's rulesets
@@ -2439,6 +2542,25 @@ The poller:
   releases a held landing run on it as on a green head.
 
 #### 7.5.1 PR and CI watcher
+
+The watcher is the one place a PR's situation turns into an action. Its rules:
+
+- **Sources only write facts.** The timed poll, GitHub's webhook deliveries (Section 5.4.7,
+  `github.webhooks`) and Check Now record what they learned about a PR on the ticket's state
+  record, and the agent's PR tool, the CI poller and the PR review poller record only that the
+  ticket has a PR and how it ended (Section 4.1.10) or the review comments still to address; none
+  of them decides a CI, conflict or landing case. A delivery patches the facts and asks for a read;
+  only that read decides.
+- **One pure decision.** `PrDecision.decide/1` maps the facts to exactly one action by the first
+  matching row of one table (`docs/pr-ci-decisions.md`, generated from `PrDecision.rules/0` by
+  `mix pr_decision.table`); a fact set no row matches is a defect, logged, never a silent default.
+  Every decision that changes logs one `pr_watch.decision` line.
+- **Every wait has an owner.** A decision that leaves the ticket where it is names who acts next
+  (`agent`, `ci`, `github`, `person` or `symphony`) and what ends the wait. A conflict and a check
+  that keeps failing never ask a person: they wait on the competing PRs, a fix ticket, or go to
+  `Rework`.
+- **Silent waits are reported.** A ticket waiting with no owner, or past its bound, is listed and
+  logged (below), so nothing parks unnoticed.
 
 With `pull_requests.enabled`, one `PrWatch.Repo` per repository reads, every poll interval, every
 ticket of the repository in the Code Review, QA, `Rework`, `CI Fix` or `Merging` state, and in
@@ -2464,11 +2586,14 @@ holds through the Needs Decision hold and the self-heal lane, GitHub calls throu
   ticket at once and returns its `watch` (`docs/pr-ci-decisions.md#silent-waits`).
 - A CI Fix run sent for a red head spends a red attempt, held against
   `pull_requests.checks.max_fix_attempts` (default 10); one sent for a conflict spends a conflict
-  attempt, against a fixed 3. Both reset only when the PR is green and conflict-free. At the red
-  backstop the watcher turns auto-merge off and the self-heal lane files or reuses one fix ticket
-  for the failing check in the repo whose CI fails, links it as a blocker and holds the ticket on
-  it in place; the count restarts when that hold clears. A conflict back after 3 fix runs with no
-  PR ahead of it goes to `Rework`.
+  attempt, against a fixed 3. Both reset only when the PR is green and conflict-free. The red
+  backstop also fires after 3 CI Fix runs in a row met the same failure (the same check and first
+  error line), whatever the count. At the backstop the watcher turns auto-merge off and the
+  self-heal lane files or reuses one fix ticket for the failing check (component `ci:<check>`) in
+  the repo whose CI fails, links it as a blocker and holds the ticket on it in place, logging
+  `pr_watch.ci_fix_ticket`; no person is asked, and the count restarts when that hold clears. A
+  conflict back after 3 fix runs waits on the open PRs that share its files (below), or goes to
+  `Rework` when none does.
 - In `Merging`, with `pull_requests.auto_merge` on: a CLEAN, green PR is squash-merged at once; a
   PR with checks running or branch protection holding it gets GitHub auto-merge (squash, the PR
   title as `<title> (#<number>)` and its body, `expectedHeadOid` the read head) once per head; a
@@ -2479,7 +2604,11 @@ holds through the Needs Decision hold and the self-heal lane, GitHub calls throu
   before a `CI Fix` run, a fix-ticket hold, a conflict wait or a person's question, and whenever the
   ticket is outside `Merging`. A head a person pushed in `Merging` sends the ticket back to the
   Code Review state. A `protected paths` check that only a person clears asks a person once per
-  stay unless the ticket's `PathUnlock` grants cover every protected path the PR changes. Each
+  stay in `Merging`, unless the ticket's `PathUnlock` grants cover every protected path the PR
+  changes, in which case the head reads as green. The question offers "Allow the
+  change", whose `unlocks` carry the protected paths the PR changes (recommended when the ticket's
+  description or a person's ruling names one), and "Drop the change in Rework"; it names each file
+  by its plain description, never its path, and no option asks for a label. Each
   turn-off writes an `auto_merge_disabled` audit event and a ticket comment.
 - The orchestrator starts a Code Review or QA run only on the watcher's decision `dispatch`, and,
   with auto-merge on, a `Merging` landing agent only on `land_agent` (or when the ticket has no
@@ -2607,7 +2736,9 @@ Rules:
   `waiting_on_you` in `/api/v1/state`) lists the ticket. A person lifts it with `Unblock` or
   `Restart`, and the count starts again.
 - **Green-head gating.** CI state (`running` / `green` / `red`) is an attribute per PR head, not a
-  state. The reviewer and QA runs MUST dispatch only on a green head, whether the poll, a retry or
+  state. A failed check only a person clears (`protected paths`) does not make a head red: with no
+  other failure, the head is green once its other checks passed. The reviewer and QA runs MUST
+  dispatch only on a green head, whether the poll, a retry or
   the continuation of an earlier run (the reviewer's approve moving the ticket into `QA`) dispatches
   them; a held-back run records `code_review_head_not_green` or `qa_head_not_green` once per head. A
   QA `fail` or block on a head the PR watcher reads as red, missing a required check, or
@@ -2616,8 +2747,9 @@ Rules:
   `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its
   origin recorded, whether or not the PR also conflicts. A `Code Review` or `QA` ticket back from
   `CI Fix` on the same red head or the same conflict (a repair that pushed nothing) MUST enter
-  `CI Fix` again, until the fix attempts run out and the failure or conflict escalates to a
-  `Needs Decision` hold in place. Reviewer comments left on a PR in `Code Review` or `QA` are not a
+  `CI Fix` again, until the fix attempts run out. Then neither asks a person: a red head gets a
+  fix ticket for its failing check and a `Blocked` hold on it, and a conflict waits on the PRs
+  that share its files, or goes to `Rework` when none does (Section 7.5.1). Reviewer comments left on a PR in `Code Review` or `QA` are not a
   rework in flight and MUST NOT hold a red head back. A repo with the reviewer off parks its
   `Code Review` tickets with `code_review_reviewer_disabled` recorded and never approves without a
   reviewer.
@@ -2637,7 +2769,9 @@ Rules:
   ticket-state store and projected as machine-owned labels, which only the machine writes. A held
   ticket MUST NOT dispatch and MUST NOT move because of the hold. `Blocked` is set by an open
   blocked-by dependency on a `Todo` ticket, an agent's request to park in `Backlog` from
-  `In Progress` or `Rework` (its block report), or a self-heal fix ticket, and clears by itself when
+  `In Progress` or `Rework` (its block report), a self-heal fix ticket (including the PR and CI
+  watcher's fix ticket for a check that keeps failing), or the watcher's wait on competing PRs (its
+  `landing` kind), and clears by itself when
   what it waits on goes terminal (an access hold clears on a person's `Unblock`). A block report
   from a ticket with open blocked-by blockers MUST record a dependency hold on those blockers, which
   clears by itself once every one is terminal, in whatever phase the ticket is, and the ticket
@@ -2673,16 +2807,24 @@ Rules:
   (`ruling-<id>`), titled by its first sentence and scoped by its text the same way; a ruling whose
   answer the section already records MUST NOT be written again. The agents' comment tools MUST
   refuse a body that opens that way, so only a person writes a ruling.
-- **Unlocking a protected path for one run.** A recorded decision (or a ruling the poll read) that
-  says `Unlock <path> for <ticket>` MUST unlock that path only when the path is one of the
-  workspace's agent-protected paths and the ticket is the one the decision is on. The ticket's next
+- **Unlocking a protected path for one run.** A decision request's option MAY carry `unlocks`, the
+  agent-protected paths picking it grants; `linear_request_human_action` MUST refuse a path outside
+  the protected list, naming the list, and MUST keep refusing file names in labels, the question
+  and the Why, which names each file by its plain description. The request comment carries the
+  paths in a hidden line per option, never in the option's text. A pick of that option, by a reply
+  under the request or in the Inbox, MUST record the paths with the decision (a hidden line of its
+  Decisions entry) and grant each one for that ticket; an answer that picks no option, or more than
+  one, grants nothing. A recorded decision (or a ruling the poll read) that says
+  `Unlock <path> for <ticket>` MUST unlock that path only when the path is one of the workspace's
+  agent-protected paths and the ticket is the one the decision is on. The ticket's next
   implementation run MUST claim the grant in the ticket's store record before its session starts,
   and only an unclaimed grant unlocks: the run's sandbox write-deny lists (Claude `denyWrite` and
   `Edit` rules, Codex filesystem permissions, SRT `denyWrite`) MUST leave the path out, its prompt
   MUST name the path and the decision, and its `github_sync_base` and `github_push_branch` MUST
   accept the branch's change to it. Every later run and every other ticket MUST keep the
   protection. A store that cannot record the claim MUST unlock nothing. The agents' comment and
-  sub-issue tools MUST refuse text that reads as such a grant.
+  sub-issue tools MUST refuse text that reads as such a grant or carries an option's hidden paths,
+  and a reply under a request whose options unlock a path.
 - **Escalation rules.** Code Review applies the repo's escalation rules (`EscalationRules`, the
   retired acceptance gate's deterministic rules, read from `auto_review.acceptance_gate.escalate`
   during its deprecation window) to an approval. A person rule — an `escalate.labels` label other
@@ -2707,7 +2849,10 @@ Rules:
   confirming continues into `Merging`. Rework verdicts never wait on a person.
 - **Self-heal.** A QA or epic review blocked by tooling or environment retries boundedly, then files
   (or reuses) one fix ticket per broken component and sets a `Blocked` hold on the affected ticket
-  waiting on it. From the `QA` state only these blocks reach it: the ones the QA tools raise
+  waiting on it. The PR and CI watcher's red backstop is such a block: a check still failing after
+  `pull_requests.checks.max_fix_attempts` CI Fix runs, or after 3 in a row with the same failure,
+  names the component `ci:<check>` (one fix ticket per failing check per repository, filed in the
+  repository whose CI fails), and the affected ticket waits on it in place instead of asking. From the `QA` state only these blocks reach it: the ones the QA tools raise
   themselves (`qa_worker_*`, `qa_host_missing_tool`, `qa_host_tool_check_failed`,
   `qa_host_tunnel_failed`, `qa_dev_server_failed`), the `needs_person` access cases, and the QA
   answer's `covered_by` and `needs_dev_server`. Any other blocked QA pass (the agent's own account
@@ -2863,7 +3008,8 @@ An issue is dispatch-eligible only if all are true:
     fail to load as an unknown key.
   - The state API reports `waiting_on_you`, the Inbox's items (`GET /api/v1/inbox`) in short:
     oldest first, each with its identifier, repo, title, URL, kind (`action`, `plan`, `clarify`
-    or `blocked`), its one-line ask as `headline` and how long it has waited, and
+    or `blocked`), `decision` (true for a request with options, so a client names it a decision as
+    the Inbox does), its one-line ask as `headline` and how long it has waited, and
     `counts.waiting_on_you` is their number. It MUST drop an issue the orchestrator sees running or
     watches outside `Plan Review`, unless a hold pauses it. `inbox_read` is false until Symphony's
     first successful Linear read for the Inbox, so a client can tell an empty list from one not
@@ -3795,7 +3941,8 @@ Scoped Linear tool extension contract:
   `linear_attach_url`, `linear_attach_file`, `linear_create_subissue`, `linear_update_subissue`,
   `linear_add_blocked_by`, `linear_create_project_update`, `linear_create_document`,
   `linear_update_document`, `linear_get_document`, `linear_update_issue_summary`,
-  `linear_request_human_action`, and `linear_withdraw_human_action`.
+  `linear_record_walkthrough_proofs`, `linear_request_human_action`, and
+  `linear_withdraw_human_action`.
 - `linear_add_comment` MAY take a `parent_id` naming a comment on the current issue; the comment is
   then posted as a reply under it. `linear_get_comments` SHOULD return each reply's parent id.
 - `linear_get_related_issues` MAY read beyond the current issue, but only inside its family: the
@@ -3876,9 +4023,16 @@ Scoped Linear tool extension contract:
   In the QA scope alone (a QA pass and an epic review), `linear_get_document` MUST also list and
   read the documents the parent issue's runs created (marked by the parent's attachments, listed
   apart from the issue's own); `linear_update_document` still MUST refuse them.
-- `linear_update_issue_summary` is the only tool that writes the current issue's description (the
-  Decisions section is Symphony's own write, outside any tool), and
-  it MUST only write the Symphony summary block between `<!-- symphony:summary:start -->` and
+- `linear_update_issue_summary` and `linear_record_walkthrough_proofs` are the only tools that write
+  the current issue's description (the Decisions section is Symphony's own write, outside any tool).
+  `linear_record_walkthrough_proofs` accepts only `proofs`, a list of a step number and a test; it
+  MUST read the description right before writing and change only the `Proved by:` line of each named
+  step of its `## User walkthrough` (replacing a test proof, or appending one), leaving every other
+  byte unchanged. It MUST refuse, with nothing written, a test holding a ` › ` or ` > ` separator (a
+  check name), `QA`, a step the walkthrough lacks, a step its author ended with `Proved by: QA`, and a
+  test that fails the comments' secret scan; the read-only reviewer and QA scopes MUST NOT advertise
+  or execute it. `linear_update_issue_summary`
+  MUST only write the Symphony summary block between `<!-- symphony:summary:start -->` and
   `<!-- symphony:summary:end -->`. It accepts only a one-line `status`, an optional `links` object
   (`review_brief`, the URL of the review brief comment, and `artifacts`, a list of `label` and
   `url`; URLs MUST be http(s)) and a one-line `changelog_entry`; every field MUST pass the same
@@ -4788,6 +4942,11 @@ Minimum endpoints:
     }
     ```
 
+- `GET /api/v1/health`
+  - Answers `200` `{"ok": true}` as soon as the endpoint serves, reading nothing else: the
+    liveness route for a dev server's health check (`verification.dev_server.health_check_url`),
+    which gives each request 250 ms. `/api/v1/state` stays the app's poll.
+
 - `GET /api/v1/repos`
   - Returns one entry per configured repository, in config order: its key, `default` and
     `base_branch`, where its code comes from, its GitHub repository, its Linear routing, whether
@@ -4883,8 +5042,13 @@ Minimum endpoints:
       applies it to `symphony.yml` through its settings writer once the operator confirms.
     - `{"kind": "linear", "action", "team", "name", "type"}`: the service runs it once the operator
       confirms, through `POST /api/v1/setup/fixes`. `create_label` creates the label `name` in the
-      team `team`; `{"kind": "linear", "action": "resync_hold", "repo", "tickets"}` re-syncs each
-      ticket's hold label from the store.
+      team `team`; `create_state` (with `after` and `position`) creates the workflow state `name` of
+      the type `type` in the team `team`, at `position` on its board, just after the state `after`
+      (`null` when it goes first of its type; a `null` position leaves the place to Linear). It
+      runs where the check put it: the request may leave `after` and `position` out, and one it
+      names must be the proposed one;
+      `{"kind": "linear", "action": "resync_hold", "repo", "tickets"}` re-syncs each ticket's hold
+      label from the store.
     - `{"kind": "open", "target": "settings" | "symphony_yml" | "linear" | "drain_report" | "repos",
       "url"}`: no fix is safe; the app shows the button that goes where the operator fixes it.
     Symphony never fixes a problem by itself.
@@ -4934,7 +5098,20 @@ Minimum endpoints:
     `Blocked` or `Needs Decision` label with no hold, or a hold with no label) through two checks
     without a poll putting it right (one `warning` per repo naming the tickets, a `details` line
     each saying which way and since when, and a `resync_hold` fix). The poll logs each drift once
-    per change, not on every poll.
+    per change, not on every poll. The workflow states, in each routed team, from one states read
+    per team: a state of the ticket machine the team lacks (`Todo`, `In Progress`, `Code Review`,
+    `QA`, `Merging`, `Rework`, `Plan Review`, `Epic Review`, `Waiting on sub-tickets`, `CI Fix`,
+    `Done`, `Canceled` or `Cancelled`, the phase and waiting states by their `issues.states.*`
+    names, one turned off with `null` not wanted; an `error` saying where tickets stop, with a
+    `create_state` fix of its type, placed just after the machine state of that type before it, or
+    first of its type);
+    one of the wrong type (an `error`, `open` `linear`); a name in `issues.states.active`, or in
+    an `issues.states.terminal` that differs from the default list, that no state of the team has
+    (an `error` naming the key and the value, `open` `settings`). And, without reading Linear: the
+    waiting state the startup check didn't find and turned off until a restart (a `warning`);
+    tickets the drain report still finds in a retired state (one `warning` per state naming them,
+    `open` `drain_report`); and a phase state Symphony runs by itself listed in
+    `issues.states.active` (a `warning` with a `config_edit` `remove` of it).
     It also checks where `macos_app` QA runs: a repo
     whose playbooks include `macos_app` while `auto_review.worker_host` is unset, and a
     `worker_host` whose `IOPlatformUUID` (read over SSH) is this host's (each an `error` with an
@@ -4945,9 +5122,22 @@ Minimum endpoints:
     its value), each step (`relay`, `gh_ready`, `secret`, `port`, `repo:<key>`, `test:<key>`) with
     its `status` (`done`, `failed`, `waiting`, `pending`) and, when it failed, a plain-words
     `detail` and `fix`, each repository's connection and health (last delivery, signature failures
-    in 24 hours, relay restarts, test), the poll intervals and GitHub's rate limit. `needs_setup`
-    is `enabled: true` on a Mac whose setup never ran; `degraded` is a relay that can't restart, or
-    no delivery for `silence_alert_minutes` after a read found a change none reported.
+    in 24 hours, the relay's status, restarts, last error and whether it is `stable`, test, why
+    it is degraded (`degraded_reason`) and the interval its watcher polls at now
+    (`poll_interval_ms`)), the poll intervals and GitHub's rate limit. `needs_setup` is
+    `enabled: true` on a Mac whose setup never ran; `degraded` is a relay that can't restart, or
+    that stopped more than twice in ten minutes and hasn't run ten minutes since (its watcher
+    keeps the normal poll interval meanwhile), or no delivery for `silence_alert_minutes` after a
+    read found a change none reported.
+    `/api/v1/state` carries the same section under `setup.github_updates`, so the app's Setup card
+    and its Overview row follow the state poll; it is `null` there when it can't be read. The
+    Elixir implementation builds that copy in the background
+    (`SymphonyElixir.GitHub.WebhookSetup.Cache`): at startup, after a config reload, after each
+    verified delivery, and every 5 seconds, and it keeps the section each setup action answers
+    with. `/api/v1/state` serves the last one built, so a slow git, run store or relay makes it a
+    few seconds stale, not the poll slow; each repository's GitHub name, which git reads, is read
+    at startup and after a config reload only. `GET /api/v1/setup` builds the section on each
+    request.
   - `?repo=<key>` keeps only the problems whose `repos` name that repository, and those that name
     none (keys, secrets and the rest of the global setup); `not_checked` and the times are as
     they are. While the running config has no repository `<key>` (between an Add Repo save and
@@ -4970,12 +5160,17 @@ Minimum endpoints:
     Check Now.
 - `POST /api/v1/setup/github_updates/<action>`
   - `turn_on` (`relay`, `url`), `run_step` (`step`, and `url` for a URL relay's `relay` step),
-    `test` (`repo` optional), `restart_relay`, `recreate_secret`, `change_relay` (`relay`, `url`)
-    and `turn_off`; each answers with the section as it leaves it. Same-origin like Check Now: a
+    `test` (`repo` optional), `leave_on_polling` (`repo`), `restart_relay`, `recreate_secret`,
+    `change_relay` (`relay`, `url`) and `turn_off`; each answers with the section as it leaves it. Same-origin like Check Now: a
     client that sends no `Origin` may call it. `404` for an unknown action or step, `422` for bad
     params or a `symphony.yml` it can't edit, `409` while updates are off or nothing is connected.
   - Turning off stops the relays, deletes only the hooks Symphony created (their ids are kept per
-    Mac in the run store) and keeps the secret. Polling never depends on any of it.
+    Mac in the run store) and keeps the secret. `leave_on_polling` does the same for one
+    repository and forgets its steps and test, so the setup finishes without it. Polling never
+    depends on any of it.
+  - A failed step's `action` names the app's button for a fix only the person makes:
+    `grant_permission` (`gh` lacks the webhook scope), `sign_in` (`gh` is signed out) or
+    `restart_symphony` (`dashboard.port` pins another port than the one Symphony listens on).
 
 - `GET /api/v1/inbox`
   - Returns everything that waits on the operator, oldest first (an item whose wait is unknown
@@ -5269,6 +5464,19 @@ Minimum endpoints:
 
   - If the issue is unknown to the current in-memory state, return `404` with an error response (for
     example `{\"error\":{\"code\":\"issue_not_found\",\"message\":\"...\"}}`).
+
+- `GET /api/v1/repos/<repo_key>/tickets/<issue_identifier>/events?since=&types=&run_id=&limit=`
+  - The ticket's event ledger (Section 4.1.11), the debug API through which it is visible:
+    `{"events": [...], "next_since": "<iso8601>"}`, the events oldest first by `at` then `seq`, each
+    with its `summary`. Read-only and served like `/api/v1/state`.
+  - `since` (ISO 8601, exclusive) pages: `next_since` is the `at` of the last event returned (the
+    `since` given, or null, on an empty page). A page never ends inside a group of events that share
+    one `at`, so paging with `next_since` returns every event exactly once.
+  - `types` is a comma-separated list of catalog types, `run_id` keeps one run's events, and `limit`
+    defaults to 50 and is capped at 200.
+  - The identifier resolves through the ticket's state record in that repo: a ticket with none is
+    `404` `ticket_not_found`. An unknown type, a bad `since` or a `limit` that is not a positive
+    integer is `400` `invalid_query`. Other methods are `405`.
 
 - `GET /api/v1/repos/<repo_key>/issues/<issue_identifier>/transcript`
   - Returns transcript metadata and events for a running, retrying, or watched issue in the selected

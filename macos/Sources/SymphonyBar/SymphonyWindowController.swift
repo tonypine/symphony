@@ -28,6 +28,8 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     var appBuild = AppBuild(build: 0, isDevelopment: true)
     /// The app's secrets, for the `symphony check` a Setup settings fix runs.
     var secrets: SecretsReader?
+    /// The app's graceful restart of Symphony, for the guided setup's Restart Symphony.
+    var restartSymphony: () -> Void = {}
 
     private var window: NSWindow?
     private var model: SymphonyWindowModel?
@@ -97,6 +99,35 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     }
 
     /// Opens the window, or brings it to the front.
+    /// The GitHub updates card shows `section` until the state poll reports something new (Add Repo's Instant updates).
+    func showGitHubUpdates(_ section: GitHubUpdatesSection) {
+        model?.acceptGitHubUpdates(section)
+    }
+
+    /// Grant Permission… and Sign In…: Terminal runs the app's `gh` with `arguments` from a `.command` script in the
+    /// app's temporary folder, so the person approves in gh's own words. Answers why it couldn't.
+    static func openGitHubTerminal(_ arguments: [String]) -> String? {
+        let environment = AppStores.current.environment
+        guard let gh = GitHubCLI.locate(environment: environment) else {
+            return "Couldn't find the GitHub CLI (gh). Install it with brew install gh, then try again."
+        }
+        guard let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: TerminalDashboard.terminalBundleIdentifier) else {
+            return "Terminal.app was not found."
+        }
+        let script = FileManager.default.temporaryDirectory.appendingPathComponent(GitHubUpdatesSetup.terminalScriptFileName)
+        do {
+            try GitHubUpdatesSetup.terminalScript(gh: gh, arguments: arguments, environment: environment).write(to: script, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+        } catch {
+            return "Couldn't open Terminal: \(error.localizedDescription)"
+        }
+        NSWorkspace.shared.open([script], withApplicationAt: terminal, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            guard let error else { return }
+            DispatchQueue.main.async { SymphonyRunner.showAlert(title: "Couldn't open Terminal", body: error.localizedDescription) }
+        }
+        return nil
+    }
+
     func show() {
         if window == nil {
             let saved = AppStores.current.defaults.object(forKey: Self.viewKey) as? String
@@ -135,6 +166,26 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
                 afterControl()
                 return result
             }
+            model.onGitHubUpdatesRequest = { [weak self] action, params in
+                guard let self else { return .failed("") }
+                let result = await GitHubUpdatesAPI.send(
+                    action, params: params, stateRoot: stateRoot(), fallback: AppStores.current.apiFallback, transport: AppStores.current.apiTransport
+                )
+                afterControl()
+                return result
+            }
+            model.onGitHubUpdatesRead = { [weak self] in
+                guard let self else { return .failed("") }
+                return await GitHubUpdatesAPI.read(stateRoot: stateRoot(), fallback: AppStores.current.apiFallback, transport: AppStores.current.apiTransport)
+            }
+            model.onMoveWebhookSecret = { [weak self] in
+                guard let self else { return .nothingHandedOff }
+                let stores = AppStores.current
+                return stores.settingsStore().moveWebhookSecret(handedOffAt: stores.webhookSecretHandOff(stateRoot: stateRoot()))
+            }
+            model.onWebhookSecretStored = { AppStores.current.settingsStore().hasWebhookSecret }
+            model.onOpenGitHubTerminal = { arguments in Self.openGitHubTerminal(arguments) }
+            model.onRestartSymphony = { [weak self] in self?.restartSymphony() }
             model.onCheckConfig = { [weak self] path in
                 guard let secrets = self?.secrets else { return .failed("The app's secrets aren't available to run symphony check.") }
                 return await ReposWindowController.configCheck(path, secrets: secrets)
@@ -208,7 +259,7 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             menu.addItem(item)
         }
         menu.addItem(.separator())
-        let back = NSMenuItem(title: NavigationHistory.backTitle, action: #selector(goBack(_:)), keyEquivalent: "[")
+        let back = NSMenuItem(title: NavigationHistory.backTitle, action: #selector(goBack(_:)), keyEquivalent: String(NavigationHistory.backKey))
         back.target = self
         menu.addItem(back)
         let forward = NSMenuItem(title: NavigationHistory.forwardTitle, action: #selector(goForward(_:)), keyEquivalent: "]")
@@ -297,8 +348,18 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         window?.saveFrame(to: frame, after: notification)
     }
 
+    /// Whether the Inbox holds an answer for Undo, still to send.
+    var holdsAnswer: Bool { model?.holdsAnswer ?? false }
+
+    /// Sends the Inbox answer held for Undo at once, and waits for Symphony's answer: the app is quitting.
+    func sendHeldAnswer() async {
+        await model?.sendHeldNow()?.value
+    }
+
     func windowWillClose(_ notification: Notification) {
         window?.saveFrame(to: frame, after: notification)
+        // An Inbox answer held for Undo goes now: its banner closes with the window.
+        model?.sendHeldNow()
         window = nil
         model = nil
         client.isVisible = false

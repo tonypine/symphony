@@ -72,6 +72,101 @@ defmodule SymphonyElixir.GitHub.RelayTest do
     refute log =~ @secret
   end
 
+  test "an error followed by gh's usage text is reported by the error, with the whole tail logged once", %{dir: dir, spec: spec} do
+    usage = """
+    echo "error: websocket: close 1006 (abnormal closure): connection closed by the forwarding service"
+    echo "Usage:  gh webhook forward [flags]"
+    echo ""
+    echo "Flags:"
+    echo "  -E, --events strings       Names of the event types to forward. Use * to forward all events."
+    echo "  -S, --secret string        Webhook secret for incoming events (secret ${10})"
+    echo "  -U, --url string           Address of the local server to receive events. If omitted, events will be printed to stdout."
+    exit 1
+    """
+
+    log =
+      capture_log(fn ->
+        relay = start_relay(spec, executable: fake_gh(dir, usage))
+        assert_receive {:timer, 1_000, :start}, 2_000
+
+        assert %{last_error: "error: websocket: close 1006 (abnormal closure): connection closed by the forwarding service", stable: true} =
+                 Relay.status(relay)
+      end)
+
+    assert [_stop] = Regex.scan(~r/GitHub relay for repo=app github=acme\/app stopped: error: websocket/, log)
+    assert log =~ "gh's last output:\nerror: websocket"
+    assert log =~ "-U, --url string"
+    refute log =~ @secret
+  end
+
+  test "the stop reason is the first error line, else the line before the usage text, else none" do
+    assert Relay.reason(["Forwarding Webhook events from GitHub...", "Failed to connect: EOF", "error: retrying", "-U, --url string"]) == "Failed to connect: EOF"
+    assert Relay.reason(["unable to connect to webhooks server, forwarding stopped"]) == "unable to connect to webhooks server, forwarding stopped"
+    assert Relay.reason(["unknown flag: --secrett", "Usage:  gh webhook forward [flags]", "-U, --url string"]) == "unknown flag: --secrett"
+    assert Relay.reason(["Usage:  gh webhook forward [flags]", "-U, --url string"]) == nil
+    assert Relay.reason(["Forwarding Webhook events from GitHub..."]) == nil
+    assert Relay.reason([]) == nil
+  end
+
+  test "a gh killed after its greeting is reported by the signal, not the greeting", %{dir: dir, spec: spec} do
+    gh = fake_gh(dir, "echo 'Forwarding Webhook events from GitHub...'\necho up > \"#{dir}/greeted\"\nexec sleep 30")
+
+    log =
+      capture_log(fn ->
+        relay = start_relay(spec, executable: gh)
+        assert wait_for_file(Path.join(dir, "greeted"))
+        kill(dir)
+
+        assert_receive {:timer, 1_000, :start}, 2_000
+        assert %{last_error: "gh webhook forward was killed by signal 9"} = Relay.status(relay)
+      end)
+
+    assert log =~ "stopped: gh webhook forward was killed by signal 9"
+    assert log =~ "gh's last output:\nForwarding Webhook events from GitHub..."
+  end
+
+  test "a relay that stops three times in ten minutes is unstable until it runs ten minutes", %{dir: dir, spec: spec} do
+    clock = start_supervised!({Agent, fn -> 0 end})
+    gh = fake_gh(dir, "exec sleep 30")
+    advance = fn ms -> Agent.update(clock, &(&1 + ms)) end
+
+    log =
+      capture_log(fn ->
+        relay = start_relay(spec, executable: gh, clock: fn -> Agent.get(clock, & &1) end)
+
+        # Two stops: still stable.
+        for _stop <- 1..2, do: kill_and_start(relay, dir)
+        assert %{stable: true} = Relay.status(relay)
+
+        # A third within ten minutes: unstable, while it waits and once it runs again.
+        advance.(9 * 60_000)
+        kill_and_start(relay, dir)
+        assert %{state: :running, stable: false} = Relay.status(relay)
+
+        # Nine minutes of running isn't enough; ten is.
+        advance.(9 * 60_000)
+        assert %{stable: false} = Relay.status(relay)
+        advance.(60_000)
+        assert %{stable: true} = Relay.status(relay)
+
+        # Three more stops, the relay restarted only after five minutes, then a stop six minutes
+        # into its run: the earlier stops are past ten minutes, but it never ran ten.
+        for _stop <- 1..3, do: kill_and_start(relay, dir)
+        assert %{stable: false} = Relay.status(relay)
+        advance.(6 * 60_000)
+        kill_and_start(relay, dir)
+        advance.(5 * 60_000)
+        assert %{stable: false} = Relay.status(relay)
+
+        # A stop after ten minutes of running starts the count over.
+        advance.(5 * 60_000)
+        kill_and_start(relay, dir)
+        assert %{stable: true} = Relay.status(relay)
+      end)
+
+    assert log =~ "it stopped more than twice in ten minutes, so the watcher polls at its normal interval until it runs ten minutes"
+  end
+
   test "a gh that dies without a word is reported by its exit status", %{dir: dir, spec: spec} do
     capture_log(fn ->
       relay = start_relay(spec, executable: fake_gh(dir, "exit 3"))
@@ -159,6 +254,16 @@ defmodule SymphonyElixir.GitHub.RelayTest do
   test "scrub replaces the secret, and leaves text alone when there is none", %{spec: spec} do
     assert Relay.scrub("bad #{@secret}!", spec) == "bad [secret]!"
     assert Relay.scrub("bad", %{spec | secret: nil}) == "bad"
+  end
+
+  # Kills the running gh, then starts the relay again (its wait taken by the test) and waits for the new gh.
+  defp kill_and_start(relay, dir) do
+    assert wait_for_file(Path.join(dir, "pid"))
+    kill(dir)
+    assert_receive {:timer, _ms, :start}, 2_000
+    File.rm!(Path.join(dir, "pid"))
+    send(relay, :start)
+    assert wait_for_file(Path.join(dir, "pid"))
   end
 
   defp kill(dir) do

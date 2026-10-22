@@ -180,6 +180,7 @@
     },
     {
       "checks_green": false,
+      "decision": true,
       "headline": "Update the old workflow's instructions now, or leave them to TP-891?",
       "issue_id": "i-892",
       "issue_identifier": "TP-892",

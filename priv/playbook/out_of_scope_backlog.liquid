@@ -29,23 +29,22 @@ change is live (on their own machine, in production, with their account) is not 
 walkthrough step: put it under `## After release`, which QA skips and which never
 blocks the ticket.
 
-Each walkthrough step names the one place that proves it, on a line at its end:
-`Proved by: <check> › <test>` (the GitHub check run, then the suite, scenario or
-test file that proves the step on the PR head) or `Proved by: QA`. A step with no
-`Proved by:` line is read as `Proved by: QA`. Name the test as the code has it: its
-file path, or a test or scenario name as it is written. Symphony's QA pre-check
-looks it up in the PR's checkout and fails the step when it is not there. Route
-each step when you write it:
+Write the walkthrough end to end, in plain words from the user's seat, and name no
+test and no check in it. The implementer, who writes the tests, records which test
+proves each step it covers (`Proved by: <test>`), and the repo names the check that
+runs them (`proof_check` in its WORKFLOW.md). Symphony's QA pre-check confirms each
+named test on the PR head, and QA walks every step without one. Unit-level facts
+(keys, counters, error tuples) are acceptance criteria, not walkthrough steps.
+Shape each step when you write it:
 
-- A step code can drive names its test. QA does not walk it: QA links that test's
-  result on the PR head.
 - A step that needs an environment QA lacks (a signed build, a device, real
-  credentials) goes to an automated harness and names it, never to QA.
-- A step that needs a QA tool QA has, or one a sibling ticket adds, stays
-  `Proved by: QA`, and so does a judgment by sight of what the user sees.
-- One journey is proved in one place. When an end-to-end ticket covers it, that
-  ticket owns the journey, and the other tickets' steps name its test instead of
-  repeating the journey for QA.
+  credentials) needs an automated harness: say so under `## Acceptance criteria`,
+  so the implementer covers it with a test.
+- A judgment by sight of what the user sees ends with `Proved by: QA`, so the
+  implementer leaves it to QA, and so does a step that needs a QA tool QA has, or
+  one a sibling ticket adds.
+- One journey sits in one walkthrough. When an end-to-end ticket covers it, that
+  ticket owns the journey, and the other tickets leave it out.
 
 Record the new issue
 identifiers in the current workpad's `Notes`. If the tool refuses, list the

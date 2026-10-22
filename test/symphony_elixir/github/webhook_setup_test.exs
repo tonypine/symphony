@@ -20,12 +20,12 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf(dir) end)
 
-    # The relays' `gh`: it records its pid and arguments, and fails while `fail` exists.
+    # The relays' `gh`: it greets as gh does, records its pid and arguments, and fails while `fail` exists.
     gh_bin = Path.join(dir, "gh")
 
     File.write!(
       gh_bin,
-      ~s(#!/bin/sh\necho $$ > "#{dir}/pid"\nprintf '%s\\n' "$@" > "#{dir}/args"\nif [ -e "#{dir}/fail" ]; then echo "unable to connect to webhooks server, forwarding stopped"; exit 1; fi\nexec sleep 30\n)
+      ~s(#!/bin/sh\necho "Forwarding Webhook events from GitHub..."\necho $$ > "#{dir}/pid"\nprintf '%s\\n' "$@" > "#{dir}/args"\nif [ -e "#{dir}/fail" ]; then echo "unable to connect to webhooks server, forwarding stopped"; exit 1; fi\nexec sleep 30\n)
     )
 
     File.chmod!(gh_bin, 0o755)
@@ -33,7 +33,10 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     test = self()
     relays = Module.concat(__MODULE__, "Relays#{System.unique_integer([:positive])}")
     timer = fn ms, message -> send(test, {:relay_timer, ms, message}) && make_ref() end
-    start_supervised!({RelaySupervisor, name: relays, resume: nil, relay_opts: [executable: gh_bin, timer: timer]})
+    # The relays' monotonic clock, in milliseconds.
+    relay_clock = start_supervised!({Agent, fn -> 0 end}, id: :relay_clock)
+    relay_opts = [executable: gh_bin, timer: timer, clock: fn -> Agent.get(relay_clock, & &1) end]
+    start_supervised!({RelaySupervisor, name: relays, resume: nil, relay_opts: relay_opts})
 
     gh = start_supervised!({Agent, fn -> %{installed: false, overrides: %{}, hook_ids: [11, 12]} end}, id: :gh)
     secret = start_supervised!({Agent, fn -> nil end}, id: :secret)
@@ -56,6 +59,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     ]
 
     %{opts: opts, gh: gh, secret: secret, clock: clock, repos: repos, port: port, relays: relays, dir: dir}
+    |> Map.put(:relay_clock, relay_clock)
   end
 
   ## The fake `gh`
@@ -146,6 +150,20 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     dir |> Path.join("args") |> File.read!() |> String.split("\n", trim: true)
   end
 
+  # Waits for the relay started last to pass `secret`: a `gh` the action stopped may write its own
+  # arguments just before it is killed, after the test removed the file.
+  defp assert_relay_secret(dir, secret) do
+    assert Enum.find_value(1..300, fn _attempt -> relay_secret(dir) == secret || (Process.sleep(10) && nil) end),
+           "no relay started with the expected secret; the last one passed #{inspect(relay_secret(dir))}"
+  end
+
+  defp relay_secret(dir) do
+    case File.read(Path.join(dir, "args")) do
+      {:ok, args} -> args |> String.split("\n", trim: true) |> List.last()
+      {:error, _reason} -> nil
+    end
+  end
+
   # Sets up instant updates through `gh webhook forward` for `app` (on) and `lib` (no admin).
   defp set_up_forwarding(%{opts: opts, dir: dir}) do
     act("turn_on", %{"relay" => "gh_webhook_forward"}, opts)
@@ -177,6 +195,32 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     assert section.rate_limit == nil
 
     assert {:error, {:conflict, "Instant GitHub updates are off. Turn them on first."}} = WebhookSetup.action("run_step", %{"step" => "relay"}, opts)
+  end
+
+  test "the state's section is the setup's, or nil when it can't be read", %{opts: opts} do
+    assert WebhookSetup.state_section(opts) == WebhookSetup.section(opts)
+    assert WebhookSetup.state_section(Keyword.put(opts, :settings, fn -> raise ArgumentError, "no config" end)) == nil
+    assert WebhookSetup.state_section(Keyword.put(opts, :repos, fn -> exit(:noproc) end)) == nil
+  end
+
+  # Every `/api/v1/state` poll carries the section; each settings read parses the configuration
+  # again, and each repositories read asks git for every repository's GitHub name.
+  test "the section reads the settings, the repositories, the port and the secret once", %{opts: opts} do
+    reads = start_supervised!({Agent, fn -> %{} end}, id: :reads)
+
+    counted =
+      for key <- [:settings, :repos, :port, :secret] do
+        read = Keyword.get(opts, key, &Config.settings!/0)
+
+        {key,
+         fn ->
+           Agent.update(reads, &Map.update(&1, key, 1, fn count -> count + 1 end))
+           read.()
+         end}
+      end
+
+    assert WebhookSetup.section(Keyword.merge(opts, counted)) == WebhookSetup.section(opts)
+    assert Agent.get(reads, & &1) == %{settings: 1, repos: 1, port: 1, secret: 1}
   end
 
   ## J1–J3: turn on through gh webhook forward
@@ -247,10 +291,11 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     section = WebhookSetup.section(opts)
     assert %{status: "done", detail: "received and verified"} = step(section, "test:app")
     assert section.mode == "on"
-    assert %{relay: %{state: "running"}, relay_restarts: 1, hook: nil, degraded: false} = repo(section, "app")
+    assert %{relay: %{state: "running", stable: true}, relay_restarts: 1, hook: nil, degraded: false} = repo(section, "app")
+    assert repo(section, "app").degraded_reason == nil
   end
 
-  test "a relay that is killed starts again, and one that can't restart degrades the mode", %{opts: opts, dir: dir} = ctx do
+  test "a relay that is killed starts again, and one that can't restart degrades the mode", %{opts: opts, dir: dir, relay_clock: relay_clock} = ctx do
     set_up_forwarding(ctx)
     WebhookSetup.delivered("https://github.com/acme/app", opts)
     assert WebhookSetup.section(opts).mode == "on"
@@ -276,12 +321,18 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     section = WebhookSetup.section(opts)
     assert section.mode == "degraded"
     assert %{degraded: true, relay: %{state: "restarting", failures: 3}} = repo(section, "app")
+    assert repo(section, "app").degraded_reason == "The relay can't start again: unable to connect to webhooks server, forwarding stopped"
     assert %{status: "failed", detail: "The relay for acme/app stopped: unable to connect to webhooks server, forwarding stopped"} = step(section, "repo:app")
 
+    # Back, but it stopped more than twice in ten minutes: degraded until it runs ten minutes.
     File.rm!(Path.join(dir, "fail"))
     send(relay, :start)
     assert wait_for(Path.join(dir, "args"))
-    assert Enum.find_value(1..300, fn _ -> WebhookSetup.section(opts).mode == "on" || (Process.sleep(10) && nil) end)
+    assert Enum.find_value(1..300, fn _ -> match?(%{relay: %{state: "running"}}, repo(WebhookSetup.section(opts), "app")) || (Process.sleep(10) && nil) end)
+    assert %{degraded: true, degraded_reason: "The relay stopped more than twice in ten minutes" <> _} = repo(WebhookSetup.section(opts), "app")
+
+    Agent.update(relay_clock, &(&1 + 10 * 60_000))
+    assert WebhookSetup.section(opts).mode == "on"
   end
 
   test "a change no delivery reported, then silence past the alert's minutes, degrades the mode", %{opts: opts, clock: clock} = ctx do
@@ -300,7 +351,46 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     section = WebhookSetup.section(opts)
     assert section.mode == "degraded"
     assert %{degraded: true, silent: true, healthy: false, last_delivery_at: last, deliveries: 1} = repo(section, "app")
+    assert repo(section, "app").degraded_reason == "No delivery for 10 minutes after a read found a change none reported."
     assert last == DateTime.add(@t0, 5)
+  end
+
+  test "a relay killed three times in ten minutes degrades its repository and keeps the normal poll until it runs ten minutes",
+       %{opts: opts, dir: dir, relay_clock: relay_clock} = ctx do
+    set_up_forwarding(ctx)
+    WebhookSetup.delivered("https://github.com/acme/app", opts)
+    :ok = Health.save(RunStore, "app", Health.delivered(Health.new(), @t0))
+
+    section = WebhookSetup.section(opts)
+    assert section.mode == "on"
+    assert %{degraded: false, poll_interval_ms: fallback} = repo(section, "app")
+    assert fallback == section.poll.fallback_interval_ms
+    assert fallback != section.poll.interval_ms
+
+    [relay] = Registry.lookup(Module.concat(ctx.relays, Registry), "app") |> Enum.map(&elem(&1, 0))
+
+    for _kill <- 1..3 do
+      assert wait_for(Path.join(dir, "pid"))
+      pid = dir |> Path.join("pid") |> File.read!() |> String.trim()
+      File.rm!(Path.join(dir, "pid"))
+      System.cmd("kill", ["-9", pid])
+      assert_receive {:relay_timer, _ms, :start}, 2_000
+      send(relay, :start)
+    end
+
+    assert wait_for(Path.join(dir, "pid"))
+    section = WebhookSetup.section(opts)
+    assert section.mode == "degraded"
+    assert %{degraded: true, relay: %{state: "running", stable: false, last_error: "gh webhook forward was killed by signal 9"}} = repo(section, "app")
+    assert "The relay stopped more than twice in ten minutes (gh webhook forward was killed by signal 9)" <> _rest = repo(section, "app").degraded_reason
+    assert repo(section, "app").poll_interval_ms == section.poll.interval_ms
+
+    # Ten minutes up without a stop: steady again, at the safety-net pace.
+    Agent.update(relay_clock, &(&1 + 10 * 60_000))
+    section = WebhookSetup.section(opts)
+    assert section.mode == "on"
+    assert %{degraded: false, degraded_reason: nil, relay: %{stable: true}} = repo(section, "app")
+    assert repo(section, "app").poll_interval_ms == fallback
   end
 
   test "a test that hears nothing in 30 seconds fails with what to check", %{opts: opts, clock: clock} = ctx do
@@ -318,13 +408,13 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
 
     File.rm!(Path.join(dir, "args"))
     act("restart_relay", %{"repo" => "app"}, opts)
-    assert List.last(relay_args(dir)) == first
+    assert_relay_secret(dir, first)
 
     File.rm!(Path.join(dir, "args"))
     section = act("recreate_secret", %{}, opts)
     assert_received {:handed_off, second}
     assert second != first
-    assert List.last(relay_args(dir)) == second
+    assert_relay_secret(dir, second)
     assert %{status: "done"} = step(section, "repo:app")
     assert webhooks()["secret"] == "$SYMPHONY_GITHUB_WEBHOOK_SECRET"
 
@@ -366,7 +456,56 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     assert section.turned_on_at == nil
   end
 
+  test "leave on polling stops a connected repository's relay and forgets its steps, so the setup finishes without it",
+       %{opts: opts, relays: relays} = ctx do
+    set_up_forwarding(ctx)
+    section = WebhookSetup.section(opts)
+    assert %{status: "waiting"} = step(section, "test:app")
+    assert %{status: "failed"} = step(section, "repo:lib")
+    assert RelaySupervisor.repo_keys(relays) == ["app"]
+
+    # lib never connected: its failed step goes, and the mode still needs app's test.
+    section = act("leave_on_polling", %{"repo" => "lib"}, opts)
+    assert %{status: "pending", detail: nil, fix: nil, action: nil} = step(section, "repo:lib")
+    assert section.mode == "setting_up"
+
+    # app connected but its test never came: back on polling, with nothing left to finish.
+    section = act("leave_on_polling", %{"repo" => "app"}, opts)
+    assert RelaySupervisor.repo_keys(relays) == []
+    assert %{status: "pending"} = step(section, "repo:app")
+    assert %{status: "pending"} = step(section, "test:app")
+    assert repo(section, "app").connection == "polling"
+    assert repo(section, "app").test == nil
+    assert section.mode == "setting_up"
+
+    assert {:error, {:unprocessable, "Name the repository in repo."}} = WebhookSetup.action("leave_on_polling", %{}, opts)
+    assert {:error, {:not_found, ~s(There is no repository named "nope".)}} = WebhookSetup.action("leave_on_polling", %{"repo" => "nope"}, opts)
+    act("turn_off", %{}, opts)
+    assert {:error, {:conflict, "Instant GitHub updates are off. Turn them on first."}} = WebhookSetup.action("leave_on_polling", %{"repo" => "app"}, opts)
+  end
+
   ## URL relays
+
+  test "leave on polling deletes the hook Symphony created, and keeps one GitHub wouldn't delete", %{opts: opts, gh: gh} do
+    act("turn_on", %{"relay" => "smee", "url" => "https://smee.io/AbC"}, opts)
+    for step <- ["secret", "port", "repo:app"], do: act("run_step", %{"step" => step}, opts)
+    gh_calls()
+
+    gh_respond(gh, ["api", "repos/acme/app/hooks/11", "--method", "DELETE"], {:error, {:gh_failed, [], 1, "HTTP 502"}})
+    section = act("leave_on_polling", %{"repo" => "app"}, opts)
+    assert [{["api", "repos/acme/app/hooks/11", "--method", "DELETE"], nil}] = gh_calls()
+    # Turning off tries it again.
+    assert repo(section, "app").hook == %{id: 11, created_by_symphony: true}
+    assert repo(section, "app").connection == "polling"
+
+    gh_respond(gh, ["api", "repos/acme/app/hooks/11", "--method", "DELETE"], {:ok, ""})
+    section = act("leave_on_polling", %{"repo" => "app"}, opts)
+    assert repo(section, "app").hook == nil
+
+    # Nothing left to delete.
+    act("leave_on_polling", %{"repo" => "app"}, opts)
+    assert gh_calls() == [{["api", "repos/acme/app/hooks/11", "--method", "DELETE"], nil}]
+  end
 
   test "a URL relay registers a hook per repository, pings it, and turn off deletes only the hooks Symphony created", %{opts: opts} do
     section = act("turn_on", %{"relay" => "smee", "url" => "https://smee.io/AbC/"}, opts)
@@ -580,15 +719,20 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
 
   test "gh_ready: signed out, no gh, no webhook scope, or a token gh can't list scopes for", %{opts: opts, gh: gh} do
     gh_respond(gh, ["auth", "status"], {:error, {:gh_failed, ["auth", "status"], 1, "You are not logged into any GitHub hosts."}})
-    assert {:error, %{detail: "The GitHub CLI isn't signed in.", fix: "Run gh auth login in Terminal, then run this step again."}} = WebhookSetup.check("gh_ready", opts)
+    assert {:error, %{detail: "The GitHub CLI isn't signed in.", fix: "Run gh auth login in Terminal, then run this step again.", action: "sign_in"}} = WebhookSetup.check("gh_ready", opts)
 
     gh_respond(gh, ["auth", "status"], {:error, {:gh_unavailable, "enoent"}})
     assert {:error, %{detail: "The GitHub CLI (gh) isn't installed."}} = WebhookSetup.run("gh_ready", %{}, opts)
 
     gh_respond(gh, ["auth", "status"], {:ok, "  - Token scopes: 'gist', 'read:org'\n"})
 
-    assert {:error, %{detail: "The GitHub CLI is signed in, but can't add webhooks" <> _, fix: "Run gh auth refresh -h github.com -s admin:repo_hook in Terminal" <> _}} =
+    assert {:error, %{detail: "The GitHub CLI is signed in, but can't add webhooks" <> _, fix: "Run gh auth refresh -h github.com -s admin:repo_hook in Terminal" <> _, action: "grant_permission"}} =
              WebhookSetup.check("gh_ready", opts)
+
+    # The section names the app's button for it, and a step the app can't help with names none.
+    act("turn_on", %{}, opts)
+    assert %{status: "failed", action: "grant_permission"} = step(act("run_step", %{"step" => "gh_ready"}, opts), "gh_ready")
+    assert %{status: "failed", action: nil} = step(WebhookSetup.section(opts), "relay")
 
     gh_respond(gh, ["auth", "status"], {:ok, "  ✓ Logged in to github.com using token (GH_TOKEN)\n"})
     assert WebhookSetup.check("gh_ready", opts) == :ok
@@ -640,7 +784,9 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     Agent.update(port, fn _port -> 4040 end)
     assert WebhookSetup.run("port", %{}, opts) == :ok
     Agent.update(port, fn _port -> 5050 end)
-    assert {:error, %{detail: "symphony.yml pins dashboard.port to 4040, but Symphony listens on another port.", fix: "Restart Symphony so it listens on 4040."}} = WebhookSetup.check("port", opts)
+
+    assert {:error, %{detail: "symphony.yml pins dashboard.port to 4040, but Symphony listens on another port.", fix: "Restart Symphony so it listens on 4040.", action: "restart_symphony"}} =
+             WebhookSetup.check("port", opts)
   end
 
   test "repo: no secret or port yet, a hook GitHub refuses or doesn't name, and unknown repositories", %{opts: opts, secret: secret, port: port, gh: gh} do
@@ -720,7 +866,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     assert {:error, {:conflict, "Symphony couldn't save the webhook secret (permission denied)."}} =
              WebhookSetup.action("recreate_secret", %{}, Keyword.put(opts, :hand_off, fn _secret -> {:error, :eacces} end))
 
-    assert WebhookSetup.actions() == ~w(turn_on run_step test restart_relay recreate_secret change_relay turn_off)
+    assert WebhookSetup.actions() == ~w(turn_on run_step test leave_on_polling restart_relay recreate_secret change_relay turn_off)
     assert hd(WebhookSetup.relays()) == "gh_webhook_forward"
   end
 

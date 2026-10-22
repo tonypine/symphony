@@ -52,8 +52,9 @@ defmodule SymphonyElixir.PrDecision.Apply do
       "put back" retargets the PR once), a required check that never reported (R17: proceed without
       it for this PR, rerun, or fix the workflow in Rework; the answer is read back by
       `SymphonyElixir.PrWatch.Repo`, `unreported_answer/1`), and a PR whose only red check is one a
-      person must clear (R18: add the waiver label, or drop the change in Rework). Answering an R17
-      or R18 Rework option moves the ticket there.
+      person must clear (R18: allow the change, an option that unlocks the protected paths the PR
+      changes for the ticket (`SymphonyElixir.PathUnlock`), or drop the change in Rework). Answering
+      an R17 or R18 Rework option moves the ticket there.
 
   The CI rows with `pull_requests.checks` off and the landing rows with auto-merge off are recorded
   as the decision without an action. A check red on the base too (R23) is a wait on CI: nothing to
@@ -68,11 +69,11 @@ defmodule SymphonyElixir.PrDecision.Apply do
     AuditLog,
     AutoMerge,
     CiFix,
-    CiPoller,
     Decisions,
     MergeConfirmation,
     NeedsDecisionHold,
     Notifications,
+    PathUnlock,
     PrDecision,
     RunStore,
     SelfHeal,
@@ -389,10 +390,21 @@ defmodule SymphonyElixir.PrDecision.Apply do
     end
   end
 
+  # R18 offers to unlock the protected paths the PR changes, as the PR watch read them
+  # (`SymphonyElixir.ProtectedPathsGate.changed_entries/2`). A read without them waits for the next
+  # tick rather than asking a question whose Allow would unlock nothing.
   defp perform(%Action{kind: :decision}, ctx) do
-    with :ok <- disarm_if_armed(ctx, :protected_paths),
-         :ok <- ask(protected_paths_request(ctx), "protected_paths", ctx) do
+    with {:ok, paths} <- changed_protected_paths(ctx),
+         :ok <- disarm_if_armed(ctx, :protected_paths),
+         :ok <- ask(protected_paths_request(ctx, paths), "protected_paths", ctx) do
       {:ok, %{}}
+    end
+  end
+
+  defp changed_protected_paths(ctx) do
+    case read_field(ctx, :protected_paths) do
+      [_path | _more] = paths -> {:ok, paths}
+      _unread -> {:error, :protected_paths_unread}
     end
   end
 
@@ -525,11 +537,14 @@ defmodule SymphonyElixir.PrDecision.Apply do
     case self_heal.heal(ctx.issue, heal_opts(ctx, outcome)) do
       :filed ->
         identifier = fix_ticket(ctx)
+        log_fix_ticket(:filed, check, identifier, ctx)
         reason = "CI keeps failing: waiting on #{identifier || "a fix ticket"}, a fix ticket for the `#{check}` check"
         args = Map.put(action.args, :fix_ticket, identifier)
         {:ok, %{attempts: Attempts.filed(ctx.attempts, identifier), action: %{action | reason: reason, args: args}}}
 
       :escalated ->
+        log_fix_ticket(:escalated, check, nil, ctx)
+
         {:ok, %{action: %{action | reason: "CI keeps failing on the `#{check}` check after its fix ticket landed: a person decides", owner: :person}}}
 
       :retry ->
@@ -541,6 +556,14 @@ defmodule SymphonyElixir.PrDecision.Apply do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp log_fix_ticket(outcome, check, identifier, ctx) do
+    Logger.info(
+      "pr_watch.ci_fix_ticket issue_id=#{ctx.issue.id} issue_identifier=#{ctx.issue.identifier} outcome=#{outcome} " <>
+        "component=ci:#{check} fix_ticket=#{identifier || "none"} red_attempts=#{ctx.facts.red_attempts} " <>
+        "same_failure_streak=#{ctx.facts.same_failure_streak} pr_url=#{pr_url(ctx)} head_sha=#{head(ctx)}"
+    )
   end
 
   @doc """
@@ -683,30 +706,47 @@ defmodule SymphonyElixir.PrDecision.Apply do
     end
   end
 
-  defp protected_paths_request(ctx) do
+  # The Director reads each file by its plain description, never its path; the paths travel in the
+  # Allow option's `unlocks`, so picking it grants them for this ticket.
+  defp protected_paths_request(ctx, paths) do
     label = label(ctx)
     pr = Request.pull_request(pr_url(ctx)) || "its pull request"
     state = ctx.issue.state
+    files = PathUnlock.describe_all(paths)
+    asked? = asked_for?(ctx.issue, paths)
 
     %{
       title: "Protected files changed on #{label}",
-      question:
-        "The pull request of #{label} changes files that agents may only change with a person's permission, and that is the only failing check. " <>
-          "How should it continue?",
+      question: "#{subject(pr)} of #{label} changes #{files}. Agents may change these only with a person's permission. Allow the change?",
       why:
-        "Symphony's check for changes to those files failed on #{pr}, and only a person can clear it. " <>
-          "Adding the #{CiPoller.waiver_label()} label to the pull request runs the check again, and it passes.",
+        "Symphony's check for changes to those files failed on #{pr}, and only a person's permission clears it. " <>
+          if(asked?, do: "The ticket itself asks for this change.", else: "Nothing on the ticket asks for this change."),
       if_unanswered: "#{label} stays in #{state} and #{pr} isn't merged.",
       options: [
         %{
-          label: "Add the waiver label",
-          effect: "you add the #{CiPoller.waiver_label()} label to #{pr}; the check runs again and passes, and the ticket continues in #{state}",
-          recommended: false
+          label: "Allow the change",
+          effect: "#{label} may change #{files}; #{pr} goes on through review and merges with the change, and the ticket continues in #{state}",
+          recommended: asked?,
+          unlocks: paths
         },
-        %{label: "Drop the change in Rework", effect: "the ticket moves to Rework, where a run takes the change to those files out of the pull request", recommended: true}
+        %{
+          label: "Drop the change in Rework",
+          effect: "the ticket moves to Rework, where a run takes the change to those files out of the pull request",
+          recommended: not asked?
+        }
       ],
-      recommendation_reason: "No one allowed the change, so taking it out is the safe default."
+      recommendation_reason:
+        if(asked?,
+          do: "The ticket's description or a person's ruling asks for the change.",
+          else: "No one asked for the change on the ticket, so taking it out is the safe default."
+        )
     }
+  end
+
+  # Whether the ticket's description, or a ruling a person gave in a comment, names one of the paths.
+  defp asked_for?(%Issue{} = issue, paths) do
+    text = [issue.description | Enum.map(List.wrap(issue.rulings), &Map.get(&1, :answer))] |> Enum.filter(&is_binary/1) |> Enum.join("\n") |> String.downcase()
+    Enum.any?(paths, &String.contains?(text, String.downcase(&1)))
   end
 
   defp missing_pr_request(ctx) do

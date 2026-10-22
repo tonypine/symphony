@@ -39,8 +39,9 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   end
 
   @doc """
-  The hold payload a decision request records: the question as the reason, the options, and when
-  the decision is recorded as what clears it. The request is a parsed one
+  The hold payload a decision request records: the question as the reason, the options with the
+  protected paths each unlocks (`SymphonyElixir.PathUnlock`), and when the decision is recorded as
+  what clears it. The request is a parsed one
   (`SymphonyElixir.HumanActions.Request`) or the tool's own request before Linear reads it back,
   which has no `created_at` yet.
   """
@@ -54,6 +55,7 @@ defmodule SymphonyElixir.NeedsDecisionHold do
         question: request.question,
         why: request.why,
         options: request.options,
+        unlocks: Request.option_unlocks(request),
         asked_at: Map.get(request, :created_at)
       }
     }
@@ -155,15 +157,19 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   # its confirmation performs (`SymphonyElixir.MergeConfirmation`), so a reply under the request
   # that picks that option continues there, one that picks `Send to Rework` goes to `Rework`, and
   # any other reply is a change request sent to `In Progress` (`MergeConfirmation.reply_target/2`).
-  # An ordinary decision carries none and continues in place, so the next poll dispatches it.
+  # An ordinary decision carries none and continues in place, so the next poll dispatches it. A
+  # request a reply answered ends with its answer (`Decisions.sync/2` recorded it first); one gone
+  # with no answer (withdrawn, deleted) ends as a withdrawal.
   defp apply_clear(repo_key, issue_id, current, node, opts) do
-    case Hold.clear(repo_key, issue_id, :needs_decision, opts) do
+    replies = replies(node, current)
+
+    case Hold.clear(repo_key, issue_id, :needs_decision, Keyword.put(opts, :answered, replies != [])) do
       :ok ->
         clear_quiet_handoff_hold(repo_key, issue_id, opts)
 
         if moved_since_request?(current, node),
           do: Logger.info("Leaving issue_id=#{issue_id} where a person moved it after its decision request"),
-          else: resume(repo_key, issue_id, current, replies(node, current), opts)
+          else: resume(repo_key, issue_id, current, replies, opts)
 
         :clear
 

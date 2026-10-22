@@ -211,9 +211,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         reposWindow.checkAtStart = { [weak self] key in self?.setupOnStart.addPending(key) }
         reposWindow.checkForUpdates = { [weak self] in self?.checkForUpdates(nil) }
         reposWindow.openSetup = { [weak self] in self?.symphonyWindow.show(view: .setup) }
+        reposWindow.showGitHubUpdates = { [weak self] section in self?.symphonyWindow.showGitHubUpdates(section) }
         symphonyWindow.appVersion = updates.current.version ?? ""
         symphonyWindow.appBuild = updates.current
         symphonyWindow.secrets = runner.secrets
+        symphonyWindow.restartSymphony = { [weak self] in self?.restart() }
         symphonyWindow.stateRoot = poller.stateRoot
         symphonyWindow.onAction = { [weak self] action in self?.perform(action) }
         symphonyWindow.openRepos = { [weak self] key in
@@ -409,12 +411,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         DispatchQueue.main.async { [weak self] in self?.notify(notice) }
     }
 
-    /// Quitting stops an owned Symphony first, after confirming when agent runs are active.
+    /// Quitting stops an owned Symphony first, after confirming when agent runs are active. An Inbox answer held for
+    /// Undo is sent before, while Symphony still runs to take it.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard runner.isRunning else { return .terminateNow }
+        guard runner.isRunning || symphonyWindow.holdsAnswer else { return .terminateNow }
 
         Task {
-            if !runner.isStopping, let message = StatusMenu.quitConfirmation(activeRuns: await runner.activeRunCount()) {
+            if runner.isRunning, !runner.isStopping, let message = StatusMenu.quitConfirmation(activeRuns: await runner.activeRunCount()) {
                 let alert = NSAlert()
                 alert.messageText = "Quit Symphony?"
                 alert.informativeText = message
@@ -425,6 +428,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                     return
                 }
             }
+            await symphonyWindow.sendHeldAnswer()
+            guard runner.isRunning else { return sender.reply(toApplicationShouldTerminate: true) }
             runner.stop { sender.reply(toApplicationShouldTerminate: true) }
         }
         return .terminateLater
@@ -472,8 +477,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             return forceInFlight == nil && StatusMenu.canForce(machine.status)
         case #selector(openTerminalDashboard(_:)):
             return isAnswering
-        case #selector(openWaitingTicket(_:)):
-            return menuItem.representedObject is URL
         case #selector(openLogs(_:)):
             return canOpenLogs
         case #selector(checkForUpdates(_:)):
@@ -1064,7 +1067,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             let item = menuItem(StatusMenu.waitingLine(ticket), action: #selector(openWaitingTicket(_:)))
             item.representedObject = ticket.issueID ?? ticket.identifier
             item.toolTip = ticket.title
-            item.image = NSImage(systemSymbolName: ticket.kind.symbol, accessibilityDescription: StatusMenu.kindLabel(ticket.kind))
+            item.image = NSImage(systemSymbolName: ticket.kind.symbol, accessibilityDescription: StatusMenu.kindLabel(ticket))
             return item
         }
         let more = waiting.moreTitle.map { [menuItem($0, action: #selector(openWaitingTicket(_:)))] } ?? []

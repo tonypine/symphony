@@ -116,6 +116,8 @@ defmodule SymphonyElixir.Application do
              SymphonyElixir.HttpServer,
              # After the HTTP server: a relay forwards to the port it listens on.
              SymphonyElixir.GitHub.RelaySupervisor,
+             # After the relays: the GitHub updates section reads the port and each relay's status.
+             SymphonyElixir.GitHub.WebhookSetup.Cache,
              SymphonyElixir.StatusDashboard
            ])
         |> List.flatten()

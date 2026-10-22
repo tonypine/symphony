@@ -24,6 +24,7 @@ defmodule SymphonyElixirWeb.Presenter do
   }
 
   alias SymphonyElixir.Codex.MessageHumanizer
+  alias SymphonyElixir.GitHub.WebhookSetup.Cache, as: WebhookSetupCache
   alias SymphonyElixir.Repo.Status, as: RepoStatus
   alias SymphonyElixirWeb.WatchPayload
 
@@ -37,8 +38,8 @@ defmodule SymphonyElixirWeb.Presenter do
     seconds_running: 0
   }
 
-  @spec state_payload(GenServer.name(), timeout(), GenServer.server(), GenServer.name(), GenServer.server()) :: map()
-  def state_payload(orchestrator, snapshot_timeout_ms, stray_processes \\ StrayProcesses, inbox \\ Inbox, setup \\ Setup) do
+  @spec state_payload(GenServer.name(), timeout(), GenServer.server(), GenServer.name(), GenServer.server(), keyword()) :: map()
+  def state_payload(orchestrator, snapshot_timeout_ms, stray_processes \\ StrayProcesses, inbox \\ Inbox, setup \\ Setup, github_updates \\ []) do
     now = DateTime.utc_now()
     generated_at = now |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
@@ -73,7 +74,7 @@ defmodule SymphonyElixirWeb.Presenter do
           conflicts: snapshot |> Map.get(:conflicts, []) |> Enum.map(&conflict_entry_payload/1),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
           drain_report: drain_report_payload(RetiredStates.drain_report()),
-          setup: Setup.payload(setup),
+          setup: setup |> Setup.payload() |> Map.put(:github_updates, WebhookSetupCache.state_section(github_updates)),
           awaiting_clarification:
             snapshot
             |> Map.get(:awaiting_clarification, [])
@@ -656,11 +657,17 @@ defmodule SymphonyElixirWeb.Presenter do
       url: URLUtils.present_url(item.url),
       state: item.state,
       kind: Atom.to_string(item.kind),
+      decision: decision?(item),
       headline: item.ask,
       waiting_since: iso8601(item.waiting_since),
       waiting_seconds: waiting_seconds(item.waiting_since, now)
     }
   end
+
+  # A request with options reads "Decision" in the app, as the Inbox's does; an older hand-written
+  # one with steps stays an action.
+  defp decision?(%{kind: :action, review: %{options: [_ | _]}}), do: true
+  defp decision?(_item), do: false
 
   defp waiting_seconds(%DateTime{} = since, now), do: max(DateTime.diff(now, since, :second), 0)
   defp waiting_seconds(_since, _now), do: nil

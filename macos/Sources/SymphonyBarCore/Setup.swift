@@ -76,8 +76,9 @@ public struct SetupPayload: Equatable {
         /// An edit of `symphony.yml` the app makes through its settings writer once the operator confirms it.
         case configEdit(path: String, action: ConfigAction, value: SetupValue)
         /// A Linear change Symphony makes once the operator confirms it (`POST /api/v1/setup/fixes`), such as
-        /// `create_label`: the `name` in team `team`, of `type` for a status.
-        case linear(action: String, team: String, name: String, type: String?)
+        /// `create_label`: the `name` in team `team`; for a status (`create_state`), of `type`, just `after` the
+        /// status the check names, or first of its type when it names none.
+        case linear(action: String, team: String, name: String, type: String?, after: String? = nil)
         /// Re-syncs each ticket's hold label in repo `repo` from the hold Symphony keeps.
         case resyncHold(repo: String, tickets: [String])
         /// No safe fix: the place where the operator fixes it.
@@ -89,9 +90,11 @@ public struct SetupPayload: Equatable {
         /// `tickets`, the ones the operator picked, or all of them.
         public func descriptor(tickets picked: [String]? = nil) -> [String: Any]? {
             switch self {
-            case let .linear(action, team, name, type):
+            case let .linear(action, team, name, type, after):
+                // The place the sheet showed goes back, so Symphony refuses a status whose place moved since.
                 var descriptor: [String: Any] = ["kind": "linear", "action": action, "team": team, "name": name]
                 if let type { descriptor["type"] = type }
+                if let after { descriptor["after"] = after }
                 return descriptor
             case let .resyncHold(repo, tickets):
                 return ["kind": "linear", "action": "resync_hold", "repo": repo, "tickets": picked ?? tickets]
@@ -192,12 +195,22 @@ public struct SetupPayload: Equatable {
     public var checkedAt: Date?
     /// When the last run that reached Linear was; earlier than `checkedAt` while Linear can't be reached.
     public var linearCheckedAt: Date?
+    /// Instant GitHub updates (`github_updates`); nil from a Symphony that predates them, and in the answers of Check
+    /// Again and the fixes, which leave them out.
+    public var githubUpdates: GitHubUpdatesSection?
 
-    public init(problems: [Problem] = [], notChecked: [NotChecked] = [], checkedAt: Date? = nil, linearCheckedAt: Date? = nil) {
+    public init(
+        problems: [Problem] = [],
+        notChecked: [NotChecked] = [],
+        checkedAt: Date? = nil,
+        linearCheckedAt: Date? = nil,
+        githubUpdates: GitHubUpdatesSection? = nil
+    ) {
         self.problems = problems
         self.notChecked = notChecked
         self.checkedAt = checkedAt
         self.linearCheckedAt = linearCheckedAt
+        self.githubUpdates = githubUpdates
     }
 
     /// The payload with only the problems of the repo `key`: those naming it, and those naming no repo (keys, secrets
@@ -234,13 +247,17 @@ public struct SetupPayload: Equatable {
     /// The payload of `/api/v1/setup`, or of the answer to `POST /api/v1/setup/refresh` and `/fixes`; nil when it
     /// isn't one.
     public static func decode(_ data: Data) -> SetupPayload? {
-        (try? decoder.decode(Wire.self, from: data)).map(SetupPayload.init(wire:))
+        guard var payload = (try? decoder.decode(Wire.self, from: data)).map(SetupPayload.init(wire:)) else { return nil }
+        payload.githubUpdates = GitHubUpdatesSection.decode(data)
+        return payload
     }
 
     /// The `setup` section of a `/api/v1/state` payload, nil when Symphony predates it.
     public static func decode(state data: Data) -> SetupPayload? {
         struct State: Decodable { let setup: Wire? }
-        return (try? decoder.decode(State.self, from: data))?.setup.map(SetupPayload.init(wire:))
+        guard var payload = (try? decoder.decode(State.self, from: data))?.setup.map(SetupPayload.init(wire:)) else { return nil }
+        payload.githubUpdates = GitHubUpdatesSection.decode(state: data)
+        return payload
     }
 
     init(wire: Wire) {
@@ -285,7 +302,7 @@ public struct SetupPayload: Equatable {
                 return .resyncHold(repo: repo, tickets: tickets)
             }
             guard let action = wire.action, let team = wire.team, let name = wire.name else { return .unknown("linear") }
-            return .linear(action: action, team: team, name: name, type: wire.type)
+            return .linear(action: action, team: team, name: name, type: wire.type, after: wire.after)
         case "open":
             // The app's own `update` is never one Symphony sends.
             guard let target = wire.target.flatMap(OpenTarget.init(rawValue:)), target != .update else { return .unknown("open") }
@@ -333,6 +350,7 @@ public struct SetupPayload: Equatable {
             let team: String?
             let name: String?
             let type: String?
+            let after: String?
             let repo: String?
             let tickets: [String]?
             let target: String?

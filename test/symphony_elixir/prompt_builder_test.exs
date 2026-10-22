@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.PromptBuilderTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Decisions, TicketState}
+  alias SymphonyElixir.{Decisions, TicketState, WorkflowPreview}
 
   test "prompt builder uses PR prompt branch for PR runs" do
     write_workflow_file!(
@@ -712,7 +712,8 @@ defmodule SymphonyElixir.PromptBuilderTest do
 
     assert prompt =~ "Failed checks: protected paths, specs"
     assert prompt =~ "`protected paths` is not yours to fix: it fails because this PR's own commits change an agent-protected path"
-    assert prompt =~ "adding the `protected-paths-approved` label"
+    assert prompt =~ "only a person clears it, by allowing the change in a decision Symphony asks on the ticket"
+    refute prompt =~ "protected-paths-approved"
   end
 
   test "compact prompt keeps CI failure context without a log excerpt" do
@@ -938,6 +939,29 @@ defmodule SymphonyElixir.PromptBuilderTest do
     assert prompt =~ "Continue on the **same** pull request and the same branch"
     assert prompt =~ "It is a person's move from the Director app"
     refute prompt =~ "Close the existing PR tied to the issue"
+  end
+
+  test "the preview carries the Visual work section and the rework findings step" do
+    assert {:ok, prompt} = WorkflowPreview.render(file: Path.expand("../../WORKFLOW.md", __DIR__), agent_kind: "claude")
+    flat = String.replace(prompt, ~r/\s+/, " ")
+
+    assert prompt =~ "### Visual work"
+    assert flat =~ "Apply this whenever a ticket adds or changes a screen or pane."
+    assert flat =~ "Viewports are inputs to any layout change; the repo's `WORKFLOW.md` names them with a goal each"
+    assert flat =~ "Where a repo names none, the QA wide pass size (1400×900 pt) is the functional viewport."
+    assert flat =~ "Design before code, recorded in the workpad under `### Design`"
+    assert flat =~ "3. Responsiveness pass, answered in writing: Is horizontal scroll needed, and where?"
+    assert flat =~ "5. Accessibility pass: AX labels on every control; contrast per the repo's design system."
+    assert flat =~ "where it doesn't (`Table`, `NavigationSplitView`, `Form`), say so in the workpad and leave the sight check to QA"
+
+    assert flat =~
+             "3. Before planning, read every prior QA report and the workpad's superseded attempts, and list the findings by class (clipped, truncated, mechanism broken, state missing)"
+
+    assert flat =~ "If the same class fails for the second time on this ticket, do not push a third attempt of the same kind."
+    assert flat =~ "two layout options for a person to choose, and stop."
+
+    assert flat =~
+             "Viewports (see `Visual work`) for the Director's `macos_app`: laptop 1440×900 pt `functional`, desktop 2560×1440 pt `optimize`."
   end
 
   test "prompt builder renders a partial with passed variables" do

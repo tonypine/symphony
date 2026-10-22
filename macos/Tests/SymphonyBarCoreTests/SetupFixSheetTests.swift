@@ -42,18 +42,50 @@ final class SetupFixSheetTests: XCTestCase {
 
     func testAStatusFixNamesItsTypeAndPosition() throws {
         var problem = label
-        problem.fix = .linear(action: "create_state", team: "TP", name: "Plan Review", type: "started")
+        problem.fix = .linear(action: "create_state", team: "TP", name: "Plan Review", type: "started", after: "Rework")
         let sheet = try XCTUnwrap(SetupFixSheet(problem: problem))
         XCTAssertEqual(sheet.title, "Create the status “Plan Review” in team TP?")
         XCTAssertEqual(sheet.verb, "Create Status")
-        XCTAssertEqual(sheet.kind, .linear(["Kind: Status", "Name: Plan Review", "Team: TP", "Type: Started", "Position: last of the Started statuses"]))
+        XCTAssertEqual(sheet.kind, .linear(["Kind: Status", "Name: Plan Review", "Team: TP", "Type: Started", "Position: after “Rework”"]))
         XCTAssertEqual(sheet.undo, "To undo it, delete the status “Plan Review” in Linear: Settings › Teams › TP › Workflow.")
         XCTAssertEqual(sheet.stays, "No ticket moves, and the team's other statuses stay as they are.")
-        XCTAssertEqual(sheet.fix.descriptor()?["type"] as? String, "started")
+        XCTAssertEqual(
+            sheet.fix.descriptor() as? [String: String],
+            ["kind": "linear", "action": "create_state", "team": "TP", "name": "Plan Review", "type": "started", "after": "Rework"]
+        )
+
+        // With no status of its type before it on the team's board, Symphony puts it first of its type.
+        problem.fix = .linear(action: "create_state", team: "TP", name: "In Progress", type: "started")
+        let first = try XCTUnwrap(SetupFixSheet(problem: problem))
+        XCTAssertEqual(first.kind, .linear(["Kind: Status", "Name: In Progress", "Team: TP", "Type: Started", "Position: first of the Started statuses"]))
+        XCTAssertNil(first.fix.descriptor()?["after"])
         XCTAssertEqual(
             ["backlog", "unstarted", "completed", "canceled", "triage", "other"].map(SetupFixSheet.stateTypeWord),
             ["Backlog", "Unstarted", "Completed", "Canceled", "Triage", "other"]
         )
+    }
+
+    func testTheCreateStatusSheetReadsTheAPIsStatusContract() throws {
+        // `test/fixtures/api/setup_status_problems.json` is the payload the API's tests compare against, and
+        // `setup_controller_test.exs` posts this sheet's request back to `POST /api/v1/setup/fixes`.
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("test/fixtures/api/setup_status_problems.json")
+        let payload = try XCTUnwrap(SetupPayload.decode(try Data(contentsOf: url)))
+        let missing = try XCTUnwrap(payload.problems.first { $0.id == "statuses:missing:TP:QA" })
+
+        XCTAssertEqual(missing.fix, .linear(action: "create_state", team: "TP", name: "QA", type: "started", after: "Code Review"))
+        let sheet = try XCTUnwrap(SetupFixSheet(problem: missing))
+        XCTAssertEqual(sheet.title, "Create the status “QA” in team TP?")
+        XCTAssertEqual(sheet.kind, .linear(["Kind: Status", "Name: QA", "Team: TP", "Type: Started", "Position: after “Code Review”"]))
+        XCTAssertEqual(
+            sheet.fix.descriptor() as? [String: String],
+            ["kind": "linear", "action": "create_state", "team": "TP", "name": "QA", "type": "started", "after": "Code Review"]
+        )
+
+        // The retired-state warning opens the drain report, and the misspelt active state opens Settings.
+        XCTAssertEqual(payload.problems.first { $0.id == "status_use:retired:In Review" }?.fix, .open(.drainReport, url: nil))
+        XCTAssertEqual(payload.problems.first { $0.id == "statuses:unknown:TP:issues.states.active:In Progres" }?.fix, .open(.settings, url: nil))
     }
 
     func testAnUnknownLinearActionStillSaysWhere() throws {

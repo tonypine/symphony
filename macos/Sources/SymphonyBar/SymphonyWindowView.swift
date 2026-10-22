@@ -137,6 +137,14 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var history: NavigationHistory
     /// What the ticket page shown last read from its own endpoints; the state comes from the client's poll.
     @Published var ticketSources = TicketPage.Sources()
+    /// What the pull request page shown read from its endpoint, nil while it reads (D15).
+    @Published var pullRequestResult: PullRequestPageResult?
+    var readingPullRequest = false
+    /// The link each pull request page was opened from, for Open on GitHub before Symphony answers.
+    var pullRequestLinks: [PullRequestPlace: URL] = [:]
+    /// How far each Inbox review is scrolled, so ⌘[ from a page finds it where it was. Not `@Published`: a scroll
+    /// redraws nothing else.
+    var inboxScroll = InboxScrollOffsets()
     /// The Stop Run sheet shown (D12c); nothing stops until its button is pressed.
     @Published var stopSheet: StopRunSheet?
     /// True while the sheet's requests are on their way to Symphony.
@@ -175,6 +183,15 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var setupBanner: SetupBanner?
     /// SU12: the welcome line above the Setup page when the first launch opened it, nil otherwise.
     @Published var setupWelcome: String?
+    /// The last GitHub updates action's answer: the card shows it until the state poll reports something new.
+    @Published var githubUpdatesAnswer: GitHubUpdatesAnswer?
+    /// The GitHub updates card's consequence sheet (S11, S12, the relay sheet); nothing changes until its button.
+    @Published var githubUpdatesSheet: GitHubUpdatesSheet?
+    /// True while Restart Relay is on its way.
+    @Published var restartingRelay = false
+    /// S2–S6: the guided setup behind Turn On Instant Updates… and Finish Setup…, nil while it is closed.
+    @Published var githubUpdatesSetup: GitHubUpdatesSetup?
+    var githubUpdatesSetupController: GitHubUpdatesSetupController?
     var setupBannerTask: Task<Void, Never>?
     /// The app's own build, for the build warning (J11).
     var appBuild = AppBuild(build: 0, isDevelopment: true)
@@ -184,6 +201,17 @@ final class SymphonyWindowModel: ObservableObject {
     var onSetupRequest: (_ fix: [String: Any]?) async -> SetupAPI.Result = { _ in .failed("") }
     /// `symphony check` on a copy of `symphony.yml`, as the settings writer runs it.
     var onCheckConfig: (String) async -> ConfigCheckResult = { _ in .passed }
+    /// `POST /api/v1/setup/github_updates/<action>`, to Symphony or the API fixtures.
+    var onGitHubUpdatesRequest: (GitHubUpdatesAPI.Action, [String: String]) async -> GitHubUpdatesAPI.Result = { _, _ in .failed("") }
+    /// `GET /api/v1/setup`'s GitHub updates section, which the guided setup reads while a test update is on its way.
+    var onGitHubUpdatesRead: () async -> GitHubUpdatesAPI.Result = { .failed("") }
+    /// Moves the webhook secret Symphony handed off into the app's secret item, and whether the item holds one.
+    var onMoveWebhookSecret: () -> WebhookSecret.Move = { .nothingHandedOff }
+    var onWebhookSecretStored: () -> Bool = { false }
+    /// Opens Terminal on `gh` with these arguments; the reason when it couldn't.
+    var onOpenGitHubTerminal: (_ arguments: [String]) -> String? = { _ in "Terminal isn't available." }
+    /// The app's graceful restart of Symphony.
+    var onRestartSymphony: () -> Void = {}
     /// The app's version, for the sidebar footer while Symphony doesn't say its own.
     var appVersion = ""
     /// Where the client reads Symphony from, for Diagnostics.
@@ -228,6 +256,11 @@ final class SymphonyWindowModel: ObservableObject {
     /// The runs and audit records are read again at most this often.
     static let ticketSlowInterval: TimeInterval = 10
     private var bannerTask: Task<Void, Never>?
+    /// An answer the app holds for the banner's Undo before it sends it (`ConsequenceSheet.holdsForUndo`), with the
+    /// banner that offers the Undo and the wait that sends it.
+    private var held: (sheet: ConsequenceSheet, action: ControlAction, bannerID: UUID, wait: Task<Void, Never>)?
+    /// Whether an answer waits for the banner's Undo, still to send.
+    var holdsAnswer: Bool { held != nil }
     /// The Inbox items the Director answered, by issue id: they leave the Inbox without a banner of their own.
     private var answeredItems = Set<String>()
     /// The tickets a Check Now is on its way for.
@@ -246,6 +279,7 @@ final class SymphonyWindowModel: ObservableObject {
                 overviewState = data.flatMap(OverviewState.decode)
                 watchState = data.map(WatchState.decode) ?? WatchState()
                 holdSetupOrder()
+                settleGitHubUpdatesAnswer()
                 readReposIfDue()
                 readInbox()
                 readInitiatives()
@@ -351,9 +385,16 @@ final class SymphonyWindowModel: ObservableObject {
         }
     }
 
-    /// Opens the consequence sheet of `move` on `item`.
+    /// Opens the consequence sheet of `move` on `item`. An answer on `item` the app still holds is taken back first:
+    /// the Director is answering again, with the picks it left.
     func open(_ move: InboxMove, on item: InboxItem) {
         guard !inboxMoveInFlight else { return }
+        if let held, held.sheet.itemID == item.id {
+            held.wait.cancel()
+            self.held = nil
+            answeredItems.remove(item.id)
+            if inboxBanner?.id == held.bannerID { dismissBanner() }
+        }
         inboxMoveError = nil
         inboxSheet = ConsequenceSheet(move: move, item: item, picks: picks(for: item.id))
     }
@@ -370,6 +411,7 @@ final class SymphonyWindowModel: ObservableObject {
     /// sheet says why.
     func confirm(_ sheet: ConsequenceSheet, reason: String) {
         guard !inboxMoveInFlight, let action = sheet.action(reason: reason) else { return }
+        if sheet.holdsForUndo { return hold(action, of: sheet) }
         inboxMoveInFlight = true
         inboxMoveError = nil
         Task {
@@ -391,10 +433,62 @@ final class SymphonyWindowModel: ObservableObject {
         }
     }
 
-    /// Undo on the banner: takes the move back, and selects the item again.
+    /// Holds an answer that moves nothing for the banner's Undo (DS10): the sheet closes, the selection moves to the
+    /// next item after a request's answer and the banner offers Undo; the answer is sent once the banner's time is up. An answer held already
+    /// is sent at once, so only the newest waits.
+    private func hold(_ action: ControlAction, of sheet: ConsequenceSheet) {
+        sendHeldNow()
+        inboxSheet = nil
+        answeredItems.insert(sheet.itemID)
+        if sheet.selectsNext(after: sheet.expectedOutcome) { inboxSelection = inboxList?.neighbor(of: sheet.itemID)?.id }
+        let banner = sheet.heldBanner
+        showBanner(banner)
+        let wait = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(InboxBanner.duration))
+            guard !Task.isCancelled else { return }
+            self?.sendHeldNow()
+        }
+        held = (sheet, action, banner.id, wait)
+    }
+
+    /// Sends the answer the app holds, if any, without waiting for the banner's time: when its time is up, when
+    /// another answer is held, and when the window closes or the app quits. Its banner then says how it went, unless
+    /// another banner took its place; a failure always shows, and keeps the picks to send again.
+    @discardableResult
+    func sendHeldNow() -> Task<Void, Never>? {
+        guard let held else { return nil }
+        self.held = nil
+        held.wait.cancel()
+        return Task {
+            let result = await onControl(held.action)
+            let sheet = held.sheet
+            switch result {
+            case .done, .moved:
+                inboxPicks.clear(sheet.itemID)
+                if inboxBanner == nil || inboxBanner?.id == held.bannerID {
+                    showBanner(sheet.banner(after: result.moveOutcome ?? sheet.expectedOutcome))
+                }
+            case let .failed(message):
+                answeredItems.remove(sheet.itemID)
+                showBanner(.failed(itemID: sheet.itemID, identifier: sheet.identifier, message: message))
+            }
+            client.refresh()
+        }
+    }
+
+    /// Undo on the banner: takes the move back, and selects the item again. An answer the app still holds is
+    /// never sent.
     func undo(_ banner: InboxBanner) {
         guard banner.undo else { return }
         dismissBanner()
+        if let held, held.bannerID == banner.id {
+            held.wait.cancel()
+            self.held = nil
+            answeredItems.remove(banner.itemID)
+            inboxSelection = banner.itemID
+            showBanner(.unsent(itemID: banner.itemID, identifier: banner.identifier))
+            return
+        }
         Task {
             switch await onControl(.undo(banner.identifier)) {
             case .done, .moved:
@@ -489,6 +583,8 @@ final class SymphonyWindowModel: ObservableObject {
             openTicket(identifier)
         case .openSetup:
             show(.setup)
+        case .restartRelay:
+            restartRelay()
         }
     }
 
@@ -520,7 +616,7 @@ final class SymphonyWindowModel: ObservableObject {
     private func showDepartures(from previous: [InboxItem], to current: [InboxItem]) {
         let banners = WatcherDeparture.banners(previous: previous, current: current, answered: answeredItems, watches: watchState.watches)
         answeredItems.subtract(previous.map(\.id).filter { id in !current.contains { $0.id == id } })
-        if let banner = banners.first, selection == .inbox, shownTicket == nil { showBanner(banner) }
+        if let banner = banners.first, selection == .inbox, !showsPage { showBanner(banner) }
     }
 
     /// Opens Usage and reads the history at once.
@@ -532,7 +628,7 @@ final class SymphonyWindowModel: ObservableObject {
 
     /// Reads the history while Usage shows; Symphony answers from its run records, with no Linear request.
     private func readHistoryIfDue() {
-        guard selection == .usage, shownTicket == nil, !readingHistory, state.countsKnown,
+        guard selection == .usage, !showsPage, !readingHistory, state.countsKnown,
             historyReadAt.map({ Date().timeIntervalSince($0) >= Self.historyInterval }) ?? true
         else { return }
         readingHistory = true
@@ -551,7 +647,7 @@ final class SymphonyWindowModel: ObservableObject {
 
     /// Reads Quality's history and runs while Quality shows, for its period.
     private func readQualityIfDue() {
-        guard selection == .quality, shownTicket == nil, !readingQuality, state.countsKnown,
+        guard selection == .quality, !showsPage, !readingQuality, state.countsKnown,
             qualityReadAt.map({ Date().timeIntervalSince($0) >= Self.historyInterval }) ?? true
         else { return }
         readingQuality = true
@@ -601,11 +697,13 @@ final class SymphonyWindowModel: ObservableObject {
         }
     }
 
-    /// The toolbar's title: the view's, or the ticket's identifier on its page.
-    var toolbarTitle: String { shownTicket ?? selection.title }
+    /// The toolbar's title: the view's, the ticket's identifier on its page, or "#448 · <title>" on a pull request's.
+    var toolbarTitle: String { shownTicket ?? pullRequestScreen?.title ?? selection.title }
 
-    /// The toolbar's line under the title: the view's, or the ticket's title on its page.
+    /// The toolbar's line under the title: the view's, the ticket's title on its page, or "<repo> · for <ticket>" on a
+    /// pull request's.
     var toolbarSubtitle: String {
+        if let screen = pullRequestScreen { return screen.subtitle }
         guard shownTicket != nil else { return selection.subtitle }
         return ticketPage?.title ?? "Ticket"
     }
@@ -664,9 +762,18 @@ struct SymphonyWindowView: View {
                                 .help("Forward (⌘])")
                         }
                         VStack(alignment: .leading, spacing: 0) {
-                            Text(model.toolbarTitle).font(.headline)
-                            Text(model.toolbarSubtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                            Text(model.toolbarTitle).font(.headline).lineLimit(1)
+                            HStack(spacing: DesignTokens.Space.s1) {
+                                Text(model.toolbarSubtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                                // D15 reading: the spinner in the subtitle, over its placeholder cards.
+                                if model.pullRequestScreen?.isLoading == true {
+                                    ProgressView().controlSize(.mini).accessibilityLabel(PullRequestScreen.readingTitle)
+                                }
+                            }
                         }
+                        // A pull request's long title is cut short here, so the window's items stay out of the
+                        // toolbar's overflow; its page's header shows it whole.
+                        .frame(maxWidth: DesignTokens.Layout.toolbarTitleMaxWidth, alignment: .leading)
                         .accessibilityElement(children: .combine)
                     }
                     ToolbarItem(placement: .status) {
@@ -679,7 +786,7 @@ struct SymphonyWindowView: View {
                         DispatchControlButton(model: model, client: client)
                     }
                     .sharedBackgroundVisibility(.hidden)
-                    if model.selection == .shipped, model.shownTicket == nil {
+                    if model.selection == .shipped, !model.showsPage {
                         ToolbarItem(placement: .principal) {
                             Picker("Shipped or Learnings", selection: $model.shippedTab) {
                                 ForEach(Shipped.Tab.allCases) { Text($0.title).tag($0) }
@@ -688,7 +795,7 @@ struct SymphonyWindowView: View {
                             .fixedSize()
                         }
                     }
-                    if model.selection == .audit, model.shownTicket == nil {
+                    if model.selection == .audit, !model.showsPage {
                         ToolbarItem(placement: .automatic) {
                             Button { model.exportAudit() } label: {
                                 Label(Audit.exportTitle, systemImage: "square.and.arrow.up")
@@ -697,7 +804,7 @@ struct SymphonyWindowView: View {
                             .disabled(model.auditExporting || model.auditRecords == nil)
                         }
                     }
-                    if model.selection == .tickets, model.shownTicket == nil {
+                    if model.selection == .tickets, !model.showsPage {
                         ToolbarItem(placement: .automatic) {
                             Button { model.openForceSheet() } label: {
                                 Label(DispatchControl.forceTitle, systemImage: DesignTokens.Status.forced.symbol)
@@ -706,7 +813,7 @@ struct SymphonyWindowView: View {
                             .disabled(!model.dispatchControl.canForce)
                         }
                     }
-                    if model.selection == .inbox, model.shownTicket == nil {
+                    if model.selection == .inbox, !model.showsPage {
                         ToolbarItem(placement: .primaryAction) {
                             // N4: closes the peek, or shows it again.
                             Button { model.togglePeek() } label: {
@@ -817,8 +924,8 @@ struct SymphonySidebar: View {
     /// The list's selection, which opens the Repos window instead of selecting it.
     private var selection: Binding<SymphonyView?> {
         Binding(
-            // On a ticket page no view is selected, so choosing the view the page came from goes back to it.
-            get: { model.shownTicket == nil ? model.selection : nil },
+            // On a page no view is selected, so choosing the view the page came from goes back to it.
+            get: { model.showsPage ? nil : model.selection },
             set: { view in
                 guard let view else { return }
                 model.show(view)
@@ -884,6 +991,8 @@ struct SymphonyDetail: View {
             )
         } else if model.shownTicket != nil {
             TicketPageContent(model: model, client: client)
+        } else if model.shownPullRequest != nil {
+            PullRequestPageContent(model: model)
         } else {
             switch model.selection {
             case .inbox:

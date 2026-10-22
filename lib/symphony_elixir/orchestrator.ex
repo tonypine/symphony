@@ -47,7 +47,9 @@ defmodule SymphonyElixir.Orchestrator do
     StateProvisioning,
     StatusDashboard,
     SubIssueWait,
+    TicketEvents,
     TicketPullRequest,
+    TicketSignals,
     TicketState,
     TicketStateReconciler,
     Tracker,
@@ -258,6 +260,8 @@ defmodule SymphonyElixir.Orchestrator do
     mark_interrupted_runs_for_configured_repos(repo_key)
     TicketStateReconciler.reconcile_all()
     TicketPullRequest.Backfill.run(configured_repo_keys(repo_key))
+    # The ledger's one-time history backfill runs in a task: startup never waits for it.
+    TicketEvents.Backfill.start()
     tick_token = make_ref()
     send(self(), {:tick, tick_token})
     schedule_snapshot_publish(config.observability.snapshot_publish_ms)
@@ -4290,6 +4294,24 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # The force label is on: the Director's force is recorded on the ticket, best effort, in its repo,
+  # else the primary one. A clear records nothing.
+  defp record_force_action(_issue, true = _clear?), do: :ok
+
+  defp record_force_action(%Issue{id: issue_id} = issue, false = _clear?) do
+    case force_repo_key(issue) do
+      {:ok, repo_key} -> TicketSignals.record_event(repo_key, issue_id, "person.action", %{action: "force"}, actor: {:person, "the Director"})
+      {:error, _reason} -> :ok
+    end
+  end
+
+  defp force_repo_key(issue) do
+    case issue_repo_key(issue) do
+      nil -> Config.repo_key()
+      repo_key -> {:ok, repo_key}
+    end
+  end
+
   # What `symphony force` reports: whether the ticket is forced now, its place in the queue (nil
   # until it joins), and the tickets holding the `forced_max` slots.
   defp force_result(%Issue{} = issue, forced, settings) do
@@ -5123,7 +5145,64 @@ defmodule SymphonyElixir.Orchestrator do
     repo_key
     |> RunStore.record_ticket_dispatch(issue_id, dispatch)
     |> log_run_store_error("record the dispatch")
+
+    record_run_started(repo_key, issue_id, dispatch)
   end
+
+  # The run's `run.started` event, next to its dispatch, keyed by its run id. Its number counts the
+  # ticket's earlier runs of the same kind.
+  defp record_run_started(repo_key, issue_id, %{kind: kind, run_id: run_id, state: issue_state, head: head}) do
+    run_kind = to_string(kind)
+    run_number = length(run_events(repo_key, issue_id, "run.started", &(&1[:run_kind] == run_kind))) + 1
+    payload = %{run_id: run_id, run_kind: run_kind, run_number: run_number, state: issue_state, head: head}
+    TicketSignals.record_event(repo_key, issue_id, "run.started", payload, phase: issue_state, run_id: run_id)
+  end
+
+  # The run's `run.ended` event, keyed by its run id, with how it ended, how long it ran and the
+  # tokens it spent. A run a usage limit, an unreachable model API or a CI wait stopped records
+  # `counted: false`, as its dispatch outcome is dropped.
+  defp record_run_ended(repo_key, issue_id, run_id, running_entry, reason) do
+    head = pr_head(issue_id, repo_key)
+    started = run_events(repo_key, issue_id, "run.started", &(&1[:run_id] == run_id)) |> List.first() || %{}
+
+    payload = %{
+      run_id: run_id,
+      run_kind: started[:run_kind],
+      run_number: started[:run_number],
+      exit: run_exit(reason, repo_key, issue_id, head),
+      head: head,
+      duration_ms: run_duration_ms(Map.get(running_entry, :started_at)),
+      tokens: Map.get(running_entry, :total_tokens),
+      counted: not uncounted_exit?(reason)
+    }
+
+    TicketSignals.record_event(repo_key, issue_id, "run.ended", payload, run_id: run_id)
+  end
+
+  defp run_events(repo_key, issue_id, type, keep?) do
+    case RunStore.list_ticket_events(repo_key, issue_id, types: [type]) do
+      events when is_list(events) -> events |> Enum.map(& &1.payload) |> Enum.filter(keep?)
+      {:error, _reason} -> []
+    end
+  end
+
+  defp run_exit({:usage_limited, _info}, _repo_key, _issue_id, _head), do: "usage limit"
+  defp run_exit({:model_api_unreachable, _info}, _repo_key, _issue_id, _head), do: "model API unreachable"
+  defp run_exit({:ci_pending, _info}, _repo_key, _issue_id, _head), do: "waiting for CI"
+
+  defp run_exit(reason, repo_key, issue_id, head) do
+    cond do
+      is_binary(head) and Handoff.emitted?(repo_key, issue_id, head) -> "handoff"
+      reason == :normal -> "ended normally"
+      true -> "failed (#{reason |> agent_exit_reason_summary() |> String.slice(0, 120)})"
+    end
+  end
+
+  defp uncounted_exit?({uncounted, _info}) when uncounted in [:usage_limited, :model_api_unreachable, :ci_pending], do: true
+  defp uncounted_exit?(_reason), do: false
+
+  defp run_duration_ms(%DateTime{} = started_at), do: max(DateTime.diff(DateTime.utc_now(), started_at, :millisecond), 0)
+  defp run_duration_ms(_started_at), do: nil
 
   # How the run ended, for the dispatch-loop guard's hold reason: its exit and the PR head it left. A
   # run stopped by a usage limit or an unreachable model API counts no attempt, and an epic review
@@ -5137,17 +5216,20 @@ defmodule SymphonyElixir.Orchestrator do
       repo_key
       |> RunStore.record_ticket_dispatch_outcome(issue_id, run_id, dispatch_outcome(reason, issue_id, repo_key))
       |> log_run_store_error("record the end of the run")
+
+      record_run_ended(repo_key, issue_id, run_id, running_entry, reason)
     end
   end
 
   defp record_dispatch_outcome(_running_entry, _reason), do: :ok
 
-  defp dispatch_outcome({uncounted, _info}, _issue_id, _repo_key) when uncounted in [:usage_limited, :model_api_unreachable, :ci_pending],
-    do: %{counted: false}
+  defp dispatch_outcome(reason, issue_id, repo_key) do
+    if uncounted_exit?(reason), do: %{counted: false}, else: counted_dispatch_outcome(reason, issue_id, repo_key)
+  end
 
-  defp dispatch_outcome(:normal, issue_id, repo_key), do: %{exit: "ended normally", head: pr_head(issue_id, repo_key)}
+  defp counted_dispatch_outcome(:normal, issue_id, repo_key), do: %{exit: "ended normally", head: pr_head(issue_id, repo_key)}
 
-  defp dispatch_outcome(reason, issue_id, repo_key),
+  defp counted_dispatch_outcome(reason, issue_id, repo_key),
     do: %{exit: "failed (#{reason |> agent_exit_reason_summary() |> String.slice(0, 120)})", head: pr_head(issue_id, repo_key)}
 
   defp run_profile_log_fields(%{kind: kind, model: model, effort: effort}) do
@@ -7398,8 +7480,9 @@ defmodule SymphonyElixir.Orchestrator do
     :ok
   end
 
-  # Every move the orchestrator makes is recorded in the ticket's signals ledger, best effort: a
-  # store failure must never change a transition, the board or a label.
+  # Every move the orchestrator makes is recorded in the ticket's signals ledger and its event stream
+  # (`TicketSignals.record/4`), best effort: a store failure must never change a transition, the
+  # board or a label.
   defp record_ticket_signal(%Issue{id: issue_id} = issue, name, details) when is_binary(issue_id) do
     case issue_repo_key(issue) do
       repo_key when is_binary(repo_key) -> record_ticket_signal(repo_key, issue_id, name, details)
@@ -7409,13 +7492,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp record_ticket_signal(_issue, _name, _details), do: :ok
 
-  defp record_ticket_signal(repo_key, issue_id, name, details) when is_binary(repo_key) and is_binary(issue_id) do
-    repo_key
-    |> RunStore.record_ticket_signal(issue_id, name, details)
-    |> log_run_store_error("record #{name} signal")
-  end
-
-  defp record_ticket_signal(_repo_key, _issue_id, _name, _details), do: :ok
+  defp record_ticket_signal(repo_key, issue_id, name, details), do: TicketSignals.record(repo_key, issue_id, name, details)
 
   @spec request_refresh() :: map() | :unavailable
   def request_refresh do
@@ -7532,7 +7609,8 @@ defmodule SymphonyElixir.Orchestrator do
       settings = Config.settings!()
 
       with {:ok, issue} <- fetch_issue_to_force(identifier),
-           {:ok, issue} <- put_force_label(issue, clear?, settings) do
+           {:ok, issue} <- put_force_label(issue, clear?, settings),
+           :ok <- record_force_action(issue, clear?) do
         GenServer.call(server, {:force_issue, issue})
       end
     else

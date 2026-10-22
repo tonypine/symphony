@@ -74,16 +74,38 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     public var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
     public var popover: ChipPopoverPresenting?
     public var hoverDelay: TimeInterval = DesignTokens.Chip.hoverDelay
+    /// Scrolls the review a distance down, in points, through its SwiftUI scroll view's own position: that scroll view
+    /// keeps its offset itself, and its next layout puts back a scroll made from AppKit alone. Nil outside one.
+    public var scrollReview: ((CGFloat) -> Void)?
+
+    /// False while a sheet covers the window: the view draws nothing and opens no popover on hover, and SwiftUI draws
+    /// the paragraph's image under it, which dims with the window. The view stays in the window, so assistive apps read
+    /// it as they do without a sheet.
+    public var drawsText = true {
+        didSet {
+            guard drawsText != oldValue else { return }
+            alphaValue = drawsText ? 1 : 0
+            if !drawsText { pointerMoved(to: nil) }
+        }
+    }
 
     /// The chip under the pointer.
     public private(set) var hoveredChip: Int? {
         didSet { if hoveredChip != oldValue { redrawChips() } }
     }
 
-    /// The chip the keyboard is on, after Tab entered the paragraph.
+    /// The chip the keyboard is on, after Tab entered the paragraph. A chip that takes the keyboard scrolls into view.
     public private(set) var focusedChip: Int? {
-        didSet { if focusedChip != oldValue { redrawChips() } }
+        didSet {
+            guard focusedChip != oldValue else { return }
+            placeFocusRing()
+            if let focusedChip { scrollChipToVisible(focusedChip) }
+        }
     }
+
+    /// The focused chip's ring: a view of its own under the text, so it moves and hides with the keyboard. Drawn by
+    /// the layout fragment, it was cut to the text's height and its old pixels stayed after the keyboard moved on.
+    let focusRing = ChipFocusRing()
 
     private var pressedChip: Int?
     private var hoverWork: DispatchWorkItem?
@@ -110,6 +132,7 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         textContainerInset = .zero
         isVerticallyResizable = false
         isHorizontallyResizable = false
+        addSubview(focusRing, positioned: .below, relativeTo: nil)
         apply()
     }
 
@@ -183,10 +206,12 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
 
     private func apply() {
         measured = []
+        drawn = nil
         setAccessibilityElement(style.selectable)
         textStorage?.setAttributedString(attributedText())
         needsLayout = true
         needsDisplay = true
+        placeFocusRing()
     }
 
     /// The room before a chip's characters: its padding, and the pull request symbol with a gap. A missing
@@ -279,6 +304,7 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         let width = max(1, newSize.width)
         if textContainer?.size.width != width {
             textContainer?.size = CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+            placeFocusRing()
         }
     }
 
@@ -333,7 +359,7 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     }
 
     /// Draws the chips that sit in a layout fragment, under its text: tinted, or dotted-underlined when missing (the
-    /// underline is a text attribute); hovered, tinted more with a hairline; focused, with a focus ring.
+    /// underline is a text attribute); hovered, tinted more with a hairline. The focus ring is `focusRing`'s.
     func drawChips(of fragment: NSTextLayoutFragment, at point: CGPoint, context: CGContext) {
         guard let manager = fragment.textLayoutManager else { return }
         let fragmentFrame = fragment.layoutFragmentFrame
@@ -355,12 +381,6 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
                     NSColor.controlAccentColor.withAlphaComponent(0.5).setStroke()
                     hairline.stroke()
                 }
-                if index == focusedChip {
-                    let ring = NSBezierPath(roundedRect: chip.insetBy(dx: -1.5, dy: -1.5), xRadius: radius + 1.5, yRadius: radius + 1.5)
-                    ring.lineWidth = 3
-                    NSColor.keyboardFocusIndicatorColor.setStroke()
-                    ring.stroke()
-                }
                 if mention.kind == .pullRequest {
                     let symbol = symbolImage()
                     let size = symbol.size
@@ -378,7 +398,19 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         didSet { if popoverChip != oldValue { redrawChips() } }
     }
 
+    /// Puts the ring on the focused chip's tint, or hides it when no chip has the keyboard.
+    private func placeFocusRing() {
+        guard let focusedChip, let rect = chipRects(focusedChip).first else {
+            focusRing.isHidden = true
+            return
+        }
+        focusRing.frame = rect
+        focusRing.isHidden = false
+        focusRing.needsDisplay = true
+    }
+
     private func redrawChips() {
+        drawn = nil
         guard let manager = textLayoutManager else { return }
         manager.invalidateLayout(for: manager.documentRange)
         manager.textViewportLayoutController.layoutViewport()
@@ -395,12 +427,47 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
 
     // MARK: - Popover and opening
 
-    /// Opens a chip's popover (N2, N3, or the "can't see" line).
+    /// Opens a chip's popover (N2, N3, or the "can't see" line), on screen: the chip scrolls into view first.
     public func showDetails(_ index: Int, hover: Bool = false) {
-        guard content.mentions.indices.contains(index), let rect = chipRects(index).first else { return }
+        guard content.mentions.indices.contains(index) else { return }
+        scrollChipToVisible(index)
+        guard let rect = chipRects(index).first else { return }
         popoverChip = index
         popover?.show(content.mentions[index], relativeTo: rect, of: self, hover: hover)
     }
+
+    /// Scrolls the review so a chip and its focus ring are in view; outside a scroll view, nothing moves. With
+    /// `scrollReview`, the review scrolls through it, and its clip view moves the same distance at once, so a popover
+    /// opened next is anchored on screen.
+    func scrollChipToVisible(_ index: Int) {
+        guard let rect = chipRects(index).first else { return }
+        let ringed = rect.insetBy(dx: -Self.focusRingMargin, dy: -Self.focusRingMargin)
+        guard let scrollReview, let scrollView = enclosingScrollView, scrollView.contentView.isFlipped else {
+            scrollToVisible(ringed)
+            return
+        }
+        let clip = scrollView.contentView
+        let insets = clip.contentInsets
+        let visible = CGRect(
+            x: clip.bounds.minX, y: clip.bounds.minY + insets.top,
+            width: clip.bounds.width, height: clip.bounds.height - insets.top - insets.bottom
+        )
+        let distance = Self.distance(showing: convert(ringed, to: clip), in: visible)
+        guard distance != 0 else { return }
+        scrollReview(distance)
+        clip.scroll(to: CGPoint(x: clip.bounds.minX, y: clip.bounds.minY + distance))
+        scrollView.reflectScrolledClipView(clip)
+    }
+
+    /// How far down a top-down review scrolls for `visible` to show `rect`: the least distance, or to its top when it
+    /// is taller.
+    static func distance(showing rect: CGRect, in visible: CGRect) -> CGFloat {
+        if rect.minY < visible.minY || rect.height > visible.height { return rect.minY - visible.minY }
+        return max(0, rect.maxY - visible.maxY)
+    }
+
+    /// Room kept in view around a chip the keyboard moves to.
+    static let focusRingMargin: CGFloat = 3
 
     /// The popover closed.
     public func popoverClosed() {
@@ -417,9 +484,9 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     }
 
     /// The pointer moved to `point` in the view, or left it: the chip under it lights, and its popover opens after
-    /// the pointer rests there for `hoverDelay`.
+    /// the pointer rests there for `hoverDelay`. Under a sheet (`drawsText` false) no chip lights.
     public func pointerMoved(to point: CGPoint?) {
-        let chip = point.flatMap(chipIndex(at:))
+        let chip = drawsText ? point.flatMap(chipIndex(at:)) : nil
         guard chip != hoveredChip else { return }
         hoveredChip = chip
         hoverWork?.cancel()
@@ -689,9 +756,23 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
 
     // MARK: - Snapshots
 
+    /// The image drawn last, kept until the text, the chips' look, the width, the scale or the appearance changes.
+    private var drawn: (width: CGFloat, scale: CGFloat, appearance: NSAppearance.Name, image: NSImage)?
+
     /// The paragraph drawn at `width` into an image, offscreen and without a window, for `ImageRenderer` snapshots
-    /// (which can't draw an AppKit view). It draws exactly what the view's layout fragments draw.
+    /// (which can't draw an AppKit view) and for the paragraph under a sheet. It draws exactly what the view's layout
+    /// fragments draw, once: a redraw at the same width gets the same image.
     public func image(width: CGFloat, scale: CGFloat = 2) -> NSImage {
+        let appearance = effectiveAppearance.name
+        if let drawn, drawn.width == width, drawn.scale == scale, drawn.appearance == appearance {
+            return drawn.image
+        }
+        let image = drawImage(width: width, scale: scale)
+        drawn = (width, scale, appearance, image)
+        return image
+    }
+
+    private func drawImage(width: CGFloat, scale: CGFloat) -> NSImage {
         let manager = layout(width: width)
         let size = CGSize(width: max(1, width), height: max(1, ceil(manager.usageBoundsForTextContainer.height)))
         let rep = NSBitmapImageRep(
@@ -720,6 +801,26 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     }
 }
 
+/// The text view a paragraph's image is drawn from, made on first use and kept up to date after, so drawing the
+/// paragraph again (a redraw, an accessibility read that lays the window out) makes no text view and draws no image
+/// again.
+public final class ChipTextImageSource {
+    private var made: ChipTextView?
+
+    public init() {}
+
+    /// The text view showing `content` in `style` and `appearance`.
+    public func view(content: ChipTextContent, style: ChipTextStyle, appearance: NSAppearance.Name) -> ChipTextView {
+        let view = made ?? ChipTextView(content: content, style: style)
+        made = view
+        view.update(content: content, style: style)
+        if view.appearance?.name != appearance {
+            view.appearance = NSAppearance(named: appearance)
+        }
+        return view
+    }
+}
+
 /// The paragraph's layout fragment: the chips' tint under the text.
 final class ChipLayoutFragment: NSTextLayoutFragment {
     weak var owner: ChipTextView?
@@ -732,6 +833,34 @@ final class ChipLayoutFragment: NSTextLayoutFragment {
     override func draw(at point: CGPoint, in context: CGContext) {
         owner?.drawChips(of: self, at: point, context: context)
         super.draw(at: point, in: context)
+    }
+}
+
+/// The focus ring of the chip the keyboard is on, framed on its tint: the ring runs along the tint's edge inside it,
+/// so it stays in the paragraph's bounds and in the room around the chip, off the characters on either side. It
+/// takes no clicks and reads as nothing for VoiceOver; the chip's link is focused instead.
+final class ChipFocusRing: NSView {
+    static let lineWidth: CGFloat = 2
+
+    override init(frame: NSRect = .zero) {
+        super.init(frame: frame)
+        isHidden = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let inset = Self.lineWidth / 2
+        let radius = min(DesignTokens.Chip.radius, bounds.height / 2) - inset
+        let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: inset, dy: inset), xRadius: radius, yRadius: radius)
+        ring.lineWidth = Self.lineWidth
+        NSColor.keyboardFocusIndicatorColor.setStroke()
+        ring.stroke()
     }
 }
 

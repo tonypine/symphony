@@ -59,6 +59,16 @@ defmodule SymphonyElixirWeb.WatchPayloadTest do
     assert json(WatchPayload.watch(record())) == @fixture |> File.read!() |> Jason.decode!()
   end
 
+  test "a head red only on protected paths lists the protected files its PR changes" do
+    facts = Facts.new(phase: :code_review, pr: :open, pr_number: 42, ci: :green, red_kind: :human_only, failing_check: "protected paths")
+    files = %{head_sha: "abc123", paths: ["WORKFLOW.md"]}
+
+    assert %{"facts" => %{"protected_files" => ["WORKFLOW.md"]}} = json(WatchPayload.watch(record(%{facts: facts, protected_files: files})))
+
+    # Files read on an older head aren't this head's.
+    assert %{"facts" => %{"protected_files" => []}} = json(WatchPayload.watch(record(%{facts: facts, protected_files: %{files | head_sha: "abc000"}})))
+  end
+
   test "a wait keeps its own owner and clearing condition" do
     decision = %{rule: "R23", kind: :wait, reason: "The base is red too", owner: :ci, clears_when: "the base goes green", since: nil, outcome: :recorded}
 

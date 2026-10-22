@@ -1,0 +1,28 @@
+# The GitHub updates card's QA fixture: instant updates on through GitHub CLI forwarding. Details edits the two
+# intervals below.
+issues:
+  provider: memory
+  memory:
+    issues_file: issues.json
+  states:
+    active: [Todo, In Progress]
+    terminal: [Done]
+repositories:
+  - key: web-shop
+    workflow: WORKFLOW.md
+    route:
+      team: TP
+    workspace:
+      source: https://github.com/acme/web-shop.git
+agent:
+  runtime: claude
+  command: claude
+dashboard:
+  port: 4040
+github:
+  webhooks:
+    enabled: true
+    relay: gh_webhook_forward
+    secret: $SYMPHONY_GITHUB_WEBHOOK_SECRET
+    fallback_poll_interval_ms: 300000
+    silence_alert_minutes: 10

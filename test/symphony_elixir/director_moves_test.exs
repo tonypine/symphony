@@ -94,6 +94,14 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert [%{name: "decision returned", details: %{move: "approve_plan", from: "Plan Review", to: @waiting}}] =
                RunStore.get_ticket_state("repo-director", "plan").signals
+
+      # The Director's move is also a person action on the ticket's events, next to its audit record.
+      assert [%{actor: %{kind: :person, name: "the Director"}, payload: payload} = event] =
+               RunStore.list_ticket_events("repo-director", "plan", types: ["person.action"])
+
+      assert payload == %{action: "move", move: "approve_plan", from: "Plan Review", to: @waiting}
+      assert event.summary.title == "The Director moved the ticket to #{@waiting}"
+      assert [%{"move" => "approve_plan"}] = audit_records()
     end
 
     test "refuses a plan outside Plan Review, a ticket that is not a plan, and a turned-off waiting state", %{opts: opts} do
@@ -194,6 +202,8 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert [%{name: "restart", details: %{move: "restart", from: "Rework", to: "In Progress"}}] =
                RunStore.get_ticket_state("repo-restart", "pr").signals
+
+      assert ticket_events("repo-restart", "pr", "person.action") == [{"person.action", %{action: "restart", from: "Rework", to: "In Progress"}}]
     end
 
     test "clears a dispatch-loop hold, so the ticket starts again with its count at zero", %{opts: opts} do
@@ -366,7 +376,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
   describe "a move Linear takes only half of" do
     test "a rework comment whose move Linear refuses is recorded, and not posted twice when sent again", %{opts: opts} do
-      put_issues([plan("Plan Review")])
+      put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :state_failed}])
 
       assert {:error, {:partial, message}} = DirectorMoves.move(:rework, "MOT-30", %{reason: "No"}, opts)
@@ -378,6 +388,9 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert [%{"move" => "rework", "from_state" => "Plan Review", "to_state" => "Plan Review", "comment" => "Sent to Rework by the Director:\n\nNo", "failed" => "move"}] =
                audit_records()
+
+      # The person action matches its audit record: the ticket stayed where it was.
+      assert ticket_events("repo-director", "plan", "person.action") == [{"person.action", %{action: "move", move: "rework", from: "Plan Review", to: "Plan Review"}}]
 
       assert {:ok, %{to_state: "Rework", commented: true}} = DirectorMoves.move(:rework, "MOT-30", %{reason: "No"}, opts)
       refute_received {:memory_tracker_comment, _id, _body}
@@ -459,6 +472,15 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director: MOT-40 continues in place."}
       assert [%{name: "unblocked", details: %{by: "the Director"}}] = RunStore.get_ticket_state("repo-director", "pr").signals
       assert [%{"move" => "unblock", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
+
+      # The hold's clear, then the Director's unblock as a person action.
+      assert [
+               {"hold.set", %{kind: "blocked"}},
+               {"hold.cleared", %{kind: "blocked"}},
+               {"person.action", %{action: "unblock", from: "In Progress", to: "In Progress"}}
+             ] = ticket_events("repo-director", "pr")
+
+      assert [%{actor: %{kind: :person, name: "the Director"}}] = RunStore.list_ticket_events("repo-director", "pr", types: ["person.action"])
     end
 
     test "clears a dispatch-loop hold in place, and the ticket's count starts again", %{opts: opts} do
@@ -507,6 +529,9 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:error, {:conflict, "MOT-40 is not waiting on an access hold"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
       assert Hold.held?("repo-director", "pr", :blocked)
       refute_received {:memory_tracker_comment, _id, _body}
+      # A refused move is no action: no audit record, no event.
+      assert audit_records() == []
+      assert ticket_events("repo-director", "pr", "person.action") == []
     end
 
     test "the hold is cleared even when Linear refuses the comment", %{opts: opts} do
@@ -570,6 +595,9 @@ defmodule SymphonyElixir.DirectorMovesTest do
                DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1", move: "rework"}, opts)
 
       refute Hold.held?("repo-director", "pr", :needs_decision)
+
+      # A Decide that moves the ticket is its answer and the phase it entered.
+      assert ["decision.requested", "decision.recorded", "phase.entered"] = Enum.map(ticket_events("repo-director", "pr"), &elem(&1, 0))
     end
 
     test "records the decision in place: the reply goes under the request and the hold clears", %{opts: opts} do
@@ -596,6 +624,13 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute_received {:memory_tracker_state_update, _issue_id, _state}
       assert [%{name: "decision returned", details: %{move: "decide", from: "In Progress", to: "In Progress"}}] = RunStore.get_ticket_state("repo-director", "pr").signals
       assert [%{"move" => "decide", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
+
+      # The request, then the Director's answer naming it: the clear is no withdrawal, and the
+      # Decide that moved nothing has no event of its own.
+      assert [
+               %{type: "decision.requested", id: request_id},
+               %{type: "decision.recorded", actor: %{kind: :person, name: "the Director"}, payload: %{answer: "Add the secrets", key: "comment-1", request: request_id}}
+             ] = RunStore.list_ticket_events("repo-director", "pr", [])
     end
 
     test "writes the answer into the description's Decisions section, so the next run reads it", %{opts: opts} do
@@ -616,6 +651,45 @@ defmodule SymphonyElixir.DirectorMovesTest do
                  answer: "Add the secrets"
                }
              ] = SymphonyElixir.Decisions.recorded(description)
+    end
+
+    test "a pick of an option that unlocks a protected path records the path, which grants it for the ticket", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director", description: "Add the hook."}])
+
+      request = %{
+        title: "Change the workflow settings",
+        question: "May MOT-40 change the workflow settings file?",
+        why: "The hook lives there.",
+        options: [
+          %{label: "Allow this ticket to change the workflow settings file", effect: "the next run changes it", recommended: true, unlocks: ["WORKFLOW.md"]},
+          %{label: "Keep it as it is", effect: "nothing changes"}
+        ]
+      }
+
+      :ok = Hold.set("repo-director", "pr", :needs_decision, SymphonyElixir.NeedsDecisionHold.attrs(request))
+      pick = [%{question: request.question, answer: "Allow this ticket to change the workflow settings file"}]
+
+      assert {:ok, %{move: "decide", moved: false}} = DirectorMoves.move(:decide, "MOT-40", %{picks: pick, request_comment_id: "comment-1"}, opts)
+
+      assert_received {:memory_tracker_description_update, "pr", description}
+      refute description =~ "**Unlocks"
+      assert [%{key: "comment-1", unlocks: ["WORKFLOW.md"]}] = SymphonyElixir.Decisions.recorded(description)
+      assert [%{key: "comment-1", unlocks: ["WORKFLOW.md"]}] = RunStore.get_ticket_state("repo-director", "pr").decisions
+      assert [%{path: "WORKFLOW.md", decision: "D1"}] = SymphonyElixir.PathUnlock.grants(%{pr("In Progress") | description: description})
+    end
+
+    test "a pick of an option that unlocks nothing records no path", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director", description: "Add the hook."}])
+
+      options = [%{label: "Allow it", effect: "x", unlocks: ["WORKFLOW.md"]}, %{label: "Keep it as it is", effect: "nothing changes"}]
+      :ok = Hold.set("repo-director", "pr", :needs_decision, %{reason: "q", decision: %{title: "t", question: "q", options: options}})
+      pick = [%{question: "q", answer: "Keep it as it is"}]
+
+      assert {:ok, %{move: "decide"}} = DirectorMoves.move(:decide, "MOT-40", %{picks: pick, request_comment_id: "comment-1"}, opts)
+
+      assert_received {:memory_tracker_description_update, "pr", description}
+      assert [decision] = SymphonyElixir.Decisions.recorded(description)
+      refute Map.has_key?(decision, :unlocks)
     end
 
     test "a description Linear refuses to write still records the decision under the request", %{opts: opts} do
@@ -764,6 +838,8 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
       refute Hold.held?("repo-director", "pr", :needs_decision)
       assert [%{"move" => "decide", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
+      # Its answer is its one event: a Decide records no person action, even when its move was refused.
+      assert ["decision.requested", "decision.recorded"] = Enum.map(ticket_events("repo-director", "pr"), &elem(&1, 0))
     after
       Application.delete_env(:symphony_elixir, :memory_tracker_update_issue_state_result)
     end
@@ -866,16 +942,21 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
   describe "undo" do
     test "moves the ticket back within 10 s, once", %{opts: opts, clock: clock} do
-      put_issues([pr("In Progress")])
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts)
       assert_received {:memory_tracker_state_update, "pr", "Backlog"}
 
-      put_issues([pr("Backlog")])
+      put_issues([%{pr("Backlog") | repo_key: "repo-director"}])
       :counters.put(clock, 1, 10_000)
 
       assert {:ok, %{move: "undo", undone: "backlog", from_state: "Backlog", to_state: "In Progress"}} = DirectorMoves.undo("MOT-40", opts)
       assert_received {:memory_tracker_state_update, "pr", "In Progress"}
       assert [%{"move" => "backlog"}, %{"move" => "undo", "from_state" => "Backlog", "to_state" => "In Progress"}] = audit_records()
+
+      assert ticket_events("repo-director", "pr", "person.action") == [
+               {"person.action", %{action: "move", move: "backlog", from: "In Progress", to: "Backlog"}},
+               {"person.action", %{action: "move", move: "undo", from: "Backlog", to: "In Progress"}}
+             ]
 
       assert {:error, {:conflict, "there is no move on MOT-40 to undo"}} = DirectorMoves.undo("MOT-40", opts)
     end
@@ -960,6 +1041,16 @@ defmodule SymphonyElixir.DirectorMovesTest do
     assert log =~ "Failed to record director_move audit event"
   after
     Application.put_env(:symphony_elixir, :audit_log_dir, Path.join(System.tmp_dir!(), "unused"))
+  end
+
+  test "an event the ledger can't write still makes the move and its audit record", %{opts: opts} do
+    put_issues([%{pr("In Progress") | repo_key: "  "}])
+
+    log = capture_log(fn -> assert {:ok, %{move: "backlog", to_state: "Backlog"}} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts) end)
+
+    assert log =~ "Failed to record the person.action event on issue_id=pr"
+    assert_received {:memory_tracker_state_update, "pr", "Backlog"}
+    assert [%{"move" => "backlog"}] = audit_records()
   end
 
   defp github_activity(fields) do

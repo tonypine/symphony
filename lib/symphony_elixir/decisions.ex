@@ -14,6 +14,10 @@ defmodule SymphonyElixir.Decisions do
         - **Answer:** Defer to TP-891: don't make that change here.
         - **Scope:** Deferred to TP-891
 
+  An answer that picks an option unlocking agent-protected paths (`SymphonyElixir.PathUnlock`)
+  records them in a hidden line under its entry, `<!-- symphony:unlocks WORKFLOW.md -->`, which
+  `PathUnlock.grants/1` reads back.
+
   An entry carries the id of the request comment it answers, so writing the same answer again
   changes nothing. The id is read from its marker wherever it stands in the section, since Linear
   rewrites the markdown it stores (`*` bullets, escapes, blank lines). New entries go at the end of
@@ -39,11 +43,15 @@ defmodule SymphonyElixir.Decisions do
   (`SymphonyElixir.AgentTools.Linear`). `stored/2` reads a ticket's decisions from the store, and
   `prompt_section/1` renders them for the implementation, reviewer and QA prompts, with no Linear
   read.
+
+  Each decision a write adds to the store is also the Director's `decision.recorded` event
+  (`SymphonyElixir.TicketEvents`), naming the open `decision.requested` it answers; the ones taken
+  from the description's section record none.
   """
 
   require Logger
 
-  alias SymphonyElixir.{Config, IssueSummary, PromptSafety, RunStore, TicketState, Tracker}
+  alias SymphonyElixir.{Config, IssueSummary, PathUnlock, PromptSafety, RunStore, TicketSignals, TicketState, Tracker}
   alias SymphonyElixir.HumanActions.Request
 
   @start_marker "<!-- symphony:decisions:start -->"
@@ -54,6 +62,7 @@ defmodule SymphonyElixir.Decisions do
   @entry_pattern ~r/^[-*+] \*\*(D\d+)\*\* · (\S+) · (.*?) <!-- symphony:decision:(\S+) -->\s*$/
   @field_pattern ~r/^\s+[-*+] \*\*(Question|Answer|Scope):\*\* (.*)$/
   @key_pattern ~r/<!-- symphony:decision:(\S+) -->/
+  @unlocks_pattern ~r/^\s*<!--\s*symphony:unlocks\s+(.*?)\s*-->\s*$/
   @identifier_pattern ~r/\b[A-Z][A-Z0-9]*-\d+\b/
   @defer_pattern ~r/\bdefer\w*\b/i
   @out_of_scope_pattern ~r/\b(defer\w*|out of scope|not in scope|leave (it|them|that) (out|for))\b/i
@@ -67,9 +76,14 @@ defmodule SymphonyElixir.Decisions do
   @ruling_prefix "ruling-"
   @ruling_question "Ruling given in a comment."
   @prompt_limit 10_000
+  @director {:person, "the Director"}
 
-  @typedoc "One recorded decision. `key` is the id of the request comment it answers."
+  @typedoc """
+  One recorded decision. `key` is the id of the request comment it answers; `unlocks`, when the
+  answer picked an option that unlocks protected paths, names them.
+  """
   @type entry :: %{
+          optional(:unlocks) => [String.t()],
           key: String.t(),
           date: Date.t(),
           title: String.t(),
@@ -80,6 +94,7 @@ defmodule SymphonyElixir.Decisions do
 
   @typedoc "A recorded decision read back from the section or the store, with its `D<n>` label."
   @type recorded :: %{
+          optional(:unlocks) => [String.t()],
           id: String.t(),
           key: String.t(),
           date: Date.t() | String.t(),
@@ -100,15 +115,20 @@ defmodule SymphonyElixir.Decisions do
   @doc """
   Builds an entry from what a person decided: the request comment's id, the day, the request's
   title and question, and the answer. Text is folded onto one line and loses comment markers, so
-  it cannot close the section early. The scope is read from the answer (`scope/1`).
+  it cannot close the section early. The scope is read from the answer (`scope/1`). `unlocks` are
+  the protected paths the picked option unlocks; only paths on the protected list are kept.
   """
-  @spec entry(String.t(), Date.t(), String.t() | nil, String.t() | nil, String.t()) :: entry()
-  def entry(key, %Date{} = date, title, question, answer) do
+  @spec entry(String.t(), Date.t(), String.t() | nil, String.t() | nil, String.t(), [String.t()]) :: entry()
+  def entry(key, %Date{} = date, title, question, answer, unlocks \\ []) do
     answer = answer |> one_line() |> String.slice(0, @answer_max_length)
     title = one_line(title || question || "")
 
     %{key: key, date: date, title: title, question: one_line(question || title), answer: answer, scope: scope(answer)}
+    |> put_unlocks(PathUnlock.protected(unlocks))
   end
+
+  defp put_unlocks(entry, []), do: entry
+  defp put_unlocks(entry, unlocks), do: Map.put(entry, :unlocks, unlocks)
 
   @doc """
   What an answer means for the ticket's scope: `Deferred to TP-x` when it defers the work to a
@@ -243,11 +263,16 @@ defmodule SymphonyElixir.Decisions do
           "  - **Question:** #{entry.question}",
           "  - **Answer:** #{entry.answer}",
           "  - **Scope:** #{entry.scope}"
+          | unlocks_line(Map.get(entry, :unlocks, []))
         ],
         "\n"
       )
     end)
   end
+
+  # Hidden from the Director: the paths the picked option unlocks.
+  defp unlocks_line([]), do: []
+  defp unlocks_line(unlocks), do: ["  <!-- symphony:unlocks #{Enum.join(unlocks, " ")} -->"]
 
   defp date_text(%Date{} = date), do: Date.to_iso8601(date)
   defp date_text(date), do: date
@@ -274,11 +299,21 @@ defmodule SymphonyElixir.Decisions do
         {nil, [_line, field, value], [entry | rest]} ->
           [Map.put(entry, field_key(field), value) | rest]
 
+        {nil, nil, [entry | rest]} ->
+          [parse_unlocks(entry, line) | rest]
+
         _other ->
           acc
       end
     end)
     |> Enum.reverse()
+  end
+
+  defp parse_unlocks(entry, line) do
+    case Regex.run(@unlocks_pattern, line) do
+      [_line, paths] -> put_unlocks(entry, paths |> String.split() |> PathUnlock.protected())
+      nil -> entry
+    end
   end
 
   defp field_key("Question"), do: :question
@@ -335,6 +370,8 @@ defmodule SymphonyElixir.Decisions do
   @doc """
   The decisions a ticket node records in its comments: each `## Decision needed:` request with a
   reply from a person under it, answered by its first reply. A withdrawn request is no decision.
+  A reply that picks an option unlocking protected paths records them
+  (`SymphonyElixir.PathUnlock.picked_paths/2`).
   `node` is a Linear issue node with `comments { nodes { id body createdAt parent { id } } }`.
   """
   @spec answered(map()) :: [entry()]
@@ -349,7 +386,7 @@ defmodule SymphonyElixir.Decisions do
         under = Enum.sort_by(Map.get(replies, id, []), &(&1["createdAt"] || "")),
         not Enum.any?(under, &Request.withdrawal?(&1["body"])),
         %{"body" => answer} = reply <- Enum.take(Enum.filter(under, &is_binary(&1["body"])), 1),
-        do: entry(id, reply_date(reply, comment), request.title, request.question, answer_text(answer, request))
+        do: entry(id, reply_date(reply, comment), request.title, request.question, answer_text(answer, request), PathUnlock.picked_paths(request, [answer]))
   end
 
   def answered(_node), do: []
@@ -547,9 +584,29 @@ defmodule SymphonyElixir.Decisions do
 
       case missing(entries, Enum.map(known, & &1.key), known) do
         [] when known == stored -> {:ok, stored}
-        new -> store.record_ticket_decisions(repo_key, issue_id, new, backfill)
+        new -> write_decisions(store, repo_key, issue_id, new, backfill)
       end
     end
+  end
+
+  defp write_decisions(store, repo_key, issue_id, new, backfill) do
+    case store.record_ticket_decisions(repo_key, issue_id, new, backfill) do
+      {:ok, _decisions} = written -> record_events(repo_key, issue_id, new, written)
+      error -> error
+    end
+  end
+
+  # Each decision the write added is the Director's `decision.recorded`, naming the request it
+  # answers while that request is open; a ruling answers none. The ones the description's section
+  # backfilled record nothing. Its key makes a second write of the same answer a no-op.
+  defp record_events(repo_key, issue_id, new, written) do
+    for entry <- new do
+      request = if not ruling_key?(entry.key), do: TicketSignals.open_decision(repo_key, issue_id, entry.title, entry.question)
+      payload = %{answer: entry.answer, title: entry.title, question: entry.question, key: entry.key, request: request && request.id}
+      TicketSignals.record_event(repo_key, issue_id, "decision.recorded", payload, actor: @director)
+    end
+
+    written
   end
 
   defp read_decisions(store, repo_key, issue_id) do

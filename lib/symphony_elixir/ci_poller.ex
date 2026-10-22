@@ -27,9 +27,9 @@ defmodule SymphonyElixir.CiPoller do
   @status_table :ci_poller_status
   @settled_conclusions ["SUCCESS", "FAILURE"]
   # Checks only a person can clear: the `protected-paths` workflow's job fails a PR whose own
-  # commits change an agent-protected path until a person adds the waiver label.
+  # commits change an agent-protected path; a person's decision that allows the change clears it
+  # (`SymphonyElixir.ProtectedPathsGate`).
   @human_only_checks ["protected paths"]
-  @waiver_label "protected-paths-approved"
 
   defmodule State do
     @moduledoc false
@@ -416,15 +416,25 @@ defmodule SymphonyElixir.CiPoller do
         cleanup_ci(record, opts, now, "closed")
 
       action ->
-        status = observed_status(action)
+        status = observed_status(action, ci_status)
         attrs = ci_status_attrs(record, ci_status, %{status: status, failed_checks: failed_checks(ci_status)}, now)
         complete_ci_update(opts, record, attrs, {:observed, issue_id, status})
     end
   end
 
-  defp observed_status(:success), do: "green"
-  defp observed_status(:pending), do: "watching"
-  defp observed_status({:failure, _checks}), do: "red"
+  # A head whose only failed checks are ones a person must clear is not red: it reads as its other
+  # checks, and keeps the failed ones in `failed_checks`. Only the merge waits on them (R18).
+  defp observed_status(:success, _ci_status), do: "green"
+  defp observed_status(:pending, _ci_status), do: "watching"
+
+  defp observed_status({:failure, checks}, ci_status) do
+    if Enum.all?(checks, &human_only_check?/1) do
+      others = ci_status |> Map.get(:checks, []) |> Enum.reject(&human_only_check?/1)
+      ci_status |> Map.put(:checks, others) |> ci_action() |> observed_status(ci_status)
+    else
+      "red"
+    end
+  end
 
   defp repo_key_for(record, opts), do: Map.get(record, :repo_key) || repo_key_from_opts(opts)
 
@@ -650,10 +660,6 @@ defmodule SymphonyElixir.CiPoller do
   @doc "Whether only a person can clear this failed check, so a CI-fix run must leave it alone."
   @spec human_only_check?(map()) :: boolean()
   def human_only_check?(check) when is_map(check), do: Map.get(check, :name) in @human_only_checks
-
-  @doc "The label a person adds to waive the `protected paths` check."
-  @spec waiver_label() :: String.t()
-  def waiver_label, do: @waiver_label
 
   defp failed_checks(ci_status) do
     ci_status

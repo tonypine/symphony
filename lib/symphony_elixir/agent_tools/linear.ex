@@ -9,6 +9,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   require Logger
 
   alias SymphonyElixir.AgentLabels
+  alias SymphonyElixir.AgentSandboxConfig
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.AgentTools.SecretScanner
   alias SymphonyElixir.CiFix
@@ -30,6 +31,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.SensitivePath
   alias SymphonyElixir.Tracker
   alias SymphonyElixir.TransitionGuard
+  alias SymphonyElixir.Walkthrough
 
   @comment_limit_default 50
   @comment_limit_max 100
@@ -269,6 +271,14 @@ defmodule SymphonyElixir.AgentTools.Linear do
         body
         url
       }
+    }
+  }
+  """
+
+  @comment_body_query """
+  query SymphonyAgentCommentBody($id: String!) {
+    comment(id: $id) {
+      body
     }
   }
   """
@@ -763,6 +773,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
     with {:ok, issue_id} <- current_issue_id(context),
          :ok <- reject_ruling(body),
          {:ok, mutation, variables} <- comment_create(issue_id, body, Keyword.get(opts, :parent_id)),
+         :ok <- reject_unlock_answer(variables, opts),
          :ok <- SecretScanner.reject_fields_if_secret_pattern([body: body], context, "linear_add_comment", opts),
          {:ok, response} <- graphql(mutation, variables, opts),
          {:ok, response} <- check_mutation_success(response, "commentCreate") do
@@ -784,6 +795,23 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   defp comment_create(_issue_id, _body, _parent_id), do: {:error, :invalid_comment_parent}
+
+  # A reply under a decision request is the person's answer, and the agent posts as that person: a
+  # reply under a request whose options unlock protected paths would grant them (`PathUnlock`).
+  defp reject_unlock_answer(%{parentId: parent_id}, opts) do
+    with {:ok, response} <- graphql(@comment_body_query, %{id: parent_id}, opts) do
+      if unlocking_request?(get_in(response, ["data", "comment", "body"])), do: {:error, :path_unlock_answer}, else: :ok
+    end
+  end
+
+  defp reject_unlock_answer(_variables, _opts), do: :ok
+
+  defp unlocking_request?(body) do
+    case Request.parse(body) do
+      %{unlocks: unlocks} -> Enum.any?(unlocks, &(&1 != []))
+      nil -> false
+    end
+  end
 
   @spec update_comment(context(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def update_comment(context, comment_id, body), do: update_comment(context, comment_id, body, [])
@@ -1274,6 +1302,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
       Map.merge(%{"title" => nil, "why" => nil, "decision" => nil, "unblocks" => nil, "if_unanswered" => nil}, attrs)
 
     case Enum.find(human_action_checks(title, why, decision, unblocks, if_unanswered), fn {valid?, _message} -> not valid?.() end) do
+      {_check, message} when is_function(message, 0) ->
+        {:error, {:invalid_human_action, message.()}}
+
       {_check, message} ->
         {:error, {:invalid_human_action, message}}
 
@@ -1289,7 +1320,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
         }
 
         case PlainWords.check(request) do
-          :ok -> {:ok, request}
+          :ok -> {:ok, describe_unlocks(request)}
           {:error, message} -> {:error, {:invalid_human_action, message}}
         end
     end
@@ -1313,6 +1344,12 @@ defmodule SymphonyElixir.AgentTools.Linear do
       {fn -> Enum.count(decision["options"], &(&1["recommended"] == true)) == 1 end, "Exactly one of `decision.options` must be `recommended`."},
       {fn -> Enum.all?(decision["options"], &valid_tradeoffs?(&1["tradeoffs"])) end,
        "Each option's `tradeoffs` lists at most #{@human_action_max_tradeoffs}, each with a `kind` (#{Enum.join(Request.tradeoff_kinds(), ", ")}) and a non-blank `text`."},
+      {fn -> Enum.all?(decision["options"], &valid_unlocks?(&1["unlocks"])) end, "Each option's `unlocks` must be a list of protected paths, as strings."},
+      {fn -> unprotected_unlocks(decision["options"]) == [] end,
+       fn ->
+         "`unlocks` names paths that are not protected: #{Enum.join(unprotected_unlocks(decision["options"]), ", ")}. " <>
+           "It may only name the protected paths: #{Enum.join(AgentSandboxConfig.workspace_protected_paths(), ", ")}."
+       end},
       {fn -> optional_string?(decision["recommendation_reason"]) end, "`decision.recommendation_reason` must be a string."},
       {fn -> optional_string?(unblocks) end, "`unblocks` must be a string."},
       {fn -> optional_string?(if_unanswered) end, "`if_unanswered` must be a string."}
@@ -1338,6 +1375,12 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp valid_tradeoff?(%{"kind" => kind, "text" => text}), do: kind in Request.tradeoff_kinds() and non_blank?(text)
   defp valid_tradeoff?(_tradeoff), do: false
 
+  defp valid_unlocks?(nil), do: true
+  defp valid_unlocks?(unlocks) when is_list(unlocks), do: Enum.all?(unlocks, &non_blank?/1)
+  defp valid_unlocks?(_unlocks), do: false
+
+  defp unprotected_unlocks(options), do: options |> Enum.flat_map(&List.wrap(&1["unlocks"])) |> PathUnlock.unprotected() |> Enum.uniq()
+
   defp decision_option(option) do
     %{
       label: option["label"],
@@ -1345,6 +1388,21 @@ defmodule SymphonyElixir.AgentTools.Linear do
       recommended: option["recommended"] == true,
       tradeoffs: for(tradeoff <- List.wrap(option["tradeoffs"]), do: %{kind: tradeoff["kind"], text: tradeoff["text"]})
     }
+    |> put_option_unlocks(PathUnlock.protected(option["unlocks"]))
+  end
+
+  defp put_option_unlocks(option, []), do: option
+  defp put_option_unlocks(option, unlocks), do: Map.put(option, :unlocks, unlocks)
+
+  # The Director never reads a path: the Why names what each unlocking option lets the ticket change
+  # by its plain description (`PathUnlock.describe/1`).
+  defp describe_unlocks(%{options: options, why: why} = request) do
+    sentences =
+      for %{unlocks: [_path | _more] = unlocks} = option <- options do
+        "“#{Request.label(option)}” lets this ticket change #{PathUnlock.describe_all(unlocks)}."
+      end
+
+    %{request | why: Enum.join([String.trim(why) | sentences], " ")}
   end
 
   defp reject_human_action_secrets(request, context, opts) do
@@ -1821,6 +1879,33 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, response} <- check_mutation_success(response, "issueUpdate") do
       {:ok, %{"issue" => get_in(response, ["data", "issueUpdate", "issue"]), "descriptionLength" => String.length(description)}}
     end
+  end
+
+  @doc """
+  Records which test proves each walkthrough step the implementer covered: each named step of the
+  current issue's `## User walkthrough` ends with `Proved by: <test>` (`SymphonyElixir.Walkthrough.record_proofs/2`).
+  The description is read right before the write, and every byte outside those steps' proof lines
+  stays as it is. A test naming a check, a step the walkthrough lacks, and a step its author marked
+  `Proved by: QA` are refused before the write; a test holding a secret pattern before any Linear call.
+  """
+  @spec record_walkthrough_proofs(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def record_walkthrough_proofs(context, attrs, opts \\ []) when is_map(attrs) do
+    proofs = Map.get(attrs, "proofs")
+
+    with {:ok, issue_id} <- current_issue_id(context),
+         :ok <- SecretScanner.reject_fields_if_secret_pattern(proof_secret_fields(proofs), context, "linear_record_walkthrough_proofs", opts),
+         {:ok, body} <- graphql(@issue_description_query, %{id: issue_id}, opts),
+         {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found),
+         {:ok, description} <- Walkthrough.record_proofs(issue["description"], proofs),
+         variables = %{id: issue_id, description: description},
+         {:ok, response} <- graphql(@update_issue_description_mutation, variables, opts),
+         {:ok, response} <- check_mutation_success(response, "issueUpdate") do
+      {:ok, %{"issue" => get_in(response, ["data", "issueUpdate", "issue"]), "steps" => Enum.map(proofs, & &1["step"])}}
+    end
+  end
+
+  defp proof_secret_fields(proofs) do
+    for %{"test" => test} when is_binary(test) <- List.wrap(proofs), do: {:test, test}
   end
 
   defp summary_secret_fields(summary) do

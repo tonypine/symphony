@@ -25,6 +25,12 @@ defmodule SymphonyElixir.DecisionsTest do
     def get_ticket_state(_repo_key, _issue_id), do: {:error, :down}
   end
 
+  # A run store that reads, but refuses to record a decision.
+  defmodule WriteFailingStore do
+    def get_ticket_state(repo_key, issue_id), do: RunStore.get_ticket_state(repo_key, issue_id)
+    def record_ticket_decisions(_repo_key, _issue_id, _entries, _backfill), do: {:error, :disk_full}
+  end
+
   # Answers the description query and the update mutation by operation name.
   defmodule FakeClient do
     def graphql(query, variables) do
@@ -56,6 +62,21 @@ defmodule SymphonyElixir.DecisionsTest do
         ]
       },
       "Code Review"
+    )
+  end
+
+  defp unlock_request_body do
+    Request.render_hold(
+      %{
+        title: "Change the workflow settings",
+        question: "May TP-1 change the workflow settings file?",
+        why: "The new hook lives there.",
+        options: [
+          %{label: "Allow this ticket to change the workflow settings file", effect: "the next run changes it", recommended: true, unlocks: ["WORKFLOW.md"]},
+          %{label: "Keep it as it is", effect: "nothing changes"}
+        ]
+      },
+      "In Progress"
     )
   end
 
@@ -334,6 +355,55 @@ defmodule SymphonyElixir.DecisionsTest do
     end
   end
 
+  describe "the events an answer records" do
+    test "a reply records one decision.recorded by the Director, naming its request, however often it is synced" do
+      decision = %{title: "Keep the legacy partials", question: "Remove the legacy partials here, or leave them for TP-891?"}
+      :ok = SymphonyElixir.Hold.set(@repo_key, @issue_id, :needs_decision, %{reason: decision.question, decision: decision})
+      [%{id: request_id}] = RunStore.list_ticket_events(@repo_key, @issue_id, [])
+      node = ticket([comment("c1", request_body()), comment("r1", "Defer to TP-891", nil, "c1")])
+
+      assert :ok = Decisions.sync(node, tracker: FakeTracker, repo_key: @repo_key)
+      assert :ok = Decisions.sync(node, tracker: FakeTracker, repo_key: @repo_key)
+      assert :ok = Decisions.record(@issue_id, Decisions.answered(node), tracker: FakeTracker, repo_key: @repo_key)
+
+      assert [_requested, %{type: "decision.recorded", actor: %{kind: :person, name: "the Director"}, idempotency: "decision.recorded:c1"} = recorded] =
+               RunStore.list_ticket_events(@repo_key, @issue_id, [])
+
+      assert %{answer: "Defer to TP-891 (option: **Defer to TP-891** (recommended): The partials stay; TP-891 removes them.)", key: "c1", request: ^request_id} =
+               recorded.payload
+
+      assert recorded.payload.title == "Keep the legacy partials"
+    end
+
+    test "a ruling records its decision.recorded naming no request" do
+      :ok = SymphonyElixir.Hold.set(@repo_key, @issue_id, :needs_decision, %{decision: %{title: "Keep the flag", question: "Keep it?"}})
+
+      assert :ok = Decisions.sync(ticket([comment("c2", "Ruling: Keep the flag")]), tracker: FakeTracker, repo_key: @repo_key)
+
+      assert [{"decision.requested", _requested}, {"decision.recorded", %{answer: "Keep the flag", key: "ruling-c2"} = ruling}] =
+               ticket_events(@repo_key, @issue_id)
+
+      refute Map.has_key?(ruling, :request)
+    end
+
+    test "the decisions backfilled from the description and a write the store refuses record nothing" do
+      {:ok, description} = Decisions.put("Fix it.", [entry()])
+      assert [%{key: "comment-1"}] = Decisions.stored(%{id: @issue_id, description: description}, repo_key: @repo_key)
+
+      log =
+        capture_log(fn ->
+          assert {:error, :down} = Decisions.record("issue-2", [entry()], tracker: FakeTracker, repo_key: @repo_key, store: DownStore)
+          assert {:error, :disk_full} = Decisions.record("issue-2", [entry()], tracker: FakeTracker, repo_key: @repo_key, store: WriteFailingStore)
+        end)
+
+      assert log =~ ":down"
+      assert log =~ ":disk_full"
+
+      assert ticket_events(@repo_key, @issue_id) == []
+      assert ticket_events(@repo_key, "issue-2") == []
+    end
+  end
+
   describe "answered/1" do
     test "reads a request answered by a reply, with the option the reply picks" do
       node =
@@ -373,6 +443,40 @@ defmodule SymphonyElixir.DecisionsTest do
       assert Decisions.answered(ticket([comment("c1", "Just a note"), comment("r1", "Reply", nil, "c1")])) == []
       assert Decisions.answered(%{"id" => @issue_id}) == []
       assert Decisions.answered(nil) == []
+    end
+  end
+
+  describe "an answer that picks an option unlocking protected paths" do
+    test "a reply that picks it records the paths, in a hidden line of the entry that reads back, and in the store" do
+      node = ticket([comment("c1", unlock_request_body()), comment("r1", "1", nil, "c1")])
+
+      assert [%{key: "c1", unlocks: ["WORKFLOW.md"]}] = Decisions.answered(node)
+      assert :ok = Decisions.sync(node, tracker: FakeTracker, repo_key: @repo_key)
+
+      assert_received {:description_written, @issue_id, description}
+      assert description =~ "  - **Scope:** As answered\n  <!-- symphony:unlocks WORKFLOW.md -->\n"
+      refute description =~ "WORKFLOW.md\n  - "
+      assert [%{id: "D1", key: "c1", unlocks: ["WORKFLOW.md"]}] = Decisions.recorded(description)
+      assert [%{id: "D1", key: "c1", unlocks: ["WORKFLOW.md"]}] = Decisions.recorded(linear_stored(description))
+      assert [%{key: "c1", unlocks: ["WORKFLOW.md"]}] = RunStore.get_ticket_state(@repo_key, @issue_id).decisions
+    end
+
+    test "a reply that picks another option, or none, records no paths" do
+      for reply <- ["Keep it as it is", "Not sure yet"] do
+        node = ticket([comment("c1", unlock_request_body()), comment("r1", reply, nil, "c1")])
+        assert [decision] = Decisions.answered(node)
+        refute Map.has_key?(decision, :unlocks), reply
+      end
+    end
+
+    test "only protected paths are kept, and a hidden line naming none adds nothing" do
+      assert Decisions.entry("c1", @date, "t", "q", "a", ["lib/app.ex", "WORKFLOW.md"]).unlocks == ["WORKFLOW.md"]
+      refute Map.has_key?(Decisions.entry("c1", @date, "t", "q", "a", ["lib/app.ex"]), :unlocks)
+
+      {:ok, description} = Decisions.put("Fix it.", [entry()])
+      tampered = String.replace(description, "  - **Scope:** Deferred to TP-891", "  - **Scope:** Deferred to TP-891\n  <!-- symphony:unlocks lib/app.ex -->\n  stray text")
+      assert [decision] = Decisions.recorded(tampered)
+      refute Map.has_key?(decision, :unlocks)
     end
   end
 

@@ -1,16 +1,72 @@
 import Foundation
 
 /// The pages of the Add Repo sheet, in order. The WORKFLOW.md page shows only for a repo that has none. Connect, on
-/// Review, saves the repo and goes on to Check setup, which has no way back.
+/// Review, saves the repo and goes on to Check setup, which has no way back. Instant updates (S13) shows only while
+/// they are on, after Check setup.
 public enum AddRepoStep: String, CaseIterable, Equatable {
     case source = "Source"
     case linear = "Linear"
     case workflow = "WORKFLOW.md"
     case review = "Review"
     case check = "Check setup"
+    case instantUpdates = "Instant updates"
 
     fileprivate var order: Int {
         Self.allCases.firstIndex(of: self) ?? 0
+    }
+}
+
+/// One step in the Add Repo sheet's step indicator: a tick once done, else its number, and its name, as much as the
+/// sheet's width lets show.
+public struct AddRepoStepMark: Equatable {
+    public var step: AddRepoStep
+    public var isDone: Bool
+    public var isCurrent: Bool
+    /// Its number, nil once done (its tick shows instead) and where it shows by name alone.
+    public var number: Int?
+    /// Its name, nil where it shows by its tick or number alone.
+    public var name: String?
+
+    public init(step: AddRepoStep, isDone: Bool = false, isCurrent: Bool = false, number: Int? = nil, name: String? = nil) {
+        self.step = step
+        self.isDone = isDone
+        self.isCurrent = isCurrent
+        self.number = number
+        self.name = name
+    }
+}
+
+/// How much of each step the Add Repo sheet's step indicator shows, from the most to the least. The indicator shows
+/// the first that fits on one line, so a name never wraps.
+public enum AddRepoStepIndicatorFit: CaseIterable, Equatable {
+    /// "✓ Source › ✓ Linear › 3 Review › 4 Check setup": each step's tick or number, and its name.
+    case full
+    /// "✓ › ✓ › WORKFLOW.md › Review › Check setup › Instant updates": the steps done by their tick alone, the others by
+    /// name alone. All six steps fit this way on every page of the 520 pt sheet.
+    case compact
+    /// "✓ › ✓ › 3 WORKFLOW.md › 4 › 5 › 6": only the current step named.
+    case currentOnly
+
+    /// The indicator's steps, done up to `current`.
+    public func marks(_ steps: [AddRepoStep], current: AddRepoStep) -> [AddRepoStepMark] {
+        let index = steps.firstIndex(of: current) ?? 0
+        return steps.enumerated().map { position, step in
+            let isDone = position < index
+            let isCurrent = step == current
+            let named: Bool
+            let numbered: Bool
+            switch self {
+            case .full:
+                (named, numbered) = (true, !isDone)
+            case .compact:
+                (named, numbered) = (!isDone, false)
+            case .currentOnly:
+                (named, numbered) = (isCurrent, !isDone)
+            }
+            return AddRepoStepMark(
+                step: step, isDone: isDone, isCurrent: isCurrent, number: numbered ? position + 1 : nil, name: named ? step.rawValue : nil
+            )
+        }
     }
 }
 
@@ -81,6 +137,8 @@ public struct AddRepoFlow: Equatable {
     public var labels: LinearLoad
     /// True for the Source sheet of a connected repo, which has no WORKFLOW.md step to offer.
     public var editing: Bool
+    /// True while instant GitHub updates are on, so the sheet ends by connecting the repo to them (S13).
+    public var instantUpdates: Bool
 
     public init(
         draft: AddRepoDraft = AddRepoDraft(),
@@ -93,7 +151,8 @@ public struct AddRepoFlow: Equatable {
         landedWorkflow: PendingWorkflow? = nil,
         projects: LinearLoad = .loaded,
         labels: LinearLoad = .loaded,
-        editing: Bool = false
+        editing: Bool = false,
+        instantUpdates: Bool = false
     ) {
         self.draft = draft
         self.existing = existing
@@ -106,13 +165,15 @@ public struct AddRepoFlow: Equatable {
         self.projects = projects
         self.labels = labels
         self.editing = editing
+        self.instantUpdates = instantUpdates
     }
 
     // MARK: Steps
 
-    /// The steps the sheet shows: WORKFLOW.md only once the repo is known to have none.
+    /// The steps the sheet shows: WORKFLOW.md only once the repo is known to have none, Instant updates only while they
+    /// are on.
     public var steps: [AddRepoStep] {
-        AddRepoStep.allCases.filter { $0 != .workflow || hasNoWorkflow }
+        AddRepoStep.allCases.filter { ($0 != .workflow || hasNoWorkflow) && ($0 != .instantUpdates || instantUpdates) }
     }
 
     /// The step Continue goes to from `step`, nil on Review, where Connect saves first, and on Check setup.
@@ -121,9 +182,9 @@ public struct AddRepoFlow: Equatable {
         return steps.first { $0.order > step.order }
     }
 
-    /// The step Back goes to from `step`, nil on Source and on Check setup, once the repo is saved.
+    /// The step Back goes to from `step`, nil on Source, and on Check setup and Instant updates, once the repo is saved.
     public func step(before step: AddRepoStep) -> AddRepoStep? {
-        guard step != .check else { return nil }
+        guard step.order < AddRepoStep.check.order else { return nil }
         return steps.last { $0.order < step.order }
     }
 
@@ -141,7 +202,7 @@ public struct AddRepoFlow: Equatable {
             if let problem = AddRepo.baseBranchProblem(draft.baseBranch) { return problem }
             if case let .failure(problem) = entry { return problem }
             return nil
-        case .check:
+        case .check, .instantUpdates:
             return nil
         }
     }

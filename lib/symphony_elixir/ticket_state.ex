@@ -83,10 +83,12 @@ defmodule SymphonyElixir.TicketState do
   @typedoc """
   One decision a person recorded on the ticket (`SymphonyElixir.Decisions`): the id of the request
   comment it answers (or `ruling-<comment id>`), the day, the request's title and question, the
-  answer and what it means for scope. The list keeps the order they were recorded in, which numbers
-  them `D1`, `D2`…
+  answer and what it means for scope, and the protected paths the picked option unlocks when it
+  unlocks any (`SymphonyElixir.PathUnlock`). The list keeps the order they were recorded in, which
+  numbers them `D1`, `D2`…
   """
   @type decision :: %{
+          optional(:unlocks) => [String.t()],
           key: String.t(),
           date: Date.t() | String.t(),
           title: String.t(),
@@ -146,7 +148,9 @@ defmodule SymphonyElixir.TicketState do
   CI Fix run reads (the red head's failure, the conflict), and `links` the links it added.
   `actions` lists the last five actions applied, newest first, across stays, with how the facts
   that called for each arrived, and `silent` the ticket's silence (`SymphonyElixir.PrWatch.SilentWait`),
-  nil while something is under way or it waits with a reason.
+  nil while something is under way or it waits with a reason. `protected_files` lists, for a head
+  red only on a check a person clears (R18), the protected paths its PR changes, read once per
+  head; nil for any other head.
   """
   @type pr_watch :: %{
           facts: PrDecision.Facts.t(),
@@ -167,7 +171,8 @@ defmodule SymphonyElixir.TicketState do
           fix: %{ci_failure: map() | nil, pr_conflict: map() | nil},
           links: [map()],
           actions: [map()],
-          silent: SymphonyElixir.PrWatch.SilentWait.t() | nil
+          silent: SymphonyElixir.PrWatch.SilentWait.t() | nil,
+          protected_files: %{head_sha: String.t() | nil, paths: [String.t()]} | nil
         }
 
   @type t :: %{
@@ -582,11 +587,17 @@ defmodule SymphonyElixir.TicketState do
       fix: normalize_fix(Map.get(watch, :fix)),
       links: maps(Map.get(watch, :links)),
       actions: watch |> Map.get(:actions) |> maps() |> Enum.take(5),
-      silent: normalize_silent(Map.get(watch, :silent))
+      silent: normalize_silent(Map.get(watch, :silent)),
+      protected_files: normalize_protected_files(Map.get(watch, :protected_files))
     }
   end
 
   defp normalize_pr_watch(_watch), do: nil
+
+  defp normalize_protected_files(%{paths: paths} = files) when is_list(paths),
+    do: %{head_sha: map_string(files, :head_sha), paths: Enum.filter(paths, &is_binary/1)}
+
+  defp normalize_protected_files(_files), do: nil
 
   defp normalize_silent(%{since: %DateTime{}, ticks: ticks, reason: reason} = silent) when is_integer(ticks) and ticks > 0 and is_binary(reason),
     do: %{since: silent.since, ticks: ticks, bound: map_string(silent, :bound), reason: reason}
@@ -752,16 +763,19 @@ defmodule SymphonyElixir.TicketState do
   defp normalize_decisions(_decisions), do: []
 
   defp normalize_decision(%{key: key} = decision) when is_binary(key) and key != "" do
-    [
-      %{
-        key: key,
-        date: normalize_date(Map.get(decision, :date)),
-        title: text(decision, :title),
-        question: text(decision, :question),
-        answer: text(decision, :answer),
-        scope: text(decision, :scope)
-      }
-    ]
+    normalized = %{
+      key: key,
+      date: normalize_date(Map.get(decision, :date)),
+      title: text(decision, :title),
+      question: text(decision, :question),
+      answer: text(decision, :answer),
+      scope: text(decision, :scope)
+    }
+
+    case decision |> Map.get(:unlocks) |> List.wrap() |> Enum.filter(&is_binary/1) do
+      [] -> [normalized]
+      unlocks -> [Map.put(normalized, :unlocks, unlocks)]
+    end
   end
 
   defp normalize_decision(_decision), do: []

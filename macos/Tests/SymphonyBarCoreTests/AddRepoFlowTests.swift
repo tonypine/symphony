@@ -56,6 +56,34 @@ final class AddRepoFlowTests: XCTestCase {
         XCTAssertEqual(AddRepoStep.check.rawValue, "Check setup")
     }
 
+    /// The step indicator's three fits, on Review of the six steps a repo without a WORKFLOW.md has while instant updates
+    /// are on. A name is never cut: a step shows by name, or by its tick or number alone.
+    func testTheStepIndicatorShowsLessOfEachStepAsItFitsLess() {
+        let six: [AddRepoStep] = [.source, .linear, .workflow, .review, .check, .instantUpdates]
+        func marks(_ fit: AddRepoStepIndicatorFit) -> [String] {
+            fit.marks(six, current: .review).map { mark in
+                [mark.isDone ? "✓" : nil, mark.number.map(String.init), mark.name].compactMap { $0 }.joined(separator: " ")
+                    + (mark.isCurrent ? "*" : "")
+            }
+        }
+
+        XCTAssertEqual(AddRepoStepIndicatorFit.allCases, [.full, .compact, .currentOnly])
+        XCTAssertEqual(marks(.full), ["✓ Source", "✓ Linear", "✓ WORKFLOW.md", "4 Review*", "5 Check setup", "6 Instant updates"])
+        XCTAssertEqual(marks(.compact), ["✓", "✓", "✓", "Review*", "Check setup", "Instant updates"])
+        XCTAssertEqual(marks(.currentOnly), ["✓", "✓", "✓", "4 Review*", "5", "6"])
+
+        // On the first page nothing is done; on the last, everything before it is.
+        XCTAssertEqual(AddRepoStepIndicatorFit.compact.marks(six, current: .source).map(\.name), six.map(\.rawValue))
+        XCTAssertEqual(
+            AddRepoStepIndicatorFit.compact.marks(six, current: .instantUpdates).map(\.name),
+            [nil, nil, nil, nil, nil, "Instant updates"]
+        )
+        XCTAssertEqual(
+            AddRepoStepIndicatorFit.full.marks([.source, .linear], current: .source),
+            [AddRepoStepMark(step: .source, isCurrent: true, number: 1, name: "Source"), AddRepoStepMark(step: .linear, number: 2, name: "Linear")]
+        )
+    }
+
     func testAReadyDraftPassesEveryStep() {
         XCTAssertEqual(problems(ready), [:])
         XCTAssertEqual(ready.entry, .success(RepositoryEntry(

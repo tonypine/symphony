@@ -538,12 +538,13 @@ final class SettingsViewModel: ObservableObject {
         !isSaving && !isLoadingSecrets && formTokenLimits != nil && tokenLimitsError == nil && !isCheckingTokenLimits
     }
 
-    /// The secrets as entered in the form.
+    /// The secrets as entered in the form, with the GitHub webhook secret as loaded: the form never shows or edits it.
     private var formSecrets: SecretSettings {
         SecretSettings(
             linearAPIKey: linearAPIKey,
             openRouterAPIKey: openRouterAPIKey,
-            extraEnvironment: extraRows.map { EnvironmentVariable(name: $0.name, value: $0.value) }
+            extraEnvironment: extraRows.map { EnvironmentVariable(name: $0.name, value: $0.value) },
+            githubWebhookSecret: loadedSecrets?.githubWebhookSecret ?? ""
         ).trimmed()
     }
 

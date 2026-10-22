@@ -92,7 +92,10 @@ public struct ReferencePopover: Equatable {
             hint = "Click to peek, ⌘-click for its page"
             link = ticket.url.map { Link(title: "Open in Linear", url: $0) }
         case let .pullRequest(pullRequest):
-            var stats = [Stat(value: "\(pullRequest.reviewRounds)", label: pullRequest.reviewRounds == 1 ? "review round" : "review rounds")]
+            // A pull request Code Review hasn't judged yet has no rounds to count.
+            var stats = pullRequest.reviewRounds > 0
+                ? [Stat(value: "\(pullRequest.reviewRounds)", label: pullRequest.reviewRounds == 1 ? "review round" : "review rounds")]
+                : []
             if let files = pullRequest.files { stats.append(Stat(value: "\(files)", label: files == 1 ? "file" : "files")) }
             if let additions = pullRequest.additions, let deletions = pullRequest.deletions {
                 stats.append(Stat(value: "+\(additions) −\(deletions)", label: "lines"))
@@ -103,7 +106,7 @@ public struct ReferencePopover: Equatable {
                 state: Badge(status: pullRequest.reviewState.status, word: pullRequest.reviewState.word),
                 title: pullRequest.title, summary: pullRequest.summary, stats: stats
             ))
-            hint = "Click to peek, ⌘-click for GitHub"
+            hint = pullRequest.repoKey == nil ? "Click to peek, ⌘-click for GitHub" : "Click to peek, ⌘-click for its page"
             link = pullRequest.url.map { Link(title: "Open on GitHub", url: $0) }
         case let .missing(url):
             content = .missing("Symphony can't see \(key).")

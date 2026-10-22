@@ -241,6 +241,26 @@ public struct InboxPicks: Equatable {
     }
 }
 
+/// How far each Inbox review is scrolled, by issue id: a page opened from the review (D3, D15) and left with ⌘[ finds
+/// the review where it was, as the peek (N4) does.
+public struct InboxScrollOffsets: Equatable {
+    private var byItem: [String: Double] = [:]
+
+    public init() {}
+
+    /// The review's offset from its top in points; nil for a review not scrolled yet.
+    public subscript(itemID: String) -> Double? {
+        get { byItem[itemID] }
+        set { byItem[itemID] = newValue.flatMap { $0 > 0 ? $0 : nil } }
+    }
+
+    /// A review's offset from its top, from its scroll view's content offset, which counts from under the window's
+    /// toolbar (−52 at the top): the offset `ScrollPosition.scrollTo(y:)` takes.
+    public static func fromTop(contentOffset: Double, topInset: Double) -> Double {
+        contentOffset + topInset
+    }
+}
+
 /// The consequence sheet of a move (C17, P5, D12d): the question as its title, what happens in Linear, what stays
 /// the same, the options (Rework's required reason), and Cancel with the verb.
 public struct ConsequenceSheet: Equatable, Identifiable {
@@ -321,7 +341,7 @@ public struct ConsequenceSheet: Equatable, Identifiable {
             if let request, let option = item.review.action?.confirmingOption {
                 self.picks = [.init(question: request.question.isEmpty ? id : request.question, answer: option.label)]
             }
-            happens = "Records your answer on \(id) as a reply to its merge request, clears the `Needs Decision` label and moves \(id) to \(confirm): Symphony turns on auto-merge, and GitHub merges the pull request once checks pass."
+            happens = "Records your answer on \(id) as a reply to its merge request, clears the Needs Decision label and moves \(id) to \(confirm): Symphony turns on auto-merge, and GitHub merges the pull request once checks pass."
             stays = "Nothing merges while a check is red or pending, and the diff stays on GitHub."
         case .sendToRework:
             title = "Send \(id) to Rework?"
@@ -355,17 +375,17 @@ public struct ConsequenceSheet: Equatable, Identifiable {
                 // Words that pick none of a confirmation's options ask for a change: Symphony moves the ticket to
                 // In Progress, where its next run takes them up on the same pull request.
                 targetState = "In Progress"
-                happens = "Records your answer on \(id) as a reply to its request, clears the `Needs Decision` label and moves \(id) to In Progress, where its next run takes up your answer."
+                happens = "Records your answer on \(id) as a reply to its request, clears the Needs Decision label and moves \(id) to In Progress, where its next run takes up your answer."
                 stays = "Nothing merges, and the pull request stays open."
             } else if let confirm = action?.confirm {
                 // A merge confirmation continues into the state its hold names. An ordinary decision moves nothing.
                 targetState = confirm
-                happens = "Records your answer on \(id) as a reply to its request, clears the `Needs Decision` label and moves \(id) to \(confirm)."
+                happens = "Records your answer on \(id) as a reply to its request, clears the Needs Decision label and moves \(id) to \(confirm)."
                 stays = "Nothing merges while a check is red or pending. Your answer stays on the ticket as the recorded decision."
             } else {
                 targetState = nil
                 happens = picked?.effect
-                    ?? "Records your answer on \(id) as a reply to its request and clears the `Needs Decision` label."
+                    ?? "Records your answer on \(id) as a reply to its request and clears the Needs Decision label."
                 stays = "\(id) stays in \(item.state ?? "its phase") until its next run picks up your answer."
             }
         case .unblock:
@@ -424,6 +444,18 @@ public struct ConsequenceSheet: Equatable, Identifiable {
     /// request was answered, which leaves the Inbox with the next poll even when the ticket stays in its phase.
     public func selectsNext(after outcome: MoveOutcome) -> Bool { outcome.moved || isDecision }
 
+    /// Whether the app holds the request for `InboxBanner.duration` before it sends it, with Undo on the banner
+    /// (DS10). An answer that leaves the ticket in place has no move for Symphony's Undo to take back, and once
+    /// Symphony posted it and cleared the hold the next run is on its way, so the answer waits in the app and Undo
+    /// keeps it from ever reaching Linear. An answer that moves the ticket (a merge confirmation) is sent at once:
+    /// its move is undone as any other.
+    public var holdsForUndo: Bool { (move == .decide || move == .sendDecisions) && targetState == nil }
+
+    /// The banner while the app holds the answer (`holdsForUndo`): its Undo takes the answer back before it is sent.
+    public var heldBanner: InboxBanner {
+        InboxBanner(itemID: itemID, identifier: identifier, text: move == .decide ? "Sending your decision" : "Sending your decisions", undo: true)
+    }
+
     /// The banner once the move is made (C18), from Symphony's answer: Undo only after the ticket moved.
     /// A restart offers no Undo: it closed the pull request, deleted the workspace and superseded the
     /// workpad, and Symphony can't take any of that back. Unblock moves nothing, so it says what it did
@@ -475,6 +507,11 @@ public struct InboxBanner: Equatable, Identifiable {
     /// The banner after Undo took a move back.
     public static func undone(itemID: String, identifier: String) -> InboxBanner {
         InboxBanner(itemID: itemID, identifier: identifier, text: "Moved back", undo: false, style: .info)
+    }
+
+    /// The banner after Undo took back an answer the app still held: nothing was sent, and the picks stay.
+    public static func unsent(itemID: String, identifier: String) -> InboxBanner {
+        InboxBanner(itemID: itemID, identifier: identifier, text: "Not sent; your pick is kept", undo: false, style: .info)
     }
 
     /// The banner for a request that failed, with Symphony's message.

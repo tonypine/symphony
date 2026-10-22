@@ -105,8 +105,11 @@ final class SettingsUIManifestTests: XCTestCase {
         // The acceptance gate's retired mode keys still load, with a deprecation warning, until the schema drops
         // them after the deprecation window; no control writes them any more (TP-827).
         let retired: Set = ["auto_review.acceptance_gate.mode", "repositories[].acceptance_gate.mode"]
+        // Setup's GitHub updates card changes these through Symphony, which writes them (TP-953).
+        XCTAssertTrue(SettingsUIManifest.writtenBySymphony.isSubset(of: SettingsUIManifest.keyPaths))
         for key in SettingsUIManifest.keyPaths
-        where !retired.contains(key) && !written.contains(where: { $0 == key || $0.hasPrefix(key + ".") }) {
+        where !retired.contains(key) && !SettingsUIManifest.writtenBySymphony.contains(key)
+            && !written.contains(where: { $0 == key || $0.hasPrefix(key + ".") }) {
             XCTFail("SettingsUIManifest.keyPaths lists `\(key)`, which no editor writes")
         }
     }

@@ -36,7 +36,8 @@ final class ReferencePopoverTests: XCTestCase {
         XCTAssertEqual(pullRequest.summary, "The Final verification and Supervisor check steps are gone, so a ticket goes from QA straight to Merging.")
         XCTAssertEqual(pullRequest.stats.map(\.accessibilityLabel), ["2 review rounds", "14 files", "+120 −486 lines", "Checks passed"])
         XCTAssertEqual(pullRequest.stats.last?.status, .done)
-        XCTAssertEqual(popover.hint, "Click to peek, ⌘-click for GitHub")
+        // Symphony knows its repo, so ⌘-click opens its page (D15).
+        XCTAssertEqual(popover.hint, "Click to peek, ⌘-click for its page")
         XCTAssertEqual(popover.link?.title, "Open on GitHub")
         XCTAssertEqual(popover.link?.url.absoluteString, "https://github.com/tonypine/symphony/pull/448")
     }
@@ -48,6 +49,14 @@ final class ReferencePopoverTests: XCTestCase {
         XCTAssertEqual(pullRequest.state, .init(status: .done, word: "Merged"))
         XCTAssertNil(pullRequest.forTicket)
         XCTAssertNil(ReferencePopover(mention).link)
+        // Without its repo there is no page to open.
+        XCTAssertEqual(ReferencePopover(mention).hint, "Click to peek, ⌘-click for GitHub")
+    }
+
+    func testAPullRequestCodeReviewHasNotJudgedCountsNoRounds() {
+        let mention = Mentions.find(in: "#446", references: ["#446": .pullRequest(.init(number: 446, reviewState: .open, reviewRounds: 0))])[0]
+        guard case let .pullRequest(pullRequest) = ReferencePopover(mention).content else { return XCTFail("not a pull request") }
+        XCTAssertEqual(pullRequest.stats, [])
     }
 
     func testAMentionSymphonyCannotSee() {
