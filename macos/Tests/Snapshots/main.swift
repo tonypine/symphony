@@ -439,6 +439,17 @@ func planQuestions() -> some View {
     return review(plan, width: 640, picks: picks)
 }
 
+/// SHOP-330 with two answers Symphony hasn't revised the plan from yet (TP-1202): the warning above its questions.
+@MainActor
+func planUnapplied() -> some View {
+    let api = here.appendingPathComponent("../Fixtures/director-app/inbox/api/v1/inbox.json").standardizedFileURL
+    guard var plan = InboxPayload.decode(try! Data(contentsOf: api))?.items.first(where: { $0.identifier == "SHOP-330" }) else {
+        fatalError("SHOP-330 is missing from \(api.path)")
+    }
+    plan.review.unappliedAnswers = 2
+    return review(plan, width: 640)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -478,6 +489,7 @@ MainActor.assumeIsolated {
         }
         render(ticketPage(), scheme, to: "ticket-page-chips-\(suffix).png")
         render(planQuestions(), scheme, to: "plan-questions-\(suffix).png")
+        render(planUnapplied(), scheme, to: "plan-unapplied-\(suffix).png")
         // The PR and CI watcher (TP-946): S15's states, S16 and S17.
         for (identifier, name) in [("TP-701", "ci"), ("TP-704", "competing"), ("TP-707", "fix-ticket"), ("TP-703", "on-hold"), ("TP-709", "pr-closed")] {
             render(watchPage(identifier), scheme, to: "pr-watch-\(name)-\(suffix).png")

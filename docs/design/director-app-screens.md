@@ -83,9 +83,10 @@ later journeys point back to it. The mock draws every screen under its ID.
   required reason, destructive: its sheet names the sub-tickets still in Backlog it cancels) and **Restart…**. Without
   open questions **Approve Plan…** is the prominent one.
 - **States:** a scope that hides items says "2 more in other repos". A plan with answers no revision has applied yet
-  (the revision didn't start, or hasn't brought the plan back) says "2 answers not yet applied" above its questions,
-  and **Approve Plan…**'s sheet says approving now approves the plan without them. (The final verification item and its
-  **Sign Off…** were retired with `Final verification:` tickets: an epic closes in its epic review.)
+  (the revision didn't start, or hasn't brought the plan back) says "2 answers not yet applied" above its questions
+  (a status.you triangle before text in the primary colour, like "If you don't answer:"), and **Approve Plan…**'s
+  sheet says approving now approves the plan without them. (The final verification item and its **Sign Off…** were
+  retired with `Final verification:` tickets: an epic closes in its epic review.)
 - **Conventions:** three-column `NavigationSplitView` like Mail; after an answer the selection moves to the next item;
   ↑↓ and Return work in the list.
 - **Data:** the Inbox list and the review brief (section 2).

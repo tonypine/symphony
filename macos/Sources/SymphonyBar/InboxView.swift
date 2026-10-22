@@ -338,10 +338,16 @@ struct InboxReviewBody: View {
             switch item.kind {
             case .plan:
                 if let warning = item.review.unappliedAnswersWarning {
-                    Label(warning, systemImage: "exclamationmark.triangle")
-                        .font(DesignTokens.TypeStyle.callout.font)
-                        .foregroundStyle(DesignTokens.Status.you.tint)
-                        .fixedSize(horizontal: false, vertical: true)
+                    // Only the triangle takes status.you: orange text on white is below 4.5:1 in light.
+                    HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(DesignTokens.Status.you.tint)
+                            .accessibilityHidden(true)
+                        Text(warning)
+                            .foregroundStyle(.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(DesignTokens.TypeStyle.callout.font)
                 }
                 PlanQuestions(questions: item.review.questions, picks: picks, pick: pick, writeIn: writeIn, narrow: narrow)
                 BriefSections(brief: item.review.brief)
