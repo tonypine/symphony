@@ -161,6 +161,37 @@ final class ControlAPITests: XCTestCase {
         XCTAssertEqual(unreachable, .failed("Couldn't stop TP-7: nothing answered at http://127.0.0.1:4010"))
     }
 
+    func testNoteRequest() throws {
+        let note = ControlAPI.request(.note(repoKey: "web-shop", identifier: "SHOP-410", text: "Keep the header."), base: base, token: "secret")
+        XCTAssertEqual(note.httpMethod, "POST")
+        XCTAssertEqual(note.url?.absoluteString, "http://127.0.0.1:4010/api/v1/control/note")
+        XCTAssertEqual(note.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+        XCTAssertEqual(try json(note), ["repo_key": "web-shop", "issue_identifier": "SHOP-410", "text": "Keep the header."])
+        XCTAssertNil(ControlAction.note(repoKey: "web-shop", identifier: "SHOP-410", text: "x").moveIdentifier)
+    }
+
+    func testNoteResponses() {
+        let note = ControlAction.note(repoKey: "web-shop", identifier: "SHOP-410", text: "Keep the header.")
+        // Symphony answers the recorded event: the note was written.
+        XCTAssertEqual(
+            ControlAPI.result(note, statusCode: 200, data: Data(#"{"event":{"id":"ev-1","type":"note","actor":{"kind":"person","name":"the Director"}}}"#.utf8)),
+            .done
+        )
+        // A refusal says why, in Symphony's words: the text stays in the field with it.
+        XCTAssertEqual(
+            ControlAPI.result(note, statusCode: 400, data: Data(#"{"error":{"code":"invalid_note","message":"A note holds at most 4,000 characters; this one has 4,001"}}"#.utf8)),
+            .failed("Couldn't add the note to SHOP-410: A note holds at most 4,000 characters; this one has 4,001 (HTTP 400)")
+        )
+        XCTAssertEqual(
+            ControlAPI.result(note, statusCode: 404, data: Data(#"{"error":{"code":"ticket_not_found","message":"No ticket SHOP-410 in web-shop"}}"#.utf8)),
+            .failed("Couldn't add the note to SHOP-410: No ticket SHOP-410 in web-shop (HTTP 404)")
+        )
+        XCTAssertEqual(
+            ControlAPI.result(note, statusCode: 401, data: Data()),
+            .failed("Couldn't add the note to SHOP-410: it rejected the control token (HTTP 401)")
+        )
+    }
+
     func testSendFallsBackToTheDefaultURL() async throws {
         try "0123abcd".write(to: root.appendingPathComponent("control_token"), atomically: false, encoding: .utf8)
         var sent: URLRequest?

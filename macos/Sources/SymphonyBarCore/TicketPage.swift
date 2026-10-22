@@ -188,6 +188,9 @@ public struct TicketPage: Equatable {
     public var isRunning: Bool
     /// Whether Symphony tracks the ticket now, so its transcript endpoint answers.
     public var isTracked: Bool
+    /// Whether the note field takes a note: Symphony serves the ticket's events feed, which a note is written to, and
+    /// the ticket's repo is known. An older Symphony doesn't.
+    public var acceptsNotes: Bool
     /// Whether the ticket is forced past the dispatch limits, so its ⋯ menu offers Stop Forcing instead of Force.
     public var isForced: Bool { badges.contains { $0.status == .forced } }
 
@@ -295,6 +298,7 @@ public struct TicketPage: Equatable {
         // A ticket only waiting to be dispatched has no run, so no transcript yet.
         isTracked = running != nil || retry != nil || watching != nil
             || issue.map { !["slot_waiting", "dispatch_skipped"].contains($0.status ?? "") } ?? false
+        acceptsNotes = sources.events != nil && repoKey?.isEmpty == false
 
         let pullRequest = [running?.pullRequestUrl, watching?.pullRequestUrl, issue?.watching?.pullRequestUrl]
             .compactMap { $0.flatMap(URL.init(string:)) }.first

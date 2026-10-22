@@ -36,6 +36,8 @@ final class SymphonyWindowModel: ObservableObject {
     let ticketFeed: TicketEventsReader
     /// The screenshots the ticket page shows, read through `client` and kept by artifact id.
     let artifactImages: ArtifactImages
+    /// The note field under the ticket page: what is typed, the note on its way, why the last one wasn't added.
+    let ticketNote = TicketNoteComposer()
     /// The build of the Symphony the window last read, to tell a restart onto another build.
     private var symphonyBuild: DiagnosticsPayload.Build?
     @Published var paused = false

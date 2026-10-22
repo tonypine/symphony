@@ -224,6 +224,21 @@ GitHub or Linear in QA:
   `macos/Tests/Fixtures/director-app/ticket-ledger-no-feed` (an older Symphony, no feed): the
   same ticket's timeline is today's, "Implementation run 1", "QA pass run 1" and "QA failed"
   with "on bbb2222", and the app doesn't crash.
+- **Ticket note (TP-1195):** with the same `ticket-ledger` fixture, SHOP-410's page has a
+  one-line field pinned under the page, "Add a note for the next run"; it stays on screen
+  however far the page scrolls. The fixture's feed already holds the Director's note, "Note by
+  you" ("Keep the run header visible when the pane is narrow."). Type a note and press Return:
+  the field clears, and `qa_api_requests` lists one `POST /api/v1/control/note` whose body has
+  `repo_key` `web-shop`, `issue_identifier` `SHOP-410` and the note's text (the fixture's feed
+  is fixed, so the new note's row is proved by the app's tests, not shown here). Press Return on
+  the empty field: no request is logged. Paste more than 4,000 characters and press Return: no
+  request is logged, the text stays, and the line under the field says "A note holds at most
+  4,000 characters; this one has …". VoiceOver reads the field as "Note on SHOP-410" and the
+  line as "Note not added: …". Then with `ticket-ledger-no-feed`, the field is dimmed and
+  disabled, and the line under it says "This version of Symphony can't take notes. Update
+  Symphony to add one."; typing is impossible and no request is logged. Walk it at 1440×900 and
+  2560×1440, light and dark: the field and its line are never clipped, and at 2560×1440 the
+  field stops at 720 pt wide.
 - **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
   state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one
   warning, `symphony.yml sets auto_review.enabled, which is deprecated` (**Remove…**). Before
