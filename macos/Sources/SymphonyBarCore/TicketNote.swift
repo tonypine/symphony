@@ -11,8 +11,10 @@ public final class TicketNoteComposer: ObservableObject {
     public static let placeholder = "Add a note for the next run"
     public static let hint = "Press Return to add it to the timeline. The next agent run reads it."
     public static let sendingTitle = "Adding the note…"
-    /// The line under the field when Symphony doesn't serve the ticket's events feed, which a note is written to.
+    /// The line under the field when Symphony doesn't serve the ticket's events feed (a 404), which a note is written to.
     public static let unsupportedReason = "This version of Symphony can't take notes. Update Symphony to add one."
+    /// The line under the field while the ticket's history isn't read: before the first read, or after one that failed.
+    public static let readingReason = "Reading the ticket's history…"
 
     @Published public var text = ""
     /// True while a note is on its way; a Return meanwhile posts nothing.

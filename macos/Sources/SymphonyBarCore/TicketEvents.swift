@@ -432,7 +432,7 @@ public final class TicketEventsReader {
     public private(set) var channel: EventStreamState = .stopped
     /// Every path the reader asked for, oldest first.
     public private(set) var requests: [String] = []
-    /// Told after a read that changed what it holds, and when it follows another ticket.
+    /// Told after a read that changed what it holds or got a 404, and when it follows another ticket.
     public var onChange: (TicketEventsPayload?) -> Void = { _ in }
 
     private let get: Get
@@ -536,8 +536,8 @@ public final class TicketEventsReader {
         }
         reading = nil
         let found = failed ? nil : history
-        // A read that found nothing new doesn't redraw the page.
-        if found != events {
+        // A read that found nothing new doesn't redraw the page; a 404 does, so the page can say Symphony predates it.
+        if found != events || isUnsupported {
             events = found
             onChange(found)
         }

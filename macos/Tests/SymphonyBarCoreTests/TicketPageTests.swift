@@ -643,14 +643,15 @@ final class TicketPageFeedTests: XCTestCase {
     private var feedData: Data { get throws { try Data(contentsOf: TicketEventsTests.sharedFixture) } }
 
     /// The page as the window builds it from a QA fixture's files, with what the feed's reader read.
-    private func fixturePage(_ name: String, events: TicketEventsPayload?) throws -> TicketPage {
+    private func fixturePage(_ name: String, events: TicketEventsPayload?, eventsUnsupported: Bool = false) throws -> TicketPage {
         let api = Self.director(name).appendingPathComponent("api/v1")
         return TicketPage(
             identifier: "SHOP-410",
             sources: TicketPage.Sources(
                 state: try Data(contentsOf: api.appendingPathComponent("state.json")),
                 issue: try Data(contentsOf: api.appendingPathComponent("SHOP-410.json")),
-                events: events
+                events: events,
+                eventsUnsupported: eventsUnsupported
             ),
             timeZone: utc
         )
@@ -866,11 +867,16 @@ final class TicketPageFeedTests: XCTestCase {
         let fixtures = APIFixtures(directory: Self.director("ticket-ledger-no-feed"), requestLog: root.appendingPathComponent("requests.jsonl"))
         let client = LiveAPIClient(fetch: LiveAPIClient.fetch(base: { APIFixtures.baseURL }, transport: fixtures.transport))
         let reader = TicketEventsReader(get: { await client.get($0) })
+        var told = 0
+        reader.onChange = { _ in told += 1 }
         reader.follow(identifier: "SHOP-410", repoKey: "web-shop")
         await reader.settle()
+        XCTAssertEqual(told, 1, "a 404 on the first read tells the page, though it holds nothing still")
 
-        let page = try fixturePage("ticket-ledger-no-feed", events: reader.events)
+        let page = try fixturePage("ticket-ledger-no-feed", events: reader.events, eventsUnsupported: reader.isUnsupported)
         XCTAssertFalse(page.acceptsNotes)
+        XCTAssertTrue(page.notesUnsupported)
+        XCTAssertEqual(page.notesOffReason, TicketNoteComposer.unsupportedReason)
         let composer = TicketNoteComposer()
         let calls = NoteCalls()
         composer.text = "Keep it."
@@ -889,6 +895,38 @@ final class TicketPageFeedTests: XCTestCase {
         // A feed that read but holds nothing still takes notes; a ticket whose repo isn't known doesn't.
         XCTAssertTrue(try fixturePage("ticket-ledger", events: TicketEventsPayload()).acceptsNotes)
         XCTAssertFalse(TicketPage(identifier: "SHOP-410", sources: TicketPage.Sources(events: TicketEventsPayload())).acceptsNotes)
+        XCTAssertNil(try fixturePage("ticket-ledger", events: TicketEventsPayload()).notesOffReason)
+    }
+
+    func testBeforeTheFirstReadAndAfterAFailedOneTheNoteFieldIsOffWithoutBlamingSymphony() async throws {
+        let feed = ScriptedFeed()
+        feed.answers = [.failed("Symphony answered with HTTP 503")]
+        let reader = TicketEventsReader(get: feed.get)
+        func page() throws -> TicketPage {
+            try fixturePage("ticket-ledger", events: reader.events, eventsUnsupported: reader.isUnsupported)
+        }
+
+        // The page just opened: nothing read yet.
+        let opened = try page()
+        XCTAssertFalse(opened.acceptsNotes)
+        XCTAssertFalse(opened.notesUnsupported)
+        XCTAssertEqual(opened.notesOffReason, TicketNoteComposer.readingReason)
+
+        // A 5xx: still off, and still not "update Symphony".
+        reader.follow(identifier: "SHOP-410", repoKey: "web-shop")
+        await reader.settle()
+        let failed = try page()
+        XCTAssertFalse(failed.acceptsNotes)
+        XCTAssertFalse(failed.notesUnsupported)
+        XCTAssertEqual(failed.notesOffReason, TicketNoteComposer.readingReason)
+        XCTAssertEqual(TicketNoteComposer.readingReason, "Reading the ticket's history…")
+
+        // The next read lands: the field takes notes.
+        feed.answers = [.loaded(try feedData)]
+        reader.statePolled()
+        await reader.settle()
+        XCTAssertTrue(try page().acceptsNotes)
+        XCTAssertNil(try page().notesOffReason)
     }
 
     func testTheNoteFieldBelongsToTheTicketShownAndKeepsWhatIsTypedMeanwhile() async throws {

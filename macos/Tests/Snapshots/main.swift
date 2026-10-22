@@ -464,7 +464,8 @@ func ledgerPage(window: CGFloat, feed: Bool = true, note: TicketNoteComposer? = 
         sources: TicketPage.Sources(
             state: try? Data(contentsOf: ledgerAPI.appendingPathComponent("state.json")),
             issue: try? Data(contentsOf: ledgerAPI.appendingPathComponent("SHOP-410.json")),
-            events: events
+            events: events,
+            eventsUnsupported: !feed
         ),
         now: ledgerNow, timeZone: TimeZone(identifier: "UTC")!
     )
@@ -483,7 +484,9 @@ func ledgerNoteBar(feed: Bool, note: TicketNoteComposer) -> some View {
     let events = feed ? TicketEventsPayload() : nil
     let page = TicketPage(
         identifier: "SHOP-410",
-        sources: TicketPage.Sources(issue: try? Data(contentsOf: ledgerAPI.appendingPathComponent("SHOP-410.json")), events: events),
+        sources: TicketPage.Sources(
+            issue: try? Data(contentsOf: ledgerAPI.appendingPathComponent("SHOP-410.json")), events: events, eventsUnsupported: !feed
+        ),
         now: ledgerNow
     )
     return TicketNoteBar(page: page, composer: note, submit: {})
