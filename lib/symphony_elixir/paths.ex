@@ -37,6 +37,11 @@ defmodule SymphonyElixir.Paths do
     Path.join(state_root(), "run_store")
   end
 
+  @spec artifacts_dir() :: Path.t()
+  def artifacts_dir do
+    Path.join(state_root(), "artifacts")
+  end
+
   @spec audit_dir() :: Path.t()
   def audit_dir do
     Path.join(state_root(), "audit")
