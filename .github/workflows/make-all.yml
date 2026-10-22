@@ -300,11 +300,17 @@ jobs:
       - build
       - coverage-report
       - dialyzer
-    if: ${{ always() }}
+    # Not when the run is cancelled: a cancelled run's check reads cancelled, not failed,
+    # so the PR watcher does not rerun it or send it to CI Fix.
+    if: ${{ !cancelled() }}
+    permissions:
+      contents: read
+      actions: write
 
     steps:
       - name: Summarize gate results
         env:
+          GH_TOKEN: ${{ github.token }}
           FORMAT_RESULT: ${{ needs.format.result }}
           AUDIT_RESULT: ${{ needs.audit.result }}
           LINT_RESULT: ${{ needs.lint.result }}
@@ -318,6 +324,16 @@ jobs:
           echo "build: $BUILD_RESULT"
           echo "coverage report: $COVERAGE_RESULT"
           echo "dialyzer: $DIALYZER_RESULT"
+
+          # A job that never finished (cancelled, or abandoned while queued) in a run that is
+          # not cancelled: cancel the run so the check reads cancelled, not failed.
+          for result in "$FORMAT_RESULT" "$AUDIT_RESULT" "$LINT_RESULT" "$BUILD_RESULT" "$COVERAGE_RESULT" "$DIALYZER_RESULT"; do
+            if [ "$result" = "cancelled" ] || [ "$result" = "abandoned" ]; then
+              gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" || true
+              sleep 60
+              break
+            fi
+          done
 
           failed=0
           for result in "$FORMAT_RESULT" "$AUDIT_RESULT" "$LINT_RESULT" "$BUILD_RESULT" "$COVERAGE_RESULT" "$DIALYZER_RESULT"; do
