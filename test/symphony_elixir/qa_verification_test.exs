@@ -35,6 +35,47 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
   end
 
+  # A QA agent session that does what `:walkthrough_session` says, as an agent would: writes its
+  # evidence under the worktree, uploads files with `linear_attach_file`, starts a Claude session
+  # whose transcript Claude keeps, and records its verdict with `qa_verdict`.
+  defmodule WalkthroughSession do
+    alias SymphonyElixir.Codex.DynamicTool
+
+    def start_session(worktree, _opts), do: {:ok, %{worktree: worktree}}
+    def stop_session(_session), do: :ok
+
+    def run_turn(%{worktree: worktree}, _prompt, issue, opts) do
+      %{files: files, uploads: uploads, verdict: verdict} = Process.get(:walkthrough_session)
+      tool_opts = Keyword.take(opts, [:tool_scope, :qa_verdict_sink])
+
+      for {name, bytes} <- files do
+        File.mkdir_p!(Path.dirname(Path.join(worktree, name)))
+        File.write!(Path.join(worktree, name), bytes)
+      end
+
+      for name <- uploads do
+        upload_client = fn _url, _opts -> {:ok, %{status: 200}} end
+        attach_opts = [issue: issue, workspace: worktree, linear_client: &linear/3, upload_client: upload_client]
+        %{"success" => true} = DynamicTool.execute("linear_attach_file", %{"local_path" => name}, tool_opts ++ attach_opts)
+      end
+
+      Keyword.fetch!(opts, :on_message).({:session_started, "walkthrough-session"})
+      %{"success" => true} = DynamicTool.execute("qa_verdict", verdict, tool_opts)
+      {:ok, %{result: ""}}
+    end
+
+    defp linear(query, variables, _opts) do
+      if query =~ "SymphonyAgentFileUpload" do
+        send(self(), {:walkthrough_upload, variables.filename})
+        upload = %{"uploadUrl" => "https://upload.test", "assetUrl" => "https://assets.linear.test/#{variables.filename}", "headers" => []}
+        {:ok, %{"data" => %{"fileUpload" => %{"success" => true, "uploadFile" => upload}}}}
+      else
+        attachment = %{"id" => "attachment-1", "url" => "https://uploads.linear.app/qa/" <> Path.basename(variables.url)}
+        {:ok, %{"data" => %{"attachmentCreate" => %{"success" => true, "attachment" => attachment}}}}
+      end
+    end
+  end
+
   # Drives the real dev server, so a failing command injected through the settings is what blocks
   # the run — the QA environment block the self-heal lane exists for, not a hand-made verdict.
   defmodule DevServerQaAgent do
@@ -1542,6 +1583,243 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert_received {:memory_tracker_comment, @issue_id, report}
       assert report =~ "Reason: no QA playbook applies to this change"
       assert report =~ "- **pass** step 1"
+    end
+  end
+
+  describe "the pass's ledger events" do
+    @home String.duplicate("a", 64)
+    @detail String.duplicate("b", 64)
+    @row String.duplicate("c", 64)
+    @transcript String.duplicate("d", 64)
+
+    setup do
+      :ok = RunStore.clear()
+      :ok = TicketPullRequest.put(@repo_key, @issue_id, %{pr_url: @pr_url})
+      :ok
+    end
+
+    defp artifacts do
+      files = %{"qa-evidence/home.png" => @home, "qa-evidence/detail.png" => @detail, "https://uploads.linear.app/qa/row.png" => @row}
+      %{files: files, transcript: @transcript}
+    end
+
+    defp events, do: SymphonyElixir.TicketEvents.query(@repo_key, @issue_id, limit: 200)
+
+    defp agent_result(result), do: Process.put(:qa_agent_result, {:ok, %{result: result, tokens: %{}}})
+
+    test "a fail records each step's evidence and each finding, then the verdict, once however often it is handled" do
+      {workspace, head} = git_workspace!()
+
+      steps = [
+        %{name: "Step 1", status: "fail", details: "blank", evidence: ["qa-evidence/home.png", "qa-evidence/detail.png"]},
+        %{name: "Step 2", status: "fail", details: "clipped", evidence: ["https://uploads.linear.app/qa/row.png", "https://ci.test/run/1"]},
+        %{name: "Step 3", status: "pass", details: "fine", evidence: []}
+      ]
+
+      details = [
+        %{line: "Step 1: The home screen is blank. Evidence: qa-evidence/home.png.", step: "Step 1", viewport: "1400×900 pt", evidence: ["qa-evidence/home.png"]},
+        %{line: "step 2: The row is clipped.", step: "step 2", viewport: nil, evidence: []}
+      ]
+
+      agent_result(%{
+        verdict: :fail,
+        summary: "Two defects.",
+        steps: steps,
+        findings: Enum.map(details, & &1.line),
+        finding_details: details,
+        artifacts: artifacts()
+      })
+
+      assert :ok = run(workspace, run_id: "run-qa-1")
+      assert :ok = run(workspace, run_id: "run-qa-1")
+
+      [step_1, step_2, transcript, finding_1, finding_2, verdict, second_verdict] =
+        Enum.filter(events(), &(&1.type in ["evidence", "finding.recorded", "verdict.recorded"]))
+
+      assert %{type: "evidence", payload: %{caption: "Step 1: fail", artifacts: [@home, @detail]}, artifacts: [@home, @detail]} = step_1
+      assert %{type: "evidence", payload: %{caption: "Step 2: fail", artifacts: [@row]}, idempotency: "evidence:run-qa-1:2"} = step_2
+      assert %{type: "evidence", payload: %{caption: "QA session transcript"}, artifacts: [@transcript]} = transcript
+
+      assert %{
+               type: "finding.recorded",
+               actor: %{kind: :agent, run_id: "run-qa-1", run_kind: "qa"},
+               run_id: "run-qa-1",
+               idempotency: "finding:run-qa-1:1",
+               artifacts: [@home],
+               payload: %{class: "unclassified", severity: "unrated", step: "Step 1", viewport: "1400×900 pt", evidence: ["qa-evidence/home.png"]} = payload
+             } = finding_1
+
+      assert payload.description == hd(details).line
+      assert finding_1.summary.title == "QA found a defect at 1400×900 pt: Step 1"
+      assert %{artifacts: [@row], payload: %{step: "step 2"} = second} = finding_2
+      refute Map.has_key?(second, :evidence)
+      assert %{type: "verdict.recorded", payload: %{outcome: "fail"}} = verdict
+      assert %{type: "verdict.recorded"} = second_verdict
+      assert [%{outcome: "fail"}, %{outcome: "fail"}] = Enum.filter(verdicts(), &(&1.head_sha == head))
+    end
+
+    test "a fail with no findings records its failing steps as findings, its text cut to the schema" do
+      {workspace, _head} = git_workspace!()
+      long = String.duplicate("x", 2_100)
+
+      agent_result(%{
+        verdict: :fail,
+        summary: "No.",
+        steps: [%{name: String.duplicate("s", 600), status: "fail", details: long, evidence: ["qa-evidence/home.png"]}],
+        findings: [],
+        artifacts: artifacts()
+      })
+
+      assert :ok = run(workspace, run_id: "run-qa-2")
+
+      assert [
+               %{type: "evidence", payload: %{caption: caption}},
+               %{type: "evidence", artifacts: [@transcript]},
+               %{type: "finding.recorded", artifacts: [@home], payload: payload},
+               %{type: "verdict.recorded"}
+             ] =
+               Enum.filter(events(), &(&1.type in ["evidence", "finding.recorded", "verdict.recorded"]))
+
+      assert String.length(caption) == 500
+      assert String.length(payload.description) == 2_000
+      assert String.length(payload.step) == 200
+    end
+
+    test "findings given only as lines are recorded with no step or evidence" do
+      {workspace, _head} = git_workspace!()
+      agent_result(%{verdict: :fail, summary: "No.", steps: [], findings: ["The header is clipped."]})
+
+      assert :ok = run(workspace, run_id: "run-qa-3")
+
+      assert [%{type: "finding.recorded", artifacts: [], payload: %{description: "The header is clipped."} = payload}, %{type: "verdict.recorded"}] =
+               Enum.filter(events(), &(&1.type in ["evidence", "finding.recorded", "verdict.recorded"]))
+
+      refute Map.has_key?(payload, :step)
+    end
+
+    test "a pass records its steps' evidence and the transcript, and no finding" do
+      {workspace, _head} = git_workspace!()
+
+      agent_result(%{
+        verdict: :pass,
+        summary: "Fine.",
+        steps: [%{name: "Step 1", status: "pass", details: "ok", evidence: ["qa-evidence/home.png", "https://ci.test/run/1"]}],
+        findings: [],
+        artifacts: artifacts()
+      })
+
+      assert :ok = run(workspace, run_id: "run-qa-4")
+
+      assert [
+               %{type: "evidence", payload: %{caption: "Step 1: pass"}, artifacts: [@home], actor: %{kind: :agent, run_kind: "qa"}},
+               %{type: "evidence", payload: %{caption: "QA session transcript"}, artifacts: [@transcript], idempotency: "evidence:run-qa-4:2"},
+               %{type: "verdict.recorded", payload: %{outcome: "pass"}}
+             ] = Enum.filter(events(), &(&1.type in ["evidence", "finding.recorded", "verdict.recorded"]))
+    end
+  end
+
+  describe "the operator's walkthrough" do
+    @png <<0x89, "PNG\r\n", 0x1A, "\n", 0, 0, 0, 13, "IHDR">>
+
+    setup do
+      :ok = RunStore.clear()
+      :ok = TicketPullRequest.put(@repo_key, @issue_id, %{pr_url: @pr_url})
+      root = Path.join(System.tmp_dir!(), "qa-walkthrough-#{System.unique_integer([:positive])}")
+      projects = Path.join(root, "projects")
+      Application.put_env(:symphony_elixir, :claude_projects_dir, projects)
+
+      on_exit(fn ->
+        Application.delete_env(:symphony_elixir, :claude_projects_dir)
+        File.rm_rf(root)
+        File.rm_rf(SymphonyElixir.Paths.artifacts_dir())
+      end)
+
+      %{settings: settings!(%{"workspace" => %{"root" => Path.join(root, "workspaces")}, "auto_review" => %{"kind" => "claude"}}), projects: projects}
+    end
+
+    defp walk(workspace, settings, session) do
+      Process.put(:walkthrough_session, session)
+
+      QaVerification.run(issue(), workspace,
+        settings: settings,
+        repo_key: @repo_key,
+        run_id: "run-walkthrough",
+        qa_policy: RunPolicy,
+        qa_agent_module: WalkthroughSession,
+        leftover_processes: [table: fn -> {:ok, []} end]
+      )
+    end
+
+    defp ledger, do: Enum.filter(SymphonyElixir.TicketEvents.query(@repo_key, @issue_id, limit: 200), &(&1.type in ["evidence", "finding.recorded", "verdict.recorded"]))
+
+    defp stored!(id) do
+      assert {:ok, path} = SymphonyElixir.Artifacts.path(id)
+      File.read!(path)
+    end
+
+    test "a fail with two findings and three screenshots leaves the findings, pointing at the screenshots, then the verdict", %{settings: settings} do
+      {workspace, head} = git_workspace!()
+      shots = for n <- 1..3, do: {"qa-evidence/shot-#{n}.png", @png <> <<n>>}
+
+      findings = [
+        %{"step" => "Step 1", "summary" => "The list is empty", "evidence" => ["qa-evidence/shot-1.png", "qa-evidence/shot-2.png"]},
+        %{"step" => "Step 2", "viewport" => "1400×900 pt", "summary" => "The row is clipped", "evidence" => ["qa-evidence/shot-3.png"]}
+      ]
+
+      assert :ok = walk(workspace, settings, %{files: shots, uploads: [], verdict: %{"verdict" => "fail", "findings" => findings}})
+
+      refute File.exists?(QaAgent.worktree_path(settings, @repo_key, "TP-816", head))
+      assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
+
+      assert [%{type: "finding.recorded"} = first, %{type: "finding.recorded"} = second, %{type: "verdict.recorded", payload: %{outcome: "fail"}}] = ledger()
+      assert %{actor: %{kind: :agent, run_kind: "qa", run_id: "run-walkthrough"}, payload: %{step: "Step 1"}} = first
+      assert %{payload: %{step: "Step 2", viewport: "1400×900 pt"}} = second
+      assert Enum.map(first.artifacts ++ second.artifacts, &stored!/1) == Enum.map(shots, &elem(&1, 1))
+    end
+
+    test "a finding citing its Linear upload points at the stored screenshot, and the upload is made as before", %{settings: settings} do
+      {workspace, _head} = git_workspace!()
+      shot = @png <> <<7>>
+      finding = %{"step" => "Step 1", "summary" => "The badge is missing", "evidence" => ["https://uploads.linear.app/qa/badge.png"]}
+
+      assert :ok =
+               walk(workspace, settings, %{
+                 files: [{"qa-evidence/badge.png", shot}],
+                 uploads: ["qa-evidence/badge.png"],
+                 verdict: %{"verdict" => "fail", "findings" => [finding]}
+               })
+
+      assert_received {:walkthrough_upload, "badge.png"}
+      assert [%{type: "finding.recorded", artifacts: [id]}, %{type: "verdict.recorded"}] = ledger()
+      assert stored!(id) == shot
+      assert {:ok, %{projections: %{linear_url: "https://uploads.linear.app/qa/badge.png"}}} = SymphonyElixir.Artifacts.get(id)
+    end
+
+    test "a pass shows each step's evidence and keeps the QA session's transcript", %{settings: settings, projects: projects} do
+      {workspace, head} = git_workspace!()
+      worktree = QaAgent.worktree_path(settings, @repo_key, "TP-816", head)
+      transcript = Path.join([projects, String.replace(worktree, ~r/[^A-Za-z0-9]/, "-"), "walkthrough-session.jsonl"])
+      File.mkdir_p!(Path.dirname(transcript))
+      File.write!(transcript, ~s({"type":"system"}\n))
+
+      steps = [
+        %{"name" => "Step 1", "status" => "pass", "evidence" => ["qa-evidence/home.png"]},
+        %{"name" => "Step 2", "status" => "pass", "evidence" => ["https://ci.test/run/1"]}
+      ]
+
+      assert :ok = walk(workspace, settings, %{files: [{"qa-evidence/home.png", @png}], uploads: [], verdict: %{"verdict" => "pass", "steps" => steps}})
+
+      assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+
+      assert [
+               %{type: "evidence", payload: %{caption: "Step 1: pass"}, artifacts: [home]},
+               %{type: "evidence", payload: %{caption: "Step 2: pass"}, artifacts: []},
+               %{type: "evidence", payload: %{caption: "QA session transcript"}, artifacts: [session]},
+               %{type: "verdict.recorded", payload: %{outcome: "pass"}}
+             ] = ledger()
+
+      assert stored!(home) == @png
+      assert stored!(session) == ~s({"type":"system"}\n)
     end
   end
 

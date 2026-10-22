@@ -9,7 +9,7 @@ defmodule SymphonyElixir.QaAgent.Report do
 
   require Logger
 
-  alias SymphonyElixir.{AgentTools, Config, Tracker}
+  alias SymphonyElixir.{AgentTools, Config, QaAgent, Tracker}
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.Linear.Issue
 
@@ -29,7 +29,9 @@ defmodule SymphonyElixir.QaAgent.Report do
   `:fail`, `:blocked`, `:inconclusive` or `:skip`), `:sha`, `:target_state`, and optionally
   `:summary`, `:steps`, `:findings`, `:reason`, `:scope` (`:none` on a pass with nothing on screen
   to judge, which states its reason), `:playbooks`, `:tokens`,
-  `:runtime_seconds`, `:follow_ups`, `:verdict_retries`, `:escalated` and `:fix_attempt`/`:max_fix_attempts`.
+  `:runtime_seconds`, `:follow_ups`, `:verdict_retries`, `:escalated`, `:fix_attempt`/`:max_fix_attempts`
+  and `:artifacts` (the files the pass kept, `t:SymphonyElixir.QaAgent.artifacts/0`: a step's
+  evidence that is a `qa-evidence/` path the pass kept shows its artifact id beside it).
 
   A run on the head of a branch also passes `:ref` (the branch the commit heads, in place of a PR),
   `:target_issue` (the identifier of the verification ticket `:target_state` applies to) and
@@ -51,7 +53,7 @@ defmodule SymphonyElixir.QaAgent.Report do
       "#{head_label(outcome)}#{meta_suffix(outcome)}",
       summary_block(outcome),
       checks_block(Map.get(outcome, :checks, [])),
-      steps_block(Map.get(outcome, :steps, [])),
+      steps_block(Map.get(outcome, :steps, []), Map.get(outcome, :artifacts)),
       findings_block(Map.get(outcome, :findings, [])),
       filed_block(Map.get(outcome, :filed, [])),
       "_Symphony rewrites this comment on every QA pass._"
@@ -131,18 +133,18 @@ defmodule SymphonyElixir.QaAgent.Report do
     "- **#{status}** #{name}: #{detail}"
   end
 
-  defp steps_block([]), do: nil
+  defp steps_block([], _artifacts), do: nil
 
-  defp steps_block(steps) do
-    lines = Enum.map(steps, &step_lines/1)
+  defp steps_block(steps, artifacts) do
+    lines = Enum.map(steps, &step_lines(&1, artifacts))
     Enum.join(["### Steps", "" | lines], "\n") <> "\n"
   end
 
-  defp step_lines(step) do
+  defp step_lines(step, artifacts) do
     evidence =
       case step.evidence do
         [] -> ""
-        links -> " (evidence: " <> Enum.join(links, ", ") <> ")"
+        links -> " (evidence: " <> Enum.map_join(links, ", ", &evidence_entry(&1, artifacts)) <> ")"
       end
 
     head = "- **#{step.status}** #{step.name}#{evidence}"
@@ -150,6 +152,14 @@ defmodule SymphonyElixir.QaAgent.Report do
     case String.trim(step.details) do
       "" -> head
       details -> head <> "\n\n  ```text\n" <> indent(truncate(details)) <> "\n  ```\n"
+    end
+  end
+
+  # A Linear URL stays as it is: the upload is what the reader opens.
+  defp evidence_entry(entry, artifacts) do
+    case QaAgent.evidence_artifact(artifacts, entry) do
+      id when is_binary(id) -> if String.starts_with?(entry, ["http://", "https://"]), do: entry, else: "#{entry} (artifact `#{id}`)"
+      nil -> entry
     end
   end
 

@@ -906,6 +906,12 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @spec attach_file(context(), Path.t(), String.t() | nil) :: {:ok, map()} | {:error, term()}
   def attach_file(context, local_path, title), do: attach_file(context, local_path, title, [])
 
+  @doc """
+  Uploads the workspace file at `local_path` to Linear and attaches it to the current issue. In a
+  QA session (`opts[:qa_verdict_sink]`, the QA process), a successful upload also sends the sink
+  `{:qa_upload, path, urls}`: the file's resolved path and its Linear URLs, the attachment's first,
+  so the pass can point the evidence the agent cites at the file it keeps (`SymphonyElixir.QaAgent`).
+  """
   @spec attach_file(context(), Path.t(), String.t() | nil, keyword()) :: {:ok, map()} | {:error, term()}
   def attach_file(context, local_path, title, opts) when is_binary(local_path) do
     with {:ok, issue_id} <- current_issue_id(context),
@@ -928,12 +934,20 @@ defmodule SymphonyElixir.AgentTools.Linear do
              @attachment_create_mutation,
              %{issueId: issue_id, url: asset_url, title: normalized_title || Path.basename(path)},
              opts
-           ) do
-      check_mutation_success(response, "attachmentCreate")
+           ),
+         {:ok, response} <- check_mutation_success(response, "attachmentCreate") do
+      report_upload(Keyword.get(opts, :qa_verdict_sink), path, [get_in(response, ["data", "attachmentCreate", "attachment", "url"]), asset_url])
+      {:ok, response}
     end
   end
 
   def attach_file(_context, _local_path, _title, _opts), do: {:error, :invalid_local_path}
+
+  defp report_upload(sink, path, urls) when is_pid(sink) do
+    send(sink, {:qa_upload, path, urls |> Enum.filter(&(is_binary(&1) and &1 != "")) |> Enum.uniq()})
+  end
+
+  defp report_upload(_sink, _path, _urls), do: :ok
 
   @doc """
   Creates a Backlog child of the current issue in the same team and project, assigned to the same

@@ -44,6 +44,30 @@ defmodule SymphonyElixir.QaAgent.VerdictTest do
       end
     end
 
+    test "keeps each finding's step, viewport and evidence beside the line it renders" do
+      findings = [
+        "One.",
+        " ",
+        %{
+          "step" => " Step 2 ",
+          "viewport" => "1400×900 pt",
+          "summary" => "The header is clipped",
+          "evidence" => ["qa-evidence/header.png", " ", "https://uploads.linear.app/a/b.png"]
+        }
+      ]
+
+      assert {:ok, %{findings: [one, two] = lines, finding_details: details}} =
+               Verdict.from_map(%{"verdict" => "fail", "findings" => findings})
+
+      assert two == "Step 2 at 1400×900 pt: The header is clipped. Evidence: qa-evidence/header.png, https://uploads.linear.app/a/b.png."
+      assert Enum.map(details, & &1.line) == lines
+
+      assert details == [
+               %{line: one, step: nil, viewport: nil, evidence: []},
+               %{line: two, step: "Step 2", viewport: "1400×900 pt", evidence: ["qa-evidence/header.png", "https://uploads.linear.app/a/b.png"]}
+             ]
+    end
+
     test "reads steps as a list or a single object, with a status in any case" do
       step = %{
         "name" => " Settings pane ",
@@ -92,6 +116,7 @@ defmodule SymphonyElixir.QaAgent.VerdictTest do
                summary: "",
                steps: [],
                findings: [],
+               finding_details: [],
                reason: "The project's server was not running.",
                needs_person: true,
                needs_dev_server: true,

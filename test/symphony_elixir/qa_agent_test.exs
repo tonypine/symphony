@@ -3,7 +3,8 @@ defmodule SymphonyElixir.QaAgentTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.AgentSandboxConfig
+  alias SymphonyElixir.{AgentSandboxConfig, Artifacts}
+  alias SymphonyElixir.Artifacts.Store
   alias SymphonyElixir.Codex.DynamicTool
   alias SymphonyElixir.LeftoverProcesses.Table
   alias SymphonyElixir.QaAgent
@@ -21,7 +22,8 @@ defmodule SymphonyElixir.QaAgentTest do
     :qa_test_turn_result,
     :qa_test_turn_results,
     :qa_test_verdict_calls,
-    :qa_test_dev_server_result
+    :qa_test_dev_server_result,
+    :qa_test_evidence
   ]
 
   defmodule FakeSession do
@@ -222,6 +224,52 @@ defmodule SymphonyElixir.QaAgentTest do
 
     {pid, 0} = System.cmd("sh", ["-c", script], cd: cwd)
     String.to_integer(String.trim(pid))
+  end
+
+  # Writes the evidence `:qa_test_evidence` names under the worktree, as a QA agent does, and
+  # uploads the files it lists with `linear_attach_file`, then answers like `FakeSession`.
+  defmodule EvidenceSession do
+    alias SymphonyElixir.Codex.DynamicTool
+
+    defdelegate start_session(workspace, opts), to: FakeSession
+    defdelegate stop_session(session), to: FakeSession
+
+    def run_turn(%{workspace: worktree} = session, prompt, issue, opts) do
+      %{files: files, uploads: uploads} = Application.fetch_env!(:symphony_elixir, :qa_test_evidence)
+
+      Enum.each(files, fn
+        {name, :remove} ->
+          File.rm_rf!(Path.join(worktree, name))
+
+        {name, {:symlink, target}} ->
+          File.mkdir_p!(Path.dirname(Path.join(worktree, name)))
+          File.ln_s!(target, Path.join(worktree, name))
+
+        {name, bytes} ->
+          File.mkdir_p!(Path.dirname(Path.join(worktree, name)))
+          File.write!(Path.join(worktree, name), bytes)
+      end)
+
+      Enum.each(uploads, fn name ->
+        upload_client = fn _url, _opts -> {:ok, %{status: 200}} end
+        tool_opts = [issue: issue, workspace: worktree, linear_client: &linear/3, upload_client: upload_client]
+        tool_opts = Keyword.take(opts, [:tool_scope, :qa_verdict_sink]) ++ tool_opts
+        response = DynamicTool.execute("linear_attach_file", %{"local_path" => name}, tool_opts)
+        true = response["success"]
+      end)
+
+      FakeSession.run_turn(session, prompt, issue, opts)
+    end
+
+    defp linear(query, variables, _opts) do
+      if query =~ "SymphonyAgentFileUpload" do
+        upload = %{"uploadUrl" => "https://upload.test", "assetUrl" => "https://assets.linear.test/#{variables.filename}", "headers" => []}
+        {:ok, %{"data" => %{"fileUpload" => %{"success" => true, "uploadFile" => upload}}}}
+      else
+        attachment = %{"id" => "attachment-1", "url" => "https://uploads.linear.app/qa/" <> Path.basename(variables.url)}
+        {:ok, %{"data" => %{"attachmentCreate" => %{"success" => true, "attachment" => attachment}}}}
+      end
+    end
   end
 
   defp base_tmp_dir(base) do
@@ -2823,6 +2871,162 @@ defmodule SymphonyElixir.QaAgentTest do
     fn args ->
       send(test_pid, {:npx, args})
       result
+    end
+  end
+
+  describe "the files a pass keeps" do
+    @png <<0x89, "PNG\r\n", 0x1A, "\n", 0, 0, 0, 13, "IHDR">>
+
+    setup do
+      :ok = RunStore.clear()
+      projects = Path.join(System.tmp_dir!(), "qa-agent-projects-#{System.unique_integer([:positive])}")
+      outside = Path.join(System.tmp_dir!(), "qa-agent-outside-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(outside)
+      Application.put_env(:symphony_elixir, :claude_projects_dir, projects)
+
+      on_exit(fn ->
+        Application.delete_env(:symphony_elixir, :claude_projects_dir)
+        File.rm_rf(projects)
+        File.rm_rf(outside)
+        File.rm_rf(SymphonyElixir.Paths.artifacts_dir())
+      end)
+
+      %{projects: projects, outside: outside}
+    end
+
+    defp png(n), do: @png <> <<n>>
+
+    defp transcript!(projects, worktree, session_id, contents) do
+      path = Path.join([projects, String.replace(worktree, ~r/[^A-Za-z0-9]/, "-"), session_id <> ".jsonl"])
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, contents)
+    end
+
+    test "a failing pass keeps its screenshots, uploads and transcript after the worktree is gone", %{projects: projects, outside: outside} do
+      write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{runtime: "claude"})
+      settings = Config.settings!()
+      worktree = QaAgent.worktree_path(settings, "default", "TP-900", @sha)
+      secret = Path.join(outside, "secret.png")
+      File.write!(secret, png(9))
+      transcript!(projects, worktree, "session-1", ~s({"type":"system"}\n))
+
+      Application.put_env(:symphony_elixir, :qa_test_evidence, %{
+        files: [
+          {"qa-evidence/home.png", png(1)},
+          {"qa-evidence/detail.png", png(2)},
+          {"qa-evidence/wide/row.png", png(3)},
+          {"qa-evidence/run.log", "exit: 0\n"},
+          {"qa-evidence/notes.md", "# Notes\n"},
+          {"qa-evidence/fake.png", "not a png"},
+          {"qa-evidence/data.bin", <<0, 1, 2>>},
+          {"qa-evidence/link.png", {:symlink, secret}},
+          {"shots/menu.png", png(4)}
+        ],
+        uploads: ["qa-evidence/wide/row.png", "shots/menu.png"]
+      })
+
+      Application.put_env(:symphony_elixir, :qa_test_messages, [{:session_started, "session-1"}])
+
+      findings = [
+        %{"step" => "Step 1", "summary" => "The home screen is blank", "evidence" => ["qa-evidence/home.png", "./qa-evidence/detail.png"]},
+        %{"step" => "Step 2", "summary" => "The row is clipped", "evidence" => ["https://uploads.linear.app/qa/row.png", "https://ci.test/run/1"]}
+      ]
+
+      Application.put_env(:symphony_elixir, :qa_test_verdict_calls, [
+        [%{"verdict" => "fail", "steps" => [%{"name" => "Step 1", "status" => "fail", "evidence" => ["qa-evidence/home.png"]}], "findings" => findings}]
+      ])
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{result: %{verdict: :fail, artifacts: artifacts, finding_details: [first, second]} = result}} =
+                   QaAgent.run(job(), settings, git: fake_git(), qa_agent_module: EvidenceSession, leftover_processes: [table: fn -> {:ok, []} end])
+
+          send(self(), {:result, result, artifacts, first, second})
+        end)
+
+      assert_received {:result, result, artifacts, first, second}
+      refute File.exists?(worktree)
+
+      entries = first.evidence ++ [hd(second.evidence)]
+      [home, detail, row] = for entry <- entries, do: QaAgent.evidence_artifact(artifacts, entry)
+      assert QaAgent.evidence_artifact(artifacts, "https://ci.test/run/1") == nil
+      assert QaAgent.evidence_artifact(artifacts, "qa-evidence/wide/row.png") == row
+      assert QaAgent.evidence_artifact(artifacts, Path.join(worktree, "qa-evidence/home.png")) == home
+      assert QaAgent.evidence_artifact(nil, "qa-evidence/home.png") == nil
+
+      for {id, bytes} <- [{home, png(1)}, {detail, png(2)}, {row, png(3)}] do
+        assert {:ok, %{kind: "screenshot", repo_key: "default", issue_id: "issue-qa", run_id: "qa-run-1"}} = Artifacts.get(id)
+        assert {:ok, path} = Artifacts.path(id)
+        assert File.read!(path) == bytes
+      end
+
+      assert {:ok, %{projections: %{linear_url: "https://uploads.linear.app/qa/row.png"}, label: "qa-evidence/wide/row.png"}} = Artifacts.get(row)
+      assert QaAgent.evidence_artifact(artifacts, "https://assets.linear.test/row.png") == row
+
+      menu = QaAgent.evidence_artifact(artifacts, "https://uploads.linear.app/qa/menu.png")
+      assert {:ok, %{label: "shots/menu.png", projections: %{linear_url: "https://uploads.linear.app/qa/menu.png"}}} = Artifacts.get(menu)
+
+      kinds = for artifact <- Artifacts.list(issue_id: "issue-qa"), into: %{}, do: {artifact.label, artifact.kind}
+
+      assert kinds == %{
+               "qa-evidence/home.png" => "screenshot",
+               "qa-evidence/detail.png" => "screenshot",
+               "qa-evidence/wide/row.png" => "screenshot",
+               "qa-evidence/run.log" => "log",
+               "qa-evidence/notes.md" => "report",
+               "qa-evidence/fake.png" => "file",
+               "qa-evidence/data.bin" => "file",
+               "shots/menu.png" => "screenshot",
+               "QA session transcript" => "transcript"
+             }
+
+      assert {:ok, %{kind: "transcript"}} = Artifacts.get(artifacts.transcript)
+      refute Map.has_key?(artifacts.files, "qa-evidence/link.png")
+      refute Enum.any?(Artifacts.list(), &(&1.id == Store.id(png(9))))
+      assert log =~ "Could not keep the QA evidence file qa-evidence/link.png for TP-900"
+
+      report = Report.render(Map.merge(result, %{sha: @sha, target_state: "Rework"}))
+      assert report =~ "- **fail** Step 1 (evidence: qa-evidence/home.png (artifact `#{home}`))"
+    end
+
+    test "a pass with no Claude transcript, or one the store refuses, keeps no transcript", %{projects: projects} do
+      Application.put_env(:symphony_elixir, :qa_test_evidence, %{files: [], uploads: []})
+      Application.put_env(:symphony_elixir, :qa_test_messages, [{:session_started, "session-2"}])
+      run_opts = [git: fake_git(), qa_agent_module: EvidenceSession, leftover_processes: [table: fn -> {:ok, []} end]]
+
+      assert {:ok, %{result: %{artifacts: %{files: files, transcript: nil}}}} = QaAgent.run(job(), Config.settings!(), run_opts)
+      assert files == %{}
+
+      write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{runtime: "claude"})
+      settings = Config.settings!()
+      transcript!(projects, QaAgent.worktree_path(settings, "default", "TP-900", @sha), "session-2", "not json lines")
+
+      log = capture_log(fn -> assert {:ok, %{result: %{artifacts: %{transcript: nil}}}} = QaAgent.run(job(), settings, run_opts) end)
+      assert log =~ "Could not keep the QA session transcript for TP-900: :unsupported_mime"
+    end
+
+    test "a pass that removed its evidence folder keeps nothing from it" do
+      Application.put_env(:symphony_elixir, :qa_test_evidence, %{files: [{"qa-evidence", :remove}], uploads: []})
+
+      assert {:ok, %{result: %{artifacts: %{files: files}}}} =
+               QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: EvidenceSession, leftover_processes: [table: fn -> {:ok, []} end])
+
+      assert files == %{}
+    end
+
+    test "a job with no repo key keeps nothing, and a pass that errors drops the uploads it reported" do
+      Application.put_env(:symphony_elixir, :qa_test_evidence, %{files: [{"qa-evidence/home.png", png(1)}], uploads: ["qa-evidence/home.png"]})
+      run_opts = [git: fake_git(), qa_agent_module: EvidenceSession, leftover_processes: [table: fn -> {:ok, []} end]]
+
+      assert {:ok, %{result: result} = run} = QaAgent.run(job(%{repo_key: nil}), Config.settings!(), run_opts)
+      refute Map.has_key?(result, :artifacts)
+      refute Map.has_key?(run, :session_id)
+      refute_received {:qa_upload, _path, _urls}
+
+      Application.put_env(:symphony_elixir, :qa_test_turn_result, {:error, :turn_timeout})
+      assert {:error, {:qa_agent_failed, :turn_timeout}, _tokens} = QaAgent.run(job(), Config.settings!(), run_opts)
+      refute_received {:qa_upload, _path, _urls}
+      assert Artifacts.list() == []
     end
   end
 

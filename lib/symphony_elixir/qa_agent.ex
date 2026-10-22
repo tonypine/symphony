@@ -61,16 +61,27 @@ defmodule SymphonyElixir.QaAgent do
   the agent left running under the
   worktree or that folder, even detached ones, are stopped before both are removed (see
   `SymphonyElixir.LeftoverProcesses`).
+
+  Before the worktree is removed, the pass's files are copied into the artifact store
+  (`SymphonyElixir.Artifacts`) and named on its result (`:artifacts`): every regular file under
+  `qa-evidence/` (a `screenshot` for PNG and JPEG, else a `log`, `report` or `file`), each file the
+  agent uploaded with `linear_attach_file` (its Linear URL kept as the artifact's `linear_url`
+  projection), and a Claude session's transcript (`SymphonyElixir.Artifacts.Transcript`). A file the
+  store refuses (a symlink, a file outside `qa-evidence/`, one over the size cap) is skipped and
+  logged; keeping the files never changes the verdict. `evidence_artifact/2` reads which artifact an
+  evidence entry (a `qa-evidence/` path or a Linear URL) names.
   """
 
   require Logger
 
   alias SymphonyElixir.AgentSandboxConfig
-  alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, AgentTools, LeftoverProcesses, PromptSafety, QaDriver, ReviewAgent}
+  alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, AgentTools, Artifacts, LeftoverProcesses}
+  alias SymphonyElixir.Artifacts.Transcript
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Agent.Mcp.Server, as: McpServer
   alias SymphonyElixir.Decisions
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.{PathSafety, PromptSafety, QaDriver, ReviewAgent}
   alias SymphonyElixir.QaAgent.Design
   alias SymphonyElixir.QaAgent.PlaybookSettings
   alias SymphonyElixir.QaAgent.Verdict
@@ -82,6 +93,9 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.Workspace
 
   @evidence_dir "qa-evidence"
+  @screenshot_exts ~w(.png .jpg .jpeg)
+  @log_exts ~w(.log .txt)
+  @report_exts ~w(.md .html .json)
   @worktree_dir ".qa"
   @tmp_dir_prefix "symphony-qa-"
   @token_keys [:uncached_input, :cached_input, :cache_creation_input, :output, :total]
@@ -114,6 +128,8 @@ defmodule SymphonyElixir.QaAgent do
           required(:summary) => String.t(),
           required(:steps) => [step()],
           required(:findings) => [String.t()],
+          optional(:finding_details) => [Verdict.finding_detail()],
+          optional(:artifacts) => artifacts(),
           optional(:reason) => String.t(),
           optional(:needs_person) => true,
           optional(:covered_by) => String.t(),
@@ -146,6 +162,13 @@ defmodule SymphonyElixir.QaAgent do
         }
   @type run_result :: %{result: result(), tokens: map()}
 
+  @typedoc """
+  The files a pass kept (`SymphonyElixir.Artifacts`): `files` maps each evidence entry that names a
+  kept file (its `qa-evidence/` path, relative to the worktree or absolute, and each Linear URL it
+  was uploaded under) to its artifact id; `transcript` is the session transcript's id.
+  """
+  @type artifacts :: %{files: %{String.t() => String.t()}, transcript: String.t() | nil}
+
   @doc """
   Runs one QA pass. Returns the parsed verdict and the session's token usage, or an
   error with the tokens spent before it. Runtime errors (no worktree, agent crash,
@@ -166,7 +189,9 @@ defmodule SymphonyElixir.QaAgent do
             tmp_dirs = tmp_dirs(worktree, Keyword.get_lazy(opts, :tmp_bases, &AgentTmpDir.default_bases/0))
 
             try do
-              run_with_tmp_dir(job, worktree, tmp_dirs, settings, opts)
+              job
+              |> run_with_tmp_dir(worktree, tmp_dirs, settings, opts)
+              |> keep_artifacts(job, worktree, settings)
             after
               stop_leftover_processes(job, [worktree | tmp_dirs], opts)
               Enum.each(tmp_dirs, &File.rm_rf/1)
@@ -178,6 +203,19 @@ defmodule SymphonyElixir.QaAgent do
         end
     end
   end
+
+  @doc """
+  The artifact id `entry`, an evidence entry of a step or finding, names in a pass's `artifacts`:
+  a `qa-evidence/` path the pass kept or a Linear URL of a file it uploaded; nil for anything else
+  (a CI run's URL).
+  """
+  @spec evidence_artifact(artifacts() | nil, term()) :: String.t() | nil
+  def evidence_artifact(%{files: files}, entry) when is_binary(entry) do
+    entry = String.trim(entry)
+    Map.get(files, entry) || Map.get(files, String.replace_prefix(entry, "./", ""))
+  end
+
+  def evidence_artifact(_artifacts, _entry), do: nil
 
   @doc "The worktree path a QA pass for `identifier` at `sha` uses."
   @spec worktree_path(Schema.t(), String.t() | nil, String.t() | nil, String.t()) :: Path.t()
@@ -1255,14 +1293,15 @@ defmodule SymphonyElixir.QaAgent do
   defp missing_verdict_error({:agent_exited, reason}), do: {:qa_agent_failed, reason}
 
   defp run_tracked_pass(agent_module, job, worktree, qa_settings, prompt, opts, spent) do
-    {:ok, tracker} = Agent.start_link(fn -> %{tokens: empty_tokens(), messages: []} end)
+    {:ok, tracker} = Agent.start_link(fn -> %{tokens: empty_tokens(), messages: [], session_id: nil} end)
 
     try do
       result = run_session(agent_module, job, worktree, qa_settings, prompt, {tracker, spent}, opts)
-      tokens = add_tokens(spent, Agent.get(tracker, & &1.tokens))
+      %{tokens: session_tokens, session_id: session_id} = Agent.get(tracker, & &1)
+      tokens = add_tokens(spent, session_tokens)
 
       case result do
-        {:ok, parsed} -> {:ok, %{result: parsed, tokens: tokens}}
+        {:ok, parsed} -> {:ok, %{result: parsed, tokens: tokens, session_id: session_id}}
         {:error, reason} -> {:error, reason, tokens}
       end
     after
@@ -1429,7 +1468,8 @@ defmodule SymphonyElixir.QaAgent do
       tokens =
         Agent.get_and_update(tracker, fn state ->
           tokens = merge_usage(state.tokens, usage)
-          {tokens, %{state | tokens: tokens, messages: [message | state.messages]}}
+          session_id = started_session(message) || state.session_id
+          {tokens, %{state | tokens: tokens, messages: [message | state.messages], session_id: session_id}}
         end)
 
       if is_function(forward, 1), do: forward.(message)
@@ -1443,6 +1483,9 @@ defmodule SymphonyElixir.QaAgent do
       :ok
     end
   end
+
+  defp started_session({:session_started, session_id}) when is_binary(session_id), do: session_id
+  defp started_session(_message), do: nil
 
   @doc false
   @spec merge_usage(map(), map() | nil) :: map()
@@ -1657,6 +1700,147 @@ defmodule SymphonyElixir.QaAgent do
       {_output, 0} -> :ok
     end
   end
+
+  # The pass's files, kept before its worktree and temp folders are removed and put on its result.
+  # The uploads `linear_attach_file` reported are drained whatever the outcome, so none reaches a
+  # later pass in this process. A job without a repo key has no ticket to keep them for.
+  defp keep_artifacts(outcome, job, worktree, settings) do
+    uploads = drain_uploads([])
+
+    case outcome do
+      {:ok, %{result: result} = run} ->
+        {session_id, run} = Map.pop(run, :session_id)
+
+        case Map.get(job, :repo_key) do
+          repo_key when is_binary(repo_key) and repo_key != "" ->
+            {:ok, %{run | result: Map.put(result, :artifacts, ingest_artifacts(job, repo_key, worktree, uploads, session_id, settings))}}
+
+          _none ->
+            {:ok, run}
+        end
+
+      error ->
+        error
+    end
+  end
+
+  defp drain_uploads(acc) do
+    receive do
+      {:qa_upload, path, urls} -> drain_uploads([{path, urls} | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
+
+  # The walk starts from the worktree's resolved path, so each kept file's path is the one
+  # `linear_attach_file` reports for it.
+  defp ingest_artifacts(job, repo_key, worktree, uploads, session_id, settings) do
+    meta = %{repo_key: repo_key, issue_id: job.issue.id, run_id: Map.get(job, :run_id)}
+    {:ok, root} = PathSafety.canonicalize(worktree)
+    evidence_dir = Path.join(root, @evidence_dir)
+    where = %{root: root, worktree: worktree, meta: meta, identifier: job.issue.identifier}
+
+    kept =
+      evidence_dir
+      |> evidence_files()
+      |> Enum.flat_map(&keep_file(&1, [evidence_dir], where))
+      |> keep_uploads(uploads, where)
+
+    %{
+      files: kept |> Enum.flat_map(fn file -> Enum.map(file.keys, &{&1, file.id}) end) |> Map.new(),
+      transcript: keep_transcript(worktree, session_id, settings, where)
+    }
+  end
+
+  # Every entry under `dir` but its folders, which are walked; a symlink is never followed and is
+  # left to the store, which refuses it.
+  defp evidence_files(dir) do
+    case File.ls(dir) do
+      {:ok, names} -> names |> Enum.sort() |> Enum.flat_map(&evidence_entry(Path.join(dir, &1)))
+      {:error, _reason} -> []
+    end
+  end
+
+  defp evidence_entry(path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :directory}} -> evidence_files(path)
+      _file -> [path]
+    end
+  end
+
+  # A kept file is named by its path relative to the worktree and by its absolute path, resolved or
+  # as the worktree was given.
+  defp keep_file(path, roots, where) do
+    relative = Path.relative_to(path, where.root)
+
+    case ingest_file(path, Map.merge(where.meta, %{label: relative, kind: file_kind(path)}), roots) do
+      {:ok, id} ->
+        [%{id: id, path: path, keys: Enum.uniq([relative, path, Path.join(where.worktree, relative)])}]
+
+      error ->
+        warn_unless_ok(error, "the QA evidence file #{relative}", where)
+        []
+    end
+  end
+
+  # A `.png` or `.jpg` that is neither is kept as a plain `file`.
+  defp ingest_file(path, meta, roots) do
+    case Artifacts.ingest(path, meta, roots: roots) do
+      {:ok, %{id: id}} -> {:ok, id}
+      {:error, :unsupported_mime} when meta.kind == "screenshot" -> ingest_file(path, %{meta | kind: "file"}, roots)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp file_kind(path) do
+    ext = path |> Path.extname() |> String.downcase()
+
+    cond do
+      ext in @screenshot_exts -> "screenshot"
+      ext in @log_exts -> "log"
+      ext in @report_exts -> "report"
+      true -> "file"
+    end
+  end
+
+  # An uploaded file is the evidence file of its path, or, uploaded from elsewhere in the worktree,
+  # kept on its own; its URLs then name it, and the first is its `linear_url` projection.
+  defp keep_uploads(kept, uploads, where) do
+    Enum.reduce(uploads, kept, fn {path, urls}, kept ->
+      case Enum.split_with(kept, &(&1.path == path)) do
+        {[file], rest} -> [project(file, urls, where) | rest]
+        {[], _none} -> Enum.map(keep_file(path, [where.root], where), &project(&1, urls, where)) ++ kept
+      end
+    end)
+  end
+
+  defp project(file, urls, where) do
+    for url <- Enum.take(urls, 1) do
+      file.id |> Artifacts.put_projection(:linear_url, url) |> warn_unless_ok("the Linear URL of artifact #{file.id}", where)
+    end
+
+    %{file | keys: Enum.uniq(file.keys ++ urls)}
+  end
+
+  defp keep_transcript(worktree, session_id, settings, where) do
+    runtime = if qa_settings(settings).agent.kind == "claude", do: :claude, else: :codex
+    meta = Map.merge(where.meta, %{kind: "transcript", label: "QA session transcript"})
+
+    with {:ok, path} <- Transcript.locate(runtime, worktree, session_id, nil),
+         {:ok, %{id: id}} <- Artifacts.ingest(path, meta, roots: [Transcript.root(:claude)]) do
+      id
+    else
+      :none ->
+        nil
+
+      error ->
+        warn_unless_ok(error, "the QA session transcript", where)
+        nil
+    end
+  end
+
+  defp warn_unless_ok({:ok, _value}, _what, _where), do: :ok
+  defp warn_unless_ok({:error, reason}, what, where), do: Logger.warning("Could not keep #{what} for #{where.identifier}: #{inspect(reason)}")
 
   # The add and the remove run under the per-repo fetch lock: they write the
   # `.git/worktrees` the workspace shares with the source checkout and every
