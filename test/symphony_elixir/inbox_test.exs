@@ -200,12 +200,17 @@ defmodule SymphonyElixir.InboxTest do
               comment("brief", @brief, "2026-10-01T09:59:00Z"),
               comment("q2", second, "2026-10-01T09:58:00Z"),
               comment("q1", request_body(), "2026-10-01T09:57:00Z"),
-              comment("steps", steps_only, "2026-10-01T09:56:00Z")
+              comment("steps", steps_only, "2026-10-01T09:56:00Z"),
+              %{"id" => "q0", "body" => second}
             ]
           }
         })
 
-      assert %{kind: :plan, review: %{brief: %{format: "parsed"}, decisions: [first, card]} = review} = Item.from_node(plan, "shop", %Schema{}, lookups())
+      assert %{kind: :plan, review: %{brief: %{format: "parsed"}, decisions: [undated, first, card]} = review} =
+               Item.from_node(plan, "shop", %Schema{}, lookups())
+
+      # A request read without its posting time sorts first.
+      assert %{comment_id: "q0"} = undated
       refute Map.has_key?(review.brief, :decisions)
 
       assert %{

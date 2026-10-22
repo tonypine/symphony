@@ -147,9 +147,12 @@ defmodule SymphonyElixir.Inbox.Item do
     node
     |> Collector.open_requests(settings)
     |> Enum.filter(fn {_comment_id, request} -> request.options != [] end)
-    |> Enum.sort_by(fn {_comment_id, request} -> request.created_at && DateTime.to_unix(request.created_at, :microsecond) end)
+    |> Enum.sort_by(&posted_at/1)
     |> Enum.map(fn {comment_id, request} -> request_review(comment_id, request) end)
   end
+
+  defp posted_at({_comment_id, %{created_at: %DateTime{} = at}}), do: DateTime.to_unix(at, :microsecond)
+  defp posted_at(_request), do: 0
 
   @doc "A rendered request option (`**Label** (recommended): effect`) as its label, effect and whether it is recommended."
   @spec option(String.t()) :: %{label: String.t(), effect: String.t() | nil, recommended: boolean()}

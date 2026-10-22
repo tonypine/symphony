@@ -20,8 +20,9 @@ defmodule SymphonyElixir.NeedsDecisionHold do
 
   require Logger
 
-  alias SymphonyElixir.{Config, DecisionRequest, Decisions, Handoff, Hold, MergeConfirmation, TicketSignals, TransitionGuard}
+  alias SymphonyElixir.{Config, DecisionRequest, Decisions, Handoff, Hold}
   alias SymphonyElixir.HumanActions.{Collector, Request}
+  alias SymphonyElixir.{MergeConfirmation, TicketSignals, TransitionGuard}
 
   @typedoc "What the ticket's open decision requests call for: set the hold, clear it, or leave it."
   @type action :: {:set, map()} | :clear | :none

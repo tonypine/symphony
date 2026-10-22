@@ -104,7 +104,11 @@ defmodule SymphonyElixir.DirectorMoves do
           | :backlog
           | :unblock
           | :decide
-  @type pick :: %{required(:question) => String.t(), required(:answer) => String.t(), optional(:request_comment_id) => String.t() | nil}
+  @type pick :: %{
+          required(:question) => String.t(),
+          required(:answer) => String.t(),
+          optional(:request_comment_id) => String.t() | nil
+        }
   @type input :: %{
           optional(:reason) => String.t() | nil,
           optional(:note) => String.t() | nil,

@@ -914,7 +914,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert decision.title == "QA could not finish its check of TP-816"
       assert decision.question == "QA ran TP-816 (Land the QA state) 2 times on the same change without a pass or a fail. How should it continue?"
       assert decision.why =~ "The last run ended with: The app cannot be pointed at a fake update list."
-      assert [%{label: "Run QA again", recommended: true}, %{label: "Send it back to Rework"}, %{label: "Merge without a QA verdict", effect: merge}] = decision.options
+      assert [%{label: "Run QA again", recommended: true}, %{label: "Send it back to Rework"}, %{label: "Merge without a QA result", effect: merge}] = decision.options
       assert merge =~ "you move TP-816 to Merging"
 
       assert_received {:memory_tracker_comment, @issue_id, _retrying_report}

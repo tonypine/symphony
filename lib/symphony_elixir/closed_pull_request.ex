@@ -24,9 +24,9 @@ defmodule SymphonyElixir.ClosedPullRequest do
 
   require Logger
 
+  alias SymphonyElixir.{DecisionRequest, TicketPullRequest}
   alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.{DecisionRequest, TicketPullRequest}
 
   @merging_state "Merging"
 

@@ -27,10 +27,6 @@ defmodule SymphonyElixir.DecisionRequest do
   @option_count 2..4
   @max_tradeoffs 3
 
-  @doc "The longest title a request may have, in characters."
-  @spec title_max_length() :: pos_integer()
-  def title_max_length, do: @title_max_length
-
   @doc "How many options a request offers: two to four."
   @spec option_count() :: Range.t()
   def option_count, do: @option_count

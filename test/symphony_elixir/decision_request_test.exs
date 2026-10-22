@@ -62,6 +62,7 @@ defmodule SymphonyElixir.DecisionRequestTest do
 
     test "refuses each part of the standard a request misses, naming the field" do
       option = fn attrs -> Map.merge(%{label: "Keep it", effect: "Nothing changes."}, attrs) end
+      four = List.duplicate(%{kind: "good", text: "x"}, 4)
       tradeoffs = "Each option's `tradeoffs` lists at most 3, each with a `kind` (good, cost, risk) and a non-blank `text`."
       options = "`decision.options` must list 2 to 4 options, each with a `label` and an `effect`; with no real choice to make, there is nothing to ask a person."
 
@@ -76,7 +77,7 @@ defmodule SymphonyElixir.DecisionRequestTest do
             {%{options: [option.(%{recommended: true}), option.(%{effect: " "})]}, "Each of `decision.options` needs a non-blank `label` and `effect`."},
             {%{options: [option.(%{}), option.(%{})]}, "Exactly one of `decision.options` must be `recommended`."},
             {%{options: [option.(%{recommended: true, tradeoffs: "cheap"}), option.(%{})]}, tradeoffs},
-            {%{options: [option.(%{recommended: true, tradeoffs: List.duplicate(%{kind: "good", text: "x"}, 4)}), option.(%{})]}, tradeoffs},
+            {%{options: [option.(%{recommended: true, tradeoffs: four}), option.(%{})]}, tradeoffs},
             {%{options: [option.(%{recommended: true, tradeoffs: [%{kind: "nice", text: "x"}]}), option.(%{})]}, tradeoffs},
             {%{options: [option.(%{recommended: true, tradeoffs: ["cheap"]}), option.(%{})]}, tradeoffs},
             {%{if_unanswered: nil}, "`if_unanswered` must say what waits or repeats until someone answers."},

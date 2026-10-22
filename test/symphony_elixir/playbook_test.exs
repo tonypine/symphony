@@ -265,6 +265,7 @@ defmodule SymphonyElixir.PlaybookTest do
                "list every sub-ticket with its identifier and one line on what it delivers, " <>
                "and link each request the plan run raised for a choice it leaves open under `Decisions needed`, so the person reviews everything at once. " <>
                "The brief links the requests and never restates them"
+
     refute body =~ "- Options: <A>; <B>"
 
     assert flat =~ "A PR's brief links the PR and says what to check"

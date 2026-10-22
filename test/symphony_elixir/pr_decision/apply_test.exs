@@ -958,6 +958,16 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       capture_log(fn -> assert %{outcome: {:error, :forbidden}} = Apply.apply(action, put_back) end)
     end
 
+    test "a base branch whose name reads as code is asked as another branch (R7)" do
+      action = action("R7", :decision, args: %{question: "q", options: []}, owner: :person)
+      read = read(base_ref: "release/2.0", base_branch: "main")
+
+      assert %{outcome: :applied} = Apply.apply(action, ctx(:qa, read: read, facts: %{base: :changed}))
+      assert_received {:comment, @issue_id, "## Decision needed: PR #7 of TP-7 merges into another branch, not main" <> request}
+      assert request =~ "PR #7 of TP-7 (Add it) merges into another branch, not into main"
+      refute request =~ "release/2.0"
+    end
+
     test "base_answer/3 reads a person's answer to R7's question from the recorded decisions" do
       issue = %Issue{id: @issue_id, identifier: "TP-7"}
       read = read(base_ref: "release", base_branch: "main")
