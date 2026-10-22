@@ -16,6 +16,9 @@ defmodule SymphonyElixir.PromptBuilder do
   }
 
   alias SymphonyElixir.PathUnlock
+  alias SymphonyElixir.TicketEvents.Brief
+
+  require Logger
 
   @render_opts [
     strict_variables: true,
@@ -121,6 +124,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_pr_conflict(pr_conflict)
     |> append_open_pr_overlap(Keyword.get(opts, :open_pr_overlap))
     |> append_ticket_state(Keyword.get(opts, :ticket_state))
+    |> append_ticket_ledger(opts)
     |> append_decisions(Keyword.get(opts, :decisions))
     |> append_path_unlocks(Keyword.get(opts, :path_unlocks, []))
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
@@ -186,6 +190,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_pr_conflict(pr_conflict)
     |> append_open_pr_overlap(Keyword.get(opts, :open_pr_overlap))
     |> append_ticket_state(Keyword.get(opts, :ticket_state))
+    |> append_ticket_ledger(opts)
     |> append_decisions(Keyword.get(opts, :decisions))
     |> append_path_unlocks(Keyword.get(opts, :path_unlocks, []))
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
@@ -673,7 +678,7 @@ defmodule SymphonyElixir.PromptBuilder do
     if ticket_state_empty?(state) do
       nil
     else
-      render_ticket_state(state)
+      render_ticket_state(state, not Config.prompt_brief_enabled?())
     end
   end
 
@@ -685,15 +690,75 @@ defmodule SymphonyElixir.PromptBuilder do
     state.phase == nil and state.holds == [] and state.ci_states == [] and state.signals == []
   end
 
-  defp render_ticket_state(state) do
+  # With the ticket's history summary on, the summary holds the ticket's events, so the signals
+  # are left out.
+  defp render_ticket_state(state, signals?) do
     [
       "Ticket state:",
       "",
       "- Phase: #{blank_fallback(state.phase, "unknown")}",
       "- Holds: #{ticket_state_holds(state.holds)}",
-      "- CI: #{ticket_state_ci(state.ci_states)}",
-      "Recent signals:",
-      PromptSafety.linear_block(ticket_state_signal_lines(state.signals), "ticket_state", @ticket_state_limit)
+      "- CI: #{ticket_state_ci(state.ci_states)}"
+    ]
+    |> Kernel.++(ticket_state_signals(state.signals, signals?))
+    |> Enum.join("\n")
+  end
+
+  defp ticket_state_signals(signals, true) do
+    ["Recent signals:", PromptSafety.linear_block(ticket_state_signal_lines(signals), "ticket_state", @ticket_state_limit)]
+  end
+
+  defp ticket_state_signals(_signals, false), do: []
+
+  # The summary of the ticket's history (`Brief`), after the ticket state of a prompt that has one,
+  # when `ledger.prompt_brief_enabled` is on. `:ticket_ledger` passes a summary already built (the
+  # workflow preview's sample), else it is read from the store. It carries agent and person text, so
+  # it is wrapped as untrusted input, and it is never cut: over `ledger.prompt_brief_max_tokens` it
+  # is still rendered whole, and a warning is logged.
+  defp append_ticket_ledger(prompt, opts) do
+    ticket_state = Keyword.get(opts, :ticket_state)
+
+    if is_map(ticket_state) and Config.prompt_brief_enabled?() do
+      state = TicketState.normalize(ticket_state)
+
+      case ticket_ledger(state, opts) do
+        {:ok, brief} ->
+          warn_if_over_limit(brief, state)
+          prompt <> "\n\n" <> render_ticket_ledger(brief)
+
+        {:error, reason} ->
+          Logger.warning("Could not read the ticket's history summary #{ticket_context(state)}: #{inspect(reason)}")
+          prompt
+      end
+    else
+      prompt
+    end
+  end
+
+  defp ticket_ledger(state, opts) do
+    case Keyword.fetch(opts, :ticket_ledger) do
+      {:ok, brief} -> {:ok, brief}
+      :error -> Brief.render(state.repo_key, state.issue_id)
+    end
+  end
+
+  defp warn_if_over_limit(%{tokens: tokens}, state) do
+    limit = Config.prompt_brief_max_tokens()
+
+    if tokens > limit do
+      Logger.warning("Ticket history summary over ledger.prompt_brief_max_tokens #{ticket_context(state)} tokens=#{tokens} limit=#{limit}; rendered whole")
+    end
+  end
+
+  defp ticket_context(state), do: "issue_id=#{state.issue_id} issue_identifier=#{state.issue_identifier}"
+
+  # `PromptSafety.linear_block/3` cuts a text over its limit, and its escaping can lengthen a text:
+  # an `&` becomes five characters, a model control token a 29-character marker. Eight characters
+  # per byte of the summary is more than any of that, so the summary is never cut.
+  defp render_ticket_ledger(%{text: text}) do
+    [
+      "Ticket history (every decision, open finding and note in full; earlier runs one line each, the latest run in full):",
+      PromptSafety.linear_block(text, "ticket_ledger", max(byte_size(text), 1) * 8)
     ]
     |> Enum.join("\n")
   end

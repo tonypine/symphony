@@ -126,6 +126,10 @@ final class SettingsViewModel: ObservableObject {
     /// finished ticket's artifact files are kept, and the largest file Symphony stores, in MB.
     @Published var artifactRetentionDays = LedgerSettings.defaultRetentionDays
     @Published var artifactMaxMegabytes = LedgerSettings.megabytes(LedgerSettings.defaultMaxBytes)
+    /// `ledger.prompt_brief_enabled` and `ledger.prompt_brief_max_tokens`: whether agents get the summary of the
+    /// ticket's history, and the size in tokens over which Symphony warns about one (it still gives it whole).
+    @Published var promptBriefEnabled = LedgerSettings.defaultBriefEnabled
+    @Published var promptBriefMaxTokens = LedgerSettings.defaultBriefMaxTokens
     /// Why `symphony check` rejected the changed ledger settings, shown in their section.
     @Published private(set) var ledgerError: String?
     /// `auto_review.playbooks.macos_app.dev_server`, `dev_server_port` and `launch_env` in the configured
@@ -161,7 +165,7 @@ final class SettingsViewModel: ObservableObject {
     /// stepper moved is written.
     private var loadedDispatchLoopLimits: DispatchLoopLimits?
 
-    /// The ledger settings read from symphony.yml, or nil when they couldn't be read. Only a setting whose stepper
+    /// The ledger settings read from symphony.yml, or nil when they couldn't be read. Only a setting whose control
     /// moved is written.
     private var loadedLedgerSettings: LedgerSettings?
 
@@ -437,7 +441,7 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
-    /// The ledger steppers are off until a symphony.yml has been read, and while Save checks it.
+    /// The ledger controls are off until a symphony.yml has been read, and while Save checks it.
     var canEditLedger: Bool { loadedLedgerSettings != nil && !isSaving }
 
     private func loadLedgerSettings() {
@@ -447,6 +451,8 @@ final class SettingsViewModel: ObservableObject {
             let ledger = try SymphonyConfigFile(path: path).readLedgerSettings()
             artifactRetentionDays = LedgerSettings.steppedDays(ledger.retentionDays)
             artifactMaxMegabytes = LedgerSettings.megabytes(ledger.maxBytes)
+            promptBriefEnabled = ledger.briefEnabled
+            promptBriefMaxTokens = ledger.briefMaxTokens
             loadedLedgerSettings = ledger
         } catch {
             configFileError = "Could not read the ledger settings from symphony.yml: \(error.localizedDescription)"
@@ -611,7 +617,9 @@ final class SettingsViewModel: ObservableObject {
         )
         let oldLoopLimits = loadedDispatchLoopLimits.flatMap { $0 != loopLimits ? $0 : nil }
         ledgerError = nil
-        let ledger = loadedLedgerSettings?.setting(retentionDays: artifactRetentionDays, maxMegabytes: artifactMaxMegabytes)
+        var ledger = loadedLedgerSettings?.setting(retentionDays: artifactRetentionDays, maxMegabytes: artifactMaxMegabytes)
+        ledger?.briefEnabled = promptBriefEnabled
+        ledger?.briefMaxTokens = promptBriefMaxTokens
         let oldLedger = loadedLedgerSettings.flatMap { $0 != ledger ? $0 : nil }
         macAppQAError = nil
         let qaPlaybook = macAppQA.trimmed()

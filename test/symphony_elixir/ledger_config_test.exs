@@ -64,5 +64,42 @@ defmodule SymphonyElixir.LedgerConfigTest do
 
     assert "ledger.artifact_retention_days" in keys
     assert "ledger.artifact_max_bytes" in keys
+    assert "ledger.prompt_brief_enabled" in keys
+    assert "ledger.prompt_brief_max_tokens" in keys
+  end
+
+  test "gives agents the ticket's history summary, guarded at 50,000 tokens, when the section is missing" do
+    write_workflow_file!(Workflow.workflow_file_path())
+
+    assert %{prompt_brief_enabled: true, prompt_brief_max_tokens: 50_000} = Config.system!().ledger
+    assert Config.prompt_brief_enabled?()
+    assert Config.prompt_brief_max_tokens() == 50_000
+
+    assert {:ok, %{ledger: %{prompt_brief_enabled: true, prompt_brief_max_tokens: 50_000}}} =
+             SystemSchema.parse(Map.put(@base, "ledger", %{"prompt_brief_enabled" => nil, "prompt_brief_max_tokens" => nil}))
+  end
+
+  test "reads the summary settings on each call, so a change applies without a restart" do
+    write_workflow_file!(Workflow.workflow_file_path())
+    assert Config.prompt_brief_enabled?()
+
+    append_symphony_yml!("ledger:\n  prompt_brief_enabled: false\n  prompt_brief_max_tokens: 2000\n")
+
+    refute Config.prompt_brief_enabled?()
+    assert Config.prompt_brief_max_tokens() == 2_000
+  end
+
+  test "refuses a summary switch that isn't true or false and a limit that isn't a positive whole number, naming the key" do
+    for {key, value, error} <- [
+          {"prompt_brief_enabled", "sometimes", "is invalid"},
+          {"prompt_brief_enabled", 3, "is invalid"},
+          {"prompt_brief_max_tokens", 0, "must be greater than 0"},
+          {"prompt_brief_max_tokens", -50, "must be greater than 0"},
+          {"prompt_brief_max_tokens", 1.5, "is invalid"},
+          {"prompt_brief_max_tokens", "50k", "is invalid"}
+        ] do
+      assert {:error, {:invalid_symphony_config, message}} = SystemSchema.parse(Map.put(@base, "ledger", %{key => value}))
+      assert message == "ledger.#{key} #{error}"
+    end
   end
 end
