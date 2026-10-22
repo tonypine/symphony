@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.PromptBuilderTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Decisions, TicketEvents, TicketState, WorkflowPreview}
+  alias SymphonyElixir.{DecisionRequest, Decisions, TicketEvents, TicketState, WorkflowPreview}
   alias SymphonyElixir.TicketEvents.Brief
 
   test "prompt builder uses PR prompt branch for PR runs" do
@@ -1141,13 +1141,14 @@ defmodule SymphonyElixir.PromptBuilderTest do
       assert PromptBuilder.build_prompt(issue, ticket_state: record, ticket_ledger: brief) =~ "Symphony: from the caller"
     end
 
-    test "a summary over the limit is rendered whole, with one warning naming the ticket and its size", %{issue: issue, record: record, at: at} do
+    test "a summary over the limit is rendered whole, with one log line naming the ticket and its size", %{issue: issue, record: record, at: at} do
       ledger!("prompt_brief_max_tokens: 10")
       text = String.duplicate("long finding text ", 50)
       {:ok, _note} = TicketEvents.record("r", "i", "note", %{text: text}, at: at)
       tokens = Brief.render("r", "i") |> elem(1) |> Map.fetch!(:tokens)
 
-      log = capture_log(fn -> send(self(), {:prompt, PromptBuilder.build_prompt(issue, ticket_state: record)}) end)
+      build = fn -> send(self(), {:prompt, PromptBuilder.build_prompt(issue, ticket_state: record)}) end
+      log = capture_log([level: :info], build)
 
       assert_received {:prompt, prompt}
       assert prompt =~ String.trim(text)
@@ -1175,6 +1176,117 @@ defmodule SymphonyElixir.PromptBuilderTest do
 
       assert log =~ "Could not read the ticket's history summary issue_id= issue_identifier=: :invalid_issue_id"
     end
+  end
+
+  describe "the ticket summary's size limit" do
+    setup do
+      :ok = RunStore.clear()
+      write_workflow_file!(Workflow.workflow_file_path(), prompt: "Issue {{ issue.identifier }}")
+      ledger!("prompt_brief_max_tokens: 10")
+      {:ok, _note} = TicketEvents.record("r", "i", "note", %{text: String.duplicate("a long note ", 20)}, at: ~U[2026-10-22 09:00:00Z])
+
+      %{issue: %Issue{id: "i", identifier: "MT-SL", title: "Fix the `lib/foo.ex` crash", state: "In Progress", repo_key: "r"}}
+    end
+
+    test "a summary over the limit asks the Director how to go on, in plain words", %{issue: issue} do
+      assert {:ask, request} = PromptBuilder.ticket_ledger_gate(issue, [])
+      {:ok, brief} = Brief.render("r", "i")
+
+      assert request == PromptBuilder.summary_request(issue, brief, 10)
+      assert :ok = DecisionRequest.check(request)
+      assert request.title == "MT-SL's ticket summary is over its size limit"
+      assert request.question =~ "The summary of MT-SL (Fix the a file crash)'s history"
+      assert request.question =~ "How should MT-SL go on?"
+      assert request.why =~ "The summary has 0 decisions, 0 open findings, 1 note and 0 runs."
+      assert request.why =~ "It is about #{brief.tokens} tokens long, and its limit is 10 tokens."
+      assert request.why =~ "usually means something went wrong earlier on it"
+      assert request.if_unanswered == "MT-SL stays in In Progress and no agent works on it."
+      assert Enum.map(request.options, & &1.label) == ["Go on with the whole summary", "Cancel the ticket"]
+      assert Enum.at(request.options, 1).effect =~ "moves to Canceled"
+    end
+
+    test "a ticket with no identifier, title or state is still named in plain words" do
+      brief = %{text: "", tokens: 20, decisions: 1, open_findings: 1, notes: 2, runs: 1}
+      request = PromptBuilder.summary_request(%Issue{id: "i"}, brief, 10)
+
+      assert :ok = DecisionRequest.check(request)
+      assert request.title == "i's ticket summary is over its size limit"
+      assert request.question =~ "The summary of this ticket's history"
+      assert request.why =~ "1 decision, 1 open finding, 2 notes and 1 run."
+      assert request.if_unanswered == "This ticket stays and no agent works on it."
+    end
+
+    test "within the limit, with the summary off, or with no ledger to read, the run starts", %{issue: issue} do
+      assert PromptBuilder.ticket_ledger_gate(%{issue | repo_key: nil}, []) == :start
+      assert PromptBuilder.ticket_ledger_gate(%{issue | repo_key: nil}, repo_key: "r") |> elem(0) == :ask
+      assert PromptBuilder.ticket_ledger_gate(%{issue | id: nil}, []) == :start
+
+      write_workflow_file!(Workflow.workflow_file_path(), prompt: "Issue {{ issue.identifier }}")
+      ledger!("prompt_brief_max_tokens: 100000")
+      assert PromptBuilder.ticket_ledger_gate(issue, []) == :start
+
+      write_workflow_file!(Workflow.workflow_file_path(), prompt: "Issue {{ issue.identifier }}")
+      ledger!("prompt_brief_max_tokens: 10\n  prompt_brief_enabled: false")
+      assert PromptBuilder.ticket_ledger_gate(issue, []) == :start
+    end
+
+    test "while its request is open the run waits, and asks no second time", %{issue: issue} do
+      request!(issue, ~U[2026-10-22 10:00:00Z])
+
+      assert PromptBuilder.ticket_ledger_gate(issue, []) == :waiting
+    end
+
+    test "another ticket's request is not this ticket's", %{issue: issue} do
+      request!(%{issue | identifier: "MT-OTHER"}, ~U[2026-10-22 10:00:00Z])
+
+      assert {:ask, _request} = PromptBuilder.ticket_ledger_gate(issue, [])
+    end
+
+    test "once the Director chose to go on, every later run starts however much the summary grows", %{issue: issue} do
+      first = request!(issue, ~U[2026-10-22 10:00:00Z])
+      answer!(first, "Go on with the whole summary", ~U[2026-10-22 10:05:00Z])
+      second = request!(issue, ~U[2026-10-22 11:00:00Z])
+      answer!(second, "something else", ~U[2026-10-22 11:05:00Z])
+      {:ok, _note} = TicketEvents.record("r", "i", "note", %{text: String.duplicate("more ", 400)}, at: ~U[2026-10-22 12:00:00Z])
+
+      assert PromptBuilder.ticket_ledger_gate(issue, []) == :start
+    end
+
+    test "an answer picking the first option by its number goes on too", %{issue: issue} do
+      issue |> request!(~U[2026-10-22 10:00:00Z]) |> answer!("1", ~U[2026-10-22 10:05:00Z])
+
+      assert PromptBuilder.ticket_ledger_gate(issue, []) == :start
+    end
+
+    test "an answer in the Director's own words, or a withdrawal, asks again", %{issue: issue} do
+      issue |> request!(~U[2026-10-22 10:00:00Z]) |> answer!("Let me look at the findings first.", ~U[2026-10-22 10:05:00Z])
+      assert {:ask, _request} = PromptBuilder.ticket_ledger_gate(issue, [])
+
+      later = request!(issue, ~U[2026-10-22 11:00:00Z])
+      {:ok, _withdrawn} = TicketEvents.record("r", "i", "decision.withdrawn", %{title: later.payload.title, request: later.id}, at: ~U[2026-10-22 11:05:00Z])
+      assert {:ask, _request} = PromptBuilder.ticket_ledger_gate(issue, [])
+    end
+
+    test "Cancel cancels the ticket, unless a move was recorded since the answer", %{issue: issue} do
+      issue |> request!(~U[2026-10-22 10:00:00Z]) |> answer!("Cancel the ticket", ~U[2026-10-22 10:05:00Z])
+      {:ok, _earlier} = TicketEvents.record("r", "i", "phase.entered", %{to: "In Progress"}, at: ~U[2026-10-22 09:30:00Z])
+
+      assert PromptBuilder.ticket_ledger_gate(issue, []) == :cancel
+
+      {:ok, _moved} = TicketEvents.record("r", "i", "phase.entered", %{to: "Todo"}, at: ~U[2026-10-22 10:30:00Z])
+      assert {:ask, _request} = PromptBuilder.ticket_ledger_gate(issue, [])
+    end
+  end
+
+  defp request!(issue, at) do
+    request = PromptBuilder.summary_request(issue, %{tokens: 20, decisions: 0, open_findings: 0, notes: 1, runs: 0}, 10)
+    {:ok, event} = TicketEvents.record("r", "i", "decision.requested", %{title: request.title, question: request.question}, at: at)
+    event
+  end
+
+  defp answer!(request, answer, at) do
+    {:ok, _event} = TicketEvents.record("r", "i", "decision.recorded", %{answer: answer, request: request.id, key: "k-#{request.id}"}, actor: {:person, "Sam"}, at: at)
+    request
   end
 
   describe "the status map" do
