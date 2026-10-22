@@ -150,6 +150,20 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     dir |> Path.join("args") |> File.read!() |> String.split("\n", trim: true)
   end
 
+  # Waits for the relay started last to pass `secret`: a `gh` the action stopped may write its own
+  # arguments just before it is killed, after the test removed the file.
+  defp assert_relay_secret(dir, secret) do
+    assert Enum.find_value(1..300, fn _attempt -> relay_secret(dir) == secret || (Process.sleep(10) && nil) end),
+           "no relay started with the expected secret; the last one passed #{inspect(relay_secret(dir))}"
+  end
+
+  defp relay_secret(dir) do
+    case File.read(Path.join(dir, "args")) do
+      {:ok, args} -> args |> String.split("\n", trim: true) |> List.last()
+      {:error, _reason} -> nil
+    end
+  end
+
   # Sets up instant updates through `gh webhook forward` for `app` (on) and `lib` (no admin).
   defp set_up_forwarding(%{opts: opts, dir: dir}) do
     act("turn_on", %{"relay" => "gh_webhook_forward"}, opts)
@@ -187,6 +201,26 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     assert WebhookSetup.state_section(opts) == WebhookSetup.section(opts)
     assert WebhookSetup.state_section(Keyword.put(opts, :settings, fn -> raise ArgumentError, "no config" end)) == nil
     assert WebhookSetup.state_section(Keyword.put(opts, :repos, fn -> exit(:noproc) end)) == nil
+  end
+
+  # Every `/api/v1/state` poll carries the section; each settings read parses the configuration
+  # again, and each repositories read asks git for every repository's GitHub name.
+  test "the section reads the settings, the repositories, the port and the secret once", %{opts: opts} do
+    reads = start_supervised!({Agent, fn -> %{} end}, id: :reads)
+
+    counted =
+      for key <- [:settings, :repos, :port, :secret] do
+        read = Keyword.get(opts, key, &Config.settings!/0)
+
+        {key,
+         fn ->
+           Agent.update(reads, &Map.update(&1, key, 1, fn count -> count + 1 end))
+           read.()
+         end}
+      end
+
+    assert WebhookSetup.section(Keyword.merge(opts, counted)) == WebhookSetup.section(opts)
+    assert Agent.get(reads, & &1) == %{settings: 1, repos: 1, port: 1, secret: 1}
   end
 
   ## J1–J3: turn on through gh webhook forward
@@ -374,13 +408,13 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
 
     File.rm!(Path.join(dir, "args"))
     act("restart_relay", %{"repo" => "app"}, opts)
-    assert List.last(relay_args(dir)) == first
+    assert_relay_secret(dir, first)
 
     File.rm!(Path.join(dir, "args"))
     section = act("recreate_secret", %{}, opts)
     assert_received {:handed_off, second}
     assert second != first
-    assert List.last(relay_args(dir)) == second
+    assert_relay_secret(dir, second)
     assert %{status: "done"} = step(section, "repo:app")
     assert webhooks()["secret"] == "$SYMPHONY_GITHUB_WEBHOOK_SECRET"
 

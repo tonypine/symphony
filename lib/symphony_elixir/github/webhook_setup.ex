@@ -96,6 +96,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
   def section(opts) when is_list(opts), do: section(context(opts))
 
   def section(%{} = ctx) do
+    ctx = read_once(ctx)
     record = load(ctx)
     webhooks = ctx.settings.().github.webhooks
     steps = Enum.map(step_ids(ctx), &step_entry(&1, record, ctx))
@@ -131,6 +132,17 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
     error -> section_unavailable(Exception.message(error))
   catch
     kind, reason -> section_unavailable(Exception.format_banner(kind, reason))
+  end
+
+  # Every step, repository and relay entry asks for the settings and the repositories again, and
+  # each read parses symphony.yml and WORKFLOW.md: the section reads them, the port and the secret
+  # once. It rides on every `/api/v1/state` poll, which a dev server's health check gives 250 ms.
+  defp read_once(ctx) do
+    settings = ctx.settings.()
+    repos = ctx.repos.()
+    port = ctx.port.()
+    secret = ctx.secret.()
+    %{ctx | settings: fn -> settings end, repos: fn -> repos end, port: fn -> port end, secret: fn -> secret end}
   end
 
   defp section_unavailable(reason) do

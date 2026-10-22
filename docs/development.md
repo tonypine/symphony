@@ -155,8 +155,10 @@ runs them.
 
 The [`seatbelt` workflow](../.github/workflows/seatbelt.yml) runs the same command on the newest
 macOS runner image, on pull requests and pushes to `main` that change `lib/symphony_elixir/verification/`,
-`lib/symphony_elixir/agent_sandbox_config.ex`, `lib/symphony_elixir/http_server.ex`,
-`scripts/qa-dashboard-server.sh` or the tests themselves. It is not a required check.
+`lib/symphony_elixir/agent_sandbox_config.ex`, `lib/symphony_elixir/http_server.ex`, the
+dashboard scripts (`scripts/qa-dashboard-server.sh`, `scripts/qa-dashboard-build.sh`), the code
+that answers `GET /api/v1/state` (the e2e test's health check, which gives each request 250 ms) or
+the tests themselves. It is not a required check.
 
 The test tagged `:appkit_dialog` runs a minimal AppKit program under the agent profile, checks
 that it draws no window and that the Bash hook refuses to start it, and records whether it checks
