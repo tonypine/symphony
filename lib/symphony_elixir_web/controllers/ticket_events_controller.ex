@@ -3,31 +3,44 @@ defmodule SymphonyElixirWeb.TicketEventsController do
   The read-only feed of a ticket's events (`SymphonyElixir.TicketEvents`), the debug API through
   which the event stream is visible:
 
-      GET /api/v1/repos/:repo_key/tickets/:issue_identifier/events?since=&types=&run_id=&limit=
+      GET /api/v1/repos/:repo_key/tickets/:issue_identifier/events?since=&types=&run_id=&limit=&group=
 
   answers `{"events": [...], "next_since": iso8601}`: the events oldest first, each with its
-  summary, and the `at` of the last one returned, which the next page passes as `since` (exclusive).
-  A page never ends inside a group of events that share one `at`, so paging returns every event
-  once. `types` is a comma-separated list of catalog types (`SymphonyElixir.TicketEvents.Types`),
-  `run_id` keeps one run's events, and `limit` defaults to 50 and is capped at 200.
+  summary and its artifacts (`SymphonyElixirWeb.Presenter.ticket_events_json/3`), and the `at` of
+  the last one returned, which the next page passes as `since` (exclusive). A page never ends inside
+  a group of events that share one `at`, so paging returns every event once. `types` is a
+  comma-separated list of catalog types (`SymphonyElixir.TicketEvents.Types`), `run_id` keeps one
+  run's events, and `limit` defaults to 50 and is capped at 200.
+
+  `group=run` answers `{"timeline": [...], "next_since": iso8601}` instead: the same page grouped
+  by run and by parent (`SymphonyElixirWeb.Presenter.ticket_timeline_json/4`). Each run's header is
+  read from the ticket's whole history, so a page that holds a run's newest events answers the
+  run's header as it is now, and a run whose events span two pages shows on each with that page's
+  events; a client merges them by `run_id`.
 
   The identifier resolves through the ticket's record (`SymphonyElixir.TicketState`): a ticket
-  with none is 404. An unknown type, a `since` that is not an ISO 8601 timestamp or a `limit` that
-  is not a positive integer is 400. Like the other reads of `/api/v1`, it needs no token.
+  with none is 404. An unknown type, a `since` that is not an ISO 8601 timestamp, a `limit` that
+  is not a positive integer or a `group` other than `run` is 400. Like the other reads of
+  `/api/v1`, it needs no token.
   """
 
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
   alias SymphonyElixir.{RunStore, TicketEvents, TicketState}
-  alias SymphonyElixir.TicketEvents.{Event, Types}
+  alias SymphonyElixir.TicketEvents.Types
+  alias SymphonyElixirWeb.Presenter
+
+  # The events a run's header is read from.
+  @run_header_types ["run.started", "run.ended", "verdict.recorded"]
 
   @spec index(Conn.t(), map()) :: Conn.t()
   def index(conn, %{"repo_key" => repo_key, "issue_identifier" => issue_identifier} = params) do
     with {:ok, record} <- ticket(repo_key, issue_identifier),
          {:ok, opts} <- query_opts(params),
+         {:ok, group} <- group(params["group"]),
          events when is_list(events) <- TicketEvents.query(record.repo_key, record.issue_id, opts) do
-      json(conn, %{events: Enum.map(events, &event_json/1), next_since: next_since(events, opts[:since])})
+      json(conn, record |> page_json(events, group) |> Map.put(:next_since, next_since(events, opts[:since])))
     else
       # A store error that is neither raises, as any read of a store that failed does.
       {:error, :not_found} -> error_response(conn, 404, "ticket_not_found", "No ticket #{issue_identifier} in #{repo_key}")
@@ -91,27 +104,20 @@ defmodule SymphonyElixirWeb.TicketEventsController do
 
   defp limit(_value), do: {:error, {:invalid, "limit must be a positive integer"}}
 
+  defp group(value) when value in [nil, ""], do: {:ok, nil}
+  defp group("run"), do: {:ok, :run}
+  defp group(_value), do: {:error, {:invalid, "group must be run"}}
+
+  defp page_json(record, events, nil), do: %{events: Presenter.ticket_events_json(record.repo_key, record.issue_id, events)}
+
+  # A store error on the history read raises, as the page's own read does.
+  defp page_json(record, events, :run) do
+    history = RunStore.list_ticket_events(record.repo_key, record.issue_id, types: @run_header_types)
+    %{timeline: Presenter.ticket_timeline_json(record.repo_key, record.issue_id, events, history)}
+  end
+
   defp next_since([], since), do: since && DateTime.to_iso8601(since)
   defp next_since(events, _since), do: events |> List.last() |> Map.fetch!(:at) |> DateTime.to_iso8601()
-
-  defp event_json(%Event{} = event) do
-    %{
-      id: event.id,
-      seq: event.seq,
-      at: event.at && DateTime.to_iso8601(event.at),
-      type: event.type,
-      phase: event.phase,
-      actor: event.actor,
-      run_id: event.run_id,
-      head_sha: event.head_sha,
-      parent: event.parent,
-      supersedes: event.supersedes,
-      idempotency: event.idempotency,
-      payload: event.payload,
-      summary: event.summary,
-      artifacts: event.artifacts
-    }
-  end
 
   defp blank_to_nil(value) when is_binary(value), do: if(String.trim(value) == "", do: nil, else: value)
   defp blank_to_nil(_value), do: nil

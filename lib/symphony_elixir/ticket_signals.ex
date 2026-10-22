@@ -68,12 +68,15 @@ defmodule SymphonyElixir.TicketSignals do
   `details`, on the ticket's record, then its `verdict.recorded` event, in the kind's phase. No-ops
   when the ticket carries no repo key. Verdicts are never collapsed: two inconclusive verdicts on
   one head are two events, as the reviewer counts them.
+
+  `run_id:` in `opts` names the run that gave the verdict, the id its `run.started` event carries,
+  so the event sits inside that run. A verdict no run gave (one carried to a new head) names none.
   """
-  @spec record_verdict(String.t() | nil, String.t() | nil, String.t(), String.t() | nil, String.t(), map()) :: :ok
-  def record_verdict(repo_key, issue_id, kind, head_sha, outcome, details \\ %{}) do
+  @spec record_verdict(id, id, String.t(), id, String.t(), map(), keyword()) :: :ok when id: String.t() | nil
+  def record_verdict(repo_key, issue_id, kind, head_sha, outcome, details \\ %{}, opts \\ []) do
     if is_binary(repo_key) and is_binary(issue_id) do
       case RunStore.record_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome, details) do
-        :ok -> record_mapped(repo_key, issue_id, verdict_event(kind, outcome, head_sha))
+        :ok -> record_mapped(repo_key, issue_id, verdict_event(kind, outcome, head_sha, opts))
         error -> log_error(error, "record #{kind} verdict")
       end
     else
@@ -81,9 +84,12 @@ defmodule SymphonyElixir.TicketSignals do
     end
   end
 
-  @doc "The `verdict.recorded` event `record_verdict/6` records for a verdict of `kind` with `outcome` on `head_sha`."
-  @spec verdict_event(String.t(), String.t() | nil, String.t() | nil) :: mapping()
-  def verdict_event(kind, outcome, head_sha), do: verdict(kind, outcome, head_sha, nil)
+  @doc """
+  The `verdict.recorded` event `record_verdict/7` records for a verdict of `kind` with `outcome` on
+  `head_sha`, in the run `opts`' `run_id:` names, or in none.
+  """
+  @spec verdict_event(String.t(), String.t() | nil, String.t() | nil, keyword()) :: mapping()
+  def verdict_event(kind, outcome, head_sha, opts \\ []), do: verdict(kind, outcome, head_sha, nil, Keyword.get(opts, :run_id))
 
   @doc """
   The event a signal `name` with `details` maps to: its type, payload and `TicketEvents.record/5`
@@ -208,9 +214,9 @@ defmodule SymphonyElixir.TicketSignals do
     end
   end
 
-  defp verdict(kind, outcome, head, signal) do
+  defp verdict(kind, outcome, head, signal, run_id \\ nil) do
     payload = compact(%{kind: kind, outcome: outcome, head: head, signal: signal})
-    {"verdict.recorded", payload, compact_opts(phase: Map.get(@kind_phases, kind), head_sha: head)}
+    {"verdict.recorded", payload, compact_opts(phase: Map.get(@kind_phases, kind), head_sha: head, run_id: string(run_id))}
   end
 
   defp note(name, details) do

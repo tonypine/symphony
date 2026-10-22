@@ -1653,8 +1653,8 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert finding_1.summary.title == "QA found a defect at 1400×900 pt: Step 1"
       assert %{artifacts: [@row], payload: %{step: "step 2"} = second} = finding_2
       refute Map.has_key?(second, :evidence)
-      assert %{type: "verdict.recorded", payload: %{outcome: "fail"}} = verdict
-      assert %{type: "verdict.recorded"} = second_verdict
+      assert %{type: "verdict.recorded", run_id: "run-qa-1", actor: %{kind: :machine}, payload: %{outcome: "fail"}} = verdict
+      assert %{type: "verdict.recorded", run_id: "run-qa-1"} = second_verdict
       assert [%{outcome: "fail"}, %{outcome: "fail"}] = Enum.filter(verdicts(), &(&1.head_sha == head))
     end
 
@@ -1713,8 +1713,28 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert [
                %{type: "evidence", payload: %{caption: "Step 1: pass"}, artifacts: [@home], actor: %{kind: :agent, run_kind: "qa"}},
                %{type: "evidence", payload: %{caption: "QA session transcript"}, artifacts: [@transcript], idempotency: "evidence:run-qa-4:2"},
-               %{type: "verdict.recorded", payload: %{outcome: "pass"}}
+               %{type: "verdict.recorded", run_id: "run-qa-4", payload: %{outcome: "pass"}}
              ] = Enum.filter(events(), &(&1.type in ["evidence", "finding.recorded", "verdict.recorded"]))
+    end
+
+    test "a blocked verdict names the QA run that gave it" do
+      {workspace, _head} = git_workspace!()
+      agent_result(%{verdict: :blocked, summary: "No emulator.", steps: [], findings: [], reason: "the QA host failed", artifacts: artifacts()})
+
+      assert :ok = run(workspace, run_id: "run-qa-5")
+
+      assert [%{type: "evidence", run_id: "run-qa-5"}, %{type: "verdict.recorded", run_id: "run-qa-5", payload: %{outcome: "blocked"}}] =
+               Enum.filter(events(), &(&1.type in ["evidence", "verdict.recorded"]))
+    end
+
+    test "a verdict from a run given no id names the id its evidence carries" do
+      {workspace, head} = git_workspace!()
+      agent_result(%{verdict: :pass, summary: "Fine.", steps: [], findings: [], artifacts: artifacts()})
+
+      assert :ok = run(workspace, [])
+
+      run_id = "qa-TP-816-#{String.slice(head, 0, 12)}"
+      assert [%{type: "evidence", run_id: ^run_id}, %{type: "verdict.recorded", run_id: ^run_id}] = Enum.filter(events(), &(&1.type in ["evidence", "verdict.recorded"]))
     end
   end
 
@@ -1834,6 +1854,14 @@ defmodule SymphonyElixir.QaVerificationTest do
       :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "qa", "old-head", "pass")
       assert :ok = QaVerification.carry_verdict(@repo_key, @issue_id, nil)
       assert [%{head_sha: "old-head", outcome: "pass"} | _] = verdicts()
+    end
+
+    test "a carried pass names no run: no run gave it" do
+      :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "qa", "old-head", "pass")
+      assert :ok = QaVerification.carry_verdict(@repo_key, @issue_id, "new-head")
+
+      assert [%{type: "verdict.recorded", run_id: nil, head_sha: "new-head", payload: %{outcome: "pass"}}] =
+               SymphonyElixir.TicketEvents.query(@repo_key, @issue_id, types: ["verdict.recorded"])
     end
   end
 end

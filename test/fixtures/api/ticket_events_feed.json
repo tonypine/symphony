@@ -1,0 +1,516 @@
+{
+  "next_since": "2026-10-18T11:13:00.000000Z",
+  "timeline": [
+    {
+      "actor": {
+        "kind": "machine"
+      },
+      "artifacts": [],
+      "at": "2026-10-18T10:01:00.000000Z",
+      "children": [],
+      "head_sha": null,
+      "id": "ev-01",
+      "idempotency": null,
+      "parent": null,
+      "payload": {
+        "from": "Todo",
+        "to": "In Progress"
+      },
+      "phase": "In Progress",
+      "run_id": null,
+      "seq": 1,
+      "summary": {
+        "detail": null,
+        "title": "Entered In Progress from Todo"
+      },
+      "supersedes": null,
+      "type": "phase.entered"
+    },
+    {
+      "ended_at": "2026-10-18T10:20:00.000000Z",
+      "events": [
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:02:00.000000Z",
+          "children": [],
+          "head_sha": null,
+          "id": "ev-02",
+          "idempotency": "run.started:run-impl-1",
+          "parent": null,
+          "payload": {
+            "head": "aaa1111",
+            "run_id": "run-impl-1",
+            "run_kind": "implementation",
+            "run_number": 1
+          },
+          "phase": null,
+          "run_id": "run-impl-1",
+          "seq": 2,
+          "summary": {
+            "detail": "at aaa1111",
+            "title": "Implementation run 1 started"
+          },
+          "supersedes": null,
+          "type": "run.started"
+        },
+        {
+          "actor": {
+            "kind": "agent",
+            "run_id": "run-impl-1",
+            "run_kind": "implementation"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:03:00.000000Z",
+          "children": [],
+          "head_sha": null,
+          "id": "ev-03",
+          "idempotency": null,
+          "parent": null,
+          "payload": {
+            "text": "Plan: group the feed by run."
+          },
+          "phase": null,
+          "run_id": "run-impl-1",
+          "seq": 3,
+          "summary": {
+            "detail": "Plan: group the feed by run.",
+            "title": "Note added"
+          },
+          "supersedes": null,
+          "type": "note"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:20:00.000000Z",
+          "children": [],
+          "head_sha": null,
+          "id": "ev-04",
+          "idempotency": "run.ended:run-impl-1",
+          "parent": null,
+          "payload": {
+            "duration_ms": 1020000,
+            "exit": "handoff",
+            "head": "bbb2222",
+            "run_id": "run-impl-1",
+            "run_kind": "implementation",
+            "run_number": 1
+          },
+          "phase": null,
+          "run_id": "run-impl-1",
+          "seq": 4,
+          "summary": {
+            "detail": "17 min",
+            "title": "Implementation run 1 ended: handoff"
+          },
+          "supersedes": null,
+          "type": "run.ended"
+        }
+      ],
+      "exit": "handoff",
+      "head": "bbb2222",
+      "kind": "run",
+      "run_id": "run-impl-1",
+      "run_kind": "implementation",
+      "run_number": 1,
+      "started_at": "2026-10-18T10:02:00.000000Z",
+      "status": "ended",
+      "summary": {
+        "detail": "17 min",
+        "title": "Implementation run 1 ended: handoff"
+      },
+      "verdict": null
+    },
+    {
+      "actor": {
+        "kind": "machine"
+      },
+      "artifacts": [],
+      "at": "2026-10-18T10:30:00.000000Z",
+      "children": [],
+      "head_sha": null,
+      "id": "ev-05",
+      "idempotency": null,
+      "parent": null,
+      "payload": {
+        "from": "Code Review",
+        "to": "QA"
+      },
+      "phase": "QA",
+      "run_id": null,
+      "seq": 5,
+      "summary": {
+        "detail": null,
+        "title": "Entered QA from Code Review"
+      },
+      "supersedes": null,
+      "type": "phase.entered"
+    },
+    {
+      "ended_at": "2026-10-18T10:46:00.000000Z",
+      "events": [
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:31:00.000000Z",
+          "children": [],
+          "head_sha": null,
+          "id": "ev-06",
+          "idempotency": "run.started:run-qa-1",
+          "parent": null,
+          "payload": {
+            "head": "bbb2222",
+            "run_id": "run-qa-1",
+            "run_kind": "qa",
+            "run_number": 1
+          },
+          "phase": null,
+          "run_id": "run-qa-1",
+          "seq": 6,
+          "summary": {
+            "detail": "at bbb2222",
+            "title": "QA run 1 started"
+          },
+          "supersedes": null,
+          "type": "run.started"
+        },
+        {
+          "actor": {
+            "kind": "agent",
+            "run_id": "run-qa-1",
+            "run_kind": "qa"
+          },
+          "artifacts": [
+            {
+              "available": true,
+              "id": "1a5944804739c3246135942da82f849565310c15e861390baa8bd75677fa48b0",
+              "kind": "screenshot",
+              "label": "Run header at 1440×900",
+              "mime": "image/png",
+              "url": "/api/v1/artifacts/1a5944804739c3246135942da82f849565310c15e861390baa8bd75677fa48b0"
+            },
+            {
+              "available": true,
+              "id": "2035cb78c921ade2e7d0feeff6325598babd737e3f8b8aa392a9e0a7f1de18d7",
+              "kind": "screenshot",
+              "label": "Run header at 1100×800",
+              "mime": "image/png",
+              "url": "/api/v1/artifacts/2035cb78c921ade2e7d0feeff6325598babd737e3f8b8aa392a9e0a7f1de18d7"
+            }
+          ],
+          "at": "2026-10-18T10:40:00.000000Z",
+          "children": [],
+          "head_sha": null,
+          "id": "ev-07",
+          "idempotency": null,
+          "parent": null,
+          "payload": {
+            "class": "clipped",
+            "description": "The run header is cut off.",
+            "severity": "major",
+            "viewport": "1440×900"
+          },
+          "phase": null,
+          "run_id": "run-qa-1",
+          "seq": 7,
+          "summary": {
+            "detail": "The run header is cut off.",
+            "title": "QA found clipped at 1440×900"
+          },
+          "supersedes": null,
+          "type": "finding.recorded"
+        },
+        {
+          "actor": {
+            "kind": "agent",
+            "run_id": "run-qa-1",
+            "run_kind": "qa"
+          },
+          "artifacts": [
+            {
+              "available": false,
+              "id": "95daa538ab8619e4c9162fcc28c4901fc129eeda70528083d8f498e332f2d99b",
+              "kind": "screenshot",
+              "label": "Verdict badge after refresh",
+              "mime": "image/png",
+              "url": "/api/v1/artifacts/95daa538ab8619e4c9162fcc28c4901fc129eeda70528083d8f498e332f2d99b"
+            }
+          ],
+          "at": "2026-10-18T10:41:00.000000Z",
+          "children": [],
+          "head_sha": null,
+          "id": "ev-08",
+          "idempotency": null,
+          "parent": null,
+          "payload": {
+            "class": "state missing",
+            "description": "The verdict badge is gone after a refresh.",
+            "severity": "minor"
+          },
+          "phase": null,
+          "run_id": "run-qa-1",
+          "seq": 8,
+          "summary": {
+            "detail": "The verdict badge is gone after a refresh.",
+            "title": "QA found state missing"
+          },
+          "supersedes": null,
+          "type": "finding.recorded"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:45:00.000000Z",
+          "children": [],
+          "head_sha": null,
+          "id": "ev-09",
+          "idempotency": null,
+          "parent": null,
+          "payload": {
+            "head": "bbb2222",
+            "kind": "qa",
+            "outcome": "fail"
+          },
+          "phase": null,
+          "run_id": "run-qa-1",
+          "seq": 9,
+          "summary": {
+            "detail": "on bbb2222",
+            "title": "QA verdict: fail"
+          },
+          "supersedes": null,
+          "type": "verdict.recorded"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:46:00.000000Z",
+          "children": [],
+          "head_sha": null,
+          "id": "ev-10",
+          "idempotency": "run.ended:run-qa-1",
+          "parent": null,
+          "payload": {
+            "duration_ms": 900000,
+            "exit": "ended normally",
+            "head": "bbb2222",
+            "run_id": "run-qa-1",
+            "run_kind": "qa",
+            "run_number": 1
+          },
+          "phase": null,
+          "run_id": "run-qa-1",
+          "seq": 10,
+          "summary": {
+            "detail": "15 min",
+            "title": "QA run 1 ended: ended normally"
+          },
+          "supersedes": null,
+          "type": "run.ended"
+        }
+      ],
+      "exit": "ended normally",
+      "head": "bbb2222",
+      "kind": "run",
+      "run_id": "run-qa-1",
+      "run_kind": "qa",
+      "run_number": 1,
+      "started_at": "2026-10-18T10:31:00.000000Z",
+      "status": "ended",
+      "summary": {
+        "detail": "15 min",
+        "title": "QA run 1 ended: ended normally"
+      },
+      "verdict": {
+        "at": "2026-10-18T10:45:00.000000Z",
+        "head": "bbb2222",
+        "kind": "qa",
+        "outcome": "fail"
+      }
+    },
+    {
+      "actor": {
+        "kind": "machine"
+      },
+      "artifacts": [],
+      "at": "2026-10-18T10:47:00.000000Z",
+      "children": [],
+      "head_sha": null,
+      "id": "ev-11",
+      "idempotency": null,
+      "parent": null,
+      "payload": {
+        "from": "QA",
+        "to": "Rework"
+      },
+      "phase": "Rework",
+      "run_id": null,
+      "seq": 11,
+      "summary": {
+        "detail": null,
+        "title": "Entered Rework from QA"
+      },
+      "supersedes": null,
+      "type": "phase.entered"
+    },
+    {
+      "actor": {
+        "kind": "person",
+        "name": "Director"
+      },
+      "artifacts": [],
+      "at": "2026-10-18T10:50:00.000000Z",
+      "children": [],
+      "head_sha": null,
+      "id": "ev-12",
+      "idempotency": null,
+      "parent": null,
+      "payload": {
+        "text": "Keep the run header visible when the pane is narrow."
+      },
+      "phase": null,
+      "run_id": null,
+      "seq": 12,
+      "summary": {
+        "detail": "Keep the run header visible when the pane is narrow.",
+        "title": "Note added"
+      },
+      "supersedes": null,
+      "type": "note"
+    },
+    {
+      "actor": {
+        "kind": "machine"
+      },
+      "artifacts": [],
+      "at": "2026-10-18T11:10:00.000000Z",
+      "children": [],
+      "head_sha": null,
+      "id": "ev-13",
+      "idempotency": null,
+      "parent": null,
+      "payload": {
+        "from": "Code Review",
+        "to": "QA"
+      },
+      "phase": "QA",
+      "run_id": null,
+      "seq": 13,
+      "summary": {
+        "detail": null,
+        "title": "Entered QA from Code Review"
+      },
+      "supersedes": null,
+      "type": "phase.entered"
+    },
+    {
+      "ended_at": null,
+      "events": [
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T11:11:00.000000Z",
+          "children": [],
+          "head_sha": null,
+          "id": "ev-14",
+          "idempotency": "run.started:run-qa-2",
+          "parent": null,
+          "payload": {
+            "head": "ccc3333",
+            "run_id": "run-qa-2",
+            "run_kind": "qa",
+            "run_number": 2
+          },
+          "phase": null,
+          "run_id": "run-qa-2",
+          "seq": 14,
+          "summary": {
+            "detail": "at ccc3333",
+            "title": "QA run 2 started"
+          },
+          "supersedes": null,
+          "type": "run.started"
+        },
+        {
+          "actor": {
+            "kind": "agent",
+            "run_id": "run-qa-2",
+            "run_kind": "qa"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T11:12:00.000000Z",
+          "children": [
+            {
+              "actor": {
+                "kind": "agent",
+                "run_id": "run-qa-2",
+                "run_kind": "qa"
+              },
+              "artifacts": [],
+              "at": "2026-10-18T11:13:00.000000Z",
+              "children": [],
+              "head_sha": null,
+              "id": "ev-16",
+              "idempotency": null,
+              "parent": "ev-15",
+              "payload": {
+                "text": "The run header stays visible."
+              },
+              "phase": null,
+              "run_id": "run-qa-2",
+              "seq": 16,
+              "summary": {
+                "detail": "The run header stays visible.",
+                "title": "Note added"
+              },
+              "supersedes": null,
+              "type": "note"
+            }
+          ],
+          "head_sha": null,
+          "id": "ev-15",
+          "idempotency": null,
+          "parent": null,
+          "payload": {
+            "text": "Walking step 1 at 1440×900."
+          },
+          "phase": null,
+          "run_id": "run-qa-2",
+          "seq": 15,
+          "summary": {
+            "detail": "Walking step 1 at 1440×900.",
+            "title": "Note added"
+          },
+          "supersedes": null,
+          "type": "note"
+        }
+      ],
+      "exit": null,
+      "head": "ccc3333",
+      "kind": "run",
+      "run_id": "run-qa-2",
+      "run_kind": "qa",
+      "run_number": 2,
+      "started_at": "2026-10-18T11:11:00.000000Z",
+      "status": "running",
+      "summary": {
+        "detail": "at ccc3333",
+        "title": "QA run 2 started"
+      },
+      "verdict": null
+    }
+  ]
+}
