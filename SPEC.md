@@ -482,6 +482,25 @@ made in a task the orchestrator does not wait for, and the event keeps the time 
 transcript the store refuses (over the size cap, not JSON lines, gone) leaves the event without
 one, logged once; the run still records exactly one `run.ended`.
 
+A QA pass keeps its files and records what it found. Before its worktree is removed, every regular
+file it wrote under `qa-evidence/` is copied into the artifact store (`screenshot` for PNG and JPEG,
+otherwise `log`, `report` or `file`; a symlink is never followed), with each file it uploaded with
+`linear_attach_file` (the upload's URL kept as the artifact's `linear_url` projection) and, for a
+Claude Code session, its transcript, located as for a `run.ended` with the worktree as the working
+directory. A file the store refuses (a symlink, one over the size cap) is skipped and logged. A step's
+or finding's evidence entry names an artifact when it is a `qa-evidence/` path the pass kept or a
+Linear URL of a file it uploaded; any other entry (a CI run's URL) names none and stays as written.
+Before the pass's `verdict.recorded`, whatever its outcome, the QA run (`agent`, run kind `qa`)
+writes one `evidence` per step that cites evidence, captioned `<step>: <status>` with the artifacts
+its entries name, and one for the transcript, captioned "QA session transcript", keyed
+`evidence:<run_id>:<n>`; and, for a `fail`, one `finding.recorded` per finding (the failing steps
+when it gives none), keyed `finding:<run_id>:<n>`: class `unclassified` and severity `unrated` until
+findings are classified, the finding's line as `description` (at most 2,000 characters), its `step`,
+`viewport` and `evidence` as given, and as `artifacts` the files its evidence names, or those of the
+step it names when it cites none. Handling the same outcome again writes none of them twice. Keeping
+the files or writing the events never changes the verdict or the ticket's next state; a failure is
+logged.
+
 A decision a person must make has one representation, whoever asks it: `decision.requested`, then
 the person's `decision.recorded` (keyed `decision.recorded:<key>`, the request comment it answers)
 or `decision.withdrawn` when it ends unanswered; both name the request in `request`. The Needs

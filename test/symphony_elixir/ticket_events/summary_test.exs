@@ -91,6 +91,9 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       assert render("finding.recorded", Map.put(base, :class_count, 0)).detail == "The title ends mid-word"
       assert render("finding.recorded", base).title == "QA found text truncated"
 
+      unclassified = %{base | class: "unclassified"} |> Map.merge(%{severity: "unrated", step: "Step 2", viewport: "1400×900 pt"})
+      assert render("finding.recorded", unclassified).title == "QA found a defect at 1400×900 pt: Step 2"
+
       ordinals = [{2, "2nd"}, {4, "4th"}, {11, "11th"}, {12, "12th"}, {13, "13th"}, {21, "21st"}, {22, "22nd"}, {23, "23rd"}, {111, "111th"}]
 
       for {count, ordinal} <- ordinals do

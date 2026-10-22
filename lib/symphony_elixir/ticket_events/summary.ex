@@ -93,7 +93,7 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   end
 
   defp summary("finding.recorded", payload, _event) do
-    title = "QA found #{text(payload, :class) || "a defect"}" <> suffix(" at ", text(payload, :viewport)) <> suffix(": ", text(payload, :step))
+    title = "QA found #{finding_class(text(payload, :class))}" <> suffix(" at ", text(payload, :viewport)) <> suffix(": ", text(payload, :step))
 
     case present([class_count(count(payload, :class_count)), plural(length(strings(field(payload, :evidence))), "screenshot")]) do
       [] -> {title, [text(payload, :description)]}
@@ -130,6 +130,10 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp person_action("unblock", _to), do: "The Director unblocked the ticket"
   defp person_action("restart", _to), do: "The Director restarted the ticket"
   defp person_action(action, _to), do: "The Director acted" <> suffix(": ", action)
+
+  # A finding QA has not classified yet (until the findings model, `unclassified`) is a defect.
+  defp finding_class(class) when class in [nil, "unclassified"], do: "a defect"
+  defp finding_class(class), do: class
 
   defp class_count(nil), do: nil
   defp class_count(0), do: nil

@@ -12,7 +12,9 @@ defmodule SymphonyElixir.QaAgent.Verdict do
   synonym (`PASS`, `Failed`, `block`), `findings` as a list, a single object or a single sentence,
   `steps` as a list or a single object, and `needs_person`/`needs_dev_server` as `true` or `"true"`.
   A finding object (`step`, `viewport`, `expected`, `actual`, `evidence`) is rendered to the one
-  line the QA report and the rework run read.
+  line the QA report and the rework run read (`findings`); `finding_details` keeps, per finding and
+  in the same order, that line with the finding's `step`, `viewport` and `evidence` as given, for
+  the ledger's `finding.recorded` events (`SymphonyElixir.QaVerification`).
   """
 
   @tool_name "qa_verdict"
@@ -38,6 +40,14 @@ defmodule SymphonyElixir.QaAgent.Verdict do
   }
 
   @identifier_pattern ~r/\A[A-Za-z][A-Za-z0-9]*-\d+\z/
+
+  @typedoc "A finding's line with the step, viewport and evidence it named (nil and `[]` when none)."
+  @type finding_detail :: %{
+          line: String.t(),
+          step: String.t() | nil,
+          viewport: String.t() | nil,
+          evidence: [String.t()]
+        }
 
   @evidence_schema %{
     "type" => "array",
@@ -140,11 +150,12 @@ defmodule SymphonyElixir.QaAgent.Verdict do
   def from_map(decoded) when is_map(decoded) do
     with {:ok, verdict} <- coerce_verdict(Map.get(decoded, "verdict")),
          {:ok, steps} <- coerce_steps(Map.get(decoded, "steps")),
-         {:ok, findings} <- coerce_findings(Map.get(decoded, "findings")),
+         {:ok, details} <- coerce_findings(Map.get(decoded, "findings")),
+         findings = Enum.map(details, & &1.line),
          reason = trimmed(Map.get(decoded, "reason")),
          :ok <- validate_verdict(verdict, steps, findings, reason) do
       {:ok,
-       %{verdict: verdict, summary: trimmed(Map.get(decoded, "summary")) || "", steps: steps, findings: findings}
+       %{verdict: verdict, summary: trimmed(Map.get(decoded, "summary")) || "", steps: steps, findings: findings, finding_details: details}
        |> put_if(:reason, reason, reason)
        |> put_if(:needs_person, true, flag?(Map.get(decoded, "needs_person")))
        |> put_if(:needs_dev_server, true, flag?(Map.get(decoded, "needs_dev_server")))
@@ -217,21 +228,27 @@ defmodule SymphonyElixir.QaAgent.Verdict do
     |> Enum.map(&coerce_finding/1)
     |> collect(:invalid_finding)
     |> case do
-      {:ok, findings} -> {:ok, Enum.reject(findings, &is_nil/1)}
+      {:ok, findings} -> {:ok, Enum.reject(findings, &is_nil(&1.line))}
       error -> error
     end
   end
 
   defp coerce_findings(_findings), do: {:error, :invalid_findings}
 
-  defp coerce_finding(finding) when is_binary(finding), do: {:ok, trimmed(finding)}
+  defp coerce_finding(finding) when is_binary(finding), do: {:ok, %{line: trimmed(finding), step: nil, viewport: nil, evidence: []}}
 
   defp coerce_finding(finding) when is_map(finding) do
     summary = trimmed(Map.get(finding, "summary"))
     actual = trimmed(Map.get(finding, "actual"))
 
     if summary || actual do
-      {:ok, finding_line(finding, summary, actual)}
+      {:ok,
+       %{
+         line: finding_line(finding, summary, actual),
+         step: trimmed(Map.get(finding, "step")),
+         viewport: trimmed(Map.get(finding, "viewport")),
+         evidence: evidence(finding)
+       }}
     else
       :error
     end
@@ -256,11 +273,13 @@ defmodule SymphonyElixir.QaAgent.Verdict do
       summary && sentence(summary),
       labelled("Expected", trimmed(Map.get(finding, "expected"))),
       labelled("Actual", actual),
-      labelled("Evidence", finding |> Map.get("evidence") |> List.wrap() |> string_list() |> join_list())
+      labelled("Evidence", finding |> evidence() |> join_list())
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join(" ")
   end
+
+  defp evidence(finding), do: finding |> Map.get("evidence") |> List.wrap() |> string_list()
 
   defp labelled(_label, nil), do: nil
   defp labelled(label, text), do: "#{label}: #{sentence(text)}"

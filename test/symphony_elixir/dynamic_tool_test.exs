@@ -2196,6 +2196,26 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
   end
 
+  test "attach_file in a QA session reports the upload to the QA process and uploads as before" do
+    workspace = tmp_workspace!("linear-attach-file-qa-sink")
+    path = Path.join(workspace, "screenshot.png")
+    File.write!(path, "png")
+    test_pid = self()
+
+    try do
+      {:ok, canonical} = SymphonyElixir.PathSafety.canonicalize(path)
+      opts = successful_attach_file_opts(workspace, test_pid) ++ [tool_scope: :qa, qa_verdict_sink: test_pid]
+
+      response = DynamicTool.execute("linear_attach_file", %{"local_path" => path, "title" => "Screenshot"}, opts)
+
+      assert response["success"] == true
+      assert_received {:attachment_created, %{issueId: "issue-current", url: "https://linear-asset.example/screenshot.png"}}
+      assert_received {:qa_upload, ^canonical, ["https://linear-asset.example/screenshot.png"]}
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
   test "attach_file supports explicit public upload opt-in" do
     workspace = tmp_workspace!("linear-attach-file-public")
     path = Path.join(workspace, "screenshot.png")

@@ -969,6 +969,40 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       end
     end
 
+    test "attach_file sends a QA session's sink the uploaded file's path and its Linear URLs" do
+      workspace = tmp_workspace!("linear-agent-file-qa-sink")
+      test_pid = self()
+
+      try do
+        File.mkdir_p!(Path.join(workspace, "qa-evidence"))
+        File.write!(Path.join(workspace, "qa-evidence/home.png"), "png")
+        {:ok, canonical} = SymphonyElixir.PathSafety.canonicalize(Path.join(workspace, "qa-evidence/home.png"))
+
+        linear_client = successful_file_upload_linear_client(test_pid)
+        opts = [linear_client: linear_client, upload_client: successful_upload_client(test_pid)]
+        context = secret_context(workspace)
+
+        assert {:ok, _response} = Linear.attach_file(context, "qa-evidence/home.png", "Home", [qa_verdict_sink: test_pid] ++ opts)
+        assert_received {:qa_upload, ^canonical, ["https://assets.example.test/home.png"]}
+
+        assert {:ok, _response} = Linear.attach_file(secret_context(workspace), "qa-evidence/home.png", "Home", opts)
+        refute_received {:qa_upload, _path, _urls}
+
+        failing = fn query, variables, linear_opts ->
+          if query =~ "SymphonyAgentAttachFile",
+            do: {:ok, %{"data" => %{"attachmentCreate" => %{"success" => false}}}},
+            else: linear_client.(query, variables, linear_opts)
+        end
+
+        assert {:error, {:linear_mutation_failed, "attachmentCreate", _response}} =
+                 Linear.attach_file(secret_context(workspace), "qa-evidence/home.png", "Home", [qa_verdict_sink: test_pid] ++ Keyword.put(opts, :linear_client, failing))
+
+        refute_received {:qa_upload, _path, _urls}
+      after
+        File.rm_rf(workspace)
+      end
+    end
+
     test "attach_file rejects disallowed public upload extensions before upload" do
       workspace = tmp_workspace!("linear-agent-file-public-disallowed")
 

@@ -72,6 +72,7 @@ defmodule SymphonyElixir.QaVerification do
   alias SymphonyElixir.QaAgent.Report
 
   @verdict_kind "qa"
+  @run_kind "qa"
   @max_blocked_attempts 2
   @max_inconclusive_attempts 2
   @head_unreadable_signal "qa_head_unreadable"
@@ -412,7 +413,7 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   defp pass(issue, opts, settings, head, %{scope: :none} = outcome) do
-    record_verdict(issue, opts, head, "pass", %{scope: "none", reason: outcome.reason})
+    record_pass_verdict(issue, opts, head, "pass", outcome, %{scope: "none", reason: outcome.reason})
     publish_report(issue, opts, head, outcome, "Merging")
     Logger.info("QA passed for #{issue_label(issue)} head=#{head} with nothing on screen to judge: #{outcome.reason}")
 
@@ -423,7 +424,7 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   defp pass(issue, opts, settings, head, outcome) do
-    record_verdict(issue, opts, head, "pass")
+    record_pass_verdict(issue, opts, head, "pass", outcome)
     publish_report(issue, opts, head, outcome, "Merging")
     Logger.info("QA passed for #{issue_label(issue)} head=#{head}")
 
@@ -461,7 +462,7 @@ defmodule SymphonyElixir.QaVerification do
 
   defp inconclusive_run(issue, opts, settings, head, outcome) do
     details = blocked_details(opts, settings, outcome)
-    record_verdict(issue, opts, head, "inconclusive", details)
+    record_pass_verdict(issue, opts, head, "inconclusive", outcome, details)
     attempts = count_verdicts(issue, opts, head, "inconclusive")
     rerun? = attempts < @max_inconclusive_attempts
     publish_report(issue, opts, head, outcome, if(rerun?, do: "QA (inconclusive, rerunning)", else: "QA (inconclusive; a person decides)"))
@@ -491,7 +492,7 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   defp fail_to_rework(issue, opts, settings, head, outcome) do
-    record_verdict(issue, opts, head, "fail")
+    record_pass_verdict(issue, opts, head, "fail", outcome)
     publish_report(issue, opts, head, outcome, "Rework")
     Logger.warning("QA failed for #{issue_label(issue)} head=#{head}: #{verdict_reason(outcome)}")
 
@@ -515,7 +516,7 @@ defmodule SymphonyElixir.QaVerification do
 
   defp blocked_on_environment(issue, opts, settings, head, outcome) do
     details = blocked_details(opts, settings, outcome)
-    record_verdict(issue, opts, head, "blocked", details)
+    record_pass_verdict(issue, opts, head, "blocked", outcome, details)
     attempts = blocked_attempts(issue, opts, head)
     next = blocked_next(attempts, outcome)
     publish_report(issue, opts, head, outcome, blocked_target(attempts, outcome))
@@ -621,7 +622,7 @@ defmodule SymphonyElixir.QaVerification do
   defp ci_blocked(issue, opts, settings, head, outcome, rejection) do
     outcome = Map.merge(outcome, %{verdict: :blocked, reason: rejection, needs_person: false})
     details = opts |> blocked_details(settings, outcome) |> Map.merge(%{reason: rejection, component: @ci_component})
-    record_verdict(issue, opts, head, "blocked", details)
+    record_pass_verdict(issue, opts, head, "blocked", outcome, details)
     publish_report(issue, opts, head, outcome, "QA (blocked on CI; the PR watcher routes the head)")
 
     Logger.warning("QA blocked on CI for #{issue_label(issue)} head=#{head} model=#{details.model}; handing the head to the PR watcher: #{rejection}")
@@ -678,7 +679,7 @@ defmodule SymphonyElixir.QaVerification do
       workspace_path: workspace,
       worker_host: Keyword.get(opts, :worker_host),
       repo_key: repo_key(issue, opts),
-      run_id: Keyword.get(opts, :run_id) || "qa-#{issue.identifier}-#{String.slice(head, 0, 12)}",
+      run_id: qa_run_id(issue, opts, head),
       pr_url: Keyword.get(opts, :pr_url),
       playbooks: playbooks,
       token_limit: settings.agent.max_tokens_per_issue,
@@ -694,6 +695,8 @@ defmodule SymphonyElixir.QaVerification do
       summary: result.summary,
       steps: Map.get(result, :steps, []),
       findings: Map.get(result, :findings, []),
+      finding_details: Map.get(result, :finding_details),
+      artifacts: Map.get(result, :artifacts),
       reason: Map.get(result, :reason),
       needs_person: Map.get(result, :needs_person, false),
       needs_dev_server: Map.get(result, :needs_dev_server, false),
@@ -780,6 +783,104 @@ defmodule SymphonyElixir.QaVerification do
       tracker -> [tracker: tracker]
     end
   end
+
+  defp qa_run_id(issue, opts, head), do: Keyword.get(opts, :run_id) || "qa-#{issue.identifier}-#{String.slice(to_string(head), 0, 12)}"
+
+  # A verdict the QA pass reached, after the pass's own events: one `evidence` per step that cites
+  # evidence and one for the session's transcript, then, on a `fail`, one `finding.recorded` per
+  # finding. The QA run writes them (`agent{run_id, run_kind: "qa"}`), keyed on the run and their
+  # position, so handling the same outcome again writes none twice. A write that fails is logged
+  # (`TicketSignals.record_event/5`) and changes neither the verdict nor the move.
+  defp record_pass_verdict(issue, opts, head, verdict, outcome, details \\ %{}) do
+    repo_key = repo_key(issue, opts)
+
+    if is_binary(repo_key) do
+      run_id = qa_run_id(issue, opts, head)
+      record_evidence(repo_key, issue, run_id, outcome)
+      if verdict == "fail", do: record_findings(repo_key, issue, run_id, outcome)
+    end
+
+    record_verdict(issue, opts, head, verdict, details)
+  end
+
+  defp record_evidence(repo_key, issue, run_id, outcome) do
+    artifacts = Map.get(outcome, :artifacts)
+
+    steps =
+      for %{evidence: [_ | _] = entries} = step <- Map.get(outcome, :steps, []),
+          do: {"#{step.name}: #{step.status}", resolved(artifacts, entries)}
+
+    transcript =
+      case artifacts do
+        %{transcript: id} when is_binary(id) -> [{"QA session transcript", [id]}]
+        _none -> []
+      end
+
+    (steps ++ transcript)
+    |> Enum.with_index(1)
+    |> Enum.each(fn {{caption, ids}, n} ->
+      payload = %{caption: cut(caption, 500), artifacts: ids}
+      TicketSignals.record_event(repo_key, issue.id, "evidence", payload, pass_event_opts(run_id, "evidence:#{run_id}:#{n}", ids))
+    end)
+  end
+
+  # Each finding until the findings model classifies them (epic 4): `unclassified` and `unrated`,
+  # its line as the description, its step and viewport as given and its evidence as written. Its
+  # artifacts are the files its evidence names, or those of the step it names when it cites none.
+  defp record_findings(repo_key, issue, run_id, outcome) do
+    artifacts = Map.get(outcome, :artifacts)
+    steps = Map.get(outcome, :steps, [])
+
+    outcome
+    |> finding_details()
+    |> Enum.with_index(1)
+    |> Enum.each(fn {finding, n} ->
+      ids =
+        case finding.evidence do
+          [] -> resolved(artifacts, step_evidence(steps, finding.step))
+          entries -> resolved(artifacts, entries)
+        end
+
+      payload = %{
+        class: "unclassified",
+        severity: "unrated",
+        description: cut(finding.line, 2_000),
+        step: cut(finding.step, 200),
+        viewport: cut(finding.viewport, 100),
+        evidence: if(finding.evidence == [], do: nil, else: finding.evidence)
+      }
+
+      TicketSignals.record_event(repo_key, issue.id, "finding.recorded", payload, pass_event_opts(run_id, "finding:#{run_id}:#{n}", ids))
+    end)
+  end
+
+  # The findings the agent gave, else its failing steps, as `QaAgent.failure_findings/1` reads them.
+  defp finding_details(%{finding_details: [_ | _] = details}), do: details
+
+  defp finding_details(%{findings: [_ | _] = findings}) do
+    for line <- findings, is_binary(line), do: %{line: line, step: nil, viewport: nil, evidence: []}
+  end
+
+  defp finding_details(outcome) do
+    for %{status: "fail"} = step <- Map.get(outcome, :steps, []),
+        do: %{line: String.trim("#{step.name}: #{step.details}"), step: step.name, viewport: nil, evidence: step.evidence}
+  end
+
+  defp step_evidence(_steps, nil), do: []
+
+  defp step_evidence(steps, name) do
+    name = String.downcase(name)
+    Enum.find_value(steps, [], &(String.downcase(&1.name) == name and &1.evidence))
+  end
+
+  defp resolved(artifacts, entries) do
+    entries |> Enum.map(&QaAgent.evidence_artifact(artifacts, &1)) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+  end
+
+  defp pass_event_opts(run_id, key, ids), do: [actor: {:agent, run_id, @run_kind}, idempotency: key, artifacts: ids]
+
+  defp cut(nil, _max), do: nil
+  defp cut(text, max), do: String.slice(text, 0, max)
 
   defp record_verdict(issue, opts, head, outcome, details \\ %{}) do
     TicketSignals.record_verdict(repo_key(issue, opts), issue.id, @verdict_kind, head, outcome, details)
