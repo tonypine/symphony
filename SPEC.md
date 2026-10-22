@@ -496,6 +496,37 @@ no-op.
 The stream is read through `GET /api/v1/repos/<repo_key>/tickets/<issue_identifier>/events`
 (Section 13.8.2).
 
+#### 4.1.12 Ticket Artifacts
+
+The files an event points at (its `artifacts`: a QA pass's screenshots, a run's transcript) are
+kept in a content-addressed store Symphony owns, `<state_root>/artifacts`, so they outlive the
+worktree or session folder they were written in. An artifact's `id` is the lowercase hex sha256 of
+its bytes; its file sits at `artifacts/<id[0,2]>/<id>` and is written under a temporary name in the
+same folder and renamed, so no reader sees a partial file. One metadata row per id lives in the
+durable run store:
+
+- `id`, `mime`, `bytes` (the size), `label`, `kind` (`screenshot`, `transcript`, `log`, `report`,
+  `diff` or `file`), `repo_key`, `issue_id`, `run_id` and `captured_at`: the first ingest's.
+- `references` (how many ingests) and `tickets` (every repo and issue that ingested the bytes, so
+  retention never removes bytes another ticket still holds).
+- `projections` (where the file was published: `linear_url`), `expired` and `expired_at`.
+
+An ingest names a source file and the ticket, run, label and kind. The source must be a regular
+file, not a symlink, whose resolved path is under one of the folders an agent writes (by default
+the repo's workspace root and the agent temp folders); anything else is refused before a byte is
+read, because an agent chooses the source and Symphony runs outside the agent sandbox. A file over
+the size cap (25 MiB) is refused. The mime comes from the bytes: PNG and JPEG by their magic bytes;
+a UTF-8 `.jsonl` file whose first line is a JSON object is `application/x-ndjson`; UTF-8 `.md` is
+`text/markdown`; UTF-8 `.txt` and `.log` are `text/plain`; anything else is
+`application/octet-stream`. A `screenshot` that is not PNG or JPEG, or a `transcript` that is not
+JSON lines, is refused.
+
+The same bytes ingested again are the same file and row: `references` grows and `tickets` gains a
+new ticket. Expiring an artifact removes its bytes and keeps its row with `expired` set; asking for
+the path of an artifact whose file is gone answers that it expired and marks the row so. Ingesting
+the same bytes again writes the file back and clears `expired`. An ingest, an expiry and that check
+of one id hold the row's lock while they touch its file, so they never interleave.
+
 ### 4.2 Stable Identifiers and Normalization Rules
 
 - `Issue ID`
