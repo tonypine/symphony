@@ -1112,4 +1112,41 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert opts[:review_scope] == :code_review
     end
   end
+
+  describe "the verdict's run" do
+    defp verdict_runs do
+      for event <- RunStore.list_ticket_events(@repo_key, @issue_id, types: ["verdict.recorded"]) do
+        {event.payload.outcome, event.run_id}
+      end
+    end
+
+    test "each review verdict names the review run that gave it" do
+      Process.put(:fake_review_result, {:ok, %{verdict: :approve, comments: [], reason: "looks good"}})
+      assert :ok = run("/tmp/workspace", settings: designed_settings(), run_id: "run-cr-approve")
+
+      Process.put(:fake_review_result, {:ok, %{verdict: :request_changes, comments: ["Rename this"], reason: nil}})
+      assert :ok = run("/tmp/workspace", settings: designed_settings(), run_id: "run-cr-changes")
+
+      Process.put(:fake_review_result, {:ok, %{verdict: :block, comments: [], reason: "touches protected files"}})
+      assert :ok = run("/tmp/workspace", settings: designed_settings(), run_id: "run-cr-block")
+
+      Process.put(:fake_review_result, {:error, {:review_agent_inconclusive, :no_grounding}})
+      assert {:error, _inconclusive} = run("/tmp/workspace", settings: designed_settings(), run_id: "run-cr-inconclusive")
+
+      assert verdict_runs() == [
+               {"approve", "run-cr-approve"},
+               {"request_changes", "run-cr-changes"},
+               {"block", "run-cr-block"},
+               {"inconclusive", "run-cr-inconclusive"}
+             ]
+    end
+
+    test "a verdict from a run given no id names none, and a carried approve names no run" do
+      assert :ok = run("/tmp/workspace", settings: designed_settings())
+      assert :ok = CodeReview.carry_verdict(@repo_key, @issue_id, "the-repaired-head")
+
+      assert verdict_runs() == [{"approve", nil}, {"approve", nil}]
+      assert [%{head_sha: "the-repaired-head"} | _] = verdicts()
+    end
+  end
 end

@@ -5541,18 +5541,31 @@ Minimum endpoints:
   - If the issue is unknown to the current in-memory state, return `404` with an error response (for
     example `{\"error\":{\"code\":\"issue_not_found\",\"message\":\"...\"}}`).
 
-- `GET /api/v1/repos/<repo_key>/tickets/<issue_identifier>/events?since=&types=&run_id=&limit=`
+- `GET /api/v1/repos/<repo_key>/tickets/<issue_identifier>/events?since=&types=&run_id=&limit=&group=`
   - The ticket's event ledger (Section 4.1.11), the debug API through which it is visible:
     `{"events": [...], "next_since": "<iso8601>"}`, the events oldest first by `at` then `seq`, each
     with its `summary`. Read-only and served like `/api/v1/state`.
+  - Each event's `artifacts` are `{id, kind, mime, label, available, url}`: `url` is
+    `/api/v1/artifacts/<id>`, relative to the server, and `available` is false for an artifact the
+    store marks expired and for an id it doesn't know (whose other fields are null). The page's
+    artifacts are read in one store read.
+  - `group=run` answers `{"timeline": [...], "next_since": "<iso8601>"}`: the same page, oldest
+    first, with each event that names an earlier event of the page as `parent` in that event's
+    `children` (at any depth), each other event whose `run_id` names a run of the ticket in that
+    run's `events`, and the rest at the top level. A run is `{"kind": "run", run_id, run_kind,
+    run_number, status, verdict, started_at, ended_at, exit, head, summary, events}`, placed where
+    its first event on the page falls. Its header is read from the ticket's whole history: `status`
+    is `running` until its `run.ended`, then `ended`, and `verdict` is the newest `verdict.recorded`
+    naming the run (`{kind, outcome, head, at}`), else null. A run whose events span two pages shows
+    on each with that page's events and its whole header; the client merges by `run_id`.
   - `since` (ISO 8601, exclusive) pages: `next_since` is the `at` of the last event returned (the
     `since` given, or null, on an empty page). A page never ends inside a group of events that share
     one `at`, so paging with `next_since` returns every event exactly once.
   - `types` is a comma-separated list of catalog types, `run_id` keeps one run's events, and `limit`
     defaults to 50 and is capped at 200.
   - The identifier resolves through the ticket's state record in that repo: a ticket with none is
-    `404` `ticket_not_found`. An unknown type, a bad `since` or a `limit` that is not a positive
-    integer is `400` `invalid_query`. Other methods are `405`.
+    `404` `ticket_not_found`. An unknown type, a bad `since`, a `limit` that is not a positive
+    integer or a `group` other than `run` is `400` `invalid_query`. Other methods are `405`.
 
 - `GET /api/v1/stream?repo_key=&issue_identifier=`
   - The live channel: a `text/event-stream` response that stays open and tells the client the moment

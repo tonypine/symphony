@@ -373,7 +373,7 @@ defmodule SymphonyElixir.EpicReview do
       sha: sha,
       workspace_path: workspace,
       repo_key: repo_key(issue, opts),
-      run_id: Keyword.get(opts, :run_id) || "epic-review-#{issue.identifier}-#{String.slice(sha, 0, 12)}",
+      run_id: epic_run_id(issue, opts, sha),
       playbooks: playbooks,
       token_limit: settings.agent.max_tokens_per_issue,
       run_profile: Keyword.get(opts, :run_profile),
@@ -956,9 +956,12 @@ defmodule SymphonyElixir.EpicReview do
     end
   end
 
+  # The review run gave the verdict, so its event names that run, the one its QA agent ran as.
   defp record_verdict(issue, opts, sha, outcome) do
-    TicketSignals.record_verdict(repo_key(issue, opts), issue.id, @verdict_kind, sha, outcome)
+    TicketSignals.record_verdict(repo_key(issue, opts), issue.id, @verdict_kind, sha, outcome, %{}, run_id: epic_run_id(issue, opts, sha))
   end
+
+  defp epic_run_id(issue, opts, sha), do: Keyword.get(opts, :run_id) || "epic-review-#{issue.identifier}-#{String.slice(to_string(sha), 0, 12)}"
 
   defp record_move_signal(issue, opts, signal, extra) do
     details =

@@ -167,6 +167,32 @@ defmodule SymphonyElixir.TicketSignalsTest do
              RunStore.get_ticket_state(@repo_key, "issue-1")
   end
 
+  test "a verdict a run gave names that run; one without a run id names none, and the verdicts are the same" do
+    assert :ok = TicketSignals.record_verdict(@repo_key, "issue-1", "qa", "abc123", "pass", %{}, run_id: "run-qa-1")
+    assert :ok = TicketSignals.record_verdict(@repo_key, "issue-1", "code_review", "abc123", "approve")
+    assert :ok = TicketSignals.record_verdict(@repo_key, "issue-1", "epic_review", "abc123", "pass", %{}, run_id: " ")
+
+    assert [
+             %{type: "verdict.recorded", run_id: "run-qa-1", actor: %{kind: :machine}, phase: "QA", payload: qa_payload},
+             %{type: "verdict.recorded", run_id: nil, phase: "Code Review"},
+             %{type: "verdict.recorded", run_id: nil, phase: "Epic Review"}
+           ] = RunStore.list_ticket_events(@repo_key, "issue-1", [])
+
+    assert qa_payload == %{kind: "qa", outcome: "pass", head: "abc123"}
+
+    %{verdicts: verdicts} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert verdicts |> Enum.map(&{&1.kind, &1.outcome, &1.details}) |> Enum.sort() == [{"code_review", "approve", %{}}, {"epic_review", "pass", %{}}, {"qa", "pass", %{}}]
+  end
+
+  test "verdict_event/4 binds the event to the run it names, and to none without one" do
+    assert {"verdict.recorded", %{kind: "qa", outcome: "fail"}, opts} = TicketSignals.verdict_event("qa", "fail", "abc123", run_id: "run-qa-1")
+    assert opts[:run_id] == "run-qa-1"
+    assert opts[:head_sha] == "abc123"
+
+    assert {"verdict.recorded", _payload, opts} = TicketSignals.verdict_event("qa", "fail", "abc123")
+    refute Keyword.has_key?(opts, :run_id)
+  end
+
   test "repeated verdicts on one head stay separate events" do
     assert :ok = TicketSignals.record_verdict(@repo_key, "issue-1", "code_review", "abc123", "inconclusive")
     assert :ok = TicketSignals.record_verdict(@repo_key, "issue-1", "code_review", "abc123", "inconclusive")
