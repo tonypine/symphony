@@ -884,8 +884,10 @@ defmodule SymphonyElixir.QaVerification do
   defp cut(nil, _max), do: nil
   defp cut(text, max), do: String.slice(text, 0, max)
 
+  # The QA run gave the verdict, so its event names that run, as its evidence and findings do.
   defp record_verdict(issue, opts, head, outcome, details \\ %{}) do
-    TicketSignals.record_verdict(repo_key(issue, opts), issue.id, @verdict_kind, head, outcome, details)
+    run_opts = [run_id: qa_run_id(issue, opts, head)]
+    TicketSignals.record_verdict(repo_key(issue, opts), issue.id, @verdict_kind, head, outcome, details, run_opts)
   end
 
   defp record_move_signal(issue, opts, signal, extra) do
