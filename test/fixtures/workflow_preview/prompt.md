@@ -570,10 +570,16 @@ Which plan run this is:
    reads them off the parent, so a requirement no sub-ticket delivers is a plan gap —
    fix the plan, not the checklist. File no verification sub-ticket: the epic
    closes itself (`The epic close`).
-4. Record the plan and the sub-ticket identifiers in the workpad `Notes`. Leave the
+4. Ask each choice the plan leaves open with `linear_request_human_action`, one
+   request per choice, before the handoff: the person answers them in the Inbox, by
+   an option or in their own words, and the answers come back as the ticket's
+   Decisions. Write each one as the standard says, starting the question from what
+   the person is doing when the choice matters. Never write a question only into a
+   comment or the brief: a question the Inbox does not list is never answered.
+5. Record the plan and the sub-ticket identifiers in the workpad `Notes`. Leave the
    review brief (see `Review brief`): one brief for the whole plan, linking every
-   artifact, listing every sub-ticket and every decision needed, with the moves that
-   approve, change or reject it. Then hand the parent over to `Plan Review` with
+   artifact, listing every sub-ticket and linking each request step 4 raised, with the
+   moves that approve, change or reject it. Then hand the parent over to `Plan Review` with
    `linear_update_state` and end the turn. The person reviewing the plan reads the brief, not the workpad.
 
 When the parent is in `Rework` because a person rejected the plan (Symphony's
@@ -587,9 +593,9 @@ When the parent is in `Rework` because a person rejected the plan (Symphony's
   `Backlog` and `Canceled` (a human already promoted it), and do not create one
   twice: a sub-ticket in `Backlog` that was created after the parent moved to
   `Rework` belongs to this re-plan.
-- Then follow steps 2-4 for the new plan. Edit the existing review brief in place
+- Then follow steps 2-5 for the new plan. Edit the existing review brief in place
   with `linear_update_comment`, with what the new plan changes under
-  `What changed since the last brief`, and hand the parent over again as step 4
+  `What changed since the last brief`, and hand the parent over again as step 5
   says.
 
 ### Plan revision run (a person commented on the plan under review)
@@ -613,7 +619,11 @@ What triggers it:
    `linear_get_comments`). Only people's comments count: skip the workpad, the
    review brief, QA reports, `Action needed` requests, Symphony's promote and cancel
    lists, supervisor notes (`Supervisor review:`, `Supervisor note:`), and integration
-   bots. List in the workpad what each comment asks.
+   bots. List in the workpad what each comment asks. The answers to the plan's
+   questions are people's comments too: replies under the requests the plan run
+   raised, also written into the description's Decisions section. Apply each answer
+   to the plan, and ask any choice the revision leaves open with
+   `linear_request_human_action`, as the plan run's step 4 says.
 2. Edit the existing artifacts in place instead of posting new copies: documents
    with `linear_update_document`, the HTML screens as the `Plan pipeline` says, and
    artifact comments (use cases, features, journeys and so on) with
@@ -784,10 +794,10 @@ Apply this whenever a ticket adds or changes a screen or pane.
    - When the report names a red check without its failing assertion, read the check's log with `github_ci_log` (`job_id` or `run_id` from the check's URL, or `pr_number` for the PR's failed checks) before changing anything: it returns the failed steps, their annotations and the last lines of their log.
    - When the change adds, renames or moves a test that proves a walkthrough step, record the step's proof again with `linear_record_walkthrough_proofs` (`Proved by: <test>`, never a check name). A QA pre-check finding on a step's `Proved by:` line is fixed by making that test run and pass on the PR head, or by recording the test that does.
 3. Before planning, read every prior QA report and the workpad's superseded attempts, and list the findings by class (clipped, truncated, mechanism broken, state missing) in the workpad, with the head each was found on.
-   - If the same class fails for the second time on this ticket, do not push a third attempt of the same kind. Write `## Action needed:` with the finding history and two layout options for a person to choose, and stop.
+   - If the same class fails for the second time on this ticket, do not push a third attempt of the same kind. Ask the person with `linear_request_human_action`: the finding history in `why` (what QA found each time, in plain words), the ways forward as its options (for a layout, two layouts to choose from), and stop. The person answers in the Inbox, by an option or in their own words, and the next run reads the answer in the Decisions section.
 4. Keep the single workpad comment; extend its `Plan`, `Acceptance Criteria` and `Validation` with what the verdict adds instead of superseding what is there.
 5. Push the changes to the same branch. That push is the handoff: it moves the ticket to `Code Review` for a review of the new head. Do not ask for the state by hand.
-6. `Restart` is the full reset — close the pull request, a fresh branch from main, the prior attempt superseded in the workpad. It is a person's move from the Director app; an agent can neither request nor perform it. If you judge that the approach itself is wrong, say so plainly in the workpad and ask for a person with an `## Action needed:` request rather than starting over on your own.
+6. `Restart` is the full reset — close the pull request, a fresh branch from main, the prior attempt superseded in the workpad. It is a person's move from the Director app; an agent can neither request nor perform it. If you judge that the approach itself is wrong, say so plainly in the workpad and ask for a person with `linear_request_human_action` rather than starting over on your own.
 
 ## Review brief
 
@@ -811,8 +821,10 @@ a plan handed off to `Plan Review`, and a `linear_request_human_action` decision
 - A plan's brief covers the whole plan in one review: link every artifact (each
   document or artifact comment, the HTML screens), list every sub-ticket with its
   identifier and one line on what it delivers, and
-  put every decision the plan leaves open under `Decisions needed`, so the person
-  reviews everything at once.
+  link each request the plan run raised for a choice it leaves open under
+  `Decisions needed`, so the person reviews everything at once. The brief links the
+  requests and never restates them: the person answers each one in the Inbox, by an
+  option or in their own words.
 - A PR's brief links the PR and says what to check: the behaviour to try, the user
   journeys QA should walk, and the parts that carry the risk.
 - Next to the brief, update the summary block at the end of the issue description
@@ -838,9 +850,7 @@ Use this exact format:
 
 **Decisions needed:**
 
-1. <question>
-   - Options: <A>; <B>
-   - Recommendation: <the option Symphony recommends, and why in one line>
+1. <the request's title>: <link to the request comment>
 
 **How to approve / change / reject:**
 
@@ -855,10 +865,13 @@ Write `None.` under `Decisions needed` when nothing is open. Fill in
 - **Plan review** (a plan parent in `Plan Review`):
   - Approve: move the parent to `Waiting on sub-tickets`; Symphony promotes its
     `Backlog` sub-tickets to `Todo`.
-  - Change: comment on any part of the plan; Symphony moves the parent to `Rework`
-    and a revision run edits the plan in place and updates this brief.
-  - Reject: move the parent to `Rework`; Symphony cancels its `Backlog` sub-tickets
-    and plans again.
+  - Change: answer the plan's questions (Send Decisions in the Inbox, or a reply under
+    each request), or ask for changes (Ask for Changes in the Inbox, or a comment on
+    any part of the plan); Symphony moves the parent to `Rework` and a revision run
+    edits the plan in place, keeps its sub-tickets and updates this brief. Nothing is
+    approved until you approve it.
+  - Reject: Reject Plan in the Inbox, or move the parent to `Rework`; Symphony cancels
+    its `Backlog` sub-tickets and plans again.
 - **PR review** (a PR in `Code Review`): no person's move is needed. The reviewer
   agent's verdict moves it on: approve to `QA` (or `Merging` when QA is skipped),
   rework to `Rework` on the same PR. With manual review on, the step into `Merging`

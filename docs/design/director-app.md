@@ -170,10 +170,10 @@ D10); see the build plan in [Screens](director-app-screens.md#5-build-plan).
    lists the items. Clicking either opens the window on the Inbox. → **D14**, **D13** → **D2a**
 2. The Inbox lists four items, grouped by kind and oldest first: plan SHOP-330 (3 h), PR BIL-206 (1 h), action NOTE-90
    (20 min), clarify SHOP-341 (5 min). → **D2a**
-3. Select the plan. Its review shows what to review (3 documents and the HTML screens), 2 decisions needed with the
-   recommended option picked, and 7 sub-tickets in landing order. → **D2a**
-4. To change a decision, pick another option and **Send Decisions**: it posts one comment on the plan, and Symphony
-   revises the plan. To approve, **Approve Plan…** opens a sheet that names the 7 sub-tickets and the one that starts
+3. Select the plan. Its review shows its 2 open questions, each with the recommended option picked and **Answer in my
+   own words**, what to review (3 documents and the HTML screens), and 7 sub-tickets in landing order. → **D2a**
+4. To answer, pick an option or write your own words on each question and **Send Decisions**: each answer goes under
+   its question, and Symphony revises the plan, keeps its sub-tickets and brings it back for approval. To approve, **Approve Plan…** opens a sheet that names the 7 sub-tickets and the one that starts
    first. → **D2a** → **D12d**
 5. Next, the PR. CI is green, QA passed 6 of 6 walkthrough steps, the gate says Approve (Shadow), and the change is
    +412 −120 in 9 files. **Approve and Merge…** asks first, then moves the ticket to `Merging`, where Symphony turns on

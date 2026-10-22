@@ -69,13 +69,18 @@ later journeys point back to it. The mock draws every screen under its ID.
 
 - **Shows:** the list grouped as Plans, Pull requests, Actions, Clarify, Blocked, each row with
   identifier, title, one-line ask and age. The review: header with kind, wait and state badges; the brief's headline;
-  **What to review** (the plan's Linear documents and HTML); **Decisions needed** as radio groups with the recommended
-  option marked and picked; **Sub-tickets** in landing order with their Kano class or blocker; then, when the plan's
+  the plan's open questions first (TP-1191): each one a request its plan run raised, shown as D2c shows a decision
+  (the question, what happened and what waits, the options with their trade-offs and the recommended one picked, and
+  **Answer in my own words**); **What to review** (the plan's Linear documents and HTML); **Sub-tickets** in landing order with their Kano class or blocker; then, when the plan's
   ticket has a parent or connected tickets, **Where this ticket sits** (N9, as on D2c). Every ticket and pull
   request the ask, What to review, What changed, the decisions and the moves mention is a chip (N1) with its popover,
   as on D2c; a line that is only a link stays a link. An item without `references` shows its text as plain text.
-- **Actions:** **Approve Plan…** (prominent), **Send Decisions** (enabled when a pick changes; posts one comment, which
-  starts Symphony's plan revision run), **Open in Linear**, ⋯ **Send to Rework…**.
+- **Actions:** with open questions **Send Decisions** (prominent, enabled once every question has an answer; each
+  answer goes under its question and into the Decisions section, and starts Symphony's plan revision run, which keeps
+  the sub-tickets and brings the plan back for approval), then **Approve Plan…**, **Ask for Changes…** (a required
+  reason, posted as a comment: the same revision, sub-tickets kept), **Open in Linear**, ⋯ **Reject Plan…** (a
+  required reason, destructive: its sheet names the sub-tickets still in Backlog it cancels) and **Restart…**. Without
+  open questions **Approve Plan…** is the prominent one.
 - **States:** a scope that hides items says "2 more in other repos". (The final verification item and its
   **Sign Off…** were retired with `Final verification:` tickets: an epic closes in its epic review.)
 - **Conventions:** three-column `NavigationSplitView` like Mail; after an answer the selection moves to the next item;

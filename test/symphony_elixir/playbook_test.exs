@@ -254,8 +254,7 @@ defmodule SymphonyElixir.PlaybookTest do
           "**What to review:**",
           "**What changed since the last brief:**",
           "**Decisions needed:**",
-          "- Options: <A>; <B>",
-          "- Recommendation:",
+          "1. <the request's title>: <link to the request comment>",
           "**How to approve / change / reject:**"
         ] do
       assert body =~ section
@@ -264,7 +263,9 @@ defmodule SymphonyElixir.PlaybookTest do
     assert flat =~
              "A plan's brief covers the whole plan in one review: link every artifact (each document or artifact comment, the HTML screens), " <>
                "list every sub-ticket with its identifier and one line on what it delivers, " <>
-               "and put every decision the plan leaves open under `Decisions needed`, so the person reviews everything at once."
+               "and link each request the plan run raised for a choice it leaves open under `Decisions needed`, so the person reviews everything at once. " <>
+               "The brief links the requests and never restates them"
+    refute body =~ "- Options: <A>; <B>"
 
     assert flat =~ "A PR's brief links the PR and says what to check"
 
@@ -275,7 +276,9 @@ defmodule SymphonyElixir.PlaybookTest do
     refute body =~ "**Human Review**"
     refute body =~ "**Final verification**"
     assert flat =~ "Approve: move the parent to `Waiting on sub-tickets`"
-    assert flat =~ "Reject: move the parent to `Rework`; Symphony cancels its `Backlog` sub-tickets"
+    assert flat =~ "Reject: Reject Plan in the Inbox, or move the parent to `Rework`; Symphony cancels its `Backlog` sub-tickets"
+    assert flat =~ "or ask for changes (Ask for Changes in the Inbox, or a comment on any part of the plan)"
+    assert flat =~ "keeps its sub-tickets and updates this brief. Nothing is approved until you approve it."
     assert flat =~ "Approve: nothing to do, or confirm the merge decision when manual review is on."
     assert flat =~ "Approve: reply under the `## Decision needed:` comment with the option you pick; the hold clears and the ticket continues where it stopped."
     refute flat =~ "do the steps"
@@ -296,12 +299,13 @@ defmodule SymphonyElixir.PlaybookTest do
     # The brief's own section, with the plan's brief covering every artifact, decision and sub-ticket.
     assert prompt =~ "\n## Review brief\n\nThe workpad is the agent's log"
     assert flat =~ "link every artifact (each document or artifact comment, the HTML screens), list every sub-ticket"
-    assert flat =~ "put every decision the plan leaves open under `Decisions needed`"
+    assert flat =~ "link each request the plan run raised for a choice it leaves open under `Decisions needed`"
+    assert flat =~ "Ask each choice the plan leaves open with `linear_request_human_action`, one request per choice, before the handoff"
 
     # Plan to Plan Review: the plan run, a resumed plan and a re-plan.
     assert flat =~
              "Leave the review brief (see `Review brief`): one brief for the whole plan, linking every artifact, " <>
-               "listing every sub-ticket and every decision needed, with the moves that approve, change or reject it. " <>
+               "listing every sub-ticket and linking each request step 4 raised, with the moves that approve, change or reject it. " <>
                "Then hand the parent over to `Plan Review`"
 
     assert flat =~ "leave the review brief (see `Review brief`), and hand the parent over as the plan run's last step says."
