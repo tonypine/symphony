@@ -78,7 +78,9 @@ branch name Linear suggests for the ticket; a PR on a branch with any other name
   state, per-issue transcripts and the audit log as JSON under `/api/v1`, which the Mac app and
   `symphony dashboard` read. Each ticket's event stream is served, oldest first and paged, at
   `GET /api/v1/repos/<repo>/tickets/<ticket>/events?since=&types=&run_id=&limit=`; history from
-  before the stream existed is backfilled from the ticket's snapshot once, at startup.
+  before the stream existed is backfilled from the ticket's snapshot once, at startup. The files
+  its events name (screenshots, transcripts) open at `GET /api/v1/artifacts/<id>`, with their
+  metadata at `GET /api/v1/artifacts/<id>/meta`; an expired one answers 410 with its metadata.
 - **Operator controls** — pause, resume, and stop, persisted across restarts.
 - **PR-driven runs** — work an existing pull request from the CLI for review comments, failing CI, and
   conflict fixes.
