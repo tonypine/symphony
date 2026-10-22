@@ -23,6 +23,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   require Schema.Dependencies
   require Schema.GitHub
   require Schema.HumanActions
+  require Schema.Ledger
   require Schema.Learnings
   require Schema.Notifications
   require Schema.Observability
@@ -46,8 +47,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
   @retired_human_review_state "the Human Review state (`tracker.human_review_state`) is retired; a decision request pauses " <>
                                 "the ticket on a Needs Decision hold, and a plan waits in `issues.states.plan_review`"
   @allowed_keys ~w(
-    agent auto_review dashboard dependency_audit github human_actions issue_gate issues notifications poller pre_push_review
-    pull_requests
+    agent auto_review dashboard dependency_audit github human_actions issue_gate issues ledger notifications poller
+    pre_push_review pull_requests
     repositories tickets verification watchdog workers workspaces
   )
 
@@ -117,6 +118,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "issue_gate" => ~w(enabled provider model pass_threshold clarification_floor max_clarification_rounds on_error),
     "dependency_audit" => ~w(allow_registries allow_git_sources allow_path_sources),
     "human_actions" => ~w(enabled interval_ms min_update_interval_ms),
+    "ledger" => ~w(artifact_retention_days artifact_max_bytes),
     "dashboard" => ~w(enabled host port refresh_ms render_interval_ms snapshot_publish_ms transcript_buffer_size)
   }
 
@@ -455,6 +457,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     embeds_one(:dependencies, Schema.Dependencies, on_replace: :update, defaults_to_struct: true)
     embeds_one(:notifications, Schema.Notifications, on_replace: :update, defaults_to_struct: true)
     embeds_one(:human_actions, Schema.HumanActions, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:ledger, Schema.Ledger, on_replace: :update, defaults_to_struct: true)
     embeds_many(:repos, Repo, on_replace: :delete)
   end
 
@@ -699,6 +702,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     |> cast_embed(:dependencies, with: &Schema.Dependencies.changeset/2)
     |> cast_embed(:notifications, with: &Schema.Notifications.changeset/2)
     |> cast_embed(:human_actions, with: &Schema.HumanActions.changeset/2)
+    |> cast_embed(:ledger, with: &Schema.Ledger.changeset/2)
     |> Schema.validate_profile_command_flags()
     |> cast_embed(:repos, with: &Repo.changeset/2, required: true)
     |> validate_length(:repos, min: 1)
@@ -741,7 +745,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, issue_gate} <- normalize_issue_gate(Map.get(config, "issue_gate", %{})),
          {:ok, dependency_audit} <- normalize_dependency_audit(Map.get(config, "dependency_audit", %{})),
          {:ok, dashboard} <- normalize_dashboard(Map.get(config, "dashboard", %{})),
-         {:ok, human_actions} <- normalize_human_actions(Map.get(config, "human_actions", %{})) do
+         {:ok, human_actions} <- normalize_human_actions(Map.get(config, "human_actions", %{})),
+         {:ok, ledger} <- normalize_ledger(Map.get(config, "ledger", %{})) do
       workspace = merge_section(workspace, "sandbox", Map.get(agent_config, "workspace_sandbox"))
 
       {:ok,
@@ -763,7 +768,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
        |> maybe_put("watchdog", Map.get(config, "watchdog"))
        |> merge_sections(dashboard)
        |> maybe_put("notifications", Map.get(config, "notifications"))
-       |> maybe_put("human_actions", human_actions)}
+       |> maybe_put("human_actions", human_actions)
+       |> maybe_put("ledger", ledger)}
     end
   end
 
@@ -1298,6 +1304,13 @@ defmodule SymphonyElixir.Config.SystemSchema do
   defp normalize_human_actions(config) do
     with {:ok, config} <- section_map(config, "human_actions"),
          :ok <- reject_unknown_section_keys(config, section_keys("human_actions"), "human_actions") do
+      {:ok, config}
+    end
+  end
+
+  defp normalize_ledger(config) do
+    with {:ok, config} <- section_map(config, "ledger"),
+         :ok <- reject_unknown_section_keys(config, section_keys("ledger"), "ledger") do
       {:ok, config}
     end
   end

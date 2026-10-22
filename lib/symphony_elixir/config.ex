@@ -576,6 +576,31 @@ defmodule SymphonyElixir.Config do
     operator_setting(& &1.agent.mcp_tool_timeout_ms, :mcp_tool_timeout_ms, @default_mcp_tool_timeout_ms)
   end
 
+  @doc """
+  How many days a finished ticket's artifact files are kept: symphony.yml's
+  `ledger.artifact_retention_days`, read on each call, else 14.
+  """
+  @spec artifact_retention_days() :: pos_integer()
+  def artifact_retention_days, do: ledger_setting(:artifact_retention_days)
+
+  @doc """
+  The largest file `SymphonyElixir.Artifacts.ingest/3` takes in, in bytes: symphony.yml's
+  `ledger.artifact_max_bytes`, read on each call, else 25 MB.
+  """
+  @spec artifact_max_bytes() :: pos_integer()
+  def artifact_max_bytes, do: ledger_setting(:artifact_max_bytes)
+
+  # While symphony.yml can't be read, the section's defaults apply.
+  defp ledger_setting(field) do
+    ledger =
+      case system() do
+        {:ok, system_config} -> system_config.ledger
+        {:error, _reason} -> %Schema.Ledger{}
+      end
+
+    Map.fetch!(ledger, field)
+  end
+
   # A symphony.yml setting with no default of its own: unset, or while symphony.yml can't be
   # read, the application env (which tests set) and then `default` apply.
   defp operator_setting(read, env_key, default) do

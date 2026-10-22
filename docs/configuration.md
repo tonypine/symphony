@@ -29,6 +29,7 @@ Common optional sections:
 - `dependency_audit`
 - `notifications`
 - `human_actions`
+- `ledger`
 - `verification`
 - `workers`
 - `github`
@@ -2590,6 +2591,31 @@ human_actions:
   update posted. They show as `human_actions` in the dashboard's Linear usage table.
 - `min_update_interval_ms` (default `900000`): the least time between two updates to one project. A
   change inside that window is posted once the window has passed, with whatever is open by then.
+
+### `ledger`
+
+How long the ticket ledger keeps a finished ticket's artifact files (QA screenshots, run
+transcripts), and the largest file it stores. Both have a control in the Mac app's Settings, under
+Ledger.
+
+```yaml
+ledger:
+  artifact_retention_days: 14
+  artifact_max_bytes: 26214400
+```
+
+- `artifact_retention_days` (default `14`): once a ticket has been in a terminal state for this many
+  days (its newest ledger event is older than that), Symphony removes the bytes of its artifacts and
+  keeps their metadata and the events that name them; the artifacts API answers 410 with the
+  metadata. It runs every `workspaces.cleanup.interval_ms` and asks Linear for the states of the
+  tickets whose artifacts are old enough, one request per 50 tickets (shown as `artifact_retention`
+  in the dashboard's Linear usage table). A file shared with a ticket that isn't finished keeps its
+  bytes, and so does every file of a ticket Linear doesn't return.
+- `artifact_max_bytes` (default `26214400`, 25 MB): the largest file Symphony stores as an
+  artifact; a larger one is refused.
+
+Each must be a whole number above 0. Symphony reads them on each run and each stored file, so a
+change applies without a restart.
 
 **Waiting on you.** The list `/api/v1/state` returns as `waiting_on_you`, which the dashboard and
 the menu bar app show, is the Mac app's Inbox (`GET /api/v1/inbox`) in short. Symphony builds it on

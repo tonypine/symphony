@@ -2228,6 +2228,34 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule Ledger do
+    @moduledoc """
+    `symphony.yml`'s `ledger` section: how many days a finished ticket's artifact files are kept
+    (`artifact_retention_days`) and the largest file `SymphonyElixir.Artifacts.ingest/3` takes in
+    (`artifact_max_bytes`).
+    """
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @type t :: %__MODULE__{}
+
+    @primary_key false
+    @fields [:artifact_retention_days, :artifact_max_bytes]
+
+    embedded_schema do
+      field(:artifact_retention_days, :integer, default: 14)
+      field(:artifact_max_bytes, :integer, default: 26_214_400)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, @fields, empty_values: [])
+      |> validate_number(:artifact_retention_days, greater_than: 0)
+      |> validate_number(:artifact_max_bytes, greater_than: 0)
+    end
+  end
+
   defmodule Notifications do
     @moduledoc false
     use Ecto.Schema
