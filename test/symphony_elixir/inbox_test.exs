@@ -225,8 +225,39 @@ defmodule SymphonyElixir.InboxTest do
       assert %{comment_id: "q2", question: "How long does a gift card last?"} = card
     end
 
+    test "a plan counts the answers given since it last came back to review, which no revision applied yet" do
+      reply = fn id, parent, at -> %{"id" => id, "body" => "Decision from the Director:\n\n1. Q\n   **Decision:** B", "createdAt" => at, "parent" => %{"id" => parent}} end
+
+      plan =
+        issue_node("SHOP-330", %{
+          "history" => %{"nodes" => [moved("Plan Review", "2026-10-01T08:00:00Z"), moved("Plan Review", "2026-10-01T10:00:00Z")]},
+          "comments" => %{
+            "nodes" => [
+              reply.("a2", "q2", "2026-10-01T10:16:00Z"),
+              reply.("a4", "q4", nil),
+              comment("q4", request_body(), "2026-10-01T09:59:30Z"),
+              reply.("a1", "q1", "2026-10-01T10:15:00Z"),
+              %{"id" => "w3", "body" => Request.render_withdrawal("Not needed"), "createdAt" => "2026-10-01T10:14:00Z", "parent" => %{"id" => "q3"}},
+              comment("q3", request_body(), "2026-10-01T09:59:00Z"),
+              comment("q2", request_body(), "2026-10-01T09:58:00Z"),
+              comment("q1", request_body(), "2026-10-01T09:57:00Z"),
+              reply.("a0", "q0", "2026-10-01T09:00:00Z"),
+              comment("q0", request_body(), "2026-10-01T07:57:00Z")
+            ]
+          }
+        })
+
+      # The first round's answer was applied by the revision that brought the plan back at 10:00; an
+      # answer read without its time can't be told apart, so it isn't counted.
+      assert %{kind: :plan, review: %{unapplied_answers: 2}} = Item.from_node(plan, "shop", %Schema{}, lookups())
+
+      # A plan whose history shows no move into review counts none.
+      undated = %{plan | "history" => %{"nodes" => [%{"createdAt" => nil, "toState" => %{"name" => "Plan Review"}}]}}
+      assert %{review: %{unapplied_answers: 0}} = Item.from_node(undated, "shop", %Schema{}, lookups())
+    end
+
     test "a plan without a brief asks for its approval" do
-      assert %{kind: :plan, ask: "Approve the plan", review: %{brief: nil, sub_tickets: [], decisions: []}} =
+      assert %{kind: :plan, ask: "Approve the plan", review: %{brief: nil, sub_tickets: [], decisions: [], unapplied_answers: 0}} =
                Item.from_node(issue_node("SHOP-331"), "shop", %Schema{}, lookups())
     end
 

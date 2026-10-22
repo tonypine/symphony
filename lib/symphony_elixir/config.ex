@@ -599,8 +599,9 @@ defmodule SymphonyElixir.Config do
   def prompt_brief_enabled?, do: ledger_setting(:prompt_brief_enabled)
 
   @doc """
-  The size in tokens over which a ticket's history summary is logged as too large; the summary is
-  still rendered whole: symphony.yml's `ledger.prompt_brief_max_tokens`, read on each call, else
+  The size in tokens over which a ticket's history summary starts no agent until the Director says
+  how the ticket goes on (`SymphonyElixir.PromptBuilder.ticket_ledger_gate/2`); the summary is
+  always rendered whole: symphony.yml's `ledger.prompt_brief_max_tokens`, read on each call, else
   50,000.
   """
   @spec prompt_brief_max_tokens() :: pos_integer()

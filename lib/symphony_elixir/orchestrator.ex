@@ -3407,12 +3407,25 @@ defmodule SymphonyElixir.Orchestrator do
     case Tracker.fetch_plan_comments(issue_id) do
       {:ok, feedback} ->
         pending = PlanComments.pending(action, feedback, issue.state, last_run, started_at)
+        log_plan_comments_read(issue, action, feedback, pending, last_run, started_at)
         act_on_pending_plan_comments(issue, action, pending)
 
       {:error, reason} ->
         Logger.warning("Failed to read comments on breakdown parent: #{issue_context(issue)} reason=#{inspect(reason)}")
         false
     end
+  end
+
+  # Each read says what it saw, so a person's comment the poll passed over can be traced: an empty
+  # read caches the newest comment, and the parent is not read again until a newer one shows up.
+  defp log_plan_comments_read(issue, action, feedback, pending, last_run, started_at) do
+    since = PlanComments.since(action, feedback, issue.state, last_run, started_at)
+    owned = last_run |> Kernel.||(%{}) |> Map.get(:comment_ids) |> List.wrap() |> length()
+
+    Logger.debug(
+      "Read breakdown parent's plan comments: #{issue_context(issue)} action=#{action} comments=#{length(feedback.comments)} " <>
+        "pending=#{length(pending)} owned=#{owned} since=#{inspect(since)}"
+    )
   end
 
   defp act_on_pending_plan_comments(_issue, _action, []), do: true

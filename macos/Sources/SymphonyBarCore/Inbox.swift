@@ -191,20 +191,33 @@ public struct InboxReview: Equatable {
     /// A plan's open questions: the requests its plan run raised, each answered in the Inbox like an action's, oldest
     /// first. The brief links to them; it never restates them.
     public var questions: [Action]
+    /// A plan's answers given since it last came back to review: no revision has applied them yet.
+    public var unappliedAnswers: Int
     public var clarify: Clarify?
     public var blocked: Blocked?
 
     public init(
         brief: Brief? = nil, subTickets: [SubTicket] = [], pullRequest: PullRequest? = nil, action: Action? = nil, questions: [Action] = [],
-        clarify: Clarify? = nil, blocked: Blocked? = nil
+        unappliedAnswers: Int = 0, clarify: Clarify? = nil, blocked: Blocked? = nil
     ) {
         self.brief = brief
         self.subTickets = subTickets
         self.pullRequest = pullRequest
         self.action = action
         self.questions = questions
+        self.unappliedAnswers = unappliedAnswers
         self.clarify = clarify
         self.blocked = blocked
+    }
+
+    /// The warning a plan with unapplied answers carries: approving it now approves it without them. Nil when every
+    /// answer was applied.
+    public var unappliedAnswersWarning: String? {
+        switch unappliedAnswers {
+        case ..<1: nil
+        case 1: "1 answer not yet applied: Symphony hasn't revised the plan from it yet."
+        default: "\(unappliedAnswers) answers not yet applied: Symphony hasn't revised the plan from them yet."
+        }
     }
 
     /// The brief in its parts, or as text when it didn't parse.
@@ -503,6 +516,7 @@ public struct InboxReview: Equatable {
         let pullRequest: PullRequestPayload?
         /// A plan's questions.
         let decisions: [RequestPayload]?
+        let unappliedAnswers: Int?
         // An action.
         let title: String?
         let question: String?
@@ -571,6 +585,7 @@ public struct InboxReview: Equatable {
                     confirm: nil
                 )
             },
+            unappliedAnswers: payload.unappliedAnswers ?? 0,
             clarify: payload.held.map { held in
                 Clarify(
                     held: held,

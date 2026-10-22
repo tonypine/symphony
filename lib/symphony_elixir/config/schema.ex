@@ -2230,8 +2230,8 @@ defmodule SymphonyElixir.Config.Schema do
     (`artifact_retention_days`), the largest file `SymphonyElixir.Artifacts.ingest/3` takes in
     (`artifact_max_bytes`), whether agents' prompts carry the summary of the ticket's history
     (`prompt_brief_enabled`, `SymphonyElixir.TicketEvents.Brief`) and the size in tokens over which
-    a summary is logged as too large (`prompt_brief_max_tokens`), a guard and never a budget: the
-    summary is always rendered whole.
+    a run asks the Director before its agent starts (`prompt_brief_max_tokens`), a guard and never a
+    budget: the summary is always rendered whole.
     """
     use Ecto.Schema
     import Ecto.Changeset

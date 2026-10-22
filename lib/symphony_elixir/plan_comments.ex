@@ -91,10 +91,10 @@ defmodule SymphonyElixir.PlanComments do
   run to measure from and no move into `state` in the history, there are none.
   """
   @spec pending(action(), feedback(), String.t(), last_run() | nil, DateTime.t() | nil) :: [comment()]
-  def pending(action, %{state_changes: changes, comments: comments}, state, last_run, started_at) do
+  def pending(action, %{comments: comments} = feedback, state, last_run, started_at) do
     owned = MapSet.new(owned_ids(last_run))
 
-    case since(action, entered_at(changes, state), last_run, started_at) do
+    case since(action, feedback, state, last_run, started_at) do
       nil ->
         []
 
@@ -105,6 +105,14 @@ defmodule SymphonyElixir.PlanComments do
         |> Enum.sort_by(& &1.created_at, DateTime)
     end
   end
+
+  @doc """
+  The time `pending/5` counts comments from, with the same arguments: nil when there is no run to
+  measure from and no move into `state` in the history.
+  """
+  @spec since(action(), feedback(), String.t(), last_run() | nil, DateTime.t() | nil) :: DateTime.t() | nil
+  def since(action, %{state_changes: changes}, state, last_run, started_at),
+    do: since_from(action, entered_at(changes, state), last_run, started_at)
 
   @doc "True when a person wrote `comment`: not an integration bot, not one of Symphony's own comments and not a supervisor's note."
   @spec human?(comment() | term()) :: boolean()
@@ -125,12 +133,12 @@ defmodule SymphonyElixir.PlanComments do
       "Symphony re-plans it, cancels only the sub-tickets still in Backlog and keeps the ones already promoted."
   end
 
-  defp since(:revise, _entered_at, %{started_at: %DateTime{} = run_started_at, comment_ids: ids}, _started_at) when is_list(ids),
+  defp since_from(:revise, _entered_at, %{started_at: %DateTime{} = run_started_at, comment_ids: ids}, _started_at) when is_list(ids),
     do: run_started_at
 
-  defp since(_action, nil, _last_run, _started_at), do: nil
-  defp since(:revise, entered_at, last_run, _started_at), do: latest(entered_at, ended_at(last_run))
-  defp since(:answer, entered_at, last_run, started_at), do: entered_at |> latest(ended_at(last_run)) |> latest(started_at)
+  defp since_from(_action, nil, _last_run, _started_at), do: nil
+  defp since_from(:revise, entered_at, last_run, _started_at), do: latest(entered_at, ended_at(last_run))
+  defp since_from(:answer, entered_at, last_run, started_at), do: entered_at |> latest(ended_at(last_run)) |> latest(started_at)
 
   defp ended_at(%{ended_at: %DateTime{} = at}), do: at
   defp ended_at(_last_run), do: nil

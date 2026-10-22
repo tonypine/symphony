@@ -447,7 +447,7 @@ final class InboxTests: XCTestCase {
           {"identifier": "X-4", "kind": "clarify", "review": {"held": false, "found": "Empty."}},
           {"identifier": "X-5", "kind": "plan", "review": {"brief": {"format": "parsed",
             "moves": [{"move": "approve"}], "what_to_review": [{"links": [{"url": "https://example.com/a"}]}]}, "sub_tickets": [{"title": "no id"}],
-            "decisions": [{"question": "Q?", "options": [{"label": "A"}, {"effect": "no label"}]}, {}]}},
+            "decisions": [{"question": "Q?", "options": [{"label": "A"}, {"effect": "no label"}]}, {}], "unapplied_answers": 2}},
           {"identifier": "X-6", "kind": "action", "review": {"comment_id": "c-6", "options": [{"label": "Merge", "recommended": true}], "confirm": "Merging"}}
         ]}
         """
@@ -466,6 +466,13 @@ final class InboxTests: XCTestCase {
         XCTAssertTrue(InboxReview.Clarify(held: true, questions: []).nextLine.hasPrefix("Symphony scores the ticket again"))
         guard case let .parsed(brief)? = inbox.items[3].review.brief else { return XCTFail("not parsed") }
         XCTAssertEqual(inbox.items[3].review.questions.count, 2)
+        XCTAssertEqual(inbox.items[3].review.unappliedAnswers, 2)
+        XCTAssertEqual(inbox.items[3].review.unappliedAnswersWarning, "2 answers not yet applied: Symphony hasn't revised the plan from them yet.")
+        XCTAssertEqual(inbox.items[0].review.unappliedAnswers, 0)
+        XCTAssertNil(inbox.items[0].review.unappliedAnswersWarning)
+        XCTAssertEqual(
+            InboxReview(unappliedAnswers: 1).unappliedAnswersWarning, "1 answer not yet applied: Symphony hasn't revised the plan from it yet."
+        )
         XCTAssertEqual(inbox.items[3].review.questions[0].options.map(\.label), ["A"])
         XCTAssertNil(inbox.items[3].review.decisions[0].initialPick)
         // A question with no options is no decision, and still keeps its place.

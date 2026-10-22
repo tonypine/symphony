@@ -9,13 +9,18 @@ defmodule SymphonyElixir.PromptBuilder do
     Config,
     Decisions,
     LandingOrder,
+    MergeConfirmation,
     PromptSafety,
+    RunStore,
+    TicketSignals,
     TicketState,
     Workflow
   }
 
+  alias SymphonyElixir.HumanActions.PlainWords
+  alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PathUnlock
-  alias SymphonyElixir.TicketEvents.Brief
+  alias SymphonyElixir.TicketEvents.{Brief, Event}
 
   require Logger
 
@@ -38,6 +43,8 @@ defmodule SymphonyElixir.PromptBuilder do
   @ticket_state_limit 4_000
   @open_pr_limit 10
   @open_pr_file_limit 15
+  @go_on "Go on with the whole summary"
+  @cancel "Cancel the ticket"
   @compact_ci_log_truncation_marker "[Symphony truncated earlier CI log lines to fit the compact prompt]"
   @codex_transport_output_guard """
   Codex transport output guard:
@@ -711,7 +718,8 @@ defmodule SymphonyElixir.PromptBuilder do
   # when `ledger.prompt_brief_enabled` is on. `:ticket_ledger` passes a summary already built (the
   # workflow preview's sample), else it is read from the store. It carries agent and person text, so
   # it is wrapped as untrusted input, and it is never cut: over `ledger.prompt_brief_max_tokens` it
-  # is still rendered whole, and a warning is logged.
+  # is still rendered whole, since a run only gets here once the Director chose to go on with it
+  # (`ticket_ledger_gate/2`).
   defp append_ticket_ledger(prompt, opts) do
     ticket_state = Keyword.get(opts, :ticket_state)
 
@@ -743,9 +751,143 @@ defmodule SymphonyElixir.PromptBuilder do
     limit = Config.prompt_brief_max_tokens()
 
     if tokens > limit do
-      Logger.warning("Ticket history summary over ledger.prompt_brief_max_tokens #{ticket_context(state)} tokens=#{tokens} limit=#{limit}; rendered whole")
+      Logger.info("Ticket history summary over ledger.prompt_brief_max_tokens #{ticket_context(state)} tokens=#{tokens} limit=#{limit}; rendered whole")
     end
   end
+
+  @typedoc "What a ticket's history summary lets its run do before the agent starts (`ticket_ledger_gate/2`)."
+  @type ticket_ledger_gate :: :start | :waiting | :cancel | {:ask, map()}
+
+  @doc """
+  What the summary of `issue`'s history lets its run do before the agent starts, with
+  `ledger.prompt_brief_enabled` on. The size limit (`ledger.prompt_brief_max_tokens`) only guards
+  against something absurd, so nothing is ever left out to fit it: a summary over it is raised to
+  the Director instead.
+
+    * `:start`: the summary is within the limit, or the Director answered one of the ticket's
+      summary requests with **#{@go_on}**, which holds for every later run whatever the size.
+    * `{:ask, request}`: the summary is over the limit, with the decision request to raise
+      (`summary_request/3`, through `SymphonyElixir.DecisionRequest.ask/4`).
+    * `:waiting`: over the limit, and the ticket's latest summary request is still open.
+    * `:cancel`: the Director answered the latest one with **#{@cancel}**, and no move was recorded
+      since (a person who brought the ticket back wins over the answer).
+
+  The answers are read from the ticket's ledger: the `decision.recorded` event naming the request,
+  never Linear's text. With the summary off the limit is never checked, and a ticket whose ledger
+  can't be read starts as it would without the check. `opts[:repo_key]` names the repo when the issue
+  doesn't.
+  """
+  @spec ticket_ledger_gate(Issue.t(), keyword()) :: ticket_ledger_gate()
+  def ticket_ledger_gate(%Issue{id: issue_id} = issue, opts) do
+    repo_key = Keyword.get(opts, :repo_key) || issue.repo_key
+
+    with true <- Config.prompt_brief_enabled?(),
+         true <- is_binary(repo_key) and is_binary(issue_id),
+         record when not is_tuple(record) <- RunStore.get_ticket_state(repo_key, issue_id),
+         events when is_list(events) <- RunStore.list_ticket_events(repo_key, issue_id, []) do
+      ledger_gate(issue, Brief.build(record, events), summary_requests(issue, events), events)
+    else
+      _off_or_unreadable -> :start
+    end
+  end
+
+  defp ledger_gate(issue, brief, requests, events) do
+    limit = Config.prompt_brief_max_tokens()
+    latest = List.last(requests)
+
+    cond do
+      Enum.any?(requests, &(&1.pick == :go_on)) -> :start
+      latest && latest.pick == :cancel && not moved_since?(events, latest.answer) -> :cancel
+      brief.tokens <= limit -> :start
+      latest && is_nil(latest.answer) -> :waiting
+      true -> {:ask, summary_request(issue, brief, limit)}
+    end
+  end
+
+  # The ticket's summary requests, oldest first, each with the event that ended it (nil while open)
+  # and what that answer picks. A request is told by its title, which names only the ticket.
+  defp summary_requests(issue, events) do
+    title = summary_title(issue)
+    ends = Enum.filter(events, &(&1.type in ["decision.recorded", "decision.withdrawn"]))
+
+    for %Event{type: "decision.requested", id: id} = request <- events, TicketSignals.same_text?(payload(request, :title), title) do
+      answer = Enum.find(ends, &(payload(&1, :request) == id))
+      %{answer: answer, pick: summary_pick(answer)}
+    end
+  end
+
+  defp summary_pick(%Event{type: "decision.recorded"} = answer) do
+    case MergeConfirmation.picked_option([@go_on, @cancel], [payload(answer, :answer) || ""]) do
+      1 -> :go_on
+      2 -> :cancel
+      nil -> nil
+    end
+  end
+
+  defp summary_pick(_open_or_withdrawn), do: nil
+
+  # The store lists a ticket's events in the order they happened.
+  defp moved_since?(events, answer), do: events |> Enum.drop_while(&(&1.id != answer.id)) |> Enum.any?(&(&1.type == "phase.entered"))
+
+  defp payload(%Event{payload: payload}, key), do: Map.get(payload, key, Map.get(payload, Atom.to_string(key)))
+
+  @doc """
+  The decision request a run raises when the summary of `issue`'s history (`brief`) is over its
+  size `limit` in tokens, written to the decision-writing standard: what the summary holds and its
+  size against the limit, and the two ways on, **#{@go_on}** and **#{@cancel}**.
+  """
+  @spec summary_request(Issue.t(), Brief.t(), non_neg_integer()) :: map()
+  def summary_request(%Issue{} = issue, brief, limit) do
+    label = issue.identifier || "This ticket"
+
+    %{
+      title: summary_title(issue),
+      question:
+        "The summary of #{named(issue)}'s history, which every agent run on it starts from, is over its size limit. " <>
+          "How should #{label} go on?",
+      why:
+        "The summary has #{count(brief.decisions, "decision")}, #{count(brief.open_findings, "open finding")}, " <>
+          "#{count(brief.notes, "note")} and #{count(brief.runs, "run")}. " <>
+          "It is about #{brief.tokens} tokens long, and its limit is #{limit} tokens. " <>
+          "Symphony leaves nothing out of a summary, so no agent has started.\n\n" <>
+          "A ticket this large usually means something went wrong earlier on it, such as a QA loop that kept recording findings.",
+      if_unanswered: "#{label} stays#{in_state(issue)} and no agent works on it.",
+      options: [
+        %{
+          label: @go_on,
+          effect: "#{label} continues where it is, and every run on it gets the whole summary from then on, whatever its size",
+          recommended: true,
+          tradeoffs: [
+            %{kind: "good", text: "the work goes on, and the next run sees everything that happened"},
+            %{kind: "cost", text: "each run on it reads a long summary"}
+          ]
+        },
+        %{
+          label: @cancel,
+          effect: "#{label} moves to Canceled and no agent works on it again",
+          tradeoffs: [
+            %{kind: "good", text: "a ticket that went wrong stops spending runs"},
+            %{kind: "risk", text: "the work done on it so far is dropped"}
+          ]
+        }
+      ],
+      recommendation_reason: "Nothing is lost by going on, and the whole summary shows the next run what went wrong."
+    }
+  end
+
+  defp summary_title(issue), do: "#{issue.identifier || issue.id}'s ticket summary is over its size limit"
+
+  # The ticket by its identifier and its title, in plain words.
+  defp named(%Issue{identifier: identifier, title: title}) when is_binary(identifier) and is_binary(title) and title != "",
+    do: "#{identifier} (#{title |> PlainWords.scrub() |> String.trim()})"
+
+  defp named(issue), do: issue.identifier || "this ticket"
+
+  defp count(1, noun), do: "1 #{noun}"
+  defp count(number, noun), do: "#{number} #{noun}s"
+
+  defp in_state(%Issue{state: state}) when is_binary(state) and state != "", do: " in #{state}"
+  defp in_state(_issue), do: ""
 
   defp ticket_context(state), do: "issue_id=#{state.issue_id} issue_identifier=#{state.issue_identifier}"
 

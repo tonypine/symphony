@@ -208,6 +208,22 @@ GitHub or Linear in QA:
     Rework, …" with **Open PR**. The Inbox lists none of TP-704, TP-707 and TP-709.
   - VoiceOver: the card's summary reads as one element (the status word, the line, who acts
     next, since when, Updated), each action row as one, and each button by its title.
+- **Ticket timeline (TP-1193):** pass `macos/Tests/Fixtures/director-app/ticket-ledger` as
+  `api_fixtures` and open SHOP-410 from Tickets (Code Review & QA). Its clock is 2026-10-18 11:20
+  UTC. It serves the ticket's events feed and no live channel, so the page reads the feed after
+  each state poll. The **Timeline** card shows each run as a group: "QA run 1 failed" holds "QA
+  found clipped at 1440×900" with two screenshot thumbnails, "QA found state missing" with a
+  "Screenshot unavailable" placeholder, and "QA verdict: fail" as its last row; "QA run 2
+  running" holds a note with a reply under it. Click a group's chevron: its rows fold and the
+  header keeps its state word; they stay folded across the next polls. Click a thumbnail: the
+  full image opens in a sheet, and Esc closes it. VoiceOver reads the chevron as "Collapse QA run
+  1, failed", a thumbnail as "Screenshot Run header at 1440×900, opens full size", the
+  placeholder as "Screenshot Verdict badge after refresh unavailable", and the running symbol as
+  "Running". Walk it at 1440×900 and 2560×1440, light and dark: nothing clipped; at 1440×900
+  the thumbnails wrap when the window narrows and the page scrolls. Then launch with
+  `macos/Tests/Fixtures/director-app/ticket-ledger-no-feed` (an older Symphony, no feed): the
+  same ticket's timeline is today's, "Implementation run 1", "QA pass run 1" and "QA failed"
+  with "on bbb2222", and the app doesn't crash.
 - **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
   state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one
   warning, `symphony.yml sets auto_review.enabled, which is deprecated` (**Remove…**). Before

@@ -360,8 +360,8 @@ struct SettingsView: View {
                     .disabled(!model.promptBriefEnabled)
                     Text(
                         "Every agent starts from a summary of the ticket's whole history: every decision, open finding "
-                            + "and note in full. Nothing is left out: a summary over the limit is still given whole, and "
-                            + "Symphony logs a warning."
+                            + "and note in full. Nothing is left out: a ticket whose summary is over the limit waits for you "
+                            + "to choose in the Inbox whether it goes on with the whole summary or is canceled."
                     )
                     .foregroundStyle(.secondary)
                     if let error = model.ledgerError {

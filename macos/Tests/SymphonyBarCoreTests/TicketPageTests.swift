@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import XCTest
 @testable import SymphonyBarCore
@@ -561,5 +562,436 @@ final class TicketRowTests: XCTestCase {
         XCTAssertEqual(LiveAPIClient.url("api/v1/audit?issue=SHOP-305&type=run_stopped", base: base)?.absoluteString,
                        "http://127.0.0.1:4000/api/v1/audit?issue=SHOP-305&type=run_stopped")
         XCTAssertEqual(LiveAPIClient.url("api/v1/state", base: base)?.absoluteString, "http://127.0.0.1:4000/api/v1/state")
+    }
+}
+
+// MARK: - The timeline from the events feed (TP-1193)
+
+/// Answers each read of the feed with the next canned answer, the last one again once they run out; while `holding`,
+/// a read waits for `release()`.
+@MainActor
+private final class ScriptedFeed {
+    var answers: [EndpointResult] = []
+    private(set) var paths: [String] = []
+    var holding = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    var get: TicketEventsReader.Get { { [unowned self] path in await answer(path) } }
+
+    private func answer(_ path: String) async -> EndpointResult {
+        paths.append(path)
+        if holding { await withCheckedContinuation { waiting.append($0) } }
+        return answers.count > 1 ? answers.removeFirst() : answers.first ?? .unsupported
+    }
+
+    func release() {
+        holding = false
+        waiting.forEach { $0.resume() }
+        waiting = []
+    }
+}
+
+/// The live channel, scripted: each opening is answered with the next status code, and the test writes its body.
+@MainActor
+private final class ScriptedChannel: PollScheduler {
+    var answers: [Int] = []
+    private(set) var body: AsyncThrowingStream<Data, Error>.Continuation?
+    /// The try the stream scheduled after a drop.
+    private(set) var retry: (@MainActor () -> Void)?
+
+    var connect: EventStream.Connect {
+        { [unowned self] _ in
+            guard !answers.isEmpty else { throw URLError(.cannotConnectToHost) }
+            let (body, continuation) = AsyncThrowingStream<Data, Error>.makeStream()
+            self.body = continuation
+            return EventStream.Response(statusCode: answers.removeFirst(), body: body)
+        }
+    }
+
+    nonisolated func schedule(after interval: TimeInterval, _ action: @escaping @MainActor () -> Void) -> PollTimer {
+        MainActor.assumeIsolated { retry = action }
+        return Idle()
+    }
+
+    private struct Idle: PollTimer {
+        func cancel() {}
+    }
+
+    func stream() -> EventStream {
+        EventStream(base: { URL(string: "http://127.0.0.1:4000") }, connect: connect, scheduler: self)
+    }
+
+    /// Symphony's notice that it wrote an event on `identifier`.
+    func notice(_ identifier: String, repoKey: String? = "web-shop") {
+        let repo = repoKey.map { #""repo_key":"\#($0)","# } ?? ""
+        body?.yield(Data("event: ticket\ndata: {\(repo)\"issue_id\":\"i-410\",\"issue_identifier\":\"\(identifier)\",\"event_id\":\"ev-x\",\"type\":\"note\"}\n\n".utf8))
+    }
+}
+
+@MainActor
+final class TicketPageFeedTests: XCTestCase {
+    private let utc = TimeZone(identifier: "UTC")!
+    private var cancellables = Set<AnyCancellable>()
+
+    private static func director(_ name: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/director-app/\(name)", isDirectory: true)
+    }
+
+    private var feedData: Data { get throws { try Data(contentsOf: TicketEventsTests.sharedFixture) } }
+
+    /// The page as the window builds it from a QA fixture's files, with what the feed's reader read.
+    private func fixturePage(_ name: String, events: TicketEventsPayload?) throws -> TicketPage {
+        let api = Self.director(name).appendingPathComponent("api/v1")
+        return TicketPage(
+            identifier: "SHOP-410",
+            sources: TicketPage.Sources(
+                state: try Data(contentsOf: api.appendingPathComponent("state.json")),
+                issue: try Data(contentsOf: api.appendingPathComponent("SHOP-410.json")),
+                events: events
+            ),
+            timeZone: utc
+        )
+    }
+
+    /// Waits for the main actor's queued work (the channel's chunk, a read's start) until `done`.
+    private func settle(until done: () -> Bool) async {
+        for _ in 0 ..< 500 where !done() { await Task.yield() }
+    }
+
+    /// A page of the feed with QA run 2's result: its verdict and its end.
+    private static let qaRunTwoEnded = TicketEventsTests.page(nextSince: "2026-10-18T11:31:00Z", entries: [
+        TicketEventsTests.run("run-qa-2", number: 2, status: "ended", exit: "ended normally", verdict: "fail", ended: "2026-10-18T11:31:00Z", events: [
+            TicketEventsTests.event("ev-17", seq: 17, type: "finding.recorded", at: "2026-10-18T11:25:00Z", run: "run-qa-2", title: "QA found truncated"),
+            TicketEventsTests.event("ev-18", seq: 18, type: "verdict.recorded", at: "2026-10-18T11:30:00Z", run: "run-qa-2", title: "QA verdict: fail", payload: #"{"kind":"qa","outcome":"fail"}"#),
+            TicketEventsTests.event("ev-19", seq: 19, type: "run.ended", at: "2026-10-18T11:31:00Z", run: "run-qa-2", title: "QA run 2 ended", payload: #"{"exit":"ended normally"}"#),
+        ]),
+    ])
+
+    // MARK: - The page
+
+    func testWithTheFeedTheTimelineIsItsRunsAndEvents() throws {
+        let page = try fixturePage("ticket-ledger", events: TicketEventsTests.sharedPayload())
+
+        XCTAssertEqual(page.repoKey, "web-shop")
+        XCTAssertEqual(page.timeline.map(\.title), [
+            "Entered In Progress from Todo", "Implementation run 1", "Entered QA from Code Review", "QA run 1",
+            "Entered Rework from QA", "Note by you", "Entered QA from Code Review", "QA run 2",
+        ])
+        let failed = try XCTUnwrap(page.timeline.first { $0.runID == "run-qa-1" })
+        XCTAssertEqual(failed.resultWord, "failed")
+        XCTAssertEqual(failed.children.last?.title, "QA verdict: fail")
+        XCTAssertEqual(failed.children.flatMap(\.screenshots).count, 3)
+        XCTAssertEqual(page.timeline.last?.resultWord, "running")
+        // The state's generated_at is the reference: QA run 2 has run 9 minutes.
+        XCTAssertEqual(page.timeline.last?.duration, "9 min")
+    }
+
+    func testWithoutTheFeedThePageShowsTodaysTimeline() throws {
+        // An older Symphony: no feed, so the runs and the verdicts make the timeline.
+        for events in [nil, TicketEventsPayload()] {
+            let page = try fixturePage("ticket-ledger-no-feed", events: events)
+            XCTAssertEqual(page.timeline.map(\.title), ["Implementation run 1", "QA pass run 1", "QA failed"])
+            XCTAssertEqual(page.timeline[2].detail, "on bbb2222")
+            XCTAssertFalse(page.timeline.contains(where: \.isGroup))
+        }
+    }
+
+    func testAStopFromTheAppShowsUntilTheFeedHasCaughtUp() throws {
+        func page(stoppedAt: String) throws -> TicketPage {
+            TicketPage(
+                identifier: "SHOP-410",
+                sources: TicketPage.Sources(
+                    stops: [TicketPage.LocalStop(identifier: "SHOP-410", at: try XCTUnwrap(TicketPage.date(stoppedAt)), movedToBacklog: false)],
+                    events: try TicketEventsTests.sharedPayload()
+                ),
+                now: try XCTUnwrap(TicketPage.date("2026-10-18T11:20:00Z")),
+                timeZone: utc
+            )
+        }
+        XCTAssertEqual(try page(stoppedAt: "2026-10-18T11:15:00Z").timeline.last?.title, TicketPage.stoppedByYou)
+        XCTAssertFalse(try page(stoppedAt: "2026-10-18T11:00:00Z").timeline.contains { $0.title == TicketPage.stoppedByYou })
+    }
+
+    func testTheQAFixtureServesTheFileTheElixirTestChecksIn() throws {
+        let served = Self.director("ticket-ledger").appendingPathComponent("api/v1/repos/web-shop/tickets/SHOP-410/events.json")
+        XCTAssertEqual(try Data(contentsOf: served), try feedData)
+    }
+
+    func testTheQAFixturesAnswerTheFeedAndItsScreenshotsThroughTheWindowsClient() async throws {
+        let root = uniqueTemporaryDirectory("ticket-ledger")
+        defer { try? FileManager.default.removeItem(at: root) }
+        func client(_ name: String) -> LiveAPIClient {
+            let fixtures = APIFixtures(directory: Self.director(name), requestLog: root.appendingPathComponent("\(name).jsonl"))
+            return LiveAPIClient(fetch: LiveAPIClient.fetch(base: { APIFixtures.baseURL }, transport: fixtures.transport))
+        }
+
+        let ledger = client("ticket-ledger")
+        let reader = TicketEventsReader(get: { await ledger.get($0) })
+        XCTAssertTrue(reader.follow(identifier: "SHOP-410", repoKey: "web-shop"))
+        await reader.settle()
+        let events = try XCTUnwrap(reader.events)
+        XCTAssertEqual(events, try TicketEventsTests.sharedPayload())
+        // Without the channel's fixture the channel is unavailable, and each state poll reads the same page again.
+        reader.channelChanged(.unavailable)
+        reader.statePolled()
+        await reader.settle()
+        XCTAssertEqual(reader.requests.count, 2)
+        XCTAssertEqual(reader.events, events)
+
+        let images = ArtifactImages(get: { await ledger.answer($0) })
+        let shots = try fixturePage("ticket-ledger", events: events).timeline.flatMap(\.children).flatMap(\.screenshots)
+        for shot in shots { await images.load(shot)?.value }
+        XCTAssertEqual(shots.map { images.image($0) == .unavailable }, [false, false, true])
+        XCTAssertEqual(shots.compactMap { if case .loaded = images.image($0) { $0.label } else { nil } },
+                       ["Run header at 1440×900", "Run header at 1100×800"])
+
+        let older = client("ticket-ledger-no-feed")
+        let legacy = TicketEventsReader(get: { await older.get($0) })
+        legacy.follow(identifier: "SHOP-410", repoKey: "web-shop")
+        await legacy.settle()
+        XCTAssertNil(legacy.events)
+        XCTAssertTrue(legacy.isUnsupported)
+    }
+
+    // MARK: - Reading the feed
+
+    func testOpeningReadsEveryPageForwardAndStopsAtThePageThatAddsNothing() async throws {
+        func page(_ ids: [Int], next: String) -> EndpointResult {
+            .loaded(Data(TicketEventsTests.page(nextSince: next, entries: ids.map {
+                TicketEventsTests.event("e-\($0)", seq: $0, type: "note", at: String(format: "2026-10-18T10:%02d:00Z", $0), title: "Note \($0)")
+            }).utf8))
+        }
+        let feed = ScriptedFeed()
+        feed.answers = [page([1, 2], next: "2026-10-18T10:02:00Z"), page([3, 4], next: "2026-10-18T10:04:00Z"), page([3, 4], next: "2026-10-18T10:04:00Z")]
+        let reader = TicketEventsReader(get: feed.get, pageLimit: 2)
+
+        reader.follow(identifier: "SHOP-410", repoKey: "web-shop")
+        await reader.settle()
+
+        XCTAssertEqual(feed.paths, [
+            "api/v1/repos/web-shop/tickets/SHOP-410/events?group=run&limit=2",
+            "api/v1/repos/web-shop/tickets/SHOP-410/events?group=run&limit=2&since=2026-10-18T10:02:00Z",
+            "api/v1/repos/web-shop/tickets/SHOP-410/events?group=run&limit=2&since=2026-10-18T10:04:00Z",
+        ])
+        XCTAssertEqual(reader.events?.events.map(\.id), ["e-1", "e-2", "e-3", "e-4"])
+
+        // A short page is the last; and a read never asks for more than its bound.
+        feed.answers = [page([5], next: "2026-10-18T10:05:00Z")]
+        reader.read()
+        await reader.settle()
+        XCTAssertEqual(feed.paths.count, 4)
+        XCTAssertEqual(feed.paths.last, "api/v1/repos/web-shop/tickets/SHOP-410/events?group=run&limit=2&since=2026-10-18T10:04:00Z")
+
+        let endless = ScriptedFeed()
+        endless.answers = (0 ..< 10).map { page([10 + 2 * $0, 11 + 2 * $0], next: "2026-10-18T11:\(10 + $0):00Z") }
+        let bounded = TicketEventsReader(get: endless.get, pageLimit: 2, maxPages: 3)
+        bounded.follow(identifier: "SHOP-410", repoKey: "web-shop")
+        await bounded.settle()
+        XCTAssertEqual(endless.paths.count, 3)
+        XCTAssertEqual(bounded.events?.events.count, 6)
+    }
+
+    func testAFeedThatIsntThereLeavesTodaysTimeline() async throws {
+        var told: [TicketEventsPayload?] = []
+        let feed = ScriptedFeed()
+        feed.answers = [.loaded(try feedData)]
+        let reader = TicketEventsReader(get: feed.get)
+        reader.onChange = { told.append($0) }
+        reader.follow(identifier: "SHOP-410", repoKey: "web-shop")
+        await reader.settle()
+        XCTAssertNotNil(reader.events)
+
+        // Unreachable, or a body that isn't a feed page: no feed; the next read starts over.
+        for failure in [EndpointResult.failed("Symphony isn't answering"), .loaded(Data("<html>".utf8))] {
+            feed.answers = [failure]
+            reader.read()
+            await reader.settle()
+            XCTAssertNil(reader.events)
+            XCTAssertFalse(reader.isUnsupported)
+        }
+        feed.answers = [.loaded(try feedData)]
+        reader.statePolled()
+        await reader.settle()
+        XCTAssertNotNil(reader.events)
+        XCTAssertFalse(try XCTUnwrap(feed.paths.last).contains("since="), "a read after a failure reads it all")
+
+        // A 404: Symphony predates the feed. Nothing reads it again until the page opens anew.
+        feed.answers = [.unsupported]
+        reader.read()
+        await reader.settle()
+        XCTAssertNil(reader.events)
+        XCTAssertTrue(reader.isUnsupported)
+        let reads = feed.paths.count
+        reader.statePolled()
+        XCTAssertNil(reader.read())
+        XCTAssertEqual(feed.paths.count, reads)
+        XCTAssertEqual(told.map { $0 == nil }, [false, true, false, true])
+
+        reader.follow(identifier: nil, repoKey: nil)
+        feed.answers = [.loaded(try feedData)]
+        XCTAssertTrue(reader.follow(identifier: "SHOP-410", repoKey: "web-shop"))
+        await reader.settle()
+        XCTAssertNotNil(reader.events)
+    }
+
+    func testFollowsTheShownTicketOnceItsRepoIsKnown() async throws {
+        let feed = ScriptedFeed()
+        feed.answers = [.loaded(try feedData)]
+        let reader = TicketEventsReader(get: feed.get)
+
+        XCTAssertFalse(reader.follow(identifier: "SHOP-410", repoKey: nil), "no read before the repo is known")
+        XCTAssertNil(reader.read())
+        XCTAssertTrue(reader.follow(identifier: "SHOP-410", repoKey: "web-shop"))
+        await reader.settle()
+        // The same ticket, its repo unknown for a moment, keeps what it read.
+        XCTAssertFalse(reader.follow(identifier: "SHOP-410", repoKey: nil))
+        XCTAssertFalse(reader.follow(identifier: "SHOP-410", repoKey: "web-shop"))
+        XCTAssertNotNil(reader.events)
+
+        // Another ticket while a read is out: the read's answer is dropped.
+        feed.holding = true
+        XCTAssertTrue(reader.follow(identifier: "SHOP-411", repoKey: "web-shop"))
+        XCTAssertNil(reader.events)
+        await settle { feed.paths.count == 2 }
+        reader.follow(identifier: nil, repoKey: nil)
+        feed.release()
+        await reader.settle()
+        XCTAssertNil(reader.events)
+        XCTAssertNil(reader.identifier)
+        XCTAssertNil(reader.repoKey)
+    }
+
+    func testARunUnderWayTurnsToItsResultWhenTheChannelSaysSomethingHappened() async throws {
+        let channel = ScriptedChannel()
+        channel.answers = [200]
+        let stream = channel.stream()
+        let feed = ScriptedFeed()
+        feed.answers = [.loaded(try feedData)]
+        let reader = TicketEventsReader(get: feed.get)
+        reader.listen(to: stream)
+        stream.start()
+        await settle { stream.state == .connected }
+        XCTAssertEqual(reader.channel, .connected)
+
+        reader.follow(identifier: "SHOP-410", repoKey: "web-shop")
+        await reader.settle()
+        var page = try fixturePage("ticket-ledger", events: reader.events)
+        XCTAssertEqual(page.timeline.last?.title, "QA run 2")
+        XCTAssertEqual(page.timeline.last?.resultWord, "running")
+        XCTAssertEqual(page.timeline.last?.result, .current)
+
+        // While the channel is connected, a state poll reads nothing; another ticket's or repo's notice neither.
+        reader.statePolled()
+        channel.notice("SHOP-411")
+        channel.notice("SHOP-410", repoKey: "api")
+        await settle { false }
+        XCTAssertEqual(feed.paths.count, 1)
+
+        // QA records its result: Symphony's notice, then one read of what is newer than the cursor.
+        feed.answers = [.loaded(Data(Self.qaRunTwoEnded.utf8))]
+        channel.notice("SHOP-410")
+        await settle { feed.paths.count == 2 }
+        await reader.settle()
+        XCTAssertEqual(feed.paths.last, "api/v1/repos/web-shop/tickets/SHOP-410/events?group=run&limit=200&since=2026-10-18T11:13:00.000000Z")
+        page = try fixturePage("ticket-ledger", events: reader.events)
+        let run = try XCTUnwrap(page.timeline.last)
+        XCTAssertEqual(run.title, "QA run 2")
+        XCTAssertEqual(run.resultWord, "failed")
+        XCTAssertEqual(run.result, .failed)
+        XCTAssertEqual(run.children.last?.title, "QA verdict: fail")
+        XCTAssertEqual(run.foldAccessibilityLabel(folded: true), "Expand QA run 2, failed")
+        // The fold is kept by run id, the same before and after the read.
+        XCTAssertEqual(run.runID, "run-qa-2")
+        stream.stop()
+    }
+
+    func testNoticesDuringAReadLeadToOneMoreReadNotOneEach() async throws {
+        let channel = ScriptedChannel()
+        channel.answers = [200]
+        let stream = channel.stream()
+        let feed = ScriptedFeed()
+        feed.answers = [.loaded(try feedData)]
+        let reader = TicketEventsReader(get: feed.get)
+        reader.listen(to: stream)
+        stream.start()
+        await settle { stream.state == .connected }
+        reader.follow(identifier: "SHOP-410", repoKey: "web-shop")
+        await reader.settle()
+
+        feed.holding = true
+        channel.notice("SHOP-410")
+        await settle { feed.paths.count == 2 }
+        var heard = 0
+        stream.notices.sink { _ in heard += 1 }.store(in: &cancellables)
+        channel.notice("SHOP-410")
+        channel.notice("SHOP-410", repoKey: nil)
+        channel.notice("SHOP-410")
+        await settle { heard == 3 }
+        XCTAssertEqual(feed.paths.count, 2)
+        feed.release()
+        await reader.settle()
+
+        XCTAssertEqual(feed.paths.count, 3)
+        stream.stop()
+    }
+
+    func testReadsAfterEachStatePollOnlyWhileTheChannelIsDown() async throws {
+        let channel = ScriptedChannel()
+        channel.answers = [200, 200]
+        let stream = channel.stream()
+        let feed = ScriptedFeed()
+        feed.answers = [.loaded(try feedData)]
+        let reader = TicketEventsReader(get: feed.get)
+        reader.listen(to: stream)
+        stream.start()
+        await settle { stream.state == .connected }
+        reader.follow(identifier: "SHOP-410", repoKey: "web-shop")
+        await reader.settle()
+        reader.statePolled()
+        XCTAssertEqual(feed.paths.count, 1)
+
+        // The connection drops: each state poll reads what is new until it is back.
+        channel.body?.finish()
+        await settle { stream.state == .reconnecting(after: 1) }
+        reader.statePolled()
+        await reader.settle()
+        reader.statePolled()
+        await reader.settle()
+        XCTAssertEqual(feed.paths.count, 3)
+
+        // It reconnects: one read of what was written meanwhile, and no more reads on the poll.
+        try XCTUnwrap(channel.retry)()
+        await settle { stream.state == .connected }
+        await settle { feed.paths.count == 4 }
+        await reader.settle()
+        XCTAssertEqual(feed.paths.count, 4)
+        reader.statePolled()
+        XCTAssertEqual(feed.paths.count, 4)
+        stream.stop()
+    }
+
+    func testWithoutTheChannelEachStatePollReadsWhatIsNew() async throws {
+        // An older Symphony answers the channel 404.
+        let channel = ScriptedChannel()
+        channel.answers = [404]
+        let stream = channel.stream()
+        let feed = ScriptedFeed()
+        feed.answers = [.loaded(try feedData)]
+        let reader = TicketEventsReader(get: feed.get)
+        reader.listen(to: stream)
+        stream.start()
+        await settle { stream.state == .unavailable }
+        reader.follow(identifier: "SHOP-410", repoKey: "web-shop")
+        await reader.settle()
+
+        for _ in 0 ..< 3 {
+            reader.statePolled()
+            await reader.settle()
+        }
+        XCTAssertEqual(feed.paths.count, 4)
+        XCTAssertTrue(feed.paths.dropFirst().allSatisfy { $0.hasSuffix("since=2026-10-18T11:13:00.000000Z") })
     }
 }

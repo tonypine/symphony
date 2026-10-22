@@ -18,7 +18,9 @@ defmodule SymphonyElixir.Inbox.Item do
 
   A plan carries its `## Review brief` comment parsed (`SymphonyElixir.Inbox.ReviewBrief`) as
   `review.brief`, nil when it has none. Its questions are never read from the brief: the brief
-  links to the requests, and `review.decisions` lists them.
+  links to the requests, and `review.decisions` lists them. `review.unapplied_answers` counts the
+  answers given since the plan last came back to `Plan Review`, which no revision has applied yet:
+  the Inbox warns before such a plan is approved.
 
   A hold only becomes a `:blocked` item when nothing else already waits on the ticket: `from_node/4`
   reads the store's hold after `SymphonyElixir.HumanActions.Waiting` found no entry, so an open
@@ -32,6 +34,7 @@ defmodule SymphonyElixir.Inbox.Item do
   alias SymphonyElixir.HumanActions.{Collector, Waiting}
   alias SymphonyElixir.Inbox.ReviewBrief
   alias SymphonyElixir.MergeConfirmation
+  alias SymphonyElixir.PlanReview
 
   @type kind :: :action | :plan | :clarify | :blocked
   @type t :: %{
@@ -121,7 +124,14 @@ defmodule SymphonyElixir.Inbox.Item do
     |> Map.merge(%{requested_at: request.created_at, confirm: MergeConfirmation.confirm_target(store_hold(repo_key, node["id"], lookups))})
   end
 
-  defp review(:plan, node, _repo_key, settings, _lookups), do: %{brief: brief(node), sub_tickets: sub_tickets(node), decisions: plan_decisions(node, settings)}
+  defp review(:plan, node, _repo_key, settings, _lookups) do
+    %{
+      brief: brief(node),
+      sub_tickets: sub_tickets(node),
+      decisions: plan_decisions(node, settings),
+      unapplied_answers: unapplied_answers(node, settings)
+    }
+  end
 
   # A request as the Inbox shows it, an action's or a plan's: what it asks, why, what waits until it
   # is answered, the options with their trade-offs and why the recommended one. `comment_id` is what
@@ -150,6 +160,28 @@ defmodule SymphonyElixir.Inbox.Item do
     |> Enum.sort_by(&posted_at/1)
     |> Enum.map(fn {comment_id, request} -> request_review(comment_id, request) end)
   end
+
+  # The answers to the plan's requests given since the plan last came back to `Plan Review`: the
+  # revision that applies them has not handed the plan back yet, so approving it now approves a plan
+  # written without them. A plan whose history shows no move into review counts none.
+  defp unapplied_answers(node, settings) do
+    case entered_review_at(node, settings) do
+      %DateTime{} = entered_at -> node |> Collector.answered_requests() |> Enum.count(&later?(&1.at, entered_at))
+      nil -> 0
+    end
+  end
+
+  defp entered_review_at(node, settings) do
+    for %{"toState" => %{"name" => to}, "createdAt" => created_at} <- node |> get_in(["history", "nodes"]) |> List.wrap(),
+        PlanReview.in_state?(to, settings),
+        {:ok, at, _offset} <- [DateTime.from_iso8601(created_at || "")] do
+      at
+    end
+    |> Enum.max(DateTime, fn -> nil end)
+  end
+
+  defp later?(%DateTime{} = at, since), do: DateTime.compare(at, since) == :gt
+  defp later?(_at, _since), do: false
 
   defp posted_at({_comment_id, %{created_at: %DateTime{} = at}}), do: DateTime.to_unix(at, :microsecond)
   defp posted_at(_request), do: 0

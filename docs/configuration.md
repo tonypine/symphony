@@ -2632,9 +2632,14 @@ ledger:
   as untrusted input, since it carries agents' and people's text. `false` leaves the prompt as it
   was before the summary existed. `symphony workflow preview` shows it for a sample ticket.
 - `prompt_brief_max_tokens` (default `50000`, about 200 decisions and open findings with their whole
-  text): a guard against a summary that grew absurdly, not a budget. A summary over it (its size in
-  tokens is its bytes / 4) is still given to the agent whole, and Symphony logs one warning naming
-  the ticket and the size.
+  text): a guard against a summary that grew absurdly, not a budget. Nothing is ever left out of a
+  summary to fit it. A ticket whose summary is over it (its size in tokens is its bytes / 4) starts
+  no agent: Symphony asks the Director how it goes on, with what the summary holds and its size, and
+  the ticket waits on that decision in its phase. **Go on with the whole summary** lets it continue,
+  and every later run on it gets the whole summary whatever its size; **Cancel the ticket** moves it
+  to `Canceled`; an answer in the Director's own words lets it continue, and its next run asks again
+  while the summary is still over. The answer is read from the ticket's ledger. With
+  `prompt_brief_enabled: false` the limit is never checked.
 
 `prompt_brief_enabled` is `true` or `false`; the other three must each be a whole number above 0.
 Symphony reads them on each run, each prompt and each stored file, so a change applies without a

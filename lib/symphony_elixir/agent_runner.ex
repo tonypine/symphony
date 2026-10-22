@@ -17,6 +17,7 @@ defmodule SymphonyElixir.AgentRunner do
     CodeReview,
     Config,
     Connected,
+    DecisionRequest,
     Decisions,
     DependencyAudit,
     DependencyGate,
@@ -648,7 +649,59 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
+  # A ticket whose history summary is over its size limit starts no agent until the Director says how
+  # it goes on (`PromptBuilder.ticket_ledger_gate/2`).
   defp run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host) do
+    case PromptBuilder.ticket_ledger_gate(issue, repo_key: run_repo_key(issue, opts)) do
+      :start -> start_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
+      gate -> stop_for_ticket_summary(gate, issue, opts)
+    end
+  end
+
+  # The run ends like any run a hold stopped: not a failure, and the hold, not a retry, says when the
+  # ticket runs again. A request that can't be raised fails the run, so the next one asks again.
+  defp stop_for_ticket_summary({:ask, request}, issue, opts) do
+    case DecisionRequest.ask(issue, request, [repo_key: run_repo_key(issue, opts)] ++ Keyword.take(opts, [:tracker])) do
+      :ok ->
+        Logger.info("Starting no agent for #{issue_context(issue)}: its ticket summary is over ledger.prompt_brief_max_tokens; asked the Director how it goes on")
+        :ok
+
+      {:error, reason} ->
+        {:error, {:ticket_summary_request_failed, reason}}
+    end
+  end
+
+  defp stop_for_ticket_summary(:waiting, issue, _opts) do
+    Logger.info("Starting no agent for #{issue_context(issue)}: its ticket summary is over ledger.prompt_brief_max_tokens and the Director's answer is pending")
+    :ok
+  end
+
+  defp stop_for_ticket_summary(:cancel, issue, opts) do
+    case cancel_issue(issue, opts) do
+      {:ok, state} ->
+        record_move_signal(issue, "decision returned", %{move: "cancel", from: issue.state, to: state}, opts)
+        Logger.info("Moved #{issue_context(issue)} to #{state}: the Director canceled it over its ticket summary")
+        :ok
+
+      {:error, reason} ->
+        {:error, {:ticket_summary_cancel_failed, reason}}
+    end
+  end
+
+  # The team's canceled state, under either spelling.
+  defp cancel_issue(issue, opts) do
+    ctx = %{repo_key: run_repo_key(issue, opts)}
+
+    Enum.reduce_while(["Canceled", "Cancelled"], {:error, :state_not_found}, fn state, _result ->
+      case TransitionGuard.perform(issue.id, :director_move, Map.put(ctx, :target, state), Keyword.take(opts, [:tracker])) do
+        :ok -> {:halt, {:ok, state}}
+        {:error, :state_not_found} = error -> {:cont, error}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp start_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host) do
     settings = Keyword.fetch!(opts, :settings)
     max_turns = Keyword.get(opts, :max_turns, settings.agent.max_turns)
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
