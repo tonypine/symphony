@@ -214,7 +214,10 @@ jobs:
           fi
 
   # The required check. It passes when nothing under macos/ changed (build skipped)
-  # or the build passed, and fails when change detection or the build failed.
+  # or the build passed, and fails when change detection or the build failed. It
+  # does not run when the run is cancelled (a newer push on the PR supersedes it), so
+  # the superseded head's check reads cancelled, not failed, and the PR watcher does
+  # not rerun it or send it to CI Fix.
   macos:
     name: macos
     runs-on: ubuntu-latest
@@ -222,11 +225,15 @@ jobs:
     needs:
       - changes
       - build
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
+    permissions:
+      contents: read
+      actions: write
 
     steps:
       - name: Summarize gate results
         env:
+          GH_TOKEN: ${{ github.token }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           BUILD_RESULT: ${{ needs.build.result }}
         run: |
@@ -238,5 +245,15 @@ jobs:
           fi
           case "$BUILD_RESULT" in
             success | skipped) ;;
+            cancelled | abandoned)
+              # The run is not cancelled, yet the build never finished (a timeout, or an
+              # attempt abandoned while queued). Cancel the run so the check reads
+              # cancelled, not failed: the PR watcher reruns it without a CI Fix run, and
+              # the required gate never passes without a build.
+              echo "::warning::The build was $BUILD_RESULT; cancelling the run"
+              gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" || true
+              sleep 60
+              exit 1
+              ;;
             *) exit 1 ;;
           esac
