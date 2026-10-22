@@ -82,6 +82,7 @@ defmodule SymphonyElixirWeb.Router do
     get("/api/v1/repos/:repo_key/tickets/:issue_identifier/events", TicketEventsController, :index)
     get("/api/v1/artifacts/:id", ArtifactsController, :show)
     get("/api/v1/artifacts/:id/meta", ArtifactsController, :meta)
+    get("/api/v1/stream", StreamController, :index)
 
     match(:*, "/api/v1/health", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/state", ObservabilityApiController, :method_not_allowed)
@@ -105,6 +106,7 @@ defmodule SymphonyElixirWeb.Router do
     match(:*, "/api/v1/repos/:repo_key/tickets/:issue_identifier/events", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/artifacts/:id", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/artifacts/:id/meta", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/stream", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/refresh", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/issues/:issue_identifier/watch/check", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/github/webhook", ObservabilityApiController, :method_not_allowed)

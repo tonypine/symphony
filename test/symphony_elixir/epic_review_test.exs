@@ -172,6 +172,12 @@ defmodule SymphonyElixir.EpicReviewTest do
   defp created_issue(id, identifier),
     do: {:ok, %{"data" => %{"issueCreate" => %{"success" => true, "issue" => %{"id" => id, "identifier" => identifier}}}}}
 
+  defp verdict_runs do
+    for event <- RunStore.list_ticket_events(@repo_key, @issue_id, types: ["verdict.recorded"]) do
+      {event.payload.outcome, event.run_id}
+    end
+  end
+
   defp run(issue, opts \\ []) do
     EpicReview.run(
       issue,
@@ -443,6 +449,7 @@ defmodule SymphonyElixir.EpicReviewTest do
       assert [{@issue_id, "Epic Review"}, {@issue_id, "Done"}] = state_updates()
 
       assert [%{kind: "epic_review", head_sha: @sha, outcome: "pass"}] = verdicts()
+      assert [{"pass", "run-1"}] = verdict_runs()
 
       assert [
                %{name: "epic_review", details: %{signal: "epic_review_pass", target: "Done"}},
@@ -458,6 +465,15 @@ defmodule SymphonyElixir.EpicReviewTest do
       assert report =~ "- **ok** comments: no comment on the epic to account for"
       assert report =~ "1200 tokens"
       assert report =~ "- **pass** Open Settings (evidence: https://uploads.linear.test/s1.png)"
+    end
+
+    test "a verdict from a run given no id names the id its QA agent ran as" do
+      agent_result(:fail, %{summary: "Missing.", findings: ["The export button is absent"]})
+
+      assert :ok = run(epic(), run_id: nil)
+
+      assert_received {:qa_agent_run, %{run_id: "epic-review-TP-823-c0ffee001122"}, _settings, _agent_opts}
+      assert [{"fail", "epic-review-TP-823-c0ffee001122"}] = verdict_runs()
     end
 
     test "a recovery run in Epic Review does not enter it again" do

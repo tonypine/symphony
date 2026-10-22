@@ -1,7 +1,8 @@
 defmodule SymphonyElixir.PromptBuilderTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Decisions, TicketState, WorkflowPreview}
+  alias SymphonyElixir.{Decisions, TicketEvents, TicketState, WorkflowPreview}
+  alias SymphonyElixir.TicketEvents.Brief
 
   test "prompt builder uses PR prompt branch for PR runs" do
     write_workflow_file!(
@@ -1038,6 +1039,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
     end
 
     test "renders the phase, holds, CI and recent signals", %{issue: issue} do
+      ledger!("prompt_brief_enabled: false")
       at = ~U[2026-10-04 00:23:15Z]
 
       record =
@@ -1057,6 +1059,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
     end
 
     test "renders the fallbacks for a bare hold, no CI and no signals", %{issue: issue} do
+      ledger!("prompt_brief_enabled: false")
       record = TicketState.new("r", "i", %{phase: "Merging", holds: [%{kind: :needs_decision}]})
 
       prompt = PromptBuilder.build_prompt(issue, ticket_state: record)
@@ -1067,6 +1070,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
     end
 
     test "renders a signal with no details without a trailing gap", %{issue: issue} do
+      ledger!("prompt_brief_enabled: false")
       at = ~U[2026-10-04 00:23:15Z]
       record = TicketState.new("r", "i", %{phase: "Todo"}) |> TicketState.record_signal("restart", %{}, at)
 
@@ -1078,6 +1082,98 @@ defmodule SymphonyElixir.PromptBuilderTest do
 
       assert PromptBuilder.build_compact_prompt(issue, ticket_state: record) =~ "Ticket state:"
       refute PromptBuilder.build_compact_prompt(issue) =~ "Ticket state:"
+    end
+  end
+
+  describe "the ticket's history summary" do
+    setup do
+      :ok = RunStore.clear()
+      write_workflow_file!(Workflow.workflow_file_path(), prompt: "Issue {{ issue.identifier }}")
+      at = ~U[2026-10-22 10:00:00Z]
+
+      record =
+        TicketState.new("r", "i", %{phase: "QA", issue_identifier: "MT-LB"})
+        |> TicketState.record_signal("handoff", %{to: "Code Review"}, at)
+
+      %{issue: %Issue{identifier: "MT-LB", title: "Ledger", state: "QA"}, record: record, at: at}
+    end
+
+    test "sits after the ticket state, wrapped as untrusted input, in place of the recent signals", %{issue: issue, record: record, at: at} do
+      {:ok, _note} = TicketEvents.record("r", "i", "note", %{text: "Keep the <b>button</b> where it is."}, actor: {:person, "Sam"}, at: at)
+      {:ok, _hold} = TicketEvents.record("r", "i", "hold.set", %{kind: "blocked", reason: "tooling"}, at: DateTime.add(at, 60))
+      :ok = RunStore.update_ticket_state("r", "i", %{phase: "QA"})
+
+      opts = [ticket_state: record]
+      prompts = [PromptBuilder.build_prompt(issue, opts), PromptBuilder.build_compact_prompt(issue, opts)]
+
+      for prompt <- prompts do
+        refute prompt =~ "Recent signals:"
+        refute prompt =~ "handoff at"
+        [state, history] = String.split(prompt, "Ticket history (every decision, open finding and note in full;")
+        assert state =~ "Ticket state:"
+        assert history =~ "\n<ticket_ledger>\nPhase and holds:\n- Phase: QA"
+        assert history =~ "- 2026-10-22T10:00:00Z, the Director (Sam): Keep the &lt;b&gt;button&lt;/b&gt; where it is."
+        assert history =~ "- 2026-10-22T10:01:00Z Blocked hold set: tooling"
+        assert history =~ "</ticket_ledger>"
+      end
+    end
+
+    test "is not rendered when no ticket state is passed", %{issue: issue} do
+      refute PromptBuilder.build_prompt(issue) =~ "Ticket history"
+      refute PromptBuilder.build_prompt(issue, ticket_state: nil) =~ "Ticket history"
+    end
+
+    test "with the setting off, the prompt keeps its recent signals and no summary", %{issue: issue, record: record} do
+      ledger!("prompt_brief_enabled: false")
+      brief = Brief.build(record, [])
+
+      prompt = PromptBuilder.build_prompt(issue, ticket_state: record)
+
+      assert prompt == PromptBuilder.build_prompt(issue, ticket_state: record, ticket_ledger: brief)
+      assert prompt =~ "Recent signals:"
+      refute prompt =~ "Ticket history"
+      refute prompt =~ "ticket_ledger"
+    end
+
+    test "a summary built by the caller is used without reading the store", %{issue: issue, record: record} do
+      brief = Brief.build(record, [%{id: "e1", seq: 1, at: ~U[2026-10-22 09:00:00Z], type: "note", actor: %{kind: :machine}, payload: %{text: "from the caller"}}])
+
+      assert PromptBuilder.build_prompt(issue, ticket_state: record, ticket_ledger: brief) =~ "Symphony: from the caller"
+    end
+
+    test "a summary over the limit is rendered whole, with one warning naming the ticket and its size", %{issue: issue, record: record, at: at} do
+      ledger!("prompt_brief_max_tokens: 10")
+      text = String.duplicate("long finding text ", 50)
+      {:ok, _note} = TicketEvents.record("r", "i", "note", %{text: text}, at: at)
+      tokens = Brief.render("r", "i") |> elem(1) |> Map.fetch!(:tokens)
+
+      log = capture_log(fn -> send(self(), {:prompt, PromptBuilder.build_prompt(issue, ticket_state: record)}) end)
+
+      assert_received {:prompt, prompt}
+      assert prompt =~ String.trim(text)
+      refute prompt =~ "truncated by Symphony"
+      assert [_warning] = Regex.scan(~r/Ticket history summary over ledger.prompt_brief_max_tokens/, log)
+      assert log =~ "issue_id=i issue_identifier=MT-LB tokens=#{tokens} limit=10; rendered whole"
+    end
+
+    test "escaping never cuts a summary of characters the wrapper lengthens", %{issue: issue, record: record} do
+      text = String.duplicate("&", 4_000)
+      brief = %{text: text, tokens: 1_000, decisions: 0, open_findings: 0, notes: 0, runs: 0}
+
+      prompt = PromptBuilder.build_prompt(issue, ticket_state: record, ticket_ledger: brief)
+
+      assert prompt =~ String.duplicate("&amp;", 4_000)
+      refute prompt =~ "truncated by Symphony"
+    end
+
+    test "a ledger the store can't read leaves the summary out and logs why", %{issue: issue} do
+      opts = [ticket_state: %{repo_key: "r", phase: "QA"}]
+      log = capture_log(fn -> send(self(), {:prompt, PromptBuilder.build_prompt(issue, opts)}) end)
+
+      assert_received {:prompt, prompt}
+      refute prompt =~ "Ticket history"
+
+      assert log =~ "Could not read the ticket's history summary issue_id= issue_identifier=: :invalid_issue_id"
     end
   end
 
@@ -1106,5 +1202,11 @@ defmodule SymphonyElixir.PromptBuilderTest do
         else: "\nplaybook:\n  lockfile: mix.lock" <> front_matter
 
     "---" <> front_matter <> "---\n\n{% render \"playbook\" %}\n"
+  end
+
+  defp ledger!(yaml) do
+    path = Workflow.symphony_file_path()
+    File.write!(path, File.read!(path) <> "ledger:\n  " <> yaml <> "\n")
+    Cache.clear()
   end
 end

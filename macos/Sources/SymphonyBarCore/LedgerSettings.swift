@@ -6,6 +6,8 @@ public enum LedgerSettingsError: LocalizedError, Equatable {
     case notABlock(String)
     /// The key holds something other than a whole number or `null`.
     case unreadable(key: String, value: String)
+    /// The on/off key holds something other than `true`, `false` or `null`.
+    case notOnOrOff(key: String, value: String)
 
     public var errorDescription: String? {
         switch self {
@@ -13,21 +15,29 @@ public enum LedgerSettingsError: LocalizedError, Equatable {
             return "`\(key):` in symphony.yml is not an indented block. Change the ledger settings by hand."
         case let .unreadable(key, value):
             return "`\(key): \(value)` in symphony.yml is not a whole number. Change it by hand."
+        case let .notOnOrOff(key, value):
+            return "`\(key): \(value)` in symphony.yml is not true or false. Change it by hand."
         }
     }
 }
 
-/// The ticket ledger's artifact settings in the text of a `symphony.yml`: `ledger.artifact_retention_days`, how many
-/// days a finished ticket's artifact files are kept, and `ledger.artifact_max_bytes`, the largest file Symphony
-/// stores. Only the lines of the settings that change are rewritten, or inserted with `ledger:` when missing, so the
-/// rest of the file stays as it is.
+/// The ticket ledger's settings in the text of a `symphony.yml`: `ledger.artifact_retention_days`, how many days a
+/// finished ticket's artifact files are kept; `ledger.artifact_max_bytes`, the largest file Symphony stores;
+/// `ledger.prompt_brief_enabled`, whether agents get the summary of the ticket's history; and
+/// `ledger.prompt_brief_max_tokens`, the size over which Symphony warns about a summary, which it still gives whole.
+/// Only the lines of the settings that change are rewritten, or inserted with `ledger:` when missing, so the rest of
+/// the file stays as it is.
 public struct LedgerSettings: Equatable {
     public var retentionDays: Int
     public var maxBytes: Int
+    public var briefEnabled: Bool
+    public var briefMaxTokens: Int
 
     /// What Symphony uses when a key is missing or null.
     public static let defaultRetentionDays = 14
     public static let defaultMaxBytes = 26_214_400
+    public static let defaultBriefEnabled = true
+    public static let defaultBriefMaxTokens = 50_000
 
     /// Bytes in one MB, the unit Settings shows the size cap in.
     public static let bytesPerMB = 1_048_576
@@ -38,29 +48,43 @@ public struct LedgerSettings: Equatable {
 
     static let retentionPath = ["ledger", "artifact_retention_days"]
     static let maxBytesPath = ["ledger", "artifact_max_bytes"]
+    static let briefEnabledPath = ["ledger", "prompt_brief_enabled"]
+    static let briefMaxTokensPath = ["ledger", "prompt_brief_max_tokens"]
 
-    public init(retentionDays: Int = defaultRetentionDays, maxBytes: Int = defaultMaxBytes) {
+    public init(
+        retentionDays: Int = defaultRetentionDays,
+        maxBytes: Int = defaultMaxBytes,
+        briefEnabled: Bool = defaultBriefEnabled,
+        briefMaxTokens: Int = defaultBriefMaxTokens
+    ) {
         self.retentionDays = retentionDays
         self.maxBytes = maxBytes
+        self.briefEnabled = briefEnabled
+        self.briefMaxTokens = briefMaxTokens
     }
 
     /// The settings, with Symphony's default for a missing or null key.
     public static func values(in yaml: String) throws -> LedgerSettings {
         LedgerSettings(
             retentionDays: try number(retentionPath, default: defaultRetentionDays, in: yaml),
-            maxBytes: try number(maxBytesPath, default: defaultMaxBytes, in: yaml)
+            maxBytes: try number(maxBytesPath, default: defaultMaxBytes, in: yaml),
+            briefEnabled: try onOff(briefEnabledPath, default: defaultBriefEnabled, in: yaml),
+            briefMaxTokens: try number(briefMaxTokensPath, default: defaultBriefMaxTokens, in: yaml)
         )
     }
 
     /// The same text with the settings that differ between `old` and `new` set to their `new` values. A missing key is
     /// inserted at the top of `ledger:`, so they are written last to first and read in order.
     public static func updating(_ yaml: String, from old: LedgerSettings, to new: LedgerSettings) throws -> String {
+        let changes: [(path: [String], changed: Bool, value: String)] = [
+            (briefMaxTokensPath, new.briefMaxTokens != old.briefMaxTokens, String(new.briefMaxTokens)),
+            (briefEnabledPath, new.briefEnabled != old.briefEnabled, new.briefEnabled ? "true" : "false"),
+            (maxBytesPath, new.maxBytes != old.maxBytes, String(new.maxBytes)),
+            (retentionPath, new.retentionDays != old.retentionDays, String(new.retentionDays)),
+        ]
         var yaml = yaml
-        for (path, keyPath) in [
-            (maxBytesPath, \LedgerSettings.maxBytes),
-            (retentionPath, \LedgerSettings.retentionDays),
-        ] where new[keyPath: keyPath] != old[keyPath: keyPath] {
-            yaml = try setting(path, to: new[keyPath: keyPath], in: yaml)
+        for change in changes where change.changed {
+            yaml = try setting(change.path, to: change.value, in: yaml)
         }
         return yaml
     }
@@ -80,7 +104,9 @@ public struct LedgerSettings: Equatable {
     public func setting(retentionDays: Int, maxMegabytes: Int) -> LedgerSettings {
         LedgerSettings(
             retentionDays: retentionDays == Self.steppedDays(self.retentionDays) ? self.retentionDays : retentionDays,
-            maxBytes: maxMegabytes == Self.megabytes(maxBytes) ? maxBytes : maxMegabytes * Self.bytesPerMB
+            maxBytes: maxMegabytes == Self.megabytes(maxBytes) ? maxBytes : maxMegabytes * Self.bytesPerMB,
+            briefEnabled: briefEnabled,
+            briefMaxTokens: briefMaxTokens
         )
     }
 
@@ -93,8 +119,18 @@ public struct LedgerSettings: Equatable {
         return number
     }
 
-    private static func setting(_ path: [String], to value: Int, in yaml: String) throws -> String {
-        try blockSection { try ConfigSetting.setting(at: path, to: String(value), in: yaml) }
+    private static func onOff(_ path: [String], default defaultValue: Bool, in yaml: String) throws -> Bool {
+        let value = try blockSection { try ConfigSetting.value(at: path, of: yaml) }
+        guard let value, !TokenLimits.nullValues.contains(value) else { return defaultValue }
+        switch value {
+        case "true", "True", "TRUE": return true
+        case "false", "False", "FALSE": return false
+        default: throw LedgerSettingsError.notOnOrOff(key: path.joined(separator: "."), value: value)
+        }
+    }
+
+    private static func setting(_ path: [String], to value: String, in yaml: String) throws -> String {
+        try blockSection { try ConfigSetting.setting(at: path, to: value, in: yaml) }
     }
 
     /// Reports an inline `ledger:` section as a ledger settings error.
