@@ -106,7 +106,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
           duration_ms: :non_neg_integer,
           tokens: @tokens,
           head: :string,
-          counted: :boolean
+          counted: :boolean,
+          transcript: :string
         ] ++ @signal,
       idempotency: {:fields, [:run_id]}
     },

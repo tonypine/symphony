@@ -54,9 +54,9 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     {"#{run_name(payload)} started", prefixed("in", text(payload, :state)) ++ prefixed("at", short_sha(text(payload, :head)))}
   end
 
-  defp summary("run.ended", payload, event) do
+  defp summary("run.ended", payload, _event) do
     title = "#{run_name(payload)} ended" <> suffix(": ", text(payload, :exit))
-    transcript = if Enum.any?(event.artifacts, &String.starts_with?(&1, "transcript")), do: "transcript"
+    transcript = if text(payload, :transcript), do: "transcript"
     {title, [duration(count(payload, :duration_ms)), tokens(field(payload, :tokens)), transcript]}
   end
 

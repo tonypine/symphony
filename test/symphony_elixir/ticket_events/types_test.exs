@@ -125,6 +125,10 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       ended = %{run_id: "run-1", exit: "success", run_number: 2, duration_ms: 10, tokens: %{total: 5}, counted: true}
       assert {:ok, ^ended} = machine.("run.ended", ended)
       assert {:ok, %{tokens: 7}} = machine.("run.ended", %{ended | tokens: 7})
+      # A run's transcript is named by its artifact id.
+      transcript = String.duplicate("ab", 32)
+      assert {:ok, %{transcript: ^transcript}} = machine.("run.ended", Map.put(ended, :transcript, transcript))
+      assert {:error, {:invalid_payload, [:transcript]}} = machine.("run.ended", Map.put(ended, :transcript, " "))
 
       assert {:error, {:invalid_payload, [:run_number, :duration_ms, :tokens, :counted]}} =
                machine.("run.ended", %{ended | run_number: -1, duration_ms: "1", tokens: "lots", counted: "yes"})

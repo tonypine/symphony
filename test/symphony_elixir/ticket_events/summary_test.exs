@@ -4,6 +4,9 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
   alias SymphonyElixir.TicketEvents.{Event, Summary, Types}
 
   @long String.duplicate("word ", 100)
+  @transcript String.duplicate("ab", 32)
+  @run_ended %{run_id: "run-3", run_kind: "rework", run_number: 3, exit: "handoff", transcript: @transcript}
+             |> Map.merge(%{duration_ms: 1_260_000, tokens: 13_400_000})
 
   # One fixture per catalog type: the event's type, payload and artifacts, then the summary it
   # renders.
@@ -13,8 +16,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     {"hold.set", %{kind: "blocked", reason: "Waiting on TP-12"}, [], %{title: "Blocked hold set", detail: "Waiting on TP-12"}},
     {"hold.cleared", %{kind: "blocked", by: "TP-12 done"}, [], %{title: "Blocked hold cleared", detail: "by TP-12 done"}},
     {"run.started", %{run_id: "run-3", run_kind: "rework", run_number: 3, state: "Rework", head: "e051234abcdef"}, [], %{title: "Rework run 3 started", detail: "in Rework · at e051234"}},
-    {"run.ended", %{run_id: "run-3", run_kind: "rework", run_number: 3, exit: "handoff", duration_ms: 1_260_000, tokens: 13_400_000}, ["transcript:run-3"],
-     %{title: "Rework run 3 ended: handoff", detail: "21 min · 13.4M tokens · transcript"}},
+    {"run.ended", @run_ended, [@transcript], %{title: "Rework run 3 ended: handoff", detail: "21 min · 13.4M tokens · transcript"}},
     {"attempt.pushed", %{head: "e051234abcdef", attempt: 5, intent: "Render the summary on record"}, [], %{title: "Attempt 5 pushed e051234", detail: "Render the summary on record"}},
     {"verdict.recorded", %{kind: "code_review", outcome: "approve", head: "e051234abcdef"}, [], %{title: "Code Review verdict: approve", detail: "on e051234"}},
     {"decision.requested", %{title: "Close TP-612 as a duplicate", question: "Should TP-612 close as a duplicate of TP-668?"}, [],
@@ -115,7 +117,10 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       assert ended.(%{duration_ms: 5_400_000, tokens: 2_000_000}, []).detail == "1 h 30 min · 2M tokens"
       assert ended.(%{tokens: %{total_tokens: 850_000, input_tokens: 800_000}}, []).detail == "850K tokens"
       assert ended.(%{tokens: %{"total_tokens" => 1_000}}, []).detail == "1K tokens"
-      assert ended.(%{}, ["transcript-run-3"]).detail == "transcript"
+      # The transcript is the one the payload names: an artifact id is a sha256, never "transcript…".
+      assert ended.(%{transcript: @transcript}, [@transcript]).detail == "transcript"
+      assert ended.(%{duration_ms: 45_500, transcript: @transcript}, [@transcript]).detail == "45 s · transcript"
+      assert ended.(%{}, [@transcript]).detail == nil
     end
 
     test "a run start without its kind, number, state or head" do

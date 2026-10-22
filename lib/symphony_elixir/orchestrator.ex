@@ -11,6 +11,7 @@ defmodule SymphonyElixir.Orchestrator do
     AgentProcesses,
     AgentRunner,
     AgentTelemetry,
+    Artifacts,
     AuditLog,
     BlockedHold,
     BreakdownReview,
@@ -63,6 +64,7 @@ defmodule SymphonyElixir.Orchestrator do
     WorkspaceHead
   }
 
+  alias SymphonyElixir.Artifacts.Transcript
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.{Client, Issue, RateLimit, TransientRetry, Usage}
   alias SymphonyElixir.QaDriver.DevServerLease
@@ -5158,9 +5160,9 @@ defmodule SymphonyElixir.Orchestrator do
     TicketSignals.record_event(repo_key, issue_id, "run.started", payload, phase: issue_state, run_id: run_id)
   end
 
-  # The run's `run.ended` event, keyed by its run id, with how it ended, how long it ran and the
-  # tokens it spent. A run a usage limit, an unreachable model API or a CI wait stopped records
-  # `counted: false`, as its dispatch outcome is dropped.
+  # The run's `run.ended` event, keyed by its run id, with how it ended, how long it ran, the tokens
+  # it spent and its transcript. A run a usage limit, an unreachable model API or a CI wait stopped
+  # records `counted: false`, as its dispatch outcome is dropped.
   defp record_run_ended(repo_key, issue_id, run_id, running_entry, reason) do
     head = pr_head(issue_id, repo_key)
     started = run_events(repo_key, issue_id, "run.started", &(&1[:run_id] == run_id)) |> List.first() || %{}
@@ -5176,7 +5178,53 @@ defmodule SymphonyElixir.Orchestrator do
       counted: not uncounted_exit?(reason)
     }
 
-    TicketSignals.record_event(repo_key, issue_id, "run.ended", payload, run_id: run_id)
+    opts = [run_id: run_id, at: DateTime.utc_now()]
+
+    case run_transcript(repo_key, issue_id, run_id, running_entry) do
+      {:ok, path} -> record_run_ended_with_transcript(repo_key, issue_id, path, payload, opts)
+      :none -> TicketSignals.record_event(repo_key, issue_id, "run.ended", payload, opts)
+    end
+  end
+
+  # A local Claude Code run's transcript (`Transcript.locate/4`). A run whose end was already
+  # recorded keeps it, so a repeated end ingests nothing a second time.
+  defp run_transcript(repo_key, issue_id, run_id, running_entry) do
+    with nil <- Map.get(running_entry, :worker_host),
+         SymphonyElixir.ClaudeCode.AppServer <- Map.get(running_entry, :agent_module),
+         {:ok, path} <-
+           Transcript.locate(:claude, Map.get(running_entry, :workspace_path), Map.get(running_entry, :session_id), Map.get(running_entry, :transcript_path)),
+         [] <- run_events(repo_key, issue_id, "run.ended", &(&1[:run_id] == run_id)) do
+      {:ok, path}
+    else
+      _none -> :none
+    end
+  end
+
+  # The transcript is copied and hashed in a task, so a large one never holds up the orchestrator;
+  # the event keeps the time the run ended. A transcript the store refuses, or a task that can't
+  # start, leaves the event without it.
+  defp record_run_ended_with_transcript(repo_key, issue_id, path, payload, opts) do
+    case start_task_supervisor_child(fn -> ingest_run_transcript(repo_key, issue_id, path, payload, opts) end) do
+      {:ok, _pid} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Recording run.ended without its transcript on issue_id=#{issue_id} run_id=#{payload.run_id}: #{inspect(reason)}")
+        TicketSignals.record_event(repo_key, issue_id, "run.ended", payload, opts)
+    end
+  end
+
+  defp ingest_run_transcript(repo_key, issue_id, path, payload, opts) do
+    meta = %{repo_key: repo_key, issue_id: issue_id, kind: "transcript", run_id: payload.run_id}
+
+    case Artifacts.ingest(path, meta, roots: [Transcript.root(:claude)]) do
+      {:ok, %{id: id}} ->
+        TicketSignals.record_event(repo_key, issue_id, "run.ended", Map.put(payload, :transcript, id), [artifacts: [id]] ++ opts)
+
+      {:error, reason} ->
+        Logger.warning("Recording run.ended without its transcript on issue_id=#{issue_id} run_id=#{payload.run_id}: #{inspect(reason)}")
+        TicketSignals.record_event(repo_key, issue_id, "run.ended", payload, opts)
+    end
   end
 
   defp run_events(repo_key, issue_id, type, keep?) do
