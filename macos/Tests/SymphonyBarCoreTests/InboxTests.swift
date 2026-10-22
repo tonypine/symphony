@@ -15,9 +15,13 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(plan.age, "3 h 12 min")
         guard case let .parsed(brief)? = plan.review.brief else { return XCTFail("the plan's brief didn't parse") }
         XCTAssertEqual(brief.whatToReview.first?.links.first?.label, "Domain brief")
-        XCTAssertEqual(brief.decisions.count, 2)
-        XCTAssertEqual(brief.decisions.map(\.initialPick), [0, 0])
         XCTAssertEqual(brief.moves.map(\.move), ["approve", "change", "reject"])
+        // The plan's questions are its requests, each as an action's: why, what waits, options with trade-offs.
+        XCTAssertEqual(plan.review.questions.map(\.commentID), ["q-330-1", "q-330-2"])
+        XCTAssertEqual(plan.review.questions[0].ifUnanswered, "SHOP-330 stays in Plan Review and none of its sub-tickets start.")
+        XCTAssertEqual(plan.review.questions[0].options.map(\.tradeoffs.count), [1, 1])
+        XCTAssertEqual(plan.review.questions[1].recommendationReason, "Refunds never convert.")
+        XCTAssertEqual(plan.review.decisions.map(\.initialPick), [0, 0])
         XCTAssertEqual(plan.review.subTickets.map(\.identifier), (331...337).map { "SHOP-\($0)" })
 
         let pr = try XCTUnwrap(inbox.items[1].review.pullRequest)
@@ -344,17 +348,6 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual([InboxReview.Action.Tradeoff.Kind.good, .cost, .risk].map(\.status), [.done, .you, .problem])
     }
 
-    func testAPlanDecisionDrawsTheSameCardsWithTheBriefsRecommendationAsTheReason() {
-        let decision = InboxReview.Decision(question: "Where?", options: ["A", "B"], recommendation: "B, because it is quicker.", recommended: 1)
-        let cards = OptionCard.cards(for: decision)
-        XCTAssertEqual(cards.map(\.label), ["A", "B"])
-        XCTAssertEqual(cards.map(\.effect), [nil, nil])
-        XCTAssertEqual(cards.map(\.recommended), [false, true])
-        XCTAssertEqual(cards.map(\.reason), [nil, "B, because it is quicker."])
-        XCTAssertEqual(cards[1].accessibilityLabel(selected: true), "Option 2 of 2, B, recommended, selected. Why we recommend it: B, because it is quicker.")
-        XCTAssertTrue(OptionCard.cards(for: InboxReview.Decision(question: "Q", options: [], recommendation: nil, recommended: nil)).isEmpty)
-    }
-
     func testSelectionFallsBackToTheFirstAndMovesToTheNeighbor() {
         let list = InboxList(items: [item("P-1", .plan, seconds: 9), item("R-1", .pr, seconds: 5), item("R-2", .pr, seconds: 1)])
         XCTAssertEqual(list.selection(nil)?.identifier, "P-1")
@@ -452,8 +445,9 @@ final class InboxTests: XCTestCase {
           {"issue_id": "i-2", "kind": "pr"},
           {"identifier": "X-3", "kind": "audit"},
           {"identifier": "X-4", "kind": "clarify", "review": {"held": false, "found": "Empty."}},
-          {"identifier": "X-5", "kind": "plan", "review": {"brief": {"format": "parsed", "decisions": [{"question": "Q?", "options": ["A"], "recommended": 3}, {"options": []}],
-            "moves": [{"move": "approve"}], "what_to_review": [{"links": [{"url": "https://example.com/a"}]}]}, "sub_tickets": [{"title": "no id"}]}},
+          {"identifier": "X-5", "kind": "plan", "review": {"brief": {"format": "parsed",
+            "moves": [{"move": "approve"}], "what_to_review": [{"links": [{"url": "https://example.com/a"}]}]}, "sub_tickets": [{"title": "no id"}],
+            "decisions": [{"question": "Q?", "options": [{"label": "A"}, {"effect": "no label"}]}, {}]}},
           {"identifier": "X-6", "kind": "action", "review": {"comment_id": "c-6", "options": [{"label": "Merge", "recommended": true}], "confirm": "Merging"}}
         ]}
         """
@@ -471,8 +465,11 @@ final class InboxTests: XCTestCase {
         XCTAssertTrue(clarify.nextLine.hasPrefix("Symphony skips the ticket"))
         XCTAssertTrue(InboxReview.Clarify(held: true, questions: []).nextLine.hasPrefix("Symphony scores the ticket again"))
         guard case let .parsed(brief)? = inbox.items[3].review.brief else { return XCTFail("not parsed") }
-        XCTAssertEqual(brief.decisions.count, 1)
-        XCTAssertNil(brief.decisions[0].initialPick)
+        XCTAssertEqual(inbox.items[3].review.questions.count, 2)
+        XCTAssertEqual(inbox.items[3].review.questions[0].options.map(\.label), ["A"])
+        XCTAssertNil(inbox.items[3].review.decisions[0].initialPick)
+        // A question with no options is no decision, and still keeps its place.
+        XCTAssertEqual(inbox.items[3].review.decisions[1].options, [])
         XCTAssertEqual(brief.moves, [])
         XCTAssertEqual(brief.whatToReview.first?.links.first?.label, "https://example.com/a")
         XCTAssertEqual(inbox.items[3].review.subTickets, [])

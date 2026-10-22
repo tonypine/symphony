@@ -4,7 +4,12 @@ import Foundation
 /// changes Linear until the sheet's button is pressed.
 public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
     case approvePlan
+    /// Answers a plan's questions: each answer goes under its question, and Symphony revises the plan from them.
     case sendDecisions
+    /// Asks for changes to a plan: Symphony revises it in place and keeps its sub-tickets.
+    case askForChanges
+    /// Rejects a plan: Symphony cancels its sub-tickets still in Backlog and plans again.
+    case rejectPlan
     case approveAndMerge
     case sendToRework
     case restart
@@ -19,6 +24,8 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
         switch self {
         case .approvePlan: "Approve Plan…"
         case .sendDecisions: "Send Decisions"
+        case .askForChanges: "Ask for Changes…"
+        case .rejectPlan: "Reject Plan…"
         case .approveAndMerge: "Approve and Merge…"
         case .sendToRework: "Send to Rework…"
         case .restart: "Restart…"
@@ -32,6 +39,8 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
         switch self {
         case .approvePlan: "Approve Plan"
         case .sendDecisions: "Send Decisions"
+        case .askForChanges: "Ask for Changes"
+        case .rejectPlan: "Reject Plan"
         case .approveAndMerge: "Approve and Merge"
         case .sendToRework: "Send to Rework"
         case .restart: "Restart"
@@ -68,8 +77,10 @@ public struct InboxToolbar: Equatable {
     /// What Return in the list takes: the default button, while it is enabled.
     public var defaultCommand: InboxCommand? { buttons.first.flatMap { $0.enabled ? $0.command : nil } }
 
-    /// The toolbar of `item`: a plan offers Approve Plan…, Send Decisions (on once a pick differs from the
-    /// recommendation) and ⋯ Send to Rework… and Restart…; a PR waiting on its merge confirmation Approve and Merge…
+    /// The toolbar of `item`: a plan with open questions offers Send Decisions first (on once every question has an
+    /// answer), then Approve Plan… and Ask for Changes…, with ⋯ Reject Plan… and Restart…; one without questions
+    /// Approve Plan… first. Answering and asking for changes keep the plan's sub-tickets; only Reject Plan cancels
+    /// them. A PR waiting on its merge confirmation Approve and Merge…
     /// and Send to Rework…, which answer the request, with Open PR the default while a check is red (D2b), and
     /// ⋯ Restart…; a PR with no request to answer only its links and ⋯ Restart…; a blocked ticket
     /// Unblock… and ⋯ Restart…, which also lifts a dispatch-loop hold. Actions and clarify items keep their links.
@@ -84,12 +95,11 @@ public struct InboxToolbar: Equatable {
         let restart: [InboxCommand] = [.move(.restart)]
         switch item.kind {
         case .plan:
-            let changed = picks.changed(item.review.decisions)
-            let sendDecisions = item.review.decisions.isEmpty ? [] : [move(.sendDecisions, enabled: changed)]
-            return InboxToolbar(
-                buttons: [move(.approvePlan)] + sendDecisions + links,
-                overflow: [.move(.sendToRework)] + restart
-            )
+            let questions = item.review.questions
+            let moves = questions.isEmpty
+                ? [move(.approvePlan), move(.askForChanges)]
+                : [move(.sendDecisions, enabled: picks.answersAll(questions)), move(.approvePlan), move(.askForChanges)]
+            return InboxToolbar(buttons: moves + links, overflow: [.move(.rejectPlan)] + restart)
         case .pr:
             // Symphony has no move of its own for a PR: it reaches the Inbox on its merge confirmation, a decision
             // request, and both moves answer that request through `decide`.
@@ -172,23 +182,30 @@ extension InboxItem {
 }
 
 extension InboxReview {
-    /// A plan's decisions, empty when its brief has none or didn't parse.
+    /// A plan's questions as decisions (C16), in the same order, so the picks answer them by index.
     public var decisions: [Decision] {
-        if case let .parsed(parsed) = brief { return parsed.decisions }
-        return []
+        questions.map { $0.decision ?? Decision(question: $0.question ?? "", options: [], recommendation: nil, recommended: nil) }
     }
 }
 
-/// The Director's picks in a plan's decisions (C16), by decision index; a decision not picked keeps its recommended
-/// option.
+/// The Director's picks in a request's or a plan's decisions (C16), by decision index; a decision not picked keeps its
+/// recommended option.
 public struct DecisionPicks: Equatable {
     public var picks: [Int: Int]
-    /// What the Director wrote in a request's write-in (N11), kept with the picks while they look at other items.
-    public var writeIn: String
+    /// What the Director wrote in each decision's write-in (N11), by decision index, kept with the picks while they
+    /// look at other items.
+    public var writeIns: [Int: String]
 
-    public init(picks: [Int: Int] = [:], writeIn: String = "") {
+    public init(picks: [Int: Int] = [:], writeIn: String = "", writeIns: [Int: String] = [:]) {
         self.picks = picks
-        self.writeIn = writeIn
+        self.writeIns = writeIns
+        if !writeIn.isEmpty { self.writeIns[0] = writeIn }
+    }
+
+    /// The write-in of a request's one decision.
+    public var writeIn: String {
+        get { writeIns[0] ?? "" }
+        set { writeIns[0] = newValue }
     }
 
     /// The option shown picked in decision `index`: the Director's pick, else the recommended one.
@@ -196,18 +213,23 @@ public struct DecisionPicks: Equatable {
         picks[index] ?? decision.initialPick
     }
 
-    /// True once a pick differs from its decision's recommendation: Send Decisions turns on.
-    public func changed(_ decisions: [InboxReview.Decision]) -> Bool {
-        decisions.indices.contains { index in picks[index].map { $0 != decisions[index].initialPick } ?? false }
+    /// The answer to a plan's question `index`: its picked option's label, or the Director's own words when its
+    /// write-in is picked, with the request it answers; nil when nothing is picked or the write-in is blank.
+    public func answer(_ index: Int, of question: InboxReview.Action) -> ControlAction.DecisionPick? {
+        guard let decision = question.decision, let pick = pick(index, in: decision) else { return nil }
+        let text = pick == question.writeInIndex ? (writeIns[index] ?? "").trimmingWhitespace() : (question.options.indices.contains(pick) ? question.options[pick].label : "")
+        return text.isEmpty ? nil : ControlAction.DecisionPick(question: decision.question, answer: text, requestCommentID: question.commentID)
     }
 
-    /// Each decision with its picked option, as the decisions comment lists them; a decision with nothing picked
-    /// is left out.
-    public func answers(_ decisions: [InboxReview.Decision]) -> [ControlAction.DecisionPick] {
-        decisions.enumerated().compactMap { index, decision in
-            guard let pick = pick(index, in: decision), decision.options.indices.contains(pick) else { return nil }
-            return ControlAction.DecisionPick(question: decision.question, answer: decision.options[pick])
-        }
+    /// Each of a plan's questions with its answer, as Send Decisions posts them; a question with no answer is left
+    /// out.
+    public func answers(_ questions: [InboxReview.Action]) -> [ControlAction.DecisionPick] {
+        questions.enumerated().compactMap { answer($0.offset, of: $0.element) }
+    }
+
+    /// True when every one of a plan's questions has an answer: Send Decisions turns on.
+    public func answersAll(_ questions: [InboxReview.Action]) -> Bool {
+        !questions.isEmpty && answers(questions).count == questions.count
     }
 }
 
@@ -226,12 +248,12 @@ public struct InboxPicks: Equatable {
         byItem[itemID, default: DecisionPicks()].picks[decision] = option
     }
 
-    /// Keeps the words written in the item's write-in (N11). Returns true when they turned blank or stopped being
-    /// blank, the one change Send Decision… shows; the field shows the words themselves.
+    /// Keeps the words written in the write-in (N11) of decision `decision` of the item. Returns true when they turned
+    /// blank or stopped being blank, the one change Send Decision… shows; the field shows the words themselves.
     @discardableResult
-    public mutating func writeIn(_ text: String, itemID: String) -> Bool {
-        let wasBlank = self[itemID].writeIn.trimmingWhitespace().isEmpty
-        byItem[itemID, default: DecisionPicks()].writeIn = text
+    public mutating func writeIn(_ text: String, itemID: String, decision: Int = 0) -> Bool {
+        let wasBlank = (self[itemID].writeIns[decision] ?? "").trimmingWhitespace().isEmpty
+        byItem[itemID, default: DecisionPicks()].writeIns[decision] = text
         return wasBlank != text.trimmingWhitespace().isEmpty
     }
 
@@ -293,13 +315,18 @@ public struct ConsequenceSheet: Equatable, Identifiable {
     public var verb: String { move.verb }
     /// Whether the sheet lists the picks it posts: Send Decision names its one pick in the title instead.
     public var listsPicks: Bool { !picks.isEmpty && move != .decide }
-    /// Send to Rework and Restart use the destructive style.
-    public var isDestructive: Bool { move == .sendToRework || move == .restart }
-    /// Send to Rework and Restart can't be sent without a reason.
-    public var needsReason: Bool { move == .sendToRework || move == .restart }
-    /// Why the ticket goes back (Rework), or starts over (Restart).
+    /// Send to Rework, Reject Plan and Restart use the destructive style.
+    public var isDestructive: Bool { [.sendToRework, .rejectPlan, .restart].contains(move) }
+    /// Send to Rework, Ask for Changes, Reject Plan and Restart can't be sent without a reason.
+    public var needsReason: Bool { [.sendToRework, .askForChanges, .rejectPlan, .restart].contains(move) }
+    /// Why the ticket goes back (Rework), starts over (Restart), what should change in a plan, or why it is rejected.
     public var reasonPrompt: String {
-        move == .restart ? "Why does \(identifier) start over?" : "Why does \(identifier) go back?"
+        switch move {
+        case .restart: "Why does \(identifier) start over?"
+        case .askForChanges: "What should change in the plan of \(identifier)?"
+        case .rejectPlan: "Why is the plan of \(identifier) rejected?"
+        default: "Why does \(identifier) go back?"
+        }
     }
 
     public init(move: InboxMove, item: InboxItem, picks: DecisionPicks = DecisionPicks()) {
@@ -322,16 +349,27 @@ public struct ConsequenceSheet: Equatable, Identifiable {
             title = "Approve the plan of \(id)?"
             targetState = Self.waitingState
             happens = "Moves \(id) to \(Self.waitingState)" + Self.promotion(item.review.subTickets) + "."
-            stays = picks.changed(item.review.decisions)
-                ? "The plan stays as written: your changed picks are not sent. To have Symphony revise it first, choose Send Decisions instead."
-                : "The plan stays as written. To change it, send decisions or comment on it in Linear instead."
+            let open = item.review.questions.count
+            stays = open == 0
+                ? "The plan stays as written. To change it, ask for changes instead."
+                : "The plan stays as written: \(open == 1 ? "its open question is" : "its \(open) open questions are") not answered. To have Symphony apply your answers first, choose Send Decisions instead."
         case .sendDecisions:
-            title = "Send your decisions on \(id)?"
-            // The comment goes in place: a person's comment on a plan under review starts its revision run.
+            title = "Send your answers on \(id)?"
+            // The answers go in place: a person's reply on a plan under review starts its revision run.
             targetState = nil
-            self.picks = picks.answers(item.review.decisions)
-            happens = "Posts one comment on \(id) with your picks, and Symphony revises the plan from it."
-            stays = "The plan stays in \(item.state ?? "Plan Review") and isn't approved: it comes back to the Inbox once Symphony has revised it."
+            self.picks = picks.answers(item.review.questions)
+            happens = "Records each answer under its question on \(id), and Symphony revises the plan from them. The plan keeps its sub-tickets."
+            stays = "The plan isn't approved: it comes back to \(item.state ?? "Plan Review") once Symphony has revised it, and you approve it then."
+        case .askForChanges:
+            title = "Ask for changes to the plan of \(id)?"
+            targetState = nil
+            happens = "Posts your request on \(id), and Symphony revises the plan from it. The plan keeps its sub-tickets."
+            stays = "The plan isn't approved: it comes back to \(item.state ?? "Plan Review") once Symphony has revised it."
+        case .rejectPlan:
+            title = "Reject the plan of \(id)?"
+            targetState = "Rework"
+            happens = "Posts your reason on \(id) and moves it to Rework: Symphony cancels " + Self.cancellation(item.review.subTickets) + " and plans again."
+            stays = "Sub-tickets already started are kept. Your reason stays on the ticket as your comment, even after Undo."
         case .approveAndMerge:
             // Confirming picks the request's option that moves the ticket to the state its hold carries, so
             // Symphony continues it there exactly as with manual review off.
@@ -349,9 +387,6 @@ public struct ConsequenceSheet: Equatable, Identifiable {
             if isDecision {
                 happens = "Records your answer on \(id) and moves it to Rework through the guard."
                 stays = "Your answer stays on the ticket as the recorded decision, even after Undo."
-            } else if item.kind == .plan {
-                happens = "Posts your reason on \(id) and moves it to Rework: Symphony cancels the plan's sub-tickets still in Backlog and plans again."
-                stays = "Your reason stays on the ticket as your comment, even after Undo."
             } else {
                 happens = "Posts your reason on \(id) and moves it to Rework: Symphony continues on the same pull request. Restart instead closes the pull request and starts over from main."
                 stays = "Your reason stays on the ticket as your comment, even after Undo."
@@ -406,6 +441,15 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         return " and promotes \(count) to Todo; \(first.identifier) starts first"
     }
 
+    /// "its 3 sub-tickets still in Backlog (SHOP-331, SHOP-332, SHOP-333)", or "no sub-ticket, since none is still in
+    /// Backlog".
+    static func cancellation(_ tickets: [InboxReview.SubTicket]) -> String {
+        let backlog = tickets.filter { ($0.state ?? "Backlog").caseInsensitiveCompare("Backlog") == .orderedSame }
+        guard !backlog.isEmpty else { return "no sub-ticket, since none is still in Backlog," }
+        let count = backlog.count == 1 ? "its sub-ticket" : "its \(backlog.count) sub-tickets"
+        return "\(count) still in Backlog (\(backlog.map(\.identifier).joined(separator: ", ")))"
+    }
+
     /// Whether the sheet's button is on for `reason`; a blank write-in has nothing to send.
     public func canSend(reason: String) -> Bool {
         (!isWriteIn || quote != nil) && (!needsReason || !reason.trimmingWhitespace().isEmpty)
@@ -418,6 +462,8 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         switch move {
         case .approvePlan: return .approvePlan(identifier)
         case .sendDecisions: return .decisions(identifier, picks: picks)
+        case .askForChanges: return .changes(identifier, reason: answer)
+        case .rejectPlan: return .rework(identifier, reason: answer)
         case .approveAndMerge:
             guard let requestCommentID, !picks.isEmpty else { return nil }
             return .decide(identifier, requestCommentID: requestCommentID, picks: picks, move: nil)
@@ -449,11 +495,20 @@ public struct ConsequenceSheet: Equatable, Identifiable {
     /// Symphony posted it and cleared the hold the next run is on its way, so the answer waits in the app and Undo
     /// keeps it from ever reaching Linear. An answer that moves the ticket (a merge confirmation) is sent at once:
     /// its move is undone as any other.
-    public var holdsForUndo: Bool { (move == .decide || move == .sendDecisions) && targetState == nil }
+    public var holdsForUndo: Bool { [.decide, .sendDecisions, .askForChanges].contains(move) && targetState == nil }
+
+    /// What the banners call what an in-place move sends.
+    private var sent: String {
+        switch move {
+        case .decide: "your decision"
+        case .askForChanges: "your changes"
+        default: "your decisions"
+        }
+    }
 
     /// The banner while the app holds the answer (`holdsForUndo`): its Undo takes the answer back before it is sent.
     public var heldBanner: InboxBanner {
-        InboxBanner(itemID: itemID, identifier: identifier, text: move == .decide ? "Sending your decision" : "Sending your decisions", undo: true)
+        InboxBanner(itemID: itemID, identifier: identifier, text: "Sending \(sent)", undo: true)
     }
 
     /// The banner once the move is made (C18), from Symphony's answer: Undo only after the ticket moved.
@@ -472,7 +527,7 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         if move == .unblock {
             return InboxBanner(itemID: itemID, identifier: identifier, text: "Hold cleared", undo: false)
         }
-        return InboxBanner(itemID: itemID, identifier: identifier, text: move == .decide ? "Sent your decision" : "Sent your decisions", undo: false)
+        return InboxBanner(itemID: itemID, identifier: identifier, text: "Sent \(sent)", undo: false)
     }
 }
 

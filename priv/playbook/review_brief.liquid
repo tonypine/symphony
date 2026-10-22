@@ -24,8 +24,10 @@ a plan handed off to `Plan Review`, and a `linear_request_human_action` decision
 - A plan's brief covers the whole plan in one review: link every artifact (each
   document or artifact comment, the HTML screens), list every sub-ticket with its
   identifier and one line on what it delivers, and
-  put every decision the plan leaves open under `Decisions needed`, so the person
-  reviews everything at once.
+  link each request the plan run raised for a choice it leaves open under
+  `Decisions needed`, so the person reviews everything at once. The brief links the
+  requests and never restates them: the person answers each one in the Inbox, by an
+  option or in their own words.
 - A PR's brief links the PR and says what to check: the behaviour to try, the user
   journeys QA should walk, and the parts that carry the risk.
 - Next to the brief, update the summary block at the end of the issue description
@@ -51,9 +53,7 @@ Use this exact format:
 
 **Decisions needed:**
 
-1. <question>
-   - Options: <A>; <B>
-   - Recommendation: <the option Symphony recommends, and why in one line>
+1. <the request's title>: <link to the request comment>
 
 **How to approve / change / reject:**
 
@@ -68,10 +68,13 @@ Write `None.` under `Decisions needed` when nothing is open. Fill in
 - **Plan review** (a plan parent in `Plan Review`):
   - Approve: move the parent to `Waiting on sub-tickets`; Symphony promotes its
     `Backlog` sub-tickets to `Todo`.
-  - Change: comment on any part of the plan; Symphony moves the parent to `Rework`
-    and a revision run edits the plan in place and updates this brief.
-  - Reject: move the parent to `Rework`; Symphony cancels its `Backlog` sub-tickets
-    and plans again.
+  - Change: answer the plan's questions (Send Decisions in the Inbox, or a reply under
+    each request), or ask for changes (Ask for Changes in the Inbox, or a comment on
+    any part of the plan); Symphony moves the parent to `Rework` and a revision run
+    edits the plan in place, keeps its sub-tickets and updates this brief. Nothing is
+    approved until you approve it.
+  - Reject: Reject Plan in the Inbox, or move the parent to `Rework`; Symphony cancels
+    its `Backlog` sub-tickets and plans again.
 - **PR review** (a PR in `Code Review`): no person's move is needed. The reviewer
   agent's verdict moves it on: approve to `QA` (or `Merging` when QA is skipped),
   rework to `Rework` on the same PR. With manual review on, the step into `Merging`

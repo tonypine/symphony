@@ -188,14 +188,21 @@ public struct InboxReview: Equatable {
     public var subTickets: [SubTicket]
     public var pullRequest: PullRequest?
     public var action: Action?
+    /// A plan's open questions: the requests its plan run raised, each answered in the Inbox like an action's, oldest
+    /// first. The brief links to them; it never restates them.
+    public var questions: [Action]
     public var clarify: Clarify?
     public var blocked: Blocked?
 
-    public init(brief: Brief? = nil, subTickets: [SubTicket] = [], pullRequest: PullRequest? = nil, action: Action? = nil, clarify: Clarify? = nil, blocked: Blocked? = nil) {
+    public init(
+        brief: Brief? = nil, subTickets: [SubTicket] = [], pullRequest: PullRequest? = nil, action: Action? = nil, questions: [Action] = [],
+        clarify: Clarify? = nil, blocked: Blocked? = nil
+    ) {
         self.brief = brief
         self.subTickets = subTickets
         self.pullRequest = pullRequest
         self.action = action
+        self.questions = questions
         self.clarify = clarify
         self.blocked = blocked
     }
@@ -216,7 +223,7 @@ public struct InboxReview: Equatable {
         public var links: [Link]
     }
 
-    /// A decision (C16): its options, and the one recommended when the brief says which.
+    /// A decision (C16): its options, and the one recommended.
     public struct Decision: Equatable {
         public var question: String
         public var options: [String]
@@ -236,7 +243,6 @@ public struct InboxReview: Equatable {
         public var headline: String?
         public var whatToReview: [ReviewLine]
         public var whatChanged: [String]
-        public var decisions: [Decision]
         public var moves: [Move]
     }
 
@@ -434,13 +440,6 @@ public struct InboxReview: Equatable {
             let links: [LinkPayload]?
         }
 
-        struct DecisionPayload: Decodable {
-            let question: String?
-            let options: [String]?
-            let recommendation: String?
-            let recommended: Int?
-        }
-
         struct MovePayload: Decodable {
             let move: String?
             let text: String?
@@ -452,7 +451,6 @@ public struct InboxReview: Equatable {
             let headline: String?
             let whatToReview: [LinePayload]?
             let whatChanged: [String]?
-            let decisions: [DecisionPayload]?
             let moves: [MovePayload]?
         }
 
@@ -486,10 +484,25 @@ public struct InboxReview: Equatable {
             let tradeoffs: [TradeoffPayload]?
         }
 
+        /// One of a plan's questions: a request, as an action's fields carry one.
+        struct RequestPayload: Decodable {
+            let title: String?
+            let question: String?
+            let why: String?
+            let ifUnanswered: String?
+            let unblocks: String?
+            let steps: [String]?
+            let options: [OptionPayload]?
+            let recommendationReason: String?
+            let commentId: String?
+        }
+
         // A plan or PR.
         let brief: BriefPayload?
         let subTickets: [SubTicketPayload]?
         let pullRequest: PullRequestPayload?
+        /// A plan's questions.
+        let decisions: [RequestPayload]?
         // An action.
         let title: String?
         let question: String?
@@ -539,23 +552,25 @@ public struct InboxReview: Equatable {
                 ifUnanswered: payload.ifUnanswered,
                 unblocks: payload.unblocks,
                 steps: payload.steps ?? [],
-                options: (payload.options ?? []).compactMap { option in
-                    option.label.map {
-                        Action.Option(
-                            label: $0,
-                            effect: option.effect,
-                            recommended: option.recommended ?? false,
-                            tradeoffs: (option.tradeoffs ?? []).compactMap { tradeoff in
-                                guard let kind = tradeoff.kind.flatMap(Action.Tradeoff.Kind.init(rawValue:)), let text = tradeoff.text else { return nil }
-                                return Action.Tradeoff(kind: kind, text: text)
-                            }
-                        )
-                    }
-                },
+                options: Self.options(payload.options),
                 recommendationReason: payload.recommendationReason,
                 commentID: payload.commentId,
                 confirm: payload.confirm
             ),
+            questions: (payload.decisions ?? []).map { request in
+                Action(
+                    title: request.title,
+                    question: request.question,
+                    why: request.why,
+                    ifUnanswered: request.ifUnanswered,
+                    unblocks: request.unblocks,
+                    steps: request.steps ?? [],
+                    options: Self.options(request.options),
+                    recommendationReason: request.recommendationReason,
+                    commentID: request.commentId,
+                    confirm: nil
+                )
+            },
             clarify: payload.held.map { held in
                 Clarify(
                     held: held,
@@ -573,6 +588,22 @@ public struct InboxReview: Equatable {
         )
     }
 
+    private static func options(_ payloads: [Payload.OptionPayload]?) -> [Action.Option] {
+        (payloads ?? []).compactMap { option in
+            option.label.map {
+                Action.Option(
+                    label: $0,
+                    effect: option.effect,
+                    recommended: option.recommended ?? false,
+                    tradeoffs: (option.tradeoffs ?? []).compactMap { tradeoff in
+                        guard let kind = tradeoff.kind.flatMap(Action.Tradeoff.Kind.init(rawValue:)), let text = tradeoff.text else { return nil }
+                        return Action.Tradeoff(kind: kind, text: text)
+                    }
+                )
+            }
+        }
+    }
+
     private static func brief(_ payload: Payload.BriefPayload) -> Brief? {
         guard payload.format == "parsed" else { return payload.markdown.map(Brief.raw) }
         return .parsed(ParsedBrief(
@@ -586,11 +617,6 @@ public struct InboxReview: Equatable {
                 )
             },
             whatChanged: payload.whatChanged ?? [],
-            decisions: (payload.decisions ?? []).compactMap { decision in
-                decision.question.map {
-                    Decision(question: $0, options: decision.options ?? [], recommendation: decision.recommendation, recommended: decision.recommended)
-                }
-            },
             moves: (payload.moves ?? []).compactMap { move in
                 guard let name = move.move, let text = move.text else { return nil }
                 return Move(move: name, text: text)

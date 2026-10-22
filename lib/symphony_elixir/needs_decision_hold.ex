@@ -3,9 +3,10 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   The Needs Decision hold: a ticket pauses in its phase with the question recorded, and continues in
   place once the decision is made.
 
-  An agent's decision request (`SymphonyElixir.HumanActions.Request`) never moves the ticket: the
-  ticket keeps its phase, gains the `Needs Decision` machine label, and the hold carries the
-  decision payload — the question, its options and what clears it. The Inbox loop runs `sweep/3`
+  A decision request (`SymphonyElixir.HumanActions.Request`), whoever asks it, is raised through
+  the one writer, `SymphonyElixir.DecisionRequest`, and never moves the ticket: the ticket keeps its
+  phase, gains the `Needs Decision` machine label, and the hold carries the decision payload — the
+  question, its options and what clears it. The Inbox loop runs `sweep/3`
   over the tickets it read, reconciling each one's store hold against the requests Linear still
   reads as open (`sync/3` does one ticket).
 
@@ -19,8 +20,9 @@ defmodule SymphonyElixir.NeedsDecisionHold do
 
   require Logger
 
-  alias SymphonyElixir.{Config, Decisions, Handoff, Hold, MergeConfirmation, TicketSignals, TransitionGuard}
+  alias SymphonyElixir.{Config, DecisionRequest, Decisions, Handoff, Hold}
   alias SymphonyElixir.HumanActions.{Collector, Request}
+  alias SymphonyElixir.{MergeConfirmation, TicketSignals, TransitionGuard}
 
   @typedoc "What the ticket's open decision requests call for: set the hold, clear it, or leave it."
   @type action :: {:set, map()} | :clear | :none
@@ -60,44 +62,6 @@ defmodule SymphonyElixir.NeedsDecisionHold do
       }
     }
   end
-
-  @doc """
-  Pauses `issue` in its phase on a decision the machine needs: posts `request` as the
-  `## Decision needed:` comment (rendered to say the ticket stays where it is) and sets the Needs
-  Decision hold carrying it. The hold is set before the comment is posted, so a retry after a
-  failure never posts the comment twice. `confirm`, when given, is the state a confirmation continues into, as
-  a merge confirmation's does (`SymphonyElixir.MergeConfirmation.confirm_target/1`); without it the
-  ticket continues in place once the decision is recorded.
-
-  `issue` needs `:id` and `:state`, and `:repo_key` unless `opts[:repo_key]` names it.
-  `opts[:tracker]` and `opts[:store]` override the tracker and the run store (tests, a fake).
-  """
-  @spec pause(map(), map(), keyword(), String.t() | nil) :: :ok | {:error, term()}
-  def pause(%{id: issue_id} = issue, request, opts, confirm \\ nil) do
-    tracker = Keyword.get(opts, :tracker, SymphonyElixir.Tracker)
-    repo_key = Keyword.get(opts, :repo_key) || Map.get(issue, :repo_key)
-
-    hold_opts = Keyword.take(opts, [:store])
-
-    # The hold first: a hold that can't be set posts nothing, so the caller's retry never posts a
-    # second `## Decision needed:` comment. A comment that can't be posted takes the hold back.
-    with {:hold, :ok} <- {:hold, Hold.set(repo_key, issue_id, :needs_decision, confirming(attrs(request), confirm, Map.get(issue, :state)), hold_opts)},
-         {:post, :ok} <- {:post, tracker.create_comment(issue_id, Request.render_hold(request, Map.get(issue, :state)))} do
-      :ok
-    else
-      {:hold, {:error, reason}} ->
-        {:error, {:decision_hold_failed, reason}}
-
-      {:post, {:error, reason}} ->
-        Hold.clear(repo_key, issue_id, :needs_decision, hold_opts)
-        {:error, {:decision_request_failed, reason}}
-    end
-  end
-
-  # A confirmation also records the state the ticket waits in, so a person's move made after the
-  # request wins over the move the answer would perform (`resume/5`).
-  defp confirming(attrs, nil, _state), do: attrs
-  defp confirming(attrs, confirm, state), do: %{attrs | decision: attrs.decision |> Map.put(:confirm, confirm) |> Map.put(:state, state)}
 
   @doc """
   Reconciles the Needs Decision hold of one ticket against the decision requests Linear still reads
@@ -147,7 +111,7 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   defp sync_ticket(_repo_key, _node, _settings, _opts), do: :none
 
   defp apply_set(repo_key, issue_id, attrs, opts) do
-    case Hold.set(repo_key, issue_id, :needs_decision, attrs, opts) do
+    case DecisionRequest.project(repo_key, issue_id, attrs, opts) do
       :ok -> :set
       {:error, reason} -> log_failure("set", issue_id, reason)
     end

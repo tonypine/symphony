@@ -73,7 +73,7 @@ defmodule SymphonyElixir.TransitionGuard do
   # on to the QA state, or straight to `Merging` when the QA state's skip rule applies (the
   # deterministic docs-only/internal-only diff — the caller picks the row and records the reason); and
   # a rework verdict returns it to `Rework`. An escalation has no row: it is a Needs Decision hold
-  # (`SymphonyElixir.NeedsDecisionHold.pause/3`), which pauses the ticket in Code Review and never
+  # (`SymphonyElixir.DecisionRequest.ask/4`), which pauses the ticket in Code Review and never
   # moves it, and so is CI that could not be fixed, a dependency that needs approval and an agent's
   # decision request.
   #

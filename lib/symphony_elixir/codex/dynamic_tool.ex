@@ -17,8 +17,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
                                "The question stands alone: name each ticket by identifier and a short name the first time, and explain any term a director wouldn't know in the same sentence. " <>
                                "No file names or paths, code identifiers, branch names, commit hashes, template syntax or backticks, and no internal jargon (partials, head, verdict, hold): say what a thing does, not where it lives. A pull request is PR #448. " <>
                                "`why` is at most two short paragraphs, one fact per sentence, subject first. Each option's `effect` says what will happen to the work. " <>
-                               "Add `if_unanswered` (what waits or repeats until someone answers), up to three `tradeoffs` per option (good, cost, risk) and `decision.recommendation_reason` (one line). " <>
-                               "The tool refuses a request holding backticks, template syntax, a path or file name, a commit hash or an auto/ or origin/ branch, and names each token. " <>
+                               "Every request says `if_unanswered` (what waits or repeats until someone answers) and `decision.recommendation_reason` (one line), and may add up to three `tradeoffs` per option (good, cost, risk). " <>
+                               "The tool refuses a request missing either, or holding backticks, template syntax, a path or file name, a commit hash, an auto/ or origin/ branch or an internal word (head, verdict, hold, feed), and names each token. " <>
                                ~s|Before: "How should TP-892 handle the legacy partials that Code Review keeps flagging?", why "Code Review sent PR #448 back again (head 2f5af5ab). Its only finding is that the legacy partials (parent_tickets.liquid, …) still describe [a retired review step]." | <>
                                ~s|After: "TP-892 (Retire two old review steps) keeps failing Code Review because the older set of agent instructions still describes one of those steps. Should TP-892 leave that text to TP-891 (Remove the retired review states), which deletes it anyway?", why "Code Review sent PR #448 back a second time. Its only finding is the old step's text. You decided earlier today that TP-891 removes it.", if_unanswered "TP-892 stays in Rework, and each hand-back to Code Review is sent back for the same reason."|
 
@@ -352,12 +352,12 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_request_human_action",
       "description" =>
-        "Ask a person for a decision only they can make on the current issue: a product call, a missing secret or permission (add it, or drop what needs it), an account to set up. Give one question and 2 to 4 options, each with what it does, one of them recommended; a request without options is refused. Never ask a person to run a check: a check an agent can't run (launching the app, a host crash check, a check on a device) belongs to CI or a QA playbook, and a manual check that could be a test becomes a test. It leaves the issue in its phase on a Needs Decision hold, where the person finds it, and Symphony lists the decision in a Linear project update until the person answers it. It adds no label itself. Never put a secret value in any field. A request with the same title that is still open is not posted again, and one a person already answered (the Decisions section of the description) is not raised again: the result carries the recorded answer, which you apply. Before asking about slow or stuck CI, compute the job's age from the API's UTC timestamps against the current UTC time (`date -u`), never local time; under 30 minutes old, wait for the CI poller's re-run instead. To change an agent-protected file, ask with an option whose `unlocks` names it: the person's pick grants it, and they never type a path. Update the workpad first: the hold ends your run shortly after. " <>
+        "Ask a person for a decision only they can make on the current issue: a product call, a missing secret or permission (add it, or drop what needs it), an account to set up. Every question a person is asked goes through this tool, including a plan's open choices and a rework that failed the same way twice. Give one question and 2 to 4 options, each with what it does, one of them recommended; a request without options is refused. Never ask a person to run a check: a check an agent can't run (launching the app, a host crash check, a check on a device) belongs to CI or a QA playbook, and a manual check that could be a test becomes a test. It leaves the issue in its phase on a Needs Decision hold, where the person finds it, and Symphony lists the decision in a Linear project update until the person answers it. It adds no label itself. Never put a secret value in any field. A request with the same title that is still open is not posted again, and one a person already answered (the Decisions section of the description) is not raised again: the result carries the recorded answer, which you apply. Before asking about slow or stuck CI, compute the job's age from the API's UTC timestamps against the current UTC time (`date -u`), never local time; under 30 minutes old, wait for the CI poller's re-run instead. To change an agent-protected file, ask with an option whose `unlocks` names it: the person's pick grants it, and they never type a path. Update the workpad first: the hold ends your run shortly after. " <>
           @decision_writing_standard,
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
-        "required" => ["title", "why", "decision"],
+        "required" => ["title", "why", "decision", "if_unanswered"],
         "properties" => %{
           "title" => %{"type" => "string", "maxLength" => 120, "description" => "The decision in a few words: `Close TP-612 as a duplicate of TP-668`."},
           "why" => %{
@@ -371,7 +371,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
           "decision" => %{
             "type" => "object",
             "additionalProperties" => false,
-            "required" => ["question", "options"],
+            "required" => ["question", "options", "recommendation_reason"],
             "properties" => %{
               "question" => %{
                 "type" => "string",

@@ -18,26 +18,6 @@
       "state_machine": "designed",
       "review": {
         "brief": {
-          "decisions": [
-            {
-              "options": [
-                "In the checkout",
-                "On a separate page"
-              ],
-              "question": "Where are gift cards bought?",
-              "recommendation": "In the checkout: one path to pay.",
-              "recommended": 0
-            },
-            {
-              "options": [
-                "The store's currency",
-                "The buyer's currency"
-              ],
-              "question": "Which currency does a card hold?",
-              "recommendation": "The store's currency, so refunds never convert.",
-              "recommended": 0
-            }
-          ],
           "format": "parsed",
           "headline": "The plan for gift cards at checkout, in 7 sub-tickets.",
           "moves": [
@@ -80,6 +60,71 @@
             }
           ]
         },
+        "decisions": [
+          {
+            "comment_id": "q-330-1",
+            "title": "Where gift cards are bought",
+            "question": "When a shopper buys a gift card, where do they do it: in the checkout they already use, or on a page of its own?",
+            "why": "The checkout and a separate page need different screens and different sub-tickets.\n\nSHOP-332 waits on this answer.",
+            "if_unanswered": "SHOP-330 stays in Plan Review and none of its sub-tickets start.",
+            "unblocks": null,
+            "steps": [],
+            "options": [
+              {
+                "label": "In the checkout",
+                "effect": "Shoppers add a card like any product, and pay for it with the rest of their order.",
+                "recommended": true,
+                "tradeoffs": [
+                  {
+                    "kind": "good",
+                    "text": "One path to pay."
+                  }
+                ]
+              },
+              {
+                "label": "On a separate page",
+                "effect": "Shoppers buy cards from a page of their own, paid on their own.",
+                "recommended": false,
+                "tradeoffs": [
+                  {
+                    "kind": "cost",
+                    "text": "One more page to build and test."
+                  }
+                ]
+              }
+            ],
+            "recommendation_reason": "One path to pay keeps refunds and receipts in one place."
+          },
+          {
+            "comment_id": "q-330-2",
+            "title": "The currency a card holds",
+            "question": "When a shopper abroad buys a card, which currency does it hold: the store's, or the buyer's?",
+            "why": "A card's balance is shown and refunded in the currency it holds.",
+            "if_unanswered": "SHOP-330 stays in Plan Review and none of its sub-tickets start.",
+            "unblocks": null,
+            "steps": [],
+            "options": [
+              {
+                "label": "The store's currency",
+                "effect": "Every card holds the store's currency; the buyer sees a converted price when buying.",
+                "recommended": true,
+                "tradeoffs": []
+              },
+              {
+                "label": "The buyer's currency",
+                "effect": "A card holds the currency it was bought in, converted at payment.",
+                "recommended": false,
+                "tradeoffs": [
+                  {
+                    "kind": "risk",
+                    "text": "Refunds convert twice."
+                  }
+                ]
+              }
+            ],
+            "recommendation_reason": "Refunds never convert."
+          }
+        ],
         "sub_tickets": [
           {
             "identifier": "SHOP-331",

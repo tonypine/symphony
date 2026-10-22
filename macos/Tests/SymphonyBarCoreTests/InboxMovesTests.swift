@@ -8,23 +8,87 @@ final class InboxMovesTests: XCTestCase {
 
     // MARK: - The toolbar
 
-    func testAPlanOffersApproveFirstSendDecisionsOnceAPickChangesAndReworkUnderMore() throws {
+    func testAPlanWithQuestionsOffersSendDecisionsFirstThenApproveAndAskForChangesWithRejectUnderMore() throws {
         let plan = try shipped("SHOP-330")
 
         let toolbar = InboxToolbar.toolbar(for: plan)
-        XCTAssertEqual(toolbar.buttons.map(\.command.title), ["Approve Plan…", "Send Decisions", "Open in Linear"])
-        XCTAssertEqual(toolbar.buttons.map(\.enabled), [true, false, true])
-        XCTAssertEqual(toolbar.overflow, [.move(.sendToRework), .move(.restart)])
-        XCTAssertEqual(toolbar.defaultCommand, .move(.approvePlan))
+        XCTAssertEqual(toolbar.buttons.map(\.command.title), ["Send Decisions", "Approve Plan…", "Ask for Changes…", "Open in Linear"])
+        // Every question starts on its recommended option, so the answers can go at once.
+        XCTAssertEqual(toolbar.buttons.map(\.enabled), [true, true, true, true])
+        XCTAssertEqual(toolbar.overflow, [.move(.rejectPlan), .move(.restart)])
+        XCTAssertEqual(toolbar.defaultCommand, .move(.sendDecisions))
 
-        // Picking the recommended option again changes nothing; another option turns Send Decisions on.
-        XCTAssertFalse(InboxToolbar.toolbar(for: plan, picks: DecisionPicks(picks: [0: 0])).buttons[1].enabled)
-        XCTAssertTrue(InboxToolbar.toolbar(for: plan, picks: DecisionPicks(picks: [0: 1])).buttons[1].enabled)
+        // A write-in picked with nothing in it is no answer: Send Decisions waits for the words.
+        let writeIn = plan.review.questions[1].writeInIndex
+        XCTAssertFalse(InboxToolbar.toolbar(for: plan, picks: DecisionPicks(picks: [1: writeIn])).buttons[0].enabled)
+        XCTAssertTrue(InboxToolbar.toolbar(for: plan, picks: DecisionPicks(picks: [1: writeIn], writeIns: [1: "Ask the finance team"])).buttons[0].enabled)
 
-        // A plan whose brief has no decisions has no Send Decisions.
+        // A plan with no open question is approved, or changed, from the start.
         var bare = plan
-        bare.review.brief = .raw("## Review brief")
-        XCTAssertEqual(InboxToolbar.toolbar(for: bare).buttons.map(\.command.title), ["Approve Plan…", "Open in Linear"])
+        bare.review.questions = []
+        XCTAssertEqual(InboxToolbar.toolbar(for: bare).buttons.map(\.command.title), ["Approve Plan…", "Ask for Changes…", "Open in Linear"])
+        XCTAssertEqual(InboxToolbar.toolbar(for: bare).defaultCommand, .move(.approvePlan))
+    }
+
+    func testSendDecisionsAnswersEachQuestionUnderItsRequestInPickedOptionsOrOwnWords() throws {
+        let plan = try shipped("SHOP-330")
+        let ownWords = "Ask the finance team which currency the books use."
+        let picks = DecisionPicks(picks: [1: plan.review.questions[1].writeInIndex], writeIns: [1: "  \(ownWords) "])
+
+        let sheet = ConsequenceSheet(move: .sendDecisions, item: plan, picks: picks)
+        XCTAssertEqual(sheet.title, "Send your answers on SHOP-330?")
+        XCTAssertNil(sheet.targetState)
+        XCTAssertTrue(sheet.happens.contains("The plan keeps its sub-tickets."))
+        XCTAssertTrue(sheet.stays.hasPrefix("The plan isn't approved"))
+        XCTAssertTrue(sheet.holdsForUndo)
+        XCTAssertEqual(sheet.heldBanner.text, "Sending your decisions")
+        XCTAssertEqual(
+            sheet.action(),
+            .decisions("SHOP-330", picks: [
+                .init(question: plan.review.questions[0].question ?? "", answer: "In the checkout", requestCommentID: "q-330-1"),
+                .init(question: plan.review.questions[1].question ?? "", answer: ownWords, requestCommentID: "q-330-2"),
+            ])
+        )
+
+        // Approving instead says the questions stay unanswered.
+        XCTAssertTrue(ConsequenceSheet(move: .approvePlan, item: plan).stays.contains("its 2 open questions are not answered"))
+        var one = plan
+        one.review.questions = [plan.review.questions[0]]
+        XCTAssertTrue(ConsequenceSheet(move: .approvePlan, item: one).stays.contains("its open question is not answered"))
+        one.review.questions = []
+        XCTAssertEqual(ConsequenceSheet(move: .approvePlan, item: one).stays, "The plan stays as written. To change it, ask for changes instead.")
+    }
+
+    func testAskForChangesKeepsTheSubTicketsAndRejectPlanSaysWhichItCancels() throws {
+        let plan = try shipped("SHOP-330")
+
+        let changes = ConsequenceSheet(move: .askForChanges, item: plan)
+        XCTAssertEqual(changes.title, "Ask for changes to the plan of SHOP-330?")
+        XCTAssertNil(changes.targetState)
+        XCTAssertFalse(changes.isDestructive)
+        XCTAssertTrue(changes.needsReason)
+        XCTAssertEqual(changes.reasonPrompt, "What should change in the plan of SHOP-330?")
+        XCTAssertTrue(changes.happens.contains("The plan keeps its sub-tickets."))
+        XCTAssertNil(changes.action())
+        XCTAssertEqual(changes.action(reason: " Split the checkout step "), .changes("SHOP-330", reason: "Split the checkout step"))
+        XCTAssertTrue(changes.holdsForUndo)
+        XCTAssertEqual(changes.heldBanner.text, "Sending your changes")
+        XCTAssertEqual(changes.banner(after: MoveOutcome(moved: false, toState: "Plan Review")).text, "Sent your changes")
+
+        let reject = ConsequenceSheet(move: .rejectPlan, item: plan)
+        XCTAssertEqual(reject.title, "Reject the plan of SHOP-330?")
+        XCTAssertEqual(reject.targetState, "Rework")
+        XCTAssertTrue(reject.isDestructive)
+        XCTAssertEqual(reject.reasonPrompt, "Why is the plan of SHOP-330 rejected?")
+        XCTAssertTrue(reject.happens.contains("Symphony cancels its 7 sub-tickets still in Backlog (SHOP-331, SHOP-332"), reject.happens)
+        XCTAssertEqual(reject.action(reason: "Wrong split"), .rework("SHOP-330", reason: "Wrong split"))
+        XCTAssertFalse(reject.holdsForUndo)
+
+        var started = plan
+        started.review.subTickets = [InboxReview.SubTicket(identifier: "SHOP-331", title: nil, state: "Todo", url: nil)]
+        XCTAssertTrue(ConsequenceSheet(move: .rejectPlan, item: started).happens.contains("cancels no sub-ticket, since none is still in Backlog, and plans again"))
+        started.review.subTickets = [InboxReview.SubTicket(identifier: "SHOP-331", title: nil, state: "Backlog", url: nil)]
+        XCTAssertTrue(ConsequenceSheet(move: .rejectPlan, item: started).happens.contains("cancels its sub-ticket still in Backlog (SHOP-331) and plans again"))
     }
 
     func testAPullRequestOffersApproveAndMergeUnlessACheckIsRed() throws {
@@ -67,7 +131,7 @@ final class InboxMovesTests: XCTestCase {
     }
 
     func testEveryPlanAndPROffersRestart() throws {
-        XCTAssertEqual(InboxToolbar.toolbar(for: try shipped("SHOP-330")).overflow, [.move(.sendToRework), .move(.restart)])
+        XCTAssertEqual(InboxToolbar.toolbar(for: try shipped("SHOP-330")).overflow, [.move(.rejectPlan), .move(.restart)])
 
         var pr = try shipped("BIL-206")
         XCTAssertEqual(InboxToolbar.toolbar(for: pr).overflow, [.move(.restart)])
@@ -84,7 +148,7 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertNil(InboxToolbar(buttons: [.init(command: .move(.sendDecisions), enabled: false)], overflow: []).defaultCommand)
         XCTAssertEqual(
             InboxMove.allCases.map(\.verb),
-            ["Approve Plan", "Send Decisions", "Approve and Merge", "Send to Rework", "Restart", "Send Decision", "Unblock"]
+            ["Approve Plan", "Send Decisions", "Ask for Changes", "Reject Plan", "Approve and Merge", "Send to Rework", "Restart", "Send Decision", "Unblock"]
         )
         XCTAssertEqual(InboxMove.approvePlan.id, "approvePlan")
         XCTAssertEqual(InboxMove.decide.id, "decide")
@@ -227,9 +291,6 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(OptionCard.cards(for: action).map(\.isWriteIn), [false, false, false])
         XCTAssertEqual(OptionCard.cards(for: InboxReview.Action(steps: ["Add the key."], options: []), writeIn: true), [])
 
-        // A plan's decisions (C16) take no write-in: the plan's Change move already takes free text.
-        let decision = InboxReview.Decision(question: "Where?", options: ["A", "B"], recommendation: "A is closer.", recommended: 0)
-        XCTAssertEqual(OptionCard.cards(for: decision).map(\.isWriteIn), [false, false])
     }
 
     func testPickingTheWriteInTurnsSendDecisionOffUntilItHoldsWords() throws {
@@ -395,23 +456,28 @@ final class InboxMovesTests: XCTestCase {
 
     // MARK: - Picks
 
-    func testPicksStartAtTheRecommendationAndListEachAnswer() throws {
+    func testPicksStartAtTheRecommendationAndListEachAnswerWithItsRequest() throws {
+        let questions = try shipped("SHOP-330").review.questions
         let decisions = try shipped("SHOP-330").review.decisions
         let picks = DecisionPicks(picks: [1: 1])
         XCTAssertEqual(picks.pick(0, in: decisions[0]), 0)
         XCTAssertEqual(picks.pick(1, in: decisions[1]), 1)
-        XCTAssertTrue(picks.changed(decisions))
-        XCTAssertEqual(picks.answers(decisions), [
-            .init(question: "Where are gift cards bought?", answer: "In the checkout"),
-            .init(question: "Which currency does a card hold?", answer: "The buyer's currency"),
-        ])
+        XCTAssertEqual(picks.answers(questions).map(\.answer), ["In the checkout", "The buyer's currency"])
+        XCTAssertEqual(picks.answers(questions).map(\.requestCommentID), ["q-330-1", "q-330-2"])
+        XCTAssertTrue(picks.answersAll(questions))
 
-        // A decision with no recommendation and no pick is left out; any pick of it is a change.
-        let open = InboxReview.Decision(question: "Who pays?", options: ["A", "B"], recommendation: nil, recommended: nil)
+        // A question with no recommendation and no pick has no answer, nor has one picked past its options.
+        let open = InboxReview.Action(question: "Who pays?", steps: [], options: [.init(label: "A", effect: nil, recommended: false), .init(label: "B", effect: nil, recommended: false)], commentID: "q")
         XCTAssertEqual(DecisionPicks().answers([open]), [])
-        XCTAssertFalse(DecisionPicks().changed([open]))
-        XCTAssertTrue(DecisionPicks(picks: [0: 0]).changed([open]))
+        XCTAssertFalse(DecisionPicks().answersAll([open]))
+        XCTAssertFalse(DecisionPicks().answersAll([]))
         XCTAssertEqual(DecisionPicks(picks: [0: 5]).answers([open]), [])
+        XCTAssertEqual(DecisionPicks(picks: [0: 1]).answers([open]), [.init(question: "Who pays?", answer: "B", requestCommentID: "q")])
+        // A request's one write-in is decision 0's.
+        var request = DecisionPicks(writeIn: "Mine")
+        XCTAssertEqual(request.writeIns, [0: "Mine"])
+        request.writeIn = "Yours"
+        XCTAssertEqual(request.writeIns[0], "Yours")
     }
 
     // MARK: - The consequence sheets
@@ -421,7 +487,7 @@ final class InboxMovesTests: XCTestCase {
         let sheet = ConsequenceSheet(move: .approvePlan, item: plan)
         XCTAssertEqual(sheet.title, "Approve the plan of SHOP-330?")
         XCTAssertEqual(sheet.happens, "Moves SHOP-330 to Waiting on sub-tickets and promotes its 7 sub-tickets to Todo; SHOP-331 starts first.")
-        XCTAssertEqual(sheet.stays, "The plan stays as written. To change it, send decisions or comment on it in Linear instead.")
+        XCTAssertEqual(sheet.stays, "The plan stays as written: its 2 open questions are not answered. To have Symphony apply your answers first, choose Send Decisions instead.")
         XCTAssertEqual(sheet.verb, "Approve Plan")
         XCTAssertFalse(sheet.isDestructive)
         XCTAssertEqual(sheet.action(), .approvePlan("SHOP-330"))
@@ -430,7 +496,6 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertFalse(sheet.holdsForUndo)
         XCTAssertEqual(sheet.id, "i-330:approvePlan")
 
-        XCTAssertTrue(ConsequenceSheet(move: .approvePlan, item: plan, picks: DecisionPicks(picks: [0: 1])).stays.contains("your changed picks are not sent"))
 
         var one = plan
         one.review.subTickets = [.init(identifier: "SHOP-331", title: nil, state: "Backlog", url: nil), .init(identifier: "SHOP-332", title: nil, state: "Todo", url: nil)]
@@ -439,27 +504,25 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(ConsequenceSheet(move: .approvePlan, item: one).happens, "Moves SHOP-330 to Waiting on sub-tickets.")
     }
 
-    func testSendDecisionsPostsThePicksAndLeavesThePlanInPlanReview() throws {
+    func testSendDecisionsListsTheAnswersAndLeavesThePlanInPlanReview() throws {
         var plan = try shipped("SHOP-330")
         let picks = DecisionPicks(picks: [0: 1])
         let sheet = ConsequenceSheet(move: .sendDecisions, item: plan, picks: picks)
-        XCTAssertEqual(sheet.title, "Send your decisions on SHOP-330?")
-        XCTAssertEqual(sheet.happens, "Posts one comment on SHOP-330 with your picks, and Symphony revises the plan from it.")
-        XCTAssertNil(sheet.targetState)
+        XCTAssertEqual(sheet.happens, "Records each answer under its question on SHOP-330, and Symphony revises the plan from them. The plan keeps its sub-tickets.")
         XCTAssertEqual(sheet.picks.map(\.answer), ["On a separate page", "The store's currency"])
         XCTAssertTrue(sheet.listsPicks)
         XCTAssertEqual(sheet.action(), .decisions("SHOP-330", picks: sheet.picks))
         XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome), InboxBanner(itemID: "i-330", identifier: "SHOP-330", text: "Sent your decisions", undo: false))
-        XCTAssertTrue(sheet.holdsForUndo)
         XCTAssertEqual(sheet.heldBanner, InboxBanner(itemID: "i-330", identifier: "SHOP-330", text: "Sending your decisions", undo: true))
-        XCTAssertEqual(sheet.stays, "The plan stays in Plan Review and isn't approved: it comes back to the Inbox once Symphony has revised it.")
+        XCTAssertEqual(sheet.stays, "The plan isn't approved: it comes back to Plan Review once Symphony has revised it, and you approve it then.")
 
         // The workflow's Plan Review state under another name; the sheet names the state the plan is in.
         plan.state = "Plan review (design)"
         XCTAssertNil(ConsequenceSheet(move: .sendDecisions, item: plan, picks: picks).targetState)
-        XCTAssertTrue(ConsequenceSheet(move: .sendDecisions, item: plan, picks: picks).stays.hasPrefix("The plan stays in Plan review (design) and"))
+        XCTAssertTrue(ConsequenceSheet(move: .sendDecisions, item: plan, picks: picks).stays.contains("comes back to Plan review (design) once"))
         plan.state = nil
-        XCTAssertTrue(ConsequenceSheet(move: .sendDecisions, item: plan, picks: picks).stays.hasPrefix("The plan stays in Plan Review and"))
+        XCTAssertTrue(ConsequenceSheet(move: .sendDecisions, item: plan, picks: picks).stays.contains("comes back to Plan Review once"))
+        XCTAssertTrue(ConsequenceSheet(move: .askForChanges, item: plan).stays.contains("comes back to Plan Review once"))
     }
 
     func testTheBannerFollowsSymphonysAnswerNotTheSheetsGuess() throws {
@@ -553,9 +616,6 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertNil(sheet.action())
         XCTAssertTrue(sheet.canSend(reason: "Totals are off"))
         XCTAssertEqual(sheet.action(reason: " Totals are off \n"), .rework("BIL-206", reason: "Totals are off"))
-
-        let plan = ConsequenceSheet(move: .sendToRework, item: try shipped("SHOP-330"))
-        XCTAssertTrue(plan.happens.contains("cancels the plan's sub-tickets still in Backlog and plans again"))
     }
 
     func testRestartResetsFromMainAndSaysWhatItDoes() throws {
@@ -637,6 +697,12 @@ final class InboxMovesTests: XCTestCase {
             (.rework("BIL-206", reason: "No"), "rework", ["issue_identifier": "BIL-206", "reason": "No"]),
             (.restart("BIL-206", reason: "No"), "restart", ["issue_identifier": "BIL-206", "reason": "No"]),
             (.decisions("SHOP-330", picks: picks), "decisions", ["issue_identifier": "SHOP-330", "picks": [["question": "Where?", "answer": "B"]]]),
+            (
+                .decisions("SHOP-330", picks: [.init(question: "Where?", answer: "B", requestCommentID: "q-1")]),
+                "decisions",
+                ["issue_identifier": "SHOP-330", "picks": [["question": "Where?", "answer": "B", "request_comment_id": "q-1"]]]
+            ),
+            (.changes("SHOP-330", reason: "Split it"), "changes", ["issue_identifier": "SHOP-330", "reason": "Split it"]),
             (.backlog("BIL-206", note: "Later"), "backlog", ["issue_identifier": "BIL-206", "note": "Later"]),
             (.backlog("BIL-206", note: nil), "backlog", ["issue_identifier": "BIL-206"]),
             (
@@ -730,8 +796,11 @@ final class InboxMovesTests: XCTestCase {
         ])
         let decisions = try XCTUnwrap(entries[0]["body"] as? [String: Any])
         XCTAssertEqual(decisions["picks"] as? [[String: String]], [
-            ["question": "Where are gift cards bought?", "answer": "On a separate page"],
-            ["question": "Which currency does a card hold?", "answer": "The store's currency"],
+            [
+                "question": "When a shopper buys a gift card, where do they do it: in the checkout they already use, or on a page of its own?",
+                "answer": "On a separate page", "request_comment_id": "q-330-1",
+            ],
+            ["question": "When a shopper abroad buys a card, which currency does it hold: the store's, or the buyer's?", "answer": "The store's currency", "request_comment_id": "q-330-2"],
         ])
         let question = "Merge BIL-206 (Prorate plan changes mid-cycle) into its base branch?"
         XCTAssertEqual(entries[3]["body"] as? NSDictionary, [

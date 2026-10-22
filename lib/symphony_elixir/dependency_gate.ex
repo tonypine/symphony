@@ -11,7 +11,8 @@ defmodule SymphonyElixir.DependencyGate do
 
   require Logger
 
-  alias SymphonyElixir.{Config, DependencyAudit, NeedsDecisionHold, Notifications, TicketSignals, Tracker}
+  alias SymphonyElixir.{Config, DecisionRequest, DependencyAudit, Notifications, TicketSignals, Tracker}
+  alias SymphonyElixir.HumanActions.PlainWords
 
   @type gate :: %{
           workspace: Path.t(),
@@ -151,12 +152,12 @@ defmodule SymphonyElixir.DependencyGate do
   (`{:error, reason}`). The `## Decision needed:` comment asks whether to allow the changes or drop
   them; the decision clears the hold and the ticket continues in place
   (`SymphonyElixir.NeedsDecisionHold`). `repo_key` names the repo the hold is recorded under when
-  the issue carries none; `opts` go to `NeedsDecisionHold.pause/4` (`:tracker`, `:store`).
+  the issue carries none; `opts` go to `DecisionRequest.ask/4` (`:tracker`, `:store`).
   """
   @spec pause(map(), {:hold, [map()]} | {:error, term()}, String.t() | nil, keyword()) :: :ok | {:error, term()}
   def pause(issue, finding, repo_key, opts \\ []) do
     opts = if is_binary(repo_key), do: Keyword.put(opts, :repo_key, repo_key), else: opts
-    NeedsDecisionHold.pause(issue, decision_request(issue, finding), opts)
+    DecisionRequest.ask(issue, decision_request(issue, finding), opts)
   end
 
   defp decision_request(issue, finding) do
@@ -164,7 +165,7 @@ defmodule SymphonyElixir.DependencyGate do
 
     %{
       title: "Approve the dependency changes on #{label}",
-      question: "#{label} adds or changes outside packages that Symphony's package check holds for approval. How should it continue?",
+      question: "#{label} adds or changes outside packages that Symphony's package check keeps out until a person approves them. How should it continue?",
       why: finding_why(finding),
       if_unanswered: "#{label} stays where it is and its pull request is not opened.",
       options: [
@@ -179,12 +180,13 @@ defmodule SymphonyElixir.DependencyGate do
     }
   end
 
+  # The package names and reasons come from the audit, so their code is said in plain words.
   defp finding_why({:hold, items}) do
-    changes = Enum.map_join(items, ", ", &"#{Map.get(&1, :package)} (#{Map.get(&1, :reason)})")
-    "The package check holds the pull request until a person approves these changes: #{changes}."
+    changes = Enum.map_join(items, ", ", &PlainWords.scrub("#{Map.get(&1, :package)} (#{Map.get(&1, :reason)})"))
+    "The package check keeps the pull request closed until a person approves these changes: #{changes}."
   end
 
-  defp finding_why({:error, _reason}), do: "The package check could not run, so the pull request is held until a person decides."
+  defp finding_why({:error, _reason}), do: "The package check could not run, so the pull request waits until a person decides."
 
   @doc """
   Build the structured failure response that mirrors `Codex.DynamicTool`

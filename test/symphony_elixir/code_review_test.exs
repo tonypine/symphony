@@ -315,7 +315,7 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert request =~ "## Decision needed:"
       assert request =~ "Merge TP-815 (Land the Code Review state) into its base branch?"
       assert request =~ "Code Review: looks good"
-      assert request =~ "QA: QA skipped: the PR only changes docs, tests or `auto_review.skip_globs` paths"
+      assert request =~ "QA: QA skipped: the PR only changes docs, tests or auto_review.skip_globs paths"
       assert request =~ "the ticket stays in Code Review until the decision is recorded"
 
       assert Hold.held?(@repo_key, @issue_id, :needs_decision)

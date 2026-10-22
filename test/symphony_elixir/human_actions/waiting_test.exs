@@ -123,6 +123,20 @@ defmodule SymphonyElixir.HumanActions.WaitingTest do
     assert [%{identifier: "TP-11", kind: :action, waiting_since: ~U[2026-10-02 07:00:00Z]}] = entries([held])
   end
 
+  test "a plan in Plan Review with open requests stays a plan: the requests are its questions" do
+    plan =
+      node("TP-13", %{
+        "history" => history([moved("Plan Review", "2026-10-02T08:00:00Z")]),
+        "comments" => comments([request_comment("2026-10-02T07:00:00Z")])
+      })
+
+    assert [%{identifier: "TP-13", kind: :plan, waiting_since: ~U[2026-10-02 08:00:00Z]}] = entries([plan])
+
+    # Before its handoff, a plan's request is an action like any other.
+    working = put_in(plan, ["state", "name"], "In Progress")
+    assert [%{identifier: "TP-13", kind: :action}] = entries([working])
+  end
+
   test "a plan with no request waits since its latest move into Plan Review" do
     plan = node("TP-12", %{"history" => history([moved("Plan Review", "2026-10-01T09:00:00Z"), moved("Plan Review", "2026-10-01T11:00:00Z")])})
 

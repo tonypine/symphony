@@ -12,14 +12,23 @@ defmodule SymphonyElixir.DirectorMoves do
     state (`Waiting on sub-tickets`). It is a person's move, so Symphony promotes the plan's
     `Backlog` sub-tickets (`SymphonyElixir.BreakdownReview`);
   - `:rework`: a plan in `Plan Review` gets the reason as a comment, then moves to `Rework`, which
-    rejects the plan; the full reset is `:restart`;
+    rejects the plan: Symphony cancels its sub-tickets still in `Backlog` and plans again
+    (`SymphonyElixir.BreakdownReview`); the full reset is `:restart`;
   - `:restart`: the full reset, and only a person makes it (design doc D7). It closes the ticket's
     pull requests, removes its workspaces — so the next dispatch branches fresh from the configured
     base branch — and supersedes the workpad, then moves the ticket to `In Progress`
     (`SymphonyElixir.Restart`). A dispatch-loop hold is cleared with it, since the loop's attempt is
     the one thrown away, and so is an operator's stop (`SymphonyElixir.OperatorStop`);
-  - `:decisions`: a plan in `Plan Review` gets one comment with the picked options, in place, which
-    starts Symphony's plan revision run (`SymphonyElixir.PlanComments`);
+  - `:decisions`: a plan in `Plan Review` gets the Director's answers to its questions, in place:
+    each pick naming its `request_comment_id` is replied under that request and written into the
+    Decisions section (`SymphonyElixir.Decisions`), and the Needs Decision hold the requests set is
+    cleared; a pick without one goes into one comment with the picked options. The replies are a
+    person's comments on a plan under review, so they start Symphony's plan revision run, which keeps
+    the plan's sub-tickets (`SymphonyElixir.PlanComments`). Nothing is approved: the plan comes back
+    to `Plan Review`;
+  - `:changes`: a plan in `Plan Review` gets the Director's reason as a comment, in place, which starts
+    the same revision run: the plan is changed and keeps its sub-tickets. `:rework` is the
+    rejection that cancels them;
   - `:backlog`: an open ticket gets the note as a comment when there is one, then moves to `Backlog`;
   - `:unblock`: a ticket waiting on an **access** hold — an agent's block report — on a
     dispatch-loop hold (`SymphonyElixir.DispatchLoop`) or on an operator's stop
@@ -91,10 +100,15 @@ defmodule SymphonyElixir.DirectorMoves do
           | :rework
           | :restart
           | :decisions
+          | :changes
           | :backlog
           | :unblock
           | :decide
-  @type pick :: %{question: String.t(), answer: String.t()}
+  @type pick :: %{
+          required(:question) => String.t(),
+          required(:answer) => String.t(),
+          optional(:request_comment_id) => String.t() | nil
+        }
   @type input :: %{
           optional(:reason) => String.t() | nil,
           optional(:note) => String.t() | nil,
@@ -112,7 +126,7 @@ defmodule SymphonyElixir.DirectorMoves do
           | {:partial, String.t()}
   @type result :: {:ok, map()} | {:error, error()}
 
-  @moves [:approve_plan, :rework, :restart, :decisions, :backlog, :unblock, :decide]
+  @moves [:approve_plan, :rework, :restart, :decisions, :changes, :backlog, :unblock, :decide]
   @decide_targets %{"rework" => @rework_state, "done" => @done_state, "merging" => @merging_state, "todo" => @todo_state}
 
   @spec start_link(keyword()) :: Agent.on_start()
@@ -203,6 +217,10 @@ defmodule SymphonyElixir.DirectorMoves do
     Enum.join(["Decisions on the plan, from the Director:" | lines], "\n\n")
   end
 
+  @doc "The comment `:changes` posts with the Director's reason: a person's comment on the plan, which revises it."
+  @spec changes_comment(String.t()) :: String.t()
+  def changes_comment(reason) when is_binary(reason), do: "Changes asked by the Director:\n\n#{reason}"
+
   @doc "The comment `:rework` posts with the Director's reason."
   @spec rework_comment(String.t()) :: String.t()
   def rework_comment(reason) when is_binary(reason), do: "Sent to Rework by the Director:\n\n#{reason}"
@@ -235,6 +253,10 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   defp validate_input(:rework, input) do
+    if present?(input[:reason]), do: :ok, else: {:error, {:invalid, "reason is required"}}
+  end
+
+  defp validate_input(:changes, input) do
     if present?(input[:reason]), do: :ok, else: {:error, {:invalid, "reason is required"}}
   end
 
@@ -306,8 +328,8 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   # The comment goes in place: a person's comment on a plan under review starts its revision run.
-  defp target(:decisions, issue, settings) do
-    with :ok <- require_plan(issue, "decisions"),
+  defp target(move, issue, settings) when move in [:decisions, :changes] do
+    with :ok <- require_plan(issue, Atom.to_string(move)),
          :ok <- require_plan_review(issue, settings),
          do: {:ok, nil}
   end
@@ -362,13 +384,67 @@ defmodule SymphonyElixir.DirectorMoves do
       else: comment_then_move(:backlog, issue, nil, to_state, opts)
   end
 
-  defp apply_move(:decisions, issue, nil, %{picks: picks}, _opts) do
-    comment = picks |> Enum.map(&%{question: String.trim(&1.question), answer: String.trim(&1.answer)}) |> decisions_comment()
+  # Each answer to one of the plan's requests goes under it, as a Decide's does, and the rest in one
+  # comment. The replies and the comment are the Director's, so the plan's revision run starts from
+  # them; the answers are in the Decisions section before it reads the ticket.
+  defp apply_move(:decisions, issue, nil, %{picks: picks}, opts) do
+    picks = Enum.map(picks, &%{question: String.trim(&1.question), answer: String.trim(&1.answer), request_comment_id: Map.get(&1, :request_comment_id)})
+    {answers, loose} = Enum.split_with(picks, &present?(&1.request_comment_id))
 
+    with {:ok, replies} <- reply_to_requests(issue, answers),
+         {:ok, comment} <- post_loose_picks(issue, loose) do
+      record_answers(issue, answers)
+      clear_answered_hold(issue, answers, opts)
+      {:ok, Enum.join(replies ++ List.wrap(comment), "\n\n")}
+    end
+  end
+
+  defp apply_move(:changes, issue, nil, %{reason: reason}, _opts) do
+    comment = changes_comment(String.trim(reason))
     with :ok <- post_comment(issue, comment), do: {:ok, comment}
   end
 
   defp apply_move(move, issue, to_state, _input, opts), do: comment_then_move(move, issue, nil, to_state, opts)
+
+  defp reply_to_requests(issue, answers) do
+    Enum.reduce_while(answers, {:ok, []}, fn answer, {:ok, replies} ->
+      reply = decide_comment([answer])
+
+      case reply_to_request(issue, answer.request_comment_id, reply) do
+        :ok -> {:cont, {:ok, replies ++ [reply]}}
+        {:error, reason} -> {:halt, {:error, {:linear, reason}}}
+      end
+    end)
+  end
+
+  defp post_loose_picks(_issue, []), do: {:ok, nil}
+
+  defp post_loose_picks(issue, picks) do
+    comment = decisions_comment(picks)
+    with :ok <- post_comment(issue, comment), do: {:ok, comment}
+  end
+
+  # Best-effort, as a Decide's: the answers are under the requests, and the Inbox's next read writes
+  # them from there when this write fails (`SymphonyElixir.Decisions.sync/2`).
+  defp record_answers(_issue, []), do: :ok
+
+  defp record_answers(issue, answers) do
+    entries = for answer <- answers, do: Decisions.entry(answer.request_comment_id, Date.utc_today(), answer.question, answer.question, answer.answer)
+    _ = Decisions.record(issue.id, entries, repo_key: issue.repo_key)
+    :ok
+  end
+
+  # The requests are answered, so the hold they set clears with no withdrawal, and the revision run
+  # the replies start is dispatched. A clear the store refuses is reported; the Inbox's next read
+  # clears it once it sees the answers.
+  defp clear_answered_hold(_issue, [], _opts), do: :ok
+
+  defp clear_answered_hold(issue, _answers, opts) do
+    case Hold.clear(issue.repo_key, issue.id, :needs_decision, [answered: true] ++ store_opts(opts)) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Failed to clear the Needs Decision hold on #{issue.identifier} after its plan's answers: #{inspect(reason)}")
+    end
+  end
 
   # The attempt a dispatch loop held is the one Restart throws away, so its hold goes with it and the
   # ticket starts again with its count at zero; an operator's stop is lifted by the Restart that

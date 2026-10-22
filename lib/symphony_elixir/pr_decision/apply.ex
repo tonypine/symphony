@@ -2,7 +2,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   @moduledoc """
   Carries out the action `SymphonyElixir.PrDecision.decide/1` chose for a ticket: the PR and CI
   watcher's only writer (`docs/pr-ci-decisions.md`). Linear moves go through
-  `SymphonyElixir.TransitionGuard`, holds through `SymphonyElixir.NeedsDecisionHold` and the
+  `SymphonyElixir.TransitionGuard`, holds through `SymphonyElixir.DecisionRequest` and the
   self-heal lane (`SymphonyElixir.SelfHeal`), and GitHub calls through `SymphonyElixir.AutoMerge`
   and `SymphonyElixir.GitHub.PullRequest`.
 
@@ -76,9 +76,9 @@ defmodule SymphonyElixir.PrDecision.Apply do
     AuditLog,
     AutoMerge,
     CiFix,
+    DecisionRequest,
     Decisions,
     MergeConfirmation,
-    NeedsDecisionHold,
     Notifications,
     PathUnlock,
     PrDecision,
@@ -95,12 +95,13 @@ defmodule SymphonyElixir.PrDecision.Apply do
   alias SymphonyElixir.PrWatch.Competitors
 
   alias SymphonyElixir.GitHub.FailedLog
-  alias SymphonyElixir.HumanActions.Request
+  alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrDecision.{Action, Facts}
   alias SymphonyElixir.PrWatch.{Attempts, Fetch}
 
   @rework_state "Rework"
+  @other_branch "another branch"
   @merging_state "Merging"
   @in_progress_state "In Progress"
 
@@ -766,7 +767,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   defp ask(request, reason, ctx, confirm \\ @rework_state) do
     held = %{id: ctx.issue.id, state: ctx.issue.state, repo_key: ctx.repo_key}
 
-    with :ok <- NeedsDecisionHold.pause(held, request, [tracker: tracker(ctx)] ++ store_opts(ctx), confirm) do
+    with :ok <- DecisionRequest.ask(held, request, [tracker: tracker(ctx)] ++ store_opts(ctx), confirm) do
       TicketSignals.record(ctx.repo_key, ctx.issue.id, "decision requested", %{to: ctx.issue.state, reason: reason})
     end
   end
@@ -842,11 +843,11 @@ defmodule SymphonyElixir.PrDecision.Apply do
     label = label(ctx)
     state = ctx.issue.state
     pr = pr_name(ctx)
-    {base, expected} = {read_field(ctx, :base_ref), read_field(ctx, :base_branch)}
+    {base, expected} = {branch_words(read_field(ctx, :base_ref)), branch_words(read_field(ctx, :base_branch))}
 
     %{
       title: base_title(ctx.issue, ctx.read),
-      question: "#{subject(pr)} of #{mention(ctx)} merges into the #{base} branch, not into #{expected}, where the repo's pull requests merge. Which should it merge into?",
+      question: "#{subject(pr)} of #{mention(ctx)} merges into #{the_branch(base)}, not into #{expected}, where the repo's pull requests merge. Which should it merge into?",
       why: "Someone changed the branch #{pr} merges into on GitHub. Symphony merges a ticket's pull request into #{expected} unless a person says otherwise.",
       if_unanswered: "#{label} stays in #{state} and #{pr} isn't reviewed or merged.",
       options: [
@@ -876,8 +877,17 @@ defmodule SymphonyElixir.PrDecision.Apply do
   # The question names the PR and both branches, so an answer stands for that change of base only.
   defp base_title(issue, read) do
     pr = Request.pull_request(read.pr_url) || "The pull request"
-    "#{pr} of #{issue.identifier || issue.id} merges into #{read.base_ref}, not #{read.base_branch}"
+    "#{pr} of #{issue.identifier || issue.id} merges into #{branch_words(read.base_ref)}, not #{branch_words(read.base_branch)}"
   end
+
+  # A branch as a request names it: by its name when that reads as plain words (`main`), else by what
+  # it is, since the Director reads no code (`release/2.0` would read as a path).
+  defp branch_words(name) do
+    if is_binary(name) and PlainWords.tokens(name) == [], do: name, else: @other_branch
+  end
+
+  defp the_branch(@other_branch), do: @other_branch
+  defp the_branch(name), do: "the #{name} branch"
 
   defp put_base_back(ctx) do
     github = Keyword.get(ctx.opts, :github, SymphonyElixir.GitHub.PullRequest)
@@ -892,7 +902,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
     label = label(ctx)
     pr = Request.pull_request(pr_url(ctx)) || "its pull request"
     state = ctx.issue.state
-    checks = Enum.join(ctx.facts.missing_checks, ", ")
+    checks = ctx.facts.missing_checks |> Enum.join(", ") |> PlainWords.scrub()
     minutes = div(ctx.settings.ci.merging_wait_timeout_ms, 60_000)
 
     %{
@@ -934,7 +944,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   defp cancelled_request(ctx) do
     label = label(ctx)
     pr = Request.pull_request(pr_url(ctx)) || "its pull request"
-    checks = ctx |> cancelled_names() |> Enum.join(", ")
+    checks = ctx |> cancelled_names() |> Enum.join(", ") |> PlainWords.scrub()
     reruns = PrDecision.max_cancel_reruns()
 
     %{
@@ -1048,7 +1058,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
 
   defp label(%{issue: %Issue{} = issue}), do: issue.identifier || issue.id
 
-  defp mention(%{issue: %Issue{title: title}} = ctx) when is_binary(title) and title != "", do: "#{label(ctx)} (#{title})"
+  defp mention(%{issue: %Issue{title: title}} = ctx) when is_binary(title) and title != "", do: "#{label(ctx)} (#{PlainWords.scrub(title)})"
   defp mention(ctx), do: label(ctx)
 
   # A phrase opening a sentence.

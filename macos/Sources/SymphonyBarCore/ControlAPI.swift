@@ -18,7 +18,11 @@ public enum ControlAction: Equatable {
     /// The full reset (design doc D7): close the pull request, branch fresh from main, supersede the
     /// workpad, back to In Progress. A person's move; agents cannot ask for it.
     case restart(String, reason: String)
+    /// Answers a plan's questions: each pick goes under the request it names.
     case decisions(String, picks: [DecisionPick])
+    /// Asks for changes to a plan under review: the reason goes on it as a comment, and Symphony revises the plan
+    /// in place, keeping its sub-tickets. `rework` is the rejection that cancels them.
+    case changes(String, reason: String)
     case backlog(String, note: String?)
     /// Answers a decision request: the picks, the id of the request comment they answer, and the state the
     /// decision directs (`rework`, `done`) when it directs one.
@@ -28,14 +32,23 @@ public enum ControlAction: Equatable {
     /// Takes back the last move on the ticket, within 10 s of it.
     case undo(String)
 
-    /// A decision's question and the option the Director picked, as `decisions` posts them.
+    /// A decision's question and the option the Director picked, or their own words, as `decisions` posts them; a
+    /// plan's pick also names the request comment it answers, so the answer goes under it.
     public struct DecisionPick: Equatable {
         public var question: String
         public var answer: String
+        public var requestCommentID: String?
 
-        public init(question: String, answer: String) {
+        public init(question: String, answer: String, requestCommentID: String? = nil) {
             self.question = question
             self.answer = answer
+            self.requestCommentID = requestCommentID
+        }
+
+        var body: [String: String] {
+            var body = ["question": question, "answer": answer]
+            if let requestCommentID { body["request_comment_id"] = requestCommentID }
+            return body
         }
     }
 
@@ -72,6 +85,8 @@ public enum ControlAction: Equatable {
             return "api/v1/control/restart"
         case .decisions:
             return "api/v1/control/decisions"
+        case .changes:
+            return "api/v1/control/changes"
         case .backlog:
             return "api/v1/control/backlog"
         case .decide:
@@ -88,7 +103,7 @@ public enum ControlAction: Equatable {
         switch self {
         case let .approvePlan(identifier), let .rework(identifier, _),
              let .restart(identifier, _),
-             let .decisions(identifier, _), let .backlog(identifier, _),
+             let .decisions(identifier, _), let .changes(identifier, _), let .backlog(identifier, _),
              let .decide(identifier, _, _, _), let .unblock(identifier), let .undo(identifier):
             return identifier
         case .pause, .pauseWithReason, .resume, .force, .stopForcing, .stop:
@@ -112,10 +127,10 @@ public enum ControlAction: Equatable {
             return ["issue_identifier": identifier]
         case let .rework(identifier, reason):
             return ["issue_identifier": identifier, "reason": reason]
-        case let .restart(identifier, reason):
+        case let .restart(identifier, reason), let .changes(identifier, reason):
             return ["issue_identifier": identifier, "reason": reason]
         case let .decisions(identifier, picks):
-            return ["issue_identifier": identifier, "picks": picks.map { ["question": $0.question, "answer": $0.answer] }]
+            return ["issue_identifier": identifier, "picks": picks.map(\.body)]
         case let .backlog(identifier, note):
             return note.map { ["issue_identifier": identifier, "note": $0] } ?? ["issue_identifier": identifier]
         case let .decide(identifier, requestCommentID, picks, move):
@@ -150,6 +165,8 @@ public enum ControlAction: Equatable {
             return "Couldn't restart \(identifier)"
         case let .decisions(identifier, _):
             return "Couldn't send the decisions on \(identifier)"
+        case let .changes(identifier, _):
+            return "Couldn't ask for changes to the plan of \(identifier)"
         case let .backlog(identifier, _):
             return "Couldn't move \(identifier) to Backlog"
         case let .decide(identifier, _, _, _):

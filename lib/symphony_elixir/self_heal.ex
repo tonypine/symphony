@@ -48,8 +48,8 @@ defmodule SymphonyElixir.SelfHeal do
 
   require Logger
 
-  alias SymphonyElixir.{Config, Hold, RunStore, TicketState}
-  alias SymphonyElixir.HumanActions.Request
+  alias SymphonyElixir.{Config, DecisionRequest, Hold, RunStore, TicketState}
+  alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Linear.Issue
 
   @default_component "qa_environment"
@@ -67,7 +67,6 @@ defmodule SymphonyElixir.SelfHeal do
   @access_type "access"
   @fix_ticket_type "fix_ticket"
   @blocked_hold :blocked
-  @needs_decision_hold :needs_decision
 
   @typedoc "A blocked run's outcome, as `SymphonyElixir.QaVerification` or `SymphonyElixir.SetupBlock` builds it."
   @type outcome :: map()
@@ -248,31 +247,25 @@ defmodule SymphonyElixir.SelfHeal do
   end
 
   # The same failure with no new information, or a head that used up its attempts: there is no next
-  # step to try, so only here does the machine ask a person, with the decision structured. The
-  # decision is posted as a `## Decision needed:` comment next to the hold: the Inbox clears a Needs
-  # Decision hold whose request it no longer reads as open (`SymphonyElixir.NeedsDecisionHold`), so
-  # a hold with no request would lift on its next read and the ticket would dispatch again. A
-  # comment that can't be posted takes the hold back.
+  # step to try, so only here does the machine ask a person, with the decision structured. It goes
+  # through the one writer (`SymphonyElixir.DecisionRequest`), which sets the hold and posts the
+  # `## Decision needed:` comment next to it: the Inbox clears a Needs Decision hold whose request it
+  # no longer reads as open (`SymphonyElixir.NeedsDecisionHold`), so a hold with no request would
+  # lift on its next read and the ticket would dispatch again. A comment that can't be posted takes
+  # the hold back.
   defp escalate(ctx, stuck) do
-    decision = decision(ctx, stuck)
+    opts = [repo_key: ctx.repo_key, label_tracker: ctx.opts[:tracker]] ++ Keyword.take(ctx.opts, [:store, :tracker])
 
-    attrs = %{
-      reason: "self-heal is stuck on the #{ctx.component} block: #{ctx.signature}",
-      clearing_condition: "when the decision is recorded",
-      decision: decision
-    }
+    case DecisionRequest.ask(ctx.issue, decision(ctx, stuck), opts) do
+      :ok ->
+        Logger.warning("Self-heal for #{label(ctx.issue)} is stuck on the #{ctx.component} block; Needs Decision set")
+        :escalated
 
-    with {:hold, :ok} <- {:hold, Hold.set(ctx.repo_key, ctx.issue.id, @needs_decision_hold, attrs, hold_opts(ctx.opts))},
-         {:post, :ok} <- {:post, tracker(ctx.opts).create_comment(ctx.issue.id, Request.render_hold(decision, ctx.issue.state))} do
-      Logger.warning("Self-heal for #{label(ctx.issue)} is stuck on the #{ctx.component} block; Needs Decision set")
-      :escalated
-    else
-      {:hold, {:error, reason}} ->
-        {:error, {:self_heal_escalation_failed, reason}}
-
-      {:post, {:error, reason}} ->
-        _ = Hold.clear(ctx.repo_key, ctx.issue.id, @needs_decision_hold, hold_opts(ctx.opts))
+      {:error, {:decision_request_failed, reason}} ->
         {:error, {:self_heal_escalation_request_failed, reason}}
+
+      {:error, {_hold_or_check, reason}} ->
+        {:error, {:self_heal_escalation_failed, reason}}
     end
   end
 
@@ -518,14 +511,23 @@ defmodule SymphonyElixir.SelfHeal do
 
   defp findings(_outcome), do: ""
 
+  # The component and the failure's signature come from the machine's names and logs, so their code
+  # is said in plain words: `qa_environment` reads `qa environment`, `ci:specs` `ci specs`, a file
+  # `a file` (`PlainWords.scrub/1`).
+  defp plain(text), do: text |> to_string() |> String.replace("_", " ") |> PlainWords.scrub()
+
+  defp plain_component(component), do: component |> String.replace(":", " ") |> plain()
+
   defp decision(ctx, stuck) do
     %{
-      title: "Self-heal is stuck on the #{ctx.component} block",
+      title: "Self-heal is stuck on the #{plain_component(ctx.component)} block",
       question: question(ctx, stuck),
       why: why(stuck),
+      if_unanswered: "#{label(ctx.issue)} stays where it is and nothing runs on it.",
+      recommendation_reason: "The machine has no next step left to try, so a person looking at the failure is the quickest way forward.",
       options: [
         %{
-          label: "Investigate the #{ctx.component} by hand",
+          label: "Investigate the #{plain_component(ctx.component)} by hand",
           effect: "the block is cleared by hand and the ticket resumes in its phase",
           recommended: true
         },
@@ -539,13 +541,13 @@ defmodule SymphonyElixir.SelfHeal do
   end
 
   defp question(ctx, :unchanged) do
-    "The #{ctx.component} block on #{label(ctx.issue)} came back unchanged after #{ctx.attempts} " <>
-      "attempt(s) and its fix ticket landed: #{ctx.signature}. How should it be handled?"
+    "The #{plain_component(ctx.component)} block on #{label(ctx.issue)} came back unchanged after #{ctx.attempts} " <>
+      "attempt(s) and its fix ticket landed: #{plain(ctx.signature)}. How should it be handled?"
   end
 
   defp question(ctx, :out_of_attempts) do
-    "The #{ctx.component} block on #{label(ctx.issue)} kept coming back over #{ctx.attempts} blocked runs " <>
-      "of the same change: #{ctx.signature}. How should it be handled?"
+    "The #{plain_component(ctx.component)} block on #{label(ctx.issue)} kept coming back over #{ctx.attempts} blocked runs " <>
+      "of the same change: #{plain(ctx.signature)}. How should it be handled?"
   end
 
   defp why(:unchanged),

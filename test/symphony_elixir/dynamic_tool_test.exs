@@ -1634,18 +1634,20 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       "why" => "Release fails.",
       "decision" => %{
         "question" => "Add the secret, or ship unsigned?",
-        "options" => [%{"label" => "Add it", "effect" => "Releases sign again.", "recommended" => true}, %{"label" => "Ship unsigned", "effect" => "No signing."}]
-      }
+        "options" => [%{"label" => "Add it", "effect" => "Releases sign again.", "recommended" => true}, %{"label" => "Ship unsigned", "effect" => "No signing."}],
+        "recommendation_reason" => "Signing is a one-time setup."
+      },
+      "if_unanswered" => "Every release keeps failing."
     }
 
     test "is advertised with its fields and hidden from the read-only scope" do
-      assert %{"description" => description, "inputSchema" => %{"properties" => properties, "required" => ["title", "why", "decision"]}} =
+      assert %{"description" => description, "inputSchema" => %{"properties" => properties, "required" => ["title", "why", "decision", "if_unanswered"]}} =
                Enum.find(DynamicTool.tool_specs(), &(&1["name"] == "linear_request_human_action"))
 
       assert properties |> Map.keys() |> Enum.sort() == ["decision", "if_unanswered", "title", "unblocks", "why"]
 
       assert %{
-               "required" => ["question", "options"],
+               "required" => ["question", "options", "recommendation_reason"],
                "properties" => %{"options" => %{"minItems" => 2, "maxItems" => 4, "items" => option}, "recommendation_reason" => %{"type" => "string"}}
              } = properties["decision"]
 

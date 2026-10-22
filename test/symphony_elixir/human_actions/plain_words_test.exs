@@ -44,12 +44,29 @@ defmodule SymphonyElixir.HumanActions.PlainWordsTest do
   end
 
   test "finds a commit hash" do
-    assert PlainWords.tokens("Code Review sent it back (head 2f5af5ab). Then 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b.") ==
+    assert PlainWords.tokens("Code Review sent it back (at 2f5af5ab). Then 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b.") ==
              [hash: "2f5af5ab", hash: "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b"]
   end
 
   test "finds a branch name" do
     assert PlainWords.tokens("the next run syncs main into auto/TP-892, then origin/main.") == [branch: "auto/TP-892", branch: "origin/main"]
+  end
+
+  test "finds Symphony's internal words, whatever their case, and only as whole words" do
+    assert PlainWords.tokens("The head moved, the Verdict came, two holds and the feed; feeds, heads, verdicts and a hold.") ==
+             [jargon: "head", jargon: "Verdict", jargon: "holds", jargon: "feed", jargon: "feeds", jargon: "heads", jargon: "verdicts", jargon: "hold"]
+
+    assert PlainWords.tokens("Go ahead: the household feedback is withheld.") == []
+  end
+
+  test "scrub says each token of code in plain words and keeps the rest of the sentence" do
+    assert PlainWords.scrub("Fix `parent_tickets.liquid` at lib/foo (head 2f5af5ab) on auto/TP-1 {% if x %}, see https://x.io/a.") ==
+             "Fix a file at a file (latest change a commit) on a branch, see a link."
+
+    assert PlainWords.scrub("Head and Verdict stay capitalised; holds, feeds.") == "Latest change and Result stay capitalised; pauses, lists."
+    assert PlainWords.scrub("Nothing to change here.") == "Nothing to change here."
+    assert PlainWords.scrub(nil) == nil
+    assert "Fix a file at a file" |> PlainWords.tokens() == []
   end
 
   test "lets ticket identifiers, PR numbers, numbers and ordinary sentences pass" do
@@ -85,6 +102,7 @@ defmodule SymphonyElixir.HumanActions.PlainWordsTest do
     assert PlainWords.findings(request) == [
              %{field: "title", token: "parent_tickets.liquid", kind: :file},
              %{field: "decision.question", token: "{% else %}", kind: :template},
+             %{field: "why", token: "Head", kind: :jargon},
              %{field: "why", token: "2f5af5ab", kind: :hash},
              %{field: "if_unanswered", token: "auto/TP-892", kind: :branch},
              %{field: "unblocks", token: "`main`", kind: :backticks},
@@ -108,8 +126,8 @@ defmodule SymphonyElixir.HumanActions.PlainWordsTest do
     assert message ==
              "A decision is read by the Director, who does not read code. " <>
                ~s(`decision.question` has backticks "`parent_tickets.liquid`", the file name "parent_tickets.liquid"; ) <>
-               ~s(`why` has the commit hash "2f5af5ab", the link "https://x.io/a". ) <>
-               "Rewrite it in plain words: say what the thing does, not where it lives or what it is called in the code. " <>
+               ~s(`why` has the internal word "Head", the commit hash "2f5af5ab", the link "https://x.io/a". ) <>
+               "Rewrite it in plain words: say what the thing does, not where it lives or what it is called in the code or inside Symphony. " <>
                "Name a ticket by its identifier and a short name, and a PR as PR #123."
   end
 

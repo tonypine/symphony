@@ -2,7 +2,7 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{Hold, MergeConfirmation, NeedsDecisionHold, RunStore, Workflow}
+  alias SymphonyElixir.{DecisionRequest, Hold, MergeConfirmation, NeedsDecisionHold, RunStore, Workflow}
   alias SymphonyElixir.HumanActions.{Collector, Request}
   alias SymphonyElixir.Linear.Issue
 
@@ -67,7 +67,9 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
         question: "Add the signing secrets, or ship unsigned builds?",
         why: "Every Release run on main fails without them.",
         unblocks: "the Release workflow on main",
+        if_unanswered: "Every Release run on main keeps failing.",
         options: [%{label: "Add the secrets", effect: "Releases are signed again.", recommended: true}, %{label: "Ship unsigned", effect: "The agent drops the signing step."}],
+        recommendation_reason: "Signing is a one-time setup.",
         steps: [],
         created_at: nil
       },
@@ -242,7 +244,7 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
             {"**Neither option**: one change on the same PR, then continue to QA", "In Progress"},
             {"Can you check the reviewer's reason first?", "In Progress"}
           ] do
-        :ok = NeedsDecisionHold.pause(issue(%{state: "Code Review"}), escalation, [tracker: SymphonyElixir.Tracker.Memory], "QA")
+        :ok = DecisionRequest.ask(issue(%{state: "Code Review"}), escalation, [tracker: SymphonyElixir.Tracker.Memory], "QA")
         comments = [request_comment(@comment_id, body), reply(@comment_id, answer)]
         node = ticket_node(%{"state" => %{"name" => "Code Review"}, "comments" => %{"nodes" => comments}})
 
@@ -256,7 +258,7 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
       on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
 
-      :ok = NeedsDecisionHold.pause(issue(%{state: "Code Review"}), request(), [tracker: SymphonyElixir.Tracker.Memory], "QA")
+      :ok = DecisionRequest.ask(issue(%{state: "Code Review"}), request(), [tracker: SymphonyElixir.Tracker.Memory], "QA")
       node = ticket_node(%{"state" => %{"name" => "In Progress"}, "comments" => %{"nodes" => [request_comment(), reply(@comment_id, "1")]}})
 
       log = capture_log(fn -> assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :clear end)
@@ -528,57 +530,6 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       answered = ticket_node(%{"comments" => %{"nodes" => [request_comment(), reply()]}})
       assert Collector.newest_open_request(answered, designed_settings()) == nil
       assert Collector.newest_request(answered, designed_settings()) == nil
-    end
-  end
-
-  describe "pause/4" do
-    defmodule CommentTracker do
-      def create_comment(issue_id, body) do
-        send(self(), {:commented, issue_id, body})
-        Process.get(:pause_comment_result, :ok)
-      end
-
-      def set_machine_label(_issue_id, _name), do: :ok
-      def clear_machine_label(_issue_id, _name), do: :ok
-    end
-
-    test "posts the request, rendered to stay in the phase, and sets the hold with its confirmation" do
-      assert :ok = NeedsDecisionHold.pause(issue(%{state: "Code Review"}), request(), [tracker: CommentTracker], "QA")
-
-      assert_received {:commented, @issue_id, body}
-      assert body =~ "the ticket stays in Code Review until the decision is recorded"
-      assert MergeConfirmation.confirm_target(Hold.get(@repo_key, @issue_id, :needs_decision)) == "QA"
-      assert [{"decision.requested", %{title: "Add the release signing secrets", confirm: "QA"}}] = ticket_events(@repo_key, @issue_id)
-    end
-
-    test "without a confirmation the ticket continues in place once decided" do
-      assert :ok = NeedsDecisionHold.pause(issue(), request(), tracker: CommentTracker)
-
-      assert %{decision: decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
-      refute Map.has_key?(decision, :confirm)
-    end
-
-    test "a request that can't be posted sets no hold, and a hold that can't be set is reported" do
-      Process.put(:pause_comment_result, {:error, :rate_limited})
-      assert {:error, {:decision_request_failed, :rate_limited}} = NeedsDecisionHold.pause(issue(), request(), tracker: CommentTracker)
-      assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
-
-      assert [%{type: "decision.requested", id: request_id}, %{type: "decision.withdrawn", payload: %{request: request_id}}] =
-               RunStore.list_ticket_events(@repo_key, @issue_id, [])
-
-      Process.delete(:pause_comment_result)
-    end
-
-    test "a hold that can't be set posts nothing, so the retry posts the comment once" do
-      assert {:error, {:decision_hold_failed, :boom}} =
-               NeedsDecisionHold.pause(issue(), request(), tracker: CommentTracker, store: FailingStore, repo_key: @repo_key)
-
-      refute_received {:commented, _issue_id, _body}
-
-      assert :ok = NeedsDecisionHold.pause(issue(), request(), tracker: CommentTracker)
-      assert_received {:commented, @issue_id, _body}
-      refute_received {:commented, _issue_id, _body}
-      assert Hold.get(@repo_key, @issue_id, :needs_decision)
     end
   end
 end

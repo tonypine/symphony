@@ -68,20 +68,6 @@ public struct OptionCard: Equatable, Identifiable {
         return options + [OptionCard(number: count, count: count, label: writeInLabel, effect: writeInEffect, isWriteIn: true)]
     }
 
-    /// The cards of a plan's decision: a brief gives labels only, and its recommendation line is the reason.
-    public static func cards(for decision: InboxReview.Decision) -> [OptionCard] {
-        decision.options.enumerated().map { index, label in
-            let recommended = index == decision.recommended
-            return OptionCard(
-                number: index + 1,
-                count: decision.options.count,
-                label: label,
-                recommended: recommended,
-                reason: recommended ? decision.recommendation : nil
-            )
-        }
-    }
-
     /// What VoiceOver reads for the card, as one element: "Option 1 of 3, Leave it to TP-891, recommended, selected.
     /// TP-892 goes back to Code Review. Good: TP-892 can merge today. Why we recommend it: …"
     public func accessibilityLabel(selected: Bool) -> String {

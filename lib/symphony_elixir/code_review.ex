@@ -27,7 +27,7 @@ defmodule SymphonyElixir.CodeReview do
   returns `:skip` for anything but a `Code Review` ticket, so the executor path is untouched.
 
   An escalation never moves the ticket: it posts a `## Decision needed:` request and sets a Needs
-  Decision hold (`SymphonyElixir.NeedsDecisionHold.pause/4`), whose confirmation continues into the
+  Decision hold (`SymphonyElixir.DecisionRequest.ask/4`), whose confirmation continues into the
   QA state and whose redirect sends the ticket to `Rework`. A head whose escalation a person decided
   is never reviewed again: a dispatch on it performs the continue move into QA instead.
 
@@ -54,10 +54,10 @@ defmodule SymphonyElixir.CodeReview do
   alias SymphonyElixir.{
     ClosedPullRequest,
     Config,
+    DecisionRequest,
     EscalationRules,
     Handoff,
     MergeConfirmation,
-    NeedsDecisionHold,
     QaPolicy,
     ReviewAgent,
     RunStore,
@@ -69,6 +69,7 @@ defmodule SymphonyElixir.CodeReview do
     WorkspaceHead
   }
 
+  alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.Linear.Issue
 
   @verdict_kind "code_review"
@@ -683,7 +684,7 @@ defmodule SymphonyElixir.CodeReview do
     Logger.warning("Escalating Code Review for #{issue_label(issue)} to a person: #{reason}")
     qa_state = settings.tracker.qa_state
 
-    case NeedsDecisionHold.pause(issue, escalation_request(issue, reason, qa_state, recommend), hold_opts(issue, opts), qa_state) do
+    case DecisionRequest.ask(issue, escalation_request(issue, reason, qa_state, recommend), hold_opts(issue, opts), qa_state) do
       :ok ->
         record_move_signal(issue, opts, @escalate_signal, %{reason: reason, head: head})
         :ok
@@ -693,18 +694,23 @@ defmodule SymphonyElixir.CodeReview do
     end
   end
 
+  # The reason is the reviewer's or a rule's own words, so its code is said in plain words.
   defp escalation_request(issue, reason, qa_state, recommend) do
     %{
       title: "Code Review escalated #{issue_label(issue)}",
       question: "Code Review could not settle #{issue_mention(issue)} on its own. How should it continue?",
-      why: reason,
+      why: PlainWords.scrub(reason),
       options: [
         %{label: "Continue to #{qa_state}", effect: "the ticket moves to #{qa_state} and its QA run starts", recommended: recommend == :continue},
         %{label: "Send to Rework", effect: "the ticket moves to Rework with these reasons", recommended: recommend == :rework}
       ],
-      if_unanswered: "#{issue_label(issue)} stays in Code Review and goes no further."
+      if_unanswered: "#{issue_label(issue)} stays in Code Review and goes no further.",
+      recommendation_reason: escalation_recommendation(recommend)
     }
   end
+
+  defp escalation_recommendation(:continue), do: "The reviewer approved the change; only a rule that asks for a person stopped it."
+  defp escalation_recommendation(:rework), do: "The reviewer did not approve the change, so it needs another pass before QA."
 
   defp hold_opts(issue, opts) do
     opts
@@ -805,7 +811,7 @@ defmodule SymphonyElixir.CodeReview do
   defp verdict_reason(_result), do: "reviewer blocked the change"
 
   # A ticket as a question names it the first time: its identifier and its title.
-  defp issue_mention(%Issue{title: title} = issue) when is_binary(title) and title != "", do: "#{issue_label(issue)} (#{title})"
+  defp issue_mention(%Issue{title: title} = issue) when is_binary(title) and title != "", do: "#{issue_label(issue)} (#{PlainWords.scrub(title)})"
   defp issue_mention(issue), do: issue_label(issue)
 
   defp issue_label(%Issue{identifier: identifier}) when is_binary(identifier), do: identifier

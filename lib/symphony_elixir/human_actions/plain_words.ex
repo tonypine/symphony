@@ -10,14 +10,18 @@ defmodule SymphonyElixir.HumanActions.PlainWords do
   - a path (`lib/…`, `./setup`, a link) or a file name with an extension (`foo.ex`, `*.liquid`,
     `.md`);
   - a commit hash: a run of 7 to 40 hex characters with both a digit and a letter;
-  - a branch name: `auto/…` or `origin/…`.
+  - a branch name: `auto/…` or `origin/…`;
+  - Symphony's internal words, which mean nothing to the Director: `head`, `verdict`, `hold` and
+    `feed` (and their plurals).
 
   Ticket identifiers (`TP-891`), PR numbers (`#448`, `PR #448`), numbers and ordinary sentences
-  pass. Symphony's own requests are written to pass the same check.
+  pass. Symphony's own requests are written to pass the same check: their fixed words are plain, and
+  the text they quote from elsewhere (a ticket's title, a failure's reason) goes through `scrub/1`,
+  which says each token of code in plain words, before it is quoted.
   """
 
   @typedoc "What kind of code a token is."
-  @type kind :: :backticks | :template | :branch | :link | :path | :file | :hash
+  @type kind :: :backticks | :template | :branch | :link | :path | :file | :hash | :jargon
 
   @typedoc "One token of code found in a field of a request."
   @type finding :: %{field: String.t(), token: String.t(), kind: kind()}
@@ -28,6 +32,18 @@ defmodule SymphonyElixir.HumanActions.PlainWords do
   @link ~r/^[a-z][a-z0-9+.-]*:\/\/\S+$/i
   @file_name ~r/^(?<stem>[\w*.-]*)\.[A-Za-z][A-Za-z0-9]{0,9}$/
   @hash ~r/^(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}$/i
+  # Each internal word with the plain words `scrub/1` says it in.
+  @jargon %{
+    "head" => "latest change",
+    "heads" => "latest changes",
+    "verdict" => "result",
+    "verdicts" => "results",
+    "hold" => "pause",
+    "holds" => "pauses",
+    "feed" => "list",
+    "feeds" => "lists"
+  }
+  @stand_ins %{branch: "a branch", link: "a link", path: "a file", file: "a file", hash: "a commit"}
   @path_roots ~w(lib test priv docs config macos src bin scripts deps tmp .github .symphony .agents .claude Sources Tests)
   @leading ~r/^[(\[{<"'“‘]+/u
   @trailing ~r/[)\]}>"'”’,;:!?….]+$/u
@@ -39,7 +55,8 @@ defmodule SymphonyElixir.HumanActions.PlainWords do
     link: "the link",
     path: "the path",
     file: "the file name",
-    hash: "the commit hash"
+    hash: "the commit hash",
+    jargon: "the internal word"
   }
 
   @doc """
@@ -78,6 +95,41 @@ defmodule SymphonyElixir.HumanActions.PlainWords do
 
   def tokens(_text), do: []
 
+  @doc """
+  `text` with each token of code said in plain words, for the text a Symphony request quotes from
+  elsewhere: backticks and template syntax go, a path or file name reads `a file`, a link `a link`,
+  a commit hash `a commit`, a branch name `a branch`, and an internal word its plain words (`head`
+  reads `latest change`). Nil stays nil.
+  """
+  @spec scrub(String.t() | nil) :: String.t() | nil
+  def scrub(text) when is_binary(text) do
+    text
+    |> then(&Regex.replace(@template_span, &1, ""))
+    |> String.replace("`", "")
+    |> then(&Regex.replace(~r/\S+/u, &1, fn token -> scrub_token(token) end))
+    |> then(&Regex.replace(~r/[ \t]{2,}/, &1, " "))
+    |> then(&Regex.replace(~r/[ \t]+([,.;:!?])/, &1, "\\1"))
+    |> String.trim()
+  end
+
+  def scrub(nil), do: nil
+
+  defp scrub_token(token) do
+    word = trim_word(token)
+
+    case word_kind(word) do
+      nil -> token
+      kind -> String.replace(token, word, stand_in(kind, word), global: false)
+    end
+  end
+
+  defp stand_in(:jargon, word), do: word |> String.downcase() |> then(&Map.fetch!(@jargon, &1)) |> same_case(word)
+  defp stand_in(kind, _word), do: Map.fetch!(@stand_ins, kind)
+
+  defp same_case(plain, word) do
+    if String.first(word) == String.upcase(String.first(word)), do: String.capitalize(plain), else: plain
+  end
+
   @doc "The `invalid_human_action` message for `findings`: each token by field, and what to do instead."
   @spec message([finding()]) :: String.t()
   def message(findings) do
@@ -90,7 +142,7 @@ defmodule SymphonyElixir.HumanActions.PlainWords do
       end)
 
     "A decision is read by the Director, who does not read code. #{by_field}. " <>
-      "Rewrite it in plain words: say what the thing does, not where it lives or what it is called in the code. " <>
+      "Rewrite it in plain words: say what the thing does, not where it lives or what it is called in the code or inside Symphony. " <>
       "Name a ticket by its identifier and a short name, and a PR as PR #123."
   end
 
@@ -138,6 +190,7 @@ defmodule SymphonyElixir.HumanActions.PlainWords do
       path?(word) -> :path
       file?(word) -> :file
       Regex.match?(@hash, word) -> :hash
+      Map.has_key?(@jargon, String.downcase(word)) -> :jargon
       true -> nil
     end
   end

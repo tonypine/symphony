@@ -7,8 +7,9 @@ defmodule SymphonyElixir.HumanActions.Waiting do
   parent (label `plan` or `breakdown`) in `Plan Review` (`SymphonyElixir.PlanReview`). Its `kind`
   says what waits:
 
-  - `:action`: an open request, whatever else the issue is;
-  - `:plan`: a plan parent whose plan waits for approval.
+  - `:plan`: a plan parent whose plan waits for approval; its open requests are the plan's
+    questions, so they stay on the plan's entry;
+  - `:action`: an open request on any other issue.
 
   `waiting_since` is the later of the latest move into the issue's current state in its history and
   the creation of its newest open request, or whichever of the two exists, else nil: a request
@@ -54,7 +55,7 @@ defmodule SymphonyElixir.HumanActions.Waiting do
           title: node["title"],
           url: node["url"],
           state: state,
-          kind: kind(node, requests),
+          kind: if(plan_review?(node, state, settings), do: :plan, else: :action),
           waiting_since: waiting_since(node, state, requests),
           headline: headline(node)
         }
@@ -65,9 +66,6 @@ defmodule SymphonyElixir.HumanActions.Waiting do
   end
 
   defp entry(_node, _settings), do: []
-
-  defp kind(_node, [_ | _]), do: :action
-  defp kind(_node, []), do: :plan
 
   defp plan_review?(node, state, settings) do
     labels = node |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(& &1["name"])

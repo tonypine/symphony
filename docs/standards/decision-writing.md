@@ -1,7 +1,11 @@
 # Writing a decision for the Director
 
-A decision request (`linear_request_human_action`, and the requests Symphony raises itself) is read
-by the Director in the Inbox. The Director decides like a film director: they want the picture
+This standard covers every question a person is asked, whatever raises it: an agent's
+`linear_request_human_action`, a plan's open choices, a rework that failed the same way twice, and
+the requests Symphony raises itself. Each one goes through one writer
+(`SymphonyElixir.DecisionRequest`), which checks it against this standard, records it and shows it
+in the Inbox with "Answer in my own words"; the answer is written into the ticket's Decisions
+section, which every later run reads. A decision request is read by the Director in the Inbox. The Director decides like a film director: they want the picture
 brighter or darker, not the f-stop. Every field of a request is written in their words.
 
 This is the standard. The tool description and the agent instructions repeat it, and the tool
@@ -14,16 +18,18 @@ refuses the parts of it a machine can check (see [What the tool refuses](#what-t
    ("TP-891 (Remove the retired review states)"), and explain any term a director wouldn't know in
    the same sentence.
 2. **No code.** No file names or paths, code identifiers, branch names, commit hashes, template
-   syntax or backticks. No internal jargon either: "partials", "head", "verdict", "hold". Say what
+   syntax or backticks. No internal jargon either: "partials", "head", "verdict", "hold", "feed". Say what
    a thing does, not where it lives or what it is called in the code. A pull request is
    "PR #448".
 3. **`why` is short.** At most two short paragraphs, one fact per sentence, subject first.
 4. **Each option's `effect` says what will happen to the work**, in the Director's terms: what
    moves, what waits, what ships.
-5. **Say what waits.** `if_unanswered` says what waits or repeats until someone answers.
+5. **Say what waits.** `if_unanswered` says what waits or repeats until someone answers. It is
+   required.
 6. **Weigh the options.** Each option may carry up to three trade-offs, each one line:
    `good` (what it gains), `cost` (what it takes) and `risk` (what may go wrong).
-   `decision.recommendation_reason` says in one line why the recommended option is the one.
+   `decision.recommendation_reason` says in one line why the recommended option is the one; it is
+   required.
 
 The request is still a decision: one question, 2 to 4 options, exactly one recommended.
 
@@ -87,20 +93,24 @@ The same request, rewritten:
 
 ## What the tool refuses
 
-Before it posts, `linear_request_human_action` refuses a request whose title, question, why,
-`if_unanswered`, `unblocks`, recommendation reason, option labels, effects or trade-offs hold:
+Before it posts, the writer refuses a request with no `if_unanswered` or no recommendation reason,
+and one whose title, question, why, `if_unanswered`, `unblocks`, recommendation reason, option
+labels, effects or trade-offs hold:
 
 - backticks;
 - template syntax: `{%` or `%}`;
 - a path or a file name with an extension: `foo.ex`, `lib/…`, `*.liquid`, `.md`, a link;
 - a commit hash: a run of 7 to 40 hex characters with both a digit and a letter;
-- a branch name: `auto/…` or `origin/…`.
+- a branch name: `auto/…` or `origin/…`;
+- an internal word: "head", "verdict", "hold" or "feed" (and their plurals).
 
-The `invalid_human_action` error names each token and its field and asks for plain words. Ticket
+An agent's request is refused with the `invalid_human_action` error; Symphony's own requests are
+written to pass, and the text they quote from elsewhere (a ticket's title, a failure's reason) is said
+in plain words before it is quoted. The `invalid_human_action` error names each token and its field and asks for plain words. Ticket
 identifiers (`TP-891`), PR numbers (`#448`, `PR #448`), numbers and ordinary sentences pass.
 
-The rest of the standard (a question that stands alone, no jargon, short sentences) is not
-something a machine can check; it is on the writer.
+The rest of the standard (a question that stands alone, the rest of the jargon, short sentences) is
+not something a machine can check; it is on the writer.
 
 ## How the request is stored
 
