@@ -337,6 +337,18 @@ struct InboxReviewBody: View {
             ReviewHeader(item: item, toolbar: InboxToolbar.toolbar(for: item, picks: picks), perform: perform, openTicket: openTicket)
             switch item.kind {
             case .plan:
+                if let warning = item.review.unappliedAnswersWarning {
+                    // Only the triangle takes status.you: orange text on white is below 4.5:1 in light.
+                    HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(DesignTokens.Status.you.tint)
+                            .accessibilityHidden(true)
+                        Text(warning)
+                            .foregroundStyle(.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(DesignTokens.TypeStyle.callout.font)
+                }
                 PlanQuestions(questions: item.review.questions, picks: picks, pick: pick, writeIn: writeIn, narrow: narrow)
                 BriefSections(brief: item.review.brief)
                 if !item.review.subTickets.isEmpty { SubTicketsCard(tickets: item.review.subTickets) }

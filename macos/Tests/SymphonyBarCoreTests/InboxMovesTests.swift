@@ -57,6 +57,15 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertTrue(ConsequenceSheet(move: .approvePlan, item: one).stays.contains("its open question is not answered"))
         one.review.questions = []
         XCTAssertEqual(ConsequenceSheet(move: .approvePlan, item: one).stays, "The plan stays as written. To change it, ask for changes instead.")
+
+        // Answers Symphony hasn't applied yet: approving now approves the plan without them, and the sheet says so.
+        one.review.unappliedAnswers = 2
+        XCTAssertEqual(
+            ConsequenceSheet(move: .approvePlan, item: one).stays,
+            "2 answers not yet applied: Symphony hasn't revised the plan from them yet. Approving now approves the plan as written, without them."
+        )
+        one.review.unappliedAnswers = 1
+        XCTAssertTrue(ConsequenceSheet(move: .approvePlan, item: one).stays.hasSuffix("as written, without it."))
     }
 
     func testAskForChangesKeepsTheSubTicketsAndRejectPlanSaysWhichItCancels() throws {
@@ -74,6 +83,10 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertTrue(changes.holdsForUndo)
         XCTAssertEqual(changes.heldBanner.text, "Sending your changes")
         XCTAssertEqual(changes.banner(after: MoveOutcome(moved: false, toState: "Plan Review")).text, "Sent your changes")
+        XCTAssertEqual(
+            changes.banner(after: MoveOutcome(moved: true, toState: "Rework")),
+            InboxBanner(itemID: "i-330", identifier: "SHOP-330", text: "Sent your changes: revising the plan in Rework", undo: false)
+        )
 
         let reject = ConsequenceSheet(move: .rejectPlan, item: plan)
         XCTAssertEqual(reject.title, "Reject the plan of SHOP-330?")
@@ -508,7 +521,10 @@ final class InboxMovesTests: XCTestCase {
         var plan = try shipped("SHOP-330")
         let picks = DecisionPicks(picks: [0: 1])
         let sheet = ConsequenceSheet(move: .sendDecisions, item: plan, picks: picks)
-        XCTAssertEqual(sheet.happens, "Records each answer under its question on SHOP-330, and Symphony revises the plan from them. The plan keeps its sub-tickets.")
+        XCTAssertEqual(
+            sheet.happens,
+            "Records each answer under its question on SHOP-330 and moves it to Rework, where Symphony revises the plan from them. The plan keeps its sub-tickets."
+        )
         XCTAssertEqual(sheet.picks.map(\.answer), ["On a separate page", "The store's currency"])
         XCTAssertTrue(sheet.listsPicks)
         XCTAssertEqual(sheet.action(), .decisions("SHOP-330", picks: sheet.picks))
@@ -528,8 +544,10 @@ final class InboxMovesTests: XCTestCase {
     func testTheBannerFollowsSymphonysAnswerNotTheSheetsGuess() throws {
         let sheet = ConsequenceSheet(move: .sendDecisions, item: try shipped("SHOP-330"), picks: DecisionPicks(picks: [0: 1]))
         XCTAssertNil(sheet.targetState)
+        // The answers started the plan's revision: they were held for Undo before they were sent, so none is offered now.
         let moved = sheet.banner(after: MoveOutcome(moved: true, toState: "Rework"))
-        XCTAssertEqual(moved, InboxBanner(itemID: "i-330", identifier: "SHOP-330", text: "Moved to Rework", undo: true))
+        XCTAssertEqual(moved, InboxBanner(itemID: "i-330", identifier: "SHOP-330", text: "Sent your decisions: revising the plan in Rework", undo: false))
+        XCTAssertEqual(sheet.banner(after: MoveOutcome(moved: true, toState: nil)).text, "Sent your decisions: revising the plan in Rework")
         XCTAssertEqual(sheet.banner(after: MoveOutcome(moved: false, toState: "Plan Review")).text, "Sent your decisions")
 
         let decisions = ControlAction.decisions("SHOP-330", picks: [])
