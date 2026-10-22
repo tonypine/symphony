@@ -312,6 +312,8 @@ defmodule SymphonyElixir.TicketEvents.Brief do
   defp section(name, [], _lines), do: "#{name} (0):\n- none"
   defp section(name, items, lines), do: Enum.join(["#{name} (#{length(items)}):" | Enum.flat_map(items, lines)], "\n")
 
+  # The control API's one shared token names its person "the Director" (a note, a decision from the app).
+  defp actor(%{kind: :person, name: "the Director"}), do: "the Director"
   defp actor(%{kind: :person, name: name}), do: "the Director (#{name})"
   defp actor(%{kind: :agent, run_kind: kind}), do: "an agent (#{kind_name(kind)} run)"
   defp actor(_actor), do: "Symphony"
