@@ -368,10 +368,11 @@ final class SymphonyWindowModel: ObservableObject {
         inboxPicks.pick(option, decision: decision, itemID: itemID)
     }
 
-    /// Keeps what the Director writes in the write-in (N11) of the request with issue id `itemID`, with its picks.
-    func writeIn(_ text: String, itemID: String) {
+    /// Keeps what the Director writes in the write-in (N11) of decision `decision` of the item with issue id `itemID`,
+    /// with its picks.
+    func writeIn(_ text: String, decision: Int, itemID: String) {
         var picks = inboxPicks
-        let blankChanged = picks.writeIn(text, itemID: itemID)
+        let blankChanged = picks.writeIn(text, itemID: itemID, decision: decision)
         publishesPicks = blankChanged
         inboxPicks = picks
         publishesPicks = true

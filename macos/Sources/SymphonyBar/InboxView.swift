@@ -16,7 +16,7 @@ struct InboxContent: View {
                     selection: $model.inboxSelection,
                     picks: model.picks(for:),
                     pick: model.pick,
-                    writeIn: model.writeIn,
+                    writeIn: { model.writeIn($0, decision: $1, itemID: $2) },
                     perform: { model.perform($0, on: $1) },
                     openOverview: { model.show(.overview) },
                     openTicket: model.openTicket,
@@ -60,8 +60,8 @@ struct InboxView: View {
     let picks: (String) -> DecisionPicks
     /// Picks an option: (option, decision, issue id).
     let pick: (Int, Int, String) -> Void
-    /// Keeps the write-in's text: (text, issue id).
-    var writeIn: (String, String) -> Void = { _, _ in }
+    /// Keeps a write-in's text: (text, decision, issue id).
+    var writeIn: (String, Int, String) -> Void = { _, _, _ in }
     let perform: (InboxCommand, InboxItem) -> Void
     let openOverview: () -> Void
     /// A double-click on a row, or the review header's title, opens the ticket's page (D3).
@@ -95,7 +95,7 @@ struct InboxView: View {
                                 item: item,
                                 picks: picks(item.id),
                                 pick: { option, decision in pick(option, decision, item.id) },
-                                writeIn: { writeIn($0, item.id) },
+                                writeIn: { text, decision in writeIn(text, decision, item.id) },
                                 perform: { perform($0, item) },
                                 openTicket: { openTicket(item.identifier) },
                                 openMention: openMention,
@@ -317,7 +317,8 @@ struct InboxReviewBody: View {
     let item: InboxItem
     var picks = DecisionPicks()
     var pick: (Int, Int) -> Void = { _, _ in }
-    var writeIn: (String) -> Void = { _ in }
+    /// Keeps a write-in's text: (text, decision).
+    var writeIn: (String, Int) -> Void = { _, _ in }
     let perform: (InboxCommand) -> Void
     var openTicket: () -> Void = {}
     /// A click on a ticket or pull request chip in the review's text, and a ⌘-click.
@@ -336,7 +337,8 @@ struct InboxReviewBody: View {
             ReviewHeader(item: item, toolbar: InboxToolbar.toolbar(for: item, picks: picks), perform: perform, openTicket: openTicket)
             switch item.kind {
             case .plan:
-                BriefSections(brief: item.review.brief, picks: picks, pick: pick, narrow: narrow)
+                PlanQuestions(questions: item.review.questions, picks: picks, pick: pick, writeIn: writeIn, narrow: narrow)
+                BriefSections(brief: item.review.brief)
                 if !item.review.subTickets.isEmpty { SubTicketsCard(tickets: item.review.subTickets) }
             case .pr:
                 if let pullRequest = item.review.pullRequest { ChecksCard(pullRequest: pullRequest) }
@@ -344,7 +346,7 @@ struct InboxReviewBody: View {
             case .action:
                 if let action = item.review.action {
                     ActionCards(
-                        action: action, picks: picks, pick: { pick($0, 0) }, writeIn: writeIn, answerable: item.answerable, narrow: narrow,
+                        action: action, picks: picks, pick: { pick($0, 0) }, writeIn: { writeIn($0, 0) }, answerable: item.answerable, narrow: narrow,
                         evidence: evidence
                     )
                 }
@@ -475,12 +477,10 @@ private struct ActionButtons: View {
     }
 }
 
-/// A brief in its parts, or as text when it didn't parse.
+/// A brief in its parts, or as text when it didn't parse. A plan's questions are not the brief's: they are its requests
+/// (`PlanQuestions`).
 private struct BriefSections: View {
     let brief: InboxReview.Brief?
-    var picks = DecisionPicks()
-    var pick: (Int, Int) -> Void = { _, _ in }
-    var narrow = false
 
     var body: some View {
         switch brief {
@@ -490,17 +490,6 @@ private struct BriefSections: View {
                     VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                         ForEach(Array(parsed.whatToReview.enumerated()), id: \.offset) { _, line in
                             ReviewLineView(line: line)
-                        }
-                    }
-                }
-            }
-            if !parsed.decisions.isEmpty {
-                Card(title: "Decisions needed") {
-                    VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
-                        ForEach(Array(parsed.decisions.enumerated()), id: \.offset) { index, decision in
-                            DecisionCard(number: index + 1, decision: decision, pick: picks.pick(index, in: decision), narrow: narrow) { option in
-                                pick(option, index)
-                            }
                         }
                     }
                 }
@@ -570,32 +559,78 @@ private struct ReviewLineView: View {
     }
 }
 
-/// C16: a plan's decision, its options as N7 cards (DD-4) with the recommended one marked and picked to start with.
-/// A pick that differs from the recommendation turns Send Decisions on.
-private struct DecisionCard: View {
-    let number: Int
-    let decision: InboxReview.Decision
-    let pick: Int?
+/// C16: a plan's open questions, each a request its plan run raised: what it asks, what happened and what waits if
+/// nobody answers, then its options as N7 cards with the recommended one picked to start with, and the write-in
+/// (N11) for an answer in the Director's own words. Send Decisions sends every answer.
+private struct PlanQuestions: View {
+    let questions: [InboxReview.Action]
+    var picks = DecisionPicks()
+    var pick: (Int, Int) -> Void = { _, _ in }
+    var writeIn: (String, Int) -> Void = { _, _ in }
     var narrow = false
-    let choose: (Int) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            ChipText(text: decision.question, lead: "\(number).", font: DesignTokens.TypeStyle.rowTitle.nsFont)
-            OptionCardList(
-                title: "Decision \(number), \(decision.question)",
-                cards: OptionCard.cards(for: decision),
-                selected: pick,
-                selectable: true,
-                narrow: narrow,
-                choose: choose
+        ForEach(Array(questions.enumerated()), id: \.offset) { index, question in
+            PlanQuestionCard(
+                index: index,
+                count: questions.count,
+                question: question,
+                picks: picks,
+                pick: { pick($0, index) },
+                writeIn: { writeIn($0, index) },
+                narrow: narrow
             )
-            // A brief that names no recommended option still says what it recommends.
-            if decision.initialPick == nil, let recommendation = decision.recommendation {
-                ChipText(text: recommendation, lead: "Recommendation:", font: DesignTokens.TypeStyle.callout.nsFont, color: .secondaryLabelColor)
-            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct PlanQuestionCard: View {
+    let index: Int
+    let count: Int
+    let question: InboxReview.Action
+    let picks: DecisionPicks
+    let pick: (Int) -> Void
+    let writeIn: (String) -> Void
+    var narrow = false
+    @FocusState private var writeInFocused: Bool
+
+    private var picked: Int? { question.decision.flatMap { picks.pick(index, in: $0) } }
+    private var writeInPicked: Bool { picked == question.writeInIndex }
+
+    var body: some View {
+        Card(title: count == 1 ? "Your decision" : "Your decision \(index + 1) of \(count)") {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+                if let text = question.question {
+                    ChipText(text: text, font: DecisionType.questionFont)
+                        .accessibilityAddTraits(.isHeader)
+                }
+                ForEach(Array(question.whyParagraphs.enumerated()), id: \.offset) { _, paragraph in
+                    ChipText(text: paragraph)
+                }
+                if let ifUnanswered = question.ifUnanswered {
+                    HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(DesignTokens.Status.you.tint)
+                            .accessibilityHidden(true)
+                        ChipText(text: ifUnanswered, lead: "If you don't answer:")
+                    }
+                }
+                OptionCardList(
+                    title: "Decision \(index + 1), \(question.question ?? "")",
+                    cards: OptionCard.cards(for: question, writeIn: true),
+                    selected: picked,
+                    selectable: true,
+                    narrow: narrow,
+                    choose: pick
+                )
+                if writeInPicked {
+                    WriteInField(initialText: picks.writeIns[index] ?? "", commit: writeIn, focused: $writeInFocused)
+                }
+            }
+            .font(DesignTokens.TypeStyle.body.font)
+        }
+        // Picking the write-in puts the keyboard in its field.
+        .onChange(of: writeInPicked) { _, picked in writeInFocused = picked }
     }
 }
 

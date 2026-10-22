@@ -427,6 +427,18 @@ let unavailablePullRequest = pullRequest {
 }
 let untrackedPullRequest = pullRequest { $0["ticket"] = NSNull() }
 
+/// A plan's open questions (TP-1191): SHOP-330 from the Inbox fixture, its second question answered in the Director's
+/// own words.
+@MainActor
+func planQuestions() -> some View {
+    let api = here.appendingPathComponent("../Fixtures/director-app/inbox/api/v1/inbox.json").standardizedFileURL
+    guard let plan = InboxPayload.decode(try! Data(contentsOf: api))?.items.first(where: { $0.identifier == "SHOP-330" }) else {
+        fatalError("SHOP-330 is missing from \(api.path)")
+    }
+    let picks = DecisionPicks(picks: [1: plan.review.questions[1].writeInIndex], writeIns: [1: "Ask the finance team which currency the books use, then pick."])
+    return review(plan, width: 640, picks: picks)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -465,6 +477,7 @@ MainActor.assumeIsolated {
             render(review(identifier), scheme, to: "\(name)-chips-\(suffix).png")
         }
         render(ticketPage(), scheme, to: "ticket-page-chips-\(suffix).png")
+        render(planQuestions(), scheme, to: "plan-questions-\(suffix).png")
         // The PR and CI watcher (TP-946): S15's states, S16 and S17.
         for (identifier, name) in [("TP-701", "ci"), ("TP-704", "competing"), ("TP-707", "fix-ticket"), ("TP-703", "on-hold"), ("TP-709", "pr-closed")] {
             render(watchPage(identifier), scheme, to: "pr-watch-\(name)-\(suffix).png")
