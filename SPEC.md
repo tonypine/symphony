@@ -524,7 +524,10 @@ the history was backfilled. A run store marker (`ticket_events_backfill_v1`) mak
 no-op.
 
 The stream is read through `GET /api/v1/repos/<repo_key>/tickets/<issue_identifier>/events`
-(Section 13.8.2).
+(Section 13.8.2). Each event a write adds (not a backfilled one, an idempotent no-op or a refused
+write) is also announced, best-effort, on the live channel `GET /api/v1/stream` (Section 13.8.2), so
+a reader learns at once that a ticket has something new; a failed announcement never fails the
+write.
 
 #### 4.1.12 Ticket Artifacts
 
@@ -5550,6 +5553,21 @@ Minimum endpoints:
   - The identifier resolves through the ticket's state record in that repo: a ticket with none is
     `404` `ticket_not_found`. An unknown type, a bad `since` or a `limit` that is not a positive
     integer is `400` `invalid_query`. Other methods are `405`.
+
+- `GET /api/v1/stream?repo_key=&issue_identifier=`
+  - The live channel: a `text/event-stream` response that stays open and tells the client the moment
+    an event is written to a ticket's history (Section 4.1.11), so the Director's app reads only
+    what is new instead of polling. Read-only and served like the events feed.
+  - One message per written event: `event: ticket`, `id:` the event's id, and `data:` a notice as
+    JSON: `repo_key`, `issue_id`, `issue_identifier` (null when the ticket's state record doesn't
+    know it), `event_id`, `type` and `at`. The notice carries no payload: the client reads the
+    events feed for it.
+  - A comment line `: keep-alive` every 15 seconds keeps an idle connection open and lets the
+    client notice a dead one.
+  - `repo_key` and `issue_identifier` each keep only the notices that carry them; without either,
+    every ticket's notices come.
+  - When the client goes away a write fails, and the response ends and unsubscribes. Other methods
+    are `405`. An older Symphony without the channel answers `404`, and the app keeps polling.
 
 - `GET /api/v1/artifacts/<id>` and `GET /api/v1/artifacts/<id>/meta`
   - An artifact (Section 4.1.12) by id, read-only and served like the events feed. The first answers

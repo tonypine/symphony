@@ -131,7 +131,11 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     func show() {
         if window == nil {
             let saved = AppStores.current.defaults.object(forKey: Self.viewKey) as? String
-            let model = SymphonyWindowModel(client: client, selection: Sidebar().restoredView(saved: saved))
+            let eventStream = EventStream(
+                base: { [weak self] in self.flatMap { StateRoot.controlURL(in: $0.stateRoot(), fallback: AppStores.current.apiFallback) } },
+                connect: AppStores.current.apiStreamTransport
+            )
+            let model = SymphonyWindowModel(client: client, eventStream: eventStream, selection: Sidebar().restoredView(saved: saved))
             model.state = state
             model.paused = paused
             model.updateHold = updateHold
@@ -360,6 +364,8 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         window?.saveFrame(to: frame, after: notification)
         // An Inbox answer held for Undo goes now: its banner closes with the window.
         model?.sendHeldNow()
+        // The live channel closes with the window; the next window opens its own.
+        model?.eventStream.stop()
         window = nil
         model = nil
         client.isVisible = false
