@@ -217,11 +217,11 @@ defmodule SymphonyElixir.MergeConfirmationTest do
       refute Hold.held_any?(@repo_key, @issue_id)
     end
 
-    test "a failed hold write is reported" do
+    test "a failed hold write is reported, and nothing is posted, so a retry posts the request once" do
       assert {:error, {:merge_confirmation_hold_failed, :boom}} =
                MergeConfirmation.pause(issue(), opts(store: FailingStore), parts())
 
-      assert_received {:comment, @issue_id, _body}
+      refute_received {:comment, @issue_id, _body}
     end
   end
 

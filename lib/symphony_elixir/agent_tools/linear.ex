@@ -16,11 +16,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Workspace.Attachments
+  alias SymphonyElixir.DecisionRequest
   alias SymphonyElixir.Decisions
   alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions
   alias SymphonyElixir.HumanActions.Collector, as: HumanActionsCollector
-  alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.IssueSummary
   alias SymphonyElixir.Linear.{Client, Issue, TransientRetry}
@@ -50,7 +50,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @project_update_healths ["onTrack", "atRisk", "offTrack"]
   # Requests for a human are deduplicated by title, so this only bounds a run that loops.
   @human_action_cap_per_run 5
-  @human_action_options 2..4
   @human_action_max_tradeoffs 3
   # Documents hold a ticket's long-lived artifacts, edited over several runs; this bounds a run that loops.
   @document_cap_per_run 10
@@ -1315,7 +1314,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
     %{"title" => title, "why" => why, "decision" => decision, "unblocks" => unblocks, "if_unanswered" => if_unanswered} =
       Map.merge(%{"title" => nil, "why" => nil, "decision" => nil, "unblocks" => nil, "if_unanswered" => nil}, attrs)
 
-    case Enum.find(human_action_checks(title, why, decision, unblocks, if_unanswered), fn {valid?, _message} -> not valid?.() end) do
+    case Enum.find(human_action_checks(title, decision, unblocks, if_unanswered), fn {valid?, _message} -> not valid?.() end) do
       {_check, message} when is_function(message, 0) ->
         {:error, {:invalid_human_action, message.()}}
 
@@ -1325,7 +1324,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
       nil ->
         request = %{
           title: Request.one_line(title),
-          why: why,
+          why: if(is_binary(why), do: why, else: ""),
           question: decision["question"],
           options: Enum.map(decision["options"], &decision_option/1),
           recommendation_reason: present_text(decision["recommendation_reason"]),
@@ -1333,31 +1332,31 @@ defmodule SymphonyElixir.AgentTools.Linear do
           unblocks: present_text(unblocks)
         }
 
-        case PlainWords.check(request) do
+        case DecisionRequest.check(request) do
           :ok -> {:ok, describe_unlocks(request)}
           {:error, message} -> {:error, {:invalid_human_action, message}}
         end
     end
   end
 
-  # In order, and lazy: a later check relies on the earlier ones having passed.
-  defp human_action_checks(title, why, decision, unblocks, if_unanswered) do
+  # The shape of the tool's input, in order and lazy: a later check relies on the earlier ones
+  # having passed. What a request must say is the writer's standard (`DecisionRequest.check/1`).
+  defp human_action_checks(title, decision, unblocks, if_unanswered) do
+    options = DecisionRequest.option_count()
+
     [
       {fn -> non_blank?(title) end, "`title` must be a non-blank string."},
-      {fn -> String.length(Request.one_line(title)) <= @title_max_length end, "`title` must be at most #{@title_max_length} characters."},
-      {fn -> non_blank?(why) end, "`why` must be a non-blank string."},
       {fn -> is_map(decision) end,
-       "`decision` is required: one `question` and #{@human_action_options.first} to #{@human_action_options.last} `options`. " <>
+       "`decision` is required: one `question` and #{options.first} to #{options.last} `options`. " <>
          "A person only makes decisions; a check an agent can't run belongs to CI or a QA playbook, " <>
          "and a manual check that could be a test becomes a test."},
-      {fn -> non_blank?(decision["question"]) end, "`decision.question` must be a non-blank string."},
-      {fn -> is_list(decision["options"]) and length(decision["options"]) in @human_action_options end,
-       "`decision.options` must list #{@human_action_options.first} to #{@human_action_options.last} options, each with a `label` and an `effect`; " <>
+      {fn -> optional_string?(decision["question"]) end, "`decision.question` must be a string."},
+      {fn -> is_list(decision["options"]) and length(decision["options"]) in options end,
+       "`decision.options` must list #{options.first} to #{options.last} options, each with a `label` and an `effect`; " <>
          "with no real choice to make, there is nothing to ask a person."},
       {fn -> Enum.all?(decision["options"], &valid_decision_option?/1) end, "Each of `decision.options` needs a non-blank `label` and `effect`."},
-      {fn -> Enum.count(decision["options"], &(&1["recommended"] == true)) == 1 end, "Exactly one of `decision.options` must be `recommended`."},
       {fn -> Enum.all?(decision["options"], &valid_tradeoffs?(&1["tradeoffs"])) end,
-       "Each option's `tradeoffs` lists at most #{@human_action_max_tradeoffs}, each with a `kind` (#{Enum.join(Request.tradeoff_kinds(), ", ")}) and a non-blank `text`."},
+       "Each option's `tradeoffs` lists at most #{DecisionRequest.max_tradeoffs()}, each with a `kind` (#{Enum.join(Request.tradeoff_kinds(), ", ")}) and a non-blank `text`."},
       {fn -> Enum.all?(decision["options"], &valid_unlocks?(&1["unlocks"])) end, "Each option's `unlocks` must be a list of protected paths, as strings."},
       {fn -> unprotected_unlocks(decision["options"]) == [] end,
        fn ->
@@ -1488,17 +1487,16 @@ defmodule SymphonyElixir.AgentTools.Linear do
     }
   end
 
-  # Nothing moves. The comment goes first — a hold with no question on the board
-  # would pause the ticket with nothing for the person to answer — then the hold is set from the
-  # request, so the ticket keeps its phase and the person answers it there. A request the ticket
-  # already has is the one recorded, so the hold carries what the comment says. A request raised from
-  # the CI Fix lane is the lane's `cannot_fix` verdict: the repair needs access or a secret, which no
-  # run can supply, so the ticket waits for a person in place.
+  # Nothing moves. A new request goes through the one writer (`DecisionRequest.ask/4`), which sets
+  # the hold and posts the comment through this tool's Linear client, so the ticket keeps its phase
+  # and the person answers it there. A request the ticket already has is the one recorded, so the
+  # hold is set again from it (`DecisionRequest.project/4`) and nothing is posted. A request raised
+  # from the CI Fix lane is the lane's `cannot_fix` verdict: the repair needs access or a secret,
+  # which no run can supply, so the ticket waits for a person in place.
   defp hold_request(repo_key, issue, open, request, settings, opts) do
     state = get_in(issue, ["state", "name"])
 
-    with {:ok, result} <- post_request(issue, open, request, state, opts),
-         :ok <- set_decision_hold(repo_key, issue, recorded_request(open, request), opts) do
+    with {:ok, result} <- ask_or_project(repo_key, issue, open, request, opts) do
       record_hold_verdict(repo_key, issue, state, settings)
 
       {:ok,
@@ -1517,11 +1515,21 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
-  defp recorded_request({_comment_id, open_request}, _request), do: open_request
-  defp recorded_request(nil, request), do: request
+  defp ask_or_project(repo_key, issue, {comment_id, open_request}, _request, opts) do
+    with :ok <- DecisionRequest.project(repo_key, issue["id"], NeedsDecisionHold.attrs(open_request), opts) do
+      {:ok, %{"requested" => false, "reason" => "already_open", "commentId" => comment_id}}
+    end
+  end
 
-  defp set_decision_hold(repo_key, issue, request, opts) do
-    Hold.set(repo_key, issue["id"], :needs_decision, NeedsDecisionHold.attrs(request), opts)
+  defp ask_or_project(repo_key, issue, nil, request, opts) do
+    held = %{id: issue["id"], state: get_in(issue, ["state", "name"]), repo_key: repo_key}
+
+    # The request already passed `validate_human_action/1`, so the writer's error is the post's or
+    # the hold's, returned as the tool returned it before.
+    case DecisionRequest.ask(held, request, [post: &post_request(issue, &1, opts), label_tracker: opts[:tracker]] ++ Keyword.take(opts, [:store])) do
+      {:ok, result} -> {:ok, result}
+      {:error, {_step, reason}} -> {:error, reason}
+    end
   end
 
   defp open_request_titled(issue, title, settings) do
@@ -1529,14 +1537,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
     Enum.find(HumanActionsCollector.open_requests(issue, settings), fn {_comment_id, open} -> Request.normalize_title(open.title) == title end)
   end
 
-  defp post_request(_issue, {comment_id, _open}, _request, _state, _opts),
-    do: {:ok, %{"requested" => false, "reason" => "already_open", "commentId" => comment_id}}
-
-  # The request sets the hold instead of moving the issue, so the closing line says the ticket is
-  # not going anywhere.
-  defp post_request(issue, nil, request, state, opts) do
-    body = Request.render_hold(request, state)
-
+  # The comment the writer posts, rendered to say the ticket is not going anywhere.
+  defp post_request(issue, body, opts) do
     with {:ok, response} <- graphql(@add_comment_mutation, %{issueId: issue["id"], body: body}, opts),
          {:ok, response} <- check_mutation_success(response, "commentCreate") do
       comment = get_in(response, ["data", "commentCreate", "comment"]) || %{}

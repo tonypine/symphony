@@ -11,7 +11,7 @@ defmodule SymphonyElixir.ClosedPullRequest do
   This module stops that. `guard/3` runs before a run starts (`SymphonyElixir.AgentRunner`): a
   ticket in a phase that judges, repairs or lands its existing pull request — Code Review, QA, CI
   Fix or Merging — whose recorded pull request (`SymphonyElixir.TicketPullRequest`) is closed is
-  paused on a Needs Decision hold (`SymphonyElixir.NeedsDecisionHold.pause/4`) instead. The PR and
+  paused on a Needs Decision hold (`SymphonyElixir.DecisionRequest.ask/4`) instead. The PR and
   CI watcher sends such a ticket to Rework first (rule R8, D5), and a Rework run starts: it opens a
   new pull request from main. The QA run checks the same before its policy
   (`SymphonyElixir.QaVerification`), and the QA run and the Code Review approve hold an empty diff
@@ -24,9 +24,9 @@ defmodule SymphonyElixir.ClosedPullRequest do
 
   require Logger
 
-  alias SymphonyElixir.HumanActions.Request
+  alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.{NeedsDecisionHold, TicketPullRequest}
+  alias SymphonyElixir.{DecisionRequest, TicketPullRequest}
 
   @merging_state "Merging"
 
@@ -43,7 +43,7 @@ defmodule SymphonyElixir.ClosedPullRequest do
   whose pull request is open or was never recorded, runs as before.
 
   `opts[:repo_key]` names the repo when the issue carries none; `opts[:tracker]` and `opts[:store]`
-  go to `NeedsDecisionHold.pause/4`.
+  go to `DecisionRequest.ask/4`.
   """
   @spec guard(map(), map(), keyword()) :: :run | :held | {:error, term()}
   def guard(%Issue{} = issue, settings, opts) do
@@ -78,12 +78,12 @@ defmodule SymphonyElixir.ClosedPullRequest do
 
   @doc """
   Pauses `issue` in its phase on the Needs Decision hold for `cause`. `opts` go to
-  `NeedsDecisionHold.pause/4` (`:repo_key`, `:tracker`, `:store`).
+  `DecisionRequest.ask/4` (`:repo_key`, `:tracker`, `:store`).
   """
   @spec pause(Issue.t(), cause(), keyword()) :: :ok | {:error, term()}
   def pause(%Issue{} = issue, cause, opts) do
     hold_opts = opts |> Keyword.take([:tracker, :store]) |> Keyword.put(:repo_key, repo_key(issue, opts))
-    NeedsDecisionHold.pause(issue, request(issue, cause), hold_opts)
+    DecisionRequest.ask(issue, request(issue, cause), hold_opts)
   end
 
   @doc """
@@ -180,7 +180,7 @@ defmodule SymphonyElixir.ClosedPullRequest do
   defp in_state(%Issue{state: state}) when is_binary(state) and state != "", do: " in #{state}"
   defp in_state(_issue), do: ""
 
-  defp mention(%Issue{title: title} = issue) when is_binary(title) and title != "", do: "#{label(issue)} (#{title})"
+  defp mention(%Issue{title: title} = issue) when is_binary(title) and title != "", do: "#{label(issue)} (#{PlainWords.scrub(title)})"
   defp mention(issue), do: label(issue)
 
   defp label(%Issue{identifier: identifier}) when is_binary(identifier), do: identifier

@@ -53,9 +53,9 @@ defmodule SymphonyElixir.QaVerification do
     CiWait,
     ClosedPullRequest,
     Config,
+    DecisionRequest,
     Handoff,
     MergeConfirmation,
-    NeedsDecisionHold,
     PrWatch,
     QaPolicy,
     QaPreCheck,
@@ -67,6 +67,7 @@ defmodule SymphonyElixir.QaVerification do
     WorkspaceHead
   }
 
+  alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaAgent.Report
@@ -573,7 +574,7 @@ defmodule SymphonyElixir.QaVerification do
     Logger.warning("QA for #{issue_label(issue)} could not reach a verdict after #{attempts} run(s); asking a person: #{reason}")
     hold_opts = opts |> Keyword.take([:tracker, :store]) |> Keyword.put(:repo_key, repo_key(issue, opts))
 
-    case NeedsDecisionHold.pause(issue, escalation_request(issue, settings, attempts, reason), hold_opts) do
+    case DecisionRequest.ask(issue, escalation_request(issue, settings, attempts, reason), hold_opts) do
       :ok -> :ok
       {:error, error} -> {:error, {:qa_escalation_failed, error}}
     end
@@ -581,19 +582,20 @@ defmodule SymphonyElixir.QaVerification do
 
   defp escalation_request(issue, settings, attempts, reason) do
     %{
-      title: "QA could not reach a verdict on #{issue_label(issue)}",
-      question: "QA ran #{issue_mention(issue)} #{attempts} times on the same change without reaching a verdict. How should it continue?",
-      why: "The last run ended with: #{String.replace(reason, "`", "")}. No QA tool reported a broken part of the QA environment, so the machine files no fix ticket for it.",
+      title: "QA could not finish its check of #{issue_label(issue)}",
+      question: "QA ran #{issue_mention(issue)} #{attempts} times on the same change without a pass or a fail. How should it continue?",
+      why: "The last run ended with: #{PlainWords.scrub(reason)}. No QA tool reported a broken part of the QA environment, so the machine files no fix ticket for it.",
       options: [
-        %{label: "Run QA again", effect: "the hold clears and QA runs once more on the same change", recommended: true},
+        %{label: "Run QA again", effect: "the ticket continues in QA and QA runs once more on the same change", recommended: true},
         %{label: "Send it back to Rework", effect: "you move #{issue_label(issue)} to Rework, and its next run reads QA's report"},
-        %{label: "Merge without a QA verdict", effect: "you move #{issue_label(issue)} to #{TransitionGuard.target(:qa_pass, %{settings: settings})}, and it merges on its review and CI alone"}
+        %{label: "Merge without a QA result", effect: "you move #{issue_label(issue)} to #{TransitionGuard.target(:qa_pass, %{settings: settings})}, and it merges on its review and CI alone"}
       ],
-      if_unanswered: "#{issue_label(issue)} stays in #{settings.tracker.qa_state} and goes no further."
+      if_unanswered: "#{issue_label(issue)} stays in #{settings.tracker.qa_state} and goes no further.",
+      recommendation_reason: "A run that ends without a result is often a passing hiccup, and one more run costs little."
     }
   end
 
-  defp issue_mention(%Issue{identifier: identifier, title: title}) when is_binary(identifier) and is_binary(title), do: "#{identifier} (#{title})"
+  defp issue_mention(%Issue{identifier: identifier, title: title}) when is_binary(identifier) and is_binary(title), do: "#{identifier} (#{PlainWords.scrub(title)})"
   defp issue_mention(issue), do: issue_label(issue)
 
   # A head the PR and CI watcher reads as rejected by CI: its checks red, a required check that never

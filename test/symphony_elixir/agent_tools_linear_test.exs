@@ -2345,8 +2345,10 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
           "options" => [
             %{"label" => "Allow this ticket to change them", "effect" => "The next run changes them.", "recommended" => true, "unlocks" => ["./WORKFLOW.md", ".agents/skills"]},
             %{"label" => "Keep them as they are", "effect" => "The hook waits.", "unlocks" => []}
-          ]
-        }
+          ],
+          "recommendation_reason" => "The hook needs both."
+        },
+        "if_unanswered" => "The hook waits."
       }
 
       assert {:ok, %{"requested" => true}} = request_human_action(context, human_action_scope(), %{}, attrs)
@@ -2423,10 +2425,11 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
         for {attrs, message} <- [
               {%{"title" => " "}, "`title` must be a non-blank string."},
               {%{"title" => String.duplicate("a", 121)}, "`title` must be at most 120 characters."},
-              {%{"why" => nil}, "`why` must be a non-blank string."},
+              {%{"why" => nil}, "`why` must say what happened and why it needs a person."},
               {%{"decision" => nil}, decision_required},
               {%{"decision" => "Ship it?"}, decision_required},
-              {decision.(%{"question" => " "}), "`decision.question` must be a non-blank string."},
+              {decision.(%{"question" => " "}), "`decision.question` must ask the one question the person answers."},
+              {decision.(%{"question" => 3}), "`decision.question` must be a string."},
               {decision.(%{"options" => nil}), options_count},
               {decision.(%{"options" => []}), options_count},
               {decision.(%{"options" => [option.(%{"recommended" => true})]}), options_count},
@@ -2447,7 +2450,13 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                  Enum.join(SymphonyElixir.AgentSandboxConfig.workspace_protected_paths(), ", ") <> "."},
               {decision.(%{"recommendation_reason" => 3}), "`decision.recommendation_reason` must be a string."},
               {%{"unblocks" => 3}, "`unblocks` must be a string."},
-              {%{"if_unanswered" => 3}, "`if_unanswered` must be a string."}
+              {%{"if_unanswered" => 3}, "`if_unanswered` must be a string."},
+              {%{"if_unanswered" => " "}, "`if_unanswered` must say what waits or repeats until someone answers."},
+              {decision.(%{"recommendation_reason" => nil}), "`decision.recommendation_reason` must say in one line why the recommended option is the one to pick."},
+              {decision.(%{"options" => [option.(%{"recommended" => true, "effect" => "The PR head moves."}), option.(%{})]}),
+               "A decision is read by the Director, who does not read code. `decision.options[0].effect` has the internal word \"head\". " <>
+                 "Rewrite it in plain words: say what the thing does, not where it lives or what it is called in the code or inside Symphony. " <>
+                 "Name a ticket by its identifier and a short name, and a PR as PR #123."}
             ] do
           assert {:error, {:invalid_human_action, ^message}} = Linear.request_human_action(context, Map.merge(@human_action, attrs), opts)
         end
@@ -2557,7 +2566,8 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                request_human_action(%{issue: %Issue{id: "issue-24", repo_key: "repo-a"}, comment_registry: registry}, again, %{}, %{
                  "title" => "Re-run the stuck dialyzer job",
                  "why" => "x",
-                 "decision" => @human_action["decision"]
+                 "decision" => @human_action["decision"],
+                 "if_unanswered" => "The job stays stuck."
                })
     end
 

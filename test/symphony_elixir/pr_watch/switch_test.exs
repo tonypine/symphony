@@ -451,7 +451,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       tick!(pid, 3)
 
       assert [{"TP-FIX1", _attrs}] = World.calls(:fix_ticket)
-      assert %{decision: %{title: "Self-heal is stuck on the ci:specs block"}} = Hold.get(@repo_key, issue_id, :needs_decision)
+      assert %{decision: %{title: "Self-heal is stuck on the ci specs block"}} = Hold.get(@repo_key, issue_id, :needs_decision)
       assert [_one] = Enum.filter(comments(issue_id), &String.starts_with?(&1, "## Decision needed: Self-heal is stuck"))
       assert %{rule: "R4", owner: :person} = decision(issue_id)
     end

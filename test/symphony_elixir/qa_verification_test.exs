@@ -911,16 +911,16 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert SymphonyElixir.TicketState.self_heal(RunStore.get_ticket_state(@repo_key, @issue_id)) == nil
 
       assert %{decision: decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
-      assert decision.title == "QA could not reach a verdict on TP-816"
-      assert decision.question == "QA ran TP-816 (Land the QA state) 2 times on the same change without reaching a verdict. How should it continue?"
-      assert decision.why =~ "The last run ended with: The app cannot be pointed at a fake update feed."
+      assert decision.title == "QA could not finish its check of TP-816"
+      assert decision.question == "QA ran TP-816 (Land the QA state) 2 times on the same change without a pass or a fail. How should it continue?"
+      assert decision.why =~ "The last run ended with: The app cannot be pointed at a fake update list."
       assert [%{label: "Run QA again", recommended: true}, %{label: "Send it back to Rework"}, %{label: "Merge without a QA verdict", effect: merge}] = decision.options
       assert merge =~ "you move TP-816 to Merging"
 
       assert_received {:memory_tracker_comment, @issue_id, _retrying_report}
       assert_received {:memory_tracker_comment, @issue_id, _report}
       assert_received {:memory_tracker_comment, @issue_id, request}
-      assert request =~ "QA could not reach a verdict on TP-816"
+      assert request =~ "QA could not finish its check of TP-816"
       assert Enum.map(verdicts(), & &1.outcome) == ["blocked", "blocked"]
       assert Enum.all?(verdicts(), &(&1.head_sha == head))
     end
@@ -1011,7 +1011,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert Hold.held?(@repo_key, @issue_id, :needs_decision)
 
       assert %{reason: stuck} = Hold.get(@repo_key, @issue_id, :needs_decision)
-      assert stuck =~ "self-heal is stuck on the dev_server block"
+      assert stuck =~ "The dev server block on"
     after
       stop_verification_port_pool()
     end
@@ -1196,7 +1196,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert %{decision: decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
       assert decision.why =~ "The last run ended with: the wide pass did not run: no qa_resize_window call resized"
       assert_received {:memory_tracker_comment, @issue_id, request}
-      assert request =~ "QA could not reach a verdict on TP-816"
+      assert request =~ "QA could not finish its check of TP-816"
       assert Enum.map(verdicts(), & &1.outcome) == ["inconclusive", "inconclusive"]
     end
 
@@ -1256,7 +1256,7 @@ defmodule SymphonyElixir.QaVerificationTest do
         assert :ok = QaVerification.run(untitled, workspace, opts)
       end)
 
-      assert %{decision: %{question: "QA ran TP-816 2 times on the same change without reaching a verdict. How should it continue?"}} =
+      assert %{decision: %{question: "QA ran TP-816 2 times on the same change without a pass or a fail. How should it continue?"}} =
                Hold.get(@repo_key, @issue_id, :needs_decision)
     end
 

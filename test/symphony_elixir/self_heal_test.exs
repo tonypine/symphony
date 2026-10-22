@@ -507,14 +507,14 @@ defmodule SymphonyElixir.SelfHealTest do
       assert :escalated = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable)))
 
       assert {:needs_decision, %{decision: decision, reason: reason}} = Process.get(:hold_attrs)
-      assert reason =~ "self-heal is stuck on the qa_environment block"
-      assert decision.title == "Self-heal is stuck on the qa_environment block"
+      assert reason =~ "The qa environment block on TP-816 came back unchanged"
+      assert decision.title == "Self-heal is stuck on the qa environment block"
       assert Enum.map(decision.options, &Map.get(&1, :recommended)) == [true, nil]
-      assert [{"decision.requested", %{title: "Self-heal is stuck on the qa_environment block"}}] = ticket_events(@repo_key, @issue_id)
+      assert [{"decision.requested", %{title: "Self-heal is stuck on the qa environment block"}}] = ticket_events(@repo_key, @issue_id)
 
       # TP-1019: the decision is posted as a request, so the Inbox's read of the ticket finds it open
       # and keeps the hold. With no request it cleared the hold, and the ticket dispatched again.
-      assert {@issue_id, "## Decision needed: Self-heal is stuck on the qa_environment block" <> _rest = body} = Process.get(:comment)
+      assert {@issue_id, "## Decision needed: Self-heal is stuck on the qa environment block" <> _rest = body} = Process.get(:comment)
       node = %{"id" => @issue_id, "comments" => %{"nodes" => [%{"id" => "c1", "body" => body, "createdAt" => "2026-10-14T22:35:27.000Z"}]}}
       assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}})
 

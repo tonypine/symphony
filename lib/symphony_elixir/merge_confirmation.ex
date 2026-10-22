@@ -10,10 +10,10 @@ defmodule SymphonyElixir.MergeConfirmation do
   with a **Needs Decision hold** whose decision payload carries the summary a person needs to decide:
   the recommendation, the Code Review reasons, the QA result and the PR link.
 
-  The pause is the ordinary decision request the rest of the machine already uses: the same
-  `## Decision needed:` comment (`SymphonyElixir.HumanActions.Request`, rendered with
-  `render_hold/2` so it says the ticket stays in its phase), and the same hold
-  (`SymphonyElixir.NeedsDecisionHold`) the Inbox loop reconciles against it. The hold's decision
+  The pause is the ordinary decision request the rest of the machine already uses, raised through the
+  one writer (`SymphonyElixir.DecisionRequest`): the same `## Decision needed:` comment
+  (`SymphonyElixir.HumanActions.Request`), and the same hold (`SymphonyElixir.NeedsDecisionHold`)
+  the Inbox loop reconciles against it. The hold's decision
   payload also carries a `:confirm` target — `"Merging"` — which is what makes confirming continue
   into `Merging` exactly as when the setting is `off`: both the Inbox's Decide and a reply under the
   request clear the hold and then perform that move through the guard
@@ -29,8 +29,8 @@ defmodule SymphonyElixir.MergeConfirmation do
 
   require Logger
 
-  alias SymphonyElixir.{Handoff, Hold, NeedsDecisionHold, TicketPullRequest, TransitionGuard}
-  alias SymphonyElixir.HumanActions.Request
+  alias SymphonyElixir.{DecisionRequest, Handoff, NeedsDecisionHold, TicketPullRequest, TransitionGuard}
+  alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Linear.Issue
 
   @merging_state "Merging"
@@ -59,10 +59,16 @@ defmodule SymphonyElixir.MergeConfirmation do
   """
   @spec pause(Issue.t(), keyword(), summary()) :: :ok | {:error, term()}
   def pause(%Issue{} = issue, opts, summary) do
-    request = request(issue, summary)
+    case DecisionRequest.ask(issue, request(issue, summary), opts, @confirm_target) do
+      :ok ->
+        Logger.info("Merge confirmation for #{label(issue)}: manual review is on, so the step into Merging waits")
+        :ok
 
-    with :ok <- post_request(issue, opts, request) do
-      set_hold(issue, opts, request)
+      {:error, {:decision_hold_failed, reason}} ->
+        {:error, {:merge_confirmation_hold_failed, reason}}
+
+      {:error, {:decision_request_failed, reason}} ->
+        {:error, {:merge_confirmation_request_failed, reason}}
     end
   end
 
@@ -92,7 +98,8 @@ defmodule SymphonyElixir.MergeConfirmation do
       question: "Merge #{mention(issue)} into its base branch?",
       why: why(summary),
       if_unanswered: "#{label(issue)} waits#{in_state(issue)} and is not merged.",
-      options: options(summary)
+      options: options(summary),
+      recommendation_reason: "Every check Symphony runs before a merge is done; send it back only when the summary shows something you want changed."
     }
   end
 
@@ -238,27 +245,6 @@ defmodule SymphonyElixir.MergeConfirmation do
     end
   end
 
-  defp post_request(issue, opts, request) do
-    case tracker(opts).create_comment(issue.id, Request.render_hold(request, issue.state)) do
-      :ok -> :ok
-      {:error, reason} -> {:error, {:merge_confirmation_request_failed, reason}}
-    end
-  end
-
-  defp set_hold(issue, opts, request) do
-    attrs = attrs(request)
-    attrs = %{attrs | decision: Map.put(attrs.decision, :state, issue.state)}
-
-    case Hold.set(repo_key(issue, opts), issue.id, :needs_decision, attrs, store_opts(opts)) do
-      :ok ->
-        Logger.info("Merge confirmation for #{label(issue)}: manual review is on, so the step into Merging waits")
-        :ok
-
-      {:error, reason} ->
-        {:error, {:merge_confirmation_hold_failed, reason}}
-    end
-  end
-
   # The summary, as the one line the request renders: each part says what it knows and nothing when
   # it doesn't, so the request carries what the mode needs a person to weigh — recommendation, the
   # reviewer's reasons, the QA result and the PR.
@@ -277,8 +263,9 @@ defmodule SymphonyElixir.MergeConfirmation do
     |> Enum.join(" · ")
   end
 
+  # A part quotes the reviewer or QA, so its code is said in plain words.
   defp part(value) when is_binary(value) do
-    value = value |> String.replace(~r/\s+/, " ") |> String.trim()
+    value = value |> PlainWords.scrub() |> String.replace(~r/\s+/, " ") |> String.trim()
     if String.length(value) > @part_max, do: String.slice(value, 0, @part_max - 3) <> "...", else: value
   end
 
@@ -324,15 +311,11 @@ defmodule SymphonyElixir.MergeConfirmation do
   defp pr_link(issue, opts), do: Keyword.get(opts, :pr_url) || TicketPullRequest.current_url(issue, repo_key(issue, opts))
 
   # A ticket as the question names it the first time: its identifier and its title.
-  defp mention(%Issue{title: title} = issue) when is_binary(title) and title != "", do: "#{label(issue)} (#{title})"
+  defp mention(%Issue{title: title} = issue) when is_binary(title) and title != "", do: "#{label(issue)} (#{PlainWords.scrub(title)})"
   defp mention(issue), do: label(issue)
 
   defp label(%Issue{identifier: identifier}) when is_binary(identifier), do: identifier
   defp label(%Issue{id: id}), do: inspect(id)
 
   defp repo_key(issue, opts), do: Keyword.get(opts, :repo_key) || Map.get(issue, :repo_key)
-
-  defp tracker(opts), do: Keyword.get(opts, :tracker, SymphonyElixir.Tracker)
-
-  defp store_opts(opts), do: Keyword.take(opts, [:store])
 end
