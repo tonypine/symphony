@@ -2429,6 +2429,11 @@ build lock takes one too, both refused by the no-TCP-listener profile. Build the
 in `build_cmd` and point `start_cmd` at that prebuilt artifact, so the dev server's sandbox only
 starts the artifact and never Mix (`scripts/qa-dashboard-server.sh` does this).
 
+The health check asks `health_check_url` every 250 ms and gives each request 250 ms, until one
+answers 200 or `health_timeout_ms` passes. Point it at a route that answers at once, not a page the
+server builds on each request: in the sandbox, on a shared runner, a page that takes 300 ms fails
+every probe. Symphony's own API has `GET /api/v1/health` for this.
+
 `build_cmd` (optional) runs with `sh -lc` in the same checkout before `start_cmd`, every time the
 dev server starts: in an agent run before the first turn, and in a QA `web` pass in its
 fresh worktree at the PR head, which has no `deps/`, `_build/` or build output yet. It gets the dev
