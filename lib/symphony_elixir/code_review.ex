@@ -744,8 +744,10 @@ defmodule SymphonyElixir.CodeReview do
     end
   end
 
+  # The review run gave the verdict, so its event names that run.
   defp record_verdict(issue, opts, head, outcome, details \\ %{}) do
-    TicketSignals.record_verdict(repo_key(issue, opts), issue.id, @verdict_kind, head, outcome, details)
+    run_opts = [run_id: Keyword.get(opts, :run_id)]
+    TicketSignals.record_verdict(repo_key(issue, opts), issue.id, @verdict_kind, head, outcome, details, run_opts)
   end
 
   # The run's record carries the cause, so the run history counts inconclusive reviews per cause.
