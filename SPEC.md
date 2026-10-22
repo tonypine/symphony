@@ -5520,6 +5520,19 @@ Minimum endpoints:
     `404` `ticket_not_found`. An unknown type, a bad `since` or a `limit` that is not a positive
     integer is `400` `invalid_query`. Other methods are `405`.
 
+- `GET /api/v1/artifacts/<id>` and `GET /api/v1/artifacts/<id>/meta`
+  - An artifact (Section 4.1.12) by id, read-only and served like the events feed. The first answers
+    its bytes, sent from the file, with the artifact's `mime` as `Content-Type` (`; charset=utf-8`
+    for text and JSON lines), `Cache-Control: public, max-age=31536000, immutable`,
+    `X-Content-Type-Options: nosniff` and `Content-Disposition: inline` with the label as file name
+    (`attachment` for `application/octet-stream`). The second answers its metadata: `id`, `mime`,
+    `bytes`, `label`, `kind`, `repo_key`, `issue_id`, `run_id`, `captured_at`, `projections`,
+    `expired`, `expired_at` and `references`.
+  - An expired artifact, or one whose file is gone (the store then marks it expired), is `410` on
+    both, with the metadata and an `error` (`artifact_expired`) in the body. An id that is not 64
+    lowercase hex characters is `404` `artifact_not_found` before any store or filesystem lookup, so
+    no path can be traversed; so is an unknown id. Other methods are `405`.
+
 - `GET /api/v1/repos/<repo_key>/issues/<issue_identifier>/transcript`
   - Returns transcript metadata and events for a running, retrying, or watched issue in the selected
     repository.
