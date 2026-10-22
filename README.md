@@ -76,7 +76,9 @@ branch name Linear suggests for the ticket; a PR on a branch with any other name
   `symphony.yml`, with per-repo Linear selectors and conflict detection.
 - **Observability and control API** — active runs, watched issues, the retry queue, quality-gate
   state, per-issue transcripts and the audit log as JSON under `/api/v1`, which the Mac app and
-  `symphony dashboard` read.
+  `symphony dashboard` read. Each ticket's event stream is served, oldest first and paged, at
+  `GET /api/v1/repos/<repo>/tickets/<ticket>/events?since=&types=&run_id=&limit=`; history from
+  before the stream existed is backfilled from the ticket's snapshot once, at startup.
 - **Operator controls** — pause, resume, and stop, persisted across restarts.
 - **PR-driven runs** — work an existing pull request from the CLI for review comments, failing CI, and
   conflict fixes.

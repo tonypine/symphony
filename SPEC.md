@@ -440,6 +440,62 @@ spec says a run's or a ticket's "attached PR", it means the PR the record answer
   one-shot run records, issue notifications and the epic review's pull-request check carry the
   recorded PR.
 
+#### 4.1.11 Ticket Event Ledger
+
+Each ticket has one durable, typed, append-only event stream, kept in the durable run store per
+`repo_key` and issue ID. It is Symphony's record of the ticket's history; the tracker is a projection
+of it. Until readers move over, the snapshot fields of the ticket's state record (`signals`,
+`verdicts`, `dispatches`, `holds`, `decisions`) stay the source of truth and keep being written:
+every write to them also records its event (dual-write), and nothing user-facing reads the stream
+yet.
+
+The event:
+
+- `id` (a ULID, so ids sort by time), `seq` (the ticket's own monotonic number, assigned on append),
+  `at` (when it happened), `type`, `phase` (the ticket's phase then), `actor` (the machine, an agent
+  with its run and run kind, or a person by name), `run_id`, `head_sha`, `parent` (a step nested
+  under another event), `supersedes` (an earlier event a later fact replaces), `idempotency`,
+  `payload`, `artifacts` and `summary`.
+- `summary` (`title`, `detail`) is rendered by Symphony from the type and payload, never written by
+  an agent: the title says what happened in at most 120 characters, and an agent's free text only
+  ever lands in the one-line detail.
+- A second append with the idempotency key of an event the ticket already holds writes nothing and
+  returns that event.
+
+The catalog is closed. Each type names who may write it (machine, agent, person), which agent run
+kinds may, its payload schema and its idempotency rule; a payload outside its schema, or a writer the
+type does not allow, is refused. The types: `phase.entered`, `hold.set` and `hold.cleared` (kind
+`blocked` only), `run.started` and `run.ended` (keyed by run id), `attempt.pushed`,
+`verdict.recorded` (machine only: an agent never records a verdict), `decision.requested`,
+`decision.recorded`, `decision.withdrawn`, `person.action` (`stop`, `move`, `force`, `unblock`,
+`restart`), `step.started`, `step.completed`, `step.skipped`, `evidence`, `finding.recorded` (QA
+runs), `finding.resolved`, `checklist.answered` and `note`.
+
+A decision a person must make has one representation, whoever asks it: `decision.requested`, then
+the person's `decision.recorded` (keyed `decision.recorded:<key>`, the request comment it answers)
+or `decision.withdrawn` when it ends unanswered; both name the request in `request`. The Needs
+Decision hold is the projection of an open request, never a hold event. A query with
+`open_decisions` lists the requests no answer or withdrawal names; `open_findings` the findings no
+unsuperseded resolution names.
+
+At startup the ledger's backfill converts each ticket's history from before the stream existed,
+once, in a task the startup does not wait for (a failure is logged). For every ticket record of
+every repo it converts the snapshot's signals (through the same mapping as the live writes),
+verdicts and dispatches, and the last 14 days of `run_stopped` and `director_move` audit records,
+older than the ticket's first live event, into events keyed `backfill:<source>:<hash>` at their
+original time. A signal live writes leave to a hold write becomes that write's event (a held block,
+a dispatch loop or CI wait is `hold.set`, an unblock `hold.cleared`). A decision-requested signal,
+which carries no question, becomes a `note`, so no request from before the ledger stays open. Each
+recorded decision becomes `decision.recorded` under its live key, so an answer already recorded live
+is not recorded twice; a hold still set that the stream doesn't show open becomes its opening event
+(`hold.set`, or `decision.requested` with the hold's question, which its live answer closes). Each
+ticket's events are appended oldest first in one transaction and end with one note saying until when
+the history was backfilled. A run store marker (`ticket_events_backfill_v1`) makes a later start a
+no-op.
+
+The stream is read through `GET /api/v1/repos/<repo_key>/tickets/<issue_identifier>/events`
+(Section 13.8.2).
+
 ### 4.2 Stable Identifiers and Normalization Rules
 
 - `Issue ID`
@@ -5408,6 +5464,19 @@ Minimum endpoints:
 
   - If the issue is unknown to the current in-memory state, return `404` with an error response (for
     example `{\"error\":{\"code\":\"issue_not_found\",\"message\":\"...\"}}`).
+
+- `GET /api/v1/repos/<repo_key>/tickets/<issue_identifier>/events?since=&types=&run_id=&limit=`
+  - The ticket's event ledger (Section 4.1.11), the debug API through which it is visible:
+    `{"events": [...], "next_since": "<iso8601>"}`, the events oldest first by `at` then `seq`, each
+    with its `summary`. Read-only and served like `/api/v1/state`.
+  - `since` (ISO 8601, exclusive) pages: `next_since` is the `at` of the last event returned (the
+    `since` given, or null, on an empty page). A page never ends inside a group of events that share
+    one `at`, so paging with `next_since` returns every event exactly once.
+  - `types` is a comma-separated list of catalog types, `run_id` keeps one run's events, and `limit`
+    defaults to 50 and is capped at 200.
+  - The identifier resolves through the ticket's state record in that repo: a ticket with none is
+    `404` `ticket_not_found`. An unknown type, a bad `since` or a `limit` that is not a positive
+    integer is `400` `invalid_query`. Other methods are `405`.
 
 - `GET /api/v1/repos/<repo_key>/issues/<issue_identifier>/transcript`
   - Returns transcript metadata and events for a running, retrying, or watched issue in the selected
