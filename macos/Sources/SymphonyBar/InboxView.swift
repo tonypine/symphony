@@ -337,6 +337,12 @@ struct InboxReviewBody: View {
             ReviewHeader(item: item, toolbar: InboxToolbar.toolbar(for: item, picks: picks), perform: perform, openTicket: openTicket)
             switch item.kind {
             case .plan:
+                if let warning = item.review.unappliedAnswersWarning {
+                    Label(warning, systemImage: "exclamationmark.triangle")
+                        .font(DesignTokens.TypeStyle.callout.font)
+                        .foregroundStyle(DesignTokens.Status.you.tint)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 PlanQuestions(questions: item.review.questions, picks: picks, pick: pick, writeIn: writeIn, narrow: narrow)
                 BriefSections(brief: item.review.brief)
                 if !item.review.subTickets.isEmpty { SubTicketsCard(tickets: item.review.subTickets) }

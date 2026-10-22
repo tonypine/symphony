@@ -350,20 +350,25 @@ public struct ConsequenceSheet: Equatable, Identifiable {
             targetState = Self.waitingState
             happens = "Moves \(id) to \(Self.waitingState)" + Self.promotion(item.review.subTickets) + "."
             let open = item.review.questions.count
-            stays = open == 0
-                ? "The plan stays as written. To change it, ask for changes instead."
-                : "The plan stays as written: \(open == 1 ? "its open question is" : "its \(open) open questions are") not answered. To have Symphony apply your answers first, choose Send Decisions instead."
+            if let unapplied = item.review.unappliedAnswersWarning {
+                stays = "\(unapplied) Approving now approves the plan as written, without \(item.review.unappliedAnswers == 1 ? "it" : "them")."
+            } else {
+                stays = open == 0
+                    ? "The plan stays as written. To change it, ask for changes instead."
+                    : "The plan stays as written: \(open == 1 ? "its open question is" : "its \(open) open questions are") not answered. To have Symphony apply your answers first, choose Send Decisions instead."
+            }
         case .sendDecisions:
             title = "Send your answers on \(id)?"
-            // The answers go in place: a person's reply on a plan under review starts its revision run.
+            // Symphony moves a plan under review to Rework to revise it, and an approved plan stays: its answer says
+            // which, so the sheet guesses no state and the app holds the answers for Undo before sending them.
             targetState = nil
             self.picks = picks.answers(item.review.questions)
-            happens = "Records each answer under its question on \(id), and Symphony revises the plan from them. The plan keeps its sub-tickets."
+            happens = "Records each answer under its question on \(id) and moves it to Rework, where Symphony revises the plan from them. The plan keeps its sub-tickets."
             stays = "The plan isn't approved: it comes back to \(item.state ?? "Plan Review") once Symphony has revised it, and you approve it then."
         case .askForChanges:
             title = "Ask for changes to the plan of \(id)?"
             targetState = nil
-            happens = "Posts your request on \(id), and Symphony revises the plan from it. The plan keeps its sub-tickets."
+            happens = "Posts your request on \(id) and moves it to Rework, where Symphony revises the plan from it. The plan keeps its sub-tickets."
             stays = "The plan isn't approved: it comes back to \(item.state ?? "Plan Review") once Symphony has revised it."
         case .rejectPlan:
             title = "Reject the plan of \(id)?"
@@ -516,6 +521,11 @@ public struct ConsequenceSheet: Equatable, Identifiable {
     /// workpad, and Symphony can't take any of that back. Unblock moves nothing, so it says what it did
     /// instead of where the ticket went.
     public func banner(after outcome: MoveOutcome) -> InboxBanner {
+        // Answers or changes that started the plan's revision were held for Undo before they were sent: once Symphony
+        // moved the plan to revise it, there is nothing left to take back.
+        if outcome.moved, [.sendDecisions, .askForChanges].contains(move) {
+            return InboxBanner(itemID: itemID, identifier: identifier, text: "Sent \(sent): revising the plan in \(outcome.toState ?? "Rework")", undo: false)
+        }
         if outcome.moved {
             return InboxBanner(
                 itemID: itemID,

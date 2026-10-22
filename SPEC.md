@@ -5270,8 +5270,9 @@ Minimum endpoints:
       `options`, `recommendation`, `recommended`: the index of the recommended option, null when it
       can't be told), `moves` (`approve`, `change`, `reject`), with `format`
       `parsed`; a brief without a `**What to review:**` line comes as `{"format": "raw",
-      "markdown": ...}`; null without a brief, and `sub_tickets` (`identifier`, `title`, `url`,
-      `state`) in landing order.
+      "markdown": ...}`; null without a brief, `sub_tickets` (`identifier`, `title`, `url`,
+      `state`) in landing order, and `unapplied_answers`: how many of the plan's requests a person
+      answered since the plan last moved into `Plan Review`, which no revision has applied yet.
     - `action`: `title`, `question`, `why`, `if_unanswered`, `unblocks`, `steps`, `options`
       (`label`, `effect`, `recommended`, `tradeoffs`: `kind` and `text`), `recommendation_reason`
       and `requested_at`.
@@ -5322,7 +5323,8 @@ Minimum endpoints:
           "url": "https://linear.app/acme/issue/SHOP-330",
           "review": {
             "brief": {"format": "parsed", "headline": "Approve the saved-searches plan.", "what_to_review": [], "what_changed": [], "decisions": [], "moves": []},
-            "sub_tickets": []
+            "sub_tickets": [],
+            "unapplied_answers": 0
           }
         },
         {
@@ -5616,15 +5618,21 @@ Minimum endpoints:
     | `approve_plan` | a plan in `Plan Review` | the waiting state | none; Symphony promotes its `Backlog` sub-tickets as for a person's approval |
     | `rework` | a plan in `Plan Review` | `Rework` | `reason` (required), posted before the move |
     | `restart` | any open ticket | `In Progress`, after the reset | `reason` (required), posted before the move; the reset (close the pull requests, remove the workspaces, supersede the workpad) runs first, and a reset that fails answers `502` `restart_incomplete` and makes no move |
-    | `decisions` | a plan in `Plan Review` | no move | one comment with `picks` (required, `[{"question", "answer"}]`) |
+    | `decisions` | a plan in `Plan Review` | `Rework` through `plan_revise` for a plan under review (its revision), no move for an approved plan | each pick naming its `request_comment_id` as a reply under that request, the rest in one comment; `picks` are required (`[{"question", "answer", "request_comment_id"}]`) |
+    | `changes` | a plan in `Plan Review` | as `decisions` | `reason` (required), posted before the move |
     | `backlog` | any open ticket | `Backlog` | `note` (optional), posted before the move |
     | `unblock` | any ticket waiting on an access, dispatch-loop or operator-stop hold | no move; the hold clears and the ticket continues in place | one comment, posted after the hold clears |
     | `decide` | any ticket waiting on a `Needs Decision` hold | no move, else the state `move` names (`rework` or `done`), through the guard | the answer, posted as a reply under the request comment `request_comment_id` names; `picks` are required |
     | `undo` | the state the ticket's last move put it in | the state it came from | none |
 
+  - `decisions` and `changes` start the plan's revision themselves, on every round, rather than
+    wait for the plan comment poll: the move to `Rework` is recorded as Symphony's own, so the
+    plan's sub-tickets are kept, and as a `plan_review` `verdict.recorded` and a `phase.entered`
+    event naming the move. When Linear refuses that move, the answers stay posted and the move
+    answers `502` `move_incomplete` (`failed`: `revise`); the plan stays in `Plan Review` and the
+    Inbox counts the answers as `unapplied_answers`. Neither move is undoable.
   - The comments are the Director's, not Symphony's: none starts like a comment Symphony posts
-    itself, so the plan revision trigger counts a `decisions` comment as a person's and revises the
-    plan.
+    itself, so the plan comment poll counts them as a person's too.
   - `undo` takes back the last move on the ticket within 10 seconds of it, only while the ticket is
     still where the move put it and, for an approved plan, before Symphony promoted its sub-tickets;
     otherwise it answers `409`. A comment the move posted stays. A `restart` is never undoable: it
