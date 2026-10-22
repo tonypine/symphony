@@ -36,10 +36,7 @@ defmodule SymphonyElixir.ReviewAgent do
           required(:comments) => [String.t()],
           optional(:findings) => [finding()],
           optional(:reason) => String.t(),
-          optional(:source) => map(),
-          optional(:advisory_notes) => [String.t()],
-          optional(:decision_notes) => [String.t()],
-          optional(:inconclusive) => String.t()
+          optional(:source) => map()
         }
 
   @spec enabled?(Schema.ReviewAgent.t() | nil) :: boolean()
@@ -270,8 +267,9 @@ defmodule SymphonyElixir.ReviewAgent do
   @doc """
   Keeps a review from requesting changes against a person's recorded decision
   (`SymphonyElixir.Decisions`): a finding that names a decision recorded on the ticket
-  (`"decision": "D1"`, read from its store record) becomes a decision note, and a change request
-  left with no other finding approves. A finding that names no recorded decision stays a finding.
+  (`"decision": "D1"`, read from its store record) is dropped from the change request. A change
+  request left with no other finding approves, with the dropped findings as its comments (decision
+  notes). A finding that names no recorded decision stays a finding.
   `opts[:repo_key]` names the ticket's repo.
   """
   @spec honour_decisions(result(), Issue.t(), keyword()) :: result()
@@ -288,8 +286,8 @@ defmodule SymphonyElixir.ReviewAgent do
   end
 
   defp honoured(result, [], _kept), do: result
-  defp honoured(result, notes, []), do: Map.merge(result, %{verdict: :approve, findings: [], comments: notes, decision_notes: notes})
-  defp honoured(result, notes, kept), do: Map.merge(result, %{findings: kept, comments: Enum.map(kept, &finding_comment/1), decision_notes: notes})
+  defp honoured(result, notes, []), do: Map.merge(result, %{verdict: :approve, findings: [], comments: notes})
+  defp honoured(result, _notes, kept), do: Map.merge(result, %{findings: kept, comments: Enum.map(kept, &finding_comment/1)})
 
   defp decision_note(finding), do: "Against decision #{finding.decision}, so a note, not a change request: " <> finding_comment(finding)
 

@@ -213,6 +213,37 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
       refute Map.has_key?(sub_run, :reviewer_profile)
     end
 
+    test "a Code Review run records its reviewer's profile from code_review's model and effort", ctx do
+      write_profile_workflow!(ctx,
+        review_agent: %{enabled: true, kind: "claude", command: ctx.fake_claude, model: "claude-sonnet-5-5", effort: "low"}
+      )
+
+      review_ticket = issue("issue-profile-code-review", "MT-PROFILE-CR", %{state: "Code Review"})
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [review_ticket])
+      repo_key = Config.repo_key!()
+
+      # Code Review dispatches on a green head only.
+      assert {:ok, :changed} = RunStore.record_ci_state(repo_key, review_ticket.id, "abc123", "green", DateTime.utc_now())
+      SymphonyElixir.PrWatchSupport.put_watch!(repo_key, review_ticket.id, head_sha: "abc123", decision: :dispatch)
+      on_exit(fn -> RunStore.delete_ticket_state(repo_key, review_ticket.id) end)
+
+      orchestrator_name = Module.concat(__MODULE__, :CodeReviewDispatchOrchestrator)
+      {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+      on_exit(fn -> stop_process(pid) end)
+
+      {review_run, _log} =
+        with_log(fn ->
+          send(pid, :run_poll_cycle)
+          wait_for_run("issue-profile-code-review")
+        end)
+
+      assert %{
+               run_kind: "code_review",
+               reviewer_profile: %{run_kind: "code_review", model: "claude-sonnet-5-5", effort: "low"}
+             } = review_run
+    end
+
     test "dispatches a `plan` ticket as a breakdown run with the breakdown run profile", ctx do
       write_profile_workflow!(ctx)
       plan = issue("issue-profile-plan", "MT-PROFILE-3", %{labels: ["Plan"]})

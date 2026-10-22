@@ -756,7 +756,7 @@ defmodule SymphonyElixir.ReviewAgentTest do
 
         opts = [review_agent_module: SequenceReviewer]
 
-        assert {:ok, %{verdict: :approve, findings: [], decision_notes: [note], comments: [note]}} =
+        assert {:ok, %{verdict: :approve, findings: [], comments: [note]}} =
                  ReviewAgent.evaluate(decided_issue(), repo, Config.settings!(), opts)
 
         assert note =~ "Against decision D1, so a note, not a change request: The legacy partials are still here. (feature.txt:1-1)"
@@ -776,9 +776,9 @@ defmodule SymphonyElixir.ReviewAgentTest do
       honoured = ReviewAgent.honour_decisions(result, decided_issue())
 
       assert %{verdict: :request_changes, findings: [%{summary: "Unknown decision."}, %{summary: "Plain."}]} = honoured
-      assert %{comments: comments, decision_notes: [note]} = honoured
+      assert %{comments: comments} = honoured
 
-      assert note =~ "Against decision D1"
+      # The decided finding is dropped: what is left asks for changes.
       assert comments == ["Unknown decision. (feature.txt:1-1) Suggested fix: Remove it.", "Plain. (feature.txt:1-1) Suggested fix: Remove it."]
     end
 
