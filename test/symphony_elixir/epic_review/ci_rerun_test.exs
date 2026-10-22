@@ -140,6 +140,44 @@ defmodule SymphonyElixir.EpicReview.CiRerunTest do
     assert length(signals("ci_rerun")) == 2
   end
 
+  test "a run GitHub cancelled is rerun and waited on, twice per run and commit, and never spends the failed run's rerun" do
+    assert CiRerun.cancel_signal() == "ci_cancel_rerun"
+    cancelled = [ci_run("701", "CANCELLED", %{workflow_name: "macos"}), ci_run("702", "SUCCESS")]
+
+    log = capture_log(fn -> assert {:wait, [%{id: "701"}]} = check(cancelled) end)
+    assert log =~ "Epic review reran the cancelled CI on feed00112233: macos (#{@runs}/701); GitHub cancelled it, which is no failure"
+    assert reruns() == [["run", "rerun", "701", "--failed", "-R", "acme/app"]]
+    assert [%{details: %{sha: @sha, run: "701", workflow: "macos"}}] = signals("ci_cancel_rerun")
+    assert [%{details: %{sha: @sha}}] = signals("ci_wait_started")
+    assert signals("ci_rerun") == []
+
+    # Cancelled again: rerun once more; a third time the review goes on, with nothing filed as a failure.
+    assert {:wait, _runs} = check(cancelled)
+    assert {:proceed, nil} = check(cancelled)
+    assert [["run", "rerun", "701" | _rest]] = reruns()
+    assert length(signals("ci_cancel_rerun")) == 2
+    assert signals("ci_rerun") == []
+
+    # A failed run still gets its one rerun beside a cancelled one past its reruns.
+    assert {:wait, [%{id: "703"}]} = check(cancelled ++ [ci_run("703", "FAILURE")])
+    assert [["run", "rerun", "703" | _rest]] = reruns()
+
+    # Another commit's cancelled run is rerun afresh.
+    assert {:wait, _runs} = check(cancelled, [], @other_sha)
+  end
+
+  test "a cancelled run's rerun it cannot record, or gh refuses, is not waited on" do
+    cancelled = [ci_run("701", "CANCELLED")]
+
+    log = capture_log(fn -> assert {:proceed, nil} = check(cancelled, [], @sha, nil) end)
+    assert log =~ "Epic review did not rerun the cancelled run 701 on feed00112233: it could not record the rerun"
+    assert reruns() == []
+
+    log = capture_log(fn -> assert {:proceed, nil} = check(cancelled, gh_runner: gh({"HTTP 403", 1})) end)
+    assert log =~ "Epic review could not rerun run 701 on feed00112233"
+    assert signals("ci_wait_started") == []
+  end
+
   describe "test_names/1" do
     test "reads ExUnit, Go, XCTest and Swift Testing failures, once each and in order" do
       log = """

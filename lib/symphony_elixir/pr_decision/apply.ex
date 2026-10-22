@@ -8,15 +8,20 @@ defmodule SymphonyElixir.PrDecision.Apply do
 
   An action is applied once per head and rule in a stay in the phase: the stay's `applied` ledger
   holds what was done, so a repeated tick or a duplicate trigger never repeats a move, a rerun, an
-  update-branch or a fix-ticket filing. An action that fails is not recorded, so the next tick
-  decides again from fresh facts.
+  update-branch or a fix-ticket filing. A cancelled run's rerun (R19) is the exception: it is kept
+  per cancellation instead (`SymphonyElixir.PrWatch.Attempts.new_cancellations/2`), so a second
+  workflow cancelled on the head, or a rerun GitHub cancelled again, is rerun too. An action that
+  fails is not recorded, so the next tick decides again from fresh facts.
 
   The actions:
 
     * `wait`, `dispatch` – nothing to do here: a wait is recorded with its reason, and the
       orchestrator dispatches a ticket whose decision is `dispatch` (or `land_agent`). A draft PR in
       `Merging` (R10) has auto-merge turned off while it waits; marking it ready arms it again (R30).
-    * `rerun_failed` – reruns the failed jobs of the head's failed workflow runs, once per head.
+    * `rerun_failed` – reruns the failed jobs of the head's failed workflow runs, once per head
+      (R22). R19 reruns the head's newly cancelled runs that are under
+      `SymphonyElixir.PrDecision.max_cancel_reruns/0`, each cancellation once and with no attempt
+      spent; with no new cancellation it waits on CI for the rerun it sent to report.
     * `ci_fix` – sends the ticket to CI Fix for a red head or a conflict, recording its origin, and
       spends one red or conflict attempt (`SymphonyElixir.PrWatch.Attempts`). In `Merging` auto-merge
       goes off first. In CI Fix itself the ticket stays and the next run takes the fix; the run sent
@@ -53,8 +58,10 @@ defmodule SymphonyElixir.PrDecision.Apply do
       it for this PR, rerun, or fix the workflow in Rework; the answer is read back by
       `SymphonyElixir.PrWatch.Repo`, `unreported_answer/1`), and a PR whose only red check is one a
       person must clear (R18: allow the change, an option that unlocks the protected paths the PR
-      changes for the ticket (`SymphonyElixir.PathUnlock`), or drop the change in Rework). Answering
-      an R17 or R18 Rework option moves the ticket there.
+      changes for the ticket (`SymphonyElixir.PathUnlock`), or drop the change in Rework), and a run
+      GitHub cancelled again after its reruns (R19a: keep retrying, or wait; `cancelled_answer/1`
+      reads the answer back, and once a person chose to wait nothing more is asked on the head).
+      Answering an R17 or R18 Rework option moves the ticket there.
 
   The CI rows with `pull_requests.checks` off and the landing rows with auto-merge off are recorded
   as the decision without an action. A check red on the base too (R23) is a wait on CI: nothing to
@@ -91,14 +98,14 @@ defmodule SymphonyElixir.PrDecision.Apply do
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrDecision.{Action, Facts}
-  alias SymphonyElixir.PrWatch.Attempts
+  alias SymphonyElixir.PrWatch.{Attempts, Fetch}
 
   @rework_state "Rework"
   @merging_state "Merging"
   @in_progress_state "In Progress"
 
   # The CI rows (`pull_requests.checks`).
-  @ci_rules ["R17", "R19", "R20", "R21", "R22"]
+  @ci_rules ["R17", "R19", "R19a", "R20", "R21", "R22"]
   # The landing rows, and a conflict in `Merging` (`pull_requests.auto_merge`).
   @landing_rules ["R3", "R28", "R29", "R30", "R31"]
   @conflict_rules ["R14", "R14a", "R15", "R15a"]
@@ -111,6 +118,9 @@ defmodule SymphonyElixir.PrDecision.Apply do
   @proceed "Proceed without it for this PR"
   @rerun "Rerun the checks"
   @fix_in_rework "Fix the workflow in Rework"
+  # R19a's options, and what each answer does to the head's cancelled runs (`cancelled_answer/1`).
+  @keep_retrying "Keep retrying"
+  @wait "Wait"
 
   @typedoc "One action done in the stay: the head and rule it was for, its kind and when."
   @type entry :: %{head_sha: String.t() | nil, rule: String.t(), kind: Action.kind(), at: DateTime.t()}
@@ -168,7 +178,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
       not owned?(action, ctx) -> recorded(action, ctx)
       no_op?(action, ctx) -> recorded(action, ctx)
       already_sent?(action, ctx) -> recorded(%{action | reason: "The CI Fix run already sent for this head takes the fix"}, ctx)
-      action.kind != :wait_for_competitors and applied?(ctx, action.rule) -> recorded(action, ctx)
+      done = already_done(action, ctx) -> recorded(done, ctx)
       true -> action |> perform(ctx) |> finish(action, ctx)
     end
   end
@@ -178,6 +188,41 @@ defmodule SymphonyElixir.PrDecision.Apply do
   def applied?(ledger, rule, head) when is_list(ledger), do: Enum.any?(ledger, &(&1.rule == rule and &1.head_sha == head))
 
   defp applied?(ctx, rule), do: applied?(ctx.applied, rule, head(ctx))
+
+  # What applying would only repeat, as it is recorded instead; nil when there is something to do. A
+  # wait on competitors may come back on the same head, and R19 is kept per cancellation: with none
+  # new, it waits for the rerun it sent. Once a person chose to wait, R19a asks nothing more.
+  defp already_done(%Action{kind: :wait_for_competitors}, _ctx), do: nil
+  defp already_done(%Action{rule: "R19"}, ctx), do: if(cancels_due(ctx) == [], do: rerun_reporting(ctx))
+
+  defp already_done(%Action{rule: "R19a"} = action, ctx) do
+    if waiting_by_choice?(ctx), do: chose_to_wait(ctx), else: applied_action(action, ctx)
+  end
+
+  defp already_done(action, ctx), do: applied_action(action, ctx)
+
+  defp applied_action(action, ctx), do: if(applied?(ctx, action.rule), do: action)
+
+  defp cancels_due(ctx), do: Attempts.cancels_due(ctx.attempts, ctx.read, PrDecision.max_cancel_reruns())
+
+  # R19 with no new cancellation: the rerun it sent hasn't reported yet.
+  defp rerun_reporting(ctx) do
+    Action.new!("R19", :wait,
+      reason: "Symphony reran #{cancelled_checks(ctx)} after GitHub cancelled it: waiting for the rerun to report",
+      owner: :ci,
+      clears_when: "the rerun reports"
+    )
+  end
+
+  defp waiting_by_choice?(ctx), do: match?(%{cancels: %{answer: :wait}}, Attempts.normalize(ctx.attempts))
+
+  defp chose_to_wait(ctx) do
+    Action.new!("R19a", :wait,
+      reason: "A person chose to wait on #{cancelled_checks(ctx)}, which GitHub keeps cancelling on #{pr_name(ctx)}",
+      owner: :person,
+      clears_when: "a person reruns the check or new changes are pushed"
+    )
+  end
 
   # In CI Fix, the run the ticket entered the lane for takes that fix: no second attempt is spent.
   defp already_sent?(%Action{kind: :ci_fix, args: %{cause: cause}}, %{facts: %{phase: :ci_fix}} = ctx), do: Attempts.sent?(ctx.attempts, head(ctx), cause)
@@ -227,14 +272,25 @@ defmodule SymphonyElixir.PrDecision.Apply do
 
   # The actions.
 
+  # Only the runs whose cancellation is new and under the bound: a cancelled run is rerun once per
+  # cancellation, and spends no attempt.
+  defp perform(%Action{kind: :rerun_failed, rule: "R19"} = action, ctx) do
+    due = cancels_due(ctx)
+    run_ids = run_ids(due)
+
+    with :ok <- rerun(run_ids, ctx) do
+      Logger.info("PR watch reran the cancelled checks of #{label(ctx)} rule=#{action.rule} pr_url=#{pr_url(ctx)} head_sha=#{head(ctx)} run_ids=#{Enum.join(run_ids, ",")}")
+      {:ok, %{attempts: Attempts.cancel_rerun(ctx.attempts, head(ctx), due)}}
+    end
+  end
+
   defp perform(%Action{kind: :rerun_failed} = action, ctx) do
     run_ids = ctx |> failed_checks() |> run_ids()
 
     with :ok <- rerun(run_ids, ctx) do
       checks = ctx |> failed_checks() |> Enum.map(& &1.name)
       Logger.info("PR watch reran the failed checks of #{label(ctx)} rule=#{action.rule} pr_url=#{pr_url(ctx)} head_sha=#{head(ctx)} run_ids=#{Enum.join(run_ids, ",")}")
-      attempts = if action.rule == "R22", do: Attempts.rerun(ctx.attempts, head(ctx), checks), else: ctx.attempts
-      {:ok, %{attempts: attempts}}
+      {:ok, %{attempts: Attempts.rerun(ctx.attempts, head(ctx), checks)}}
     end
   end
 
@@ -390,6 +446,15 @@ defmodule SymphonyElixir.PrDecision.Apply do
     end
   end
 
+  defp perform(%Action{kind: :decision, rule: "R19a"}, ctx) do
+    request = cancelled_request(ctx)
+
+    with :ok <- ask(request, "check_cancelled", ctx, nil) do
+      prior = Enum.count(Map.get(ctx, :decisions, []), &same_title?(&1, request.title))
+      {:ok, %{attempts: Attempts.cancel_asked(ctx.attempts, head(ctx), request.title, prior)}}
+    end
+  end
+
   # R18 offers to unlock the protected paths the PR changes, as the PR watch read them
   # (`SymphonyElixir.ProtectedPathsGate.changed_entries/2`). A read without them waits for the next
   # tick rather than asking a question whose Allow would unlock nothing.
@@ -441,7 +506,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
         head_ref_name: read_field(ctx, :head_ref),
         is_cross_repository: false,
         head_repository: nil,
-        failed_checks: failed_checks(ctx),
+        failed_checks: failures(ctx),
         log_excerpt: excerpt,
         first_error: error,
         earlier_failures: ctx.attempts.fix_failures,
@@ -478,7 +543,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   defp failed_log(ctx) do
     case read_field(ctx, :failed_log) do
       %{excerpt: _excerpt, error: _error} = log -> {:ok, log}
-      _none -> FailedLog.read(run_ids(failed_checks(ctx)), ctx.settings.ci.log_excerpt_lines, github_opts(ctx))
+      _none -> FailedLog.read(run_ids(failures(ctx)), ctx.settings.ci.log_excerpt_lines, github_opts(ctx))
     end
   end
 
@@ -518,7 +583,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
         pr_title: read_field(ctx, :pr_title),
         state: target,
         reason: "CI failed; dispatching agent",
-        metadata: %{source: "pr_watch", commit_sha: head(ctx), retry_count: ctx.attempts.red + 1, failed_checks: Enum.map(failed_checks(ctx), &Map.take(&1, [:name, :run_id, :conclusion]))}
+        metadata: %{source: "pr_watch", commit_sha: head(ctx), retry_count: ctx.attempts.red + 1, failed_checks: Enum.map(failures(ctx), &Map.take(&1, [:name, :run_id, :conclusion]))}
       })
     end
   end
@@ -866,6 +931,52 @@ defmodule SymphonyElixir.PrDecision.Apply do
     end
   end
 
+  defp cancelled_request(ctx) do
+    label = label(ctx)
+    pr = Request.pull_request(pr_url(ctx)) || "its pull request"
+    checks = ctx |> cancelled_names() |> Enum.join(", ")
+    reruns = PrDecision.max_cancel_reruns()
+
+    %{
+      title: "Check #{checks} keeps being cancelled on #{label}",
+      question:
+        "GitHub cancelled the #{checks} check on #{pr} of #{label} #{reruns + 1} times in a row without running it. " <>
+          "Should Symphony keep retrying it, or wait?",
+      why:
+        "GitHub cancels a check it can't find a machine for, as happens when its macOS machines are busy. " <>
+          "Symphony reran the check #{reruns} times, and GitHub cancelled it again each time. " <>
+          "A cancelled check is not a failure of the change, so no fix run is spent on it.",
+      if_unanswered: "#{label} stays in #{ctx.issue.state} and waits for the check.",
+      options: [
+        %{
+          label: @keep_retrying,
+          effect: "Symphony reruns the check up to #{reruns} more times while GitHub keeps cancelling it, then asks again",
+          recommended: true,
+          tradeoffs: [%{kind: "good", text: "nothing to do by hand once GitHub has machines again"}]
+        },
+        %{
+          label: @wait,
+          effect: "Symphony stops rerunning the check on these changes; #{label} waits until a person reruns it on GitHub or new changes are pushed",
+          tradeoffs: [%{kind: "cost", text: "the ticket waits until someone reruns the check"}]
+        }
+      ],
+      recommendation_reason: "A shortage of GitHub machines usually passes within the hour, and a rerun costs nothing."
+    }
+  end
+
+  @doc """
+  What a person's answer to R19a picks, read from the recorded answer text (an option's number or
+  label): `:rerun` (keep retrying), `:wait`, or `:other` for an answer that picks neither.
+  """
+  @spec cancelled_answer(String.t() | nil) :: :rerun | :wait | :other
+  def cancelled_answer(answer) do
+    case MergeConfirmation.picked_option([@keep_retrying, @wait], List.wrap(answer)) do
+      1 -> :rerun
+      2 -> :wait
+      nil -> :other
+    end
+  end
+
   @doc "Whether a recorded decision answers a question with `title`, ignoring case, spacing and Linear's escapes."
   @spec same_title?(map(), String.t()) :: boolean()
   def same_title?(%{title: recorded}, title) when is_binary(recorded), do: comparable(recorded) == comparable(title)
@@ -901,6 +1012,30 @@ defmodule SymphonyElixir.PrDecision.Apply do
   defp state_name(:merging, _settings), do: @merging_state
 
   defp failed_checks(ctx), do: read_field(ctx, :failed_checks) || []
+
+  # What a CI Fix run is sent for: the checks that failed, never one GitHub cancelled beside them.
+  defp failures(ctx), do: ctx |> failed_checks() |> Fetch.failures()
+
+  # The head's cancelled checks by name: the newly cancelled ones, else every cancelled one.
+  defp cancelled_names(ctx) do
+    checks =
+      case Attempts.new_cancellations(ctx.attempts, ctx.read) do
+        [] -> Enum.filter(failed_checks(ctx), &(Map.get(&1, :conclusion) == "CANCELLED"))
+        new -> new
+      end
+
+    case for(%{name: name} <- checks, is_binary(name), uniq: true, do: name) do
+      [] -> [ctx.facts.failing_check || "a check"]
+      names -> names
+    end
+  end
+
+  defp cancelled_checks(ctx) do
+    case cancelled_names(ctx) do
+      [name] -> "the `#{name}` check"
+      names -> "the #{Enum.map_join(names, ", ", &"`#{&1}`")} checks"
+    end
+  end
 
   defp run_ids(checks), do: checks |> Enum.map(&Map.get(&1, :run_id)) |> Enum.filter(&(is_binary(&1) and &1 != "")) |> Enum.uniq()
 

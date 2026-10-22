@@ -321,6 +321,64 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
       assert {:ok, %{red_kind: :cancelled, past_human_only: nil}} = read({response(pull(cancelled)), 0})
     end
 
+    test "TP-1170: a cancellation beside a real failure is never named as the failure" do
+      mixed = rollup([check("e2e", "CANCELLED", workflow: "macos-e2e", run: 300, job: 7), check("test", "FAILURE", run: 100, job: 8)])
+      rest = %{:runs => base_runs([{"ci", "success", 1}]), {:log, "100"} => failed_log([{"test", "** (MatchError) no match"}])}
+
+      assert {:ok, read} = read({response(pull(mixed)), 0}, rest)
+      assert %{ci: :red, red_kind: :failure, failing_check: "test", past_cancelled: nil} = read
+      assert [%{name: "e2e", run_id: "300", job_id: 7, conclusion: "CANCELLED"}, %{name: "test", job_id: 8}] = read.failed_checks
+
+      # The failure is read from the failed run only, not the cancelled one.
+      read = Fetch.failure(read, nil, gh_runner: runner({response(pull(mixed)), 0}, rest))
+      assert %{failure: %{check: "test", error: "** (MatchError) no match"}} = read
+      assert_received {:gh, ["run", "view", "100", "--log-failed" | _rest]}
+      refute_received {:gh, ["run", "view", "300", "--log-failed" | _rest]}
+
+      assert Fetch.failures([%{name: "e2e", conclusion: "CANCELLED"}]) == [%{name: "e2e", conclusion: "CANCELLED"}]
+    end
+
+    test "TP-1170: a head red only on cancellations reads the required checks, to set aside the ones the base doesn't require" do
+      rest = %{
+        @rules => {Jason.encode!([%{"type" => "required_status_checks", "parameters" => %{"required_status_checks" => [%{"context" => "make all"}]}}]), 0},
+        @branch => {Jason.encode!(%{"name" => "main"}), 0}
+      }
+
+      install = check("install script", "CANCELLED", workflow: "macos", run: 300)
+      passed = rollup([check("make all", "SUCCESS"), install])
+      assert {:ok, read} = read({response(pull(passed)), 0}, rest, required_checks: %{})
+      assert %{ci: :red, red_kind: :cancelled, past_cancelled: :green, required: {"main", ["make all"]}} = read
+      assert_received {:gh, ["api", @rules]}
+
+      # What the other checks say: running while one runs, waiting on a required check never reported.
+      known = [required_checks: %{"main" => ["make all"]}]
+      running = rollup([check("make all", nil), install])
+      assert {:ok, %{past_cancelled: :pending}} = read({response(pull(running)), 0}, %{}, known)
+      missing = rollup([check("lint", "SUCCESS"), install])
+      assert {:ok, %{past_cancelled: :required_missing}} = read({response(pull(missing)), 0}, %{}, known)
+      assert {:ok, %{past_cancelled: :green}} = read({response(pull(rollup([install]))), 0})
+
+      # A required check cancelled, or required checks that can't be read: never set aside.
+      required = [required_checks: %{"main" => ["install script"]}]
+      assert {:ok, %{red_kind: :cancelled, past_cancelled: nil}} = read({response(pull(passed)), 0}, %{}, required)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        unreadable = %{@rules => {"boom", 1}}
+
+        assert {:ok, %{red_kind: :cancelled, past_cancelled: nil}} =
+                 read({response(pull(passed)), 0}, unreadable, required_checks: %{})
+      end)
+
+      # A real failure reads no required checks.
+      flush_gh()
+      failed = rollup([check("make all", "FAILURE"), install])
+
+      assert {:ok, %{red_kind: :failure, past_cancelled: nil}} =
+               read({response(pull(failed)), 0}, %{runs: base_runs([])}, required_checks: %{})
+
+      refute_received {:gh, ["api", @rules]}
+    end
+
     test "TP-1073: a check that passed on the base isn't red there because another job of its workflow failed" do
       head = rollup([check("coverage (3/4)", "SUCCESS", workflow: "make-all"), check("coverage (4/4)", "FAILURE", workflow: "make-all")])
 

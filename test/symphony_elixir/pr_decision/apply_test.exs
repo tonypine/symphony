@@ -234,13 +234,63 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     end
 
     test "a cancelled run's rerun (R19) spends nothing, and a head with no run id has nothing to rerun" do
-      assert %{outcome: :applied, attempts: attempts} = Apply.apply(action("R19", :rerun_failed), ctx(:qa))
-      assert attempts == Attempts.new()
+      cancelled = read(failed_checks: [%{name: "specs", run_id: "11", job_id: 101, workflow_name: "ci", conclusion: "CANCELLED"}])
+      assert %{outcome: :applied, attempts: attempts} = Apply.apply(action("R19", :rerun_failed), ctx(:qa, read: cancelled))
+      assert_received {:rerun_failed, "11", [repo: "acme/app"]}
+      assert %{attempts | cancels: nil} == Attempts.new()
+      assert attempts.reruns == %{}
 
       assert %{outcome: :applied, attempts: %{reruns: %{"head-1" => ["specs"]}}} =
                Apply.apply(action("R22", :rerun_failed), ctx(:qa, read: read(failed_checks: [%{name: "specs", run_id: nil}])))
 
       refute_received {:rerun_failed, nil, _opts}
+    end
+
+    test "R19 reruns every new cancellation on the head: a second workflow's, and a rerun cancelled again" do
+      e2e = %{name: "e2e", run_id: "21", job_id: 201, workflow_name: "macos-e2e", conclusion: "CANCELLED"}
+      install = %{name: "install script", run_id: "22", job_id: 202, workflow_name: "macos", conclusion: "CANCELLED"}
+      rerun = action("R19", :rerun_failed)
+
+      # The first workflow's run is cancelled and rerun.
+      assert %{outcome: :applied, attempts: attempts, applied: applied} = Apply.apply(rerun, ctx(:code_review, read: read(failed_checks: [e2e])))
+      assert_received {:rerun_failed, "21", _opts}
+
+      # Minutes later the other workflow's run is cancelled on the same head: rerun too, though R19 is in the ledger.
+      ctx = ctx(:code_review, read: read(failed_checks: [install]), attempts: attempts, applied: applied)
+      assert %{outcome: :applied, attempts: attempts, applied: applied} = Apply.apply(rerun, ctx)
+      assert_received {:rerun_failed, "22", _opts}
+      refute_received {:rerun_failed, "21", _opts}
+
+      # The first rerun's attempt is cancelled again: new job ids, rerun once more.
+      again = %{e2e | job_id: 211}
+      ctx = ctx(:code_review, read: read(failed_checks: [again]), attempts: attempts, applied: applied)
+      assert %{outcome: :applied, attempts: attempts} = Apply.apply(rerun, ctx)
+      assert_received {:rerun_failed, "21", _opts}
+      assert %{"21" => %{reruns: 2, jobs: ["201", "211"], checks: ["e2e"]}, "22" => %{reruns: 1}} = attempts.cancels.runs
+      assert %{red: 0, reruns: reruns} = attempts
+      assert reruns == %{}
+    end
+
+    test "R19 with no new cancellation waits on CI for the rerun it sent, without rerunning it again" do
+      e2e = %{name: "e2e", run_id: "21", job_id: 201, workflow_name: "macos-e2e", conclusion: "CANCELLED"}
+      lint = %{e2e | name: "lint", job_id: 202}
+      attempts = Attempts.cancel_rerun(Attempts.new(), "head-1", [e2e, lint])
+
+      assert %{outcome: :recorded, action: action, applied: []} = Apply.apply(action("R19", :rerun_failed), ctx(:qa, read: read(failed_checks: [e2e]), attempts: attempts))
+      assert %Action{rule: "R19", kind: :wait, owner: :ci, clears_when: "the rerun reports"} = action
+      assert action.reason == "Symphony reran the `e2e` check after GitHub cancelled it: waiting for the rerun to report"
+
+      assert %{action: %{reason: reason}} = Apply.apply(action("R19", :rerun_failed), ctx(:qa, read: read(failed_checks: [e2e, lint]), attempts: attempts))
+      assert reason == "Symphony reran the `e2e`, `lint` checks after GitHub cancelled it: waiting for the rerun to report"
+
+      # A read with no cancelled check named left: the failing check names it.
+      assert %{action: %{reason: "Symphony reran the `specs` check after GitHub cancelled it: waiting for the rerun to report"}} =
+               Apply.apply(action("R19", :rerun_failed), ctx(:qa, read: read(failed_checks: []), attempts: attempts))
+
+      # A run already at its bound is R19a's; R19 doesn't rerun it.
+      capped = put_in(attempts.cancels.runs["21"].reruns, 2)
+      assert %{outcome: :recorded} = Apply.apply(action("R19", :rerun_failed), ctx(:qa, read: read(failed_checks: [%{e2e | job_id: 299}]), attempts: capped))
+      refute_received {:rerun_failed, _run_id, _opts}
     end
 
     test "a rerun GitHub refuses leaves the head to be decided again" do
@@ -599,6 +649,43 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       # No ticket record of decisions: none came before.
       Hold.clear(@repo_key, @issue_id, :needs_decision)
       assert %{attempts: %{unreported: %{asked: %{prior: 0}}}} = Apply.apply(action, Map.delete(ctx, :decisions))
+    end
+
+    test "a run GitHub cancelled again after its reruns asks to keep retrying or wait, naming the check and the cause (R19a)" do
+      action = action("R19a", :decision, args: %{question: "q", options: []}, owner: :person)
+      install = %{name: "install script", run_id: "22", job_id: 205, workflow_name: "macos", conclusion: "CANCELLED"}
+      attempts = %{Attempts.new() | cancels: %{head_sha: "head-1", runs: %{"22" => %{reruns: 2, jobs: ["202", "204"], checks: ["install script"]}}, asked: nil, answer: nil}}
+      decisions = [%{key: "c1", title: "Check install script keeps being cancelled on TP-7", answer: "2"}]
+      ctx = ctx(:code_review, read: read(failed_checks: [install]), attempts: attempts) |> Map.put(:decisions, decisions)
+
+      assert %{outcome: :applied, attempts: attempts} = Apply.apply(action, ctx)
+      assert %{asked: %{title: "Check install script keeps being cancelled on TP-7", prior: 1}, answer: nil} = attempts.cancels
+
+      assert_received {:comment, @issue_id, "## Decision needed: Check install script keeps being cancelled on TP-7" <> body}
+      assert body =~ "GitHub cancelled the install script check on PR #7 of TP-7 3 times in a row without running it."
+      assert body =~ "GitHub cancels a check it can't find a machine for"
+      assert body =~ "1. **Keep retrying** (recommended)"
+      assert body =~ "2. **Wait**"
+      assert %{decision: %{options: options} = decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      refute decision[:confirm]
+      assert Enum.map(options, & &1.label) == ["Keep retrying", "Wait"]
+      signals = TicketState.recent_signals(RunStore.get_ticket_state(@repo_key, @issue_id))
+      assert [%{name: "decision requested", details: %{reason: "check_cancelled"}} | _] = signals
+      refute_received {:rerun_failed, _run_id, _opts}
+
+      # A person chose to wait: nothing more is asked on the head, and the ticket waits on a person.
+      waited = Attempts.cancel_answer(attempts, :wait)
+      assert %{outcome: :recorded, action: wait} = Apply.apply(action, %{ctx | attempts: waited})
+      assert %Action{rule: "R19a", kind: :wait, owner: :person, clears_when: "a person reruns the check or new changes are pushed"} = wait
+      assert wait.reason == "A person chose to wait on the `install script` check, which GitHub keeps cancelling on PR #7"
+    end
+
+    test "an answer to R19a picks keep retrying or wait by number or label, or none" do
+      assert Apply.cancelled_answer("1") == :rerun
+      assert Apply.cancelled_answer("Keep retrying") == :rerun
+      assert Apply.cancelled_answer("Wait") == :wait
+      assert Apply.cancelled_answer("2") == :wait
+      assert Apply.cancelled_answer("hmm") == :other
     end
 
     test "only protected paths red asks a person in any phase: allow the change, or Rework (R18, G10)" do

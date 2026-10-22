@@ -18,7 +18,11 @@ defmodule SymphonyElixir.PrWatch.Attempts do
 
   It also keeps the heads whose failed checks were rerun once (`rerun_done`), with the checks each
   rerun named, so a rerun whose checks dropped out of the rollup reads as running rather than green
-  (`rerun_pending?/2`); each red run's failing check and first error line (`fix_failures`, the fix
+  (`rerun_pending?/2`); the current head's cancelled runs Symphony reran (`cancels`, R19): per
+  workflow run, how many times and which cancelled jobs each rerun answered, so every new
+  cancellation of a run is rerun once, a second workflow's as much as the first's, until the run
+  reaches `SymphonyElixir.PrDecision.max_cancel_reruns/0` and R19a asks a person, whose answer is kept
+  on the head too; each red run's failing check and first error line (`fix_failures`, the fix
   ticket's evidence); the fix ticket a backstop filed; since when a `Merging` head has been
   blocked by branch protection on green checks (`landing_timed_out`); the head and cause the last
   CI Fix run was sent for, so a ticket that entered CI Fix doesn't spend a second attempt on the
@@ -67,10 +71,29 @@ defmodule SymphonyElixir.PrWatch.Attempts do
           answer: :proceed | :rework | nil
         }
 
+  @typedoc """
+  One cancelled workflow run of the head Symphony reran: how many times, the cancelled jobs those
+  reruns answered (a rerun's new attempt cancelled again has new job ids), and the checks the last
+  rerun named.
+  """
+  @type cancelled_run :: %{reruns: non_neg_integer(), jobs: [String.t()], checks: [String.t()]}
+
+  @typedoc """
+  The head's cancelled runs Symphony reran, by run id, the question R19a asked about them (its
+  title, and how many decisions with that title the ticket held before), and the person's answer.
+  """
+  @type cancels :: %{
+          head_sha: String.t() | nil,
+          runs: %{optional(String.t()) => cancelled_run()},
+          asked: %{title: String.t(), prior: non_neg_integer()} | nil,
+          answer: :wait | nil
+        }
+
   @type t :: %{
           red: non_neg_integer(),
           conflict: non_neg_integer(),
           reruns: %{optional(String.t()) => [String.t()]},
+          cancels: cancels() | nil,
           fix_failures: [Facts.failure()],
           streak: [Facts.failure()],
           failure: Facts.failure() | nil,
@@ -93,6 +116,7 @@ defmodule SymphonyElixir.PrWatch.Attempts do
       red: 0,
       conflict: 0,
       reruns: %{},
+      cancels: nil,
       fix_failures: [],
       streak: [],
       failure: nil,
@@ -113,6 +137,7 @@ defmodule SymphonyElixir.PrWatch.Attempts do
       red: count(Map.get(attempts, :red)),
       conflict: count(Map.get(attempts, :conflict)),
       reruns: reruns(Map.get(attempts, :reruns)),
+      cancels: cancels(Map.get(attempts, :cancels)),
       fix_failures: failures(Map.get(attempts, :fix_failures)),
       streak: failures(Map.get(attempts, :streak)),
       failure: attempts |> Map.get(:failure) |> List.wrap() |> failures() |> List.first(),
@@ -130,7 +155,7 @@ defmodule SymphonyElixir.PrWatch.Attempts do
 
   @doc "The facts these attempts fill, as `SymphonyElixir.PrWatch.Fetch.facts/2` takes them from the ticket."
   @spec fact_keys() :: [atom()]
-  def fact_keys, do: [:red_attempts, :conflict_attempts, :rerun_done, :same_failure_streak, :fix_failures, :landing_timed_out, :head_origin]
+  def fact_keys, do: [:red_attempts, :conflict_attempts, :rerun_done, :cancel_reruns, :same_failure_streak, :fix_failures, :landing_timed_out, :head_origin]
 
   @doc """
   The attempts after this tick's `read` of the PR (nil when the ticket has none), before deciding.
@@ -154,6 +179,7 @@ defmodule SymphonyElixir.PrWatch.Attempts do
     |> break_streak(read)
     |> keep_head_failure(read)
     |> keep_head_reruns(read)
+    |> keep_head_cancels(read)
     |> head_origin(read, ticket)
   end
 
@@ -222,9 +248,13 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   defp keep_head_reruns(attempts, %{head_sha: head}) when is_binary(head), do: %{attempts | reruns: Map.take(attempts.reruns, [head])}
   defp keep_head_reruns(attempts, _read), do: %{attempts | reruns: %{}}
 
+  defp keep_head_cancels(%{cancels: %{head_sha: head}} = attempts, %{head_sha: head}) when is_binary(head), do: attempts
+  defp keep_head_cancels(attempts, _read), do: %{attempts | cancels: nil}
+
   @doc """
   The facts for `decide/1`: the counts, whether the head's failed checks were rerun already (always,
-  with `flaky_retry` off), the same-failure streak, the fix runs' failures, and whether the merge
+  with `flaky_retry` off), the reruns already spent on the head's newly cancelled runs
+  (`cancel_reruns/2`), the same-failure streak, the fix runs' failures, and whether the merge
   wait (`timeout_ms`) passed.
   """
   @spec facts(t(), map() | nil, ci_settings(), DateTime.t()) :: map()
@@ -235,6 +265,7 @@ defmodule SymphonyElixir.PrWatch.Attempts do
       red_attempts: attempts.red,
       conflict_attempts: attempts.conflict,
       rerun_done: not settings.flaky_retry or rerun_done?(attempts, read),
+      cancel_reruns: cancel_reruns(attempts, read),
       same_failure_streak: same_failure_streak(attempts, read),
       fix_failures: attempts.fix_failures,
       landing_timed_out: timed_out?(attempts.blocked, now, settings.merging_wait_timeout_ms),
@@ -359,13 +390,141 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   """
   @spec rerun_pending?(t(), map() | nil) :: boolean()
   def rerun_pending?(attempts, %{head_sha: head, check_names: names}) when is_binary(head) and is_list(names) do
-    case Map.get(normalize(attempts).reruns, head) do
-      [_ | _] = rerun -> Enum.any?(rerun, &(&1 not in names))
-      _none -> false
-    end
+    attempts = normalize(attempts)
+    rerun = Map.get(attempts.reruns, head, []) ++ cancel_rerun_checks(attempts.cancels, head)
+    Enum.any?(rerun, &(&1 not in names))
   end
 
   def rerun_pending?(_attempts, _read), do: false
+
+  defp cancel_rerun_checks(%{head_sha: head, runs: runs}, head), do: Enum.flat_map(Map.values(runs), & &1.checks)
+  defp cancel_rerun_checks(_cancels, _head), do: []
+
+  @doc """
+  The cancelled checks of `read`'s head (its failed checks GitHub cancelled) whose cancellation
+  Symphony hasn't rerun yet: a run never rerun, or one whose rerun was cancelled again, which gives
+  its jobs new ids. A check with no job id is known by its name.
+  """
+  @spec new_cancellations(t(), map() | nil) :: [map()]
+  def new_cancellations(attempts, %{head_sha: head} = read) when is_binary(head) do
+    runs = head_cancels(normalize(attempts), head).runs
+
+    for check <- Map.get(read, :failed_checks, []), cancelled?(check), job_key(check) not in Map.get(runs, run_key(check), %{jobs: []}).jobs, do: check
+  end
+
+  def new_cancellations(_attempts, _read), do: []
+
+  @doc """
+  The reruns already spent on the head's newly cancelled runs (`new_cancellations/2`): the fewest
+  of any of them, so a run still under the bound is rerun before a person is asked about one past
+  it. 0 when no cancellation is new: what was cancelled is rerunning.
+  """
+  @spec cancel_reruns(t(), map() | nil) :: non_neg_integer()
+  def cancel_reruns(attempts, %{head_sha: head} = read) when is_binary(head) do
+    attempts = normalize(attempts)
+    runs = head_cancels(attempts, head).runs
+
+    case new_cancellations(attempts, read) do
+      [] -> 0
+      checks -> checks |> Enum.map(&Map.get(runs, run_key(&1), %{reruns: 0}).reruns) |> Enum.min()
+    end
+  end
+
+  def cancel_reruns(_attempts, _read), do: 0
+
+  @doc """
+  The newly cancelled checks of the head whose run has had fewer than `max` reruns: the ones R19
+  reruns now.
+  """
+  @spec cancels_due(t(), map() | nil, non_neg_integer()) :: [map()]
+  def cancels_due(attempts, read, max) do
+    attempts = normalize(attempts)
+    runs = head_cancels(attempts, Map.get(read || %{}, :head_sha)).runs
+    Enum.filter(new_cancellations(attempts, read), &(Map.get(runs, run_key(&1), %{reruns: 0}).reruns < max))
+  end
+
+  @doc """
+  Records that the cancelled `checks` of `head` were rerun: one more rerun for each of their runs,
+  answering the jobs they name. It spends no CI Fix attempt and doesn't mark the head's failed checks
+  rerun (`rerun_done` is R22's).
+  """
+  @spec cancel_rerun(t(), String.t() | nil, [map()]) :: t()
+  def cancel_rerun(attempts, head, checks) when is_binary(head) do
+    attempts = normalize(attempts)
+    cancels = head_cancels(attempts, head)
+
+    runs =
+      checks
+      |> Enum.group_by(&run_key/1)
+      |> Enum.reduce(cancels.runs, fn {run, run_checks}, runs ->
+        known = Map.get(runs, run, %{reruns: 0, jobs: [], checks: []})
+        names = for %{name: name} <- run_checks, is_binary(name), do: name
+        Map.put(runs, run, %{reruns: known.reruns + 1, jobs: Enum.uniq(known.jobs ++ Enum.map(run_checks, &job_key/1)), checks: Enum.uniq(names)})
+      end)
+
+    %{attempts | cancels: %{cancels | runs: runs}}
+  end
+
+  def cancel_rerun(attempts, _head, _checks), do: normalize(attempts)
+
+  @doc """
+  Records that R19a asked a person about the cancelled checks of `head`: the question's `title`, and
+  how many recorded decisions with that title the ticket held before (`prior`), so only a newer one
+  answers it.
+  """
+  @spec cancel_asked(t(), String.t() | nil, String.t(), non_neg_integer()) :: t()
+  def cancel_asked(attempts, head, title, prior) when is_binary(head) do
+    attempts = normalize(attempts)
+    %{attempts | cancels: %{head_cancels(attempts, head) | asked: %{title: title, prior: prior}, answer: nil}}
+  end
+
+  def cancel_asked(attempts, _head, _title, _prior), do: normalize(attempts)
+
+  @doc "The question R19a asked about the current head and not yet answered, or nil."
+  @spec cancel_question(t()) :: %{title: String.t(), prior: non_neg_integer()} | nil
+  def cancel_question(attempts) do
+    case normalize(attempts).cancels do
+      %{asked: %{} = asked, answer: nil} -> asked
+      _none -> nil
+    end
+  end
+
+  @doc """
+  Records the person's answer to R19a: `:rerun` starts every cancelled run's count again, so R19
+  reruns the check and the bound applies afresh; `:wait` (or an answer that picks no option) leaves
+  the runs as they are, and nothing more is asked on the head.
+  """
+  @spec cancel_answer(t(), :rerun | :wait | :other) :: t()
+  def cancel_answer(attempts, pick) do
+    case normalize(attempts) do
+      %{cancels: nil} = attempts ->
+        attempts
+
+      %{cancels: cancels} = attempts when pick == :rerun ->
+        runs = Map.new(cancels.runs, fn {run, known} -> {run, %{known | reruns: 0}} end)
+        %{attempts | cancels: %{cancels | runs: runs, asked: nil, answer: nil}}
+
+      %{cancels: cancels} = attempts ->
+        %{attempts | cancels: %{cancels | answer: :wait}}
+    end
+  end
+
+  defp head_cancels(%{cancels: %{head_sha: head} = cancels}, head), do: cancels
+  defp head_cancels(_attempts, head), do: %{head_sha: head, runs: %{}, asked: nil, answer: nil}
+
+  defp cancelled?(check), do: Map.get(check, :conclusion) == "CANCELLED"
+
+  # A run by its id; a check outside GitHub Actions by its name.
+  defp run_key(check), do: string(Map.get(check, :run_id)) || "check:#{Map.get(check, :name)}"
+
+  # A cancelled job by its id: a rerun's attempt gives its jobs new ones.
+  defp job_key(check) do
+    case Map.get(check, :job_id) do
+      id when is_integer(id) -> Integer.to_string(id)
+      id when is_binary(id) and id != "" -> id
+      _none -> "check:#{Map.get(check, :name)}"
+    end
+  end
 
   @doc """
   Records that the failed `checks` of `head` were rerun. The head's failure is read again once the
@@ -423,6 +582,24 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   end
 
   defp reruns(_reruns), do: %{}
+
+  defp cancels(%{runs: %{} = runs} = cancels) do
+    %{
+      head_sha: string(Map.get(cancels, :head_sha)),
+      runs: for({run, %{} = known} <- runs, is_binary(run), into: %{}, do: {run, cancelled_run(known)}),
+      asked: asked(Map.get(cancels, :asked)),
+      answer: if(Map.get(cancels, :answer) == :wait, do: :wait)
+    }
+  end
+
+  defp cancels(_cancels), do: nil
+
+  defp cancelled_run(known) do
+    %{reruns: count(Map.get(known, :reruns)), jobs: strings(Map.get(known, :jobs)), checks: strings(Map.get(known, :checks))}
+  end
+
+  defp strings(values) when is_list(values), do: Enum.filter(values, &is_binary/1)
+  defp strings(_values), do: []
 
   defp failures(failures) when is_list(failures) do
     for %{check: check} = failure <- failures, is_binary(check) do
