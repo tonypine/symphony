@@ -590,6 +590,22 @@ defmodule SymphonyElixir.Config do
   @spec artifact_max_bytes() :: pos_integer()
   def artifact_max_bytes, do: ledger_setting(:artifact_max_bytes)
 
+  @doc """
+  Whether agents' prompts carry the summary of the ticket's history
+  (`SymphonyElixir.TicketEvents.Brief`): symphony.yml's `ledger.prompt_brief_enabled`, read on each
+  call, else true.
+  """
+  @spec prompt_brief_enabled?() :: boolean()
+  def prompt_brief_enabled?, do: ledger_setting(:prompt_brief_enabled)
+
+  @doc """
+  The size in tokens over which a ticket's history summary is logged as too large; the summary is
+  still rendered whole: symphony.yml's `ledger.prompt_brief_max_tokens`, read on each call, else
+  50,000.
+  """
+  @spec prompt_brief_max_tokens() :: pos_integer()
+  def prompt_brief_max_tokens, do: ledger_setting(:prompt_brief_max_tokens)
+
   # While symphony.yml can't be read, the section's defaults apply.
   defp ledger_setting(field) do
     ledger =
