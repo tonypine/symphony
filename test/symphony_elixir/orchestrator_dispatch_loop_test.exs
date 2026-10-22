@@ -1,7 +1,8 @@
 defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{CiWait, DispatchLoop, Handoff, Hold, TicketEvents, TicketState}
+  alias SymphonyElixir.{Artifacts, CiWait, DispatchLoop, Handoff, Hold, Paths, TicketEvents, TicketState}
+  alias SymphonyElixir.{ClaudeCode, Codex}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Inbox.Item
 
@@ -206,6 +207,163 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     end
   end
 
+  describe "a run's transcript" do
+    @session "5f0c6a52-0e4b-4c4f-9d8e-2a1b3c4d5e6f"
+    @workspace "/Users/tonypine/symphony-workspaces/symphony/TP-1082"
+    @transcript ~s({"type":"user","message":"Implement TP-1082"}\n{"type":"assistant"}\n)
+
+    setup do
+      :ok = RunStore.clear()
+      :ok = RunStore.record_ticket_dispatch(@repo_key, @issue_id, %{kind: :implementation, run_id: "run-1", state: "In Progress"})
+      root = Path.join(System.tmp_dir!(), "symphony-claude-projects-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(root)
+      File.rm_rf!(Paths.artifacts_dir())
+      Application.put_env(:symphony_elixir, :claude_projects_dir, root)
+
+      on_exit(fn ->
+        Application.delete_env(:symphony_elixir, :claude_projects_dir)
+        File.rm_rf(root)
+        File.rm_rf(Paths.artifacts_dir())
+      end)
+
+      %{root: root, own: Path.join([root, "-Users-tonypine-symphony-workspaces-symphony-TP-1082", @session <> ".jsonl"])}
+    end
+
+    test "a Claude Code run ends naming its transcript, which opens from the artifacts directory", %{own: own} do
+      write!(own, @transcript)
+      pid = start_orchestrator(:TranscriptKept)
+      log = await_tasks(fn -> send_down(pid, "run-1", "In Progress", :normal, claude_run()) end)
+
+      assert [%{payload: payload, artifacts: [id], summary: summary}] = run_ended()
+      assert payload.transcript == id
+      assert String.ends_with?(summary.detail, "transcript")
+      assert {:ok, %{kind: "transcript", mime: "application/x-ndjson", run_id: "run-1", repo_key: @repo_key, issue_id: @issue_id, references: 1}} = Artifacts.get(id)
+      assert {:ok, path} = Artifacts.path(id)
+      assert File.read!(path) == @transcript
+      refute log =~ "transcript"
+    end
+
+    test "a run whose transcript can't be found ends as before, with no transcript and no error", %{own: own} do
+      pid = start_orchestrator(:TranscriptMissing)
+      log = send_down(pid, "run-1", "In Progress", :normal, claude_run())
+
+      assert [%{payload: payload, artifacts: []}] = run_ended()
+      refute Map.has_key?(payload, :transcript)
+      refute payload.exit =~ "failed"
+      refute log =~ "transcript"
+      refute log =~ "[error]"
+
+      # A Codex run, a run on a remote worker and a run with no session id have none, even beside a transcript.
+      write!(own, @transcript)
+
+      for {run_id, entry} <- [
+            {"run-codex", agent_module: Codex.AppServer},
+            {"run-remote", worker_host: "worker-1"},
+            {"run-unnamed", session_id: nil}
+          ] do
+        :ok = RunStore.record_ticket_dispatch(@repo_key, @issue_id, %{kind: :implementation, run_id: run_id, state: "In Progress"})
+        send_down(pid, run_id, "In Progress", :normal, Keyword.merge(claude_run(), entry))
+        assert [%{artifacts: [], payload: payload}] = run_ended(run_id)
+        refute Map.has_key?(payload, :transcript)
+      end
+
+      assert Artifacts.list() == []
+    end
+
+    test "a reported path outside Claude Code's projects folder, or not .jsonl, is not ingested", %{root: root} do
+      outside = write!(Path.join(System.tmp_dir!(), "symphony-outside-#{System.unique_integer([:positive])}/session.jsonl"), @transcript)
+      on_exit(fn -> File.rm_rf(Path.dirname(outside)) end)
+      not_jsonl = write!(Path.join([root, "-w", "session.txt"]), @transcript)
+      pid = start_orchestrator(:TranscriptOutside)
+
+      for {run_id, reported} <- [{"run-1", outside}, {"run-2", not_jsonl}] do
+        :ok = RunStore.record_ticket_dispatch(@repo_key, @issue_id, %{kind: :implementation, run_id: run_id, state: "In Progress"})
+        log = send_down(pid, run_id, "In Progress", :normal, Keyword.put(claude_run(), :transcript_path, reported))
+
+        assert log =~ "Ignoring the reported transcript path #{inspect(reported)}"
+        assert [%{artifacts: [], payload: payload}] = run_ended(run_id)
+        refute Map.has_key?(payload, :transcript)
+      end
+
+      assert Artifacts.list() == []
+    end
+
+    test "two runs with byte-identical transcripts share one artifact", %{root: root, own: own} do
+      write!(own, @transcript)
+      reported = write!(Path.join([root, "-elsewhere", "copy.jsonl"]), @transcript)
+      :ok = RunStore.record_ticket_dispatch(@repo_key, @issue_id, %{kind: :implementation, run_id: "run-2", state: "In Progress"})
+      pid = start_orchestrator(:TranscriptShared)
+
+      await_tasks(fn -> send_down(pid, "run-1", "In Progress", :normal, claude_run()) end)
+      await_tasks(fn -> send_down(pid, "run-2", "In Progress", :normal, Keyword.put(claude_run(), :transcript_path, reported)) end)
+
+      assert [%{id: id, references: 2, run_id: "run-1"}] = Artifacts.list()
+      ended = run_ended()
+      assert Enum.map(ended, &{&1.run_id, &1.artifacts, &1.payload.transcript}) == [{"run-1", [id], id}, {"run-2", [id], id}]
+
+      # The same run's end delivered again ingests nothing a second time.
+      :ok = RunStore.record_ticket_dispatch(@repo_key, @issue_id, %{kind: :implementation, run_id: "run-2", state: "In Progress"})
+      await_tasks(fn -> send_down(pid, "run-2", "In Progress", :normal, claude_run()) end)
+      assert [%{references: 2}] = Artifacts.list()
+      assert length(run_ended()) == 2
+    end
+
+    test "the orchestrator handles the end of the run without waiting on the copy, which keeps the time the run ended", %{own: own} do
+      write!(own, @transcript)
+      pid = start_orchestrator(:TranscriptAsync)
+      test_pid = self()
+
+      # The artifacts table is locked, so the copy waits until the test lets it go.
+      locker =
+        spawn(fn ->
+          :mnesia.transaction(fn ->
+            :mnesia.lock({:table, :symphony_run_store_artifacts}, :write)
+            send(test_pid, :locked)
+            receive do: (:release -> :ok)
+          end)
+        end)
+
+      assert_receive :locked
+      before_end = DateTime.utc_now()
+
+      await_tasks(fn ->
+        send_down(pid, "run-1", "In Progress", :normal, claude_run())
+        refute Map.has_key?(:sys.get_state(pid).running, @issue_id)
+        assert run_ended() == []
+        released = DateTime.utc_now()
+        send(locker, :release)
+        send(test_pid, {:released, released})
+      end)
+
+      assert_received {:released, released}
+      assert [%{at: at, artifacts: [_id]}] = run_ended()
+      assert DateTime.compare(at, before_end) != :lt and DateTime.compare(at, released) != :gt
+    end
+
+    test "a transcript the store refuses leaves run.ended without it, logged once", %{own: own} do
+      write!(own, "not json lines\n")
+      pid = start_orchestrator(:TranscriptRefused)
+      log = await_tasks(fn -> send_down(pid, "run-1", "In Progress", :normal, claude_run()) end)
+
+      assert [_once] = Regex.scan(~r/Recording run.ended without its transcript on issue_id=#{@issue_id} run_id=run-1: :unsupported_mime/, log)
+      assert [%{artifacts: [], payload: payload}] = run_ended()
+      refute Map.has_key?(payload, :transcript)
+      assert Artifacts.list() == []
+    end
+
+    test "a copy that can't start leaves run.ended without the transcript, logged", %{own: own} do
+      write!(own, @transcript)
+      pid = start_orchestrator(:TranscriptNoTask)
+      assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, SymphonyElixir.TaskSupervisor)
+
+      log = send_down(pid, "run-1", "In Progress", :normal, claude_run())
+
+      assert log =~ "Recording run.ended without its transcript on issue_id=#{@issue_id} run_id=run-1: :task_supervisor_unavailable"
+      assert [%{artifacts: [], payload: payload}] = run_ended()
+      refute Map.has_key?(payload, :transcript)
+    end
+  end
+
   describe "an epic review waiting for CI" do
     @sha "26758a2471558f89fc0411dcf1f81aa82c0e1dc4"
     @runs [%{workflow_name: "release", url: "https://github.com/acme/app/actions/runs/1"}, %{workflow_name: "macos", url: nil, id: 2}]
@@ -300,6 +458,36 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
       refute Hold.held?(@repo_key, @issue_id, :blocked)
       assert [%{name: "ci_wait_started", details: %{sha: @sha}} | _rest] = RunStore.get_ticket_state(@repo_key, @issue_id).signals
     end
+  end
+
+  defp claude_run do
+    [agent_module: ClaudeCode.AppServer, worker_host: nil, workspace_path: @workspace, session_id: @session]
+  end
+
+  defp run_ended(run_id \\ nil) do
+    opts = if run_id, do: [types: ["run.ended"], run_id: run_id], else: [types: ["run.ended"]]
+    RunStore.list_ticket_events(@repo_key, @issue_id, opts)
+  end
+
+  defp write!(path, contents) do
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, contents)
+    path
+  end
+
+  # Runs `fun`, then waits for the tasks it started under the shared TaskSupervisor, and returns
+  # the log of both.
+  defp await_tasks(fun) do
+    before = Task.Supervisor.children(SymphonyElixir.TaskSupervisor)
+
+    capture_log(fn ->
+      fun.()
+
+      for task <- Task.Supervisor.children(SymphonyElixir.TaskSupervisor) -- before do
+        ref = Process.monitor(task)
+        assert_receive {:DOWN, ^ref, :process, ^task, _reason}, 5_000
+      end
+    end)
   end
 
   defp put_observed_head!(commit_sha) do

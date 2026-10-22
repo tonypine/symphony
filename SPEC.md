@@ -471,6 +471,17 @@ type does not allow, is refused. The types: `phase.entered`, `hold.set` and `hol
 `restart`), `step.started`, `step.completed`, `step.skipped`, `evidence`, `finding.recorded` (QA
 runs), `finding.resolved`, `checklist.answered` and `note`.
 
+A `run.ended` names the run's transcript: a copy kept in the artifact store (Section 4.1.12) as
+kind `transcript`, its id both in the event's `artifacts` and in `payload.transcript`. The
+transcript is the path the run reported, when it reported one; otherwise, for a Claude Code run on
+the local host, `~/.claude/projects/<the run's working directory, every character other than a
+letter or a digit as "-">/<session id>.jsonl`, when that file exists. That folder is a sensitive
+path, so only a `.jsonl` file under it is ingested; a reported path anywhere else is ignored and
+logged. A Codex run, a run on a remote worker and a run with no session id have none. The copy is
+made in a task the orchestrator does not wait for, and the event keeps the time the run ended. A
+transcript the store refuses (over the size cap, not JSON lines, gone) leaves the event without
+one, logged once; the run still records exactly one `run.ended`.
+
 A decision a person must make has one representation, whoever asks it: `decision.requested`, then
 the person's `decision.recorded` (keyed `decision.recorded:<key>`, the request comment it answers)
 or `decision.withdrawn` when it ends unanswered; both name the request in `request`. The Needs
