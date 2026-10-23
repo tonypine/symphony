@@ -335,12 +335,14 @@ repositories:
   reviewed in the `Code Review` state, so the reviewer must be on: with `review_agent.enabled`
   off, `Code Review` tickets are parked (a `code_review_reviewer_disabled` signal is recorded)
   instead of being dispatched. A
-  `Code Review` run also reads the repo's `auto_review.acceptance_gate.escalate` rules on an
-  approval: a person rule (`labels`, `ticket_patterns`) pauses the ticket on a **Needs Decision**
-  hold whose confirmation continues into QA, and a risk rule (`paths`, `diff_patterns`,
-  `dependencies`, `max_changed_lines`, `busy_files`) deepens the review rather than routing it — the
-  run takes a second reviewer pass on the same head, records the verdict bound to it and moves
-  nothing, and the next dispatch performs that verdict. A reviewer block, or a review still
+  `Code Review` run also checks the repo's `auto_review.acceptance_gate.escalate` rules before its
+  reviewer starts, and runs the reviewer once per head. A risk rule (`paths`, `diff_patterns`,
+  `dependencies`, `max_changed_lines`, `busy_files`) puts its finding in plain words in the
+  reviewer's instructions and in the verdict's summary — the size as added, changed and removed
+  lines — so the one review weighs it. On an approval, a person rule (`labels`,
+  `ticket_patterns`), and a risk rule whose `escalate.on_match` key is `ask` (default `inform`),
+  pauses the ticket on a **Needs Decision** hold whose confirmation continues into QA; otherwise the
+  approval routes at once. A reviewer block, or a review still
   inconclusive after two retries, pauses the ticket on a Needs Decision hold too. See
   [`docs/design/state-machine.md`](design/state-machine.md).
 - `manual_review`: who decides that a verified ticket merges, `off` (the default) or `on`
@@ -1593,16 +1595,18 @@ still read, by Code Review, until the block is removed. Each rule's new home:
 | --- | --- |
 | `labels` (an escalation label other than `plan` / `breakdown`) | Needs Decision hold on an approved Code Review |
 | `ticket_patterns` | Needs Decision hold on an approved Code Review |
-| `paths` | deepens the Code Review (a second reviewer pass on the same head) |
-| `diff_patterns` | deepens the Code Review |
-| `dependencies` | deepens the Code Review |
-| `max_changed_lines` | deepens the Code Review |
-| `busy_files` | deepens the Code Review |
+| `paths` | informs the Code Review reviewer; asks a person on approval with `on_match.paths: ask` |
+| `diff_patterns` | informs the Code Review reviewer, or asks (`on_match.diff_patterns`) |
+| `dependencies` | informs the Code Review reviewer, or asks (`on_match.dependencies`) |
+| `max_changed_lines` | informs the Code Review reviewer, or asks (`on_match.max_changed_lines`); `size_counts: added` leaves removed lines out |
+| `busy_files` | informs the Code Review reviewer, or asks (`on_match.busy_files`) |
 | `inconclusive_limit` | dropped: Code Review retries an inconclusive review twice, then asks a person |
 | the gate's `settings_ui` rule | dropped: CI's `mix settings.ui_coverage` fails such a PR |
 
 The built-in lists stay in force, and a configured list adds to them; only
-`escalate.ticket_patterns_builtin: false` drops the built-in `ticket_patterns`. See
+`escalate.ticket_patterns_builtin: false` drops the built-in `ticket_patterns`. `escalate.on_match`
+and `escalate.size_counts` are set in the global block only; Settings → Code Review in the macOS app
+sets both. See
 [`docs/acceptance_gate.md`](acceptance_gate.md) for the rules' syntax.
 
 #### Android settings

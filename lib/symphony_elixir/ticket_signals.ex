@@ -34,8 +34,6 @@ defmodule SymphonyElixir.TicketSignals do
     "ci_wait_started" => "Waiting for CI",
     "handoff_missing" => "The run ended without its handoff",
     "code_review_carried" => "Code Review carried its approval to a new head",
-    "code_review_deepened" => "Code Review deepened its review",
-    "code_review_deepening_applied" => "Code Review applied its deeper review",
     "code_review_reviewer_disabled" => "Code Review's reviewer is turned off",
     "code_review_head_not_green" => "Code Review waits for a green head",
     "qa_head_not_green" => "QA waits for a green head",
@@ -71,6 +69,7 @@ defmodule SymphonyElixir.TicketSignals do
 
   `run_id:` in `opts` names the run that gave the verdict, the id its `run.started` event carries,
   so the event sits inside that run. A verdict no run gave (one carried to a new head) names none.
+  `reason:` is the verdict's summary in plain words, which the event carries.
   """
   @spec record_verdict(id, id, String.t(), id, String.t(), map(), keyword()) :: :ok when id: String.t() | nil
   def record_verdict(repo_key, issue_id, kind, head_sha, outcome, details \\ %{}, opts \\ []) do
@@ -86,10 +85,13 @@ defmodule SymphonyElixir.TicketSignals do
 
   @doc """
   The `verdict.recorded` event `record_verdict/7` records for a verdict of `kind` with `outcome` on
-  `head_sha`, in the run `opts`' `run_id:` names, or in none.
+  `head_sha`, in the run `opts`' `run_id:` names, or in none, with `opts`' `reason:` as its summary.
   """
   @spec verdict_event(String.t(), String.t() | nil, String.t() | nil, keyword()) :: mapping()
-  def verdict_event(kind, outcome, head_sha, opts \\ []), do: verdict(kind, outcome, head_sha, nil, Keyword.get(opts, :run_id))
+  def verdict_event(kind, outcome, head_sha, opts \\ []) do
+    {type, payload, event_opts} = verdict(kind, outcome, head_sha, nil, Keyword.get(opts, :run_id))
+    {type, compact(Map.put(payload, :reason, string(Keyword.get(opts, :reason)))), event_opts}
+  end
 
   @doc """
   The event a signal `name` with `details` maps to: its type, payload and `TicketEvents.record/5`

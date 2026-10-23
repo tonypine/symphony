@@ -104,6 +104,29 @@ defmodule SymphonyElixir.DeprecatedGateSettingsTest do
       assert error!(%{}, %{"acceptance_gate" => %{"runtime" => "claude"}}) =~ "unknown symphony.yml key `repositories[app].acceptance_gate.runtime`"
       assert error!(%{}, %{"acceptance_gate" => %{"max_concurrent" => 4}}) =~ "unknown symphony.yml key `repositories[app].acceptance_gate.max_concurrent`"
       assert error!(%{}, %{"acceptance_gate" => %{"escalate" => %{"globs" => []}}}) =~ "unknown symphony.yml key `repositories[app].acceptance_gate.escalate.globs`"
+
+      assert error!(gate(%{"escalate" => %{"on_match" => %{"size" => "ask"}}})) =~
+               "unknown symphony.yml key `auto_review.acceptance_gate.escalate.on_match.size`"
+    end
+
+    test "on_match and size_counts are set in the global block, for every repository" do
+      escalate = settings!(gate(%{"escalate" => %{"size_counts" => "added", "on_match" => %{"busy_files" => "ask", "paths" => "ask"}}})).auto_review.acceptance_gate.escalate
+
+      assert escalate.size_counts == "added"
+
+      assert escalate.on_match == %Escalate.OnMatch{
+               paths: "ask",
+               diff_patterns: "inform",
+               dependencies: "inform",
+               max_changed_lines: "inform",
+               busy_files: "ask"
+             }
+
+      assert error!(%{}, %{"acceptance_gate" => %{"escalate" => %{"on_match" => %{"paths" => "ask"}}}}) =~
+               "unknown symphony.yml key `repositories[app].acceptance_gate.escalate.on_match`"
+
+      assert error!(%{}, %{"acceptance_gate" => %{"escalate" => %{"size_counts" => "added"}}}) =~
+               "unknown symphony.yml key `repositories[app].acceptance_gate.escalate.size_counts`"
     end
 
     test "invalid values name the key" do
@@ -116,6 +139,9 @@ defmodule SymphonyElixir.DeprecatedGateSettingsTest do
       assert error!(gate(%{"escalate" => %{"max_changed_lines" => 0}})) =~ "auto_review.acceptance_gate.escalate.max_changed_lines must be a positive integer"
       assert error!(gate(%{"escalate" => %{"busy_files" => %{"top" => "ten"}}})) =~ "auto_review.acceptance_gate.escalate.busy_files.top must be a positive integer"
       assert error!(gate(%{"escalate" => %{"busy_files" => %{"max_lines" => -1}}})) =~ "auto_review.acceptance_gate.escalate.busy_files.max_lines must be a positive integer"
+      assert error!(gate(%{"escalate" => %{"size_counts" => "removed"}})) =~ "auto_review.acceptance_gate.escalate.size_counts must be one of: total, added"
+      assert error!(gate(%{"escalate" => %{"on_match" => %{"busy_files" => "warn"}}})) =~ "auto_review.acceptance_gate.escalate.on_match.busy_files must be one of: inform, ask"
+      assert error!(gate(%{"escalate" => %{"on_match" => "ask"}})) =~ "`auto_review.acceptance_gate.escalate.on_match` must be an object"
 
       assert error!(gate(%{"escalate" => %{"ticket_patterns" => ["(unclosed"]}})) =~
                "auto_review.acceptance_gate.escalate.ticket_patterns has an invalid regular expression `(unclosed`: missing closing parenthesis"
@@ -166,6 +192,15 @@ defmodule SymphonyElixir.DeprecatedGateSettingsTest do
 
       assert %Escalate{dependencies: "major", max_changed_lines: 1500, inconclusive_limit: 2} = gate.escalate
       assert gate.escalate.busy_files == %Escalate.BusyFiles{top: 10, window_days: 14, max_lines: 300}
+      assert gate.escalate.size_counts == "total"
+
+      assert gate.escalate.on_match == %Escalate.OnMatch{
+               paths: "inform",
+               diff_patterns: "inform",
+               dependencies: "inform",
+               max_changed_lines: "inform",
+               busy_files: "inform"
+             }
 
       for {field, values} <- Escalate.built_in(), do: assert(Map.fetch!(gate.escalate, field) == values)
       assert "needs-human" in gate.escalate.labels

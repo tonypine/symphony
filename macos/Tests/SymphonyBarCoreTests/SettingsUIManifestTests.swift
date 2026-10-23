@@ -100,6 +100,11 @@ final class SettingsUIManifestTests: XCTestCase {
             )
         }, from: yaml)
         yaml = try record("turning off the built-in ticket patterns", { try BuiltInTicketPatterns.setting(false, in: $0) }, from: yaml)
+        let asking = RiskRuleSettings(
+            onMatch: Dictionary(uniqueKeysWithValues: RiskRule.allCases.map { ($0, RiskRuleMatch.ask) }),
+            sizeCounts: .added
+        )
+        yaml = try record("setting the risk rules", { try RiskRuleSettings.updating($0, from: RiskRuleSettings(), to: asking) }, from: yaml)
         yaml = try record("setting the QA host tools", {
             try QAHostTools.updating($0, from: QAHostTools(), to: QAHostTools(tools: ["go", "pg_ctl"]))
         }, from: yaml)

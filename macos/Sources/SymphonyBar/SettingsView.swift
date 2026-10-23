@@ -272,6 +272,8 @@ struct SettingsView: View {
                 }
                 .disabled(!model.canEditTicketPatternsBuiltIn)
 
+                RiskRulesSection(model: model)
+
                 Section {
                     TimeoutRow(title: "Git network timeout", minutes: $model.gitNetworkTimeoutMinutes)
                     Text("Stops a git fetch, pull, push or ls-remote that runs longer, so a remote that stops answering can't hold the repo.")
@@ -571,6 +573,9 @@ struct SettingsView: View {
                 if let error = model.ticketPatternsBuiltInError {
                     CheckErrorText(message: error)
                 }
+                if let error = model.riskRulesError {
+                    CheckErrorText(message: error)
+                }
                 if let loginItemError = model.loginItemError {
                     Text(loginItemError).foregroundStyle(.red)
                 }
@@ -825,6 +830,53 @@ private struct OpenRouterModelField: View {
     private func choose(_ id: String?) {
         selection = id
         isPicking = false
+    }
+}
+
+/// Code Review's risk rules (`auto_review.acceptance_gate.escalate.on_match` and `.size_counts`): per rule, whether
+/// its match only tells the reviewer or also asks you once the reviewer approves, and what the change size counts.
+private struct RiskRulesSection: View {
+    @ObservedObject var model: SettingsViewModel
+
+    var body: some View {
+        Section {
+            ForEach(RiskRule.allCases) { rule in
+                Picker(rule.title, selection: match(rule)) {
+                    ForEach(RiskRuleMatch.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                Text(rule.explanation)
+                    .foregroundStyle(.secondary)
+            }
+            Picker(RiskRuleSettings.sizeCountsTitle, selection: $model.riskRules.sizeCounts) {
+                ForEach(ChangeSizeCount.allCases) { count in
+                    Text(count.title).tag(count)
+                }
+            }
+            Text(model.riskRules.sizeCounts.explanation)
+                .foregroundStyle(.secondary)
+            if model.riskRulesError != nil {
+                CheckErrorPointer(subject: "these risk rules")
+            }
+        } header: {
+            Text("Code Review risk rules (saved in symphony.yml)")
+        } footer: {
+            SectionFooter(
+                "auto_review.acceptance_gate.escalate.on_match and .size_counts. Code Review reviews each change once. "
+                    + "A risk rule that matches tells the reviewer what it found, so the review weighs it; set to Ask me, "
+                    + "an approval it matches also waits for your answer in the Inbox. These apply to every repo. Save "
+                    + "checks symphony.yml with symphony check first; Symphony reads it on its next poll, no restart needed."
+            )
+        }
+        .disabled(!model.canEditRiskRules)
+    }
+
+    private func match(_ rule: RiskRule) -> Binding<RiskRuleMatch> {
+        Binding(
+            get: { model.riskRules.match(for: rule) },
+            set: { model.riskRules.onMatch[rule] = $0 }
+        )
     }
 }
 

@@ -56,8 +56,12 @@ defmodule SymphonyElixir.Config.SystemSchema do
   # rules; the gate agent's runtime, model and concurrency stay global.
   @acceptance_gate_keys ~w(mode runtime command model effort max_turns timeout_ms max_concurrent escalate)
   @repo_acceptance_gate_keys ~w(mode max_turns timeout_ms escalate)
-  @acceptance_gate_escalate_keys ~w(labels ticket_patterns ticket_patterns_builtin paths diff_patterns dependencies max_changed_lines busy_files inconclusive_limit)
+  @repo_acceptance_gate_escalate_keys ~w(labels ticket_patterns ticket_patterns_builtin paths diff_patterns dependencies max_changed_lines busy_files inconclusive_limit)
+  # What a risk rule's match does (`on_match`) and what the size rule counts (`size_counts`) are set
+  # for every repository at once, in the global block.
+  @acceptance_gate_escalate_keys @repo_acceptance_gate_escalate_keys ++ ~w(size_counts on_match)
   @acceptance_gate_busy_files_keys ~w(top window_days max_lines)
+  @acceptance_gate_on_match_keys ~w(paths diff_patterns dependencies max_changed_lines busy_files)
 
   # The deprecated acceptance-gate `mode` → the `manual_review` setting, per the design's review-modes
   # table. The three modes a `symphony.yml` may carry today, and the design's names for them.
@@ -87,7 +91,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "repositories[].workspace" => ~w(strategy repo fetch_before_dispatch source),
     "repositories[].agent" => ~w(provider model effort run_profiles),
     "repositories[].acceptance_gate" => @repo_acceptance_gate_keys,
-    "repositories[].acceptance_gate.escalate" => @acceptance_gate_escalate_keys,
+    "repositories[].acceptance_gate.escalate" => @repo_acceptance_gate_escalate_keys,
     "repositories[].acceptance_gate.escalate.busy_files" => @acceptance_gate_busy_files_keys,
     "workspaces" => ~w(root clones_root strategy repo fetch_before_dispatch git_network_timeout_ms cleanup attachments),
     "workspaces.cleanup" => ~w(enabled max_age_days interval_ms min_free_bytes orphan_action trash_dir),
@@ -110,6 +114,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "auto_review.acceptance_gate" => @acceptance_gate_keys,
     "auto_review.acceptance_gate.escalate" => @acceptance_gate_escalate_keys,
     "auto_review.acceptance_gate.escalate.busy_files" => @acceptance_gate_busy_files_keys,
+    "auto_review.acceptance_gate.escalate.on_match" => @acceptance_gate_on_match_keys,
     "pull_requests" => ~w(enabled poll_interval_ms auto_merge review_comments checks learnings),
     "pull_requests.review_comments" => ~w(rework_delay_minutes stale_after_days ignored_reviewers reply_after_addressing request_review_after_push),
     "pull_requests.checks" => ~w(enabled log_excerpt_lines retry_failed_once max_fix_attempts escalate_to_state landing_wait_timeout_ms),
@@ -866,7 +871,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          :ok <- reject_unknown_section_keys(agent, section_keys("repositories[].agent"), repo_agent_path(Map.get(repo, "key"), index)),
          agent = drop_repo_retired_run_profiles(agent, repo_agent_path(Map.get(repo, "key"), index)),
          {:ok, acceptance_gate} <-
-           normalize_acceptance_gate(Map.get(repo, "acceptance_gate"), repo_path(Map.get(repo, "key"), index) <> ".acceptance_gate", section_keys("repositories[].acceptance_gate")) do
+           normalize_acceptance_gate(Map.get(repo, "acceptance_gate"), repo_path(Map.get(repo, "key"), index) <> ".acceptance_gate", "repositories[].acceptance_gate") do
       normalized =
         %{}
         |> maybe_put("name", Map.get(repo, "key"))
@@ -1091,7 +1096,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
            reject_unknown_section_keys(config, section_keys("auto_review"), "auto_review"),
          {:ok, android} <- section_map(Map.get(config, "android"), "auto_review.android"),
          :ok <- reject_unknown_section_keys(android, section_keys("auto_review.android"), "auto_review.android"),
-         {:ok, acceptance_gate} <- normalize_acceptance_gate(Map.get(config, "acceptance_gate"), "auto_review.acceptance_gate", section_keys("auto_review.acceptance_gate")) do
+         {:ok, acceptance_gate} <- normalize_acceptance_gate(Map.get(config, "acceptance_gate"), "auto_review.acceptance_gate", "auto_review.acceptance_gate") do
       warn_retired_auto_review_keys(config)
 
       {:ok,
@@ -1102,16 +1107,22 @@ defmodule SymphonyElixir.Config.SystemSchema do
     end
   end
 
-  defp normalize_acceptance_gate(nil, _path, _allowed_keys), do: {:ok, nil}
+  defp normalize_acceptance_gate(nil, _path, _section), do: {:ok, nil}
 
-  defp normalize_acceptance_gate(config, path, allowed_keys) do
+  # `section` is the block's place in the key catalog (`auto_review.acceptance_gate`, or
+  # `repositories[].acceptance_gate`), which names the keys each of its parts allows.
+  defp normalize_acceptance_gate(config, path, section) do
+    allowed_keys = section_keys(section)
+
     with {:ok, config} <- section_map(config, path),
          :ok <- reject_acceptance_gate_kind(config, path, allowed_keys),
          :ok <- reject_unknown_section_keys(config, allowed_keys, path),
          {:ok, escalate} <- section_map(Map.get(config, "escalate"), path <> ".escalate"),
-         :ok <- reject_unknown_section_keys(escalate, @acceptance_gate_escalate_keys, path <> ".escalate"),
+         :ok <- reject_unknown_section_keys(escalate, section_keys(section <> ".escalate"), path <> ".escalate"),
          {:ok, busy_files} <- section_map(Map.get(escalate, "busy_files"), path <> ".escalate.busy_files"),
-         :ok <- reject_unknown_section_keys(busy_files, @acceptance_gate_busy_files_keys, path <> ".escalate.busy_files") do
+         :ok <- reject_unknown_section_keys(busy_files, @acceptance_gate_busy_files_keys, path <> ".escalate.busy_files"),
+         {:ok, on_match} <- section_map(Map.get(escalate, "on_match"), path <> ".escalate.on_match"),
+         :ok <- reject_unknown_section_keys(on_match, @acceptance_gate_on_match_keys, path <> ".escalate.on_match") do
       warn_deprecated_gate_mode(Map.get(config, "mode"), path)
       warn_retired_gate_keys(config, escalate, path)
 
@@ -1180,7 +1191,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         "its rules now act in Code Review",
         "symphony.yml `#{path}.escalate` is deprecated and will move when the acceptance gate's block is removed: its rules now act in " <>
           "Code Review (`labels` and `ticket_patterns` pause the ticket on a Needs Decision hold; `paths`, `diff_patterns`, " <>
-          "`dependencies`, `max_changed_lines` and `busy_files` deepen the review)",
+          "`dependencies`, `max_changed_lines` and `busy_files` tell the reviewer, or ask a person when `on_match` says `ask`)",
         false
       )
     end
