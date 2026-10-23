@@ -99,10 +99,7 @@ defmodule SymphonyElixir.Application do
       else
         (core_children ++
            [
-             SymphonyElixir.RunStore,
-             # Beside the workspace cleanup's schedule, but only where the orchestrator runs: an
-             # agent's own Symphony process neither holds the store nor asks Linear for states.
-             SymphonyElixir.Artifacts.Retention
+             SymphonyElixir.RunStore
            ] ++
            verification_child_specs(system_config) ++
            [

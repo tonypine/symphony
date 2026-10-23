@@ -11,11 +11,11 @@ decision D12 of the state-machine plan:
 | --- | --- |
 | `labels` (an escalation label other than `plan` / `breakdown`) | person rule: an approved Code Review pauses on a **Needs Decision** hold recommending QA |
 | `ticket_patterns` | person rule: the same Needs Decision hold |
-| `paths` | risk rule: deepens the Code Review (a second reviewer pass on the same head, recorded with no move; the next dispatch performs its verdict) |
-| `diff_patterns` | risk rule: deepens the Code Review |
-| `dependencies` | risk rule: deepens the Code Review |
-| `max_changed_lines` | risk rule: deepens the Code Review |
-| `busy_files` | risk rule: deepens the Code Review |
+| `paths` | risk rule: its finding goes in the Code Review reviewer's instructions, so the one review weighs it; with `on_match.paths: ask`, an approval also pauses on the Needs Decision hold |
+| `diff_patterns` | risk rule: informs the Code Review, or asks (`on_match.diff_patterns`) |
+| `dependencies` | risk rule: informs the Code Review, or asks (`on_match.dependencies`) |
+| `max_changed_lines` | risk rule: informs the Code Review, or asks (`on_match.max_changed_lines`) |
+| `busy_files` | risk rule: informs the Code Review, or asks (`on_match.busy_files`) |
 | `inconclusive_limit` | dropped: Code Review retries an inconclusive review twice on the same head, then asks a person |
 | the `settings_ui` rule | dropped: CI's `mix settings.ui_coverage` already fails a new setting without a control or an exemption |
 | the gate agent's own `escalate` verdict | the Code Review reviewer's `block`: a Needs Decision hold recommending `Rework` |
@@ -57,7 +57,14 @@ auto_review:
         - '\brm\s+-rf\b'
       dependencies: major  # off | major | any
       max_changed_lines: 1500
+      size_counts: total   # total | added
       busy_files: { top: 10, window_days: 14, max_lines: 300 }
+      on_match:            # inform | ask, per risk rule
+        paths: inform
+        diff_patterns: inform
+        dependencies: inform
+        max_changed_lines: inform
+        busy_files: inform
 ```
 
 Quote regular expressions with single quotes in YAML, so a backslash stays a backslash.
@@ -70,19 +77,23 @@ Quote regular expressions with single quotes in YAML, so a backslash stays a bac
 | `escalate.paths` | the built-in paths below | Globs matched against each changed path outside docs and tests. `**` spans directories, `*` and `?` don't. |
 | `escalate.diff_patterns` | the four above | Regular expressions matched against each added line of the diff, in every file. Removed lines don't count. |
 | `escalate.dependencies` | `major` | `off`: dependency changes don't count. `major`: a new dependency or a major version change in `mix.lock` or `package.json` counts. `any`: any added, changed or removed dependency counts. |
-| `escalate.max_changed_lines` | `1500` | More changed lines (added plus deleted) outside docs and tests counts. |
+| `escalate.max_changed_lines` | `1500` | More lines than this outside docs and tests counts, as `size_counts` counts them. |
+| `escalate.size_counts` | `total` | What `max_changed_lines` counts. `total`: every added, changed and removed line. `added`: only the added and changed lines, so a change that mostly deletes doesn't count. |
 | `escalate.busy_files.top` | `10` | How many of the files changed most often on the base branch count as busy. |
 | `escalate.busy_files.window_days` | `14` | How many days of the base branch's history pick the busy files. |
-| `escalate.busy_files.max_lines` | `300` | More changed lines than this in one busy file counts. |
+| `escalate.busy_files.max_lines` | `300` | More added, changed and removed lines than this in one busy file counts. |
+| `escalate.on_match.<rule>` | `inform` | What a match of the risk rule `paths`, `diff_patterns`, `dependencies`, `max_changed_lines` or `busy_files` does. `inform`: its finding goes in the reviewer's instructions and the verdict's summary. `ask`: the same, and an approval also pauses on a Needs Decision hold recommending QA, as a person rule does. |
 
 The built-in `labels`, `ticket_patterns`, `paths` and `diff_patterns` always apply, except the
 `ticket_patterns` with `ticket_patterns_builtin: false`. A list you configure adds to them, and a
 `repositories[].acceptance_gate.escalate` override adds to the global lists and replaces its
-numbers and `ticket_patterns_builtin` for that repository. A repository that sets
+numbers and `ticket_patterns_builtin` for that repository; `size_counts` and `on_match` are set in
+the global block only, for every repository. A repository that sets
 `ticket_patterns_builtin: false` keeps the global `ticket_patterns` you configured, without the
 built-in ones; one that sets `true` gets them back. In the macOS app, Settings → Code Review →
 Built-in ticket patterns sets the global key, and a repository's Review sheet (Repos window) sets its override
-(Same as Settings, On or Off). A run on an SSH worker reads no
+(Same as Settings, On or Off). Settings → Code Review also sets each risk rule's `on_match`
+(Tell the reviewer, or Ask me) and `size_counts` (Change size counts). A run on an SSH worker reads no
 dependency manifests and no busy files, since both come from git in the local workspace.
 
 ### Built-in paths
@@ -103,8 +114,10 @@ docs- or tests-only diff: `**/*.md`, `**/*.mdx`, `**/*.rst`, `**/*.txt`, `docs/*
 
 `EscalationRules.check(issue, diff_summary, busy_files, rules, opts)` returns one reason per rule
 that triggers, as `%{rule: atom, detail: String.t()}`, or `[]` when nothing does.
-`EscalationRules.person_rules/0` and `risk_rules/0` split them. The rules are checked in this
-order:
+`EscalationRules.person_rules/0` and `risk_rules/0` split them, `asking/2` picks the ones that
+ask a person on an approval, and `reviewer_brief/1` words the risk rules' findings for the
+reviewer. Code Review checks them on the diff the reviewer judges, before the reviewer starts, and
+the reviewer runs once per head. The rules are checked in this order:
 
 | `rule` | Kind | Triggers when |
 | --- | --- | --- |
@@ -115,6 +128,11 @@ order:
 | `:dependency` | risk | `mix.lock` or a `package.json` adds a dependency or changes a major version (`major`), or changes any dependency (`any`). A manifest that can't be parsed also counts. |
 | `:size` | risk | more than `escalate.max_changed_lines` lines change outside docs and tests. |
 | `:busy_file` | risk | more than `escalate.busy_files.max_lines` lines change in one busy file. |
+
+A change's size is three numbers (`EscalationRules.changed_lines/1`): per file, as many lines as it
+both removes and adds are changed lines (`min(additions, deletions)`), and the rest are added or
+removed lines. The size finding reads `adds 300, changes 50, removes 2,100 lines outside docs and
+tests: 2,450 in all, over the limit of 1,500`, so a large deletion reads as one.
 
 A ticket that asks for a person's review escalates; one that only names a review state, or
 discusses manual review as a topic, doesn't. The built-in `ticket_patterns` match request

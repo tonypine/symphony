@@ -248,7 +248,31 @@ struct SettingsView: View {
                 }
                 .disabled(!model.canEditWorkflowStates)
 
-                CodeReviewSection(model: model)
+                Section {
+                    Toggle(BuiltInTicketPatterns.toggleTitle, isOn: $model.ticketPatternsBuiltIn)
+                    Text(
+                        model.ticketPatternsBuiltIn
+                            ? BuiltInTicketPatternsChoice.on.explanation
+                            : BuiltInTicketPatternsChoice.off.explanation
+                    )
+                    .foregroundStyle(.secondary)
+                    if model.ticketPatternsBuiltInError != nil {
+                        CheckErrorPointer(subject: "this setting")
+                    }
+                } header: {
+                    Text("Code Review (saved in symphony.yml)")
+                } footer: {
+                    SectionFooter(
+                        "auto_review.acceptance_gate.escalate.ticket_patterns_builtin. The built-in ticket patterns "
+                            + "match a title or description asking for a human or manual review, saying it must not be "
+                            + "auto-approved, or that it needs a human. Turn them off when they misfire on your tickets; "
+                            + "a repo can override this in its Review sheet in Repos. Save checks symphony.yml with symphony check "
+                            + "first; Symphony reads it on its next poll, no restart needed."
+                    )
+                }
+                .disabled(!model.canEditTicketPatternsBuiltIn)
+
+                RiskRulesSection(model: model)
 
                 Section {
                     TimeoutRow(title: "Git network timeout", minutes: $model.gitNetworkTimeoutMinutes)
@@ -324,14 +348,6 @@ struct SettingsView: View {
                 .disabled(!model.canEditDispatchLoop)
 
                 Section {
-                    LabeledContent("Keep artifact files for") {
-                        HStack {
-                            Text(model.artifactRetentionDays == 1 ? "1 day" : "\(model.artifactRetentionDays) days")
-                                .monospacedDigit()
-                            Stepper("Keep artifact files for days", value: $model.artifactRetentionDays, in: LedgerSettings.dayRange)
-                                .labelsHidden()
-                        }
-                    }
                     LabeledContent("Largest artifact") {
                         HStack {
                             Text("\(model.artifactMaxMegabytes) MB")
@@ -341,9 +357,8 @@ struct SettingsView: View {
                         }
                     }
                     Text(
-                        "Once a ticket has been finished this long, Symphony deletes its artifact files (screenshots, "
-                            + "transcripts) and keeps their details and the events that name them. It refuses to store a "
-                            + "file larger than the cap."
+                        "Symphony keeps every artifact file (screenshots, transcripts) for good, so a ticket's history "
+                            + "stays whole. It refuses to store a file larger than the cap."
                     )
                     .foregroundStyle(.secondary)
                     Toggle("Give agents the ticket's history summary", isOn: $model.promptBriefEnabled)
@@ -371,10 +386,9 @@ struct SettingsView: View {
                     Text("Ledger (saved in symphony.yml)")
                 } footer: {
                     SectionFooter(
-                        "ledger.artifact_retention_days (default 14 days), ledger.artifact_max_bytes (default 25 MB), "
-                            + "ledger.prompt_brief_enabled (default on) and ledger.prompt_brief_max_tokens (default 50,000 "
-                            + "tokens). Save checks symphony.yml with symphony check first; Symphony reads them on its next "
-                            + "cleanup, stored file and agent prompt, no restart needed."
+                        "ledger.artifact_max_bytes (default 25 MB), ledger.prompt_brief_enabled (default on) and "
+                            + "ledger.prompt_brief_max_tokens (default 50,000 tokens). Save checks symphony.yml with symphony "
+                            + "check first; Symphony reads them on its next stored file and agent prompt, no restart needed."
                     )
                 }
                 .disabled(!model.canEditLedger)
@@ -559,7 +573,7 @@ struct SettingsView: View {
                 if let error = model.ticketPatternsBuiltInError {
                     CheckErrorText(message: error)
                 }
-                if let error = model.codeReviewError {
+                if let error = model.riskRulesError {
                     CheckErrorText(message: error)
                 }
                 if let loginItemError = model.loginItemError {
@@ -819,70 +833,50 @@ private struct OpenRouterModelField: View {
     }
 }
 
-/// Code Review: its reviewer, the read-only agent that judges each pull request (`code_review.enabled` and
-/// `code_review.runtime`; its command, model and effort are the Models section's Code review row), and the built-in
-/// ticket patterns that send a ticket to a person
-/// (`auto_review.acceptance_gate.escalate.ticket_patterns_builtin`).
-private struct CodeReviewSection: View {
+/// Code Review's risk rules (`auto_review.acceptance_gate.escalate.on_match` and `.size_counts`): per rule, whether
+/// its match only tells the reviewer or also asks you once the reviewer approves, and what the change size counts.
+private struct RiskRulesSection: View {
     @ObservedObject var model: SettingsViewModel
 
     var body: some View {
         Section {
-            Group {
-                Toggle("Code Review's reviewer", isOn: $model.codeReview.enabled)
-                    .help(
-                        "code_review.enabled: on, a read-only agent reviews each pull request in Code Review. Off, "
-                            + "Code Review tickets wait and nothing reviews the PR."
-                    )
-                Text(
-                    model.codeReview.enabled
-                        ? "A read-only agent reviews each pull request in Code Review, with the command in "
-                            + "code_review.command and the Code review row's model and effort."
-                        : "Off: Code Review tickets wait, and nothing reviews the PR, until it is turned on."
-                )
-                .foregroundStyle(.secondary)
-                Picker("Runtime", selection: $model.codeReview.runtime) {
-                    if model.codeReview.runtime == nil {
-                        Text("Not set").tag(CodeReviewRuntime?.none)
-                    }
-                    ForEach(CodeReviewRuntime.allCases) { runtime in
-                        Text(runtime.title).tag(CodeReviewRuntime?.some(runtime))
+            ForEach(RiskRule.allCases) { rule in
+                Picker(rule.title, selection: match(rule)) {
+                    ForEach(RiskRuleMatch.allCases) { option in
+                        Text(option.title).tag(option)
                     }
                 }
-                .help("code_review.runtime: the agent runtime the reviewer runs on, Codex or Claude. Required while the reviewer is on.")
-                .accessibilityLabel("Code Review's reviewer runtime")
-                .disabled(!model.codeReview.enabled)
-                if model.codeReviewError != nil {
-                    CheckErrorPointer(subject: "the reviewer settings")
+                Text(rule.explanation)
+                    .foregroundStyle(.secondary)
+            }
+            Picker(RiskRuleSettings.sizeCountsTitle, selection: $model.riskRules.sizeCounts) {
+                ForEach(ChangeSizeCount.allCases) { count in
+                    Text(count.title).tag(count)
                 }
             }
-            .disabled(!model.canEditCodeReview)
-            Group {
-                Toggle(BuiltInTicketPatterns.toggleTitle, isOn: $model.ticketPatternsBuiltIn)
-                Text(
-                    model.ticketPatternsBuiltIn
-                        ? BuiltInTicketPatternsChoice.on.explanation
-                        : BuiltInTicketPatternsChoice.off.explanation
-                )
+            Text(model.riskRules.sizeCounts.explanation)
                 .foregroundStyle(.secondary)
-                if model.ticketPatternsBuiltInError != nil {
-                    CheckErrorPointer(subject: "this setting")
-                }
+            if model.riskRulesError != nil {
+                CheckErrorPointer(subject: "these risk rules")
             }
-            .disabled(!model.canEditTicketPatternsBuiltIn)
         } header: {
-            Text("Code Review (saved in symphony.yml)")
+            Text("Code Review risk rules (saved in symphony.yml)")
         } footer: {
             SectionFooter(
-                "code_review.enabled (default off) and code_review.runtime (codex or claude); with the reviewer on, "
-                    + "symphony check also needs code_review.command. "
-                    + "auto_review.acceptance_gate.escalate.ticket_patterns_builtin: the built-in ticket patterns "
-                    + "match a title or description asking for a human or manual review, saying it must not be "
-                    + "auto-approved, or that it needs a human. Turn them off when they misfire on your tickets; "
-                    + "a repo can override this in its Review sheet in Repos. Save checks symphony.yml with symphony check "
-                    + "first; Symphony reads them on its next poll, no restart needed."
+                "auto_review.acceptance_gate.escalate.on_match and .size_counts. Code Review reviews each change once. "
+                    + "A risk rule that matches tells the reviewer what it found, so the review weighs it; set to Ask me, "
+                    + "an approval it matches also waits for your answer in the Inbox. These apply to every repo. Save "
+                    + "checks symphony.yml with symphony check first; Symphony reads it on its next poll, no restart needed."
             )
         }
+        .disabled(!model.canEditRiskRules)
+    }
+
+    private func match(_ rule: RiskRule) -> Binding<RiskRuleMatch> {
+        Binding(
+            get: { model.riskRules.match(for: rule) },
+            set: { model.riskRules.onMatch[rule] = $0 }
+        )
     }
 }
 

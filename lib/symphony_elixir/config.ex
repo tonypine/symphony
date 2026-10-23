@@ -577,13 +577,6 @@ defmodule SymphonyElixir.Config do
   end
 
   @doc """
-  How many days a finished ticket's artifact files are kept: symphony.yml's
-  `ledger.artifact_retention_days`, read on each call, else 14.
-  """
-  @spec artifact_retention_days() :: pos_integer()
-  def artifact_retention_days, do: ledger_setting(:artifact_retention_days)
-
-  @doc """
   The largest file `SymphonyElixir.Artifacts.ingest/3` takes in, in bytes: symphony.yml's
   `ledger.artifact_max_bytes`, read on each call, else 25 MB.
   """

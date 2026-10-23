@@ -67,7 +67,7 @@ defmodule SymphonyElixir.TicketEvents.Summary do
 
   defp summary("verdict.recorded", payload, _event) do
     title = "#{kind_name(text(payload, :kind)) || "Review"} verdict" <> suffix(": ", text(payload, :outcome))
-    {title, prefixed("on", short_sha(text(payload, :head)))}
+    {title, [text(payload, :reason) | prefixed("on", short_sha(text(payload, :head)))]}
   end
 
   defp summary("decision.requested", payload, _event) do

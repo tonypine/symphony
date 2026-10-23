@@ -540,8 +540,7 @@ durable run store:
 
 - `id`, `mime`, `bytes` (the size), `label`, `kind` (`screenshot`, `transcript`, `log`, `report`,
   `diff` or `file`), `repo_key`, `issue_id`, `run_id` and `captured_at`: the first ingest's.
-- `references` (how many ingests) and `tickets` (every repo and issue that ingested the bytes, so
-  retention never removes bytes another ticket still holds).
+- `references` (how many ingests) and `tickets` (every repo and issue that ingested the bytes).
 - `projections` (where the file was published: `linear_url`), `expired` and `expired_at`.
 
 An ingest names a source file and the ticket, run, label and kind. The source must be a regular
@@ -555,22 +554,12 @@ a UTF-8 `.jsonl` file whose first line is a JSON object is `application/x-ndjson
 JSON lines, is refused.
 
 The same bytes ingested again are the same file and row: `references` grows and `tickets` gains a
-new ticket. Expiring an artifact removes its bytes and keeps its row with `expired` set; asking for
-the path of an artifact whose file is gone answers that it expired and marks the row so. Ingesting
-the same bytes again writes the file back and clears `expired`. An ingest, an expiry and that check
+new ticket. Nothing removes an artifact's bytes: a ticket's history is immutable, so every
+screenshot and transcript is kept for good. Asking for the path of an artifact whose file is gone
+from the store anyway (a damaged disk, a hand edit) answers that it expired and marks the row so,
+keeping the row and the events that name the id; the artifacts API answers 410 with the metadata.
+Ingesting the same bytes again writes the file back and clears `expired`. An ingest and that check
 of one id hold the row's lock while they touch its file, so they never interleave.
-
-Retention removes the bytes of a finished ticket's artifacts once `ledger.artifact_retention_days`
-(14 by default) have passed. It runs every `workspaces.cleanup.interval_ms` and reads the retention
-on each run. A run looks only at the artifacts that are not expired and were captured longer than
-the retention ago, and asks the tracker for their tickets' current states, one request per 50
-tickets and none when no artifact is old enough: Symphony's stored phase is refreshed only at
-startup, so it can't say whether a ticket is finished. A ticket is finished when the tracker says it
-is in one of its repository's terminal states and its newest ledger event is older than the
-retention. An artifact expires only when every ticket in its `tickets` is finished, so a file a
-finished ticket shares with an active one keeps its bytes. A ticket the tracker doesn't return, and
-every ticket of a request that failed, keeps its artifacts, and the run logs why. Expiring keeps the
-row and the events that name the id; the artifacts API answers 410 with the metadata.
 
 ### 4.2 Stable Identifiers and Normalization Rules
 
@@ -2896,17 +2885,24 @@ Rules:
   protection. A store that cannot record the claim MUST unlock nothing. The agents' comment and
   sub-issue tools MUST refuse text that reads as such a grant or carries an option's hidden paths,
   and a reply under a request whose options unlock a path.
-- **Escalation rules.** Code Review applies the repo's escalation rules (`EscalationRules`, the
+- **Escalation rules.** Code Review checks the repo's escalation rules (`EscalationRules`, the
   retired acceptance gate's deterministic rules, read from `auto_review.acceptance_gate.escalate`
-  during its deprecation window) to an approval. A person rule — an `escalate.labels` label other
-  than `plan` and `breakdown`, or a title or description matching `escalate.ticket_patterns` — MUST
-  pause the ticket in `Code Review` on a `Needs Decision` hold recommending QA. A risk rule — a
-  changed path outside docs and tests matching `escalate.paths`, an added line matching
-  `escalate.diff_patterns`, a dependency manifest change per `escalate.dependencies`, more than
-  `escalate.max_changed_lines` lines outside docs and tests, or more than
-  `escalate.busy_files.max_lines` lines in one of the base branch's busiest files — MUST deepen the
-  review (a second reviewer pass on the same head, recorded with no move) rather than route it. A
-  reviewer `block`, and an inconclusive review that ran out of retries, MUST pause the ticket on a
+  during its deprecation window) on the diff the reviewer judges, before the reviewer starts. The
+  reviewer MUST run once per head: no rule starts a second pass. A risk rule — a changed path
+  outside docs and tests matching `escalate.paths`, an added line matching `escalate.diff_patterns`,
+  a dependency manifest change per `escalate.dependencies`, more than `escalate.max_changed_lines`
+  lines outside docs and tests (every added, changed and removed line, or only the added and changed
+  ones with `escalate.size_counts: added`), or more than `escalate.busy_files.max_lines` lines in
+  one of the base branch's busiest files — MUST put its finding in plain words in the reviewer's
+  instructions, and in the verdict's summary; with no match the instructions say nothing about
+  rules. A change's size is three numbers outside docs and tests: added, changed (a line both
+  removed and added, `min(additions, deletions)` per file) and removed lines. On an approval, a
+  person rule — an `escalate.labels` label other than `plan` and `breakdown`, or a title or
+  description matching `escalate.ticket_patterns` — and a risk rule whose `escalate.on_match` key
+  is `ask` (the default is `inform`) MUST pause the ticket in `Code Review` on a `Needs Decision`
+  hold recommending QA; otherwise the approval routes at once. A deepened verdict an earlier version
+  recorded (a second pass with no move) on a head no move has routed since MUST be routed once by
+  the next dispatch, without reviewing again. A reviewer `block`, and an inconclusive review that ran out of retries, MUST pause the ticket on a
   `Needs Decision` hold recommending `Rework`. Every escalation hold's confirmation continues into
   the QA state; its redirect sends the ticket to `Rework`. The Code Review reviewer judges the code
   and the change against the ticket's acceptance criteria, scope and intent; no reviewer runs

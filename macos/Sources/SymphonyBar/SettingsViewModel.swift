@@ -91,11 +91,11 @@ final class SettingsViewModel: ObservableObject {
     @Published var ticketPatternsBuiltIn = BuiltInTicketPatterns.defaultIsOn
     /// Why `symphony check` rejected the changed built-in ticket patterns setting, shown above Save.
     @Published private(set) var ticketPatternsBuiltInError: String?
-    /// `code_review.enabled` and `code_review.runtime` in the configured symphony.yml: whether Code Review's reviewer
-    /// runs on each pull request (with it off, Code Review tickets wait), and the runtime it runs on.
-    @Published var codeReview = CodeReviewSettings()
-    /// Why `symphony check` rejected the changed Code Review reviewer settings, shown above Save.
-    @Published private(set) var codeReviewError: String?
+    /// `auto_review.acceptance_gate.escalate.on_match.*` and `.size_counts` in the configured symphony.yml: what
+    /// each of Code Review's risk rules does when it matches, and what the change-size rule counts.
+    @Published var riskRules = RiskRuleSettings()
+    /// Why `symphony check` rejected the changed risk rule settings, shown above Save.
+    @Published private(set) var riskRulesError: String?
     /// Today's tokens from Symphony's latest state, nil while it isn't answering.
     @Published var budget: StateSnapshot.Budget?
     /// Why this copy can't install updates with Development mode on or off, nil when it can.
@@ -127,9 +127,7 @@ final class SettingsViewModel: ObservableObject {
     @Published var dispatchLoopLongWindowMinutes = DispatchLoopLimits.minutes(DispatchLoopLimits.defaultLongWindowMs)
     /// Why `symphony check` rejected the changed dispatch-loop limits, shown in their section.
     @Published private(set) var dispatchLoopError: String?
-    /// `ledger.artifact_retention_days` and `ledger.artifact_max_bytes` in the configured symphony.yml: how many days a
-    /// finished ticket's artifact files are kept, and the largest file Symphony stores, in MB.
-    @Published var artifactRetentionDays = LedgerSettings.defaultRetentionDays
+    /// `ledger.artifact_max_bytes` in the configured symphony.yml: the largest file Symphony stores, in MB.
     @Published var artifactMaxMegabytes = LedgerSettings.megabytes(LedgerSettings.defaultMaxBytes)
     /// `ledger.prompt_brief_enabled` and `ledger.prompt_brief_max_tokens`: whether agents get the summary of the
     /// ticket's history, and the size in tokens over which Symphony warns about one (it still gives it whole).
@@ -194,9 +192,9 @@ final class SettingsViewModel: ObservableObject {
     /// written only when the toggle moved away from it.
     private var loadedTicketPatternsBuiltIn: Bool?
 
-    /// The Code Review reviewer settings read from symphony.yml, or nil when they couldn't be read. Only a setting
-    /// that changed is written.
-    private var loadedCodeReview: CodeReviewSettings?
+    /// The risk rule settings read from symphony.yml, or nil when they couldn't be read. Only what changed from
+    /// these is written.
+    private var loadedRiskRules: RiskRuleSettings?
 
     /// The pending or running `symphony check` on the changed token limits.
     private var tokenLimitsCheck: Task<Void, Never>?
@@ -244,7 +242,7 @@ final class SettingsViewModel: ObservableObject {
         loadQAHostTools()
         loadWorkflowStates()
         loadTicketPatternsBuiltIn()
-        loadCodeReview()
+        loadRiskRules()
         loadTimeouts()
         loadGitHubUpdates()
         loadDispatchLoopLimits()
@@ -400,18 +398,18 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
-    /// The Code Review reviewer controls are off until a symphony.yml has been read, and while Save checks it.
-    var canEditCodeReview: Bool { loadedCodeReview != nil && !isSaving }
+    /// The risk rule pickers are off until a symphony.yml has been read, and while Save checks it.
+    var canEditRiskRules: Bool { loadedRiskRules != nil && !isSaving }
 
-    private func loadCodeReview() {
+    private func loadRiskRules() {
         let path = settings.trimmed().configPath
         guard !path.isEmpty else { return }
         do {
-            let reviewer = try SymphonyConfigFile(path: path).readCodeReviewSettings()
-            codeReview = reviewer
-            loadedCodeReview = reviewer
+            let rules = try SymphonyConfigFile(path: path).readRiskRuleSettings()
+            riskRules = rules
+            loadedRiskRules = rules
         } catch {
-            configFileError = "Could not read Code Review's reviewer settings from symphony.yml: \(error.localizedDescription)"
+            configFileError = "Could not read the risk rules from symphony.yml: \(error.localizedDescription)"
         }
     }
 
@@ -474,7 +472,6 @@ final class SettingsViewModel: ObservableObject {
         guard !path.isEmpty else { return }
         do {
             let ledger = try SymphonyConfigFile(path: path).readLedgerSettings()
-            artifactRetentionDays = LedgerSettings.steppedDays(ledger.retentionDays)
             artifactMaxMegabytes = LedgerSettings.megabytes(ledger.maxBytes)
             promptBriefEnabled = ledger.briefEnabled
             promptBriefMaxTokens = ledger.briefMaxTokens
@@ -609,7 +606,7 @@ final class SettingsViewModel: ObservableObject {
     /// Validates and saves, then calls `onSaved` when everything was stored. Changed models, token limits and
     /// timeouts are written only after `symphony check` passes on them; until then the rest isn't saved, and a
     /// failure shows in `configCheckError`, `tokenLimitsError`, `timeoutsError`, `gitHubUpdatesError`,
-    /// `dispatchLoopError`, `ledgerError`, `macAppQAError` or `codeReviewError`.
+    /// `dispatchLoopError`, `ledgerError` or `macAppQAError`.
     func save(onSaved: @escaping () -> Void) {
         guard canSave else { return }
         let settings = settings.trimmed()
@@ -642,7 +639,7 @@ final class SettingsViewModel: ObservableObject {
         )
         let oldLoopLimits = loadedDispatchLoopLimits.flatMap { $0 != loopLimits ? $0 : nil }
         ledgerError = nil
-        var ledger = loadedLedgerSettings?.setting(retentionDays: artifactRetentionDays, maxMegabytes: artifactMaxMegabytes)
+        var ledger = loadedLedgerSettings?.setting(maxMegabytes: artifactMaxMegabytes)
         ledger?.briefEnabled = promptBriefEnabled
         ledger?.briefMaxTokens = promptBriefMaxTokens
         let oldLedger = loadedLedgerSettings.flatMap { $0 != ledger ? $0 : nil }
@@ -661,13 +658,13 @@ final class SettingsViewModel: ObservableObject {
         ticketPatternsBuiltInError = nil
         let builtInPatterns = ticketPatternsBuiltIn
         let builtInPatternsChanged = loadedTicketPatternsBuiltIn.map { $0 != builtInPatterns } ?? false
-        codeReviewError = nil
-        let reviewer = codeReview
-        let oldReviewer = loadedCodeReview.flatMap { $0 != reviewer ? $0 : nil }
+        riskRulesError = nil
+        let rules = riskRules
+        let loadedRules = loadedRiskRules.flatMap { $0 != rules ? $0 : nil }
 
         guard loadedProfiles != nil || loadedLimits != nil || oldTimeouts != nil || oldUpdates != nil || oldLoopLimits != nil
             || oldLedger != nil || oldQAPlaybook != nil || loadedPriorities != nil || loadedHostTools != nil || loadedStates != nil
-            || builtInPatternsChanged || oldReviewer != nil else {
+            || builtInPatternsChanged || loadedRules != nil else {
             if saveRest(settings, secrets) { onSaved() }
             return
         }
@@ -707,8 +704,8 @@ final class SettingsViewModel: ObservableObject {
             if saved, builtInPatternsChanged {
                 saved = await saveTicketPatternsBuiltIn(builtInPatterns, settings: settings, secrets: secrets)
             }
-            if saved, let oldReviewer {
-                saved = await saveCodeReview(reviewer, from: oldReviewer, settings: settings, secrets: secrets)
+            if saved, let loadedRules {
+                saved = await saveRiskRules(rules, from: loadedRules, settings: settings, secrets: secrets)
             }
             isSaving = false
             if saved && saveRest(settings, secrets) { onSaved() }
@@ -1036,31 +1033,29 @@ final class SettingsViewModel: ObservableObject {
         return true
     }
 
-    /// Writes the Code Review reviewer settings that changed to symphony.yml once `symphony check` passes on the
-    /// result.
-    private func saveCodeReview(
-        _ reviewer: CodeReviewSettings,
-        from loaded: CodeReviewSettings,
+    /// Writes the risk rule settings that changed to symphony.yml once `symphony check` passes on the result.
+    private func saveRiskRules(
+        _ rules: RiskRuleSettings,
+        from old: RiskRuleSettings,
         settings: AppSettings,
         secrets: SecretSettings
     ) async -> Bool {
         let check = configCheck
         let result: ConfigCheckResult
         do {
-            result = try await SymphonyConfigFile(path: settings.configPath).writeCodeReviewSettings(reviewer, from: loaded) { path in
+            result = try await SymphonyConfigFile(path: settings.configPath).writeRiskRuleSettings(rules, from: old) { path in
                 await check(path, settings, secrets)
             }
         } catch {
-            configFileError = "Could not save Code Review's reviewer settings to symphony.yml: \(error.localizedDescription)"
+            configFileError = "Could not save the risk rules to symphony.yml: \(error.localizedDescription)"
             return false
         }
         if case .failed(let message) = result {
-            codeReviewError = "symphony check rejected Code Review's reviewer settings, so nothing was saved: "
-                + ConfigCheck.reasonFirst(message)
+            riskRulesError = "symphony check rejected the risk rules, so nothing was saved: " + ConfigCheck.reasonFirst(message)
             return false
         }
         configFileError = nil
-        loadedCodeReview = reviewer
+        loadedRiskRules = rules
         return true
     }
 

@@ -8,14 +8,13 @@ final class LedgerSettingsTests: XCTestCase {
           root: ~/work
 
         ledger:
-          artifact_retention_days: 30  # keep QA evidence a month
-          artifact_max_bytes: 10485760
+          artifact_max_bytes: 10485760  # screenshots stay small
           prompt_brief_enabled: true  # agents get the history summary
           prompt_brief_max_tokens: 40_000
 
         """
 
-    private let configSettings = LedgerSettings(retentionDays: 30, maxBytes: 10_485_760, briefEnabled: true, briefMaxTokens: 40_000)
+    private let configSettings = LedgerSettings(maxBytes: 10_485_760, briefEnabled: true, briefMaxTokens: 40_000)
 
     // MARK: Reading
 
@@ -24,11 +23,11 @@ final class LedgerSettingsTests: XCTestCase {
     }
 
     func testMissingAndNullKeysReadAsSymphonysDefaults() throws {
-        let defaults = LedgerSettings(retentionDays: 14, maxBytes: 26_214_400, briefEnabled: true, briefMaxTokens: 50_000)
+        let defaults = LedgerSettings(maxBytes: 26_214_400, briefEnabled: true, briefMaxTokens: 50_000)
         XCTAssertEqual(LedgerSettings(), defaults)
         XCTAssertEqual(try LedgerSettings.values(in: ""), defaults)
         XCTAssertEqual(try LedgerSettings.values(in: "ledger:\n"), defaults)
-        XCTAssertEqual(try LedgerSettings.values(in: "ledger:\n  artifact_retention_days: null\n  artifact_max_bytes: ~\n"), defaults)
+        XCTAssertEqual(try LedgerSettings.values(in: "ledger:\n  artifact_max_bytes: ~\n"), defaults)
         XCTAssertEqual(try LedgerSettings.values(in: "ledger:\n  prompt_brief_enabled: null\n  prompt_brief_max_tokens: ~\n"), defaults)
     }
 
@@ -43,8 +42,8 @@ final class LedgerSettingsTests: XCTestCase {
     }
 
     func testRefusesValuesItCannotRead() {
-        XCTAssertThrowsError(try LedgerSettings.values(in: "ledger:\n  artifact_retention_days: forever\n")) { error in
-            XCTAssertEqual(error as? LedgerSettingsError, .unreadable(key: "ledger.artifact_retention_days", value: "forever"))
+        XCTAssertThrowsError(try LedgerSettings.values(in: "ledger:\n  artifact_max_bytes: huge\n")) { error in
+            XCTAssertEqual(error as? LedgerSettingsError, .unreadable(key: "ledger.artifact_max_bytes", value: "huge"))
         }
         XCTAssertThrowsError(try LedgerSettings.values(in: "ledger:\n  prompt_brief_enabled: sometimes\n")) { error in
             XCTAssertEqual(error as? LedgerSettingsError, .notOnOrOff(key: "ledger.prompt_brief_enabled", value: "sometimes"))
@@ -60,8 +59,8 @@ final class LedgerSettingsTests: XCTestCase {
             XCTAssertEqual(error as? LedgerSettingsError, .notABlock("ledger"))
         }
         XCTAssertEqual(
-            LedgerSettingsError.unreadable(key: "ledger.artifact_retention_days", value: "forever").errorDescription,
-            "`ledger.artifact_retention_days: forever` in symphony.yml is not a whole number. Change it by hand."
+            LedgerSettingsError.unreadable(key: "ledger.artifact_max_bytes", value: "huge").errorDescription,
+            "`ledger.artifact_max_bytes: huge` in symphony.yml is not a whole number. Change it by hand."
         )
         XCTAssertEqual(
             LedgerSettingsError.notABlock("ledger").errorDescription,
@@ -72,16 +71,12 @@ final class LedgerSettingsTests: XCTestCase {
     // MARK: Writing
 
     func testRewritesOnlyTheChangedLineKeepingItsComment() throws {
-        var retention = configSettings
-        retention.retentionDays = 7
-        XCTAssertEqual(
-            changedLines(config, try LedgerSettings.updating(config, from: configSettings, to: retention)),
-            ["  artifact_retention_days: 7  # keep QA evidence a month"]
-        )
-
         var cap = configSettings
         cap.maxBytes = 52_428_800
-        XCTAssertEqual(changedLines(config, try LedgerSettings.updating(config, from: configSettings, to: cap)), ["  artifact_max_bytes: 52428800"])
+        XCTAssertEqual(
+            changedLines(config, try LedgerSettings.updating(config, from: configSettings, to: cap)),
+            ["  artifact_max_bytes: 52428800  # screenshots stay small"]
+        )
         XCTAssertEqual(try LedgerSettings.updating(config, from: configSettings, to: configSettings), config)
 
         var off = configSettings
@@ -100,11 +95,11 @@ final class LedgerSettingsTests: XCTestCase {
     func testInsertsTheSummarySettingsWithTheOthersUntouched() throws {
         XCTAssertEqual(
             try LedgerSettings.updating(
-                "ledger:\n  artifact_retention_days: 3\n",
-                from: LedgerSettings(retentionDays: 3),
-                to: LedgerSettings(retentionDays: 3, briefEnabled: false, briefMaxTokens: 1_000)
+                "ledger:\n  artifact_max_bytes: 1048576\n",
+                from: LedgerSettings(maxBytes: 1_048_576),
+                to: LedgerSettings(maxBytes: 1_048_576, briefEnabled: false, briefMaxTokens: 1_000)
             ),
-            "ledger:\n  prompt_brief_enabled: false\n  prompt_brief_max_tokens: 1000\n  artifact_retention_days: 3\n"
+            "ledger:\n  prompt_brief_enabled: false\n  prompt_brief_max_tokens: 1000\n  artifact_max_bytes: 1048576\n"
         )
     }
 
@@ -113,19 +108,15 @@ final class LedgerSettingsTests: XCTestCase {
             try LedgerSettings.updating(
                 "issues:\n  provider: linear\n",
                 from: LedgerSettings(),
-                to: LedgerSettings(retentionDays: 7, maxBytes: 52_428_800)
+                to: LedgerSettings(maxBytes: 52_428_800)
             ),
-            "issues:\n  provider: linear\nledger:\n  artifact_retention_days: 7\n  artifact_max_bytes: 52428800\n"
-        )
-        XCTAssertEqual(
-            try LedgerSettings.updating("ledger:\n  artifact_max_bytes: 1048576\n", from: LedgerSettings(maxBytes: 1_048_576), to: LedgerSettings(retentionDays: 3, maxBytes: 1_048_576)),
-            "ledger:\n  artifact_retention_days: 3\n  artifact_max_bytes: 1048576\n"
+            "issues:\n  provider: linear\nledger:\n  artifact_max_bytes: 52428800\n"
         )
     }
 
     func testRefusesToWriteIntoAnInlineSection() {
         XCTAssertThrowsError(
-            try LedgerSettings.updating("ledger: {}\n", from: LedgerSettings(), to: LedgerSettings(retentionDays: 2))
+            try LedgerSettings.updating("ledger: {}\n", from: LedgerSettings(), to: LedgerSettings(maxBytes: 2))
         ) { error in
             XCTAssertEqual(error as? LedgerSettingsError, .notABlock("ledger"))
         }
@@ -134,9 +125,6 @@ final class LedgerSettingsTests: XCTestCase {
     // MARK: Steppers
 
     func testSteppersStayInTheirRanges() {
-        XCTAssertEqual(LedgerSettings.steppedDays(14), 14)
-        XCTAssertEqual(LedgerSettings.steppedDays(0), 1)
-        XCTAssertEqual(LedgerSettings.steppedDays(5_000), 365)
         XCTAssertEqual(LedgerSettings.megabytes(26_214_400), 25)
         XCTAssertEqual(LedgerSettings.megabytes(1_600_000), 2)
         XCTAssertEqual(LedgerSettings.megabytes(1), 1)
@@ -144,23 +132,22 @@ final class LedgerSettingsTests: XCTestCase {
     }
 
     func testOnlyAMovedStepperChangesItsSetting() {
-        let loaded = LedgerSettings(retentionDays: 1_000, maxBytes: 1_600_000)
-        XCTAssertEqual(loaded.setting(retentionDays: 365, maxMegabytes: 2), loaded)
-        XCTAssertEqual(loaded.setting(retentionDays: 7, maxMegabytes: 2), LedgerSettings(retentionDays: 7, maxBytes: 1_600_000))
-        XCTAssertEqual(loaded.setting(retentionDays: 365, maxMegabytes: 50), LedgerSettings(retentionDays: 1_000, maxBytes: 52_428_800))
+        let loaded = LedgerSettings(maxBytes: 1_600_000)
+        XCTAssertEqual(loaded.setting(maxMegabytes: 2), loaded)
+        XCTAssertEqual(loaded.setting(maxMegabytes: 50), LedgerSettings(maxBytes: 52_428_800))
 
         let summaryOff = LedgerSettings(briefEnabled: false, briefMaxTokens: 9)
-        XCTAssertEqual(summaryOff.setting(retentionDays: 7, maxMegabytes: 25), LedgerSettings(retentionDays: 7, briefEnabled: false, briefMaxTokens: 9))
+        XCTAssertEqual(summaryOff.setting(maxMegabytes: 50), LedgerSettings(maxBytes: 52_428_800, briefEnabled: false, briefMaxTokens: 9))
     }
 
     // MARK: The file
 
-    /// The operator changes the retention to 7 days and the size cap to 50 MB: symphony.yml holds the new values.
+    /// The operator changes the size cap to 50 MB: symphony.yml holds the new value.
     func testFileWriteRunsTheCheckOnTheNewTextFirst() async throws {
         let url = try writeConfig()
         let file = SymphonyConfigFile(path: url.path)
         let loaded = try file.readLedgerSettings()
-        let new = loaded.setting(retentionDays: 7, maxMegabytes: 50)
+        let new = loaded.setting(maxMegabytes: 50)
         var checked: String?
 
         let result = try await file.writeLedgerSettings(new, from: loaded) { path in
@@ -171,20 +158,20 @@ final class LedgerSettingsTests: XCTestCase {
         XCTAssertEqual(result, .passed)
         let written = try String(contentsOf: url, encoding: .utf8)
         XCTAssertEqual(checked, written)
-        XCTAssertEqual(changedLines(config, written), ["  artifact_retention_days: 7  # keep QA evidence a month", "  artifact_max_bytes: 52428800"])
-        XCTAssertEqual(try file.readLedgerSettings(), LedgerSettings(retentionDays: 7, maxBytes: 52_428_800, briefMaxTokens: 40_000))
+        XCTAssertEqual(changedLines(config, written), ["  artifact_max_bytes: 52428800  # screenshots stay small"])
+        XCTAssertEqual(try file.readLedgerSettings(), LedgerSettings(maxBytes: 52_428_800, briefMaxTokens: 40_000))
     }
 
     func testFileWriteLeavesTheFileWhenTheCheckFails() async throws {
         let url = try writeConfig()
         var new = configSettings
-        new.retentionDays = 0
+        new.maxBytes = 0
 
         let result = try await SymphonyConfigFile(path: url.path).writeLedgerSettings(new, from: configSettings) { _ in
-            .failed("ledger.artifact_retention_days must be greater than 0")
+            .failed("ledger.artifact_max_bytes must be greater than 0")
         }
 
-        XCTAssertEqual(result, .failed("ledger.artifact_retention_days must be greater than 0"))
+        XCTAssertEqual(result, .failed("ledger.artifact_max_bytes must be greater than 0"))
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), config)
     }
 
