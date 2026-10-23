@@ -47,8 +47,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
   @retired_human_review_state "the Human Review state (`tracker.human_review_state`) is retired; a decision request pauses " <>
                                 "the ticket on a Needs Decision hold, and a plan waits in `issues.states.plan_review`"
   @allowed_keys ~w(
-    agent auto_review dashboard dependency_audit github human_actions issue_gate issues ledger notifications poller
-    pre_push_review pull_requests
+    agent auto_review code_review dashboard dependency_audit github human_actions issue_gate issues ledger notifications
+    poller pull_requests
     repositories tickets verification watchdog workers workspaces
   )
 
@@ -108,7 +108,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "agent.mcp" => ~w(inherit allowed_servers servers),
     "agent.usage_limit" => ~w(auto_pause resume_margin_seconds unknown_reset_retry_seconds headroom_utilization),
     "workers" => ~w(ssh_hosts max_concurrent_agents_per_host),
-    "pre_push_review" => ~w(enabled runtime command model effort max_iterations run_on),
+    "code_review" => ~w(enabled runtime command model effort),
     "auto_review" => ~w(enabled state runtime command model effort max_turns timeout_ms max_concurrent max_fix_attempts run_on skip_globs playbooks worker_host android acceptance_gate),
     "auto_review.android" => ~w(avd sdk_root boot_timeout_ms idle_timeout_ms),
     "auto_review.acceptance_gate" => @acceptance_gate_keys,
@@ -143,6 +143,12 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "watchdog" => Schema.Watchdog
   }
 
+  # The pre-push reviewer is removed: Code Review reviews the code on the pull request, with the
+  # reviewer its `code_review` section configures.
+  @removed_pre_push_review "the pre-push reviewer is removed and Code Review owns the review of the code now; " <>
+                             "set Code Review's reviewer in `code_review` (enabled, runtime, command, model, effort) " <>
+                             "and its run profile in `agent.run_profiles.code_review`"
+
   # A removed key and what to do instead: a top-level key, or a dotted path to one in a section.
   @removed_keys %{
     "ci" => "use `pull_requests.checks`",
@@ -153,10 +159,11 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "observability" => "use `dashboard`",
     "polling" => "use `issues.poll_interval_ms`",
     "pr_review" => "use `pull_requests.review_comments`",
+    "pre_push_review" => @removed_pre_push_review,
     "quality_gate" => "use `issue_gate`",
     "repos" => "use `repositories`",
-    "review_agent" => "use `pre_push_review`",
-    "self_review" => "use `pre_push_review`",
+    "review_agent" => "use `code_review`",
+    "self_review" => "use `code_review`",
     "server" => "use `dashboard`",
     "token_budget" => "remove it; use `agent.limits.tokens_per_issue` and `agent.limits.tokens_per_day`",
     "tracker" => "use `issues`",
@@ -172,7 +179,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "polling" => "issues",
     "pr_review" => "pull_requests",
     "quality_gate" => "issue_gate",
-    "review_agent" => "pre_push_review",
+    "review_agent" => "code_review",
     "server" => "dashboard",
     "tracker" => "issues",
     "worker" => "workers",
@@ -255,13 +262,11 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "repos.workspace.fetch_before_dispatch" => "repositories.workspace.fetch_before_dispatch",
     "repos.workspace.repo" => "repositories.workspace.repo",
     "repos.workspace.strategy" => "repositories.workspace.strategy",
-    "review_agent.command" => "pre_push_review.command",
-    "review_agent.enabled" => "pre_push_review.enabled",
-    "review_agent.effort" => "pre_push_review.effort",
-    "review_agent.kind" => "pre_push_review.runtime",
-    "review_agent.max_iterations" => "pre_push_review.max_iterations",
-    "review_agent.model" => "pre_push_review.model",
-    "review_agent.run_on" => "pre_push_review.run_on",
+    "review_agent.command" => "code_review.command",
+    "review_agent.enabled" => "code_review.enabled",
+    "review_agent.effort" => "code_review.effort",
+    "review_agent.kind" => "code_review.runtime",
+    "review_agent.model" => "code_review.model",
     "server.host" => "dashboard.host",
     "server.port" => "dashboard.port",
     "tracker.active_states" => "issues.states.active",
@@ -300,8 +305,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
   @operator_error_message_rewrites [
     {"quality_gate.", "issue_gate."},
     {"quality_gate", "issue_gate"},
-    {"review_agent.", "pre_push_review."},
-    {"review_agent", "pre_push_review"},
+    {"review_agent.", "code_review."},
+    {"review_agent", "code_review"},
     {"learnings.", "pull_requests.learnings."},
     {"pr_review.", "pull_requests."},
     {"ci.", "pull_requests.checks."},
@@ -749,7 +754,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, agent_config} <- normalize_agent(Map.get(config, "agent", %{})),
          {:ok, worker} <- normalize_workers(Map.get(config, "workers", %{})),
          :ok <- reject_managed_sources_on_ssh_workers(repos, worker),
-         {:ok, pre_push_review} <- normalize_pre_push_review(Map.get(config, "pre_push_review", %{})),
+         {:ok, code_review} <- normalize_code_review(Map.get(config, "code_review", %{})),
          {:ok, auto_review} <- normalize_auto_review(Map.get(config, "auto_review", %{})),
          {:ok, pull_requests} <- normalize_pull_requests(Map.get(config, "pull_requests", %{})),
          {:ok, poller} <- normalize_poller(Map.get(config, "poller", %{})),
@@ -770,7 +775,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
        |> maybe_put("github", Map.get(config, "github"))
        |> maybe_put("agent", Map.get(agent_config, "agent"))
        |> maybe_put("verification", Map.get(config, "verification"))
-       |> maybe_put("review_agent", pre_push_review)
+       |> maybe_put("review_agent", code_review)
        |> maybe_put("auto_review", auto_review)
        |> merge_sections(pull_requests)
        |> maybe_put("poller", poller)
@@ -869,6 +874,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, workspace} <- normalize_repo_source(repo, workspace, repo_path(Map.get(repo, "key"), index)),
          {:ok, agent} <- section_map(Map.get(repo, "agent"), repo_agent_path(Map.get(repo, "key"), index)),
          :ok <- reject_unknown_section_keys(agent, section_keys("repositories[].agent"), repo_agent_path(Map.get(repo, "key"), index)),
+         :ok <- reject_removed_run_profiles(Map.get(agent, "run_profiles"), repo_agent_path(Map.get(repo, "key"), index) <> ".run_profiles"),
          agent = drop_repo_retired_run_profiles(agent, repo_agent_path(Map.get(repo, "key"), index)),
          {:ok, acceptance_gate} <-
            normalize_acceptance_gate(Map.get(repo, "acceptance_gate"), repo_path(Map.get(repo, "key"), index) <> ".acceptance_gate", "repositories[].acceptance_gate") do
@@ -993,6 +999,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   defp normalize_agent(config) do
     with {:ok, config} <- section_map(config, "agent"),
          :ok <- reject_unknown_section_keys(config, section_keys("agent"), "agent"),
+         :ok <- reject_removed_run_profiles(Map.get(config, "run_profiles"), "agent.run_profiles"),
          {:ok, concurrency} <- section_map(Map.get(config, "concurrency", %{}), "agent.concurrency"),
          :ok <- reject_unknown_section_keys(concurrency, section_keys("agent.concurrency"), "agent.concurrency"),
          {:ok, limits} <- section_map(Map.get(config, "limits", %{}), "agent.limits"),
@@ -1075,18 +1082,16 @@ defmodule SymphonyElixir.Config.SystemSchema do
     end
   end
 
-  defp normalize_pre_push_review(config) do
-    with {:ok, config} <- section_map(config, "pre_push_review"),
-         :ok <- reject_unknown_section_keys(config, section_keys("pre_push_review"), "pre_push_review") do
+  defp normalize_code_review(config) do
+    with {:ok, config} <- section_map(config, "code_review"),
+         :ok <- reject_unknown_section_keys(config, section_keys("code_review"), "code_review") do
       {:ok,
        %{}
        |> maybe_put("enabled", Map.get(config, "enabled"))
        |> maybe_put("kind", Map.get(config, "runtime"))
        |> maybe_put("command", Map.get(config, "command"))
        |> maybe_put("model", Map.get(config, "model"))
-       |> maybe_put("effort", Map.get(config, "effort"))
-       |> maybe_put("max_iterations", Map.get(config, "max_iterations"))
-       |> maybe_put("run_on", Map.get(config, "run_on"))}
+       |> maybe_put("effort", Map.get(config, "effort"))}
     end
   end
 
@@ -1181,7 +1186,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     for key <- @retired_gate_keys, Map.has_key?(config, key) do
       no_effect_warning(
         "#{path}.#{key}",
-        "the acceptance gate is retired, and Code Review judges the pull request with the `pre_push_review` reviewer"
+        "the acceptance gate is retired, and Code Review judges the pull request with the `code_review` reviewer"
       )
     end
 
@@ -1223,6 +1228,18 @@ defmodule SymphonyElixir.Config.SystemSchema do
   end
 
   defp drop_retired_run_profiles(profiles, _path), do: profiles
+
+  # A removed run kind's profile is refused, like a removed top-level key: its run no longer exists.
+  @removed_run_profiles %{"pre_push_review" => @removed_pre_push_review}
+
+  defp reject_removed_run_profiles(profiles, path) when is_map(profiles) do
+    case Enum.find(Map.keys(profiles), &Map.has_key?(@removed_run_profiles, &1)) do
+      nil -> :ok
+      kind -> {:error, {:invalid_symphony_config, "`#{path}.#{kind}` is not valid; #{@removed_run_profiles[kind]}"}}
+    end
+  end
+
+  defp reject_removed_run_profiles(_profiles, _path), do: :ok
 
   defp drop_repo_retired_run_profiles(%{"run_profiles" => profiles} = agent, path) when is_map(profiles),
     do: Map.put(agent, "run_profiles", drop_retired_run_profiles(profiles, path <> ".run_profiles"))

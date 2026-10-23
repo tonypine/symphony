@@ -3,9 +3,9 @@ defmodule SymphonyElixir.CodeReview do
   The `Code Review` state's reviewer run.
 
   A `Code Review` ticket is dispatched by the poll loop like any other active
-  ticket; this module turns that dispatch into a review instead of an executor run. It reuses the
-  pre-push reviewer's machinery (`SymphonyElixir.ReviewAgent`), so a Code Review verdict is
-  grounded in the same read-only, diff-based judgment the pre-push reviewer already makes.
+  ticket; this module turns that dispatch into a review instead of an executor run. The reviewer is
+  `SymphonyElixir.ReviewAgent`, a read-only agent that judges the PR's diff, configured in
+  `symphony.yml`'s `code_review` section.
 
   The run is only ever started on a green head (the orchestrator gates dispatch on the ticket's
   recorded CI state). Its verdict is recorded bound to the head SHA it judged, then performed
@@ -46,7 +46,7 @@ defmodule SymphonyElixir.CodeReview do
   pass, recorded with no move) on a head still waiting to be routed is routed once by the next
   dispatch, without reviewing again.
 
-  A repo with the reviewer turned off (`review_agent.enabled: false`) has no reviewer to run, and
+  A repo with the reviewer turned off (`code_review.enabled: false`) has no reviewer to run, and
   `SymphonyElixir.ReviewAgent` answers a disabled reviewer with a fabricated approval. A Code Review
   ticket is never approved on that: dispatch is gated on the setting (the orchestrator parks the
   ticket with a `code_review_reviewer_disabled` signal recorded), and `run/3` itself refuses to
@@ -432,7 +432,7 @@ defmodule SymphonyElixir.CodeReview do
       TicketSignals.record(repo_key(issue, opts), issue.id, @reviewer_disabled_signal, %{})
     end
 
-    Logger.warning("Not reviewing #{issue_label(issue)}: review_agent.enabled is false for its repo")
+    Logger.warning("Not reviewing #{issue_label(issue)}: code_review.enabled is false for its repo")
 
     :ok
   end
@@ -443,8 +443,8 @@ defmodule SymphonyElixir.CodeReview do
     |> Enum.any?(&(&1.name == @reviewer_disabled_signal))
   end
 
-  # The same read-only reviewer the pre-push pass uses, pointed at the PR head this run is checked
-  # out on. The base branch comes from the repo's config, exactly as the pre-push pass resolves it.
+  # The read-only reviewer, pointed at the PR head this run is checked out on. The base branch comes
+  # from the repo's config.
   # Whatever reviewer judged it, a finding against a person's recorded decision is a note, never a
   # change request (`ReviewAgent.honour_decisions/3`).
   defp evaluate(issue, workspace, opts, settings) do
@@ -452,7 +452,6 @@ defmodule SymphonyElixir.CodeReview do
       opts
       |> Keyword.take([:repo_key, :run_id, :reviewer_run_profile, :linear_comment_registry, :agent_tmp_dir])
       |> Keyword.put(:worker_host, Keyword.get(opts, :worker_host))
-      |> Keyword.put(:review_scope, :code_review)
       |> Keyword.put(:escalation_rules, escalation_check(issue, workspace, opts, settings))
       |> maybe_put_base_branch(opts)
 

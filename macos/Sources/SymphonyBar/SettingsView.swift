@@ -434,8 +434,8 @@ struct SettingsView: View {
                     if model.commandProfile != RunProfile() {
                         Text(
                             "agent.command passes --model or --effort. Saving any model or effort moves them "
-                                + "to the Default row, and any in pre_push_review.command or auto_review.command "
-                                + "(or that section's model and effort) to the Pre-push review or QA row, so runs "
+                                + "to the Default row, and any in code_review.command or auto_review.command "
+                                + "(or that section's model and effort) to the Code review or QA row, so runs "
                                 + "keep the same model and effort."
                         )
                         .font(.callout)

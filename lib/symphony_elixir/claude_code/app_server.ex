@@ -22,12 +22,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   @agent_runtime_env_value AgentEnv.runtime_marker_value()
   @settings_dir_prefix "symphony-claude-settings-"
   @port_line_bytes 1_048_576
-  @approval_handoff_markers [
-    "Reviewer agent approved the committed diff.",
-    "Review-agent gate status:"
-  ]
-  @handoff_required_mcp_server "symphony"
-  @missing_required_mcp_tools_code "missing_required_mcp_tools"
+  @symphony_mcp_server "symphony"
   @mcp_log_files_scanned 5
   @diagnostic_output_line_count 5
   @diagnostic_output_line_max_bytes 4_096
@@ -92,13 +87,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     turn_timeout_ms = settings.agent.turn_timeout_ms
     command_timeout_ms = settings.agent.command_timeout_ms
 
-    required_mcp_server = required_mcp_server_for_prompt(prompt)
-
     # Claude writes MCP server logs on the host it runs on.
     mcp_log_workspace = if is_nil(worker_host), do: workspace
 
     read_opts = [
-      required_mcp_server: required_mcp_server,
       issue: issue,
       mcp_log_workspace: mcp_log_workspace,
       provider: session |> Map.get(:run_profile) |> run_profile_provider()
@@ -1429,7 +1421,6 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       turn_failed: nil,
       turn_completed: false,
       diagnostic_output_lines: [],
-      required_mcp_server: Keyword.get(opts, :required_mcp_server),
       mcp_servers_checked: false,
       mcp_log_workspace: Keyword.get(opts, :mcp_log_workspace),
       issue: Keyword.get(opts, :issue),
@@ -1493,7 +1484,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     new_acc =
       event
       |> apply_event(on_message, acc)
-      |> then(&check_symphony_mcp_server(full_line, on_message, &1))
+      |> then(&check_symphony_mcp_server(full_line, &1))
 
     new_loop_state = %{
       tracked_loop_state
@@ -1572,7 +1563,6 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
      |> Map.delete(:turn_failed)
      |> Map.delete(:turn_completed)
      |> Map.delete(:diagnostic_output_lines)
-     |> Map.delete(:required_mcp_server)
      |> Map.delete(:mcp_servers_checked)
      |> Map.delete(:mcp_log_workspace)
      |> Map.delete(:issue)
@@ -1582,47 +1572,23 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
      |> Map.delete(:usage_windows)}
   end
 
-  defp required_mcp_server_for_prompt(prompt) when is_binary(prompt) do
-    if Enum.any?(@approval_handoff_markers, &String.contains?(prompt, &1)) do
-      @handoff_required_mcp_server
-    else
-      nil
-    end
-  end
-
-  defp required_mcp_server_for_prompt(_prompt), do: nil
-
-  defp check_symphony_mcp_server(line, on_message, %{mcp_servers_checked: false} = acc) do
+  defp check_symphony_mcp_server(line, %{mcp_servers_checked: false} = acc) do
     # Only `init` lists the session's MCP servers; other `system` events (hooks,
     # status) can arrive first and must not be read as "no servers".
     case Jason.decode(line) do
       {:ok, %{"type" => "system", "subtype" => "init"} = event} ->
         acc = %{acc | mcp_servers_checked: true}
 
-        if mcp_server_available?(event, @handoff_required_mcp_server) do
-          acc
-        else
-          log_symphony_mcp_start_failure(event, acc)
-          maybe_fail_missing_required_mcp_server(event, on_message, acc)
-        end
+        # The turn goes on without the Symphony tools; the log records why the server didn't start.
+        unless mcp_server_available?(event, @symphony_mcp_server), do: log_symphony_mcp_start_failure(event, acc)
+        acc
 
       _not_system_event ->
         acc
     end
   end
 
-  defp check_symphony_mcp_server(_line, _on_message, acc), do: acc
-
-  # A turn that doesn't need the Symphony tools goes on without them; the
-  # error log above still records why the server didn't start.
-  defp maybe_fail_missing_required_mcp_server(event, on_message, %{required_mcp_server: required_mcp_server} = acc)
-       when is_binary(required_mcp_server) do
-    reason = missing_required_mcp_server_reason(required_mcp_server, event)
-    on_message.({:turn_failed, reason})
-    %{acc | turn_failed: reason}
-  end
-
-  defp maybe_fail_missing_required_mcp_server(_event, _on_message, acc), do: acc
+  defp check_symphony_mcp_server(_line, acc), do: acc
 
   defp log_symphony_mcp_start_failure(event, acc) do
     session_id = Map.get(event, "session_id")
@@ -1641,7 +1607,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       Path.join([
         claude_cache_root(),
         String.replace(workspace, ~r/[^A-Za-z0-9]/, "-"),
-        "mcp-logs-#{@handoff_required_mcp_server}"
+        "mcp-logs-#{@symphony_mcp_server}"
       ])
 
     errors =
@@ -1753,12 +1719,6 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   end
 
   defp mcp_server_status_available?(_status), do: true
-
-  defp missing_required_mcp_server_reason(required_server, event) do
-    "#{@missing_required_mcp_tools_code}: required Symphony MCP server is not available " <>
-      "in this Claude session. Missing MCP server: #{required_server}. " <>
-      "Advertised MCP servers: #{advertised_mcp_servers(event)}."
-  end
 
   defp advertised_mcp_servers(%{"mcp_servers" => servers}) do
     case mcp_server_entries(servers) do

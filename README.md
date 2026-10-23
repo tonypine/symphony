@@ -133,7 +133,9 @@ branch name Linear suggests for the ticket; a PR on a branch with any other name
   Agents add requests with `linear_request_human_action` and withdraw them with
   `linear_withdraw_human_action`; see `human_actions` in
   [docs/configuration.md](docs/configuration.md).
-- **Executor + reviewer runs** — an optional read-only reviewer agent gates the executor's push.
+- **Code Review** — a read-only reviewer agent (`code_review` in `symphony.yml`) judges each pull
+  request's diff against the ticket once its head is green; see
+  [`code_review`](docs/configuration.md#code_review).
 - **QA** — the `QA` state's agent uses each PR the way a user would, with
   built-in playbooks for CLIs (`cli`), web apps in a headless browser (`web`), macOS apps through
   accessibility in a QA VM (`macos_app`) and Android apps on a host-side emulator (`android_app`). See
@@ -396,8 +398,7 @@ Forcing only removes the wait for a slot. These transitions stay with a person:
 | a `Needs Decision` hold | a person records the decision |
 | any state → `Restart` | a person resets the approach |
 
-The review-agent verdict and the Code Review and QA verdicts are still required: forcing never
-skips or changes them.
+The Code Review and QA verdicts are still required: forcing never skips or changes them.
 
 ### Preview the assembled prompt
 
@@ -512,9 +513,9 @@ When Claude or Codex can't reach its API at all (the network or DNS is down, so 
 on `API Error: Can't reach the API server … (ENOTFOUND)` or Codex gives up on
 `error sending request … dns error`), Symphony holds that provider's runs the same way,
 `auto_pause` or not, instead of reading the turn as finished: no idle turn is counted and no issue
-is parked. The pre-push reviewer and QA hold too, so a push never goes ahead
-without a review and no verdict is recorded. One held run probes the API after a minute, then after
-twice as long each time it still fails (up to `unknown_reset_retry_seconds`). The log says
+is parked. Code Review's reviewer and QA hold too, so no verdict is recorded. One held run probes
+the API after a minute, then after twice as long each time it still fails (up to
+`unknown_reset_retry_seconds`). The log says
 `Model API unreachable (ENOTFOUND); holding dispatch` once, and the dashboards show
 `Paused: Claude API unreachable (ENOTFOUND), retries ~14:05`; `/api/v1/state` lists the hold
 under `usage_limits` with `reason: model_api_unreachable`.

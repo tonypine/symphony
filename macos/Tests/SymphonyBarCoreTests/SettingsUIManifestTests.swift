@@ -9,7 +9,7 @@ final class SettingsUIManifestTests: XCTestCase {
         # Symphony operator config.
         agent:
           command: claude --model claude-opus-5-5 --effort high  # flags
-        pre_push_review:
+        code_review:
           command: claude --model claude-haiku-4-5-20251001 --effort low
           model: claude-haiku-4-5-20251001
           effort: low

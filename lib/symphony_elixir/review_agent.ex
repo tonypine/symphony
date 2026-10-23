@@ -1,11 +1,12 @@
 defmodule SymphonyElixir.ReviewAgent do
   @moduledoc """
-  Runs a configured reviewer agent against the committed diff and parses its verdict.
+  Runs Code Review's reviewer agent (`SymphonyElixir.CodeReview`) against the pull request's diff
+  and parses its verdict.
   """
 
   require Logger
 
-  alias SymphonyElixir.{AgentLabels, AgentTmpDir, Config, GitConfigCommands, ProjectGuides, PromptSafety, SSH}
+  alias SymphonyElixir.{AgentTmpDir, Config, GitConfigCommands, ProjectGuides, PromptSafety, SSH}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Decisions
   alias SymphonyElixir.EscalationRules
@@ -37,38 +38,12 @@ defmodule SymphonyElixir.ReviewAgent do
           optional(:findings) => [finding()],
           optional(:reason) => String.t(),
           optional(:source) => map(),
-          optional(:advisory_notes) => [String.t()],
-          optional(:decision_notes) => [String.t()],
-          optional(:inconclusive) => String.t(),
           optional(:escalation_reasons) => [EscalationRules.reason()]
         }
 
   @spec enabled?(Schema.ReviewAgent.t() | nil) :: boolean()
   def enabled?(%Schema.ReviewAgent{enabled: true}), do: true
   def enabled?(_config), do: false
-
-  @doc """
-  Returns true when the configured `run_on` mode excludes this run from the
-  pre-push reviewer. Under `first_push`, follow-up runs on an existing PR are
-  skipped: explicit PR dispatches (`prompt_mode: :pr`) and rework runs carrying
-  reviewer comments, a CI failure, or a PR conflict in the run options.
-  """
-  @spec skip_for_run?(Schema.ReviewAgent.t() | map() | nil, keyword()) :: boolean()
-  def skip_for_run?(%{run_on: "first_push"}, opts) when is_list(opts) do
-    pr_prompt_mode?(opts) or follow_up_context?(opts)
-  end
-
-  def skip_for_run?(_config, _opts), do: false
-
-  defp pr_prompt_mode?(opts), do: Keyword.get(opts, :prompt_mode, :issue) in [:pr, "pr"]
-
-  defp follow_up_context?(opts) do
-    reviewer_comments = Keyword.get(opts, :reviewer_comments)
-
-    (is_list(reviewer_comments) and reviewer_comments != []) or
-      not is_nil(Keyword.get(opts, :ci_failure)) or
-      not is_nil(Keyword.get(opts, :pr_conflict))
-  end
 
   @doc """
   Runs the reviewer on the committed diff in `workspace` and returns its grounded verdict.
@@ -302,21 +277,11 @@ defmodule SymphonyElixir.ReviewAgent do
   end
 
   @doc """
-  Advisory notes for findings whose quotes stayed unverifiable: one `[unverified]`
-  line per dropped finding, or the reviewer's comments when it gave no findings.
-  """
-  @spec unverified_notes(map()) :: [String.t()]
-  def unverified_notes(%{failures: [_failure | _rest] = failures}) do
-    Enum.map(failures, fn %{finding: finding} -> "[unverified] " <> finding_comment(finding) end)
-  end
-
-  def unverified_notes(payload) when is_map(payload), do: Map.get(payload, :comments, [])
-
-  @doc """
   Keeps a review from requesting changes against a person's recorded decision
   (`SymphonyElixir.Decisions`): a finding that names a decision recorded on the ticket
-  (`"decision": "D1"`, read from its store record) becomes a decision note, and a change request
-  left with no other finding approves. A finding that names no recorded decision stays a finding.
+  (`"decision": "D1"`, read from its store record) is dropped from the change request. A change
+  request left with no other finding approves, with the dropped findings as its comments (decision
+  notes). A finding that names no recorded decision stays a finding.
   `opts[:repo_key]` names the ticket's repo.
   """
   @spec honour_decisions(result(), Issue.t(), keyword()) :: result()
@@ -333,8 +298,8 @@ defmodule SymphonyElixir.ReviewAgent do
   end
 
   defp honoured(result, [], _kept), do: result
-  defp honoured(result, notes, []), do: Map.merge(result, %{verdict: :approve, findings: [], comments: notes, decision_notes: notes})
-  defp honoured(result, notes, kept), do: Map.merge(result, %{findings: kept, comments: Enum.map(kept, &finding_comment/1), decision_notes: notes})
+  defp honoured(result, notes, []), do: Map.merge(result, %{verdict: :approve, findings: [], comments: notes})
+  defp honoured(result, _notes, kept), do: Map.merge(result, %{findings: kept, comments: Enum.map(kept, &finding_comment/1)})
 
   defp decision_note(finding), do: "Against decision #{finding.decision}, so a note, not a change request: " <> finding_comment(finding)
 
@@ -363,132 +328,6 @@ defmodule SymphonyElixir.ReviewAgent do
   def inconclusive_cause(cause) when is_atom(cause), do: Atom.to_string(cause)
   def inconclusive_cause(_cause), do: "other"
 
-  @spec approval_prompt(result()) :: String.t()
-  def approval_prompt(result), do: approval_prompt(result, [])
-
-  @spec approval_prompt(result(), keyword()) :: String.t()
-  def approval_prompt(result, opts) do
-    """
-    #{approval_heading(result)}
-    #{advisory_notes_section(result)}#{decision_notes_section(result)}
-    Continue the normal workflow push and PR handoff now. Use the validation evidence already
-    collected for the reviewed diff. Do not stop at the reviewer-agent gate again unless code
-    changes after this approval.
-
-    #{approval_handoff_tool_guidance(Keyword.get(opts, :settings))}
-    """
-  end
-
-  defp approval_heading(%{inconclusive: reason}) do
-    """
-    Reviewer agent stayed inconclusive twice on the committed diff (#{reason}).
-    Symphony lets the push go ahead without reviewer approval: CI, QA and the supervisor still
-    gate the PR. Record in the workpad Notes and in the PR body that the pre-push reviewer
-    was inconclusive, with that reason.\
-    """
-  end
-
-  defp approval_heading(_result), do: "Reviewer agent approved the committed diff."
-
-  defp advisory_notes_section(%{advisory_notes: [_note | _rest] = notes} = result) do
-    body =
-      notes
-      |> Enum.with_index(1)
-      |> Enum.map_join("\n", fn {note, index} -> "#{index}. #{note}" end)
-
-    """
-
-    #{advisory_notes_intro(result)} They are advisory notes: do not change code for them before
-    the push. Record any you judge real in the workpad Notes.
-
-    #{body}
-    """
-  end
-
-  defp advisory_notes_section(_result), do: ""
-
-  defp decision_notes_section(%{decision_notes: [_note | _rest] = notes}) do
-    """
-
-    The reviewer disagreed with the ticket's recorded decisions below. The decisions stand: do not
-    change code for them. Record them in the workpad Notes for the person who made them.
-
-    #{notes |> Enum.with_index(1) |> Enum.map_join("\n", fn {note, index} -> "#{index}. #{note}" end)}
-    """
-  end
-
-  defp decision_notes_section(_result), do: ""
-
-  defp advisory_notes_intro(%{inconclusive: _reason}) do
-    "The reviewer's last pass still raised the findings below after the correction rounds ran\nout."
-  end
-
-  defp advisory_notes_intro(_result) do
-    """
-    The reviewer also raised the findings below, but their quoted lines could not be found in
-    the diff or the changed files.\
-    """
-  end
-
-  @doc false
-  @spec approval_handoff_tool_guidance(Schema.t() | map() | nil) :: String.t()
-  def approval_handoff_tool_guidance(settings) do
-    case configured_agent_kind(settings) do
-      "claude" ->
-        """
-        Use Claude's Symphony MCP GitHub tools for PR handoff:
-        - `mcp__symphony__github_get_pull_request`
-        - `mcp__symphony__github_push_branch`
-        - `mcp__symphony__github_create_pull_request`
-
-        Use Claude's Symphony MCP Linear tools for tracker handoff:
-        - #{attach_pr_url_guidance("`mcp__symphony__linear_attach_url`")}
-        - update the existing workpad with `mcp__symphony__linear_update_comment`
-        - do not use `mcp__symphony__linear_add_comment` for PR, CI, or completion summaries
-
-        Do not search for these with ToolSearch or deferred-tool discovery. If the
-        `mcp__symphony__github_*` tools are not visible in this session, stop and report that
-        the Symphony MCP GitHub tools are unavailable. If the Linear attachment tool is not
-        visible, record the gap in the workpad instead of posting a summary comment. Avoid raw
-        `gh` or `git push`; do not use SSH as a fallback.
-        """
-
-      _kind ->
-        """
-        Use Codex's scoped Symphony GitHub tools for PR handoff:
-        - `github_get_pull_request`
-        - `github_push_branch`
-        - `github_create_pull_request`
-
-        Use Codex's scoped Symphony Linear tools for tracker handoff:
-        - #{attach_pr_url_guidance("`linear_attach_url`")}
-        - update the existing workpad with `linear_update_comment`
-        - do not use `linear_add_comment` for PR, CI, or completion summaries
-
-        If these scoped tools are not visible in this session, stop and report that the Symphony
-        GitHub tools are unavailable. If the Linear attachment tool is not visible, record the gap
-        in the workpad instead of posting a summary comment. Avoid raw `gh` or `git push`; do not
-        use SSH as a fallback.
-        """
-    end
-  end
-
-  @spec request_changes_prompt(result()) :: String.t()
-  def request_changes_prompt(%{comments: comments}) do
-    body =
-      comments
-      |> Enum.with_index(1)
-      |> Enum.map_join("\n", fn {comment, index} -> "#{index}. #{comment}" end)
-
-    """
-    Reviewer agent requested changes.
-
-    Address the review comments below in one additional implementation pass. Keep the same workspace and workpad, then stop before push again so Symphony can rerun reviewer approval.
-
-    #{body}
-    """
-  end
-
   @spec block_reason(result()) :: String.t()
   def block_reason(%{reason: reason}) when is_binary(reason) and reason != "", do: reason
   def block_reason(%{comments: [comment | _]}) when is_binary(comment), do: comment
@@ -516,18 +355,6 @@ defmodule SymphonyElixir.ReviewAgent do
     end
   end
 
-  # The push is the handoff: Symphony moves the ticket to Code Review itself and its guard refuses
-  # an agent's own move, so the text names no state move at all.
-  defp attach_pr_url_guidance(tool) do
-    "attach the PR URL with #{tool}; the push is the handoff: Symphony moves the ticket to Code " <>
-      "Review itself, so do not change the issue's state"
-  end
-
-  defp configured_agent_kind(%Schema{agent: %{kind: kind}}), do: AgentLabels.normalize_kind(kind)
-  defp configured_agent_kind(%{agent: %{kind: kind}}), do: AgentLabels.normalize_kind(kind)
-  defp configured_agent_kind(%{agent: %{"kind" => kind}}), do: AgentLabels.normalize_kind(kind)
-  defp configured_agent_kind(_settings), do: nil
-
   defp source_material(issue, workspace, _settings, opts) do
     worker_host = Keyword.get(opts, :worker_host)
     comparison_base = comparison_base(workspace, opts, worker_host)
@@ -544,9 +371,9 @@ defmodule SymphonyElixir.ReviewAgent do
     with {:ok, agent_module} <- resolve_agent_module(opts, config) do
       reviewer_settings = reviewer_settings(settings, config)
       decision_opts = [repo_key: Keyword.get(opts, :repo_key)]
-      prompt = reviewer_prompt(issue, source, Keyword.get(opts, :review_scope, :pre_push), decision_opts, reasons)
+      prompt = reviewer_prompt(issue, source, decision_opts, reasons)
       message_collector = Keyword.get(opts, :review_agent_message_collector, self())
-      on_message = reviewer_on_message(message_collector, Keyword.get(opts, :on_reviewer_message))
+      on_message = reviewer_on_message(message_collector)
 
       with {:ok, session} <-
              agent_module.start_session(workspace,
@@ -555,11 +382,11 @@ defmodule SymphonyElixir.ReviewAgent do
                issue: issue,
                repo_key: Keyword.get(opts, :repo_key),
                run_id: Keyword.get(opts, :run_id),
-               run_profile: Keyword.get(opts, :reviewer_run_profile) || Config.pre_push_review_profile(settings),
+               run_profile: Keyword.get(opts, :reviewer_run_profile) || Config.code_review_profile(settings),
                tool_scope: :read_only,
                review_verdict_sink: self(),
                linear_comment_registry: Keyword.get(opts, :linear_comment_registry),
-               # The executor run's temp folder, which the run's settings already make writable.
+               # The run's temp folder, which its settings already make writable.
                extra_env: AgentTmpDir.env(reviewer_settings.agent.kind, Keyword.get(opts, :agent_tmp_dir))
              ) do
         try do
@@ -835,14 +662,13 @@ defmodule SymphonyElixir.ReviewAgent do
   defp agent_module("claude"), do: {:ok, SymphonyElixir.ClaudeCode.AppServer}
   defp agent_module(other), do: {:error, {:unsupported_review_agent_kind, other}}
 
-  # The pre-push reviewer covers code quality and bugs only. Code Review (`review_scope:
-  # :code_review`, `SymphonyElixir.CodeReview`) judges the same diff on the pull request, and there
-  # the ticket's acceptance criteria, scope and intent are part of the judgment.
-  defp reviewer_prompt(issue, source, scope, decision_opts, reasons) do
+  # Code Review judges the pull request's diff for bugs and code quality, and against the ticket's
+  # acceptance criteria, scope and intent.
+  defp reviewer_prompt(issue, source, decision_opts, reasons) do
     """
-    You are the reviewer agent in an executor + reviewer Symphony run.
+    You are the reviewer agent in Symphony's Code Review of a pull request.
 
-    Review the executor's committed diff for this Linear issue. You may inspect files and use read-only scoped Linear/GitHub tools, but you must not modify files, write Linear/GitHub data, push, or open a PR.
+    Review the pull request's committed diff for this Linear issue. You may inspect files and use read-only scoped Linear/GitHub tools, but you must not modify files, write Linear/GitHub data, push, or open a PR.
 
     Review the diff by reading it. Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer: CI runs them after the push.
 
@@ -855,7 +681,7 @@ defmodule SymphonyElixir.ReviewAgent do
     - Error handling: errors are handled or returned, not swallowed, and failures leave no half-done state.
     - The repo's code rules: read the repo's agent instructions (`AGENTS.md`, `CLAUDE.md`) for its rules, such as required specs, style and module patterns. Narrow scope is a code rule: flag unrelated refactors, stray debug code and dead code left in the diff.
 
-    #{ticket_judgment(scope)}
+    #{ticket_judgment()}
     #{rule_findings(reasons)}
     Diff context:
     #{truncate(source.diff, @max_diff_prompt_bytes)}
@@ -892,14 +718,9 @@ defmodule SymphonyElixir.ReviewAgent do
     """
   end
 
-  defp ticket_judgment(:code_review) do
+  defp ticket_judgment do
     "This is the pull request's Code Review, so also judge the change against the ticket: check that the diff meets each of the ticket's acceptance criteria " <>
       "and stays within its scope and intent. Request changes for an unmet criterion or for work outside the ticket, naming the criterion or the out-of-scope change."
-  end
-
-  defp ticket_judgment(_pre_push) do
-    "Do not judge whether the diff meets the ticket's acceptance criteria or matches the ticket's scope, and do not ask for work the ticket describes but the diff " <>
-      "does not touch: Code Review checks that on the pull request."
   end
 
   # What the repo's risk rules found in the change, so the one review weighs it. Nothing when none
@@ -943,10 +764,9 @@ defmodule SymphonyElixir.ReviewAgent do
     end
   end
 
-  defp reviewer_on_message(collector, forward) do
+  defp reviewer_on_message(collector) do
     fn message ->
       collect_message(collector, message)
-      if is_function(forward, 1), do: forward.(message)
       :ok
     end
   end

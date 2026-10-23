@@ -199,7 +199,7 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
       {sub_run, log} =
         with_log(fn ->
           send(pid, :run_poll_cycle)
-          assert [_first, second | _reviewer] = wait_for_argv_lines(ctx.argv_trace, 2)
+          assert [_first, second | _rest] = wait_for_argv_lines(ctx.argv_trace, 2)
           assert String.ends_with?(second, "--print --effort low")
           refute second =~ "--model"
           wait_for_run("issue-profile-sub")
@@ -207,12 +207,41 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
 
       assert log =~ ~r/Dispatching issue to agent: issue_id=issue-profile-sub .* run_kind=implementation model=default effort=low\n/
 
+      assert %{run_kind: "implementation", model: nil, effort: "low"} = sub_run
+
+      # Code Review's reviewer runs only in a Code Review run: an implementation run has none.
+      refute Map.has_key?(sub_run, :reviewer_profile)
+    end
+
+    test "a Code Review run records its reviewer's profile from code_review's model and effort", ctx do
+      write_profile_workflow!(ctx,
+        review_agent: %{enabled: true, kind: "claude", command: ctx.fake_claude, model: "claude-sonnet-5-5", effort: "low"}
+      )
+
+      review_ticket = issue("issue-profile-code-review", "MT-PROFILE-CR", %{state: "Code Review"})
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [review_ticket])
+      repo_key = Config.repo_key!()
+
+      # Code Review dispatches on a green head only.
+      assert {:ok, :changed} = RunStore.record_ci_state(repo_key, review_ticket.id, "abc123", "green", DateTime.utc_now())
+      SymphonyElixir.PrWatchSupport.put_watch!(repo_key, review_ticket.id, head_sha: "abc123", decision: :dispatch)
+      on_exit(fn -> RunStore.delete_ticket_state(repo_key, review_ticket.id) end)
+
+      orchestrator_name = Module.concat(__MODULE__, :CodeReviewDispatchOrchestrator)
+      {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+      on_exit(fn -> stop_process(pid) end)
+
+      {review_run, _log} =
+        with_log(fn ->
+          send(pid, :run_poll_cycle)
+          wait_for_run("issue-profile-code-review")
+        end)
+
       assert %{
-               run_kind: "implementation",
-               model: nil,
-               effort: "low",
-               reviewer_profile: %{run_kind: "pre_push_review", model: "claude-sonnet-5-5", effort: "medium"}
-             } = sub_run
+               run_kind: "code_review",
+               reviewer_profile: %{run_kind: "code_review", model: "claude-sonnet-5-5", effort: "low"}
+             } = review_run
     end
 
     test "dispatches a `plan` ticket as a breakdown run with the breakdown run profile", ctx do

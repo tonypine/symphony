@@ -430,7 +430,7 @@ spec says a run's or a ticket's "attached PR", it means the PR the record answer
 
 - The agent run: the renamed-team-key PR head the workspace syncs to, the PR known at dispatch, the
   post-turn checks (the quiet hand-off on the PR head, the CI wait on a pushed head, a `Rework` that
-  is done, the landing run's CI wait, the reviewer agent's progress key) and the idle-park note. A
+  is done, the landing run's CI wait, the run's progress key) and the idle-park note. A
   run whose ticket had a PR at dispatch logs a warning naming the issue when the record no longer
   answers one.
 - The orchestrator: running and completed run entries, the run records it persists, watching
@@ -645,7 +645,7 @@ Top-level keys accepted by the Elixir implementation:
 - `workers`
 - `github`
 - `agent`
-- `pre_push_review`
+- `code_review`
 - `auto_review`
 - `pull_requests`
 - `verification`
@@ -657,7 +657,8 @@ Top-level keys accepted by the Elixir implementation:
 
 Unknown top-level keys in `symphony.yml` are rejected. Pre-release aliases such as `tracker`,
 `repos`, `workspace`, `pr_review`, `ci`, `quality_gate`, `review_agent`, `dependencies`,
-`observability`, and `server` are also rejected with migration guidance.
+`observability`, and `server` are also rejected with migration guidance, and so is
+`pre_push_review`, the removed pre-push reviewer (Section 5.4.16).
 
 ### 5.3 Repo `WORKFLOW.md` File Format
 
@@ -1467,29 +1468,38 @@ Fields:
 - `max_per_run` (integer 0..3)
   - Default: `3`.
 
-#### 5.4.16 `pre_push_review` (object)
+#### 5.4.16 `code_review` (object)
+
+Code Review's reviewer: the read-only agent the `Code Review` state runs on the pull request's diff
+(`SymphonyElixir.CodeReview`, `SymphonyElixir.ReviewAgent`).
 
 Fields:
 
 - `enabled` (boolean)
-  - Default: `false`.
+  - Default: `false`. With `enabled: false` there is no reviewer, so Symphony MUST park the repo's
+    `Code Review` tickets with `code_review_reviewer_disabled` recorded and never approve one
+    without a reviewer.
 - `runtime` (`codex` or `claude`)
   - REQUIRED when `enabled` is true.
 - `command` (string)
   - REQUIRED when `enabled` is true.
 - `model` (string), `effort` (`low`, `medium`, `high`, `xhigh`, or `max`)
-  - Optional. Each resolves to this field, else the `pre_push_review` run profile resolved as for
+  - Optional. Each resolves to this field, else the `code_review` run profile resolved as for
     `agent.run_profiles` (the routed repository's `repositories[].agent` first), else null
     (nothing added). `command` MUST NOT pass `--model` /
     `--effort` while any of them resolves.
-- `max_iterations` (positive integer)
-  - Default: `1`.
 
-When enabled, Symphony SHOULD run an executor + reviewer flow in the same workspace. The executor
-SHOULD stop before pushing, the reviewer SHOULD receive issue context plus the committed diff, the
-reviewer SHOULD judge code quality and bugs (correctness, tests for new branches, error handling,
-the repository's code rules) and not the issue's acceptance criteria or scope, and the reviewer
-MUST return a structured verdict of `approve`, `request_changes`, or `block`. Reviewer
+The pre-push reviewer is removed: an implementation run writes its code, runs its checks and
+pushes, with no reviewer pass before the push. A `symphony.yml` that still has `pre_push_review`
+MUST be refused at load with the reason "the pre-push reviewer is removed and Code Review owns the
+review of the code now; set Code Review's reviewer in `code_review` (enabled, runtime, command,
+model, effort) and its run profile in `agent.run_profiles.code_review`", and so MUST
+`agent.run_profiles.pre_push_review` and `repositories[].agent.run_profiles.pre_push_review`.
+
+The reviewer SHOULD receive the issue context plus the pull request's committed diff, SHOULD judge
+code quality and bugs (correctness, tests for new branches, error handling, the repository's code
+rules) and the change against the ticket's acceptance criteria, scope and intent, and MUST return a
+structured verdict of `approve`, `request_changes`, or `block`. Reviewer
 sessions SHOULD expose only read-only scoped Linear/GitHub tools, plus the `review_verdict` tool
 through which the reviewer records its verdict: its input schema is the verdict contract (a
 `verdict` enum, `findings` with `file`, `line_range`, `quoted_snippet`, `summary` and
@@ -1501,9 +1511,9 @@ where a slip has one reading: a verdict word in another case or a synonym (`appr
 `changes_requested`, `request-changes`, `blocked`), and a line range given as one line (`12`,
 `"12"`), a span (`"12-15"`), a reversed pair or a `{"start", "end"}` object. A turn whose verdict
 Symphony cannot read SHOULD get one repair turn in the same session, carrying the parser's error
-and the contract, before the review counts as inconclusive. An `approve` verdict SHOULD keep
-later executor continuations in push/PR handoff mode rather than reintroducing the pre-push reviewer
-gate. `request_changes` and `block` verdicts SHOULD include evidence-backed findings with file,
+and the contract, before the review counts as inconclusive. A finding that contradicts a decision a
+person recorded on the ticket SHOULD be kept as a note rather than a change request.
+`request_changes` and `block` verdicts SHOULD include evidence-backed findings with file,
 line range, quoted snippet, summary, and suggested fix. A finding whose quote cannot be located in
 the reviewer diff/context SHOULD be kept as an unanchored comment marked as one that could not be
 placed, with the verdict standing; Symphony SHOULD treat a verdict as unverifiable only when it is a
@@ -1515,28 +1525,14 @@ the cited range before anywhere else), moving the finding's line range to where 
 When no finding of a `request_changes` can be grounded, Symphony SHOULD give the same reviewer session one re-quote turn
 that shows the text actually at the cited lines. The reviewer prompt SHOULD tell the reviewer to
 review the diff by reading it and not to run the test suite, coverage or static analysis, which CI
-runs after the push. Reviewer token usage SHOULD be tracked separately from the aggregate run token
-total.
+runs.
 
-Reviewer outcome handling MUST distinguish terminal blocks from inconclusive reviewer runs.
-Verified `block` verdicts with at least one grounded finding SHOULD terminate the worker with a
-dedicated `review_agent_blocked` exit, post the block reason/findings to the tracker, pause the
-issue in its phase on a `Blocked` (access) hold a person lifts, and avoid
-scheduling another orchestrator retry. If that tracker transition fails, Symphony SHOULD still release
-its local issue claim rather than leaving the issue stuck as running. Reviewer parse failures,
-turn-budget failures, or self-check paths that remove all findings SHOULD be classified as
-`review_agent_inconclusive`, and so SHOULD a `request_changes` verdict that arrives after the
-`max_iterations` correction rounds are spent. Symphony SHOULD retry the reviewer once with a fresh
-reviewer session. When that retry is inconclusive too, Symphony SHOULD let the push go ahead without
-reviewer approval rather than send the executor a `request_changes` with no finding to act on: the
-approval prompt names the non-convergence reason, asks the executor to record it in the workpad and
-the PR body, and carries the last pass's findings, if any, as advisory notes. Symphony SHOULD log the
-reviewer's last findings when the correction rounds run out, and record a `review_agent_inconclusive`
-audit event with the issue, the review round and the reason. When every finding stays unverifiable
-after the re-quote turn, Symphony SHOULD instead approve the push without spending a correction
-round, attach those findings to the approval prompt as advisory notes, and record a
-`review_agent_unverified` audit event with the issue, the review round and the number of findings
-dropped.
+Reviewer outcome handling MUST distinguish a `block` from an inconclusive review. Reviewer parse
+failures, turn-budget failures, self-check turns that retract every finding, and a change request
+whose findings stay unverifiable after the re-quote turn SHOULD be classified as
+`review_agent_inconclusive`, with a cause (`ReviewAgent.inconclusive_cause/1`) recorded on the
+verdict and on the run. How Code Review routes each verdict, and retries and then escalates an
+inconclusive review, is in Section 7.6.
 
 #### 5.4.17 `auto_review` (object)
 
@@ -2186,9 +2182,10 @@ not require recognizing or validating extension fields unless that extension is 
 - `agent.provider`: `anthropic` or `openrouter`, default `anthropic`. The provider that serves the
   run's model; `openrouter` requires a resolved model and `agent.runtime == "claude"`.
 - `agent.run_profiles`: map of run kind to `{model, effort, provider}`, default `{}`. Run kinds:
-  `implementation`, `breakdown`, `rework`, `landing`, `ci_fix`, `review_feedback`,
-  `pre_push_review`, `qa`, `code_review`, `epic_review`. `close_out` named the retired close-out run: an entry
-  naming it still loads, and no run uses it. `final_verification` (retired with
+  `implementation`, `breakdown`, `rework`, `landing`, `ci_fix`, `review_feedback`, `qa`,
+  `code_review`, `epic_review`. `close_out` named the retired close-out run: an entry naming it
+  still loads, and no run uses it. `pre_push_review` named the removed pre-push reviewer: an entry
+  naming it is refused at load (Section 5.4.16). `final_verification` (retired with
   `Final verification:` tickets) and `acceptance_gate` load with a deprecation warning and do
   nothing. Each field resolves, for the issue's routed
   repository, to `repositories[].agent.run_profiles.<kind>`, else `repositories[].agent.<field>`,
@@ -2279,12 +2276,12 @@ not require recognizing or validating extension fields unless that extension is 
 - `pull_requests.learnings.model`: string, default `claude-haiku-4-5-20251001`
 - `pull_requests.learnings.max_total_per_repo`: integer, default `500`
 - `pull_requests.learnings.max_per_run`: integer, default `3`
-- `pre_push_review.enabled`: boolean, default `false`
-- `pre_push_review.runtime`: `codex` or `claude`, required when enabled
-- `pre_push_review.command`: string, required when enabled
-- `pre_push_review.model`: string or null, default `null`
-- `pre_push_review.effort`: `low`, `medium`, `high`, `xhigh`, `max`, or null, default `null`
-- `pre_push_review.max_iterations`: integer, default `1`
+- `code_review.enabled`: boolean, default `false`
+- `code_review.runtime`: `codex` or `claude`, required when enabled
+- `code_review.command`: string, required when enabled
+- `code_review.model`: string or null, default `null`; else the `code_review` run profile's model
+- `code_review.effort`: `low`, `medium`, `high`, `xhigh`, `max`, or null, default `null`; else the
+  `code_review` run profile's effort
 - `auto_review.runtime`: `codex` or `claude`, optional
 - `auto_review.command`: string, optional
 - `auto_review.model`: string or null, default `null`; else the `qa` run profile's model (see
@@ -2394,28 +2391,26 @@ Important nuance:
   or conflict signal that started the run is still pending. Such a signal is only cleared once the
   run ends, so without this a fix run on an open PR never ends on its own. The PR and CI watcher
   then owns that head (Section 7.5.1): QA on green, a re-run or a CI-fix run on red. A head with no checks reported yet
-  or a failed check does not end the run this way, nor does a head the pre-push reviewer applies to
-  and has not yet passed: the run continues so the reviewer runs on it first.
+  or a failed check does not end the run this way.
 - A run on an active issue with an attached PR and no pending review, CI, QA or conflict signal
   (outside `Rework` and `Merging`) MUST end after a turn only once its work is on the PR: the
-  workspace `HEAD` is the PR head and, when the pre-push reviewer applies to the run, that head is
-  the one the run started on or has passed the reviewer. Otherwise it MUST log why and continue, so
-  the reviewer runs and the agent pushes. When the workspace `HEAD` or the PR head cannot be read,
-  the run ends as before and the post-PR transition's workspace check applies.
+  workspace `HEAD` is the PR head. Otherwise it MUST log why and continue, so the agent pushes.
+  When the workspace `HEAD` or the PR head cannot be read, the run ends as before and the post-PR
+  transition's workspace check applies.
 - A run whose ticket waits on a hold (a `Needs Decision` hold from its decision request, a
   `Blocked` hold from a block report), or that posted a decision request itself, MUST end after
   that turn, without the idle park below and without a handoff: the hold, not another turn, says
   when the ticket continues.
 - When the workspace `HEAD` is readable, two consecutive turns with no new commit, no issue state
-  change, no newly attached PR and no reviewer-agent verdict MUST end the run, move the issue to
+  change and no newly attached PR MUST end the run, move the issue to
   `Backlog` and post a comment saying why. This does not apply in `Merging`. Nor does it apply to
   a `Rework` run while the attached PR's head is the workspace `HEAD`, that `HEAD` differs from the
   one the run started on or from the head the `Rework` started from, and its checks are still
   running or have all passed. The run pushed that head and is waiting on its CI, so it MUST end and
   move to the post-PR state instead. This includes a `Rework` run whose CI failure stays pending
   until the run ends. Nor does it apply while the attached PR's head is the workspace `HEAD` and
-  that head has checks still pending; such a run (one that started on that head, or one whose
-  pushed head awaits the pre-push reviewer) keeps turning up to `agent.max_turns`. Nor does it apply, outside `Rework`, to a run started by
+  that head has checks still pending; such a run (one that started on that head) keeps
+  turning up to `agent.max_turns`. Nor does it apply, outside `Rework`, to a run started by
   a CI failure once the PR head is the workspace `HEAD` and all its checks have passed: the red
   check was a flake, so green CI is that run's outcome. Such a run MUST end and move the issue back
   to `Merging` (with a comment saying why, and the CI-fix auto-merge hold dropped so auto-merge
@@ -2909,8 +2904,9 @@ Rules:
   recorded (a second pass with no move) on a head no move has routed since MUST be routed once by
   the next dispatch, without reviewing again. A reviewer `block`, and an inconclusive review that ran out of retries, MUST pause the ticket on a
   `Needs Decision` hold recommending `Rework`. Every escalation hold's confirmation continues into
-  the QA state; its redirect sends the ticket to `Rework`. The Code Review reviewer, unlike the
-  pre-push pass, judges the change against the ticket's acceptance criteria, scope and intent.
+  the QA state; its redirect sends the ticket to `Rework`. The Code Review reviewer judges the code
+  and the change against the ticket's acceptance criteria, scope and intent; no reviewer runs
+  before the push.
 - **Retired states.** No move may enter `Auto Review`, `In Review` or `Human Review`
   (`TransitionGuard.retired_states/0`): `TransitionGuard.perform/4` and an agent's request both
   refuse it with `{:retired_state, name}`. A ticket still sitting in one is reported at startup with
@@ -3171,8 +3167,7 @@ transitions stay with a person, forced or not:
 | a `Needs Decision` hold | a person records the decision |
 | any state -> `Restart` | a person resets the approach |
 
-The review-agent verdict and the Code Review and QA verdicts are still required for a forced
-issue.
+The Code Review and QA verdicts are still required for a forced issue.
 
 ### 8.3 Concurrency Control
 
@@ -3406,10 +3401,10 @@ not an outage and keeps its normal path.
 
 - The turn fails with `{:model_api_unreachable, info}` (`source: api_unreachable`, `error` the code
   it named); it is never a completed turn, so it never counts toward the idle-turn park limit.
-- The run, a pre-push reviewer turn (review, self-check or re-quote) and a QA run all hold the
-  provider as in Section 8.4.1, whatever `usage_limit.auto_pause` says, with
-  `reason: "model_api_unreachable"`. The reviewer is unavailable, never inconclusive: the run is
-  held and the push waits for a review. QA records no verdict and runs again once the hold clears.
+- The run and a QA run both hold the provider as in Section 8.4.1, whatever
+  `usage_limit.auto_pause` says, with `reason: "model_api_unreachable"`. A Code Review reviewer turn
+  (review, self-check or re-quote) that cannot reach the API is unavailable, never inconclusive: it
+  records no verdict. QA records no verdict and runs again once the hold clears.
 - The first probe (the canary) goes out 60 seconds after the outage is found. Each canary that
   still cannot reach the API doubles the wait, up to `usage_limit.unknown_reset_retry_seconds`,
   keeping `since`. A run that finds the outage while a hold is already `paused` leaves it as it is,
@@ -4628,8 +4623,9 @@ Token accounting rules:
 - Do not treat generic `usage` maps as cumulative totals unless the event type defines them that
   way.
 - Accumulate aggregate totals in orchestrator state.
-- When a reviewer-agent phase is enabled, count reviewer token deltas in the aggregate run total and
-  also expose reviewer-specific token totals separately for dashboards and run metadata.
+- Run records MAY keep reviewer-specific token totals (`reviewer_tokens`) next to the run's
+  totals. Since the pre-push reviewer was removed no run reports any: Code Review's reviewer reads
+  its turn's messages itself and sends none to the orchestrator's token stream.
 
 Runtime accounting:
 
@@ -5395,7 +5391,7 @@ Minimum endpoints:
     other value returns `400` `invalid_days`), for the Mac app's Usage and Quality. Read from the
     run records only; it MUST make no Linear request.
   - `tokens_per_day` has one entry per day (`date`, `total_tokens`, `providers`: tokens by
-    provider). A run counts on the day it started, with its pre-push reviewer's tokens. The
+    provider). A run counts on the day it started. The
     provider is the one the run recorded, else the one its model names (`unknown` when neither).
   - `tickets` lists each ticket that ran in the period, most tokens first: `issue_id`,
     `identifier`, `title`, `repo_key`, `total_tokens`, `attempts` (its runs in the period) and
@@ -5782,8 +5778,8 @@ After restart:
 - Previously running sessions are not assumed recoverable; they SHOULD remain visible in run history
   and MAY be marked failed/interrupted.
 - Run history records SHOULD include the run kind and the model and effort the run started with.
-  QA runs record `qa`; the pre-push reviewer runs inside the run it reviews, whose record SHOULD
-  also include the reviewer's kind, model and effort.
+  QA runs record `qa`; Code Review's reviewer runs inside the Code Review run, whose record SHOULD
+  also include the reviewer's kind, model and effort (`reviewer_profile`).
 - Service recovers by:
   - startup terminal workspace cleanup
   - durable retry queue hydration
@@ -6292,7 +6288,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 Where checks run is split by cost, not by kind. Agents (executor, rework and CI-fix runs) run cheap,
 targeted checks locally before each push: format, compile with warnings as errors, lint, and the
 tests for the changed code. The full test suite, the coverage threshold and Dialyzer run only in
-CI, which is the merge gate; the pre-push reviewer and the QA agent run no test suites
+CI, which is the merge gate; Code Review's reviewer and the QA agent run no test suites
 at all. A repository workflow MAY let an agent run the full gate locally for a change to shared
 infrastructure.
 

@@ -37,47 +37,6 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     def stop_session(_session), do: :ok
   end
 
-  defmodule ProgressReviewer do
-    # Pre-push reviewer stand-in: approves the diff and reports the review to the test, asks for
-    # changes with `:progress_reviewer_requests_changes` set, or, with
-    # `:progress_reviewer_api_unreachable` set, can't reach the model API.
-    def start_session(_workspace, _opts), do: {:ok, %{}}
-
-    def run_turn(_session, _prompt, _issue, _opts) do
-      turns = Application.get_env(:symphony_elixir, :progress_agent_turns, 0)
-      send(Application.fetch_env!(:symphony_elixir, :progress_agent_recipient), {:progress_reviewed, turns})
-
-      cond do
-        info = Application.get_env(:symphony_elixir, :progress_reviewer_api_unreachable) ->
-          {:error, {:model_api_unreachable, info}}
-
-        Application.get_env(:symphony_elixir, :progress_reviewer_requests_changes) ->
-          {:ok, %{result: request_changes_verdict()}}
-
-        true ->
-          {:ok, %{result: ~s({"verdict":"approve","comments":[]})}}
-      end
-    end
-
-    def stop_session(_session), do: :ok
-
-    defp request_changes_verdict do
-      Jason.encode!(%{
-        "verdict" => "request_changes",
-        "findings" => [
-          %{
-            "summary" => "Say which conflict this fixes.",
-            "file" => "fix.txt",
-            "line_range" => [1, 1],
-            "quoted_snippet" => "conflict fixed",
-            "suggested_fix" => "Name the conflict."
-          }
-        ],
-        "reason" => ""
-      })
-    end
-  end
-
   defmodule ProgressGitHub do
     # Stands in for GitHub.PullRequest.fetch_ci_status/2 and reports the configured PR head;
     # `{:by_turn, results}` gives the result read after each turn (the last one repeats).
@@ -106,8 +65,6 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
             :progress_pr_head_result,
             :progress_api_unreachable,
             :progress_turn_hook,
-            :progress_reviewer_api_unreachable,
-            :progress_reviewer_requests_changes,
             :memory_tracker_update_issue_state_result,
             :memory_tracker_create_comment_result
           ] do
@@ -381,7 +338,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       refute_received {:memory_tracker_state_update, _issue_id, _state}
     end
 
-    test "the pre-push reviewer reviews the pushed head before the run moves on the recorded PR" do
+    test "the run moves on the recorded PR once its pushed head is the PR head, with no reviewer turn before" do
       pending = [%{name: "make-all", status: "IN_PROGRESS", conclusion: nil}]
       Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: pending}})
 
@@ -390,10 +347,9 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
           run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], handoff: "sha-fixed", max_turns: 6, reviewer: true, pr_url: nil)
         end)
 
-      assert turns() == 2
-      assert_received {:progress_reviewed, 1}
+      assert turns() == 1
       assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
-      assert log =~ "its PR head sha-fixed has not passed the pre-push reviewer, continuing"
+      refute log =~ "reviewer"
     end
 
     test "a closed or merged PR is no in-flight PR" do
@@ -544,39 +500,17 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       assert log =~ "CI is running on issue_id=issue-progress issue_identifier=TP-337's pushed head sha-fixed on its PR; moving to Code Review"
     end
 
-    test "lets the pre-push reviewer review the head it pushed before moving to Code Review" do
+    test "with Code Review's reviewer on, pushes and moves to Code Review with no reviewer turn before the push" do
       Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: @pending_checks}})
 
       log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], handoff: "sha-fixed", max_turns: 6, reviewer: true) end)
 
-      # The reviewer runs after the turn that pushed, and the run moves on after the turn it approved.
-      assert turns() == 2
-      {:messages, messages} = Process.info(self(), :messages)
-      reviewed_at = Enum.find_index(messages, &match?({:progress_reviewed, 1}, &1))
-      assert is_integer(reviewed_at)
-      assert reviewed_at < Enum.find_index(messages, &match?({:memory_tracker_state_update, "issue-progress", "Code Review"}, &1))
+      # The turn that pushed is the last: no reviewer-agent guidance turn follows it.
+      assert turns() == 1
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
       refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
       assert log =~ "CI is running on issue_id=issue-progress issue_identifier=TP-337's pushed head sha-fixed on its PR; moving to Code Review"
-    end
-
-    test "holds the push when the pre-push reviewer can't reach the model API, instead of reading it as inconclusive" do
-      info = outage_info()
-      Application.put_env(:symphony_elixir, :progress_reviewer_api_unreachable, info)
-
-      log =
-        capture_log(fn ->
-          run = fn -> run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], max_turns: 6, reviewer: true) end
-          assert {:model_api_unreachable, ^info} = catch_exit(run.())
-        end)
-
-      # No approval turn: the executor never gets the go-ahead to push.
-      assert turns() == 1
-      assert_received {:progress_reviewed, 1}
-      refute_received {:progress_reviewed, _turns}
-      refute_received {:memory_tracker_state_update, "issue-progress", _state}
-      assert log =~ "Reviewer agent could not reach the model API for issue_id=issue-progress issue_identifier=TP-337 error=ENOTFOUND; holding the push until it is reviewed"
-      refute log =~ "inconclusive"
-      refute log =~ "letting the push go ahead"
+      refute log =~ "reviewer-agent guidance"
     end
 
     test "waits a turn for the checks of the head it pushed to show up, then moves to Code Review" do
@@ -960,24 +894,6 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
     end
 
-    test "outside Rework keeps turning while the pre-push reviewer has not passed the head it pushed" do
-      # Each reviewer pass changes the review state the empty-turn count compares, so such a run
-      # turns until the reviewer passes the head, and only then moves on.
-      for checks <- [@pending_checks, @green_checks] do
-        :ok = put_pending_ci_failure(approved: false)
-        Application.put_env(:symphony_elixir, :progress_reviewer_requests_changes, true)
-        Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: checks}})
-        Application.delete_env(:symphony_elixir, :progress_agent_turns)
-
-        run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], max_turns: 2, reviewer: true)
-
-        assert turns() == 2
-        assert_received {:progress_reviewed, 1}
-        refute_received {:memory_tracker_state_update, "issue-progress", _state}
-        refute_received {:memory_tracker_comment, "issue-progress", "Symphony parked" <> _note}
-      end
-    end
-
     test "is still parked when its pushed head is red, or when it pushed nothing and CI is red" do
       for {state, heads} <- [{"Rework", ["sha-same", "sha-fixed"]}, {"Rework", ["sha-fixed"]}, {"In Progress", ["sha-fixed"]}] do
         :ok = put_pending_ci_failure(approved: false)
@@ -1191,7 +1107,6 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     workspace = Path.join(test_root, "TP-337")
     File.mkdir_p!(workspace)
     reviewer? = Keyword.get(opts, :reviewer, false)
-    if reviewer?, do: init_reviewed_repo!(workspace)
 
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
@@ -1200,7 +1115,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       max_turns: Keyword.get(opts, :max_turns, 3),
       auto_review: Keyword.get(opts, :auto_review, %{enabled: true}),
       repos: Keyword.get(opts, :repos),
-      review_agent: if(reviewer?, do: %{enabled: true, kind: "codex", command: "reviewer app-server", run_on: "always"})
+      review_agent: if(reviewer?, do: %{enabled: true, kind: "codex", command: "reviewer app-server"})
     )
 
     issue = %Issue{
@@ -1224,8 +1139,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
           github: ProgressGitHub,
           workspace_head_reader: fn ^workspace, nil -> at_turn(heads) end,
           issue_state_fetcher: Keyword.get(opts, :issue_state_fetcher, fn _ids -> {:ok, [%{issue | state: at_turn(states, -1)}]} end),
-          issue_enricher: &{:ok, &1},
-          review_agent_module: ProgressReviewer
+          issue_enricher: &{:ok, &1}
         ] ++ Keyword.get(opts, :runner_opts, [])
       )
     after
@@ -1236,21 +1150,6 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   # The newest signal recorded for the run's issue, asserting its name and details.
   defp assert_signal(name, details) do
     assert [%{name: ^name, details: ^details} | _rest] = RunStore.get_ticket_state("default", "issue-progress").signals
-  end
-
-  # A checkout with a commit past `origin/main`, for the pre-push reviewer to read its diff from.
-  defp init_reviewed_repo!(repo) do
-    git = &System.cmd("git", ["-C", repo | &1])
-    git.(["init", "-b", "main"])
-    git.(["config", "user.name", "Test User"])
-    git.(["config", "user.email", "test@example.com"])
-    File.write!(Path.join(repo, "README.md"), "# test")
-    git.(["add", "README.md"])
-    git.(["commit", "-m", "initial"])
-    git.(["update-ref", "refs/remotes/origin/main", "HEAD"])
-    File.write!(Path.join(repo, "fix.txt"), "conflict fixed\n")
-    git.(["add", "fix.txt"])
-    git.(["commit", "-m", "fix: resolve the conflict"])
   end
 
   # Refreshes the issue through the Linear client, as the runner does in production.

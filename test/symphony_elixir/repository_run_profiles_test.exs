@@ -141,11 +141,11 @@ defmodule SymphonyElixir.RepositoryRunProfilesTest do
     end
 
     test "the reviewer and QA agent use the routed repository, below their own fields" do
-      assert Config.pre_push_review_profile(Config.settings_for_repo!("api")) ==
-               %{kind: :pre_push_review, model: "anthropic/claude-sonnet-4.5", effort: "max", provider: "openrouter"}
+      assert Config.code_review_profile(Config.settings_for_repo!("api")) ==
+               %{kind: :code_review, model: "anthropic/claude-sonnet-4.5", effort: "max", provider: "openrouter"}
 
-      assert Config.pre_push_review_profile(Config.settings_for_repo!("web")) ==
-               %{kind: :pre_push_review, model: "claude-sonnet-5-5", effort: "max", provider: "anthropic"}
+      assert Config.code_review_profile(Config.settings_for_repo!("web")) ==
+               %{kind: :code_review, model: "claude-sonnet-5-5", effort: "max", provider: "anthropic"}
 
       assert Config.qa_profile(Config.settings_for_repo!("web")) == %{kind: :qa, model: "claude-haiku-4-5", effort: "low", provider: "anthropic"}
     end
@@ -264,8 +264,8 @@ defmodule SymphonyElixir.RepositoryRunProfilesTest do
       assert error!(%{"model" => "x"}, %{"agent" => %{"runtime" => "claude", "command" => "claude --model y"}}) =~
                "agent.command must not pass --model when repositories[app].agent sets a model, effort or run_profiles; remove it from agent.command"
 
-      assert error!(%{"run_profiles" => %{"pre_push_review" => %{"effort" => "low"}}}, %{"pre_push_review" => %{"command" => "claude --effort high"}}) =~
-               "pre_push_review.command must not pass --effort when repositories[app].agent sets"
+      assert error!(%{"run_profiles" => %{"code_review" => %{"effort" => "low"}}}, %{"code_review" => %{"command" => "claude --effort high"}}) =~
+               "code_review.command must not pass --effort when repositories[app].agent sets"
 
       assert error!(%{"run_profiles" => %{"qa" => %{"model" => "x"}}}, %{"auto_review" => %{"command" => "claude --model y"}}) =~
                "auto_review.command must not pass --model when repositories[app].agent sets"
@@ -273,7 +273,7 @@ defmodule SymphonyElixir.RepositoryRunProfilesTest do
       assert {:ok, _system} =
                SystemSchema.parse(
                  symphony(%{"run_profiles" => %{"breakdown" => %{"model" => "x"}}}, %{
-                   "pre_push_review" => %{"command" => "claude --model y"},
+                   "code_review" => %{"command" => "claude --model y"},
                    "auto_review" => %{"command" => "claude --model y"}
                  })
                )

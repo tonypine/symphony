@@ -35,7 +35,7 @@ defmodule SymphonyElixir.RunProfileReviewQaTest do
       settings = settings!(%{})
 
       unset = %{model: nil, effort: nil, provider: "anthropic"}
-      assert Config.pre_push_review_profile(settings) == Map.put(unset, :kind, :pre_push_review)
+      assert Config.code_review_profile(settings) == Map.put(unset, :kind, :code_review)
       assert Config.qa_profile(settings) == Map.put(unset, :kind, :qa)
     end
 
@@ -45,48 +45,48 @@ defmodule SymphonyElixir.RunProfileReviewQaTest do
           agent(%{
             "model" => "claude-sonnet-5-5",
             "effort" => "medium",
-            "run_profiles" => %{"pre_push_review" => %{"effort" => "high"}, "qa" => %{"model" => "claude-haiku-4-5"}}
+            "run_profiles" => %{"code_review" => %{"effort" => "high"}, "qa" => %{"model" => "claude-haiku-4-5"}}
           })
       }
 
       settings = settings!(base)
-      assert Config.pre_push_review_profile(settings) == %{kind: :pre_push_review, model: "claude-sonnet-5-5", effort: "high", provider: "anthropic"}
+      assert Config.code_review_profile(settings) == %{kind: :code_review, model: "claude-sonnet-5-5", effort: "high", provider: "anthropic"}
       assert Config.qa_profile(settings) == %{kind: :qa, model: "claude-haiku-4-5", effort: "medium", provider: "anthropic"}
 
       settings =
         settings!(
           Map.merge(base, %{
-            "pre_push_review" => %{"model" => " claude-opus-5-5 ", "effort" => "max"},
+            "code_review" => %{"model" => " claude-opus-5-5 ", "effort" => "max"},
             "auto_review" => %{"effort" => "low"}
           })
         )
 
-      assert Config.pre_push_review_profile(settings) == %{kind: :pre_push_review, model: "claude-opus-5-5", effort: "max", provider: "anthropic"}
+      assert Config.code_review_profile(settings) == %{kind: :code_review, model: "claude-opus-5-5", effort: "max", provider: "anthropic"}
       assert Config.qa_profile(settings) == %{kind: :qa, model: "claude-haiku-4-5", effort: "low", provider: "anthropic"}
     end
   end
 
   describe "validation errors name the key" do
     test "unknown or blank reviewer and QA fields" do
-      assert error!(%{"pre_push_review" => %{"effort" => "extreme"}}) =~ "pre_push_review.effort must be one of: low, medium, high, xhigh, max"
+      assert error!(%{"code_review" => %{"effort" => "extreme"}}) =~ "code_review.effort must be one of: low, medium, high, xhigh, max"
       assert error!(%{"auto_review" => %{"effort" => "extreme"}}) =~ "auto_review.effort must be one of: low, medium, high, xhigh, max"
-      assert error!(%{"pre_push_review" => %{"model" => " "}}) =~ "pre_push_review.model must not be blank"
+      assert error!(%{"code_review" => %{"model" => " "}}) =~ "code_review.model must not be blank"
       assert error!(%{"auto_review" => %{"model" => 5}}) =~ "auto_review.model is invalid"
     end
 
     test "--model / --effort in the reviewer command when a profile reaches it" do
-      message = error!(%{"pre_push_review" => %{"command" => "claude --model x --effort=high", "effort" => "low"}})
+      message = error!(%{"code_review" => %{"command" => "claude --model x --effort=high", "effort" => "low"}})
 
-      assert message =~ "pre_push_review.command must not pass --model when a model or effort is set for the pre-push reviewer"
-      assert message =~ "pre_push_review.command must not pass --effort when"
+      assert message =~ "code_review.command must not pass --model when a model or effort is set for Code Review's reviewer"
+      assert message =~ "code_review.command must not pass --effort when"
 
       assert error!(%{
-               "agent" => agent(%{"run_profiles" => %{"pre_push_review" => %{"model" => "y"}}}),
-               "pre_push_review" => %{"command" => "claude --effort high"}
-             }) =~ "pre_push_review.command must not pass --effort"
+               "agent" => agent(%{"run_profiles" => %{"code_review" => %{"model" => "y"}}}),
+               "code_review" => %{"command" => "claude --effort high"}
+             }) =~ "code_review.command must not pass --effort"
 
-      assert error!(%{"agent" => agent(%{"effort" => "low"}), "pre_push_review" => %{"command" => "claude --model x"}}) =~
-               "pre_push_review.command must not pass --model"
+      assert error!(%{"agent" => agent(%{"effort" => "low"}), "code_review" => %{"command" => "claude --model x"}}) =~
+               "code_review.command must not pass --model"
     end
 
     test "--model / --effort in the QA command when a profile reaches it" do
@@ -114,7 +114,7 @@ defmodule SymphonyElixir.RunProfileReviewQaTest do
       settings =
         settings!(%{
           "agent" => agent(%{"command" => "claude --model x"}),
-          "pre_push_review" => %{"command" => "claude --model x --effort high"},
+          "code_review" => %{"command" => "claude --model x --effort high"},
           "auto_review" => %{"command" => "claude --effort high"}
         })
 
@@ -123,7 +123,7 @@ defmodule SymphonyElixir.RunProfileReviewQaTest do
       settings =
         settings!(%{
           "agent" => agent(%{"effort" => "low"}),
-          "pre_push_review" => %{"command" => "claude --model-hint x"},
+          "code_review" => %{"command" => "claude --model-hint x"},
           "auto_review" => %{"command" => "claude"}
         })
 
@@ -131,10 +131,10 @@ defmodule SymphonyElixir.RunProfileReviewQaTest do
     end
 
     test "a flag conflict is reported with other errors in the same section" do
-      message = error!(%{"pre_push_review" => %{"command" => "claude --model x", "model" => "y", "run_on" => "never"}})
+      message = error!(%{"code_review" => %{"command" => "claude --model x", "model" => "y", "runtime" => "other"}})
 
-      assert message =~ "pre_push_review.command must not pass --model"
-      assert message =~ "pre_push_review.run_on is invalid"
+      assert message =~ "code_review.command must not pass --model"
+      assert message =~ "code_review.runtime is invalid"
     end
 
     test "the merged workflow schema checks the reviewer command too" do
@@ -224,7 +224,7 @@ defmodule SymphonyElixir.RunProfileReviewQaTest do
         {_output, 0} = System.cmd("git", ["-C", repo | args], stderr_to_stdout: true)
       end
 
-      issue = %Issue{id: "issue-review", identifier: "MT-REVIEW", title: "Review", description: "Review it", state: "In Progress"}
+      issue = %Issue{id: "issue-review", identifier: "MT-REVIEW", title: "Review", description: "Review it", state: "Code Review"}
 
       assert {:ok, %{verdict: :approve}} = ReviewAgent.evaluate(issue, repo, Config.settings!(), base_branch: "main")
       argv!(ctx)
@@ -261,7 +261,7 @@ defmodule SymphonyElixir.RunProfileReviewQaTest do
       write_workflow!(ctx,
         agent_model: "claude-sonnet-5-5",
         agent_effort: "medium",
-        agent_run_profiles: %{"pre_push_review" => %{"effort" => "xhigh"}, "qa" => %{"model" => "claude-haiku-4-5"}},
+        agent_run_profiles: %{"code_review" => %{"effort" => "xhigh"}, "qa" => %{"model" => "claude-haiku-4-5"}},
         review_agent: %{enabled: true, kind: "claude", command: ctx.fake_claude, model: "claude-opus-5-5"},
         auto_review: %{"runtime" => "claude", "command" => ctx.fake_claude, "effort" => "low"}
       )
@@ -304,7 +304,7 @@ defmodule SymphonyElixir.RunProfileReviewQaTest do
       end
 
       issue = %Issue{id: "issue-dispatch", identifier: "MT-DISPATCH", title: "Review", description: "Review it", state: "In Progress"}
-      profile = %{kind: :pre_push_review, model: "claude-opus-5-5", effort: nil}
+      profile = %{kind: :code_review, model: "claude-opus-5-5", effort: nil}
 
       assert {:ok, %{verdict: :approve}} =
                ReviewAgent.evaluate(issue, repo, Config.settings!(), base_branch: "main", reviewer_run_profile: profile)

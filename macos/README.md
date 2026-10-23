@@ -226,7 +226,7 @@ set (or, in Development mode, no checkout folder).
   `agent` section, and each `repositories[]` key edits that repository's `repositories[<key>].agent`
   overrides. The Default row is `agent.provider` / `agent.model` / `agent.effort`, and each run kind row
   (breakdown, close-out, implementation, rework, CI fix, review feedback, landing,
-  pre-push review, QA) is `agent.run_profiles.<kind>.provider` / `.model` / `.effort` (the same keys under
+  code review, QA) is `agent.run_profiles.<kind>.provider` / `.model` / `.effort` (the same keys under
   the repository's `agent` for a repository scope). A field left unset shows, greyed out, the value it
   inherits, resolved the way Symphony does: the repository's kind, the repository's Default row, the
   All repositories kind, the All repositories Default row, then `agent.command` and the `anthropic` provider.
@@ -253,9 +253,9 @@ set (or, in Development mode, no checkout folder).
   the Default row shows their values (for example "Opus 5.5, from command"), and the first save that sets a
   model or effort moves them out of the command (keeping the rest of the line and its comment) into
   `agent.model` / `agent.effort`, unless you set the Default row in the same save. In the same way, once a
-  save sets the Default row or the pre-push review row, `pre_push_review.model` / `pre_push_review.effort`, or
-  else `--model` / `--effort` in `pre_push_review.command`, move into the pre-push review row
-  (`agent.run_profiles.pre_push_review`), and once it sets the Default row or the QA row, those of
+  save sets the Default row or the code review row, `code_review.model` / `code_review.effort`, or
+  else `--model` / `--effort` in `code_review.command`, move into the code review row
+  (`agent.run_profiles.code_review`), and once it sets the Default row or the QA row, those of
   `auto_review` move into the QA row. Those section keys outrank the rows and name no provider, so left in
   place they would hide the row's choice, and an OpenRouter Default row would make Symphony look their Claude
   model up on OpenRouter. A moved model keeps the provider it ran on, and a value you change in that row in

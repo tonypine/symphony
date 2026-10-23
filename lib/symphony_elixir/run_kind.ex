@@ -1,10 +1,6 @@
 defmodule SymphonyElixir.RunKind do
-  # The kinds `classify/2` never returns: they name the pre-push reviewer run, which Symphony
-  # starts itself. The moduledoc interpolates these names, so the documented set cannot drift from
-  # the code.
-  @reserved_kinds [:pre_push_review]
-  @reserved_kind_names Enum.map_join(@reserved_kinds, " and ", fn kind -> "`" <> Atom.to_string(kind) <> "`" end)
-  # The legacy machine's kinds, which `classify/2` never returns either; see the moduledoc.
+  # The legacy machine's kinds, which `classify/2` never returns; see the moduledoc. The moduledoc
+  # interpolates these names, so the documented set cannot drift from the code.
   @retired_kinds [:close_out]
   @retired_kind_names Enum.map_join(@retired_kinds, " and ", fn kind -> "`" <> Atom.to_string(kind) <> "`" end)
 
@@ -41,8 +37,7 @@ defmodule SymphonyElixir.RunKind do
   Parent tickets come before states because they never open a PR: the workflow sends them to the
   parent-ticket steps whatever their state.
 
-  #{@reserved_kind_names} is never returned by `classify/2`; it names the pre-push reviewer run,
-  which Symphony starts itself. Neither is #{@retired_kind_names}: the legacy machine's close-out
+  #{@retired_kind_names} is never returned by `classify/2`: the legacy machine's close-out
   run is retired with it (the epic path reviews the epic in `Epic Review`), and the name stays only
   so an `agent.run_profiles` that still sets it loads.
   """
@@ -59,7 +54,6 @@ defmodule SymphonyElixir.RunKind do
           | :epic_review
           | :ci_fix
           | :review_feedback
-          | :pre_push_review
           | :qa
 
   @typedoc "The provider that serves a run's model."
@@ -78,7 +72,6 @@ defmodule SymphonyElixir.RunKind do
     :epic_review,
     :ci_fix,
     :review_feedback,
-    :pre_push_review,
     :qa
   ]
 
@@ -93,13 +86,6 @@ defmodule SymphonyElixir.RunKind do
   @doc "Every run kind, in documentation order."
   @spec kinds() :: [t()]
   def kinds, do: @kinds
-
-  @doc """
-  The kinds `classify/2` never returns; Symphony starts those runs itself. The moduledoc's
-  list of never-returned kinds is built from this list.
-  """
-  @spec reserved_kinds() :: [t()]
-  def reserved_kinds, do: @reserved_kinds
 
   @doc "Every run kind as the string used for `agent.run_profiles` keys."
   @spec names() :: [String.t()]

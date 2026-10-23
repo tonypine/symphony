@@ -35,7 +35,6 @@ defmodule SymphonyElixir.AgentRunner do
     PrReviewPoller,
     PrWatch,
     QaVerification,
-    ReviewAgent,
     RunKind,
     RunStore,
     SetupBlock,
@@ -61,7 +60,6 @@ defmodule SymphonyElixir.AgentRunner do
   # Fallback when settings are unavailable; the effective value comes from
   # `agent.codex_stdio_prompt_soft_limit` (see Config.Schema.Agent).
   @codex_stdio_prompt_soft_limit_fallback 65_536
-  @terminal_agent_setup_error_marker "missing_required_mcp_tools"
   @tmp_dir_prefix "symphony-run-"
 
   @type worker_host :: String.t() | nil
@@ -114,9 +112,6 @@ defmodule SymphonyElixir.AgentRunner do
           hold = provider_hold_reason(reason) ->
             exit(hold)
 
-          terminal_agent_setup_error?(reason) ->
-            exit({:terminal_agent_setup_error, reason})
-
           exits_as_is?(reason) ->
             exit(reason)
 
@@ -154,18 +149,15 @@ defmodule SymphonyElixir.AgentRunner do
   defp provider_hold_reason({:model_api_unreachable, %{}} = reason), do: reason
   defp provider_hold_reason(_reason), do: nil
 
-  # The reasons the orchestrator reads as they are: a reviewer block, the tool-failure circuit
-  # breaker, and an epic review or a QA pass waiting for CI.
-  defp exits_as_is?(reason), do: terminal_review_agent_block?(reason) or terminal_tool_failure_circuit_breaker?(reason) or ci_pending?(reason)
+  # The reasons the orchestrator reads as they are: the tool-failure circuit breaker, and an epic
+  # review or a QA pass waiting for CI.
+  defp exits_as_is?(reason), do: terminal_tool_failure_circuit_breaker?(reason) or ci_pending?(reason)
 
   # An epic review that found CI still running on the commit it reviews, or a QA pass whose named
   # check is still running on the PR head: the orchestrator starts it again after a short wait
   # instead of failing the run (`SymphonyElixir.EpicReview`, `SymphonyElixir.QaVerification`).
   defp ci_pending?({:ci_pending, %{}}), do: true
   defp ci_pending?(_reason), do: false
-
-  defp terminal_review_agent_block?({:review_agent_blocked, _reason}), do: true
-  defp terminal_review_agent_block?(_reason), do: false
 
   defp terminal_tool_failure_circuit_breaker?({:tool_failure_circuit_breaker, _payload}), do: true
   defp terminal_tool_failure_circuit_breaker?(_reason), do: false
@@ -195,12 +187,6 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp linear_unavailable?(_reason), do: false
-
-  defp terminal_agent_setup_error?(reason) do
-    reason
-    |> inspect()
-    |> String.contains?(@terminal_agent_setup_error_marker)
-  end
 
   defp run_on_worker_host(issue, codex_update_recipient, opts, worker_host) do
     Logger.info("Starting worker attempt for #{issue_context(issue)} worker_host=#{worker_host_for_log(worker_host)}")
@@ -311,9 +297,8 @@ defmodule SymphonyElixir.AgentRunner do
   defp run_tmp_dirs(workspace, nil, opts), do: tmp_dirs(workspace, Keyword.get_lazy(opts, :agent_tmp_bases, &tmp_bases/0))
   defp run_tmp_dirs(_workspace, _worker_host, _opts), do: []
 
-  # Every agent session of the run, the pre-push reviewer's included, gets the folder as its
-  # `$TMPDIR`, writable in its sandbox. A run that can't create one still runs, with the
-  # runtime's default temp folder.
+  # Every agent session of the run gets the folder as its `$TMPDIR`, writable in its sandbox. A
+  # run that can't create one still runs, with the runtime's default temp folder.
   defp put_agent_tmp_dir(opts, [], _issue), do: opts
 
   defp put_agent_tmp_dir(opts, tmp_dirs, issue) do
@@ -542,20 +527,13 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp send_codex_update(recipient, issue, message), do: send_codex_update(recipient, issue, message, :executor)
-
-  defp send_codex_update(recipient, %Issue{id: issue_id}, message, phase)
-       when is_binary(issue_id) and is_pid(recipient) do
+  defp send_codex_update(recipient, %Issue{id: issue_id}, message) when is_binary(issue_id) and is_pid(recipient) do
     payload = SymphonyElixir.ClaudeCode.AppServer.event_to_update(message) || message
-    payload = maybe_put_agent_phase(payload, phase)
     send(recipient, {:codex_worker_update, issue_id, payload})
     :ok
   end
 
-  defp send_codex_update(_recipient, _issue, _message, _phase), do: :ok
-
-  defp maybe_put_agent_phase(payload, phase) when is_map(payload), do: Map.put(payload, :agent_phase, phase)
-  defp maybe_put_agent_phase(payload, _phase), do: payload
+  defp send_codex_update(_recipient, _issue, _message), do: :ok
 
   defp send_worker_runtime_info(recipient, %Issue{id: issue_id}, worker_host, workspace)
        when is_binary(issue_id) and is_pid(recipient) and is_binary(workspace) do
@@ -725,9 +703,9 @@ defmodule SymphonyElixir.AgentRunner do
       send_agent_session_info(codex_update_recipient, issue, agent_module, session)
 
       # Capture pending rework context (reviewer comments, CI failure, PR
-      # conflict) up front so the review-agent skip decision after the turn
-      # sees the same snapshot as the first-turn prompt, even if the pending
-      # records get completed mid-run.
+      # conflict) up front so every turn of the run sees the same snapshot as
+      # the first-turn prompt, even if the pending records get completed
+      # mid-run.
       run_opts =
         opts
         |> Keyword.put(:linear_comment_registry, linear_comment_registry)
@@ -744,9 +722,6 @@ defmodule SymphonyElixir.AgentRunner do
         opts: run_opts,
         issue_state_fetcher: issue_state_fetcher,
         worker_host: worker_host,
-        review_agent: initial_review_agent_state(),
-        next_prompt: nil,
-        session_rebuilt: false,
         progress: initial_progress(workspace, worker_host, issue, run_opts),
         dispatch_pr_url: ticket_pr_url(issue, run_opts)
       }
@@ -767,8 +742,7 @@ defmodule SymphonyElixir.AgentRunner do
       issue_state_fetcher: issue_state_fetcher
     } = run_context
 
-    prompt = run_context.next_prompt || build_turn_prompt(issue, opts, turn_number, max_turns, run_context.review_agent)
-    run_context = %{run_context | next_prompt: nil}
+    prompt = build_turn_prompt(issue, opts, turn_number, max_turns)
     audit_prompt_sent(issue, Keyword.get(opts, :run_id), prompt, turn_number, max_turns, agent_module, opts)
 
     case run_agent_turn(agent_module, app_session, prompt, run_context) do
@@ -795,12 +769,8 @@ defmodule SymphonyElixir.AgentRunner do
             {:error, reason}
         end
 
-      {:error, reason} = error ->
-        if retry_in_fresh_session?(reason, run_context, turn_number) do
-          retry_turn_in_fresh_session(reason, agent_module, prompt, run_context, turn_number, max_turns)
-        else
-          error
-        end
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -851,37 +821,6 @@ defmodule SymphonyElixir.AgentRunner do
       dependency_audit_command_runner: Keyword.get(opts, :dependency_audit_command_runner),
       unlocked_paths: Keyword.get(opts, :unlocked_paths, [])
     )
-  end
-
-  # A continuation turn that starts without the Symphony MCP server gets one retry in a
-  # fresh session (new MCP session, socket, settings and `--mcp-config` files). Turn 1
-  # setup errors stay terminal: no earlier turn has shown the setup can work.
-  defp retry_in_fresh_session?(reason, run_context, turn_number) do
-    turn_number > 1 and not run_context.session_rebuilt and terminal_agent_setup_error?(reason)
-  end
-
-  # The broken session is left for `run_codex_turns/5` to stop, so each session is
-  # stopped exactly once.
-  defp retry_turn_in_fresh_session(reason, agent_module, prompt, run_context, turn_number, max_turns) do
-    %{workspace: workspace, worker_host: worker_host, issue: issue, opts: opts} = run_context
-
-    Logger.warning("Continuation turn started without the Symphony MCP server for #{issue_context(issue)}; retrying once in a fresh session turn=#{turn_number}/#{max_turns} reason=#{inspect(reason)}")
-
-    case start_agent_session(agent_module, workspace, worker_host, issue, opts) do
-      {:ok, fresh_session} ->
-        send_agent_session_info(run_context.codex_update_recipient, issue, agent_module, fresh_session)
-        retry_context = %{run_context | next_prompt: prompt, session_rebuilt: true}
-
-        try do
-          do_run_codex_turns(agent_module, fresh_session, retry_context, turn_number, max_turns)
-        after
-          agent_module.stop_session(fresh_session)
-        end
-
-      {:error, restart_reason} ->
-        Logger.warning("Could not start a fresh session for #{issue_context(issue)} reason=#{inspect(restart_reason)}")
-        {:error, reason}
-    end
   end
 
   defp continue_after_completed_turn(issue, issue_state_fetcher, opts, run_context, agent_module, app_session, turn_number, max_turns) do
@@ -1025,315 +964,9 @@ defmodule SymphonyElixir.AgentRunner do
   defp maybe_put_option(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp continue_active_issue(agent_module, app_session, run_context, refreshed_issue, turn_number, max_turns) do
-    case maybe_review_agent_next_turn(run_context, turn_number, max_turns) do
-      {:review_agent_turn, next_context} ->
-        Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} with reviewer-agent guidance turn=#{turn_number}/#{max_turns}")
+    Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
 
-        do_run_codex_turns(agent_module, app_session, next_context, turn_number + 1, max_turns)
-
-      {:error, reason} ->
-        {:error, reason}
-
-      :normal_continuation ->
-        Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
-
-        do_run_codex_turns(
-          agent_module,
-          app_session,
-          run_context,
-          turn_number + 1,
-          max_turns
-        )
-    end
-  end
-
-  defp initial_review_agent_state, do: %{phase: :not_run, request_change_rounds: 0, inconclusive_retries: 0}
-
-  defp maybe_review_agent_next_turn(run_context, _turn_number, _max_turns) do
-    config = run_context.opts |> Keyword.fetch!(:settings) |> Map.fetch!(:review_agent)
-
-    cond do
-      not ReviewAgent.enabled?(config) ->
-        :normal_continuation
-
-      ReviewAgent.skip_for_run?(config, run_context.opts) ->
-        :normal_continuation
-
-      true ->
-        review_agent_next_turn(run_context, config)
-    end
-  end
-
-  defp review_agent_next_turn(%{review_agent: %{phase: :complete}}, _config), do: :normal_continuation
-
-  defp review_agent_next_turn(%{review_agent: %{phase: phase}} = run_context, config)
-       when phase in [:not_run, :awaiting_correction] do
-    round = review_agent_request_change_rounds(run_context) + 1
-
-    case evaluate_review_agent(run_context) do
-      {:ok, result} ->
-        emit_review_agent_verdict(run_context, result, round, config.max_iterations)
-
-        case handle_review_agent_result(result, run_context, config) do
-          {:error, {:review_agent_inconclusive, reason}} ->
-            handle_review_agent_inconclusive(run_context, config, round, reason)
-
-          other ->
-            other
-        end
-
-      {:error, {:review_agent_blocked, payload} = reason} ->
-        emit_review_agent_blocked(run_context, payload, round, config.max_iterations)
-        {:error, reason}
-
-      {:error, {:review_agent_inconclusive, reason}} ->
-        handle_review_agent_inconclusive(run_context, config, round, reason)
-
-      # The reviewer is unavailable, not inconclusive: the run is held with the push still
-      # waiting for a review, and reviews again once the API is back.
-      {:error, {:model_api_unreachable, info} = reason} ->
-        Logger.warning("Reviewer agent could not reach the model API for #{issue_context(run_context.issue)} error=#{info.error}; holding the push until it is reviewed")
-        {:error, reason}
-
-      {:error, reason} ->
-        {:error, {:review_agent_failed, reason}}
-    end
-  end
-
-  defp review_agent_next_turn(_run_context, _config), do: :normal_continuation
-
-  defp handle_review_agent_result(%{verdict: :approve} = result, run_context, _config) do
-    {:review_agent_turn,
-     %{
-       run_context
-       | review_agent: %{
-           phase: :complete,
-           request_change_rounds: review_agent_request_change_rounds(run_context),
-           inconclusive_retries: review_agent_inconclusive_retries(run_context)
-         },
-         next_prompt: ReviewAgent.approval_prompt(result, run_context.opts)
-     }}
-  end
-
-  defp handle_review_agent_result(%{verdict: :request_changes} = result, run_context, config) do
-    if review_agent_correction_round_available?(run_context, config) do
-      {:review_agent_turn,
-       %{
-         run_context
-         | review_agent: %{
-             phase: :awaiting_correction,
-             request_change_rounds: next_review_agent_request_change_round(run_context),
-             inconclusive_retries: review_agent_inconclusive_retries(run_context),
-             comments: result.comments
-           },
-           next_prompt: ReviewAgent.request_changes_prompt(result)
-       }}
-    else
-      rounds = review_agent_request_change_rounds(run_context)
-
-      Logger.warning("Reviewer agent hit the request-change limit for #{issue_context(run_context.issue)} rounds=#{rounds} last_comments=#{inspect(result.comments)}")
-
-      {:error, {:review_agent_inconclusive, {:review_agent_max_iterations_reached, result.comments}}}
-    end
-  end
-
-  # Findings nobody could ground do not earn a correction round: the push goes ahead
-  # and they ride along on the approval prompt as advisory notes.
-  defp handle_review_agent_inconclusive(run_context, config, round, {:review_agent_unverifiable, payload}) do
-    notes = ReviewAgent.unverified_notes(payload)
-    dropped = payload |> Map.get(:failures, []) |> length()
-
-    Logger.warning("Reviewer agent findings stayed unverifiable for #{issue_context(run_context.issue)} round=#{round} dropped=#{dropped}; approving with advisory notes")
-
-    audit_review_agent_unverified(run_context, round, dropped)
-
-    result = %{
-      verdict: :approve,
-      comments: notes,
-      reason: "reviewer findings unverifiable; approved with #{dropped} advisory note(s)",
-      advisory_notes: notes
-    }
-
-    emit_review_agent_verdict(run_context, result, round, config.max_iterations)
-    handle_review_agent_result(result, run_context, config)
-  end
-
-  defp handle_review_agent_inconclusive(run_context, config, round, reason) do
-    if review_agent_inconclusive_retry_available?(run_context) do
-      Logger.info("Reviewer agent was inconclusive for #{issue_context(run_context.issue)} reason=#{inspect(reason)}; retrying reviewer once with a fresh session")
-
-      run_context =
-        put_inconclusive_retries(run_context, review_agent_inconclusive_retries(run_context) + 1)
-
-      review_agent_next_turn(run_context, config)
-    else
-      # A second inconclusive pass on the same commit gives the executor nothing to act on, so
-      # the push goes ahead: CI, QA and the supervisor still gate the PR.
-      Logger.warning("Reviewer agent remained inconclusive for #{issue_context(run_context.issue)} reason=#{inspect(reason)}; letting the push go ahead without reviewer approval")
-
-      reason_text = review_agent_non_convergence_reason(reason)
-      notes = review_agent_inconclusive_notes(reason)
-
-      audit_review_agent_inconclusive(run_context, round, reason_text)
-
-      result = %{
-        verdict: :approve,
-        comments: notes,
-        reason: "#{reason_text}; push allowed without reviewer approval",
-        inconclusive: reason_text,
-        advisory_notes: notes
-      }
-
-      emit_review_agent_verdict(run_context, result, round, config.max_iterations)
-      handle_review_agent_result(result, run_context, config)
-    end
-  end
-
-  defp review_agent_inconclusive_notes({:review_agent_max_iterations_reached, comments}), do: comments
-  defp review_agent_inconclusive_notes(_reason), do: []
-
-  defp review_agent_non_convergence_reason(reason) do
-    case review_agent_inconclusive_summary(reason) do
-      nil -> "reviewer did not converge"
-      summary -> "reviewer did not converge: #{summary}"
-    end
-  end
-
-  defp review_agent_inconclusive_summary({:review_agent_max_iterations_reached, _comments}), do: "request-change limit reached"
-  defp review_agent_inconclusive_summary({:max_iterations, _reason}), do: "review turn reached max iterations"
-  defp review_agent_inconclusive_summary({:self_check_max_iterations, _reason}), do: "self-check reached max iterations"
-
-  defp review_agent_inconclusive_summary({:malformed_review_agent_response, reason}) do
-    "malformed response #{limited_inspect(reason)}"
-  end
-
-  defp review_agent_inconclusive_summary(reason) when is_atom(reason) do
-    reason |> Atom.to_string() |> String.replace("_", " ")
-  end
-
-  defp review_agent_inconclusive_summary(_reason), do: nil
-
-  defp limited_inspect(term) do
-    term
-    |> inspect(limit: 3, printable_limit: 160)
-    |> truncate_text(220)
-  end
-
-  defp truncate_text(text, max_length) when byte_size(text) > max_length do
-    String.slice(text, 0, max_length) <> "..."
-  end
-
-  defp truncate_text(text, _max_length), do: text
-
-  defp emit_review_agent_verdict(
-         %{
-           issue: issue,
-           codex_update_recipient: codex_update_recipient
-         },
-         result,
-         round,
-         max_iterations
-       ) do
-    event = %{
-      event: :review_agent_verdict,
-      timestamp: DateTime.utc_now(),
-      payload: %{
-        type: "review_agent_verdict",
-        verdict: result.verdict,
-        round: round,
-        max_iterations: max_iterations,
-        reason: review_agent_verdict_reason(result),
-        comments: Map.get(result, :comments, []),
-        tokens: %{
-          input_tokens: 0,
-          uncached_input_tokens: 0,
-          cached_input_tokens: 0,
-          cache_creation_input_tokens: 0,
-          output_tokens: 0,
-          total_tokens: 0
-        }
-      }
-    }
-
-    send_codex_update(codex_update_recipient, issue, event, :reviewer)
-  end
-
-  defp emit_review_agent_blocked(run_context, payload, round, max_iterations) do
-    result = %{
-      verdict: :block,
-      reason: review_agent_block_payload_reason(payload),
-      comments: review_agent_block_payload_comments(payload)
-    }
-
-    emit_review_agent_verdict(run_context, result, round, max_iterations)
-  end
-
-  defp review_agent_block_payload_reason(%{reason: reason}) when is_binary(reason), do: reason
-  defp review_agent_block_payload_reason(reason) when is_binary(reason), do: reason
-  defp review_agent_block_payload_reason(reason), do: inspect(reason)
-
-  defp review_agent_block_payload_comments(%{comments: comments}) when is_list(comments), do: comments
-  defp review_agent_block_payload_comments(_payload), do: []
-
-  defp review_agent_verdict_reason(%{reason: reason}) when is_binary(reason) and reason != "", do: reason
-  defp review_agent_verdict_reason(%{comments: [comment | _]}) when is_binary(comment), do: comment
-  defp review_agent_verdict_reason(_result), do: nil
-
-  defp review_agent_correction_round_available?(run_context, config) do
-    review_agent_request_change_rounds(run_context) < config.max_iterations
-  end
-
-  defp next_review_agent_request_change_round(run_context), do: review_agent_request_change_rounds(run_context) + 1
-
-  defp review_agent_request_change_rounds(%{review_agent: %{request_change_rounds: rounds}}) when is_integer(rounds), do: rounds
-
-  defp review_agent_inconclusive_retries(%{review_agent: %{inconclusive_retries: retries}}) when is_integer(retries), do: retries
-  defp review_agent_inconclusive_retries(_run_context), do: 0
-
-  defp review_agent_inconclusive_retry_available?(run_context), do: review_agent_inconclusive_retries(run_context) < 1
-
-  defp put_inconclusive_retries(run_context, retries) when is_integer(retries) do
-    review_agent =
-      run_context.review_agent
-      |> Map.put(:inconclusive_retries, retries)
-
-    %{run_context | review_agent: review_agent}
-  end
-
-  defp evaluate_review_agent(%{
-         issue: issue,
-         workspace: workspace,
-         opts: opts,
-         worker_host: worker_host,
-         codex_update_recipient: codex_update_recipient
-       }) do
-    review_opts =
-      opts
-      |> Keyword.take([:repo_key, :run_id, :reviewer_run_profile, :linear_comment_registry, :review_agent_module, :agent_tmp_dir])
-      |> Keyword.put(:worker_host, worker_host)
-      |> maybe_put_option(:base_branch, review_base_branch(opts))
-      |> Keyword.put(:on_reviewer_message, reviewer_message_handler(codex_update_recipient, issue))
-      |> put_reviewer_comments(issue)
-      |> put_ci_failure(issue)
-
-    ReviewAgent.evaluate(issue, workspace, Keyword.fetch!(opts, :settings), review_opts)
-  end
-
-  defp reviewer_message_handler(recipient, issue) do
-    fn message -> send_codex_update(recipient, issue, message, :reviewer) end
-  end
-
-  defp review_base_branch(opts) do
-    repo_key = Keyword.get(opts, :repo_key)
-
-    case Config.repo_base_branch(repo_key) do
-      {:ok, base_branch} ->
-        base_branch
-
-      {:error, reason} ->
-        Logger.warning("ReviewAgent base_branch lookup failed repo_key=#{inspect(repo_key)} reason=#{inspect(reason)}")
-        nil
-    end
+    do_run_codex_turns(agent_module, app_session, run_context, turn_number + 1, max_turns)
   end
 
   defp agent_module(opts) do
@@ -1357,10 +990,10 @@ defmodule SymphonyElixir.AgentRunner do
   @doc false
   @spec build_first_turn_prompt(map(), keyword()) :: String.t()
   def build_first_turn_prompt(issue, opts) do
-    build_turn_prompt(issue, opts, 1, Keyword.get(opts, :max_turns, 1), initial_review_agent_state())
+    build_turn_prompt(issue, opts, 1, Keyword.get(opts, :max_turns, 1))
   end
 
-  defp build_turn_prompt(issue, opts, 1, _max_turns, _review_agent_state) do
+  defp build_turn_prompt(issue, opts, 1, _max_turns) do
     prompt_opts =
       opts
       |> put_reviewer_comments(issue)
@@ -1374,7 +1007,7 @@ defmodule SymphonyElixir.AgentRunner do
     maybe_compact_codex_initial_prompt(prompt, issue, prompt_opts)
   end
 
-  defp build_turn_prompt(_issue, opts, turn_number, max_turns, review_agent_state) do
+  defp build_turn_prompt(_issue, opts, turn_number, max_turns) do
     agent_name =
       opts
       |> Keyword.get(:settings)
@@ -1389,40 +1022,7 @@ defmodule SymphonyElixir.AgentRunner do
     - Resume from the current workspace and workpad state instead of restarting from scratch.
     - The original task instructions and prior turn context are already present in this thread, so do not restate them before acting.
     - Focus on the remaining ticket work and do not end the turn while the issue stays active unless you are truly blocked.
-    #{review_agent_continuation_guard(opts, review_agent_state)}
     """
-  end
-
-  defp review_agent_continuation_guard(opts, review_agent_state) do
-    case Keyword.get(opts, :settings) do
-      %{review_agent: %{enabled: true} = config} ->
-        cond do
-          ReviewAgent.skip_for_run?(config, opts) ->
-            ""
-
-          review_agent_state.phase == :complete ->
-            """
-
-            Review-agent gate status:
-
-            - Reviewer-agent approval has already been injected for this run.
-            - Do not stop at the reviewer-agent gate again; complete the normal push/PR handoff unless code changes after approval or a true auth/permission blocker prevents handoff.
-            #{ReviewAgent.approval_handoff_tool_guidance(Keyword.get(opts, :settings))}
-            """
-
-          true ->
-            """
-
-            Review-agent gate reminder:
-
-            - If this thread has not already received a reviewer-agent approval prompt, stop before `git push` or PR creation after validation and committed-diff review.
-            - Ending the turn at that gate is expected even if the issue remains active; Symphony will run the reviewer agent and inject the next prompt. The handoff push to `Code Review` follows the reviewer's approval.
-            """
-        end
-
-      _settings ->
-        ""
-    end
   end
 
   defp agent_kind_from_settings(%{agent: %{kind: kind}}), do: kind
@@ -1472,32 +1072,6 @@ defmodule SymphonyElixir.AgentRunner do
       )
     )
     |> log_audit_error("record prompt_sent")
-  end
-
-  defp audit_review_agent_unverified(%{issue: issue, opts: opts}, round, dropped) do
-    %{
-      event_type: "review_agent_unverified",
-      issue_id: issue.id,
-      issue_identifier: issue.identifier,
-      run_id: Keyword.get(opts, :run_id),
-      round: round,
-      findings_dropped: dropped
-    }
-    |> AuditLog.record(audit_opts(opts))
-    |> log_audit_error("record review_agent_unverified")
-  end
-
-  defp audit_review_agent_inconclusive(%{issue: issue, opts: opts}, round, reason) do
-    %{
-      event_type: "review_agent_inconclusive",
-      issue_id: issue.id,
-      issue_identifier: issue.identifier,
-      run_id: Keyword.get(opts, :run_id),
-      round: round,
-      reason: reason
-    }
-    |> AuditLog.record(audit_opts(opts))
-    |> log_audit_error("record review_agent_inconclusive")
   end
 
   defp audit_opts(opts, extra \\ []) do
@@ -1728,11 +1302,10 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # The run's work is on its PR once the workspace HEAD is the PR head and that head has passed the
-  # pre-push reviewer, when the reviewer applies to the run. A commit the run has not pushed, or
-  # pushed without a review, keeps the run going: the next turn runs the reviewer and the agent
-  # pushes. An unreadable HEAD or PR head stops the run as before; the orchestrator checks the
-  # workspace for unpushed commits before it moves the issue on.
+  # The run's work is on its PR once the workspace HEAD is the PR head. A commit the run has not
+  # pushed keeps the run going, so the agent pushes it. An unreadable HEAD or PR head stops the run
+  # as before; the orchestrator checks the workspace for unpushed commits before it moves the issue
+  # on.
   defp work_on_pr?(%Issue{} = issue, pr_url, run_context) do
     head = read_workspace_head(run_context.workspace, run_context.worker_host, run_context.opts)
     github = Keyword.get(run_context.opts, :github, PullRequest)
@@ -1740,28 +1313,15 @@ defmodule SymphonyElixir.AgentRunner do
     with true <- is_binary(head),
          {:ok, %{commit_sha: pr_head}} when is_binary(pr_head) <-
            github.fetch_ci_status(pr_url, cwd: run_context.workspace) do
-      cond do
-        pr_head != head ->
-          Logger.info("Not stopping agent run for #{issue_context(issue)} after PR opened; workspace HEAD #{head} is not its PR head #{pr_head}, continuing so it is reviewed and pushed")
-          false
-
-        not head_reviewed?(head, run_context) ->
-          Logger.info("Not stopping agent run for #{issue_context(issue)} after PR opened; its PR head #{head} has not passed the pre-push reviewer, continuing")
-          false
-
-        true ->
-          true
+      if pr_head == head do
+        true
+      else
+        Logger.info("Not stopping agent run for #{issue_context(issue)} after PR opened; workspace HEAD #{head} is not its PR head #{pr_head}, continuing so it is pushed")
+        false
       end
     else
       _unknown -> true
     end
-  end
-
-  defp head_reviewed?(head, %{progress: progress, review_agent: review_agent, opts: opts}) do
-    config = opts |> Keyword.fetch!(:settings) |> Map.fetch!(:review_agent)
-
-    head == progress.start_head or review_agent.phase == :complete or
-      not ReviewAgent.enabled?(config) or ReviewAgent.skip_for_run?(config, opts)
   end
 
   defp no_pending_rework_signal?(%Issue{} = issue, opts) do
@@ -1770,13 +1330,12 @@ defmodule SymphonyElixir.AgentRunner do
       is_nil(pending_pr_conflict(issue, opts))
   end
 
-  # A turn makes progress when it adds a commit, changes the issue state, attaches a PR or
-  # follows a reviewer-agent verdict (the push after an approval adds no commit). Without a
+  # A turn makes progress when it adds a commit, changes the issue state or attaches a PR. Without a
   # readable workspace HEAD (an SSH worker, no git checkout) progress is unknown and no turn
   # counts as empty.
   defp initial_progress(workspace, worker_host, issue, opts) do
     head = read_workspace_head(workspace, worker_host, opts)
-    fingerprint = progress_fingerprint(head, issue, initial_review_agent_state(), opts)
+    fingerprint = progress_fingerprint(head, issue, opts)
     rework_base = rework_base(issue, head, opts)
     %{rework_base: rework_base, start_head: head, head: head, fingerprint: fingerprint, empty_turns: 0}
   end
@@ -1821,7 +1380,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp track_turn_progress(%{progress: progress} = run_context, %Issue{} = refreshed_issue) do
     head = read_workspace_head(run_context.workspace, run_context.worker_host, run_context.opts)
-    fingerprint = progress_fingerprint(head, refreshed_issue, run_context.review_agent, run_context.opts)
+    fingerprint = progress_fingerprint(head, refreshed_issue, run_context.opts)
     empty_turns = if is_nil(head) or fingerprint != progress.fingerprint, do: 0, else: progress.empty_turns + 1
 
     %{run_context | progress: %{progress | head: head, fingerprint: fingerprint, empty_turns: empty_turns}}
@@ -1832,8 +1391,7 @@ defmodule SymphonyElixir.AgentRunner do
     reader.(workspace, worker_host)
   end
 
-  defp progress_fingerprint(head, issue, review_agent, opts),
-    do: {head, Map.get(issue, :state), ticket_pr_url(issue, opts), review_agent}
+  defp progress_fingerprint(head, issue, opts), do: {head, Map.get(issue, :state), ticket_pr_url(issue, opts)}
 
   # Nothing moves an issue out of `Rework` once its rework is done: the post-PR move skips `Rework`.
   # The rework is done once the workspace HEAD has moved past the head the Rework started from (by
@@ -1883,15 +1441,12 @@ defmodule SymphonyElixir.AgentRunner do
   # a new head to that PR and CI on that head is running or green, the PR and CI watcher takes it from
   # there: in the post-PR state it starts QA on green, and re-runs a flaky failure or dispatches a
   # fix run on red. So the run moves to that state instead of turning while CI runs until the idle
-  # check parks it. A head the pre-push reviewer applies to but has not passed keeps the run going,
-  # as the post-PR stop does (`head_reviewed?/2`), so the next turn reviews it. Gives the CI action
-  # (`:pending` or `:success`), or nil for a head with no checks yet, a red head, another PR head or
-  # an unreviewed head. `Rework` and `Merging` keep their own rules (`rework_finished?/2`,
+  # check parks it. Gives the CI action (`:pending` or `:success`), or nil for a head with no checks
+  # yet, a red head or another PR head. `Rework` and `Merging` keep their own rules (`rework_finished?/2`,
   # `merging_ci_pending?/2`).
   defp pushed_head_handoff_ci_action(%Issue{} = issue, %{progress: %{head: head, start_head: start_head}} = run_context)
        when is_binary(head) and is_binary(start_head) do
-    if head != start_head and !rework_state?(issue.state) and !merging_state?(issue.state) and
-         head_reviewed?(head, run_context) do
+    if head != start_head and !rework_state?(issue.state) and !merging_state?(issue.state) do
       case pushed_head_ci_action(issue, run_context) do
         action when action in [:pending, :success] -> action
         _action -> nil
@@ -2029,9 +1584,8 @@ defmodule SymphonyElixir.AgentRunner do
   # so it is not idle: it moves to the post-PR state, where the PR and CI watcher takes the head over. That
   # covers what `rework_finished?/2` skips, such as a Rework started by a CI failure, which stays
   # pending until the run ends. Outside Rework, `pushed_head_handoff_ci_action/2` already handed off
-  # such a head once it passed the pre-push reviewer, so one left here awaits the reviewer. A run
-  # whose HEAD is the PR head with checks pending but that is not handed off (one that started on
-  # that head, or one whose pushed head awaits the reviewer) keeps turning, up to
+  # such a head. A run whose HEAD is the PR head with checks pending but that is not handed off (one
+  # that started on that head) keeps turning, up to
   # `agent.max_turns`, until CI settles. A CI-fix run that found the red check a flake, or a
   # merge-conflict run that found the PR no longer conflicts, rightly pushes nothing: once CI on
   # its PR head is green, that is its outcome, so it hands the PR back instead of being parked

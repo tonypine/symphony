@@ -842,7 +842,7 @@ defmodule SymphonyElixir.Config.Schema do
     defp command_flag_errors(repo_agent, sections, path) do
       [
         {"agent.command", sections.agent.command, Schema.profile_settings?(repo_agent, nil)},
-        {"pre_push_review.command", sections.review_agent.command, Schema.profile_settings?(repo_agent, "pre_push_review")},
+        {"code_review.command", sections.review_agent.command, Schema.profile_settings?(repo_agent, "code_review")},
         {"auto_review.command", sections.auto_review.command, Schema.profile_settings?(repo_agent, "qa")}
       ]
       |> Enum.filter(fn {_key, _command, settings?} -> settings? end)
@@ -2025,7 +2025,7 @@ defmodule SymphonyElixir.Config.Schema do
     @type t :: %__MODULE__{}
 
     @primary_key false
-    @fields [:enabled, :kind, :command, :model, :effort, :max_iterations, :run_on]
+    @fields [:enabled, :kind, :command, :model, :effort]
 
     embedded_schema do
       field(:enabled, :boolean, default: false)
@@ -2033,8 +2033,6 @@ defmodule SymphonyElixir.Config.Schema do
       field(:command, :string)
       field(:model, :string)
       field(:effort, :string)
-      field(:max_iterations, :integer, default: 1)
-      field(:run_on, :string, default: "always")
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -2042,15 +2040,13 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(attrs, @fields, empty_values: [])
       |> validate_inclusion(:kind, ["codex", "claude"])
-      |> validate_inclusion(:run_on, ["always", "first_push"])
-      |> validate_number(:max_iterations, greater_than: 0)
       |> Agent.validate_profile_fields()
       |> validate_required_when_enabled()
     end
 
     defp validate_required_when_enabled(changeset) do
       if get_field(changeset, :enabled) do
-        Schema.validate_present(changeset, [:kind, :command, :max_iterations], message: "is required when review_agent.enabled is true")
+        Schema.validate_present(changeset, [:kind, :command], message: "is required when review_agent.enabled is true")
       else
         changeset
       end
@@ -2519,7 +2515,7 @@ defmodule SymphonyElixir.Config.Schema do
 
   defp reject_removed_keys(config) do
     if Map.has_key?(config, "self_review") do
-      {:error, {:invalid_workflow_config, "`self_review` has been removed; use `pre_push_review` in symphony.yml instead"}}
+      {:error, {:invalid_workflow_config, "`self_review` has been removed; use `code_review` in symphony.yml instead"}}
     else
       :ok
     end
@@ -2707,7 +2703,7 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   @doc """
-  Rejects `--model` / `--effort` in the pre-push reviewer and QA agent commands when a model or
+  Rejects `--model` / `--effort` in Code Review's reviewer and the QA agent commands when a model or
   effort resolves for that run kind, since the resolved values are passed as those flags.
 
   The QA agent falls back to `agent.command`; that command is only checked here when the QA
@@ -2722,8 +2718,8 @@ defmodule SymphonyElixir.Config.Schema do
     agent_settings? = profile_settings?(agent, nil)
 
     changeset
-    |> reject_profile_flags(:review_agent, review_agent.command, &"must not pass #{&1} when a model or effort is set for the pre-push reviewer; remove it from the command", fn ->
-      own_profile_settings?(review_agent) or profile_settings?(agent, "pre_push_review")
+    |> reject_profile_flags(:review_agent, review_agent.command, &"must not pass #{&1} when a model or effort is set for Code Review's reviewer; remove it from the command", fn ->
+      own_profile_settings?(review_agent) or profile_settings?(agent, "code_review")
     end)
     |> reject_qa_profile_flags(auto_review, agent, agent_settings?)
   end

@@ -106,7 +106,6 @@ defmodule SymphonyElixir.Orchestrator do
   @snapshot_key :current
   @snapshot_timing_key :timing
   @repo_poll_cold_failure_warm_after 3
-  @terminal_agent_setup_error_marker "missing_required_mcp_tools"
   @empty_codex_totals %{
     input_tokens: 0,
     uncached_input_tokens: 0,
@@ -172,7 +171,6 @@ defmodule SymphonyElixir.Orchestrator do
       slot_waiting: %{},
       dispatch_skipped: %{},
       operator_stops: %{},
-      setup_failed: %{},
       pause: %{paused: false, reason: nil, paused_at: nil},
       operator_pause_logged: false,
       workspace_lifecycle_last_check_at_ms: nil,
@@ -607,7 +605,6 @@ defmodule SymphonyElixir.Orchestrator do
         {:noreply, state}
 
       running_entry ->
-        update = maybe_put_review_agent_verdict_tokens(update, running_entry)
         {updated_running_entry, token_delta} = integrate_codex_update(running_entry, update)
         audit_agent_update(updated_running_entry, update, token_delta)
         maybe_emit_pr_opened(running_entry, updated_running_entry)
@@ -986,32 +983,6 @@ defmodule SymphonyElixir.Orchestrator do
         emit_run_failed(running_entry, error, nil)
         state
 
-      terminal_agent_setup_error?(reason) ->
-        Logger.error(
-          "Agent task exited for issue_id=#{issue_id} session_id=#{session_id} " <>
-            "reason=#{inspect(reason)}; terminal setup error is not retried"
-        )
-
-        emit_run_failed(running_entry, error, nil)
-
-        comment = fn -> maybe_comment_terminal_agent_setup_failure(issue_id, running_entry, reason) end
-
-        state
-        |> start_tracker_task(%{kind: :comment, issue_ids: [issue_id]}, comment)
-        |> release_issue_claim(issue_id)
-        |> mark_setup_failed(issue_id, running_entry)
-
-      terminal_review_agent_block?(reason) ->
-        Logger.error(
-          "Agent task exited for issue_id=#{issue_id} session_id=#{session_id} " <>
-            "reason=#{inspect(reason)}; reviewer block is not retried"
-        )
-
-        comment = fn -> maybe_comment_review_agent_block(issue_id, running_entry, reason) end
-        state = maybe_hold_blocked_issue(state, issue_id, running_entry, "the reviewer agent blocked the run: #{review_agent_block_reason(reason)}", comment)
-        emit_run_failed(running_entry, error, nil)
-        state
-
       terminal_tool_failure_circuit_breaker?(reason) ->
         Logger.error(
           "Agent task exited for issue_id=#{issue_id} session_id=#{session_id} " <>
@@ -1185,10 +1156,6 @@ defmodule SymphonyElixir.Orchestrator do
     strip_ansi(message)
   end
 
-  defp agent_exit_reason_summary({:review_agent_blocked, payload}) do
-    "review_agent blocked: #{review_agent_block_reason(payload)}"
-  end
-
   defp agent_exit_reason_summary({:model_api_unreachable, info}) do
     "model API unreachable (#{Map.get(info, :error)})"
   end
@@ -1233,43 +1200,8 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp strip_ansi(text) when is_binary(text), do: String.replace(text, ~r/\x1b\[[0-9;]*m/, "")
 
-  defp terminal_agent_setup_error?({:terminal_agent_setup_error, _reason}), do: true
-
-  defp terminal_agent_setup_error?(reason) do
-    reason
-    |> inspect()
-    |> String.contains?(@terminal_agent_setup_error_marker)
-  end
-
-  defp terminal_review_agent_block?({:review_agent_blocked, _reason}), do: true
-  defp terminal_review_agent_block?(_reason), do: false
-
   defp terminal_tool_failure_circuit_breaker?({:tool_failure_circuit_breaker, _payload}), do: true
   defp terminal_tool_failure_circuit_breaker?(_reason), do: false
-
-  defp maybe_comment_review_agent_block(issue_id, running_entry, reason)
-       when is_binary(issue_id) and is_map(running_entry) do
-    body = review_agent_block_comment(reason)
-
-    case Tracker.create_comment(issue_id, body) do
-      :ok ->
-        :ok
-
-      {:error, comment_reason} ->
-        Logger.warning(
-          "Failed to post review-agent block comment for issue_id=#{issue_id}: " <>
-            "#{inspect(comment_reason)}"
-        )
-    end
-  rescue
-    exception ->
-      Logger.warning(
-        "Failed to post review-agent block comment for issue_id=#{issue_id}: " <>
-          "#{Exception.message(exception)}"
-      )
-  end
-
-  defp maybe_comment_review_agent_block(_issue_id, _running_entry, _reason), do: :ok
 
   defp maybe_comment_tool_failure_circuit_breaker(issue_id, running_entry, reason)
        when is_binary(issue_id) and is_map(running_entry) do
@@ -1326,18 +1258,6 @@ defmodule SymphonyElixir.Orchestrator do
     release_issue_claim(state, issue_id)
   end
 
-  defp review_agent_block_comment(reason) do
-    """
-    Symphony stopped this run without retrying because the reviewer agent returned a verified blocking verdict.
-
-    Reason: #{review_agent_block_reason(reason)}
-
-    #{review_agent_block_findings_section(reason)}
-
-    The ticket stays where it is on a Blocked hold until a person unblocks it.
-    """
-  end
-
   defp tool_failure_circuit_breaker_comment(reason) do
     """
     Symphony stopped this run without retrying because the agent repeated the same failing tool execution until the circuit breaker tripped.
@@ -1347,11 +1267,6 @@ defmodule SymphonyElixir.Orchestrator do
     The ticket stays where it is on a Blocked hold until a person unblocks it.
     """
   end
-
-  defp review_agent_block_reason({:review_agent_blocked, payload}), do: review_agent_block_reason(payload)
-  defp review_agent_block_reason(%{reason: reason}) when is_binary(reason) and reason != "", do: reason
-  defp review_agent_block_reason(reason) when is_binary(reason) and reason != "", do: reason
-  defp review_agent_block_reason(_reason), do: "review_agent blocked the run"
 
   defp tool_failure_circuit_breaker_details({:tool_failure_circuit_breaker, payload}),
     do: tool_failure_circuit_breaker_details(payload)
@@ -1389,110 +1304,6 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp tool_failure_signature_text(_signature), do: "unknown"
-
-  defp review_agent_block_findings_section({:review_agent_blocked, payload}), do: review_agent_block_findings_section(payload)
-
-  defp review_agent_block_findings_section(%{findings: findings}) when is_list(findings) and findings != [] do
-    body =
-      findings
-      |> Enum.with_index(1)
-      |> Enum.map_join("\n", fn {finding, index} -> "#{index}. #{review_agent_block_finding_text(finding)}" end)
-
-    "Verified findings:\n#{body}"
-  end
-
-  defp review_agent_block_findings_section(_reason), do: "Verified findings: none provided"
-
-  defp review_agent_block_finding_text(finding) when is_map(finding) do
-    finding
-    |> review_agent_block_finding_summary()
-    |> review_agent_block_finding_with_location(review_agent_block_finding_location(finding))
-    |> review_agent_block_finding_with_fix(review_agent_block_finding_suggested_fix(finding))
-  end
-
-  defp review_agent_block_finding_text(finding), do: inspect(finding)
-
-  defp review_agent_block_finding_summary(finding) do
-    review_agent_block_finding_field(finding, :summary, "summary") || "Finding"
-  end
-
-  defp review_agent_block_finding_location(finding) do
-    file = review_agent_block_finding_field(finding, :file, "file") || "unknown file"
-
-    case review_agent_block_finding_line_range(finding) do
-      nil -> file
-      {start_line, end_line} -> "#{file}:#{start_line}-#{end_line}"
-    end
-  end
-
-  defp review_agent_block_finding_suggested_fix(finding) do
-    review_agent_block_finding_field(finding, :suggested_fix, "suggested_fix")
-  end
-
-  defp review_agent_block_finding_with_location(summary, location), do: "#{summary} (#{location})"
-
-  defp review_agent_block_finding_with_fix(text, fix) when is_binary(fix) and fix != "" do
-    "#{text} Suggested fix: #{fix}"
-  end
-
-  defp review_agent_block_finding_with_fix(text, _fix), do: text
-
-  defp review_agent_block_finding_field(finding, atom_key, string_key) do
-    Map.get(finding, atom_key) || Map.get(finding, string_key)
-  end
-
-  defp review_agent_block_finding_line_range(finding) do
-    case Map.get(finding, :line_range) || Map.get(finding, "line_range") do
-      {start_line, end_line} when is_integer(start_line) and is_integer(end_line) -> {start_line, end_line}
-      [start_line, end_line] when is_integer(start_line) and is_integer(end_line) -> {start_line, end_line}
-      _ -> nil
-    end
-  end
-
-  defp maybe_comment_terminal_agent_setup_failure(issue_id, running_entry, reason)
-       when is_binary(issue_id) and is_map(running_entry) do
-    body = terminal_agent_setup_failure_comment(reason)
-
-    case Tracker.create_comment(issue_id, body) do
-      :ok ->
-        :ok
-
-      {:error, comment_reason} ->
-        Logger.warning(
-          "Failed to post terminal setup failure comment for issue_id=#{issue_id}: " <>
-            "#{inspect(comment_reason)}"
-        )
-    end
-  rescue
-    exception ->
-      Logger.warning(
-        "Failed to post terminal setup failure comment for issue_id=#{issue_id}: " <>
-          "#{Exception.message(exception)}"
-      )
-  end
-
-  defp maybe_comment_terminal_agent_setup_failure(_issue_id, _running_entry, _reason), do: :ok
-
-  defp terminal_agent_setup_failure_comment(reason) do
-    """
-    Symphony stopped this run before retrying because the agent runtime did not expose
-    the required Symphony GitHub MCP tools.
-
-    Reason: #{terminal_agent_setup_error_summary(reason)}
-
-    Fix the agent MCP/tool configuration, then re-dispatch the issue.
-    """
-  end
-
-  defp terminal_agent_setup_error_summary({:terminal_agent_setup_error, reason}) do
-    terminal_agent_setup_error_summary(reason)
-  end
-
-  defp terminal_agent_setup_error_summary({:turn_failed, reason}) when is_binary(reason), do: reason
-
-  defp terminal_agent_setup_error_summary(reason) when is_binary(reason), do: reason
-
-  defp terminal_agent_setup_error_summary(reason), do: inspect(reason)
 
   defp start_repo_poll_task(%State{repo_poll_task_ref: ref} = state, _now_ms) when is_reference(ref),
     do: {:skip, state}
@@ -3870,9 +3681,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp dispatch_waiting_issue(%State{} = state, %Issue{} = issue, waiting) do
-    state
-    |> clear_setup_failed(issue.id)
-    |> dispatch_issue(freeze_issue_repo_key(issue, Map.get(waiting, :repo_key)), Map.get(waiting, :attempt), Map.get(waiting, :worker_host))
+    dispatch_issue(state, freeze_issue_repo_key(issue, Map.get(waiting, :repo_key)), Map.get(waiting, :attempt), Map.get(waiting, :worker_host))
   end
 
   defp put_slot_waiting(%State{} = state, %Issue{} = issue, waiting, reason) do
@@ -4008,7 +3817,6 @@ defmodule SymphonyElixir.Orchestrator do
       Map.has_key?(state.running, issue_id) -> running_reason(issue_id)
       MapSet.member?(state.claimed, issue_id) -> "claimed by a retry or a Linear update in flight"
       MapSet.member?(state.budget_exhausted, issue_id) -> "its token budget is spent (agent.max_tokens_per_issue)"
-      setup_failed_suppressed?(state.setup_failed, issue) -> "workspace setup failed in #{issue.state}; it waits for the ticket to change state"
       not priority_allowed?(issue, state) -> priority_reason(issue)
       true -> nil
     end
@@ -5031,7 +4839,7 @@ defmodule SymphonyElixir.Orchestrator do
     # Read from the current workflow on every dispatch, so a config edit applies to the next run.
     settings = Config.settings_for_repo!(repo_key)
     run_profile = AgentRunner.run_profile(issue, settings, repo_key: repo_key)
-    reviewer_run_profile = if review_agent_enabled?(settings), do: Config.pre_push_review_profile(settings)
+    reviewer_run_profile = if run_profile.kind == :code_review and review_agent_enabled?(settings), do: Config.code_review_profile(settings)
     forced? = forced_slot_available?(issue, state)
 
     case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
@@ -5348,7 +5156,6 @@ defmodule SymphonyElixir.Orchestrator do
   defp complete_issue(%State{} = state, issue_id, running_entry) do
     state = delete_persisted_retry(state, issue_id, running_repo_key(state, running_entry))
     state = remember_completed_run(state, issue_id, running_entry)
-    state = clear_setup_failed(state, issue_id)
 
     %{state | retry_attempts: Map.delete(state.retry_attempts, issue_id)}
   end
@@ -6341,31 +6148,6 @@ defmodule SymphonyElixir.Orchestrator do
     # A released claim ends the quiet cycle, so a later one on the same head counts from zero.
     %{state | claimed: MapSet.delete(state.claimed, issue_id), quiet_handoff_runs: Map.delete(state.quiet_handoff_runs, issue_id)}
   end
-
-  # Terminal setup failures release the claim so the issue can recover without an
-  # orchestrator restart, but record the state it failed in so the next poll does
-  # not immediately re-dispatch it into the same failure (tight loop + repeated
-  # comments). The suppression lifts once the issue moves to a different tracker
-  # state (an explicit operator action) or the orchestrator restarts.
-  defp mark_setup_failed(%State{} = state, issue_id, running_entry) when is_binary(issue_id) do
-    %{state | setup_failed: Map.put(state.setup_failed, issue_id, setup_failed_issue_state(running_entry))}
-  end
-
-  defp setup_failed_issue_state(%{issue: %Issue{state: state_name}}) when is_binary(state_name), do: state_name
-  defp setup_failed_issue_state(_running_entry), do: nil
-
-  defp clear_setup_failed(%State{} = state, issue_id) when is_binary(issue_id) do
-    %{state | setup_failed: Map.delete(state.setup_failed, issue_id)}
-  end
-
-  defp setup_failed_suppressed?(setup_failed, %Issue{id: id, state: state_name}) when is_map(setup_failed) do
-    case Map.fetch(setup_failed, id) do
-      {:ok, failed_state} -> failed_state == state_name
-      :error -> false
-    end
-  end
-
-  defp setup_failed_suppressed?(_setup_failed, _issue), do: false
 
   defp retry_delay(attempt, metadata) when is_integer(attempt) and attempt > 0 and is_map(metadata) do
     case retry_delay_type(metadata) do
@@ -7379,7 +7161,7 @@ defmodule SymphonyElixir.Orchestrator do
     |> Map.merge(reviewer_profile_record(Map.get(running_entry, :reviewer_run_profile)))
   end
 
-  # The pre-push reviewer runs inside this run, so its profile sits next to `reviewer_tokens`.
+  # Code Review's reviewer runs inside the Code Review run, so the run's record keeps its profile.
   defp reviewer_profile_record(nil), do: %{}
   defp reviewer_profile_record(profile), do: %{reviewer_profile: run_profile_record(profile)}
 
@@ -7526,7 +7308,6 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp terminal_status_for_reason(:timeout), do: "timeout"
   defp terminal_status_for_reason({:timeout, _reason}), do: "timeout"
-  defp terminal_status_for_reason({:review_agent_blocked, _reason}), do: "blocked"
   defp terminal_status_for_reason({:tool_failure_circuit_breaker, _payload}), do: "blocked"
   defp terminal_status_for_reason({:setup_block, _cause}), do: "blocked"
   defp terminal_status_for_reason(_reason), do: "failure"
@@ -8300,11 +8081,6 @@ defmodule SymphonyElixir.Orchestrator do
     cache_creation_input_tokens = entry_cache_creation_input_tokens(running_entry)
     output_tokens = entry_output_tokens(running_entry)
     total_tokens = entry_total_tokens(running_entry)
-    reviewer_uncached_input_tokens = reviewer_uncached_input_tokens(running_entry)
-    reviewer_cached_input_tokens = reviewer_cached_input_tokens(running_entry)
-    reviewer_cache_creation_input_tokens = reviewer_cache_creation_input_tokens(running_entry)
-    reviewer_output_tokens = reviewer_output_tokens(running_entry)
-    reviewer_total_tokens = reviewer_total_tokens(running_entry)
     codex_app_server_pid = Map.get(running_entry, :codex_app_server_pid)
     transcript_path = Map.get(running_entry, :transcript_path)
     pull_request_url = URLUtils.pull_request_url(update) || URLUtils.pull_request_url(running_entry)
@@ -8314,25 +8090,12 @@ defmodule SymphonyElixir.Orchestrator do
     last_reported_output = last_reported_token(running_entry, :output)
     last_reported_total = last_reported_token(running_entry, :total)
     turn_count = Map.get(running_entry, :turn_count, 0)
-    reviewer_delta = reviewer_token_delta(update, token_delta)
     next_uncached_input_tokens = uncached_input_tokens + token_delta.uncached_input_tokens
     next_cached_input_tokens = cached_input_tokens + token_delta.cached_input_tokens
     next_cache_creation_input_tokens = cache_creation_input_tokens + token_delta.cache_creation_input_tokens
     next_input_tokens = next_uncached_input_tokens + next_cached_input_tokens + next_cache_creation_input_tokens
     next_output_tokens = output_tokens + token_delta.output_tokens
     next_total_tokens = total_tokens + token_delta.total_tokens
-    next_reviewer_uncached_input_tokens = reviewer_uncached_input_tokens + reviewer_delta.uncached_input_tokens
-    next_reviewer_cached_input_tokens = reviewer_cached_input_tokens + reviewer_delta.cached_input_tokens
-
-    next_reviewer_cache_creation_input_tokens =
-      reviewer_cache_creation_input_tokens + reviewer_delta.cache_creation_input_tokens
-
-    next_reviewer_input_tokens =
-      next_reviewer_uncached_input_tokens + next_reviewer_cached_input_tokens +
-        next_reviewer_cache_creation_input_tokens
-
-    next_reviewer_output_tokens = reviewer_output_tokens + reviewer_delta.output_tokens
-    next_reviewer_total_tokens = reviewer_total_tokens + reviewer_delta.total_tokens
     next_last_reported_uncached_input = max(last_reported_uncached_input, token_delta.uncached_input_reported)
     next_last_reported_cached_input = max(last_reported_cached_input, token_delta.cached_input_reported)
 
@@ -8371,12 +8134,6 @@ defmodule SymphonyElixir.Orchestrator do
         codex_cache_creation_input_tokens: next_cache_creation_input_tokens,
         codex_output_tokens: next_output_tokens,
         codex_total_tokens: next_total_tokens,
-        reviewer_input_tokens: next_reviewer_input_tokens,
-        reviewer_uncached_input_tokens: next_reviewer_uncached_input_tokens,
-        reviewer_cached_input_tokens: next_reviewer_cached_input_tokens,
-        reviewer_cache_creation_input_tokens: next_reviewer_cache_creation_input_tokens,
-        reviewer_output_tokens: next_reviewer_output_tokens,
-        reviewer_total_tokens: next_reviewer_total_tokens,
         last_reported_uncached_input_tokens: next_last_reported_uncached_input,
         last_reported_cached_input_tokens: next_last_reported_cached_input,
         last_reported_cache_creation_input_tokens: next_last_reported_cache_creation_input,
@@ -8392,19 +8149,6 @@ defmodule SymphonyElixir.Orchestrator do
         transcript_buffer_size: transcript_buffer_size
       }),
       token_delta
-    }
-  end
-
-  defp reviewer_token_delta(%{agent_phase: :reviewer}, token_delta), do: token_delta
-
-  defp reviewer_token_delta(_update, _token_delta) do
-    %{
-      input_tokens: 0,
-      uncached_input_tokens: 0,
-      cached_input_tokens: 0,
-      cache_creation_input_tokens: 0,
-      output_tokens: 0,
-      total_tokens: 0
     }
   end
 
@@ -8439,21 +8183,6 @@ defmodule SymphonyElixir.Orchestrator do
   defp last_reported_token(running_entry, :total) do
     Map.get(running_entry, :last_reported_total_tokens, Map.get(running_entry, :codex_last_reported_total_tokens, 0))
   end
-
-  defp maybe_put_review_agent_verdict_tokens(%{event: event} = update, running_entry)
-       when event in [:review_agent_verdict, "review_agent_verdict"] and is_map(running_entry) do
-    payload =
-      update
-      |> Map.get(:payload, %{})
-      |> put_map_value(:tokens, reviewer_tokens(running_entry))
-
-    Map.put(update, :payload, payload)
-  end
-
-  defp maybe_put_review_agent_verdict_tokens(update, _running_entry), do: update
-
-  defp put_map_value(map, key, value) when is_map(map), do: Map.put(map, key, value)
-  defp put_map_value(_map, key, value), do: %{key => value}
 
   defp append_transcript_event(_queue, _size, _event, limit) when not is_integer(limit) or limit <= 0,
     do: {:queue.new(), 0}
@@ -9743,7 +9472,7 @@ defmodule SymphonyElixir.Orchestrator do
       record_ticket_signal(issue, @code_review_reviewer_disabled_signal, %{})
     end
 
-    Logger.warning("Not dispatching the reviewer for #{issue_context(issue)}: review_agent.enabled is false for its repo")
+    Logger.warning("Not dispatching the reviewer for #{issue_context(issue)}: code_review.enabled is false for its repo")
 
     state
   end

@@ -1333,15 +1333,13 @@ defmodule SymphonyElixir.TestSupport do
         kv("runtime", Map.get(config, :kind)),
         kv("command", Map.get(config, :command)),
         kv("model", Map.get(config, :model)),
-        kv("effort", Map.get(config, :effort)),
-        kv("max_iterations", Map.get(config, :max_iterations)),
-        kv("run_on", Map.get(config, :run_on))
+        kv("effort", Map.get(config, :effort))
       ]
       |> Enum.reject(&is_nil/1)
 
     case fields do
       [] -> nil
-      lines -> Enum.join(["pre_push_review:" | lines], "\n")
+      lines -> Enum.join(["code_review:" | lines], "\n")
     end
   end
 

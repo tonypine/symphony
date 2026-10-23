@@ -157,13 +157,11 @@ exemptions:
       - issues.states.terminal
       - issues.states.waiting_on_sub_issues
 
-  # pre_push_review
-  - reason: Whether and when the pre-push review agent runs, beyond the model and effort the app's Models section sets. No control in the app yet.
+  # code_review
+  - reason: Whether Code Review's reviewer runs and the runtime it runs on, beyond the model and effort the app's Models section sets. No control in the app yet.
     keys:
-      - pre_push_review.enabled
-      - pre_push_review.max_iterations
-      - pre_push_review.run_on
-      - pre_push_review.runtime
+      - code_review.enabled
+      - code_review.runtime
 
   # pull_requests
   - reason: PR polling, review comment, CI fix and learnings behaviour. No control in the app yet.

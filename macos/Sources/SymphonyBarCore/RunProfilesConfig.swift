@@ -26,7 +26,7 @@ public enum RunKind: String, CaseIterable, Identifiable {
     case ciFix = "ci_fix"
     case reviewFeedback = "review_feedback"
     case landing
-    case prePushReview = "pre_push_review"
+    case codeReview = "code_review"
     case qa
 
     public var id: String { rawValue }
@@ -40,7 +40,7 @@ public enum RunKind: String, CaseIterable, Identifiable {
         case .ciFix: return "CI fix"
         case .reviewFeedback: return "Review feedback"
         case .landing: return "Landing"
-        case .prePushReview: return "Pre-push review"
+        case .codeReview: return "Code review"
         case .qa: return "QA"
         }
     }
@@ -310,7 +310,7 @@ public enum RunProfilesConfig {
     }
 
     /// The `--model` and `--effort` that `agent.command` passes, which runs use while `agent.model` and
-    /// `agent.effort` are unset. `section` reads another section's command, such as `pre_push_review`.
+    /// `agent.effort` are unset. `section` reads another section's command, such as `code_review`.
     public static func commandProfile(in yaml: String, section: String = "agent") throws -> RunProfile {
         let document = Document(yaml)
         guard let key = try commandKey(in: document, section: section),
@@ -366,11 +366,11 @@ public enum RunProfilesConfig {
     ///
     /// Symphony rejects `--model` / `--effort` in `agent.command` once any model or effort is set, so when
     /// the result sets one, those flags move out of the command into `agent.model` / `agent.effort`, unless
-    /// `new` sets those itself. It rejects them in `pre_push_review.command` once a model or effort resolves
-    /// for pre-push review. `pre_push_review.model` / `.effort` outrank the `pre_push_review` kind and name no
+    /// `new` sets those itself. It rejects them in `code_review.command` once a model or effort resolves
+    /// for Code Review's reviewer. `code_review.model` / `.effort` outrank the `code_review` kind and name no
     /// provider, so a model there would also be checked against the provider the kind picks, such as
-    /// OpenRouter. When the result sets a default or the `pre_push_review` kind, the section's keys, else
-    /// its flags, move into `agent.run_profiles.pre_push_review`, the row Settings shows, for each field
+    /// OpenRouter. When the result sets a default or the `code_review` kind, the section's keys, else
+    /// its flags, move into `agent.run_profiles.code_review`, the row Settings shows, for each field
     /// that row keeps from `old`; a moved model keeps the provider the kind had in `old`. A row whose model
     /// or provider changes drops the section's model, which names a model of the old provider.
     /// `auto_review` and the `qa` kind work the same way. Runs then use the same model, effort and provider
@@ -395,7 +395,7 @@ public enum RunProfilesConfig {
         }
         // After the move, as `agent.model` / `.effort` set from the flags count too.
         let all = [new.global] + new.repositories.values
-        for (section, kind) in [(prePushReview, RunKind.prePushReview), (autoReview, .qa)] {
+        for (section, kind) in [(codeReview, RunKind.codeReview), (autoReview, .qa)] {
             let moving = try sectionProfile(in: yaml, section: section)
             guard moving != RunProfile() && all.contains(where: { $0.setsCommandFlags(for: kind) }) else { continue }
             let kept = old.global[kind]
@@ -596,7 +596,7 @@ public enum RunProfilesConfig {
         return document.text
     }
 
-    static let prePushReview = "pre_push_review"
+    static let codeReview = "code_review"
     static let autoReview = "auto_review"
 
     /// The model and effort `<section>` gives its runs: its `model` / `effort` keys, else the `--model` /
