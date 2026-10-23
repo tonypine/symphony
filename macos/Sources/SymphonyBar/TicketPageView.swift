@@ -85,7 +85,7 @@ extension SymphonyWindowModel {
     func ticketEventsChanged(_ events: TicketEventsPayload?) {
         guard let identifier = shownTicket, identifier == ticketFeed.identifier else { return }
         ticketSources.events = events
-        ticketSources.eventsUnsupported = ticketFeed.isUnsupported
+        ticketSources.feedAbsence = ticketFeed.absence
     }
 
     /// Reads the shown ticket's endpoints: `/api/v1/:issue_identifier` after each state poll, its runs and audit
@@ -116,7 +116,7 @@ extension SymphonyWindowModel {
             // A Check Now answer and the feed's events that came in meanwhile stay.
             sources.check = ticketSources.check
             sources.events = ticketSources.events
-            sources.eventsUnsupported = ticketSources.eventsUnsupported
+            sources.feedAbsence = ticketSources.feedAbsence
             ticketSources = sources
             followTicketFeed(afterPoll: false)
         }
@@ -389,8 +389,8 @@ struct TicketPageBody: View {
 }
 
 /// The note field under the ticket page: one line, where Return posts the Director's note on the ticket. Under it, while
-/// needed, one line: why the field is off (an older Symphony without the events feed, or the ticket's history not read
-/// yet), the note on its way, or why the last one wasn't added.
+/// needed, one line: why the field is off (an older Symphony without the events feed, a ticket that hasn't run, or the
+/// ticket's history not read yet), the note on its way, or why the last one wasn't added.
 struct TicketNoteBar: View {
     let page: TicketPage
     @ObservedObject var composer: TicketNoteComposer

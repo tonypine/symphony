@@ -465,7 +465,7 @@ func ledgerPage(window: CGFloat, feed: Bool = true, note: TicketNoteComposer? = 
             state: try? Data(contentsOf: ledgerAPI.appendingPathComponent("state.json")),
             issue: try? Data(contentsOf: ledgerAPI.appendingPathComponent("SHOP-410.json")),
             events: events,
-            eventsUnsupported: !feed
+            feedAbsence: feed ? .unread : .unsupported
         ),
         now: ledgerNow, timeZone: TimeZone(identifier: "UTC")!
     )
@@ -478,14 +478,15 @@ func ledgerPage(window: CGFloat, feed: Bool = true, note: TicketNoteComposer? = 
     .background(DesignTokens.Surface.content.color)
 }
 
-/// The note field alone, under a laptop window's page: a refusal, and an older Symphony's disabled field.
+/// The note field alone, under a laptop window's page: a refusal with the feed read (`absence` nil), and the field off
+/// for an older Symphony or a ticket that hasn't run.
 @MainActor
-func ledgerNoteBar(feed: Bool, note: TicketNoteComposer) -> some View {
-    let events = feed ? TicketEventsPayload() : nil
+func ledgerNoteBar(absence: TicketFeedAbsence? = nil, note: TicketNoteComposer) -> some View {
     let page = TicketPage(
         identifier: "SHOP-410",
         sources: TicketPage.Sources(
-            issue: try? Data(contentsOf: ledgerAPI.appendingPathComponent("SHOP-410.json")), events: events, eventsUnsupported: !feed
+            issue: try? Data(contentsOf: ledgerAPI.appendingPathComponent("SHOP-410.json")),
+            events: absence == nil ? TicketEventsPayload() : nil, feedAbsence: absence ?? .unread
         ),
         now: ledgerNow
     )
@@ -584,12 +585,14 @@ MainActor.assumeIsolated {
         render(pullRequestPage(unavailablePullRequest), scheme, to: "pr-page-github-unavailable-\(suffix).png")
         render(pullRequestPage(untrackedPullRequest), scheme, to: "pr-page-untracked-\(suffix).png")
         render(pullRequestPage(.notFound), scheme, to: "pr-page-not-found-\(suffix).png")
-        // The note field under a ticket's timeline (TP-1195): laptop and desktop, a refusal, and an older Symphony.
+        // The note field under a ticket's timeline (TP-1195): laptop and desktop, a refusal, an older Symphony, and a
+        // ticket that hasn't run.
         render(ledgerPage(window: 1440), scheme, to: "ticket-note-laptop-\(suffix).png")
         render(ledgerPage(window: 2560), scheme, to: "ticket-note-desktop-\(suffix).png")
         let long = String(repeating: "Keep the run header visible. ", count: 160)
-        render(ledgerNoteBar(feed: true, note: TicketNoteComposer(identifier: "SHOP-410", text: long, refusal: TicketNoteComposer.tooLong(long))),
+        render(ledgerNoteBar(note: TicketNoteComposer(identifier: "SHOP-410", text: long, refusal: TicketNoteComposer.tooLong(long))),
                scheme, to: "ticket-note-refused-\(suffix).png")
-        render(ledgerNoteBar(feed: false, note: TicketNoteComposer(identifier: "SHOP-410")), scheme, to: "ticket-note-no-feed-\(suffix).png")
+        render(ledgerNoteBar(absence: .unsupported, note: TicketNoteComposer(identifier: "SHOP-410")), scheme, to: "ticket-note-no-feed-\(suffix).png")
+        render(ledgerNoteBar(absence: .unknownTicket, note: TicketNoteComposer(identifier: "SHOP-410")), scheme, to: "ticket-note-not-run-\(suffix).png")
     }
 }

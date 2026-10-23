@@ -290,7 +290,7 @@ final class SymphonyWindowModel: ObservableObject {
         self.client = client
         self.eventStream = eventStream
         self.selection = selection
-        ticketFeed = TicketEventsReader(get: { [client] path in await client.get(path) })
+        ticketFeed = TicketEventsReader(get: { [client] path in TicketEventsResult(await client.answer(path)) })
         artifactImages = ArtifactImages(get: { [client] path in await client.answer(path) })
         history = NavigationHistory(current: .view(selection))
         ticketFeed.listen(to: eventStream)
