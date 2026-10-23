@@ -221,14 +221,6 @@ set (or, in Development mode, no checkout folder).
   row. Values are saved in plain text, so they hold documented QA values only, never a secret. Save runs
   `symphony check` first, which refuses a name Symphony sets itself, `PATH`, `HOME` or `DYLD_*`, and writes only
   the changed lines.
-- **Code Review** turns Code Review's reviewer on or off and picks the runtime it runs on. **Code Review's
-  reviewer** is `code_review.enabled` (off by default): on, a read-only agent reviews each pull request in Code
-  Review; off, Code Review tickets wait and nothing reviews the PR. **Runtime** is `code_review.runtime`
-  (**Codex** or **Claude**, **Not set** while the key is missing), editable while the reviewer is on.
-  `code_review.command` is required once the reviewer is on, and its model and effort are the Models section's
-  Code review row. **Built-in ticket patterns** (`auto_review.acceptance_gate.escalate.ticket_patterns_builtin`)
-  sits in the same section. Save runs `symphony check` first and writes only the changed lines, adding
-  `code_review:` when it is missing and keeping its other keys and comments.
 - **Models** sets the provider, model and effort for each kind of run, also in the `symphony.yml` itself.
   The **Scope** picker chooses which `agent` block the rows edit: **All repositories** is the top-level
   `agent` section, and each `repositories[]` key edits that repository's `repositories[<key>].agent`
