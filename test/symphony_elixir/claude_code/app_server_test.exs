@@ -2082,7 +2082,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end
     end
 
-    test "a continuation turn fails fast when Symphony MCP server is missing" do
+    test "a continuation turn goes on when the Symphony MCP server is missing, and logs it" do
       test_root =
         Path.join(
           System.tmp_dir!(),
@@ -2116,18 +2116,20 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
         prompt = "Continuation guidance:\n\n- Push the branch and open the PR."
 
-        assert {:error, {:turn_failed, reason}} =
-                 AppServer.run_turn(session, prompt, %{}, on_message: on_message)
+        log =
+          capture_log(fn ->
+            assert {:ok, result} = AppServer.run_turn(session, prompt, %{}, on_message: on_message)
+            assert result.output_tokens == 5
+          end)
 
-        assert reason =~ "missing_required_mcp_tools"
-        assert reason =~ "Missing MCP server: symphony"
-        assert_received {:turn_msg, {:turn_failed, ^reason}}
+        assert log =~ "Claude Symphony MCP server failed to start"
+        refute_received {:turn_msg, {:turn_failed, _reason}}
       after
         File.rm_rf(test_root)
       end
     end
 
-    test "a continuation turn continues when Symphony MCP server is loaded" do
+    test "a turn whose session has the Symphony MCP server logs no start failure" do
       test_root =
         Path.join(
           System.tmp_dir!(),
@@ -2156,11 +2158,15 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         )
 
         session = local_session(workspace, test_root)
-        prompt = "Continuation guidance:\n\n- Push the branch and open the PR."
 
-        assert {:ok, result} = AppServer.run_turn(session, prompt, %{}, [])
-        assert result.input_tokens == 10
-        assert result.output_tokens == 5
+        log =
+          capture_log(fn ->
+            assert {:ok, result} = AppServer.run_turn(session, "Push the branch and open the PR.", %{}, [])
+            assert result.input_tokens == 10
+            assert result.output_tokens == 5
+          end)
+
+        refute log =~ "Claude Symphony MCP server failed to start"
       after
         File.rm_rf(test_root)
       end
@@ -2230,7 +2236,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       assert AppServer.default_claude_cache_root({:unix, :linux}, nil) == Path.join([home, ".cache", "claude-cli-nodejs"])
     end
 
-    test "a continuation turn ignores system events that arrive before init" do
+    test "the Symphony MCP check ignores system events that arrive before init" do
       test_root =
         Path.join(
           System.tmp_dir!(),
@@ -2260,10 +2266,14 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         )
 
         session = local_session(workspace, test_root)
-        prompt = "Continuation guidance:\n\n- Push the branch and open the PR."
 
-        assert {:ok, result} = AppServer.run_turn(session, prompt, %{}, [])
-        assert result.output_tokens == 5
+        log =
+          capture_log(fn ->
+            assert {:ok, result} = AppServer.run_turn(session, "Push the branch and open the PR.", %{}, [])
+            assert result.output_tokens == 5
+          end)
+
+        refute log =~ "Claude Symphony MCP server failed to start"
       after
         File.rm_rf(test_root)
       end

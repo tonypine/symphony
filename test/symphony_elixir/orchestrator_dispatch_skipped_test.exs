@@ -84,9 +84,9 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     refute Map.has_key?(state.dispatch_skipped, "unset")
 
     # A changed reason is logged again, with a new `since`.
-    {state, log} = dispatch_with_log([medium], %{state | setup_failed: %{"medium" => "Todo"}})
-    assert %{reason: "workspace setup failed in Todo; it waits for the ticket to change state"} = state.dispatch_skipped["medium"]
-    assert log =~ "issue_identifier=MT-MED state=\"Todo\"; workspace setup failed"
+    {state, log} = dispatch_with_log([medium], %{state | budget_exhausted: MapSet.new(["medium"])})
+    assert %{reason: "its token budget is spent (agent.max_tokens_per_issue)"} = state.dispatch_skipped["medium"]
+    assert log =~ "issue_identifier=MT-MED state=\"Todo\"; its token budget is spent"
   end
 
   test "each closed gate names itself" do

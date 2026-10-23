@@ -60,7 +60,6 @@ defmodule SymphonyElixir.AgentRunner do
   # Fallback when settings are unavailable; the effective value comes from
   # `agent.codex_stdio_prompt_soft_limit` (see Config.Schema.Agent).
   @codex_stdio_prompt_soft_limit_fallback 65_536
-  @terminal_agent_setup_error_marker "missing_required_mcp_tools"
   @tmp_dir_prefix "symphony-run-"
 
   @type worker_host :: String.t() | nil
@@ -112,9 +111,6 @@ defmodule SymphonyElixir.AgentRunner do
         cond do
           hold = provider_hold_reason(reason) ->
             exit(hold)
-
-          terminal_agent_setup_error?(reason) ->
-            exit({:terminal_agent_setup_error, reason})
 
           exits_as_is?(reason) ->
             exit(reason)
@@ -191,12 +187,6 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp linear_unavailable?(_reason), do: false
-
-  defp terminal_agent_setup_error?(reason) do
-    reason
-    |> inspect()
-    |> String.contains?(@terminal_agent_setup_error_marker)
-  end
 
   defp run_on_worker_host(issue, codex_update_recipient, opts, worker_host) do
     Logger.info("Starting worker attempt for #{issue_context(issue)} worker_host=#{worker_host_for_log(worker_host)}")
@@ -537,20 +527,13 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp send_codex_update(recipient, issue, message), do: send_codex_update(recipient, issue, message, :executor)
-
-  defp send_codex_update(recipient, %Issue{id: issue_id}, message, phase)
-       when is_binary(issue_id) and is_pid(recipient) do
+  defp send_codex_update(recipient, %Issue{id: issue_id}, message) when is_binary(issue_id) and is_pid(recipient) do
     payload = SymphonyElixir.ClaudeCode.AppServer.event_to_update(message) || message
-    payload = maybe_put_agent_phase(payload, phase)
     send(recipient, {:codex_worker_update, issue_id, payload})
     :ok
   end
 
-  defp send_codex_update(_recipient, _issue, _message, _phase), do: :ok
-
-  defp maybe_put_agent_phase(payload, phase) when is_map(payload), do: Map.put(payload, :agent_phase, phase)
-  defp maybe_put_agent_phase(payload, _phase), do: payload
+  defp send_codex_update(_recipient, _issue, _message), do: :ok
 
   defp send_worker_runtime_info(recipient, %Issue{id: issue_id}, worker_host, workspace)
        when is_binary(issue_id) and is_pid(recipient) and is_binary(workspace) do
@@ -739,8 +722,6 @@ defmodule SymphonyElixir.AgentRunner do
         opts: run_opts,
         issue_state_fetcher: issue_state_fetcher,
         worker_host: worker_host,
-        next_prompt: nil,
-        session_rebuilt: false,
         progress: initial_progress(workspace, worker_host, issue, run_opts),
         dispatch_pr_url: ticket_pr_url(issue, run_opts)
       }
@@ -761,8 +742,7 @@ defmodule SymphonyElixir.AgentRunner do
       issue_state_fetcher: issue_state_fetcher
     } = run_context
 
-    prompt = run_context.next_prompt || build_turn_prompt(issue, opts, turn_number, max_turns)
-    run_context = %{run_context | next_prompt: nil}
+    prompt = build_turn_prompt(issue, opts, turn_number, max_turns)
     audit_prompt_sent(issue, Keyword.get(opts, :run_id), prompt, turn_number, max_turns, agent_module, opts)
 
     case run_agent_turn(agent_module, app_session, prompt, run_context) do
@@ -789,12 +769,8 @@ defmodule SymphonyElixir.AgentRunner do
             {:error, reason}
         end
 
-      {:error, reason} = error ->
-        if retry_in_fresh_session?(reason, run_context, turn_number) do
-          retry_turn_in_fresh_session(reason, agent_module, prompt, run_context, turn_number, max_turns)
-        else
-          error
-        end
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -845,37 +821,6 @@ defmodule SymphonyElixir.AgentRunner do
       dependency_audit_command_runner: Keyword.get(opts, :dependency_audit_command_runner),
       unlocked_paths: Keyword.get(opts, :unlocked_paths, [])
     )
-  end
-
-  # A continuation turn that starts without the Symphony MCP server gets one retry in a
-  # fresh session (new MCP session, socket, settings and `--mcp-config` files). Turn 1
-  # setup errors stay terminal: no earlier turn has shown the setup can work.
-  defp retry_in_fresh_session?(reason, run_context, turn_number) do
-    turn_number > 1 and not run_context.session_rebuilt and terminal_agent_setup_error?(reason)
-  end
-
-  # The broken session is left for `run_codex_turns/5` to stop, so each session is
-  # stopped exactly once.
-  defp retry_turn_in_fresh_session(reason, agent_module, prompt, run_context, turn_number, max_turns) do
-    %{workspace: workspace, worker_host: worker_host, issue: issue, opts: opts} = run_context
-
-    Logger.warning("Continuation turn started without the Symphony MCP server for #{issue_context(issue)}; retrying once in a fresh session turn=#{turn_number}/#{max_turns} reason=#{inspect(reason)}")
-
-    case start_agent_session(agent_module, workspace, worker_host, issue, opts) do
-      {:ok, fresh_session} ->
-        send_agent_session_info(run_context.codex_update_recipient, issue, agent_module, fresh_session)
-        retry_context = %{run_context | next_prompt: prompt, session_rebuilt: true}
-
-        try do
-          do_run_codex_turns(agent_module, fresh_session, retry_context, turn_number, max_turns)
-        after
-          agent_module.stop_session(fresh_session)
-        end
-
-      {:error, restart_reason} ->
-        Logger.warning("Could not start a fresh session for #{issue_context(issue)} reason=#{inspect(restart_reason)}")
-        {:error, reason}
-    end
   end
 
   defp continue_after_completed_turn(issue, issue_state_fetcher, opts, run_context, agent_module, app_session, turn_number, max_turns) do
