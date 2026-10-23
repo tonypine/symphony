@@ -157,6 +157,12 @@ exemptions:
       - issues.states.terminal
       - issues.states.waiting_on_sub_issues
 
+  # code_review
+  - reason: Whether Code Review's reviewer runs and the runtime it runs on, beyond the model and effort the app's Models section sets. No control in the app yet.
+    keys:
+      - code_review.enabled
+      - code_review.runtime
+
   # pull_requests
   - reason: PR polling, review comment, CI fix and learnings behaviour. No control in the app yet.
     keys:
