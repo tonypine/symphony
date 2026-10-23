@@ -48,8 +48,14 @@ defmodule SymphonyElixirWeb.TicketEventsController do
     end
   end
 
-  # A store that can't be read lists no record, so its tickets read as unknown.
-  defp ticket(repo_key, issue_identifier) do
+  @doc """
+  The record of `repo_key`'s ticket `issue_identifier` (`SymphonyElixir.TicketState`), as the feed
+  and the control API's note (`SymphonyElixirWeb.ControlApiController.note/2`) resolve it: a ticket
+  with no record, or one whose record has no issue id, is `{:error, :not_found}`. A store that can't
+  be read lists no record, so its tickets read as unknown.
+  """
+  @spec ticket(String.t(), String.t()) :: {:ok, TicketState.t()} | {:error, :not_found}
+  def ticket(repo_key, issue_identifier) do
     repo_key
     |> RunStore.list_ticket_states()
     |> List.wrap()

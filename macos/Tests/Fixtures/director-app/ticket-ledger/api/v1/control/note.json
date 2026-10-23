@@ -1,0 +1,26 @@
+{
+  "event": {
+    "actor": {
+      "kind": "person",
+      "name": "the Director"
+    },
+    "artifacts": [],
+    "at": "2026-10-18T11:19:00.000000Z",
+    "head_sha": null,
+    "id": "ev-20",
+    "idempotency": null,
+    "parent": null,
+    "payload": {
+      "text": "Keep the run header visible at both widths."
+    },
+    "phase": "QA",
+    "run_id": null,
+    "seq": 20,
+    "summary": {
+      "detail": "Keep the run header visible at both widths.",
+      "title": "Note added"
+    },
+    "supersedes": null,
+    "type": "note"
+  }
+}

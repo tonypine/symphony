@@ -184,18 +184,21 @@ defmodule SymphonyElixir.TicketEvents.BriefTest do
       events = [
         event(0, "note", %{text: "Keep the button.\nUsers know it."}, actor: {:person, "Sam"}),
         event(1, "note", %{text: "Batching rows."}, actor: {:agent, "run-1", "implementation"}),
-        event(2, "note", %{text: "Restarted."})
+        event(2, "note", %{text: "Restarted."}),
+        # The control API's note (one shared token) names its person "the Director" already.
+        event(3, "note", %{text: "Ship it narrow."}, actor: {:person, "the Director"})
       ]
 
-      assert %{notes: 3, text: text} = Brief.build(nil, events)
+      assert %{notes: 4, text: text} = Brief.build(nil, events)
 
       assert text =~
                """
-               Notes (3):
+               Notes (4):
                - 2026-10-22T10:00:00Z, the Director (Sam): Keep the button.
                  Users know it.
                - 2026-10-22T10:01:00Z, an agent (Implementation run): Batching rows.
                - 2026-10-22T10:02:00Z, Symphony: Restarted.
+               - 2026-10-22T10:03:00Z, the Director: Ship it narrow.
                """
     end
 

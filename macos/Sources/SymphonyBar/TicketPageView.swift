@@ -58,7 +58,8 @@ extension SymphonyWindowModel {
         switch history.current {
         case let .view(view):
             selection = view
-        case .ticket:
+        case let .ticket(identifier):
+            ticketNote.show(identifier)
             ticketSources = TicketPage.Sources()
             ticketSlowReadAt = nil
             readTicket(force: true)
@@ -84,6 +85,7 @@ extension SymphonyWindowModel {
     func ticketEventsChanged(_ events: TicketEventsPayload?) {
         guard let identifier = shownTicket, identifier == ticketFeed.identifier else { return }
         ticketSources.events = events
+        ticketSources.feedAbsence = ticketFeed.absence
     }
 
     /// Reads the shown ticket's endpoints: `/api/v1/:issue_identifier` after each state poll, its runs and audit
@@ -114,6 +116,7 @@ extension SymphonyWindowModel {
             // A Check Now answer and the feed's events that came in meanwhile stay.
             sources.check = ticketSources.check
             sources.events = ticketSources.events
+            sources.feedAbsence = ticketSources.feedAbsence
             ticketSources = sources
             followTicketFeed(afterPoll: false)
         }
@@ -175,6 +178,15 @@ extension SymphonyWindowModel {
             }
             client.refresh()
             readTicket(force: true)
+        }
+    }
+
+    /// Return in the note field: the note goes on the shown ticket, then the page reads what is new in its feed, so
+    /// the note shows at once.
+    func submitNote() {
+        guard let page = ticketPage else { return }
+        Task {
+            await ticketNote.submit(on: page, send: onControl, read: { [ticketFeed] in ticketFeed.read() })
         }
     }
 
@@ -274,7 +286,9 @@ struct TicketPageContent: View {
                     openTicket: model.openTicket,
                     checking: model.checkingNow.contains(page.identifier)
                 ),
-                images: model.artifactImages
+                images: model.artifactImages,
+                note: model.ticketNote,
+                submitNote: model.submitNote
             )
         } else {
             EmptyState(title: "Reading the ticket…", symbol: "doc.text.magnifyingglass", showsSpinner: true)
@@ -289,6 +303,9 @@ struct TicketPageView: View {
     let actions: TicketPageActions
     /// The timeline's screenshots, read through the window's client.
     var images: ArtifactImages?
+    /// The note field pinned under the page, so it stays reachable however long the timeline is.
+    var note: TicketNoteComposer?
+    var submitNote: () -> Void = {}
     @State private var width: CGFloat = DesignTokens.Layout.windowWidth - DesignTokens.Layout.sidebarWidth
     /// The run groups folded, by run id: they stay folded as the feed is read again.
     @State private var folded = Set<String>()
@@ -303,6 +320,9 @@ struct TicketPageView: View {
             )
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let note { TicketNoteBar(page: page, composer: note, submit: submitNote) }
+        }
         .sheet(item: $fullScreenshot) { shot in
             ScreenshotSheet(shot: shot, images: images, close: { fullScreenshot = nil })
         }
@@ -365,6 +385,87 @@ struct TicketPageBody: View {
         // The mentions in the page's text are chips (N1) with popovers (N2, N3), read from its Inbox item.
         .environment(\.mentionReferences, brief?.references ?? [:])
         .environment(\.openMention, OpenMentionAction(handler: actions.openMention))
+    }
+}
+
+/// The note field under the ticket page: one line, where Return posts the Director's note on the ticket. Under it, while
+/// needed, one line: why the field is off (an older Symphony without the events feed, a ticket that hasn't run, or the
+/// ticket's history not read yet), the note on its way, or why the last one wasn't added.
+struct TicketNoteBar: View {
+    let page: TicketPage
+    @ObservedObject var composer: TicketNoteComposer
+    let submit: () -> Void
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+
+    /// A one-line note needs no more on a wide window; the rest of the bar stays empty.
+    static let maxFieldWidth: CGFloat = 720
+    /// The line under the field wraps to at most this many lines. The window's split view measures the page's smallest
+    /// size with no width, where unbounded text wraps a character a line: the bar then claimed more height than the
+    /// window has, and pushed itself and the window's content off screen.
+    static let lineLimit = 3
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+            if offscreenSnapshot {
+                snapshotField
+            } else {
+                TextField(TicketNoteComposer.placeholder, text: $composer.text)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(submit)
+                    .disabled(!page.acceptsNotes)
+                    .accessibilityLabel(TicketNoteComposer.fieldLabel(page.identifier))
+                    .accessibilityHint(page.notesOffReason ?? TicketNoteComposer.hint)
+            }
+            if let reason = page.notesOffReason {
+                Label(reason, systemImage: "info.circle")
+                    .font(DesignTokens.TypeStyle.callout.font)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(Self.lineLimit)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if composer.sending {
+                HStack(spacing: DesignTokens.Space.s2) {
+                    if offscreenSnapshot {
+                        // `ImageRenderer` can't draw a spinner: its symbol stands in.
+                        Image(systemName: "ellipsis").foregroundStyle(.secondary)
+                    } else {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text(TicketNoteComposer.sendingTitle)
+                        .font(DesignTokens.TypeStyle.callout.font)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(TicketNoteComposer.sendingTitle)
+            } else if let refusal = composer.refusal {
+                Label(refusal, systemImage: DesignTokens.Status.problem.symbol)
+                    .font(DesignTokens.TypeStyle.callout.font)
+                    .foregroundStyle(DesignTokens.Status.problem.tint)
+                    .lineLimit(Self.lineLimit)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .help(refusal)
+                    .accessibilityLabel(TicketNoteComposer.refusalLabel(refusal))
+            }
+        }
+        .frame(maxWidth: Self.maxFieldWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, DesignTokens.Space.s5)
+        .padding(.vertical, DesignTokens.Space.s3)
+        .background(DesignTokens.Surface.content.color)
+        .overlay(alignment: .top) { Divider() }
+    }
+
+    /// `ImageRenderer` can't draw a text field: a rounded box with its text or placeholder stands in.
+    private var snapshotField: some View {
+        Text(composer.text.isEmpty ? TicketNoteComposer.placeholder : composer.text)
+            .font(DesignTokens.TypeStyle.body.font)
+            .foregroundStyle(composer.text.isEmpty || !page.acceptsNotes ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
+            .lineLimit(1)
+            .padding(.horizontal, DesignTokens.Space.s2)
+            .padding(.vertical, DesignTokens.Space.s1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(DesignTokens.Surface.content.color.opacity(page.acceptsNotes ? 1 : 0.5), in: RoundedRectangle(cornerRadius: 5))
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(DesignTokens.Surface.separator.color))
     }
 }
 

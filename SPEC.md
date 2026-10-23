@@ -5631,6 +5631,19 @@ Minimum endpoints:
     runs it again in place, `restart` starts it over, and a move to another state on the board
     clears the mark too.
 
+- `POST /api/v1/control/note` (OPTIONAL)
+  - Writes the Director's note on a ticket: `repo_key`, `issue_identifier` and `text`. The ticket
+    resolves as the events feed resolves it. The note is a `note` event (Section 4.1.11) whose actor
+    is the person "the Director", since the control API authenticates one shared token. It shows in
+    the ticket's timeline and in the summary the next agent run starts from, under Notes.
+  - Answers `200` `{"event": ...}` with the event as the feed shows it, and writes a `director_note`
+    audit record (`event_id`, the text's first 500 characters). Text that is blank, or longer than
+    the `note` type's 4,000 characters, is `400` `invalid_note` with a message that says why; a
+    ticket with no state record in that repo is `404` `ticket_not_found`; a request without
+    `repo_key` or `issue_identifier` is `422`. None of them writes an event or an audit record.
+    Unlike a stop's event, the note is the request: an answer other than `200` means it wasn't
+    written.
+
 - `POST /api/v1/control/<move>` (the Director's moves, OPTIONAL)
   - The Mac app's Inbox makes the Director's Linear moves through Symphony, which holds the Linear
     key and the audit log. Like the other control endpoints they require the control bearer token.
