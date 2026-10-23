@@ -122,9 +122,7 @@ final class SettingsViewModel: ObservableObject {
     @Published var dispatchLoopLongWindowMinutes = DispatchLoopLimits.minutes(DispatchLoopLimits.defaultLongWindowMs)
     /// Why `symphony check` rejected the changed dispatch-loop limits, shown in their section.
     @Published private(set) var dispatchLoopError: String?
-    /// `ledger.artifact_retention_days` and `ledger.artifact_max_bytes` in the configured symphony.yml: how many days a
-    /// finished ticket's artifact files are kept, and the largest file Symphony stores, in MB.
-    @Published var artifactRetentionDays = LedgerSettings.defaultRetentionDays
+    /// `ledger.artifact_max_bytes` in the configured symphony.yml: the largest file Symphony stores, in MB.
     @Published var artifactMaxMegabytes = LedgerSettings.megabytes(LedgerSettings.defaultMaxBytes)
     /// `ledger.prompt_brief_enabled` and `ledger.prompt_brief_max_tokens`: whether agents get the summary of the
     /// ticket's history, and the size in tokens over which Symphony warns about one (it still gives it whole).
@@ -449,7 +447,6 @@ final class SettingsViewModel: ObservableObject {
         guard !path.isEmpty else { return }
         do {
             let ledger = try SymphonyConfigFile(path: path).readLedgerSettings()
-            artifactRetentionDays = LedgerSettings.steppedDays(ledger.retentionDays)
             artifactMaxMegabytes = LedgerSettings.megabytes(ledger.maxBytes)
             promptBriefEnabled = ledger.briefEnabled
             promptBriefMaxTokens = ledger.briefMaxTokens
@@ -617,7 +614,7 @@ final class SettingsViewModel: ObservableObject {
         )
         let oldLoopLimits = loadedDispatchLoopLimits.flatMap { $0 != loopLimits ? $0 : nil }
         ledgerError = nil
-        var ledger = loadedLedgerSettings?.setting(retentionDays: artifactRetentionDays, maxMegabytes: artifactMaxMegabytes)
+        var ledger = loadedLedgerSettings?.setting(maxMegabytes: artifactMaxMegabytes)
         ledger?.briefEnabled = promptBriefEnabled
         ledger?.briefMaxTokens = promptBriefMaxTokens
         let oldLedger = loadedLedgerSettings.flatMap { $0 != ledger ? $0 : nil }

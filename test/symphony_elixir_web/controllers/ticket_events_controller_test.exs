@@ -4,6 +4,7 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
   import Phoenix.ConnTest
 
   alias SymphonyElixir.{Artifacts, Paths, TicketEvents}
+  alias SymphonyElixir.Artifacts.Store
 
   @endpoint SymphonyElixirWeb.Endpoint
   @repo_key "repo-a"
@@ -266,7 +267,8 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
         artifact.id
       end
 
-    {:ok, _expired} = Artifacts.expire(badge)
+    File.rm!(Store.path(badge))
+    {:error, :expired} = Artifacts.path(badge)
     implementer = {:agent, "run-impl-1", "implementation"}
     qa = {:agent, "run-qa-1", "qa"}
     qa_again = {:agent, "run-qa-2", "qa"}

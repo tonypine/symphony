@@ -2,6 +2,7 @@ defmodule SymphonyElixirWeb.PresenterTicketEventsTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.{Artifacts, Paths, TicketEvents}
+  alias SymphonyElixir.Artifacts.Store
   alias SymphonyElixirWeb.Presenter
 
   @repo_key "repo-a"
@@ -28,7 +29,8 @@ defmodule SymphonyElixirWeb.PresenterTicketEventsTest do
     test "expands each artifact, and says one the store expired or doesn't know is unavailable", %{workspace: workspace} do
       shown = ingest!(workspace, 1, "Home screen")
       expired = ingest!(workspace, 2, "Settings")
-      {:ok, _expired} = Artifacts.expire(expired)
+      File.rm!(Store.path(expired))
+      {:error, :expired} = Artifacts.path(expired)
       elsewhere = ingest!(workspace, 3, "Another ticket's", issue_id: "issue-2")
 
       event = event("note", %{text: "shots"}, 1, artifacts: [shown, expired, elsewhere, @unknown])

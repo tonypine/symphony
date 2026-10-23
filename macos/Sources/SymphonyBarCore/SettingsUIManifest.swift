@@ -43,7 +43,6 @@ public enum SettingsUIManifest {
         "issues.states.plan_review",
         "issues.states.qa",
         "ledger.artifact_max_bytes",
-        "ledger.artifact_retention_days",
         "ledger.prompt_brief_enabled",
         "ledger.prompt_brief_max_tokens",
         "pre_push_review.command",

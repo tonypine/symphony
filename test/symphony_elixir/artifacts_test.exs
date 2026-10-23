@@ -247,24 +247,20 @@ defmodule SymphonyElixir.ArtifactsTest do
     end
   end
 
-  describe "expire/1" do
-    test "removes the bytes and keeps the row; ingesting the same bytes again restores them", %{workspace: workspace, roots: roots} do
+  describe "a file gone from the store" do
+    test "is expired with its row kept; ingesting the same bytes again restores it", %{workspace: workspace, roots: roots} do
       path = write!(workspace, "home.png", @png)
       {:ok, artifact} = Artifacts.ingest(path, @meta, roots: roots)
+      File.rm!(Store.path(artifact.id))
 
-      assert {:ok, %{expired: true, expired_at: %DateTime{} = expired_at, references: 1}} = Artifacts.expire(artifact.id)
-      assert stored_files() == []
       assert {:error, :expired} = Artifacts.path(artifact.id)
-      assert {:ok, %{expired_at: ^expired_at}} = Artifacts.expire(artifact.id)
+      assert {:ok, %{expired: true, expired_at: %DateTime{} = expired_at, references: 1}} = Artifacts.get(artifact.id)
+      assert {:error, :expired} = Artifacts.path(artifact.id)
+      assert {:ok, %{expired_at: ^expired_at}} = Artifacts.get(artifact.id)
 
       assert {:ok, %{expired: false, expired_at: nil, references: 2}} = Artifacts.ingest(path, @meta, roots: roots)
       assert {:ok, stored} = Artifacts.path(artifact.id)
       assert File.read!(stored) == @png
-    end
-
-    test "an unknown or malformed id is not found" do
-      assert {:error, :not_found} = Artifacts.expire(Store.id("never ingested"))
-      assert {:error, :not_found} = Artifacts.expire("../../etc/passwd")
     end
   end
 
@@ -294,7 +290,9 @@ defmodule SymphonyElixir.ArtifactsTest do
       {:ok, a} = Artifacts.ingest(write!(workspace, "a.png", @png), @meta, roots: roots)
       {:ok, b} = Artifacts.ingest(write!(workspace, "b.log", "b\n"), %{@meta | kind: "log", repo_key: "repo-b"}, roots: roots)
       {:ok, _a} = Artifacts.ingest(write!(workspace, "a.png", @png), %{@meta | issue_id: "issue-2"}, roots: roots)
-      {:ok, b} = Artifacts.expire(b.id)
+      File.rm!(Store.path(b.id))
+      {:error, :expired} = Artifacts.path(b.id)
+      {:ok, b} = Artifacts.get(b.id)
       {:ok, a} = Artifacts.get(a.id)
 
       assert Artifacts.list() == [a, b]

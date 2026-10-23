@@ -540,8 +540,7 @@ durable run store:
 
 - `id`, `mime`, `bytes` (the size), `label`, `kind` (`screenshot`, `transcript`, `log`, `report`,
   `diff` or `file`), `repo_key`, `issue_id`, `run_id` and `captured_at`: the first ingest's.
-- `references` (how many ingests) and `tickets` (every repo and issue that ingested the bytes, so
-  retention never removes bytes another ticket still holds).
+- `references` (how many ingests) and `tickets` (every repo and issue that ingested the bytes).
 - `projections` (where the file was published: `linear_url`), `expired` and `expired_at`.
 
 An ingest names a source file and the ticket, run, label and kind. The source must be a regular
@@ -555,22 +554,12 @@ a UTF-8 `.jsonl` file whose first line is a JSON object is `application/x-ndjson
 JSON lines, is refused.
 
 The same bytes ingested again are the same file and row: `references` grows and `tickets` gains a
-new ticket. Expiring an artifact removes its bytes and keeps its row with `expired` set; asking for
-the path of an artifact whose file is gone answers that it expired and marks the row so. Ingesting
-the same bytes again writes the file back and clears `expired`. An ingest, an expiry and that check
+new ticket. Nothing removes an artifact's bytes: a ticket's history is immutable, so every
+screenshot and transcript is kept for good. Asking for the path of an artifact whose file is gone
+from the store anyway (a damaged disk, a hand edit) answers that it expired and marks the row so,
+keeping the row and the events that name the id; the artifacts API answers 410 with the metadata.
+Ingesting the same bytes again writes the file back and clears `expired`. An ingest and that check
 of one id hold the row's lock while they touch its file, so they never interleave.
-
-Retention removes the bytes of a finished ticket's artifacts once `ledger.artifact_retention_days`
-(14 by default) have passed. It runs every `workspaces.cleanup.interval_ms` and reads the retention
-on each run. A run looks only at the artifacts that are not expired and were captured longer than
-the retention ago, and asks the tracker for their tickets' current states, one request per 50
-tickets and none when no artifact is old enough: Symphony's stored phase is refreshed only at
-startup, so it can't say whether a ticket is finished. A ticket is finished when the tracker says it
-is in one of its repository's terminal states and its newest ledger event is older than the
-retention. An artifact expires only when every ticket in its `tickets` is finished, so a file a
-finished ticket shares with an active one keeps its bytes. A ticket the tracker doesn't return, and
-every ticket of a request that failed, keeps its artifacts, and the run logs why. Expiring keeps the
-row and the events that name the id; the artifacts API answers 410 with the metadata.
 
 ### 4.2 Stable Identifiers and Normalization Rules
 

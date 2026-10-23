@@ -10,10 +10,9 @@ defmodule SymphonyElixir.Artifacts do
   may write (`roots:`), checked before a byte is read: an agent writes the folder it ingests from,
   and Symphony runs outside the agent sandbox.
 
-  `expire/1` removes the bytes and keeps the row, marked `expired`; so does `path/1` when it finds
-  the file gone. Ingesting the same bytes again writes them back and clears `expired`.
-  `SymphonyElixir.Artifacts.Retention` expires a finished ticket's artifacts once
-  `ledger.artifact_retention_days` have passed.
+  Nothing removes the bytes: a ticket's history is kept whole. A file found gone from the store
+  (a damaged disk, a hand edit) makes `path/1` mark its row `expired` and keep it, so it is answered
+  as unavailable. Ingesting the same bytes again writes them back and clears `expired`.
   """
 
   alias SymphonyElixir.{AgentTmpDir, Config, PathSafety, RunStore}
@@ -106,8 +105,8 @@ defmodule SymphonyElixir.Artifacts do
   end
 
   @doc """
-  Where the bytes of `id` sit. An artifact whose file is gone (removed by `expire/1` or by hand) is
-  `:expired`, and its row is marked expired with its metadata kept.
+  Where the bytes of `id` sit. An artifact whose file is gone from the store is `:expired`, and its
+  row is marked expired with its metadata kept.
   """
   @spec path(String.t()) :: {:ok, Path.t()} | {:error, :not_found | :expired | term()}
   def path(id) do
@@ -124,14 +123,6 @@ defmodule SymphonyElixir.Artifacts do
   @spec put_projection(String.t(), :linear_url, String.t()) :: {:ok, artifact()} | {:error, :not_found | term()}
   def put_projection(id, :linear_url = name, url) when is_binary(url) do
     update(id, &{:ok, put_in(&1, [:projections, name], url)})
-  end
-
-  @doc "Removes the bytes of `id` and keeps its row, marked `expired`."
-  @spec expire(String.t()) :: {:ok, artifact()} | {:error, :not_found | term()}
-  def expire(id) do
-    update(id, fn artifact ->
-      with :ok <- Store.remove(id), do: {:ok, expired(artifact)}
-    end)
   end
 
   @doc """
@@ -181,8 +172,8 @@ defmodule SymphonyElixir.Artifacts do
     if mime in Map.get(@kind_mimes, kind, [mime]), do: :ok, else: {:error, :unsupported_mime}
   end
 
-  # The file is written inside the row's transaction, so an ingest, an `expire/1` and `path/1`'s
-  # check of the same id never interleave. A restarted transaction writes it again, which is a no-op.
+  # The file is written inside the row's transaction, so an ingest and `path/1`'s check of the
+  # same id never interleave. A restarted transaction writes it again, which is a no-op.
   defp store(bytes, mime, meta) do
     ticket = %{repo_key: meta.repo_key, issue_id: meta.issue_id}
 
