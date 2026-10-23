@@ -60,6 +60,7 @@ defmodule SymphonyElixirWeb.Router do
     post("/unblock", ControlApiController, :unblock)
     post("/decide", ControlApiController, :decide)
     post("/undo", ControlApiController, :undo)
+    post("/note", ControlApiController, :note)
   end
 
   scope "/", SymphonyElixirWeb do

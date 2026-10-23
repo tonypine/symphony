@@ -31,6 +31,9 @@ public enum ControlAction: Equatable {
     case unblock(String)
     /// Takes back the last move on the ticket, within 10 s of it.
     case undo(String)
+    /// Writes the Director's note on the ticket of repo `repoKey`: it shows in the ticket's timeline, and the next
+    /// agent run reads it in the ticket's summary.
+    case note(repoKey: String, identifier: String, text: String)
 
     /// A decision's question and the option the Director picked, or their own words, as `decisions` posts them; a
     /// plan's pick also names the request comment it answers, so the answer goes under it.
@@ -95,6 +98,8 @@ public enum ControlAction: Equatable {
             return "api/v1/control/unblock"
         case .undo:
             return "api/v1/control/undo"
+        case .note:
+            return "api/v1/control/note"
         }
     }
 
@@ -106,7 +111,7 @@ public enum ControlAction: Equatable {
              let .decisions(identifier, _), let .changes(identifier, _), let .backlog(identifier, _),
              let .decide(identifier, _, _, _), let .unblock(identifier), let .undo(identifier):
             return identifier
-        case .pause, .pauseWithReason, .resume, .force, .stopForcing, .stop:
+        case .pause, .pauseWithReason, .resume, .force, .stopForcing, .stop, .note:
             return nil
         }
     }
@@ -141,6 +146,8 @@ public enum ControlAction: Equatable {
             ]
             if let move { body["move"] = move }
             return body
+        case let .note(repoKey, identifier, text):
+            return ["repo_key": repoKey, "issue_identifier": identifier, "text": text]
         }
     }
 
@@ -175,6 +182,8 @@ public enum ControlAction: Equatable {
             return "Couldn't unblock \(identifier)"
         case let .undo(identifier):
             return "Couldn't undo the move on \(identifier)"
+        case let .note(_, identifier, _):
+            return "Couldn't add the note to \(identifier)"
         }
     }
 }

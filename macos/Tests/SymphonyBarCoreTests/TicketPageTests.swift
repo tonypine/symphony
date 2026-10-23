@@ -571,14 +571,14 @@ final class TicketRowTests: XCTestCase {
 /// a read waits for `release()`.
 @MainActor
 private final class ScriptedFeed {
-    var answers: [EndpointResult] = []
+    var answers: [TicketEventsResult] = []
     private(set) var paths: [String] = []
     var holding = false
     private var waiting: [CheckedContinuation<Void, Never>] = []
 
     var get: TicketEventsReader.Get { { [unowned self] path in await answer(path) } }
 
-    private func answer(_ path: String) async -> EndpointResult {
+    private func answer(_ path: String) async -> TicketEventsResult {
         paths.append(path)
         if holding { await withCheckedContinuation { waiting.append($0) } }
         return answers.count > 1 ? answers.removeFirst() : answers.first ?? .unsupported
@@ -643,14 +643,15 @@ final class TicketPageFeedTests: XCTestCase {
     private var feedData: Data { get throws { try Data(contentsOf: TicketEventsTests.sharedFixture) } }
 
     /// The page as the window builds it from a QA fixture's files, with what the feed's reader read.
-    private func fixturePage(_ name: String, events: TicketEventsPayload?) throws -> TicketPage {
+    private func fixturePage(_ name: String, events: TicketEventsPayload?, feedAbsence: TicketFeedAbsence = .unread) throws -> TicketPage {
         let api = Self.director(name).appendingPathComponent("api/v1")
         return TicketPage(
             identifier: "SHOP-410",
             sources: TicketPage.Sources(
                 state: try Data(contentsOf: api.appendingPathComponent("state.json")),
                 issue: try Data(contentsOf: api.appendingPathComponent("SHOP-410.json")),
-                events: events
+                events: events,
+                feedAbsence: feedAbsence
             ),
             timeZone: utc
         )
@@ -729,7 +730,7 @@ final class TicketPageFeedTests: XCTestCase {
         }
 
         let ledger = client("ticket-ledger")
-        let reader = TicketEventsReader(get: { await ledger.get($0) })
+        let reader = TicketEventsReader(get: { TicketEventsResult(await ledger.answer($0)) })
         XCTAssertTrue(reader.follow(identifier: "SHOP-410", repoKey: "web-shop"))
         await reader.settle()
         let events = try XCTUnwrap(reader.events)
@@ -749,17 +750,308 @@ final class TicketPageFeedTests: XCTestCase {
                        ["Run header at 1440×900", "Run header at 1100×800"])
 
         let older = client("ticket-ledger-no-feed")
-        let legacy = TicketEventsReader(get: { await older.get($0) })
+        let legacy = TicketEventsReader(get: { TicketEventsResult(await older.answer($0)) })
         legacy.follow(identifier: "SHOP-410", repoKey: "web-shop")
         await legacy.settle()
         XCTAssertNil(legacy.events)
         XCTAssertTrue(legacy.isUnsupported)
     }
 
+    // MARK: - The note field
+
+    /// The Director's note as the feed answers it once Symphony wrote it.
+    private static func notePage(_ text: String) -> TicketEventsResult {
+        .loaded(Data(TicketEventsTests.page(nextSince: "2026-10-18T11:19:00Z", entries: [
+            TicketEventsTests.event(
+                "ev-20", seq: 20, type: "note", at: "2026-10-18T11:19:00Z", title: "Note added", detail: text,
+                payload: #"{"text":"\#(text)"}"#, actor: #"{"kind":"person","name":"the Director"}"#
+            ),
+        ]).utf8))
+    }
+
+    /// What the note field sent, and how often it read the feed.
+    private final class NoteCalls {
+        var sent: [ControlAction] = []
+        var reads = 0
+    }
+
+    func testANoteGoesOnTheTicketAndShowsInTheTimelineAsTheDirectorsAtOnce() async throws {
+        let feed = ScriptedFeed()
+        let text = "Keep the run header visible when the pane is narrow, at both widths."
+        feed.answers = [.loaded(try feedData), Self.notePage(text)]
+        let reader = TicketEventsReader(get: feed.get)
+        reader.follow(identifier: "SHOP-410", repoKey: "web-shop")
+        await reader.settle()
+        let before = try fixturePage("ticket-ledger", events: reader.events)
+        XCTAssertTrue(before.acceptsNotes)
+        XCTAssertEqual(before.timeline.filter { $0.title == TicketPage.noteByYou }.count, 1)
+
+        let composer = TicketNoteComposer()
+        let calls = NoteCalls()
+        composer.text = "  \(text)\n"
+        let written = await composer.submit(on: before, send: { action in
+            calls.sent.append(action)
+            return ControlAPI.result(action, statusCode: 200, data: Data(#"{"event":{"id":"ev-20","type":"note"}}"#.utf8))
+        }, read: {
+            calls.reads += 1
+            reader.read()
+        })
+        await reader.settle()
+
+        XCTAssertTrue(written)
+        XCTAssertEqual(calls.sent, [.note(repoKey: "web-shop", identifier: "SHOP-410", text: text)])
+        XCTAssertEqual(calls.reads, 1)
+        XCTAssertEqual(composer.text, "")
+        XCTAssertNil(composer.refusal)
+        XCTAssertFalse(composer.sending)
+        // The page read what is new in the feed: the note is in the timeline, as the Director's.
+        XCTAssertEqual(feed.paths.last, "api/v1/repos/web-shop/tickets/SHOP-410/events?group=run&limit=200&since=2026-10-18T11:13:00.000000Z")
+        let after = try fixturePage("ticket-ledger", events: reader.events)
+        let notes = after.timeline.filter { $0.title == TicketPage.noteByYou }
+        XCTAssertEqual(notes.count, 2)
+        XCTAssertEqual(notes.last?.detail, text)
+    }
+
+    func testANoteThatIsEmptyOrTooLongOrRefusedIsNotRecordedAndTheFieldSaysWhy() async throws {
+        let page = try fixturePage("ticket-ledger", events: try TicketEventsTests.sharedPayload())
+        let composer = TicketNoteComposer()
+        let calls = NoteCalls()
+        func submit(_ answer: ControlResult = .done) async -> Bool {
+            await composer.submit(on: page, send: { action in
+                calls.sent.append(action)
+                return answer
+            }, read: { calls.reads += 1 })
+        }
+
+        // Return on an empty field posts nothing, and there is nothing to say.
+        for empty in ["", "  \n "] {
+            composer.text = empty
+            let written = await submit()
+            XCTAssertFalse(written)
+            XCTAssertNil(composer.refusal)
+        }
+
+        // A note over the bound is refused here, as Symphony would refuse it, and the text stays.
+        let long = String(repeating: "é", count: TicketNoteComposer.maxLength + 1)
+        composer.text = long
+        var written = await submit()
+        XCTAssertFalse(written)
+        XCTAssertEqual(composer.refusal, "A note holds at most 4,000 characters; this one has 4,001")
+        XCTAssertEqual(composer.text, long)
+        XCTAssertEqual(calls.sent, [])
+        XCTAssertNil(TicketNoteComposer.tooLong(String(repeating: "é", count: TicketNoteComposer.maxLength)))
+
+        // Symphony's refusal: its reason under the field, the text kept, the feed not read.
+        composer.text = "Keep it."
+        let refusal = ControlAPI.result(
+            .note(repoKey: "web-shop", identifier: "SHOP-410", text: "Keep it."), statusCode: 400,
+            data: Data(#"{"error":{"code":"invalid_note","message":"A note needs text"}}"#.utf8)
+        )
+        written = await submit(refusal)
+        XCTAssertFalse(written)
+        XCTAssertEqual(calls.sent, [.note(repoKey: "web-shop", identifier: "SHOP-410", text: "Keep it.")])
+        XCTAssertEqual(composer.refusal, "Couldn't add the note to SHOP-410: A note needs text (HTTP 400)")
+        XCTAssertEqual(TicketNoteComposer.refusalLabel(composer.refusal!), "Note not added: Couldn't add the note to SHOP-410: A note needs text (HTTP 400)")
+        XCTAssertEqual(composer.text, "Keep it.")
+        XCTAssertEqual(calls.reads, 0)
+
+        // The next note that goes through clears the reason.
+        written = await submit()
+        XCTAssertTrue(written)
+        XCTAssertNil(composer.refusal)
+    }
+
+    func testAgainstASymphonyWithoutTheFeedTheNoteFieldIsOffAndPostsNothing() async throws {
+        let root = uniqueTemporaryDirectory("ticket-note")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fixtures = APIFixtures(directory: Self.director("ticket-ledger-no-feed"), requestLog: root.appendingPathComponent("requests.jsonl"))
+        let client = LiveAPIClient(fetch: LiveAPIClient.fetch(base: { APIFixtures.baseURL }, transport: fixtures.transport))
+        let reader = TicketEventsReader(get: { TicketEventsResult(await client.answer($0)) })
+        var told = 0
+        reader.onChange = { _ in told += 1 }
+        reader.follow(identifier: "SHOP-410", repoKey: "web-shop")
+        await reader.settle()
+        XCTAssertEqual(told, 1, "a 404 on the first read tells the page, though it holds nothing still")
+
+        let page = try fixturePage("ticket-ledger-no-feed", events: reader.events, feedAbsence: reader.absence)
+        XCTAssertFalse(page.acceptsNotes)
+        XCTAssertEqual(page.feedAbsence, .unsupported)
+        XCTAssertEqual(page.notesOffReason, TicketNoteComposer.unsupportedReason)
+        let composer = TicketNoteComposer()
+        let calls = NoteCalls()
+        composer.text = "Keep it."
+        let written = await composer.submit(on: page, send: { action in
+            calls.sent.append(action)
+            return .done
+        }, read: { calls.reads += 1 })
+
+        XCTAssertFalse(written)
+        XCTAssertEqual(calls.sent, [])
+        XCTAssertEqual(composer.text, "Keep it.")
+        XCTAssertEqual(TicketNoteComposer.unsupportedReason, "This version of Symphony can't take notes. Update Symphony to add one.")
+        XCTAssertEqual(TicketNoteComposer.fieldLabel(page.identifier), "Note on SHOP-410")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixtures.requestLog.path))
+
+        // A feed that read but holds nothing still takes notes; a ticket whose repo isn't known doesn't.
+        XCTAssertTrue(try fixturePage("ticket-ledger", events: TicketEventsPayload()).acceptsNotes)
+        XCTAssertFalse(TicketPage(identifier: "SHOP-410", sources: TicketPage.Sources(events: TicketEventsPayload())).acceptsNotes)
+        XCTAssertNil(try fixturePage("ticket-ledger", events: TicketEventsPayload()).notesOffReason)
+    }
+
+    func testBeforeTheFirstReadAndAfterAFailedOneTheNoteFieldIsOffWithoutBlamingSymphony() async throws {
+        let feed = ScriptedFeed()
+        feed.answers = [.failed("Symphony answered with HTTP 503")]
+        let reader = TicketEventsReader(get: feed.get)
+        func page() throws -> TicketPage {
+            try fixturePage("ticket-ledger", events: reader.events, feedAbsence: reader.absence)
+        }
+
+        // The page just opened: nothing read yet.
+        let opened = try page()
+        XCTAssertFalse(opened.acceptsNotes)
+        XCTAssertEqual(opened.feedAbsence, .unread)
+        XCTAssertEqual(opened.notesOffReason, TicketNoteComposer.readingReason)
+
+        // A 5xx: still off, and still not "update Symphony".
+        reader.follow(identifier: "SHOP-410", repoKey: "web-shop")
+        await reader.settle()
+        let failed = try page()
+        XCTAssertFalse(failed.acceptsNotes)
+        XCTAssertEqual(failed.feedAbsence, .unread)
+        XCTAssertEqual(failed.notesOffReason, TicketNoteComposer.readingReason)
+        XCTAssertEqual(TicketNoteComposer.readingReason, "Reading the ticket's history…")
+
+        // The next read lands: the field takes notes.
+        feed.answers = [.loaded(try feedData)]
+        reader.statePolled()
+        await reader.settle()
+        XCTAssertTrue(try page().acceptsNotes)
+        XCTAssertNil(try page().notesOffReason)
+    }
+
+    func testForATicketThatHasNotRunYetTheNoteFieldIsOffAndSaysSoWithoutBlamingSymphony() async throws {
+        // A current Symphony keeps no record of a ticket before its first run: the feed's own 404, not the router's.
+        func answer(_ body: String, statusCode: Int = 404) -> TicketEventsResult {
+            TicketEventsResult(.answered(Data(body.utf8), statusCode: statusCode))
+        }
+        let unknown = answer(#"{"error":{"code":"ticket_not_found","message":"No ticket SHOP-410 in web-shop"}}"#)
+        XCTAssertEqual(unknown, .unknownTicket)
+        XCTAssertEqual(answer(#"{"error":{"code":"not_found","message":"Route not found"}}"#), .unsupported)
+        XCTAssertEqual(answer(""), .unsupported)
+        XCTAssertEqual(answer("{}", statusCode: 200), .loaded(Data("{}".utf8)))
+        XCTAssertEqual(answer("", statusCode: 503), .failed("Symphony answered with HTTP 503"))
+        XCTAssertEqual(TicketEventsResult(.unreachable), .failed("Symphony isn't answering"))
+
+        let feed = ScriptedFeed()
+        feed.answers = [unknown, unknown, .loaded(try feedData)]
+        let reader = TicketEventsReader(get: feed.get)
+        var told = 0
+        reader.onChange = { _ in told += 1 }
+        reader.follow(identifier: "SHOP-410", repoKey: "web-shop")
+        await reader.settle()
+        XCTAssertEqual(told, 1, "the feed's 404 tells the page, though it holds nothing still")
+        XCTAssertEqual(reader.absence, .unknownTicket)
+        XCTAssertFalse(reader.isUnsupported)
+
+        let page = try fixturePage("ticket-ledger", events: reader.events, feedAbsence: reader.absence)
+        XCTAssertFalse(page.acceptsNotes)
+        XCTAssertEqual(page.notesOffReason, TicketNoteComposer.unknownTicketReason)
+        XCTAssertNotEqual(page.notesOffReason, TicketNoteComposer.unsupportedReason)
+        XCTAssertEqual(
+            TicketNoteComposer.unknownTicketReason,
+            "Symphony has no history for this ticket yet. A note can go on once its first run starts."
+        )
+        let composer = TicketNoteComposer()
+        var sent: [ControlAction] = []
+        composer.text = "Keep it."
+        let written = await composer.submit(on: page, send: { action in
+            sent.append(action)
+            return .done
+        }, read: {})
+        XCTAssertFalse(written)
+        XCTAssertEqual(sent, [])
+
+        // Unlike an older Symphony's 404, it reads again; the same answer doesn't redraw the page.
+        reader.statePolled()
+        await reader.settle()
+        XCTAssertEqual(feed.paths.count, 2)
+        XCTAssertEqual(told, 1)
+
+        // The ticket's first run starts: the channel's notice reads its history, and the field takes notes.
+        reader.noticed(EventStreamNotice(
+            repoKey: "web-shop", issueId: "issue-410", issueIdentifier: "SHOP-410", eventId: "ev-1", type: "run.started", at: nil
+        ))
+        await reader.settle()
+        XCTAssertEqual(told, 2)
+        XCTAssertEqual(reader.absence, .unread)
+        let ran = try fixturePage("ticket-ledger", events: reader.events, feedAbsence: reader.absence)
+        XCTAssertTrue(ran.acceptsNotes)
+        XCTAssertNil(ran.notesOffReason)
+
+        // Another ticket opened after one the feed didn't know: its page starts from "reading" until its feed answers.
+        feed.answers = [unknown]
+        reader.read()
+        await reader.settle()
+        XCTAssertEqual(reader.absence, .unknownTicket)
+        feed.holding = true
+        reader.follow(identifier: "SHOP-411", repoKey: "web-shop")
+        XCTAssertEqual(told, 4)
+        XCTAssertEqual(reader.absence, .unread)
+        feed.release()
+        await reader.settle()
+    }
+
+    func testTheNoteFieldBelongsToTheTicketShownAndKeepsWhatIsTypedMeanwhile() async throws {
+        let page = try fixturePage("ticket-ledger", events: try TicketEventsTests.sharedPayload())
+        let composer = TicketNoteComposer()
+
+        // Typed while the note is on its way: it stays, and a second Return meanwhile posts nothing.
+        composer.text = "First."
+        var nested: Bool?
+        var written = await composer.submit(on: page, send: { _ in
+            XCTAssertTrue(composer.sending)
+            composer.text = "Second, typed meanwhile."
+            nested = await composer.submit(on: page, send: { _ in .done }, read: {})
+            return .done
+        }, read: {})
+        XCTAssertTrue(written)
+        XCTAssertEqual(nested, false)
+        XCTAssertEqual(composer.text, "Second, typed meanwhile.")
+
+        // Another ticket opened while a note was on its way: its field starts empty, and the answer changes nothing.
+        written = await composer.submit(on: page, send: { _ in
+            composer.show("SHOP-411")
+            composer.text = "On SHOP-411."
+            return .failed("Couldn't add the note to SHOP-410: HTTP 502")
+        }, read: {})
+        XCTAssertFalse(written)
+        XCTAssertEqual(composer.identifier, "SHOP-411")
+        XCTAssertEqual(composer.text, "On SHOP-411.")
+        XCTAssertNil(composer.refusal)
+        XCTAssertFalse(composer.sending)
+    }
+
+    func testTheQAFixturesTakeTheNoteAndLogItForQA() async throws {
+        let root = uniqueTemporaryDirectory("ticket-note-qa")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fixtures = APIFixtures(directory: Self.director("ticket-ledger"), requestLog: root.appendingPathComponent("requests.jsonl"))
+
+        let result = await ControlAPI.send(
+            .note(repoKey: "web-shop", identifier: "SHOP-410", text: "Keep the header."), stateRoot: root, fallback: APIFixtures.baseURL,
+            token: APIFixtures.token, transport: fixtures.transport
+        )
+
+        XCTAssertEqual(result, .done)
+        let line = try String(contentsOf: fixtures.requestLog, encoding: .utf8).trimmingCharacters(in: .newlines)
+        let entry = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        XCTAssertEqual(entry["path"] as? String, "/api/v1/control/note")
+        XCTAssertEqual(entry["body"] as? [String: String], ["repo_key": "web-shop", "issue_identifier": "SHOP-410", "text": "Keep the header."])
+    }
+
     // MARK: - Reading the feed
 
     func testOpeningReadsEveryPageForwardAndStopsAtThePageThatAddsNothing() async throws {
-        func page(_ ids: [Int], next: String) -> EndpointResult {
+        func page(_ ids: [Int], next: String) -> TicketEventsResult {
             .loaded(Data(TicketEventsTests.page(nextSince: next, entries: ids.map {
                 TicketEventsTests.event("e-\($0)", seq: $0, type: "note", at: String(format: "2026-10-18T10:%02d:00Z", $0), title: "Note \($0)")
             }).utf8))
@@ -805,7 +1097,7 @@ final class TicketPageFeedTests: XCTestCase {
         XCTAssertNotNil(reader.events)
 
         // Unreachable, or a body that isn't a feed page: no feed; the next read starts over.
-        for failure in [EndpointResult.failed("Symphony isn't answering"), .loaded(Data("<html>".utf8))] {
+        for failure in [TicketEventsResult.failed("Symphony isn't answering"), .loaded(Data("<html>".utf8))] {
             feed.answers = [failure]
             reader.read()
             await reader.settle()

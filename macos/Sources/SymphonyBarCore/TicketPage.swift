@@ -129,10 +129,13 @@ public struct TicketPage: Equatable {
         public var inboxDecision: Bool
         /// The ticket's events feed, merged from every page read; nil while Symphony doesn't serve it.
         public var events: TicketEventsPayload?
+        /// Why `events` is nil (`TicketEventsReader.absence`): not read yet or a failed read, a ticket Symphony keeps
+        /// no record of yet, or a Symphony that predates the feed.
+        public var feedAbsence: TicketFeedAbsence
 
         public init(
             state: Data? = nil, issue: Data? = nil, runs: Data? = nil, audit: [Data] = [], stops: [LocalStop] = [],
-            check: Data? = nil, inboxDecision: Bool = false, events: TicketEventsPayload? = nil
+            check: Data? = nil, inboxDecision: Bool = false, events: TicketEventsPayload? = nil, feedAbsence: TicketFeedAbsence = .unread
         ) {
             self.state = state
             self.issue = issue
@@ -142,6 +145,7 @@ public struct TicketPage: Equatable {
             self.check = check
             self.inboxDecision = inboxDecision
             self.events = events
+            self.feedAbsence = feedAbsence
         }
     }
 
@@ -188,6 +192,23 @@ public struct TicketPage: Equatable {
     public var isRunning: Bool
     /// Whether Symphony tracks the ticket now, so its transcript endpoint answers.
     public var isTracked: Bool
+    /// Whether the note field takes a note: Symphony serves the ticket's events feed, which a note is written to, and
+    /// the ticket's repo is known. An older Symphony doesn't.
+    public var acceptsNotes: Bool
+    /// Why the note field is off, nil while it takes notes: an older Symphony, whose 404 isn't the feed's own; a ticket
+    /// the feed has no record of, before its first run; or the ticket's history not read yet (before the first read,
+    /// after a failed one, or while its repo isn't known).
+    public var notesOffReason: String? {
+        if acceptsNotes { return nil }
+        switch feedAbsence {
+        case .unsupported: return TicketNoteComposer.unsupportedReason
+        case .unknownTicket: return TicketNoteComposer.unknownTicketReason
+        case .unread: return TicketNoteComposer.readingReason
+        }
+    }
+
+    /// Why the page has no history from the events feed, as the feed's reader last said.
+    public var feedAbsence: TicketFeedAbsence
     /// Whether the ticket is forced past the dispatch limits, so its ⋯ menu offers Stop Forcing instead of Force.
     public var isForced: Bool { badges.contains { $0.status == .forced } }
 
@@ -295,6 +316,8 @@ public struct TicketPage: Equatable {
         // A ticket only waiting to be dispatched has no run, so no transcript yet.
         isTracked = running != nil || retry != nil || watching != nil
             || issue.map { !["slot_waiting", "dispatch_skipped"].contains($0.status ?? "") } ?? false
+        acceptsNotes = sources.events != nil && repoKey?.isEmpty == false
+        feedAbsence = sources.feedAbsence
 
         let pullRequest = [running?.pullRequestUrl, watching?.pullRequestUrl, issue?.watching?.pullRequestUrl]
             .compactMap { $0.flatMap(URL.init(string:)) }.first

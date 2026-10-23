@@ -5,7 +5,8 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
   import Plug.Test
 
   alias SymphonyElixir.{AuditLog, RunStore}
-  alias SymphonyElixirWeb.ControlApiController
+  alias SymphonyElixir.TicketEvents.Brief
+  alias SymphonyElixirWeb.{ControlApiController, Router}
 
   defmodule StubOrchestrator do
     use GenServer
@@ -173,6 +174,119 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
       assert log =~ "Failed to record the person.action event on issue_id=issue-7"
       {:ok, stream} = AuditLog.query(dir: tmp_dir, event_type: "run_stopped")
       assert [%{"issue_id" => "issue-7"}] = Enum.to_list(stream)
+    end
+  end
+
+  describe "POST /control/note" do
+    @describetag :tmp_dir
+
+    setup do
+      n = System.unique_integer([:positive])
+      ticket = %{repo_key: "notes-#{n}", issue_id: "issue-#{n}", issue_identifier: "SHOP-#{n}"}
+      :ok = RunStore.put_ticket_state(ticket)
+      %{ticket: ticket}
+    end
+
+    defp post_note(params, audit_dir) do
+      build_conn(:post, "/api/v1/control/note", params)
+      |> Plug.Conn.assign(:audit_log, dir: audit_dir)
+      |> send_to(:note, start_stub([]), params)
+    end
+
+    defp note_params(ticket, text), do: %{"repo_key" => ticket.repo_key, "issue_identifier" => ticket.issue_identifier, "text" => text}
+
+    defp audit_records(dir) do
+      {:ok, stream} = AuditLog.query(dir: dir, event_type: "director_note")
+      Enum.to_list(stream)
+    end
+
+    test "records the Director's note, answers it as the feed shows it, and the ticket summary lists it under Notes",
+         %{ticket: ticket, tmp_dir: tmp_dir} do
+      conn = post_note(note_params(ticket, "  Keep the export button where it is.\n"), tmp_dir)
+
+      assert conn.status == 200
+
+      assert %{"event" => %{"id" => event_id, "type" => "note", "actor" => %{"kind" => "person", "name" => "the Director"}} = event} =
+               json_body(conn)
+
+      assert event["payload"] == %{"text" => "Keep the export button where it is."}
+      assert event["summary"]["detail"] == "Keep the export button where it is."
+
+      assert [%{id: ^event_id, type: "note", actor: %{kind: :person, name: "the Director"}}] =
+               RunStore.list_ticket_events(ticket.repo_key, ticket.issue_id, [])
+
+      assert [%{"event_id" => ^event_id, "issue_identifier" => identifier, "repo_key" => repo_key, "text" => "Keep the export button where it is."}] =
+               audit_records(tmp_dir)
+
+      assert {identifier, repo_key} == {ticket.issue_identifier, ticket.repo_key}
+
+      # The next agent run starts from the summary, which holds the note in full.
+      assert {:ok, %{notes: 1, text: text}} = Brief.render(ticket.repo_key, ticket.issue_id)
+      assert text =~ ~r/Notes \(1\):\n- \S+, the Director: Keep the export button where it is\.\n/
+    end
+
+    test "refuses empty and over-bound text with 400 and writes nothing", %{ticket: ticket, tmp_dir: tmp_dir} do
+      for {text, message} <- [
+            {"", "A note needs text"},
+            {"   \n ", "A note needs text"},
+            {nil, "A note needs text"},
+            {42, "A note needs text"},
+            {String.duplicate("é", 4_001), "A note holds at most 4,000 characters; this one has 4,001"}
+          ] do
+        conn = post_note(note_params(ticket, text), tmp_dir)
+
+        assert conn.status == 400
+        assert json_body(conn)["error"] == %{"code" => "invalid_note", "message" => message}
+      end
+
+      assert RunStore.list_ticket_events(ticket.repo_key, ticket.issue_id, []) == []
+      assert audit_records(tmp_dir) == []
+
+      # The bound itself is a note.
+      assert post_note(note_params(ticket, String.duplicate("é", 4_000)), tmp_dir).status == 200
+    end
+
+    test "an unknown ticket is 404, and a request without the ticket is 422; neither writes", %{ticket: ticket, tmp_dir: tmp_dir} do
+      conn = post_note(%{note_params(ticket, "Hello") | "issue_identifier" => "SHOP-0"}, tmp_dir)
+
+      assert conn.status == 404
+      assert json_body(conn)["error"] == %{"code" => "ticket_not_found", "message" => "No ticket SHOP-0 in #{ticket.repo_key}"}
+
+      for params <- [%{"text" => "Hello"}, Map.delete(note_params(ticket, "Hello"), "repo_key"), %{note_params(ticket, "Hello") | "issue_identifier" => " "}] do
+        conn = post_note(params, tmp_dir)
+        assert conn.status == 422
+        assert json_body(conn)["error"]["code"] == "invalid_request"
+      end
+
+      assert RunStore.list_ticket_events(ticket.repo_key, ticket.issue_id, []) == []
+      assert audit_records(tmp_dir) == []
+    end
+
+    test "is refused without the control token, like the other control routes", %{ticket: ticket} do
+      for path <- ["/api/v1/control/note", "/api/v1/control/stop"] do
+        conn =
+          conn(:post, path, Jason.encode!(note_params(ticket, "Hello")))
+          |> put_req_header("content-type", "application/json")
+          |> Router.call(Router.init([]))
+
+        assert conn.status == 401
+      end
+
+      assert RunStore.list_ticket_events(ticket.repo_key, ticket.issue_id, []) == []
+    end
+
+    test "still answers the written note when its audit record can't be written", %{ticket: ticket, tmp_dir: tmp_dir} do
+      blocker = Path.join(tmp_dir, "blocker")
+      File.write!(blocker, "")
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          conn = post_note(note_params(ticket, "Hello"), Path.join(blocker, "audit"))
+          assert conn.status == 200
+        end)
+
+      assert log =~ "Failed to record director_note audit event: issue_identifier=#{ticket.issue_identifier}"
+      assert [%{type: "note"}] = RunStore.list_ticket_events(ticket.repo_key, ticket.issue_id, [])
     end
   end
 

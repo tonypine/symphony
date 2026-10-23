@@ -407,6 +407,49 @@ public struct TicketEventsPayload: Equatable {
 
 // MARK: - Reading the feed
 
+/// What a read of one page of a ticket's events feed got (`TicketEventsReader.Get`).
+public enum TicketEventsResult: Equatable {
+    case loaded(Data)
+    /// The feed's own 404 (`ticket_not_found`): Symphony keeps no record of the ticket, which it writes when the
+    /// ticket's first run starts.
+    case unknownTicket
+    /// Any other 404: the Symphony running predates the feed (`EndpointPlaceholder.updateSymphony`).
+    case unsupported
+    case failed(String)
+
+    public init(_ answer: APIAnswer) {
+        struct Payload: Decodable {
+            struct Failure: Decodable {
+                let code: String?
+            }
+
+            let error: Failure?
+        }
+        switch answer {
+        case let .answered(data, 200):
+            self = .loaded(data)
+        case let .answered(data, 404):
+            // An older Symphony has no such route: its 404 isn't the feed's own.
+            let code = (try? JSONDecoder().decode(Payload.self, from: data))?.error?.code
+            self = code == "ticket_not_found" ? .unknownTicket : .unsupported
+        case let .answered(_, statusCode):
+            self = .failed("Symphony answered with HTTP \(statusCode)")
+        case .unreachable:
+            self = .failed("Symphony isn't answering")
+        }
+    }
+}
+
+/// Why the reader holds no history of its ticket.
+public enum TicketFeedAbsence: Equatable {
+    /// Not read yet, or the last read failed: the next read may get it.
+    case unread
+    /// Symphony keeps no record of the ticket yet: it hasn't run. A later read gets its history once it has.
+    case unknownTicket
+    /// The Symphony running predates the feed. Nothing reads it again until the reader follows a ticket anew.
+    case unsupported
+}
+
 /// Reads the shown ticket's events feed and keeps it current. It reads the whole feed when it starts following a
 /// ticket, paging forward with `since`. Then it reads only what is newer than its cursor: on the live channel's notice
 /// about its ticket, when the channel connects again, and, only while the channel isn't connected, after each state
@@ -414,7 +457,7 @@ public struct TicketEventsPayload: Equatable {
 /// reachable or doesn't decode leaves `events` nil, so the page shows the timeline it builds without it.
 @MainActor
 public final class TicketEventsReader {
-    public typealias Get = (_ path: String) async -> EndpointResult
+    public typealias Get = (_ path: String) async -> TicketEventsResult
 
     /// The most events one page asks for.
     public static let pageLimit = 200
@@ -425,14 +468,15 @@ public final class TicketEventsReader {
     public private(set) var repoKey: String?
     /// The history read so far; nil before the first read and after a read that failed.
     public private(set) var events: TicketEventsPayload?
-    /// Symphony answered 404: it predates the feed, or doesn't know the ticket. Nothing reads it again until the page
-    /// follows a ticket anew.
-    public private(set) var isUnsupported = false
+    /// Why `events` is nil: `.unread` while it holds history too.
+    public private(set) var absence: TicketFeedAbsence = .unread
+    /// Symphony predates the feed. Nothing reads it again until the page follows a ticket anew.
+    public var isUnsupported: Bool { absence == .unsupported }
     /// The live channel's state, as it was last told.
     public private(set) var channel: EventStreamState = .stopped
     /// Every path the reader asked for, oldest first.
     public private(set) var requests: [String] = []
-    /// Told after a read that changed what it holds, and when it follows another ticket.
+    /// Told after a read that changed what it holds or why it holds none, and when it follows another ticket.
     public var onChange: (TicketEventsPayload?) -> Void = { _ in }
 
     private let get: Get
@@ -459,8 +503,8 @@ public final class TicketEventsReader {
         generation += 1
         reading = nil
         readAgain = false
-        isUnsupported = false
-        let changed = events != nil
+        let changed = events != nil || absence != .unread
+        absence = .unread
         events = nil
         self.identifier = identifier
         self.repoKey = identifier == nil ? nil : repoKey
@@ -521,13 +565,18 @@ public final class TicketEventsReader {
     private func readPages(identifier: String, repoKey: String, generation: Int) async {
         var history = events ?? TicketEventsPayload()
         var failed = false
+        var absence = TicketFeedAbsence.unread
         for _ in 0 ..< maxPages {
             let path = TicketPage.eventsPath(identifier, repoKey: repoKey, since: history.nextSince, limit: pageLimit)
             requests.append(path)
             let result = await get(path)
             guard generation == self.generation else { return }
             guard case let .loaded(data) = result, let page = TicketEventsPayload.decode(data) else {
-                isUnsupported = result == .unsupported
+                switch result {
+                case .unknownTicket: absence = .unknownTicket
+                case .unsupported: absence = .unsupported
+                case .loaded, .failed: break
+                }
                 failed = true
                 break
             }
@@ -536,9 +585,11 @@ public final class TicketEventsReader {
         }
         reading = nil
         let found = failed ? nil : history
-        // A read that found nothing new doesn't redraw the page.
-        if found != events {
+        // A read that found nothing new doesn't redraw the page; one that says why there is nothing does, so the page
+        // can say it too.
+        if found != events || absence != self.absence {
             events = found
+            self.absence = absence
             onChange(found)
         }
         if readAgain {

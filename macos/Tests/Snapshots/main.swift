@@ -450,6 +450,51 @@ func planUnapplied() -> some View {
     return review(plan, width: 640)
 }
 
+// The ticket ledger's fixture (TP-1193, TP-1195): SHOP-410 with its events feed, and against an older Symphony without.
+let ledgerAPI = here.appendingPathComponent("../Fixtures/director-app/ticket-ledger/api/v1").standardizedFileURL
+let ledgerNow = ISO8601DateFormatter().date(from: "2026-10-18T11:20:00Z")!
+
+/// SHOP-410's page in a window `window` pt wide beside the sidebar, with the note field pinned under it as the window
+/// shows it: the laptop viewport (1440) and the desktop one (2560).
+@MainActor
+func ledgerPage(window: CGFloat, feed: Bool = true, note: TicketNoteComposer? = nil) -> some View {
+    let events = feed ? (try? Data(contentsOf: ledgerAPI.appendingPathComponent("repos/web-shop/tickets/SHOP-410/events.json"))).flatMap(TicketEventsPayload.decode) : nil
+    let page = TicketPage(
+        identifier: "SHOP-410",
+        sources: TicketPage.Sources(
+            state: try? Data(contentsOf: ledgerAPI.appendingPathComponent("state.json")),
+            issue: try? Data(contentsOf: ledgerAPI.appendingPathComponent("SHOP-410.json")),
+            events: events,
+            feedAbsence: feed ? .unread : .unsupported
+        ),
+        now: ledgerNow, timeZone: TimeZone(identifier: "UTC")!
+    )
+    let width = window - DesignTokens.Layout.sidebarWidth
+    return VStack(spacing: 0) {
+        TicketPageBody(page: page, actions: TicketPageActions(), width: width)
+        TicketNoteBar(page: page, composer: note ?? TicketNoteComposer(), submit: {})
+    }
+    .frame(width: width)
+    .background(DesignTokens.Surface.content.color)
+}
+
+/// The note field alone, under a laptop window's page: a refusal with the feed read (`absence` nil), and the field off
+/// for an older Symphony or a ticket that hasn't run.
+@MainActor
+func ledgerNoteBar(absence: TicketFeedAbsence? = nil, note: TicketNoteComposer) -> some View {
+    let page = TicketPage(
+        identifier: "SHOP-410",
+        sources: TicketPage.Sources(
+            issue: try? Data(contentsOf: ledgerAPI.appendingPathComponent("SHOP-410.json")),
+            events: absence == nil ? TicketEventsPayload() : nil, feedAbsence: absence ?? .unread
+        ),
+        now: ledgerNow
+    )
+    return TicketNoteBar(page: page, composer: note, submit: {})
+        .frame(width: 1440 - DesignTokens.Layout.sidebarWidth)
+        .background(DesignTokens.Surface.content.color)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -540,5 +585,14 @@ MainActor.assumeIsolated {
         render(pullRequestPage(unavailablePullRequest), scheme, to: "pr-page-github-unavailable-\(suffix).png")
         render(pullRequestPage(untrackedPullRequest), scheme, to: "pr-page-untracked-\(suffix).png")
         render(pullRequestPage(.notFound), scheme, to: "pr-page-not-found-\(suffix).png")
+        // The note field under a ticket's timeline (TP-1195): laptop and desktop, a refusal, an older Symphony, and a
+        // ticket that hasn't run.
+        render(ledgerPage(window: 1440), scheme, to: "ticket-note-laptop-\(suffix).png")
+        render(ledgerPage(window: 2560), scheme, to: "ticket-note-desktop-\(suffix).png")
+        let long = String(repeating: "Keep the run header visible. ", count: 160)
+        render(ledgerNoteBar(note: TicketNoteComposer(identifier: "SHOP-410", text: long, refusal: TicketNoteComposer.tooLong(long))),
+               scheme, to: "ticket-note-refused-\(suffix).png")
+        render(ledgerNoteBar(absence: .unsupported, note: TicketNoteComposer(identifier: "SHOP-410")), scheme, to: "ticket-note-no-feed-\(suffix).png")
+        render(ledgerNoteBar(absence: .unknownTicket, note: TicketNoteComposer(identifier: "SHOP-410")), scheme, to: "ticket-note-not-run-\(suffix).png")
     }
 }
