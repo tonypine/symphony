@@ -82,11 +82,11 @@ final class SettingsUIManifestTests: XCTestCase {
         yaml = try record("setting the dispatch-loop limits", {
             try DispatchLoopLimits.updating($0, from: DispatchLoopLimits(), to: loopLimits)
         }, from: yaml)
-        yaml = try record("setting the ledger's artifact retention and size cap, and its history summary", {
+        yaml = try record("setting the ledger's artifact size cap and its history summary", {
             try LedgerSettings.updating(
                 $0,
                 from: LedgerSettings(),
-                to: LedgerSettings(retentionDays: 7, maxBytes: 52_428_800, briefEnabled: false, briefMaxTokens: 80_000)
+                to: LedgerSettings(maxBytes: 52_428_800, briefEnabled: false, briefMaxTokens: 80_000)
             )
         }, from: yaml)
         yaml = try record("setting allowed ticket priorities", {

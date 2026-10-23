@@ -2594,25 +2594,18 @@ human_actions:
 
 ### `ledger`
 
-How long the ticket ledger keeps a finished ticket's artifact files (QA screenshots, run
-transcripts), the largest file it stores, and the summary of a ticket's history that agents start
-from. Each has a control in the Mac app's Settings, under Ledger.
+The largest artifact file (a QA screenshot, a run transcript) the ticket ledger stores, and the
+summary of a ticket's history that agents start from. Each has a control in the Mac app's Settings,
+under Ledger. Symphony keeps every artifact file for good, so a ticket's history stays whole; a
+file found missing from the store is answered as unavailable (the artifacts API's 410).
 
 ```yaml
 ledger:
-  artifact_retention_days: 14
   artifact_max_bytes: 26214400
   prompt_brief_enabled: true
   prompt_brief_max_tokens: 50000
 ```
 
-- `artifact_retention_days` (default `14`): once a ticket has been in a terminal state for this many
-  days (its newest ledger event is older than that), Symphony removes the bytes of its artifacts and
-  keeps their metadata and the events that name them; the artifacts API answers 410 with the
-  metadata. It runs every `workspaces.cleanup.interval_ms` and asks Linear for the states of the
-  tickets whose artifacts are old enough, one request per 50 tickets (shown as `artifact_retention`
-  in the dashboard's Linear usage table). A file shared with a ticket that isn't finished keeps its
-  bytes, and so does every file of a ticket Linear doesn't return.
 - `artifact_max_bytes` (default `26214400`, 25 MB): the largest file Symphony stores as an
   artifact; a larger one is refused.
 
@@ -2636,9 +2629,10 @@ ledger:
   while the summary is still over. The answer is read from the ticket's ledger. With
   `prompt_brief_enabled: false` the limit is never checked.
 
-`prompt_brief_enabled` is `true` or `false`; the other three must each be a whole number above 0.
+`prompt_brief_enabled` is `true` or `false`; the other two must each be a whole number above 0.
 Symphony reads them on each run, each prompt and each stored file, so a change applies without a
-restart.
+restart. `artifact_retention_days` was removed: a `symphony.yml` that still sets it is refused, and
+the fix is to delete the line.
 
 **Waiting on you.** The list `/api/v1/state` returns as `waiting_on_you`, which the dashboard and
 the menu bar app show, is the Mac app's Inbox (`GET /api/v1/inbox`) in short. Symphony builds it on

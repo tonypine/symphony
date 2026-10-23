@@ -66,16 +66,6 @@ defmodule SymphonyElixir.Artifacts.StoreTest do
     File.mkdir_p!(Store.path(id, dir))
 
     refute Store.present?(id, dir)
-    assert {:error, _reason} = Store.remove(id, dir)
-  end
-
-  test "remove deletes the file, and a file already gone is fine", %{dir: dir} do
-    :ok = Store.write("hello", dir)
-    id = Store.id("hello")
-
-    assert :ok = Store.remove(id, dir)
-    refute Store.present?(id, dir)
-    assert :ok = Store.remove(id, dir)
   end
 
   describe "sniff/2" do

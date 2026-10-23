@@ -15,41 +15,47 @@ defmodule SymphonyElixir.LedgerConfigTest do
     Cache.clear()
   end
 
-  test "keeps artifact files 14 days and takes files up to 25 MB when the section is missing" do
+  test "takes files up to 25 MB when the section is missing" do
     write_workflow_file!(Workflow.workflow_file_path())
 
-    assert %{artifact_retention_days: 14, artifact_max_bytes: 26_214_400} = Config.system!().ledger
-    assert Config.artifact_retention_days() == 14
+    assert %{artifact_max_bytes: 26_214_400} = Config.system!().ledger
     assert Config.artifact_max_bytes() == 26_214_400
 
-    assert {:ok, %{ledger: %{artifact_retention_days: 14, artifact_max_bytes: 26_214_400}}} =
-             SystemSchema.parse(Map.put(@base, "ledger", %{"artifact_retention_days" => nil}))
+    assert {:ok, %{ledger: %{artifact_max_bytes: 26_214_400}}} =
+             SystemSchema.parse(Map.put(@base, "ledger", %{"artifact_max_bytes" => nil}))
   end
 
   test "reads the ledger section of symphony.yml on each call, so a change applies without a restart" do
     write_workflow_file!(Workflow.workflow_file_path())
-    assert Config.artifact_retention_days() == 14
+    assert Config.artifact_max_bytes() == 26_214_400
 
-    append_symphony_yml!("ledger:\n  artifact_retention_days: 7\n  artifact_max_bytes: 52428800\n")
+    append_symphony_yml!("ledger:\n  artifact_max_bytes: 52428800\n")
 
-    assert Config.artifact_retention_days() == 7
     assert Config.artifact_max_bytes() == 52_428_800
   end
 
-  test "refuses a retention or cap of 0, a negative number or a non-integer, naming the key" do
-    for {key, value, error} <- [
-          {"artifact_retention_days", 0, "must be greater than 0"},
-          {"artifact_retention_days", -3, "must be greater than 0"},
-          {"artifact_retention_days", 1.5, "is invalid"},
-          {"artifact_retention_days", "two weeks", "is invalid"},
-          {"artifact_max_bytes", 0, "must be greater than 0"},
-          {"artifact_max_bytes", -1, "must be greater than 0"},
-          {"artifact_max_bytes", 2.5, "is invalid"},
-          {"artifact_max_bytes", "25MB", "is invalid"}
-        ] do
-      assert {:error, {:invalid_symphony_config, message}} = SystemSchema.parse(Map.put(@base, "ledger", %{key => value}))
-      assert message == "ledger.#{key} #{error}"
+  test "refuses a cap of 0, a negative number or a non-integer, naming the key" do
+    for {value, error} <- [{0, "must be greater than 0"}, {-1, "must be greater than 0"}, {2.5, "is invalid"}, {"25MB", "is invalid"}] do
+      assert {:error, {:invalid_symphony_config, message}} =
+               SystemSchema.parse(Map.put(@base, "ledger", %{"artifact_max_bytes" => value}))
+
+      assert message == "ledger.artifact_max_bytes #{error}"
     end
+  end
+
+  test "refuses the removed artifact retention, even set to null: Symphony keeps every artifact" do
+    for value <- [14, nil] do
+      assert {:error, {:invalid_symphony_config, message}} =
+               SystemSchema.parse(Map.put(@base, "ledger", %{"artifact_retention_days" => value, "artifact_max_bytes" => 1}))
+
+      assert message ==
+               "`ledger.artifact_retention_days` is not valid; remove it: Symphony now keeps every screenshot and run transcript"
+    end
+
+    refute "ledger.artifact_retention_days" in SystemSchema.operator_key_paths()
+
+    assert {:error, {:invalid_symphony_config, "`server` is not valid; use `dashboard`"}} =
+             SystemSchema.parse(Map.put(@base, "server", %{"port" => 4000}))
   end
 
   test "refuses an unknown key and a section that isn't an object" do
@@ -59,10 +65,9 @@ defmodule SymphonyElixir.LedgerConfigTest do
     assert {:error, {:invalid_symphony_config, "`ledger` must be an object"}} = SystemSchema.parse(Map.put(@base, "ledger", 7))
   end
 
-  test "both keys are symphony.yml settings, which the macOS app must edit" do
+  test "its keys are symphony.yml settings, which the macOS app must edit" do
     keys = SystemSchema.operator_key_paths()
 
-    assert "ledger.artifact_retention_days" in keys
     assert "ledger.artifact_max_bytes" in keys
     assert "ledger.prompt_brief_enabled" in keys
     assert "ledger.prompt_brief_max_tokens" in keys

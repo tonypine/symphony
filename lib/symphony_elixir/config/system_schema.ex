@@ -118,7 +118,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "issue_gate" => ~w(enabled provider model pass_threshold clarification_floor max_clarification_rounds on_error),
     "dependency_audit" => ~w(allow_registries allow_git_sources allow_path_sources),
     "human_actions" => ~w(enabled interval_ms min_update_interval_ms),
-    "ledger" => ~w(artifact_retention_days artifact_max_bytes prompt_brief_enabled prompt_brief_max_tokens),
+    "ledger" => ~w(artifact_max_bytes prompt_brief_enabled prompt_brief_max_tokens),
     "dashboard" => ~w(enabled host port refresh_ms render_interval_ms snapshot_publish_ms transcript_buffer_size)
   }
 
@@ -138,11 +138,13 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "watchdog" => Schema.Watchdog
   }
 
-  @removed_top_level_keys %{
+  # A removed key and what to do instead: a top-level key, or a dotted path to one in a section.
+  @removed_keys %{
     "ci" => "use `pull_requests.checks`",
     "dependencies" => "use `dependency_audit`",
     "dispatch" => "remove it; use `agent.concurrency.max_total`",
     "learnings" => "use `pull_requests.learnings`",
+    "ledger.artifact_retention_days" => "remove it: Symphony now keeps every screenshot and run transcript",
     "observability" => "use `dashboard`",
     "polling" => "use `issues.poll_interval_ms`",
     "pr_review" => "use `pull_requests.review_comments`",
@@ -721,14 +723,18 @@ defmodule SymphonyElixir.Config.SystemSchema do
   end
 
   defp reject_removed_keys(config) do
-    case Enum.find(Map.keys(config), &Map.has_key?(@removed_top_level_keys, &1)) do
+    case Enum.find(@removed_keys, fn {key, _reason} -> has_path?(config, String.split(key, ".")) end) do
       nil ->
         :ok
 
-      key ->
-        {:error, {:invalid_symphony_config, "`#{key}` is not valid; #{@removed_top_level_keys[key]}"}}
+      {key, reason} ->
+        {:error, {:invalid_symphony_config, "`#{key}` is not valid; #{reason}"}}
     end
   end
+
+  defp has_path?(config, [key]) when is_map(config), do: Map.has_key?(config, key)
+  defp has_path?(config, [key | rest]) when is_map(config), do: has_path?(Map.get(config, key), rest)
+  defp has_path?(_value, _path), do: false
 
   defp normalize_operator_config(config) do
     with {:ok, issue_config} <- normalize_issues(Map.get(config, "issues", %{})),
