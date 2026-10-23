@@ -54,16 +54,6 @@ defmodule SymphonyElixir.Artifacts.Store do
     end
   end
 
-  @doc "Removes the file of `id` under `dir`; a file already gone is fine."
-  @spec remove(String.t(), Path.t()) :: :ok | {:error, term()}
-  def remove(id, dir \\ Paths.artifacts_dir()) do
-    case File.rm(path(id, dir)) do
-      :ok -> :ok
-      {:error, :enoent} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
   @doc """
   The mime type of `bytes`, read from the file named `name`: PNG and JPEG by their magic bytes; a
   UTF-8 `.jsonl` file whose first line is a JSON object is `application/x-ndjson`; UTF-8 `.md` is

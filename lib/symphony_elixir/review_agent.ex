@@ -8,6 +8,7 @@ defmodule SymphonyElixir.ReviewAgent do
   alias SymphonyElixir.{AgentLabels, AgentTmpDir, Config, GitConfigCommands, ProjectGuides, PromptSafety, SSH}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Decisions
+  alias SymphonyElixir.EscalationRules
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.ReviewAgent.{Context, Verdict}
 
@@ -38,7 +39,8 @@ defmodule SymphonyElixir.ReviewAgent do
           optional(:source) => map(),
           optional(:advisory_notes) => [String.t()],
           optional(:decision_notes) => [String.t()],
-          optional(:inconclusive) => String.t()
+          optional(:inconclusive) => String.t(),
+          optional(:escalation_reasons) => [EscalationRules.reason()]
         }
 
   @spec enabled?(Schema.ReviewAgent.t() | nil) :: boolean()
@@ -68,14 +70,24 @@ defmodule SymphonyElixir.ReviewAgent do
       not is_nil(Keyword.get(opts, :pr_conflict))
   end
 
+  @doc """
+  Runs the reviewer on the committed diff in `workspace` and returns its grounded verdict.
+
+  `opts[:escalation_rules]` is a function of the diff context the reviewer judges
+  (`ReviewAgent.Context`) to the escalation rules' reasons (`EscalationRules.check/4`). It runs once
+  the diff context is built and before the reviewer starts: the risk rules' findings go in the
+  reviewer's instructions, so its one review weighs them, and the reasons come back on the verdict
+  as `escalation_reasons`. Without it, the instructions say nothing about rules.
+  """
   @spec evaluate(Issue.t(), Path.t(), Schema.t(), keyword()) :: {:ok, result()} | {:error, term()}
   def evaluate(%Issue{} = issue, workspace, %Schema{} = settings, opts \\ []) when is_binary(workspace) do
     config = settings.review_agent
 
     with true <- enabled?(config),
          {:ok, source} <- source_material(issue, workspace, settings, opts),
-         {:ok, grounded_verdict} <- run_reviewer_agent(issue, workspace, settings, source, opts) do
-      finalize_verdict(grounded_verdict, source)
+         reasons = escalation_reasons(source, opts),
+         {:ok, grounded_verdict} <- run_reviewer_agent(issue, workspace, settings, source, reasons, opts) do
+      finalize_verdict(grounded_verdict, source, reasons)
     else
       false -> {:ok, %{verdict: :approve, comments: [], reason: "review_agent disabled"}}
       {:error, reason} -> {:error, reason}
@@ -491,11 +503,18 @@ defmodule SymphonyElixir.ReviewAgent do
     }
   end
 
-  defp finalize_verdict(%{verdict: :block} = verdict, _source) do
+  defp finalize_verdict(%{verdict: :block} = verdict, _source, _reasons) do
     {:error, {:review_agent_blocked, block_payload(verdict)}}
   end
 
-  defp finalize_verdict(verdict, source), do: {:ok, Map.put(verdict, :source, source)}
+  defp finalize_verdict(verdict, source, reasons), do: {:ok, Map.merge(verdict, %{source: source, escalation_reasons: reasons})}
+
+  defp escalation_reasons(source, opts) do
+    case Keyword.get(opts, :escalation_rules) do
+      check when is_function(check, 1) -> check.(source)
+      nil -> []
+    end
+  end
 
   # The push is the handoff: Symphony moves the ticket to Code Review itself and its guard refuses
   # an agent's own move, so the text names no state move at all.
@@ -519,13 +538,13 @@ defmodule SymphonyElixir.ReviewAgent do
     Context.build(issue, workspace, git_range, opts, git_fun)
   end
 
-  defp run_reviewer_agent(issue, workspace, settings, source, opts) do
+  defp run_reviewer_agent(issue, workspace, settings, source, reasons, opts) do
     config = settings.review_agent
 
     with {:ok, agent_module} <- resolve_agent_module(opts, config) do
       reviewer_settings = reviewer_settings(settings, config)
       decision_opts = [repo_key: Keyword.get(opts, :repo_key)]
-      prompt = reviewer_prompt(issue, source, Keyword.get(opts, :review_scope, :pre_push), decision_opts)
+      prompt = reviewer_prompt(issue, source, Keyword.get(opts, :review_scope, :pre_push), decision_opts, reasons)
       message_collector = Keyword.get(opts, :review_agent_message_collector, self())
       on_message = reviewer_on_message(message_collector, Keyword.get(opts, :on_reviewer_message))
 
@@ -819,7 +838,7 @@ defmodule SymphonyElixir.ReviewAgent do
   # The pre-push reviewer covers code quality and bugs only. Code Review (`review_scope:
   # :code_review`, `SymphonyElixir.CodeReview`) judges the same diff on the pull request, and there
   # the ticket's acceptance criteria, scope and intent are part of the judgment.
-  defp reviewer_prompt(issue, source, scope, decision_opts) do
+  defp reviewer_prompt(issue, source, scope, decision_opts, reasons) do
     """
     You are the reviewer agent in an executor + reviewer Symphony run.
 
@@ -837,7 +856,7 @@ defmodule SymphonyElixir.ReviewAgent do
     - The repo's code rules: read the repo's agent instructions (`AGENTS.md`, `CLAUDE.md`) for its rules, such as required specs, style and module patterns. Narrow scope is a code rule: flag unrelated refactors, stray debug code and dead code left in the diff.
 
     #{ticket_judgment(scope)}
-
+    #{rule_findings(reasons)}
     Diff context:
     #{truncate(source.diff, @max_diff_prompt_bytes)}
 
@@ -881,6 +900,22 @@ defmodule SymphonyElixir.ReviewAgent do
   defp ticket_judgment(_pre_push) do
     "Do not judge whether the diff meets the ticket's acceptance criteria or matches the ticket's scope, and do not ask for work the ticket describes but the diff " <>
       "does not touch: Code Review checks that on the pull request."
+  end
+
+  # What the repo's risk rules found in the change, so the one review weighs it. Nothing when none
+  # matched.
+  defp rule_findings(reasons) do
+    case EscalationRules.reviewer_brief(reasons) do
+      [] ->
+        ""
+
+      lines ->
+        """
+
+        What Symphony's risk rules found in this change. They are not findings against it: weigh each one in your single judgement of the change, read the code it points at with that in mind, and say in your verdict's `reason` how it weighed:
+        #{Enum.map_join(lines, "\n", &"- #{&1}")}
+        """
+    end
   end
 
   defp present_issue(%Issue{} = issue) do

@@ -61,6 +61,11 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     assert Summary.render(%{type: "legacy.signal", payload: "not a map"}) == %{title: "legacy.signal", detail: nil}
   end
 
+  test "a verdict's reason, when it has one, opens its detail" do
+    assert render("verdict.recorded", %{kind: "code_review", outcome: "approve", head: "e051234abcdef", reason: "adds 300, changes 50, removes 2,100 lines. ok"}) ==
+             %{title: "Code Review verdict: approve", detail: "adds 300, changes 50, removes 2,100 lines. ok · on e051234"}
+  end
+
   test "a known type with a missing or malformed payload renders what it can" do
     for {type, _payload, _artifacts, _summary} <- @fixtures do
       assert %{title: title} = render(type, %{})

@@ -82,11 +82,11 @@ final class SettingsUIManifestTests: XCTestCase {
         yaml = try record("setting the dispatch-loop limits", {
             try DispatchLoopLimits.updating($0, from: DispatchLoopLimits(), to: loopLimits)
         }, from: yaml)
-        yaml = try record("setting the ledger's artifact retention and size cap, and its history summary", {
+        yaml = try record("setting the ledger's artifact size cap and its history summary", {
             try LedgerSettings.updating(
                 $0,
                 from: LedgerSettings(),
-                to: LedgerSettings(retentionDays: 7, maxBytes: 52_428_800, briefEnabled: false, briefMaxTokens: 80_000)
+                to: LedgerSettings(maxBytes: 52_428_800, briefEnabled: false, briefMaxTokens: 80_000)
             )
         }, from: yaml)
         yaml = try record("setting allowed ticket priorities", {
@@ -100,6 +100,11 @@ final class SettingsUIManifestTests: XCTestCase {
             )
         }, from: yaml)
         yaml = try record("turning off the built-in ticket patterns", { try BuiltInTicketPatterns.setting(false, in: $0) }, from: yaml)
+        let asking = RiskRuleSettings(
+            onMatch: Dictionary(uniqueKeysWithValues: RiskRule.allCases.map { ($0, RiskRuleMatch.ask) }),
+            sizeCounts: .added
+        )
+        yaml = try record("setting the risk rules", { try RiskRuleSettings.updating($0, from: RiskRuleSettings(), to: asking) }, from: yaml)
         yaml = try record("setting the QA host tools", {
             try QAHostTools.updating($0, from: QAHostTools(), to: QAHostTools(tools: ["go", "pg_ctl"]))
         }, from: yaml)

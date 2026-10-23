@@ -272,6 +272,8 @@ struct SettingsView: View {
                 }
                 .disabled(!model.canEditTicketPatternsBuiltIn)
 
+                RiskRulesSection(model: model)
+
                 Section {
                     TimeoutRow(title: "Git network timeout", minutes: $model.gitNetworkTimeoutMinutes)
                     Text("Stops a git fetch, pull, push or ls-remote that runs longer, so a remote that stops answering can't hold the repo.")
@@ -346,14 +348,6 @@ struct SettingsView: View {
                 .disabled(!model.canEditDispatchLoop)
 
                 Section {
-                    LabeledContent("Keep artifact files for") {
-                        HStack {
-                            Text(model.artifactRetentionDays == 1 ? "1 day" : "\(model.artifactRetentionDays) days")
-                                .monospacedDigit()
-                            Stepper("Keep artifact files for days", value: $model.artifactRetentionDays, in: LedgerSettings.dayRange)
-                                .labelsHidden()
-                        }
-                    }
                     LabeledContent("Largest artifact") {
                         HStack {
                             Text("\(model.artifactMaxMegabytes) MB")
@@ -363,9 +357,8 @@ struct SettingsView: View {
                         }
                     }
                     Text(
-                        "Once a ticket has been finished this long, Symphony deletes its artifact files (screenshots, "
-                            + "transcripts) and keeps their details and the events that name them. It refuses to store a "
-                            + "file larger than the cap."
+                        "Symphony keeps every artifact file (screenshots, transcripts) for good, so a ticket's history "
+                            + "stays whole. It refuses to store a file larger than the cap."
                     )
                     .foregroundStyle(.secondary)
                     Toggle("Give agents the ticket's history summary", isOn: $model.promptBriefEnabled)
@@ -393,10 +386,9 @@ struct SettingsView: View {
                     Text("Ledger (saved in symphony.yml)")
                 } footer: {
                     SectionFooter(
-                        "ledger.artifact_retention_days (default 14 days), ledger.artifact_max_bytes (default 25 MB), "
-                            + "ledger.prompt_brief_enabled (default on) and ledger.prompt_brief_max_tokens (default 50,000 "
-                            + "tokens). Save checks symphony.yml with symphony check first; Symphony reads them on its next "
-                            + "cleanup, stored file and agent prompt, no restart needed."
+                        "ledger.artifact_max_bytes (default 25 MB), ledger.prompt_brief_enabled (default on) and "
+                            + "ledger.prompt_brief_max_tokens (default 50,000 tokens). Save checks symphony.yml with symphony "
+                            + "check first; Symphony reads them on its next stored file and agent prompt, no restart needed."
                     )
                 }
                 .disabled(!model.canEditLedger)
@@ -579,6 +571,9 @@ struct SettingsView: View {
                     CheckErrorText(message: error)
                 }
                 if let error = model.ticketPatternsBuiltInError {
+                    CheckErrorText(message: error)
+                }
+                if let error = model.riskRulesError {
                     CheckErrorText(message: error)
                 }
                 if let loginItemError = model.loginItemError {
@@ -835,6 +830,53 @@ private struct OpenRouterModelField: View {
     private func choose(_ id: String?) {
         selection = id
         isPicking = false
+    }
+}
+
+/// Code Review's risk rules (`auto_review.acceptance_gate.escalate.on_match` and `.size_counts`): per rule, whether
+/// its match only tells the reviewer or also asks you once the reviewer approves, and what the change size counts.
+private struct RiskRulesSection: View {
+    @ObservedObject var model: SettingsViewModel
+
+    var body: some View {
+        Section {
+            ForEach(RiskRule.allCases) { rule in
+                Picker(rule.title, selection: match(rule)) {
+                    ForEach(RiskRuleMatch.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                Text(rule.explanation)
+                    .foregroundStyle(.secondary)
+            }
+            Picker(RiskRuleSettings.sizeCountsTitle, selection: $model.riskRules.sizeCounts) {
+                ForEach(ChangeSizeCount.allCases) { count in
+                    Text(count.title).tag(count)
+                }
+            }
+            Text(model.riskRules.sizeCounts.explanation)
+                .foregroundStyle(.secondary)
+            if model.riskRulesError != nil {
+                CheckErrorPointer(subject: "these risk rules")
+            }
+        } header: {
+            Text("Code Review risk rules (saved in symphony.yml)")
+        } footer: {
+            SectionFooter(
+                "auto_review.acceptance_gate.escalate.on_match and .size_counts. Code Review reviews each change once. "
+                    + "A risk rule that matches tells the reviewer what it found, so the review weighs it; set to Ask me, "
+                    + "an approval it matches also waits for your answer in the Inbox. These apply to every repo. Save "
+                    + "checks symphony.yml with symphony check first; Symphony reads it on its next poll, no restart needed."
+            )
+        }
+        .disabled(!model.canEditRiskRules)
+    }
+
+    private func match(_ rule: RiskRule) -> Binding<RiskRuleMatch> {
+        Binding(
+            get: { model.riskRules.match(for: rule) },
+            set: { model.riskRules.onMatch[rule] = $0 }
+        )
     }
 }
 

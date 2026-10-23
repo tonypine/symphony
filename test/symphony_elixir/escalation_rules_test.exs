@@ -268,18 +268,50 @@ defmodule SymphonyElixir.EscalationRulesTest do
     end
   end
 
-  test "total size outside docs and tests" do
-    files = [file("lib/app/big.ex", additions: 1400, deletions: 101), file("test/app/big_test.exs", additions: 5000), file("README.md", additions: 900)]
+  test "changed lines are three numbers: a line both removed and added is one changed line" do
+    assert EscalationRules.changed_lines(%{additions: 350, deletions: 2150}) == %{added: 0, changed: 350, removed: 1800}
+    assert EscalationRules.changed_lines(%{additions: 300, deletions: 0}) == %{added: 300, changed: 0, removed: 0}
+    assert EscalationRules.changed_lines(%{additions: 12, deletions: 12}) == %{added: 0, changed: 12, removed: 0}
+  end
 
-    assert check(files: files) == [%{rule: :size, detail: "1501 lines change outside docs and tests (limit 1500)"}]
-    assert check(files: [file("lib/app/big.ex", additions: 1400, deletions: 100)]) == []
+  test "total size outside docs and tests, as added, changed and removed lines" do
+    files = [
+      file("lib/app/new.ex", additions: 300, deletions: 0),
+      file("lib/app/legacy.ex", additions: 50, deletions: 2150),
+      file("test/app/big_test.exs", additions: 5000),
+      file("README.md", additions: 900)
+    ]
+
+    assert check(files: files) == [
+             %{rule: :size, detail: "adds 300, changes 50, removes 2,100 lines outside docs and tests: 2,450 in all, over the limit of 1,500"}
+           ]
+
+    # A rewritten line is one changed line, not one removed and one added.
+    assert check(files: [file("lib/app/big.ex", additions: 1500, deletions: 1500)]) == []
+    assert [%{rule: :size}] = check(files: [file("lib/app/big.ex", additions: 1500, deletions: 1501)])
+  end
+
+  test "a size rule counting added lines leaves a large deletion out, and still counts changed lines" do
+    deletion = [file("lib/app/legacy.ex", additions: 100, deletions: 2000)]
+
+    assert check(files: deletion, rules: rules(size_counts: "added")) == []
+    assert [%{rule: :size, detail: "adds 0, changes 100, removes 1,900 lines outside docs and tests: 2,000 in all, over the limit of 1,500"}] = check(files: deletion)
+
+    feature = [file("lib/app/feature.ex", additions: 1501, deletions: 0)]
+
+    assert check(files: feature, rules: rules(size_counts: "added")) == [
+             %{rule: :size, detail: "adds 1,501, changes 0, removes 0 lines outside docs and tests: 1,501 added or changed, over the limit of 1,500"}
+           ]
   end
 
   test "busy file size" do
-    files = [file("lib/app/router.ex", additions: 250, deletions: 51), file("lib/app/other.ex", additions: 400)]
+    files = [file("lib/app/router.ex", additions: 301, deletions: 51), file("lib/app/other.ex", additions: 400)]
 
     assert check(files: files, busy_files: ["lib/app/router.ex"]) == [
-             %{rule: :busy_file, detail: "lib/app/router.ex is a busy file and 301 of its lines change (limit 300)"}
+             %{
+               rule: :busy_file,
+               detail: "lib/app/router.ex is one of the repository's busiest files, and this change adds 250, changes 51, removes 0 of its lines: 301 in all, over the limit of 300"
+             }
            ]
 
     assert check(files: [file("lib/app/router.ex", additions: 300, deletions: 0)], busy_files: ["lib/app/router.ex"]) == []
@@ -305,6 +337,51 @@ defmodule SymphonyElixir.EscalationRulesTest do
   test "person rules and risk rules split every rule" do
     assert EscalationRules.person_rules() == [:label, :ticket_pattern]
     assert EscalationRules.risk_rules() == [:path, :diff_pattern, :dependency, :size, :busy_file]
+  end
+
+  describe "asking/2" do
+    @reasons [
+      %{rule: :label, detail: "the issue is labelled `needs-human`"},
+      %{rule: :path, detail: "lib/app/auth.ex matches `**/*auth*`"},
+      %{rule: :busy_file, detail: "lib/app/router.ex is one of the repository's busiest files"}
+    ]
+
+    test "picks every person rule's reason, and no risk rule's by default" do
+      assert EscalationRules.asking(@reasons, @rules) == [hd(@reasons)]
+      assert EscalationRules.asking(tl(@reasons), @rules) == []
+    end
+
+    test "picks a risk rule's reason when its on_match is ask" do
+      rules = rules(on_match: %Escalate.OnMatch{busy_files: "ask"})
+
+      assert EscalationRules.asking(@reasons, rules) == [hd(@reasons), List.last(@reasons)]
+    end
+  end
+
+  describe "reviewer_brief/1" do
+    test "words each risk rule's finding for the reviewer, and leaves the person rules out" do
+      reasons = [
+        %{rule: :ticket_pattern, detail: "the ticket matches `x`"},
+        %{rule: :path, detail: "a"},
+        %{rule: :diff_pattern, detail: "b"},
+        %{rule: :dependency, detail: "c"},
+        %{rule: :size, detail: "d"},
+        %{rule: :busy_file, detail: "e"}
+      ]
+
+      assert EscalationRules.reviewer_brief(reasons) == [
+               "Sensitive path: a",
+               "Sensitive content: b",
+               "Dependencies: c",
+               "Size: d",
+               "Busiest files: e"
+             ]
+    end
+
+    test "is empty when no risk rule matched" do
+      assert EscalationRules.reviewer_brief([]) == []
+      assert EscalationRules.reviewer_brief([%{rule: :label, detail: "x"}]) == []
+    end
   end
 
   describe "MixParser.parse_lock/1" do

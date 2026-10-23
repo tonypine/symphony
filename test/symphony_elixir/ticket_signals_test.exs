@@ -82,8 +82,6 @@ defmodule SymphonyElixir.TicketSignalsTest do
       {"handoff_missing", %{to: "Code Review", reason: "after the run"}, "note"},
       {"ci_wait_started", %{sha: "abc123"}, "note"},
       {"code_review_carried", %{head: "abc123"}, "note"},
-      {"code_review_deepened", %{head: "abc123", verdict: "approve", reason: "risky", findings: []}, "note"},
-      {"code_review_deepening_applied", %{head: "abc123"}, "note"},
       {"code_review_reviewer_disabled", %{}, "note"},
       {"code_review_head_not_green", %{head: "abc123", status: :red}, "note"},
       {"qa_head_not_green", %{head: "abc123", status: :pending}, "note"},
@@ -191,6 +189,14 @@ defmodule SymphonyElixir.TicketSignalsTest do
 
     assert {"verdict.recorded", _payload, opts} = TicketSignals.verdict_event("qa", "fail", "abc123")
     refute Keyword.has_key?(opts, :run_id)
+  end
+
+  test "verdict_event/4 carries the verdict's summary as its reason, and none when it is blank" do
+    assert {"verdict.recorded", %{reason: "adds 3, changes 0, removes 0 lines. ok"}, _opts} =
+             TicketSignals.verdict_event("code_review", "approve", "abc123", reason: "adds 3, changes 0, removes 0 lines. ok")
+
+    assert {"verdict.recorded", payload, _opts} = TicketSignals.verdict_event("code_review", "approve", "abc123", reason: " ")
+    refute Map.has_key?(payload, :reason)
   end
 
   test "repeated verdicts on one head stay separate events" do

@@ -8,7 +8,7 @@ import Foundation
 /// nor in `config/settings_ui_exempt.yml`, so a new setting ships with a control. `SettingsUIManifestTests`
 /// checks that every key the line editors (`RepositoriesConfig`, `RunProfilesConfig`, `MaxConcurrentAgents`,
 /// `TokenLimits`, `OperationTimeouts`, `GitHubUpdates`, `DispatchLoopLimits`, `LedgerSettings`,
-/// `BuiltInTicketPatterns`, `QAHostTools`, `MacAppQAPlaybook`) write is here, and that the rest are
+/// `BuiltInTicketPatterns`, `RiskRuleSettings`, `QAHostTools`, `MacAppQAPlaybook`) write is here, and that the rest are
 /// `writtenBySymphony`. Keep one string literal per line, sorted.
 public enum SettingsUIManifest {
     public static let keyPaths: [String] = [
@@ -22,6 +22,12 @@ public enum SettingsUIManifest {
         "agent.run_profiles",
         "agent.small_model",
         "agent.timeouts.mcp_tool_ms",
+        "auto_review.acceptance_gate.escalate.on_match.busy_files",
+        "auto_review.acceptance_gate.escalate.on_match.dependencies",
+        "auto_review.acceptance_gate.escalate.on_match.diff_patterns",
+        "auto_review.acceptance_gate.escalate.on_match.max_changed_lines",
+        "auto_review.acceptance_gate.escalate.on_match.paths",
+        "auto_review.acceptance_gate.escalate.size_counts",
         "auto_review.acceptance_gate.escalate.ticket_patterns_builtin",
         "auto_review.acceptance_gate.mode",
         "auto_review.command",
@@ -43,7 +49,6 @@ public enum SettingsUIManifest {
         "issues.states.plan_review",
         "issues.states.qa",
         "ledger.artifact_max_bytes",
-        "ledger.artifact_retention_days",
         "ledger.prompt_brief_enabled",
         "ledger.prompt_brief_max_tokens",
         "pre_push_review.command",

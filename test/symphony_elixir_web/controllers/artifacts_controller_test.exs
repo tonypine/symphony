@@ -48,9 +48,9 @@ defmodule SymphonyElixirWeb.ArtifactsControllerTest do
       assert get_resp_header(conn, "content-disposition") == [~s(inline; filename="Home screen")]
     end
 
-    test "an expired screenshot is 410 with its metadata, and a made-up id is 404", %{workspace: workspace} do
+    test "a screenshot whose file is gone from the store is 410 with its metadata, and a made-up id is 404", %{workspace: workspace} do
       artifact = ingest!(workspace, "home.png", @png, @meta)
-      {:ok, _expired} = Artifacts.expire(artifact.id)
+      File.rm!(Store.path(artifact.id))
 
       for path <- ["/api/v1/artifacts/#{artifact.id}", "/api/v1/artifacts/#{artifact.id}/meta"] do
         body = json_response(get(build_conn(), path), 410)

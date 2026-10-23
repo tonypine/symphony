@@ -122,7 +122,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:machine],
       run_kinds: [],
       required: [kind: {:enum, @verdict_kinds}, outcome: :string],
-      optional: [head: :string] ++ @signal,
+      optional: [head: :string, reason: :string] ++ @signal,
       idempotency: :writer
     },
     "decision.requested" => %{
