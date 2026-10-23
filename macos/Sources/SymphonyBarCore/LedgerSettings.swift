@@ -22,9 +22,9 @@ public enum LedgerSettingsError: LocalizedError, Equatable {
 }
 
 /// The ticket ledger's settings in the text of a `symphony.yml`: `ledger.artifact_max_bytes`, the largest file Symphony
-/// stores (it keeps every file for good); `ledger.prompt_brief_enabled`, whether agents get the summary of the ticket's history; and
-/// `ledger.prompt_brief_max_tokens`, the size over which a ticket asks the Director before its agent starts (the
-/// summary is still given whole).
+/// stores (it keeps every file for good); `ledger.prompt_brief_enabled`, whether agents get the summary of the
+/// ticket's history; and `ledger.prompt_brief_max_tokens`, the size over which a ticket asks the Director before its
+/// agent starts (the summary is still given whole).
 /// Only the lines of the settings that change are rewritten, or inserted with `ledger:` when missing, so the rest of
 /// the file stays as it is.
 public struct LedgerSettings: Equatable {
