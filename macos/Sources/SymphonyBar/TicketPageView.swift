@@ -399,6 +399,10 @@ struct TicketNoteBar: View {
 
     /// A one-line note needs no more on a wide window; the rest of the bar stays empty.
     static let maxFieldWidth: CGFloat = 720
+    /// The line under the field wraps to at most this many lines. The window's split view measures the page's smallest
+    /// size with no width, where unbounded text wraps a character a line: the bar then claimed more height than the
+    /// window has, and pushed itself and the window's content off screen.
+    static let lineLimit = 3
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
@@ -416,6 +420,7 @@ struct TicketNoteBar: View {
                 Label(reason, systemImage: "info.circle")
                     .font(DesignTokens.TypeStyle.callout.font)
                     .foregroundStyle(.secondary)
+                    .lineLimit(Self.lineLimit)
                     .fixedSize(horizontal: false, vertical: true)
             } else if composer.sending {
                 HStack(spacing: DesignTokens.Space.s2) {
@@ -435,8 +440,10 @@ struct TicketNoteBar: View {
                 Label(refusal, systemImage: DesignTokens.Status.problem.symbol)
                     .font(DesignTokens.TypeStyle.callout.font)
                     .foregroundStyle(DesignTokens.Status.problem.tint)
+                    .lineLimit(Self.lineLimit)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
+                    .help(refusal)
                     .accessibilityLabel(TicketNoteComposer.refusalLabel(refusal))
             }
         }
