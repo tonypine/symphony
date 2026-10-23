@@ -133,7 +133,9 @@ branch name Linear suggests for the ticket; a PR on a branch with any other name
   Agents add requests with `linear_request_human_action` and withdraw them with
   `linear_withdraw_human_action`; see `human_actions` in
   [docs/configuration.md](docs/configuration.md).
-- **Executor + reviewer runs** — an optional read-only reviewer agent gates the executor's push.
+- **Code Review** — a read-only reviewer agent (`code_review` in `symphony.yml`) judges each pull
+  request's diff against the ticket once its head is green; see
+  [`code_review`](docs/configuration.md#code_review).
 - **QA** — the `QA` state's agent uses each PR the way a user would, with
   built-in playbooks for CLIs (`cli`), web apps in a headless browser (`web`), macOS apps through
   accessibility in a QA VM (`macos_app`) and Android apps on a host-side emulator (`android_app`). See
@@ -396,8 +398,7 @@ Forcing only removes the wait for a slot. These transitions stay with a person:
 | a `Needs Decision` hold | a person records the decision |
 | any state → `Restart` | a person resets the approach |
 
-The review-agent verdict and the Code Review and QA verdicts are still required: forcing never
-skips or changes them.
+The Code Review and QA verdicts are still required: forcing never skips or changes them.
 
 ### Preview the assembled prompt
 
