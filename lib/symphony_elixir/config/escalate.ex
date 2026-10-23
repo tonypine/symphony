@@ -1,9 +1,12 @@
 defmodule SymphonyElixir.Config.Escalate do
   @moduledoc """
   The escalation rules Code Review applies (`SymphonyElixir.EscalationRules`): the person rules
-  (`labels`, `ticket_patterns`) pause a Code Review ticket on a Needs Decision hold, and the risk
-  rules (`paths`, `diff_patterns`, `dependencies`, `max_changed_lines`, `busy_files`) deepen the
-  review with a second reviewer pass.
+  (`labels`, `ticket_patterns`) pause an approved Code Review ticket on a Needs Decision hold, and
+  the risk rules (`paths`, `diff_patterns`, `dependencies`, `max_changed_lines`, `busy_files`) tell
+  the reviewer what they found, so its one review weighs it. `on_match` sets a risk rule to `ask`
+  instead: an approval it matches then pauses on a Needs Decision hold like a person rule's.
+  `size_counts` says what `max_changed_lines` counts: every added, changed and removed line
+  (`total`), or only the added and changed ones (`added`), so a large deletion doesn't match.
 
   During the acceptance gate's deprecation window the rules are still read from the
   `auto_review.acceptance_gate.escalate` block of `symphony.yml` (and a
@@ -41,6 +44,30 @@ defmodule SymphonyElixir.Config.Escalate do
       |> validate_number(:top, greater_than: 0, message: "must be a positive integer")
       |> validate_number(:window_days, greater_than: 0, message: "must be a positive integer")
       |> validate_number(:max_lines, greater_than: 0, message: "must be a positive integer")
+    end
+  end
+
+  defmodule OnMatch do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @type t :: %__MODULE__{}
+
+    @primary_key false
+    @fields [:paths, :diff_patterns, :dependencies, :max_changed_lines, :busy_files]
+    @modes ["inform", "ask"]
+
+    # What a match of each risk rule does: `inform` tells the reviewer, `ask` also asks a person once
+    # the reviewer approves.
+    embedded_schema do
+      for rule <- @fields, do: field(rule, :string, default: "inform")
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      changeset = cast(schema, attrs, @fields, empty_values: [])
+      Enum.reduce(@fields, changeset, &validate_inclusion(&2, &1, @modes, message: "must be one of: #{Enum.join(@modes, ", ")}"))
     end
   end
 
@@ -83,7 +110,9 @@ defmodule SymphonyElixir.Config.Escalate do
   }
 
   @list_fields Map.keys(@built_in)
-  @fields @list_fields ++ [:ticket_patterns_builtin, :dependencies, :max_changed_lines, :inconclusive_limit]
+  @size_counts ["total", "added"]
+  @fields @list_fields ++
+            [:ticket_patterns_builtin, :dependencies, :max_changed_lines, :size_counts, :inconclusive_limit]
   @pattern_fields [:ticket_patterns, :diff_patterns]
 
   @primary_key false
@@ -96,8 +125,10 @@ defmodule SymphonyElixir.Config.Escalate do
     field(:diff_patterns, {:array, :string}, default: @built_in.diff_patterns)
     field(:dependencies, :string, default: "major")
     field(:max_changed_lines, :integer, default: 1500)
+    field(:size_counts, :string, default: "total")
     field(:inconclusive_limit, :integer, default: 2)
     embeds_one(:busy_files, BusyFiles, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:on_match, OnMatch, on_replace: :update, defaults_to_struct: true)
   end
 
   @doc """
@@ -112,11 +143,13 @@ defmodule SymphonyElixir.Config.Escalate do
     schema
     |> cast(attrs, @fields, empty_values: [])
     |> cast_embed(:busy_files, with: &BusyFiles.changeset/2)
+    |> cast_embed(:on_match, with: &OnMatch.changeset/2)
     |> drop_built_in_ticket_patterns()
     |> keep_built_in_lists()
     |> validate_patterns()
     |> validate_inclusion(:dependencies, @dependency_modes, message: "must be one of: #{Enum.join(@dependency_modes, ", ")}")
     |> validate_number(:max_changed_lines, greater_than: 0, message: "must be a positive integer")
+    |> validate_inclusion(:size_counts, @size_counts, message: "must be one of: #{Enum.join(@size_counts, ", ")}")
     |> validate_number(:inconclusive_limit, greater_than: 0, message: "must be a positive integer")
   end
 

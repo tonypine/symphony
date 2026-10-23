@@ -774,6 +774,63 @@ defmodule SymphonyElixir.ReviewAgentTest do
     end
   end
 
+  test "the Code Review prompt carries the risk rules' findings in plain words, and the verdict returns their reasons" do
+    test_root = unique_tmp("symphony-elixir-review-agent-rule-findings")
+
+    try do
+      repo = git_repo_with_change!(test_root)
+      put_sequence_responses!([~s({"verdict":"approve","comments":[],"reason":"weighed the size"})])
+
+      write_workflow_file!(Workflow.workflow_file_path(), review_agent: %{enabled: true, kind: "codex", command: "codex app-server"})
+
+      size = %{rule: :size, detail: "adds 300, changes 50, removes 2,100 lines outside docs and tests: 2,450 in all, over the limit of 1,500"}
+      label = %{rule: :label, detail: "the issue is labelled `needs-human`"}
+
+      check = fn source ->
+        send(self(), {:rule_check, source})
+        [label, size]
+      end
+
+      opts = [review_agent_module: SequenceReviewer, review_scope: :code_review, escalation_rules: check]
+
+      assert {:ok, %{verdict: :approve, escalation_reasons: [^label, ^size]}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), opts)
+
+      # The check reads the diff context the reviewer judges, before the reviewer starts.
+      assert_received {:rule_check, %{changed_file_inventory: [%{path: "feature.txt"} | _]}}
+      assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
+      assert prompt =~ "What Symphony's risk rules found in this change."
+      assert prompt =~ "say in your verdict's `reason` how it weighed"
+      assert prompt =~ "- Size: adds 300, changes 50, removes 2,100 lines outside docs and tests"
+      refute prompt =~ "needs-human"
+    after
+      clear_sequence_responses!()
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "the prompt says nothing about rules when none matched" do
+    test_root = unique_tmp("symphony-elixir-review-agent-no-rule-findings")
+
+    try do
+      repo = git_repo_with_change!(test_root)
+      put_sequence_responses!([~s({"verdict":"approve","comments":[]})])
+
+      write_workflow_file!(Workflow.workflow_file_path(), review_agent: %{enabled: true, kind: "codex", command: "codex app-server"})
+
+      opts = [review_agent_module: SequenceReviewer, review_scope: :code_review, escalation_rules: fn _source -> [] end]
+
+      assert {:ok, %{verdict: :approve, escalation_reasons: []}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), opts)
+
+      assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
+      refute prompt =~ "risk rules"
+    after
+      clear_sequence_responses!()
+      File.rm_rf(test_root)
+    end
+  end
+
   describe "recorded decisions" do
     # TP-892: a person deferred the legacy partials to TP-891, and the reviewer flagged them anyway.
     defp decided_issue do

@@ -2901,17 +2901,24 @@ Rules:
   protection. A store that cannot record the claim MUST unlock nothing. The agents' comment and
   sub-issue tools MUST refuse text that reads as such a grant or carries an option's hidden paths,
   and a reply under a request whose options unlock a path.
-- **Escalation rules.** Code Review applies the repo's escalation rules (`EscalationRules`, the
+- **Escalation rules.** Code Review checks the repo's escalation rules (`EscalationRules`, the
   retired acceptance gate's deterministic rules, read from `auto_review.acceptance_gate.escalate`
-  during its deprecation window) to an approval. A person rule — an `escalate.labels` label other
-  than `plan` and `breakdown`, or a title or description matching `escalate.ticket_patterns` — MUST
-  pause the ticket in `Code Review` on a `Needs Decision` hold recommending QA. A risk rule — a
-  changed path outside docs and tests matching `escalate.paths`, an added line matching
-  `escalate.diff_patterns`, a dependency manifest change per `escalate.dependencies`, more than
-  `escalate.max_changed_lines` lines outside docs and tests, or more than
-  `escalate.busy_files.max_lines` lines in one of the base branch's busiest files — MUST deepen the
-  review (a second reviewer pass on the same head, recorded with no move) rather than route it. A
-  reviewer `block`, and an inconclusive review that ran out of retries, MUST pause the ticket on a
+  during its deprecation window) on the diff the reviewer judges, before the reviewer starts. The
+  reviewer MUST run once per head: no rule starts a second pass. A risk rule — a changed path
+  outside docs and tests matching `escalate.paths`, an added line matching `escalate.diff_patterns`,
+  a dependency manifest change per `escalate.dependencies`, more than `escalate.max_changed_lines`
+  lines outside docs and tests (every added, changed and removed line, or only the added and changed
+  ones with `escalate.size_counts: added`), or more than `escalate.busy_files.max_lines` lines in
+  one of the base branch's busiest files — MUST put its finding in plain words in the reviewer's
+  instructions, and in the verdict's summary; with no match the instructions say nothing about
+  rules. A change's size is three numbers outside docs and tests: added, changed (a line both
+  removed and added, `min(additions, deletions)` per file) and removed lines. On an approval, a
+  person rule — an `escalate.labels` label other than `plan` and `breakdown`, or a title or
+  description matching `escalate.ticket_patterns` — and a risk rule whose `escalate.on_match` key
+  is `ask` (the default is `inform`) MUST pause the ticket in `Code Review` on a `Needs Decision`
+  hold recommending QA; otherwise the approval routes at once. A deepened verdict an earlier version
+  recorded (a second pass with no move) on a head no move has routed since MUST be routed once by
+  the next dispatch, without reviewing again. A reviewer `block`, and an inconclusive review that ran out of retries, MUST pause the ticket on a
   `Needs Decision` hold recommending `Rework`. Every escalation hold's confirmation continues into
   the QA state; its redirect sends the ticket to `Rework`. The Code Review reviewer, unlike the
   pre-push pass, judges the change against the ticket's acceptance criteria, scope and intent.
