@@ -93,9 +93,11 @@ defmodule SymphonyElixirWeb.ObservabilityPubSub do
   def ticket_events_topic, do: @ticket_events_topic
 
   @doc """
-  Subscribes the caller to the changes of tickets' records (`SymphonyElixir.TicketObservation`):
-  each arrives as `{:ticket_record, repo_key, issue_id, :changed}`. With no PubSub running it
-  subscribes to nothing.
+  Subscribes the caller to the changes of tickets' records (`SymphonyElixir.TicketObservation`,
+  `SymphonyElixir.TicketSignals.record_phase/3`, `SymphonyElixir.Hold`): each arrives as
+  `{:ticket_record, repo_key, issue_id, :changed, fields}`, `fields` naming the record's fields that
+  changed (`:phase`, `:holds`, `:blockers`, `:title`...). With no PubSub running it subscribes to
+  nothing.
   """
   @spec subscribe_ticket_records() :: :ok | {:error, term()}
   def subscribe_ticket_records do
@@ -103,12 +105,12 @@ defmodule SymphonyElixirWeb.ObservabilityPubSub do
   end
 
   @doc """
-  Tells the subscribers of `subscribe_ticket_records/0` that the record of `issue_id` in `repo_key`
-  changed, best-effort as `broadcast_ticket_event/1` is.
+  Tells the subscribers of `subscribe_ticket_records/0` that `fields` of the record of `issue_id` in
+  `repo_key` changed, best-effort as `broadcast_ticket_event/1` is.
   """
-  @spec broadcast_ticket_record_changed(String.t(), String.t()) :: :ok
-  def broadcast_ticket_record_changed(repo_key, issue_id) when is_binary(repo_key) and is_binary(issue_id) do
-    message = {:ticket_record, repo_key, issue_id, :changed}
+  @spec broadcast_ticket_record_changed(String.t(), String.t(), [atom()]) :: :ok
+  def broadcast_ticket_record_changed(repo_key, issue_id, fields) when is_binary(repo_key) and is_binary(issue_id) and is_list(fields) do
+    message = {:ticket_record, repo_key, issue_id, :changed, fields}
 
     with pid when is_pid(pid) <- Process.whereis(@pubsub),
          {:error, reason} <- Phoenix.PubSub.broadcast(@pubsub, @ticket_records_topic, message) do

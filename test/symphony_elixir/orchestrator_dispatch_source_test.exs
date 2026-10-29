@@ -263,12 +263,12 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
 
       # The poll's own writes are not announced: the cycle that made them dispatches from them.
       issue_id = "#{ctx.repo_key}-1"
-      refute_received {:ticket_record, _repo_key, ^issue_id, :changed}
+      refute_received {:ticket_record, _repo_key, ^issue_id, :changed, _fields}
 
       # The PR and CI watcher reads a priority change: the record announces it.
       changed = issue(ctx.repo_key, 1, priority: 2, updated_at: DateTime.add(@linear_at, 60))
       {:ok, :updated} = TicketObservation.observe(ctx.repo_key, changed, source: :watcher)
-      assert_receive {:ticket_record, repo_key, ^issue_id, :changed} = message
+      assert_receive {:ticket_record, repo_key, ^issue_id, :changed, [:priority]} = message
       assert repo_key == ctx.repo_key
 
       state = %{state | poll_check_in_progress: false, next_poll_due_at_ms: nil}
@@ -293,7 +293,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       {%{dispatchable: dispatchable}, state} = capture_cycle(state, ctx.repos, 50)
       assert identifiers(dispatchable) == ["ACME-1", "ACME-2"]
 
-      message = {:ticket_record, ctx.repo_key, "#{ctx.repo_key}-3", :changed}
+      message = {:ticket_record, ctx.repo_key, "#{ctx.repo_key}-3", :changed, [:phase]}
       assert {:noreply, ^state} = Orchestrator.handle_info(message, state)
     end
 

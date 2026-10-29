@@ -70,6 +70,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
 
   # A store that refuses to set a hold.
   defmodule FailingHoldStore do
+    def get_ticket_state(_repo_key, _issue_id), do: nil
     def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :store_down}
   end
 

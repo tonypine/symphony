@@ -12,6 +12,7 @@ defmodule SymphonyElixir.ClosedPullRequestTest do
   @pr_url "https://github.com/acme/repo/pull/512"
 
   defmodule FailingStore do
+    def get_ticket_state(_repo_key, _issue_id), do: nil
     def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :disk_full}
   end
 

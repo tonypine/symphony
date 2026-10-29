@@ -25,10 +25,12 @@ defmodule SymphonyElixir.TicketObservation do
   does Symphony's own moves. A by-id read or a poll asks for none.
 
   A write that changed a record, other than the poll's and a by-id read's, and a removal, are
-  announced as `{:ticket_record, repo_key, issue_id, :changed}`
-  (`SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records/0`): with `dispatch.source: record`
-  the orchestrator asks for a cycle of the ticket's repo at once. The poll's and the by-id reads'
-  changes are not announced, since the cycle that made them dispatches from them right after.
+  announced as `{:ticket_record, repo_key, issue_id, :changed, fields}`
+  (`SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records/0`), `fields` naming the observed
+  fields the write changed (all of them for a new record, `[:removed_at]` for a removal): with
+  `dispatch.source: record` the orchestrator asks for a cycle of the ticket's repo at once, and the
+  PR watcher re-decides the ticket when its phase or blockers changed. The poll's and the by-id
+  reads' changes are not announced, since the cycle that made them dispatches from them right after.
 
   Every read other than a webhook delivery is compared with the webhook: a read that changes a field
   the webhook carries (state, identifier, title, labels, priority, assignee, URL) of an existing
@@ -149,7 +151,8 @@ defmodule SymphonyElixir.TicketObservation do
             {:ok, :unchanged}
 
           {observed, :changed} ->
-            stored |> write_and_compare(observed, source, now, opts) |> announce(repo_key, issue_id, source)
+            change = {repo_key, issue_id, changed(stored, observed)}
+            stored |> write_and_compare(observed, source, now, opts) |> announce(change, source)
         end
       end
 
@@ -282,12 +285,23 @@ defmodule SymphonyElixir.TicketObservation do
   # A changed record is announced (`ObservabilityPubSub.subscribe_ticket_records/0`), so dispatch from
   # the record considers it at once; not for the poll's and the by-id reads, which the cycle that
   # made them dispatches from right after.
-  defp announce({:ok, :updated} = written, repo_key, issue_id, source) when source not in [:poll, :by_id] do
-    :ok = ObservabilityPubSub.broadcast_ticket_record_changed(repo_key, issue_id)
+  defp announce({:ok, :updated} = written, {repo_key, issue_id, fields}, source) when source not in [:poll, :by_id] do
+    :ok = ObservabilityPubSub.broadcast_ticket_record_changed(repo_key, issue_id, fields)
     written
   end
 
-  defp announce(result, _repo_key, _issue_id, _source), do: result
+  defp announce(result, _change, _source), do: result
+
+  # The observed fields an observation changed, every one of a new record's, without the times that
+  # say when it was read.
+  defp changed(stored, observed) do
+    before = if stored, do: TicketState.observation(stored), else: %{}
+
+    for {field, value} <- TicketState.observation(observed),
+        field not in [:linear_updated_at, :observed_at, :observed_from, :updated_at],
+        Map.get(before, field) != value,
+        do: field
+  end
 
   defp write_and_compare(stored, observed, source, now, opts) do
     with {:ok, :updated} = written <- write(stored, observed) do
@@ -442,7 +456,7 @@ defmodule SymphonyElixir.TicketObservation do
     with {:ok, stored} when not is_nil(stored) <- read(repo_key, issue_id),
          removed = TicketState.mark_removed(stored, now),
          :ok <- RunStore.update_ticket_state(repo_key, issue_id, Map.take(removed, [:removed_at, :updated_at])) do
-      :ok = ObservabilityPubSub.broadcast_ticket_record_changed(repo_key, issue_id)
+      :ok = ObservabilityPubSub.broadcast_ticket_record_changed(repo_key, issue_id, [:removed_at])
       :removed
     else
       {:ok, nil} -> :no_record

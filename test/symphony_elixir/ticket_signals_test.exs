@@ -115,6 +115,19 @@ defmodule SymphonyElixir.TicketSignalsTest do
       assert RunStore.get_ticket_state(@repo_key, "issue-1") == before
     end
 
+    test "a phase written is announced as a change of the record's phase; one already there is not" do
+      :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records()
+
+      assert :ok = TicketSignals.record_phase(@repo_key, "issue-1", "In Progress")
+      assert_received {:ticket_record, @repo_key, "issue-1", :changed, [:phase]}
+
+      assert :ok = TicketSignals.record_phase(@repo_key, "issue-1", "Code Review")
+      assert_received {:ticket_record, @repo_key, "issue-1", :changed, [:phase]}
+
+      assert :ok = TicketSignals.record_phase(@repo_key, "issue-1", "Code Review")
+      refute_received {:ticket_record, _repo_key, _issue_id, :changed, _fields}
+    end
+
     test "no-ops without a repo key, an issue id or a phase" do
       assert :ok = TicketSignals.record_phase(nil, "issue-1", "QA")
       assert :ok = TicketSignals.record_phase(@repo_key, nil, "QA")
