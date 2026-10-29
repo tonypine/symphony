@@ -64,9 +64,10 @@ defmodule SymphonyElixir.PrWatch.Repo do
   later (the confirm read), or, for a push to their base, one by one 1 second apart (a PR whose
   mergeability GitHub hasn't computed yet is read again after the others, up to 5 times). A confirm read
   is a tick of those PRs only: it decides and acts as a timed tick does, keeping the landing order
-  of the last one, unless one of them conflicts or waits on its competitors: then it reads every
-  watched PR and the open PRs, as a timed tick, so the landing order and the race are as fresh as a
-  poll's. While deliveries are healthy (`SymphonyElixir.PrWatch.Health`) the timed tick is
+  of the last one, unless one of them conflicts, waits on its competitors, or is `BEHIND` and last
+  waited on a PR ahead of it: then it reads every watched PR and the open PRs, as a timed tick, so
+  the landing order and the race are as fresh as a poll's, and a PR whose leader just landed gets
+  its update-branch on its own read. While deliveries are healthy (`SymphonyElixir.PrWatch.Health`) the timed tick is
   only the safety net, every `github.webhooks.fallback_poll_interval_ms`; one that finds a change
   no delivery reported marks them unhealthy, and the next tick is back at the poll interval, as it
   is while the repository's `gh webhook forward` relay keeps stopping (`SymphonyElixir.GitHub.Relay`
@@ -397,14 +398,15 @@ defmodule SymphonyElixir.PrWatch.Repo do
     end
   end
 
-  # A confirm read that finds a conflict, or a ticket waiting on its competitors, reads the other
-  # watched PRs and the repository's open PRs too, and decides on all of them as a timed tick does:
-  # the landing order and the race need every PR, so a delivery reaches the same decision a poll
-  # would. Returns the reads and what the tick decides on.
+  # A confirm read that finds a conflict, a ticket waiting on its competitors, or a PR behind its
+  # base that last waited on a PR ahead of it, reads the other watched PRs and the repository's open
+  # PRs too, and decides on all of them as a timed tick does: the landing order and the race need
+  # every PR, so a delivery reaches the same decision a poll would, and a PR whose leader just landed
+  # is updated on its own reread. Returns the reads and what the tick decides on.
   defp widen(:all, _watched, reads, state, _now), do: {reads, state, :all}
 
   defp widen(scope, watched, reads, state, now) do
-    if Enum.any?(in_scope(watched, scope), &competes?(&1, reads)) do
+    if Enum.any?(in_scope(watched, scope), &(competes?(&1, reads) or behind_a_leader?(&1, reads))) do
       {rest, state} = watched |> Enum.reject(&Map.has_key?(reads, &1.issue.id)) |> read_all(state, now)
       {Map.merge(reads, rest), state, :all}
     else
@@ -583,6 +585,12 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   defp competes?(entry, reads) do
     match?({:ok, %{mergeable: :dirty}}, Map.get(reads, entry.issue.id)) or entry.links != [] or BlockedHold.landing?(entry.blocked_hold)
+  end
+
+  # Upkeep updates a BEHIND PR only with nothing ahead of it, and the PR ahead it last waited on may
+  # have just landed: only the open PRs tell.
+  defp behind_a_leader?(entry, reads) do
+    match?({:ok, %{mergeable: :behind}}, Map.get(reads, entry.issue.id)) and previous_ahead(entry) != []
   end
 
   defp read_open_pulls(entry, state) do

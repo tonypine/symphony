@@ -245,6 +245,29 @@ defmodule SymphonyElixir.PrWatch.IngestTest do
       assert %{decision: %{rule: "R28", args: %{prs: [%{issue_identifier: "TP-3"}]}}} = Parity.watch("4")
     end
 
+    test "a PR behind main waiting on the PR ahead is updated on its reread once that PR merges (TP-1160)" do
+      Parity.tickets!(%{
+        tickets: [{"1", "Merging", []}, {"2", "Merging", mergeable: :behind}],
+        files: %{"1" => ["SPEC.md"], "2" => ["SPEC.md", "lib/b.ex"]}
+      })
+
+      pid = Parity.start!()
+      Parity.tick!(pid)
+      flush_timers()
+      assert updates() == []
+      assert %{decision: %{rule: "R28", args: %{prs: [%{issue_identifier: "TP-1"}]}}} = Parity.watch("2")
+
+      # PR 2's reread reads the open PRs again: TP-1 is gone from them, so nothing is ahead any more.
+      Parity.change!([{"1", pr: :merged}, {"2", mergeable: :behind}])
+      :ok = Ingest.deliver(merged("1"), nil, watchers: [pid])
+      _state = :sys.get_state(pid)
+      assert :sys.get_state(pid).rereads == ["issue-2"]
+      reread!(pid, 1)
+
+      assert updates() == [{Parity.pr_url("2"), "head-2-1"}]
+      assert %{source: :webhook, facts: %{ahead: []}, actions: [%{rule: "U1", kind: :update_branch} | _]} = Parity.watch("2")
+    end
+
     test "a PR whose mergeability GitHub hasn't computed yet is read again after the others, up to 5 times" do
       pid = started!([{"1", "Code Review", []}, {"2", "QA", []}])
       flush_timers()
