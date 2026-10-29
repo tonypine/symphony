@@ -84,8 +84,9 @@ defmodule SymphonyElixir.Orchestrator do
   @ci_wait_retry_delay_ms 60_000
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
-  # A repo Symphony's own moves force due is polled once per window: the poll that answers the first
-  # move of a burst reads the others too.
+  # A repo Symphony's own moves force due is polled for them at most once per window: moves made
+  # before that poll starts share it, and a move made after it started, inside the window, gets one
+  # more poll at the window's end.
   @forced_poll_window_ms 2_000
   @default_transcript_buffer_size 200
   @default_snapshot_publish_ms 500
@@ -324,8 +325,12 @@ defmodule SymphonyElixir.Orchestrator do
   defp slow_callback_ms, do: Application.get_env(:symphony_elixir, :orchestrator_slow_callback_ms, @slow_callback_ms)
 
   defp handle_cast_message({:request_refresh, repo_key, :now}, state) do
-    {coalesced?, state} = force_repo_due(state, repo_key, System.monotonic_time(:millisecond))
-    {:noreply, if(coalesced?, do: state, else: state |> request_poll() |> elem(1))}
+    now_ms = System.monotonic_time(:millisecond)
+
+    case force_repo_due(state, repo_key, now_ms) do
+      {:coalesced, state} -> {:noreply, state}
+      {{:poll_at, due_at_ms}, state} -> {:noreply, request_poll_by(state, due_at_ms, now_ms)}
+    end
   end
 
   defp handle_info_message(:publish_snapshot, state) do
@@ -733,6 +738,12 @@ defmodule SymphonyElixir.Orchestrator do
     else
       {false, schedule_tick(state, 0)}
     end
+  end
+
+  # Ticks by `due_at_ms` unless a poll is running (it ends by scheduling the earliest due repo) or a
+  # tick comes sooner.
+  defp request_poll_by(%State{} = state, due_at_ms, now_ms) do
+    if poll_tick_coalesced?(state, due_at_ms), do: state, else: schedule_tick(state, due_at_ms - now_ms)
   end
 
   defp poll_tick_coalesced?(%State{} = state, now_ms) do
@@ -1621,7 +1632,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp tracker_failure_reason(_reason), do: :unknown
 
   @doc false
-  @spec force_repo_due_for_test(State.t(), String.t() | nil, integer()) :: {boolean(), State.t()}
+  @spec force_repo_due_for_test(State.t(), String.t() | nil, integer()) ::
+          {:coalesced | {:poll_at, integer()}, State.t()}
   def force_repo_due_for_test(%State{} = state, repo_key, now_ms), do: force_repo_due(state, repo_key, now_ms)
 
   @doc false
@@ -1777,27 +1789,36 @@ defmodule SymphonyElixir.Orchestrator do
     }
   end
 
-  # A move makes its repo due now and marks it forced, so the next poll takes it ahead of any other
-  # due repo. A repo forced within the window is answered by the poll the first forcing asked for.
+  # A move marks its repo forced, so the next poll due by then takes it ahead of any other due repo.
+  # A forcing whose poll has not started yet already covers the move. One whose poll started inside
+  # the window may have read Linear before the move, so the move is polled again at the window's end;
+  # later moves in the window share that poll. Outside the window the repo is due now.
   defp force_repo_due(%State{} = state, repo_key, now_ms) when is_binary(repo_key) do
-    case Map.get(state.repo_poll_forced_at_ms, repo_key) do
-      forced_at_ms when is_integer(forced_at_ms) and now_ms - forced_at_ms < @forced_poll_window_ms ->
-        {true, state}
+    forced_at_ms = Map.get(state.repo_poll_forced_at_ms, repo_key)
 
-      _forced_at_ms ->
-        due_at_ms = min(Map.get(state.repo_poll_due_at_ms, repo_key, now_ms), now_ms)
+    cond do
+      MapSet.member?(state.repo_poll_forced, repo_key) ->
+        {:coalesced, state}
 
-        {false,
-         %{
-           state
-           | repo_poll_due_at_ms: Map.put(state.repo_poll_due_at_ms, repo_key, due_at_ms),
-             repo_poll_forced: MapSet.put(state.repo_poll_forced, repo_key),
-             repo_poll_forced_at_ms: Map.put(state.repo_poll_forced_at_ms, repo_key, now_ms)
-         }}
+      is_integer(forced_at_ms) and now_ms - forced_at_ms < @forced_poll_window_ms ->
+        mark_repo_forced(state, repo_key, forced_at_ms + @forced_poll_window_ms)
+
+      true ->
+        mark_repo_forced(state, repo_key, now_ms)
     end
   end
 
-  defp force_repo_due(%State{} = state, _repo_key, _now_ms), do: {false, state}
+  defp force_repo_due(%State{} = state, _repo_key, now_ms), do: {{:poll_at, now_ms}, state}
+
+  defp mark_repo_forced(%State{} = state, repo_key, due_at_ms) do
+    {{:poll_at, due_at_ms},
+     %{
+       state
+       | repo_poll_due_at_ms: Map.update(state.repo_poll_due_at_ms, repo_key, due_at_ms, &min(&1, due_at_ms)),
+         repo_poll_forced: MapSet.put(state.repo_poll_forced, repo_key),
+         repo_poll_forced_at_ms: Map.put(state.repo_poll_forced_at_ms, repo_key, due_at_ms)
+     }}
+  end
 
   # The repo this poll fetches; its forced mark goes with it, so a move made while it is in flight
   # marks it again.
@@ -1808,19 +1829,27 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # A repo forced while its poll was in flight stays due: that poll may have read it before the move.
+  # A repo forced while its poll was in flight stays due by its forcing: that poll may have read it
+  # before the move.
   defp keep_forced_repo_due(%State{} = state, repo_name) do
-    if MapSet.member?(state.repo_poll_forced, repo_name),
-      do: put_repo_next_due(state, repo_name, Map.fetch!(state.repo_poll_forced_at_ms, repo_name)),
-      else: state
+    if MapSet.member?(state.repo_poll_forced, repo_name) do
+      forced_at_ms = Map.fetch!(state.repo_poll_forced_at_ms, repo_name)
+      %{state | repo_poll_due_at_ms: Map.update!(state.repo_poll_due_at_ms, repo_name, &min(&1, forced_at_ms))}
+    else
+      state
+    end
   end
 
+  # A forced repo whose forcing is due goes first, the oldest forcing first.
   defp next_due_repo(%State{} = state, repos, now_ms) do
-    case Enum.filter(repos, &MapSet.member?(state.repo_poll_forced, repo_name(&1))) do
+    case Enum.filter(repos, &forced_repo_due?(state, repo_name(&1), now_ms)) do
       [] -> next_timed_due_repo(state, repos, now_ms)
       forced -> Enum.min_by(forced, &{Map.fetch!(state.repo_poll_forced_at_ms, repo_name(&1)), repo_name(&1)})
     end
   end
+
+  defp forced_repo_due?(%State{} = state, repo_name, now_ms),
+    do: MapSet.member?(state.repo_poll_forced, repo_name) and state.repo_poll_forced_at_ms[repo_name] <= now_ms
 
   defp next_timed_due_repo(%State{} = state, repos, now_ms) do
     sorted_repos =
@@ -7443,8 +7472,10 @@ defmodule SymphonyElixir.Orchestrator do
   @doc """
   Asks for a cycle on `repo_key` at once, after a move Symphony or the Director made there: the repo
   is due now, ahead of its stagger, and the next tick polls it, reads the tickets by id and
-  dispatches. A cast, so a move recorded inside the orchestrator's own process never waits on it;
-  `repo_key` nil asks for a poll of whatever is due.
+  dispatches. When the poll for a move made there less than two seconds earlier has already
+  started, the repo is due again two seconds after that move instead, since that poll may have read
+  Linear before this one. A cast, so a move recorded inside the orchestrator's own process never
+  waits on it; `repo_key` nil asks for a poll of whatever is due.
   """
   @spec request_refresh(String.t() | nil, due: :now) :: :ok
   def request_refresh(repo_key, due: :now), do: request_refresh(__MODULE__, repo_key, due: :now)

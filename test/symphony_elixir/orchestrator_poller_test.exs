@@ -256,7 +256,7 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
     test "is polled on the next tick regardless of its stagger, ahead of a repo already due" do
       state = warmed_state()
 
-      assert {false, state} = force(state, "api", 6_000)
+      assert {{:poll_at, 6_000}, state} = force(state, "api", 6_000)
       assert state.repo_poll_due_at_ms["api"] == 6_000
 
       assert {:ok, _buckets, state} = poll(state, 6_010)
@@ -265,7 +265,7 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
       assert state.repo_poll_due_at_ms == %{"web" => 10_000, "api" => 16_010}
 
       # web is due at its own time and api forced again at once: the forced repo goes first.
-      assert {false, state} = force(state, "api", 10_500)
+      assert {{:poll_at, 10_500}, state} = force(state, "api", 10_500)
       assert {:ok, _buckets, state} = poll(state, 10_500)
       assert_received {:polled, "api"}
       refute_received {:polled, "web"}
@@ -277,9 +277,9 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
     test "three requests within two seconds poll it once; one after the window polls it again" do
       state = warmed_state()
 
-      assert {false, state} = force(state, "web", 6_000)
-      assert {true, state} = force(state, "web", 6_500)
-      assert {true, state} = force(state, "web", 7_999)
+      assert {{:poll_at, 6_000}, state} = force(state, "web", 6_000)
+      assert {:coalesced, state} = force(state, "web", 6_500)
+      assert {:coalesced, state} = force(state, "web", 7_999)
 
       assert {:ok, _buckets, state} = poll(state, 8_000)
       assert_received {:polled, "web"}
@@ -287,9 +287,34 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
       assert {:ok, _buckets, state} = poll(state, 8_010)
       refute_received {:polled, _repo}
 
-      assert {false, state} = force(state, "web", 8_000)
+      assert {{:poll_at, 8_000}, state} = force(state, "web", 8_000)
       assert {:ok, _buckets, _state} = poll(state, 8_020)
       assert_received {:polled, "web"}
+    end
+
+    test "a move after the forced poll started, inside the window, is polled once more at the window's end" do
+      state = warmed_state()
+
+      assert {{:poll_at, 6_000}, state} = force(state, "web", 6_000)
+      assert {:ok, _buckets, state} = poll(state, 6_010)
+      assert_received {:polled, "web"}
+
+      # The poll that took web may have read Linear before this move: it is kept, due at 8_000.
+      assert {{:poll_at, 8_000}, state} = force(state, "web", 6_500)
+      assert {:ok, _buckets, state} = answer(state, {"web", {:ok, []}}, 6_010)
+      assert state.repo_poll_due_at_ms["web"] == 8_000
+
+      # Later moves in the window share that poll, and nothing polls web before it is due.
+      assert {:coalesced, state} = force(state, "web", 7_000)
+      assert {:ok, _buckets, state} = poll(state, 7_999)
+      refute_received {:polled, _repo}
+
+      assert {:ok, _buckets, state} = poll(state, 8_000)
+      assert_received {:polled, "web"}
+      assert state.repo_poll_due_at_ms["web"] == 18_000
+
+      assert {:ok, _buckets, _state} = poll(state, 8_010)
+      refute_received {:polled, _repo}
     end
 
     test "a forcing that lands while the repo's poll is in flight keeps it due after that poll" do
@@ -298,7 +323,7 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
       # The poll task took web at 10_000; the move lands before its answer.
       assert {:ok, _buckets, state} = poll(state, 10_000)
       assert_received {:polled, "web"}
-      assert {false, state} = force(state, "web", 10_005)
+      assert {{:poll_at, 10_005}, state} = force(state, "web", 10_005)
 
       assert {:ok, _buckets, state} = answer(state, {"web", {:ok, []}}, 10_000)
       assert state.repo_poll_due_at_ms["web"] == 10_005
@@ -311,8 +336,8 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
     test "the timed cadence is unchanged without a forcing, and a forcing of a repo no longer configured is dropped" do
       state = warmed_state()
 
-      assert {false, state} = force(state, "gone", 6_000)
-      assert {false, ^state} = force(state, nil, 6_000)
+      assert {{:poll_at, 6_000}, state} = force(state, "gone", 6_000)
+      assert {{:poll_at, 6_000}, ^state} = force(state, nil, 6_000)
 
       assert {:ok, _buckets, state} = poll(state, 9_999)
       refute_received {:polled, _repo}
@@ -333,7 +358,7 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
       assert state.tick_token == tick_token
       assert MapSet.member?(state.repo_poll_forced, "web")
 
-      # Within the window the request is already answered: no second tick is scheduled.
+      # Its poll has not started yet, so it answers this request too: no second tick is scheduled.
       assert {:noreply, ^state} = Orchestrator.handle_cast({:request_refresh, "web", :now}, state)
 
       fresh = %Orchestrator.State{poll_interval_ms: 10_000}
@@ -341,6 +366,28 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
       assert_receive {:tick, tick_token}
       assert state.tick_token == tick_token
       assert state.repo_poll_forced == MapSet.new()
+    end
+
+    test "a refresh request after the forced poll started schedules the tick for the window's end" do
+      now_ms = System.monotonic_time(:millisecond)
+
+      polled = %Orchestrator.State{
+        poll_interval_ms: 10_000,
+        repo_poll_due_at_ms: %{"web" => now_ms + 10_000},
+        repo_poll_forced_at_ms: %{"web" => now_ms}
+      }
+
+      assert {:noreply, state} = Orchestrator.handle_cast({:request_refresh, "web", :now}, polled)
+      assert MapSet.member?(state.repo_poll_forced, "web")
+      assert state.repo_poll_due_at_ms["web"] == now_ms + 2_000
+      assert state.next_poll_due_at_ms in (now_ms + 2_000)..(now_ms + 3_000)
+      refute_receive {:tick, _tick_token}, 50
+
+      # A poll in flight schedules the earliest due repo when it finishes: no tick is scheduled now.
+      polling = %{polled | poll_check_in_progress: true}
+      assert {:noreply, in_flight} = Orchestrator.handle_cast({:request_refresh, "web", :now}, polling)
+      assert in_flight.tick_token == nil
+      assert in_flight.repo_poll_due_at_ms["web"] == now_ms + 2_000
     end
   end
 end
