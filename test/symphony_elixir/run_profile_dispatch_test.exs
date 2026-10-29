@@ -22,6 +22,7 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
   end
 
   defmodule FailingHoldStore do
+    def get_ticket_state(_repo_key, _issue_id), do: nil
     def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :disk_full}
   end
 

@@ -21,12 +21,16 @@ defmodule SymphonyElixir.Hold do
   `decision.requested` (unless that request is already open), and clearing it records
   `decision.withdrawn`, unless the caller passes `answered: true` because the answer's
   `decision.recorded` (`SymphonyElixir.Decisions`) ends the request.
+
+  A hold of a kind the ticket didn't have, and a clear of one it had, are announced as a change of
+  the record's `holds` (`SymphonyElixirWeb.ObservabilityPubSub.broadcast_ticket_record_changed/3`).
   """
 
   require Logger
 
   alias SymphonyElixir.Hold.Drift
   alias SymphonyElixir.{RunStore, TicketSignals, TicketState, Tracker}
+  alias SymphonyElixirWeb.ObservabilityPubSub
 
   @kind_labels %{blocked: "Blocked", needs_decision: "Needs Decision"}
   @kinds [:blocked, :needs_decision]
@@ -126,7 +130,9 @@ defmodule SymphonyElixir.Hold do
       store = Keyword.get(opts, :store, RunStore)
 
       with :ok <- require_repo_key(repo_key, issue_id),
+           previous = stored_hold(store, repo_key, issue_id, kind),
            :ok <- store.set_ticket_hold(repo_key, issue_id, kind, attrs) do
+        announce(repo_key, issue_id, is_nil(previous))
         record_set(repo_key, issue_id, kind, attrs)
         project(Keyword.get(opts, :tracker, Tracker), issue_id, kind, :set)
       end
@@ -149,6 +155,7 @@ defmodule SymphonyElixir.Hold do
       with :ok <- require_repo_key(repo_key, issue_id),
            previous = stored_hold(store, repo_key, issue_id, kind),
            :ok <- store.clear_ticket_hold(repo_key, issue_id, kind) do
+        announce(repo_key, issue_id, previous != nil)
         record_clear(repo_key, issue_id, previous, Keyword.get(opts, :answered) == true)
         project(Keyword.get(opts, :tracker, Tracker), issue_id, kind, :clear)
       end
@@ -324,7 +331,12 @@ defmodule SymphonyElixir.Hold do
     TicketSignals.record_event(repo_key, issue_id, "decision.withdrawn", %{title: title, question: question, request: request && request.id})
   end
 
-  # The store's hold before a clear, read without a warning: a read that fails records no event.
+  # A hold that appeared or went is a change of the record's holds, which the PR watcher re-decides
+  # the ticket on; a hold set again over itself changes nothing it reads.
+  defp announce(repo_key, issue_id, true), do: ObservabilityPubSub.broadcast_ticket_record_changed(repo_key, issue_id, [:holds])
+  defp announce(_repo_key, _issue_id, false), do: :ok
+
+  # The store's hold before a write, read without a warning: a read that fails records no event.
   defp stored_hold(store, repo_key, issue_id, kind) do
     case store.get_ticket_state(repo_key, issue_id) do
       {:error, _reason} -> nil

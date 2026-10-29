@@ -88,6 +88,20 @@ defmodule SymphonyElixir.HoldTest do
       assert labels() == []
     end
 
+    test "a hold that appears or goes is announced as a change of the record's holds; one set over itself is not" do
+      :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records()
+
+      :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "waiting"})
+      assert_received {:ticket_record, @repo_key, @issue_id, :changed, [:holds]}
+
+      :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "still waiting"})
+      :ok = Hold.clear(@repo_key, @issue_id, :needs_decision)
+      refute_received {:ticket_record, _repo_key, _issue_id, :changed, _fields}
+
+      :ok = Hold.clear(@repo_key, @issue_id, :blocked)
+      assert_received {:ticket_record, @repo_key, @issue_id, :changed, [:holds]}
+    end
+
     test "refuses a write with no repo key, touching neither the store nor the label" do
       log =
         capture_log(fn ->
