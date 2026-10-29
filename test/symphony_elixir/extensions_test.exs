@@ -947,7 +947,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                "cycles_with_differences" => 0,
                "window_cycles" => 0,
                "window_differences" => 0,
-               "recent" => []
+               "recent" => [],
+               "record_newer" => %{"count" => 0, "recent" => []}
              },
              "orchestrator" => %{
                "message_queue_len" => 0,

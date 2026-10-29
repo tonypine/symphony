@@ -12,6 +12,13 @@ defmodule SymphonyElixir.Dispatch.Shadow do
   difference since Symphony started, the differences of the last cycles of the window
   (`dispatch.shadow_window`), and the last ten differences that appeared, newest first. A difference that lasts over several cycles
   appears, and is logged at warning level, once; once it clears, it appears again if it comes back.
+
+  A record can be newer than the poll snapshot it is compared with: Symphony writes its own moves to
+  the record first, and a webhook writes a person's, while the snapshot was read before. `classify/3`
+  sets aside a difference in a ticket's presence or state whose record phase was written after the
+  snapshot was read (`record_newer`): the record is the fresher side, so it is not drift. The report
+  counts those apart, once each like a difference, with the identifiers of the last five. The next
+  poll reads Linear again, and the comparison on that fresh snapshot shows a lag that is real.
   """
 
   use GenServer
@@ -22,8 +29,19 @@ defmodule SymphonyElixir.Dispatch.Shadow do
 
   @table __MODULE__
   @recent_limit 10
+  @record_newer_limit 5
   @field_order %{candidate: 0, state: 1, priority: 2}
-  @empty_summary %{cycles_compared: 0, cycles_with_differences: 0, window_cycles: 0, window_differences: 0, recent: []}
+  # The fields a phase write changes: a move changes the state, and in or out of the active states
+  # whether the ticket is a candidate at all.
+  @phase_fields [:candidate, :state]
+  @empty_summary %{
+    cycles_compared: 0,
+    cycles_with_differences: 0,
+    window_cycles: 0,
+    window_differences: 0,
+    recent: [],
+    record_newer: %{count: 0, recent: []}
+  }
 
   @typedoc """
   Which side has the ticket: only the poll, only the record, or both with a different `field`.
@@ -49,12 +67,19 @@ defmodule SymphonyElixir.Dispatch.Shadow do
           record: term()
         }
 
+  @typedoc """
+  One cycle's comparison once classified (`classify/3`): the differences to report, and the ones
+  the record's newer phase write explains.
+  """
+  @type classified :: %{differences: [difference()], record_newer: [difference()]}
+
   @type summary :: %{
           cycles_compared: non_neg_integer(),
           cycles_with_differences: non_neg_integer(),
           window_cycles: non_neg_integer(),
           window_differences: non_neg_integer(),
-          recent: [map()]
+          recent: [map()],
+          record_newer: %{count: non_neg_integer(), recent: [String.t() | nil]}
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -95,17 +120,32 @@ defmodule SymphonyElixir.Dispatch.Shadow do
   end
 
   @doc """
-  Records one compared cycle and its `differences`, keeping the last `window` cycles' counts. A
-  difference new since the last cycle joins the recent ones and is logged at warning level.
+  Splits `differences` by which side is newer: a difference in a ticket's presence or state whose
+  record phase was written after the poll snapshot was read (`read_at`) is `record_newer`; every
+  other one stays a difference. `phase_at` maps an issue id to when its record's phase was last
+  written (`SymphonyElixir.TicketState`). A snapshot or a phase write with no known time, and a
+  priority difference, stay differences.
   """
-  @spec record([difference()], pos_integer(), DateTime.t()) :: :ok
-  def record(differences, window, %DateTime{} = now \\ DateTime.utc_now())
-      when is_list(differences) and is_integer(window) and window > 0 do
+  @spec classify([difference()], DateTime.t() | nil, %{optional(String.t()) => DateTime.t() | nil}) :: classified()
+  def classify(differences, read_at, phase_at) when is_list(differences) and is_map(phase_at) do
+    {record_newer, differences} = Enum.split_with(differences, &record_newer?(&1, read_at, Map.get(phase_at, &1.issue_id)))
+    %{differences: differences, record_newer: record_newer}
+  end
+
+  @doc """
+  Records one compared cycle and its `differences` (a list, or a cycle `classify/3` split), keeping
+  the last `window` cycles' counts. A difference new since the last cycle joins the recent ones and
+  is logged at warning level; a `record_newer` one new since the last cycle is counted apart.
+  """
+  @spec record([difference()] | classified(), pos_integer(), DateTime.t()) :: :ok
+  def record(compared, window, %DateTime{} = now \\ DateTime.utc_now()) when is_integer(window) and window > 0 do
+    %{differences: differences, record_newer: record_newer} = classified(compared)
     cycle = bump(:cycles_compared)
     if differences != [], do: bump(:cycles_with_differences)
     :ets.insert(@table, {{:cycle, cycle}, length(differences)})
     :ets.select_delete(@table, [{{{:cycle, :"$1"}, :_}, [{:"=<", :"$1", cycle - window}], [true]}])
     note_open(differences, now)
+    note_record_newer(record_newer)
     :ok
   rescue
     ArgumentError -> :ok
@@ -120,13 +160,15 @@ defmodule SymphonyElixir.Dispatch.Shadow do
     entries = :ets.tab2list(@table)
     window = for {{:cycle, _cycle}, count} <- entries, do: count
     recent = for {{:recent, seq}, difference} <- entries, do: {seq, difference}
+    newer = for {{:newer_recent, seq}, identifier} <- entries, do: {seq, identifier}
 
     %{
       cycles_compared: lookup(entries, :cycles_compared),
       cycles_with_differences: lookup(entries, :cycles_with_differences),
       window_cycles: length(window),
       window_differences: Enum.sum(window),
-      recent: recent |> Enum.sort_by(&elem(&1, 0), :desc) |> Enum.map(&elem(&1, 1))
+      recent: newest_first(recent),
+      record_newer: %{count: lookup(entries, :record_newer), recent: newest_first(newer)}
     }
   rescue
     ArgumentError -> @empty_summary
@@ -154,22 +196,49 @@ defmodule SymphonyElixir.Dispatch.Shadow do
     %{repo_key: issue.repo_key, issue_id: issue.id, identifier: issue.identifier, side: side, field: field, poll: poll, record: record}
   end
 
+  defp classified(differences) when is_list(differences), do: %{differences: differences, record_newer: []}
+  defp classified(%{differences: differences, record_newer: record_newer} = compared) when is_list(differences) and is_list(record_newer), do: compared
+
+  defp record_newer?(%{field: field}, %DateTime{} = read_at, %DateTime{} = phase_at) when field in @phase_fields,
+    do: DateTime.compare(phase_at, read_at) == :gt
+
+  defp record_newer?(_difference, _read_at, _phase_at), do: false
+
   # The differences open now; one not open in the last cycle is new, and one open then but not now
   # has cleared.
   defp note_open(differences, now) do
-    open = MapSet.new(differences, &open_key/1)
-
-    for difference <- differences, :ets.insert_new(@table, {{:open, open_key(difference)}, true}) do
+    for difference <- new_since_last_cycle(:open, differences) do
       seq = bump(:recent_seq)
       :ets.insert(@table, {{:recent, seq}, Map.put(difference, :at, now)})
       :ets.delete(@table, {:recent, seq - @recent_limit})
       log(difference)
     end
+  end
 
-    for {{:open, key} = entry, true} <- :ets.match_object(@table, {{:open, :_}, true}), not MapSet.member?(open, key) do
-      :ets.delete(@table, entry)
+  # A record newer than the snapshot stays so on every cycle until its repo's next poll: it counts
+  # once, as a difference appears once.
+  defp note_record_newer(record_newer) do
+    for difference <- new_since_last_cycle(:newer_open, record_newer) do
+      bump(:record_newer)
+      seq = bump(:newer_seq)
+      :ets.insert(@table, {{:newer_recent, seq}, difference.identifier})
+      :ets.delete(@table, {:newer_recent, seq - @record_newer_limit})
     end
   end
+
+  # The entries of `differences` not open (under `tag`) in the last cycle, and forgets the ones open
+  # then but not now.
+  defp new_since_last_cycle(tag, differences) do
+    open = MapSet.new(differences, &open_key/1)
+
+    for {{^tag, key} = entry, true} <- :ets.match_object(@table, {{tag, :_}, true}), not MapSet.member?(open, key) do
+      :ets.delete(@table, entry)
+    end
+
+    Enum.filter(differences, &:ets.insert_new(@table, {{tag, open_key(&1)}, true}))
+  end
+
+  defp newest_first(entries), do: entries |> Enum.sort_by(&elem(&1, 0), :desc) |> Enum.map(&elem(&1, 1))
 
   defp field_order(field), do: Map.fetch!(@field_order, field)
 

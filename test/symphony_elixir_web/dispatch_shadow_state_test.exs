@@ -48,16 +48,19 @@ defmodule SymphonyElixirWeb.DispatchShadowStateTest do
              "cycles_with_differences" => 0,
              "window_cycles" => 0,
              "window_differences" => 0,
-             "recent" => []
+             "recent" => [],
+             "record_newer" => %{"count" => 0, "recent" => []}
            }
   end
 
-  test "reports source record and names each difference with its ticket, side and field" do
+  test "reports source record, names each difference with its ticket, side and field, and counts record_newer apart" do
     File.write!(Workflow.symphony_file_path(), File.read!(Workflow.symphony_file_path()) <> "dispatch:\n  source: record\n  shadow_window: 5\n")
     Cache.clear()
 
     issue = %Issue{id: "issue-1", identifier: "ACME-1", title: "Shadowed", state: "Todo", priority: 1, repo_key: "web"}
-    Shadow.record([], 5)
+    moved = %Issue{id: "issue-2", identifier: "ACME-2", title: "Moved", state: "Rework", priority: 1, repo_key: "web"}
+    newer = Shadow.compare([moved], [%{moved | state: "Code Review"}])
+    Shadow.record(%{differences: [], record_newer: newer}, 5)
     capture_log(fn -> Shadow.record(Shadow.compare([issue], []), 5, ~U[2026-10-29 17:00:00Z]) end)
 
     assert dispatch_shadow_state() == %{
@@ -78,7 +81,8 @@ defmodule SymphonyElixirWeb.DispatchShadowStateTest do
                  "record" => nil,
                  "at" => "2026-10-29T17:00:00Z"
                }
-             ]
+             ],
+             "record_newer" => %{"count" => 1, "recent" => ["ACME-2"]}
            }
   end
 end

@@ -6,7 +6,14 @@ defmodule SymphonyElixir.Dispatch.ShadowTest do
   alias SymphonyElixir.Dispatch.Shadow
 
   @now ~U[2026-10-29 17:00:00Z]
-  @empty %{cycles_compared: 0, cycles_with_differences: 0, window_cycles: 0, window_differences: 0, recent: []}
+  @empty %{
+    cycles_compared: 0,
+    cycles_with_differences: 0,
+    window_cycles: 0,
+    window_differences: 0,
+    recent: [],
+    record_newer: %{count: 0, recent: []}
+  }
 
   setup do
     Shadow.reset()
@@ -55,6 +62,46 @@ defmodule SymphonyElixir.Dispatch.ShadowTest do
 
     test "matches tickets by id, so a renamed identifier is the same ticket" do
       assert Shadow.compare([issue("a", "MT-1")], [issue("a", "MT-9")]) == []
+    end
+  end
+
+  describe "classify/3" do
+    @read_at ~U[2026-10-29 17:50:30Z]
+
+    test "a state the record's phase moved to after the snapshot was read is record_newer, not a difference" do
+      # TP-1222: the poll read Rework, then Symphony moved the record to Code Review.
+      differences = Shadow.compare([issue("a", "MT-1", state: "Rework")], [issue("a", "MT-1", state: "Code Review")])
+
+      assert Shadow.classify(differences, @read_at, %{"a" => DateTime.add(@read_at, 7)}) == %{differences: [], record_newer: differences}
+      assert [%{identifier: "MT-1", side: :both, field: :state, poll: "Rework", record: "Code Review"}] = differences
+    end
+
+    test "a record phase written before the snapshot was read, or at the same time, still differs" do
+      differences = Shadow.compare([issue("a", "MT-1", state: "Rework")], [issue("a", "MT-1", state: "Code Review")])
+
+      assert %{differences: [%{identifier: "MT-1", field: :state}], record_newer: []} =
+               Shadow.classify(differences, @read_at, %{"a" => DateTime.add(@read_at, -60)})
+
+      assert %{differences: [_difference], record_newer: []} = Shadow.classify(differences, @read_at, %{"a" => @read_at})
+    end
+
+    test "a move in or out of the active states is record_newer too; a priority difference never is" do
+      left = Shadow.compare([issue("a", "MT-1")], [])
+      entered = Shadow.compare([], [issue("b", "MT-2", state: "Rework")])
+      priority = Shadow.compare([issue("c", "MT-3")], [issue("c", "MT-3", priority: 3)])
+      later = DateTime.add(@read_at, 5)
+
+      classified = Shadow.classify(left ++ entered ++ priority, @read_at, %{"a" => later, "b" => later, "c" => later})
+      assert [%{identifier: "MT-3", field: :priority}] = classified.differences
+      assert [%{identifier: "MT-1"}, %{identifier: "MT-2"}] = classified.record_newer
+    end
+
+    test "with no known read time or phase write time, a difference stays a difference" do
+      differences = Shadow.compare([issue("a", "MT-1", state: "Rework")], [issue("a", "MT-1", state: "Code Review")])
+
+      assert %{differences: [_difference], record_newer: []} = Shadow.classify(differences, nil, %{"a" => @read_at})
+      assert %{differences: [_difference], record_newer: []} = Shadow.classify(differences, @read_at, %{"a" => nil})
+      assert %{differences: [_difference], record_newer: []} = Shadow.classify(differences, @read_at, %{})
     end
   end
 
@@ -123,6 +170,25 @@ defmodule SymphonyElixir.Dispatch.ShadowTest do
 
       recent = Shadow.summary().recent
       assert Enum.map(recent, & &1.identifier) == for(n <- 12..3//-1, do: "MT-#{n}")
+    end
+
+    test "a record_newer is counted once while it lasts, apart from the differences, with the last five identifiers" do
+      [newer] = Shadow.compare([issue("a", "MT-1", state: "Rework")], [issue("a", "MT-1", state: "Code Review")])
+      cycle = %{differences: [], record_newer: [newer]}
+
+      refute capture_log(fn -> Shadow.record(cycle, 20, @now) end) =~ "Dispatch shadow difference"
+      Shadow.record(cycle, 20, @now)
+
+      assert Shadow.summary() ==
+               %{@empty | cycles_compared: 2, window_cycles: 2, record_newer: %{count: 1, recent: ["MT-1"]}}
+
+      # Its repo's next poll reads the move and it clears; a later move of the same ticket counts again.
+      Shadow.record([], 20, @now)
+      Shadow.record(cycle, 20, @now)
+      assert %{record_newer: %{count: 2, recent: ["MT-1", "MT-1"]}} = Shadow.summary()
+
+      for n <- 2..7, do: Shadow.record(%{differences: [], record_newer: [%{newer | issue_id: "id-#{n}", identifier: "MT-#{n}"}]}, 20, @now)
+      assert %{record_newer: %{count: 8, recent: ["MT-7", "MT-6", "MT-5", "MT-4", "MT-3"]}, window_differences: 0} = Shadow.summary()
     end
 
     test "without its table, recording does nothing and the report is empty" do

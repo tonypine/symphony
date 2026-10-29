@@ -655,8 +655,9 @@ defmodule SymphonyElixirWeb.Presenter do
 
   # Where dispatch reads its candidates from (`dispatch.source`), and how the candidates the ticket
   # records give compared with the poll cache's (`SymphonyElixir.Dispatch.Shadow`): cycles compared
-  # and with a difference, the differences of the last `window` cycles, and the last ten that
-  # appeared, newest first.
+  # and with a difference, the differences of the last `window` cycles, the last ten that appeared,
+  # newest first, and the differences the record's newer phase write explained (`record_newer`: how
+  # many, and the identifiers of the last five, newest first).
   defp dispatch_shadow_payload do
     summary = DispatchShadow.summary()
 
@@ -667,7 +668,8 @@ defmodule SymphonyElixirWeb.Presenter do
       cycles_with_differences: summary.cycles_with_differences,
       window_cycles: summary.window_cycles,
       window_differences: summary.window_differences,
-      recent: Enum.map(summary.recent, &%{&1 | at: iso8601(&1.at)})
+      recent: Enum.map(summary.recent, &%{&1 | at: iso8601(&1.at)}),
+      record_newer: summary.record_newer
     }
   end
 
