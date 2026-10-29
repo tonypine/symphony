@@ -1384,6 +1384,8 @@ defmodule SymphonyElixir.Orchestrator do
 
     case start_async_task(fn ->
            RetiredStates.refresh_if_due()
+           # When Linear was read: the by-id reads below may write newer facts into the records first.
+           read_at = DateTime.utc_now()
            repo_result = fetch_due_repo_if_needed(due_repo)
            TicketPullRequest.Lookup.start(due_repo, repo_result)
 
@@ -1391,6 +1393,7 @@ defmodule SymphonyElixir.Orchestrator do
             %{
               repos: repos,
               now_ms: now_ms,
+              read_at: read_at,
               running_ids: running_ids,
               running_result: fetch_issue_states_if_needed(running_ids),
               watching_ids: watching_ids,
@@ -1462,6 +1465,7 @@ defmodule SymphonyElixir.Orchestrator do
          %{
            repos: repos,
            now_ms: now_ms,
+           read_at: read_at,
            running_ids: running_ids,
            running_result: running_result,
            watching_ids: watching_ids,
@@ -1478,7 +1482,7 @@ defmodule SymphonyElixir.Orchestrator do
       |> apply_forced_poll_result(repo_result, forced_ids, forced_result, now_ms)
       |> apply_operator_stops_result(Map.get(result, :stopped_ids, []), Map.get(result, :stopped_result, {:ok, []}))
 
-    case apply_repo_poll_result(state, repos, repo_result, now_ms) do
+    case apply_repo_poll_result(state, repos, repo_result, now_ms, read_at) do
       {:ok, %{dispatchable: issues}, state} ->
         state =
           state
@@ -1661,7 +1665,7 @@ defmodule SymphonyElixir.Orchestrator do
           {:ok, %{dispatchable: [Issue.t()], conflicts: [Issue.t()]}, State.t()}
           | {:error, term(), State.t()}
   def apply_repo_poll_result_for_test(%State{} = state, repos, repo_result, now_ms),
-    do: apply_repo_poll_result(state, repos, repo_result, now_ms)
+    do: apply_repo_poll_result(state, repos, repo_result, now_ms, DateTime.utc_now())
 
   @doc false
   @spec poll_candidate_issue_buckets_for_test(
@@ -1705,28 +1709,34 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp poll_due_repo(state, repos, repo, fetcher, now_ms) do
     repo_name = repo_name(repo)
-    apply_due_repo_fetch_result(state, repos, repo_name, fetcher.(repo), now_ms)
+    read_at = DateTime.utc_now()
+    result = fetcher.(repo)
+    apply_due_repo_fetch_result(state, repos, repo_name, result, now_ms, read_at)
   end
 
-  defp apply_repo_poll_result(state, repos, :not_due, _now_ms) do
+  defp apply_repo_poll_result(state, repos, :not_due, _now_ms, _read_at) do
     buckets = candidate_buckets_from_cache(state, repos)
     {:ok, buckets, put_conflict_bucket(state, buckets.conflicts)}
   end
 
-  defp apply_repo_poll_result(state, repos, {repo_name, result}, now_ms) when is_binary(repo_name) do
-    apply_due_repo_fetch_result(state, repos, repo_name, result, now_ms)
+  defp apply_repo_poll_result(state, repos, {repo_name, result}, now_ms, read_at) when is_binary(repo_name) do
+    apply_due_repo_fetch_result(state, repos, repo_name, result, now_ms, read_at)
   end
 
-  defp apply_repo_poll_result(state, _repos, result, _now_ms), do: {:error, {:invalid_repo_poll_result, result}, state}
+  defp apply_repo_poll_result(state, _repos, result, _now_ms, _read_at), do: {:error, {:invalid_repo_poll_result, result}, state}
 
-  defp apply_due_repo_fetch_result(state, repos, repo_name, result, now_ms) do
+  # `read_at` is when Linear was read, taken just before the fetch. The read is written into the
+  # records as of then, so a write the poll made itself is never newer than its own snapshot, and a
+  # write that landed while the poll ran (a move of Symphony's, a webhook, the poll task's by-id
+  # reads) is.
+  defp apply_due_repo_fetch_result(state, repos, repo_name, result, now_ms, read_at) do
     case result do
       {:ok, issues} when is_list(issues) ->
-        TicketObservation.observe_all(repo_name, issues)
+        TicketObservation.observe_all(repo_name, issues, now: read_at)
 
         state =
           state
-          |> put_repo_poll_cache(repo_name, issues, now_ms)
+          |> put_repo_poll_cache(repo_name, issues, now_ms, read_at)
           |> put_repo_next_due(repo_name, now_ms + linear_poll_interval_ms(state))
           |> keep_forced_repo_due(repo_name)
           |> record_tracker_poll_success()
@@ -1752,7 +1762,7 @@ defmodule SymphonyElixir.Orchestrator do
 
             Logger.warning("Linear repo poll failed for #{repo_name} #{failure_count} consecutive times; treating cold cache as empty: #{inspect(reason)}")
 
-            state = put_repo_poll_cache(state, repo_name, [], now_ms)
+            state = put_repo_poll_cache(state, repo_name, [], now_ms, read_at)
             buckets = candidate_buckets_from_cache(state, repos)
             {:ok, buckets, put_conflict_bucket(state, buckets.conflicts)}
 
@@ -2014,11 +2024,10 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # `read_at` is when the snapshot was in the records: the poll's read is written into them
-  # (`TicketObservation.observe_all/3`) just before. The dispatch shadow holds it against when each
-  # record's phase was written, so only a write after the poll's own is newer than the snapshot.
-  defp put_repo_poll_cache(%State{} = state, repo_name, issues, now_ms) do
-    cache_entry = %{issues: issues, fetched_at_ms: now_ms, read_at: DateTime.utc_now()}
+  # `read_at` is when Linear was read for the snapshot. The dispatch shadow holds it against when each
+  # record's phase was written, so only a write after the read is newer than the snapshot.
+  defp put_repo_poll_cache(%State{} = state, repo_name, issues, now_ms, read_at) do
+    cache_entry = %{issues: issues, fetched_at_ms: now_ms, read_at: read_at}
     %{state | repo_poll_cache: Map.put(state.repo_poll_cache, repo_name, cache_entry)}
   end
 

@@ -2681,14 +2681,15 @@ Symphony's store, never Linear, and writes nothing. `/api/v1/state` returns the 
 - `record_newer`: the differences the record being newer explains, counted apart: `count` since
   Symphony started, and `recent`, the identifiers of the last five, newest first.
 
-A difference means the two sides disagree on a snapshot at least as new as the record: the poll
-cache was read, and written into the records, no earlier than the record's phase was last written,
-so one side is behind. A difference in a ticket's presence or state whose record phase was written
-after that (Symphony's own move, which writes the record before Linear, or a person's move a webhook
-delivered) is the record being the fresher side, not drift: it counts under `record_newer` instead,
-once while it lasts, and the repository's next poll compares the two again on a fresh snapshot, so
-a lag that is real still shows. A priority difference, and a ticket whose record has no phase time
-yet (written before Symphony kept one), is always a difference.
+A difference means the two sides disagree on a snapshot at least as new as the record: Linear was
+read for the poll cache no earlier than the record's phase was last written, so one side is behind.
+A difference in a ticket's presence or state whose record phase was written after that read
+(Symphony's own move, which writes the record before Linear, a person's move a webhook delivered, or
+a newer read of the ticket while the poll ran) is the record being the fresher side, not drift: it
+counts under `record_newer` instead, once while it lasts, and the repository's next poll compares
+the two again on a fresh snapshot, so a lag that is real still shows. A priority difference, and a
+ticket whose record has no phase time yet (written before Symphony kept one), is always a
+difference.
 
 A difference is logged at warning level once while it lasts (`Dispatch shadow difference:`), and
 once more if it comes back after it cleared. `window_differences` staying at zero across a window

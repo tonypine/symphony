@@ -122,6 +122,31 @@ defmodule SymphonyElixir.OrchestratorDispatchShadowTest do
     assert summary.record_newer == %{count: 1, recent: ["ACME-1"]}
   end
 
+  test "TP-1222 inside the poll: Symphony moves the ticket and a by-id read writes the move after the repo read, before the poll result is applied",
+       ctx do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_active_states: @review_states)
+    issue_id = "#{ctx.repo_key}-1"
+    rework = issue(ctx.repo_key, 1, state: "Rework")
+    {_buckets, state} = cycle(%Orchestrator.State{poll_interval_ms: 100}, ctx.repos, [rework], 0)
+
+    # The repo read returns Rework; while the poll still runs, Symphony moves the ticket (record first)
+    # and the poll's by-id read writes Linear's newer copy, so the repo read is stale once applied.
+    fetcher = fn _repo ->
+      :ok = TicketSignals.record_phase(ctx.repo_key, issue_id, "Code Review")
+      moved = issue(ctx.repo_key, 1, state: "Code Review", updated_at: DateTime.add(@linear_at, 60))
+      {:ok, :updated} = TicketObservation.observe(ctx.repo_key, moved, source: :by_id)
+      {:ok, [rework]}
+    end
+
+    log = capture_log(fn -> Orchestrator.poll_candidate_issue_buckets_for_test(state, ctx.repos, fetcher, 100) end)
+    refute log =~ "Dispatch shadow difference"
+
+    assert %{phase: "Code Review"} = RunStore.get_ticket_state(ctx.repo_key, issue_id)
+    summary = Shadow.summary()
+    assert %{cycles_compared: 2, cycles_with_differences: 0, window_differences: 0, recent: []} = summary
+    assert summary.record_newer == %{count: 1, recent: ["ACME-1"]}
+  end
+
   test "a record whose phase was written before the poll read and still differs is a difference naming the ticket and field", ctx do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_active_states: @review_states)
     {_buckets, state} = cycle(%Orchestrator.State{poll_interval_ms: 100}, ctx.repos, [issue(ctx.repo_key, 1, state: "Rework")], 0)
