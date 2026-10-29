@@ -272,14 +272,54 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert RunStore.get_ticket_state(repo_key, "issue-observed") == nil
     end
 
+    # The operator's routes: a project named by its slug, which a delivery's project never carries,
+    # beside a team default the delivery's team alone would match.
+    @project_repo "observation-project-repo"
+    @default_repo "observation-default-repo"
+    @slug_routes [
+      %{name: @default_repo, team: "Test", default: true},
+      %{name: @project_repo, team: "Test", projects: ["building-the-harness-f469eb38bbc5"]}
+    ]
+
+    test "a delivery goes to the repo whose record the poll keeps, not the one its fields would match" do
+      project = %{id: "project-harness", name: "Building the harness"}
+      polled = linear_issue(%{project: project, blocked_by: []})
+      {:ok, :updated} = TicketObservation.observe(@project_repo, polled, now: @now, terminal_states: [])
+
+      edited = delivery(%{project: project, priority: 1, updated_at: DateTime.add(@linear_at, 60)})
+      opts = [now: DateTime.add(@now, 60), repos: @slug_routes, terminal_states: []]
+      assert TicketObservation.observe_delivery(edited, opts) == :updated
+
+      assert %{priority: 1, observed_from: :webhook} = RunStore.get_ticket_state(@project_repo, "issue-observed")
+      assert RunStore.get_ticket_state(@default_repo, "issue-observed") == nil
+
+      repolled = %{polled | priority: 1, updated_at: DateTime.add(@linear_at, 60)}
+      opts = [now: DateTime.add(@now, 120), terminal_states: [], compare: true]
+      assert {:ok, :unchanged} = TicketObservation.observe(@project_repo, repolled, opts)
+      assert compare() == %{webhook_first: 1, poll_first: 0, poll_first_recent: []}
+    end
+
+    test "a ticket without a record routes by its fields; one held in several repos is unrouted" do
+      assert TicketObservation.observe_delivery(delivery(), now: @now, repos: @slug_routes) == :updated
+      assert %{observed_from: :webhook} = RunStore.get_ticket_state(@default_repo, "issue-observed")
+
+      {:ok, :updated} = TicketObservation.observe(@project_repo, linear_issue(), now: @now, terminal_states: [])
+      held = Enum.map([@default_repo, @project_repo], &RunStore.get_ticket_state(&1, "issue-observed"))
+
+      edited = delivery(%{priority: 1, updated_at: DateTime.add(@linear_at, 60)})
+      assert TicketObservation.observe_delivery(edited, now: DateTime.add(@now, 60), repos: @slug_routes) == :unrouted
+      assert Enum.map([@default_repo, @project_repo], &RunStore.get_ticket_state(&1, "issue-observed")) == held
+    end
+
     test "a store refusal is logged and is an error" do
       log =
         capture_log(fn ->
           assert TicketObservation.observe_delivery(delivery(%{repo_key: "  "}), now: @now, terminal_states: []) == :error
+          assert TicketObservation.observe_delivery(delivery(), now: @now, repos: [:junk, %{name: "  "}]) == :error
         end)
 
       assert log =~ "Ticket observation failed for issue_id=issue-observed issue_identifier=ACME-7 repo_key=  : :invalid_repo_key"
-      assert counts().errors == 1
+      assert counts().errors == 2
     end
 
     test "a removal marks the ticket's record and leaves the rest", %{repo_key: repo_key} do
