@@ -13,8 +13,10 @@ defmodule SymphonyElixir.PrWatch.Repo do
   with `record`, from the repository's ticket records (`SymphonyElixir.Dispatch.Candidates`, the
   records' phase in place of Linear's state, the worker's tickets only), so neither the tick nor a
   confirm read makes a Linear request, and a move Symphony or the Director made, which writes the
-  record first, is watched at the next tick. A record keeps no description and no rulings, so R18's
-  question reads the ticket by id once, when it asks (`SymphonyElixir.PrDecision.Apply`).
+  record first, is watched at the next tick. A ticket rebuilt from its record carries the record's
+  description, team and project, and the decisions Symphony recorded on it (`Decisions.stored/2`: a
+  person's answers and rulings, read from the store) in place of the rulings a Linear read gives, so
+  R18's question, the protected paths gate and the self-heal lane read them with no Linear request.
 
   The facts follow the ticket's PR through its whole life: its open PR
   (`SymphonyElixir.TicketPullRequest`), else the one closed without merging (R8 sends the ticket to
@@ -89,6 +91,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     CiFix,
     CiState,
     Config,
+    Decisions,
     LandingOrder,
     PrDecision,
     ProtectedPathsGate,
@@ -467,16 +470,16 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # The records the dispatch candidates are rebuilt from (`Candidates.from_records/4`), filtered by the
   # watched states instead of the active ones and by the worker as the Linear read is: no Linear read.
   # With `assignee: me` before any poll learned the viewer, no record could count as assigned, so the
-  # tick fails instead of dropping every watched ticket. A record keeps no description and no
-  # rulings, so each issue says its rulings are unknown, as a webhook delivery's does: R18, the one
-  # decision that reads that text, reads the ticket by id when it asks (`Apply`).
+  # tick fails instead of dropping every watched ticket. The rulings a Linear read gives are the
+  # decisions the store recorded on the ticket, which R18's recommendation and the protected paths
+  # gate's grants (`PathUnlock.grants/1`) read with the record's description.
   defp recorded_issues(state, settings) do
     with records when is_list(records) <- store(state).list_ticket_states(state.repo_key),
          {:ok, route} <- Config.repo(state.repo_key),
          {:ok, opts} <- assignee_opts(route, settings) do
       opts = [route: route, states: Enum.map(phases(settings), &elem(&1, 0))] ++ opts
       %{candidates: issues} = Candidates.from_records(state.repo_key, records, settings, opts)
-      {:ok, for(issue <- issues, do: %{issue | rulings: :unknown})}
+      {:ok, for(issue <- issues, do: %{issue | rulings: Decisions.stored(issue, repo_key: state.repo_key, store: store(state))})}
     end
   end
 

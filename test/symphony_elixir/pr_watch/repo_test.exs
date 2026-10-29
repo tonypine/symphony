@@ -37,10 +37,9 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     def clear_machine_label(_issue_id, _label), do: :ok
   end
 
-  # Linear for R18's question: FakeTracker's reads, the ticket read by id, which the question reads its
-  # text from under `dispatch.source: record`, and the comment it posts, each reported to the test.
+  # Linear for R18's question: FakeTracker's reads and the comment the question posts, each reported
+  # to the test. A ticket read by id is reported and fails: the watcher never makes one.
   defmodule AskingTracker do
-    alias SymphonyElixir.Linear.Issue
     alias SymphonyElixir.PrWatch.RepoTest.FakeTracker
 
     defdelegate fetch_issues_by_states_with_failures(states), to: FakeTracker
@@ -49,8 +48,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
 
     def fetch_issue_states_by_ids(ids) do
       send(Application.fetch_env!(:symphony_elixir, :pr_watch_test_pid), {:linear_read_by_id, ids})
-      issues = Application.get_env(:symphony_elixir, :pr_watch_test_by_id, [])
-      {:ok, for(%Issue{id: id} = issue <- issues, id in ids, do: issue)}
+      {:error, :linear_must_not_be_read}
     end
 
     def create_comment(issue_id, body), do: send(Application.fetch_env!(:symphony_elixir, :pr_watch_test_pid), {:comment, issue_id, body}) && :ok
@@ -79,6 +77,20 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       args = Macro.generate_arguments(arity, __MODULE__)
       def unquote(name)(unquote_splicing(args)), do: raise("PrWatch wrote to GitHub: #{unquote(name)} #{inspect([unquote_splicing(args)])}")
     end
+  end
+
+  # GitHub for a PR that lands: FakeGitHub's reads, and the squash merge reported to the test.
+  defmodule LandingGitHub do
+    alias SymphonyElixir.PrWatch.RepoTest.FakeGitHub
+
+    defdelegate list_open_pull_requests(pr_url, opts), to: FakeGitHub
+
+    def squash_merge(pr_url, request, _opts), do: send(Application.fetch_env!(:symphony_elixir, :pr_watch_test_pid), {:merged, pr_url, request.head_sha}) && :ok
+  end
+
+  # The self-heal lane: the ticket it is given is reported to the test, and it files nothing.
+  defmodule FakeSelfHeal do
+    def heal(issue, _opts), do: send(Application.fetch_env!(:symphony_elixir, :pr_watch_test_pid), {:heal, issue}) && :held
   end
 
   # The PR reads, by URL, from the test's env.
@@ -916,54 +928,132 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       refute_received {:linear_read, _states}
     end
 
-    test "R18's question reads the ticket's text by id as it asks, and recommends what it did under poll", %{repo_key: repo_key} do
-      write_workflow_file!(Workflow.workflow_file_path(), pr_review_mode: "polling", ci: %{enabled: true})
-      ticket = with_pr(repo_key, issue("1", "Merging", description: "Add the hook to `WORKFLOW.md`."), 1)
-      ticket = %{ticket | repo_key: repo_key, updated_at: @now}
+    # Ticket 1's PR #1, whose head is red only on `protected paths`, which a person clears, and which
+    # changes `WORKFLOW.md`: in Merging, R18 asks about it. Puts the ticket's workspace and the PR's
+    # read, and returns the git runner the gate reads the PR with.
+    defp protected_paths_head!(repo_key) do
       workspace = Path.join(System.tmp_dir!(), "repo-ws-#{System.unique_integer([:positive])}")
       File.mkdir_p!(workspace)
       on_exit(fn -> File.rm_rf(workspace) end)
       run = %{repo_key: repo_key, run_id: "run-1", issue_id: "1", status: "success", started_at: @now}
       :ok = RunStore.put_run(Map.put(run, :workspace_path, workspace))
 
-      # Every commit is there, and the PR changes `WORKFLOW.md` among the protected paths.
-      git = fn
+      check = "protected paths"
+      failed = [%{name: check, run_id: "5"}]
+      red = %{ci: :red, red_kind: :human_only, past_human_only: :green, failing_check: check, failed_checks: failed}
+      reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), Map.merge(red, %{base_sha: "base-1", pr_node_id: "node-1"}))}})
+
+      # Every commit is there, and the PR changes `WORKFLOW.md` among the protected paths, unless a
+      # grant leaves it out.
+      fn
         ["diff", "--name-only", "--no-renames", _range, "--" | paths], _cwd -> {Enum.join(Enum.filter(["WORKFLOW.md"], &(&1 in paths)), "\n"), 0}
         _args, _cwd -> {"", 0}
       end
+    end
 
-      # Red only on `protected paths`, which a person clears: R18 asks in Merging.
-      check = "protected paths"
-      human_only = %{base_sha: "base-1", ci: :red, red_kind: :human_only, past_human_only: :green, failing_check: check}
-      reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), Map.put(human_only, :failed_checks, [%{name: check, run_id: "5"}]))}})
+    defp question(issue_id) do
+      assert_received {:comment, ^issue_id, "## Decision needed: Protected files changed on TP-" <> body}
+      body
+    end
+
+    test "R18's question recommends what it did under poll, from the record's description and the store's rulings, with no Linear read",
+         %{repo_key: repo_key} do
+      write_workflow_file!(Workflow.workflow_file_path(), pr_review_mode: "polling", ci: %{enabled: true})
+      git = protected_paths_head!(repo_key)
+      ticket = %{with_pr(repo_key, issue("1", "Merging", description: "Add the hook to `WORKFLOW.md`."), 1) | repo_key: repo_key, updated_at: @now}
 
       # Polling, the Linear read carries the description, which names the protected path.
       issues!([ticket])
       pid = start_repo!(repo_key, tracker: AskingTracker, git: git)
       assert {:ok, %{errors: 0}} = Repo.poll(pid)
-      assert_received {:comment, "1", "## Decision needed: Protected files changed on TP-1" <> polled}
+      polled = question("1")
       assert polled =~ "**Allow the change** (recommended)"
-      refute_received {:linear_read_by_id, _ids}
 
-      # From the record, as if the watcher had not asked yet: the ticket is read by id once, as the
-      # question is asked, and the question is the one the Linear read gave.
-      Hold.clear(repo_key, "1", :needs_decision)
-      :ok = RunStore.put_ticket_pr_watch(repo_key, "1", "TP-1", nil)
+      # From the record, as if the watcher had not asked yet: the record's description gives the
+      # same question, and no Linear is read.
+      ask_again = fn ->
+        Hold.clear(repo_key, "1", :needs_decision)
+        :ok = RunStore.put_ticket_pr_watch(repo_key, "1", "TP-1", nil)
+        flush()
+        assert {:ok, %{errors: 0}} = Repo.poll(pid)
+        refute_received {:linear_read, _states}
+        refute_received {:linear_read_by_id, _ids}
+        question("1")
+      end
+
       record_source!(pr_review_mode: "polling", ci: %{enabled: true})
       issues!({:error, :linear_must_not_be_read})
-      Application.put_env(:symphony_elixir, :pr_watch_test_by_id, [ticket])
-      on_exit(fn -> Application.delete_env(:symphony_elixir, :pr_watch_test_by_id) end)
-      flush()
-      assert {:ok, %{errors: 0}} = Repo.poll(pid)
-      assert_received {:linear_read_by_id, ["1"]}
-      assert_received {:comment, "1", "## Decision needed: Protected files changed on TP-1" <> ^polled}
-      refute_received {:linear_read, _states}
+      assert ask_again.() == polled
+
+      # A description that names no protected path recommends dropping the change, as under poll...
+      observed!(repo_key, %{ticket | description: "Add the hook."})
+      assert ask_again.() =~ "**Drop the change in Rework** (recommended)"
+
+      # ...unless a ruling the store recorded on the ticket names it.
+      ruling = SymphonyElixir.Decisions.entry("ruling-c1", ~D[2026-10-16], "Change workflow.md too.", nil, "Change workflow.md too.")
+      {:ok, projected} = SymphonyElixir.Decisions.put("Add the hook.", [ruling])
+      :ok = SymphonyElixir.Decisions.record("1", [ruling], repo_key: repo_key, description: projected)
+      assert ask_again.() == polled
 
       # Asked, the ticket waits on its hold: the next tick reads no Linear and asks nothing.
       assert {:ok, %{errors: 0}} = Repo.poll(pid)
-      refute_received {:linear_read_by_id, _ids}
       refute_received {:linear_read, _states}
+      refute_received {:linear_read_by_id, _ids}
       refute_received {:comment, "1", _body}
+    end
+
+    test "R18 in Merging: picking Allow grants the PR's protected paths from the store, and the head then lands, with no Linear read",
+         %{repo_key: repo_key} do
+      record_source!(pr_review_mode: "polling", ci: %{enabled: true})
+      issues!({:error, :linear_must_not_be_read})
+      git = protected_paths_head!(repo_key)
+      observed!(repo_key, with_pr(repo_key, issue("1", "Merging", description: "Ship it."), 1))
+      pid = start_repo!(repo_key, tracker: AskingTracker, github: LandingGitHub, git: git)
+
+      assert {:ok, %{errors: 0}} = Repo.poll(pid)
+      assert %{decision: decision} = Hold.get(repo_key, "1", :needs_decision)
+      assert question("1") =~ "**Drop the change in Rework** (recommended)"
+      unlocks = SymphonyElixir.PathUnlock.picked_paths(decision, ["Allow the change"])
+      assert unlocks == ["WORKFLOW.md"]
+
+      # The person picks Allow: the answer goes into the ticket's store record with its paths, and the
+      # hold clears. The record's description, not observed again, never shows it.
+      picked = SymphonyElixir.Decisions.entry("request-1", ~D[2026-10-16], decision.title, decision.question, "Allow the change", unlocks)
+      {:ok, projected} = SymphonyElixir.Decisions.put("Ship it.", [picked])
+      :ok = SymphonyElixir.Decisions.record("1", [picked], repo_key: repo_key, description: projected)
+      :ok = Hold.clear(repo_key, "1", :needs_decision)
+      assert %{description: "Ship it."} = RunStore.get_ticket_state(repo_key, "1")
+
+      # The head is still red only on that check: the grant covers it, so it reads as green and lands,
+      # and nothing is asked again.
+      flush()
+      assert {:ok, %{errors: 0}} = Repo.poll(pid)
+      assert %{facts: %Facts{ci: :green}, decision: %{rule: "R29"}} = watch(repo_key, "1")
+      assert_received {:merged, "https://github.com/acme/app/pull/1", "sha-1"}
+      refute Hold.held?(repo_key, "1", :needs_decision)
+      refute_received {:comment, "1", _body}
+      refute_received {:linear_read, _states}
+      refute_received {:linear_read_by_id, _ids}
+    end
+
+    test "the self-heal lane gets the ticket with its record's team and project, with no Linear read", %{repo_key: repo_key} do
+      record_source!(pr_review_mode: "polling", ci: %{enabled: true, max_retries: 1})
+      issues!({:error, :linear_must_not_be_read})
+      team = %{key: "ENG", name: "Engineering"}
+      project = %{id: "project-1", name: "App", slug_id: "app-1"}
+      observed!(repo_key, with_pr(repo_key, issue("1", "Code Review", team: team, project: project), 1))
+
+      # Red on `specs` after its one CI Fix run: the red backstop hands the ticket to the self-heal lane.
+      failure = %{check: "specs", error: "ERROR: specs failed", head_sha: "sha-1"}
+      SymphonyElixir.PrWatchSupport.put_watch!(repo_key, "1", head_sha: "sha-1", attempts: %{PrWatch.Attempts.new() | red: 1, failure: failure})
+      red = %{ci: :red, failing_check: "specs", failed_checks: [%{name: "specs", run_id: "5"}]}
+      reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), red)}})
+      pid = start_repo!(repo_key, self_heal: FakeSelfHeal)
+
+      assert {:ok, %{errors: 0}} = Repo.poll(pid)
+      assert %{decision: %{rule: "R20"}} = watch(repo_key, "1")
+      assert_received {:heal, %Issue{id: "1", team: ^team, project: ^project}}
+      refute_received {:linear_read, _states}
     end
 
     test "records that can't be read fail the tick instead of reading as tickets that left", %{repo_key: repo_key} do

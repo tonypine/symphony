@@ -2662,12 +2662,14 @@ seconds instead of at the next timed poll. Under `poll` the change waits for the
 its repository's records, by the same filter as dispatch with the watched states in place of the
 active ones, instead of reading those states from Linear: neither its tick nor the confirm read
 after a GitHub delivery makes a Linear request, and a ticket Symphony or the Director moved, which
-writes the record first, is watched from the next tick. Its GitHub reads are unchanged. A record
-keeps no description and no rulings, so the question about a PR that changes protected files
-([rule R18](pr-ci-decisions.md)) reads the ticket by id once, when it asks, to recommend allowing a
-change the ticket asked for, as under `poll`. With
-`assignee: me`, the watcher waits for a poll to learn whose tickets are the worker's: until then its
-tick fails and keeps what it watched. Under `poll` it reads Linear each tick, as before.
+writes the record first, is watched from the next tick. Its GitHub reads are unchanged. Each
+watched ticket carries its record's description, team and project, and the decisions and rulings
+Symphony recorded on it, read from its store: the question about a PR that changes protected files
+([rule R18](pr-ci-decisions.md)) recommends allowing a change the ticket asked for, a person's Allow
+lets the PR land, and a fix ticket the self-heal lane files goes to the ticket's own team and
+project, as under `poll`, with no Linear read. With `assignee: me`, the watcher waits for a poll to
+learn whose tickets are the worker's: until then its tick fails and keeps what it watched. Under
+`poll` it reads Linear each tick, as before.
 
 Setting `source` back to `poll` is the rollback: the next cycle dispatches from the poll cache
 again, and no run is stopped or restarted.

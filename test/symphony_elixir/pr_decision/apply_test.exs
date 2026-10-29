@@ -26,11 +26,6 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
 
     def set_machine_label(issue_id, label), do: send(self(), {:label, issue_id, label}) && :ok
     def clear_machine_label(_issue_id, _label), do: :ok
-
-    def fetch_issue_states_by_ids(ids) do
-      send(self(), {:read_by_id, ids})
-      Process.get(:by_id_result, {:ok, []})
-    end
   end
 
   # GitHub: every call is reported; each answers what the process dictionary says, `:ok` by default.
@@ -727,40 +722,6 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
         assert body =~ "**Why recommended:** The ticket's description or a person's ruling asks for the change."
         assert body =~ "**Drop the change in Rework**: the ticket moves to Rework"
       end
-    end
-
-    test "R18 reads the text of a ticket rebuilt from its record by id as it asks; a read that fails asks nothing" do
-      action = action("R18", :decision, args: %{question: "q", options: []}, owner: :person)
-      ctx = ctx(:code_review, read: read(protected_paths: ["WORKFLOW.md"]), rulings: :unknown)
-
-      # A read that fails or finds nothing asks nothing this tick, and the next one tries again.
-      for {result, reason} <- [{{:error, :rate_limited}, :rate_limited}, {{:ok, []}, :ticket_not_found}] do
-        Process.put(:by_id_result, result)
-        capture_log(fn -> assert %{outcome: {:error, ^reason}} = Apply.apply(action, ctx) end)
-        assert_received {:read_by_id, [@issue_id]}
-        refute_received {:comment, @issue_id, _body}
-        assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
-      end
-
-      # The description or a ruling read by id names the path: the question recommends allowing it.
-      for {text, recommended} <- [
-            {[description: "Add the hook to `WORKFLOW.md`."], "**Allow the change** (recommended)"},
-            {[rulings: [%{answer: "Change workflow.md too."}]], "**Allow the change** (recommended)"},
-            {[description: "Add the hook."], "**Drop the change in Rework** (recommended)"}
-          ] do
-        Hold.clear(@repo_key, @issue_id, :needs_decision)
-        Process.put(:by_id_result, {:ok, [struct!(%Issue{id: @issue_id, rulings: []}, text)]})
-        assert %{outcome: :applied} = Apply.apply(action, ctx)
-
-        assert_received {:read_by_id, [@issue_id]}
-        assert_received {:comment, @issue_id, "## Decision needed: Protected files changed on TP-7" <> body}
-        assert body =~ recommended
-      end
-
-      # A ticket the Linear read brought carries its text: nothing more is read.
-      Hold.clear(@repo_key, @issue_id, :needs_decision)
-      assert %{outcome: :applied} = Apply.apply(action, %{ctx | issue: %{ctx.issue | rulings: []}})
-      refute_received {:read_by_id, _ids}
     end
 
     test "R18 waits for the protected paths the PR changes before asking" do

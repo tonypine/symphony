@@ -63,9 +63,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
       it for this PR, rerun, or fix the workflow in Rework; the answer is read back by
       `SymphonyElixir.PrWatch.Repo`, `unreported_answer/1`), and a PR whose only red check is one a
       person must clear (R18: allow the change, an option that unlocks the protected paths the PR
-      changes for the ticket (`SymphonyElixir.PathUnlock`), or drop the change in Rework; it
-      recommends allowing it when the ticket's description or a ruling names a changed path, read by
-      id when the watcher rebuilt the ticket from its record), and a run
+      changes for the ticket (`SymphonyElixir.PathUnlock`), or drop the change in Rework), and a run
       GitHub cancelled again after its reruns (R19a: keep retrying, or wait; `cancelled_answer/1`
       reads the answer back, and once a person chose to wait nothing more is asked on the head).
       Answering an R17 or R18 Rework option moves the ticket there.
@@ -459,9 +457,8 @@ defmodule SymphonyElixir.PrDecision.Apply do
   # tick rather than asking a question whose Allow would unlock nothing.
   defp perform(%Action{kind: :decision}, ctx) do
     with {:ok, paths} <- changed_protected_paths(ctx),
-         {:ok, issue} <- ticket_text(ctx),
          :ok <- disarm_if_armed(ctx, :protected_paths),
-         :ok <- ask(protected_paths_request(%{ctx | issue: issue}, paths), "protected_paths", ctx) do
+         :ok <- ask(protected_paths_request(ctx, paths), "protected_paths", ctx) do
       {:ok, %{}}
     end
   end
@@ -472,19 +469,6 @@ defmodule SymphonyElixir.PrDecision.Apply do
       _unread -> {:error, :protected_paths_unread}
     end
   end
-
-  # The description and rulings R18's recommendation reads. A ticket the watcher rebuilt from its
-  # record (`dispatch.source: record`) has none read, its rulings `:unknown`: the ticket is read by id
-  # here, as the question is asked, and a read that fails asks nothing until the next tick.
-  defp ticket_text(%{issue: %Issue{rulings: :unknown} = issue} = ctx) do
-    case tracker(ctx).fetch_issue_states_by_ids([issue.id]) do
-      {:ok, [%Issue{} = read | _rest]} -> {:ok, %{issue | description: read.description, rulings: read.rulings}}
-      {:ok, _none} -> {:error, :ticket_not_found}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp ticket_text(ctx), do: {:ok, ctx.issue}
 
   defp send_fix(origin, cause, ctx) do
     with {:ok, fix} <- fix_context(cause, ctx),
