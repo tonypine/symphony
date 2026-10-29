@@ -73,8 +73,9 @@ through the same relay as GitHub's; the steps below use the Tailscale Funnel rel
 the check above (logged with its reason only, never its payload), and `200` for an accepted one:
 Linear counts any other status as a failed delivery, retries it after one minute, one hour and
 six hours, and may turn the webhook off after repeated failures.
-An accepted delivery makes no Linear request. Within the request, and bounded to five seconds,
-Symphony observes it into the ticket's record (`SymphonyElixir.TicketObservation.observe_delivery/2`):
+An accepted delivery makes no Linear request. Within the request, and bounded to two seconds (well
+under the five Linear waits for the answer), Symphony observes it into the ticket's record
+(`SymphonyElixir.TicketObservation.observe_delivery/2`):
 
 - An `Issue` create or update is read as the poll reads a ticket and written into the record of the
   repo its team, project and labels route to, as a poll writes it, with `observed_from: webhook`. Its
@@ -130,5 +131,6 @@ the ticket, the fields, the read and when:
   "poll_first": 1,
   "poll_first_recent": [{"identifier": "TP-7", "fields": ["priority"], "source": "poll", "at": "2026-10-29T07:42:10Z"}]
 }
-``` The counts live in memory and start again from zero when Symphony
-restarts.
+```
+
+The counts live in memory and start again from zero when Symphony restarts.

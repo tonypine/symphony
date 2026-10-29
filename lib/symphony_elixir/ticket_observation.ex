@@ -37,7 +37,8 @@ defmodule SymphonyElixir.TicketObservation do
   @table __MODULE__
   @outcomes [:updated, :unchanged, :stale]
   @recent_limit 10
-  @delivery_timeout_ms 5_000
+  # Well under Linear's 5 s delivery timeout, which also covers the signature check and the relay.
+  @delivery_timeout_ms 2_000
   # The record's fields an `Issue` webhook delivery carries, which a later read should find unchanged.
   @webhook_fields [:issue_identifier, :phase, :title, :labels, :priority, :assignee, :url]
 
@@ -135,9 +136,9 @@ defmodule SymphonyElixir.TicketObservation do
   ticket routes to (as `observe_routed/2` routes), and an `Issue` remove marks the ticket's record
   in every configured repo removed. Any other delivery is not observed, and gives nil.
 
-  The work runs in a task bounded by `:timeout_ms` (default five seconds), so a crash or a hang is
-  logged and returned as `:error`, never raised. `opts`: `:repos`, `:timeout_ms`, and those of
-  `observe/3`.
+  The work runs in a task bounded by `:timeout_ms` (default two seconds, well under the five Linear
+  waits for an answer), so a crash or a hang is logged and returned as `:error`, never raised.
+  `opts`: `:repos`, `:timeout_ms`, and those of `observe/3`.
   """
   @spec observe_delivery(Webhook.parsed(), keyword()) :: delivery_outcome() | nil
   def observe_delivery(parsed, opts \\ []) do

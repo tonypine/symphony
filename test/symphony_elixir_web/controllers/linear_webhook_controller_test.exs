@@ -156,6 +156,16 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       assert RunStore.get_ticket_state(Config.repo_key!(), "issue-hook") == nil
       assert %{"recent" => [%{"observation" => "error"}], "observations" => %{"error" => 1}} = linear_webhooks_state()
     end
+
+    test "still answers 200 within the bound when the record write hangs, logged and counted as an error" do
+      hang = fn _parsed, _opts -> Process.sleep(:infinity) end
+      Application.put_env(:symphony_elixir, :linear_webhook_observation_opts, observe_fun: hang, timeout_ms: 50)
+
+      log = capture_log(fn -> assert json_response(post_signed(issue_delivery("update", %{})), 200) == %{"status" => "accepted"} end)
+
+      assert log =~ "Linear webhook observation failed for issue_id=issue-hook: :timeout"
+      assert %{"recent" => [%{"observation" => "error"}], "observations" => %{"error" => 1}} = linear_webhooks_state()
+    end
   end
 
   test "accepts a signed delivery without a type or an action, counted as unknown" do
