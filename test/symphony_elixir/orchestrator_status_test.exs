@@ -73,7 +73,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
         end
       end)
 
-    assert_receive :snapshot_server_ready, 1_000
+    assert_receive :snapshot_server_ready, @min_wait_ms
     assert Orchestrator.snapshot(server_name, 10) == :timeout
 
     send(pid, :stop)
@@ -653,11 +653,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert :ok = ObservabilityPubSub.subscribe_transcript()
 
     send(pid, {:codex_worker_update, issue_id, session_update})
-    assert_receive {:transcript_event, session_event}
+    assert_receive {:transcript_event, session_event}, @min_wait_ms
     assert Map.take(session_event, [:repo_key, :issue_id]) == %{repo_key: repo_key, issue_id: issue_id}
 
     send(pid, {:codex_worker_update, issue_id, notification_update})
-    assert_receive {:transcript_event, notification_event}
+    assert_receive {:transcript_event, notification_event}, @min_wait_ms
     assert Map.take(notification_event, [:repo_key, :issue_id]) == %{repo_key: repo_key, issue_id: issue_id}
 
     snapshot = GenServer.call(pid, :snapshot)
@@ -2150,7 +2150,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
            }
 
     refute Process.alive?(worker_pid)
-    assert_receive :agent_stop_session_called
+    assert_receive :agent_stop_session_called, @min_wait_ms
 
     assert_receive {:notification_event,
                     %SymphonyElixir.Notifications.Event{
@@ -2158,7 +2158,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
                       issue_identifier: "MT-BUDGET",
                       metadata: %{scope: "issue", limit: 10}
                     }},
-                   500
+                   @min_wait_ms
   end
 
   test "orchestrator pauses new dispatch when the daily token budget is exhausted" do
@@ -3036,8 +3036,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
               session_id: "thread-stop-turn-stop"
             }} = Orchestrator.stop_running(orchestrator_name, issue.identifier)
 
-    assert_receive :agent_stop_session_called
-    assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
+    assert_receive :agent_stop_session_called, @min_wait_ms
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}, @min_wait_ms
 
     assert %{running: []} = GenServer.call(pid, :snapshot)
     assert :ok = WorkspaceCleanup.await(issue.identifier)
@@ -3109,15 +3109,22 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       }
     end)
 
+    # A stop asks for a poll at once, and a poll stops the runs the tracker no longer lists: the
+    # tracker lists the other issue until that poll is over, so the poll keeps it running.
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [other_issue])
+
     assert {:ok, %{stopped: true}} = Orchestrator.stop_running(orchestrator_name, slow_issue.identifier)
-    assert_receive {:DOWN, ^slow_ref, :process, ^slow_worker, :shutdown}
+    assert_receive {:DOWN, ^slow_ref, :process, ^slow_worker, :shutdown}, @min_wait_ms
     assert wait_for_file_contents(hook_log, "started\n", 5_000)
+    wait_for_requested_poll(pid)
 
     # The hook is still blocked: the orchestrator answers and handles another issue meanwhile.
     assert %{running: [%{issue_id: "issue-other-stop"}]} = GenServer.call(pid, :snapshot, 1_000)
+    # The poll this stop asks for would dispatch the issue again if the tracker still listed it.
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
     assert {:ok, %{stopped: true}} = Orchestrator.stop_running(orchestrator_name, other_issue.identifier)
-    assert_receive {:DOWN, ^other_ref, :process, ^other_worker, :shutdown}
-    assert %{running: []} = Orchestrator.snapshot(orchestrator_name, 1_000)
+    assert_receive {:DOWN, ^other_ref, :process, ^other_worker, :shutdown}, @min_wait_ms
+    assert %{running: []} = GenServer.call(pid, :snapshot, 1_000)
     assert File.read!(hook_log) == "started\n"
     assert File.exists?(workspace)
 
@@ -3237,10 +3244,12 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       Orchestrator.reconcile_issue_states_for_test([terminal_issue], state)
     end)
 
-    assert_receive :agent_stop_session_called
-    assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
+    assert_receive :agent_stop_session_called, @min_wait_ms
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}, @min_wait_ms
 
     assert %{running: []} = GenServer.call(pid, :snapshot)
+    # WorkspaceCleanup removes the workspace after the orchestrator queued it.
+    assert :ok = WorkspaceCleanup.await(issue.identifier)
     refute File.exists?(workspace)
   end
 
@@ -3279,8 +3288,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     put_running_entry(pid, issue, running_entry)
 
     assert {:ok, %{stopped: true}} = Orchestrator.stop_running(orchestrator_name, issue.identifier)
-    assert_receive :failing_stop_session_called
-    assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
+    assert_receive :failing_stop_session_called, @min_wait_ms
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}, @min_wait_ms
 
     assert %{status: "stopped", error: error} =
              wait_for_run_record(fn
@@ -3335,7 +3344,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     refute Process.whereis(SymphonyElixir.TaskSupervisor)
 
     assert {:ok, %{stopped: true}} = Orchestrator.stop_running(orchestrator_name, issue.identifier)
-    assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}, @min_wait_ms
     refute_receive :agent_stop_session_called, 50
 
     assert %{status: "stopped", error: error} =
@@ -3387,7 +3396,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
             }} = Orchestrator.stop_running(orchestrator_name, issue.identifier)
 
     refute_receive :agent_stop_session_called, 50
-    assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}, @min_wait_ms
 
     assert [%{run_id: ^run_id, status: "stopped", error: "agent stopped by operator"}] =
              RunStore.list_runs()
@@ -4127,7 +4136,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
                       event: "awaiting_review",
                       issue_identifier: ^issue_identifier
                     }},
-                   500
+                   @min_wait_ms
 
     run_record = wait_for_run_record(&(&1.run_id == "run-watch-restart"))
     assert %DateTime{} = run_record.awaiting_review_notified_at
@@ -4299,7 +4308,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
                       event: "issue_completed",
                       issue_identifier: ^issue_identifier
                     }},
-                   500
+                   @min_wait_ms
 
     run_record =
       wait_for_run_record(fn run ->
@@ -4414,7 +4423,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
                       event: "issue_completed",
                       issue_identifier: ^issue_identifier
                     }},
-                   500
+                   @min_wait_ms
 
     # Recording the next shipped ticket prunes the entry from the earlier day.
     assert get_orchestrator_state(pid).shipped |> Map.keys() |> Enum.sort() == [issue_id, "today"]
@@ -4829,7 +4838,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
                       attempt: 3,
                       metadata: %{reason: "stuck", elapsed_ms: event_elapsed_ms}
                     }},
-                   500
+                   @min_wait_ms
 
     assert event_elapsed_ms >= 1_000
   end
@@ -5248,8 +5257,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       end_linear_wait(pid, issue)
       run_stall_check(pid)
 
-      assert_receive :agent_stop_session_called
-      assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
+      assert_receive :agent_stop_session_called, @min_wait_ms
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}, @min_wait_ms
       assert %{error: "stalled for " <> _} = wait_for_retry!(pid, issue)
     end
 
@@ -5286,8 +5295,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
       # The retry is scheduled after the restart stops the session and the worker.
       assert %{error: "stuck for " <> _} = wait_for_retry!(pid, issue)
-      assert_receive :agent_stop_session_called
-      assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
+      assert_receive :agent_stop_session_called, @min_wait_ms
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}, @min_wait_ms
     end
 
     test "still restart a run with no agent event and no Linear wait" do
@@ -5299,7 +5308,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
       run_stall_check(pid)
 
-      assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}, @min_wait_ms
       assert %{error: "stalled for " <> _} = wait_for_retry!(pid, issue)
 
       pid =
@@ -5315,7 +5324,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       send(pid, :watchdog_tick)
 
       assert %{error: "stuck for " <> _} = wait_for_retry!(pid, issue)
-      assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}, @min_wait_ms
     end
   end
 
@@ -5417,7 +5426,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
       assert log =~ "Agent run stuck: issue_id=issue-tool-call-stuck"
       assert log =~ ~r/elapsed_ms=\d+ pending_tool=github_sync_base pending_tool_age_ms=\d+; restarting with backoff/
-      assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}, @min_wait_ms
     end
   end
 
@@ -5576,7 +5585,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       capture_log(fn ->
         StatusDashboard.notify_update(dashboard_name)
 
-        assert_receive {:stale_dashboard_render, rendered}, 500
+        assert_receive {:stale_dashboard_render, rendered}, @min_wait_ms
 
         plain = Regex.replace(~r/\e\[[0-9;]*m/, rendered, "")
 
@@ -5669,7 +5678,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     StatusDashboard.notify_update(dashboard_name)
 
-    assert_receive {:startup_pending_dashboard_render, rendered}, 500
+    assert_receive {:startup_pending_dashboard_render, rendered}, @min_wait_ms
 
     plain = Regex.replace(~r/\e\[[0-9;]*m/, rendered, "")
 
@@ -5704,7 +5713,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     StatusDashboard.notify_update(dashboard_name)
 
-    assert_receive {:startup_unavailable_dashboard_render, rendered}, 500
+    assert_receive {:startup_unavailable_dashboard_render, rendered}, @min_wait_ms
 
     plain = Regex.replace(~r/\e\[[0-9;]*m/, rendered, "")
 
@@ -5826,7 +5835,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     StatusDashboard.notify_update(dashboard_name)
 
-    assert_receive {:quality_gate_dashboard_render, rendered}, 500
+    assert_receive {:quality_gate_dashboard_render, rendered}, @min_wait_ms
 
     plain = Regex.replace(~r/\e\[[0-9;]*m/, rendered, "")
 
@@ -6109,7 +6118,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     end)
 
     StatusDashboard.notify_update(dashboard_name)
-    assert_receive {:render, first_render_ms, _content}, 200
+    assert_receive {:render, first_render_ms, _content}, @min_wait_ms
 
     :sys.replace_state(pid, fn state ->
       %{state | last_snapshot_fingerprint: :force_next_change, last_rendered_content: nil}
@@ -6118,7 +6127,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     StatusDashboard.notify_update(dashboard_name)
     StatusDashboard.notify_update(dashboard_name)
 
-    assert_receive {:render, second_render_ms, _content}, 200
+    assert_receive {:render, second_render_ms, _content}, @min_wait_ms
     assert second_render_ms > first_render_ms
     refute_receive {:render, _third_render_ms, _content}, 60
   end
@@ -6859,6 +6868,20 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     wait_for_orchestrator_state(
       pid,
       &(is_nil(&1.repo_poll_task_ref) and not &1.poll_check_in_progress and &1.dispatch_readiness_tasks == %{}),
+      5_000
+    )
+  end
+
+  # Returns once the poll a stop or a refresh asked for has run to its end: no poll is running and
+  # the next one is a full interval away.
+  defp wait_for_requested_poll(pid) do
+    wait_for_orchestrator_state(
+      pid,
+      fn state ->
+        is_nil(state.repo_poll_task_ref) and not state.poll_check_in_progress and
+          state.dispatch_readiness_tasks == %{} and is_integer(state.next_poll_due_at_ms) and
+          state.next_poll_due_at_ms > System.monotonic_time(:millisecond)
+      end,
       5_000
     )
   end
