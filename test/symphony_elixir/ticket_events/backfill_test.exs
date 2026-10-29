@@ -312,18 +312,14 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       assert log =~ "Backfilled 2 ticket event(s) on 1 ticket(s) from their snapshots"
       assert length(events()) == 2
 
-      assert {:ok, pid} = Backfill.start(enabled: true, now: @now, audit_log: audit)
-      ref = Process.monitor(pid)
-      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+      start_held([enabled: true, now: @now, audit_log: audit], &Backfill.run/1)
       assert length(events()) == 2
     end
 
     test "logs a run that fails, and a task that can't start" do
       log =
         capture_log(fn ->
-          assert {:ok, pid} = Backfill.start(enabled: true, run: fn _opts -> {:error, :boom} end)
-          ref = Process.monitor(pid)
-          assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+          start_held([enabled: true], fn _opts -> {:error, :boom} end)
         end)
 
       assert log =~ "Failed to backfill ticket events: :boom"
@@ -331,6 +327,21 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       log = capture_log(fn -> assert {:error, _reason} = Backfill.start(enabled: true, supervisor: :missing_task_supervisor) end)
       assert log =~ "Failed to start the ticket events backfill"
     end
+  end
+
+  # Starts the backfill with its run held until the task is monitored: a run that returns at once
+  # would otherwise exit before `Process.monitor/1`, and the DOWN would carry `:noproc`.
+  defp start_held(opts, run) do
+    held = fn run_opts ->
+      receive do
+        :go -> run.(run_opts)
+      end
+    end
+
+    assert {:ok, pid} = Backfill.start(Keyword.put(opts, :run, held))
+    ref = Process.monitor(pid)
+    send(pid, :go)
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
   end
 
   defp put_ticket(attrs) do
