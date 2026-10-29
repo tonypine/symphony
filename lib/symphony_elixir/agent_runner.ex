@@ -1495,7 +1495,7 @@ defmodule SymphonyElixir.AgentRunner do
     else
       # The handoff is the table's explicit `:handoff` edge, whose target resolves from the settings
       # to the configured Code Review state.
-      move = fn -> TransitionGuard.perform(issue_id, :handoff, %{settings: settings}) end
+      move = fn -> TransitionGuard.perform(issue_id, :handoff, %{settings: settings, repo_key: run_repo_key(issue, run_context.opts)}) end
 
       case with_linear_retry(move, "moving #{issue_context(issue)} to #{post_pr_state} #{reason}", run_context.opts) do
         :ok ->
@@ -1549,7 +1549,8 @@ defmodule SymphonyElixir.AgentRunner do
     # A return to `Merging` starts a new stay there, in which the PR and CI watcher turns
     # auto-merge on again for the head (rule R30): the approval still covers the PR.
     label = "returning #{issue_context(issue)} to #{origin} from CI Fix"
-    move = fn -> TransitionGuard.perform(issue_id, :ci_fix_mechanical, %{target: origin, settings: settings}) end
+    ctx = %{target: origin, settings: settings, repo_key: run_repo_key(issue, run_context.opts)}
+    move = fn -> TransitionGuard.perform(issue_id, :ci_fix_mechanical, ctx) end
 
     case with_linear_retry(move, label, run_context.opts) do
       :ok ->
@@ -1678,7 +1679,8 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp return_to_merging(%Issue{id: issue_id} = issue, kind, head, run_context) do
     label = "moving #{issue_context(issue)} back to #{@merging_state} with CI green"
-    move = fn -> TransitionGuard.perform(issue_id, :merge_ready, %{settings: Keyword.fetch!(run_context.opts, :settings)}) end
+    ctx = %{settings: Keyword.fetch!(run_context.opts, :settings), repo_key: run_repo_key(issue, run_context.opts)}
+    move = fn -> TransitionGuard.perform(issue_id, :merge_ready, ctx) end
     comment = fn -> Tracker.create_comment(issue_id, green_fix_note(kind, head)) end
 
     with :ok <- with_linear_retry(move, label, run_context.opts),
@@ -1732,7 +1734,9 @@ defmodule SymphonyElixir.AgentRunner do
 
     label = "parking #{issue_context(issue)} in #{@idle_park_state}"
 
-    with :ok <- with_linear_retry(fn -> TransitionGuard.perform(issue_id, :idle_park, %{settings: Keyword.fetch!(opts, :settings)}) end, label, opts),
+    ctx = %{settings: Keyword.fetch!(opts, :settings), repo_key: run_repo_key(issue, opts)}
+
+    with :ok <- with_linear_retry(fn -> TransitionGuard.perform(issue_id, :idle_park, ctx) end, label, opts),
          :ok <- with_linear_retry(fn -> Tracker.create_comment(issue_id, idle_park_note()) end, label, opts) do
       record_move_signal(issue, "blocked", %{to: @idle_park_state, reason: "idle_park"}, opts)
       :ok

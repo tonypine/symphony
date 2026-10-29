@@ -3366,8 +3366,8 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp move_breakdown_sub_issue(issue, action, %{id: sub_issue_id, identifier: identifier}) do
     case BreakdownReview.move(action, sub_issue_id, Tracker.adapter(), %{repo_key: issue_repo_key(issue)}) do
-      :ok ->
-        record_breakdown_sub_issue_signal(issue, action, sub_issue_id, identifier)
+      {:ok, state} ->
+        record_breakdown_sub_issue_signal(issue, action, sub_issue_id, identifier, state)
         {:ok, identifier}
 
       {:error, reason} ->
@@ -3377,11 +3377,11 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # A promoted sub-issue carries the plan's approval; a replaced one is the plan's changes, which
-  # cancel the sub-issues it judged.
-  defp record_breakdown_sub_issue_signal(issue, action, sub_issue_id, identifier) do
+  # cancel the sub-issues it judged. `state` is the one the move entered, the team's own spelling.
+  defp record_breakdown_sub_issue_signal(issue, action, sub_issue_id, identifier, state) do
     case issue_repo_key(issue) do
       repo_key when is_binary(repo_key) ->
-        details = %{outcome: breakdown_sub_issue_outcome(action), sub_issue: identifier, to: BreakdownReview.target(action)}
+        details = %{outcome: breakdown_sub_issue_outcome(action), sub_issue: identifier, to: state}
         record_ticket_signal(repo_key, sub_issue_id, breakdown_sub_issue_signal(action), details)
 
       _repo_key ->
@@ -3597,7 +3597,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp park_breakdown_parent(%Issue{id: issue_id} = issue, waiting_state, settings) do
     issue_id |> RunStore.put_own_state_move(DateTime.utc_now()) |> log_run_store_error("record breakdown parent move")
 
-    case TransitionGuard.perform(issue_id, :plan_approve, %{settings: settings}) do
+    case TransitionGuard.perform(issue_id, :plan_approve, %{settings: settings, repo_key: issue_repo_key(issue)}) do
       :ok ->
         record_ticket_signal(issue, "plan verdict", %{outcome: "approve", to: waiting_state})
         Logger.info("Moved breakdown parent to #{waiting_state} while its sub-issues are open: #{issue_context(issue)}")

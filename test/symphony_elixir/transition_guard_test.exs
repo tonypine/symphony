@@ -2,11 +2,19 @@ defmodule SymphonyElixir.TransitionGuardTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.TransitionGuard
+  alias SymphonyElixir.{TicketState, TransitionGuard}
 
   defmodule FakeTracker do
     def update_issue_state(issue_id, state) do
       send(self(), {:moved, issue_id, state})
+      Process.get(:transition_guard_tracker_result, :ok)
+    end
+  end
+
+  # Reads the ticket's record when Linear is asked, so a test sees what the record held by then.
+  defmodule RecordReadingTracker do
+    def update_issue_state(issue_id, state) do
+      send(self(), {:moved, issue_id, state, RunStore.get_ticket_state("repo-guard", issue_id)})
       Process.get(:transition_guard_tracker_result, :ok)
     end
   end
@@ -406,6 +414,70 @@ defmodule SymphonyElixir.TransitionGuardTest do
       end
 
       refute_received {:moved, "issue-8", _state}
+    end
+
+    test "writes the target as the record's phase before Linear is asked, and leaves what a read of Linear wrote" do
+      seen = ~U[2026-10-29 10:00:00Z]
+      RunStore.delete_ticket_state("repo-guard", "issue-9")
+      :ok = RunStore.put_ticket_state(TicketState.new("repo-guard", "issue-9", %{phase: "Todo", issue_identifier: "MT-9", linear_updated_at: seen}))
+
+      assert :ok = TransitionGuard.perform("issue-9", :claim, %{repo_key: "repo-guard"}, tracker: RecordReadingTracker)
+
+      assert_received {:moved, "issue-9", "In Progress", %{phase: "In Progress"}}
+      assert %{phase: "In Progress", issue_identifier: "MT-9", linear_updated_at: ^seen} = RunStore.get_ticket_state("repo-guard", "issue-9")
+    end
+
+    test "a move Linear refuses leaves the record moved and logs the identifier and the target" do
+      RunStore.delete_ticket_state("repo-guard", "issue-10")
+      :ok = RunStore.put_ticket_state(TicketState.new("repo-guard", "issue-10", %{phase: "Code Review", issue_identifier: "MT-10"}))
+      Process.put(:transition_guard_tracker_result, {:error, :unauthorized})
+
+      {ctx, opts} = {%{target: "Rework", repo_key: "repo-guard"}, [tracker: RecordReadingTracker]}
+
+      log =
+        capture_log(fn ->
+          assert {:error, :unauthorized} = TransitionGuard.perform("issue-10", :director_move, ctx, opts)
+        end)
+
+      assert_received {:moved, "issue-10", "Rework", %{phase: "Rework"}}
+      assert %{phase: "Rework"} = RunStore.get_ticket_state("repo-guard", "issue-10")
+      assert log =~ "Linear refused the move; the record keeps it issue_id=issue-10 issue_identifier=MT-10 to=Rework reason=:unauthorized"
+
+      # The caller's identifier is the one logged; a move with no repo key writes no record.
+      log =
+        capture_log(fn ->
+          ctx = %{target: "Rework", issue_identifier: "MT-11"}
+          assert {:error, :unauthorized} = TransitionGuard.perform("issue-11", :director_move, ctx, tracker: FakeTracker)
+        end)
+
+      assert log =~ "issue_id=issue-11 issue_identifier=MT-11 to=Rework"
+      assert RunStore.get_ticket_state("repo-guard", "issue-11") == nil
+
+      log = capture_log(fn -> TransitionGuard.perform("issue-11", :director_move, %{target: "Rework"}, tracker: FakeTracker) end)
+      assert log =~ "issue_id=issue-11 issue_identifier= to=Rework"
+    end
+
+    test "a target the team doesn't have puts the record back where it was and logs no refused move" do
+      RunStore.delete_ticket_state("repo-guard", "issue-12")
+      :ok = RunStore.put_ticket_state(TicketState.new("repo-guard", "issue-12", %{phase: "Backlog", issue_identifier: "MT-12"}))
+      Process.put(:transition_guard_tracker_result, {:error, :state_not_found})
+      {ctx, opts} = {%{target: "Canceled", repo_key: "repo-guard"}, [tracker: RecordReadingTracker]}
+
+      log =
+        capture_log(fn ->
+          assert {:error, :state_not_found} = TransitionGuard.perform("issue-12", :breakdown_cancel, ctx, opts)
+        end)
+
+      # The record is written before Linear is asked, and put back once Linear names no such state.
+      assert_received {:moved, "issue-12", "Canceled", %{phase: "Canceled"}}
+      assert %{phase: "Backlog", issue_identifier: "MT-12"} = RunStore.get_ticket_state("repo-guard", "issue-12")
+      refute log =~ "Linear refused the move"
+
+      # A ticket the record held no phase for goes back to none.
+      RunStore.delete_ticket_state("repo-guard", "issue-13")
+      assert {:error, :state_not_found} = TransitionGuard.perform("issue-13", :breakdown_cancel, ctx, opts)
+      assert_received {:moved, "issue-13", "Canceled", %{phase: "Canceled"}}
+      assert %{phase: nil} = RunStore.get_ticket_state("repo-guard", "issue-13")
     end
 
     test "defaults to the configured tracker" do

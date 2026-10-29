@@ -688,7 +688,7 @@ defmodule SymphonyElixir.CodeReview do
   # configured Code Review state (`reviewer_run?/2`), which is the origin of each of these edges in
   # the table; the table itself is what defines them, and is tested directly.
   defp move(issue, opts, settings, signal, extra) do
-    ctx = Map.merge(%{settings: settings}, extra)
+    ctx = Map.merge(%{settings: settings, repo_key: repo_key(issue, opts)}, extra)
     target = TransitionGuard.target(signal, ctx)
 
     case TransitionGuard.perform(issue.id, signal, ctx, tracker_opts(opts)) do

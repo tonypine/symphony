@@ -935,7 +935,7 @@ defmodule SymphonyElixir.EpicReview do
   # and gaps moves' is `Epic Review`; the table in `SymphonyElixir.TransitionGuard` defines those
   # edges and is tested directly.
   defp move(issue, settings, opts, signal, extra) do
-    ctx = Map.merge(%{settings: settings}, extra)
+    ctx = Map.merge(%{settings: settings, repo_key: repo_key(issue, opts)}, extra)
     target = TransitionGuard.target(signal, ctx)
     move = fn -> TransitionGuard.perform(issue.id, signal, ctx, tracker_opts(opts)) end
 

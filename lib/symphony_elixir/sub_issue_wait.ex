@@ -200,7 +200,9 @@ defmodule SymphonyElixir.SubIssueWait do
   end
 
   defp move_to_waiting(%Issue{id: issue_id} = issue, waiting_state, terminal_states, settings, tracker) do
-    with :ok <- TransitionGuard.perform(issue_id, :wait_on_merge, %{settings: settings}, tracker: tracker) do
+    ctx = %{settings: settings, repo_key: issue.repo_key}
+
+    with :ok <- TransitionGuard.perform(issue_id, :wait_on_merge, ctx, tracker: tracker) do
       TicketSignals.record(issue.repo_key, issue_id, "merge settled", %{to: waiting_state})
       Logger.info("Moved issue to #{waiting_state} after its PR merged with sub-issues open: #{issue_fields(issue)}")
       comment(issue, wait_comment(issue, waiting_state, terminal_states), tracker)
