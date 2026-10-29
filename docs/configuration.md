@@ -1416,10 +1416,12 @@ not run on a PR at all. For each step it:
   `check_test.exs`, with or without a `:line`) must be a tracked file or folder, and any other part,
   such as a test or scenario name, must appear in the tracked files, within the file named before it
   when there is one (`test/foo_test.exs › "does X"`, `test/foo_test.exs: does X` or
-  `test/foo_test.exs does X`). A name is found as text (a test name or a describe alone) or as
-  ExUnit's full test name, the describe and the test joined by a space, as `mix test` prints it
-  (with its leading `test ` and trailing `(Module)` too), though the two sit on different lines.
-  A name found nowhere fails naming the file it narrowed to (or the checkout) and the forms tried;
+  `test/foo_test.exs does X`). A part that opens with a file the rest is not in is also read as one
+  name, so a test named `WORKFLOW.md front matter cannot set the agent` is found. A name is found
+  as text (a test name or a describe alone) or as ExUnit's full test name, the describe and the
+  test joined by a space, as `mix test` prints it (with its leading `test ` and trailing `(Module)`
+  too), though the two sit on different lines. A name found nowhere fails naming the file it
+  narrowed to (or the checkout) and the forms tried;
 - reads the PR head's status checks with `gh` and finds the ones the step's check names (the
   `proof_check` for `Proved by: <test>`): a check run, a whole workflow, or `workflow / job`.
 
