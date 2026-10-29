@@ -71,12 +71,13 @@ A push to a base branch (or a pull request that closes by merging into it) can m
 on it fall behind or conflict. The watcher marks each open watched PR on that base as of unknown
 mergeability and reads them one by one, 1 second apart, while GitHub computes it again: a PR that
 now conflicts goes to CI Fix in seconds, or waits on the PR ahead of it that changes the same files,
-and a `Merging` PR that is now `BEHIND` gets its update-branch. A read that finds a conflict, or a
-PR waiting on its competitors, reads every watched PR and the repository's open PRs too, as the
-timed poll does, so the competitor's landing clears the wait in seconds as well. A PR still in Code
-Review, QA or Rework is left behind on purpose: a review or QA run starts only on a green head, so
-updating it on every merge would keep restarting its CI, and an agent run brings its own branch up
-to date. It is updated once it reaches `Merging`.
+and a PR that is now `BEHIND`, in any phase, gets its update-branch from the branch upkeep (U1 in
+the [decision table](pr-ci-decisions.md#upkeep)) unless a run is working on it or a PR ahead of it
+changes the same files; a PR whose run is working is updated on the read that sees the run end. A
+read that finds a conflict, a PR waiting on its competitors, or a `BEHIND` PR that last waited on a
+PR ahead of it, reads every watched PR and the repository's open PRs too, as the timed poll does, so
+the landing of the PR ahead clears the wait in seconds as well: the conflict gets its CI Fix run,
+and the `BEHIND` PR its update-branch, on its own read.
 
 A `release` published on `tonypine/symphony`, the repository the macOS app updates from, records its
 newest release in Symphony. `/api/v1/state` reports it under `app_update.latest_release`, and the app

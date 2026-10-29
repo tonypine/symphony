@@ -64,9 +64,10 @@ defmodule SymphonyElixir.PrWatch.Repo do
   later (the confirm read), or, for a push to their base, one by one 1 second apart (a PR whose
   mergeability GitHub hasn't computed yet is read again after the others, up to 5 times). A confirm read
   is a tick of those PRs only: it decides and acts as a timed tick does, keeping the landing order
-  of the last one, unless one of them conflicts or waits on its competitors: then it reads every
-  watched PR and the open PRs, as a timed tick, so the landing order and the race are as fresh as a
-  poll's. While deliveries are healthy (`SymphonyElixir.PrWatch.Health`) the timed tick is
+  of the last one, unless one of them conflicts, waits on its competitors, or is `BEHIND` and last
+  waited on a PR ahead of it: then it reads every watched PR and the open PRs, as a timed tick, so
+  the landing order and the race are as fresh as a poll's, and a PR whose leader just landed gets
+  its update-branch on its own read. While deliveries are healthy (`SymphonyElixir.PrWatch.Health`) the timed tick is
   only the safety net, every `github.webhooks.fallback_poll_interval_ms`; one that finds a change
   no delivery reported marks them unhealthy, and the next tick is back at the poll interval, as it
   is while the repository's `gh webhook forward` relay keeps stopping (`SymphonyElixir.GitHub.Relay`
@@ -397,14 +398,15 @@ defmodule SymphonyElixir.PrWatch.Repo do
     end
   end
 
-  # A confirm read that finds a conflict, or a ticket waiting on its competitors, reads the other
-  # watched PRs and the repository's open PRs too, and decides on all of them as a timed tick does:
-  # the landing order and the race need every PR, so a delivery reaches the same decision a poll
-  # would. Returns the reads and what the tick decides on.
+  # A confirm read that finds a conflict, a ticket waiting on its competitors, or a PR behind its
+  # base that last waited on a PR ahead of it, reads the other watched PRs and the repository's open
+  # PRs too, and decides on all of them as a timed tick does: the landing order and the race need
+  # every PR, so a delivery reaches the same decision a poll would, and a PR whose leader just landed
+  # is updated on its own reread. Returns the reads and what the tick decides on.
   defp widen(:all, _watched, reads, state, _now), do: {reads, state, :all}
 
   defp widen(scope, watched, reads, state, now) do
-    if Enum.any?(in_scope(watched, scope), &competes?(&1, reads)) do
+    if Enum.any?(in_scope(watched, scope), &(competes?(&1, reads) or behind_a_leader?(&1, reads))) do
       {rest, state} = watched |> Enum.reject(&Map.has_key?(reads, &1.issue.id)) |> read_all(state, now)
       {Map.merge(reads, rest), state, :all}
     else
@@ -583,6 +585,12 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   defp competes?(entry, reads) do
     match?({:ok, %{mergeable: :dirty}}, Map.get(reads, entry.issue.id)) or entry.links != [] or BlockedHold.landing?(entry.blocked_hold)
+  end
+
+  # Upkeep updates a BEHIND PR only with nothing ahead of it, and the PR ahead it last waited on may
+  # have just landed: only the open PRs tell.
+  defp behind_a_leader?(entry, reads) do
+    match?({:ok, %{mergeable: :behind}}, Map.get(reads, entry.issue.id)) and previous_ahead(entry) != []
   end
 
   defp read_open_pulls(entry, state) do
@@ -879,9 +887,11 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # The decision keeps since when it stands while the watcher makes the same one on the same head,
   # and an action applied joins the last five.
   defp settled(watch, previous) do
+    {upkept, watch} = Map.pop(watch, :upkept, [])
+
     watch
     |> Map.put(:decision, since(watch.decision, previous && previous.decision))
-    |> Map.put(:actions, actions(watch, previous))
+    |> Map.put(:actions, actions(watch, upkept, previous))
   end
 
   # A decision that changed (its rule, action or head) logs one `pr_watch.decision` line; the same
@@ -909,12 +919,12 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   defp since(decision, _previous), do: Map.put(decision, :since, decision.decided_at)
 
-  defp actions(%{decision: %{outcome: :applied} = decision, source: source}, previous) do
-    action = %{rule: decision.rule, kind: decision.kind, head_sha: decision.head_sha, at: decision.decided_at, source: source}
-    Enum.take([action | carried(previous, :actions, [])], 5)
+  # The upkeep applied on the read comes before its flow action.
+  defp actions(watch, upkept, previous) do
+    flow = for %{outcome: :applied} = decision <- [watch.decision], do: %{rule: decision.rule, kind: decision.kind, head_sha: decision.head_sha, at: decision.decided_at}
+    done = for action <- upkept ++ flow, do: Map.put(action, :source, watch.source)
+    Enum.take(Enum.reverse(done) ++ carried(previous, :actions, []), 5)
   end
-
-  defp actions(_watch, previous), do: carried(previous, :actions, [])
 
   defp silence(watch, entry, previous, now, state, settings) do
     before = previous && Map.get(previous, :silent)
@@ -947,7 +957,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp decided(%{decision: %{kind: kind, reason: reason}}) when is_binary(reason), do: " action=#{kind} decision=#{inspect(reason)}"
   defp decided(_watch), do: ""
 
-  # A read GitHub refused keeps what the record held, its facts marked rate limited: R1 waits.
+  # A read GitHub refused keeps what the record held, its facts marked rate limited: R1 waits. It
+  # applied no upkeep, so it keeps no upkeep failure either.
   defp rate_limited(entry, ticket, previous, limited, now) do
     base =
       previous ||
@@ -957,7 +968,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
     # R1 matches every rate-limited read, so there is always a decision: the wait.
     decision = decision_record(PrDecision.decide(facts), :recorded, base.attempts, facts, base.head_sha, now)
-    Map.merge(base, %{facts: facts, github: limited, decision: decision, links: entry.links})
+    Map.merge(base, %{facts: facts, github: limited, decision: decision, links: entry.links, upkeep_failure: nil})
   end
 
   # The facts, completed with what the watcher keeps, the decision and what applying it did. A stay
@@ -984,22 +995,25 @@ defmodule SymphonyElixir.PrWatch.Repo do
     facts = Fetch.facts(Map.merge(ticket, Attempts.facts(attempts, read, settings.ci, now)), read)
     fix = settle_fix(carried(previous, :fix, @no_fix), facts)
 
+    ctx = %{
+      repo_key: state.repo_key,
+      settings: settings,
+      issue: entry.issue,
+      read: read,
+      facts: facts,
+      now: now,
+      decisions: decisions(entry.record),
+      opts: apply_opts(state),
+      fix: fix,
+      links: entry.links
+    }
+
+    {upkept, upkeep_failure, attempts, applied} = upkeep(ctx, attempts, applied, entry, state)
+
     case decide(facts, entry) do
       {:ok, action} ->
         read = with_protected_entries(read, action, entry, state)
-
-        ctx = %{
-          repo_key: state.repo_key,
-          settings: settings,
-          issue: entry.issue,
-          read: read,
-          facts: facts,
-          now: now,
-          decisions: decisions(entry.record),
-          opts: apply_opts(state)
-        }
-
-        result = Apply.apply(action, Map.merge(ctx, %{attempts: attempts, applied: applied, fix: fix, links: entry.links}))
+        result = Apply.apply(action, Map.merge(ctx, %{read: read, attempts: attempts, applied: applied}))
         attempts = result.attempts
         project_ci(entry, facts, read, now, state)
 
@@ -1007,6 +1021,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
           facts: facts,
           stay: result.moved_to || entry.phase,
           decision: result.action |> with_landing_hold(entry, facts) |> decision_record(result.outcome, attempts, facts, head, now),
+          upkept: upkept,
+          upkeep_failure: upkeep_failure,
           applied: result.applied,
           attempts: attempts,
           fix: result.fix,
@@ -1019,6 +1035,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
           facts: facts,
           stay: entry.phase,
           decision: nil,
+          upkept: upkept,
+          upkeep_failure: upkeep_failure,
           applied: applied,
           attempts: attempts,
           fix: fix,
@@ -1026,6 +1044,39 @@ defmodule SymphonyElixir.PrWatch.Repo do
           protected_files: protected_files
         }
     end
+  end
+
+  # The upkeep the facts call for (`SymphonyElixir.PrDecision.upkeep/1`), applied before the flow
+  # decision on the same read, which it never changes: each action's attempts and ledger carry into
+  # the next and into the flow decision's. Returns what was applied, as `actions` keeps it, and the
+  # last action GitHub refused on this read, which the record keeps until a read has none
+  # (`upkeep_failure`): the silent-wait detector lists a ticket whose upkeep keeps failing.
+  defp upkeep(ctx, attempts, applied, entry, state) do
+    ctx.facts
+    |> PrDecision.upkeep()
+    |> Enum.reduce({[], nil, attempts, applied}, fn action, {upkept, failure, attempts, applied} ->
+      result = Apply.apply(action, Map.merge(ctx, %{attempts: attempts, applied: applied}))
+      log_upkeep(result, ctx, entry, state)
+      {upkept ++ upkept(result, ctx), upkeep_failure(result, ctx) || failure, result.attempts, result.applied}
+    end)
+  end
+
+  defp upkept(%{outcome: :applied, action: action}, ctx), do: [%{rule: action.rule, kind: action.kind, head_sha: ctx.read[:head_sha], at: ctx.now}]
+  defp upkept(_result, _ctx), do: []
+
+  defp upkeep_failure(%{outcome: {:error, reason}, action: action}, ctx),
+    do: %{rule: action.rule, kind: action.kind, head_sha: ctx.read[:head_sha], error: inspect(reason), at: ctx.now}
+
+  defp upkeep_failure(_result, _ctx), do: nil
+
+  defp log_upkeep(%{outcome: :recorded}, _ctx, _entry, _state), do: :ok
+
+  defp log_upkeep(%{action: action, outcome: outcome}, ctx, entry, state) do
+    Logger.info(
+      "pr_watch.upkeep issue_id=#{entry.issue.id} issue_identifier=#{entry.issue.identifier} repo_key=#{state.repo_key} " <>
+        "phase=#{entry.phase} rule=#{action.rule} action=#{action.kind} head_sha=#{ctx.read[:head_sha]} " <>
+        "outcome=#{outcome_name(outcome)} reason=#{inspect(action.reason)}"
+    )
   end
 
   # The wait on competing PRs that stepped behind them (R15) is over: the conflict gets its fix runs

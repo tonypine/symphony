@@ -2663,11 +2663,23 @@ The watcher is the one place a PR's situation turns into an action. Its rules:
 
 With `pull_requests.enabled`, one `PrWatch.Repo` per repository reads, every poll interval, every
 ticket of the repository in the Code Review, QA, `Rework`, `CI Fix` or `Merging` state, and in
-`In Progress` once it has a PR, with its PR in one GitHub query. For each it decides the one action
-its phase and PR facts call for (`PrDecision.decide/1`, the table in `docs/pr-ci-decisions.md`)
-and applies it (`PrDecision.Apply`, the only writer): Linear moves go through the transition guard,
-holds through the Needs Decision hold and the self-heal lane, GitHub calls through `AutoMerge`.
+`In Progress` once it has a PR, with its PR in one GitHub query. For each it first applies the
+branch upkeep the facts call for (`PrDecision.upkeep/1`), then decides the one flow action its phase
+and PR facts call for (`PrDecision.decide/1`, the table in `docs/pr-ci-decisions.md`) from the same
+facts and applies it on the same read; upkeep never changes that decision. Both go through
+`PrDecision.Apply`, the only writer: Linear moves go through the transition guard, holds through
+the Needs Decision hold and the self-heal lane, GitHub calls through `AutoMerge`.
 
+- Branch upkeep runs in every watched phase, whatever `pull_requests.auto_merge` says and whatever
+  the flow decides (a hold, a question, a CI or competitor wait), and only while no run is active
+  on the ticket: an upkeep due during a run is deferred, and the orchestrator asks the watcher to
+  read when a run ends, so it fires at once. U1: a `BEHIND` PR with no PR ahead of it in the
+  landing order sharing its files, on a head not red on a failure or a cancelled run, gets one
+  update-branch per head (`PUT .../update-branch` with `expected_head_sha`), and the CI runs left
+  on the head it replaced are cancelled; a conflict GitHub reports goes to the conflict rules on
+  the next read. U2: a head red only because every run of a workflow was cancelled gets that run
+  rerun once per cancellation, at most twice per head, with no attempt spent. Each upkeep applied
+  or failed logs one `pr_watch.upkeep` line.
 - An action is applied at most once per head and rule in a stay in the phase (the phase a move of
   the watcher put the ticket in starts a new stay), so a repeated poll never repeats a move, a
   rerun, an update-branch or a fix-ticket filing. An action that fails is not recorded, and the
@@ -2680,7 +2692,11 @@ holds through the Needs Decision hold and the self-heal lane, GitHub calls throu
   watcher applied on that poll and no decision
   from the last two polls that names who it waits on and what ends the wait, on two polls at least
   a poll interval apart (an extra poll inside an interval counts for none), or a wait on CI past
-  `ci.merging_wait_timeout_ms` or on GitHub's rate limit one poll past its reset. `/api/v1/state` lists it under `silent_waits`, and it logs one `pr_watch.silent_wait`
+  `ci.merging_wait_timeout_ms` or on GitHub's rate limit one poll past its reset. An upkeep GitHub
+  refused on the head (kept on the record as `upkeep_failure`) makes the ticket quiet whatever its
+  decision waits on, so an update-branch refused on every poll is listed after two polls. So does
+  R28 waiting on the update U1 made on the same head on an earlier poll (GitHub took it, or found
+  a conflict, and the head never moved). `/api/v1/state` lists it under `silent_waits`, and it logs one `pr_watch.silent_wait`
   line. `POST /api/v1/issues/<identifier>/watch/check` makes the watcher read and decide on the
   ticket at once and returns its `watch` (`docs/pr-ci-decisions.md#silent-waits`).
 - A CI Fix run sent for a red head spends a red attempt, held against
@@ -2696,8 +2712,7 @@ holds through the Needs Decision hold and the self-heal lane, GitHub calls throu
 - In `Merging`, with `pull_requests.auto_merge` on: a CLEAN, green PR is squash-merged at once; a
   PR with checks running or branch protection holding it gets GitHub auto-merge (squash, the PR
   title as `<title> (#<number>)` and its body, `expectedHeadOid` the read head) once per head; a
-  `BEHIND` PR gets one update-branch per head (`PUT .../update-branch` with `expected_head_sha`),
-  and the CI runs left on the head it replaced are cancelled; a PR `BLOCKED` on a green head past
+  `BEHIND` PR waits for the upkeep's update-branch (above); a PR `BLOCKED` on a green head past
   `checks.landing_wait_timeout_ms` goes to the landing agent, with a comment; a merged PR moves
   the ticket to `Done`, or to the waiting state with started sub-issues open. Auto-merge goes off
   before a `CI Fix` run, a fix-ticket hold, a conflict wait or a person's question, and whenever the

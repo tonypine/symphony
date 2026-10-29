@@ -655,7 +655,8 @@ defmodule SymphonyElixir.TicketStateTest do
             links: :junk,
             actions: [%{rule: "R1"}, :junk, %{rule: "R2"}, %{rule: "R3"}, %{rule: "R4"}, %{rule: "R5"}, %{rule: "R6"}],
             silent: %{since: @at, ticks: 2, bound: " ", reason: "quiet", extra: 1},
-            protected_files: %{head_sha: "abc", paths: ["WORKFLOW.md", :junk]}
+            protected_files: %{head_sha: "abc", paths: ["WORKFLOW.md", :junk]},
+            upkeep_failure: %{rule: "U1", kind: :update_branch, head_sha: "abc", error: ":forbidden", at: @at, extra: 1}
           },
           @at
         )
@@ -690,7 +691,8 @@ defmodule SymphonyElixir.TicketStateTest do
                links: [],
                actions: [%{rule: "R1"}, %{rule: "R2"}, %{rule: "R3"}, %{rule: "R4"}, %{rule: "R5"}],
                silent: %{since: @at, ticks: 2, bound: nil, reason: "quiet"},
-               protected_files: %{head_sha: "abc", paths: ["WORKFLOW.md"]}
+               protected_files: %{head_sha: "abc", paths: ["WORKFLOW.md"]},
+               upkeep_failure: %{rule: "U1", kind: :update_branch, head_sha: "abc", error: ":forbidden", at: @at}
              }
 
       assert TicketState.normalize(record) == record
@@ -716,9 +718,13 @@ defmodule SymphonyElixir.TicketStateTest do
                links: [],
                actions: [],
                silent: nil,
-               protected_files: nil
+               protected_files: nil,
+               upkeep_failure: nil
              } =
                TicketState.pr_watch(sparse)
+
+      junk_failure = TicketState.new("repo-a", "issue-1", %{pr_watch: %{facts: facts, upkeep_failure: %{rule: "U1", kind: :update_branch, error: :forbidden}}})
+      assert %{upkeep_failure: nil} = TicketState.pr_watch(junk_failure)
 
       assert %{attempts: attempts, fix: %{ci_failure: nil, pr_conflict: nil}} = TicketState.pr_watch(sparse)
       assert attempts == Attempts.new()
