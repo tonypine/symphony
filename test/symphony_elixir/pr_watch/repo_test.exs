@@ -187,6 +187,17 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
 
   defp watch(repo_key, issue_id), do: repo_key |> RunStore.get_ticket_state(issue_id) |> TicketState.pr_watch()
 
+  # The registry drops a stopped watcher's name only once it handles the exit, so until then Check
+  # Now still lists the watcher and calls a process that is gone.
+  defp stop_registered!(pid) do
+    GenServer.stop(pid)
+    await_live_watchers!()
+  end
+
+  defp await_live_watchers!, do: eventually(fn -> registered_watchers() |> Enum.all?(fn {_repo_key, pid} -> Process.alive?(pid) end) end)
+
+  defp registered_watchers, do: Registry.select(SymphonyElixir.Repo.Registry, [{{{:pr_watch, :"$1"}, :"$2", :_}, [], [{{:"$1", :"$2"}}]}])
+
   defp flush do
     receive do
       _message -> flush()
@@ -635,19 +646,19 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     assert GenServer.whereis(Repo.name(repo_key)) == pid
     assert {:ok, %{watched: 0, next_tick_ms: interval}} = Repo.poll(Repo.name(repo_key))
     assert interval == Config.settings!().polling.interval_ms
-    GenServer.stop(pid)
+    stop_registered!(pid)
 
     # A repo whose settings can't be read reports it, and its own ticks wait the longest backoff.
     {:ok, pid} = Repo.start_link(repo_key: "no-such-repo", auto: false, tracker: FakeTracker)
     assert {:error, _reason} = Repo.poll(pid)
-    GenServer.stop(pid)
+    stop_registered!(pid)
 
     {:ok, pid} = Repo.start_link(repo_key: "no-such-repo", tracker: FakeTracker)
     assert %{timer: timer} = :sys.get_state(pid)
     assert is_reference(timer)
     assert {:error, _reason} = Repo.poll(pid)
     assert Process.read_timer(:sys.get_state(pid).timer) > 290_000
-    GenServer.stop(pid)
+    stop_registered!(pid)
   end
 
   describe "silent waits (TP-945)" do
@@ -768,8 +779,12 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       assert since == Agent.get(clock, & &1)
     end
 
-    test "Check Now reads and decides within the call, and names a ticket the watcher doesn't watch", %{repo_key: repo_key, clock: clock} do
+    test "Check Now reads and decides within the call, and names a ticket the watcher doesn't watch", %{repo_key: repo_key, clock: clock, pid: pid} do
       issues!([repo_key |> with_pr(issue("1", "Rework"), 1)])
+      # Check Now calls every watcher the registry lists. This one stays up until the test stops it.
+      await_live_watchers!()
+      assert {repo_key, pid} in registered_watchers()
+      watcher = Process.monitor(pid)
 
       # No record yet: every running watcher ticks, and the new record is the answer.
       assert {:ok, %{issue_identifier: "TP-1", pr_watch: %{decision: %{rule: "R26", decided_at: @now}}}} = PrWatch.check("TP-1", repo_key: repo_key)
@@ -783,8 +798,10 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
 
       issues!({:error, :unauthorized})
       assert capture_log(fn -> assert PrWatch.check("TP-1", repo_key: repo_key) == {:error, :unauthorized} end) =~ "PR watch tick failed"
+      refute_received {:DOWN, ^watcher, :process, ^pid, _reason}
 
       stop_supervised!({Repo, repo_key})
+      await_live_watchers!()
       assert PrWatch.check("TP-1", repo_key: repo_key) == {:error, :watcher_not_running}
       assert PrWatch.check("TP-404", repo_key: repo_key) == {:error, :not_watched}
     end

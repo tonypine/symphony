@@ -204,9 +204,13 @@ defmodule SymphonyElixir.OrchestratorClaimsTest do
       %{state | running: %{moved.id => running}, claimed: MapSet.new([moved.id]), repo_poll_due_at_ms: %{"default" => not_due}}
     end)
 
+    # The orchestrator publishes its snapshot on a timer, whenever it lands; one now shows the
+    # running entry has what the snapshot reads.
+    send(pid, :publish_snapshot)
     TicketObservation.reset()
     send(pid, :run_poll_cycle)
     wait_until(fn -> RunStore.get_ticket_state("default", moved.id).phase == "Rework" end)
+    wait_until_idle(pid)
     assert :sys.get_state(pid).repo_poll_due_at_ms["default"] == not_due
 
     # An older by-id answer than the record holds is dropped: the record keeps the newer fact.
@@ -291,19 +295,7 @@ defmodule SymphonyElixir.OrchestratorClaimsTest do
     end)
   end
 
-  defp wait_until(fun, attempts \\ 100) do
-    cond do
-      fun.() ->
-        :ok
-
-      attempts == 0 ->
-        flunk("condition not met")
-
-      true ->
-        Process.sleep(20)
-        wait_until(fun, attempts - 1)
-    end
-  end
+  defp wait_until(fun), do: eventually(fun)
 
   defp issue(id, identifier, state) do
     %Issue{
