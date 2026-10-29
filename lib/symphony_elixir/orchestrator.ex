@@ -1401,10 +1401,10 @@ defmodule SymphonyElixir.Orchestrator do
   defp fetch_issue_states_if_needed(issue_ids), do: fetch_observed_issues_by_ids(issue_ids)
 
   # Every by-id read the poll and dispatch make also writes what it read into the tickets' records,
-  # each under the repo it routes to, so the record is as fresh as Symphony's newest read.
+  # each under the repo that holds its record, so the record is as fresh as Symphony's newest read.
   defp fetch_observed_issues_by_ids(issue_ids) do
     with {:ok, issues} = result when is_list(issues) <- Tracker.fetch_issue_states_by_ids(issue_ids) do
-      TicketObservation.observe_routed(issues, source: :by_id)
+      TicketObservation.observe_held(issues, source: :by_id)
       result
     end
   end
