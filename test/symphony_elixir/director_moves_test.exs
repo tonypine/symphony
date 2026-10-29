@@ -105,6 +105,14 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert [%{"move" => "approve_plan"}] = audit_records()
     end
 
+    test "asks for a cycle on the plan's repo at once, so its first sub-ticket dispatches on the next one", %{opts: opts} do
+      put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
+
+      assert {:ok, _result} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, Keyword.put(opts, :orchestrator, self()))
+
+      assert_received {:"$gen_cast", {:request_refresh, "repo-director", :now}}
+    end
+
     test "refuses a plan outside Plan Review, a ticket that is not a plan, and a turned-off waiting state", %{opts: opts} do
       put_issues([plan("In Progress"), pr("Plan Review"), %{plan(nil) | id: "stateless", identifier: "MOT-31"}])
       assert {:error, {:conflict, message}} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
@@ -999,33 +1007,25 @@ defmodule SymphonyElixir.DirectorMovesTest do
       set_decision_hold()
       test_pid = self()
 
-      # An orchestrator still busy with a poll: it takes the refresh request and never replies.
+      # An orchestrator still busy with a poll: it reads one message and handles nothing after it.
       busy =
         spawn(fn ->
           receive do
-            {:"$gen_call", {caller, _tag}, :request_refresh} ->
-              send(test_pid, {:refresh_requested, caller})
-              Process.sleep(:infinity)
+            message -> send(test_pid, {:orchestrator_got, message})
           end
+
+          Process.sleep(:infinity)
         end)
+
+      on_exit(fn -> Process.exit(busy, :kill) end)
 
       assert {:ok, %{move: "decide", moved: false}} =
                DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, Keyword.put(opts, :orchestrator, busy))
 
       assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
       refute Hold.held?("repo-director", "pr", :needs_decision)
-      assert_receive {:refresh_requested, caller}
-
-      # The orchestrator going away mid-call ends the request with a warning, not a crash.
-      ref = Process.monitor(caller)
-
-      log =
-        capture_log(fn ->
-          Process.exit(busy, :kill)
-          assert_receive {:DOWN, ^ref, :process, ^caller, :normal}
-        end)
-
-      assert log =~ "Director move couldn't ask the orchestrator to poll again"
+      # The refresh is a cast for a cycle on the ticket's repo at once, so nothing waits on its answer.
+      assert_receive {:orchestrator_got, {:"$gen_cast", {:request_refresh, "repo-director", :now}}}
     end
 
     test "a hold the store refuses to clear comes back as a store error", %{opts: opts} do
