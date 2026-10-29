@@ -34,6 +34,10 @@ defmodule SymphonyElixir.QaVerification do
       the run comes back as `{:error, {:usage_limited, info}}`, and the orchestrator holds it until
       the limit resets (SPEC §8.4.1)
 
+  First the run brings its workspace to the PR's current head (a reused workspace still holds the
+  head of its last run, and branch upkeep may have updated the PR since), resetting it only when it
+  holds no local work; a head that moves during the run is synced once more before it blocks.
+
   Before the agent starts, the QA pre-check (`SymphonyElixir.QaPreCheck`) confirms each walkthrough
   step a named test proves, on the PR head: a passed check whose test is in the checkout reaches the
   agent as confirmed, linked and not walked; a failed check, one that never ran, or a test not in the
@@ -64,13 +68,16 @@ defmodule SymphonyElixir.QaVerification do
     TicketSignals,
     TransitionGuard,
     Walkthrough,
+    Workspace,
     WorkspaceHead
   }
 
+  alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaAgent.Report
+  alias SymphonyElixir.Repo.Fetcher
 
   @verdict_kind "qa"
   @run_kind "qa"
@@ -176,12 +183,125 @@ defmodule SymphonyElixir.QaVerification do
     blocked(issue, opts, settings, nil, blocked_outcome({:remote_worker_unsupported, host}, %{}))
   end
 
+  # A reused workspace keeps the head of its last run, and the PR's head moves between runs (branch
+  # upkeep merges the base branch in after the approve), so the run first brings the workspace to the
+  # PR's current head and only then reads the head its verdict binds to. A workspace with local work
+  # is never reset: the run is blocked naming it. A PR head that cannot be fetched leaves the
+  # workspace as it is; the pre-check still catches a head that moved.
   defp read_head(issue, workspace, opts, settings) do
+    case sync_to_pr_head(issue, workspace, opts) do
+      {:error, {:workspace_dirty, _head, _pr_head, _dirt} = dirty} -> dirty_workspace(issue, opts, settings, dirty)
+      :ok -> read_synced_head(issue, workspace, opts, settings)
+      {:error, reason} -> unsynced(issue, workspace, opts, settings, reason)
+    end
+  end
+
+  defp unsynced(issue, workspace, opts, settings, reason) do
+    unless reason in [:head_unreadable, :no_pull_request] do
+      Logger.warning("QA for #{issue_label(issue)} runs on its workspace head: the PR head could not be synced: #{inspect(reason)}")
+    end
+
+    read_synced_head(issue, workspace, opts, settings)
+  end
+
+  defp read_synced_head(issue, workspace, opts, settings) do
     case WorkspaceHead.read(workspace, nil) do
       nil -> park_unreadable_head(issue, opts)
       head -> verify_head(issue, workspace, opts, settings, head)
     end
   end
+
+  defp dirty_workspace(issue, opts, settings, {:workspace_dirty, head, pr_head, dirt}) do
+    reason =
+      "the workspace at #{String.slice(head, 0, 12)} is behind the PR head #{String.slice(pr_head, 0, 12)} " <>
+        "and was not reset to it, because it has #{Enum.join(dirt, " and ")}"
+
+    blocked(issue, opts, settings, head, blocked_outcome(reason, %{}))
+  end
+
+  # Fetches the PR's head (`refs/pull/<number>/head`, which GitHub keeps for every pull request) and
+  # resets the workspace to it when the workspace is behind and holds no local work: no uncommitted
+  # or untracked file, and no commit that neither the PR head nor a remote branch has.
+  defp sync_to_pr_head(issue, workspace, opts) do
+    git = Keyword.get(opts, :git, &git/2)
+
+    with {:ok, head} <- local_head(workspace),
+         {:ok, number} <- pr_number(issue, opts),
+         {:ok, pr_head} <- fetch_pr_head(workspace, number, git) do
+      if head == pr_head, do: :ok, else: reset_to_pr_head(workspace, head, pr_head, git)
+    end
+  end
+
+  defp local_head(workspace) do
+    case WorkspaceHead.read(workspace, nil) do
+      nil -> {:error, :head_unreadable}
+      head -> {:ok, head}
+    end
+  end
+
+  defp pr_number(issue, opts) do
+    with url when is_binary(url) <- TicketPullRequest.current_url(issue, repo_key(issue, opts)),
+         {:ok, %{number: number}} <- PullRequest.parse_url(url) do
+      {:ok, number}
+    else
+      _none -> {:error, :no_pull_request}
+    end
+  end
+
+  defp fetch_pr_head(workspace, number, git) do
+    ref = "refs/pull/#{number}/head"
+
+    with {_output, 0} <- Fetcher.fetch(workspace, fn -> git.(["fetch", "--quiet", "origin", ref], workspace) end),
+         {sha, 0} <- git.(["rev-parse", "--verify", "-q", "FETCH_HEAD^{commit}"], workspace) do
+      {:ok, String.trim(sha)}
+    else
+      {output, status} -> {:error, {:pr_head_fetch_failed, ref, status, String.trim(output)}}
+    end
+  end
+
+  defp reset_to_pr_head(workspace, head, pr_head, git) do
+    case local_work(workspace, pr_head, git) do
+      [] ->
+        case git.(["reset", "--hard", "--quiet", pr_head], workspace) do
+          {_output, 0} -> :ok
+          {output, status} -> {:error, {:pr_head_reset_failed, status, String.trim(output)}}
+        end
+
+      dirt ->
+        {:error, {:workspace_dirty, head, pr_head, dirt}}
+    end
+  end
+
+  # What a reset would lose, in plain words; a git read that fails counts as local work, so a
+  # workspace that cannot be read is never reset.
+  defp local_work(workspace, pr_head, git) do
+    changes = git_lines(git, ["status", "--porcelain=v1", "--untracked-files=all"], workspace)
+    unpushed = git_lines(git, ["rev-list", "HEAD", "--not", pr_head, "--remotes"], workspace)
+
+    Enum.reject(
+      [
+        work(changes, &"local changes (#{few(Enum.map(&1, fn line -> String.trim(line) end))})"),
+        work(unpushed, &"#{length(&1)} unpushed commit(s) (#{few(Enum.map(&1, fn sha -> String.slice(sha, 0, 12) end))})")
+      ],
+      &is_nil/1
+    )
+  end
+
+  defp git_lines(git, args, workspace) do
+    case git.(args, workspace) do
+      {output, 0} -> {:ok, String.split(output, "\n", trim: true)}
+      {output, status} -> {:error, "git #{hd(args)} exited #{status}: #{String.trim(output)}"}
+    end
+  end
+
+  defp work({:error, unread}, _describe), do: "a state git could not read (#{unread})"
+  defp work({:ok, []}, _describe), do: nil
+  defp work({:ok, lines}, describe), do: describe.(lines)
+
+  defp few(items) when length(items) > 5, do: Enum.join(Enum.take(items, 5), ", ") <> " and #{length(items) - 5} more"
+  defp few(items), do: Enum.join(items, ", ")
+
+  defp git(args, workspace), do: Workspace.safe_git(args, cd: workspace, stderr_to_stdout: true)
 
   # A verdict binds to a head SHA; with no head to bind to, the run says so once and leaves the
   # ticket where it is, so the next tick can try again rather than record a verdict on nothing.
@@ -237,7 +357,29 @@ defmodule SymphonyElixir.QaVerification do
       {:pass, results} -> run_agent(issue, workspace, opts, settings, head, playbooks, results)
       {:fail, results} -> fail(issue, opts, settings, head, pre_check_failed(results))
       {:pending, results} -> wait_for_checks(issue, opts, settings, head, results)
-      {:error, reason} -> blocked(issue, opts, settings, head, blocked_outcome("the QA pre-check could not read CI on the PR head: #{inspect(reason)}", %{}))
+      {:error, {:pr_head_moved, moved_to}} -> head_moved(issue, workspace, opts, settings, head, moved_to)
+      {:error, reason} -> pre_check_unreadable(issue, opts, settings, head, reason)
+    end
+  end
+
+  defp pre_check_unreadable(issue, opts, settings, head, reason) do
+    blocked(issue, opts, settings, head, blocked_outcome("the QA pre-check could not read CI on the PR head: #{inspect(reason)}", %{}))
+  end
+
+  # The PR's head moved after the workspace was synced (upkeep merged the base branch in, a push
+  # landed): the workspace is synced once more and the run starts again from the head it reads, in
+  # the same run. Only a head that still differs after that sync blocks the run.
+  defp head_moved(issue, workspace, opts, settings, head, moved_to) do
+    if Keyword.get(opts, :qa_head_resynced, false) do
+      pre_check_unreadable(issue, opts, settings, head, {:pr_head_moved, moved_to})
+    else
+      Logger.info("QA for #{issue_label(issue)} re-syncs its workspace: the PR head moved from #{String.slice(head, 0, 12)} to #{String.slice(moved_to, 0, 12)}")
+
+      case sync_to_pr_head(issue, workspace, opts) do
+        :ok -> read_synced_head(issue, workspace, Keyword.put(opts, :qa_head_resynced, true), settings)
+        {:error, {:workspace_dirty, _head, _pr_head, _dirt} = dirty} -> dirty_workspace(issue, opts, settings, dirty)
+        {:error, reason} -> pre_check_unreadable(issue, opts, settings, head, {:pr_head_moved, moved_to, reason})
+      end
     end
   end
 
