@@ -1419,6 +1419,11 @@ not run on a PR at all. For each step it:
 - reads the PR head's status checks with `gh` and finds the ones the step's check names (the
   `proof_check` for `Proved by: <test>`): a check run, a whole workflow, or `workflow / job`.
 
+First the QA run brings its workspace to the PR's current head (GitHub's `refs/pull/<number>/head`),
+so a branch that upkeep updated after the approve is judged at its new head: the workspace is reset
+only when it holds no local change and no unpushed commit, a workspace with either is `blocked`
+naming it, and a PR head that moves during the run is synced once more before it blocks the pass.
+
 | What the pre-check finds | Step | The pass |
 | --- | --- | --- |
 | the check passed and the test is in the checkout | `pass`, linked to the check run | the agent starts; the prompt lists the step as confirmed, with its link, and tells the agent not to walk it |
