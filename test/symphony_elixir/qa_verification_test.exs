@@ -122,6 +122,14 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
   end
 
+  # A UI change on the hub: the diff selects the enabled `macos_app` playbook, whose pass runs the
+  # project's own server beside the app on the QA host.
+  defmodule AppPolicy do
+    def decide(_issue, settings, _opts) do
+      {:run, Enum.filter(SymphonyElixir.QaPolicy.enabled_playbooks(settings), &(&1.kind == "macos_app")), "the change delivers or updates a user journey"}
+    end
+  end
+
   defmodule UnusedStore do
     def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :disk_full}
     def get_ticket_state(_repo_key, _issue_id), do: nil
@@ -1187,6 +1195,47 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert report =~ "**Verdict:** blocked → QA (blocked)"
     end
 
+    test "the Mac app's pass, which runs the server, is never told it is ruled out, and its server block takes the repair as before" do
+      {workspace, _head} = git_workspace!()
+
+      result = needs_dev_server([step("Start a run", "pass"), step("Watch the run in the Mac app", "blocked", "no hub dev server")])
+      Process.put(:qa_agent_result, {:ok, %{result: result, tokens: %{input: 1, output: 1}}})
+      assert :ok = run(workspace, settings: hub_settings(), qa_policy: AppPolicy)
+      assert :ok = run(workspace, settings: hub_settings(), qa_policy: AppPolicy)
+
+      assert_received {:fixer_create, %{scope: @repo_key, component: "dev_server"}}
+      refute_received {:memory_tracker_state_update, @issue_id, "Merging"}
+
+      assert_received {:qa_agent_run, job, _settings}
+      assert [%{kind: "macos_app", dev_server: true}] = job.playbooks
+      assert job.unprovable.dev_server_ruled_out == nil
+      refute QaAgent.prompt(job, nil) =~ "The project's own server and its database"
+    end
+
+    test "a block that names its own cause stays blocked, whatever its unprovable steps" do
+      steps = [step("Start a run", "pass"), step("Watch the run on Android", "unprovable", "the Android playbook is not in this pass")]
+
+      # A wide pass a small QA screen limited, the ticket that already covers the gap, a QA tool's own
+      # failure, and the project's server on a repo that has not ruled it out.
+      causes = [
+        %{needs_person: true, reason: "the QA screen is too small for the wide pass"},
+        %{covered_by: "TP-716"},
+        %{cause: {:qa_worker, "qa_worker_unsafe"}},
+        %{needs_dev_server: true}
+      ]
+
+      for cause <- causes do
+        RunStore.delete_ticket_state(@repo_key, @issue_id)
+        {workspace, _head} = git_workspace!()
+        result = Map.merge(%{verdict: :blocked, summary: "The run started.", steps: steps, findings: [], reason: "blocked"}, cause)
+
+        capture_log(fn -> assert :ok = run_hub(workspace, result, settings!()) end)
+
+        refute_received {:memory_tracker_state_update, @issue_id, "Merging"}
+        assert [%{outcome: "blocked"}] = verdicts()
+      end
+    end
+
     test "a repo without the opt-out keeps the dev-server repair, whatever playbooks it has" do
       {workspace, _head} = git_workspace!()
       settings = settings!(%{"auto_review" => %{"playbooks" => %{"macos_app" => %{"build" => "make app", "app" => "build/Hub.app"}}}})
@@ -1208,6 +1257,17 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       assert :ok = run_hub(workspace, %{blocked | steps: [step("Run it", "pass"), step("Open the Mac app", "unprovable", "no app playbook")]}, settings!())
       assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+    end
+
+    test "a pass the agent gave with an unprovable step passes, naming that step" do
+      {workspace, _head} = git_workspace!()
+
+      passed = %{verdict: :pass, summary: "It ran.", steps: [step("Run it", "pass"), step("Open the Mac app", "unprovable", "no app playbook")], findings: []}
+      assert :ok = run_hub(workspace, passed, settings!())
+
+      assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "It ran. Unprovable here: Open the Mac app (no app playbook)."
     end
 
     test "a pass with no unprovable step, and a fail, are left as the agent gave them" do

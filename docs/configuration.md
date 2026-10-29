@@ -1512,7 +1512,7 @@ selects the playbook instead. The pass is then decided by the other steps, the p
 
 | The other steps | The pass |
 | --- | --- |
-| one is `blocked` | `blocked`, as before |
+| one is `blocked`, or the block names its own cause (`needs_person`, `covered_by`, `needs_dev_server`, a QA tool's own failure, a wide pass a small QA screen limited) | `blocked`, as before |
 | one fails | `fail` → `Rework` |
 | one passes, or a pre-check passed | `pass` → `Merging`, the report naming each unprovable step and its reason |
 | none is left | `blocked` with no retry and no fix ticket: the ticket pauses in `QA` on the "QA could not finish" Needs Decision hold at once, with its three options and **Merge without a QA result** recommended |
@@ -1585,11 +1585,14 @@ it to set `verification.dev_server` and `dev_server: true` on the playbook.
 A repository that sets `verification.dev_server` but keeps `verification.enabled: false` has ruled
 that repair out: its server exists and must not start on the Symphony host, where every agent run
 would start it inside its sandbox (a hub whose server only runs beside its Mac app on the QA VM,
-through `macos_app` with `dev_server: true`, say). On such a repository a `needs_dev_server` block
-files no fix ticket and sets no hold: the steps it blocked become `unprovable` with the repository's
-reason ("this repo runs its own server only beside the app on the QA host…"), and the pass is
-decided by the rest, as above. A repository without `verification.dev_server`, or with verification
-on, still gets the fix ticket.
+through `macos_app` with `dev_server: true`, say). On such a repository, a pass none of whose
+playbooks runs the server (a server-only diff that selects only `cli`) files no fix ticket for a
+`needs_dev_server` block and sets no hold: the steps it blocked become `unprovable` with the
+repository's reason ("this repo runs its own server only beside the app on the QA host…"), and the
+pass is decided by the rest, as above. A pass whose playbook runs the server itself (that
+`macos_app` pass, or `web`) has it: its prompt never calls the server unprovable, and its
+`needs_dev_server` block gets the fix ticket as before. A repository without
+`verification.dev_server`, or with verification on, still gets the fix ticket.
 
 A repository's `WORKFLOW.md` can set `auto_review.playbooks` too, for settings that differ per
 repository, such as a build command or trigger paths. It is the only `auto_review` key allowed
@@ -2472,9 +2475,10 @@ QA `web` playbook and other `dev_server: true` kinds, whose server runs on this 
 never on this host (see [macOS app QA](#macos-app-qa)).
 
 `dev_server` set with `enabled: false` is a decision Symphony reads: the server must not start on
-this host. QA's self-heal lane then never files the fix ticket that would turn `enabled` on; a QA
-step that needed the server on a pass without one is `unprovable` there, with that reason, and the
-pass is decided by its other steps (see [QA passes](#qa-passes)).
+this host. QA's self-heal lane then never files the fix ticket that would turn `enabled` on for a
+pass that has no server; a QA step that needed the server on such a pass is `unprovable` there, with
+that reason, and the pass is decided by its other steps (see [QA passes](#qa-passes)). A `macos_app`
+pass with `dev_server: true` runs the server on the QA host and is judged as before.
 
 The pool hands out the first port in `range` that no other run holds and nothing on the host already
 listens on (on `127.0.0.1`), so a port another program took is skipped rather than failing the run.

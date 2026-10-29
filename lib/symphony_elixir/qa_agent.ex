@@ -166,7 +166,8 @@ defmodule SymphonyElixir.QaAgent do
   @typedoc """
   What a pass cannot give a step (`SymphonyElixir.QaVerification`): the enabled playbooks the diff
   did not select (`SymphonyElixir.QaPolicy.unselected_playbooks/2`), and why the repo's setup rules
-  a dev server out (`SymphonyElixir.SelfHeal.dev_server_ruled_out/1`), or `nil`.
+  a dev server out of this pass, none of whose playbooks runs it
+  (`SymphonyElixir.SelfHeal.dev_server_ruled_out/2`), or `nil`.
   """
   @type unprovable :: %{unselected: [String.t()], dev_server_ruled_out: String.t() | nil}
 

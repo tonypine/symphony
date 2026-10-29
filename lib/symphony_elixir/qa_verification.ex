@@ -28,11 +28,13 @@ defmodule SymphonyElixir.QaVerification do
       Decision hold in `QA`: a block nothing names as broken gets no fix ticket
     * a step the pass cannot prove here (`unprovable`: it needs the app on a pass the diff did not
       select the app's playbook for, or the project's own server on a repo whose setup rules a dev
-      server out, `SymphonyElixir.SelfHeal.dev_server_ruled_out/1`) -> decided by the other steps,
-      the pre-checks and CI: a failing step fails, a passing one passes, and with nothing left to
-      prove a Needs Decision hold in `QA` at once, recommending a merge without a QA result; a
-      `needs_dev_server` block on such a repo makes its blocked steps unprovable instead of filing a
-      dev-server repair
+      server out of a pass none of whose playbooks runs it,
+      `SymphonyElixir.SelfHeal.dev_server_ruled_out/2`) -> decided by the other steps, the
+      pre-checks and CI: a failing step fails, a passing one passes, and with nothing left to prove
+      a Needs Decision hold in `QA` at once, recommending a merge without a QA result; a
+      `needs_dev_server` block on such a pass makes its blocked steps unprovable instead of filing a
+      dev-server repair. A block that names its own cause (a person to ask, the ticket that covers
+      it, a QA tool's own failure, the project's server) stays that block
     * a `fail` or a block on a head the PR and CI watcher reads as rejected by CI (red checks, a
       required check that never reported, a conflict with the base branch) -> `blocked` with the
       component `ci`, the ticket left in `QA` for the watcher to route (a rerun, then CI Fix, or a
@@ -506,7 +508,7 @@ defmodule SymphonyElixir.QaVerification do
 
     case Keyword.get(opts, :qa_agent, QaAgent).run(job, settings, opts) do
       {:ok, %{result: result, tokens: tokens}} ->
-        outcome = result |> run_outcome(tokens, playbooks) |> Map.put(:checks, checks) |> settle_unprovable(settings)
+        outcome = result |> run_outcome(tokens, playbooks) |> Map.put(:checks, checks) |> settle_unprovable(job.unprovable)
         apply_outcome(issue, opts, settings, head, outcome)
 
       {:error, reason, tokens} ->
@@ -537,16 +539,17 @@ defmodule SymphonyElixir.QaVerification do
 
   # A step the pass could not prove here (TP-1284): it needs what no playbook of this pass gives —
   # the running app on a pass the diff did not select the app's playbook for, or the project's own
-  # server on a repo whose setup rules a dev server out (`SelfHeal.dev_server_ruled_out/1`). Such a
-  # step can neither pass nor be repaired, so it decides nothing: on a repo that rules the server
-  # out, a `needs_dev_server` block makes its blocked steps `unprovable` with the repo's reason
-  # rather than filing a dev-server repair the repo decided against, and a pass or block whose only
-  # open steps are unprovable is decided by the rest. A failing step fails it; a passing step or a
-  # passed pre-check passes it, the report naming each unprovable step; with nothing left to prove
-  # it stays blocked, marked `unprovable`, and goes straight to a person, who is told merging
-  # without a QA result is the way on. Any other blocked step keeps the pass blocked as before.
-  defp settle_unprovable(outcome, settings) do
-    outcome |> rule_out_dev_server(SelfHeal.dev_server_ruled_out(settings)) |> settle()
+  # server on a repo whose setup rules a dev server out of a pass none of whose playbooks runs it
+  # (`SelfHeal.dev_server_ruled_out/2`, read once for the agent's job). Such a step can neither
+  # pass nor be repaired, so it decides nothing: on such a pass, a `needs_dev_server` block makes
+  # its blocked steps `unprovable` with the repo's reason rather than filing a dev-server repair the
+  # repo decided against, and a pass or block whose only open steps are unprovable is decided by
+  # the rest. A failing step fails it; a passing step or a passed pre-check passes it, the report
+  # naming each unprovable step; with nothing left to prove it stays blocked, marked `unprovable`,
+  # and goes straight to a person, who is told merging without a QA result is the way on. Any other
+  # blocked step, or a block that names its own cause, keeps the pass blocked as before.
+  defp settle_unprovable(outcome, %{dev_server_ruled_out: ruled_out}) do
+    outcome |> rule_out_dev_server(ruled_out) |> settle()
   end
 
   defp rule_out_dev_server(%{verdict: :blocked, needs_dev_server: true} = outcome, reason) when is_binary(reason) do
@@ -576,7 +579,7 @@ defmodule SymphonyElixir.QaVerification do
 
   defp settle(outcome, unprovable, by_status) do
     cond do
-      Map.has_key?(by_status, "blocked") ->
+      Map.has_key?(by_status, "blocked") or own_block?(outcome) ->
         outcome
 
       Map.has_key?(by_status, "fail") ->
@@ -589,6 +592,16 @@ defmodule SymphonyElixir.QaVerification do
         Map.merge(outcome, %{verdict: :blocked, unprovable: true, reason: "QA could prove none of the steps here. #{unprovable_note(unprovable)}"})
     end
   end
+
+  # A block that names its own cause is that block, whatever its steps say: a person to ask (an
+  # access case, or a wide pass a small QA screen limited, `QaAgent`), the open ticket that already
+  # covers it, a QA tool's own failure, or the project's server a pass that runs it lacked.
+  defp own_block?(%{verdict: :blocked} = outcome) do
+    needs_person?(outcome) or Map.get(outcome, :needs_dev_server) == true or is_binary(Map.get(outcome, :covered_by)) or
+      not is_nil(Map.get(outcome, :cause))
+  end
+
+  defp own_block?(_outcome), do: false
 
   defp settled_findings([], failing), do: Enum.map(failing, &"#{&1.name}: #{&1.details}")
   defp settled_findings(findings, _failing), do: findings
@@ -928,7 +941,7 @@ defmodule SymphonyElixir.QaVerification do
       proofs: proofs,
       unprovable: %{
         unselected: QaPolicy.unselected_playbooks(settings, playbooks),
-        dev_server_ruled_out: SelfHeal.dev_server_ruled_out(settings)
+        dev_server_ruled_out: SelfHeal.dev_server_ruled_out(settings, playbooks)
       }
     }
   end
