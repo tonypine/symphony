@@ -461,6 +461,18 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     assert watch(repo_key, "1") == nil
   end
 
+  test "a tick writes every repo's watched tickets it read into their records, and watches only its own", %{repo_key: repo_key} do
+    own = repo_key |> with_pr(issue("1", "Code Review", repo_key: repo_key, updated_at: ~U[2026-10-16 11:00:00Z]), 1)
+    other = issue("2", "QA", repo_key: "observed-other-repo", url: "https://linear.app/acme/issue/TP-2", updated_at: ~U[2026-10-16 11:30:00Z])
+    issues!([own, other])
+    pid = start_repo!(repo_key)
+
+    assert {:ok, %{watched: 1}} = Repo.poll(pid)
+
+    assert %{phase: "Code Review", issue_identifier: "TP-1", linear_updated_at: ~U[2026-10-16 11:00:00Z]} = RunStore.get_ticket_state(repo_key, "1")
+    assert %{phase: "QA", url: "https://linear.app/acme/issue/TP-2", pr_watch: nil} = RunStore.get_ticket_state("observed-other-repo", "2")
+  end
+
   test "a store that can't be read or written leaves the tick going", %{repo_key: repo_key} do
     issues!([repo_key |> with_pr(issue("1", "Code Review"), 1), issue("2", "In Progress")])
     pid = start_repo!(repo_key, run_store: FailingStore, settings: Config.settings!())

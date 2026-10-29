@@ -22,6 +22,7 @@ defmodule SymphonyElixir.TicketObservation do
 
   alias SymphonyElixir.{Config, RunStore, TicketState}
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Routing.Resolver
 
   @table __MODULE__
   @outcomes [:updated, :unchanged, :stale]
@@ -98,6 +99,24 @@ defmodule SymphonyElixir.TicketObservation do
     end)
   end
 
+  @doc """
+  Observes `issues` that may belong to several repos, such as a by-id read, which carries no repo
+  key. Each issue goes to the repo it routes to (`SymphonyElixir.Routing.Resolver.with_repo_key/2`;
+  an issue that already has a key keeps it), and an issue no repo takes is skipped. `opts`: `:repos`,
+  defaulting to the configured repos, and those of `observe/3`. Returns the outcomes across repos.
+  """
+  @spec observe_routed([Issue.t()], keyword()) :: summary()
+  def observe_routed(issues, opts \\ []) when is_list(issues) do
+    {repos, opts} = Keyword.pop_lazy(opts, :repos, &configured_repos/0)
+
+    issues
+    |> Enum.flat_map(&route(&1, repos))
+    |> Enum.group_by(fn {repo_key, _issue} -> repo_key end, fn {_repo_key, issue} -> issue end)
+    |> Enum.reduce(empty_summary(), fn {repo_key, repo_issues}, acc ->
+      Map.merge(acc, observe_all(repo_key, repo_issues, opts), fn _outcome, left, right -> left + right end)
+    end)
+  end
+
   @doc "How many observations had each outcome since Symphony started."
   @spec summary() :: summary()
   def summary do
@@ -125,6 +144,22 @@ defmodule SymphonyElixir.TicketObservation do
   defp observe_issue(_repo_key, _issue, _opts) do
     bump(:errors)
     {:error, :invalid_issue}
+  end
+
+  defp route(%Issue{} = issue, repos) do
+    case Resolver.with_repo_key(issue, repos) do
+      %Issue{repo_key: repo_key} = routed when is_binary(repo_key) and repo_key != "" -> [{repo_key, routed}]
+      _unrouted -> []
+    end
+  end
+
+  defp route(_issue, _repos), do: []
+
+  defp configured_repos do
+    case Config.repos() do
+      {:ok, repos} -> repos
+      {:error, _reason} -> []
+    end
   end
 
   defp read(repo_key, issue_id) do

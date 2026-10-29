@@ -88,6 +88,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     ProtectedPathsGate,
     PrReviewPoller,
     RunStore,
+    TicketObservation,
     TicketPullRequest,
     TicketState,
     Tracker
@@ -446,11 +447,14 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp failures(_scope, _failed?, state), do: state.failures
 
   # The repository's tickets in the watched states, read from Linear; an error when its read failed,
-  # so a missing answer never reads as tickets that left the set.
+  # so a missing answer never reads as tickets that left the set. The read covers every repo, and
+  # every repo's tickets it returned are written into their records.
   defp watched_issues(state, settings) do
     tracker = Keyword.get(state.opts, :tracker, Tracker)
 
     with {:ok, issues, failures} <- tracker.fetch_issues_by_states_with_failures(Enum.map(phases(settings), &elem(&1, 0))) do
+      TicketObservation.observe_routed(issues)
+
       if Enum.any?(failures, &(elem(&1, 0) == state.repo_key)),
         do: {:error, {:linear_read_failed, state.repo_key}},
         else: {:ok, for(%Issue{repo_key: key} = issue <- issues, key in [nil, state.repo_key], do: issue)}
