@@ -220,7 +220,8 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       polled = issue(ctx.repo_key, 1, description: "Dispatch from the record", comments: [%{author: "Tony", body: "Also the retry", created_at: @linear_at}])
       {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [polled], 0)
 
-      {%{passed: [_polled], cache: cache}, _log} = with_log(fn -> QualityGate.evaluate([polled], config, %{}, provider_module: PassProvider) end)
+      score = fn -> QualityGate.evaluate([polled], config, %{}, provider_module: PassProvider) end
+      {%{passed: [_polled], cache: cache}, _log} = with_log(score)
       assert %{passed?: true, comment_signature: signature} = cache[polled.id]
       assert is_binary(signature)
 
@@ -230,7 +231,9 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       {%{dispatchable: [rebuilt]}, state} = capture_cycle(state, ctx.repos, 50)
 
       assert Orchestrator.quality_gate_input_for_test(state, [rebuilt]) == [rebuilt]
-      assert %{passed: [^rebuilt], cache: ^cache} = QualityGate.evaluate([rebuilt], config, cache, provider_module: NoScoreProvider)
+
+      assert %{passed: [^rebuilt], cache: ^cache} =
+               QualityGate.evaluate([rebuilt], config, cache, provider_module: NoScoreProvider)
     end
 
     test "with the quality gate on, a ticket only the record has waits for its repo's poll to read its text", ctx do
