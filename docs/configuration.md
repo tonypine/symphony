@@ -1500,7 +1500,25 @@ run store, which the dashboard's run history shows. The `QA` state applies the v
 | `pass` with `scope: none` | the change has nothing on screen to judge: neither the diff nor the ticket names a walkthrough step or a screen, by the agent's answer or by the QA policy (below) | `Merging` with the reason in the report, but only when the pass ran `qa_build`, `qa_launch_app` and a `qa_check_app` that found the app healthy, so the merge still waits on the app starting; without them it is `inconclusive` |
 | `fail` | a step shows a defect in the change | `Rework` |
 | `inconclusive` | the QA run itself fell short: a `macos_app` pass that judged screens but never ran the wide pass, or a `scope: none` pass that never started the app | QA runs once more on the same head, then the ticket pauses in `QA` on a Needs Decision hold. Nothing in the environment is broken, so no fix ticket is filed |
-| `blocked` | the pass could not test the change | retried once on the same head, then: the self-heal lane when the QA tools raised the block themselves (`qa_worker_*`, `qa_host_missing_tool`, `qa_host_tool_check_failed`, `qa_host_tunnel_failed`, `qa_dev_server_failed`), when only a person can clear it (`needs_person`, an access hold), or when the agent named the open ticket that covers it (`covered_by`) or the project's missing dev server (`needs_dev_server`); any other block (the agent's own account, a crash, the token limit, a check that never finished) pauses the ticket in `QA` on a Needs Decision hold instead of filing a fix ticket for a problem nothing names |
+| `blocked` | the pass could not test the change | retried once on the same head, then: the self-heal lane when the QA tools raised the block themselves (`qa_worker_*`, `qa_host_missing_tool`, `qa_host_tool_check_failed`, `qa_host_tunnel_failed`, `qa_dev_server_failed`), when only a person can clear it (`needs_person`, an access hold), or when the agent named the open ticket that covers it (`covered_by`) or the project's missing dev server (`needs_dev_server`, unless the repository rules a dev server out: below); a block whose only open steps are `unprovable` (below) asks a person at once; any other block (the agent's own account, a crash, the token limit, a check that never finished) pauses the ticket in `QA` on a Needs Decision hold instead of filing a fix ticket for a problem nothing names |
+
+**Steps QA cannot prove here.** A step can need what no playbook of the pass gives: the running app
+on a pass the diff did not select the app's playbook for (a server-only fix whose walkthrough
+watches the Mac app), or the project's own server on a repository that rules a dev server out
+(below). Such a step can neither pass nor be repaired, so the agent marks it `unprovable` with the
+reason, and the report lists it as **unprovable here**. The prompt names the enabled playbooks the
+diff did not select, so the agent knows which steps fall there; a `qa:<kind>` label on the ticket
+selects the playbook instead. Only a pass whose prompt offered the status (an enabled playbook the
+diff did not select, or a server the repository rules out for this pass) reads it: on any other
+pass an `unprovable` step is the agent's own block, reported `blocked` and retried as one. The pass
+is then decided by the other steps, the pre-checks and CI:
+
+| The other steps | The pass |
+| --- | --- |
+| one is `blocked`, or the block names its own cause (`needs_person`, `covered_by`, `needs_dev_server`, a QA tool's own failure, a wide pass a small QA screen limited) | `blocked`, as before |
+| one fails | `fail` → `Rework` |
+| one passes, or a pre-check passed | `pass` → `Merging`, the report naming each unprovable step and its reason |
+| none is left | `blocked` with no retry and no fix ticket: the ticket pauses in `QA` on the "QA could not finish" Needs Decision hold at once, with its three options and **Merge without a QA result** recommended |
 
 The QA policy gives a pass `scope: none` up front when a `macos_app` pass is selected (by a
 `qa:macos_app` label) although no changed path matches any selected playbook's `paths`, and the
@@ -1566,6 +1584,18 @@ server cannot build or start, the steps that need it are `blocked`, never judged
 the agent wrote. When they are blocked because the pass had no dev server at all, the agent says
 so (`needs_dev_server`), and the self-heal fix ticket lands in the project's own repository, asking
 it to set `verification.dev_server` and `dev_server: true` on the playbook.
+
+A repository that sets `verification.dev_server` but keeps `verification.enabled: false` has ruled
+that repair out: its server exists and must not start on the Symphony host, where every agent run
+would start it inside its sandbox (a hub whose server only runs beside its Mac app on the QA VM,
+through `macos_app` with `dev_server: true`, say). On such a repository, a pass none of whose
+playbooks runs the server (a server-only diff that selects only `cli`) files no fix ticket for a
+`needs_dev_server` block and sets no hold: the steps it blocked become `unprovable` with the
+repository's reason ("this repo runs its own server only beside the app on the QA host…"), and the
+pass is decided by the rest, as above. A pass whose playbook runs the server itself (that
+`macos_app` pass, or `web`) has it: its prompt never calls the server unprovable, and its
+`needs_dev_server` block gets the fix ticket as before. A repository without
+`verification.dev_server`, or with verification on, still gets the fix ticket.
 
 A repository's `WORKFLOW.md` can set `auto_review.playbooks` too, for settings that differ per
 repository, such as a build command or trigger paths. It is the only `auto_review` key allowed
@@ -2447,6 +2477,12 @@ QA `web` playbook and other `dev_server: true` kinds, whose server runs on this 
 `dev_server: true` reads only `dev_server`, whatever `enabled` says: its server runs on the QA VM,
 never on this host (see [macOS app QA](#macos-app-qa)).
 
+`dev_server` set with `enabled: false` is a decision Symphony reads: the server must not start on
+this host. QA's self-heal lane then never files the fix ticket that would turn `enabled` on for a
+pass that has no server; a QA step that needed the server on such a pass is `unprovable` there, with
+that reason, and the pass is decided by its other steps (see [QA passes](#qa-passes)). A `macos_app`
+pass with `dev_server: true` runs the server on the QA host and is judged as before.
+
 The pool hands out the first port in `range` that no other run holds and nothing on the host already
 listens on (on `127.0.0.1`), so a port another program took is skipped rather than failing the run.
 The default range, `[4100, 4199]`, leaves out `4000`, Symphony's own API port. When every port is
@@ -2711,17 +2747,19 @@ Symphony's store, never Linear, and writes nothing. `/api/v1/state` returns the 
   without the ticket) and `at`.
 
 - `record_newer`: the differences the record being newer explains, counted apart: `count` since
-  Symphony started, and `recent`, the identifiers of the last five, newest first.
+  Symphony started, and `recent`, the last five, newest first, each with `identifier` and `side`.
 
 A difference means the two sides disagree on a snapshot at least as new as the record: Linear was
-read for the poll cache no earlier than the record's phase was last written, so one side is behind.
-A difference in a ticket's presence or state whose record phase was written after that read
-(Symphony's own move, which writes the record before Linear, a person's move a webhook delivered, or
-a newer read of the ticket while the poll ran) is the record being the fresher side, not drift: it
-counts under `record_newer` instead, once while it lasts, and the repository's next poll compares
-the two again on a fresh snapshot, so a lag that is real still shows. A priority difference, and a
-ticket whose record has no phase time yet (written before Symphony kept one), is always a
-difference.
+read for the poll cache no earlier than the record last changed, so one side is behind. A
+difference in a ticket's state, or in whether it is a candidate at all, whose record changed after
+that read is the record being the fresher side, not drift: Symphony's own move, which writes the
+record before Linear (a ticket the poll still lists in Merging that Symphony closed once its PR
+merged, or one Symphony promoted that the poll doesn't list yet), a person's move or a removal a
+webhook delivered, or a newer read of the ticket while the poll ran. It counts under `record_newer`
+instead, once while it lasts, and the repository's next poll compares the two again on a fresh
+snapshot, so a lag that is real still shows. A priority difference, a ticket the record has never
+observed, and a ticket whose record has no phase time yet (written before Symphony kept one) are
+always differences.
 
 A difference is logged at warning level once while it lasts (`Dispatch shadow difference:`), and
 once more if it comes back after it cleared. `window_differences` staying at zero across a window

@@ -158,9 +158,18 @@ defmodule SymphonyElixir.QaAgent do
           optional(:base_ref) => String.t(),
           optional(:journey) => %{source: String.t(), text: String.t() | nil},
           optional(:proofs) => [QaPreCheck.result()],
-          optional(:design_files) => [Design.file()]
+          optional(:design_files) => [Design.file()],
+          optional(:unprovable) => unprovable()
         }
   @type run_result :: %{result: result(), tokens: map()}
+
+  @typedoc """
+  What a pass cannot give a step (`SymphonyElixir.QaVerification`): the enabled playbooks the diff
+  did not select (`SymphonyElixir.QaPolicy.unselected_playbooks/2`), and why the repo's setup rules
+  a dev server out of this pass, none of whose playbooks runs it
+  (`SymphonyElixir.SelfHeal.dev_server_ruled_out/2`), or `nil`.
+  """
+  @type unprovable :: %{unselected: [String.t()], dev_server_ruled_out: String.t() | nil}
 
   @typedoc """
   The files a pass kept (`SymphonyElixir.Artifacts`): `files` maps each evidence entry that names a
@@ -335,7 +344,7 @@ defmodule SymphonyElixir.QaAgent do
     #{own_tools_rule(job)}
     When one playbook is blocked, mark its steps `blocked` and continue with the other playbooks'
     steps: report `pass` or `fail` for every step that could run. The verdict stays `blocked` while
-    any step is blocked, with each failing step's defect in `details`.
+    any step is blocked, with each failing step's defect in `details`.#{unprovable_rule(job)}
 
     Ending your turn ends the session: you cannot come back later to check on anything. Do not leave
     work running in the background. Run each command in the foreground with a timeout, or poll it
@@ -351,7 +360,7 @@ defmodule SymphonyElixir.QaAgent do
       "steps": [
         {
           "name": "<what you checked>",
-          "status": "pass" | "fail" | "blocked" | "skipped",
+          "status": "pass" | "fail" | "blocked" | "skipped"#{unprovable_status(job)},
           "details": "<command and the relevant output, or what you saw>",
           "evidence": ["<linear_attach_file URL or qa-evidence/ path>"]#{checklist_field(job)}
         }
@@ -563,6 +572,59 @@ defmodule SymphonyElixir.QaAgent do
     with their account), and anything under an `After release` heading, is not yours to run: name it
     in your report as outside QA's reach and judge the rest. It never fails or blocks the ticket.
     """
+  end
+
+  # A step that needs what no playbook of this pass gives — the running app on a pass the diff did not
+  # select the app's playbook for, or the project's own server on a repo that rules a dev server out —
+  # can neither pass nor be repaired here (TP-1284): it is `unprovable`, and Symphony decides the pass
+  # from the other steps, the pre-checks and CI. The rule is offered only when one of them holds.
+  defp unprovable_rule(%{epic_review: true}), do: ""
+
+  defp unprovable_rule(%{unprovable: unprovable}) do
+    case unprovable_cases(unprovable) do
+      [] ->
+        ""
+
+      cases ->
+        """
+
+
+        Some steps cannot be proved in this pass:
+        #{Enum.map_join(cases, "\n", &("- " <> &1))}
+        Mark a step that needs one of them `unprovable`, never `blocked`, with that reason in `details`,
+        and do not set `needs_dev_server` for it. Symphony decides the pass from the other steps, the
+        pre-checks and CI. Never mark `unprovable` a step one of this pass's playbooks (above) can run,
+        or one that fails.\
+        """
+    end
+  end
+
+  defp unprovable_rule(_job), do: ""
+
+  defp unprovable_status(job), do: if(unprovable_rule(job) == "", do: "", else: ~s( | "unprovable"))
+
+  defp unprovable_cases(unprovable) do
+    playbooks =
+      case Map.get(unprovable, :unselected, []) do
+        [] ->
+          []
+
+        kinds ->
+          names = Enum.map_join(kinds, ", ", &"`#{&1}`")
+
+          [
+            "This repo also has the #{names} playbook(s), which this diff did not select, so their app or " <>
+              "tools are not part of this pass. A `qa:<kind>` label on the ticket selects one."
+          ]
+      end
+
+    dev_server =
+      case Map.get(unprovable, :dev_server_ruled_out) do
+        reason when is_binary(reason) -> ["The project's own server and its database: #{reason}."]
+        _none -> []
+      end
+
+    playbooks ++ dev_server
   end
 
   # A PR that adds a QA tool, or a QA host setup it lists under `After release`, cannot have its

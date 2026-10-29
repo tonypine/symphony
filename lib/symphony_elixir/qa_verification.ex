@@ -26,6 +26,15 @@ defmodule SymphonyElixir.QaVerification do
     * `blocked` (tooling or environment) -> retried boundedly on the same head, then the self-heal
       lane when the QA tools raised the block themselves or only a person can clear it, else a Needs
       Decision hold in `QA`: a block nothing names as broken gets no fix ticket
+    * a step the pass cannot prove here (`unprovable`: it needs the app on a pass the diff did not
+      select the app's playbook for, or the project's own server on a repo whose setup rules a dev
+      server out of a pass none of whose playbooks runs it,
+      `SymphonyElixir.SelfHeal.dev_server_ruled_out/2`) -> decided by the other steps, the
+      pre-checks and CI: a failing step fails, a passing one passes, and with nothing left to prove
+      a Needs Decision hold in `QA` at once, recommending a merge without a QA result; a
+      `needs_dev_server` block on such a pass makes its blocked steps unprovable instead of filing a
+      dev-server repair. A block that names its own cause (a person to ask, the ticket that covers
+      it, a QA tool's own failure, the project's server) stays that block
     * a `fail` or a block on a head the PR and CI watcher reads as rejected by CI (red checks, a
       required check that never reported, a conflict with the base branch) -> `blocked` with the
       component `ci`, the ticket left in `QA` for the watcher to route (a rerun, then CI Fix, or a
@@ -499,7 +508,7 @@ defmodule SymphonyElixir.QaVerification do
 
     case Keyword.get(opts, :qa_agent, QaAgent).run(job, settings, opts) do
       {:ok, %{result: result, tokens: tokens}} ->
-        outcome = result |> run_outcome(tokens, playbooks) |> Map.put(:checks, checks)
+        outcome = result |> run_outcome(tokens, playbooks) |> Map.put(:checks, checks) |> settle_unprovable(job.unprovable)
         apply_outcome(issue, opts, settings, head, outcome)
 
       {:error, reason, tokens} ->
@@ -527,6 +536,87 @@ defmodule SymphonyElixir.QaVerification do
         blocked(issue, opts, settings, head, blocked_outcome(reason, extra))
     end
   end
+
+  # A step the pass could not prove here (TP-1284): it needs what no playbook of this pass gives —
+  # the running app on a pass the diff did not select the app's playbook for, or the project's own
+  # server on a repo whose setup rules a dev server out of a pass none of whose playbooks runs it
+  # (`SelfHeal.dev_server_ruled_out/2`, read once for the agent's job). Such a step can neither
+  # pass nor be repaired, so it decides nothing: on such a pass, a `needs_dev_server` block makes
+  # its blocked steps `unprovable` with the repo's reason rather than filing a dev-server repair the
+  # repo decided against, and a pass or block whose only open steps are unprovable is decided by
+  # the rest. A failing step fails it; a passing step or a passed pre-check passes it, the report
+  # naming each unprovable step; with nothing left to prove it stays blocked, marked `unprovable`,
+  # and goes straight to a person, who is told merging without a QA result is the way on. Any other
+  # blocked step, or a block that names its own cause, keeps the pass blocked as before.
+  #
+  # Only a pass that offered the status (an unselected playbook or a ruled-out server) settles: on
+  # any other pass an `unprovable` step is the agent's own block, so it is `blocked` again and takes
+  # the retry, self-heal or person path as before.
+  defp settle_unprovable(outcome, %{unselected: [], dev_server_ruled_out: nil}),
+    do: %{outcome | steps: Enum.map(outcome.steps, &unoffered_step/1)}
+
+  defp settle_unprovable(outcome, %{dev_server_ruled_out: ruled_out}) do
+    outcome |> rule_out_dev_server(ruled_out) |> settle()
+  end
+
+  defp unoffered_step(%{status: "unprovable"} = step), do: %{step | status: "blocked"}
+  defp unoffered_step(step), do: step
+
+  defp rule_out_dev_server(%{verdict: :blocked, needs_dev_server: true} = outcome, reason) when is_binary(reason) do
+    steps =
+      if Enum.any?(outcome.steps, &(&1.status == "blocked")),
+        do: outcome.steps,
+        else: outcome.steps ++ [%{name: "The steps that need the project's own server", status: "blocked", details: outcome.reason || "", evidence: []}]
+
+    %{outcome | needs_dev_server: false, steps: Enum.map(steps, &unprovable_step(&1, reason))}
+  end
+
+  defp rule_out_dev_server(outcome, _reason), do: outcome
+
+  defp unprovable_step(%{status: "blocked"} = step, reason),
+    do: %{step | status: "unprovable", details: String.trim("#{reason}. #{step.details}")}
+
+  defp unprovable_step(step, _reason), do: step
+
+  defp settle(%{verdict: verdict, steps: steps} = outcome) when verdict in [:pass, :blocked] do
+    case Enum.filter(steps, &(&1.status == "unprovable")) do
+      [] -> outcome
+      unprovable -> settle(outcome, unprovable, Enum.group_by(steps, & &1.status))
+    end
+  end
+
+  defp settle(outcome), do: outcome
+
+  defp settle(outcome, unprovable, by_status) do
+    cond do
+      Map.has_key?(by_status, "blocked") or own_block?(outcome) ->
+        outcome
+
+      Map.has_key?(by_status, "fail") ->
+        %{outcome | verdict: :fail, findings: settled_findings(outcome.findings, by_status["fail"])}
+
+      Map.has_key?(by_status, "pass") or Enum.any?(Map.get(outcome, :checks, []), &(&1.status == :pass)) ->
+        %{outcome | verdict: :pass, summary: String.trim("#{outcome.summary} #{unprovable_note(unprovable)}")}
+
+      true ->
+        Map.merge(outcome, %{verdict: :blocked, unprovable: true, reason: "QA could prove none of the steps here. #{unprovable_note(unprovable)}"})
+    end
+  end
+
+  # A block that names its own cause is that block, whatever its steps say: a person to ask (an
+  # access case, or a wide pass a small QA screen limited, `QaAgent`), the open ticket that already
+  # covers it, a QA tool's own failure, or the project's server a pass that runs it lacked.
+  defp own_block?(%{verdict: :blocked} = outcome) do
+    needs_person?(outcome) or Map.get(outcome, :needs_dev_server) == true or is_binary(Map.get(outcome, :covered_by)) or
+      not is_nil(Map.get(outcome, :cause))
+  end
+
+  defp own_block?(_outcome), do: false
+
+  defp settled_findings([], failing), do: Enum.map(failing, &"#{&1.name}: #{&1.details}")
+  defp settled_findings(findings, _failing), do: findings
+
+  defp unprovable_note(steps), do: "Unprovable here: " <> Enum.map_join(steps, "; ", &"#{&1.name} (#{&1.details})") <> "."
 
   defp apply_outcome(issue, opts, settings, head, %{verdict: :pass, scope: :none} = outcome) do
     case missing_app_checks(outcome) do
@@ -673,7 +763,7 @@ defmodule SymphonyElixir.QaVerification do
     case next do
       :retry -> :ok
       :self_heal -> self_heal(issue, opts, attempts, outcome)
-      :escalate -> escalate(issue, opts, settings, attempts, details.reason)
+      :escalate -> escalate(issue, opts, settings, attempts, details.reason, unprovable?(outcome))
     end
   end
 
@@ -696,6 +786,7 @@ defmodule SymphonyElixir.QaVerification do
   # own dev server setup in its repo (TP-1106). Any other block — the agent's own account of what
   # went wrong, a run that crashed or ran out of tokens, a check that never finished — names nothing
   # broken to fix, so a fix ticket for it would chase a non-problem (TP-1118): it goes to a person.
+  defp self_heal_input?(%{unprovable: true}), do: false
   defp self_heal_input?(%{needs_person: true}), do: true
   defp self_heal_input?(%{needs_dev_server: true}), do: true
   defp self_heal_input?(%{covered_by: identifier}) when is_binary(identifier), do: true
@@ -712,30 +803,55 @@ defmodule SymphonyElixir.QaVerification do
   # A pass that keeps ending without a verdict and names nothing the machine can repair: the ticket
   # pauses in QA on a person's decision. Answering it clears the hold and QA runs again on the same
   # head; each further run that ends the same way asks again.
-  defp escalate(issue, opts, settings, attempts, reason) do
+  #
+  # A pass with nothing it could prove here (every open step `unprovable`) asks at once, with the
+  # same three options: another run would end the same way, so merging without a QA result is the
+  # recommended one.
+  defp escalate(issue, opts, settings, attempts, reason, unprovable? \\ false) do
     Logger.warning("QA for #{issue_label(issue)} could not reach a verdict after #{attempts} run(s); asking a person: #{reason}")
     hold_opts = opts |> Keyword.take([:tracker, :store]) |> Keyword.put(:repo_key, repo_key(issue, opts))
 
-    case DecisionRequest.ask(issue, escalation_request(issue, settings, attempts, reason), hold_opts) do
+    case DecisionRequest.ask(issue, escalation_request(issue, settings, attempts, reason, unprovable?), hold_opts) do
       :ok -> :ok
       {:error, error} -> {:error, {:qa_escalation_failed, error}}
     end
   end
 
-  defp escalation_request(issue, settings, attempts, reason) do
+  defp escalation_request(issue, settings, attempts, reason, unprovable?) do
     %{
       title: "QA could not finish its check of #{issue_label(issue)}",
-      question: "QA ran #{issue_mention(issue)} #{attempts} times on the same change without a pass or a fail. How should it continue?",
-      why: "The last run ended with: #{PlainWords.scrub(reason)}. No QA tool reported a broken part of the QA environment, so the machine files no fix ticket for it.",
+      question: escalation_question(issue, attempts, unprovable?),
+      why: escalation_why(reason, unprovable?),
       options: [
-        %{label: "Run QA again", effect: "the ticket continues in QA and QA runs once more on the same change", recommended: true},
+        recommend(%{label: "Run QA again", effect: "the ticket continues in QA and QA runs once more on the same change"}, not unprovable?),
         %{label: "Send it back to Rework", effect: "you move #{issue_label(issue)} to Rework, and its next run reads QA's report"},
-        %{label: "Merge without a QA result", effect: "you move #{issue_label(issue)} to #{TransitionGuard.target(:qa_pass, %{settings: settings})}, and it merges on its review and CI alone"}
+        recommend(
+          %{label: "Merge without a QA result", effect: "you move #{issue_label(issue)} to #{TransitionGuard.target(:qa_pass, %{settings: settings})}, and it merges on its review and CI alone"},
+          unprovable?
+        )
       ],
       if_unanswered: "#{issue_label(issue)} stays in #{settings.tracker.qa_state} and goes no further.",
-      recommendation_reason: "A run that ends without a result is often a passing hiccup, and one more run costs little."
+      recommendation_reason: escalation_recommendation(unprovable?)
     }
   end
+
+  defp escalation_question(issue, _attempts, true),
+    do: "QA could not prove any step of #{issue_mention(issue)} here, because each one needs something this repo's QA pass does not have. How should it continue?"
+
+  defp escalation_question(issue, attempts, false),
+    do: "QA ran #{issue_mention(issue)} #{attempts} times on the same change without a pass or a fail. How should it continue?"
+
+  defp escalation_why(reason, true),
+    do: "The run ended with: #{PlainWords.scrub(reason)} No step QA could run failed, and nothing in the QA environment is broken, so the machine files no fix ticket for it."
+
+  defp escalation_why(reason, false),
+    do: "The last run ended with: #{PlainWords.scrub(reason)}. No QA tool reported a broken part of the QA environment, so the machine files no fix ticket for it."
+
+  defp escalation_recommendation(true), do: "QA can never prove these steps on this repo, so another run would end the same way; the review and CI already judged the change."
+  defp escalation_recommendation(false), do: "A run that ends without a result is often a passing hiccup, and one more run costs little."
+
+  defp recommend(option, true), do: Map.put(option, :recommended, true)
+  defp recommend(option, false), do: option
 
   defp issue_mention(%Issue{identifier: identifier, title: title}) when is_binary(identifier) and is_binary(title), do: "#{identifier} (#{PlainWords.scrub(title)})"
   defp issue_mention(issue), do: issue_label(issue)
@@ -798,7 +914,7 @@ defmodule SymphonyElixir.QaVerification do
     end
   end
 
-  defp retry_blocked?(attempts, outcome), do: attempts < @max_blocked_attempts and not needs_person?(outcome)
+  defp retry_blocked?(attempts, outcome), do: attempts < @max_blocked_attempts and not needs_person?(outcome) and not unprovable?(outcome)
 
   defp blocked_target(attempts, outcome) do
     if retry_blocked?(attempts, outcome), do: "QA (blocked, retrying)", else: "QA (blocked)"
@@ -816,6 +932,9 @@ defmodule SymphonyElixir.QaVerification do
   defp needs_person?(%{needs_person: true}), do: true
   defp needs_person?(_outcome), do: false
 
+  defp unprovable?(%{unprovable: true}), do: true
+  defp unprovable?(_outcome), do: false
+
   defp agent_job(issue, workspace, opts, settings, head, playbooks, proofs) do
     %{
       issue: issue,
@@ -829,7 +948,11 @@ defmodule SymphonyElixir.QaVerification do
       token_limit: settings.agent.max_tokens_per_issue,
       run_profile: Keyword.get(opts, :run_profile),
       journey: journey(issue, settings.proof_check),
-      proofs: proofs
+      proofs: proofs,
+      unprovable: %{
+        unselected: QaPolicy.unselected_playbooks(settings, playbooks),
+        dev_server_ruled_out: SelfHeal.dev_server_ruled_out(settings, playbooks)
+      }
     }
   end
 

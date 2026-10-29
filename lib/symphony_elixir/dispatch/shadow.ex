@@ -15,10 +15,12 @@ defmodule SymphonyElixir.Dispatch.Shadow do
 
   A record can be newer than the poll snapshot it is compared with: Symphony writes its own moves to
   the record first, and a webhook writes a person's, while the snapshot was read before. `classify/3`
-  sets aside a difference in a ticket's presence or state whose record phase was written after the
-  snapshot was read (`record_newer`): the record is the fresher side, so it is not drift. The report
-  counts those apart, once each like a difference, with the identifiers of the last five. The next
-  poll reads Linear again, and the comparison on that fresh snapshot shows a lag that is real.
+  sets aside a difference in a ticket's presence or state whose record was written after the
+  snapshot was read (`record_newer`): a ticket the poll still lists that Symphony closed or a webhook
+  removed since, one Symphony promoted that the poll doesn't list yet, a state moved since. The
+  record is the fresher side, so it is not drift. The report counts those apart, once each like a
+  difference, with the identifier and side of the last five. The next poll reads Linear again, and
+  the comparison on that fresh snapshot shows a lag that is real.
   """
 
   use GenServer
@@ -79,7 +81,7 @@ defmodule SymphonyElixir.Dispatch.Shadow do
           window_cycles: non_neg_integer(),
           window_differences: non_neg_integer(),
           recent: [map()],
-          record_newer: %{count: non_neg_integer(), recent: [String.t() | nil]}
+          record_newer: %{count: non_neg_integer(), recent: [%{identifier: String.t() | nil, side: side()}]}
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -121,10 +123,10 @@ defmodule SymphonyElixir.Dispatch.Shadow do
 
   @doc """
   Splits `differences` by which side is newer: a difference in a ticket's presence or state whose
-  record phase was written after the poll snapshot was read (`read_at`) is `record_newer`; every
-  other one stays a difference. `phase_at` maps an issue id to when its record's phase was last
-  written (`SymphonyElixir.TicketState`). A snapshot or a phase write with no known time, and a
-  priority difference, stay differences.
+  record was written after the poll snapshot was read (`read_at`) is `record_newer`; every other one
+  stays a difference. `phase_at` maps an issue id to when its record last changed what the
+  candidates read from it: its phase, or its removal (`SymphonyElixir.TicketState`). A snapshot or a
+  record with no known time, a ticket with no record, and a priority difference stay differences.
   """
   @spec classify([difference()], DateTime.t() | nil, %{optional(String.t()) => DateTime.t() | nil}) :: classified()
   def classify(differences, read_at, phase_at) when is_list(differences) and is_map(phase_at) do
@@ -160,7 +162,7 @@ defmodule SymphonyElixir.Dispatch.Shadow do
     entries = :ets.tab2list(@table)
     window = for {{:cycle, _cycle}, count} <- entries, do: count
     recent = for {{:recent, seq}, difference} <- entries, do: {seq, difference}
-    newer = for {{:newer_recent, seq}, identifier} <- entries, do: {seq, identifier}
+    newer = for {{:newer_recent, seq}, newer} <- entries, do: {seq, newer}
 
     %{
       cycles_compared: lookup(entries, :cycles_compared),
@@ -221,7 +223,7 @@ defmodule SymphonyElixir.Dispatch.Shadow do
     for difference <- new_since_last_cycle(:newer_open, record_newer) do
       bump(:record_newer)
       seq = bump(:newer_seq)
-      :ets.insert(@table, {{:newer_recent, seq}, difference.identifier})
+      :ets.insert(@table, {{:newer_recent, seq}, Map.take(difference, [:identifier, :side])})
       :ets.delete(@table, {:newer_recent, seq - @record_newer_limit})
     end
   end

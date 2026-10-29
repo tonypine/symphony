@@ -82,7 +82,7 @@ defmodule SymphonyElixirWeb.DispatchShadowStateTest do
                  "at" => "2026-10-29T17:00:00Z"
                }
              ],
-             "record_newer" => %{"count" => 1, "recent" => ["ACME-2"]}
+             "record_newer" => %{"count" => 1, "recent" => [%{"identifier" => "ACME-2", "side" => "both"}]}
            }
   end
 end
