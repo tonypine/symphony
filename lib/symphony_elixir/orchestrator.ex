@@ -720,6 +720,9 @@ defmodule SymphonyElixir.Orchestrator do
           end
 
         state = finish_usage_limit_canary(state, issue_id)
+        # The run's end is recorded: the PR watcher reads the ticket now, so the branch upkeep
+        # deferred while the run worked fires at once.
+        PrWatch.poll_now()
         notify_dashboard()
         {:noreply, redispatch_slot_waiting(state)}
     end

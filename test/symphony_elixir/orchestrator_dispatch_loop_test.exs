@@ -200,6 +200,13 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
       assert ticket_events(@repo_key, @issue_id) == []
     end
 
+    test "a run's end asks every PR watcher to read at once, so the branch upkeep deferred during the run fires" do
+      {:ok, _owner} = Registry.register(SymphonyElixir.Repo.Registry, {:pr_watch, "run-end-test"}, nil)
+
+      down(:DownWakesWatcher, :normal)
+      assert_receive :tick_now
+    end
+
     test "a PR run records no run event" do
       pid = start_orchestrator(:DownPrRun)
       send_down(pid, "run-1", "In Progress", :normal, run_kind: :pr)

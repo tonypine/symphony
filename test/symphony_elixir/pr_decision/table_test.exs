@@ -22,6 +22,17 @@ defmodule SymphonyElixir.PrDecision.TableTest do
     assert generated =~ "`wait`, `wait_for_competitors`, `file_fix_ticket`, `decision`"
   end
 
+  test "lists the upkeep group first, apart from the flow rules" do
+    generated = Table.generated()
+    rows = for line <- String.split(generated, "\n"), [_, id] <- [Regex.run(~r/^\| (U\d+) \|/, line)], do: id
+
+    assert rows == Enum.map(PrDecision.upkeep_rules(), & &1.id)
+    assert generated =~ "| U1 | all |"
+    [upkeep, flow] = String.split(generated, "## Rules", parts: 2)
+    assert upkeep =~ "## Upkeep"
+    refute flow =~ "| U1 |"
+  end
+
   test "update/1 keeps the prose around the generated part and replaces only that part" do
     stale = String.replace(Table.render(), "| R29 |", "| R99 |")
     document = "# Title\n\nProse before.\n\n" <> generated_part(stale) <> "\n\n## Competing PRs\n\nProse after.\n"
