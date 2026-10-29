@@ -104,6 +104,23 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       assert %{"webhook_first" => 1, "poll_first" => 0, "poll_first_recent" => []} = linear_webhooks_state()["compare"]
     end
 
+    test "names in the state each ticket and field a read had to correct before the webhook brought it" do
+      repo_key = Config.repo_key!()
+      {:ok, :updated} = TicketObservation.observe(repo_key, polled_issue(priority: 2))
+
+      # A by-id read finds a new priority no delivery brought.
+      corrected = polled_issue(priority: 3, updated_at: ~U[2026-10-29 09:02:00.000Z])
+      assert {:ok, :updated} = TicketObservation.observe(repo_key, corrected, source: :by_id, now: ~U[2026-10-29 09:03:00Z])
+
+      assert %{
+               "webhook_first" => 0,
+               "poll_first" => 1,
+               "poll_first_recent" => [%{"identifier" => "ACME-9", "fields" => ["priority"], "source" => "by_id", "at" => at}]
+             } = linear_webhooks_state()["compare"]
+
+      assert {:ok, ~U[2026-10-29 09:03:00Z], 0} = DateTime.from_iso8601(at)
+    end
+
     test "drops an older delivery and counts it stale" do
       repo_key = Config.repo_key!()
       {:ok, :updated} = TicketObservation.observe(repo_key, polled_issue(priority: 1))
