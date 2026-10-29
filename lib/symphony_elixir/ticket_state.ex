@@ -9,7 +9,9 @@ defmodule SymphonyElixir.TicketState do
   last made progress, which `SymphonyElixir.DispatchLoop` counts, and the decisions a person recorded
   on it (`SymphonyElixir.Decisions`), which the description's Decisions section projects, and
   the PR and CI watcher's fact record (`pr_watch`, written by `SymphonyElixir.PrWatch.Repo`), and
-  the sequence number of the last event in its event stream (`event_seq`, `SymphonyElixir.TicketEvents`).
+  the sequence number of the last event in its event stream (`event_seq`, `SymphonyElixir.TicketEvents`),
+  and what the last observation of the ticket in Linear found (`observe/3`): its title, labels,
+  priority, assignee, open blockers, URL and Linear's `updatedAt`, with when it was observed.
 
   The record is persisted by `SymphonyElixir.RunStore`; this module owns its shape and the
   operations that move it. It is inert by design: nothing dispatches on a record yet. It exists so
@@ -18,6 +20,7 @@ defmodule SymphonyElixir.TicketState do
   `SymphonyElixir.PromptBuilder`).
   """
 
+  alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrDecision
   alias SymphonyElixir.PrWatch.Attempts
 
@@ -191,8 +194,19 @@ defmodule SymphonyElixir.TicketState do
           decisions: [decision()],
           pr_watch: pr_watch() | nil,
           event_seq: non_neg_integer(),
+          title: String.t() | nil,
+          labels: [String.t()],
+          priority: integer() | nil,
+          assignee: String.t() | nil,
+          blockers: [String.t()],
+          url: String.t() | nil,
+          linear_updated_at: DateTime.t() | nil,
+          observed_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
+
+  # The fields an observation of the ticket in Linear writes (`observe/3`).
+  @observed_fields ~w(issue_identifier phase title labels priority assignee blockers url linear_updated_at)a
 
   @doc """
   A new record for `repo_key`'s `issue_id`, with any `attrs` applied. `attrs` may set `:phase`,
@@ -229,6 +243,14 @@ defmodule SymphonyElixir.TicketState do
       decisions: normalize_decisions(Map.get(record, :decisions)),
       pr_watch: normalize_pr_watch(Map.get(record, :pr_watch)),
       event_seq: normalize_event_seq(Map.get(record, :event_seq)),
+      title: map_string(record, :title),
+      labels: string_list(Map.get(record, :labels)),
+      priority: integer_or_nil(Map.get(record, :priority)),
+      assignee: map_string(record, :assignee),
+      blockers: string_list(Map.get(record, :blockers)),
+      url: map_string(record, :url),
+      linear_updated_at: map_datetime(record, :linear_updated_at),
+      observed_at: map_datetime(record, :observed_at),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -250,9 +272,84 @@ defmodule SymphonyElixir.TicketState do
       decisions: [],
       pr_watch: nil,
       event_seq: 0,
+      title: nil,
+      labels: [],
+      priority: nil,
+      assignee: nil,
+      blockers: [],
+      url: nil,
+      linear_updated_at: nil,
+      observed_at: nil,
       updated_at: nil
     }
   end
+
+  @doc """
+  Applies what Linear says of the ticket (`issue`, a `SymphonyElixir.Linear.Issue`) to its record:
+  its state as the `phase`, its identifier, title, labels, priority, assignee, blockers (the
+  identifiers of its `blocked_by`; the caller keeps only the open ones), URL and `updated_at` as
+  `linear_updated_at`. Returns the record and what happened:
+
+  - `:stale` when the issue's `updated_at` is older than the record's `linear_updated_at`: the fact
+    is dropped and the record returned as it was;
+  - `:unchanged` when every field already holds what the issue says;
+  - `:changed` otherwise, with `observed_at` and `updated_at` set to `observed_at`.
+
+  A field the issue marks `:unknown` (a webhook delivery that doesn't carry it) never overwrites the
+  record's value, nor does a missing state or `updated_at`: a missing fact is missing information,
+  not a change. Writing the record never records a ledger event; Symphony's own moves do that.
+  """
+  @spec observe(t(), Issue.t(), DateTime.t()) :: {t(), :changed | :unchanged | :stale}
+  def observe(record, %Issue{} = issue, %DateTime{} = observed_at) do
+    record = normalize(record)
+
+    if stale?(record.linear_updated_at, issue.updated_at) do
+      {record, :stale}
+    else
+      observed =
+        record
+        |> Map.merge(observed_fields(issue))
+        |> normalize()
+
+      if Map.take(observed, @observed_fields) == Map.take(record, @observed_fields) do
+        {record, :unchanged}
+      else
+        {%{observed | observed_at: observed_at, updated_at: observed_at}, :changed}
+      end
+    end
+  end
+
+  @doc "The fields `observe/3` writes, with `observed_at` and `updated_at`, as an update of the stored record."
+  @spec observation(t()) :: map()
+  def observation(record), do: record |> normalize() |> Map.take(@observed_fields ++ [:observed_at, :updated_at])
+
+  defp stale?(%DateTime{} = known, %DateTime{} = fact), do: DateTime.compare(fact, known) == :lt
+  defp stale?(_known, _fact), do: false
+
+  defp observed_fields(issue) do
+    [
+      issue_identifier: issue.identifier,
+      phase: issue.state,
+      title: issue.title,
+      labels: issue.labels,
+      priority: issue.priority,
+      assignee: issue.assignee_id,
+      blockers: blocker_identifiers(issue.blocked_by),
+      url: issue.url,
+      linear_updated_at: issue.updated_at
+    ]
+    |> Enum.reject(fn {field, value} -> value == :unknown or (is_nil(value) and field in [:issue_identifier, :phase, :linear_updated_at]) end)
+    |> Map.new()
+  end
+
+  defp blocker_identifiers(blockers) when is_list(blockers) do
+    Enum.flat_map(blockers, fn
+      %{identifier: identifier} when is_binary(identifier) -> [identifier]
+      _blocker -> []
+    end)
+  end
+
+  defp blocker_identifiers(blockers), do: blockers
 
   @doc """
   Marks the grants in `ids` that no run used yet as used by `run_id`, and returns them with the
@@ -884,6 +981,12 @@ defmodule SymphonyElixir.TicketState do
   defp normalize_event_seq(_seq), do: 0
 
   defp map_string(map, key), do: normalize_string(Map.get(map, key))
+
+  defp string_list(list) when is_list(list), do: list |> Enum.map(&normalize_string/1) |> Enum.reject(&is_nil/1)
+  defp string_list(_list), do: []
+
+  defp integer_or_nil(value) when is_integer(value), do: value
+  defp integer_or_nil(_value), do: nil
 
   defp normalize_string(value) when is_binary(value) do
     case String.trim(value) do

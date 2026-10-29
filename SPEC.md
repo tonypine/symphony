@@ -365,6 +365,26 @@ A running run's record MAY be written on a bounded cadence rather than on every 
 Elixir implementation writes it when the run's session, PR, workspace, worker host or turn changes,
 and otherwise at most every 5 s; the run's completion writes the final record.
 
+Each ticket also has a state record per `repo_key` and issue ID (`TicketState`), which learns from
+every repo poll. For every issue a poll returns, the observation writes into the record the ticket's
+Linear state as its `phase`, its `issue_identifier`, `title`, `labels`, `priority`, `assignee` (the
+assignee's ID), `blockers` (the identifiers of its blockers outside the repo's terminal states), `url`
+and Linear's `updatedAt` as `linear_updated_at`, with `observed_at`, creating the record when the
+ticket has none. It writes only when one of those fields changed, so an identical poll writes
+nothing, and it writes only those fields, never the record's holds, verdicts or other state:
+
+- An issue whose `updatedAt` is older than the record's `linear_updated_at` is an older fact: it is
+  dropped, counted as stale, and the record is left as it was.
+- A field the source marks `:unknown` (a webhook delivery that doesn't carry it), a missing state and
+  a missing `updatedAt` never overwrite the record's value.
+- The observation records no ledger event: a ticket's `phase.entered` stays with Symphony's own
+  moves.
+- A record written before these fields existed reads with them at their defaults (`nil`, or an empty
+  list for `labels` and `blockers`); it needs no migration.
+
+Nothing reads the observed fields yet. The Elixir implementation counts each observation's outcome
+(`updated`, `unchanged`, `stale`, `errors`) since startup (`TicketObservation.summary/0`).
+
 #### 4.1.10 Ticket Pull Request Record
 
 Symphony's own record of each ticket's pull request is the source of a ticket's PR. It lives in the
