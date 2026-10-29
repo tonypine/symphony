@@ -67,6 +67,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   alias SymphonyElixir.Artifacts.Transcript
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Dispatch.{Candidates, Shadow}
   alias SymphonyElixir.Linear.{Client, Issue, RateLimit, TransientRetry, Usage}
   alias SymphonyElixir.QaDriver.DevServerLease
   alias SymphonyElixir.Routing.PollLog
@@ -1757,6 +1758,7 @@ defmodule SymphonyElixir.Orchestrator do
       end)
 
     buckets = Client.aggregate_repo_results(repo_results)
+    shadow_dispatch(state, repos)
 
     if repo_poll_cache_warmed?(state, repos) do
       buckets
@@ -1764,6 +1766,50 @@ defmodule SymphonyElixir.Orchestrator do
       %{buckets | dispatchable: []}
     end
   end
+
+  # Every poll cycle also works out each repo's candidates from its ticket records
+  # (`Dispatch.Candidates`) and reports how they differ from the poll cache's (`Dispatch.Shadow`),
+  # whatever `dispatch.source` says: dispatch keeps reading the cache. It reads the store and no
+  # Linear: `assignee: me` takes the viewer the poll already resolved. A repo whose cache is still
+  # cold, or whose records can't be read, is left out of the cycle.
+  defp shadow_dispatch(%State{} = state, repos) do
+    settings = Config.settings!()
+    filter = {active_state_set(settings), terminal_state_set(settings)}
+
+    compared =
+      for repo <- repos,
+          repo_poll_cache_warmed?(state, repo_name(repo)),
+          records = RunStore.list_ticket_states(repo_name(repo)),
+          is_list(records),
+          do: shadow_repo_differences(state, repo, records, settings, filter)
+
+    if compared != [], do: Shadow.record(List.flatten(compared), Config.dispatch_shadow_window())
+    :ok
+  end
+
+  defp shadow_repo_differences(%State{} = state, repo, records, settings, {active_states, terminal_states}) do
+    repo_name = repo_name(repo)
+
+    poll =
+      for %Issue{} = issue <- state.repo_poll_cache[repo_name].issues,
+          candidate_issue?(issue, active_states, terminal_states),
+          do: %{issue | repo_key: repo_name}
+
+    opts = shadow_route_opts(repo, settings)
+    %{candidates: from_records} = Candidates.from_records(repo_name, records, settings, opts)
+    Shadow.compare(poll, from_records)
+  end
+
+  # The route's assignee, else the tracker's, as the poll filters by; `me` is the viewer's id.
+  defp shadow_route_opts(repo, settings) do
+    case String.trim(route_assignee(repo) || settings.tracker.assignee || "") do
+      "me" -> [route: repo, assignee_ids: List.wrap(Client.known_viewer_id())]
+      _assignee -> [route: repo]
+    end
+  end
+
+  defp route_assignee(%{assignee: assignee}), do: assignee
+  defp route_assignee(_repo), do: nil
 
   defp sync_repo_poll_state(%State{} = state, repos, now_ms) do
     repo_names = Enum.map(repos, &repo_name/1)
