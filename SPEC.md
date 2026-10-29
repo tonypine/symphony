@@ -389,10 +389,15 @@ nothing, and it writes only those fields, never the record's holds, verdicts or 
   moves.
 - Symphony's own moves and the Director's write the record first: the move's target becomes the
   record's `phase` (and nothing else; `linear_updated_at` is left, so a later read still wins on the
-  facts it owns) before Linear is asked, with the `phase.entered` event the move records. Linear is
-  the record's projection: a Linear write that fails leaves the record moved and is logged with the
-  ticket's identifier and the target. A Director move writes the record before its comment, its
-  first Linear write, and `undo` puts the record back as it puts Linear back.
+  facts it owns) before Linear is asked to move the ticket, with the `phase.entered` event the move
+  records. Linear is the record's projection: a Linear write that fails leaves the record moved and
+  is logged with the ticket's identifier and the target. A target the ticket's team doesn't have
+  (Linear knows no state by that name) was never entered, so the record goes back to the phase it
+  held; a move that tries the team's other spelling of the canceled state next leaves the record in
+  the one the team has. Every Director move writes the record before its Linear state move; a move
+  that posts its comment with the move (approve, rework, restart, backlog) writes it before that
+  comment, a restart after its reset, a Decide after its reply, and a plan's answers or changes
+  after their comments. `undo` puts the record back as it puts Linear back.
 - A record written before these fields existed reads with them at their defaults (`nil`, or an empty
   list for `labels` and `blockers`); it needs no migration.
 

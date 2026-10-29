@@ -79,8 +79,10 @@ defmodule SymphonyElixir.AgentRunnerTicketSummaryTest do
     answer!(ctx, "2")
     Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :state_not_found}, :ok])
 
-    assert :ok = run(ctx)
+    log = capture_log(fn -> assert :ok = run(ctx) end)
     assert_received {:memory_tracker_state_update, "issue-sum", "Cancelled"}
+    assert %{phase: "Cancelled"} = RunStore.get_ticket_state(ctx.repo_key, ctx.issue.id)
+    refute log =~ "Linear refused the move"
   end
 
   test "a cancel the tracker refuses fails the run", ctx do

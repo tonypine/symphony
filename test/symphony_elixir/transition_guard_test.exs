@@ -457,6 +457,29 @@ defmodule SymphonyElixir.TransitionGuardTest do
       assert log =~ "issue_id=issue-11 issue_identifier= to=Rework"
     end
 
+    test "a target the team doesn't have puts the record back where it was and logs no refused move" do
+      RunStore.delete_ticket_state("repo-guard", "issue-12")
+      :ok = RunStore.put_ticket_state(TicketState.new("repo-guard", "issue-12", %{phase: "Backlog", issue_identifier: "MT-12"}))
+      Process.put(:transition_guard_tracker_result, {:error, :state_not_found})
+      {ctx, opts} = {%{target: "Canceled", repo_key: "repo-guard"}, [tracker: RecordReadingTracker]}
+
+      log =
+        capture_log(fn ->
+          assert {:error, :state_not_found} = TransitionGuard.perform("issue-12", :breakdown_cancel, ctx, opts)
+        end)
+
+      # The record is written before Linear is asked, and put back once Linear names no such state.
+      assert_received {:moved, "issue-12", "Canceled", %{phase: "Canceled"}}
+      assert %{phase: "Backlog", issue_identifier: "MT-12"} = RunStore.get_ticket_state("repo-guard", "issue-12")
+      refute log =~ "Linear refused the move"
+
+      # A ticket the record held no phase for goes back to none.
+      RunStore.delete_ticket_state("repo-guard", "issue-13")
+      assert {:error, :state_not_found} = TransitionGuard.perform("issue-13", :breakdown_cancel, ctx, opts)
+      assert_received {:moved, "issue-13", "Canceled", %{phase: "Canceled"}}
+      assert %{phase: nil} = RunStore.get_ticket_state("repo-guard", "issue-13")
+    end
+
     test "defaults to the configured tracker" do
       write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())

@@ -3,7 +3,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{BreakdownReview, RunStore, SubIssueWait}
+  alias SymphonyElixir.{BreakdownReview, RunStore, SubIssueWait, TicketState}
   alias SymphonyElixir.Linear.Adapter
 
   @waiting "Waiting on sub-tickets"
@@ -166,16 +166,20 @@ defmodule SymphonyElixir.BreakdownReviewTest do
 
   describe "move/3" do
     test "promotes to Todo and cancels in whichever canceled state the team has" do
-      assert :ok = BreakdownReview.move(:promote, "c1", Tracker.Memory)
+      assert {:ok, "Todo"} = BreakdownReview.move(:promote, "c1", Tracker.Memory)
       assert_received {:memory_tracker_state_update, "c1", "Todo"}
 
-      assert :ok = BreakdownReview.move(:replace, "c1", CancelTracker)
+      assert {:ok, "Canceled"} = BreakdownReview.move(:replace, "c1", CancelTracker)
       assert_received {:cancel_attempt, "c1", "Canceled"}
       refute_received {:cancel_attempt, "c1", "Cancelled"}
 
       Process.put(:cancel_results, %{"Canceled" => {:error, :state_not_found}})
-      assert :ok = BreakdownReview.move(:replace, "c1", CancelTracker)
+      assert {:ok, "Cancelled"} = BreakdownReview.move(:replace, "c1", CancelTracker)
       assert_received {:cancel_attempt, "c1", "Cancelled"}
+
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :boom})
+      capture_log(fn -> assert {:error, :boom} = BreakdownReview.move(:promote, "c1", Tracker.Memory) end)
+      Application.delete_env(:symphony_elixir, :memory_tracker_update_issue_state_result)
 
       Process.put(:cancel_results, %{"Canceled" => {:error, :state_not_found}, "Cancelled" => {:error, :state_not_found}})
       assert {:error, :state_not_found} = BreakdownReview.move(:replace, "c1", CancelTracker)
@@ -405,6 +409,24 @@ defmodule SymphonyElixir.BreakdownReviewTest do
 
       assert [%{name: "deprioritized", details: %{outcome: "changes", sub_issue: "MT-c1", to: "Canceled"}}] =
                RunStore.get_ticket_state(repo_key, "c1").signals
+    end
+
+    test "a team that spells it Cancelled leaves the replaced sub-ticket's record in Cancelled" do
+      repo_key = "default"
+      RunStore.delete_ticket_state(repo_key, "c1")
+      :ok = RunStore.put_ticket_state(TicketState.new(repo_key, "c1", %{phase: "Backlog", issue_identifier: "MT-c1"}))
+      parent = %{parent("Rework", [sub("c1", "Backlog")]) | repo_key: repo_key}
+      put_history("parent", rejection(), [history_sub("c1", "Backlog")])
+      results = [{:error, :state_not_found}, :ok]
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, results)
+
+      log = capture_log(fn -> review([parent], orchestrator_state()) end)
+
+      assert_received {:memory_tracker_state_update, "c1", "Cancelled"}
+      record = RunStore.get_ticket_state(repo_key, "c1")
+      assert record.phase == "Cancelled"
+      assert [%{name: "deprioritized", details: %{to: "Cancelled"}}] = record.signals
+      refute log =~ "Linear refused the move"
     end
 
     test "a poll cycle promotes an approved parent's sub-tickets" do

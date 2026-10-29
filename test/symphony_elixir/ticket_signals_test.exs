@@ -127,6 +127,27 @@ defmodule SymphonyElixir.TicketSignalsTest do
       assert log =~ "Failed to write the record's phase QA on issue_id=issue-1"
     end
 
+    test "the phase read before a move is the one restore_phase/3 puts back" do
+      assert TicketSignals.recorded_phase(@repo_key, "issue-1") == {:ok, nil}
+      assert TicketSignals.recorded_phase(nil, "issue-1") == :unknown
+      assert TicketSignals.recorded_phase("  ", "issue-1") == :unknown
+
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-1", %{phase: "Backlog", issue_identifier: "MT-1"}))
+      before = TicketSignals.recorded_phase(@repo_key, "issue-1")
+      assert before == {:ok, "Backlog"}
+
+      :ok = TicketSignals.record_phase(@repo_key, "issue-1", "Canceled")
+      assert :ok = TicketSignals.restore_phase(@repo_key, "issue-1", before)
+      assert %{phase: "Backlog", issue_identifier: "MT-1"} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+      # A phase nobody could read is left as the move wrote it; a record that had none goes back to none.
+      :ok = TicketSignals.record_phase(@repo_key, "issue-1", "Canceled")
+      assert :ok = TicketSignals.restore_phase(@repo_key, "issue-1", :unknown)
+      assert %{phase: "Canceled"} = RunStore.get_ticket_state(@repo_key, "issue-1")
+      assert :ok = TicketSignals.restore_phase(@repo_key, "issue-1", {:ok, nil})
+      assert %{phase: nil} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    end
+
     test "a move's signal writes the phase it entered, with its phase.entered event" do
       assert :ok = TicketSignals.record(@repo_key, "issue-1", "claim", %{from: "Todo", to: "In Progress"})
 

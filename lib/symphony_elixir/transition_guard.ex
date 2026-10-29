@@ -260,7 +260,11 @@ defmodule SymphonyElixir.TransitionGuard do
   phase (`SymphonyElixir.TicketSignals.record_phase/3`) before Linear is asked, so Symphony's record
   never lags Symphony's own move. Linear is its projection: a write Linear refuses leaves the record
   moved, is logged with the ticket's identifier (`ctx.issue_identifier`, else the record's) and the
-  target, and comes back as the error it was. The caller records the move's signal after.
+  target, and comes back as the error it was. A target the ticket's team doesn't have
+  (`{:error, :state_not_found}`) is no refused projection: the ticket never entered it, so the
+  record goes back to the phase it held and nothing is logged, and a caller that tries the team's
+  other spelling next (`Canceled`, `Cancelled`) leaves the record in the one the team has. The
+  caller records the move's signal after.
   """
   @spec perform(String.t(), signal(), context(), keyword()) :: :ok | {:error, term()}
   def perform(issue_id, signal, ctx \\ %{}, opts \\ []) do
@@ -274,12 +278,14 @@ defmodule SymphonyElixir.TransitionGuard do
         {:error, {:retired_state, target}}
 
       true ->
-        :ok = TicketSignals.record_phase(Map.get(ctx, :repo_key), issue_id, target)
-        update_state(issue_id, target, ctx, opts)
+        repo_key = Map.get(ctx, :repo_key)
+        before = TicketSignals.recorded_phase(repo_key, issue_id)
+        :ok = TicketSignals.record_phase(repo_key, issue_id, target)
+        update_state(issue_id, target, ctx, before, opts)
     end
   end
 
-  defp update_state(issue_id, target, ctx, opts) do
+  defp update_state(issue_id, target, ctx, before, opts) do
     case Keyword.get(opts, :tracker, Tracker).update_issue_state(issue_id, target) do
       :ok when target == @merging_state ->
         Keyword.get(opts, :on_merging, &SymphonyElixir.PrWatch.poll_now/0).()
@@ -287,6 +293,10 @@ defmodule SymphonyElixir.TransitionGuard do
 
       :ok ->
         :ok
+
+      {:error, :state_not_found} = error ->
+        :ok = TicketSignals.restore_phase(Map.get(ctx, :repo_key), issue_id, before)
+        error
 
       {:error, reason} = error ->
         Logger.warning(

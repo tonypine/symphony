@@ -4,11 +4,9 @@ defmodule SymphonyElixir.DirectorMoves do
   (`POST /api/v1/control/<move>`, decision DD4 in `docs/design/director-app-screens.md`).
 
   Each move reads the ticket, refuses one the workflow doesn't allow from its current state
-  (`{:error, {:conflict, message}}`, a 409), writes its target as the phase of the ticket's record
-  (`SymphonyElixir.TicketSignals.record_phase/3`) before Linear's first write, so the record never
-  lags the Director's move, posts its comment when it has one, makes the Linear move, writes a
-  `director_move` audit record and a `person.action` event on the ticket (a Decide's event is its
-  `decision.recorded`), and answers with the states it moved between:
+  (`{:error, {:conflict, message}}`, a 409), posts its comment when it has one, makes the Linear
+  move, writes a `director_move` audit record and a `person.action` event on the ticket (a Decide's
+  event is its `decision.recorded`), and answers with the states it moved between:
 
   - `:approve_plan`: a plan (label `plan` or `breakdown`) in `Plan Review` moves to the waiting
     state (`Waiting on sub-tickets`). It is a person's move, so Symphony promotes the plan's
@@ -48,6 +46,12 @@ defmodule SymphonyElixir.DirectorMoves do
 
   The comments are the Director's: none starts like one of Symphony's own, so the plan comment
   poll counts them as a person's comment too.
+
+  Every move's target becomes the phase of the ticket's record
+  (`SymphonyElixir.TicketSignals.record_phase/3`) before Linear's state move, so the record never
+  lags the Director's move. A move that posts its comment with the move (`:approve_plan`, `:rework`,
+  `:restart`, `:backlog`) writes the record before that comment, and `:restart` after its reset;
+  `:decide` writes it after its reply, and `:decisions` and `:changes` after their comments.
 
   When Linear takes the first of a move's two writes and refuses the second, the move answers
   `{:error, {:partial, message}}` saying what was already done, and still writes the audit record of

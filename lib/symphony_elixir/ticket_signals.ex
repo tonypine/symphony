@@ -75,22 +75,37 @@ defmodule SymphonyElixir.TicketSignals do
   a phase.
   """
   @spec record_phase(String.t() | nil, String.t() | nil, String.t() | nil) :: :ok
-  def record_phase(repo_key, issue_id, phase) when is_binary(repo_key) and is_binary(issue_id) and is_binary(phase) do
-    moved =
-      case RunStore.get_ticket_state(repo_key, issue_id) do
-        {:error, _reason} = error -> error
-        %{phase: ^phase} -> :ok
-        nil -> repo_key |> TicketState.new(issue_id) |> TicketState.put_phase(phase) |> RunStore.put_ticket_state()
-        record -> record |> TicketState.put_phase(phase) |> update_phase(repo_key, issue_id)
-      end
+  def record_phase(repo_key, issue_id, phase) when is_binary(repo_key) and is_binary(issue_id) and is_binary(phase),
+    do: write_phase(repo_key, issue_id, phase)
 
-    case moved do
-      :ok -> :ok
-      error -> log_error(error, "write the record's phase #{phase} on issue_id=#{issue_id}")
+  def record_phase(_repo_key, _issue_id, _phase), do: :ok
+
+  @doc """
+  The phase the ticket's record holds, read before a move writes its target (`record_phase/3`) so
+  the move can put it back (`restore_phase/3`): `{:ok, nil}` for a ticket with no record or no phase
+  yet, `:unknown` when the record can't be read or the ticket carries no repo key.
+  """
+  @spec recorded_phase(String.t() | nil, String.t() | nil) :: {:ok, String.t() | nil} | :unknown
+  def recorded_phase(repo_key, issue_id) when is_binary(repo_key) and is_binary(issue_id) do
+    case RunStore.get_ticket_state(repo_key, issue_id) do
+      {:error, _reason} -> :unknown
+      nil -> {:ok, nil}
+      record -> {:ok, record.phase}
     end
   end
 
-  def record_phase(_repo_key, _issue_id, _phase), do: :ok
+  def recorded_phase(_repo_key, _issue_id), do: :unknown
+
+  @doc """
+  Puts back the phase `recorded_phase/2` read before a move, for a move whose target the ticket's team
+  doesn't have: the ticket never entered it. A phase nobody could read (`:unknown`) is left as the
+  move wrote it. Best-effort like `record_phase/3`.
+  """
+  @spec restore_phase(String.t() | nil, String.t() | nil, {:ok, String.t() | nil} | :unknown) :: :ok
+  def restore_phase(repo_key, issue_id, {:ok, phase}) when is_binary(repo_key) and is_binary(issue_id),
+    do: write_phase(repo_key, issue_id, phase)
+
+  def restore_phase(_repo_key, _issue_id, _previous), do: :ok
 
   @doc """
   Records a verdict of `kind` with `outcome`, bound to the `head_sha` it judged and carrying
@@ -310,6 +325,21 @@ defmodule SymphonyElixir.TicketSignals do
   end
 
   defp normalize(_text), do: nil
+
+  defp write_phase(repo_key, issue_id, phase) do
+    moved =
+      case RunStore.get_ticket_state(repo_key, issue_id) do
+        {:error, _reason} = error -> error
+        %{phase: ^phase} -> :ok
+        nil -> repo_key |> TicketState.new(issue_id) |> TicketState.put_phase(phase) |> RunStore.put_ticket_state()
+        record -> record |> TicketState.put_phase(phase) |> update_phase(repo_key, issue_id)
+      end
+
+    case moved do
+      :ok -> :ok
+      error -> log_error(error, "write the record's phase #{phase} on issue_id=#{issue_id}")
+    end
+  end
 
   # Only the phase and when it changed are written, so nothing another writer put on the record is lost.
   defp update_phase(moved, repo_key, issue_id), do: RunStore.update_ticket_state(repo_key, issue_id, Map.take(moved, [:phase, :updated_at]))
