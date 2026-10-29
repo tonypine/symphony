@@ -53,6 +53,16 @@ defmodule SymphonyElixir.QaPreCheckTest do
     File.write!(Path.join(dir, "README.md"), "symphony_elixir names are listed here\n")
     File.write!(Path.join(dir, "test/symphony_elixir/director_moves_test.exs"), @director_moves_test)
     File.write!(Path.join(dir, "test/symphony_elixir/orchestrator_status_test.exs"), @orchestrator_status_test)
+    # Tests whose own names open with a tracked file, as `docs/playbook.md matches …` does in this repo.
+    File.mkdir_p!(Path.join(dir, "docs"))
+    File.write!(Path.join(dir, "docs/x.md"), "# Partials\n")
+    File.write!(Path.join(dir, "symphony.yml"), "repos: []\n")
+
+    File.write!(
+      Path.join(dir, "test/symphony_elixir/playbook_catalog_test.exs"),
+      ~s(test "docs/x.md matches the partials" do\nend\ntest "symphony.yml is required before children are built" do\nend\n)
+    )
+
     git!(dir, ["init", "-q"])
     git!(dir, ["add", "."])
     git!(dir, ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "first"])
@@ -158,10 +168,13 @@ defmodule SymphonyElixir.QaPreCheckTest do
       11. A test outside a describe. Proved by: `#{status}: outside any describe`
       12. A file and a scenario folder. Proved by: `make-all` › `.github/workflows macos-e2e.yml`
       13. A name opening with a folder's bare name. Proved by: `symphony_elixir names are listed here`
+      14. A name opening with a tracked file. Proved by: `docs/x.md matches the partials`
+      15. A name opening with a tracked bare file name. Proved by: make-all › symphony.yml is required before children are built
+      16. A file and a name opening with a file. Proved by: `test/symphony_elixir/playbook_catalog_test.exs: docs/x.md matches the partials`
       """
 
       assert {:pass, results} = run(text, context, gh(context.head, checks))
-      assert Enum.map(results, &{&1.step.number, &1.status}) == Enum.map(1..13, &{&1, :pass})
+      assert Enum.map(results, &{&1.step.number, &1.status}) == Enum.map(1..16, &{&1, :pass})
     end
 
     test "a test named nowhere fails, naming the file it narrowed to and the forms it tried", context do
@@ -173,6 +186,7 @@ defmodule SymphonyElixir.QaPreCheckTest do
       3. A name over two lines. Proved by: `#{status}: a name that goes on over two lines`
       4. A missing file and a name. Proved by: `test/symphony_elixir/missing_test.exs: does it`
       5. A name that opens like a path stays whole. Proved by: `Walkthrough.steps parses it`
+      6. A name opening with a file, found neither in it nor anywhere. Proved by: `docs/x.md is nowhere`
       """
 
       assert {:fail, results} = run(text, context, unused_gh())
@@ -183,7 +197,8 @@ defmodule SymphonyElixir.QaPreCheckTest do
                "`the stall check and the no-progress watchdog outside any describe` is not in `#{status}` (#{@tried})",
                "`a name that goes on over two lines` is not in `#{status}` (#{@tried})",
                "`test/symphony_elixir/missing_test.exs` is not in the checkout",
-               "`Walkthrough.steps parses it` is not in the checkout (#{@tried})"
+               "`Walkthrough.steps parses it` is not in the checkout (#{@tried})",
+               "`is nowhere` is not in `docs/x.md` (#{@tried})"
              ]
     end
 

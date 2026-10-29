@@ -11,9 +11,11 @@ defmodule SymphonyElixir.QaPreCheck do
     * the named test is in the checkout: each path part of `<test>` (a file or folder, with or
       without a `:line` suffix) is a tracked file, and each other part (a scenario or test name) is
       found in the tracked files, within the file a path part before it names. A path part ends at
-      ` › `, `: ` or a space (`file: name`, `file › name`, `file name`), and a name is found as text
-      (a test name or a describe alone) or as ExUnit's full test name, the describe and the test
-      joined by a space, as `mix test` prints it;
+      ` › `, `: ` or a space (`file: name`, `file › name`, `file name`); a part that opens with a
+      file the name is not in is also read as one name, so a test named
+      `WORKFLOW.md front matter …` is found. A name is found as text (a test name or a describe
+      alone) or as ExUnit's full test name, the describe and the test joined by a space, as
+      `mix test` prints it;
     * the check ran on the PR head and passed: `<check>` names a check run, a workflow, or
       `workflow / job`, read from the head's status checks (`SymphonyElixir.GitHub.PullRequest`).
 
@@ -184,22 +186,45 @@ defmodule SymphonyElixir.QaPreCheck do
   defp missing_test(%{proof: %{test: test}}, files, git, workspace) do
     test
     |> String.split(@separator, trim: true)
-    |> Enum.flat_map(&split_path(unquote_part(&1), files))
+    |> Enum.map(&unquote_part/1)
     |> Enum.reject(&(&1 == ""))
-    |> Enum.reduce_while(nil, fn part, scope ->
-      case find_part(part, scope, files, git, workspace) do
-        {:ok, scope} -> {:cont, scope}
-        {:missing, missing} -> {:halt, {:missing, missing}}
-      end
-    end)
+    |> find_parts(nil, &find_reading(&1, &2, files, git, workspace))
     |> case do
       {:missing, missing} -> missing
-      _scope -> nil
+      {:ok, _scope} -> nil
+    end
+  end
+
+  # Each part found in turn, the scope a path part narrows to carried to the next one.
+  defp find_parts(parts, scope, find) do
+    Enum.reduce_while(parts, {:ok, scope}, fn part, {:ok, scope} ->
+      case find.(part, scope) do
+        {:ok, scope} -> {:cont, {:ok, scope}}
+        missing -> {:halt, missing}
+      end
+    end)
+  end
+
+  # A part that opens with a path is read first as the file and a name in it, then, when that
+  # misses, as one name, since a test's own name may open with a file
+  # (`symphony.yml is required before …`). When both miss, the first reading's detail names the file.
+  defp find_reading(part, scope, files, git, workspace) do
+    find = &find_part(&1, &2, files, git, workspace)
+
+    case split_path(part, files) do
+      [^part] ->
+        find.(part, scope)
+
+      path_and_name ->
+        with {:missing, missing} <- find_parts(path_and_name, scope, find),
+             {:missing, _whole} <- find.(part, scope) do
+          {:missing, missing}
+        end
     end
   end
 
   # A part that opens with a path and goes on with a name (`file: name`, `file name`), as an
-  # implementer copies a test from its file, is two parts. The path is a path to a file
+  # implementer copies a test from its file, may be two parts. The path is a path to a file
   # (`test/x_test.exs`), or a tracked folder with a `/` (`.github/workflows`) or file name
   # (`x_test.exs`), so a name such as `Walkthrough.steps parses`, `a/b input` or one opening with a
   # folder's bare name (`docs are current`) stays whole.
