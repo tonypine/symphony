@@ -921,6 +921,20 @@ defmodule SymphonyElixir.ExtensionsTest do
              "claimed" => ["issue-http", "retry-http"],
              "rate_limits" => %{"primary" => %{"remaining" => 11}},
              "linear_usage" => %{"window_ms" => 3_600_000, "total" => 0, "callers" => [], "queries" => []},
+             "linear_webhooks" => %{
+               "enabled" => false,
+               "secret_configured" => false,
+               "total" => 0,
+               "rejected" => 0,
+               "last_at" => nil,
+               "last_type" => nil,
+               "last_action" => nil,
+               "last_rejected_at" => nil,
+               "last_rejected_reason" => nil,
+               "counts" => [],
+               "rejected_reasons" => [],
+               "recent" => []
+             },
              "orchestrator" => %{
                "message_queue_len" => 0,
                "snapshot_age_ms" => nil,

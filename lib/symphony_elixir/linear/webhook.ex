@@ -5,8 +5,8 @@ defmodule SymphonyElixir.Linear.Webhook do
   A delivery is Linear's when its `Linear-Signature` header is the hex HMAC-SHA256 of the raw
   request body with the signing secret, and fresh when the body's `webhookTimestamp` (milliseconds
   since the epoch) is within sixty seconds of now, which keeps a captured delivery from being
-  replayed later. Nothing listens for deliveries yet; this module only decides whether one is
-  genuine.
+  replayed later. `SymphonyElixirWeb.LinearWebhookController` checks each delivery with it; this
+  module only decides whether one is genuine.
   """
 
   alias SymphonyElixir.{Config, Secret}

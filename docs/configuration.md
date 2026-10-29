@@ -2565,8 +2565,8 @@ linear:
 
 `webhooks` describes the one webhook the operator creates for the Linear workspace, so Linear can
 tell Symphony of every ticket change the moment it happens, as GitHub's webhooks do for pull
-requests. Nothing listens for its deliveries yet: Symphony still learns of Linear changes only by
-polling. `enabled` defaults to `false`. `secret` is the signing secret Linear shows when the webhook
+requests. Symphony receives its deliveries at `POST /api/v1/linear/webhook` and only counts them
+for now (`linear_webhooks` in `/api/v1/state`): it still learns of Linear changes only by polling. `enabled` defaults to `false`. `secret` is the signing secret Linear shows when the webhook
 is created, as a literal or an `$ENV` reference resolved like `github.webhooks.secret`; turning
 `enabled` on without a `secret` is refused, naming `linear.webhooks.secret`. A reference to an unset
 variable loads, and every delivery is then refused as having no secret. A delivery is Linear's when

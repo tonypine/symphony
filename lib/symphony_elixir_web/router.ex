@@ -37,10 +37,11 @@ defmodule SymphonyElixirWeb.Router do
     post("/api/v1/setup/fixes", SetupController, :fixes)
   end
 
-  # GitHub webhook deliveries authenticate with their HMAC signature, not a browser origin.
-  # `log: false` keeps Phoenix from logging the payload as request parameters.
+  # GitHub and Linear webhook deliveries authenticate with their HMAC signature, not a browser
+  # origin. `log: false` keeps Phoenix from logging the payload as request parameters.
   scope "/", SymphonyElixirWeb do
     post("/api/v1/github/webhook", GitHubWebhookController, :create, log: false)
+    post("/api/v1/linear/webhook", LinearWebhookController, :create, log: false)
   end
 
   scope "/api/v1/control", SymphonyElixirWeb do
@@ -111,6 +112,7 @@ defmodule SymphonyElixirWeb.Router do
     match(:*, "/api/v1/refresh", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/issues/:issue_identifier/watch/check", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/github/webhook", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/linear/webhook", ObservabilityApiController, :method_not_allowed)
     get("/api/v1/:issue_identifier", ObservabilityApiController, :issue)
     match(:*, "/api/v1/:issue_identifier", ObservabilityApiController, :method_not_allowed)
     match(:*, "/*path", ObservabilityApiController, :not_found)
