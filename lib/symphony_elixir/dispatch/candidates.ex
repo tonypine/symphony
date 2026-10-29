@@ -20,7 +20,8 @@ defmodule SymphonyElixir.Dispatch.Candidates do
 
   Everything here is pure: no store read, no Linear read, no process. The orchestrator calls it every
   poll cycle, to dispatch from it under `dispatch.source: record` and for the shadow
-  (`SymphonyElixir.Dispatch.Shadow`) either way.
+  (`SymphonyElixir.Dispatch.Shadow`) either way. Under `dispatch.source: record` the PR and CI watcher
+  takes its watched tickets from it too, with its watched states in place of the active ones.
   """
 
   alias SymphonyElixir.Config.Schema
@@ -49,7 +50,7 @@ defmodule SymphonyElixir.Dispatch.Candidates do
   - `incomplete`: it has no identifier, title or state, which a polled issue needs to be a candidate;
   - `unassigned`: its assignee is not the worker's;
   - `terminal`: its state is one of the terminal states;
-  - `inactive`: its state is not one of the active states.
+  - `inactive`: its state is not one of the active states (`opts[:states]` when given).
 
   A record is counted under the first reason, in that order, that leaves it out. `opts`:
 
@@ -60,12 +61,14 @@ defmodule SymphonyElixir.Dispatch.Candidates do
     the configured assignee (the route's, else the tracker's): none means any assignee, an id means
     that one. `me` names the API key's user, whose id only Linear knows, so the caller passes it;
     without it no record counts as assigned.
+  - `:states` — the state names a candidate's state must be one of, in place of the active states:
+    the PR and CI watcher passes its watched states (`SymphonyElixir.PrWatch.Repo`).
   """
   @spec from_records(String.t(), [map()], Schema.t(), keyword()) :: result()
   def from_records(repo_key, records, %Schema{} = settings, opts \\ []) when is_binary(repo_key) and is_list(records) do
     filter = %{
       assignee_ids: assignee_ids(settings, opts),
-      active: Orchestrator.active_state_set(settings),
+      active: state_set(Keyword.get(opts, :states), settings),
       terminal: Orchestrator.terminal_state_set(settings)
     }
 
@@ -125,6 +128,9 @@ defmodule SymphonyElixir.Dispatch.Candidates do
       true -> nil
     end
   end
+
+  defp state_set(nil, settings), do: Orchestrator.active_state_set(settings)
+  defp state_set(states, _settings), do: MapSet.new(states, &normalize_state/1)
 
   defp assigned?(_assignee, nil), do: true
   defp assigned?(assignee, assignee_ids), do: is_binary(assignee) and assignee in assignee_ids
