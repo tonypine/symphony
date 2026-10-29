@@ -257,4 +257,14 @@ defmodule SymphonyElixir.QaPolicyTest do
       refute "web" in kinds
     end
   end
+
+  describe "unselected_playbooks/2" do
+    test "names the enabled playbooks a run did not select, such as the app's on a server-only diff" do
+      settings = settings!(%{"auto_review" => %{"playbooks" => %{"macos_app" => %{"build" => "make app", "app" => "build/Hub.app"}}}})
+      [cli | _rest] = QaPolicy.enabled_playbooks(settings)
+
+      assert QaPolicy.unselected_playbooks(settings, [cli]) == ["macos_app"]
+      assert QaPolicy.unselected_playbooks(settings, QaPolicy.enabled_playbooks(settings)) == []
+    end
+  end
 end

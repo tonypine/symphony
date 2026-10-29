@@ -104,7 +104,7 @@ defmodule SymphonyElixir.EpicReview do
   @details_limit 4_000
   # A list item (`- [ ] …`, `* …`, `1. …`) in the epic's description: a checklist row.
   @list_row ~r/^\s*(?:[-*+]|\d+[.)])\s+\S/m
-  @unchecked_statuses ["skipped", "blocked"]
+  @unchecked_statuses ["skipped", "blocked", "unprovable"]
   @named_rows_limit 5
   # Longer than the review a lost verdict would redo, so a rate limit that outlasts the default
   # five-minute wait does not throw the verdict away.

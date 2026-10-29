@@ -1,6 +1,37 @@
 defmodule SymphonyElixir.TestSupportTest do
   use SymphonyElixir.TestSupport
 
+  describe "write_workflow_file!/2" do
+    test "a rewrite of the same size within a second reads as the new file, even when a read puts the old entry back" do
+      write_workflow_file!(Workflow.workflow_file_path(), pr_review_mode: "polling")
+      symphony = Path.expand(Workflow.symphony_file_path())
+      assert {:ok, %{pr_review: %{auto_reply: false}}} = Config.settings()
+      old_entry = :persistent_term.get({Cache, :symphony, symphony})
+      old_size = File.stat!(symphony).size
+
+      # `reply_after_addressing: null` becomes `true`: the same size.
+      write_workflow_file!(Workflow.workflow_file_path(), pr_review_mode: "polling", pr_review_auto_reply: true)
+      assert File.stat!(symphony).size == old_size
+
+      # A read that loaded the old file before the rewrite puts its entry back after the helper.
+      put_cache_entry!(old_entry)
+      assert {:ok, %{pr_review: %{auto_reply: true}}} = Config.settings()
+    end
+
+    test "a rejected rewrite reads as an error once the cache is settled, even after a read put the old entry back" do
+      symphony = Path.expand(Workflow.symphony_file_path())
+      assert {:ok, _settings} = Config.settings()
+      old_entry = :persistent_term.get({Cache, :symphony, symphony})
+
+      write_workflow_file!(Workflow.workflow_file_path(), github: %{webhooks: %{silence_alert_minutes: 0}})
+
+      # A read that loaded the old file before the rewrite puts its entry back after the clear.
+      put_cache_entry!(old_entry)
+      assert :ok = SymphonyElixir.TestSupport.settle_config_cache!([Workflow.workflow_file_path(), symphony])
+      assert {:error, _reason} = Config.settings()
+    end
+  end
+
   describe "stop_leftover_work/0" do
     test "stops a task left under the shared task supervisor" do
       {:ok, pid} = Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn -> Process.sleep(:infinity) end)
@@ -76,5 +107,11 @@ defmodule SymphonyElixir.TestSupportTest do
         Process.sleep(25)
         wait_until(fun, attempts - 1)
     end
+  end
+
+  defp put_cache_entry!(%{kind: kind, path: path} = entry) do
+    key = {Cache, kind, path}
+    :persistent_term.put(key, entry)
+    :persistent_term.put({Cache, :index}, MapSet.put(:persistent_term.get({Cache, :index}, MapSet.new()), key))
   end
 end
