@@ -35,7 +35,7 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
              labels: ["backend"],
              priority: 1,
              assignee: "user-1",
-             blockers: ["ACME-70"],
+             blockers: [%{id: "blocker", identifier: "ACME-70", state: "Todo"}],
              url: "https://linear.app/acme/issue/ACME-71",
              linear_updated_at: ~U[2026-10-29 09:00:00Z]
            }

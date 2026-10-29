@@ -2,15 +2,17 @@ defmodule SymphonyElixir.TicketObservation do
   @moduledoc """
   Writes what Symphony reads of a ticket in Linear into its record (`SymphonyElixir.TicketState`),
   so the record learns from every poll: the ticket's state as the record's `phase`, its title,
-  labels, priority, assignee, open blockers, URL and Linear's `updatedAt`.
+  labels, priority, assignee, open blockers and sub-issues (each by id, identifier and state), parent,
+  URL, creation time and Linear's `updatedAt`.
 
   `observe/3` reads the record (a new one when the ticket has none), applies
   `SymphonyElixir.TicketState.observe/4` and writes the observed fields back through
   `SymphonyElixir.RunStore.update_ticket_state/3` only when one changed, so an identical poll writes
   nothing and a write never touches the record's holds, verdicts or other fields. A fact older than
   the record's `linear_updated_at` is dropped. The record keeps which read brought its last change
-  (`observed_from`: the poll, a by-id read, the PR and CI watcher or a webhook delivery). Nothing
-  reads the observed fields yet, and an observation records no ledger event.
+  (`observed_from`: the poll, a by-id read, the PR and CI watcher or a webhook delivery). Only
+  `SymphonyElixir.Dispatch.Candidates` reads the observed fields yet, and an observation records no
+  ledger event.
 
   `observe_delivery/2` observes what a Linear webhook delivery says (`SymphonyElixir.Linear.Webhook.parse/1`)
   the same way, under the repo that already holds the ticket's record (a ticket with no record yet is

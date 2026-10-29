@@ -3,6 +3,7 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
 
   alias SymphonyElixir.Config.SystemSchema
   alias SymphonyElixir.Dispatch.Candidates
+  alias SymphonyElixir.EpicLanes
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.{TicketObservation, TicketState}
 
@@ -69,24 +70,47 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
     end
 
     test "on an epic and its lanes' parts" do
-      part_1 = issue("part-1", "MT-11", "Todo", priority: 2)
-      part_2 = issue("part-2", "MT-12", "Todo", blocked_by: [blocker("MT-11", "Todo")])
+      part_1 = issue("part-1", "MT-11", "In Progress", priority: 2)
+      part_2 = issue("part-2", "MT-12", "Todo", blocked_by: [%{id: "part-1", identifier: "MT-11", state: "In Progress"}])
+      part_3 = issue("part-3", "MT-31", "Todo")
 
-      epic =
-        issue("epic", "MT-10", @waiting,
-          labels: ["plan"],
-          sub_issues: [Map.take(part_1, [:id, :identifier, :state]), Map.take(part_2, [:id, :identifier, :state])]
-        )
+      # Two epics of the same priority: MT-30 is the older, so it takes the one lane.
+      epic = issue("epic", "MT-10", @waiting, labels: ["plan"], sub_issues: [link(part_1), link(part_2)], created_at: ~U[2026-10-02 09:00:00Z])
+      older = issue("older-epic", "MT-30", @waiting, labels: ["plan"], sub_issues: [link(part_3)], created_at: ~U[2026-10-01 09:00:00Z])
 
-      issues = [epic, part_1, part_2, issue("merging", "MT-20", "Merging"), issue("standalone", "MT-21", "Todo", priority: 1)]
+      issues = [epic, part_1, part_2, older, part_3, issue("merging", "MT-20", "Merging"), issue("standalone", "MT-21", "Todo", priority: 1)]
 
       {cache, record} = assert_same_candidates!(issues)
 
-      # The record keeps no sub-issues, so only the parts are compared through the gate; the parent's
-      # wait on its sub-tickets reads them.
-      parts = ["MT-11", "MT-12", "MT-20", "MT-21"]
-      assert Map.take(gate(record), parts) == Map.take(gate(cache), parts)
-      assert gate(cache)["MT-12"] == false
+      assert gate(record) == gate(cache)
+      assert %{"MT-10" => false, "MT-30" => false, "MT-12" => false} = gate(cache)
+
+      # Each parent waits on its sub-tickets on both paths.
+      for issues <- [cache, record], parent <- ["MT-10", "MT-30"] do
+        assert issues |> Enum.find(&(&1.identifier == parent)) |> Issue.waiting_on_sub_issues?(terminal_states())
+      end
+
+      for {epic_lanes, expected} <- [{nil, {["MT-30", "MT-10"], []}}, {1, {["MT-30"], ["MT-10"]}}] do
+        plan = EpicLanes.plan(record, 10, epic_lanes, terminal_states())
+        assert plan == EpicLanes.plan(cache, 10, epic_lanes, terminal_states())
+        assert {identifiers(plan.lanes), identifiers(plan.queued)} == expected
+        assert plan.yielded == []
+      end
+    end
+
+    test "on the dispatch order of tickets that differ only by age" do
+      # MT-99 is the older, so it runs first, though its identifier sorts after MT-100's.
+      issues = [
+        issue("newer", "MT-100", "Todo", created_at: ~U[2026-10-02 09:00:00Z]),
+        issue("older", "MT-99", "Todo", created_at: ~U[2026-10-01 09:00:00Z]),
+        issue("oldest-rework", "MT-98", "Rework", created_at: ~U[2026-09-30 09:00:00Z])
+      ]
+
+      {cache, record} = assert_same_candidates!(issues)
+
+      assert dispatch_order(cache) == ["MT-98", "MT-99", "MT-100"]
+      assert dispatch_order(record) == dispatch_order(cache)
+      assert Enum.map(record, & &1.created_at) == Enum.map(cache, & &1.created_at)
     end
 
     test "on a route whose assignee is not the tracker's, once a webhook reassigns its tickets" do
@@ -191,13 +215,18 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
   end
 
   describe "issue_from_record/1" do
-    test "rebuilds what the record observed, its open blockers with no known state" do
+    test "rebuilds what the record observed: its open blockers and sub-issues with their ids and states, its parent and age" do
+      parent = %{identifier: "MT-1", title: "Epic", done: 1, total: 2, children: ["completed", "started"]}
+
       polled =
         issue("rebuilt", "MT-7", "Rework",
           labels: ["backend"],
           priority: 2,
           assignee_id: "user-1",
-          blocked_by: [blocker("MT-6", "Todo")]
+          blocked_by: [blocker("MT-6", "Todo"), blocker("MT-5", "Done")],
+          sub_issues: [%{id: "sub", identifier: "MT-8", state: "Backlog"}],
+          parent: parent,
+          created_at: ~U[2026-10-01 09:00:00Z]
         )
 
       assert %Issue{
@@ -208,14 +237,26 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
                labels: ["backend"],
                priority: 2,
                assignee_id: "user-1",
-               blocked_by: [%{id: nil, identifier: "MT-6", state: nil}],
+               blocked_by: [%{id: "id-MT-6", identifier: "MT-6", state: "Todo"}],
+               sub_issues: [%{id: "sub", identifier: "MT-8", state: "Backlog"}],
+               parent: ^parent,
                url: "https://example.org/issues/MT-7",
                repo_key: repo_key,
+               created_at: ~U[2026-10-01 09:00:00Z],
                updated_at: ~U[2026-10-29 09:00:00Z]
              } = Candidates.issue_from_record(observed(polled))
 
       assert repo_key == repo_key()
       assert Issue.blocked?(%{Candidates.issue_from_record(observed(polled)) | state: "Todo"}, ["Done"])
+    end
+
+    test "a blocker a record kept by identifier alone has no known state, so it still blocks" do
+      record = %{observed(issue("legacy", "MT-7", "Todo")) | blockers: ["MT-6"]}
+
+      rebuilt = Candidates.issue_from_record(record)
+
+      assert rebuilt.blocked_by == [%{id: nil, identifier: "MT-6", state: nil}]
+      assert Issue.blocked?(rebuilt, ["Done"])
     end
   end
 
@@ -295,6 +336,10 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
   end
 
   defp blocker(identifier, state), do: %{id: "id-" <> identifier, identifier: identifier, state: state}
+
+  defp link(%Issue{} = issue), do: Map.take(issue, [:id, :identifier, :state])
+
+  defp terminal_states, do: Config.settings!().tracker.terminal_states
 
   defp workflow!(overrides \\ []) do
     write_workflow_file!(

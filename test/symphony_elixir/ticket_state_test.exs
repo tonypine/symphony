@@ -31,7 +31,10 @@ defmodule SymphonyElixir.TicketStateTest do
                priority: nil,
                assignee: nil,
                blockers: [],
+               sub_issues: [],
+               parent: nil,
                url: nil,
+               created_at: nil,
                linear_updated_at: nil,
                observed_at: nil,
                observed_from: nil,
@@ -139,7 +142,10 @@ defmodule SymphonyElixir.TicketStateTest do
                priority: nil,
                assignee: nil,
                blockers: [],
+               sub_issues: [],
+               parent: nil,
                url: nil,
+               created_at: nil,
                linear_updated_at: nil,
                observed_at: nil,
                observed_from: nil,
@@ -198,13 +204,16 @@ defmodule SymphonyElixir.TicketStateTest do
 
       record = TicketState.normalize(stored)
 
-      assert Map.take(record, [:title, :labels, :priority, :assignee, :blockers, :url, :linear_updated_at, :observed_at]) == %{
+      assert Map.take(record, [:title, :labels, :priority, :assignee, :blockers, :sub_issues, :parent, :url, :created_at, :linear_updated_at, :observed_at]) == %{
                title: nil,
                labels: [],
                priority: nil,
                assignee: nil,
                blockers: [],
+               sub_issues: [],
+               parent: nil,
                url: nil,
+               created_at: nil,
                linear_updated_at: nil,
                observed_at: nil
              }
@@ -220,13 +229,36 @@ defmodule SymphonyElixir.TicketStateTest do
           priority: "high",
           assignee: :someone,
           blockers: :x,
+          sub_issues: "ACME-2",
+          parent: %{title: "No identifier"},
           url: "",
+          created_at: "2026-10-01",
           linear_updated_at: "yesterday",
           observed_at: 1
         })
 
       assert {record.title, record.labels, record.priority, record.assignee} == {nil, ["bug", "ui"], nil, nil}
-      assert {record.blockers, record.url, record.linear_updated_at, record.observed_at} == {[], nil, nil, nil}
+      assert {record.blockers, record.sub_issues, record.parent} == {[], [], nil}
+      assert {record.url, record.created_at, record.linear_updated_at, record.observed_at} == {nil, nil, nil, nil}
+    end
+
+    test "keeps each link's id, identifier and state, and reads a stored identifier as a link with neither id nor state" do
+      record =
+        TicketState.normalize(%{
+          blockers: ["ACME-5", %{id: "issue-6", identifier: " ACME-6 ", state: "Todo", title: "dropped"}, %{id: nil, identifier: nil}, 7, " "],
+          sub_issues: [%{id: "issue-7", identifier: nil, state: ""}, %{state: "Todo"}]
+        })
+
+      assert record.blockers == [%{id: nil, identifier: "ACME-5", state: nil}, %{id: "issue-6", identifier: "ACME-6", state: "Todo"}]
+      assert record.sub_issues == [%{id: "issue-7", identifier: nil, state: nil}]
+    end
+
+    test "keeps a parent with an identifier, its counts read as zero when malformed" do
+      parent = %{identifier: "ACME-0", title: "Epic", done: 1, total: 2, children: ["completed", "started"]}
+      assert TicketState.normalize(%{parent: parent}).parent == parent
+
+      assert TicketState.normalize(%{parent: %{identifier: "ACME-0", done: -1, total: "2", children: :x}}).parent ==
+               %{identifier: "ACME-0", title: nil, done: 0, total: 0, children: []}
     end
 
     test "treats non-list collections as empty" do
@@ -704,6 +736,8 @@ defmodule SymphonyElixir.TicketStateTest do
   describe "observe/3" do
     @linear_at ~U[2026-10-29 09:00:00Z]
     @observed_at ~U[2026-10-29 09:05:00Z]
+    @created_at ~U[2026-10-01 08:00:00Z]
+    @observed_fields ~w(issue_identifier phase title labels priority assignee blockers sub_issues parent url created_at linear_updated_at)a
 
     defp linear_issue(attrs \\ %{}) do
       struct!(
@@ -716,7 +750,9 @@ defmodule SymphonyElixir.TicketStateTest do
           priority: 1,
           assignee_id: "user-1",
           blocked_by: [%{id: "issue-0", identifier: "ACME-0", state: "Todo"}, %{id: nil, identifier: nil, state: nil}],
+          sub_issues: [%{id: "issue-2", identifier: "ACME-2", state: "Todo"}, %{id: "issue-3", identifier: "ACME-3", state: "Done"}],
           url: "https://linear.app/acme/issue/ACME-1",
+          created_at: @created_at,
           updated_at: @linear_at
         },
         attrs
@@ -726,7 +762,7 @@ defmodule SymphonyElixir.TicketStateTest do
     test "a new record takes every field of the issue, with when it was observed" do
       assert {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(), @observed_at)
 
-      assert Map.take(record, [:issue_identifier, :phase, :title, :labels, :priority, :assignee, :blockers, :url, :linear_updated_at, :observed_at, :updated_at]) ==
+      assert Map.take(record, @observed_fields ++ [:observed_at, :updated_at]) ==
                %{
                  issue_identifier: "ACME-1",
                  phase: "In Progress",
@@ -734,8 +770,11 @@ defmodule SymphonyElixir.TicketStateTest do
                  labels: ["backend", "plan"],
                  priority: 1,
                  assignee: "user-1",
-                 blockers: ["ACME-0"],
+                 blockers: [%{id: "issue-0", identifier: "ACME-0", state: "Todo"}],
+                 sub_issues: [%{id: "issue-2", identifier: "ACME-2", state: "Todo"}, %{id: "issue-3", identifier: "ACME-3", state: "Done"}],
+                 parent: nil,
                  url: "https://linear.app/acme/issue/ACME-1",
+                 created_at: @created_at,
                  linear_updated_at: @linear_at,
                  observed_at: @observed_at,
                  updated_at: @observed_at
@@ -776,15 +815,27 @@ defmodule SymphonyElixir.TicketStateTest do
       delivery = linear_issue(%{blocked_by: :unknown, state: nil, identifier: nil, updated_at: nil, title: "Renamed"})
 
       assert {observed, :changed} = TicketState.observe(record, delivery, DateTime.add(@observed_at, 60))
-      assert {observed.blockers, observed.phase, observed.issue_identifier, observed.linear_updated_at} == {["ACME-0"], "In Progress", "ACME-1", @linear_at}
+      assert {observed.blockers, observed.phase, observed.issue_identifier, observed.linear_updated_at} == {record.blockers, "In Progress", "ACME-1", @linear_at}
       assert observed.title == "Renamed"
+    end
+
+    test "a sub-issue's new state is a change; unknown sub-issues, a missing parent and a missing creation time keep the known ones" do
+      parent = %{identifier: "ACME-0", title: "Epic", done: 0, total: 1, children: ["started"]}
+      {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(%{parent: parent}), @observed_at)
+      assert record.parent == parent
+
+      moved = linear_issue(%{sub_issues: [%{id: "issue-2", identifier: "ACME-2", state: "In Progress"}], parent: nil, created_at: nil})
+      assert {observed, :changed} = TicketState.observe(record, moved, DateTime.add(@observed_at, 60))
+      assert {observed.sub_issues, observed.parent, observed.created_at} == {[%{id: "issue-2", identifier: "ACME-2", state: "In Progress"}], parent, @created_at}
+
+      delivery = linear_issue(%{sub_issues: :unknown, parent: nil, created_at: nil})
+      assert {^record, :unchanged} = TicketState.observe(record, delivery, DateTime.add(@observed_at, 60))
     end
 
     test "observation/1 is the update that writes the observed fields" do
       {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(), @observed_at)
 
-      assert TicketState.observation(record) ==
-               Map.take(record, [:issue_identifier, :phase, :title, :labels, :priority, :assignee, :blockers, :url, :linear_updated_at, :observed_at, :observed_from, :updated_at])
+      assert TicketState.observation(record) == Map.take(record, @observed_fields ++ [:observed_at, :observed_from, :updated_at])
     end
 
     test "a change keeps which read brought it; an unchanged read keeps the last one" do
