@@ -122,6 +122,14 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
   end
 
+  # A UI change on the hub: the diff selects the enabled `macos_app` playbook, whose pass runs the
+  # project's own server beside the app on the QA host.
+  defmodule AppPolicy do
+    def decide(_issue, settings, _opts) do
+      {:run, Enum.filter(SymphonyElixir.QaPolicy.enabled_playbooks(settings), &(&1.kind == "macos_app")), "the change delivers or updates a user journey"}
+    end
+  end
+
   defmodule UnusedStore do
     def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :disk_full}
     def get_ticket_state(_repo_key, _issue_id), do: nil
@@ -1093,6 +1101,214 @@ defmodule SymphonyElixir.QaVerificationTest do
   end
 
   # The QA pre-check (`SymphonyElixir.QaPreCheck`) on a ticket whose walkthrough steps name tests.
+  describe "steps QA cannot prove here" do
+    # The hub's setup (TP-1279): its server is configured for the Mac app's pass on the QA host and
+    # switched off on the Symphony host, so a server-only diff, which selects only `cli`, has neither
+    # the app nor the server.
+    defp hub_settings do
+      settings!(%{
+        "verification" => %{"enabled" => false, "dev_server" => %{"start_cmd" => "bin/hub", "health_check_url" => "http://localhost:4000/healthz"}},
+        "auto_review" => %{"playbooks" => %{"macos_app" => %{"build" => "make app", "app" => "build/Hub.app", "dev_server" => true}}}
+      })
+    end
+
+    # A repo that also has the Mac app's playbook, which a server-only diff does not select, and no
+    # server it rules out: a pass on such a diff offers `unprovable` for the app's steps only.
+    defp app_repo_settings(extra \\ %{}) do
+      settings!(Map.merge(%{"auto_review" => %{"playbooks" => %{"macos_app" => %{"build" => "make app", "app" => "build/Hub.app"}}}}, extra))
+    end
+
+    defp run_hub(workspace, result, settings \\ hub_settings()) do
+      Process.put(:qa_agent_result, {:ok, %{result: result, tokens: %{input: 1, output: 1}}})
+      run(workspace, settings: settings)
+    end
+
+    defp step(name, status, details \\ "what QA saw"), do: %{name: name, status: status, details: details, evidence: []}
+
+    defp needs_dev_server(steps) do
+      %{verdict: :blocked, summary: "The server steps passed.", steps: steps, findings: [], reason: "no Postgres or hub dev server was running", needs_dev_server: true}
+    end
+
+    test "a server-only fix with an app step on a repo whose dev server is off by design passes on its server steps, naming the app step unprovable here" do
+      {workspace, head} = git_workspace!()
+
+      result = needs_dev_server([step("Start a run with the stand-in model route", "pass"), step("Watch the run in the Mac app", "blocked", "no hub dev server")])
+      assert :ok = run_hub(workspace, result)
+
+      refute_received {:fixer_create, _attrs}
+      refute_received {:fixer_block, _identifier}
+      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+      assert [%{outcome: "pass", head_sha: ^head}] = verdicts()
+
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "**Verdict:** pass → Merging"
+      assert report =~ "- **unprovable here** Watch the run in the Mac app"
+      assert report =~ "Unprovable here: Watch the run in the Mac app (this repo runs its own server only beside the app on the QA host"
+
+      # The agent was told which steps fall there, and why.
+      assert_received {:qa_agent_run, job, _settings}
+      assert job.unprovable.unselected == ["macos_app"]
+      assert job.unprovable.dev_server_ruled_out =~ "keeps its dev server switched off on the Symphony host"
+      prompt = QaAgent.prompt(job, nil)
+      assert prompt =~ "Some steps cannot be proved in this pass:"
+      assert prompt =~ ~s("status": "pass" | "fail" | "blocked" | "skipped" | "unprovable")
+    end
+
+    test "a failing step on such a repo fails the pass to Rework, the failing step its finding" do
+      {workspace, _head} = git_workspace!()
+
+      result = needs_dev_server([step("Start a run", "fail", "the run never started"), step("Watch the run in the Mac app", "blocked")])
+      assert :ok = run_hub(workspace, result)
+
+      refute_received {:fixer_create, _attrs}
+      assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "- Start a run: the run never started"
+    end
+
+    test "a failing step's own finding is kept when the agent wrote one" do
+      {workspace, _head} = git_workspace!()
+
+      result = %{needs_dev_server([step("Start a run", "fail"), step("Watch the run in the Mac app", "blocked")]) | findings: ["Start a run: the button is gone"]}
+      assert :ok = run_hub(workspace, result)
+
+      assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "- Start a run: the button is gone"
+      refute report =~ "- Start a run: what QA saw"
+    end
+
+    test "with nothing provable left the ticket asks a person at once, recommending a merge without a QA result" do
+      {workspace, head} = git_workspace!()
+
+      # A block that named no step: what the server would have shown is the one unprovable step.
+      assert :ok = run_hub(workspace, needs_dev_server([]))
+
+      refute_received {:fixer_create, _attrs}
+      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      assert [%{outcome: "blocked", head_sha: ^head}] = verdicts()
+
+      assert %{decision: decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert decision.title == "QA could not finish its check of TP-816"
+      assert decision.question =~ "QA could not prove any step of TP-816 (Land the QA state) here"
+      assert decision.why =~ "The steps that need the project's own server"
+
+      assert [%{label: "Run QA again"} = again, %{label: "Send it back to Rework"}, %{label: "Merge without a QA result", recommended: true}] = decision.options
+      refute Map.has_key?(again, :recommended)
+
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "**Verdict:** blocked → QA (blocked)"
+    end
+
+    test "the Mac app's pass, which runs the server, is never told it is ruled out, and its server block takes the repair as before" do
+      {workspace, _head} = git_workspace!()
+
+      result = needs_dev_server([step("Start a run", "pass"), step("Watch the run in the Mac app", "blocked", "no hub dev server")])
+      Process.put(:qa_agent_result, {:ok, %{result: result, tokens: %{input: 1, output: 1}}})
+      assert :ok = run(workspace, settings: hub_settings(), qa_policy: AppPolicy)
+      assert :ok = run(workspace, settings: hub_settings(), qa_policy: AppPolicy)
+
+      assert_received {:fixer_create, %{scope: @repo_key, component: "dev_server"}}
+      refute_received {:memory_tracker_state_update, @issue_id, "Merging"}
+
+      assert_received {:qa_agent_run, job, _settings}
+      assert [%{kind: "macos_app", dev_server: true}] = job.playbooks
+      assert job.unprovable.dev_server_ruled_out == nil
+      refute QaAgent.prompt(job, nil) =~ "The project's own server and its database"
+    end
+
+    test "a block that names its own cause stays blocked, whatever its unprovable steps" do
+      steps = [step("Start a run", "pass"), step("Watch the run on Android", "unprovable", "the Android playbook is not in this pass")]
+
+      # A wide pass a small QA screen limited, the ticket that already covers the gap, a QA tool's own
+      # failure, and the project's server on a repo that has not ruled it out.
+      causes = [
+        %{needs_person: true, reason: "the QA screen is too small for the wide pass"},
+        %{covered_by: "TP-716"},
+        %{cause: {:qa_worker, "qa_worker_unsafe"}},
+        %{needs_dev_server: true}
+      ]
+
+      for cause <- causes do
+        RunStore.delete_ticket_state(@repo_key, @issue_id)
+        {workspace, _head} = git_workspace!()
+        result = Map.merge(%{verdict: :blocked, summary: "The run started.", steps: steps, findings: [], reason: "blocked"}, cause)
+
+        capture_log(fn -> assert :ok = run_hub(workspace, result, app_repo_settings()) end)
+
+        refute_received {:memory_tracker_state_update, @issue_id, "Merging"}
+        assert [%{outcome: "blocked"}] = verdicts()
+      end
+    end
+
+    test "a repo without the opt-out keeps the dev-server repair, whatever playbooks it has" do
+      {workspace, _head} = git_workspace!()
+      settings = app_repo_settings()
+
+      result = needs_dev_server([step("Start a run", "pass"), step("Watch the run in the Mac app", "blocked")])
+      assert :ok = run_hub(workspace, result, settings)
+      assert :ok = run_hub(workspace, result, settings)
+
+      assert_received {:fixer_create, %{scope: @repo_key, component: "dev_server"}}
+    end
+
+    test "a step the agent marks unprovable is decided by the rest, unless another step is still blocked" do
+      {workspace, _head} = git_workspace!()
+
+      blocked = %{verdict: :blocked, summary: "", steps: [step("Run it", "blocked"), step("Open the Mac app", "unprovable", "no app playbook")], findings: [], reason: "the app is not in this pass"}
+      assert :ok = run_hub(workspace, blocked, app_repo_settings())
+      refute_received {:memory_tracker_state_update, @issue_id, _state}
+      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+
+      assert :ok = run_hub(workspace, %{blocked | steps: [step("Run it", "pass"), step("Open the Mac app", "unprovable", "no app playbook")]}, app_repo_settings())
+      assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+    end
+
+    test "an unprovable step on a pass that offered no such case is the agent's own block, retried as before" do
+      {workspace, head} = git_workspace!()
+
+      steps = [step("Run it", "pass"), step("Open the Mac app", "unprovable", "no app playbook")]
+      blocked = %{verdict: :blocked, summary: "", steps: steps, findings: [], reason: "the app is not in this pass"}
+      assert :ok = run_hub(workspace, blocked, settings!())
+
+      assert_received {:qa_agent_run, job, _settings}
+      assert job.unprovable == %{unselected: [], dev_server_ruled_out: nil}
+      refute QaAgent.prompt(job, nil) =~ "unprovable"
+
+      refute_received {:memory_tracker_state_update, @issue_id, _state}
+      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+      assert [%{outcome: "blocked", head_sha: ^head}] = verdicts()
+
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "**Verdict:** blocked → QA (blocked, retrying)"
+      assert report =~ "- **blocked** Open the Mac app"
+      refute report =~ "unprovable here"
+    end
+
+    test "a pass the agent gave with an unprovable step passes, naming that step" do
+      {workspace, _head} = git_workspace!()
+
+      passed = %{verdict: :pass, summary: "It ran.", steps: [step("Run it", "pass"), step("Open the Mac app", "unprovable", "no app playbook")], findings: []}
+      assert :ok = run_hub(workspace, passed, app_repo_settings())
+
+      assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "It ran. Unprovable here: Open the Mac app (no app playbook)."
+    end
+
+    test "a pass with no unprovable step, and a fail, are left as the agent gave them" do
+      {workspace, _head} = git_workspace!()
+
+      fail = %{verdict: :fail, summary: "", steps: [step("Run it", "fail"), step("Open the Mac app", "unprovable")], findings: ["Run it: broke"], reason: nil}
+      assert :ok = run_hub(workspace, fail)
+      assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
+
+      assert :ok = run_hub(workspace, %{verdict: :pass, summary: "Fine.", steps: [step("Run it", "pass")], findings: []})
+      assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+    end
+  end
+
   describe "a pass with nothing on screen to judge" do
     defp scope_none_result(app_check) do
       result = %{
@@ -1444,6 +1660,20 @@ defmodule SymphonyElixir.QaVerificationTest do
 
     defp make_all(status, conclusion) do
       %{"name" => "make-all", "workflowName" => "make-all", "status" => status, "conclusion" => conclusion, "detailsUrl" => @run_url}
+    end
+
+    test "a passed check decides a pass whose only walked step is unprovable here" do
+      {workspace, head} = git_workspace!()
+
+      steps = [%{name: "Open the dashboard", status: "unprovable", details: "the app's playbook is not in this pass", evidence: []}]
+      blocked = %{verdict: :blocked, summary: "", steps: steps, findings: [], reason: "the app is not in this pass"}
+      Process.put(:qa_agent_result, {:ok, %{result: blocked, tokens: %{}}})
+
+      settings = app_repo_settings(%{"proof_check" => "make-all"})
+      assert :ok = run_named(workspace, @named_walkthrough, settings: settings, gh_runner: gh(head, [make_all("COMPLETED", "SUCCESS")]))
+
+      assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+      assert [%{outcome: "pass", head_sha: ^head}] = verdicts()
     end
 
     test "a passed check is confirmed before the agent: the prompt says not to walk it and the report links it" do

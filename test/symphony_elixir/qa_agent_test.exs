@@ -933,6 +933,39 @@ defmodule SymphonyElixir.QaAgentTest do
       assert epic =~ "Leave `covered_by` out otherwise.\n\nWhen one playbook"
     end
 
+    test "a step needing a playbook the diff did not select, or a server the repo rules out, is unprovable, and only then" do
+      both = QaAgent.prompt(job(%{unprovable: %{unselected: ["macos_app"], dev_server_ruled_out: "this repo keeps it off"}}), nil)
+
+      assert both =~ "When one playbook is blocked"
+      assert both =~ "any step is blocked, with each failing step's defect in `details`.\n\nSome steps cannot be proved in this pass:\n"
+      assert both =~ "- This repo also has the `macos_app` playbook(s), which this diff did not select"
+      assert both =~ "A `qa:<kind>` label on the ticket selects one."
+      assert both =~ "- The project's own server and its database: this repo keeps it off.\n"
+      assert both =~ "Mark a step that needs one of them `unprovable`, never `blocked`"
+      assert both =~ "Never mark `unprovable` a step one of this pass's playbooks (above) can run,\nor one that fails.\n"
+      assert both =~ ~s("status": "pass" | "fail" | "blocked" | "skipped" | "unprovable",)
+
+      # The playbooks the rule points at come before it.
+      [before_rule, _rule] = String.split(both, "Some steps cannot be proved in this pass:", parts: 2)
+      assert before_rule =~ "Playbooks to follow:"
+
+      server_only = QaAgent.prompt(job(%{unprovable: %{unselected: [], dev_server_ruled_out: "this repo keeps it off"}}), nil)
+      assert server_only =~ "Some steps cannot be proved in this pass:\n- The project's own server"
+      refute server_only =~ "did not select"
+
+      app_only = QaAgent.prompt(job(%{unprovable: %{unselected: ["macos_app"], dev_server_ruled_out: nil}}), nil)
+      assert app_only =~ "did not select"
+      refute app_only =~ "The project's own server and its database:"
+
+      for prompt <- [
+            QaAgent.prompt(job(%{unprovable: %{unselected: [], dev_server_ruled_out: nil}}), nil),
+            QaAgent.prompt(job(), nil),
+            QaAgent.prompt(job(%{epic_review: true, base_ref: "origin/main", unprovable: %{unselected: ["macos_app"], dev_server_ruled_out: nil}}), nil)
+          ] do
+        refute prompt =~ "unprovable"
+      end
+    end
+
     test "a step needing paid AI, real credentials or an outside service is judged through a stand-in, not blocked" do
       prompt = QaAgent.prompt(job(), nil) |> String.replace(~r/\s+/, " ")
 

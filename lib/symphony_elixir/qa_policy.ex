@@ -114,6 +114,17 @@ defmodule SymphonyElixir.QaPolicy do
   def enabled_playbooks(settings), do: Selection.playbooks(settings.auto_review, Verification.selection_opts(settings))
 
   @doc """
+  The kinds of the enabled playbooks a run did not select: the `macos_app` playbook on a server-only
+  diff, say. A walkthrough step only one of them could show is `unprovable` on that run
+  (`SymphonyElixir.QaVerification`), and a `qa:<kind>` label on the ticket selects it.
+  """
+  @spec unselected_playbooks(map(), [Selection.playbook()]) :: [String.t()]
+  def unselected_playbooks(settings, selected) do
+    kinds = Enum.map(selected, & &1.kind)
+    for %{kind: kind} <- enabled_playbooks(settings), kind not in kinds, do: kind
+  end
+
+  @doc """
   The paths `sha` changes against the merge base of `origin/<base>` in `workspace`. `opts[:git]`
   overrides the git runner (tests); it is called as `git.(args, cwd)` and returns `{output, status}`.
   """

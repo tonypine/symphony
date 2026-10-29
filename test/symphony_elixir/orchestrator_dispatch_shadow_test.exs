@@ -98,7 +98,8 @@ defmodule SymphonyElixir.OrchestratorDispatchShadowTest do
 
     # With `record` dispatch reads the record, and the record being newer is no difference.
     assert [%{identifier: "ACME-1", state: "In Progress"}] = buckets.dispatchable
-    assert %{window_differences: 0, recent: [], record_newer: %{count: 1, recent: ["ACME-1"]}} = Shadow.summary()
+    assert %{window_differences: 0, recent: [], record_newer: record_newer} = Shadow.summary()
+    assert record_newer == %{count: 1, recent: [%{identifier: "ACME-1", side: :both}]}
 
     # The next poll reads the move: nothing is set aside any more, and the count stays.
     {%{dispatchable: [%{state: "In Progress"}]}, _state} = cycle(state, ctx.repos, [moved], 100)
@@ -119,7 +120,7 @@ defmodule SymphonyElixir.OrchestratorDispatchShadowTest do
 
     summary = Shadow.summary()
     assert %{cycles_compared: 2, cycles_with_differences: 0, window_differences: 0, recent: []} = summary
-    assert summary.record_newer == %{count: 1, recent: ["ACME-1"]}
+    assert summary.record_newer == %{count: 1, recent: [%{identifier: "ACME-1", side: :both}]}
   end
 
   test "TP-1222 inside the poll: Symphony moves the ticket and a by-id read writes the move after the repo read, before the poll result is applied",
@@ -144,7 +145,44 @@ defmodule SymphonyElixir.OrchestratorDispatchShadowTest do
     assert %{phase: "Code Review"} = RunStore.get_ticket_state(ctx.repo_key, issue_id)
     summary = Shadow.summary()
     assert %{cycles_compared: 2, cycles_with_differences: 0, window_differences: 0, recent: []} = summary
-    assert summary.record_newer == %{count: 1, recent: ["ACME-1"]}
+    assert summary.record_newer == %{count: 1, recent: [%{identifier: "ACME-1", side: :both}]}
+  end
+
+  test "TP-1281 replayed: the poll lists the ticket in Merging, the watcher merges and Symphony closes it, and the comparison records no difference",
+       ctx do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_active_states: @review_states ++ ["Merging"])
+    merging = issue(ctx.repo_key, 1, state: "Merging")
+    {_buckets, state} = cycle(%Orchestrator.State{poll_interval_ms: 100}, ctx.repos, [merging], 0)
+
+    # The close writes the record first, then Linear; the cache still lists the ticket in Merging.
+    :ok = TicketSignals.record_phase(ctx.repo_key, "#{ctx.repo_key}-1", "Done")
+
+    log = capture_log(fn -> cycle(state, ctx.repos, [merging], 50) end)
+    refute log =~ "Dispatch shadow difference"
+
+    summary = Shadow.summary()
+    assert %{cycles_compared: 2, cycles_with_differences: 0, window_differences: 0, recent: []} = summary
+    assert summary.record_newer == %{count: 1, recent: [%{identifier: "ACME-1", side: :poll}]}
+  end
+
+  test "a ticket removed in Linear after the poll read is record_newer; one removed before the read is a difference", ctx do
+    issues = [issue(ctx.repo_key, 1), issue(ctx.repo_key, 2)]
+    {_buckets, state} = cycle(%Orchestrator.State{poll_interval_ms: 100}, ctx.repos, issues, 0)
+    after_read = DateTime.add(DateTime.utc_now(), 5)
+    before_read = DateTime.add(after_read, -3600)
+
+    for {n, at} <- [{1, after_read}, {2, before_read}] do
+      removal = {:issue_removed, "#{ctx.repo_key}-#{n}", "ACME-#{n}"}
+      assert TicketObservation.observe_delivery(removal, repos: ctx.repos, orchestrator: :no_orchestrator, now: at) == :removed
+    end
+
+    log = capture_log(fn -> cycle(state, ctx.repos, issues, 50) end)
+    refute log =~ "issue_identifier=ACME-1 "
+    assert log =~ "issue_identifier=ACME-2 side=poll field=candidate"
+
+    summary = Shadow.summary()
+    assert %{cycles_with_differences: 1, recent: [%{identifier: "ACME-2", side: :poll, field: :candidate}]} = summary
+    assert summary.record_newer == %{count: 1, recent: [%{identifier: "ACME-1", side: :poll}]}
   end
 
   test "a record whose phase was written before the poll read and still differs is a difference naming the ticket and field", ctx do

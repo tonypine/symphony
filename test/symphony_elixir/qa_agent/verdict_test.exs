@@ -96,6 +96,9 @@ defmodule SymphonyElixir.QaAgent.VerdictTest do
       assert {:ok, %{steps: [%{name: "a", status: "skipped", details: "", evidence: []}]}} =
                Verdict.from_map(%{"verdict" => "pass", "steps" => [%{"name" => "a", "status" => "SKIP"}]})
 
+      assert {:ok, %{steps: [%{name: "a", status: "unprovable", details: "no app here"}]}} =
+               Verdict.from_map(%{"verdict" => "pass", "steps" => [%{"name" => "a", "status" => "Unprovable", "details" => "no app here"}]})
+
       for steps <- [[%{"name" => " ", "status" => "pass"}], [%{"name" => "a", "status" => "maybe"}], [%{"status" => "pass"}], "a"] do
         assert Verdict.from_map(%{"verdict" => "pass", "steps" => steps}) == {:error, :invalid_steps}
       end
@@ -178,7 +181,7 @@ defmodule SymphonyElixir.QaAgent.VerdictTest do
           {:no_verdict_object, "the answer had no qa_verdict call and no JSON verdict object."},
           {:not_a_json_object, "the verdict must be a JSON object."},
           {:invalid_verdict, "`verdict` must be one of pass, fail or blocked."},
-          {:invalid_steps, "each step must be an object with a non-empty `name` and a `status` of pass, fail, blocked or skipped."},
+          {:invalid_steps, "each step must be an object with a non-empty `name` and a `status` of pass, fail, blocked, skipped or unprovable."},
           {:invalid_findings, "`findings` must be a list of findings."},
           {:invalid_finding, "each finding must be a sentence, or an object with a `summary` or the `actual` result."},
           {:missing_fail_findings, "a fail needs at least one finding or failing step."},

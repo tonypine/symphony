@@ -656,8 +656,8 @@ defmodule SymphonyElixirWeb.Presenter do
   # Where dispatch reads its candidates from (`dispatch.source`), and how the candidates the ticket
   # records give compared with the poll cache's (`SymphonyElixir.Dispatch.Shadow`): cycles compared
   # and with a difference, the differences of the last `window` cycles, the last ten that appeared,
-  # newest first, and the differences the record's newer phase write explained (`record_newer`: how
-  # many, and the identifiers of the last five, newest first).
+  # newest first, and the differences the record's newer write explained (`record_newer`: how many,
+  # and the identifier and side of the last five, newest first).
   defp dispatch_shadow_payload do
     summary = DispatchShadow.summary()
 
