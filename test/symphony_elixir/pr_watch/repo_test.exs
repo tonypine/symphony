@@ -178,7 +178,8 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       github: FakeGitHub,
       fetch: FakeFetch,
       interval_ms: 30_000,
-      now: fn -> @now end
+      now: fn -> @now end,
+      follow_records: false
     ]
 
     start_supervised!({Repo, Keyword.merge(defaults, opts)})
@@ -1088,6 +1089,196 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       assert {:ok, %{watched: 1}} = Repo.poll(pid)
       assert watched_ids(repo_key) == ["1"]
       refute_received {:linear_read, _states}
+    end
+
+    # The watcher has handled every record change sent before this call, and the re-decision they
+    # queued: the change queues it as a message to itself, which a second call waits behind.
+    defp redecided!(pid) do
+      :sys.get_state(pid)
+      :sys.get_state(pid)
+    end
+
+    defp dispatch_reason(repo_key, issue_id, state) do
+      issue = %Issue{id: issue_id, identifier: "TP-#{issue_id}", state: state, repo_key: repo_key}
+      PrWatch.dispatch_reason(issue, Config.settings!())
+    end
+
+    defp no_reads! do
+      refute_received {:read, _pr_url, _opts}
+      refute_received {:list_open_pull_requests, _pr_url}
+      refute_received {:linear_read, _states}
+      refute_received {:linear_read_by_id, _ids}
+    end
+
+    test "TP-1223: a move to Code Review re-decides the ticket at once on the read the watcher holds, with no GitHub or Linear read",
+         %{repo_key: repo_key} do
+      record_source!()
+      issues!({:error, :linear_must_not_be_read})
+      observed!(repo_key, with_pr(repo_key, issue("1", "In Progress"), 1))
+      pid = start_repo!(repo_key, follow_records: true)
+      assert {:ok, %{watched: 1}} = Repo.poll(pid)
+      assert %{facts: %Facts{phase: :in_progress}, read_at: read_at, source: :poll} = watch(repo_key, "1")
+      flush()
+
+      # The Director's move writes the record's phase, which announces it: the watcher decides on
+      # the PR it read, and the run may start.
+      :ok = SymphonyElixir.TicketSignals.record_phase(repo_key, "1", "Code Review")
+      redecided!(pid)
+
+      redecided = watch(repo_key, "1")
+      assert %{stay: :code_review, facts: %Facts{phase: :code_review, pr_number: 1}} = redecided
+      assert %{decision: %{kind: :dispatch}} = redecided
+      assert %{read_at: ^read_at, source: :poll} = redecided
+
+      assert dispatch_reason(repo_key, "1", "Code Review") == nil
+      no_reads!()
+    end
+
+    test "TP-1223: a ticket with no PR is re-decided with nothing to read", %{repo_key: repo_key} do
+      record_source!()
+      issues!({:error, :linear_must_not_be_read})
+      observed!(repo_key, issue("2", "In Progress"))
+      pid = start_repo!(repo_key, tracker: AskingTracker, follow_records: true)
+      assert {:ok, %{watched: 1}} = Repo.poll(pid)
+      flush()
+
+      # In Rework with no PR, the watcher asks how the ticket continues.
+      :ok = SymphonyElixir.TicketSignals.record_phase(repo_key, "2", "Rework")
+      redecided!(pid)
+
+      assert %{stay: :rework, facts: %Facts{phase: :rework, pr: :missing}, pr_url: nil} = watch(repo_key, "2")
+      assert_received {:comment, "2", "## Decision needed: No pull request on TP-2" <> _body}
+      no_reads!()
+    end
+
+    test "TP-1223: a ticket the watcher holds no read of has its one PR read, as a confirm read does", %{repo_key: repo_key} do
+      record_source!()
+      issues!({:error, :linear_must_not_be_read})
+      observed!(repo_key, with_pr(repo_key, issue("1", "Todo"), 1))
+      observed!(repo_key, with_pr(repo_key, issue("2", "Code Review"), 2))
+      pid = start_repo!(repo_key, follow_records: true)
+      assert {:ok, %{watched: 1}} = Repo.poll(pid)
+      assert dispatch_reason(repo_key, "1", "Code Review") == "the PR watcher hasn't read its PR yet"
+      flush()
+
+      :ok = SymphonyElixir.TicketSignals.record_phase(repo_key, "1", "Code Review")
+      redecided!(pid)
+
+      assert %{facts: %Facts{phase: :code_review}, decision: %{kind: :dispatch}, source: :webhook} = watch(repo_key, "1")
+      assert dispatch_reason(repo_key, "1", "Code Review") == nil
+      assert_received {:read, "https://github.com/acme/app/pull/1", _opts}
+      no_reads!()
+
+      # A delivery about the PR makes the read stale: the next re-decision reads it again.
+      completed = %{event: "check_suite", action: "completed", head_sha: "sha-1", conclusion: "success", completed_at: @now}
+      delivery = {:ci, Map.merge(completed, %{pr_urls: [pr_url(1)], merged: false, base_ref: "main"})}
+      Repo.ingest(pid, delivery, "https://github.com/acme/app")
+      :ok = Hold.set(repo_key, "1", :blocked, %{reason: "waiting on TP-9"})
+      redecided!(pid)
+
+      assert %{facts: %Facts{hold: :blocked}} = watch(repo_key, "1")
+      assert_received {:read, "https://github.com/acme/app/pull/1", _opts}
+      no_reads!()
+    end
+
+    test "TP-1223: an answer that clears a question's hold re-decides the ticket at once, and it proceeds", %{repo_key: repo_key} do
+      record_source!()
+      issues!({:error, :linear_must_not_be_read})
+      observed!(repo_key, with_pr(repo_key, issue("1", "Code Review"), 1))
+      :ok = Hold.set(repo_key, "1", :needs_decision, %{reason: "Which base?", decision: %{title: "Which base?", question: "Which base?"}})
+      pid = start_repo!(repo_key, follow_records: true)
+      assert {:ok, %{watched: 1}} = Repo.poll(pid)
+      assert %{facts: %Facts{hold: :needs_decision}, decision: %{kind: kind}} = watch(repo_key, "1")
+      refute kind == :dispatch
+      assert dispatch_reason(repo_key, "1", "Code Review") =~ "the PR watcher ("
+      flush()
+
+      :ok = Hold.clear(repo_key, "1", :needs_decision, answered: true)
+      redecided!(pid)
+
+      assert %{facts: %Facts{hold: :none}, decision: %{kind: :dispatch}} = watch(repo_key, "1")
+      assert dispatch_reason(repo_key, "1", "Code Review") == nil
+      no_reads!()
+    end
+
+    test "TP-1223: a change of a title or a priority, another repo's change and any change under dispatch from the poll re-decide nothing",
+         %{repo_key: repo_key} do
+      record_source!()
+      issues!({:error, :linear_must_not_be_read})
+      ticket = %{with_pr(repo_key, issue("1", "Code Review"), 1) | repo_key: repo_key, updated_at: @now}
+      observed!(repo_key, ticket)
+      # The clock moves after the tick, so a re-decision would write a decision made later.
+      clock = :counters.new(1, [])
+      pid = start_repo!(repo_key, follow_records: true, now: fn -> DateTime.add(@now, :counters.get(clock, 1), :second) end)
+      assert {:ok, %{watched: 1}} = Repo.poll(pid)
+      before = watch(repo_key, "1")
+      :counters.put(clock, 1, 60)
+      flush()
+
+      # A webhook delivery's title and priority change is announced with those fields only.
+      renamed = %{ticket | title: "Renamed", priority: 1, updated_at: DateTime.add(@now, 60)}
+      {:ok, :updated} = TicketObservation.observe(repo_key, renamed, source: :webhook)
+      send(pid, {:ticket_record, "other-repo", "1", :changed, [:phase]})
+      redecided!(pid)
+      assert watch(repo_key, "1") == before
+
+      write_workflow_file!(Workflow.workflow_file_path())
+      Cache.clear()
+      :ok = SymphonyElixir.TicketSignals.record_phase(repo_key, "1", "QA")
+      redecided!(pid)
+
+      assert watch(repo_key, "1") == before
+      no_reads!()
+    end
+
+    test "TP-1223: a burst of changes to one ticket is one re-decision; a change after it is another", %{repo_key: repo_key} do
+      record_source!()
+      issues!({:error, :linear_must_not_be_read})
+      observed!(repo_key, with_pr(repo_key, issue("1", "Code Review"), 1))
+      # A read that fails leaves the watcher holding none, so each re-decision reads the PR once.
+      reads!(%{pr_url(1) => {:error, :boom}})
+      pid = start_repo!(repo_key, follow_records: true)
+
+      capture_log(fn ->
+        :ok = :sys.suspend(pid)
+        :ok = Hold.set(repo_key, "1", :blocked, %{reason: "waiting on TP-9"})
+        :ok = Hold.clear(repo_key, "1", :blocked)
+        :ok = SymphonyElixir.TicketSignals.record_phase(repo_key, "1", "QA")
+        :ok = :sys.resume(pid)
+        redecided!(pid)
+
+        assert_received {:read, "https://github.com/acme/app/pull/1", _opts}
+        refute_received {:read, _pr_url, _opts}
+
+        :ok = SymphonyElixir.TicketSignals.record_phase(repo_key, "1", "Code Review")
+        redecided!(pid)
+        assert_received {:read, "https://github.com/acme/app/pull/1", _opts}
+        refute_received {:read, _pr_url, _opts}
+      end)
+    end
+
+    test "TP-1223: R18's question on a re-decision reads the record's description, with no GitHub or Linear read", %{repo_key: repo_key} do
+      record_source!(pr_review_mode: "polling", ci: %{enabled: true})
+      issues!({:error, :linear_must_not_be_read})
+      git = protected_paths_head!(repo_key)
+      observed!(repo_key, with_pr(repo_key, issue("1", "Merging", description: "Add the hook to `WORKFLOW.md`."), 1))
+      pid = start_repo!(repo_key, tracker: AskingTracker, git: git, follow_records: true)
+
+      assert {:ok, %{errors: 0}} = Repo.poll(pid)
+      asked = question("1")
+      assert asked =~ "**Allow the change** (recommended)"
+      flush()
+
+      # As if the watcher had not asked yet: the hold's clear re-decides, and the description the
+      # record holds gives the same question.
+      :ok = :sys.suspend(pid)
+      :ok = Hold.clear(repo_key, "1", :needs_decision)
+      :ok = RunStore.put_ticket_pr_watch(repo_key, "1", "TP-1", nil)
+      :ok = :sys.resume(pid)
+      redecided!(pid)
+
+      assert question("1") == asked
+      no_reads!()
     end
   end
 

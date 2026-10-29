@@ -335,10 +335,11 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # A ticket's record changed outside the poll cycle (`TicketObservation`): with dispatch from the
-  # record, its repo gets a cycle at once, as a move made there does, so a ticket the change frees is
-  # considered within seconds. With dispatch from the poll cache the change waits for the repo's poll.
-  defp handle_info_message({:ticket_record, repo_key, _issue_id, :changed}, state) do
+  # A ticket's record changed outside the poll cycle (`TicketObservation`, a move, a hold): with
+  # dispatch from the record, its repo gets a cycle at once, as a move made there does, so a ticket
+  # the change frees is considered within seconds. With dispatch from the poll cache the change waits
+  # for the repo's poll.
+  defp handle_info_message({:ticket_record, repo_key, _issue_id, :changed, _fields}, state) do
     case dispatch_source_in_use() do
       :record -> handle_cast_message({:request_refresh, repo_key, :now}, state)
       :poll -> {:noreply, state}

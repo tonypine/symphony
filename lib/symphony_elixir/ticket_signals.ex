@@ -23,6 +23,7 @@ defmodule SymphonyElixir.TicketSignals do
   require Logger
 
   alias SymphonyElixir.{Orchestrator, RunStore, TicketEvents, TicketState}
+  alias SymphonyElixirWeb.ObservabilityPubSub
 
   @phase_signals ["claim", "ci fix return", "review verdict", "merge settled", "restart", "deprioritized"]
   @mirrored_signals ["decision requested", "unblocked", "dispatch_loop", "ci_wait"]
@@ -70,7 +71,9 @@ defmodule SymphonyElixir.TicketSignals do
   @doc """
   Writes `phase` as the record's phase (`TicketState.put_phase/3`), creating the record when none
   exists, and leaves every other field as it is: `linear_updated_at` stays, so a later read of Linear
-  still wins on the facts it owns. A record already in `phase` is left alone. Best-effort like every
+  still wins on the facts it owns. A phase written is announced as a change of the record's `phase`
+  (`SymphonyElixirWeb.ObservabilityPubSub.broadcast_ticket_record_changed/3`), so the PR watcher
+  re-decides the ticket at once. A record already in `phase` is left alone. Best-effort like every
   recording here: a store failure is logged and swallowed. No-ops without a repo key, an issue id or
   a phase.
   """
@@ -330,13 +333,14 @@ defmodule SymphonyElixir.TicketSignals do
     moved =
       case RunStore.get_ticket_state(repo_key, issue_id) do
         {:error, _reason} = error -> error
-        %{phase: ^phase} -> :ok
+        %{phase: ^phase} -> :unchanged
         nil -> repo_key |> TicketState.new(issue_id) |> TicketState.put_phase(phase) |> RunStore.put_ticket_state()
         record -> record |> TicketState.put_phase(phase) |> update_phase(repo_key, issue_id)
       end
 
     case moved do
-      :ok -> :ok
+      :ok -> ObservabilityPubSub.broadcast_ticket_record_changed(repo_key, issue_id, [:phase])
+      :unchanged -> :ok
       error -> log_error(error, "write the record's phase #{phase} on issue_id=#{issue_id}")
     end
   end
