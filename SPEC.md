@@ -366,7 +366,12 @@ Elixir implementation writes it when the run's session, PR, workspace, worker ho
 and otherwise at most every 5 s; the run's completion writes the final record.
 
 Each ticket also has a state record per `repo_key` and issue ID (`TicketState`), which learns from
-every repo poll. For every issue a poll returns, the observation writes into the record the ticket's
+these Linear reads of its issues: the repo poll, the by-id reads each poll tick makes of the running,
+watched, forced and operator-stopped tickets, the dispatch prefetch and the revalidation before a
+start, and each PR watcher's read of the watched states, for every repo that read returns. A by-id
+read carries no repo key, so each issue it returns is written under the repo it routes to, and one no
+repo takes is skipped. Observing adds no request to Linear. For every issue a read returns, the
+observation writes into the record the ticket's
 Linear state as its `phase`, its `issue_identifier`, `title`, `labels`, `priority`, `assignee` (the
 assignee's ID), `blockers` (the identifiers of its blockers outside the repo's terminal states), `url`
 and Linear's `updatedAt` as `linear_updated_at`, with `observed_at`, creating the record when the

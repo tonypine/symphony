@@ -1374,7 +1374,16 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp fetch_issue_states_if_needed([]), do: {:ok, []}
-  defp fetch_issue_states_if_needed(issue_ids), do: Tracker.fetch_issue_states_by_ids(issue_ids)
+  defp fetch_issue_states_if_needed(issue_ids), do: fetch_observed_issues_by_ids(issue_ids)
+
+  # Every by-id read the poll and dispatch make also writes what it read into the tickets' records,
+  # each under the repo it routes to, so the record is as fresh as Symphony's newest read.
+  defp fetch_observed_issues_by_ids(issue_ids) do
+    with {:ok, issues} = result when is_list(issues) <- Tracker.fetch_issue_states_by_ids(issue_ids) do
+      TicketObservation.observe_routed(issues)
+      result
+    end
+  end
 
   defp fetch_due_repo_if_needed(nil), do: :not_due
 
@@ -3026,7 +3035,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp prefetch_dispatch_issues([]), do: nil
-  defp prefetch_dispatch_issues(issue_ids), do: %{ids: MapSet.new(issue_ids), result: Tracker.fetch_issue_states_by_ids(issue_ids)}
+  defp prefetch_dispatch_issues(issue_ids), do: %{ids: MapSet.new(issue_ids), result: fetch_observed_issues_by_ids(issue_ids)}
 
   defp handle_dispatch_readiness_result(%State{} = state, %{kind: context, issues: issues}, result) do
     state =
@@ -4588,11 +4597,11 @@ defmodule SymphonyElixir.Orchestrator do
     fn [issue_id] = issue_ids ->
       if MapSet.member?(prefetched_ids, issue_id),
         do: prefetched_dispatch_issue(result, issue_id),
-        else: Tracker.fetch_issue_states_by_ids(issue_ids)
+        else: fetch_observed_issues_by_ids(issue_ids)
     end
   end
 
-  defp dispatch_issue_fetcher(_state), do: &Tracker.fetch_issue_states_by_ids/1
+  defp dispatch_issue_fetcher(_state), do: &fetch_observed_issues_by_ids/1
 
   defp prefetched_dispatch_issue({:ok, issues}, issue_id), do: {:ok, Enum.filter(issues, &match?(%Issue{id: ^issue_id}, &1))}
   defp prefetched_dispatch_issue({:error, _reason} = error, _issue_id), do: error

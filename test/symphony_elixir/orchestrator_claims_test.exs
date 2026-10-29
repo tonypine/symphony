@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.OrchestratorClaimsTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.TicketObservation
+
   setup do
     test_root = Path.join(System.tmp_dir!(), "symphony-claims-#{System.unique_integer([:positive])}")
     File.mkdir_p!(test_root)
@@ -175,6 +177,102 @@ defmodule SymphonyElixir.OrchestratorClaimsTest do
     refute log =~ "issue_id=issue-refreshing"
     refute log =~ "issue_id=issue-blocking"
     assert :sys.get_state(pid).claimed == MapSet.new([refreshing.id, "issue-blocking"])
+  end
+
+  test "a running ticket moved by hand has its record updated by the next tick's by-id read, before the repo poll" do
+    moved = %{issue("issue-moved", "MT-MOVED", "Rework") | updated_at: ~U[2026-10-29 10:00:00Z]}
+    {:ok, :updated} = TicketObservation.observe("default", %{moved | state: "In Progress", updated_at: ~U[2026-10-29 09:00:00Z]})
+    pid = start_orchestrator!(:MovedOrchestrator)
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [moved])
+    agent_pid = spawn(fn -> receive do: (:stop -> :ok) end)
+    on_exit(fn -> Process.exit(agent_pid, :kill) end)
+    not_due = System.monotonic_time(:millisecond) + 3_600_000
+
+    :sys.replace_state(pid, fn state ->
+      running = %{
+        pid: agent_pid,
+        ref: nil,
+        identifier: moved.identifier,
+        issue: %{moved | state: "In Progress"},
+        repo_key: "default",
+        started_at: DateTime.utc_now()
+      }
+
+      %{state | running: %{moved.id => running}, claimed: MapSet.new([moved.id]), repo_poll_due_at_ms: %{"default" => not_due}}
+    end)
+
+    TicketObservation.reset()
+    send(pid, :run_poll_cycle)
+    wait_until(fn -> RunStore.get_ticket_state("default", moved.id).phase == "Rework" end)
+    assert :sys.get_state(pid).repo_poll_due_at_ms["default"] == not_due
+
+    # An older by-id answer than the record holds is dropped: the record keeps the newer fact.
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{moved | state: "Todo", updated_at: ~U[2026-10-29 09:30:00Z]}])
+    send(pid, :run_poll_cycle)
+    wait_until(fn -> TicketObservation.summary().stale >= 1 end)
+    wait_until_idle(pid)
+
+    record = RunStore.get_ticket_state("default", moved.id)
+    assert {record.phase, record.linear_updated_at} == {"Rework", ~U[2026-10-29 10:00:00Z]}
+    :sys.replace_state(pid, &%{&1 | running: %{}, claimed: MapSet.new()})
+  end
+
+  test "the dispatch prefetch writes what it read into the candidates' records" do
+    parked = %{issue("issue-prefetch-parked", "MT-PREFETCH", "Backlog") | updated_at: ~U[2026-10-29 10:00:00Z]}
+    pid = start_orchestrator!(:PrefetchOrchestrator)
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [parked])
+
+    # The repo poll is not due; its cache still holds the ticket in Todo, so dispatch reads it again.
+    :sys.replace_state(pid, fn state ->
+      cached = %{issues: [%{parked | state: "Todo", updated_at: ~U[2026-10-29 09:00:00Z]}], fetched_at_ms: System.monotonic_time(:millisecond)}
+      not_due = System.monotonic_time(:millisecond) + 3_600_000
+      %{state | repo_poll_due_at_ms: %{"default" => not_due}, repo_poll_cache: %{"default" => cached}}
+    end)
+
+    capture_log(fn ->
+      send(pid, :run_poll_cycle)
+      wait_until(fn -> match?(%{phase: "Backlog"}, RunStore.get_ticket_state("default", parked.id)) end)
+    end)
+
+    assert :sys.get_state(pid).running == %{}
+  end
+
+  test "the revalidation before a start writes what it read into the ticket's record" do
+    parked = %{issue("issue-revalidated", "MT-REVALIDATED", "Backlog") | updated_at: ~U[2026-10-29 10:00:00Z]}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [parked])
+
+    candidates = [%{parked | state: "Todo"}]
+    state = orchestrator_state()
+    capture_log(fn -> send(self(), {:state, Orchestrator.dispatch_chosen_issues_for_test(candidates, state)}) end)
+
+    assert_received {:state, %{running: running}}
+    assert running == %{}
+    assert %{phase: "Backlog", issue_identifier: "MT-REVALIDATED"} = RunStore.get_ticket_state("default", parked.id)
+  end
+
+  # Started with no issues in Linear, so its first poll dispatches nothing.
+  defp start_orchestrator!(name) do
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
+    {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, name))
+
+    on_exit(fn ->
+      try do
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      catch
+        :exit, _reason -> :ok
+      end
+    end)
+
+    wait_until_idle(pid)
+    pid
+  end
+
+  defp wait_until_idle(pid) do
+    wait_until(fn ->
+      state = :sys.get_state(pid)
+      idle? = is_nil(state.repo_poll_task_ref) and not state.poll_check_in_progress
+      idle? and state.dispatch_readiness_tasks == %{} and state.tracker_tasks == %{}
+    end)
   end
 
   defp wait_until(fun, attempts \\ 100) do

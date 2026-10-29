@@ -131,6 +131,32 @@ defmodule SymphonyElixir.TicketObservationTest do
     assert TicketObservation.summary() == %{updated: 2, unchanged: 0, stale: 0, errors: 2}
   end
 
+  test "observe_routed writes each issue under the repo it routes to and skips the ones no repo takes", %{repo_key: repo_key} do
+    routed = linear_issue(%{team: %{key: "Test", name: "Test"}})
+    keyed = linear_issue(%{id: "issue-observed-keyed", identifier: "OTHER-1", repo_key: "observation-routed-repo"})
+    unrouted = linear_issue(%{id: "issue-observed-unrouted", team: %{key: "NOPE", name: "Nope"}})
+
+    assert TicketObservation.observe_routed([routed, keyed, unrouted, :junk], now: @now) ==
+             %{updated: 2, unchanged: 0, stale: 0, errors: 0}
+
+    assert RunStore.get_ticket_state(repo_key, "issue-observed").issue_identifier == "ACME-7"
+    assert RunStore.get_ticket_state("observation-routed-repo", "issue-observed-keyed").issue_identifier == "OTHER-1"
+    assert RunStore.get_ticket_state(repo_key, "issue-observed-unrouted") == nil
+
+    # With no repos, only an issue that carries its repo key is observed.
+    assert TicketObservation.observe_routed([routed, keyed], now: @now, repos: []) ==
+             %{updated: 0, unchanged: 1, stale: 0, errors: 0}
+  end
+
+  test "observe_routed routes nothing while the repos cannot be read" do
+    File.write!(Workflow.symphony_file_path(), "repositories: [\n")
+    Cache.clear()
+    assert {:error, _reason} = Config.repos()
+
+    issue = linear_issue(%{id: "issue-observed-unreadable", team: %{key: "Test", name: "Test"}})
+    assert TicketObservation.observe_routed([issue], now: @now) == %{updated: 0, unchanged: 0, stale: 0, errors: 0}
+  end
+
   test "without the server, observing still writes and the summary is all zeros", %{repo_key: repo_key} do
     assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, TicketObservation)
     on_exit(fn -> Supervisor.restart_child(SymphonyElixir.Supervisor, TicketObservation) end)
