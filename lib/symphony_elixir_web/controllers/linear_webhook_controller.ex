@@ -5,7 +5,8 @@ defmodule SymphonyElixirWeb.LinearWebhookController do
   counts each delivery with what that did in `SymphonyElixir.Linear.Webhook.Deliveries`. The
   observation is bounded in time and never changes the answer: an accepted delivery is answered 200
   whatever it did, so Linear never retries one the record could not take. Nothing dispatches from
-  the record yet.
+  the record yet: a delivery that changes a record only asks for a poll of its repo at once, and
+  the poll reads Linear.
 
   The `Linear-Signature` HMAC is the only authentication, so the route sits outside the
   same-origin and bearer-token pipelines. A rejected delivery is logged by its reason only, never

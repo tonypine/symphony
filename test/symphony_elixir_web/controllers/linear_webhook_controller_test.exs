@@ -157,6 +157,43 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       assert %{"recent" => [%{"type" => "Comment", "observation" => nil}, %{"action" => "remove", "observation" => "removed"} | _]} = linear_webhooks_state()
     end
 
+    test "an updated delivery polls the ticket's repo at once; unchanged, stale and unrouted ones ask for nothing" do
+      repo_key = Config.repo_key!()
+      Application.put_env(:symphony_elixir, :linear_webhook_observation_opts, orchestrator: self())
+      {:ok, :updated} = TicketObservation.observe(repo_key, polled_issue(priority: 2))
+
+      done = issue_delivery("update", %{"state" => %{"id" => "state-9", "name" => "Done", "type" => "completed"}, "updatedAt" => "2026-10-29T09:01:00.000Z"})
+      assert json_response(post_signed(done), 200) == %{"status" => "accepted"}
+      assert_receive {:"$gen_cast", {:request_refresh, ^repo_key, :now}}
+
+      assert json_response(post_signed(done), 200)
+      assert json_response(post_signed(issue_delivery("update", %{"priority" => 4, "updatedAt" => "2026-10-29T08:59:00.000Z"})), 200)
+      assert json_response(post_signed(issue_delivery("create", %{"id" => "issue-new", "identifier" => "ACME-10"})), 200)
+
+      assert %{"recent" => [%{"observation" => "unrouted"}, %{"observation" => "stale"}, %{"observation" => "unchanged"}, %{"observation" => "updated"}]} =
+               linear_webhooks_state()
+
+      refute_received {:"$gen_cast", _request}
+    end
+
+    test "a removal polls the ticket's repo at once; a removal with no record and a comment ask for nothing" do
+      repo_key = Config.repo_key!()
+      Application.put_env(:symphony_elixir, :linear_webhook_observation_opts, orchestrator: self())
+      {:ok, :updated} = TicketObservation.observe(repo_key, polled_issue([]))
+
+      remove = delivery_body(%{"type" => "Issue", "action" => "remove", "data" => %{"id" => "issue-hook", "identifier" => "ACME-9"}})
+      assert json_response(post_signed(remove), 200)
+      assert_receive {:"$gen_cast", {:request_refresh, ^repo_key, :now}}
+
+      unknown = delivery_body(%{"type" => "Issue", "action" => "remove", "data" => %{"id" => "issue-never-seen", "identifier" => "ACME-11"}})
+      comment = delivery_body(%{"type" => "Comment", "action" => "create", "data" => %{"id" => "c1", "body" => "hi", "issueId" => "issue-hook"}})
+      assert json_response(post_signed(unknown), 200)
+      assert json_response(post_signed(comment), 200)
+
+      assert %{"recent" => [%{"observation" => nil}, %{"observation" => "no_record"}, %{"observation" => "removed"}]} = linear_webhooks_state()
+      refute_received {:"$gen_cast", _request}
+    end
+
     test "still answers 200 when the record write fails, logged and counted as an error" do
       failing = fn _parsed, _opts -> raise "store down" end
       Application.put_env(:symphony_elixir, :linear_webhook_observation_opts, observe_fun: failing)

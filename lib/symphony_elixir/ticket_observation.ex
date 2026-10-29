@@ -16,7 +16,10 @@ defmodule SymphonyElixir.TicketObservation do
 
   `observe_delivery/2` observes what a Linear webhook delivery says (`SymphonyElixir.Linear.Webhook.parse/1`)
   the same way, under the repo that already holds the ticket's record (a ticket with no record yet is
-  left to the poll), or marks the record removed. `observe_held/2` does the same for a by-id read,
+  left to the poll), or marks the record removed. A delivery that changes a record (`:updated`, or
+  `:removed`) asks for a poll of the record's repo at once (`SymphonyElixir.Orchestrator.request_refresh/3`),
+  so dispatch reads the change from Linear within seconds instead of at the next timed poll; the
+  orchestrator coalesces the requests as it does Symphony's own moves. `observe_held/2` does the same for a by-id read,
   which carries no repo key either.
 
   Every read other than a webhook delivery is compared with the webhook: a read that changes a field
@@ -34,7 +37,7 @@ defmodule SymphonyElixir.TicketObservation do
 
   require Logger
 
-  alias SymphonyElixir.{Config, RunStore, TicketState}
+  alias SymphonyElixir.{Config, Orchestrator, RunStore, TicketState}
   alias SymphonyElixir.Linear.{Issue, Webhook}
   alias SymphonyElixir.Routing.Resolver
 
@@ -157,7 +160,10 @@ defmodule SymphonyElixir.TicketObservation do
 
   The work runs in a task bounded by `:timeout_ms` (default two seconds, well under the five Linear
   waits for an answer), so a crash or a hang is logged and returned as `:error`, never raised.
-  `opts`: `:repos`, `:timeout_ms`, and those of `observe/3`.
+  A delivery that updated a record, or marked one removed, asks the orchestrator for a poll of that
+  repo at once; no other outcome asks for one.
+  `opts`: `:repos`, `:timeout_ms`, `:orchestrator` (the server asked for the poll, default
+  `SymphonyElixir.Orchestrator`), and those of `observe/3`.
   """
   @spec observe_delivery(Webhook.parsed(), keyword()) :: delivery_outcome() | nil
   def observe_delivery(parsed, opts \\ []) do
@@ -198,7 +204,8 @@ defmodule SymphonyElixir.TicketObservation do
     {repos, opts} = Keyword.pop_lazy(opts, :repos, &configured_repos/0)
 
     Enum.reduce(issues, Map.put(empty_summary(), :unrouted, 0), fn issue, acc ->
-      key = issue |> observe_held_issue(repos, opts) |> held_count_key()
+      {outcome, _repo_key} = observe_held_issue(issue, repos, opts)
+      key = held_count_key(outcome)
       Map.update!(acc, key, &(&1 + 1))
     end)
   end
@@ -338,13 +345,19 @@ defmodule SymphonyElixir.TicketObservation do
 
   defp observe_parsed({:issue, _action, issue, _updated_at}, opts) do
     {repos, opts} = Keyword.pop_lazy(opts, :repos, &configured_repos/0)
-    observe_held_issue(issue, repos, Keyword.put(opts, :source, :webhook))
+    {orchestrator, opts} = Keyword.pop(opts, :orchestrator, Orchestrator)
+    {outcome, repo_key} = observe_held_issue(issue, repos, Keyword.put(opts, :source, :webhook))
+    if outcome == :updated, do: Orchestrator.request_refresh(orchestrator, repo_key, due: :now)
+    outcome
   end
 
   defp observe_parsed({:issue_removed, issue_id, _identifier}, opts) do
     {repos, opts} = Keyword.pop_lazy(opts, :repos, &configured_repos/0)
+    {orchestrator, opts} = Keyword.pop(opts, :orchestrator, Orchestrator)
     now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
-    outcomes = for repo_key <- repo_keys(repos), do: mark_removed(repo_key, issue_id, now)
+    removals = for repo_key <- repo_keys(repos), do: {repo_key, mark_removed(repo_key, issue_id, now)}
+    for {repo_key, :removed} <- removals, do: Orchestrator.request_refresh(orchestrator, repo_key, due: :now)
+    outcomes = Enum.map(removals, fn {_repo_key, outcome} -> outcome end)
 
     cond do
       :error in outcomes -> :error
@@ -357,24 +370,25 @@ defmodule SymphonyElixir.TicketObservation do
   # repo in Linear (a project by its slug, `assignee: me`), which the issue's own fields can't always
   # match, so a ticket no repo has a record of yet is unrouted until the poll files it. One held in
   # several repos is unrouted too, as the poll counts a ticket two repos return as a conflict.
+  # Gives the outcome with the repo it was observed under (nil when none).
   defp observe_held_issue(%Issue{id: issue_id} = issue, repos, opts) when is_binary(issue_id) do
     case holder(issue, repos) do
       {:ok, repo_key} ->
-        delivered(repo_key, issue, observe(repo_key, %{issue | repo_key: repo_key}, opts))
+        {delivered(repo_key, issue, observe(repo_key, %{issue | repo_key: repo_key}, opts)), repo_key}
 
       :unrouted ->
         bump(:unrouted)
-        :unrouted
+        {:unrouted, nil}
 
       {:error, repo_key, reason} ->
         bump(:errors)
-        delivered(repo_key, issue, {:error, reason})
+        {delivered(repo_key, issue, {:error, reason}), repo_key}
     end
   end
 
   defp observe_held_issue(_issue, _repos, _opts) do
     bump(:errors)
-    :error
+    {:error, nil}
   end
 
   defp held_count_key(:error), do: :errors
