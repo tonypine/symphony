@@ -84,9 +84,11 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
   describe "an Issue delivery and the ticket's record" do
     @updated_at "2026-10-29T09:00:00.000Z"
 
-    test "writes the new priority into the record before any poll; the next poll finds nothing and counts webhook first" do
+    test "writes the new priority into the record the poll keeps; the next poll finds nothing and counts webhook first" do
       repo_key = Config.repo_key!()
-      conn = post_signed(issue_delivery("update", %{"priority" => 1}))
+      {:ok, :updated} = TicketObservation.observe(repo_key, polled_issue(priority: 2))
+
+      conn = post_signed(issue_delivery("update", %{"priority" => 1, "updatedAt" => "2026-10-29T09:01:00.000Z"}))
 
       assert json_response(conn, 200) == %{"status" => "accepted"}
       assert %{priority: 1, phase: "In Progress", observed_from: :webhook, labels: ["backend"]} = RunStore.get_ticket_state(repo_key, "issue-hook")
@@ -97,44 +99,36 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
              } = linear_webhooks_state()
 
       # The poll then reads the same ticket from Linear.
-      polled = %Issue{
-        id: "issue-hook",
-        identifier: "ACME-9",
-        title: "Hooked",
-        state: "In Progress",
-        labels: ["backend"],
-        priority: 1,
-        assignee_id: "user-1",
-        blocked_by: [],
-        url: "https://linear.app/acme/issue/ACME-9",
-        updated_at: ~U[2026-10-29 09:00:00.000Z]
-      }
-
-      assert {:ok, :unchanged} = TicketObservation.observe(repo_key, polled, compare: true)
+      repolled = polled_issue(priority: 1, updated_at: ~U[2026-10-29 09:01:00.000Z])
+      assert {:ok, :unchanged} = TicketObservation.observe(repo_key, repolled, compare: true)
       assert %{"webhook_first" => 1, "poll_first" => 0, "poll_first_recent" => []} = linear_webhooks_state()["compare"]
     end
 
     test "drops an older delivery and counts it stale" do
       repo_key = Config.repo_key!()
-      assert json_response(post_signed(issue_delivery("update", %{"priority" => 1})), 200)
+      {:ok, :updated} = TicketObservation.observe(repo_key, polled_issue(priority: 1))
 
       older = issue_delivery("update", %{"priority" => 4, "updatedAt" => "2026-10-29T08:59:00.000Z"})
       assert json_response(post_signed(older), 200) == %{"status" => "accepted"}
 
       assert RunStore.get_ticket_state(repo_key, "issue-hook").priority == 1
-      assert %{"recent" => [%{"observation" => "stale"}, %{"observation" => "updated"}], "observations" => %{"stale" => 1}} = linear_webhooks_state()
+      assert %{"recent" => [%{"observation" => "stale"}], "observations" => %{"stale" => 1}} = linear_webhooks_state()
     end
 
-    test "writes nothing for a ticket no repo takes, and counts it unrouted" do
-      body = issue_delivery("create", %{"team" => %{"id" => "team-x", "key" => "NOPE", "name" => "Nope"}})
+    test "writes nothing for a ticket the poll has no record of, and counts it unrouted" do
+      created = issue_delivery("create", %{})
+      other_team = issue_delivery("create", %{"team" => %{"id" => "team-x", "key" => "NOPE", "name" => "Nope"}})
 
-      assert json_response(post_signed(body), 200) == %{"status" => "accepted"}
+      assert json_response(post_signed(created), 200) == %{"status" => "accepted"}
+      assert json_response(post_signed(other_team), 200) == %{"status" => "accepted"}
       assert RunStore.get_ticket_state(Config.repo_key!(), "issue-hook") == nil
-      assert %{"recent" => [%{"action" => "create", "observation" => "unrouted"}], "observations" => %{"unrouted" => 1, "updated" => 0}} = linear_webhooks_state()
+
+      assert %{"recent" => [%{"action" => "create", "observation" => "unrouted"} | _], "observations" => %{"unrouted" => 2, "updated" => 0}} =
+               linear_webhooks_state()
     end
 
     test "marks the record removed for an Issue remove delivery; a comment is only counted" do
-      assert json_response(post_signed(issue_delivery("update", %{})), 200)
+      {:ok, :updated} = TicketObservation.observe(Config.repo_key!(), polled_issue([]))
 
       remove = delivery_body(%{"type" => "Issue", "action" => "remove", "data" => %{"id" => "issue-hook", "identifier" => "ACME-9"}})
       assert json_response(post_signed(remove), 200)
@@ -280,6 +274,25 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       )
 
     delivery_body(%{"type" => "Issue", "action" => action, "data" => data})
+  end
+
+  # The same ticket as the regular poll reads it from Linear.
+  defp polled_issue(fields) do
+    struct!(
+      %Issue{
+        id: "issue-hook",
+        identifier: "ACME-9",
+        title: "Hooked",
+        state: "In Progress",
+        labels: ["backend"],
+        priority: 2,
+        assignee_id: "user-1",
+        blocked_by: [],
+        url: "https://linear.app/acme/issue/ACME-9",
+        updated_at: ~U[2026-10-29 09:00:00.000Z]
+      },
+      fields
+    )
   end
 
   defp sign(body, secret \\ @secret), do: :hmac |> :crypto.mac(:sha256, secret, body) |> Base.encode16(case: :lower)

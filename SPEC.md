@@ -4447,9 +4447,9 @@ Orchestrator behavior on tracker errors:
   `POST /api/v1/linear/webhook` (`404` while off, `401` when the `Linear-Signature` check fails,
   `200` otherwise, as Linear requires) and count each delivery by `type` and `action`, in memory,
   in the status snapshot (`linear_webhooks` in `/api/v1/state`). An `Issue` create or update is
-  written into the record the reads already keep of the ticket, as a poll writes it, or, for a
-  ticket with no record yet, the record of the repo it routes to (older than the record: dropped as
-  stale; no repo takes it, or several hold a record of it: unrouted, nothing written), and an
+  written into the record the reads already keep of the ticket, as a poll writes it (older than the
+  record: dropped as stale; no repo has a record of it yet, or several do: unrouted, nothing
+  written, and the next poll files a new ticket), and an
   `Issue` remove marks the record removed, within the request and bounded in time; a failure is
   logged and counted and the answer stays `200`. Every other read of Linear counts how often the webhook brought a
   change first (`compare` in `linear_webhooks`). Nothing dispatches from the record yet.

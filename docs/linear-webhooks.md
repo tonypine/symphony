@@ -78,11 +78,13 @@ under the five Linear waits for the answer), Symphony observes it into the ticke
 (`SymphonyElixir.TicketObservation.observe_delivery/2`):
 
 - An `Issue` create or update is read as the poll reads a ticket and written, as a poll writes it
-  and with `observed_from: webhook`, into the record the reads already keep of the ticket. A ticket
-  no repo has a record of yet goes to the repo its team, project and labels route to. Its
-  observation is `updated`, `unchanged`, `stale` (older than the record's `updatedAt`: dropped) or
-  `unrouted` (nothing is written: no repo takes the ticket, or several repos hold a record of it, a
-  ticket the poll counts as a conflict).
+  and with `observed_from: webhook`, into the record the reads already keep of the ticket. A
+  delivery only updates a record a read already made: the poll filters each repo in Linear (a
+  project by its slug, `assignee: me`), which a delivery's own fields can't always match, so a
+  ticket no repo has a record of yet waits for the next poll to file it. Its observation is
+  `updated`, `unchanged`, `stale` (older than the record's `updatedAt`: dropped) or `unrouted`
+  (nothing is written: no repo has a record of the ticket yet, or several repos do, a ticket the
+  poll counts as a conflict).
 - An `Issue` remove sets the record's `removed_at` in every repo that has one (`removed`), or finds
   none (`no_record`).
 - A `Comment` or any other delivery is only counted, with no observation.

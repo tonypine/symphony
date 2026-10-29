@@ -13,8 +13,8 @@ defmodule SymphonyElixir.TicketObservation do
   reads the observed fields yet, and an observation records no ledger event.
 
   `observe_delivery/2` observes what a Linear webhook delivery says (`SymphonyElixir.Linear.Webhook.parse/1`)
-  the same way, under the repo that already holds the ticket's record (else the repo it routes to),
-  or marks the record removed.
+  the same way, under the repo that already holds the ticket's record (a ticket with no record yet is
+  left to the poll), or marks the record removed.
 
   Every read other than a webhook delivery is compared with the webhook: a read that changes a field
   the webhook carries (state, identifier, title, labels, priority, assignee, URL) of an existing
@@ -46,9 +46,10 @@ defmodule SymphonyElixir.TicketObservation do
   @type outcome :: :updated | :unchanged | :stale
 
   @typedoc """
-  What `observe_delivery/2` did with a delivery: an observation's outcome, `:unrouted` (no repo
-  takes the ticket), `:removed` (a record marked removed), `:no_record` (a removal of a ticket with
-  no record) or `:error` (the store refused it, or the observation crashed or timed out).
+  What `observe_delivery/2` did with a delivery: an observation's outcome, `:unrouted` (no repo, or
+  several, hold a record of the ticket), `:removed` (a record marked removed), `:no_record` (a
+  removal of a ticket with no record) or `:error` (the store refused it, or the observation crashed
+  or timed out).
   """
   @type delivery_outcome :: outcome() | :unrouted | :removed | :no_record | :error
 
@@ -137,9 +138,9 @@ defmodule SymphonyElixir.TicketObservation do
   record of the ticket the reads already keep, and an `Issue` remove marks the ticket's record in
   every configured repo removed. Any other delivery is not observed, and gives nil.
 
-  A ticket no configured repo has a record of yet goes to the repo it routes to (as
-  `observe_routed/2` routes), and is `:unrouted` when none takes it; a ticket held in several repos
-  is `:unrouted` too, as the poll counts it a conflict.
+  A delivery only updates a record a read already made: a ticket no configured repo has a record of
+  yet is `:unrouted` and nothing is written, and the next poll files it under its repo. A ticket held
+  in several repos is `:unrouted` too, as the poll counts it a conflict.
 
   The work runs in a task bounded by `:timeout_ms` (default two seconds, well under the five Linear
   waits for an answer), so a crash or a hang is logged and returned as `:error`, never raised.
@@ -306,10 +307,16 @@ defmodule SymphonyElixir.TicketObservation do
   defp observe_parsed({:issue, _action, issue, _updated_at}, opts) do
     {repos, opts} = Keyword.pop_lazy(opts, :repos, &configured_repos/0)
 
-    case delivery_route(issue, repos) do
-      {:ok, [{repo_key, routed}]} -> observed_outcome(repo_key, routed, observe(repo_key, routed, Keyword.put(opts, :source, :webhook)))
-      {:ok, []} -> :unrouted
-      {:error, repo_key, reason} -> route_failed(repo_key, issue, reason)
+    case holder(issue, repos) do
+      {:ok, repo_key} ->
+        delivered(repo_key, issue, observe(repo_key, %{issue | repo_key: repo_key}, Keyword.put(opts, :source, :webhook)))
+
+      :unrouted ->
+        :unrouted
+
+      {:error, repo_key, reason} ->
+        bump(:errors)
+        delivered(repo_key, issue, {:error, reason})
     end
   end
 
@@ -325,11 +332,11 @@ defmodule SymphonyElixir.TicketObservation do
     end
   end
 
-  # A delivery goes to the record the reads already keep: the poll filters each repo in Linear (a
-  # project by its slug, `assignee: me`), which a delivery's own fields can't always match. Only a
-  # ticket no repo has a record of routes by those fields; one held in several repos is unrouted, as
-  # the poll counts a ticket two repos return as a conflict.
-  defp delivery_route(%Issue{id: issue_id} = issue, repos) do
+  # A delivery updates only the record the reads already keep: the poll filters each repo in Linear
+  # (a project by its slug, `assignee: me`), which a delivery's own fields can't always match, so a
+  # ticket no repo has a record of yet is unrouted until the poll files it. One held in several repos
+  # is unrouted too, as the poll counts a ticket two repos return as a conflict.
+  defp holder(%Issue{id: issue_id}, repos) do
     repos
     |> repo_keys()
     |> Enum.reduce_while({:ok, []}, fn repo_key, {:ok, held} ->
@@ -340,23 +347,17 @@ defmodule SymphonyElixir.TicketObservation do
       end
     end)
     |> case do
-      {:ok, []} -> {:ok, route(issue, repos)}
-      {:ok, [repo_key]} -> {:ok, [{repo_key, %{issue | repo_key: repo_key}}]}
-      {:ok, _several} -> {:ok, []}
+      {:ok, [repo_key]} -> {:ok, repo_key}
+      {:ok, _none_or_several} -> :unrouted
       error -> error
     end
   end
 
-  defp observed_outcome(_repo_key, _issue, {:ok, outcome}), do: outcome
+  # `observe/3` counts its own error; the holder's read is counted where it fails.
+  defp delivered(_repo_key, _issue, {:ok, outcome}), do: outcome
 
-  defp observed_outcome(repo_key, issue, {:error, reason}) do
+  defp delivered(repo_key, issue, {:error, reason}) do
     log_failure(repo_key, issue, reason)
-    :error
-  end
-
-  defp route_failed(repo_key, issue, reason) do
-    log_failure(repo_key, issue, reason)
-    bump(:errors)
     :error
   end
 
