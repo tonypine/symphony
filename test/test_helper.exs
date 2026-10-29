@@ -1,4 +1,8 @@
-ExUnit.start()
+# ExUnit's 100 ms default for `assert_receive` misses messages that come after real work (a task,
+# file I/O, a GenServer's hooks) on a loaded CI runner. A passing assertion returns as soon as its
+# message arrives, so the longer default only delays a failing one. `refute_receive` keeps 100 ms:
+# it waits out its whole window on every pass.
+ExUnit.start(assert_receive_timeout: 1_000)
 Code.require_file("support/snapshot_support.exs", __DIR__)
 Code.require_file("support/test_support.exs", __DIR__)
 Code.require_file("support/pr_watch_support.exs", __DIR__)
