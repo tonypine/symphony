@@ -10,7 +10,10 @@ defmodule SymphonyElixir.QaPreCheck do
 
     * the named test is in the checkout: each path part of `<test>` (a file or folder, with or
       without a `:line` suffix) is a tracked file, and each other part (a scenario or test name) is
-      found in the tracked files, within the file a path part before it names;
+      found in the tracked files, within the file a path part before it names. A path part ends at
+      ` › `, `: ` or a space (`file: name`, `file › name`, `file name`), and a name is found as text
+      (a test name or a describe alone) or as ExUnit's full test name, the describe and the test
+      joined by a space, as `mix test` prints it;
     * the check ran on the PR head and passed: `<check>` names a check run, a workflow, or
       `workflow / job`, read from the head's status checks (`SymphonyElixir.GitHub.PullRequest`).
 
@@ -35,6 +38,13 @@ defmodule SymphonyElixir.QaPreCheck do
   @separator ~r/\s*(?:›|\s>\s)\s*/u
   @path_part ~r{^[\w.@+/-]+$}u
   @line_suffix ~r/(?::\d+)+$/
+  @path_then_name ~r/^([\w.@+\/-]+(?::\d+)*)(?::\s+|\s+)(\S.*)$/u
+  @file_path ~r{/.*\.\w+$}u
+  @path_like ~r{/|\.\w+$}u
+  @declaration_grep ~S{^[[:space:]]*(describe|test)[[:space:]]+"}
+  @test_declaration ~r/^(\s*)(describe|test)\s+"((?:[^"\\]|\\.)*)"/u
+  @mix_test_suffix ~r/(?:\s+\([A-Z][\w.]*\)|\s+\(\d+(?:\.\d+)?ms\)|\s+\[L#\d+\])+$/
+  @tried_forms "tried as a describe plus a test name, a test name and a describe name"
   @passing_conclusions ["SUCCESS", "NEUTRAL"]
 
   @type status :: :pass | :fail | :pending
@@ -88,7 +98,7 @@ defmodule SymphonyElixir.QaPreCheck do
   defp needs_checks?({step, _missing}, proof_check), do: foreign_check?(step, proof_check)
 
   defp result({step, missing}, checks, head, proof_check) when is_binary(missing) do
-    detail = "#{code(missing)} is not in the checkout#{unknown_check(step, checks, head, proof_check, ", and ")}"
+    detail = missing <> unknown_check(step, checks, head, proof_check, ", and ")
     %{step: step, status: :fail, detail: detail, url: nil}
   end
 
@@ -167,24 +177,39 @@ defmodule SymphonyElixir.QaPreCheck do
     wanted in [name, workflow] or (is_binary(workflow) and is_binary(name) and wanted == "#{workflow} / #{name}")
   end
 
-  # The first part of the step's `<test>` that is not in the checkout, or nil when every part is
-  # (or the step names no test). A path part narrows the search of the name parts after it.
+  # What the checkout lacks of the step's `<test>`, or nil when every part is in it (or the step
+  # names no test). A path part narrows the search of the name parts after it.
   defp missing_test(%{proof: %{test: nil}}, _files, _git, _workspace), do: nil
 
   defp missing_test(%{proof: %{test: test}}, files, git, workspace) do
     test
     |> String.split(@separator, trim: true)
-    |> Enum.map(&unquote_part/1)
+    |> Enum.flat_map(&split_path(unquote_part(&1), files))
     |> Enum.reject(&(&1 == ""))
     |> Enum.reduce_while(nil, fn part, scope ->
       case find_part(part, scope, files, git, workspace) do
         {:ok, scope} -> {:cont, scope}
-        :missing -> {:halt, {:missing, part}}
+        {:missing, missing} -> {:halt, {:missing, missing}}
       end
     end)
     |> case do
-      {:missing, part} -> part
+      {:missing, missing} -> missing
       _scope -> nil
+    end
+  end
+
+  # A part that opens with a path and goes on with a name (`file: name`, `file name`), as an
+  # implementer copies a test from its file, is two parts. The path is a path to a file
+  # (`test/x_test.exs`), or a tracked folder with a `/` (`.github/workflows`) or file name
+  # (`x_test.exs`), so a name such as `Walkthrough.steps parses`, `a/b input` or one opening with a
+  # folder's bare name (`docs are current`) stays whole.
+  defp split_path(part, files) do
+    with [_part, path, name] <- Regex.run(@path_then_name, part),
+         bare = String.replace(path, @line_suffix, ""),
+         true <- Regex.match?(@file_path, bare) or (Regex.match?(@path_like, bare) and Enum.any?(files, &path_match?(&1, bare))) do
+      [path, unquote_part(name)]
+    else
+      _no_path -> [part]
     end
   end
 
@@ -197,12 +222,15 @@ defmodule SymphonyElixir.QaPreCheck do
     matched = if path?, do: Enum.filter(files, &path_match?(&1, path)), else: []
 
     cond do
-      matched != [] -> {:ok, matched}
-      path? and String.contains?(path, "/") -> :missing
-      grep?(git, workspace, part, scope) -> {:ok, scope}
-      true -> :missing
+      matched != [] -> {:ok, {path, matched}}
+      path? and String.contains?(path, "/") -> {:missing, "#{code(part)} is not in the checkout"}
+      name_found?(git, workspace, part, scope) -> {:ok, scope}
+      true -> {:missing, "#{code(part)} is not in #{scope_name(scope)} (#{@tried_forms})"}
     end
   end
+
+  defp scope_name(nil), do: "the checkout"
+  defp scope_name({path, _files}), do: code(path)
 
   # The file itself, or a file under the folder, from the checkout's root or below it.
   defp path_match?(file, path) do
@@ -212,9 +240,60 @@ defmodule SymphonyElixir.QaPreCheck do
       String.contains?(file, "/" <> path <> "/")
   end
 
-  defp grep?(git, workspace, text, scope) do
-    match?({_output, 0}, git.(["grep", "-q", "-I", "-F", "-e", text, "--" | List.wrap(scope)], workspace))
+  # A name is found the way a person reading the tests finds it: as text in the files (a test name
+  # alone, a describe alone, a scenario name), or as ExUnit's full test name, the describe and the
+  # test joined by a space, which never sit on one line. A name copied from `mix test`'s output
+  # (`test <describe> <test> (Module)`, or with `--trace`'s `(2.1ms) [L#12]`) is the full name too.
+  defp name_found?(git, workspace, name, scope) do
+    grep?(git, workspace, name, scope) or
+      Enum.any?(full_test_names(git, workspace, scope), &(&1 in [name, from_mix_test(name)]))
   end
+
+  defp grep?(git, workspace, text, scope) do
+    match?({_output, 0}, git.(["grep", "-q", "-I", "-F", "-e", text, "--" | scope_files(scope)], workspace))
+  end
+
+  # ExUnit's full name of each test in the scope: its describe's name, a space and its own name. A
+  # test belongs to the last describe indented less than it; one outside a describe is its name.
+  defp full_test_names(git, workspace, scope) do
+    case git.(["grep", "-n", "-I", "--null", "-E", "-e", @declaration_grep, "--" | scope_files(scope)], workspace) do
+      {output, 0} ->
+        output
+        |> String.split("\n", trim: true)
+        |> Enum.flat_map(&test_line/1)
+        |> Enum.chunk_by(&elem(&1, 0))
+        |> Enum.flat_map(&file_test_names/1)
+
+      _none ->
+        []
+    end
+  end
+
+  # A matched line's file, indentation, kind and name; none when its name is not one quoted string
+  # on the line, such as a name that spans lines.
+  defp test_line(line) do
+    [file, _number, content] = String.split(line, <<0>>, parts: 3)
+
+    case Regex.run(@test_declaration, content) do
+      [_content, indent, kind, name] -> [{file, String.length(indent), kind, String.replace(name, ~S(\"), ~S("))}]
+      nil -> []
+    end
+  end
+
+  defp file_test_names(lines) do
+    lines
+    |> Enum.reduce({nil, []}, fn
+      {_file, indent, "describe", name}, {_describe, names} -> {{indent, name}, [name | names]}
+      {_file, indent, "test", name}, {{outer, describe}, names} when indent > outer -> {{outer, describe}, ["#{describe} #{name}" | names]}
+      {_file, _indent, "test", name}, {describe, names} -> {describe, [name | names]}
+    end)
+    |> elem(1)
+  end
+
+  defp from_mix_test(name), do: name |> String.replace(~r/^test\s+/, "") |> String.replace(@mix_test_suffix, "")
+
+  defp scope_files(nil), do: []
+  defp scope_files({_path, files}), do: files
 
   defp tracked_files(git, workspace) do
     case git.(["ls-files", "-z"], workspace) do

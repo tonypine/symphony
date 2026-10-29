@@ -5,7 +5,42 @@ defmodule SymphonyElixir.QaPreCheckTest do
   alias SymphonyElixir.Walkthrough
 
   @pr_url "https://github.com/acme/repo/pull/1040"
+  @tried "tried as a describe plus a test name, a test name and a describe name"
   @run_url "https://github.com/acme/repo/actions/runs/555/job/1"
+
+  # Laid out as TP-1217's and TP-1273's test files are: a test inside a describe, its name on its own line.
+  @director_moves_test """
+  defmodule SymphonyElixir.DirectorMovesTest do
+    describe "the Director's moves" do
+      test "an approved plan's record is in the waiting state at once, and stays there when Linear refuses the move", %{opts: opts} do
+        opts
+      end
+    end
+  end
+  """
+
+  @orchestrator_status_test """
+  defmodule SymphonyElixir.OrchestratorStatusTest do
+    describe "the stall check and the no-progress watchdog" do
+      setup do
+        :ok
+      end
+
+      test "log an unobserved run once, whatever its kind, and never restart it" do
+      end
+
+      test "says \\"stalled\\" in the log" do
+      end
+    end
+
+    test "outside any describe" do
+    end
+
+    test "a name that goes on
+    over two lines" do
+    end
+  end
+  """
 
   # A real checkout, so the named test is looked up the way a QA pass looks it up.
   setup do
@@ -15,6 +50,9 @@ defmodule SymphonyElixir.QaPreCheckTest do
     File.write!(Path.join(dir, "test/symphony_elixir/check_test.exs"), ~s(test "reports pass when the check passed" do\nend\ntest "handles a/b input" do\nend\n))
     File.write!(Path.join(dir, "test/symphony_elixir/other_test.exs"), ~s(test "only in the other file" do\nend\n# Walkthrough.steps\n))
     File.write!(Path.join(dir, ".github/workflows/macos-e2e.yml"), "jobs:\n  e2e:\n    name: update, restart and rollback\n")
+    File.write!(Path.join(dir, "README.md"), "symphony_elixir names are listed here\n")
+    File.write!(Path.join(dir, "test/symphony_elixir/director_moves_test.exs"), @director_moves_test)
+    File.write!(Path.join(dir, "test/symphony_elixir/orchestrator_status_test.exs"), @orchestrator_status_test)
     git!(dir, ["init", "-q"])
     git!(dir, ["add", "."])
     git!(dir, ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "first"])
@@ -99,6 +137,56 @@ defmodule SymphonyElixir.QaPreCheckTest do
       assert Enum.at(results, 6).detail == "`make-all` passed on `#{String.slice(context.head, 0, 12)}`"
     end
 
+    test "a test named as an implementer copies it, file and name or describe and name, is found", context do
+      checks = [check("make-all", "COMPLETED", "SUCCESS")]
+      full = "the stall check and the no-progress watchdog log an unobserved run once, whatever its kind, and never restart it"
+      moves = "test/symphony_elixir/director_moves_test.exs"
+      status = "test/symphony_elixir/orchestrator_status_test.exs"
+      approved = "an approved plan's record is in the waiting state at once, and stays there when Linear refuses the move"
+
+      text = """
+      1. TP-1217. Proved by: make-all › #{moves}: #{approved}
+      2. TP-1273. Proved by: make-all › #{full}
+      3. A full name alone. Proved by: `#{full}`
+      4. File and full name. Proved by: `#{status}: #{full}`
+      5. File, line and name. Proved by: `#{moves}:3: "#{approved}"`
+      6. File, a space and name. Proved by: `#{moves} #{approved}`
+      7. A bare file name and a describe. Proved by: `orchestrator_status_test.exs the stall check and the no-progress watchdog`
+      8. Copied from a failure. Proved by: `test #{full} (SymphonyElixir.OrchestratorStatusTest)`
+      9. Copied from --trace. Proved by: `test #{full} (2.1ms) [L#7]`
+      10. An escaped quote. Proved by: `the stall check and the no-progress watchdog says "stalled" in the log`
+      11. A test outside a describe. Proved by: `#{status}: outside any describe`
+      12. A file and a scenario folder. Proved by: `make-all` › `.github/workflows macos-e2e.yml`
+      13. A name opening with a folder's bare name. Proved by: `symphony_elixir names are listed here`
+      """
+
+      assert {:pass, results} = run(text, context, gh(context.head, checks))
+      assert Enum.map(results, &{&1.step.number, &1.status}) == Enum.map(1..13, &{&1, :pass})
+    end
+
+    test "a test named nowhere fails, naming the file it narrowed to and the forms it tried", context do
+      status = "test/symphony_elixir/orchestrator_status_test.exs"
+
+      text = """
+      1. The full name in another file. Proved by: `test/symphony_elixir/check_test.exs: the stall check and the no-progress watchdog log an unobserved run once, whatever its kind, and never restart it`
+      2. A test outside the describe is not in it. Proved by: `#{status}: the stall check and the no-progress watchdog outside any describe`
+      3. A name over two lines. Proved by: `#{status}: a name that goes on over two lines`
+      4. A missing file and a name. Proved by: `test/symphony_elixir/missing_test.exs: does it`
+      5. A name that opens like a path stays whole. Proved by: `Walkthrough.steps parses it`
+      """
+
+      assert {:fail, results} = run(text, context, unused_gh())
+
+      assert Enum.map(results, & &1.detail) == [
+               "`the stall check and the no-progress watchdog log an unobserved run once, whatever its kind, and never restart it` " <>
+                 "is not in `test/symphony_elixir/check_test.exs` (#{@tried})",
+               "`the stall check and the no-progress watchdog outside any describe` is not in `#{status}` (#{@tried})",
+               "`a name that goes on over two lines` is not in `#{status}` (#{@tried})",
+               "`test/symphony_elixir/missing_test.exs` is not in the checkout",
+               "`Walkthrough.steps parses it` is not in the checkout (#{@tried})"
+             ]
+    end
+
     test "a named test that is not in the checkout fails without reading CI", context do
       text = """
       1. One. Proved by: `make-all` › the QA pre-check's test file
@@ -109,13 +197,16 @@ defmodule SymphonyElixir.QaPreCheckTest do
       assert {:fail, results} = run(text, context, unused_gh())
 
       assert Enum.map(results, & &1.detail) == [
-               "`the QA pre-check's test file` is not in the checkout",
+               "`the QA pre-check's test file` is not in the checkout (#{@tried})",
                "`test/symphony_elixir/missing_test.exs` is not in the checkout",
-               "`only in the other file` is not in the checkout"
+               "`only in the other file` is not in `test/symphony_elixir/check_test.exs` (#{@tried})"
              ]
 
       assert [first | _rest] = QaPreCheck.findings(results)
-      assert first =~ "Step 1 (Proved by: `make-all` › the QA pre-check's test file): `the QA pre-check's test file` is not in the checkout."
+
+      assert first =~
+               "Step 1 (Proved by: `make-all` › the QA pre-check's test file): `the QA pre-check's test file` is not in the checkout (#{@tried})."
+
       assert first =~ "The ticket's proof is part of its work"
     end
 
@@ -176,7 +267,9 @@ defmodule SymphonyElixir.QaPreCheckTest do
       # Another check that ran on the head is that check's proof.
       macos = [check("update, restart and rollback", "COMPLETED", "SUCCESS", %{"workflowName" => "macos-e2e"})]
       assert {:pass, _results} = run("1. One. Proved by: `macos-e2e` › update, restart and rollback", context, gh(context.head, macos))
-      assert {:fail, [%{detail: "`missing_test.exs` is not in the checkout"}]} = run("1. One. Proved by: `macos-e2e` › missing_test.exs", context, gh(context.head, macos))
+
+      assert {:fail, [%{detail: "`missing_test.exs` is not in the checkout (#{@tried})"}]} =
+               run("1. One. Proved by: `macos-e2e` › missing_test.exs", context, gh(context.head, macos))
     end
 
     test "without a proof check a check that never ran is named as before", context do
@@ -185,7 +278,7 @@ defmodule SymphonyElixir.QaPreCheckTest do
       assert {:fail, [result]} = run(text, context, gh(context.head, [check("make-all", "COMPLETED", "SUCCESS")]), proof_check: nil)
       assert result.detail == "`macos-e2e` did not run on `#{String.slice(context.head, 0, 12)}`"
 
-      assert {:fail, [%{detail: "`missing_test.exs` is not in the checkout"}]} =
+      assert {:fail, [%{detail: "`missing_test.exs` is not in the checkout (#{@tried})"}]} =
                run("1. One. Proved by: `macos-e2e` › missing_test.exs", context, unused_gh(), proof_check: nil)
     end
 
@@ -231,7 +324,7 @@ defmodule SymphonyElixir.QaPreCheckTest do
       git = fn _args, _workspace -> {"fatal: not a git repository", 128} end
 
       assert {:fail, [result]} = run("1. One. Proved by: `make-all` › `check_test.exs`", context, unused_gh(), git: git)
-      assert result.detail == "`check_test.exs` is not in the checkout"
+      assert result.detail == "`check_test.exs` is not in the checkout (#{@tried})"
     end
   end
 end

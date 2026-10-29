@@ -342,7 +342,13 @@ defmodule SymphonyElixir.Codex.DynamicTool do
               "required" => ["step", "test"],
               "properties" => %{
                 "step" => %{"type" => "integer", "minimum" => 1, "description" => "The walkthrough step's number."},
-                "test" => %{"type" => "string", "description" => "The test file, or a test or scenario name as written, e.g. `test/symphony_elixir/walkthrough_test.exs`."}
+                "test" => %{
+                  "type" => "string",
+                  "description" =>
+                    "The test as the code or `mix test` names it: a test file (`test/symphony_elixir/walkthrough_test.exs`), a test or scenario name " <>
+                      "(`parses each step`), a describe plus a test name (`steps/2 parses each step`), or a file and a name " <>
+                      "(`test/symphony_elixir/walkthrough_test.exs: parses each step`)."
+                }
               }
             }
           }
