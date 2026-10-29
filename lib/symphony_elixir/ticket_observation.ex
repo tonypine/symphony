@@ -185,7 +185,7 @@ defmodule SymphonyElixir.TicketObservation do
   stops the others.
   """
   @spec observe_all(String.t(), [Issue.t()], keyword()) :: counts()
-  def observe_all(repo_key, issues, opts \\ []) when is_list(issues) do
+  def observe_all(repo_key, issues, opts) when is_list(issues) do
     opts = Keyword.put_new_lazy(opts, :terminal_states, fn -> terminal_states(repo_key) end)
 
     Enum.reduce(issues, empty_summary(), fn issue, acc ->
