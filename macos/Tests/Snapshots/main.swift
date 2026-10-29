@@ -311,6 +311,49 @@ let linearWebhookStates: [(String, LinearWebhookHealth?)] = [
     ("not-available", nil),
 ]
 
+/// A healthy Setup page with the Dispatch shadow line for `report` (nil from an older Symphony) under the Linear
+/// webhooks line, beside the sidebar of a `window` pt wide window, its last differences open or closed (TP-1220).
+@MainActor
+func dispatchShadowPage(_ report: DispatchShadowReport?, expanded: Bool = false, window: CGFloat = 1440) -> some View {
+    let utc = TimeZone(identifier: "UTC")!
+    return SetupPageBody(
+        page: SetupPage(payload: SetupPayload(checkedAt: githubNow), now: githubNow, timeZone: utc),
+        githubUpdates: GitHubUpdatesCard(section: githubSection("github-updates"), now: githubNow, timeZone: utc),
+        linearWebhooks: LinearWebhooksLine(health: linearWebhookStates[2].1, now: githubNow),
+        dispatchShadow: DispatchShadowLine(report: report, now: githubNow),
+        dispatchShadowExpanded: expanded
+    )
+    .frame(width: window - DesignTokens.Layout.sidebarWidth)
+    .background(DesignTokens.Surface.window.color)
+}
+
+/// Ten differences, as many as Symphony keeps, newest first.
+let dispatchShadowDifferences: [DispatchShadowReport.Difference] = (0..<10).map { index in
+    let at = githubNow.addingTimeInterval(TimeInterval(-12 - index * 90))
+    switch index % 3 {
+    case 0: return .init(identifier: "TP-\(1221 + index)", side: .both, field: "priority", poll: "1", record: "2", at: at)
+    case 1: return .init(identifier: "TP-\(1221 + index)", side: .record, field: "candidate", record: "Todo", at: at)
+    default: return .init(identifier: "TP-\(1221 + index)", side: .poll, field: "candidate", poll: "In Progress", at: at)
+    }
+}
+
+/// The Dispatch shadow line's states, by snapshot name, and whether the last differences are open.
+let dispatchShadowStates: [(String, DispatchShadowReport?, Bool)] = [
+    ("not-available", nil, false),
+    ("poll-zero", DispatchShadowReport(cyclesCompared: 140, windowCycles: 20), false),
+    ("poll-zero-open", DispatchShadowReport(cyclesCompared: 140, windowCycles: 20), true),
+    ("poll-differences", DispatchShadowReport(
+        cyclesCompared: 1_204, cyclesWithDifferences: 7, windowCycles: 20, windowDifferences: 12, recent: dispatchShadowDifferences
+    ), false),
+    ("poll-differences-open", DispatchShadowReport(
+        cyclesCompared: 1_204, cyclesWithDifferences: 7, windowCycles: 20, windowDifferences: 12, recent: dispatchShadowDifferences
+    ), true),
+    ("record-open", DispatchShadowReport(
+        source: .record, cyclesCompared: 3_410, cyclesWithDifferences: 7, windowCycles: 20, windowDifferences: 1,
+        recent: Array(dispatchShadowDifferences.prefix(2))
+    ), true),
+]
+
 /// S10: no webhook secret on this Mac while instant updates are on.
 func githubSecretFailing() -> GitHubUpdatesSection {
     var section = githubSection("github-updates")
@@ -598,6 +641,12 @@ MainActor.assumeIsolated {
             render(linearWebhooksPage(health), scheme, to: "linear-webhooks-\(name)-laptop-\(suffix).png")
         }
         render(linearWebhooksPage(linearWebhookStates[2].1, window: 2560), scheme, to: "linear-webhooks-arriving-desktop-\(suffix).png")
+        // The Dispatch shadow line (TP-1220): every state at the laptop viewport, and the ten differences at the desktop's.
+        for (name, report, expanded) in dispatchShadowStates {
+            render(dispatchShadowPage(report, expanded: expanded), scheme, to: "dispatch-shadow-\(name)-laptop-\(suffix).png")
+        }
+        render(dispatchShadowPage(dispatchShadowStates[4].1, expanded: true, window: 2560), scheme,
+               to: "dispatch-shadow-poll-differences-open-desktop-\(suffix).png")
         // The guided setup and Add Repo's Instant updates (TP-954).
         render(githubSetup(.relay), scheme, to: "github-setup-relay-\(suffix).png")
         render(githubSetup(.gitHubCLI, answer: "github_updates/run_step.2.json"), scheme, to: "github-setup-permission-\(suffix).png")
