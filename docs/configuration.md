@@ -2634,11 +2634,16 @@ says it is not available.
 **Dispatching from the record.** With `source: record`, each poll cycle builds its candidates from
 every repository's ticket records instead of the poll cache: a record that says the ticket is in an
 active state, assigned to the worker (the route's `assignee`, else `tracker.assignee`) and not
-terminal is a candidate, rebuilt with the record's priority, labels, open blockers, sub-issues and
-parent. The dispatch gates (holds, the review flow, the slots) then run on it as on a polled ticket,
-and the ticket is read again by id from Linear just before its run starts, as with `poll`. The polls
-keep running and keep the records up to date; a ticket the record has and the last poll did not
-return is dispatched, and one the poll returned whose record is gone is not. Nothing dispatches
+terminal is a candidate, rebuilt with the record's state, priority, labels, assignee, open blockers,
+sub-issues and parent. The record keeps no description or comments, so a candidate the last poll
+also returned takes those from the poll, with its team, project, branch and the `updatedAt` they
+were read at: the dispatch gates (holds, the review flow, the slots), the plan-comment reader and
+the quality gate then run on it as on a polled ticket, and the ticket is read again by id from
+Linear just before its run starts, as with `poll`. With `quality_gate.enabled`, a candidate only the
+record has waits for its repository's poll to read its text, which a change to its record asks for
+at once, rather than being scored without a description. The polls keep running and keep the
+records up to date; a ticket the record has and the last poll did not return is dispatched, and
+one the poll returned whose record is gone is not. Nothing dispatches
 after a start until every repository's first poll has answered, so a record left from before the
 restart is refreshed first. A repository whose records can't be read gives no candidates that cycle.
 

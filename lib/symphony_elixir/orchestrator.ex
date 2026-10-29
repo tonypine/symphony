@@ -1813,8 +1813,37 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  @record_issue_fields [
+    :id,
+    :identifier,
+    :title,
+    :state,
+    :labels,
+    :priority,
+    :assignee_id,
+    :assigned_to_worker,
+    :blocked_by,
+    :sub_issues,
+    :parent,
+    :url,
+    :repo_key,
+    :created_at
+  ]
+
   defp dispatch_side(side, :poll), do: side.cache
-  defp dispatch_side(side, :record), do: side.record || []
+
+  defp dispatch_side(side, :record) do
+    polled = Map.new(side.cache, &{&1.id, &1})
+    for issue <- side.record || [], do: with_polled_text(issue, Map.get(polled, issue.id))
+  end
+
+  # A record candidate decides dispatch with what its record says (`Candidates.issue_from_record/1`).
+  # What only the poll reads (the description, comments, rulings, linked issues, team, project and
+  # branch) comes from the poll cache's issue when it has one, with the `updatedAt` it was read at, so
+  # the quality gate keys its verdict on the text it scored and the plan-comment reader sees the
+  # comments. A ticket only the records have has none of it until its repo's poll reads it.
+  defp with_polled_text(%Issue{} = issue, nil), do: issue
+  defp with_polled_text(%Issue{} = issue, %Issue{} = polled), do: struct(polled, Map.take(issue, @record_issue_fields))
 
   # Every poll cycle compares, for each repo, the candidates the poll cache gives with the ones the
   # records give and reports how they differ (`Dispatch.Shadow`), whichever side dispatch reads. It
@@ -2114,6 +2143,10 @@ defmodule SymphonyElixir.Orchestrator do
   @doc false
   @spec put_forced_parts_for_test(State.t(), [Issue.t()]) :: State.t()
   def put_forced_parts_for_test(%State{} = state, issues) when is_list(issues), do: put_forced_parts(state, issues)
+
+  @doc false
+  @spec quality_gate_input_for_test(State.t(), [Issue.t()], term()) :: [Issue.t()]
+  def quality_gate_input_for_test(%State{} = state, issues, context \\ :poll) when is_list(issues), do: with_text_read(issues, state, context)
 
   @doc false
   @spec apply_forced_poll_result_for_test(State.t(), term(), [String.t()], term(), integer()) :: State.t()
@@ -2830,6 +2863,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp start_quality_gate_task(issues, %State{} = state, context, gate_config) do
     cache = state.quality_gate_cache
     comment_keys = state.quality_gate_comment_keys
+    issues = with_text_read(issues, state, context)
 
     case start_async_task(fn ->
            {:quality_gate_result, evaluate_quality_gate_with_comments(issues, gate_config, cache, comment_keys)}
@@ -2845,6 +2879,18 @@ defmodule SymphonyElixir.Orchestrator do
         handle_quality_gate_exit(state, context, reason)
     end
   end
+
+  # The gate scores a ticket's text, which only the poll reads. A poll candidate no repo's poll cache
+  # has (one only the records have, `dispatch.source: record`) waits for its repo's poll, which a
+  # change to its record asks for at once, instead of being scored on an empty description.
+  defp with_text_read(issues, %State{} = state, :poll) do
+    polled = for {_repo, entry} <- state.repo_poll_cache, %Issue{id: id} <- Map.get(entry, :issues, []), into: MapSet.new(), do: id
+    {read, unread} = Enum.split_with(issues, &MapSet.member?(polled, &1.id))
+    if unread != [], do: Logger.debug("Quality gate waits for the poll to read #{Enum.map_join(unread, ", ", &issue_context/1)}")
+    read
+  end
+
+  defp with_text_read(issues, _state, _retry), do: issues
 
   defp evaluate_quality_gate_with_comments(issues, gate_config, cache, comment_keys) do
     %{passed: passed, skipped: skipped, awaiting_clarification: awaiting_clarification, cache: cache} =

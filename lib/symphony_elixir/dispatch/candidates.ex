@@ -17,7 +17,9 @@ defmodule SymphonyElixir.Dispatch.Candidates do
   a polled issue: the priority filter stays a gate because a forced ticket and a retry waiting for a
   slot bypass it.
 
-  Everything here is pure: no store read, no Linear read, no process. Nothing calls it yet.
+  Everything here is pure: no store read, no Linear read, no process. The orchestrator calls it every
+  poll cycle, to dispatch from it under `dispatch.source: record` and for the shadow
+  (`SymphonyElixir.Dispatch.Shadow`) either way.
   """
 
   alias SymphonyElixir.Config.Schema

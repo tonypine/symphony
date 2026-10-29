@@ -1,9 +1,24 @@
 defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Dispatch.Shadow
-  alias SymphonyElixir.TicketObservation
+  alias SymphonyElixir.{QualityGate, SubIssueWait, TicketObservation}
   alias SymphonyElixirWeb.ObservabilityPubSub
+
+  defmodule PassProvider do
+    @behaviour SymphonyElixir.QualityGate.Provider
+
+    @impl true
+    def score(_issue, _settings), do: {:ok, %{score: 9, reason: "clear"}}
+  end
+
+  defmodule NoScoreProvider do
+    @behaviour SymphonyElixir.QualityGate.Provider
+
+    @impl true
+    def score(issue, _settings), do: raise("scored #{issue.identifier} again")
+  end
 
   @linear_at ~U[2026-10-29 09:00:00Z]
 
@@ -30,8 +45,8 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
     )
   end
 
-  defp set_source(source) do
-    write_workflow_file!(Workflow.workflow_file_path())
+  defp set_source(source, opts \\ []) do
+    write_workflow_file!(Workflow.workflow_file_path(), opts)
     File.write!(Workflow.symphony_file_path(), File.read!(Workflow.symphony_file_path()) <> "dispatch:\n  source: #{source}\n")
     Cache.clear()
   end
@@ -133,6 +148,109 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
 
       set_source("poll")
       {%{dispatchable: [%{identifier: "ACME-5"}]}, _state} = capture_cycle(state, blank, 50)
+    end
+
+    test "a ticket the poll cache also has keeps what only the poll reads, under the record's fields", ctx do
+      set_source("record")
+      comments = [%{author: "Tony", body: "Also cover the retry", created_at: @linear_at}]
+
+      polled =
+        issue(ctx.repo_key, 1,
+          description: "Dispatch from the record",
+          comments: comments,
+          team: %{key: "ACME", name: "Acme"},
+          project: %{id: "project-1", name: "Reads"},
+          branch_name: "acme-1-dispatch"
+        )
+
+      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [polled], 0)
+
+      # A webhook raises its priority: the record has the new priority, the cache the text it read.
+      raised = issue(ctx.repo_key, 1, priority: 2, updated_at: DateTime.add(@linear_at, 60))
+      {:ok, :updated} = TicketObservation.observe(ctx.repo_key, raised, source: :webhook)
+
+      {%{dispatchable: [rebuilt]}, _state} = capture_cycle(state, ctx.repos, 50)
+
+      assert %Issue{priority: 2, description: "Dispatch from the record", comments: ^comments, branch_name: "acme-1-dispatch"} = rebuilt
+      assert {rebuilt.team, rebuilt.project} == {polled.team, polled.project}
+      # The text comes with the `updatedAt` it was read at, which the quality gate keys a verdict on.
+      assert rebuilt.updated_at == @linear_at
+    end
+
+    test "a person's new comment on an approved plan is read, from the comments the poll read", ctx do
+      waiting = "Waiting on sub-tickets"
+      set_source("record", tracker_kind: "memory")
+      SubIssueWait.reset_for_test(waiting)
+      on_exit(fn -> SubIssueWait.reset_for_test(waiting) end)
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      commented_at = ~U[2026-10-29 09:10:00Z]
+
+      parent =
+        issue(ctx.repo_key, 1,
+          state: waiting,
+          labels: ["breakdown"],
+          sub_issues: [%{id: "child-1", identifier: "ACME-2", state: "In Progress"}],
+          comments: [%{author: "Tony", body: "Can we drop the history screen?", created_at: commented_at}]
+        )
+
+      Application.put_env(:symphony_elixir, :memory_tracker_plan_comments, %{
+        parent.id => %{
+          state_changes: [%{at: @linear_at, from: "Plan Review", to: waiting}],
+          comments: [%{id: "c1", body: "Can we drop the history screen?", created_at: commented_at, parent_id: nil, bot?: false}]
+        }
+      })
+
+      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [parent], 0)
+      {%{dispatchable: [rebuilt]}, state} = capture_cycle(state, ctx.repos, 50)
+      assert rebuilt.comments == parent.comments
+
+      {state, _log} = with_log(fn -> Orchestrator.act_on_plan_comments_for_test(state, [rebuilt]) end)
+      parent_id = parent.id
+      assert_received {:memory_tracker_plan_comments, ^parent_id}
+      assert_received {:memory_tracker_reply, ^parent_id, "c1", _reply}
+      assert state.plan_comment_checks == %{parent_id => commented_at}
+    end
+
+    test "with the quality gate on, a verdict on a ticket with comments stays current", ctx do
+      set_source("record")
+      # The stub providers never call out; the gate only needs a key to be configured.
+      System.put_env("ANTHROPIC_API_KEY", "test-anthropic-key")
+      on_exit(fn -> System.delete_env("ANTHROPIC_API_KEY") end)
+      config = %Schema.QualityGate{enabled: true, min_score: 6}
+      polled = issue(ctx.repo_key, 1, description: "Dispatch from the record", comments: [%{author: "Tony", body: "Also the retry", created_at: @linear_at}])
+      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [polled], 0)
+
+      {%{passed: [_polled], cache: cache}, _log} = with_log(fn -> QualityGate.evaluate([polled], config, %{}, provider_module: PassProvider) end)
+      assert %{passed?: true, comment_signature: signature} = cache[polled.id]
+      assert is_binary(signature)
+
+      # The record moves on after the gate scored the text; the text did not change, so neither does the verdict.
+      raised = issue(ctx.repo_key, 1, priority: 2, updated_at: DateTime.add(@linear_at, 60))
+      {:ok, :updated} = TicketObservation.observe(ctx.repo_key, raised, source: :webhook)
+      {%{dispatchable: [rebuilt]}, state} = capture_cycle(state, ctx.repos, 50)
+
+      assert Orchestrator.quality_gate_input_for_test(state, [rebuilt]) == [rebuilt]
+      assert %{passed: [^rebuilt], cache: ^cache} = QualityGate.evaluate([rebuilt], config, cache, provider_module: NoScoreProvider)
+    end
+
+    test "with the quality gate on, a ticket only the record has waits for its repo's poll to read its text", ctx do
+      set_source("record")
+      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [issue(ctx.repo_key, 1)], 0)
+      {:ok, :updated} = TicketObservation.observe(ctx.repo_key, issue(ctx.repo_key, 3), source: :watcher)
+
+      {%{dispatchable: dispatchable}, state} = capture_cycle(state, ctx.repos, 50)
+      assert identifiers(dispatchable) == ["ACME-1", "ACME-3"]
+      assert identifiers(Orchestrator.quality_gate_input_for_test(state, dispatchable)) == ["ACME-1"]
+
+      # A retry reads its own issue by id, text and all, so the gate scores it.
+      only_record = Enum.find(dispatchable, &(&1.identifier == "ACME-3"))
+      retry = {:active_retry, only_record, 1, %{}}
+      assert Orchestrator.quality_gate_input_for_test(state, [only_record], retry) == [only_record]
+
+      # Once its repo's poll has read it, the gate scores it.
+      {{:poll_at, 60}, state} = Orchestrator.force_repo_due_for_test(state, ctx.repo_key, 60)
+      {%{dispatchable: polled}, state} = cycle(state, ctx.repos, [issue(ctx.repo_key, 1), issue(ctx.repo_key, 3)], 60)
+      assert identifiers(Orchestrator.quality_gate_input_for_test(state, polled)) == ["ACME-1", "ACME-3"]
     end
 
     test "a record change outside the poll asks for a cycle of its repo at once", ctx do
