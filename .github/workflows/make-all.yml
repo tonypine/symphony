@@ -67,15 +67,18 @@ jobs:
           install: true
           cache: true
 
-      - name: Cache deps and build
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      # One cache per Mix env, saved for each commit on main. A pull request restores the
+      # newest main entry by prefix, so it compiles only the files it changes.
+      - name: Restore deps and build
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             deps
-            _build
-          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}
+            _build/dev/lib
+          key: ${{ runner.os }}-mix-dev-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-mix-
+            ${{ runner.os }}-mix-dev-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}-
+            ${{ runner.os }}-mix-dev-
 
       - name: Install dependencies
         run: time mix deps.get
@@ -98,15 +101,16 @@ jobs:
           install: true
           cache: true
 
-      - name: Cache deps and build
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      - name: Restore deps and build
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             deps
-            _build
-          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}
+            _build/dev/lib
+          key: ${{ runner.os }}-mix-dev-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-mix-
+            ${{ runner.os }}-mix-dev-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}-
+            ${{ runner.os }}-mix-dev-
 
       - name: Install dependencies
         run: time mix deps.get
@@ -128,15 +132,16 @@ jobs:
           install: true
           cache: true
 
-      - name: Cache deps and build
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      - name: Restore deps and build
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             deps
-            _build
-          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}
+            _build/dev/lib
+          key: ${{ runner.os }}-mix-dev-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-mix-
+            ${{ runner.os }}-mix-dev-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}-
+            ${{ runner.os }}-mix-dev-
 
       - name: Install dependencies
         run: time mix deps.get
@@ -169,15 +174,16 @@ jobs:
           install: true
           cache: true
 
-      - name: Cache deps and build
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      - name: Restore deps and build
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             deps
-            _build
-          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}
+            _build/test/lib
+          key: ${{ runner.os }}-mix-test-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-mix-
+            ${{ runner.os }}-mix-test-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}-
+            ${{ runner.os }}-mix-test-
 
       - name: Install dependencies
         run: time mix deps.get
@@ -198,6 +204,16 @@ jobs:
         run: |
           set -o pipefail
           time mix test --cover --partitions 4 2>&1 | tee "$RUNNER_TEMP/test.log"
+
+      # Shard 1 saves the test build for this commit; the other shards compile the same files.
+      - name: Save deps and build
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.partition == 1
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            deps
+            _build/test/lib
+          key: ${{ runner.os }}-mix-test-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}-${{ github.sha }}
 
       # Job logs need admin rights; annotations don't, so agents can read failures.
       - name: Annotate test failures
@@ -227,15 +243,16 @@ jobs:
           install: true
           cache: true
 
-      - name: Cache deps and build
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      - name: Restore deps and build
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             deps
-            _build
-          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}
+            _build/test/lib
+          key: ${{ runner.os }}-mix-test-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-mix-
+            ${{ runner.os }}-mix-test-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}-
+            ${{ runner.os }}-mix-test-
 
       - name: Install dependencies
         run: time mix deps.get
@@ -264,22 +281,32 @@ jobs:
           install: true
           cache: true
 
-      - name: Cache deps and build
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      - name: Restore deps and build
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             deps
-            _build
-          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}
+            _build/dev/lib
+          key: ${{ runner.os }}-mix-dev-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-mix-
+            ${{ runner.os }}-mix-dev-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}-
+            ${{ runner.os }}-mix-dev-
+
+      # Dialyxir writes the Erlang and Elixir PLTs to Mix's home, which mise sets to its
+      # Elixir install, and the deps PLT with its hash to `_build/dev`.
+      - name: Locate Dialyzer PLTs
+        run: |
+          core="${MIX_HOME:-$HOME/.mix}"
+          echo "Core PLTs: $core; deps PLT: _build/dev"
+          echo "DIALYZER_CORE_PLT_DIR=$core" >> "$GITHUB_ENV"
 
       - name: Cache Dialyzer PLTs
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
-            ~/.mix/*.plt
-            ~/.mix/*.plt.hash
+            ${{ env.DIALYZER_CORE_PLT_DIR }}/dialyxir_*.plt
+            _build/dev/dialyxir_*.plt
+            _build/dev/dialyxir_*.plt.hash
           key: ${{ runner.os }}-dialyzer-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}
           restore-keys: |
             ${{ runner.os }}-dialyzer-
@@ -289,6 +316,20 @@ jobs:
 
       - name: Run Dialyzer
         run: time mix dialyzer --format short
+
+      - name: List Dialyzer PLTs
+        run: |
+          ls -l "$DIALYZER_CORE_PLT_DIR"/dialyxir_*.plt _build/dev/dialyxir_*.plt* ||
+            echo "::warning::Dialyzer PLTs are not where the PLT cache looks"
+
+      - name: Save deps and build
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            deps
+            _build/dev/lib
+          key: ${{ runner.os }}-mix-dev-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}-${{ github.sha }}
 
   make-all:
     name: make-all
