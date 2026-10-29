@@ -35,6 +35,20 @@ defmodule SymphonyElixir.ReviewAgentTest do
     def stop_session(_session), do: :ok
   end
 
+  # Streams what a Claude reviewer streams: its session, a tool heartbeat, then its verdict.
+  defmodule ClaudeStreamReviewer do
+    def start_session(workspace, opts), do: {:ok, %{workspace: workspace, opts: opts}}
+
+    def run_turn(_session, _prompt, _issue, opts) do
+      on_message = Keyword.fetch!(opts, :on_message)
+      on_message.({:session_started, "sess-reviewer"})
+      on_message.({:tool_progress, "Read"})
+      {:ok, %{result: ~s({"verdict":"approve","comments":[]})}}
+    end
+
+    def stop_session(_session), do: :ok
+  end
+
   defmodule SequenceReviewer do
     def start_session(workspace, opts) do
       parent = Application.fetch_env!(:symphony_elixir, :review_agent_sequence_parent)
@@ -525,6 +539,29 @@ defmodule SymphonyElixir.ReviewAgentTest do
                ReviewAgent.evaluate(issue, repo, Config.settings!(), review_agent_module: StreamingCodexReviewer)
 
       assert comment =~ "Handle remote guides."
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "evaluate forwards the reviewer's streamed events to the orchestrator as an implementation run does" do
+    test_root = unique_tmp("symphony-elixir-review-agent-forward")
+
+    try do
+      repo = git_repo_with_change!(test_root)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        review_agent: %{enabled: true, kind: "claude", command: "claude"}
+      )
+
+      issue = %Issue{id: "issue-review-forward", identifier: "MT-FORWARD", title: "Forward", description: "Review it", state: "Code Review"}
+      on_message = SymphonyElixir.AgentRunner.codex_message_handler(self(), issue)
+
+      opts = [review_agent_module: ClaudeStreamReviewer, on_message: on_message]
+      assert {:ok, %{verdict: :approve}} = ReviewAgent.evaluate(issue, repo, Config.settings!(), opts)
+
+      assert_received {:codex_worker_update, "issue-review-forward", %{event: :session_started, session_id: "sess-reviewer", timestamp: %DateTime{}}}
+      assert_received {:codex_worker_update, "issue-review-forward", %{event: :tool_progress, timestamp: %DateTime{}}}
     after
       File.rm_rf(test_root)
     end

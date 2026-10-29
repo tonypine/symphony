@@ -839,6 +839,10 @@ agent:
   invocation when a turn completes but the issue is still active. Codex reuses one `threadId`
   across these turns; Claude relaunches per turn (workspace + prompt provide continuation).
 - `timeouts.command_ms` caps a single shell command. Set `0` to disable.
+- `timeouts.stall_ms` (default `300000`, 5 minutes) restarts a run whose agent has not produced its
+  first transcript event for that long. Like the watchdog, it acts only on a run whose silence is
+  proven: one with no session id and no agent event is unobserved and never restarted (see
+  [`watchdog`](#watchdog)). Set `0` to disable.
 - `timeouts.mcp_tool_ms` (default `600000`, 10 minutes) caps one call of Symphony's own MCP tools
   (`linear_*`, `github_*`): a call still running then is stopped and answered with a
   `tool_timeout` error. QA tools keep their own timeouts. Settings in the macOS app edits it as
@@ -2350,6 +2354,22 @@ watchdog:
   dispatch_loop_long_runs: 8
   dispatch_loop_long_window_ms: 3600000
 ```
+
+A run is restarted only on proven silence: the orchestrator has heard from its agent (a session id,
+a transcript event or a Claude Code `tool_progress` heartbeat) and then nothing for the whole bound,
+`no_progress_threshold_ms` (default `600000`, 10 minutes) or, before the first transcript event,
+`agent.timeouts.stall_ms`, while the run's process lives. Every run kind reports the same way:
+implementation, Code Review and QA runs all forward their streamed events to the orchestrator, so
+each running entry, `/api/v1/state` and the ticket page show the run's session and its latest
+activity. A run the orchestrator never heard from is unobserved, not silent: the watchdog logs
+`watchdog.unobserved_run` once per run at warning level, with `issue_id=`, `issue_identifier=`,
+`run_kind=` and `age_ms=`, and keeps it. Such a run ends through the exit path: the agent's own
+`agent.timeouts` (`turn_ms`, `read_ms`), a hook's timeout, or its process exiting.
+
+Before Code Review runs reported their events, every review longer than the bound was restarted
+while it worked, and operators raised `agent.timeouts.stall_ms` (to 20 minutes) and
+`watchdog.no_progress_threshold_ms` to cope. Those raised values are no longer needed: remove them
+from your `symphony.yml` to go back to the defaults.
 
 `pending_tool_report_after_ms` (default `60000`, one minute; a positive integer) is how long one of
 Symphony's own MCP tool calls (`linear_*`, `github_*`, `qa_*`) must run before Symphony's state and

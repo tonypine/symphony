@@ -5179,9 +5179,17 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert %{workspace_hook: nil} = reconcile.().running[issue_id]
     assert Process.alive?(worker_pid)
 
-    # A hook still running well past its own deadline is a stall.
+    # A hook still running well past its own deadline, before any agent event, leaves the run
+    # unobserved: logged, not restarted (the hook's own timeout ends it through the exit path).
     overdue_hook = %{name: "after_create", deadline: DateTime.add(DateTime.utc_now(), -120, :second)}
     send(pid, {:worker_runtime_info, issue_id, %{workspace_hook: overdue_hook}})
+
+    log = capture_log(fn -> assert %{unobserved_logged: true} = run_stall_check(pid).running[issue_id] end)
+    assert log =~ "watchdog.unobserved_run issue_id=issue-hook-stall issue_identifier=MT-HOOK-STALL run_kind=unknown age_ms="
+    assert Process.alive?(worker_pid)
+
+    # Once the agent's session is known, the same overdue hook is a stall.
+    :sys.replace_state(pid, fn state -> put_in(state.running[issue_id][:session_id], "sess-hook-stall") end)
     state = run_stall_check(pid)
 
     refute Map.has_key?(state.running, issue_id)
@@ -5247,8 +5255,10 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       {worker_pid, worker_ref} = start_blocked_worker()
       stale_at = DateTime.add(DateTime.utc_now(), -5, :second)
 
-      # No agent event yet: the workpad bootstrap is waiting on a rate-limited Linear call.
-      put_running_entry(pid, issue, linear_wait_running_entry(issue, worker_pid, worker_ref, stale_at))
+      # The agent's session started, but no transcript event yet: the workpad bootstrap is waiting
+      # on a rate-limited Linear call.
+      running_entry = linear_wait_running_entry(issue, worker_pid, worker_ref, stale_at, %{session_id: "sess-bootstrap"})
+      put_running_entry(pid, issue, running_entry)
       wait_sent_at = DateTime.utc_now()
       send(pid, {:linear_wait, issue.id, 60_000})
       send(pid, {:linear_wait, "issue-not-running", 60_000})
@@ -5307,11 +5317,13 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}, @min_wait_ms
     end
 
-    test "still restart a run with no agent event and no Linear wait" do
+    test "still restart an observed run with no transcript event and no Linear wait" do
       pid = start_linear_wait_orchestrator!(:LinearNoWaitStallOrchestrator, @stall_check_only)
       issue = linear_wait_issue("issue-no-linear-wait-stall")
       {worker_pid, worker_ref} = start_blocked_worker()
-      put_running_entry(pid, issue, linear_wait_running_entry(issue, worker_pid, worker_ref, DateTime.add(DateTime.utc_now(), -5, :second)))
+      stale_at = DateTime.add(DateTime.utc_now(), -5, :second)
+      running_entry = linear_wait_running_entry(issue, worker_pid, worker_ref, stale_at, %{session_id: "sess-no-wait-stall"})
+      put_running_entry(pid, issue, running_entry)
       assert %{running: [%{linear_wait_until: nil}]} = GenServer.call(pid, :snapshot)
 
       run_stall_check(pid)
@@ -5327,12 +5339,106 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
       issue = linear_wait_issue("issue-no-linear-wait-stuck")
       {worker_pid, worker_ref} = start_blocked_worker()
-      put_running_entry(pid, issue, linear_wait_running_entry(issue, worker_pid, worker_ref, DateTime.add(DateTime.utc_now(), -5, :second)))
+      stale_at = DateTime.add(DateTime.utc_now(), -5, :second)
+      running_entry = linear_wait_running_entry(issue, worker_pid, worker_ref, stale_at, %{session_id: "sess-no-wait-stuck"})
+      put_running_entry(pid, issue, running_entry)
 
       send(pid, :watchdog_tick)
 
       assert %{error: "stuck for " <> _} = wait_for_retry!(pid, issue)
       assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}, @min_wait_ms
+    end
+
+    test "log an unobserved run once, whatever its kind, and never restart it" do
+      pid =
+        start_linear_wait_orchestrator!(:UnobservedRunOrchestrator,
+          agent_stall_timeout_ms: 1_000,
+          watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 1_000}
+        )
+
+      started_at = DateTime.add(DateTime.utc_now(), -5, :second)
+
+      # A Code Review run, a PR run and a run of no known kind: no session id and no agent event
+      # past both bounds, as a reviewer looked before its events reached the orchestrator.
+      runs =
+        for {id, attrs} <- [
+              {"issue-unobserved-review", %{run_profile: %{kind: :code_review, model: nil, effort: nil}}},
+              {"issue-unobserved-pr", %{run_kind: :pr}},
+              {"issue-unobserved-bare", %{}}
+            ] do
+          issue = %Issue{id: id, identifier: "MT-" <> id, title: "Unobserved", state: "In Progress"}
+          {worker_pid, worker_ref} = start_blocked_worker()
+          {issue, worker_pid, linear_wait_running_entry(issue, worker_pid, worker_ref, started_at, attrs)}
+        end
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, Enum.map(runs, &elem(&1, 0)))
+
+      :sys.replace_state(pid, fn state ->
+        %{
+          state
+          | running: Map.new(runs, fn {issue, _worker_pid, entry} -> {issue.id, entry} end),
+            claimed: MapSet.new(runs, fn {issue, _worker_pid, _entry} -> issue.id end)
+        }
+      end)
+
+      log =
+        capture_log(fn ->
+          for _round <- 1..2 do
+            run_stall_check(pid)
+            send(pid, :watchdog_tick)
+            get_orchestrator_state(pid)
+          end
+        end)
+
+      for {kind, id} <- [{"code_review", "issue-unobserved-review"}, {"pr", "issue-unobserved-pr"}, {"unknown", "issue-unobserved-bare"}] do
+        lines = Regex.scan(~r/watchdog\.unobserved_run issue_id=#{id} issue_identifier=MT-#{id} run_kind=#{kind} age_ms=(\d+)/, log)
+        assert [[_line, age_ms]] = lines
+        assert String.to_integer(age_ms) >= 5_000
+      end
+
+      state = get_orchestrator_state(pid)
+      assert map_size(state.running) == 3
+      assert state.retry_attempts == %{}
+      assert Enum.all?(runs, fn {_issue, worker_pid, _entry} -> Process.alive?(worker_pid) end)
+
+      # The reviewer's session starts: the run is observed, and a fresh event keeps it past the bound.
+      [{review_issue, review_worker, _entry} | _rest] = runs
+      update = AppServer.event_to_update({:session_started, "sess-reviewer"})
+      send(pid, {:codex_worker_update, review_issue.id, update})
+      send(pid, :watchdog_tick)
+
+      assert %{session_id: "sess-reviewer", last_event_at: last_event_at} = get_orchestrator_state(pid).running[review_issue.id]
+      assert DateTime.compare(last_event_at, update.timestamp) == :eq
+      assert %{running: running} = GenServer.call(pid, :snapshot)
+      assert %{session_id: "sess-reviewer"} = Enum.find(running, &(&1.issue_id == review_issue.id))
+      assert Process.alive?(review_worker)
+
+      # Its events stop for the bound while its process lives: a restart, as for any run.
+      :sys.replace_state(pid, fn state -> put_in(state.running[review_issue.id][:last_event_at], started_at) end)
+      :sys.replace_state(pid, fn state -> put_in(state.running[review_issue.id][:last_codex_timestamp], started_at) end)
+      send(pid, :watchdog_tick)
+
+      assert %{error: "stuck for " <> _} = wait_for_retry!(pid, review_issue)
+      refute Process.alive?(review_worker)
+
+      for {_issue, worker_pid, _entry} <- runs, do: Process.exit(worker_pid, :shutdown)
+    end
+
+    test "restart past the stall timeout a run the orchestrator only heard heartbeats from" do
+      pid = start_linear_wait_orchestrator!(:HeartbeatStallOrchestrator, @stall_check_only)
+      issue = linear_wait_issue("issue-heartbeat-stall")
+      {worker_pid, worker_ref} = start_blocked_worker()
+      stale_at = DateTime.add(DateTime.utc_now(), -5, :second)
+      put_running_entry(pid, issue, linear_wait_running_entry(issue, worker_pid, worker_ref, stale_at))
+
+      heartbeat = %{AppServer.event_to_update({:tool_progress, "Bash"}) | timestamp: stale_at}
+      send(pid, {:codex_worker_update, issue.id, heartbeat})
+      assert %{agent_observed: true, session_id: nil, last_codex_timestamp: nil} = get_orchestrator_state(pid).running[issue.id]
+
+      run_stall_check(pid)
+
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}, @min_wait_ms
+      assert %{error: "stalled for " <> _} = wait_for_retry!(pid, issue)
     end
   end
 
