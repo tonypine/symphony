@@ -2307,6 +2307,35 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule Dispatch do
+    @moduledoc """
+    `symphony.yml`'s `dispatch` section: where the dispatcher reads its candidates from (`source`:
+    `poll`, the poll cache, or `record`, the ticket records) and how many poll cycles the shadow
+    report's window covers (`shadow_window`, `SymphonyElixir.Dispatch.Shadow`). `record` is accepted
+    and changes nothing yet: dispatch reads the poll cache.
+    """
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @type t :: %__MODULE__{}
+
+    @primary_key false
+    @sources ~w(poll record)
+
+    embedded_schema do
+      field(:source, :string, default: "poll")
+      field(:shadow_window, :integer, default: 20)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:source, :shadow_window], empty_values: [])
+      |> validate_inclusion(:source, @sources, message: "must be one of: #{Enum.join(@sources, ", ")}")
+      |> validate_number(:shadow_window, greater_than: 0)
+    end
+  end
+
   defmodule Notifications do
     @moduledoc false
     use Ecto.Schema

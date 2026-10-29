@@ -479,6 +479,20 @@ defmodule SymphonyElixir.Linear.Client do
     do_fetch_issue_enrichment(issue, graphql_fun)
   end
 
+  @doc """
+  The id of the user behind the configured API key, when a poll with `assignee: me` already asked
+  Linear for it, else nil. It never asks Linear.
+  """
+  @spec known_viewer_id() :: String.t() | nil
+  def known_viewer_id do
+    api_key_hash = :erlang.phash2(Secret.unwrap(Config.settings!().tracker.api_key))
+
+    case :persistent_term.get(@viewer_id_cache_key, nil) do
+      {^api_key_hash, viewer_id} -> viewer_id
+      _missing_or_other_key -> nil
+    end
+  end
+
   @doc false
   @spec reset_viewer_cache_for_test() :: :ok
   def reset_viewer_cache_for_test do

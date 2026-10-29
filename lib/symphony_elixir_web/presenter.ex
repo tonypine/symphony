@@ -26,6 +26,7 @@ defmodule SymphonyElixirWeb.Presenter do
   }
 
   alias SymphonyElixir.Codex.MessageHumanizer
+  alias SymphonyElixir.Dispatch.Shadow, as: DispatchShadow
   alias SymphonyElixir.GitHub.WebhookSetup.Cache, as: WebhookSetupCache
   alias SymphonyElixir.Linear.Webhook, as: LinearWebhook
   alias SymphonyElixir.Linear.Webhook.Deliveries, as: LinearWebhookDeliveries
@@ -115,6 +116,7 @@ defmodule SymphonyElixirWeb.Presenter do
           rate_limits: snapshot.rate_limits,
           linear_usage: normalize_linear_usage(get_in(snapshot, [:polling, :linear, :usage])),
           linear_webhooks: linear_webhooks_payload(),
+          dispatch_shadow: dispatch_shadow_payload(),
           orchestrator: Orchestrator.diagnostics(orchestrator)
         }
 
@@ -648,6 +650,24 @@ defmodule SymphonyElixirWeb.Presenter do
         poll_first: compare.poll_first,
         poll_first_recent: Enum.map(compare.poll_first_recent, &%{&1 | at: iso8601(&1.at)})
       }
+    }
+  end
+
+  # Where dispatch reads its candidates from (`dispatch.source`), and how the candidates the ticket
+  # records give compared with the poll cache's (`SymphonyElixir.Dispatch.Shadow`): cycles compared
+  # and with a difference, the differences of the last `window` cycles, and the last ten that
+  # appeared, newest first.
+  defp dispatch_shadow_payload do
+    summary = DispatchShadow.summary()
+
+    %{
+      source: Config.dispatch_source(),
+      window: Config.dispatch_shadow_window(),
+      cycles_compared: summary.cycles_compared,
+      cycles_with_differences: summary.cycles_with_differences,
+      window_cycles: summary.window_cycles,
+      window_differences: summary.window_differences,
+      recent: Enum.map(summary.recent, &%{&1 | at: iso8601(&1.at)})
     }
   end
 
