@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.TicketStateTest do
   use ExUnit.Case, async: true
 
+  alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.PrWatch.Attempts
   alias SymphonyElixir.TicketState
@@ -25,6 +26,14 @@ defmodule SymphonyElixir.TicketStateTest do
                decisions: [],
                pr_watch: nil,
                event_seq: 0,
+               title: nil,
+               labels: [],
+               priority: nil,
+               assignee: nil,
+               blockers: [],
+               url: nil,
+               linear_updated_at: nil,
+               observed_at: nil,
                updated_at: nil
              }
     end
@@ -123,6 +132,14 @@ defmodule SymphonyElixir.TicketStateTest do
                decisions: [],
                pr_watch: nil,
                event_seq: 0,
+               title: nil,
+               labels: [],
+               priority: nil,
+               assignee: nil,
+               blockers: [],
+               url: nil,
+               linear_updated_at: nil,
+               observed_at: nil,
                updated_at: nil
              }
     end
@@ -170,6 +187,42 @@ defmodule SymphonyElixir.TicketStateTest do
       assert TicketState.normalize(%{event_seq: 12}).event_seq == 12
       assert TicketState.normalize(%{event_seq: -1}).event_seq == 0
       assert TicketState.normalize(%{event_seq: "3"}).event_seq == 0
+    end
+
+    test "a record stored before the observation fields reads back with them at their defaults" do
+      stored = %{repo_key: "repo-a", issue_id: "issue-1", issue_identifier: "ACME-1", phase: "QA", event_seq: 3, updated_at: @at}
+
+      record = TicketState.normalize(stored)
+
+      assert Map.take(record, [:title, :labels, :priority, :assignee, :blockers, :url, :linear_updated_at, :observed_at]) == %{
+               title: nil,
+               labels: [],
+               priority: nil,
+               assignee: nil,
+               blockers: [],
+               url: nil,
+               linear_updated_at: nil,
+               observed_at: nil
+             }
+
+      assert Map.take(record, Map.keys(stored)) == stored
+    end
+
+    test "reads malformed observation fields as their defaults" do
+      record =
+        TicketState.normalize(%{
+          title: 42,
+          labels: ["bug", 7, "  ", " ui "],
+          priority: "high",
+          assignee: :someone,
+          blockers: :x,
+          url: "",
+          linear_updated_at: "yesterday",
+          observed_at: 1
+        })
+
+      assert {record.title, record.labels, record.priority, record.assignee} == {nil, ["bug", "ui"], nil, nil}
+      assert {record.blockers, record.url, record.linear_updated_at, record.observed_at} == {[], nil, nil, nil}
     end
 
     test "treats non-list collections as empty" do
@@ -641,6 +694,93 @@ defmodule SymphonyElixir.TicketStateTest do
       assert TicketState.pr_watch(TicketState.new("repo-a", "issue-1", %{pr_watch: %{facts: %{phase: :qa}}})) == nil
       assert TicketState.pr_watch(TicketState.new("repo-a", "issue-1", %{pr_watch: :junk})) == nil
       assert %DateTime{} = TicketState.put_pr_watch(TicketState.new("repo-a", "issue-1"), nil).updated_at
+    end
+  end
+
+  describe "observe/3" do
+    @linear_at ~U[2026-10-29 09:00:00Z]
+    @observed_at ~U[2026-10-29 09:05:00Z]
+
+    defp linear_issue(attrs \\ %{}) do
+      struct!(
+        %Issue{
+          id: "issue-1",
+          identifier: "ACME-1",
+          title: "Observe every poll",
+          state: "In Progress",
+          labels: ["backend", "plan"],
+          priority: 1,
+          assignee_id: "user-1",
+          blocked_by: [%{id: "issue-0", identifier: "ACME-0", state: "Todo"}, %{id: nil, identifier: nil, state: nil}],
+          url: "https://linear.app/acme/issue/ACME-1",
+          updated_at: @linear_at
+        },
+        attrs
+      )
+    end
+
+    test "a new record takes every field of the issue, with when it was observed" do
+      assert {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(), @observed_at)
+
+      assert Map.take(record, [:issue_identifier, :phase, :title, :labels, :priority, :assignee, :blockers, :url, :linear_updated_at, :observed_at, :updated_at]) ==
+               %{
+                 issue_identifier: "ACME-1",
+                 phase: "In Progress",
+                 title: "Observe every poll",
+                 labels: ["backend", "plan"],
+                 priority: 1,
+                 assignee: "user-1",
+                 blockers: ["ACME-0"],
+                 url: "https://linear.app/acme/issue/ACME-1",
+                 linear_updated_at: @linear_at,
+                 observed_at: @observed_at,
+                 updated_at: @observed_at
+               }
+    end
+
+    test "the same issue again changes nothing, and keeps the first observation's time" do
+      {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(), @observed_at)
+
+      assert {^record, :unchanged} = TicketState.observe(record, linear_issue(), DateTime.add(@observed_at, 60))
+    end
+
+    test "a newer fact overwrites the observed fields and leaves the rest of the record" do
+      {record, :changed} =
+        "repo-a"
+        |> TicketState.new("issue-1")
+        |> TicketState.set_hold(:blocked, %{reason: "waiting"}, @at)
+        |> TicketState.observe(linear_issue(), @observed_at)
+
+      newer = linear_issue(%{title: "Renamed", state: "Code Review", labels: [], priority: nil, assignee_id: nil, blocked_by: [], updated_at: DateTime.add(@linear_at, 600)})
+      later = DateTime.add(@observed_at, 600)
+
+      assert {observed, :changed} = TicketState.observe(record, newer, later)
+      assert {observed.title, observed.phase, observed.labels, observed.priority, observed.assignee, observed.blockers} == {"Renamed", "Code Review", [], nil, nil, []}
+      assert {observed.linear_updated_at, observed.observed_at} == {DateTime.add(@linear_at, 600), later}
+      assert [%{kind: :blocked, reason: "waiting"}] = observed.holds
+    end
+
+    test "an older fact is dropped and the record returned as it was" do
+      {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(), @observed_at)
+      older = linear_issue(%{title: "Old title", state: "Todo", updated_at: DateTime.add(@linear_at, -1)})
+
+      assert {^record, :stale} = TicketState.observe(record, older, DateTime.add(@observed_at, 60))
+    end
+
+    test "an unknown field, a missing state and a missing updatedAt keep the known values" do
+      {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(), @observed_at)
+      delivery = linear_issue(%{blocked_by: :unknown, state: nil, identifier: nil, updated_at: nil, title: "Renamed"})
+
+      assert {observed, :changed} = TicketState.observe(record, delivery, DateTime.add(@observed_at, 60))
+      assert {observed.blockers, observed.phase, observed.issue_identifier, observed.linear_updated_at} == {["ACME-0"], "In Progress", "ACME-1", @linear_at}
+      assert observed.title == "Renamed"
+    end
+
+    test "observation/1 is the update that writes the observed fields" do
+      {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(), @observed_at)
+
+      assert TicketState.observation(record) ==
+               Map.take(record, [:issue_identifier, :phase, :title, :labels, :priority, :assignee, :blockers, :url, :linear_updated_at, :observed_at, :updated_at])
     end
   end
 end

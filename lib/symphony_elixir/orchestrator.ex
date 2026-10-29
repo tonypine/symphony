@@ -49,6 +49,7 @@ defmodule SymphonyElixir.Orchestrator do
     StatusDashboard,
     SubIssueWait,
     TicketEvents,
+    TicketObservation,
     TicketPullRequest,
     TicketSignals,
     TicketState,
@@ -1656,6 +1657,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp apply_due_repo_fetch_result(state, repos, repo_name, result, now_ms) do
     case result do
       {:ok, issues} when is_list(issues) ->
+        TicketObservation.observe_all(repo_name, issues)
+
         state =
           state
           |> put_repo_poll_cache(repo_name, issues, now_ms)

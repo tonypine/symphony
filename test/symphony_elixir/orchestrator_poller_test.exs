@@ -2,7 +2,49 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
   use ExUnit.Case, async: true
 
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.Orchestrator
+  alias SymphonyElixir.{Orchestrator, RunStore}
+
+  test "a poll result writes each polled ticket's record, and an identical poll writes nothing" do
+    repo_key = "observed-#{System.unique_integer([:positive])}"
+    repos = [%{name: repo_key, team: "ACME", labels: []}]
+
+    issue = %Issue{
+      id: "#{repo_key}-issue",
+      identifier: "ACME-71",
+      title: "Observed by the poll",
+      state: "In Progress",
+      labels: ["backend"],
+      priority: 1,
+      assignee_id: "user-1",
+      blocked_by: [%{id: "blocker", identifier: "ACME-70", state: "Todo"}],
+      url: "https://linear.app/acme/issue/ACME-71",
+      updated_at: ~U[2026-10-29 09:00:00Z]
+    }
+
+    state = %Orchestrator.State{poll_interval_ms: 100}
+
+    assert {:ok, %{dispatchable: [%{identifier: "ACME-71"}]}, state} =
+             Orchestrator.poll_candidate_issue_buckets_for_test(state, repos, fn _repo -> {:ok, [issue]} end, 0)
+
+    record = RunStore.get_ticket_state(repo_key, issue.id)
+
+    assert Map.take(record, [:issue_identifier, :phase, :title, :labels, :priority, :assignee, :blockers, :url, :linear_updated_at]) == %{
+             issue_identifier: "ACME-71",
+             phase: "In Progress",
+             title: "Observed by the poll",
+             labels: ["backend"],
+             priority: 1,
+             assignee: "user-1",
+             blockers: ["ACME-70"],
+             url: "https://linear.app/acme/issue/ACME-71",
+             linear_updated_at: ~U[2026-10-29 09:00:00Z]
+           }
+
+    assert {:ok, _buckets, _state} =
+             Orchestrator.poll_candidate_issue_buckets_for_test(state, repos, fn _repo -> {:ok, [issue]} end, 100)
+
+    assert RunStore.get_ticket_state(repo_key, issue.id) == record
+  end
 
   test "staggered repo poll cache routes cross-repo duplicates to conflicts before dispatch" do
     repos = [
