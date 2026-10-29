@@ -34,6 +34,8 @@ defmodule SymphonyElixir.TicketStateTest do
                url: nil,
                linear_updated_at: nil,
                observed_at: nil,
+               observed_from: nil,
+               removed_at: nil,
                updated_at: nil
              }
     end
@@ -140,6 +142,8 @@ defmodule SymphonyElixir.TicketStateTest do
                url: nil,
                linear_updated_at: nil,
                observed_at: nil,
+               observed_from: nil,
+               removed_at: nil,
                updated_at: nil
              }
     end
@@ -780,7 +784,33 @@ defmodule SymphonyElixir.TicketStateTest do
       {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(), @observed_at)
 
       assert TicketState.observation(record) ==
-               Map.take(record, [:issue_identifier, :phase, :title, :labels, :priority, :assignee, :blockers, :url, :linear_updated_at, :observed_at, :updated_at])
+               Map.take(record, [:issue_identifier, :phase, :title, :labels, :priority, :assignee, :blockers, :url, :linear_updated_at, :observed_at, :observed_from, :updated_at])
+    end
+
+    test "a change keeps which read brought it; an unchanged read keeps the last one" do
+      {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(), @observed_at, :webhook)
+      assert record.observed_from == :webhook
+      assert TicketState.observation(record).observed_from == :webhook
+
+      assert {^record, :unchanged} = TicketState.observe(record, linear_issue(), DateTime.add(@observed_at, 60), :poll)
+
+      renamed = linear_issue(%{title: "Renamed", updated_at: DateTime.add(@linear_at, 60)})
+      assert {%{observed_from: :by_id}, :changed} = TicketState.observe(record, renamed, DateTime.add(@observed_at, 60), :by_id)
+      assert {%{observed_from: nil}, :changed} = TicketState.observe(record, renamed, DateTime.add(@observed_at, 60))
+    end
+
+    test "reads an unknown source and a malformed removal time as nil" do
+      record = TicketState.normalize(%{observed_from: :carrier_pigeon, removed_at: "yesterday"})
+      assert {record.observed_from, record.removed_at} == {nil, nil}
+      assert TicketState.normalize(%{observed_from: :watcher}).observed_from == :watcher
+    end
+
+    test "mark_removed/2 sets when the ticket was removed and leaves the rest" do
+      {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(), @observed_at, :poll)
+      removed = TicketState.mark_removed(record, DateTime.add(@observed_at, 30))
+
+      assert {removed.removed_at, removed.updated_at} == {DateTime.add(@observed_at, 30), DateTime.add(@observed_at, 30)}
+      assert Map.drop(removed, [:removed_at, :updated_at]) == Map.drop(record, [:removed_at, :updated_at])
     end
   end
 end

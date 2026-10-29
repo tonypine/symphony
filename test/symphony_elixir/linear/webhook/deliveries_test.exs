@@ -22,6 +22,7 @@ defmodule SymphonyElixir.Linear.Webhook.DeliveriesTest do
              last_rejected_reason: nil,
              counts: [],
              rejected_reasons: [],
+             observations: %{updated: 0, unchanged: 0, stale: 0, unrouted: 0, removed: 0, no_record: 0, error: 0},
              recent: []
            }
   end
@@ -44,9 +45,9 @@ defmodule SymphonyElixir.Linear.Webhook.DeliveriesTest do
            ]
 
     assert summary.recent == [
-             %{type: "Comment", action: "create", identifier: nil, received_at: DateTime.add(@at, 2)},
-             %{type: "Issue", action: "update", identifier: "TP-2", received_at: DateTime.add(@at, 1)},
-             %{type: "Issue", action: "update", identifier: "TP-1", received_at: @at}
+             %{type: "Comment", action: "create", identifier: nil, observation: nil, received_at: DateTime.add(@at, 2)},
+             %{type: "Issue", action: "update", identifier: "TP-2", observation: nil, received_at: DateTime.add(@at, 1)},
+             %{type: "Issue", action: "update", identifier: "TP-1", observation: nil, received_at: @at}
            ]
   end
 
@@ -59,7 +60,19 @@ defmodule SymphonyElixir.Linear.Webhook.DeliveriesTest do
 
     assert summary.total == 5
     assert summary.counts == [%{type: "unknown", action: "unknown", count: 5}]
-    assert Enum.all?(summary.recent, &(&1 == %{type: "unknown", action: "unknown", identifier: nil, received_at: @at}))
+    assert Enum.all?(summary.recent, &(&1 == %{type: "unknown", action: "unknown", identifier: nil, observation: nil, received_at: @at}))
+  end
+
+  test "keeps what observing the delivery did on it, and counts each observation" do
+    assert :ok = Deliveries.accepted(%{"type" => "Issue", "action" => "update", "data" => %{"identifier" => "TP-1"}}, @at, :updated)
+    assert :ok = Deliveries.accepted(%{"type" => "Issue", "action" => "update", "data" => %{"identifier" => "TP-2"}}, @at, :unrouted)
+    assert :ok = Deliveries.accepted(%{"type" => "Issue", "action" => "update", "data" => %{"identifier" => "TP-1"}}, @at, :updated)
+    assert :ok = Deliveries.accepted(%{"type" => "Comment", "action" => "create"}, @at, :not_an_observation)
+
+    summary = Deliveries.summary()
+
+    assert %{updated: 2, unrouted: 1, unchanged: 0, stale: 0, removed: 0, no_record: 0, error: 0} = summary.observations
+    assert Enum.map(summary.recent, & &1.observation) == [nil, :updated, :unrouted, :updated]
   end
 
   test "keeps a long value to its first 64 characters" do

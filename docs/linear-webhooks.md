@@ -11,9 +11,10 @@ linear:
     secret: $SYMPHONY_LINEAR_WEBHOOK_SECRET
 ```
 
-Symphony receives the deliveries at `POST /api/v1/linear/webhook` and, for now, only counts them
-(see [What arrived](#what-arrived)): nothing acts on a delivery yet, and Symphony still learns of
-Linear changes by polling, as before.
+Symphony receives the deliveries at `POST /api/v1/linear/webhook`, writes what an `Issue` delivery
+says into the ticket's record and counts each one (see [What arrived](#what-arrived)). Nothing
+dispatches from the record yet: Symphony still acts on what it polls, as before, and measures how
+often the webhook brought a change before the poll did.
 
 ## How a delivery is verified
 
@@ -72,8 +73,24 @@ through the same relay as GitHub's; the steps below use the Tailscale Funnel rel
 the check above (logged with its reason only, never its payload), and `200` for an accepted one:
 Linear counts any other status as a failed delivery, retries it after one minute, one hour and
 six hours, and may turn the webhook off after repeated failures.
-An accepted delivery is read only for its `type`, `action` and `data.identifier`, counted, and
-dropped: Symphony makes no Linear request for it and writes nothing.
+An accepted delivery makes no Linear request. Within the request, and bounded to two seconds (well
+under the five Linear waits for the answer), Symphony observes it into the ticket's record
+(`SymphonyElixir.TicketObservation.observe_delivery/2`):
+
+- An `Issue` create or update is read as the poll reads a ticket and written, as a poll writes it
+  and with `observed_from: webhook`, into the record the reads already keep of the ticket. A
+  delivery only updates a record a read already made: the poll filters each repo in Linear (a
+  project by its slug, `assignee: me`), which a delivery's own fields can't always match, so a
+  ticket no repo has a record of yet waits for the next poll to file it. Its observation is
+  `updated`, `unchanged`, `stale` (older than the record's `updatedAt`: dropped) or `unrouted`
+  (nothing is written: no repo has a record of the ticket yet, or several repos do, a ticket the
+  poll counts as a conflict).
+- An `Issue` remove sets the record's `removed_at` in every repo that has one (`removed`), or finds
+  none (`no_record`).
+- A `Comment` or any other delivery is only counted, with no observation.
+
+A store refusal, a crash or a timeout is logged and counted as `error`; the delivery is still
+answered `200`.
 
 `GET /api/v1/state` shows the counts under `linear_webhooks`:
 
@@ -90,7 +107,9 @@ dropped: Symphony makes no Linear request for it and writes nothing.
   "last_rejected_reason": "bad_signature",
   "counts": [{"type": "Issue", "action": "update", "count": 10}, {"type": "Comment", "action": "create", "count": 2}],
   "rejected_reasons": [{"reason": "bad_signature", "count": 1}],
-  "recent": [{"type": "Issue", "action": "update", "identifier": "TP-7", "received_at": "2026-10-29T07:40:02Z"}]
+  "observations": {"updated": 9, "unchanged": 1, "stale": 0, "unrouted": 0, "removed": 0, "no_record": 0, "error": 0},
+  "recent": [{"type": "Issue", "action": "update", "identifier": "TP-7", "observation": "updated", "received_at": "2026-10-29T07:40:02Z"}],
+  "compare": {"webhook_first": 9, "poll_first": 0, "poll_first_recent": []}
 }
 ```
 
@@ -99,6 +118,23 @@ line says off, on with no deliveries yet, how many arrived and how long ago the 
 in the warning colour, how many were refused and why the last one was. Against a Symphony without
 the block it says the feature is not available.
 
-`recent` holds the last ten accepted deliveries, newest first; a delivery without a `type` or an
-`action` counts as `unknown`. The counts live in memory and start again from zero when Symphony
-restarts.
+`recent` holds the last ten accepted deliveries, newest first, each with its `observation` (null
+when it wasn't observed); a delivery without a `type` or an `action` counts as `unknown`.
+`observations` counts each observation.
+
+`compare` measures the webhook against Symphony's other reads of Linear (the poll, the by-id reads
+and the PR and CI watcher's read). A read that finds nothing to change in a record whose last change
+came from a webhook counts once under `webhook_first`. A read that changes a field the webhook
+carries (the state, identifier, title, labels, priority, assignee or URL) of an existing record, while
+`enabled` is on, counts under `poll_first`; `poll_first_recent` keeps the last ten, newest first, with
+the ticket, the fields, the read and when:
+
+```json
+"compare": {
+  "webhook_first": 41,
+  "poll_first": 1,
+  "poll_first_recent": [{"identifier": "TP-7", "fields": ["priority"], "source": "poll", "at": "2026-10-29T07:42:10Z"}]
+}
+```
+
+The counts live in memory and start again from zero when Symphony restarts.

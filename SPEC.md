@@ -4446,7 +4446,13 @@ Orchestrator behavior on tracker errors:
 - Webhook deliveries: with `linear.webhooks.enabled`, accept Linear's workspace webhook at
   `POST /api/v1/linear/webhook` (`404` while off, `401` when the `Linear-Signature` check fails,
   `200` otherwise, as Linear requires) and count each delivery by `type` and `action`, in memory,
-  in the status snapshot (`linear_webhooks` in `/api/v1/state`). Nothing acts on a delivery yet.
+  in the status snapshot (`linear_webhooks` in `/api/v1/state`). An `Issue` create or update is
+  written into the record the reads already keep of the ticket, as a poll writes it (older than the
+  record: dropped as stale; no repo has a record of it yet, or several do: unrouted, nothing
+  written, and the next poll files a new ticket), and an
+  `Issue` remove marks the record removed, within the request and bounded in time; a failure is
+  logged and counted and the answer stays `200`. Every other read of Linear counts how often the webhook brought a
+  change first (`compare` in `linear_webhooks`). Nothing dispatches from the record yet.
 - Request budget: the CI and PR review pollers each read their watched states once per poll for
   every repository together, not once per repository; the PR review poller takes an issue it needs
   from that read before asking Linear for it. With `assignee: me`, the viewer behind the API key is
@@ -5042,7 +5048,9 @@ Minimum endpoints:
         "last_rejected_reason": null,
         "counts": [{"type": "Issue", "action": "update", "count": 3}],
         "rejected_reasons": [],
-        "recent": [{"type": "Issue", "action": "update", "identifier": "MT-649", "received_at": "2026-02-24T20:14:59Z"}]
+        "observations": {"updated": 3, "unchanged": 0, "stale": 0, "unrouted": 0, "removed": 0, "no_record": 0, "error": 0},
+        "recent": [{"type": "Issue", "action": "update", "identifier": "MT-649", "observation": "updated", "received_at": "2026-02-24T20:14:59Z"}],
+        "compare": {"webhook_first": 3, "poll_first": 0, "poll_first_recent": []}
       },
       "orchestrator": {
         "message_queue_len": 0,

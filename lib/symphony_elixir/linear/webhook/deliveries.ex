@@ -4,8 +4,10 @@ defmodule SymphonyElixir.Linear.Webhook.Deliveries do
   operator can watch them arrive before anything acts on them.
 
   An accepted delivery is counted by its `type` and `action` (`unknown` when the payload has none),
-  and the last ten are kept with the ticket identifier the payload names. A rejected one is counted
-  by its reason. The counts live in a public ETS table owned by this server, so counting never
+  and by what observing it into the ticket's record did
+  (`SymphonyElixir.TicketObservation.observe_delivery/2`; none for a delivery that isn't observed),
+  and the last ten are kept with the ticket identifier the payload names and that observation. A
+  rejected one is counted by its reason. The counts live in a public ETS table owned by this server, so counting never
   waits on a process; they are diagnostic and start again from zero when Symphony restarts.
   Without the server (some tests), counting is a no-op and the summary is empty.
   """
@@ -15,9 +17,19 @@ defmodule SymphonyElixir.Linear.Webhook.Deliveries do
   @table __MODULE__
   @recent_limit 10
   @max_value_length 64
+  @observations [:updated, :unchanged, :stale, :unrouted, :removed, :no_record, :error]
+
+  @typedoc "What observing a delivery into the ticket's record did, as `SymphonyElixir.TicketObservation.observe_delivery/2` says."
+  @type observation :: :updated | :unchanged | :stale | :unrouted | :removed | :no_record | :error
 
   @typedoc "One accepted delivery, as the summary lists it."
-  @type delivery :: %{type: String.t(), action: String.t(), identifier: String.t() | nil, received_at: DateTime.t()}
+  @type delivery :: %{
+          type: String.t(),
+          action: String.t(),
+          identifier: String.t() | nil,
+          observation: observation() | nil,
+          received_at: DateTime.t()
+        }
 
   @type summary :: %{
           total: non_neg_integer(),
@@ -29,6 +41,7 @@ defmodule SymphonyElixir.Linear.Webhook.Deliveries do
           last_rejected_reason: atom() | nil,
           counts: [%{type: String.t(), action: String.t(), count: pos_integer()}],
           rejected_reasons: [%{reason: atom(), count: pos_integer()}],
+          observations: %{observation() => non_neg_integer()},
           recent: [delivery()]
         }
 
@@ -44,18 +57,23 @@ defmodule SymphonyElixir.Linear.Webhook.Deliveries do
   end
 
   @doc """
-  Counts one accepted delivery from its decoded `payload`. Only `type`, `action` and
-  `data.identifier` are read; a payload without them is counted as `unknown`.
+  Counts one accepted delivery from its decoded `payload`, with what observing it did
+  (`observation`, nil when it wasn't observed). Only `type`, `action` and `data.identifier` are
+  read; a payload without them is counted as `unknown`.
   """
-  @spec accepted(term(), DateTime.t()) :: :ok
-  def accepted(payload, received_at \\ DateTime.utc_now()) do
+  @spec accepted(term(), DateTime.t(), observation() | nil) :: :ok
+  def accepted(payload, received_at \\ DateTime.utc_now(), observation \\ nil) do
+    observation = if observation in @observations, do: observation
+
     delivery = %{
       type: text(field(payload, "type")) || "unknown",
       action: text(field(payload, "action")) || "unknown",
       identifier: payload |> field("data") |> field("identifier") |> text(),
+      observation: observation,
       received_at: received_at
     }
 
+    if observation, do: :ets.update_counter(@table, {:observation, observation}, 1, {{:observation, observation}, 0})
     :ets.update_counter(@table, :total, 1, {:total, 0})
     :ets.update_counter(@table, {:count, delivery.type, delivery.action}, 1, {{:count, delivery.type, delivery.action}, 0})
     seq = :ets.update_counter(@table, :seq, 1, {:seq, 0})
@@ -95,6 +113,7 @@ defmodule SymphonyElixir.Linear.Webhook.Deliveries do
       last_rejected_reason: Map.get(last_rejected, :reason),
       counts: counts(entries),
       rejected_reasons: rejected_reasons(entries),
+      observations: Map.new(@observations, &{&1, lookup(entries, {:observation, &1}, 0)}),
       recent: recent(entries, seq)
     }
   rescue
@@ -121,6 +140,7 @@ defmodule SymphonyElixir.Linear.Webhook.Deliveries do
       last_rejected_reason: nil,
       counts: [],
       rejected_reasons: [],
+      observations: Map.new(@observations, &{&1, 0}),
       recent: []
     }
   end
