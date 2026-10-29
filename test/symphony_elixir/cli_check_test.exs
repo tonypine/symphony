@@ -7,6 +7,7 @@ defmodule SymphonyElixir.CLICheckTest do
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Cache
   alias SymphonyElixir.OpenRouter.{Models, Stub}
+  alias SymphonyElixir.Secret
   alias SymphonyElixir.Workflow
 
   @secret "lin_api_check_secret_value"
@@ -75,6 +76,24 @@ defmodule SymphonyElixir.CLICheckTest do
 
     assert {{:error, message}, ""} = check(["--config", path])
     assert message =~ "forced_max"
+  end
+
+  test "loads linear.webhooks turned on, its secret resolved from the environment, and refuses it without a secret", %{root: root} do
+    env = "SYMPHONY_LINEAR_WEBHOOK_SECRET"
+    previous = System.get_env(env)
+    on_exit(fn -> if previous, do: System.put_env(env, previous), else: System.delete_env(env) end)
+    System.put_env(env, "linear-signing-secret")
+
+    path = write_symphony!(root, valid_symphony(root) <> "linear:\n  webhooks:\n    enabled: true\n    secret: $#{env}\n")
+
+    assert check(["--config", path]) == {{:halt, 0}, "Config OK: #{path}\n"}
+    assert %{enabled: true, secret: secret} = Config.linear_webhook_settings()
+    assert Secret.unwrap(secret) == "linear-signing-secret"
+
+    path = write_symphony!(root, valid_symphony(root) <> "linear:\n  webhooks:\n    enabled: true\n")
+
+    assert {{:error, message}, ""} = check(["--config", path])
+    assert message =~ "linear.webhooks.secret is required when linear.webhooks.enabled is true"
   end
 
   describe "a workspace.source repo" do
