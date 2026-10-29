@@ -207,6 +207,31 @@ defmodule SymphonyElixir.SelfHealTest do
     end
   end
 
+  describe "dev_server_ruled_out/1" do
+    @dev_server %{"start_cmd" => "bin/hub", "health_check_url" => "http://localhost:4000/healthz"}
+    @own_server_macos %{"macos_app" => %{"build" => "make app", "app" => "build/Hub.app", "dev_server" => true}}
+
+    defp repo_settings(verification, playbooks \\ %{}) do
+      assert {:ok, settings} =
+               Schema.parse(%{"tracker" => %{"kind" => "memory"}, "verification" => verification, "auto_review" => %{"playbooks" => playbooks}})
+
+      settings
+    end
+
+    test "a repo that sets up a dev server but keeps it switched off has ruled it out, with the Mac app's pass named when it runs the server" do
+      assert SelfHeal.dev_server_ruled_out(repo_settings(%{"enabled" => false, "dev_server" => @dev_server}, @own_server_macos)) =~
+               "runs its own server only beside the app on the QA host"
+
+      assert SelfHeal.dev_server_ruled_out(repo_settings(%{"enabled" => false, "dev_server" => @dev_server})) ==
+               "this repo sets up a dev server but keeps it switched off on the Symphony host, so no QA pass here has the server"
+    end
+
+    test "a repo with no dev server, or with verification on, has ruled nothing out: the repair stays open to it" do
+      assert SelfHeal.dev_server_ruled_out(repo_settings(%{"enabled" => false})) == nil
+      assert SelfHeal.dev_server_ruled_out(repo_settings(%{"enabled" => true, "dev_server" => @dev_server}, @own_server_macos)) == nil
+    end
+  end
+
   describe "signature/1" do
     test "normalizes the outcome's cause" do
       assert SelfHeal.signature(%{cause: {:dev_server_exit, 3}}) == "{:dev_server_exit, 3}"

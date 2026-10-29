@@ -39,7 +39,9 @@ defmodule SymphonyElixir.SelfHeal do
   The QA state sends only the blocks a fix can repair (`SymphonyElixir.QaVerification`): the ones
   the QA tools raise themselves (a refused or unreachable QA host, a tool it lacks, its host-port
   tunnel, a dev server that fails), the `needs_person` access cases, and the QA agent's structured
-  `covered_by` and `needs_dev_server` answers. A QA run's own omission (an `inconclusive` pass) or
+  `covered_by` and `needs_dev_server` answers. A `needs_dev_server` answer on a repo whose setup
+  rules a dev server out (`dev_server_ruled_out/1`) is never sent: the steps it blocked are
+  unprovable on that repo's QA pass, not a repair to file. A QA run's own omission (an `inconclusive` pass) or
   any other block names nothing broken, so it goes to a person instead of a fix ticket here.
 
   Every effect is injectable: `opts[:store]` (the run store), `opts[:tracker]` and `opts[:fixer]`
@@ -48,9 +50,11 @@ defmodule SymphonyElixir.SelfHeal do
 
   require Logger
 
-  alias SymphonyElixir.{Config, DecisionRequest, Hold, RunStore, TicketState}
+  alias SymphonyElixir.{Config, DecisionRequest, Hold, RunStore, TicketState, Verification}
+  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.QaAgent.Selection
 
   @default_component "qa_environment"
   @ci_prefix "ci:"
@@ -84,6 +88,37 @@ defmodule SymphonyElixir.SelfHeal do
   def component(%{needs_dev_server: true}), do: @dev_server
   def component(outcome) when is_map(outcome), do: outcome |> cause() |> component_for()
   def component(_outcome), do: @default_component
+
+  @doc """
+  Why the repo's own setup rules a dev server out of a QA pass on this host, or `nil` when it does
+  not: the `dev_server` repair (turn `verification.enabled` on, set `verification.dev_server`)
+  would then run against a decision the repo already made. A repo that configures
+  `verification.dev_server` but keeps `verification.enabled` off made it: its server exists, and it
+  must not start on this host, where every agent run would start it inside its sandbox. When a
+  `macos_app` playbook with `dev_server: true` is enabled, that pass runs the server beside the app
+  on the QA host, and the reason says so. A repo without `verification.dev_server`, or with
+  verification on, gets the repair as before.
+  """
+  @spec dev_server_ruled_out(Schema.t()) :: String.t() | nil
+  def dev_server_ruled_out(%Schema{} = settings) do
+    cond do
+      Verification.enabled?(settings) or not Verification.dev_server_command_configured?(settings) ->
+        nil
+
+      own_server_playbook?(settings) ->
+        "this repo runs its own server only beside the app on the QA host, in the Mac app's QA pass, " <>
+          "and keeps its dev server switched off on the Symphony host, so no other pass has the server"
+
+      true ->
+        "this repo sets up a dev server but keeps it switched off on the Symphony host, so no QA pass here has the server"
+    end
+  end
+
+  defp own_server_playbook?(settings) do
+    settings.auto_review
+    |> Selection.playbooks(Verification.selection_opts(settings))
+    |> Enum.any?(&(&1.kind == "macos_app" and Map.get(&1, :dev_server) == true))
+  end
 
   @doc """
   The repo key that owns the fix for `component`, per the design's scope rule: the affected repo

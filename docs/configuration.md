@@ -1500,7 +1500,22 @@ run store, which the dashboard's run history shows. The `QA` state applies the v
 | `pass` with `scope: none` | the change has nothing on screen to judge: neither the diff nor the ticket names a walkthrough step or a screen, by the agent's answer or by the QA policy (below) | `Merging` with the reason in the report, but only when the pass ran `qa_build`, `qa_launch_app` and a `qa_check_app` that found the app healthy, so the merge still waits on the app starting; without them it is `inconclusive` |
 | `fail` | a step shows a defect in the change | `Rework` |
 | `inconclusive` | the QA run itself fell short: a `macos_app` pass that judged screens but never ran the wide pass, or a `scope: none` pass that never started the app | QA runs once more on the same head, then the ticket pauses in `QA` on a Needs Decision hold. Nothing in the environment is broken, so no fix ticket is filed |
-| `blocked` | the pass could not test the change | retried once on the same head, then: the self-heal lane when the QA tools raised the block themselves (`qa_worker_*`, `qa_host_missing_tool`, `qa_host_tool_check_failed`, `qa_host_tunnel_failed`, `qa_dev_server_failed`), when only a person can clear it (`needs_person`, an access hold), or when the agent named the open ticket that covers it (`covered_by`) or the project's missing dev server (`needs_dev_server`); any other block (the agent's own account, a crash, the token limit, a check that never finished) pauses the ticket in `QA` on a Needs Decision hold instead of filing a fix ticket for a problem nothing names |
+| `blocked` | the pass could not test the change | retried once on the same head, then: the self-heal lane when the QA tools raised the block themselves (`qa_worker_*`, `qa_host_missing_tool`, `qa_host_tool_check_failed`, `qa_host_tunnel_failed`, `qa_dev_server_failed`), when only a person can clear it (`needs_person`, an access hold), or when the agent named the open ticket that covers it (`covered_by`) or the project's missing dev server (`needs_dev_server`, unless the repository rules a dev server out: below); a block whose only open steps are `unprovable` (below) asks a person at once; any other block (the agent's own account, a crash, the token limit, a check that never finished) pauses the ticket in `QA` on a Needs Decision hold instead of filing a fix ticket for a problem nothing names |
+
+**Steps QA cannot prove here.** A step can need what no playbook of the pass gives: the running app
+on a pass the diff did not select the app's playbook for (a server-only fix whose walkthrough
+watches the Mac app), or the project's own server on a repository that rules a dev server out
+(below). Such a step can neither pass nor be repaired, so the agent marks it `unprovable` with the
+reason, and the report lists it as **unprovable here**. The prompt names the enabled playbooks the
+diff did not select, so the agent knows which steps fall there; a `qa:<kind>` label on the ticket
+selects the playbook instead. The pass is then decided by the other steps, the pre-checks and CI:
+
+| The other steps | The pass |
+| --- | --- |
+| one is `blocked` | `blocked`, as before |
+| one fails | `fail` → `Rework` |
+| one passes, or a pre-check passed | `pass` → `Merging`, the report naming each unprovable step and its reason |
+| none is left | `blocked` with no retry and no fix ticket: the ticket pauses in `QA` on the "QA could not finish" Needs Decision hold at once, with its three options and **Merge without a QA result** recommended |
 
 The QA policy gives a pass `scope: none` up front when a `macos_app` pass is selected (by a
 `qa:macos_app` label) although no changed path matches any selected playbook's `paths`, and the
@@ -1566,6 +1581,15 @@ server cannot build or start, the steps that need it are `blocked`, never judged
 the agent wrote. When they are blocked because the pass had no dev server at all, the agent says
 so (`needs_dev_server`), and the self-heal fix ticket lands in the project's own repository, asking
 it to set `verification.dev_server` and `dev_server: true` on the playbook.
+
+A repository that sets `verification.dev_server` but keeps `verification.enabled: false` has ruled
+that repair out: its server exists and must not start on the Symphony host, where every agent run
+would start it inside its sandbox (a hub whose server only runs beside its Mac app on the QA VM,
+through `macos_app` with `dev_server: true`, say). On such a repository a `needs_dev_server` block
+files no fix ticket and sets no hold: the steps it blocked become `unprovable` with the repository's
+reason ("this repo runs its own server only beside the app on the QA host…"), and the pass is
+decided by the rest, as above. A repository without `verification.dev_server`, or with verification
+on, still gets the fix ticket.
 
 A repository's `WORKFLOW.md` can set `auto_review.playbooks` too, for settings that differ per
 repository, such as a build command or trigger paths. It is the only `auto_review` key allowed
@@ -2446,6 +2470,11 @@ QA `web` playbook and other `dev_server: true` kinds, whose server runs on this 
 `enabled: false` no agent run starts a dev server or takes a port. A `macos_app` QA pass with
 `dev_server: true` reads only `dev_server`, whatever `enabled` says: its server runs on the QA VM,
 never on this host (see [macOS app QA](#macos-app-qa)).
+
+`dev_server` set with `enabled: false` is a decision Symphony reads: the server must not start on
+this host. QA's self-heal lane then never files the fix ticket that would turn `enabled` on; a QA
+step that needed the server on a pass without one is `unprovable` there, with that reason, and the
+pass is decided by its other steps (see [QA passes](#qa-passes)).
 
 The pool hands out the first port in `range` that no other run holds and nothing on the host already
 listens on (on `127.0.0.1`), so a port another program took is skipped rather than failing the run.
