@@ -187,6 +187,22 @@ defmodule SymphonyElixir.PrDecisionTest do
       assert action.args.options == ["Allow the change", "Drop the change in Rework"]
     end
 
+    test "TP-1271: protected paths red beside a cancelled check dispatches the reviewer, never CI Fix or a rerun" do
+      # Fetch reads the head `red_kind: :human_only, past_human_only: :green`; before Merging the
+      # watcher reads it as its other checks, so the reviewer runs whatever was rerun or spent.
+      for rerun_done <- [false, true], red_attempts <- [0, 1] do
+        facts = [phase: :code_review, red_kind: :human_only, failing_check: "protected paths", rerun_done: rerun_done]
+        facts = [red_attempts: red_attempts] ++ facts
+        reason = "The head is green, so the reviewer runs"
+
+        assert %Action{rule: "R27", kind: :dispatch, args: %{phase: :code_review}, reason: ^reason} =
+                 decide([ci: :green] ++ facts)
+
+        # Still red on it (in Merging, before an unlock): a person decides, never CI Fix or a rerun.
+        assert %Action{rule: "R18", kind: :decision} = decide([ci: :red] ++ facts)
+      end
+    end
+
     test "G11: a draft waits on a person, a changed base asks one, a deleted branch counts as closed" do
       assert %Action{rule: "R10", kind: :wait, owner: :person, clears_when: "the PR is marked ready for review"} = decide(phase: :merging, pr: :draft)
       assert %Action{rule: "R7", kind: :decision} = decide(phase: :qa, base: :changed)
