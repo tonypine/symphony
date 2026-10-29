@@ -26,6 +26,8 @@ defmodule SymphonyElixirWeb.Presenter do
 
   alias SymphonyElixir.Codex.MessageHumanizer
   alias SymphonyElixir.GitHub.WebhookSetup.Cache, as: WebhookSetupCache
+  alias SymphonyElixir.Linear.Webhook, as: LinearWebhook
+  alias SymphonyElixir.Linear.Webhook.Deliveries, as: LinearWebhookDeliveries
   alias SymphonyElixir.Repo.Status, as: RepoStatus
   alias SymphonyElixir.TicketEvents.Event
   alias SymphonyElixirWeb.WatchPayload
@@ -111,6 +113,7 @@ defmodule SymphonyElixirWeb.Presenter do
           claimed: Map.get(snapshot, :claimed, []),
           rate_limits: snapshot.rate_limits,
           linear_usage: normalize_linear_usage(get_in(snapshot, [:polling, :linear, :usage])),
+          linear_webhooks: linear_webhooks_payload(),
           orchestrator: Orchestrator.diagnostics(orchestrator)
         }
 
@@ -617,6 +620,27 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp normalize_linear_usage(_usage), do: %{window_ms: 3_600_000, total: 0, callers: [], queries: []}
+
+  # The Linear webhook's settings and the deliveries counted since Symphony started.
+  defp linear_webhooks_payload do
+    settings = LinearWebhook.settings()
+    summary = LinearWebhookDeliveries.summary()
+
+    %{
+      enabled: settings.enabled,
+      secret_configured: LinearWebhook.secret(settings) != nil,
+      total: summary.total,
+      rejected: summary.rejected,
+      last_at: iso8601(summary.last_at),
+      last_type: summary.last_type,
+      last_action: summary.last_action,
+      last_rejected_at: iso8601(summary.last_rejected_at),
+      last_rejected_reason: summary.last_rejected_reason,
+      counts: summary.counts,
+      rejected_reasons: summary.rejected_reasons,
+      recent: Enum.map(summary.recent, &%{&1 | received_at: iso8601(&1.received_at)})
+    }
+  end
 
   defp normalize_poller_status(%{} = status) do
     %{

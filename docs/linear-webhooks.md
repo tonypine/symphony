@@ -11,9 +11,9 @@ linear:
     secret: $SYMPHONY_LINEAR_WEBHOOK_SECRET
 ```
 
-Symphony does not listen for the deliveries yet: the endpoint, `POST /api/v1/linear/webhook`,
-comes with the next step of the Symphony-only reads epic, and at first it only counts what
-arrives. Until then Symphony learns of Linear changes by polling, as before.
+Symphony receives the deliveries at `POST /api/v1/linear/webhook` and, for now, only counts them
+(see [What arrived](#what-arrived)): nothing acts on a delivery yet, and Symphony still learns of
+Linear changes by polling, as before.
 
 ## How a delivery is verified
 
@@ -37,7 +37,7 @@ never stops Symphony from starting, and every delivery is then refused as `missi
 
 ## Create the webhook
 
-Do this once the endpoint has landed. Symphony listens on `127.0.0.1`, so the deliveries reach it
+Symphony listens on `127.0.0.1`, so the deliveries reach it
 through the same relay as GitHub's; the steps below use the Tailscale Funnel relay.
 
 1. Add the Linear path to the funnel, which serves it on your relay's public `ts.net` URL:
@@ -63,3 +63,33 @@ through the same relay as GitHub's; the steps below use the Tailscale Funnel rel
    ```
 
    Run `symphony check`: it prints `Config OK` once the settings load.
+
+## What arrived
+
+`POST /api/v1/linear/webhook` answers `404` while `enabled` is off, `401` for a delivery that fails
+the check above (logged with its reason only, never its payload), and `202` for an accepted one.
+An accepted delivery is read only for its `type`, `action` and `data.identifier`, counted, and
+dropped: Symphony makes no Linear request for it and writes nothing.
+
+`GET /api/v1/state` shows the counts under `linear_webhooks`:
+
+```json
+"linear_webhooks": {
+  "enabled": true,
+  "secret_configured": true,
+  "total": 12,
+  "rejected": 1,
+  "last_at": "2026-10-29T07:40:02Z",
+  "last_type": "Issue",
+  "last_action": "update",
+  "last_rejected_at": "2026-10-29T07:31:10Z",
+  "last_rejected_reason": "bad_signature",
+  "counts": [{"type": "Issue", "action": "update", "count": 10}, {"type": "Comment", "action": "create", "count": 2}],
+  "rejected_reasons": [{"reason": "bad_signature", "count": 1}],
+  "recent": [{"type": "Issue", "action": "update", "identifier": "TP-7", "received_at": "2026-10-29T07:40:02Z"}]
+}
+```
+
+`recent` holds the last ten accepted deliveries, newest first; a delivery without a `type` or an
+`action` counts as `unknown`. The counts live in memory and start again from zero when Symphony
+restarts.

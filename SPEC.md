@@ -4418,6 +4418,10 @@ Orchestrator behavior on tracker errors:
   poller, post-PR transition, `agent:<identifier>` for an agent run and its tools) over
   a rolling hour, and by query (the GraphQL operation name, `unnamed` without one), and show the
   counts in the status snapshot (`linear_usage` in `/api/v1/state`).
+- Webhook deliveries: with `linear.webhooks.enabled`, accept Linear's workspace webhook at
+  `POST /api/v1/linear/webhook` (`404` while off, `401` when the `Linear-Signature` check fails,
+  `202` otherwise) and count each delivery by `type` and `action`, in memory, in the status snapshot
+  (`linear_webhooks` in `/api/v1/state`). Nothing acts on a delivery yet.
 - Request budget: the CI and PR review pollers each read their watched states once per poll for
   every repository together, not once per repository; the PR review poller takes an issue it needs
   from that read before asking Linear for it. With `assignee: me`, the viewer behind the API key is
@@ -5000,6 +5004,20 @@ Minimum endpoints:
           {"query": "SymphonyLinearIssuesById", "requests": 82},
           {"query": "SymphonyAgentCurrentIssue", "requests": 70}
         ]
+      },
+      "linear_webhooks": {
+        "enabled": true,
+        "secret_configured": true,
+        "total": 3,
+        "rejected": 0,
+        "last_at": "2026-02-24T20:14:59Z",
+        "last_type": "Issue",
+        "last_action": "update",
+        "last_rejected_at": null,
+        "last_rejected_reason": null,
+        "counts": [{"type": "Issue", "action": "update", "count": 3}],
+        "rejected_reasons": [],
+        "recent": [{"type": "Issue", "action": "update", "identifier": "MT-649", "received_at": "2026-02-24T20:14:59Z"}]
       },
       "orchestrator": {
         "message_queue_len": 0,

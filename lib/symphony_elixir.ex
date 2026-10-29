@@ -82,6 +82,7 @@ defmodule SymphonyElixir.Application do
           SymphonyElixir.AuditLog.Writer,
           SymphonyElixir.DirectorMoves,
           SymphonyElixir.Linear.Usage,
+          SymphonyElixir.Linear.Webhook.Deliveries,
           SymphonyElixir.Repo.FetchLog,
           SymphonyElixir.Routing.PollLog,
           SymphonyElixir.Hold.Drift,
