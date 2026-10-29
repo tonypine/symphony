@@ -369,8 +369,11 @@ Each ticket also has a state record per `repo_key` and issue ID (`TicketState`),
 these Linear reads of its issues: the repo poll, the by-id reads each poll tick makes of the running,
 watched, forced and operator-stopped tickets, the dispatch prefetch and the revalidation before a
 start, and each PR watcher's read of the watched states, for every repo that read returns. A by-id
-read carries no repo key, so each issue it returns is written under the repo it routes to, and one no
-repo takes is skipped. Observing adds no request to Linear. For every issue a read returns, the
+read carries no repo key, so each issue it returns is written under the repo that already holds the
+ticket's record, as a webhook delivery is: the poll filters each repo in Linear (a project by its slug,
+`assignee: me`), which the issue's own fields can't always match. A ticket no repo has a record of yet
+is skipped and counted unrouted, as the poll creates its record, and so is one held in several repos,
+as the poll counts it a conflict. Observing adds no request to Linear. For every issue a read returns, the
 observation writes into the record the ticket's
 Linear state as its `phase`, its `issue_identifier`, `title`, `labels`, `priority`, `assignee` (the
 assignee's ID), `blockers` (the identifiers of its blockers outside the repo's terminal states), `url`

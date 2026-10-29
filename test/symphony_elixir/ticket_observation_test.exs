@@ -83,7 +83,7 @@ defmodule SymphonyElixir.TicketObservationTest do
     assert {:ok, :stale} = TicketObservation.observe(repo_key, older, now: DateTime.add(@now, 60))
 
     assert RunStore.get_ticket_state(repo_key, "issue-observed") == stored
-    assert counts() == %{updated: 1, unchanged: 0, stale: 1, errors: 0}
+    assert counts() == %{updated: 1, unchanged: 0, stale: 1, unrouted: 0, errors: 0}
   end
 
   test "blockers keep the open ones: the given terminal states, else the repo's", %{repo_key: repo_key} do
@@ -128,7 +128,7 @@ defmodule SymphonyElixir.TicketObservationTest do
     assert log =~ "Ticket observation failed for issue_id= issue_identifier=ACME-9 repo_key=#{repo_key}: :invalid_issue"
     assert log =~ "issue_id= issue_identifier= repo_key=#{repo_key}"
     assert RunStore.get_ticket_state(repo_key, "issue-observed-2").issue_identifier == "ACME-8"
-    assert counts() == %{updated: 2, unchanged: 0, stale: 0, errors: 2}
+    assert counts() == %{updated: 2, unchanged: 0, stale: 0, unrouted: 0, errors: 2}
   end
 
   test "observe_routed writes each issue under the repo it routes to and skips the ones no repo takes", %{repo_key: repo_key} do
@@ -170,6 +170,7 @@ defmodule SymphonyElixir.TicketObservationTest do
                updated: 0,
                unchanged: 0,
                stale: 0,
+               unrouted: 0,
                errors: 0,
                compare: %{webhook_first: 0, poll_first: 0, poll_first_recent: []}
              }
@@ -383,6 +384,68 @@ defmodule SymphonyElixir.TicketObservationTest do
 
       assert log =~ "Linear webhook observation failed for issue_id=issue-observed: {:exit, {%RuntimeError{message: \"boom\"}"
       assert log =~ "Linear webhook observation failed for issue_id=issue-observed: :timeout"
+      assert counts().errors == 2
+    end
+  end
+
+  describe "observe_held/2" do
+    defp by_id(attrs) do
+      linear_issue(Map.merge(%{project: @project, team: %{key: "Test", name: "Test"}, blocked_by: []}, attrs))
+    end
+
+    test "a by-id read updates the record a project slug's poll keeps, as a by-id read, and nothing under the team default" do
+      poll!(@project_repo, %{project: @project})
+
+      edited = by_id(%{priority: 1, updated_at: DateTime.add(@linear_at, 60)})
+      opts = [now: DateTime.add(@now, 60), source: :by_id, repos: @slug_routes, terminal_states: []]
+
+      assert TicketObservation.observe_held([edited], opts) ==
+               %{updated: 1, unchanged: 0, stale: 0, unrouted: 0, errors: 0}
+
+      record = RunStore.get_ticket_state(@project_repo, "issue-observed")
+      assert %{priority: 1, observed_from: :by_id, repo_key: @project_repo} = record
+      assert record.observed_at == DateTime.add(@now, 60)
+      assert RunStore.get_ticket_state(@default_repo, "issue-observed") == nil
+
+      stale = by_id(%{priority: 4, updated_at: @linear_at})
+
+      assert TicketObservation.observe_held([edited, stale], opts) ==
+               %{updated: 0, unchanged: 1, stale: 1, unrouted: 0, errors: 0}
+    end
+
+    test "the configured repos are the default", %{repo_key: repo_key} do
+      assert TicketObservation.observe_held([]) == %{updated: 0, unchanged: 0, stale: 0, unrouted: 0, errors: 0}
+      poll!(repo_key)
+
+      edited = linear_issue(%{priority: 1, updated_at: DateTime.add(@linear_at, 60)})
+      assert %{updated: 1} = TicketObservation.observe_held([edited], now: DateTime.add(@now, 60), source: :by_id)
+      assert %{priority: 1, observed_from: :by_id} = RunStore.get_ticket_state(repo_key, "issue-observed")
+    end
+
+    test "a ticket no repo has a record of is skipped and counted, whatever its fields match" do
+      assert TicketObservation.observe_held([by_id(%{}), by_id(%{project: nil})], now: @now, repos: @slug_routes) ==
+               %{updated: 0, unchanged: 0, stale: 0, unrouted: 2, errors: 0}
+
+      assert Enum.map([@default_repo, @project_repo], &RunStore.get_ticket_state(&1, "issue-observed")) == [nil, nil]
+      assert counts().unrouted == 2
+    end
+
+    test "a ticket held in several repos is skipped, as the poll counts it a conflict, and both records are left" do
+      held = Enum.map([@default_repo, @project_repo], &poll!/1)
+
+      edited = by_id(%{priority: 1, updated_at: DateTime.add(@linear_at, 60)})
+      assert %{unrouted: 1, updated: 0} = TicketObservation.observe_held([edited], now: DateTime.add(@now, 60), repos: @slug_routes)
+      assert Enum.map([@default_repo, @project_repo], &RunStore.get_ticket_state(&1, "issue-observed")) == held
+    end
+
+    test "a store refusal is logged and counted under errors, and so is anything but an issue" do
+      log =
+        capture_log(fn ->
+          assert TicketObservation.observe_held([by_id(%{}), :junk], now: @now, repos: [:junk, %{name: "  "}]) ==
+                   %{updated: 0, unchanged: 0, stale: 0, unrouted: 0, errors: 2}
+        end)
+
+      assert log =~ "Ticket observation failed for issue_id=issue-observed issue_identifier=ACME-7 repo_key=  : :invalid_repo_key"
       assert counts().errors == 2
     end
   end

@@ -14,7 +14,8 @@ defmodule SymphonyElixir.TicketObservation do
 
   `observe_delivery/2` observes what a Linear webhook delivery says (`SymphonyElixir.Linear.Webhook.parse/1`)
   the same way, under the repo that already holds the ticket's record (a ticket with no record yet is
-  left to the poll), or marks the record removed.
+  left to the poll), or marks the record removed. `observe_held/2` does the same for a by-id read,
+  which carries no repo key either.
 
   Every read other than a webhook delivery is compared with the webhook: a read that changes a field
   the webhook carries (state, identifier, title, labels, priority, assignee, URL) of an existing
@@ -61,6 +62,15 @@ defmodule SymphonyElixir.TicketObservation do
           errors: non_neg_integer()
         }
 
+  @typedoc "How many issues of a by-id read had each outcome, and how many no single repo holds."
+  @type held_counts :: %{
+          updated: non_neg_integer(),
+          unchanged: non_neg_integer(),
+          stale: non_neg_integer(),
+          unrouted: non_neg_integer(),
+          errors: non_neg_integer()
+        }
+
   @typedoc "A read that changed fields a webhook should have brought first."
   @type poll_first :: %{
           identifier: String.t() | nil,
@@ -75,6 +85,7 @@ defmodule SymphonyElixir.TicketObservation do
           updated: non_neg_integer(),
           unchanged: non_neg_integer(),
           stale: non_neg_integer(),
+          unrouted: non_neg_integer(),
           errors: non_neg_integer(),
           compare: compare()
         }
@@ -173,8 +184,26 @@ defmodule SymphonyElixir.TicketObservation do
   end
 
   @doc """
-  Observes `issues` that may belong to several repos, such as a by-id read, which carries no repo
-  key. Each issue goes to the repo it routes to (`SymphonyElixir.Routing.Resolver.with_repo_key/2`;
+  Observes the issues of a by-id read, which carries no repo key, the way `observe_delivery/2`
+  observes a delivery: each issue goes through `observe/3` under the repo whose record of the ticket
+  the reads already keep. A ticket no configured repo has a record of yet is skipped and counted
+  `unrouted`, as the poll creates its record; one held in several repos is `unrouted` too, as the poll
+  counts it a conflict. A store error is logged with the issue it was for and counted under `errors`.
+  `opts`: `:repos`, defaulting to the configured repos, and those of `observe/3`.
+  """
+  @spec observe_held([Issue.t()], keyword()) :: held_counts()
+  def observe_held(issues, opts \\ []) when is_list(issues) do
+    {repos, opts} = Keyword.pop_lazy(opts, :repos, &configured_repos/0)
+
+    Enum.reduce(issues, Map.put(empty_summary(), :unrouted, 0), fn issue, acc ->
+      key = issue |> observe_held_issue(repos, opts) |> held_count_key()
+      Map.update!(acc, key, &(&1 + 1))
+    end)
+  end
+
+  @doc """
+  Observes `issues` that may belong to several repos, such as the PR and CI watcher's read, which
+  covers every repo. Each issue goes to the repo it routes to (`SymphonyElixir.Routing.Resolver.with_repo_key/2`;
   an issue that already has a key keeps it), and an issue no repo takes is skipped. `opts`: `:repos`,
   defaulting to the configured repos, and those of `observe/3`. Returns the outcomes across repos.
   """
@@ -191,7 +220,8 @@ defmodule SymphonyElixir.TicketObservation do
   end
 
   @doc """
-  How many observations had each outcome since Symphony started, and the comparison with the
+  How many observations had each outcome since Symphony started, how many issues of a by-id read or
+  a delivery no single repo holds a record of (`unrouted`), and the comparison with the
   webhook: how many reads found the webhook first, how many the poll first, and the last ten poll
   first, newest first.
   """
@@ -200,7 +230,7 @@ defmodule SymphonyElixir.TicketObservation do
     entries = :ets.tab2list(@table)
     poll_first = lookup(entries, :poll_first, 0)
 
-    counts = Map.new([:errors | @outcomes], &{&1, lookup(entries, &1, 0)})
+    counts = Map.new([:unrouted, :errors | @outcomes], &{&1, lookup(entries, &1, 0)})
 
     Map.put(counts, :compare, %{
       webhook_first: lookup(entries, :webhook_first, 0),
@@ -208,7 +238,7 @@ defmodule SymphonyElixir.TicketObservation do
       poll_first_recent: for(n <- poll_first..max(poll_first - @recent_limit + 1, 1)//-1, {_key, entry} <- [List.keyfind(entries, {:poll_first, n}, 0)], do: entry)
     })
   rescue
-    ArgumentError -> Map.put(empty_summary(), :compare, %{webhook_first: 0, poll_first: 0, poll_first_recent: []})
+    ArgumentError -> empty_summary() |> Map.put(:unrouted, 0) |> Map.put(:compare, %{webhook_first: 0, poll_first: 0, poll_first_recent: []})
   end
 
   @doc "Forgets every count."
@@ -306,18 +336,7 @@ defmodule SymphonyElixir.TicketObservation do
 
   defp observe_parsed({:issue, _action, issue, _updated_at}, opts) do
     {repos, opts} = Keyword.pop_lazy(opts, :repos, &configured_repos/0)
-
-    case holder(issue, repos) do
-      {:ok, repo_key} ->
-        delivered(repo_key, issue, observe(repo_key, %{issue | repo_key: repo_key}, Keyword.put(opts, :source, :webhook)))
-
-      :unrouted ->
-        :unrouted
-
-      {:error, repo_key, reason} ->
-        bump(:errors)
-        delivered(repo_key, issue, {:error, reason})
-    end
+    observe_held_issue(issue, repos, Keyword.put(opts, :source, :webhook))
   end
 
   defp observe_parsed({:issue_removed, issue_id, _identifier}, opts) do
@@ -332,10 +351,33 @@ defmodule SymphonyElixir.TicketObservation do
     end
   end
 
-  # A delivery updates only the record the reads already keep: the poll filters each repo in Linear
-  # (a project by its slug, `assignee: me`), which a delivery's own fields can't always match, so a
-  # ticket no repo has a record of yet is unrouted until the poll files it. One held in several repos
-  # is unrouted too, as the poll counts a ticket two repos return as a conflict.
+  # A delivery or a by-id read updates only the record the reads already keep: the poll filters each
+  # repo in Linear (a project by its slug, `assignee: me`), which the issue's own fields can't always
+  # match, so a ticket no repo has a record of yet is unrouted until the poll files it. One held in
+  # several repos is unrouted too, as the poll counts a ticket two repos return as a conflict.
+  defp observe_held_issue(%Issue{id: issue_id} = issue, repos, opts) when is_binary(issue_id) do
+    case holder(issue, repos) do
+      {:ok, repo_key} ->
+        delivered(repo_key, issue, observe(repo_key, %{issue | repo_key: repo_key}, opts))
+
+      :unrouted ->
+        bump(:unrouted)
+        :unrouted
+
+      {:error, repo_key, reason} ->
+        bump(:errors)
+        delivered(repo_key, issue, {:error, reason})
+    end
+  end
+
+  defp observe_held_issue(_issue, _repos, _opts) do
+    bump(:errors)
+    :error
+  end
+
+  defp held_count_key(:error), do: :errors
+  defp held_count_key(outcome), do: outcome
+
   defp holder(%Issue{id: issue_id}, repos) do
     repos
     |> repo_keys()

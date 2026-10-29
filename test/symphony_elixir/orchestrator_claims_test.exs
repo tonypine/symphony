@@ -219,6 +219,8 @@ defmodule SymphonyElixir.OrchestratorClaimsTest do
 
   test "the dispatch prefetch writes what it read into the candidates' records" do
     parked = %{issue("issue-prefetch-parked", "MT-PREFETCH", "Backlog") | updated_at: ~U[2026-10-29 10:00:00Z]}
+    # The record an earlier poll made; a by-id read only updates a record the reads already keep.
+    {:ok, :updated} = TicketObservation.observe("default", %{parked | state: "Todo", updated_at: ~U[2026-10-29 09:00:00Z]})
     pid = start_orchestrator!(:PrefetchOrchestrator)
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [parked])
 
@@ -239,6 +241,7 @@ defmodule SymphonyElixir.OrchestratorClaimsTest do
 
   test "the revalidation before a start writes what it read into the ticket's record" do
     parked = %{issue("issue-revalidated", "MT-REVALIDATED", "Backlog") | updated_at: ~U[2026-10-29 10:00:00Z]}
+    {:ok, :updated} = TicketObservation.observe("default", %{parked | state: "Todo", updated_at: ~U[2026-10-29 09:00:00Z]})
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [parked])
 
     candidates = [%{parked | state: "Todo"}]
@@ -247,7 +250,17 @@ defmodule SymphonyElixir.OrchestratorClaimsTest do
 
     assert_received {:state, %{running: running}}
     assert running == %{}
-    assert %{phase: "Backlog", issue_identifier: "MT-REVALIDATED"} = RunStore.get_ticket_state("default", parked.id)
+    assert %{phase: "Backlog", issue_identifier: "MT-REVALIDATED", observed_from: :by_id} = RunStore.get_ticket_state("default", parked.id)
+  end
+
+  test "a by-id read of a ticket no repo has a record of writes no record; the poll files it" do
+    unseen = %{issue("issue-by-id-unseen", "MT-UNSEEN", "Backlog") | updated_at: ~U[2026-10-29 10:00:00Z]}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [unseen])
+
+    capture_log(fn -> Orchestrator.dispatch_chosen_issues_for_test([%{unseen | state: "Todo"}], orchestrator_state()) end)
+
+    assert RunStore.get_ticket_state("default", unseen.id) == nil
+    assert TicketObservation.summary().unrouted >= 1
   end
 
   # Started with no issues in Linear, so its first poll dispatches nothing.
