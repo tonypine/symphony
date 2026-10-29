@@ -1,0 +1,13 @@
+{
+  "source": "poll",
+  "window": 20,
+  "cycles_compared": 140,
+  "cycles_with_differences": 2,
+  "window_cycles": 20,
+  "window_differences": 3,
+  "recent": [
+    {"repo_key": "symphony", "issue_id": "issue-1", "identifier": "TP-1221", "side": "both", "field": "priority", "poll": 1, "record": 2, "at": "2026-10-29T18:00:48Z"},
+    {"repo_key": "symphony", "issue_id": "issue-2", "identifier": "TP-1222", "side": "record", "field": "candidate", "poll": null, "record": "Todo", "at": "2026-10-29T17:58:30Z"},
+    {"repo_key": "symphony", "issue_id": "issue-3", "identifier": "TP-1223", "side": "poll", "field": "candidate", "poll": "Todo", "record": null, "at": "2026-10-29T17:57:00Z"}
+  ]
+}

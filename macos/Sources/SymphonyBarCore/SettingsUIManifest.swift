@@ -7,7 +7,7 @@ import Foundation
 /// `mix settings.ui_coverage` reads this list from this file and fails CI for a setting that is neither here
 /// nor in `config/settings_ui_exempt.yml`, so a new setting ships with a control. `SettingsUIManifestTests`
 /// checks that every key the line editors (`RepositoriesConfig`, `RunProfilesConfig`, `MaxConcurrentAgents`,
-/// `TokenLimits`, `OperationTimeouts`, `GitHubUpdates`, `DispatchLoopLimits`, `LedgerSettings`,
+/// `TokenLimits`, `OperationTimeouts`, `GitHubUpdates`, `DispatchLoopLimits`, `DispatchSettings`, `LedgerSettings`,
 /// `LinearWebhookSettings`, `BuiltInTicketPatterns`, `RiskRuleSettings`, `QAHostTools`, `MacAppQAPlaybook`) write is
 /// here, and that the rest are `writtenBySymphony`. Keep one string literal per line, sorted.
 public enum SettingsUIManifest {
@@ -40,6 +40,8 @@ public enum SettingsUIManifest {
         "code_review.command",
         "code_review.effort",
         "code_review.model",
+        "dispatch.shadow_window",
+        "dispatch.source",
         "github.webhooks.enabled",
         "github.webhooks.events",
         "github.webhooks.fallback_poll_interval_ms",

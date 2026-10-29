@@ -373,3 +373,117 @@ public struct LinearWebhooksLine: Equatable {
         }
     }
 }
+
+/// Setup's Dispatch shadow line: where dispatch reads its candidates from and how the candidates Symphony's ticket
+/// records give compared with the Linear poll's, from `/api/v1/state`'s `dispatch_shadow` (`DispatchShadowReport`), which
+/// the window already polls. The operator moves dispatch to the record once the window stays at zero differences.
+public struct DispatchShadowLine: Equatable {
+    public enum State: Equatable {
+        /// The Symphony running predates the shadow report.
+        case notAvailable
+        /// Dispatch runs from the Linear poll, and the window holds no difference.
+        case pollClean
+        /// Dispatch runs from the Linear poll, and the window holds at least one difference.
+        case pollDiffering
+        /// Dispatch runs from the record; the window's differences are information.
+        case record
+    }
+
+    /// One of the last differences, as the disclosure lists it.
+    public struct Row: Equatable, Identifiable {
+        public var id: Int
+        public var identifier: String
+        /// "Only in the poll", "Only in the record", "In both".
+        public var side: String
+        /// "Candidate", "State", "Priority".
+        public var field: String
+        /// What each side has, for example "Todo in the poll, none in the record"; nil when neither said.
+        public var values: String?
+        /// "4 min ago"; nil when Symphony didn't say.
+        public var ago: String?
+    }
+
+    public static let title = "Dispatch shadow"
+    public static let disclosureTitle = "Last differences"
+    public static let emptyList = "No differences since Symphony started."
+
+    public var state: State
+    /// "Not available", "No differences", "3 differences", "From the record".
+    public var word: String
+    /// What is true now, as one or two sentences.
+    public var detail: String
+    /// The last ten differences, newest first.
+    public var rows: [Row]
+
+    /// False for an older Symphony: the line is shown greyed out, with no disclosure.
+    public var isAvailable: Bool { state != .notAvailable }
+    /// True when the line is called out in the warning colour: the poll still drives dispatch and the sides disagree.
+    public var isWarning: Bool { state == .pollDiffering }
+
+    /// The line for `report` (nil from an older Symphony), its ages counted from `now`, the state's own time.
+    public init(report: DispatchShadowReport?, now: Date) {
+        guard let report else {
+            state = .notAvailable
+            word = "Not available"
+            detail = "Not available on this Symphony: update it to compare dispatch from the record with the Linear poll."
+            rows = []
+            return
+        }
+        rows = report.recent.enumerated().map { index, difference in Self.row(difference, id: index, now: now) }
+        let last = report.lastDifferenceAt.map { " The last difference was \(LinearWebhooksLine.ago($0, now: now))." } ?? ""
+        let compared = Self.compared(report)
+        switch report.source {
+        case .record:
+            state = .record
+            word = "From the record"
+            detail = "Dispatch runs from Symphony's record. \(compared)\(report.cyclesCompared > 0 ? ", for information" : "")."
+                + last
+        case .poll where report.windowDifferences > 0:
+            state = .pollDiffering
+            word = Self.differences(report.windowDifferences)
+            detail = "Dispatch runs from the Linear poll. \(compared).\(last)"
+        case .poll:
+            state = .pollClean
+            word = "No differences"
+            detail = "Dispatch runs from the Linear poll. \(compared).\(last)"
+        }
+    }
+
+    /// "140 cycles compared, 0 differences in the last 20 cycles"; "No cycle compared yet since Symphony started"
+    /// before the first.
+    static func compared(_ report: DispatchShadowReport) -> String {
+        guard report.cyclesCompared > 0 else { return "No cycle compared yet since Symphony started" }
+        let window = report.windowCycles > 0 ? min(report.windowCycles, report.window) : report.window
+        return "\(cycles(report.cyclesCompared)) compared, \(differences(report.windowDifferences)) in the last "
+            + (window == 1 ? "cycle" : "\(GitHubUpdatesCard.number(window)) cycles")
+    }
+
+    static func cycles(_ count: Int) -> String {
+        count == 1 ? "1 cycle" : "\(GitHubUpdatesCard.number(count)) cycles"
+    }
+
+    static func differences(_ count: Int) -> String {
+        count == 1 ? "1 difference" : "\(GitHubUpdatesCard.number(count)) differences"
+    }
+
+    static func row(_ difference: DispatchShadowReport.Difference, id: Int, now: Date) -> Row {
+        let side: String =
+            switch difference.side {
+            case .poll: "Only in the poll"
+            case .record: "Only in the record"
+            case .both: "In both"
+            case .other(let text): text.replacingOccurrences(of: "_", with: " ").capitalized
+            }
+        let values: String? =
+            difference.poll == nil && difference.record == nil
+            ? nil : "\(difference.poll ?? "none") in the poll, \(difference.record ?? "none") in the record"
+        return Row(
+            id: id,
+            identifier: difference.identifier,
+            side: side,
+            field: difference.field.replacingOccurrences(of: "_", with: " ").capitalized,
+            values: values,
+            ago: difference.at.map { LinearWebhooksLine.ago($0, now: now) }
+        )
+    }
+}

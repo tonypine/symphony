@@ -253,6 +253,73 @@ final class StateSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.runs, recordedRuns)
     }
 
+    /// `dispatch_shadow` as `SymphonyElixirWeb.Presenter` serves it: the source, the window, the counts and the last
+    /// differences, a priority's number and a state's name read as text.
+    func testDecodesTheDispatchShadowReport() throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/dispatch-shadow-block.json")
+        let block = try JSONSerialization.jsonObject(with: Data(contentsOf: fixture))
+        guard case .state(let snapshot) = SymphonyState.poll(data: try recordedState(replacing: "dispatch_shadow", with: block), statusCode: 200)
+        else { return XCTFail("expected a state") }
+        XCTAssertEqual(
+            snapshot.dispatchShadow,
+            DispatchShadowReport(
+                source: .poll,
+                window: 20,
+                cyclesCompared: 140,
+                cyclesWithDifferences: 2,
+                windowCycles: 20,
+                windowDifferences: 3,
+                recent: [
+                    .init(identifier: "TP-1221", side: .both, field: "priority", poll: "1", record: "2", at: SymphonyState.parseDate("2026-10-29T18:00:48Z")),
+                    .init(identifier: "TP-1222", side: .record, field: "candidate", record: "Todo", at: SymphonyState.parseDate("2026-10-29T17:58:30Z")),
+                    .init(identifier: "TP-1223", side: .poll, field: "candidate", poll: "Todo", at: SymphonyState.parseDate("2026-10-29T17:57:00Z")),
+                ]
+            )
+        )
+        XCTAssertEqual(snapshot.dispatchShadow?.lastDifferenceAt, SymphonyState.parseDate("2026-10-29T18:00:48Z"))
+        XCTAssertEqual(snapshot.runs, recordedRuns)
+    }
+
+    /// Dispatch from the record before any cycle, and a difference with no identifier, an unknown side and no time.
+    func testDecodesARecordSourceWithNothingComparedYet() throws {
+        let record: [String: Any] = [
+            "source": "record", "window": 5, "cycles_compared": 0, "cycles_with_differences": 0, "window_cycles": 0,
+            "window_differences": 0,
+            "recent": [["identifier": NSNull(), "issue_id": "issue-9", "side": "elsewhere", "field": "state", "poll": NSNull(), "record": NSNull()]],
+        ]
+        guard case .state(let snapshot) = SymphonyState.poll(data: try recordedState(replacing: "dispatch_shadow", with: record), statusCode: 200)
+        else { return XCTFail("expected a state") }
+        XCTAssertEqual(
+            snapshot.dispatchShadow,
+            DispatchShadowReport(source: .record, window: 5, recent: [.init(identifier: "issue-9", side: .other("elsewhere"), field: "state")])
+        )
+        XCTAssertNil(snapshot.dispatchShadow?.lastDifferenceAt)
+
+        let bare: [String: Any] = ["recent": [["side": "poll", "field": "candidate"]]]
+        guard case .state(let sparse) = SymphonyState.poll(data: try recordedState(replacing: "dispatch_shadow", with: bare), statusCode: 200)
+        else { return XCTFail("expected a state") }
+        XCTAssertEqual(sparse.dispatchShadow, DispatchShadowReport(recent: [.init(identifier: "?", side: .poll, field: "candidate")]))
+    }
+
+    /// An older Symphony sends no `dispatch_shadow`, and a block this app can't read is left out: the rest of the state
+    /// decodes either way.
+    func testAnOlderOrUnreadableDispatchShadowBlockIsNone() throws {
+        guard case .state(let older) = SymphonyState.poll(data: try recordedState(), statusCode: 200) else {
+            return XCTFail("expected a state")
+        }
+        XCTAssertNil(older.dispatchShadow)
+        XCTAssertEqual(older.runs, recordedRuns)
+
+        let unreadable = try recordedState(replacing: "dispatch_shadow", with: ["window": "twenty", "recent": "none"])
+        guard case .state(let snapshot) = SymphonyState.poll(data: unreadable, statusCode: 200) else {
+            return XCTFail("expected a state")
+        }
+        XCTAssertNil(snapshot.dispatchShadow)
+        XCTAssertEqual(snapshot.runs, recordedRuns)
+    }
+
     func testANullOrTaglessReleaseIsNone() throws {
         for latest: Any in [NSNull(), ["tag": NSNull()], ["tag": ""]] {
             let data = try recordedState(replacing: "app_update", with: ["unblocks": 0, "latest_release": latest])
