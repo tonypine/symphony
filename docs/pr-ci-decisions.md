@@ -1,15 +1,39 @@
 # PR and CI decisions
 
-What the PR and CI watcher does for a ticket in each phase and PR situation. Rules are checked
-in order and the first that matches decides.
+What the PR and CI watcher does for a ticket in each phase and PR situation. The upkeep rules act
+first, each one that matches; then the flow rules are checked in order and the first that matches
+decides.
+
+Upkeep keeps a PR's branch on its base (U1) and reruns a run GitHub cancelled (U2). It is not a
+step in the decision chain: a Needs Decision or Blocked hold, a question, a CI wait or a competitor
+wait says nothing about whether the branch should follow main, so none of them stops it, and it
+never changes the flow decision taken on the same read. It waits only on a run: a verdict binds to
+the head it judged, and a rework or CI Fix run pushes to the branch, so while a run is active the
+upkeep is deferred and fires on the read that sees the run end (the orchestrator asks the watcher
+to read at once when a run ends). The landing order stays: a PR with a PR ahead of it that changes
+the same files is not updated until that one lands or leaves the race. A Code Review approval
+survives the update: merging main in leaves the diff against main as it was, and a red merged head
+takes the usual red paths. A GitHub merge queue may later do the final update for `Merging`; the
+between-runs upkeep of the earlier phases stays useful under one.
 
 A workflow run counts by its newest attempt only. A run with a check still queued or running is
 pending, even when an earlier attempt's checks were cancelled: a rerun waiting for a runner reads
-as checks running (R24, or R32 in Merging), never as a cancelled run, so R19 never reruns it.
+as checks running (R24, or R32 in Merging), never as a cancelled run, so U2 never reruns it.
 
 <!-- BEGIN mix pr_decision.table: generated from SymphonyElixir.PrDecision.rules/0, do not edit by hand -->
 
+## Upkeep
+
+Checked first on every read of a PR, by poll or by a delivery. Every upkeep rule that matches acts, and none stops the chain: the flow rule below still decides on the same read, from the same facts. Upkeep never waits on a hold or a flow wait, only on a run: while one is active it is deferred, and it fires on the read that sees the run end.
+
+| Rule | Phases | When | Then |
+| --- | --- | --- | --- |
+| U1 | all | The PR is behind main, no run is active, no PR ahead in the landing order shares its files, and the head is not red on a failure or a cancelled run; whatever the flow rule (a hold, a question, a CI or competitor wait) | `update_branch`, once per head; a conflict GitHub reports goes to the conflict rules on the next read |
+| U2 | Code Review, QA, Rework, CI Fix, Merging | Red only because every run of a workflow was cancelled, its newest attempt with nothing queued or running, that run rerun fewer than 2 times on the head, and no run is active; whatever the flow rule | `rerun_failed` each new cancellation, no attempt spent |
+
 ## Rules
+
+The flow decision: the first rule that matches decides what happens to the ticket.
 
 | Rule | Phases | When | Then |
 | --- | --- | --- | --- |
@@ -33,7 +57,7 @@ as checks running (R24, or R32 in Merging), never as a cancelled run, so R19 nev
 | R16 | Merging | GitHub has not computed whether the PR can merge | `wait` on `github` |
 | R17 | Code Review, QA, Rework, CI Fix, Merging | A required check never reported within `landing_wait_timeout_ms` | `decision`: proceed without it for this PR (this head only), rerun, or fix the workflow in Rework |
 | R18 | Code Review, QA, Rework, CI Fix, Merging | Only a check a person must clear is red (`protected paths`) | `decision`: allow the change (the option unlocks the protected paths the PR changes for the ticket), or drop the change in Rework |
-| R19 | Code Review, QA, Rework, CI Fix, Merging | Red only because every run of a workflow was cancelled, its newest attempt with nothing queued or running, and that run was rerun fewer than 2 times on the head | `rerun_failed` each new cancellation, no attempt spent; a rerun not yet reported: `wait` on `ci` |
+| R19 | Code Review, QA, Rework, CI Fix, Merging | Red only because every run of a workflow was cancelled, its newest attempt with nothing queued or running, and that run was rerun fewer than 2 times on the head | `wait` on `ci`: the upkeep (U2) reruns each new cancellation, no attempt spent |
 | R19a | Code Review, QA, Rework, CI Fix, Merging | Red only because a workflow run was cancelled again after 2 reruns on the head | `decision`: keep retrying it, or wait |
 | R20 | Code Review, QA, Rework, CI Fix, Merging | Red, and the same failure 3 fix runs in a row or `red_attempts` at `max_red_attempts` | `file_fix_ticket` for the failing check, waiting on `symphony` until it is terminal |
 | R21 | Code Review, QA, Rework, CI Fix, Merging | Red after a rerun | `ci_fix` for the red head, back to the phase it came from |
@@ -42,8 +66,8 @@ as checks running (R24, or R32 in Merging), never as a cancelled run, so R19 nev
 | R24 | Code Review, QA, CI Fix | Checks are running on the head | `wait` on `ci` |
 | R25 | CI Fix | Green (or no CI) and conflict-free | `return_to_origin`, approvals carried forward |
 | R26 | Rework | Not red, not conflicting, no run | `dispatch` the rework run |
-| R27 | Code Review, QA | Green, or no CI configured (counts as green) | `dispatch` the reviewer or the QA agent |
-| R28 | Merging | The PR is behind main | a PR ahead shares its files: `wait` on `symphony`; otherwise `update_branch` |
+| R27 | Code Review, QA | Green, or no CI configured (counts as green), and not behind main with nothing ahead (the upkeep, U1, updates that one) | `dispatch` the reviewer or the QA agent |
+| R28 | Code Review, QA, Merging | The PR is behind main (in Code Review and QA: with no PR ahead sharing its files) | a PR ahead shares its files: `wait` on `symphony`; otherwise `wait` on `symphony` while the upkeep (U1) updates the branch |
 | R29 | Merging | Green (or no CI) and mergeable now | `merge_now` |
 | R30 | Merging | Auto-merge off, and checks running or branch protection still blocking | `arm` auto-merge |
 | R31 | Merging | Branch protection blocked the merge past the merge wait | `land_agent` |
@@ -95,7 +119,7 @@ and since when it stands.
 | Owner | Who acts next | The wait ends when |
 | --- | --- | --- |
 | `agent` | A run that is working, or the agent that opens the PR (R5, R8, R9) | The run ends, or the PR is opened |
-| `ci` | GitHub Actions running the head's checks, or the base branch's (R23, R24, R32) | The checks report, or the base goes green |
+| `ci` | GitHub Actions running the head's checks, or the base branch's (R19, R23, R24, R32) | The checks report, or the base goes green |
 | `github` | GitHub itself: its rate limit, a mergeability it hasn't computed, branch protection (R1, R16, R33) | The limit resets, GitHub computes it, or the merge wait passes |
 | `person` | A person: a Needs Decision hold, a draft PR, a question the watcher asked (R4, R6, R7, R10, R17, R18, R19a) | The decision is recorded, or the PR is marked ready |
 | `symphony` | Symphony itself: a Blocked hold, a fix ticket it filed, a competing PR it waits on (R4, R14a, R15, R20, R28) | The fix ticket or the competitors are done, and the hold clears by itself |
@@ -138,7 +162,7 @@ clears (`protected paths`) doesn't make a head red before `Merging`: when it is 
 the head reads as its other checks (green once they passed, running while one runs), so the
 reviewer, QA and the rework run go on and a CI Fix head returns to its origin. In `Merging`, that
 check holds the head back unless the ticket's unlock decisions cover it. A check the base branch
-doesn't require, cancelled again after R19's reruns, is set aside the same way (see
+doesn't require, cancelled again after U2's reruns, is set aside the same way (see
 [Cancelled checks](#cancelled-checks)). The
 review comments still to address come from the PR review poller's record: reviewer comments left on
 the current head, once `pull_requests.review_comments.rework_delay_minutes` has passed since the
@@ -182,7 +206,8 @@ and whether by tests or by name only.
 A check GitHub cancelled is never a failure: GitHub cancels a job it finds no runner for (its
 annotation reads "The job was not acquired by Runner of type hosted even after multiple attempts"),
 and a capacity shortage on macOS runners can cancel several workflows of one head minutes apart. A
-head red only on cancelled runs is rerun (R19), each cancellation once: the watcher keeps, per head
+head red only on cancelled runs is rerun by the upkeep (U2), each cancellation once, whatever hold
+or wait the ticket is on: the watcher keeps, per head
 and workflow run, how many times it reran the run and which cancelled jobs those reruns answered.
 A second workflow cancelled on the same head is rerun as the first was, and so is a rerun GitHub
 cancels again, whose new attempt has new job ids. No CI Fix attempt is spent, and R22's one rerun of
@@ -206,12 +231,14 @@ run, and the review agent reads a cancelled run as not run, never as a defect to
 
 ## What the watcher does
 
-Every read decides and applies the action (`SymphonyElixir.PrDecision.Apply`): Linear moves go
+Every read first applies the upkeep the facts call for, then decides and applies the flow action
+(`SymphonyElixir.PrDecision.Apply`), from the same facts. The upkeep applied joins the record's last
+actions, before the flow action of the same read, and logs one `pr_watch.upkeep` line. Linear moves go
 through the transition guard, holds through the Needs Decision hold and the self-heal lane, GitHub
 calls through `SymphonyElixir.AutoMerge`. The record keeps the decision (its rule, reason, who a
 wait is on and what ends it) and the actions applied in the ticket's stay in its phase. An action is
 applied once per head and rule in a stay, so a repeated read never repeats a move, a rerun, an
-update-branch or a fix-ticket filing (a cancelled run's rerun, R19, is kept per cancellation instead); one that fails is not recorded, and the next read decides
+update-branch or a fix-ticket filing (a cancelled run's rerun, U2, is kept per cancellation instead); one that fails is not recorded, and the next read decides
 again. The ticket's CI label (`CI green`, `CI red`, `CI running`) follows the facts.
 
 The CI and PR review pollers decide nothing in the watched phases: the CI poller keeps the head it

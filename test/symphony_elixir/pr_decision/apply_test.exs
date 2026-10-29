@@ -179,6 +179,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
             {action("R18", :decision, args: %{question: "q", options: []}, owner: :person), :qa},
             {action("R18", :decision, args: %{question: "q", options: []}, owner: :person), :merging},
             {action("R22", :rerun_failed), :code_review},
+            {action("U2", :rerun_failed), :code_review},
             {action("R21", :ci_fix, args: %{origin: :qa, cause: :red}), :qa},
             {action("R30", :arm), :merging},
             {action("R3", :disarm), :qa},
@@ -193,8 +194,10 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert %{outcome: :recorded} = Apply.apply(action("R10", :wait), ctx(:merging, facts: %{auto_merge: :armed}))
       refute_received {:disable_auto_merge, _url, _node, _opts}
 
-      # A conflict outside Merging is the watcher's whatever auto-merge says.
+      # A conflict outside Merging is the watcher's whatever auto-merge says, and so is the branch upkeep.
       assert %{outcome: :applied} = Apply.apply(action("R14", :ci_fix, args: %{origin: :qa, cause: :conflict}), ctx(:qa))
+      assert %{outcome: :applied} = Apply.apply(action("U1", :update_branch), ctx(:merging))
+      assert_received {:update_branch, @pr_url, "head-1", _opts}
       refute_received {:rerun_failed, _run_id, _opts}
       refute_received {:enable_auto_merge, _url, _request, _opts}
     end
@@ -233,9 +236,9 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert_received {:rerun_failed, "11", []}
     end
 
-    test "a cancelled run's rerun (R19) spends nothing, and a head with no run id has nothing to rerun" do
+    test "a cancelled run's rerun (U2) spends nothing, and a head with no run id has nothing to rerun" do
       cancelled = read(failed_checks: [%{name: "specs", run_id: "11", job_id: 101, workflow_name: "ci", conclusion: "CANCELLED"}])
-      assert %{outcome: :applied, attempts: attempts} = Apply.apply(action("R19", :rerun_failed), ctx(:qa, read: cancelled))
+      assert %{outcome: :applied, attempts: attempts} = Apply.apply(action("U2", :rerun_failed), ctx(:qa, read: cancelled))
       assert_received {:rerun_failed, "11", [repo: "acme/app"]}
       assert %{attempts | cancels: nil} == Attempts.new()
       assert attempts.reruns == %{}
@@ -246,16 +249,16 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       refute_received {:rerun_failed, nil, _opts}
     end
 
-    test "R19 reruns every new cancellation on the head: a second workflow's, and a rerun cancelled again" do
+    test "U2 reruns every new cancellation on the head: a second workflow's, and a rerun cancelled again" do
       e2e = %{name: "e2e", run_id: "21", job_id: 201, workflow_name: "macos-e2e", conclusion: "CANCELLED"}
       install = %{name: "install script", run_id: "22", job_id: 202, workflow_name: "macos", conclusion: "CANCELLED"}
-      rerun = action("R19", :rerun_failed)
+      rerun = action("U2", :rerun_failed)
 
       # The first workflow's run is cancelled and rerun.
       assert %{outcome: :applied, attempts: attempts, applied: applied} = Apply.apply(rerun, ctx(:code_review, read: read(failed_checks: [e2e])))
       assert_received {:rerun_failed, "21", _opts}
 
-      # Minutes later the other workflow's run is cancelled on the same head: rerun too, though R19 is in the ledger.
+      # Minutes later the other workflow's run is cancelled on the same head: rerun too, though U2 is in the ledger.
       ctx = ctx(:code_review, read: read(failed_checks: [install]), attempts: attempts, applied: applied)
       assert %{outcome: :applied, attempts: attempts, applied: applied} = Apply.apply(rerun, ctx)
       assert_received {:rerun_failed, "22", _opts}
@@ -271,25 +274,17 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert reruns == %{}
     end
 
-    test "R19 with no new cancellation waits on CI for the rerun it sent, without rerunning it again" do
+    test "U2 with no new cancellation has nothing to do: the rerun it sent is still to report" do
       e2e = %{name: "e2e", run_id: "21", job_id: 201, workflow_name: "macos-e2e", conclusion: "CANCELLED"}
       lint = %{e2e | name: "lint", job_id: 202}
       attempts = Attempts.cancel_rerun(Attempts.new(), "head-1", [e2e, lint])
+      rerun = action("U2", :rerun_failed)
 
-      assert %{outcome: :recorded, action: action, applied: []} = Apply.apply(action("R19", :rerun_failed), ctx(:qa, read: read(failed_checks: [e2e]), attempts: attempts))
-      assert %Action{rule: "R19", kind: :wait, owner: :ci, clears_when: "the rerun reports"} = action
-      assert action.reason == "Symphony reran the `e2e` check after GitHub cancelled it: waiting for the rerun to report"
+      assert %{outcome: :recorded, action: ^rerun, applied: []} = Apply.apply(rerun, ctx(:qa, read: read(failed_checks: [e2e]), attempts: attempts))
 
-      assert %{action: %{reason: reason}} = Apply.apply(action("R19", :rerun_failed), ctx(:qa, read: read(failed_checks: [e2e, lint]), attempts: attempts))
-      assert reason == "Symphony reran the `e2e`, `lint` checks after GitHub cancelled it: waiting for the rerun to report"
-
-      # A read with no cancelled check named left: the failing check names it.
-      assert %{action: %{reason: "Symphony reran the `specs` check after GitHub cancelled it: waiting for the rerun to report"}} =
-               Apply.apply(action("R19", :rerun_failed), ctx(:qa, read: read(failed_checks: []), attempts: attempts))
-
-      # A run already at its bound is R19a's; R19 doesn't rerun it.
+      # A run already at its bound is R19a's; U2 doesn't rerun it.
       capped = put_in(attempts.cancels.runs["21"].reruns, 2)
-      assert %{outcome: :recorded} = Apply.apply(action("R19", :rerun_failed), ctx(:qa, read: read(failed_checks: [%{e2e | job_id: 299}]), attempts: capped))
+      assert %{outcome: :recorded} = Apply.apply(rerun, ctx(:qa, read: read(failed_checks: [%{e2e | job_id: 299}]), attempts: capped))
       refute_received {:rerun_failed, _run_id, _opts}
     end
 
@@ -440,15 +435,15 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
 
   describe "landing" do
     test "update_branch merges the base in once and remembers the head it replaced" do
-      assert %{outcome: :applied, attempts: %{updated_from: "head-1"}} = Apply.apply(action("R28", :update_branch), ctx(:merging))
+      assert %{outcome: :applied, attempts: %{updated_from: "head-1"}} = Apply.apply(action("U1", :update_branch), ctx(:merging))
       assert_received {:update_branch, @pr_url, "head-1", _opts}
 
       # A merge that conflicts is GitHub's answer: the next read shows the conflict.
       Process.put(:update_branch, {:error, :conflict})
-      assert %{outcome: :applied, attempts: %{updated_from: nil}} = Apply.apply(action("R28", :update_branch), ctx(:merging))
+      assert %{outcome: :applied, attempts: %{updated_from: nil}} = Apply.apply(action("U1", :update_branch), ctx(:merging))
 
       Process.put(:update_branch, {:error, :timeout})
-      capture_log(fn -> assert %{outcome: {:error, :timeout}} = Apply.apply(action("R28", :update_branch), ctx(:merging)) end)
+      capture_log(fn -> assert %{outcome: {:error, :timeout}} = Apply.apply(action("U1", :update_branch), ctx(:merging)) end)
     end
 
     test "merge_now squash-merges a green, mergeable PR" do
@@ -678,6 +673,13 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert %{outcome: :recorded, action: wait} = Apply.apply(action, %{ctx | attempts: waited})
       assert %Action{rule: "R19a", kind: :wait, owner: :person, clears_when: "a person reruns the check or new changes are pushed"} = wait
       assert wait.reason == "A person chose to wait on the `install script` check, which GitHub keeps cancelling on PR #7"
+
+      # With no new cancellation it names every cancelled check the head shows, else the failing check.
+      lint = %{install | name: "lint", job_id: 202}
+      both = %{ctx | attempts: waited, read: read(failed_checks: [%{install | job_id: 204}, lint])}
+      assert %{action: %{reason: "A person chose to wait on the `install script`, `lint` checks, which GitHub keeps cancelling on PR #7"}} = Apply.apply(action, both)
+      none = %{ctx | attempts: waited, read: read(failed_checks: [])}
+      assert %{action: %{reason: "A person chose to wait on the `specs` check, which GitHub keeps cancelling on PR #7"}} = Apply.apply(action, none)
     end
 
     test "an answer to R19a picks keep retrying or wait by number or label, or none" do

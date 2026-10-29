@@ -879,9 +879,11 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # The decision keeps since when it stands while the watcher makes the same one on the same head,
   # and an action applied joins the last five.
   defp settled(watch, previous) do
+    {upkept, watch} = Map.pop(watch, :upkept, [])
+
     watch
     |> Map.put(:decision, since(watch.decision, previous && previous.decision))
-    |> Map.put(:actions, actions(watch, previous))
+    |> Map.put(:actions, actions(watch, upkept, previous))
   end
 
   # A decision that changed (its rule, action or head) logs one `pr_watch.decision` line; the same
@@ -909,12 +911,12 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   defp since(decision, _previous), do: Map.put(decision, :since, decision.decided_at)
 
-  defp actions(%{decision: %{outcome: :applied} = decision, source: source}, previous) do
-    action = %{rule: decision.rule, kind: decision.kind, head_sha: decision.head_sha, at: decision.decided_at, source: source}
-    Enum.take([action | carried(previous, :actions, [])], 5)
+  # The upkeep applied on the read comes before its flow action.
+  defp actions(watch, upkept, previous) do
+    flow = for %{outcome: :applied} = decision <- [watch.decision], do: %{rule: decision.rule, kind: decision.kind, head_sha: decision.head_sha, at: decision.decided_at}
+    done = for action <- upkept ++ flow, do: Map.put(action, :source, watch.source)
+    Enum.take(Enum.reverse(done) ++ carried(previous, :actions, []), 5)
   end
-
-  defp actions(_watch, previous), do: carried(previous, :actions, [])
 
   defp silence(watch, entry, previous, now, state, settings) do
     before = previous && Map.get(previous, :silent)
@@ -984,22 +986,25 @@ defmodule SymphonyElixir.PrWatch.Repo do
     facts = Fetch.facts(Map.merge(ticket, Attempts.facts(attempts, read, settings.ci, now)), read)
     fix = settle_fix(carried(previous, :fix, @no_fix), facts)
 
+    ctx = %{
+      repo_key: state.repo_key,
+      settings: settings,
+      issue: entry.issue,
+      read: read,
+      facts: facts,
+      now: now,
+      decisions: decisions(entry.record),
+      opts: apply_opts(state),
+      fix: fix,
+      links: entry.links
+    }
+
+    {upkept, attempts, applied} = upkeep(ctx, attempts, applied, entry, state)
+
     case decide(facts, entry) do
       {:ok, action} ->
         read = with_protected_entries(read, action, entry, state)
-
-        ctx = %{
-          repo_key: state.repo_key,
-          settings: settings,
-          issue: entry.issue,
-          read: read,
-          facts: facts,
-          now: now,
-          decisions: decisions(entry.record),
-          opts: apply_opts(state)
-        }
-
-        result = Apply.apply(action, Map.merge(ctx, %{attempts: attempts, applied: applied, fix: fix, links: entry.links}))
+        result = Apply.apply(action, Map.merge(ctx, %{read: read, attempts: attempts, applied: applied}))
         attempts = result.attempts
         project_ci(entry, facts, read, now, state)
 
@@ -1007,6 +1012,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
           facts: facts,
           stay: result.moved_to || entry.phase,
           decision: result.action |> with_landing_hold(entry, facts) |> decision_record(result.outcome, attempts, facts, head, now),
+          upkept: upkept,
           applied: result.applied,
           attempts: attempts,
           fix: result.fix,
@@ -1019,6 +1025,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
           facts: facts,
           stay: entry.phase,
           decision: nil,
+          upkept: upkept,
           applied: applied,
           attempts: attempts,
           fix: fix,
@@ -1026,6 +1033,31 @@ defmodule SymphonyElixir.PrWatch.Repo do
           protected_files: protected_files
         }
     end
+  end
+
+  # The upkeep the facts call for (`SymphonyElixir.PrDecision.upkeep/1`), applied before the flow
+  # decision on the same read, which it never changes: each action's attempts and ledger carry into
+  # the next and into the flow decision's. Returns what was applied, as `actions` keeps it.
+  defp upkeep(ctx, attempts, applied, entry, state) do
+    ctx.facts
+    |> PrDecision.upkeep()
+    |> Enum.reduce({[], attempts, applied}, fn action, {upkept, attempts, applied} ->
+      result = Apply.apply(action, Map.merge(ctx, %{attempts: attempts, applied: applied}))
+      log_upkeep(result, entry, state)
+      {upkept ++ upkept(result, ctx), result.attempts, result.applied}
+    end)
+  end
+
+  defp upkept(%{outcome: :applied, action: action}, ctx), do: [%{rule: action.rule, kind: action.kind, head_sha: ctx.read[:head_sha], at: ctx.now}]
+  defp upkept(_result, _ctx), do: []
+
+  defp log_upkeep(%{outcome: :recorded}, _entry, _state), do: :ok
+
+  defp log_upkeep(%{action: action, outcome: outcome}, entry, state) do
+    Logger.info(
+      "pr_watch.upkeep issue_id=#{entry.issue.id} issue_identifier=#{entry.issue.identifier} repo_key=#{state.repo_key} " <>
+        "phase=#{entry.phase} rule=#{action.rule} action=#{action.kind} outcome=#{outcome_name(outcome)} reason=#{inspect(action.reason)}"
+    )
   end
 
   # The wait on competing PRs that stepped behind them (R15) is over: the conflict gets its fix runs

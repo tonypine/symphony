@@ -1141,7 +1141,9 @@ pull_requests:
   - A PR that is `BEHIND` the base branch gets one GitHub "Update branch" per head; CI runs on the
     merged code and auto-merge fires when it passes. The CI runs still going on the head it
     replaced are cancelled. A PR that waits for another to land first (see the landing order below)
-    is updated once that one has landed.
+    is updated once that one has landed. This branch upkeep is not a landing step: it runs for an
+    open PR in every phase, whatever this setting says, whenever no run is working on the ticket
+    (U1 in `docs/pr-ci-decisions.md`).
   - A red head first gets one rerun of its failed jobs, with auto-merge left on. A `CI Fix` run
     after that, or one for a merge conflict, turns auto-merge off before it starts: the fix goes
     back through review, and the ticket's return to `Merging` turns auto-merge back on. Auto-merge

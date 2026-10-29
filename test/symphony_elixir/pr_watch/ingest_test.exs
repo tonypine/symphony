@@ -221,6 +221,30 @@ defmodule SymphonyElixir.PrWatch.IngestTest do
       assert %{reread_timer: nil} = :sys.get_state(pid)
     end
 
+    test "a push to main updates every open PR behind it with no run and no PR ahead sharing its files (TP-1160)" do
+      Parity.tickets!(%{
+        tickets: [{"1", "Code Review", []}, {"2", "QA", []}, {"3", "Merging", []}, {"4", "Merging", []}],
+        files: %{"3" => ["SPEC.md"], "4" => ["SPEC.md", "lib/b.ex"]},
+        running: ["2"]
+      })
+
+      pid = Parity.start!()
+      Parity.tick!(pid)
+      flush_timers()
+      assert updates() == []
+
+      Parity.change!(for id <- ["1", "2", "3", "4"], do: {id, mergeable: :behind})
+      :ok = Ingest.deliver(push(), @repo_url, watchers: [pid])
+      _state = :sys.get_state(pid)
+      assert :sys.get_state(pid).rereads == ["issue-1", "issue-2", "issue-3", "issue-4"]
+      reread!(pid, 4)
+
+      # TP-2's run is active and TP-4 lands after TP-3, which shares SPEC.md: neither is updated.
+      assert updates() == [{Parity.pr_url("1"), "head-1-1"}, {Parity.pr_url("3"), "head-3-1"}]
+      assert %{source: :webhook, actions: [%{rule: "U1", kind: :update_branch, source: :webhook} | _]} = Parity.watch("1")
+      assert %{decision: %{rule: "R28", args: %{prs: [%{issue_identifier: "TP-3"}]}}} = Parity.watch("4")
+    end
+
     test "a PR whose mergeability GitHub hasn't computed yet is read again after the others, up to 5 times" do
       pid = started!([{"1", "Code Review", []}, {"2", "QA", []}])
       flush_timers()
@@ -432,6 +456,8 @@ defmodule SymphonyElixir.PrWatch.IngestTest do
       assert %{enabled: true} = Ingest.status()
     end
   end
+
+  defp updates, do: for({:update_branch, call} <- Parity.World.calls(), do: call)
 
   defp reread!(pid, times) do
     for _read <- 1..times do

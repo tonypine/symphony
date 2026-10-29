@@ -619,11 +619,13 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
       assert %Action{rule: "R24", kind: :wait, owner: :ci, reason: "Checks are running on PR #42's head"} =
                @ticket |> Fetch.facts(read) |> PrDecision.decide()
 
-      # Once attempt 2's every check was cancelled too, with nothing queued, R19 reruns the run once.
+      # Once attempt 2's every check was cancelled too, with nothing queued, the upkeep (U2) reruns
+      # the run once and R19 waits for it.
       attempt_2 = [check("build", "CANCELLED", run: 300, job: 3, workflow: "macos"), check("test", "CANCELLED", run: 300, job: 4, workflow: "macos")]
       assert {:ok, read} = read({response(pull(rollup([check("make all", "SUCCESS") | attempt_1] ++ attempt_2))), 0})
       assert %{ci: :red, red_kind: :cancelled, failed_checks: [%{name: "build", run_id: "300"}, %{name: "test", run_id: "300"}]} = read
-      assert %Action{rule: "R19", kind: :rerun_failed} = @ticket |> Fetch.facts(read) |> PrDecision.decide()
+      assert [%Action{rule: "U2", kind: :rerun_failed}] = @ticket |> Fetch.facts(read) |> PrDecision.upkeep()
+      assert %Action{rule: "R19", kind: :wait} = @ticket |> Fetch.facts(read) |> PrDecision.decide()
     end
 
     test "keeps the origin only in CI Fix, and reads a ticket without a PR as missing" do

@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.PrDecision.Table do
   @moduledoc """
-  Renders the PR and CI decision table from `SymphonyElixir.PrDecision.rules/0` and
+  Renders the PR and CI decision table from `SymphonyElixir.PrDecision.upkeep_rules/0`,
+  `SymphonyElixir.PrDecision.rules/0` and
   `SymphonyElixir.PrDecision.Facts.domains/0` as Markdown, for `docs/pr-ci-decisions.md`.
 
   The generated part sits between two markers, so prose written around it survives
@@ -24,8 +25,9 @@ defmodule SymphonyElixir.PrDecision.Table do
     """
     # PR and CI decisions
 
-    What the PR and CI watcher does for a ticket in each phase and PR situation. Rules are checked
-    in order and the first that matches decides.
+    What the PR and CI watcher does for a ticket in each phase and PR situation. The upkeep rules
+    act first, each one that matches; then the flow rules are checked in order and the first that
+    matches decides.
 
     #{generated()}
     """
@@ -45,13 +47,27 @@ defmodule SymphonyElixir.PrDecision.Table do
   @doc "The generated part, markers included."
   @spec generated() :: String.t()
   def generated do
-    Enum.join([@begin_marker, rules_section(), facts_section(), waits_section(), @end_marker], "\n\n")
+    Enum.join([@begin_marker, upkeep_section(), rules_section(), facts_section(), waits_section(), @end_marker], "\n\n")
+  end
+
+  defp upkeep_section do
+    """
+    ## Upkeep
+
+    Checked first on every read of a PR, by poll or by a delivery. Every upkeep rule that matches acts, and none stops the chain: the flow rule \
+    below still decides on the same read, from the same facts. Upkeep never waits on a hold or a flow wait, only on a run: while one is \
+    active it is deferred, and it fires on the read that sees the run end.
+
+    #{rule_table(PrDecision.upkeep_rules())}\
+    """
   end
 
   defp rules_section do
-    rows = Enum.map(PrDecision.rules(), fn rule -> row([rule.id, phases(rule.phases), rule.when, rule.then]) end)
+    "## Rules\n\nThe flow decision: the first rule that matches decides what happens to the ticket.\n\n" <> rule_table(PrDecision.rules())
+  end
 
-    "## Rules\n\n" <> table(["Rule", "Phases", "When", "Then"], rows)
+  defp rule_table(rules) do
+    table(["Rule", "Phases", "When", "Then"], Enum.map(rules, fn rule -> row([rule.id, phases(rule.phases), rule.when, rule.then]) end))
   end
 
   defp facts_section do

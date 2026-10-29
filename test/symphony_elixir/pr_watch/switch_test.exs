@@ -282,6 +282,8 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
   end
 
   defp decision(issue_id), do: watch(issue_id).decision
+  # The upkeep applied on the ticket, newest first, as the record's last actions keep it.
+  defp upkept(issue_id), do: for(%{rule: "U" <> _} = action <- watch(issue_id).actions, do: {action.rule, action.kind, action.head_sha})
   defp attempts(issue_id), do: watch(issue_id).attempts
 
   defp moves(issue_id), do: for({^issue_id, state} <- World.calls(:move), do: state)
@@ -658,11 +660,13 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       issue_id = ticket!("1", "Code Review", red() ++ cancelled)
       pid = start!()
       tick!(pid)
-      assert %{rule: "R19", kind: :rerun_failed, outcome: :applied} = decision(issue_id)
+      assert %{rule: "R19", kind: :wait, owner: :ci, clears_when: "the rerun reports"} = decision(issue_id)
+      assert upkept(issue_id) == [{"U2", :rerun_failed, "head-1-1"}]
 
       # Reads before GitHub queues the rerun wait on it, and never rerun the same cancellation again.
       tick!(pid, 2)
       assert World.calls(:rerun) == ["77"]
+      assert upkept(issue_id) == [{"U2", :rerun_failed, "head-1-1"}]
       assert %{rule: "R19", kind: :wait, owner: :ci, clears_when: "the rerun reports"} = decision(issue_id)
       assert %{red: 0, fix_failures: []} = attempts(issue_id)
       assert moves(issue_id) == []
@@ -672,7 +676,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       log = capture_log(fn -> tick!(pid) end)
       assert log =~ "pr_watch.silent_wait issue_id=#{issue_id} issue_identifier=TP-1"
       assert log =~ "rule=R19 bound=ci.merging_wait_timeout_ms"
-      assert log =~ ~s(action=wait decision="Symphony reran the `specs` check after GitHub cancelled it: waiting for the rerun to report")
+      assert log =~ ~s[action=wait decision="Every run of the `specs` check was cancelled: Symphony reruns each new cancellation, up to 2 times on the head, with no attempt spent"]
     end
 
     # The head red only on `checks`, cancelled by GitHub; `names` are every check the head reports.
@@ -691,7 +695,8 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
       tick!(pid)
       assert World.calls(:rerun) == ["39571199789"]
-      assert %{rule: "R19", kind: :rerun_failed, outcome: :applied} = decision(issue_id)
+      assert %{rule: "R19", kind: :wait} = decision(issue_id)
+      assert [{"U2", :rerun_failed, _head}] = upkept(issue_id)
 
       # GitHub queues the rerun: the head reads as running.
       pr!("1", running)
@@ -702,7 +707,8 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       pr!("1", cancelled([install], names))
       tick!(pid)
       assert World.calls(:rerun) == ["39571199789", "39571199843"]
-      assert %{rule: "R19", kind: :rerun_failed, outcome: :applied} = decision(issue_id)
+      assert [{"U2", :rerun_failed, _head} | _older] = upkept(issue_id)
+      assert length(upkept(issue_id)) == 2
 
       # The first rerun is cancelled again by GitHub: a new attempt, so new job ids, rerun once more.
       pr!("1", cancelled([%{e2e | job_id: 3}], names))
@@ -791,7 +797,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
       for job <- [3, 4] do
         tick!(pid)
-        assert %{rule: "R19", kind: :rerun_failed} = decision(issue_id)
+        assert %{rule: "R19", kind: :wait} = decision(issue_id)
         pr!("1", cancelled([%{install | job_id: job}], names) ++ [past_cancelled: :green])
       end
 
@@ -1049,7 +1055,8 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       pid = start!()
 
       tick!(pid, 3)
-      assert %{rule: "R28", kind: :update_branch} = decision(issue_id)
+      assert %{rule: "R28", kind: :wait, owner: :symphony} = decision(issue_id)
+      assert upkept(issue_id) == [{"U1", :update_branch, "head-1-1"}]
       assert World.calls(:update_branch) == [{"https://github.com/acme/app/pull/1", "head-1-1"}]
 
       # GitHub merged the base in: a new head, behind again once the base moved on.
@@ -1308,6 +1315,168 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert moves(forced) == ["CI Fix"]
       assert World.calls(:link) == []
       refute Hold.held?(@repo_key, forced, :blocked)
+    end
+  end
+
+  describe "branch upkeep for every open PR, whatever the flow decides (TP-1160)" do
+    @pr_1 "https://github.com/acme/app/pull/1"
+    @pr_2 "https://github.com/acme/app/pull/2"
+
+    # A Merging PR whose only red check is `protected paths`, which a person clears (R18).
+    defp protected_merging!(attrs \\ []) do
+      issue_id = ticket!("1", "Merging", human_only(:green) ++ attrs)
+      workspace!(issue_id)
+      issue_id
+    end
+
+    test "a Merging PR behind main on a Needs Decision hold is updated on the next read, once per head; the hold's wait stands" do
+      issue_id = ticket!("1", "Merging", mergeable: :behind)
+      :ok = Hold.set(@repo_key, issue_id, :needs_decision, %{reason: "A question"}, tracker: Tracker)
+      pid = start!()
+
+      tick!(pid)
+      assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}]
+      assert %{rule: "R4", owner: :person} = decision(issue_id)
+      assert upkept(issue_id) == [{"U1", :update_branch, "head-1-1"}]
+
+      tick!(pid, 2)
+      assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}]
+    end
+
+    test "a Merging PR behind main whose only red check a person clears is updated; R18 still asks" do
+      issue_id = protected_merging!(mergeable: :behind)
+      pid = start!(git: protected_git(["WORKFLOW.md"]))
+
+      tick!(pid)
+      assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}]
+      assert %{rule: "R18", kind: :decision} = decision(issue_id)
+      assert Hold.held?(@repo_key, issue_id, :needs_decision)
+    end
+
+    test "a PR behind main while its checks run is updated; the CI wait stands" do
+      issue_id = ticket!("1", "Code Review", mergeable: :behind, ci: :pending)
+      pid = start!()
+
+      tick!(pid)
+      assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}]
+      assert %{rule: "R24", owner: :ci} = decision(issue_id)
+    end
+
+    test "a Merging PR behind main on a Blocked hold, with no PR ahead sharing its files, is updated; the hold's wait stands" do
+      issue_id = ticket!("1", "Merging", mergeable: :behind)
+      :ok = Hold.set(@repo_key, issue_id, :blocked, %{reason: "Waiting on TP-9 to land"}, tracker: Tracker)
+      pid = start!()
+
+      tick!(pid)
+      assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}]
+      assert %{rule: "R4", owner: :symphony} = decision(issue_id)
+    end
+
+    test "a QA PR behind main is updated only once its run ends, on the read that sees it end" do
+      issue_id = ticket!("1", "QA", mergeable: :behind)
+      run!(issue_id, "running")
+      pid = start!()
+
+      tick!(pid, 2)
+      assert World.calls(:update_branch) == []
+      assert %{rule: "R9"} = decision(issue_id)
+
+      run!(issue_id, "success")
+      tick!(pid)
+      assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}]
+      # The QA agent waits for the updated head instead of judging the one it replaces.
+      assert %{rule: "R28", kind: :wait} = decision(issue_id)
+    end
+
+    test "walkthrough: main moves before the first CI run finishes; one update, CI once on the new head, review and QA on it, merged after QA" do
+      issue_id = ticket!("1", "Code Review", ci: :pending)
+      pid = start!()
+      tick!(pid)
+      assert %{rule: "R24"} = decision(issue_id)
+
+      # Another PR lands on main seconds after this one opened: updated at once, the first CI run still going.
+      pr!("1", mergeable: :behind)
+      tick!(pid)
+      assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}]
+
+      # GitHub merged main in: one CI run on the new head, and the old head's runs cancelled.
+      pr!("1", head_sha: "head-1-2", mergeable: :clean, ci: :pending)
+      tick!(pid)
+      assert %{rule: "R24"} = decision(issue_id)
+      assert World.calls(:cancel_stale_runs) == [{@pr_1, "head-1-1"}]
+
+      pr!("1", ci: :green)
+      tick!(pid)
+      assert %{rule: "R27", kind: :dispatch, head_sha: "head-1-2"} = decision(issue_id)
+
+      # The reviewer approves, QA passes: both on the updated head, and it merges right after QA.
+      move!(issue_id, "QA")
+      tick!(pid)
+      assert %{rule: "R27", kind: :dispatch, head_sha: "head-1-2"} = decision(issue_id)
+
+      move!(issue_id, "Merging")
+      tick!(pid)
+      assert World.calls(:merge) == [{@pr_1, "head-1-2"}]
+      assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}]
+    end
+
+    test "user walkthrough 1: a Merging PR waiting on the operator's answer follows main, and lands on the answer with no second CI cycle" do
+      issue_id = protected_merging!()
+      pid = start!(git: protected_git(["WORKFLOW.md"]))
+      tick!(pid)
+      assert %{decision: request} = Hold.get(@repo_key, issue_id, :needs_decision)
+
+      # Another PR lands on main while the operator hasn't answered: updated within one read.
+      pr!("1", mergeable: :behind)
+      tick!(pid)
+      assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}]
+      assert %{rule: "R4", owner: :person} = decision(issue_id)
+
+      # CI runs on the new head while the question waits.
+      pr!("1", head_sha: "head-1-2", mergeable: :clean, past_human_only: :pending)
+      tick!(pid)
+      pr!("1", past_human_only: :green)
+      tick!(pid)
+      assert World.calls(:merge) == []
+
+      # The operator allows the change: it lands on the updated head.
+      picked = SymphonyElixir.Decisions.entry("request-1", ~D[2026-10-29], request.title, request.question, "Allow the change", ["WORKFLOW.md"])
+      {:ok, description} = SymphonyElixir.Decisions.put("Ship it.", [picked])
+      World.update(:issues, &Map.update!(&1, issue_id, fn issue -> %{issue | description: description} end))
+      :ok = Hold.clear(@repo_key, issue_id, :needs_decision, tracker: Tracker)
+      tick!(pid)
+
+      assert World.calls(:merge) == [{@pr_1, "head-1-2"}]
+      assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}]
+      assert moves(issue_id) == []
+    end
+
+    test "user walkthrough 2: of two Merging PRs on the same file, the second is updated right after the first lands, CI runs once, and it lands" do
+      first = ticket!("1", "Merging", ci: :pending, mergeable: :blocked, auto_merge: :armed)
+      second = ticket!("2", "Merging", mergeable: :behind)
+      open_pulls!([open_pull(1, ["SPEC.md"]), open_pull(2, ["SPEC.md"])])
+      pid = start!()
+
+      tick!(pid)
+      assert %{rule: "R28", kind: :wait, owner: :symphony} = decision(second)
+      assert World.calls(:update_branch) == []
+
+      # The first lands.
+      pr!("1", pr: :merged)
+      open_pulls!([open_pull(2, ["SPEC.md"])])
+      tick!(pid)
+      assert %{rule: "R2"} = decision(first)
+      assert World.calls(:update_branch) == [{@pr_2, "head-2-1"}]
+
+      # One CI run on the updated head, then it lands.
+      pr!("2", head_sha: "head-2-2", mergeable: :clean, ci: :pending)
+      open_pulls!([open_pull(2, ["SPEC.md"], head_sha: "head-2-2")])
+      tick!(pid)
+      pr!("2", ci: :green)
+      tick!(pid)
+
+      assert World.calls(:merge) == [{@pr_2, "head-2-2"}]
+      assert World.calls(:update_branch) == [{@pr_2, "head-2-1"}]
     end
   end
 
