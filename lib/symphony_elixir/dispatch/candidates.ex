@@ -112,12 +112,12 @@ defmodule SymphonyElixir.Dispatch.Candidates do
   end
 
   defp assigned?(_assignee, nil), do: true
-  defp assigned?(assignee, assignee_ids), do: is_binary(assignee) and MapSet.member?(assignee_ids, assignee)
+  defp assigned?(assignee, assignee_ids), do: is_binary(assignee) and assignee in assignee_ids
 
   defp assignee_ids(settings, opts) do
     case Keyword.fetch(opts, :assignee_ids) do
       {:ok, nil} -> nil
-      {:ok, ids} -> MapSet.new(ids)
+      {:ok, ids} -> Enum.to_list(ids)
       :error -> configured_assignee_ids(settings.tracker.assignee)
     end
   end
@@ -125,8 +125,8 @@ defmodule SymphonyElixir.Dispatch.Candidates do
   defp configured_assignee_ids(assignee) when is_binary(assignee) do
     case String.trim(assignee) do
       "" -> nil
-      "me" -> MapSet.new()
-      id -> MapSet.new([id])
+      "me" -> []
+      id -> [id]
     end
   end
 
