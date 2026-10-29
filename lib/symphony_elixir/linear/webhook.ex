@@ -5,12 +5,16 @@ defmodule SymphonyElixir.Linear.Webhook do
   A delivery is Linear's when its `Linear-Signature` header is the hex HMAC-SHA256 of the raw
   request body with the signing secret, and fresh when the body's `webhookTimestamp` (milliseconds
   since the epoch) is within sixty seconds of now, which keeps a captured delivery from being
-  replayed later. `SymphonyElixirWeb.LinearWebhookController` checks each delivery with it; this
-  module only decides whether one is genuine.
+  replayed later. `SymphonyElixirWeb.LinearWebhookController` checks each delivery with it.
+
+  `parse/1` reads a verified delivery into Symphony's terms: an `Issue` delivery becomes the same
+  `Linear.Issue` the poll builds for that ticket (`Linear.IssueNormalizer`), a `Comment` delivery the
+  comment and its issue's id. Nothing acts on what it returns yet.
   """
 
   alias SymphonyElixir.{Config, Secret}
   alias SymphonyElixir.Config.Schema.Linear.Webhooks
+  alias SymphonyElixir.Linear.{Issue, IssueNormalizer}
 
   @signature_header "linear-signature"
   @max_age_ms 60_000
@@ -20,6 +24,20 @@ defmodule SymphonyElixir.Linear.Webhook do
 
   @typedoc "Request headers, as Plug's `req_headers` list or a map; names match in any case."
   @type headers :: [{String.t(), String.t()}] | %{optional(String.t()) => String.t()}
+
+  @typedoc "What Linear did to the entity a delivery is about."
+  @type action :: :create | :update | :remove
+
+  @typedoc """
+  What a delivery says happened: an issue created or updated (with its `updatedAt`), an issue
+  removed, a comment created, updated or removed on an issue, or something Symphony doesn't read.
+  """
+  @type parsed ::
+          {:issue, :create | :update, Issue.t(), DateTime.t()}
+          | {:issue_removed, String.t(), String.t() | nil}
+          | {:comment, action(), String.t(), IssueNormalizer.comment()}
+          | :ignored
+          | {:error, :malformed}
 
   @doc "The `linear.webhooks` settings, or the defaults (off) when the config can't be read."
   @spec settings() :: Webhooks.t()
@@ -77,4 +95,66 @@ defmodule SymphonyElixir.Linear.Webhook do
       _stale -> {:error, :stale_timestamp}
     end
   end
+
+  @doc """
+  Reads a verified delivery, as its raw body or already decoded: `Issue` create and update give
+  `{:issue, action, issue, updated_at}`, `Issue` remove `{:issue_removed, id, identifier}`,
+  `Comment` `{:comment, action, issue_id, comment}`, and any other type, or an action Symphony
+  doesn't know, `:ignored`. A body that isn't JSON, or an `Issue` or `Comment` without the ids and
+  `updatedAt` those need, is `{:error, :malformed}`.
+  """
+  @spec parse(binary() | map()) :: parsed()
+  def parse(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, %{} = delivery} -> parse(delivery)
+      _not_an_object -> {:error, :malformed}
+    end
+  end
+
+  def parse(%{"type" => type, "action" => action, "data" => %{} = data}) when is_binary(type) and is_binary(action) do
+    case {type, action(action)} do
+      {_type, nil} -> :ignored
+      {"Issue", action} -> parse_issue(action, data)
+      {"Comment", action} -> parse_comment(action, data)
+      _other_type -> :ignored
+    end
+  end
+
+  def parse(%{"type" => type}) when is_binary(type) and type not in ["Issue", "Comment"], do: :ignored
+  def parse(_delivery), do: {:error, :malformed}
+
+  defp action("create"), do: :create
+  defp action("update"), do: :update
+  defp action("remove"), do: :remove
+  defp action(_action), do: nil
+
+  defp parse_issue(:remove, data) do
+    case data do
+      %{"id" => id} when is_binary(id) and id != "" -> {:issue_removed, id, string(data["identifier"])}
+      _no_id -> {:error, :malformed}
+    end
+  end
+
+  defp parse_issue(action, data) do
+    case IssueNormalizer.from_webhook_data(data) do
+      %Issue{id: id, identifier: identifier, updated_at: %DateTime{} = updated_at} = issue
+      when is_binary(id) and id != "" and is_binary(identifier) and identifier != "" ->
+        {:issue, action, issue, updated_at}
+
+      _incomplete ->
+        {:error, :malformed}
+    end
+  end
+
+  defp parse_comment(action, data) do
+    with issue_id when is_binary(issue_id) and issue_id != "" <- data["issueId"] || get_in(data, ["issue", "id"]),
+         %{} = comment <- IssueNormalizer.comment_from_webhook_data(data) do
+      {:comment, action, issue_id, comment}
+    else
+      _incomplete -> {:error, :malformed}
+    end
+  end
+
+  defp string(value) when is_binary(value) and value != "", do: value
+  defp string(_value), do: nil
 end

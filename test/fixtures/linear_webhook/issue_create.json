@@ -1,0 +1,83 @@
+{
+  "action": "create",
+  "actor": {
+    "id": "8f1c2b3a-0d4e-4f5a-9b6c-7d8e9f0a1b2c",
+    "type": "user",
+    "name": "Ada Operator",
+    "email": "ada@example.com",
+    "url": "https://linear.app/example/profiles/ada"
+  },
+  "createdAt": "2026-10-28T14:02:11.391Z",
+  "data": {
+    "id": "5a7c1f9e-3b2d-4c8a-9e6f-1d2b3c4d5e6f",
+    "createdAt": "2026-10-28T14:02:11.204Z",
+    "updatedAt": "2026-10-28T14:02:11.204Z",
+    "archivedAt": null,
+    "number": 1213,
+    "title": "Webhook payloads become Issue facts",
+    "description": null,
+    "priority": 1,
+    "priorityLabel": "Urgent",
+    "estimate": null,
+    "sortOrder": -1204.5,
+    "boardOrder": 0,
+    "startedAt": null,
+    "completedAt": null,
+    "canceledAt": null,
+    "dueDate": null,
+    "trashed": null,
+    "teamId": "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e",
+    "cycleId": null,
+    "projectId": "c2d3e4f5-a6b7-4c8d-9e0f-1a2b3c4d5e6f",
+    "stateId": "0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+    "creatorId": "8f1c2b3a-0d4e-4f5a-9b6c-7d8e9f0a1b2c",
+    "assigneeId": "e4f5a6b7-c8d9-4e0f-9a1b-3c4d5e6f7a8b",
+    "subscriberIds": [
+      "8f1c2b3a-0d4e-4f5a-9b6c-7d8e9f0a1b2c"
+    ],
+    "previousIdentifiers": [],
+    "labelIds": [
+      "f5a6b7c8-d9e0-4f1a-8b2c-4d5e6f7a8b9c",
+      "a6b7c8d9-e0f1-4a2b-9c3d-5e6f7a8b9c0d"
+    ],
+    "identifier": "TP-1213",
+    "url": "https://linear.app/example/issue/TP-1213/webhook-payloads-become-issue-facts",
+    "state": {
+      "id": "0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+      "color": "#e2e2e2",
+      "name": "Todo",
+      "type": "unstarted"
+    },
+    "team": {
+      "id": "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e",
+      "key": "TP",
+      "name": "Tony Pine"
+    },
+    "project": {
+      "id": "c2d3e4f5-a6b7-4c8d-9e0f-1a2b3c4d5e6f",
+      "name": "Symphony",
+      "url": "https://linear.app/example/project/symphony-0a1b2c3d4e5f"
+    },
+    "assignee": {
+      "id": "e4f5a6b7-c8d9-4e0f-9a1b-3c4d5e6f7a8b",
+      "name": "Symphony Agent"
+    },
+    "labels": [
+      {
+        "id": "f5a6b7c8-d9e0-4f1a-8b2c-4d5e6f7a8b9c",
+        "color": "#bec2c8",
+        "name": "Elixir"
+      },
+      {
+        "id": "a6b7c8d9-e0f1-4a2b-9c3d-5e6f7a8b9c0d",
+        "color": "#4ea7fc",
+        "name": "Reads"
+      }
+    ]
+  },
+  "url": "https://linear.app/example/issue/TP-1213/webhook-payloads-become-issue-facts",
+  "type": "Issue",
+  "organizationId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+  "webhookTimestamp": 1793196131391,
+  "webhookId": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e"
+}

@@ -42,6 +42,8 @@ defmodule SymphonyElixir.Linear.Issue do
     updated_at: nil
   ]
 
+  # `:unknown` marks a field the source did not carry (a webhook delivery has no children or
+  # comments), as opposed to one Linear reported empty; see `Linear.IssueNormalizer`.
   @type t :: %__MODULE__{
           id: String.t() | nil,
           identifier: String.t() | nil,
@@ -51,7 +53,7 @@ defmodule SymphonyElixir.Linear.Issue do
           state: String.t() | nil,
           team: %{key: String.t() | nil, name: String.t() | nil} | nil,
           project: %{:id => String.t() | nil, :name => String.t() | nil, optional(:slug_id) => String.t() | nil} | nil,
-          branch_name: String.t() | nil,
+          branch_name: String.t() | nil | :unknown,
           url: String.t() | nil,
           assignee_id: String.t() | nil,
           repo_key: String.t() | nil,
@@ -61,12 +63,12 @@ defmodule SymphonyElixir.Linear.Issue do
           workspace_branch: String.t() | nil,
           workspace_base_ref: String.t() | nil,
           parent: SymphonyElixir.Connected.parent() | nil,
-          sub_issues: [%{id: String.t() | nil, identifier: String.t() | nil, state: String.t() | nil}],
-          comments: [%{author: String.t(), body: String.t(), created_at: DateTime.t() | nil}],
-          rulings: [SymphonyElixir.Decisions.entry()],
-          linked_issues: [
-            %{relation: String.t(), identifier: String.t(), title: String.t() | nil, state: String.t() | nil}
-          ],
+          sub_issues: [%{id: String.t() | nil, identifier: String.t() | nil, state: String.t() | nil}] | :unknown,
+          comments: [%{author: String.t(), body: String.t(), created_at: DateTime.t() | nil}] | :unknown,
+          rulings: [SymphonyElixir.Decisions.entry()] | :unknown,
+          linked_issues:
+            [%{relation: String.t(), identifier: String.t(), title: String.t() | nil, state: String.t() | nil}]
+            | :unknown,
           conflict_repo_keys: [String.t()],
           labels: [String.t()],
           assigned_to_worker: boolean(),

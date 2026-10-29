@@ -6,13 +6,12 @@ defmodule SymphonyElixir.Linear.Client do
   require Logger
 
   alias SymphonyElixir.{
-    AgentLabels,
     AuditLog,
     Config,
     Connected,
-    Decisions,
     IssueSummary,
     Linear.Issue,
+    Linear.IssueNormalizer,
     Secret,
     StateMachine
   }
@@ -24,9 +23,6 @@ defmodule SymphonyElixir.Linear.Client do
   @sub_issue_page_size 20
   @enrichment_comment_last 20
   @enrichment_relation_first 50
-  @enrichment_comment_limit 3
-  @enrichment_comment_body_limit 800
-  @workpad_markers AgentLabels.known_workpad_markers()
   @max_error_body_log_bytes 1_000
   # Upload URLs in descriptions and comments need Linear's key unless the response signs them.
   # Six hours outlasts a run (the default turn timeout is one hour); agent reads re-sign each time.
@@ -444,7 +440,7 @@ defmodule SymphonyElixir.Linear.Client do
   @doc false
   @spec normalize_issue_for_test(map()) :: Issue.t() | nil
   def normalize_issue_for_test(issue) when is_map(issue) do
-    normalize_issue(issue, nil)
+    IssueNormalizer.from_graphql_node(issue, nil)
   end
 
   @doc false
@@ -462,7 +458,7 @@ defmodule SymphonyElixir.Linear.Client do
           nil
       end
 
-    normalize_issue(issue, assignee_filter)
+    IssueNormalizer.from_graphql_node(issue, assignee_filter)
   end
 
   @doc false
@@ -954,7 +950,7 @@ defmodule SymphonyElixir.Linear.Client do
            %{
              issue
              | description: IssueSummary.strip(Map.get(enrichment, "description", issue.description)),
-               comments: extract_comments(enrichment),
+               comments: IssueNormalizer.comments(enrichment),
                linked_issues: extract_linked_issues(enrichment),
                parent: Connected.parent(enrichment["parent"])
            }}
@@ -1098,7 +1094,7 @@ defmodule SymphonyElixir.Linear.Client do
   defp decode_linear_response(%{"data" => %{"issues" => %{"nodes" => nodes}}}, assignee_filter) do
     issues =
       nodes
-      |> Enum.map(&normalize_issue(&1, assignee_filter))
+      |> Enum.map(&IssueNormalizer.from_graphql_node(&1, assignee_filter))
       |> Enum.reject(&is_nil(&1))
 
     {:ok, issues}
@@ -1131,7 +1127,7 @@ defmodule SymphonyElixir.Linear.Client do
   defp decode_linear_page_response(response, assignee_filter), do: decode_linear_response(response, assignee_filter)
 
   defp decode_linear_issue_response(%{"data" => %{"issue" => issue}}, assignee_filter) when is_map(issue) do
-    case normalize_issue(issue, assignee_filter) do
+    case IssueNormalizer.from_graphql_node(issue, assignee_filter) do
       %Issue{} = issue -> {:ok, issue}
       nil -> {:error, :linear_invalid_issue}
     end
@@ -1164,75 +1160,6 @@ defmodule SymphonyElixir.Linear.Client do
 
   defp next_page_cursor(%{has_next_page: true}), do: {:error, :linear_missing_end_cursor}
   defp next_page_cursor(_), do: :done
-
-  # assigned_to_worker is load-bearing on the by-id refresh path. Candidate
-  # queries apply assignee server-side, so normalized candidate issues always
-  # keep the default true value.
-  defp normalize_issue(issue, assignee_filter) when is_map(issue) do
-    assignee = issue["assignee"]
-
-    %Issue{
-      id: issue["id"],
-      identifier: issue["identifier"],
-      title: issue["title"],
-      # Symphony's own summary block is not part of the ticket's requirements.
-      description: IssueSummary.strip(issue["description"]),
-      priority: parse_priority(issue["priority"]),
-      state: get_in(issue, ["state", "name"]),
-      team: extract_team(issue),
-      project: extract_project(issue),
-      branch_name: issue["branchName"],
-      url: issue["url"],
-      assignee_id: assignee_field(assignee, "id"),
-      blocked_by: extract_blockers(issue),
-      sub_issues: extract_sub_issues(issue),
-      labels: extract_labels(issue),
-      comments: extract_comments(issue),
-      # A person's rulings in plain comments, which the poll records in the description.
-      rulings: Decisions.rulings(issue),
-      assigned_to_worker: assigned_to_worker?(assignee, assignee_filter),
-      created_at: parse_datetime(issue["createdAt"]),
-      updated_at: parse_datetime(issue["updatedAt"])
-    }
-  end
-
-  defp normalize_issue(_issue, _assignee_filter), do: nil
-
-  defp assignee_field(%{} = assignee, field) when is_binary(field), do: assignee[field]
-  defp assignee_field(_assignee, _field), do: nil
-
-  defp extract_team(%{"team" => %{} = team}) do
-    %{
-      key: team["key"],
-      name: team["name"]
-    }
-  end
-
-  defp extract_team(_issue), do: nil
-
-  defp extract_project(%{"project" => %{} = project}) do
-    %{
-      id: project["id"],
-      name: project["name"],
-      slug_id: project["slugId"]
-    }
-  end
-
-  defp extract_project(_issue), do: nil
-
-  defp assigned_to_worker?(_assignee, nil), do: true
-
-  defp assigned_to_worker?(%{} = assignee, %{match_values: match_values})
-       when is_struct(match_values, MapSet) do
-    assignee
-    |> assignee_id()
-    |> then(fn
-      nil -> false
-      assignee_id -> MapSet.member?(match_values, assignee_id)
-    end)
-  end
-
-  defp assigned_to_worker?(_assignee, _assignee_filter), do: false
 
   defp assignee_id(%{} = assignee), do: normalize_assignee_match_value(assignee["id"])
 
@@ -1307,114 +1234,6 @@ defmodule SymphonyElixir.Linear.Client do
 
   defp normalize_assignee_match_value(_value), do: nil
 
-  defp extract_labels(%{"labels" => %{"nodes" => labels}}) when is_list(labels) do
-    labels
-    |> Enum.map(& &1["name"])
-    |> Enum.reject(&is_nil/1)
-    |> Enum.map(&String.downcase/1)
-  end
-
-  defp extract_labels(_), do: []
-
-  defp extract_blockers(%{"inverseRelations" => %{"nodes" => inverse_relations}})
-       when is_list(inverse_relations) do
-    inverse_relations
-    |> Enum.flat_map(fn
-      %{"type" => relation_type, "issue" => blocker_issue}
-      when is_binary(relation_type) and is_map(blocker_issue) ->
-        if String.downcase(String.trim(relation_type)) == "blocks" do
-          [
-            %{
-              id: blocker_issue["id"],
-              identifier: blocker_issue["identifier"],
-              state: get_in(blocker_issue, ["state", "name"])
-            }
-          ]
-        else
-          []
-        end
-
-      _ ->
-        []
-    end)
-  end
-
-  defp extract_blockers(_), do: []
-
-  defp extract_sub_issues(%{"children" => %{"nodes" => children}}) when is_list(children) do
-    Enum.flat_map(children, fn
-      %{} = child -> [%{id: child["id"], identifier: child["identifier"], state: get_in(child, ["state", "name"])}]
-      _child -> []
-    end)
-  end
-
-  defp extract_sub_issues(_), do: []
-
-  defp extract_comments(%{"comments" => %{"nodes" => comments}}) when is_list(comments) do
-    normalized_comments =
-      comments
-      |> Enum.with_index()
-      |> Enum.flat_map(fn {comment, index} ->
-        case normalize_comment(comment, index) do
-          nil -> []
-          normalized -> [normalized]
-        end
-      end)
-      |> Enum.reverse()
-
-    workpad_comment = Enum.find(normalized_comments, & &1.contains_workpad_marker)
-
-    normalized_comments
-    |> select_comments(workpad_comment)
-    |> Enum.map(&Map.take(&1, [:author, :body, :created_at]))
-  end
-
-  defp extract_comments(_issue), do: []
-
-  defp normalize_comment(%{"body" => body} = comment, index) when is_binary(body) do
-    trimmed_body = String.trim(body)
-
-    if trimmed_body == "" do
-      nil
-    else
-      %{
-        index: index,
-        author: comment_author(comment),
-        body: truncate_comment_body(body),
-        contains_workpad_marker: Enum.any?(@workpad_markers, &String.contains?(body, &1)),
-        created_at: parse_datetime(comment["createdAt"])
-      }
-    end
-  end
-
-  defp normalize_comment(_comment, _index), do: nil
-
-  defp comment_author(%{"user" => %{"name" => name}}) when is_binary(name) do
-    case String.trim(name) do
-      "" -> "Unknown"
-      author -> author
-    end
-  end
-
-  defp comment_author(_comment), do: "Unknown"
-
-  defp truncate_comment_body(body) when is_binary(body) do
-    String.slice(body, 0, @enrichment_comment_body_limit)
-  end
-
-  defp select_comments(comments, nil) do
-    Enum.take(comments, @enrichment_comment_limit)
-  end
-
-  defp select_comments(comments, workpad_comment) when is_map(workpad_comment) do
-    recent_comments =
-      comments
-      |> Enum.reject(&(&1.index == workpad_comment.index))
-      |> Enum.take(@enrichment_comment_limit - 1)
-
-    [workpad_comment | recent_comments]
-  end
-
   defp extract_linked_issues(%{"relations" => %{"nodes" => relations}}) when is_list(relations) do
     Enum.flat_map(relations, &normalize_linked_issue/1)
   end
@@ -1452,16 +1271,4 @@ defmodule SymphonyElixir.Linear.Client do
     |> String.trim()
     |> String.downcase()
   end
-
-  defp parse_datetime(nil), do: nil
-
-  defp parse_datetime(raw) do
-    case DateTime.from_iso8601(raw) do
-      {:ok, dt, _offset} -> dt
-      _ -> nil
-    end
-  end
-
-  defp parse_priority(priority) when is_integer(priority), do: priority
-  defp parse_priority(_priority), do: nil
 end
