@@ -21,6 +21,9 @@ defmodule SymphonyElixir.TicketObservationTest do
         id: "issue-observed",
         identifier: "ACME-7",
         title: "Observe every poll",
+        description: "## Why\n\nThe record learns from every poll.",
+        team: %{key: "Test", name: "Test"},
+        project: %{id: "project-1", name: "Symphony", slug_id: "symphony-1a2b"},
         state: "Todo",
         labels: ["backend"],
         priority: 2,
@@ -44,6 +47,9 @@ defmodule SymphonyElixir.TicketObservationTest do
              issue_identifier: "ACME-7",
              phase: "Todo",
              title: "Observe every poll",
+             description: "## Why\n\nThe record learns from every poll.",
+             team: %{key: "Test", name: "Test"},
+             project: %{id: "project-1", name: "Symphony", slug_id: "symphony-1a2b"},
              labels: ["backend"],
              priority: 2,
              assignee: "user-1",
@@ -65,6 +71,15 @@ defmodule SymphonyElixir.TicketObservationTest do
 
     assert {:ok, :unchanged} = TicketObservation.observe(repo_key, linear_issue(), now: DateTime.add(@now, 60))
     assert RunStore.get_ticket_state(repo_key, "issue-observed") == stored
+  end
+
+  test "an edited description is written once", %{repo_key: repo_key} do
+    {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
+
+    edited = linear_issue(%{description: "## Why\n\nEdited.", updated_at: DateTime.add(@linear_at, 60)})
+    assert {:ok, :updated} = TicketObservation.observe(repo_key, edited, now: DateTime.add(@now, 60))
+    assert RunStore.get_ticket_state(repo_key, "issue-observed").description == "## Why\n\nEdited."
+    assert {:ok, :unchanged} = TicketObservation.observe(repo_key, edited, now: DateTime.add(@now, 120))
   end
 
   test "a sub-ticket or a blocker that moves is written, at the same updatedAt", %{repo_key: repo_key} do
@@ -316,6 +331,17 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert record.observed_at == DateTime.add(@now, 60)
       assert TicketObservation.observe_delivery(edited, now: DateTime.add(@now, 60), orchestrator: self()) == :unchanged
       refute_received {:"$gen_cast", _request}
+    end
+
+    test "a delivery keeps the slug id the poll recorded, and the description and team it leaves out", %{repo_key: repo_key} do
+      polled = poll!(repo_key)
+      renamed = delivery(%{description: nil, team: nil, project: %{id: "project-1", name: "Symphony Engine"}, updated_at: DateTime.add(@linear_at, 60)})
+
+      assert TicketObservation.observe_delivery(renamed, now: DateTime.add(@now, 60)) == :updated
+
+      record = RunStore.get_ticket_state(repo_key, "issue-observed")
+      assert record.project == %{id: "project-1", name: "Symphony Engine", slug_id: "symphony-1a2b"}
+      assert {record.description, record.team} == {polled.description, %{key: "Test", name: "Test"}}
     end
 
     test "an older delivery is dropped as stale", %{repo_key: repo_key} do

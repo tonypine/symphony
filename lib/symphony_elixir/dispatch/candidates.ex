@@ -15,7 +15,8 @@ defmodule SymphonyElixir.Dispatch.Candidates do
   wait on its sub-tickets, the priority filter, a forced ticket's label), the epic lanes
   (`SymphonyElixir.EpicLanes.plan/4`) and the dispatch order (priority, then age) read it as they read
   a polled issue: the priority filter stays a gate because a forced ticket and a retry waiting for a
-  slot bypass it.
+  slot bypass it. It also carries the record's description, team and project, equal to the polled
+  issue's, for the readers that rebuild a ticket from its record.
 
   Everything here is pure: no store read, no Linear read, no process. The orchestrator calls it every
   poll cycle, to dispatch from it under `dispatch.source: record` and for the shadow
@@ -85,9 +86,9 @@ defmodule SymphonyElixir.Dispatch.Candidates do
   end
 
   @doc """
-  The `SymphonyElixir.Linear.Issue` a ticket record describes: its id, identifier, title, state (the
-  record's `phase`), labels, priority, assignee, blockers, sub-issues, parent, URL, repo, creation time
-  and Linear's `updatedAt`. The record keeps only the blockers that were open when it was observed; one
+  The `SymphonyElixir.Linear.Issue` a ticket record describes: its id, identifier, title, description,
+  team, project, state (the record's `phase`), labels, priority, assignee, blockers, sub-issues,
+  parent, URL, repo, creation time and Linear's `updatedAt`. The record keeps only the blockers that were open when it was observed; one
   a record read before blockers kept their state has no known state, which `Issue.blocked?/2` counts
   as open.
   """
@@ -99,6 +100,9 @@ defmodule SymphonyElixir.Dispatch.Candidates do
       id: record.issue_id,
       identifier: record.issue_identifier,
       title: record.title,
+      description: record.description,
+      team: record.team,
+      project: record.project,
       state: record.phase,
       labels: record.labels,
       priority: record.priority,
