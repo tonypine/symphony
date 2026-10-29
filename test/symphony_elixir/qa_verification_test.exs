@@ -1586,6 +1586,195 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
   end
 
+  # A reused workspace still holds the head of its last run, while branch upkeep merged the base
+  # branch into the PR after the approve. `origin` is a bare repo holding the PR head where GitHub
+  # keeps it, `refs/pull/816/head`.
+  describe "the workspace synced to the PR head" do
+    defp git!(args, dir) do
+      {output, 0} = System.cmd("git", args, cd: dir, stderr_to_stdout: true)
+      String.trim(output)
+    end
+
+    defp commit!(dir, message), do: git!(["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", message], dir)
+
+    # A workspace at `head` whose PR head on `origin` is one commit ahead of it, `pr_head`.
+    defp behind_pr_workspace! do
+      {workspace, head} = git_workspace!()
+      origin = workspace <> "-origin.git"
+      git!(["init", "-q", "--bare", origin], workspace)
+      on_exit(fn -> File.rm_rf(origin) end)
+      git!(["remote", "add", "origin", origin], workspace)
+      git!(["push", "-q", "origin", "HEAD:refs/heads/auto/TP-816"], workspace)
+
+      commit!(workspace, "Merge origin/main into auto/TP-816")
+      pr_head = git!(["rev-parse", "HEAD"], workspace)
+      git!(["push", "-q", "origin", "HEAD:refs/heads/auto/TP-816", "HEAD:refs/pull/816/head"], workspace)
+      git!(["reset", "-q", "--hard", head], workspace)
+
+      {workspace, head, pr_head, origin}
+    end
+
+    # Answers `gh pr view` like `gh/2`, but the PR's head moves when it is first asked: `origin`'s PR
+    # ref gets a new commit, made in a scratch clone, as an upkeep merge landing after the sync would.
+    defp moving_gh(origin, checks) do
+      moved = start_supervised!({Agent, fn -> nil end})
+
+      fn
+        ["pr", "view", @pr_url, "--json", _fields], _opts ->
+          head =
+            Agent.get_and_update(moved, fn
+              nil -> origin |> move_pr_head!() |> then(&{&1, &1})
+              sha -> {sha, sha}
+            end)
+
+          {Jason.encode!(%{"url" => @pr_url, "headRefOid" => head, "statusCheckRollup" => checks}), 0}
+
+        ["api" | _endpoint], _opts ->
+          {Jason.encode!(%{"workflow_runs" => []}), 0}
+      end
+    end
+
+    defp move_pr_head!(origin) do
+      clone = origin <> "-clone-#{System.unique_integer([:positive])}"
+      git!(["clone", "-q", origin, clone], System.tmp_dir!())
+      git!(["fetch", "-q", "origin", "refs/pull/816/head"], clone)
+      git!(["reset", "-q", "--hard", "FETCH_HEAD"], clone)
+      commit!(clone, "Merge origin/main into auto/TP-816 again")
+      git!(["push", "-q", "origin", "HEAD:refs/pull/816/head"], clone)
+      File.rm_rf!(clone)
+      head_of!(origin)
+    end
+
+    defp head_of!(origin), do: git!(["rev-parse", "refs/pull/816/head"], origin)
+
+    test "a workspace behind the PR head is reset to it, and the verdict binds to the PR head" do
+      {workspace, _head, pr_head, _origin} = behind_pr_workspace!()
+
+      assert :ok = run_named(workspace, @named_walkthrough, gh_runner: gh(pr_head, [make_all("COMPLETED", "SUCCESS")]))
+
+      assert git!(["rev-parse", "HEAD"], workspace) == pr_head
+      assert_received {:qa_agent_run, %{sha: ^pr_head}, %Schema{}}
+      assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+      assert [%{outcome: "pass", head_sha: ^pr_head}] = verdicts()
+      refute_received {:memory_tracker_comment, @issue_id, "## Decision needed" <> _rest}
+    end
+
+    test "a workspace with local changes is never reset: the run is blocked naming them" do
+      {workspace, head, pr_head, _origin} = behind_pr_workspace!()
+      for n <- 1..6, do: File.write!(Path.join(workspace, "notes-#{n}.txt"), "draft")
+
+      assert :ok = run_named(workspace, @named_walkthrough, gh_runner: gh(pr_head, [make_all("COMPLETED", "SUCCESS")]))
+
+      assert git!(["rev-parse", "HEAD"], workspace) == head
+      assert File.exists?(Path.join(workspace, "notes-6.txt"))
+      refute_received {:qa_agent_run, _, _}
+      assert_received {:memory_tracker_comment, @issue_id, report}
+
+      assert report =~
+               "Reason: the workspace at #{String.slice(head, 0, 12)} is behind the PR head #{String.slice(pr_head, 0, 12)} and was not reset to it, " <>
+                 "because it has local changes (?? notes-1.txt, ?? notes-2.txt, ?? notes-3.txt, ?? notes-4.txt, ?? notes-5.txt and 1 more)"
+
+      assert [%{outcome: "blocked", head_sha: ^head}] = verdicts()
+    end
+
+    test "a workspace with a commit nothing on origin has is never reset" do
+      {workspace, _head, _pr_head, _origin} = behind_pr_workspace!()
+      commit!(workspace, "work in progress")
+      local = git!(["rev-parse", "HEAD"], workspace)
+
+      assert :ok = run(workspace, [])
+
+      assert git!(["rev-parse", "HEAD"], workspace) == local
+      refute_received {:qa_agent_run, _, _}
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "because it has 1 unpushed commit(s) (#{String.slice(local, 0, 12)})"
+    end
+
+    test "a git read or reset that fails leaves the workspace as it is" do
+      {workspace, head, pr_head, _origin} = behind_pr_workspace!()
+
+      failing_status = fn
+        ["status" | _rest], _dir -> {"fatal: index locked", 128}
+        args, dir -> System.cmd("git", args, cd: dir, stderr_to_stdout: true)
+      end
+
+      assert :ok = run(workspace, git: failing_status)
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "because it has a state git could not read (git status exited 128: fatal: index locked)"
+
+      failing_reset = fn
+        ["reset" | _rest], _dir -> {"fatal: cannot lock ref", 128}
+        args, dir -> System.cmd("git", args, cd: dir, stderr_to_stdout: true)
+      end
+
+      RunStore.delete_ticket_state(@repo_key, @issue_id)
+      :ok = TicketPullRequest.put(@repo_key, @issue_id, %{pr_url: @pr_url})
+
+      log = capture_log(fn -> assert :ok = run(workspace, git: failing_reset) end)
+
+      assert log =~ "QA for TP-816 runs on its workspace head: the PR head could not be synced: {:pr_head_reset_failed, 128"
+      assert_received {:qa_agent_run, %{sha: ^head}, %Schema{}}
+      refute head == pr_head
+    end
+
+    test "a PR head that moves after the sync is synced again once, in the same run" do
+      {workspace, _head, _pr_head, origin} = behind_pr_workspace!()
+
+      log =
+        capture_log(fn ->
+          assert :ok = run_named(workspace, @named_walkthrough, gh_runner: moving_gh(origin, [make_all("COMPLETED", "SUCCESS")]))
+        end)
+
+      moved = head_of!(origin)
+      assert log =~ "re-syncs its workspace: the PR head moved from"
+      assert git!(["rev-parse", "HEAD"], workspace) == moved
+      assert_received {:qa_agent_run, %{sha: ^moved}, %Schema{}}
+      assert [%{outcome: "pass", head_sha: ^moved}] = verdicts()
+    end
+
+    test "a head that still differs after the sync blocks the run, as before" do
+      {workspace, _head, pr_head, _origin} = behind_pr_workspace!()
+      elsewhere = String.duplicate("f", 40)
+      runner = gh(elsewhere, [make_all("COMPLETED", "SUCCESS")])
+
+      capture_log(fn -> assert :ok = run_named(workspace, @named_walkthrough, gh_runner: runner) end)
+
+      refute_received {:qa_agent_run, _, _}
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ ~s(Reason: the QA pre-check could not read CI on the PR head: {:pr_head_moved, "#{elsewhere}"})
+      assert [%{outcome: "blocked", head_sha: ^pr_head}] = verdicts()
+    end
+
+    test "a moved head the workspace cannot be synced to blocks the run with the reason" do
+      {workspace, head} = git_workspace!()
+      elsewhere = String.duplicate("e", 40)
+      runner = gh(elsewhere, [make_all("COMPLETED", "SUCCESS")])
+
+      capture_log(fn -> assert :ok = run_named(workspace, @named_walkthrough, gh_runner: runner) end)
+
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ ~s(Reason: the QA pre-check could not read CI on the PR head: {:pr_head_moved, "#{elsewhere}", {:pr_head_fetch_failed, "refs/pull/816/head")
+      assert [%{outcome: "blocked", head_sha: ^head}] = verdicts()
+    end
+
+    test "local changes made before a moved head is synced are never reset" do
+      {workspace, _head, pr_head, origin} = behind_pr_workspace!()
+      gh = moving_gh(origin, [make_all("COMPLETED", "SUCCESS")])
+
+      dirtying_gh = fn args, opts ->
+        File.write!(Path.join(workspace, "scratch.txt"), "draft")
+        gh.(args, opts)
+      end
+
+      capture_log(fn -> assert :ok = run_named(workspace, @named_walkthrough, gh_runner: dirtying_gh) end)
+
+      assert git!(["rev-parse", "HEAD"], workspace) == pr_head
+      refute_received {:qa_agent_run, _, _}
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "and was not reset to it, because it has local changes (?? scratch.txt)"
+    end
+  end
+
   describe "the pass's ledger events" do
     @home String.duplicate("a", 64)
     @detail String.duplicate("b", 64)
