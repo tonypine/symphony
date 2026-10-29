@@ -4650,17 +4650,31 @@ defmodule SymphonyElixir.Orchestrator do
     String.downcase(String.trim(state_name))
   end
 
-  defp terminal_state_set do
-    Config.settings!().tracker.terminal_states
+  defp terminal_state_set, do: terminal_state_set(Config.settings!())
+
+  @doc """
+  The terminal states of `settings`, trimmed and lowercased: the set the dispatch gate and the
+  reconciliation read. Public so the candidates from the record (`SymphonyElixir.Dispatch.Candidates`)
+  use the same one.
+  """
+  @spec terminal_state_set(Schema.t()) :: MapSet.t(String.t())
+  def terminal_state_set(%Schema{} = settings) do
+    settings.tracker.terminal_states
     |> Enum.map(&normalize_issue_state/1)
     |> Enum.filter(&(&1 != ""))
     |> MapSet.new()
   end
 
-  # The machine's active states (the dispatch gate and the reconciliation filter): the configured
-  # active states plus the phase states, never `Plan Review` (`StateMachine.tracker_active_states/1`).
-  defp active_state_set do
-    Config.settings!().tracker
+  defp active_state_set, do: active_state_set(Config.settings!())
+
+  @doc """
+  The machine's active states of `settings` (the dispatch gate and the reconciliation filter), trimmed
+  and lowercased: the configured active states plus the phase states, never `Plan Review`
+  (`StateMachine.tracker_active_states/1`). Public for the same reason as `terminal_state_set/1`.
+  """
+  @spec active_state_set(Schema.t()) :: MapSet.t(String.t())
+  def active_state_set(%Schema{} = settings) do
+    settings.tracker
     |> StateMachine.tracker_active_states()
     |> Enum.map(&normalize_issue_state/1)
     |> Enum.filter(&(&1 != ""))
