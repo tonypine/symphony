@@ -521,7 +521,13 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp pending_ci_rework_head_ref(_issue, _opts), do: nil
 
-  defp codex_message_handler(recipient, issue) do
+  @doc """
+  The `on_message` hook of every run kind: it forwards each streamed agent event to the
+  orchestrator as `{:codex_worker_update, issue_id, update}`, which records the run's session id
+  and activity on its running entry. Code Review and QA chain it after their own collectors.
+  """
+  @spec codex_message_handler(pid() | nil, Issue.t()) :: (term() -> :ok)
+  def codex_message_handler(recipient, issue) do
     fn message ->
       send_codex_update(recipient, issue, message)
     end

@@ -6,9 +6,12 @@ defmodule SymphonyElixir.PrDecision.Apply do
   self-heal lane (`SymphonyElixir.SelfHeal`), and GitHub calls through `SymphonyElixir.AutoMerge`
   and `SymphonyElixir.GitHub.PullRequest`.
 
+  It applies the upkeep actions (`SymphonyElixir.PrDecision.upkeep/1`) the same way, before the
+  flow decision on the same read.
+
   An action is applied once per head and rule in a stay in the phase: the stay's `applied` ledger
   holds what was done, so a repeated tick or a duplicate trigger never repeats a move, a rerun, an
-  update-branch or a fix-ticket filing. A cancelled run's rerun (R19) is the exception: it is kept
+  update-branch or a fix-ticket filing. A cancelled run's rerun (U2) is the exception: it is kept
   per cancellation instead (`SymphonyElixir.PrWatch.Attempts.new_cancellations/2`), so a second
   workflow cancelled on the head, or a rerun GitHub cancelled again, is rerun too. An action that
   fails is not recorded, so the next tick decides again from fresh facts.
@@ -19,9 +22,9 @@ defmodule SymphonyElixir.PrDecision.Apply do
       orchestrator dispatches a ticket whose decision is `dispatch` (or `land_agent`). A draft PR in
       `Merging` (R10) has auto-merge turned off while it waits; marking it ready arms it again (R30).
     * `rerun_failed` – reruns the failed jobs of the head's failed workflow runs, once per head
-      (R22). R19 reruns the head's newly cancelled runs that are under
+      (R22). The upkeep's U2 reruns the head's newly cancelled runs that are under
       `SymphonyElixir.PrDecision.max_cancel_reruns/0`, each cancellation once and with no attempt
-      spent; with no new cancellation it waits on CI for the rerun it sent to report.
+      spent; with no new cancellation there is nothing to do, and R19 waits on CI for the rerun.
     * `ci_fix` – sends the ticket to CI Fix for a red head or a conflict, recording its origin, and
       spends one red or conflict attempt (`SymphonyElixir.PrWatch.Attempts`). In `Merging` auto-merge
       goes off first. In CI Fix itself the ticket stays and the next run takes the fix; the run sent
@@ -36,7 +39,9 @@ defmodule SymphonyElixir.PrDecision.Apply do
     * `to_in_progress` – review comments still to address (R13, D8): auto-merge goes off, then the
       ticket goes back to In Progress on the same PR, where the run reads the comments the PR
       review poller keeps. In `Merging` only with auto-merge on, as the landing rows.
-    * `update_branch`, `merge_now`, `arm`, `disarm` – the GitHub calls of a landing.
+    * `update_branch` – the upkeep's U1 merges the base into the PR's branch, in any phase and
+      whatever `pull_requests.auto_merge` says; a conflict GitHub reports shows on the next read.
+    * `merge_now`, `arm`, `disarm` – the GitHub calls of a landing.
     * `land_agent` – says on the ticket that a landing agent takes the PR over; the orchestrator
       dispatches it.
     * `close_out` – a merged PR moves its ticket to Done, or to the waiting state when its started
@@ -106,9 +111,9 @@ defmodule SymphonyElixir.PrDecision.Apply do
   @in_progress_state "In Progress"
 
   # The CI rows (`pull_requests.checks`).
-  @ci_rules ["R17", "R19", "R19a", "R20", "R21", "R22"]
+  @ci_rules ["R17", "R19", "R19a", "R20", "R21", "R22", "U2"]
   # The landing rows, and a conflict in `Merging` (`pull_requests.auto_merge`).
-  @landing_rules ["R3", "R28", "R29", "R30", "R31"]
+  @landing_rules ["R3", "R29", "R30", "R31"]
   @conflict_rules ["R14", "R14a", "R15", "R15a"]
   # Kinds with nothing to apply.
   @no_op [:wait, :dispatch]
@@ -191,10 +196,10 @@ defmodule SymphonyElixir.PrDecision.Apply do
   defp applied?(ctx, rule), do: applied?(ctx.applied, rule, head(ctx))
 
   # What applying would only repeat, as it is recorded instead; nil when there is something to do. A
-  # wait on competitors may come back on the same head, and R19 is kept per cancellation: with none
-  # new, it waits for the rerun it sent. Once a person chose to wait, R19a asks nothing more.
+  # wait on competitors may come back on the same head, and U2 is kept per cancellation: with none
+  # new, the rerun it sent is still to report. Once a person chose to wait, R19a asks nothing more.
   defp already_done(%Action{kind: :wait_for_competitors}, _ctx), do: nil
-  defp already_done(%Action{rule: "R19"}, ctx), do: if(cancels_due(ctx) == [], do: rerun_reporting(ctx))
+  defp already_done(%Action{rule: "U2"} = action, ctx), do: if(cancels_due(ctx) == [], do: action)
 
   defp already_done(%Action{rule: "R19a"} = action, ctx) do
     if waiting_by_choice?(ctx), do: chose_to_wait(ctx), else: applied_action(action, ctx)
@@ -205,15 +210,6 @@ defmodule SymphonyElixir.PrDecision.Apply do
   defp applied_action(action, ctx), do: if(applied?(ctx, action.rule), do: action)
 
   defp cancels_due(ctx), do: Attempts.cancels_due(ctx.attempts, ctx.read, PrDecision.max_cancel_reruns())
-
-  # R19 with no new cancellation: the rerun it sent hasn't reported yet.
-  defp rerun_reporting(ctx) do
-    Action.new!("R19", :wait,
-      reason: "Symphony reran #{cancelled_checks(ctx)} after GitHub cancelled it: waiting for the rerun to report",
-      owner: :ci,
-      clears_when: "the rerun reports"
-    )
-  end
 
   defp waiting_by_choice?(ctx), do: match?(%{cancels: %{answer: :wait}}, Attempts.normalize(ctx.attempts))
 
@@ -275,7 +271,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
 
   # Only the runs whose cancellation is new and under the bound: a cancelled run is rerun once per
   # cancellation, and spends no attempt.
-  defp perform(%Action{kind: :rerun_failed, rule: "R19"} = action, ctx) do
+  defp perform(%Action{kind: :rerun_failed, rule: "U2"} = action, ctx) do
     due = cancels_due(ctx)
     run_ids = run_ids(due)
 

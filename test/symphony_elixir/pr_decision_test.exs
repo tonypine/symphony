@@ -15,6 +15,7 @@ defmodule SymphonyElixir.PrDecisionTest do
   end
 
   defp decide(attrs), do: attrs |> facts() |> PrDecision.decide()
+  defp upkeep(attrs), do: attrs |> facts() |> PrDecision.upkeep()
 
   # Code Review, red on the `test` check after a rerun.
   defp red(attrs), do: decide(Keyword.merge([phase: :code_review, ci: :red, rerun_done: true, failing_check: "test", max_red_attempts: 10], attrs))
@@ -42,6 +43,10 @@ defmodule SymphonyElixir.PrDecisionTest do
       {^field, values, condition} -> {field, fun.(values), condition}
       domain -> domain
     end)
+  end
+
+  defp well_formed_upkeep?(%Action{rule: rule, kind: kind, reason: reason}) do
+    rule in ["U1", "U2"] and kind in [:update_branch, :rerun_failed] and is_binary(reason)
   end
 
   defp well_formed?(%Action{rule: rule, kind: kind, reason: reason} = action) do
@@ -318,16 +323,23 @@ defmodule SymphonyElixir.PrDecisionTest do
 
     test "a first red is rerun once, a cancelled run is rerun, a base that is red too is waited on" do
       assert %Action{rule: "R22", kind: :rerun_failed} = red(rerun_done: false)
-      assert %Action{rule: "R19", kind: :rerun_failed} = red(red_kind: :cancelled)
+      assert %Action{rule: "R19", kind: :wait, owner: :ci} = red(red_kind: :cancelled)
+      assert [%Action{rule: "U2", kind: :rerun_failed}] = upkeep(phase: :code_review, ci: :red, red_kind: :cancelled)
       assert %Action{rule: "R23", kind: :wait, owner: :ci} = red(red_kind: :also_red_on_base)
     end
 
     test "a cancelled run is rerun twice on a head, spending nothing, then a person is asked (R19, R19a)" do
       assert PrDecision.max_cancel_reruns() == 2
 
-      assert %Action{rule: "R19", kind: :rerun_failed, reason: reason} = red(red_kind: :cancelled, failing_check: "install script")
+      cancelled = [phase: :qa, ci: :red, red_kind: :cancelled, failing_check: "install script"]
+      assert [%Action{rule: "U2", kind: :rerun_failed, reason: reason}] = upkeep(cancelled)
       assert reason == "Every run of the `install script` check was cancelled: rerunning it (rerun 1 of 2), no attempt spent"
-      assert %Action{rule: "R19", reason: "Every run of a check was cancelled: rerunning it (rerun 2 of 2), no attempt spent"} = red(red_kind: :cancelled, cancel_reruns: 1, failing_check: nil)
+      assert [%Action{reason: "Every run of a check was cancelled: rerunning it (rerun 2 of 2), no attempt spent"}] = upkeep(phase: :qa, ci: :red, red_kind: :cancelled, cancel_reruns: 1)
+      assert upkeep(phase: :qa, ci: :red, red_kind: :cancelled, cancel_reruns: 2) == []
+
+      action = red(red_kind: :cancelled, failing_check: "install script")
+      assert %Action{rule: "R19", kind: :wait, owner: :ci, clears_when: "the rerun reports", reason: reason} = action
+      assert reason == "Every run of the `install script` check was cancelled: Symphony reruns each new cancellation, up to 2 times on the head, with no attempt spent"
 
       # Neither the red count nor the rerun of R22 bears on a cancellation.
       assert %Action{rule: "R19"} = red(red_kind: :cancelled, red_attempts: 10, rerun_done: true, same_failure_streak: 3)
@@ -366,8 +378,10 @@ defmodule SymphonyElixir.PrDecisionTest do
       assert %Action{rule: "R11", kind: :to_code_review} = decide(phase: :merging, head_origin: :person)
     end
 
-    test "BEHIND updates the branch, or waits on the PR ahead (R28)" do
-      assert %Action{rule: "R28", kind: :update_branch} = decide(phase: :merging, mergeable: :behind)
+    test "BEHIND waits while the upkeep updates the branch, or waits on the PR ahead (R28)" do
+      action = decide(phase: :merging, mergeable: :behind)
+      assert %Action{rule: "R28", kind: :wait, owner: :symphony, clears_when: "the branch is updated with main", reason: reason} = action
+      assert reason == "PR #42 is behind main: Symphony updates the branch, and CI runs on the new head"
 
       action = decide(phase: :merging, mergeable: :behind, ahead: [@tp948])
       assert %Action{rule: "R28", kind: :wait, owner: :symphony, args: %{prs: [@tp948]}} = action
@@ -389,6 +403,100 @@ defmodule SymphonyElixir.PrDecisionTest do
       assert %Action{rule: "R6", kind: :decision} = decide(phase: :qa, pr: :missing)
       assert %Action{rule: "R9", kind: :wait, owner: :agent} = decide(phase: :code_review, run: :active)
       assert %Action{rule: "R24", kind: :wait, owner: :ci} = decide(phase: :qa, ci: :pending)
+    end
+  end
+
+  describe "branch upkeep, before the flow rules (TP-1160)" do
+    test "the upkeep table is its own group: well-formed, never on a read it can't trust, and never under a run" do
+      ids = Enum.map(PrDecision.upkeep_rules(), & &1.id)
+      assert ids == ["U1", "U2"]
+      assert ids -- @ids == ids
+
+      fired =
+        Enum.reduce(Facts.combinations(), MapSet.new(), fn facts, fired ->
+          actions = PrDecision.upkeep(facts)
+          flow = PrDecision.decide(facts)
+
+          for action <- actions do
+            assert well_formed_upkeep?(action), inspect(action)
+            assert facts.github == :ok and facts.run == :none and facts.pr in [:open, :draft]
+          end
+
+          # A reviewer or QA agent never starts on the head the upkeep replaces on the same read.
+          if Enum.any?(actions, &(&1.rule == "U1")), do: refute(match?(%Action{rule: "R27"}, flow))
+
+          Enum.reduce(actions, fired, &MapSet.put(&2, &1.rule))
+        end)
+
+      assert MapSet.to_list(fired) == ids
+    end
+
+    test "a Merging PR behind main on a Needs Decision hold is updated; the hold's wait stands" do
+      held = [phase: :merging, mergeable: :behind, hold: :needs_decision]
+      assert [%Action{rule: "U1", kind: :update_branch, reason: "PR #42 is behind main"}] = upkeep(held)
+      assert %Action{rule: "R4", owner: :person} = decide(held)
+    end
+
+    test "a Merging PR behind main whose only red check a person clears (R18) is updated; the question stands" do
+      attrs = [phase: :merging, mergeable: :behind, ci: :red, red_kind: :human_only, failing_check: "protected paths"]
+      assert [%Action{rule: "U1"}] = upkeep(attrs)
+      assert %Action{rule: "R18", kind: :decision} = decide(attrs)
+    end
+
+    test "a PR behind main waiting on CI is updated; the CI wait stands" do
+      on_base = [phase: :merging, mergeable: :behind, ci: :red, red_kind: :also_red_on_base, failing_check: "test"]
+      assert [%Action{rule: "U1"}] = upkeep(on_base)
+      assert %Action{rule: "R23", owner: :ci} = decide(on_base)
+
+      running = [phase: :code_review, mergeable: :behind, ci: :pending]
+      assert [%Action{rule: "U1"}] = upkeep(running)
+      assert %Action{rule: "R24", owner: :ci} = decide(running)
+    end
+
+    test "a Merging PR behind main waiting on its competitors, with no PR ahead sharing its files, is updated" do
+      assert [%Action{rule: "U1"}] = upkeep(phase: :merging, mergeable: :behind, hold: :blocked, competing: [@tp951])
+      assert %Action{rule: "R4", owner: :symphony} = decide(phase: :merging, mergeable: :behind, hold: :blocked)
+    end
+
+    test "a PR behind main with a PR ahead sharing its files keeps the landing order: not updated" do
+      for phase <- Facts.phases() do
+        assert upkeep(phase: phase, mergeable: :behind, ahead: [@tp948]) == [], inspect(phase)
+      end
+
+      behind_tp948 = [phase: :merging, mergeable: :behind, ahead: [@tp948]]
+      assert %Action{rule: "R28", kind: :wait, args: %{prs: [@tp948]}} = decide(behind_tp948)
+      # The reviewer and QA run on that head: no update is coming.
+      assert %Action{rule: "R27", kind: :dispatch} = decide(phase: :code_review, mergeable: :behind, ahead: [@tp948])
+    end
+
+    test "in Code Review and QA a PR behind main is updated and its reviewer waits for the new head" do
+      for phase <- [:code_review, :qa] do
+        assert [%Action{rule: "U1"}] = upkeep(phase: phase, mergeable: :behind)
+        assert %Action{rule: "R28", kind: :wait, owner: :symphony} = decide(phase: phase, mergeable: :behind)
+      end
+
+      assert [%Action{rule: "U1"}] = upkeep(phase: :in_progress, mergeable: :behind)
+      assert [%Action{rule: "U1"}] = upkeep(phase: :merging, mergeable: :behind, pr: :draft)
+    end
+
+    test "a run active defers the upkeep: none while it runs, the update on the read that sees it end" do
+      for phase <- Facts.phases() do
+        assert upkeep(phase: phase, mergeable: :behind, run: :active) == []
+        assert upkeep(phase: phase, mergeable: :behind, run: :none) != []
+      end
+
+      assert upkeep(phase: :qa, ci: :red, red_kind: :cancelled, run: :active) == []
+    end
+
+    test "no upkeep on a red failure, a conflict, another base, a closed or merged PR, or an unread one" do
+      assert upkeep(phase: :code_review, mergeable: :behind, ci: :red, red_kind: :failure) == []
+      assert upkeep(phase: :code_review, mergeable: :behind, ci: :red, red_kind: :cancelled) |> Enum.map(& &1.rule) == ["U2"]
+      assert upkeep(phase: :code_review, mergeable: :dirty, ci: :red, red_kind: :cancelled) == []
+      assert upkeep(phase: :merging, mergeable: :behind, base: :changed) == []
+      assert upkeep(phase: :merging, mergeable: :behind, pr: :closed) == []
+      assert upkeep(phase: :merging, mergeable: :behind, pr: :merged) == []
+      assert upkeep(phase: :merging, mergeable: :behind, github: :rate_limited) == []
+      assert upkeep(phase: :merging, mergeable: :clean) == []
     end
   end
 

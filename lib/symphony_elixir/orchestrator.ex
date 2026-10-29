@@ -612,7 +612,7 @@ defmodule SymphonyElixir.Orchestrator do
        ) do
     case Map.get(running, issue_id) do
       nil -> {:noreply, state}
-      running_entry -> {:noreply, put_running_entry(state, issue_id, Map.put(running_entry, :last_event_at, timestamp))}
+      running_entry -> {:noreply, put_running_entry(state, issue_id, Map.merge(running_entry, %{last_event_at: timestamp, agent_observed: true}))}
     end
   end
 
@@ -720,6 +720,9 @@ defmodule SymphonyElixir.Orchestrator do
           end
 
         state = finish_usage_limit_canary(state, issue_id)
+        # The run's end is recorded: the PR watcher reads the ticket now, so the branch upkeep
+        # deferred while the run worked fires at once.
+        PrWatch.poll_now()
         notify_dashboard()
         {:noreply, redispatch_slot_waiting(state)}
     end
@@ -2477,32 +2480,61 @@ defmodule SymphonyElixir.Orchestrator do
   defp restart_stalled_issue(state, issue_id, running_entry, now, timeout_ms) do
     elapsed_ms = first_turn_stall_elapsed_ms(running_entry, now)
 
-    if is_integer(elapsed_ms) and elapsed_ms > timeout_ms do
-      identifier = Map.get(running_entry, :identifier, issue_id)
-      session_id = running_entry_session_id(running_entry)
-
-      Logger.warning("Issue stalled: issue_id=#{issue_id} issue_identifier=#{identifier} session_id=#{session_id} elapsed_ms=#{elapsed_ms}; restarting with backoff")
-
-      next_attempt = next_retry_attempt_from_running(running_entry)
-      error = "stalled for #{elapsed_ms}ms without codex activity"
-
-      state =
-        terminate_running_issue(state, issue_id, false, status: "timeout", error: error)
-
-      if pr_run_entry?(running_entry) do
-        state
-      else
-        schedule_issue_retry(state, issue_id, next_attempt, %{
-          repo_key: running_entry_repo_key(running_entry),
-          identifier: identifier,
-          title: running_entry_title(running_entry),
-          error: error
-        })
-      end
-    else
-      state
+    cond do
+      not (is_integer(elapsed_ms) and elapsed_ms > timeout_ms) -> state
+      observed_run?(running_entry) -> stall_restart(state, issue_id, running_entry, elapsed_ms)
+      true -> log_unobserved_run(state, issue_id, running_entry, now)
     end
   end
+
+  defp stall_restart(state, issue_id, running_entry, elapsed_ms) do
+    identifier = Map.get(running_entry, :identifier, issue_id)
+    session_id = running_entry_session_id(running_entry)
+
+    Logger.warning("Issue stalled: issue_id=#{issue_id} issue_identifier=#{identifier} session_id=#{session_id} elapsed_ms=#{elapsed_ms}; restarting with backoff")
+
+    next_attempt = next_retry_attempt_from_running(running_entry)
+    error = "stalled for #{elapsed_ms}ms without codex activity"
+
+    state =
+      terminate_running_issue(state, issue_id, false, status: "timeout", error: error)
+
+    if pr_run_entry?(running_entry) do
+      state
+    else
+      schedule_issue_retry(state, issue_id, next_attempt, %{
+        repo_key: running_entry_repo_key(running_entry),
+        identifier: identifier,
+        title: running_entry_title(running_entry),
+        error: error
+      })
+    end
+  end
+
+  # Silence is proven only once the orchestrator has heard from the run's agent: a session id, a
+  # transcript event or a `tool_progress` heartbeat. A run it never heard from is unobserved, not
+  # silent (TP-1273: a reviewer whose events never reached the orchestrator was killed while it
+  # worked), so both watchdogs leave it to the exit path and the agent's own timeouts.
+  defp observed_run?(%{session_id: session_id}) when is_binary(session_id), do: true
+  defp observed_run?(%{last_codex_timestamp: %DateTime{}}), do: true
+  defp observed_run?(%{agent_observed: true}), do: true
+  defp observed_run?(_running_entry), do: false
+
+  defp log_unobserved_run(state, _issue_id, %{unobserved_logged: true}, _now), do: state
+
+  defp log_unobserved_run(state, issue_id, running_entry, now) do
+    identifier = Map.get(running_entry, :identifier, issue_id)
+    age_ms = max(0, DateTime.diff(now, Map.get(running_entry, :started_at) || now, :millisecond))
+
+    Logger.warning(
+      "watchdog.unobserved_run issue_id=#{issue_id} issue_identifier=#{identifier} run_kind=#{watchdog_run_kind(running_entry)} age_ms=#{age_ms}; no session or agent event seen, not restarting"
+    )
+
+    put_running_entry(state, issue_id, Map.put(running_entry, :unobserved_logged, true))
+  end
+
+  defp watchdog_run_kind(%{run_profile: %{kind: kind}}), do: to_string(kind)
+  defp watchdog_run_kind(running_entry), do: if(pr_run_entry?(running_entry), do: "pr", else: "unknown")
 
   defp first_turn_stall_elapsed_ms(%{last_codex_timestamp: %DateTime{}}, _now), do: nil
 
@@ -2556,10 +2588,10 @@ defmodule SymphonyElixir.Orchestrator do
       running_entry ->
         elapsed_ms = watchdog_elapsed_ms(running_entry, now)
 
-        if is_integer(elapsed_ms) and elapsed_ms >= threshold_ms do
-          restart_stuck_issue(state, issue_id, running_entry, elapsed_ms)
-        else
-          state
+        cond do
+          not (is_integer(elapsed_ms) and elapsed_ms >= threshold_ms) -> state
+          observed_run?(running_entry) -> restart_stuck_issue(state, issue_id, running_entry, elapsed_ms)
+          true -> log_unobserved_run(state, issue_id, running_entry, now)
         end
     end
   end

@@ -53,6 +53,10 @@ defmodule SymphonyElixir.ReviewAgent do
   the diff context is built and before the reviewer starts: the risk rules' findings go in the
   reviewer's instructions, so its one review weighs them, and the reasons come back on the verdict
   as `escalation_reasons`. Without it, the instructions say nothing about rules.
+
+  `opts[:on_message]` is the run's own event hook (`AgentRunner.codex_message_handler/2`): every
+  event the reviewer streams reaches it too, so the orchestrator sees the review's session and
+  activity as it sees an implementation run's.
   """
   @spec evaluate(Issue.t(), Path.t(), Schema.t(), keyword()) :: {:ok, result()} | {:error, term()}
   def evaluate(%Issue{} = issue, workspace, %Schema{} = settings, opts \\ []) when is_binary(workspace) do
@@ -373,7 +377,7 @@ defmodule SymphonyElixir.ReviewAgent do
       decision_opts = [repo_key: Keyword.get(opts, :repo_key)]
       prompt = reviewer_prompt(issue, source, decision_opts, reasons)
       message_collector = Keyword.get(opts, :review_agent_message_collector, self())
-      on_message = reviewer_on_message(message_collector)
+      on_message = reviewer_on_message(message_collector, Keyword.get(opts, :on_message))
 
       with {:ok, session} <-
              agent_module.start_session(workspace,
@@ -764,9 +768,13 @@ defmodule SymphonyElixir.ReviewAgent do
     end
   end
 
-  defp reviewer_on_message(collector) do
+  # The collector serves the verdict text; `forward` is the run's own handler
+  # (`AgentRunner.codex_message_handler/2`), which reports the session and its activity to the
+  # orchestrator as an implementation run does, so the watchdogs see the reviewer working.
+  defp reviewer_on_message(collector, forward) do
     fn message ->
       collect_message(collector, message)
+      if is_function(forward, 1), do: forward.(message)
       :ok
     end
   end

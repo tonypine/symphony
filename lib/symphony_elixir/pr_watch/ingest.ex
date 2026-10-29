@@ -15,7 +15,7 @@ defmodule SymphonyElixir.PrWatch.Ingest do
   | `pull_request` `synchronize` | the PR | the new head, `ci: :pending`, `mergeable: :unknown` |
   | `pull_request` `reopened` | the PR | `pr: :open`, its head |
   | `pull_request` `closed` | the PR | `pr: :merged` or `pr: :closed`; a merge also moves its base, as a push |
-  | `push` to a branch | every open PR on that base | `mergeable: :unknown`, each read 1 second apart |
+  | `push` to a branch | every open PR on that base | `mergeable: :unknown`, each read 1 second apart; a read that finds it behind updates it (upkeep U1) |
   | `release` `published` | none | the app repository's newest release (`SymphonyElixir.PrWatch.Release`) |
   | `ping` | none | none: every watched PR is read now, catching up on what the relay missed |
 

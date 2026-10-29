@@ -5,7 +5,15 @@ defmodule SymphonyElixir.PrDecision do
 
   `rules/0` is the table as data, in precedence order: each rule names its id, the phases it acts
   in, a `when` and `then` line for `docs/pr-ci-decisions.md`, a guard and an action builder.
-  `decide/1` returns the action of the first rule whose phase and guard match.
+  `decide/1` returns the action of the first rule whose phase and guard match: the flow decision
+  (dispatch, wait, hold, move, merge).
+
+  Upkeep is a group of its own (`upkeep_rules/0`, `upkeep/1`): keeping the branch on its base
+  (U1, update-branch) and rerunning a run GitHub cancelled (U2). It is evaluated before the flow
+  rules on every read of a PR, every matching upkeep rule acts, and it never stops the chain: the
+  flow decision follows on the same read, from the same facts, whatever upkeep did. Upkeep acts in
+  every phase whose PR is open, whatever hold or wait the flow decision is, and only while no run
+  is active: a run's verdict or push binds to the head it started on.
 
   Deciding is pure: it reads only `SymphonyElixir.PrDecision.Facts`, never GitHub, Linear, the run
   store, the clock or config. Limits and timeouts arrive as facts. A guard names the values it
@@ -62,7 +70,7 @@ defmodule SymphonyElixir.PrDecision do
   @spec max_conflict_attempts() :: pos_integer()
   def max_conflict_attempts, do: @max_conflict_attempts
 
-  @doc "How many times R19 reruns a cancelled workflow run on one head before R19a asks a person."
+  @doc "How many times the upkeep (U2) reruns a cancelled workflow run on one head before R19a asks a person."
   @spec max_cancel_reruns() :: pos_integer()
   def max_cancel_reruns, do: @max_cancel_reruns
 
@@ -77,6 +85,43 @@ defmodule SymphonyElixir.PrDecision do
       nil -> raise NoRuleError, facts: facts
       rule -> rule.build.(facts)
     end
+  end
+
+  @doc """
+  The upkeep actions for `facts`: every matching upkeep rule's, in order, or none. They never stand
+  in for the flow decision, which `decide/1` takes on the same facts.
+  """
+  @spec upkeep(Facts.t()) :: [Action.t()]
+  def upkeep(%Facts{} = facts), do: for(rule <- upkeep_rules(), matches?(rule, facts), do: rule.build.(facts))
+
+  @doc """
+  The upkeep group, evaluated before `rules/0` on every read: each rule acts whenever its phase and
+  guard match, whatever the flow decision is.
+  """
+  @spec upkeep_rules() :: [rule()]
+  def upkeep_rules do
+    [
+      %{
+        id: "U1",
+        phases: @all,
+        when:
+          "The PR is behind main, no run is active, no PR ahead in the landing order shares its files, and the head is not red on a failure " <>
+            "or a cancelled run; whatever the flow rule (a hold, a question, a CI or competitor wait)",
+        then: "`update_branch`, once per head; a conflict GitHub reports goes to the conflict rules on the next read",
+        guard: &stale_branch?/1,
+        build: &update_branch/1
+      },
+      %{
+        id: "U2",
+        phases: @pr_phases,
+        when:
+          "Red only because every run of a workflow was cancelled, its newest attempt with nothing queued or running, " <>
+            "that run rerun fewer than #{@max_cancel_reruns} times on the head, and no run is active; whatever the flow rule",
+        then: "`rerun_failed` each new cancellation, no attempt spent",
+        guard: &cancelled_rerunnable?/1,
+        build: &rerun_cancelled/1
+      }
+    ]
   end
 
   @doc "Whether `rule` acts on `facts`: the phase is one of its phases and its guard holds."
@@ -225,9 +270,9 @@ defmodule SymphonyElixir.PrDecision do
         when:
           "Red only because every run of a workflow was cancelled, its newest attempt with nothing queued or running, " <>
             "and that run was rerun fewer than #{@max_cancel_reruns} times on the head",
-        then: "`rerun_failed` each new cancellation, no attempt spent; a rerun not yet reported: `wait` on `ci`",
+        then: "`wait` on `ci`: the upkeep (U2) reruns each new cancellation, no attempt spent",
         guard: &cancelled_red?/1,
-        build: &rerun_cancelled/1
+        build: &wait_for_cancelled_rerun/1
       },
       %{
         id: "R19a",
@@ -289,17 +334,17 @@ defmodule SymphonyElixir.PrDecision do
       %{
         id: "R27",
         phases: [:code_review, :qa],
-        when: "Green, or no CI configured (counts as green)",
+        when: "Green, or no CI configured (counts as green), and not behind main with nothing ahead (the upkeep, U1, updates that one)",
         then: "`dispatch` the reviewer or the QA agent",
-        guard: &green?/1,
+        guard: &reviewable?/1,
         build: &dispatch/1
       },
       %{
         id: "R28",
-        phases: [:merging],
-        when: "The PR is behind main",
-        then: "a PR ahead shares its files: `wait` on `symphony`; otherwise `update_branch`",
-        guard: &behind?/1,
+        phases: [:code_review, :qa, :merging],
+        when: "The PR is behind main (in Code Review and QA: with no PR ahead sharing its files)",
+        then: "a PR ahead shares its files: `wait` on `symphony`; otherwise `wait` on `symphony` while the upkeep (U1) updates the branch",
+        guard: &behind_waiting?/1,
         build: &behind/1
       },
       %{id: "R29", phases: [:merging], when: "Green (or no CI) and mergeable now", then: "`merge_now`", guard: &mergeable_now?/1, build: &merge_now/1},
@@ -373,8 +418,10 @@ defmodule SymphonyElixir.PrDecision do
   defp red_on_base?(facts), do: red?(facts, :also_red_on_base)
   defp pending?(facts), do: clean_pr?(facts) and facts.ci == :pending
   defp green?(facts), do: clean_pr?(facts) and facts.ci in @green
+  defp reviewable?(facts), do: green?(facts) and not upkept?(facts)
   defp not_red?(facts), do: clean_pr?(facts) and facts.ci in [:pending | @green]
   defp behind?(facts), do: not_red?(facts) and facts.mergeable == :behind
+  defp behind_waiting?(facts), do: behind?(facts) and (facts.phase == :merging or facts.ahead == [])
   defp mergeable_now?(facts), do: green?(facts) and facts.mergeable in @mergeable_now
 
   defp armable?(facts) do
@@ -384,6 +431,22 @@ defmodule SymphonyElixir.PrDecision do
   defp blocked_too_long?(facts), do: blocked?(facts) and facts.landing_timed_out == true
   defp armed_pending?(facts), do: facts.auto_merge == :armed and pending_mergeable?(facts)
   defp armed_blocked?(facts), do: facts.auto_merge == :armed and blocked_in_time?(facts)
+
+  # Upkeep reads the PR whatever the flow decides: fresh facts, an open PR and no run, hold or not.
+  defp upkeep_pr?(facts), do: fresh?(facts) and facts.run == :none and facts.pr in @with_pr
+
+  # A red failure goes to its rerun and CI Fix, and a cancelled run to U2, instead of a new head.
+  defp stale_branch?(facts) do
+    upkeep_pr?(facts) and facts.base == :ok and upkept?(facts) and
+      (facts.ci != :red or facts.red_kind in [:human_only, :also_red_on_base])
+  end
+
+  defp cancelled_rerunnable?(facts) do
+    upkeep_pr?(facts) and facts.mergeable != :dirty and facts.ci == :red and facts.red_kind == :cancelled and facts.cancel_reruns < @max_cancel_reruns
+  end
+
+  # Behind main with nobody ahead sharing its files: U1 updates the branch.
+  defp upkept?(facts), do: facts.mergeable == :behind and facts.ahead == []
 
   # The facts are fresh (R1) and no hold claimed the ticket (R4).
   defp fresh?(facts), do: facts.github == :ok
@@ -520,7 +583,16 @@ defmodule SymphonyElixir.PrDecision do
   end
 
   defp rerun_cancelled(facts) do
-    Action.new!("R19", :rerun_failed, reason: "Every run of #{check(facts)} was cancelled: rerunning it (rerun #{facts.cancel_reruns + 1} of #{@max_cancel_reruns}), no attempt spent")
+    Action.new!("U2", :rerun_failed, reason: "Every run of #{check(facts)} was cancelled: rerunning it (rerun #{facts.cancel_reruns + 1} of #{@max_cancel_reruns}), no attempt spent")
+  end
+
+  defp wait_for_cancelled_rerun(facts) do
+    wait(
+      "R19",
+      "Every run of #{check(facts)} was cancelled: Symphony reruns each new cancellation, up to #{@max_cancel_reruns} times on the head, with no attempt spent",
+      :ci,
+      "the rerun reports"
+    )
   end
 
   defp ask_about_cancelled(facts) do
@@ -561,7 +633,11 @@ defmodule SymphonyElixir.PrDecision do
     Action.new!("R25", :return_to_origin, args: %{origin: destination}, reason: "The head is green and conflict-free: back to #{phase_name(destination)} with its approvals")
   end
 
-  defp behind(%{ahead: []} = facts), do: Action.new!("R28", :update_branch, reason: "#{subject(pr(facts))} is behind main")
+  defp update_branch(facts), do: Action.new!("U1", :update_branch, reason: "#{subject(pr(facts))} is behind main")
+
+  defp behind(%{ahead: []} = facts) do
+    wait("R28", "#{subject(pr(facts))} is behind main: Symphony updates the branch, and CI runs on the new head", :symphony, "the branch is updated with main")
+  end
 
   defp behind(facts) do
     Action.new!("R28", :wait,

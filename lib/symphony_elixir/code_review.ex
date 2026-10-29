@@ -444,13 +444,14 @@ defmodule SymphonyElixir.CodeReview do
   end
 
   # The read-only reviewer, pointed at the PR head this run is checked out on. The base branch comes
-  # from the repo's config.
+  # from the repo's config. The run's `on_message` hook goes along, so the reviewer's session and
+  # activity reach the orchestrator.
   # Whatever reviewer judged it, a finding against a person's recorded decision is a note, never a
   # change request (`ReviewAgent.honour_decisions/3`).
   defp evaluate(issue, workspace, opts, settings) do
     review_opts =
       opts
-      |> Keyword.take([:repo_key, :run_id, :reviewer_run_profile, :linear_comment_registry, :agent_tmp_dir])
+      |> Keyword.take([:repo_key, :run_id, :reviewer_run_profile, :linear_comment_registry, :agent_tmp_dir, :on_message])
       |> Keyword.put(:worker_host, Keyword.get(opts, :worker_host))
       |> Keyword.put(:escalation_rules, escalation_check(issue, workspace, opts, settings))
       |> maybe_put_base_branch(opts)

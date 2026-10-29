@@ -355,7 +355,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
         "data" => %{
           "repository" => %{
             "defaultBranchRef" => %{"name" => "main"},
-            "pullRequest" => %{"number" => 1, "state" => "OPEN", "baseRefName" => "main", "headRefOid" => "abc", "mergeStateStatus" => "BEHIND", "commits" => %{"nodes" => []}}
+            "pullRequest" => %{"number" => 1, "state" => "OPEN", "baseRefName" => "main", "headRefOid" => "abc", "mergeStateStatus" => "BLOCKED", "commits" => %{"nodes" => []}}
           }
         }
       })
@@ -377,7 +377,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
 
     pid = start_repo!(repo_key, fetch: SymphonyElixir.PrWatch.Fetch, gh_runner: gh_runner)
     assert {:ok, %{watched: 2, errors: 0}} = Repo.poll(pid)
-    assert %{facts: %Facts{phase: :merging, mergeable: :behind, ci: :none, base_ref: "main"}} = watch(repo_key, "1")
+    assert %{facts: %Facts{phase: :merging, mergeable: :blocked, ci: :none, base_ref: "main"}} = watch(repo_key, "1")
     assert_received {:gh, ["api", "--include", "graphql" | _rest]}
     assert_received {:gh, ["api", "repos/acme/app/contents/.github/workflows?ref=main"]}
 
