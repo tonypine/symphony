@@ -127,6 +127,13 @@ final class SettingsViewModel: ObservableObject {
     @Published var dispatchLoopLongWindowMinutes = DispatchLoopLimits.minutes(DispatchLoopLimits.defaultLongWindowMs)
     /// Why `symphony check` rejected the changed dispatch-loop limits, shown in their section.
     @Published private(set) var dispatchLoopError: String?
+    /// `dispatch.source` in the configured symphony.yml: whether dispatch reads its candidates from the Linear poll or
+    /// from Symphony's record.
+    @Published var dispatchSource = DispatchSettings.defaultSource
+    /// `dispatch.shadow_window`: how many poll cycles Setup's Dispatch shadow line counts its differences over.
+    @Published var dispatchShadowWindow = DispatchSettings.defaultShadowWindow
+    /// Why the dispatch settings weren't saved, shown in their section.
+    @Published private(set) var dispatchError: String?
     /// `linear.webhooks.enabled` in the configured symphony.yml: whether Symphony accepts Linear's webhook deliveries.
     @Published var linearWebhooksEnabled = LinearWebhookSettings.defaultEnabled
     /// `linear.webhooks.secret`: an environment variable's name (written `$NAME`) or the secret itself. The literal
@@ -176,6 +183,10 @@ final class SettingsViewModel: ObservableObject {
     /// The dispatch-loop limits read from symphony.yml, or nil when they couldn't be read. Only a limit whose
     /// stepper moved is written.
     private var loadedDispatchLoopLimits: DispatchLoopLimits?
+
+    /// The dispatch settings read from symphony.yml, or nil when they couldn't be read. Only a setting whose control
+    /// moved is written.
+    private var loadedDispatchSettings: DispatchSettings?
 
     /// The Linear webhook settings read from symphony.yml, or nil when they couldn't be read. Only a setting that
     /// changed is written.
@@ -260,6 +271,7 @@ final class SettingsViewModel: ObservableObject {
         loadGitHubUpdates()
         loadLinearWebhooks()
         loadDispatchLoopLimits()
+        loadDispatchSettings()
         loadLedgerSettings()
         loadMacAppQA()
         loadRunProfiles()
@@ -478,6 +490,22 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// The dispatch controls are off until a symphony.yml has been read, and while Save checks it.
+    var canEditDispatch: Bool { loadedDispatchSettings != nil && !isSaving }
+
+    private func loadDispatchSettings() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let dispatch = try SymphonyConfigFile(path: path).readDispatchSettings()
+            dispatchSource = dispatch.source
+            dispatchShadowWindow = dispatch.shadowWindow
+            loadedDispatchSettings = dispatch
+        } catch {
+            configFileError = "Could not read the dispatch settings from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
     /// The Linear webhook controls are off until a symphony.yml has been read, and while Save checks it.
     var canEditLinearWebhooks: Bool { loadedLinearWebhooks != nil && !isSaving }
 
@@ -637,7 +665,7 @@ final class SettingsViewModel: ObservableObject {
     /// Validates and saves, then calls `onSaved` when everything was stored. Changed models, token limits and
     /// timeouts are written only after `symphony check` passes on them; until then the rest isn't saved, and a
     /// failure shows in `configCheckError`, `tokenLimitsError`, `timeoutsError`, `gitHubUpdatesError`,
-    /// `linearWebhooksError`, `dispatchLoopError`, `ledgerError` or `macAppQAError`.
+    /// `linearWebhooksError`, `dispatchLoopError`, `dispatchError`, `ledgerError` or `macAppQAError`.
     func save(onSaved: @escaping () -> Void) {
         guard canSave else { return }
         let settings = settings.trimmed()
@@ -681,6 +709,13 @@ final class SettingsViewModel: ObservableObject {
             longWindowMinutes: dispatchLoopLongWindowMinutes
         )
         let oldLoopLimits = loadedDispatchLoopLimits.flatMap { $0 != loopLimits ? $0 : nil }
+        dispatchError = nil
+        if loadedDispatchSettings != nil, !DispatchSettings.isValidWindow(dispatchShadowWindow) {
+            dispatchError = DispatchSettings.windowRule
+            return
+        }
+        let dispatch = loadedDispatchSettings.map { _ in DispatchSettings(source: dispatchSource, shadowWindow: dispatchShadowWindow) }
+        let oldDispatch = loadedDispatchSettings.flatMap { $0 != dispatch ? $0 : nil }
         ledgerError = nil
         var ledger = loadedLedgerSettings?.setting(maxMegabytes: artifactMaxMegabytes)
         ledger?.briefEnabled = promptBriefEnabled
@@ -706,7 +741,7 @@ final class SettingsViewModel: ObservableObject {
         let loadedRules = loadedRiskRules.flatMap { $0 != rules ? $0 : nil }
 
         guard loadedProfiles != nil || loadedLimits != nil || oldTimeouts != nil || oldUpdates != nil || oldWebhooks != nil
-            || oldLoopLimits != nil || oldLedger != nil || oldQAPlaybook != nil || loadedPriorities != nil || loadedHostTools != nil || loadedStates != nil
+            || oldLoopLimits != nil || oldDispatch != nil || oldLedger != nil || oldQAPlaybook != nil || loadedPriorities != nil || loadedHostTools != nil || loadedStates != nil
             || builtInPatternsChanged || loadedRules != nil else {
             if saveRest(settings, secrets) { onSaved() }
             return
@@ -731,6 +766,9 @@ final class SettingsViewModel: ObservableObject {
             }
             if saved, let loopLimits, let oldLoopLimits {
                 saved = await saveDispatchLoopLimits(loopLimits, from: oldLoopLimits, settings: settings, secrets: secrets)
+            }
+            if saved, let dispatch, let oldDispatch {
+                saved = await saveDispatchSettings(dispatch, from: oldDispatch, settings: settings, secrets: secrets)
             }
             if saved, let ledger, let oldLedger {
                 saved = await saveLedgerSettings(ledger, from: oldLedger, settings: settings, secrets: secrets)
@@ -921,6 +959,32 @@ final class SettingsViewModel: ObservableObject {
         }
         configFileError = nil
         loadedDispatchLoopLimits = limits
+        return true
+    }
+
+    /// Writes the dispatch settings that changed to symphony.yml once `symphony check` passes on the result.
+    private func saveDispatchSettings(
+        _ dispatch: DispatchSettings,
+        from loaded: DispatchSettings,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
+        do {
+            result = try await SymphonyConfigFile(path: settings.configPath).writeDispatchSettings(dispatch, from: loaded) { path in
+                await check(path, settings, secrets)
+            }
+        } catch {
+            configFileError = "Could not save the dispatch settings to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            dispatchError = "symphony check rejected these settings, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
+            return false
+        }
+        configFileError = nil
+        loadedDispatchSettings = dispatch
         return true
     }
 

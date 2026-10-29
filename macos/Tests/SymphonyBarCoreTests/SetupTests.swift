@@ -436,6 +436,102 @@ final class SetupTests: XCTestCase {
         XCTAssertEqual(LinearWebhooksLine.reason("too_large"), "too large")
     }
 
+    // MARK: - The Dispatch shadow line
+
+    /// Against an older Symphony the line says the feature is not available, greyed out with no differences.
+    func testTheDispatchShadowLineFromAnOlderSymphonyIsNotAvailable() {
+        let line = DispatchShadowLine(report: nil, now: now)
+        XCTAssertEqual(line.state, .notAvailable)
+        XCTAssertFalse(line.isAvailable)
+        XCTAssertFalse(line.isWarning)
+        XCTAssertEqual(line.word, "Not available")
+        XCTAssertEqual(line.detail, "Not available on this Symphony: update it to compare dispatch from the record with the Linear poll.")
+        XCTAssertEqual(line.rows, [])
+    }
+
+    /// The operator opens Setup with dispatch on the poll: the cycles compared and zero differences.
+    func testTheDispatchShadowLineOnThePollWithNoDifferences() {
+        let line = DispatchShadowLine(report: DispatchShadowReport(cyclesCompared: 140, windowCycles: 20), now: now)
+        XCTAssertEqual(line.state, .pollClean)
+        XCTAssertTrue(line.isAvailable)
+        XCTAssertFalse(line.isWarning)
+        XCTAssertEqual(line.word, "No differences")
+        XCTAssertEqual(line.detail, "Dispatch runs from the Linear poll. 140 cycles compared, 0 differences in the last 20 cycles.")
+        XCTAssertEqual(line.rows, [])
+
+        let starting = DispatchShadowLine(report: DispatchShadowReport(cyclesCompared: 1, windowCycles: 1), now: now)
+        XCTAssertEqual(starting.detail, "Dispatch runs from the Linear poll. 1 cycle compared, 0 differences in the last cycle.")
+        let none = DispatchShadowLine(report: DispatchShadowReport(), now: now)
+        XCTAssertEqual(none.detail, "Dispatch runs from the Linear poll. No cycle compared yet since Symphony started.")
+    }
+
+    /// An older difference left the window: the line is clean and still says when the last one was.
+    func testTheDispatchShadowLineSaysWhenTheLastDifferenceWas() {
+        let report = DispatchShadowReport(
+            cyclesCompared: 1_204, cyclesWithDifferences: 1, windowCycles: 20,
+            recent: [.init(identifier: "TP-1", side: .poll, field: "candidate", poll: "Todo", at: now.addingTimeInterval(-600))]
+        )
+        let line = DispatchShadowLine(report: report, now: now)
+        XCTAssertEqual(line.state, .pollClean)
+        XCTAssertEqual(
+            line.detail,
+            "Dispatch runs from the Linear poll. 1,204 cycles compared, 0 differences in the last 20 cycles. The last difference was 10 min ago."
+        )
+    }
+
+    func testTheDispatchShadowLineCallsOutDifferencesWhileThePollDispatches() {
+        let report = DispatchShadowReport(
+            cyclesCompared: 140, cyclesWithDifferences: 2, windowCycles: 20, windowDifferences: 3,
+            recent: [
+                .init(identifier: "TP-1221", side: .both, field: "priority", poll: "1", record: "2", at: now.addingTimeInterval(-12)),
+                .init(identifier: "TP-1222", side: .record, field: "candidate", record: "Todo", at: now.addingTimeInterval(-240)),
+                .init(identifier: "TP-1223", side: .poll, field: "candidate", poll: "Todo"),
+            ]
+        )
+        let line = DispatchShadowLine(report: report, now: now)
+        XCTAssertEqual(line.state, .pollDiffering)
+        XCTAssertTrue(line.isWarning)
+        XCTAssertEqual(line.word, "3 differences")
+        XCTAssertEqual(
+            line.detail,
+            "Dispatch runs from the Linear poll. 140 cycles compared, 3 differences in the last 20 cycles. The last difference was 12 s ago."
+        )
+        XCTAssertEqual(
+            line.rows,
+            [
+                .init(id: 0, identifier: "TP-1221", side: "In both", field: "Priority", values: "1 in the poll, 2 in the record", ago: "12 s ago"),
+                .init(id: 1, identifier: "TP-1222", side: "Only in the record", field: "Candidate", values: "none in the poll, Todo in the record", ago: "4 min ago"),
+                .init(id: 2, identifier: "TP-1223", side: "Only in the poll", field: "Candidate", values: "Todo in the poll, none in the record", ago: nil),
+            ]
+        )
+
+        let one = DispatchShadowLine(report: DispatchShadowReport(cyclesCompared: 3, windowCycles: 3, windowDifferences: 1), now: now)
+        XCTAssertEqual(one.word, "1 difference")
+        XCTAssertEqual(one.detail, "Dispatch runs from the Linear poll. 3 cycles compared, 1 difference in the last 3 cycles.")
+    }
+
+    /// The operator switched to Symphony's record: the line says so, and the window's differences are information.
+    func testTheDispatchShadowLineFromTheRecord() {
+        let report = DispatchShadowReport(
+            source: .record, window: 5, cyclesCompared: 40, windowCycles: 9, windowDifferences: 2,
+            recent: [.init(identifier: "TP-9", side: .other("some_side"), field: "due_date", at: now.addingTimeInterval(-180))]
+        )
+        let line = DispatchShadowLine(report: report, now: now)
+        XCTAssertEqual(line.state, .record)
+        XCTAssertTrue(line.isAvailable)
+        XCTAssertFalse(line.isWarning)
+        XCTAssertEqual(line.word, "From the record")
+        XCTAssertEqual(
+            line.detail,
+            "Dispatch runs from Symphony's record. 40 cycles compared, 2 differences in the last 5 cycles, for information. "
+                + "The last difference was 3 min ago."
+        )
+        XCTAssertEqual(line.rows, [.init(id: 0, identifier: "TP-9", side: "Some Side", field: "Due Date", values: nil, ago: "3 min ago")])
+
+        let fresh = DispatchShadowLine(report: DispatchShadowReport(source: .record), now: now)
+        XCTAssertEqual(fresh.detail, "Dispatch runs from Symphony's record. No cycle compared yet since Symphony started.")
+    }
+
     // MARK: - Open fixes (AC 5)
 
     func testOpenFixesGoWhereTheOperatorFixesIt() {
