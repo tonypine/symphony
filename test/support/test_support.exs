@@ -6,6 +6,8 @@ defmodule SymphonyElixir.TestSupport do
   @supervised_child_wait_ms 5_000
   @supervised_child_retry_ms 10
   @leftover_task_grace_ms 500
+  @eventually_timeout_ms 10_000
+  @eventually_retry_ms 10
 
   defmacro __using__(_opts) do
     quote do
@@ -36,6 +38,7 @@ defmodule SymphonyElixir.TestSupport do
           write_workflow_file!: 2,
           restore_env: 2,
           ensure_symphony_started!: 0,
+          eventually: 1,
           stop_default_orchestrator: 0,
           stop_default_http_server: 0,
           stop_process: 1,
@@ -115,8 +118,9 @@ defmodule SymphonyElixir.TestSupport do
     overrides = Keyword.put_new(overrides, :workspace_root, Path.join(Path.dirname(path), "workspaces"))
     {system_config, repo_config, prompt} = split_workflow_content(path, overrides)
     File.mkdir_p!(Path.dirname(path))
+    symphony_path = SymphonyElixir.Workflow.symphony_file_path()
     write_atomically!(path, repo_workflow_content(repo_config, prompt))
-    write_atomically!(SymphonyElixir.Workflow.symphony_file_path(), symphony_content(system_config, path))
+    write_atomically!(symphony_path, symphony_content(system_config, path))
     Cache.clear()
 
     if Process.whereis(SymphonyElixir.WorkflowStore) do
@@ -127,15 +131,77 @@ defmodule SymphonyElixir.TestSupport do
       end
     end
 
-    :ok
+    settle_config_cache!([path, symphony_path])
   end
 
   # A test may rewrite the workflow while its orchestrator runs. `File.write!` truncates the file
   # first, so a config read in between would see an empty `symphony.yml`; a rename swaps it whole.
+  # The new file is a second newer than the one it replaces: `Config.Cache` stamps a file by its
+  # mtime in seconds and its size, and two writes of the same size within a second (`null` and
+  # `true`) would otherwise share a stamp, so an entry of the old file would read as current.
   defp write_atomically!(path, content) do
     tmp_path = "#{path}.tmp-#{System.unique_integer([:positive])}"
     File.write!(tmp_path, content)
+    File.touch!(tmp_path, next_mtime(path))
     File.rename!(tmp_path, path)
+  end
+
+  defp next_mtime(path) do
+    case File.stat(path, time: :posix) do
+      {:ok, %File.Stat{mtime: mtime}} -> max(System.os_time(:second), mtime + 1)
+      {:error, _reason} -> System.os_time(:second)
+    end
+  end
+
+  # A config read that started before the rewrite can put the old file's entry back after the
+  # clear, and a rejected rewrite then reads as that entry, stale. Cleared until every entry for the
+  # written files is the file on disk.
+  def settle_config_cache!(paths) do
+    eventually(fn ->
+      current? = Enum.all?(paths, &config_cache_entries_current?/1)
+      if not current?, do: Cache.clear()
+      current?
+    end)
+
+    :ok
+  end
+
+  defp config_cache_entries_current?(path) do
+    path = Path.expand(path)
+
+    case File.stat(path, time: :posix) do
+      {:ok, stat} -> Enum.all?([:symphony, :workflow], &config_cache_entry_current?({Cache, &1, path}, stat))
+      {:error, _reason} -> true
+    end
+  end
+
+  defp config_cache_entry_current?(key, stat) do
+    case :persistent_term.get(key, nil) do
+      nil -> true
+      entry -> not entry.stale? and entry.stamp == {stat.mtime, stat.size, stat.type}
+    end
+  end
+
+  # Waits until `fun` returns a truthy value and returns it, trying again every few milliseconds. A
+  # test waits on the state it asserts this way, never on a fixed sleep; the bound only ends a wait
+  # that will never be met, and flunks it.
+  def eventually(fun, timeout_ms \\ @eventually_timeout_ms) when is_function(fun, 0) do
+    eventually(fun, timeout_ms, System.monotonic_time(:millisecond) + timeout_ms)
+  end
+
+  defp eventually(fun, timeout_ms, deadline_ms) do
+    case fun.() do
+      unmet when unmet in [nil, false] ->
+        if System.monotonic_time(:millisecond) >= deadline_ms do
+          ExUnit.Assertions.flunk("condition not met within #{timeout_ms} ms")
+        else
+          Process.sleep(@eventually_retry_ms)
+          eventually(fun, timeout_ms, deadline_ms)
+        end
+
+      result ->
+        result
+    end
   end
 
   defp split_workflow_content(path, overrides) do
@@ -239,6 +305,14 @@ defmodule SymphonyElixir.TestSupport do
   def ensure_config_cache_started! do
     ensure_application_started()
     ensure_named_supervised_child_started!(Cache, Cache)
+  end
+
+  # The fetch log's table exists once its owner has run `init/1`; the call waits for that.
+  def ensure_fetch_log_started! do
+    ensure_application_started()
+    ensure_named_supervised_child_started!(SymphonyElixir.Repo.FetchLog, SymphonyElixir.Repo.FetchLog)
+    _state = :sys.get_state(SymphonyElixir.Repo.FetchLog)
+    :ok
   end
 
   # The events recorded on a ticket (`SymphonyElixir.TicketEvents`), oldest first, as `{type,
