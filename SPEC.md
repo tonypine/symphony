@@ -3486,8 +3486,22 @@ Part A: First-turn stall detection
   the end of the run's latest wait on Linear.
 - While a workspace hook runs, compute `elapsed_ms` since the hook's deadline instead. The hook is
   bounded by its own timeout (Section 9.4), which can be longer than `stall_timeout_ms`.
-- If `elapsed_ms > agent.stall_timeout_ms`, terminate the worker and queue a retry.
+- If `elapsed_ms > agent.stall_timeout_ms` and the run is observed (see below), terminate the
+  worker and queue a retry. An unobserved run past the bound is logged, not terminated.
 - If `stall_timeout_ms <= 0`, skip stall detection entirely.
+
+Observed and unobserved runs (Parts A and C):
+
+- Every run kind (implementation, Code Review, QA, epic review) forwards each event its agent
+  streams to the orchestrator through the same path, so its running entry records the session id
+  and the time of its latest event.
+- A run is observed once the orchestrator has its session id, a transcript event or a
+  `tool_progress` heartbeat. Only an observed run's silence is proven, so only an observed run is
+  terminated by stall detection or the watchdog.
+- A run with no session id and no event is unobserved: when it passes either bound, the
+  orchestrator logs `watchdog.unobserved_run` with its run kind and age once per run and keeps it.
+  It ends through the exit path (the agent's own turn and read timeouts, a hook's timeout, or its
+  process exiting).
 
 Part B: Tracker state refresh
 
@@ -3515,7 +3529,7 @@ Part C: No-progress watchdog
   While a workspace hook runs, compute it since the hook's deadline, as in Part A. While the run's
   agent waits on a call of one of Symphony's own MCP tools, compute it since the latest deadline of
   its pending calls when that is later; a call without a deadline (a QA tool) does not hold it.
-- If `elapsed_ms >= watchdog.no_progress_threshold_ms`, terminate the agent session, run
+- If `elapsed_ms >= watchdog.no_progress_threshold_ms` and the run is observed, terminate the agent session, run
   `after_run`, record the run as `timeout`, emit `run_stuck`, and queue a retry through the normal
   retry helper/backoff path. The log line names the run's oldest pending tool call and its age,
   when there is one.
