@@ -11,9 +11,9 @@ defmodule SymphonyElixir.TicketState do
   the PR and CI watcher's fact record (`pr_watch`, written by `SymphonyElixir.PrWatch.Repo`), and
   the sequence number of the last event in its event stream (`event_seq`, `SymphonyElixir.TicketEvents`),
   and what the last observation of the ticket in Linear found (`observe/4`): its title, labels,
-  priority, assignee, open blockers, URL and Linear's `updatedAt`, with when it was observed, which
-  read brought the last change (`observed_from`) and when a webhook said the ticket was removed
-  (`removed_at`).
+  priority, assignee, open blockers and sub-issues (each by id, identifier and state), parent, URL,
+  creation time and Linear's `updatedAt`, with when it was observed, which read brought the last
+  change (`observed_from`) and when a webhook said the ticket was removed (`removed_at`).
 
   The record is persisted by `SymphonyElixir.RunStore`; this module owns its shape and the
   operations that move it. It is inert by design: nothing dispatches on a record yet. It exists so
@@ -62,6 +62,12 @@ defmodule SymphonyElixir.TicketState do
           recorded_at: DateTime.t() | nil,
           details: map()
         }
+
+  @typedoc """
+  A ticket the observed one links to (an open blocker, a sub-issue) as the read saw it: its id,
+  identifier and state, each nil when the read didn't carry it.
+  """
+  @type link :: %{id: String.t() | nil, identifier: String.t() | nil, state: String.t() | nil}
 
   @typedoc "One entry of the signals ledger."
   @type signal :: %{name: String.t(), details: map(), at: DateTime.t()}
@@ -200,8 +206,11 @@ defmodule SymphonyElixir.TicketState do
           labels: [String.t()],
           priority: integer() | nil,
           assignee: String.t() | nil,
-          blockers: [String.t()],
+          blockers: [link()],
+          sub_issues: [link()],
+          parent: SymphonyElixir.Connected.parent() | nil,
           url: String.t() | nil,
+          created_at: DateTime.t() | nil,
           linear_updated_at: DateTime.t() | nil,
           observed_at: DateTime.t() | nil,
           observed_from: observation_source() | nil,
@@ -217,8 +226,11 @@ defmodule SymphonyElixir.TicketState do
 
   @observation_sources [:poll, :by_id, :watcher, :webhook]
 
+  # The observed fields a read that doesn't carry them (nil) leaves as the record has them.
+  @kept_when_missing [:issue_identifier, :phase, :parent, :created_at, :linear_updated_at]
+
   # The fields an observation of the ticket in Linear writes (`observe/4`).
-  @observed_fields ~w(issue_identifier phase title labels priority assignee blockers url linear_updated_at)a
+  @observed_fields ~w(issue_identifier phase title labels priority assignee blockers sub_issues parent url created_at linear_updated_at)a
 
   @doc """
   A new record for `repo_key`'s `issue_id`, with any `attrs` applied. `attrs` may set `:phase`,
@@ -259,8 +271,11 @@ defmodule SymphonyElixir.TicketState do
       labels: string_list(Map.get(record, :labels)),
       priority: integer_or_nil(Map.get(record, :priority)),
       assignee: map_string(record, :assignee),
-      blockers: string_list(Map.get(record, :blockers)),
+      blockers: links(Map.get(record, :blockers)),
+      sub_issues: links(Map.get(record, :sub_issues)),
+      parent: normalize_parent(Map.get(record, :parent)),
       url: map_string(record, :url),
+      created_at: map_datetime(record, :created_at),
       linear_updated_at: map_datetime(record, :linear_updated_at),
       observed_at: map_datetime(record, :observed_at),
       observed_from: observation_source(Map.get(record, :observed_from)),
@@ -291,7 +306,10 @@ defmodule SymphonyElixir.TicketState do
       priority: nil,
       assignee: nil,
       blockers: [],
+      sub_issues: [],
+      parent: nil,
       url: nil,
+      created_at: nil,
       linear_updated_at: nil,
       observed_at: nil,
       observed_from: nil,
@@ -302,9 +320,9 @@ defmodule SymphonyElixir.TicketState do
 
   @doc """
   Applies what Linear says of the ticket (`issue`, a `SymphonyElixir.Linear.Issue`) to its record:
-  its state as the `phase`, its identifier, title, labels, priority, assignee, blockers (the
-  identifiers of its `blocked_by`; the caller keeps only the open ones), URL and `updated_at` as
-  `linear_updated_at`. Returns the record and what happened:
+  its state as the `phase`, its identifier, title, labels, priority, assignee, blockers (its
+  `blocked_by` by id, identifier and state; the caller keeps only the open ones), sub-issues, parent,
+  URL, `created_at` and `updated_at` as `linear_updated_at`. Returns the record and what happened:
 
   - `:stale` when the issue's `updated_at` is older than the record's `linear_updated_at`: the fact
     is dropped and the record returned as it was;
@@ -313,8 +331,10 @@ defmodule SymphonyElixir.TicketState do
     `observed_from` to the read's `source` (`t:observation_source/0`).
 
   A field the issue marks `:unknown` (a webhook delivery that doesn't carry it) never overwrites the
-  record's value, nor does a missing state or `updated_at`: a missing fact is missing information,
-  not a change. Writing the record never records a ledger event; Symphony's own moves do that.
+  record's value, nor does a missing state, parent, `created_at` or `updated_at`: a missing fact is
+  missing information, not a change. The poll reads no parent (only the dispatch-time enrichment
+  does), so the record keeps one once a read carries it. Writing the record never records a ledger
+  event; Symphony's own moves do that.
   """
   @spec observe(t(), Issue.t(), DateTime.t(), observation_source() | nil) :: {t(), :changed | :unchanged | :stale}
   def observe(record, %Issue{} = issue, %DateTime{} = observed_at, source \\ nil) do
@@ -364,22 +384,50 @@ defmodule SymphonyElixir.TicketState do
       labels: issue.labels,
       priority: issue.priority,
       assignee: issue.assignee_id,
-      blockers: blocker_identifiers(issue.blocked_by),
+      blockers: issue.blocked_by,
+      sub_issues: issue.sub_issues,
+      parent: issue.parent,
       url: issue.url,
+      created_at: issue.created_at,
       linear_updated_at: issue.updated_at
     ]
-    |> Enum.reject(fn {field, value} -> value == :unknown or (is_nil(value) and field in [:issue_identifier, :phase, :linear_updated_at]) end)
+    |> Enum.reject(fn {field, value} -> value == :unknown or (is_nil(value) and field in @kept_when_missing) end)
     |> Map.new()
   end
 
-  defp blocker_identifiers(blockers) when is_list(blockers) do
-    Enum.flat_map(blockers, fn
-      %{identifier: identifier} when is_binary(identifier) -> [identifier]
-      _blocker -> []
-    end)
+  # A record read before links kept their id and state holds the blocker's identifier alone.
+  defp links(links) when is_list(links), do: Enum.flat_map(links, &link/1)
+  defp links(_links), do: []
+
+  defp link(identifier) when is_binary(identifier), do: link(%{identifier: identifier})
+
+  defp link(%{} = link) do
+    case {map_string(link, :id), map_string(link, :identifier)} do
+      {nil, nil} -> []
+      {id, identifier} -> [%{id: id, identifier: identifier, state: map_string(link, :state)}]
+    end
   end
 
-  defp blocker_identifiers(blockers), do: blockers
+  defp link(_link), do: []
+
+  defp normalize_parent(%{identifier: identifier} = parent) when is_binary(identifier) do
+    %{
+      identifier: identifier,
+      title: map_string(parent, :title),
+      done: count(Map.get(parent, :done)),
+      total: count(Map.get(parent, :total)),
+      children: children(Map.get(parent, :children))
+    }
+  end
+
+  defp normalize_parent(_parent), do: nil
+
+  # Each child's state type, nil when Linear gave none.
+  defp children(children) when is_list(children), do: Enum.map(children, &normalize_string/1)
+  defp children(_children), do: []
+
+  defp count(value) when is_integer(value) and value >= 0, do: value
+  defp count(_value), do: 0
 
   @doc """
   Marks the grants in `ids` that no run used yet as used by `run_id`, and returns them with the

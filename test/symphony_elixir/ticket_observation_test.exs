@@ -7,6 +7,7 @@ defmodule SymphonyElixir.TicketObservationTest do
 
   @linear_at ~U[2026-10-29 09:00:00Z]
   @now ~U[2026-10-29 09:05:00Z]
+  @created_at ~U[2026-10-01 08:00:00Z]
 
   setup do
     TicketObservation.reset()
@@ -25,7 +26,9 @@ defmodule SymphonyElixir.TicketObservationTest do
         priority: 2,
         assignee_id: "user-1",
         blocked_by: [%{id: "issue-a", identifier: "ACME-5", state: "In Progress"}, %{id: "issue-b", identifier: "ACME-6", state: "Done"}],
+        sub_issues: [%{id: "issue-c", identifier: "ACME-8", state: "Todo"}],
         url: "https://linear.app/acme/issue/ACME-7",
+        created_at: @created_at,
         updated_at: @linear_at
       },
       attrs
@@ -44,8 +47,11 @@ defmodule SymphonyElixir.TicketObservationTest do
              labels: ["backend"],
              priority: 2,
              assignee: "user-1",
-             blockers: ["ACME-5"],
+             blockers: [%{id: "issue-a", identifier: "ACME-5", state: "In Progress"}],
+             sub_issues: [%{id: "issue-c", identifier: "ACME-8", state: "Todo"}],
+             parent: nil,
              url: "https://linear.app/acme/issue/ACME-7",
+             created_at: @created_at,
              linear_updated_at: @linear_at,
              observed_at: @now
            } = record
@@ -59,6 +65,28 @@ defmodule SymphonyElixir.TicketObservationTest do
 
     assert {:ok, :unchanged} = TicketObservation.observe(repo_key, linear_issue(), now: DateTime.add(@now, 60))
     assert RunStore.get_ticket_state(repo_key, "issue-observed") == stored
+  end
+
+  test "a sub-ticket or a blocker that moves is written, at the same updatedAt", %{repo_key: repo_key} do
+    {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
+
+    started = linear_issue(%{sub_issues: [%{id: "issue-c", identifier: "ACME-8", state: "In Progress"}]})
+    assert {:ok, :updated} = TicketObservation.observe(repo_key, started, now: DateTime.add(@now, 60))
+    assert RunStore.get_ticket_state(repo_key, "issue-observed").sub_issues == [%{id: "issue-c", identifier: "ACME-8", state: "In Progress"}]
+
+    reviewed = %{started | blocked_by: [%{id: "issue-a", identifier: "ACME-5", state: "Code Review"}]}
+    assert {:ok, :updated} = TicketObservation.observe(repo_key, reviewed, now: DateTime.add(@now, 120))
+    assert RunStore.get_ticket_state(repo_key, "issue-observed").blockers == [%{id: "issue-a", identifier: "ACME-5", state: "Code Review"}]
+  end
+
+  test "a record that kept its blockers by identifier alone is written once with their ids and states", %{repo_key: repo_key} do
+    {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
+    :ok = RunStore.update_ticket_state(repo_key, "issue-observed", %{blockers: ["ACME-5"]})
+    assert RunStore.get_ticket_state(repo_key, "issue-observed").blockers == [%{id: nil, identifier: "ACME-5", state: nil}]
+
+    assert {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: DateTime.add(@now, 60))
+    assert RunStore.get_ticket_state(repo_key, "issue-observed").blockers == [%{id: "issue-a", identifier: "ACME-5", state: "In Progress"}]
+    assert {:ok, :unchanged} = TicketObservation.observe(repo_key, linear_issue(), now: DateTime.add(@now, 120))
   end
 
   test "a newer title reaches an existing record and leaves its other fields", %{repo_key: repo_key} do
@@ -88,24 +116,24 @@ defmodule SymphonyElixir.TicketObservationTest do
 
   test "blockers keep the open ones: the given terminal states, else the repo's", %{repo_key: repo_key} do
     {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now, terminal_states: ["In Progress"])
-    assert RunStore.get_ticket_state(repo_key, "issue-observed").blockers == ["ACME-6"]
+    assert RunStore.get_ticket_state(repo_key, "issue-observed").blockers == [%{id: "issue-b", identifier: "ACME-6", state: "Done"}]
 
     {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(%{updated_at: DateTime.add(@linear_at, 1)}), now: @now)
-    assert RunStore.get_ticket_state(repo_key, "issue-observed").blockers == ["ACME-5"]
+    assert RunStore.get_ticket_state(repo_key, "issue-observed").blockers == [%{id: "issue-a", identifier: "ACME-5", state: "In Progress"}]
   end
 
   test "an unknown blocker list keeps the known blockers", %{repo_key: repo_key} do
     {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
 
     assert {:ok, :unchanged} = TicketObservation.observe(repo_key, linear_issue(%{blocked_by: :unknown}), now: DateTime.add(@now, 60))
-    assert RunStore.get_ticket_state(repo_key, "issue-observed").blockers == ["ACME-5"]
+    assert RunStore.get_ticket_state(repo_key, "issue-observed").blockers == [%{id: "issue-a", identifier: "ACME-5", state: "In Progress"}]
   end
 
   test "a repo Symphony has no settings for keeps every blocker" do
     assert {:ok, :updated} = TicketObservation.observe("observation-other-repo", linear_issue())
 
     record = RunStore.get_ticket_state("observation-other-repo", "issue-observed")
-    assert record.blockers == ["ACME-5", "ACME-6"]
+    assert Enum.map(record.blockers, & &1.identifier) == ["ACME-5", "ACME-6"]
     assert %DateTime{} = record.observed_at
   end
 
@@ -246,7 +274,7 @@ defmodule SymphonyElixir.TicketObservationTest do
 
   describe "observe_delivery/2" do
     defp delivery(attrs \\ %{}) do
-      issue = linear_issue(Map.merge(%{team: %{key: "Test", name: "Test"}, blocked_by: :unknown}, attrs))
+      issue = linear_issue(Map.merge(%{team: %{key: "Test", name: "Test"}, blocked_by: :unknown, sub_issues: :unknown}, attrs))
       {:issue, :update, issue, issue.updated_at}
     end
 
