@@ -479,6 +479,50 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       assert {:error, _reason} = revalidate.(issue(" ", 4), " ")
     end
 
+    test "a retry's own read is written into its record, so the check before its start is not older than that read" do
+      set_source("record", tracker_kind: "memory", quality_gate: %{enabled: false})
+      repo_key = Config.repo_key!()
+      pid = start_orchestrator!(:RetryOrchestrator)
+      polled = issue(repo_key, "retry", state: "In Progress")
+      {:ok, :updated} = TicketObservation.observe(repo_key, polled, source: :poll)
+
+      # The agent changed the ticket in Linear after the poll, and no webhook has landed yet: the
+      # record alone is older than what the retry reads, and would stop it.
+      read = %{polled | updated_at: DateTime.add(@linear_at, 60)}
+      assert {:skip, %Issue{}} = Orchestrator.revalidate_issue_from_record_for_test(read, repo_key, true)
+
+      # The retry fires through the orchestrator; no slot is free, so it waits for one after its read.
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [read])
+      token = make_ref()
+      not_due = System.monotonic_time(:millisecond) + 3_600_000
+
+      :sys.replace_state(pid, fn state ->
+        retry = %{attempt: 1, retry_token: token, identifier: read.identifier, repo_key: repo_key}
+
+        %{
+          state
+          | max_concurrent_agents: 0,
+            retry_attempts: %{read.id => retry},
+            claimed: MapSet.new([read.id]),
+            repo_poll_due_at_ms: %{repo_key => not_due}
+        }
+      end)
+
+      send(pid, {:retry_issue, read.id, token})
+      read_id = read.id
+      assert_receive {:memory_tracker_fetch_issue_states_by_ids, [^read_id]}
+      eventually(fn -> Map.has_key?(:sys.get_state(pid).slot_waiting, read_id) end)
+
+      record = RunStore.get_ticket_state(repo_key, read_id)
+      assert {record.observed_from, record.linear_updated_at} == {:by_id, read.updated_at}
+      assert {:ok, %Issue{state: "In Progress"}} = Orchestrator.revalidate_issue_from_record_for_test(read, repo_key, true)
+
+      # A webhook moved it to another active phase after the read: the retry does not start.
+      moved = %{read | state: "Rework", updated_at: DateTime.add(@linear_at, 120)}
+      {:ok, :updated} = TicketObservation.observe(repo_key, moved, source: :webhook)
+      assert {:skip, %Issue{state: "Rework"}} = Orchestrator.revalidate_issue_from_record_for_test(read, repo_key, true)
+    end
+
     test "the dispatch prefetch reads nothing from Linear, for a poll or a retry", ctx do
       {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [issue(ctx.repo_key, 1)], 0)
       {%{dispatchable: [candidate]}, state} = capture_cycle(state, ctx.repos, 50)
@@ -535,5 +579,26 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
   defp capture_cycle(state, repos, now_ms) do
     {result, _log} = with_log(fn -> cycle(state, repos, [], now_ms) end)
     result
+  end
+
+  # An orchestrator past its startup poll, which finds no ticket.
+  defp start_orchestrator!(name) do
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
+    {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, name))
+
+    on_exit(fn ->
+      try do
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      catch
+        :exit, _reason -> :ok
+      end
+    end)
+
+    eventually(fn ->
+      state = :sys.get_state(pid)
+      is_nil(state.repo_poll_task_ref) and not state.poll_check_in_progress and state.tracker_tasks == %{}
+    end)
+
+    pid
   end
 end
