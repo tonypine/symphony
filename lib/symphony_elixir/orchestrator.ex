@@ -1421,7 +1421,7 @@ defmodule SymphonyElixir.Orchestrator do
     TicketPullRequest.Lookup.start(input.due_repo, repo_result)
     read = tick_reader(input.by_id, Map.get(input, :list_records, &RunStore.list_all_ticket_states/0))
     {running_ids, running_result} = read.(ids.running)
-    {watching_ids, watching_result} = read.(ids.watching)
+    {watching_ids, watching_result} = ids.watching |> read.() |> plan_comments_for(input.by_id)
     {forced_ids, forced_result} = read.(ids.forced)
     {stopped_ids, stopped_result} = read.(ids.stopped)
 
@@ -1469,14 +1469,13 @@ defmodule SymphonyElixir.Orchestrator do
 
   # Each ticket read from its record: one Linear no longer has (a webhook said it was removed) is
   # left out, as a by-id read leaves it out, so its run stops and its watch, force or stop ends. One
-  # with no observed record is not judged this tick, as a failed read judges none. A watched plan
-  # parent whose comments only Linear holds is read by id (`plan_comment_reads/1`).
+  # with no observed record is not judged this tick, as a failed read judges none.
   defp recorded_tick_reader(records, held) when is_list(records) do
     recorded = recorded_issues(records)
 
     fn issue_ids ->
       {known, issues} = Enum.reduce(issue_ids, {[], []}, &recorded_tick_issue(&1, &2, recorded, held))
-      {Enum.reverse(known), issues |> Enum.reverse() |> plan_comment_reads()}
+      {Enum.reverse(known), {:ok, Enum.reverse(issues)}}
     end
   end
 
@@ -1503,10 +1502,14 @@ defmodule SymphonyElixir.Orchestrator do
     end)
   end
 
-  # A plan parent in `Plan Review` is in no repo poll (it is not an active state) and its record keeps
-  # no comments, so the comments a person leaves on a plan under review exist only in Linear. Such a
-  # parent the plan-comment reader acts on (`PlanComments.action/3`) is read by id, as under `poll`,
-  # so it sees the same comments.
+  # The watched tickets are the only ones the plan-comment reader acts on
+  # (`apply_watching_issue_states_result/3`). A plan parent in `Plan Review` is in no repo poll (it is
+  # not an active state) and its record keeps no comments, so the comments a person leaves on a plan
+  # under review exist only in Linear. Such a watched parent the plan-comment reader acts on
+  # (`PlanComments.action/3`) is read by id, as under `poll`, so it sees the same comments.
+  defp plan_comments_for({known, {:ok, issues}}, {:record, _held}), do: {known, plan_comment_reads(issues)}
+  defp plan_comments_for(read, _by_id), do: read
+
   defp plan_comment_reads(issues) do
     settings = Config.settings!()
     {active_states, terminal_states} = {active_state_set(settings), terminal_state_set(settings)}

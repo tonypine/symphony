@@ -385,6 +385,38 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       assert state.plan_comment_checks == %{parent_id => commented_at}
     end
 
+    test "a forced or stopped plan parent under review is taken from its record; only a watched one is read by id", ctx do
+      forced = issue(ctx.repo_key, 1, state: "Plan Review", labels: ["plan", "expedite"])
+      stopped = issue(ctx.repo_key, 2, state: "Plan Review", labels: ["plan"])
+      forced_and_watched = issue(ctx.repo_key, 3, state: "Plan Review", labels: ["plan"])
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [forced, stopped, forced_and_watched])
+      observe!(ctx.repo_key, [forced, stopped], :poll)
+
+      state = %{
+        orchestrator_state()
+        | forced: %{forced.id => %{}},
+          operator_stops: %{stopped.id => OperatorStop.mark(stopped.identifier, ctx.repo_key, DateTime.utc_now())}
+      }
+
+      # Neither is watched, so neither reaches the plan-comment reader: no by-id read.
+      {result, _state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0)
+      refute_received {:memory_tracker_fetch_issue_states_by_ids, _ids}
+      assert {:ok, [%Issue{identifier: "ACME-1", state: "Plan Review"}]} = result.forced_result
+      assert {:ok, [%Issue{identifier: "ACME-2", state: "Plan Review"}]} = result.stopped_result
+
+      # A forced parent that is also watched is read once, for the watched group.
+      observe!(ctx.repo_key, [forced_and_watched], :poll)
+      both_id = forced_and_watched.id
+      state = %{state | forced: Map.put(state.forced, both_id, %{}), watching: %{both_id => %{}}}
+
+      {result, _state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0)
+      assert_received {:memory_tracker_fetch_issue_states_by_ids, [^both_id]}
+      refute_received {:memory_tracker_fetch_issue_states_by_ids, _ids}
+      assert {:ok, [%Issue{identifier: "ACME-3"}]} = result.watching_result
+      assert {:ok, forced_issues} = result.forced_result
+      assert forced_issues |> Enum.map(& &1.identifier) |> Enum.sort() == ["ACME-1", "ACME-3"]
+    end
+
     test "a plan parent whose by-id read fails keeps every watched ticket as it was", ctx do
       parent = issue(ctx.repo_key, 1, state: "Plan Review", labels: ["plan"])
       {:ok, :updated} = TicketObservation.observe(ctx.repo_key, parent, source: :poll)
