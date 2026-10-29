@@ -215,6 +215,24 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
   end
 
   describe "issue_from_record/1" do
+    test "a ticket rebuilt from its record has the description, team and project the poll read" do
+      polled =
+        issue("described", "MT-9", "Todo",
+          description: "## Why\n\nThe watcher reads it.\n",
+          team: %{key: "MT", name: "Main Team"},
+          project: %{id: "project-1", name: "Symphony", slug_id: "symphony-1a2b"}
+        )
+
+      assert {[cache], [record]} = assert_same_candidates!([polled])
+      assert %Issue{identifier: "MT-9"} = record
+
+      assert Map.take(record, [:description, :team, :project]) == Map.take(cache, [:description, :team, :project])
+      assert Map.take(record, [:description, :team, :project]) == Map.take(polled, [:description, :team, :project])
+
+      rebuilt = Candidates.issue_from_record(observed(issue("bare", "MT-11", "Todo")))
+      assert {rebuilt.description, rebuilt.team, rebuilt.project} == {nil, nil, nil}
+    end
+
     test "rebuilds what the record observed: its open blockers and sub-issues with their ids and states, its parent and age" do
       parent = %{identifier: "MT-1", title: "Epic", done: 1, total: 2, children: ["completed", "started"]}
 

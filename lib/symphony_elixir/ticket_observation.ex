@@ -2,8 +2,8 @@ defmodule SymphonyElixir.TicketObservation do
   @moduledoc """
   Writes what Symphony reads of a ticket in Linear into its record (`SymphonyElixir.TicketState`),
   so the record learns from every poll: the ticket's state as the record's `phase`, its title,
-  labels, priority, assignee, open blockers and sub-issues (each by id, identifier and state), parent,
-  URL, creation time and Linear's `updatedAt`.
+  description, team, project, labels, priority, assignee, open blockers and sub-issues (each by id,
+  identifier and state), parent, URL, creation time and Linear's `updatedAt`.
 
   `observe/3` reads the record (a new one when the ticket has none), applies
   `SymphonyElixir.TicketState.observe/4` and writes the observed fields back through
