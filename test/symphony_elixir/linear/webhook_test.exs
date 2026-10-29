@@ -14,6 +14,20 @@ defmodule SymphonyElixir.Linear.WebhookTest do
   defp now_ms, do: DateTime.to_unix(@now, :millisecond)
   defp sign(body, secret \\ @secret), do: :hmac |> :crypto.mac(:sha256, secret, body) |> Base.encode16(case: :lower)
 
+  # Every key or index path in a decoded delivery, outermost first.
+  defp paths(%{} = map), do: Enum.flat_map(map, fn {key, value} -> [[key] | Enum.map(paths(value), &[key | &1])] end)
+
+  defp paths(list) when is_list(list) do
+    list |> Enum.with_index() |> Enum.flat_map(fn {value, index} -> [[index] | Enum.map(paths(value), &[index | &1])] end)
+  end
+
+  defp paths(_leaf), do: []
+
+  defp put_at(map, [key], value) when is_map(map), do: Map.put(map, key, value)
+  defp put_at(map, [key | rest], value) when is_map(map), do: Map.update!(map, key, &put_at(&1, rest, value))
+  defp put_at(list, [index], value), do: List.replace_at(list, index, value)
+  defp put_at(list, [index | rest], value), do: List.update_at(list, index, &put_at(&1, rest, value))
+
   defp verify(body, headers, opts \\ []), do: Webhook.verify(body, headers, Keyword.merge([secret: Secret.wrap(@secret), now: @now], opts))
 
   describe "verify/3" do
@@ -147,11 +161,48 @@ defmodule SymphonyElixir.Linear.WebhookTest do
         %{"type" => "Issue", "action" => "create", "data" => %{"id" => "i1", "identifier" => "TP-1"}},
         %{"type" => "Issue", "action" => "remove", "data" => %{"identifier" => "TP-1"}},
         %{"type" => "Comment", "action" => "create", "data" => %{"id" => "c1", "body" => "hi"}},
-        %{"type" => "Comment", "action" => "create", "data" => %{"issueId" => "i1", "body" => "hi"}}
+        %{"type" => "Comment", "action" => "create", "data" => %{"issueId" => "i1", "body" => "hi"}},
+        %{"type" => "Comment", "action" => "create", "data" => %{"id" => "c1", "issue" => "i1"}},
+        %{"type" => "Comment", "action" => "create", "data" => %{"id" => "c1", "issue" => ["i1"]}}
       ]
 
       for body <- malformed do
         assert Webhook.parse(body) == {:error, :malformed}, "expected #{inspect(body)} to be malformed"
+      end
+    end
+
+    test "reads a state or a blocker's state of the wrong shape as nothing, without raising" do
+      blocker = %{"type" => "blocks", "issue" => %{"id" => "b1", "identifier" => "TP-2", "state" => "Done"}}
+      data = %{"id" => "i1", "identifier" => "TP-1", "updatedAt" => "2026-10-29T09:00:00Z", "inverseRelations" => [blocker]}
+
+      for state <- ["Todo", ["Todo"], 7] do
+        delivery = %{"type" => "Issue", "action" => "update", "data" => Map.put(data, "state", state)}
+
+        assert {:issue, :update, %Issue{identifier: "TP-1", state: nil, blocked_by: [%{identifier: "TP-2", state: nil}]}, _at} =
+                 Webhook.parse(delivery)
+      end
+    end
+
+    test "never raises, whatever shape any value in a delivery takes" do
+      relation = %{"type" => "blocks", "issue" => %{"id" => "b1", "identifier" => "TP-2", "state" => %{"name" => "Done"}}}
+
+      deliveries =
+        [
+          "issue_update.json" |> delivery() |> Jason.decode!() |> put_in(["data", "inverseRelations"], [relation]),
+          "issue_create.json" |> delivery() |> Jason.decode!() |> put_in(["data", "branchName"], "auto/TP-1213")
+        ] ++ Enum.map(["issue_remove.json", "comment_create.json", "project_update.json"], &(&1 |> delivery() |> Jason.decode!()))
+
+      odd_values = ["Todo", "", ["Todo"], [%{}], 7, nil, true, %{}, %{"name" => 7, "id" => 7}]
+
+      for delivery <- deliveries, path <- paths(delivery), value <- odd_values do
+        odd = put_at(delivery, path, value)
+        result = Webhook.parse(odd)
+
+        assert match?({:issue, action, %Issue{}, %DateTime{}} when action in [:create, :update], result) or
+                 match?({:issue_removed, id, _identifier} when is_binary(id), result) or
+                 match?({:comment, _action, issue_id, %{id: _id}} when is_binary(issue_id), result) or
+                 result in [:ignored, {:error, :malformed}],
+               "#{inspect(value)} at #{inspect(path)} gave #{inspect(result)}"
       end
     end
   end

@@ -23,7 +23,8 @@ defmodule SymphonyElixir.Linear.IssueNormalizerTest do
       assert %Issue{identifier: "TP-1213", state: "In Progress", labels: ["elixir", "reads"], priority: 1} = webhook
       assert webhook.assignee_id == "e4f5a6b7-c8d9-4e0f-9a1b-3c4d5e6f7a8b"
       assert webhook.updated_at == ~U[2026-10-29 09:15:02.118Z]
-      assert webhook.project == %{id: "c2d3e4f5-a6b7-4c8d-9e0f-1a2b3c4d5e6f", name: "Symphony", slug_id: nil}
+      assert webhook.project == %{id: "c2d3e4f5-a6b7-4c8d-9e0f-1a2b3c4d5e6f", name: "Symphony"}
+      assert poll.project == Map.put(webhook.project, :slug_id, "0a1b2c3d4e5f")
     end
 
     test "leave what a delivery never carries unknown, not empty, where the poll knows it" do
@@ -41,6 +42,7 @@ defmodule SymphonyElixir.Linear.IssueNormalizerTest do
       assert webhook.linked_issues == :unknown
       assert webhook.blocked_by == :unknown
       assert webhook.branch_name == :unknown
+      refute Map.has_key?(webhook.project, :slug_id)
       assert webhook.assigned_to_worker
     end
   end
@@ -77,6 +79,24 @@ defmodule SymphonyElixir.Linear.IssueNormalizerTest do
       assert issue.created_at == nil
     end
 
+    test "keeps a project's slug when a delivery gives one" do
+      issue = IssueNormalizer.from_webhook_data(%{"project" => %{"id" => "p1", "name" => "Symphony", "slugId" => "0a1b"}})
+
+      assert issue.project == %{id: "p1", name: "Symphony", slug_id: "0a1b"}
+    end
+
+    test "reads a state, a blocker's state or a project of the wrong shape as nothing, without raising" do
+      blocker = %{"type" => "blocks", "issue" => %{"id" => "b1", "identifier" => "TP-1", "state" => "Done"}}
+
+      for state <- ["Todo", ["Todo"], 7, %{"name" => 7}, %{}] do
+        issue = IssueNormalizer.from_webhook_data(%{"state" => state, "inverseRelations" => [blocker], "project" => "Symphony"})
+
+        assert issue.state == nil
+        assert issue.blocked_by == [%{id: "b1", identifier: "TP-1", state: nil}]
+        assert issue.project == nil
+      end
+    end
+
     test "is nil for anything but a map" do
       assert IssueNormalizer.from_webhook_data(nil) == nil
       assert IssueNormalizer.from_webhook_data("TP-1") == nil
@@ -103,13 +123,15 @@ defmodule SymphonyElixir.Linear.IssueNormalizerTest do
     test "skips relations other than blocks, malformed relations and malformed children" do
       node = %{
         "inverseRelations" => %{"nodes" => [%{"type" => "related", "issue" => %{"id" => "r1"}}, %{"type" => 1}]},
-        "children" => %{"nodes" => [%{"id" => "c1", "identifier" => "TP-3", "state" => %{"name" => "Done"}}, "loose"]}
+        "children" => %{
+          "nodes" => [%{"id" => "c1", "identifier" => "TP-3", "state" => %{"name" => "Done"}}, %{"id" => "c2", "state" => "Done"}, "loose"]
+        }
       }
 
       issue = IssueNormalizer.from_graphql_node(node, nil)
 
       assert issue.blocked_by == []
-      assert issue.sub_issues == [%{id: "c1", identifier: "TP-3", state: "Done"}]
+      assert issue.sub_issues == [%{id: "c1", identifier: "TP-3", state: "Done"}, %{id: "c2", identifier: nil, state: nil}]
     end
   end
 

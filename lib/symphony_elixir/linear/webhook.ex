@@ -147,13 +147,17 @@ defmodule SymphonyElixir.Linear.Webhook do
   end
 
   defp parse_comment(action, data) do
-    with issue_id when is_binary(issue_id) and issue_id != "" <- data["issueId"] || get_in(data, ["issue", "id"]),
+    with issue_id when is_binary(issue_id) <- comment_issue_id(data),
          %{} = comment <- IssueNormalizer.comment_from_webhook_data(data) do
       {:comment, action, issue_id, comment}
     else
       _incomplete -> {:error, :malformed}
     end
   end
+
+  defp comment_issue_id(%{"issueId" => id}) when is_binary(id) and id != "", do: id
+  defp comment_issue_id(%{"issue" => %{"id" => id}}) when is_binary(id) and id != "", do: id
+  defp comment_issue_id(_data), do: nil
 
   defp string(value) when is_binary(value) and value != "", do: value
   defp string(_value), do: nil

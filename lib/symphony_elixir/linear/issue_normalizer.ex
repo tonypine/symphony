@@ -5,9 +5,11 @@ defmodule SymphonyElixir.Linear.IssueNormalizer do
   (`from_webhook_data/1`). Both read the same fields the same way, so the same ticket gives the same
   `Issue` from either.
 
-  A delivery carries less than the poll query: no children, no comments, and relations only
-  sometimes. A field the delivery doesn't carry is `:unknown`, never empty, so a later merge can tell
-  "Linear said none" from "this source didn't say" and never erases a known fact with a missing one.
+  A delivery carries less than the poll query: no children, no comments, no project slug, and
+  relations only sometimes. A field the delivery doesn't carry is `:unknown` (the project's slug is
+  left out of its map), never empty, so a later merge can tell "Linear said none" from "this source
+  didn't say" and never erases a known fact with a missing one. A value of the wrong shape in a
+  delivery reads as nothing, never a raise.
   """
 
   alias SymphonyElixir.{AgentLabels, Decisions, IssueSummary, Linear.Issue}
@@ -43,7 +45,7 @@ defmodule SymphonyElixir.Linear.IssueNormalizer do
       # Symphony's own summary block is not part of the ticket's requirements.
       description: IssueSummary.strip(issue["description"]),
       priority: parse_priority(issue["priority"]),
-      state: get_in(issue, ["state", "name"]),
+      state: name_of(issue["state"]),
       team: extract_team(issue),
       project: extract_project(issue),
       branch_name: issue["branchName"],
@@ -67,7 +69,8 @@ defmodule SymphonyElixir.Linear.IssueNormalizer do
   The `Issue` for the `data` of a Linear `Issue` webhook delivery, or nil for anything else. Linear
   sends it in its REST-like shape: `labels` a list, not a connection. Children, comments (and the
   rulings and linked issues read from them) are never in a delivery, so they are `:unknown`, as are
-  `blocked_by` and `branch_name` when the delivery lacks them. `assigned_to_worker` keeps its
+  `blocked_by` and `branch_name` when the delivery lacks them. A delivery's project has no slug, so
+  its map has no `:slug_id` unless the delivery gives one. `assigned_to_worker` keeps its
   default: the assignee filter is the poll's, and the record applies it.
   """
   @spec from_webhook_data(term()) :: Issue.t() | nil
@@ -78,9 +81,9 @@ defmodule SymphonyElixir.Linear.IssueNormalizer do
       title: data["title"],
       description: IssueSummary.strip(data["description"]),
       priority: parse_priority(data["priority"]),
-      state: get_in(data, ["state", "name"]),
+      state: name_of(data["state"]),
       team: extract_team(data),
-      project: extract_project(data),
+      project: webhook_project(data),
       branch_name: Map.get(data, "branchName", :unknown),
       url: data["url"],
       assignee_id: assignee_field(data["assignee"], "id"),
@@ -163,6 +166,18 @@ defmodule SymphonyElixir.Linear.IssueNormalizer do
 
   defp extract_project(_issue), do: nil
 
+  # A delivery's project has no `slugId`: the key is left out rather than nil, so the poll's slug
+  # (which routes match on) survives a merge.
+  defp webhook_project(%{"project" => %{} = project} = data) do
+    if Map.has_key?(project, "slugId"), do: extract_project(data), else: Map.delete(extract_project(data), :slug_id)
+  end
+
+  defp webhook_project(_data), do: nil
+
+  # The `name` of a nested entity (a state), or nil when it isn't an entity with a string name.
+  defp name_of(%{"name" => name}) when is_binary(name), do: name
+  defp name_of(_entity), do: nil
+
   defp assigned_to_worker?(_assignee, nil), do: true
 
   defp assigned_to_worker?(%{} = assignee, %{match_values: match_values})
@@ -209,7 +224,7 @@ defmodule SymphonyElixir.Linear.IssueNormalizer do
             %{
               id: blocker_issue["id"],
               identifier: blocker_issue["identifier"],
-              state: get_in(blocker_issue, ["state", "name"])
+              state: name_of(blocker_issue["state"])
             }
           ]
         else
@@ -223,7 +238,7 @@ defmodule SymphonyElixir.Linear.IssueNormalizer do
 
   defp extract_sub_issues(%{"children" => %{"nodes" => children}}) when is_list(children) do
     Enum.flat_map(children, fn
-      %{} = child -> [%{id: child["id"], identifier: child["identifier"], state: get_in(child, ["state", "name"])}]
+      %{} = child -> [%{id: child["id"], identifier: child["identifier"], state: name_of(child["state"])}]
       _child -> []
     end)
   end
