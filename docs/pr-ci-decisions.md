@@ -162,6 +162,9 @@ clears (`protected paths`) doesn't make a head red before `Merging`: when it is 
 the head reads as its other checks (green once they passed, running while one runs), so the
 reviewer, QA and the rework run go on and a CI Fix head returns to its origin. In `Merging`, that
 check holds the head back unless the ticket's unlock decisions cover it. A check the base branch
+doesn't require that GitHub cancelled beside it is set aside at once, so the head is never sent to
+CI Fix or R22's rerun for the person's check; a cancelled check the base requires beside it is
+rerun as a cancellation (U2). A check the base branch
 doesn't require, cancelled again after U2's reruns, is set aside the same way (see
 [Cancelled checks](#cancelled-checks)). The
 review comments still to address come from the PR review poller's record: reviewer comments left on

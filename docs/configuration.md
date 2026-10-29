@@ -30,6 +30,7 @@ Common optional sections:
 - `notifications`
 - `human_actions`
 - `ledger`
+- `dispatch`
 - `verification`
 - `workers`
 - `github`
@@ -2578,6 +2579,48 @@ variable loads, and every delivery is then refused as having no secret. A delive
 its `Linear-Signature` header is the HMAC-SHA256 of the raw body with the secret, and its
 `webhookTimestamp` is within sixty seconds of now. See [linear-webhooks.md](linear-webhooks.md).
 Neither key has a control in the macOS app yet.
+
+### `dispatch`
+
+Where the dispatcher reads its candidates from, and the shadow report that proves the ticket
+records give the same answer as the poll before the dispatcher trusts them.
+
+```yaml
+dispatch:
+  source: poll
+  shadow_window: 20
+```
+
+- `source` (default `poll`): `poll` dispatches from the poll cache, the tickets each repository's
+  last poll of Linear returned. `record` will dispatch from Symphony's ticket records, which the
+  polls and Linear's webhook keep; it is accepted and changes nothing yet, so dispatch still reads
+  the poll cache.
+- `shadow_window` (default `20`): how many poll cycles the report's window covers. A whole number
+  above 0.
+
+Symphony reads both on each poll cycle, so a change applies without a restart. Neither key has a
+control in the macOS app yet.
+
+**The shadow report.** Every poll cycle, whatever `source` says, Symphony also works out each
+repository's candidates from its ticket records and compares the two sets: a ticket only the poll
+has, a ticket only the record has, and a ticket both have with a different state or priority. A
+repository whose poll has not answered yet is left out of the cycle. The comparison reads
+Symphony's store, never Linear, and writes nothing. `/api/v1/state` returns the report as
+`dispatch_shadow`:
+
+- `source` and `window`: the two settings;
+- `cycles_compared` and `cycles_with_differences`: the cycles since Symphony started;
+- `window_cycles` and `window_differences`: the last `window` cycles, and how many differences
+  they found together (a difference that lasts three cycles counts three times);
+- `recent`: the last ten differences that appeared, newest first, each with `repo_key`,
+  `issue_id`, `identifier`, `side` (`poll` or `record` for a ticket only that side has, `both` for
+  a ticket both have), `field` (`candidate` for a ticket only one side has, else `state` or
+  `priority`), what each side has (`poll`, `record`: the state for `candidate`, nothing on the side
+  without the ticket) and `at`.
+
+A difference is logged at warning level once while it lasts (`Dispatch shadow difference:`), and
+once more if it comes back after it cleared. `window_differences` staying at zero across a window
+of tickets is the sign that `source: record` will dispatch what the poll would.
 
 ### `notifications`
 

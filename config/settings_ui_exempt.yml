@@ -197,6 +197,13 @@ exemptions:
       - issue_gate.pass_threshold
       - issue_gate.provider
 
+  # dispatch
+  - reason: Where dispatch reads its candidates from (the poll cache or the record), and the shadow report's window. The Director's control comes with TP-1220.
+    ticket: TP-1220
+    keys:
+      - dispatch.shadow_window
+      - dispatch.source
+
   # dashboard
   - reason: The web dashboard's address and refresh rates. No control in the app yet.
     keys:

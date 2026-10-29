@@ -321,6 +321,50 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
       assert {:ok, %{red_kind: :cancelled, past_human_only: nil}} = read({response(pull(cancelled)), 0})
     end
 
+    test "TP-1271: a cancellation beside a check only a person clears never makes the head a failure" do
+      rest = %{
+        @rules => {Jason.encode!([%{"type" => "required_status_checks", "parameters" => %{"required_status_checks" => [%{"context" => "make all"}]}}]), 0},
+        @branch => {Jason.encode!(%{"name" => "main"}), 0}
+      }
+
+      protected = check("protected paths", "FAILURE", workflow: "protected-paths", run: 100)
+      seatbelt = check("seatbelt tests", "CANCELLED", workflow: "macos", run: 300, job: 7)
+
+      # The base doesn't require the cancelled check: set aside, the head reads as its other checks.
+      head = rollup([check("make all", "SUCCESS", run: 200), protected, seatbelt])
+      assert {:ok, read} = read({response(pull(head)), 0}, rest, required_checks: %{})
+      assert %{ci: :red, red_kind: :human_only, past_human_only: :green, failing_check: "protected paths", required: {"main", ["make all"]}} = read
+      assert_received {:gh, ["api", @rules]}
+      refute_received {:gh, ["run", "list" | _rest]}
+
+      known = [required_checks: %{"main" => ["make all"]}]
+      running = rollup([check("make all", nil, run: 200), protected, seatbelt])
+      assert {:ok, %{red_kind: :human_only, past_human_only: :pending}} = read({response(pull(running)), 0}, %{}, known)
+
+      # A cancelled check the base requires, or required checks that can't be read: a cancelled
+      # head, named by the cancellation R19 reruns.
+      required = [required_checks: %{"main" => ["make all", "seatbelt tests"]}]
+
+      assert {:ok, %{red_kind: :cancelled, failing_check: "seatbelt tests", past_human_only: nil}} =
+               read({response(pull(head)), 0}, %{}, required)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        unreadable = %{@rules => {"boom", 1}}
+
+        assert {:ok, %{red_kind: :cancelled, failing_check: "seatbelt tests"}} =
+                 read({response(pull(head)), 0}, unreadable, required_checks: %{})
+      end)
+
+      # A real failure beside the cancellation is still a failure, and reads no required checks.
+      flush_gh()
+      failed = rollup([check("make all", "FAILURE", run: 200), protected, seatbelt])
+
+      assert {:ok, %{red_kind: :failure, failing_check: "make all", past_human_only: nil}} =
+               read({response(pull(failed)), 0}, %{runs: base_runs([])}, required_checks: %{})
+
+      refute_received {:gh, ["api", @rules]}
+    end
+
     test "TP-1170: a cancellation beside a real failure is never named as the failure" do
       mixed = rollup([check("e2e", "CANCELLED", workflow: "macos-e2e", run: 300, job: 7), check("test", "FAILURE", run: 100, job: 8)])
       rest = %{:runs => base_runs([{"ci", "success", 1}]), {:log, "100"} => failed_log([{"test", "** (MatchError) no match"}])}

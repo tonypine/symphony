@@ -288,12 +288,14 @@ defmodule SymphonyElixir.TicketObservationTest do
       poll!(repo_key)
       edited = delivery(%{priority: 1, updated_at: DateTime.add(@linear_at, 60)})
 
-      assert TicketObservation.observe_delivery(edited, now: DateTime.add(@now, 60)) == :updated
+      assert TicketObservation.observe_delivery(edited, now: DateTime.add(@now, 60), orchestrator: self()) == :updated
+      assert_receive {:"$gen_cast", {:request_refresh, ^repo_key, :now}}
 
       record = RunStore.get_ticket_state(repo_key, "issue-observed")
       assert %{issue_identifier: "ACME-7", priority: 1, observed_from: :webhook} = record
       assert record.observed_at == DateTime.add(@now, 60)
-      assert TicketObservation.observe_delivery(edited, now: DateTime.add(@now, 60)) == :unchanged
+      assert TicketObservation.observe_delivery(edited, now: DateTime.add(@now, 60), orchestrator: self()) == :unchanged
+      refute_received {:"$gen_cast", _request}
     end
 
     test "an older delivery is dropped as stale", %{repo_key: repo_key} do
@@ -352,12 +354,23 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert RunStore.get_ticket_state(@default_repo, "issue-observed") == nil
     end
 
-    test "a ticket held in several repos is unrouted, and both records are left" do
+    test "a ticket held in several repos is unrouted, both records are left and no poll is asked for" do
       held = Enum.map([@default_repo, @project_repo], &poll!/1)
 
       edited = delivery(%{priority: 1, updated_at: DateTime.add(@linear_at, 60)})
-      assert TicketObservation.observe_delivery(edited, now: DateTime.add(@now, 60), repos: @slug_routes) == :unrouted
+      assert TicketObservation.observe_delivery(edited, now: DateTime.add(@now, 60), repos: @slug_routes, orchestrator: self()) == :unrouted
       assert Enum.map([@default_repo, @project_repo], &RunStore.get_ticket_state(&1, "issue-observed")) == held
+      refute_received {:"$gen_cast", _request}
+    end
+
+    test "a removal asks for a poll of each repo whose record it marked, and only those" do
+      poll!(@project_repo)
+      removal = {:issue_removed, "issue-observed", "ACME-7"}
+
+      opts = [now: @now, repos: @slug_routes, orchestrator: self()]
+      assert TicketObservation.observe_delivery(removal, opts) == :removed
+      assert_receive {:"$gen_cast", {:request_refresh, @project_repo, :now}}
+      refute_received {:"$gen_cast", {:request_refresh, @default_repo, :now}}
     end
 
     test "a store refusal is logged and is an error" do
@@ -382,7 +395,9 @@ defmodule SymphonyElixir.TicketObservationTest do
     end
 
     test "a removal of a ticket without a record writes nothing; a store refusal is an error" do
-      assert TicketObservation.observe_delivery({:issue_removed, "issue-never-seen", nil}, now: @now) == :no_record
+      unknown = {:issue_removed, "issue-never-seen", nil}
+      assert TicketObservation.observe_delivery(unknown, now: @now, orchestrator: self()) == :no_record
+      refute_received {:"$gen_cast", _request}
 
       log =
         capture_log(fn ->

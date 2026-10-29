@@ -14,7 +14,8 @@ linear:
 Symphony receives the deliveries at `POST /api/v1/linear/webhook`, writes what an `Issue` delivery
 says into the ticket's record and counts each one (see [What arrived](#what-arrived)). Nothing
 dispatches from the record yet: Symphony still acts on what it polls, as before, and measures how
-often the webhook brought a change before the poll did.
+often the webhook brought a change before the poll did. A delivery that changes a record polls the
+ticket's repo at once (see [What a delivery triggers](#what-a-delivery-triggers)).
 
 ## How a delivery is verified
 
@@ -91,6 +92,18 @@ under the five Linear waits for the answer), Symphony observes it into the ticke
 
 A store refusal, a crash or a timeout is logged and counted as `error`; the delivery is still
 answered `200`.
+
+### What a delivery triggers
+
+A delivery whose observation is `updated` or `removed` asks the orchestrator to poll the ticket's
+repo at once, through the same forced poll as Symphony's own moves
+(`SymphonyElixir.Orchestrator.request_refresh/3`), so a ticket Linear moved to Done starts the next
+ticket of its chain within seconds instead of at the next timed poll (`issues.poll_interval_ms`).
+The webhook only says "read now": the poll reads Linear and dispatches from what it reads, never
+from the record. Requests for one repo coalesce: deliveries before its forced poll starts share
+that poll, and one arriving after it started, inside the two-second window, is polled once more at
+the window's end, so it is never dropped. `unchanged`, `stale`, `unrouted`, `no_record`, `error`, a
+`Comment` and any other delivery ask for nothing.
 
 `GET /api/v1/state` shows the counts under `linear_webhooks`:
 

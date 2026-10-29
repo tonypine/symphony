@@ -21,6 +21,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   require Schema.AutoReview
   require Schema.Ci
   require Schema.Dependencies
+  require Schema.Dispatch
   require Schema.GitHub
   require Schema.HumanActions
   require Schema.Ledger
@@ -48,7 +49,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   @retired_human_review_state "the Human Review state (`tracker.human_review_state`) is retired; a decision request pauses " <>
                                 "the ticket on a Needs Decision hold, and a plan waits in `issues.states.plan_review`"
   @allowed_keys ~w(
-    agent auto_review code_review dashboard dependency_audit github human_actions issue_gate issues ledger linear notifications
+    agent auto_review code_review dashboard dependency_audit dispatch github human_actions issue_gate issues ledger linear notifications
     poller pull_requests
     repositories tickets verification watchdog workers workspaces
   )
@@ -125,6 +126,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "dependency_audit" => ~w(allow_registries allow_git_sources allow_path_sources),
     "human_actions" => ~w(enabled interval_ms min_update_interval_ms),
     "ledger" => ~w(artifact_max_bytes prompt_brief_enabled prompt_brief_max_tokens),
+    "dispatch" => ~w(source shadow_window),
     "dashboard" => ~w(enabled host port refresh_ms render_interval_ms snapshot_publish_ms transcript_buffer_size)
   }
 
@@ -155,7 +157,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   @removed_keys %{
     "ci" => "use `pull_requests.checks`",
     "dependencies" => "use `dependency_audit`",
-    "dispatch" => "remove it; use `agent.concurrency.max_total`",
+    "dispatch.max_concurrent" => "remove it; use `agent.concurrency.max_total`",
     "learnings" => "use `pull_requests.learnings`",
     "ledger.artifact_retention_days" => "remove it: Symphony now keeps every screenshot and run transcript",
     "observability" => "use `dashboard`",
@@ -473,6 +475,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     embeds_one(:notifications, Schema.Notifications, on_replace: :update, defaults_to_struct: true)
     embeds_one(:human_actions, Schema.HumanActions, on_replace: :update, defaults_to_struct: true)
     embeds_one(:ledger, Schema.Ledger, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:dispatch, Schema.Dispatch, on_replace: :update, defaults_to_struct: true)
     embeds_many(:repos, Repo, on_replace: :delete)
   end
 
@@ -720,6 +723,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     |> cast_embed(:notifications, with: &Schema.Notifications.changeset/2)
     |> cast_embed(:human_actions, with: &Schema.HumanActions.changeset/2)
     |> cast_embed(:ledger, with: &Schema.Ledger.changeset/2)
+    |> cast_embed(:dispatch, with: &Schema.Dispatch.changeset/2)
     |> Schema.validate_profile_command_flags()
     |> cast_embed(:repos, with: &Repo.changeset/2, required: true)
     |> validate_length(:repos, min: 1)
@@ -767,7 +771,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, dependency_audit} <- normalize_dependency_audit(Map.get(config, "dependency_audit", %{})),
          {:ok, dashboard} <- normalize_dashboard(Map.get(config, "dashboard", %{})),
          {:ok, human_actions} <- normalize_human_actions(Map.get(config, "human_actions", %{})),
-         {:ok, ledger} <- normalize_ledger(Map.get(config, "ledger", %{})) do
+         {:ok, ledger} <- normalize_ledger(Map.get(config, "ledger", %{})),
+         {:ok, dispatch} <- normalize_dispatch(Map.get(config, "dispatch", %{})) do
       workspace = merge_section(workspace, "sandbox", Map.get(agent_config, "workspace_sandbox"))
 
       {:ok,
@@ -791,7 +796,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
        |> merge_sections(dashboard)
        |> maybe_put("notifications", Map.get(config, "notifications"))
        |> maybe_put("human_actions", human_actions)
-       |> maybe_put("ledger", ledger)}
+       |> maybe_put("ledger", ledger)
+       |> maybe_put("dispatch", dispatch)}
     end
   end
 
@@ -1351,6 +1357,13 @@ defmodule SymphonyElixir.Config.SystemSchema do
   defp normalize_ledger(config) do
     with {:ok, config} <- section_map(config, "ledger"),
          :ok <- reject_unknown_section_keys(config, section_keys("ledger"), "ledger") do
+      {:ok, config}
+    end
+  end
+
+  defp normalize_dispatch(config) do
+    with {:ok, config} <- section_map(config, "dispatch"),
+         :ok <- reject_unknown_section_keys(config, section_keys("dispatch"), "dispatch") do
       {:ok, config}
     end
   end
