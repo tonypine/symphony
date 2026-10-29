@@ -226,4 +226,121 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
              {"ACME-WEB", "web"}
            ]
   end
+
+  describe "a repo Symphony's own move forces due" do
+    @repos [%{name: "web", team: "ACME", labels: ["web"]}, %{name: "api", team: "ACME", labels: ["api"]}]
+
+    defp polling_fetcher do
+      test_pid = self()
+
+      fn repo ->
+        send(test_pid, {:polled, repo.name})
+        {:ok, []}
+      end
+    end
+
+    defp poll(state, now_ms), do: Orchestrator.poll_candidate_issue_buckets_for_test(state, @repos, polling_fetcher(), now_ms)
+    defp force(state, repo_key, now_ms), do: Orchestrator.force_repo_due_for_test(state, repo_key, now_ms)
+    defp answer(state, repo_result, now_ms), do: Orchestrator.apply_repo_poll_result_for_test(state, @repos, repo_result, now_ms)
+
+    defp warmed_state do
+      state = %Orchestrator.State{poll_interval_ms: 10_000}
+      {:ok, _buckets, state} = poll(state, 0)
+      {:ok, _buckets, state} = poll(state, 5_000)
+      assert_received {:polled, "web"}
+      assert_received {:polled, "api"}
+      assert state.repo_poll_due_at_ms == %{"web" => 10_000, "api" => 15_000}
+      state
+    end
+
+    test "is polled on the next tick regardless of its stagger, ahead of a repo already due" do
+      state = warmed_state()
+
+      assert {false, state} = force(state, "api", 6_000)
+      assert state.repo_poll_due_at_ms["api"] == 6_000
+
+      assert {:ok, _buckets, state} = poll(state, 6_010)
+      assert_received {:polled, "api"}
+      refute_received {:polled, "web"}
+      assert state.repo_poll_due_at_ms == %{"web" => 10_000, "api" => 16_010}
+
+      # web is due at its own time and api forced again at once: the forced repo goes first.
+      assert {false, state} = force(state, "api", 10_500)
+      assert {:ok, _buckets, state} = poll(state, 10_500)
+      assert_received {:polled, "api"}
+      refute_received {:polled, "web"}
+
+      assert {:ok, _buckets, _state} = poll(state, 10_510)
+      assert_received {:polled, "web"}
+    end
+
+    test "three requests within two seconds poll it once; one after the window polls it again" do
+      state = warmed_state()
+
+      assert {false, state} = force(state, "web", 6_000)
+      assert {true, state} = force(state, "web", 6_500)
+      assert {true, state} = force(state, "web", 7_999)
+
+      assert {:ok, _buckets, state} = poll(state, 8_000)
+      assert_received {:polled, "web"}
+
+      assert {:ok, _buckets, state} = poll(state, 8_010)
+      refute_received {:polled, _repo}
+
+      assert {false, state} = force(state, "web", 8_000)
+      assert {:ok, _buckets, _state} = poll(state, 8_020)
+      assert_received {:polled, "web"}
+    end
+
+    test "a forcing that lands while the repo's poll is in flight keeps it due after that poll" do
+      state = warmed_state()
+
+      # The poll task took web at 10_000; the move lands before its answer.
+      assert {:ok, _buckets, state} = poll(state, 10_000)
+      assert_received {:polled, "web"}
+      assert {false, state} = force(state, "web", 10_005)
+
+      assert {:ok, _buckets, state} = answer(state, {"web", {:ok, []}}, 10_000)
+      assert state.repo_poll_due_at_ms["web"] == 10_005
+
+      assert {:ok, _buckets, state} = poll(state, 10_010)
+      assert_received {:polled, "web"}
+      assert state.repo_poll_due_at_ms["web"] == 20_010
+    end
+
+    test "the timed cadence is unchanged without a forcing, and a forcing of a repo no longer configured is dropped" do
+      state = warmed_state()
+
+      assert {false, state} = force(state, "gone", 6_000)
+      assert {false, ^state} = force(state, nil, 6_000)
+
+      assert {:ok, _buckets, state} = poll(state, 9_999)
+      refute_received {:polled, _repo}
+      assert state.repo_poll_due_at_ms == %{"web" => 10_000, "api" => 15_000}
+      assert state.repo_poll_forced == MapSet.new()
+      assert state.repo_poll_forced_at_ms == %{}
+
+      assert {:ok, _buckets, _state} = poll(state, 10_000)
+      assert_received {:polled, "web"}
+      refute_received {:polled, "api"}
+    end
+
+    test "a refresh request for a repo forces it due and schedules the tick at once; one with no repo asks for a poll" do
+      state = %Orchestrator.State{poll_interval_ms: 10_000}
+
+      assert {:noreply, state} = Orchestrator.handle_cast({:request_refresh, "web", :now}, state)
+      assert_receive {:tick, tick_token}
+      assert state.tick_token == tick_token
+      assert MapSet.member?(state.repo_poll_forced, "web")
+
+      # Within the window the request is already answered: no second tick is scheduled.
+      assert {:noreply, ^state} = Orchestrator.handle_cast({:request_refresh, "web", :now}, state)
+
+      fresh = %Orchestrator.State{poll_interval_ms: 10_000}
+      assert {:noreply, state} = Orchestrator.handle_cast({:request_refresh, nil, :now}, fresh)
+      assert_receive {:tick, tick_token}
+      assert state.tick_token == tick_token
+      assert state.repo_poll_forced == MapSet.new()
+    end
+  end
 end

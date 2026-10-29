@@ -12,11 +12,14 @@ defmodule SymphonyElixir.TicketSignals do
   maps to none: `SymphonyElixir.Hold` records the `hold.set`, `hold.cleared`, `decision.requested`
   or `decision.withdrawn` for the same change, and `SymphonyElixir.Decisions` the
   `decision.recorded`, so each fact is one event.
+
+  A signal that maps to `phase.entered` is a move, so it also asks the orchestrator for a cycle on
+  the ticket's repo at once (`SymphonyElixir.Orchestrator.request_refresh/2`).
   """
 
   require Logger
 
-  alias SymphonyElixir.{RunStore, TicketEvents}
+  alias SymphonyElixir.{Orchestrator, RunStore, TicketEvents}
 
   @phase_signals ["claim", "ci fix return", "review verdict", "merge settled", "restart", "deprioritized"]
   @mirrored_signals ["decision requested", "unblocked", "dispatch_loop", "ci_wait"]
@@ -239,6 +242,13 @@ defmodule SymphonyElixir.TicketSignals do
   # the same event (its key), so the number it would carry is never stored.
   defp record_mapped(repo_key, issue_id, {"attempt.pushed", payload, opts}) do
     record_event(repo_key, issue_id, "attempt.pushed", Map.put(payload, :attempt, attempts(repo_key, issue_id) + 1), opts)
+  end
+
+  # A move changes what dispatch may start (a merge settled unblocks the next ticket of a chain), so
+  # the ticket's repo is polled at once instead of at its next timed poll.
+  defp record_mapped(repo_key, issue_id, {"phase.entered" = type, payload, opts}) do
+    :ok = record_event(repo_key, issue_id, type, payload, opts)
+    Orchestrator.request_refresh(repo_key, due: :now)
   end
 
   defp record_mapped(repo_key, issue_id, {type, payload, opts}), do: record_event(repo_key, issue_id, type, payload, opts)

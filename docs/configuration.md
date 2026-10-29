@@ -166,7 +166,9 @@ issues:
   Below 10% of the hourly limit Symphony stretches this interval 2x (4x below 5%) until the budget
   recovers. When Linear answers `RATELIMITED`, Symphony pauses all Linear calls (polling, retries,
   agent tools) for one minute, then sends one probe request: if it succeeds, Linear calls resume; if
-  not, the pause doubles, up to five minutes.
+  not, the pause doubles, up to five minutes. A state move Symphony or the Director makes polls that
+  ticket's repo at once, ahead of its stagger, so what the move unblocks dispatches within seconds;
+  moves on one repo within two seconds share that one poll.
 - `linear.scope`: default Linear scope. Repo routes can narrow or replace this per repo.
 - `states.active`: issue states eligible for dispatch.
 - `states.terminal`: states that stop active runs and allow cleanup.

@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.TicketSignalsTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{TicketEvents, TicketSignals}
+  alias SymphonyElixir.{Orchestrator, TicketEvents, TicketSignals}
 
   @repo_key "repo-a"
 
@@ -44,6 +44,51 @@ defmodule SymphonyElixir.TicketSignalsTest do
     assert :ok = TicketSignals.record_verdict(@repo_key, nil, "qa", nil, "pass")
 
     assert RunStore.get_ticket_state(@repo_key, "issue-1") == nil
+  end
+
+  test "a move asks the orchestrator for a cycle on the ticket's repo at once; a signal that moves nothing does not" do
+    stand_in_for_orchestrator()
+
+    assert :ok = TicketSignals.record(@repo_key, "issue-1", "merge settled", %{})
+    assert_received {:"$gen_cast", {:request_refresh, @repo_key, :now}}
+
+    assert :ok = TicketSignals.record(@repo_key, "issue-1", "review verdict", %{outcome: "pass", to: "QA"})
+    assert_received {:"$gen_cast", {:request_refresh, @repo_key, :now}}
+
+    assert :ok = TicketSignals.record(@repo_key, "issue-1", "ci_wait_started", %{})
+    assert :ok = TicketSignals.record(@repo_key, "issue-1", "unblocked", %{})
+    assert :ok = TicketSignals.record(@repo_key, "issue-1", "handoff", %{head: "abc123"})
+    refute_received {:"$gen_cast", _request}
+  end
+
+  test "a merge Symphony settled polls the ticket's repo on the very next cycle, so the ticket it unblocked is a candidate at once" do
+    stand_in_for_orchestrator()
+    repos = [%{name: @repo_key, team: "ACME", labels: []}, %{name: "repo-b", team: "ACME", labels: []}]
+    next = %Issue{id: "issue-b", identifier: "ACME-2", title: "Next in the chain", state: "Todo"}
+    test_pid = self()
+
+    fetcher = fn repo ->
+      send(test_pid, {:polled, repo.name})
+      {:ok, if(repo.name == @repo_key, do: [%{next | blocked_by: [%{id: "issue-1", identifier: "ACME-1", state: "Done"}]}], else: [])}
+    end
+
+    # Both repos polled once, on their staggered timed cadence; the repo's next timed poll is far off.
+    state = %Orchestrator.State{poll_interval_ms: 600_000}
+    {:ok, _buckets, state} = Orchestrator.poll_candidate_issue_buckets_for_test(state, repos, fetcher, 0)
+    {:ok, _buckets, state} = Orchestrator.poll_candidate_issue_buckets_for_test(state, repos, fetcher, 300_000)
+    assert_received {:polled, @repo_key}
+    assert_received {:polled, "repo-b"}
+
+    assert :ok = TicketSignals.record(@repo_key, "issue-1", "merge settled", %{})
+    assert_received {:"$gen_cast", request}
+    assert {:noreply, state} = Orchestrator.handle_cast(request, state)
+    assert_receive {:tick, _tick_token}
+
+    assert {:ok, %{dispatchable: [%{identifier: "ACME-2", blocked_by: [%{state: "Done"}]}]}, _state} =
+             Orchestrator.poll_candidate_issue_buckets_for_test(state, repos, fetcher, 300_010)
+
+    assert_received {:polled, @repo_key}
+    refute_received {:polled, "repo-b"}
   end
 
   describe "the event each signal maps to" do
@@ -253,6 +298,17 @@ defmodule SymphonyElixir.TicketSignalsTest do
     refute TicketSignals.same_text?("A or B?", "A, B or C?")
     refute TicketSignals.same_text?(" ", " ")
     refute TicketSignals.same_text?(nil, nil)
+  end
+
+  # The test takes the orchestrator's name, so the cast a move sends comes to it; the application's
+  # orchestrator, when it runs, is stopped meanwhile and started again after.
+  defp stand_in_for_orchestrator do
+    if Process.whereis(Orchestrator) do
+      :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, Orchestrator)
+      on_exit(fn -> Supervisor.restart_child(SymphonyElixir.Supervisor, Orchestrator) end)
+    end
+
+    Process.register(self(), Orchestrator)
   end
 
   defp strip_times(snapshot) do

@@ -199,7 +199,7 @@ defmodule SymphonyElixir.DirectorMoves do
       Agent.update(server(opts), &Map.delete(&1, issue.id))
       record_audit("undo", issue, issue.state, last.from_state, nil)
       Logger.info("Director undid #{last.move} issue_id=#{issue.id} issue_identifier=#{issue.identifier} state=#{last.from_state}")
-      request_refresh(opts)
+      request_refresh(issue, opts)
 
       {:ok,
        %{
@@ -442,7 +442,7 @@ defmodule SymphonyElixir.DirectorMoves do
 
       {:error, reason} ->
         record_audit(Atom.to_string(move), issue, issue.state, issue.state, comment, %{failed: "revise"})
-        request_refresh(opts)
+        request_refresh(issue, opts)
 
         partial(
           "posted #{sent(move)} on #{issue.identifier}, but Linear refused the move to #{to_state} that starts the plan's revision " <>
@@ -683,7 +683,7 @@ defmodule SymphonyElixir.DirectorMoves do
   # reported without taking either back: the ticket continues in place, with the decision on it.
   defp decision_move_refused(issue, to_state, reason, comment, opts) do
     record_audit("decide", issue, issue.state, issue.state, comment, %{failed: "move", directed: to_state})
-    request_refresh(opts)
+    request_refresh(issue, opts)
 
     partial(
       "recorded the decision on #{issue.identifier} and cleared the hold, but Linear refused the move to " <>
@@ -789,7 +789,7 @@ defmodule SymphonyElixir.DirectorMoves do
     Logger.info("Director move #{name} issue_id=#{issue.id} issue_identifier=#{issue.identifier} from=#{issue.state} to=#{to_state || issue.state}")
 
     if to_state && move not in @revision_moves, do: remember_move(move, issue, to_state, opts)
-    request_refresh(opts)
+    request_refresh(issue, opts)
 
     {:ok,
      %{
@@ -870,19 +870,11 @@ defmodule SymphonyElixir.DirectorMoves do
 
   defp record_person_action(_move, _issue, _from_state, _to_state), do: :ok
 
-  # The orchestrator polls again at once, so the Inbox and the dashboard follow the move. The move is
-  # already made, so the request goes from a task: an orchestrator busy past the call's timeout
-  # delays the refresh instead of turning the move's answer into an error.
-  defp request_refresh(opts) do
-    orchestrator = Keyword.get(opts, :orchestrator, Orchestrator)
-    {:ok, _pid} = Task.start(fn -> refresh(orchestrator) end)
-    :ok
-  end
-
-  defp refresh(orchestrator) do
-    Orchestrator.request_refresh(orchestrator)
-  catch
-    :exit, reason -> Logger.warning("Director move couldn't ask the orchestrator to poll again: #{inspect(reason)}")
+  # The orchestrator polls the ticket's repo at once, so the Inbox and the dashboard follow the move
+  # and what it unblocks (an approved plan's first sub-ticket) dispatches on the next cycle. The
+  # request is a cast: an orchestrator busy with a poll never holds up the move's answer.
+  defp request_refresh(%Issue{repo_key: repo_key}, opts) do
+    Orchestrator.request_refresh(Keyword.get(opts, :orchestrator, Orchestrator), repo_key, due: :now)
   end
 
   defp server(opts), do: Keyword.get(opts, :server, __MODULE__)
