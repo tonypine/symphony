@@ -10,8 +10,10 @@ defmodule SymphonyElixir.TicketState do
   on it (`SymphonyElixir.Decisions`), which the description's Decisions section projects, and
   the PR and CI watcher's fact record (`pr_watch`, written by `SymphonyElixir.PrWatch.Repo`), and
   the sequence number of the last event in its event stream (`event_seq`, `SymphonyElixir.TicketEvents`),
-  and what the last observation of the ticket in Linear found (`observe/3`): its title, labels,
-  priority, assignee, open blockers, URL and Linear's `updatedAt`, with when it was observed.
+  and what the last observation of the ticket in Linear found (`observe/4`): its title, labels,
+  priority, assignee, open blockers, URL and Linear's `updatedAt`, with when it was observed, which
+  read brought the last change (`observed_from`) and when a webhook said the ticket was removed
+  (`removed_at`).
 
   The record is persisted by `SymphonyElixir.RunStore`; this module owns its shape and the
   operations that move it. It is inert by design: nothing dispatches on a record yet. It exists so
@@ -202,10 +204,20 @@ defmodule SymphonyElixir.TicketState do
           url: String.t() | nil,
           linear_updated_at: DateTime.t() | nil,
           observed_at: DateTime.t() | nil,
+          observed_from: observation_source() | nil,
+          removed_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
 
-  # The fields an observation of the ticket in Linear writes (`observe/3`).
+  @typedoc """
+  Which read of Linear an observation came from: the repo poll, a by-id read, the PR and CI
+  watcher's read, or a webhook delivery.
+  """
+  @type observation_source :: :poll | :by_id | :watcher | :webhook
+
+  @observation_sources [:poll, :by_id, :watcher, :webhook]
+
+  # The fields an observation of the ticket in Linear writes (`observe/4`).
   @observed_fields ~w(issue_identifier phase title labels priority assignee blockers url linear_updated_at)a
 
   @doc """
@@ -251,6 +263,8 @@ defmodule SymphonyElixir.TicketState do
       url: map_string(record, :url),
       linear_updated_at: map_datetime(record, :linear_updated_at),
       observed_at: map_datetime(record, :observed_at),
+      observed_from: observation_source(Map.get(record, :observed_from)),
+      removed_at: map_datetime(record, :removed_at),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -280,6 +294,8 @@ defmodule SymphonyElixir.TicketState do
       url: nil,
       linear_updated_at: nil,
       observed_at: nil,
+      observed_from: nil,
+      removed_at: nil,
       updated_at: nil
     }
   end
@@ -293,14 +309,15 @@ defmodule SymphonyElixir.TicketState do
   - `:stale` when the issue's `updated_at` is older than the record's `linear_updated_at`: the fact
     is dropped and the record returned as it was;
   - `:unchanged` when every field already holds what the issue says;
-  - `:changed` otherwise, with `observed_at` and `updated_at` set to `observed_at`.
+  - `:changed` otherwise, with `observed_at` and `updated_at` set to `observed_at`, and
+    `observed_from` to the read's `source` (`t:observation_source/0`).
 
   A field the issue marks `:unknown` (a webhook delivery that doesn't carry it) never overwrites the
   record's value, nor does a missing state or `updated_at`: a missing fact is missing information,
   not a change. Writing the record never records a ledger event; Symphony's own moves do that.
   """
-  @spec observe(t(), Issue.t(), DateTime.t()) :: {t(), :changed | :unchanged | :stale}
-  def observe(record, %Issue{} = issue, %DateTime{} = observed_at) do
+  @spec observe(t(), Issue.t(), DateTime.t(), observation_source() | nil) :: {t(), :changed | :unchanged | :stale}
+  def observe(record, %Issue{} = issue, %DateTime{} = observed_at, source \\ nil) do
     record = normalize(record)
 
     if stale?(record.linear_updated_at, issue.updated_at) do
@@ -314,14 +331,27 @@ defmodule SymphonyElixir.TicketState do
       if Map.take(observed, @observed_fields) == Map.take(record, @observed_fields) do
         {record, :unchanged}
       else
-        {%{observed | observed_at: observed_at, updated_at: observed_at}, :changed}
+        {Map.merge(observed, %{observed_at: observed_at, observed_from: observation_source(source), updated_at: observed_at}), :changed}
       end
     end
   end
 
-  @doc "The fields `observe/3` writes, with `observed_at` and `updated_at`, as an update of the stored record."
+  @doc """
+  The fields `observe/4` writes, with `observed_at`, `observed_from` and `updated_at`, as an update of
+  the stored record.
+  """
   @spec observation(t()) :: map()
-  def observation(record), do: record |> normalize() |> Map.take(@observed_fields ++ [:observed_at, :updated_at])
+  def observation(record), do: record |> normalize() |> Map.take(@observed_fields ++ [:observed_at, :observed_from, :updated_at])
+
+  @doc """
+  Marks the ticket removed in Linear at `removed_at`, as an `Issue` remove delivery says. Nothing else
+  changes, and a later observation does not clear it.
+  """
+  @spec mark_removed(t(), DateTime.t()) :: t()
+  def mark_removed(record, %DateTime{} = removed_at), do: %{normalize(record) | removed_at: removed_at, updated_at: removed_at}
+
+  defp observation_source(source) when source in @observation_sources, do: source
+  defp observation_source(_source), do: nil
 
   defp stale?(%DateTime{} = known, %DateTime{} = fact), do: DateTime.compare(fact, known) == :lt
   defp stale?(_known, _fact), do: false

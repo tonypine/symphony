@@ -19,6 +19,7 @@ defmodule SymphonyElixirWeb.Presenter do
     Sessions,
     Setup,
     StrayProcesses,
+    TicketObservation,
     TicketState,
     URLUtils,
     UsageLimit
@@ -621,10 +622,12 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp normalize_linear_usage(_usage), do: %{window_ms: 3_600_000, total: 0, callers: [], queries: []}
 
-  # The Linear webhook's settings and the deliveries counted since Symphony started.
+  # The Linear webhook's settings, the deliveries counted since Symphony started with what observing
+  # them into the record did, and how often a later read found the webhook first or the poll first.
   defp linear_webhooks_payload do
     settings = LinearWebhook.settings()
     summary = LinearWebhookDeliveries.summary()
+    compare = TicketObservation.summary().compare
 
     %{
       enabled: settings.enabled,
@@ -638,7 +641,13 @@ defmodule SymphonyElixirWeb.Presenter do
       last_rejected_reason: summary.last_rejected_reason,
       counts: summary.counts,
       rejected_reasons: summary.rejected_reasons,
-      recent: Enum.map(summary.recent, &%{&1 | received_at: iso8601(&1.received_at)})
+      observations: summary.observations,
+      recent: Enum.map(summary.recent, &%{&1 | received_at: iso8601(&1.received_at)}),
+      compare: %{
+        webhook_first: compare.webhook_first,
+        poll_first: compare.poll_first,
+        poll_first_recent: Enum.map(compare.poll_first_recent, &%{&1 | at: iso8601(&1.at)})
+      }
     }
   end
 

@@ -1,8 +1,11 @@
 defmodule SymphonyElixirWeb.LinearWebhookController do
   @moduledoc """
-  Receives the deliveries of Linear's workspace webhook (through a relay) and counts them in
-  `SymphonyElixir.Linear.Webhook.Deliveries`. Nothing acts on a delivery yet: it is never read
-  from Linear and never written to the record.
+  Receives the deliveries of Linear's workspace webhook (through a relay), observes an `Issue`
+  delivery into the ticket's record (`SymphonyElixir.TicketObservation.observe_delivery/2`) and
+  counts each delivery with what that did in `SymphonyElixir.Linear.Webhook.Deliveries`. The
+  observation is bounded in time and never changes the answer: an accepted delivery is answered 200
+  whatever it did, so Linear never retries one the record could not take. Nothing dispatches from
+  the record yet.
 
   The `Linear-Signature` HMAC is the only authentication, so the route sits outside the
   same-origin and bearer-token pipelines. A rejected delivery is logged by its reason only, never
@@ -16,6 +19,7 @@ defmodule SymphonyElixirWeb.LinearWebhookController do
   alias Plug.Conn
   alias SymphonyElixir.Linear.Webhook
   alias SymphonyElixir.Linear.Webhook.Deliveries
+  alias SymphonyElixir.TicketObservation
   alias SymphonyElixirWeb.Plugs.RawBodyReader
 
   @spec create(Conn.t(), map()) :: Conn.t()
@@ -36,7 +40,8 @@ defmodule SymphonyElixirWeb.LinearWebhookController do
 
     case Webhook.verify(body, conn.req_headers, secret: Webhook.secret(webhooks)) do
       :ok ->
-        Deliveries.accepted(conn.body_params)
+        observation = conn.body_params |> Webhook.parse() |> TicketObservation.observe_delivery(observation_opts())
+        Deliveries.accepted(conn.body_params, DateTime.utc_now(), observation)
         conn |> put_status(200) |> json(%{status: "accepted"})
 
       {:error, reason} ->
@@ -45,6 +50,9 @@ defmodule SymphonyElixirWeb.LinearWebhookController do
         error_response(conn, 401, "invalid_signature", "The webhook signature did not verify")
     end
   end
+
+  # Tests set the observation's options (its time bound, or an observation that fails) here.
+  defp observation_opts, do: Application.get_env(:symphony_elixir, :linear_webhook_observation_opts, [])
 
   defp error_response(conn, status, code, message) do
     conn

@@ -453,7 +453,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     tracker = Keyword.get(state.opts, :tracker, Tracker)
 
     with {:ok, issues, failures} <- tracker.fetch_issues_by_states_with_failures(Enum.map(phases(settings), &elem(&1, 0))) do
-      TicketObservation.observe_routed(issues)
+      TicketObservation.observe_routed(issues, source: :watcher)
 
       if Enum.any?(failures, &(elem(&1, 0) == state.repo_key)),
         do: {:error, {:linear_read_failed, state.repo_key}},

@@ -4,6 +4,7 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
   import Phoenix.ConnTest, only: [build_conn: 0, get: 2, post: 3, json_response: 2]
 
   alias SymphonyElixir.Linear.Webhook.Deliveries
+  alias SymphonyElixir.TicketObservation
 
   @endpoint SymphonyElixirWeb.Endpoint
   @secret "lin_wh_test_secret"
@@ -34,7 +35,14 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
     start_supervised!({SymphonyElixirWeb.Endpoint, []})
 
     Deliveries.reset()
-    on_exit(&Deliveries.reset/0)
+    TicketObservation.reset()
+
+    on_exit(fn ->
+      Deliveries.reset()
+      TicketObservation.reset()
+      Application.delete_env(:symphony_elixir, :linear_webhook_observation_opts)
+    end)
+
     configure_webhooks!(true)
     :ok
   end
@@ -71,6 +79,83 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
            } = linear_webhooks_state()
 
     assert {:ok, _at, 0} = DateTime.from_iso8601(last_at)
+  end
+
+  describe "an Issue delivery and the ticket's record" do
+    @updated_at "2026-10-29T09:00:00.000Z"
+
+    test "writes the new priority into the record before any poll; the next poll finds nothing and counts webhook first" do
+      repo_key = Config.repo_key!()
+      conn = post_signed(issue_delivery("update", %{"priority" => 1}))
+
+      assert json_response(conn, 200) == %{"status" => "accepted"}
+      assert %{priority: 1, phase: "In Progress", observed_from: :webhook, labels: ["backend"]} = RunStore.get_ticket_state(repo_key, "issue-hook")
+
+      assert %{
+               "recent" => [%{"type" => "Issue", "action" => "update", "identifier" => "ACME-9", "observation" => "updated"}],
+               "observations" => %{"updated" => 1, "unrouted" => 0, "stale" => 0, "error" => 0}
+             } = linear_webhooks_state()
+
+      # The poll then reads the same ticket from Linear.
+      polled = %Issue{
+        id: "issue-hook",
+        identifier: "ACME-9",
+        title: "Hooked",
+        state: "In Progress",
+        labels: ["backend"],
+        priority: 1,
+        assignee_id: "user-1",
+        blocked_by: [],
+        url: "https://linear.app/acme/issue/ACME-9",
+        updated_at: ~U[2026-10-29 09:00:00.000Z]
+      }
+
+      assert {:ok, :unchanged} = TicketObservation.observe(repo_key, polled, compare: true)
+      assert %{"webhook_first" => 1, "poll_first" => 0, "poll_first_recent" => []} = linear_webhooks_state()["compare"]
+    end
+
+    test "drops an older delivery and counts it stale" do
+      repo_key = Config.repo_key!()
+      assert json_response(post_signed(issue_delivery("update", %{"priority" => 1})), 200)
+
+      older = issue_delivery("update", %{"priority" => 4, "updatedAt" => "2026-10-29T08:59:00.000Z"})
+      assert json_response(post_signed(older), 200) == %{"status" => "accepted"}
+
+      assert RunStore.get_ticket_state(repo_key, "issue-hook").priority == 1
+      assert %{"recent" => [%{"observation" => "stale"}, %{"observation" => "updated"}], "observations" => %{"stale" => 1}} = linear_webhooks_state()
+    end
+
+    test "writes nothing for a ticket no repo takes, and counts it unrouted" do
+      body = issue_delivery("create", %{"team" => %{"id" => "team-x", "key" => "NOPE", "name" => "Nope"}})
+
+      assert json_response(post_signed(body), 200) == %{"status" => "accepted"}
+      assert RunStore.get_ticket_state(Config.repo_key!(), "issue-hook") == nil
+      assert %{"recent" => [%{"action" => "create", "observation" => "unrouted"}], "observations" => %{"unrouted" => 1, "updated" => 0}} = linear_webhooks_state()
+    end
+
+    test "marks the record removed for an Issue remove delivery; a comment is only counted" do
+      assert json_response(post_signed(issue_delivery("update", %{})), 200)
+
+      remove = delivery_body(%{"type" => "Issue", "action" => "remove", "data" => %{"id" => "issue-hook", "identifier" => "ACME-9"}})
+      assert json_response(post_signed(remove), 200)
+      assert %DateTime{} = RunStore.get_ticket_state(Config.repo_key!(), "issue-hook").removed_at
+
+      comment = delivery_body(%{"type" => "Comment", "action" => "create", "data" => %{"id" => "c1", "body" => "hi", "issueId" => "issue-hook"}})
+      assert json_response(post_signed(comment), 200)
+
+      assert %{"recent" => [%{"type" => "Comment", "observation" => nil}, %{"action" => "remove", "observation" => "removed"} | _]} = linear_webhooks_state()
+    end
+
+    test "still answers 200 when the record write fails, logged and counted as an error" do
+      failing = fn _parsed, _opts -> raise "store down" end
+      Application.put_env(:symphony_elixir, :linear_webhook_observation_opts, observe_fun: failing)
+
+      log = capture_log(fn -> assert json_response(post_signed(issue_delivery("update", %{})), 200) == %{"status" => "accepted"} end)
+
+      assert log =~ "Linear webhook observation failed for issue_id=issue-hook"
+      assert RunStore.get_ticket_state(Config.repo_key!(), "issue-hook") == nil
+      assert %{"recent" => [%{"observation" => "error"}], "observations" => %{"error" => 1}} = linear_webhooks_state()
+    end
   end
 
   test "accepts a signed delivery without a type or an action, counted as unknown" do
@@ -161,6 +246,30 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
     headers
     |> Enum.reduce(build_conn(), fn {name, value}, conn -> Plug.Conn.put_req_header(conn, name, value) end)
     |> post("/api/v1/linear/webhook", body)
+  end
+
+  defp post_signed(body), do: post_webhook(body, [{"content-type", "application/json"}, {"linear-signature", sign(body)}])
+
+  # An Issue delivery for ACME-9 on the test repo's team, with `data` changed by `fields`.
+  defp issue_delivery(action, fields) do
+    data =
+      Map.merge(
+        %{
+          "id" => "issue-hook",
+          "identifier" => "ACME-9",
+          "title" => "Hooked",
+          "priority" => 2,
+          "state" => %{"id" => "state-1", "name" => "In Progress", "type" => "started"},
+          "team" => %{"id" => "team-1", "key" => "Test", "name" => "Test"},
+          "labels" => [%{"id" => "label-1", "name" => "Backend"}],
+          "assignee" => %{"id" => "user-1", "name" => "Ada"},
+          "url" => "https://linear.app/acme/issue/ACME-9",
+          "updatedAt" => @updated_at
+        },
+        fields
+      )
+
+    delivery_body(%{"type" => "Issue", "action" => action, "data" => data})
   end
 
   defp sign(body, secret \\ @secret), do: :hmac |> :crypto.mac(:sha256, secret, body) |> Base.encode16(case: :lower)

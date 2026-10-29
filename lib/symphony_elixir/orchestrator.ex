@@ -1380,7 +1380,7 @@ defmodule SymphonyElixir.Orchestrator do
   # each under the repo it routes to, so the record is as fresh as Symphony's newest read.
   defp fetch_observed_issues_by_ids(issue_ids) do
     with {:ok, issues} = result when is_list(issues) <- Tracker.fetch_issue_states_by_ids(issue_ids) do
-      TicketObservation.observe_routed(issues)
+      TicketObservation.observe_routed(issues, source: :by_id)
       result
     end
   end

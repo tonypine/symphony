@@ -574,6 +574,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   end
 
   test "phoenix observability api preserves state, issue, and refresh responses" do
+    SymphonyElixir.TicketObservation.reset()
     put_build(sha: "D3D301B0123456789ABCDEF0123456789ABCDEF0", repo: "https://github.com/acme/symphony", number: "168")
     snapshot = static_snapshot()
     orchestrator_name = Module.concat(__MODULE__, :ObservabilityApiOrchestrator)
@@ -933,7 +934,9 @@ defmodule SymphonyElixir.ExtensionsTest do
                "last_rejected_reason" => nil,
                "counts" => [],
                "rejected_reasons" => [],
-               "recent" => []
+               "observations" => %{"updated" => 0, "unchanged" => 0, "stale" => 0, "unrouted" => 0, "removed" => 0, "no_record" => 0, "error" => 0},
+               "recent" => [],
+               "compare" => %{"webhook_first" => 0, "poll_first" => 0, "poll_first_recent" => []}
              },
              "orchestrator" => %{
                "message_queue_len" => 0,
