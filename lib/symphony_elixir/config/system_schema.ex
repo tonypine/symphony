@@ -25,6 +25,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   require Schema.HumanActions
   require Schema.Ledger
   require Schema.Learnings
+  require Schema.Linear
   require Schema.Notifications
   require Schema.Observability
   require Schema.Poller
@@ -47,7 +48,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   @retired_human_review_state "the Human Review state (`tracker.human_review_state`) is retired; a decision request pauses " <>
                                 "the ticket on a Needs Decision hold, and a plan waits in `issues.states.plan_review`"
   @allowed_keys ~w(
-    agent auto_review code_review dashboard dependency_audit github human_actions issue_gate issues ledger notifications
+    agent auto_review code_review dashboard dependency_audit github human_actions issue_gate issues ledger linear notifications
     poller pull_requests
     repositories tickets verification watchdog workers workspaces
   )
@@ -138,6 +139,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   # The sections passed to their `Config.Schema` embed as they are: their keys are its fields.
   @schema_sections %{
     "github" => Schema.GitHub,
+    "linear" => Schema.Linear,
     "notifications" => Schema.Notifications,
     "verification" => Schema.Verification,
     "watchdog" => Schema.Watchdog
@@ -456,6 +458,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     embeds_one(:workspace, Schema.Workspace, on_replace: :update, defaults_to_struct: true)
     embeds_one(:worker, Schema.Worker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:github, Schema.GitHub, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:linear, Schema.Linear, on_replace: :update, defaults_to_struct: true)
     embeds_one(:agent, Schema.Agent, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Schema.Observability, on_replace: :update, defaults_to_struct: true)
     embeds_one(:pr_review, Schema.PrReview, on_replace: :update, defaults_to_struct: true)
@@ -637,6 +640,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
       "workspace" => workspace_to_map(system_config.workspace),
       "worker" => struct_to_map(system_config.worker),
       "github" => struct_to_map(system_config.github),
+      "linear" => struct_to_map(system_config.linear),
       "agent" => agent_to_map(system_config.agent),
       "observability" => struct_to_map(system_config.observability),
       "pr_review" => struct_to_map(system_config.pr_review),
@@ -701,6 +705,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     |> cast_embed(:workspace, with: &Schema.Workspace.changeset/2)
     |> cast_embed(:worker, with: &Schema.Worker.changeset/2)
     |> cast_embed(:github, with: &Schema.GitHub.changeset/2)
+    |> cast_embed(:linear, with: &Schema.Linear.changeset/2)
     |> cast_embed(:agent, with: &Schema.Agent.changeset/2)
     |> cast_embed(:observability, with: &Schema.Observability.changeset/2)
     |> cast_embed(:pr_review, with: &Schema.PrReview.changeset/2)
@@ -773,6 +778,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
        |> maybe_put("workspace", workspace)
        |> maybe_put("worker", worker)
        |> maybe_put("github", Map.get(config, "github"))
+       |> maybe_put("linear", Map.get(config, "linear"))
        |> maybe_put("agent", Map.get(agent_config, "agent"))
        |> maybe_put("verification", Map.get(config, "verification"))
        |> maybe_put("review_agent", code_review)

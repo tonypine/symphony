@@ -600,6 +600,21 @@ defmodule SymphonyElixir.Config do
   @spec prompt_brief_max_tokens() :: pos_integer()
   def prompt_brief_max_tokens, do: ledger_setting(:prompt_brief_max_tokens)
 
+  @doc """
+  symphony.yml's `linear.webhooks`: whether Linear's workspace webhook is on, and its signing secret
+  with a `$ENV` reference resolved. The defaults (off, no secret) while the config can't be read.
+  """
+  @spec linear_webhook_settings() :: Schema.Linear.Webhooks.t()
+  def linear_webhook_settings do
+    case settings() do
+      {:ok, settings} -> linear_webhook_settings(settings)
+      {:error, _reason} -> %Schema.Linear.Webhooks{}
+    end
+  end
+
+  @spec linear_webhook_settings(Schema.t()) :: Schema.Linear.Webhooks.t()
+  def linear_webhook_settings(%Schema{linear: %Schema.Linear{webhooks: webhooks}}), do: webhooks
+
   # While symphony.yml can't be read, the section's defaults apply.
   defp ledger_setting(field) do
     ledger =

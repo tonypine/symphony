@@ -667,6 +667,58 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule Linear do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    defmodule Webhooks do
+      @moduledoc false
+      # The workspace webhook Linear signs with `secret` (`SymphonyElixir.Linear.Webhook.verify/3`).
+      # Nothing listens for its deliveries yet.
+      use Ecto.Schema
+      import Ecto.Changeset
+
+      @type t :: %__MODULE__{}
+
+      @derive {Inspect, except: [:secret]}
+      @primary_key false
+      embedded_schema do
+        field(:enabled, :boolean, default: false)
+        field(:secret, :string)
+      end
+
+      @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+      def changeset(schema, attrs) do
+        schema
+        |> cast(attrs, [:enabled, :secret], empty_values: [])
+        |> validate_secret_when_enabled()
+      end
+
+      defp validate_secret_when_enabled(changeset) do
+        secret = get_field(changeset, :secret)
+
+        if get_field(changeset, :enabled) == true and (not is_binary(secret) or String.trim(secret) == ""),
+          do: add_error(changeset, :secret, "is required when linear.webhooks.enabled is true"),
+          else: changeset
+      end
+    end
+
+    @type t :: %__MODULE__{}
+
+    @primary_key false
+    embedded_schema do
+      embeds_one(:webhooks, Webhooks, on_replace: :update, defaults_to_struct: true)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [])
+      |> cast_embed(:webhooks, with: &Webhooks.changeset/2)
+    end
+  end
+
   defmodule PushCheck do
     @moduledoc false
     # Repo-local (WORKFLOW.md). `github_push_branch` pushes with repo hooks disabled, so the agent
@@ -2466,6 +2518,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:workspace, Workspace, on_replace: :update, defaults_to_struct: true)
     embeds_one(:worker, Worker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:github, GitHub, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:linear, Linear, on_replace: :update, defaults_to_struct: true)
     embeds_one(:agent, Agent, on_replace: :update, defaults_to_struct: true)
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
     embeds_one(:push_check, PushCheck, on_replace: :update, defaults_to_struct: true)
@@ -2684,6 +2737,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:workspace, with: &Workspace.changeset/2)
     |> cast_embed(:worker, with: &Worker.changeset/2)
     |> cast_embed(:github, with: &GitHub.changeset/2)
+    |> cast_embed(:linear, with: &Linear.changeset/2)
     |> cast_embed(:agent, with: &Agent.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
     |> cast_embed(:push_check, with: &PushCheck.changeset/2)
@@ -2788,11 +2842,22 @@ defmodule SymphonyElixir.Config.Schema do
     }
 
     notifications = normalize_notifications(settings.notifications)
-    webhooks = settings.github.webhooks
-    github = %{settings.github | webhooks: %{webhooks | secret: webhooks.secret |> resolve_secret_setting(nil) |> Secret.wrap()}}
+    github = %{settings.github | webhooks: resolve_webhook_secret(settings.github.webhooks)}
+    linear = %{settings.linear | webhooks: resolve_webhook_secret(settings.linear.webhooks)}
 
-    %{settings | tracker: tracker, workspace: workspace, agent: agent, notifications: notifications, github: github}
+    %{
+      settings
+      | tracker: tracker,
+        workspace: workspace,
+        agent: agent,
+        notifications: notifications,
+        github: github,
+        linear: linear
+    }
   end
+
+  # `github.webhooks.secret` and `linear.webhooks.secret`: a literal or an `$ENV` reference.
+  defp resolve_webhook_secret(%{secret: secret} = webhooks), do: %{webhooks | secret: secret |> resolve_secret_setting(nil) |> Secret.wrap()}
 
   defp validate_finalized_settings(settings) do
     with :ok <- validate_agent_approval_policy(settings.agent),
