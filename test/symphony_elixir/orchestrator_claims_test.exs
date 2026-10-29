@@ -195,7 +195,10 @@ defmodule SymphonyElixir.OrchestratorClaimsTest do
         identifier: moved.identifier,
         issue: %{moved | state: "In Progress"},
         repo_key: "default",
-        started_at: DateTime.utc_now()
+        started_at: DateTime.utc_now(),
+        last_codex_timestamp: nil,
+        last_codex_message: nil,
+        last_codex_event: nil
       }
 
       %{state | running: %{moved.id => running}, claimed: MapSet.new([moved.id]), repo_poll_due_at_ms: %{"default" => not_due}}
