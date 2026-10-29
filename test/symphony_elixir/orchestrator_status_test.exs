@@ -250,7 +250,15 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     :sys.replace_state(pid, fn state ->
       %{
         state
-        | retry_attempts: %{issue.id => %{attempt: 1, retry_token: token, identifier: issue.identifier, repo_key: Config.repo_key!()}},
+        | retry_attempts: %{
+            issue.id => %{
+              attempt: 1,
+              due_at_ms: System.monotonic_time(:millisecond) + 60_000,
+              retry_token: token,
+              identifier: issue.identifier,
+              repo_key: Config.repo_key!()
+            }
+          },
           claimed: MapSet.put(state.claimed, issue.id)
       }
     end)
