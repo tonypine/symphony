@@ -942,8 +942,12 @@ defmodule SymphonyElixir.QaAgentTest do
       assert both =~ "A `qa:<kind>` label on the ticket selects one."
       assert both =~ "- The project's own server and its database: this repo keeps it off.\n"
       assert both =~ "Mark a step that needs one of them `unprovable`, never `blocked`"
-      assert both =~ "Never mark `unprovable` a step a playbook below can run, or one that fails.\n"
+      assert both =~ "Never mark `unprovable` a step one of this pass's playbooks (above) can run,\nor one that fails.\n"
       assert both =~ ~s("status": "pass" | "fail" | "blocked" | "skipped" | "unprovable",)
+
+      # The playbooks the rule points at come before it.
+      [before_rule, _rule] = String.split(both, "Some steps cannot be proved in this pass:", parts: 2)
+      assert before_rule =~ "Playbooks to follow:"
 
       server_only = QaAgent.prompt(job(%{unprovable: %{unselected: [], dev_server_ruled_out: "this repo keeps it off"}}), nil)
       assert server_only =~ "Some steps cannot be proved in this pass:\n- The project's own server"

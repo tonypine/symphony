@@ -593,7 +593,8 @@ defmodule SymphonyElixir.QaAgent do
         #{Enum.map_join(cases, "\n", &("- " <> &1))}
         Mark a step that needs one of them `unprovable`, never `blocked`, with that reason in `details`,
         and do not set `needs_dev_server` for it. Symphony decides the pass from the other steps, the
-        pre-checks and CI. Never mark `unprovable` a step a playbook below can run, or one that fails.\
+        pre-checks and CI. Never mark `unprovable` a step one of this pass's playbooks (above) can run,
+        or one that fails.\
         """
     end
   end

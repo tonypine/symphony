@@ -1508,7 +1508,10 @@ watches the Mac app), or the project's own server on a repository that rules a d
 (below). Such a step can neither pass nor be repaired, so the agent marks it `unprovable` with the
 reason, and the report lists it as **unprovable here**. The prompt names the enabled playbooks the
 diff did not select, so the agent knows which steps fall there; a `qa:<kind>` label on the ticket
-selects the playbook instead. The pass is then decided by the other steps, the pre-checks and CI:
+selects the playbook instead. Only a pass whose prompt offered the status (an enabled playbook the
+diff did not select, or a server the repository rules out for this pass) reads it: on any other
+pass an `unprovable` step is the agent's own block, reported `blocked` and retried as one. The pass
+is then decided by the other steps, the pre-checks and CI:
 
 | The other steps | The pass |
 | --- | --- |

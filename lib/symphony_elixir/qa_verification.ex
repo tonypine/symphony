@@ -548,9 +548,19 @@ defmodule SymphonyElixir.QaVerification do
   # naming each unprovable step; with nothing left to prove it stays blocked, marked `unprovable`,
   # and goes straight to a person, who is told merging without a QA result is the way on. Any other
   # blocked step, or a block that names its own cause, keeps the pass blocked as before.
+  #
+  # Only a pass that offered the status (an unselected playbook or a ruled-out server) settles: on
+  # any other pass an `unprovable` step is the agent's own block, so it is `blocked` again and takes
+  # the retry, self-heal or person path as before.
+  defp settle_unprovable(outcome, %{unselected: [], dev_server_ruled_out: nil}),
+    do: %{outcome | steps: Enum.map(outcome.steps, &unoffered_step/1)}
+
   defp settle_unprovable(outcome, %{dev_server_ruled_out: ruled_out}) do
     outcome |> rule_out_dev_server(ruled_out) |> settle()
   end
+
+  defp unoffered_step(%{status: "unprovable"} = step), do: %{step | status: "blocked"}
+  defp unoffered_step(step), do: step
 
   defp rule_out_dev_server(%{verdict: :blocked, needs_dev_server: true} = outcome, reason) when is_binary(reason) do
     steps =
