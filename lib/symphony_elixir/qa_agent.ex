@@ -573,11 +573,6 @@ defmodule SymphonyElixir.QaAgent do
     """
   end
 
-  # A PR that adds a QA tool, or a QA host setup it lists under `After release`, cannot have its
-  # own step walked with them: the Symphony running QA offers a tool only once the PR merges and the
-  # app updates. `blocked` there sends the self-heal lane after a fix that only this PR's release
-  # makes, and the ticket waits on it for good (TP-1070). The epic review runs on the merged result,
-  # where the tools exist.
   # A step that needs what no playbook of this pass gives — the running app on a pass the diff did not
   # select the app's playbook for, or the project's own server on a repo that rules a dev server out —
   # can neither pass nor be repaired here (TP-1284): it is `unprovable`, and Symphony decides the pass
@@ -630,6 +625,11 @@ defmodule SymphonyElixir.QaAgent do
     playbooks ++ dev_server
   end
 
+  # A PR that adds a QA tool, or a QA host setup it lists under `After release`, cannot have its
+  # own step walked with them: the Symphony running QA offers a tool only once the PR merges and the
+  # app updates. `blocked` there sends the self-heal lane after a fix that only this PR's release
+  # makes, and the ticket waits on it for good (TP-1070). The epic review runs on the merged result,
+  # where the tools exist.
   defp own_tools_rule(%{epic_review: true}), do: ""
 
   defp own_tools_rule(_job) do
