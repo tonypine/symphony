@@ -49,9 +49,9 @@ defmodule SymphonyElixir.DirectorMoves do
 
   Every move's target becomes the phase of the ticket's record
   (`SymphonyElixir.TicketSignals.record_phase/3`) before Linear's state move, so the record never
-  lags the Director's move. A move that posts its comment with the move (`:approve_plan`, `:rework`,
-  `:restart`, `:backlog`) writes the record before that comment, and `:restart` after its reset;
-  `:decide` writes it after its reply, and `:decisions` and `:changes` after their comments.
+  lags the Director's move. A move that posts its comment with the move (`:rework`, `:restart`,
+  `:backlog`) writes the record before that comment, and `:restart` after its reset; `:decide`
+  writes it after its reply, and `:decisions` and `:changes` after their comments.
 
   When Linear takes the first of a move's two writes and refuses the second, the move answers
   `{:error, {:partial, message}}` saying what was already done, and still writes the audit record of

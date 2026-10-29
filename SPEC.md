@@ -395,9 +395,9 @@ nothing, and it writes only those fields, never the record's holds, verdicts or 
   (Linear knows no state by that name) was never entered, so the record goes back to the phase it
   held; a move that tries the team's other spelling of the canceled state next leaves the record in
   the one the team has. Every Director move writes the record before its Linear state move; a move
-  that posts its comment with the move (approve, rework, restart, backlog) writes it before that
-  comment, a restart after its reset, a Decide after its reply, and a plan's answers or changes
-  after their comments. `undo` puts the record back as it puts Linear back.
+  that posts its comment with the move (rework, restart, backlog) writes it before that comment, a
+  restart after its reset, a Decide after its reply, and a plan's answers or changes after their
+  comments. `undo` puts the record back as it puts Linear back.
 - A record written before these fields existed reads with them at their defaults (`nil`, or an empty
   list for `labels` and `blockers`); it needs no migration.
 
