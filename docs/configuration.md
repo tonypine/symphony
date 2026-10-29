@@ -2623,9 +2623,9 @@ dispatch:
 ```
 
 - `source` (default `poll`): `poll` dispatches from the poll cache, the tickets each repository's
-  last poll of Linear returned. `record` will dispatch from Symphony's ticket records, which the
-  polls and Linear's webhook keep; it is accepted and changes nothing yet, so dispatch still reads
-  the poll cache.
+  last poll of Linear returned. `record` dispatches from Symphony's ticket records, which the polls,
+  the by-id reads, the PR and CI watcher, Linear's webhook and Symphony's own moves keep (see
+  below).
 - `shadow_window` (default `20`): how many poll cycles the report's window covers. A whole number
   above 0.
 
@@ -2636,9 +2636,34 @@ report below: the cycles compared, the differences in the window and when the la
 with the last ten differences under a disclosure. Against a Symphony without the report the line
 says it is not available.
 
+**Dispatching from the record.** With `source: record`, each poll cycle builds its candidates from
+every repository's ticket records instead of the poll cache: a record that says the ticket is in an
+active state, assigned to the worker (the route's `assignee`, else `tracker.assignee`) and not
+terminal is a candidate, rebuilt with the record's state, priority, labels, assignee, open blockers,
+sub-issues and parent. The record keeps no description or comments, so a candidate the last poll
+also returned takes those from the poll, with its team, project, branch and the `updatedAt` they
+were read at: the dispatch gates (holds, the review flow, the slots), the plan-comment reader and
+the quality gate then run on it as on a polled ticket, and the ticket is read again by id from
+Linear just before its run starts, as with `poll`. With `quality_gate.enabled`, a candidate only the
+record has waits for its repository's poll to read its text, which a change to its record asks for
+at once, rather than being scored without a description. The polls keep running and keep the
+records up to date; a ticket the record has and the last poll did not return is dispatched, and
+one the poll returned whose record is gone is not. Nothing dispatches
+after a start until every repository's first poll has answered, so a record left from before the
+restart is refreshed first. A repository whose records can't be read gives no candidates that cycle.
+
+A change to a record outside the poll cycle (a webhook delivery, the PR and CI watcher's read, a
+removal) asks for a cycle of the ticket's repository at once while `source` is `record`, as a move
+Symphony or the Director makes there always does, so a ticket the change frees starts within
+seconds instead of at the next timed poll. Under `poll` the change waits for the repository's poll.
+
+Setting `source` back to `poll` is the rollback: the next cycle dispatches from the poll cache
+again, and no run is stopped or restarted.
+
 **The shadow report.** Every poll cycle, whatever `source` says, Symphony also works out each
-repository's candidates from its ticket records and compares the two sets: a ticket only the poll
-has, a ticket only the record has, and a ticket both have with a different state or priority. A
+repository's candidates from the side it doesn't dispatch from and compares the two sets: a ticket
+only the poll has, a ticket only the record has, and a ticket both have with a different state or
+priority. The report names the poll and the record sides the same way whichever is in use. A
 repository whose poll has not answered yet is left out of the cycle. The comparison reads
 Symphony's store, never Linear, and writes nothing. `/api/v1/state` returns the report as
 `dispatch_shadow`:

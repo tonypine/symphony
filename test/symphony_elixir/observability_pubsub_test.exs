@@ -54,6 +54,23 @@ defmodule SymphonyElixir.ObservabilityPubSubTest do
     assert_receive {:observability_updated, %{repo_key: nil}}
   end
 
+  test "subscribe_ticket_records and broadcast_ticket_record_changed deliver record changes" do
+    assert :ok = ObservabilityPubSub.subscribe_ticket_records()
+    assert :ok = ObservabilityPubSub.broadcast_ticket_record_changed("web", "issue-123")
+    assert_receive {:ticket_record, "web", "issue-123", :changed}
+  end
+
+  test "broadcast_ticket_record_changed logs adapter errors without failing the caller" do
+    {:ok, original_pubsub_meta} = Registry.meta(SymphonyElixir.PubSub, :pubsub)
+    on_exit(fn -> :ok = Registry.put_meta(SymphonyElixir.PubSub, :pubsub, original_pubsub_meta) end)
+    failing_pubsub_meta = original_pubsub_meta |> put_elem(0, FailingPubSubAdapter) |> put_elem(1, :failing_adapter)
+    :ok = Registry.put_meta(SymphonyElixir.PubSub, :pubsub, failing_pubsub_meta)
+
+    log = capture_log(fn -> assert :ok = ObservabilityPubSub.broadcast_ticket_record_changed("web", "issue-123") end)
+
+    assert log =~ "failed to broadcast ticket record change: :forced_failure"
+  end
+
   test "broadcast_update is a no-op when pubsub is unavailable" do
     pubsub_child_id = Phoenix.PubSub.Supervisor
 
@@ -67,6 +84,8 @@ defmodule SymphonyElixir.ObservabilityPubSubTest do
 
     assert :ok = ObservabilityPubSub.broadcast_update()
     assert :ok = ObservabilityPubSub.broadcast_transcript_event("default", "issue-123", %{event: :notification})
+    assert :ok = ObservabilityPubSub.subscribe_ticket_records()
+    assert :ok = ObservabilityPubSub.broadcast_ticket_record_changed("web", "issue-123")
   end
 
   test "broadcast_transcript_event logs adapter errors without failing the caller" do

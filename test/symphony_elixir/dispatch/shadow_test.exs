@@ -42,6 +42,17 @@ defmodule SymphonyElixir.Dispatch.ShadowTest do
       assert [%{field: :priority, poll: nil, record: 2}] = Shadow.compare([unset], [issue("a", "MT-1", priority: 2)])
     end
 
+    test "with the record in use, the differences read the same: the poll and record sides are kept" do
+      poll = [issue("a", "MT-1"), issue("b", "MT-2", priority: 2)]
+      record = [issue("b", "MT-2", priority: 3), issue("c", "MT-3")]
+
+      assert Shadow.compare(record, poll, :record) == Shadow.compare(poll, record)
+      assert Shadow.compare(poll, record, :poll) == Shadow.compare(poll, record)
+
+      assert [%{side: :poll, identifier: "MT-1"}, %{side: :both, poll: 2, record: 3}, %{side: :record, identifier: "MT-3"}] =
+               Shadow.compare(record, poll, :record)
+    end
+
     test "matches tickets by id, so a renamed identifier is the same ticket" do
       assert Shadow.compare([issue("a", "MT-1")], [issue("a", "MT-9")]) == []
     end

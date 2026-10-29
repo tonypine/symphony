@@ -1,0 +1,325 @@
+defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
+  use SymphonyElixir.TestSupport
+
+  alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Dispatch.Shadow
+  alias SymphonyElixir.{QualityGate, SubIssueWait, TicketObservation}
+  alias SymphonyElixirWeb.ObservabilityPubSub
+
+  defmodule PassProvider do
+    @behaviour SymphonyElixir.QualityGate.Provider
+
+    @impl true
+    def score(_issue, _settings), do: {:ok, %{score: 9, reason: "clear"}}
+  end
+
+  defmodule NoScoreProvider do
+    @behaviour SymphonyElixir.QualityGate.Provider
+
+    @impl true
+    def score(issue, _settings), do: raise("scored #{issue.identifier} again")
+  end
+
+  @linear_at ~U[2026-10-29 09:00:00Z]
+
+  setup do
+    Shadow.reset()
+    on_exit(&Shadow.reset/0)
+    repo_key = "source-#{System.unique_integer([:positive])}"
+    %{repo_key: repo_key, repos: [%{name: repo_key, team: "ACME", labels: []}]}
+  end
+
+  defp issue(repo_key, n, attrs \\ []) do
+    struct!(
+      %Issue{
+        id: "#{repo_key}-#{n}",
+        identifier: "ACME-#{n}",
+        title: "Ticket #{n}",
+        state: "Todo",
+        priority: 1,
+        assignee_id: "user-2",
+        url: "https://linear.app/acme/issue/ACME-#{n}",
+        updated_at: @linear_at
+      },
+      attrs
+    )
+  end
+
+  defp set_source(source, opts \\ []) do
+    write_workflow_file!(Workflow.workflow_file_path(), opts)
+    File.write!(Workflow.symphony_file_path(), File.read!(Workflow.symphony_file_path()) <> "dispatch:\n  source: #{source}\n")
+    Cache.clear()
+  end
+
+  defp fetcher(issues) do
+    fn repo ->
+      send(self(), {:polled, repo.name})
+      {:ok, issues}
+    end
+  end
+
+  defp cycle(state, repos, issues, now_ms) do
+    assert {:ok, buckets, state} =
+             Orchestrator.poll_candidate_issue_buckets_for_test(state, repos, fetcher(issues), now_ms)
+
+    {buckets, state}
+  end
+
+  defp identifiers(issues), do: Enum.map(issues, & &1.identifier)
+
+  defp orchestrator_state do
+    %Orchestrator.State{
+      poll_interval_ms: 100,
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+  end
+
+  describe "dispatch.source: record" do
+    test "a ticket only the record has is dispatched, and one only the poll cache has is not", ctx do
+      set_source("record")
+      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [issue(ctx.repo_key, 1), issue(ctx.repo_key, 2)], 0)
+      assert_receive {:polled, _repo}
+
+      # The poll cache keeps ACME-2, whose record is gone; ACME-3 reaches only the record.
+      :ok = RunStore.delete_ticket_state(ctx.repo_key, "#{ctx.repo_key}-2")
+      {:ok, :updated} = TicketObservation.observe(ctx.repo_key, issue(ctx.repo_key, 3), source: :watcher)
+
+      {%{dispatchable: dispatchable}, state} = capture_cycle(state, ctx.repos, 50)
+      refute_receive {:polled, _repo}
+      assert identifiers(dispatchable) == ["ACME-1", "ACME-3"]
+
+      # The gates run unchanged on the rebuilt issue: Todo, assigned, Urgent and unblocked dispatches.
+      only_record = Enum.find(dispatchable, &(&1.identifier == "ACME-3"))
+      assert %Issue{state: "Todo", priority: 1, assignee_id: "user-2", blocked_by: [], repo_key: repo_key} = only_record
+      assert repo_key == ctx.repo_key
+      assert Orchestrator.should_dispatch_issue_for_test(only_record, state)
+    end
+
+    test "the shadow still compares both sides every cycle, and finds no difference while they agree", ctx do
+      set_source("record")
+      issues = [issue(ctx.repo_key, 1), issue(ctx.repo_key, 2, state: "In Progress")]
+      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, issues, 0)
+
+      state =
+        Enum.reduce([50, 100, 150], state, fn now_ms, state ->
+          {%{dispatchable: dispatchable}, state} = cycle(state, ctx.repos, issues, now_ms)
+          assert identifiers(dispatchable) == ["ACME-1", "ACME-2"]
+          state
+        end)
+
+      assert %{cycles_compared: 4, cycles_with_differences: 0, window_differences: 0, recent: []} = Shadow.summary()
+
+      # A difference reads as it does with the poll in use: the side that has the ticket, by name.
+      :ok = RunStore.delete_ticket_state(ctx.repo_key, "#{ctx.repo_key}-2")
+      capture_cycle(state, ctx.repos, 160)
+      assert %{recent: [%{identifier: "ACME-2", side: :poll, field: :candidate, poll: "In Progress", record: nil}]} = Shadow.summary()
+    end
+
+    test "Issue.blocked? sees the record's blockers", ctx do
+      set_source("record")
+      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [issue(ctx.repo_key, 1)], 0)
+
+      blocker = %{id: "blocker-1", identifier: "ACME-9", state: "In Progress"}
+      blocked = issue(ctx.repo_key, 1, blocked_by: [blocker], updated_at: DateTime.add(@linear_at, 60))
+      {:ok, :updated} = TicketObservation.observe(ctx.repo_key, blocked, source: :webhook)
+
+      {%{dispatchable: [rebuilt]}, state} = capture_cycle(state, ctx.repos, 50)
+      assert [%{identifier: "ACME-9"}] = rebuilt.blocked_by
+      refute Orchestrator.should_dispatch_issue_for_test(rebuilt, state)
+    end
+
+    test "nothing dispatches before every cache is warm, and a repo whose records can't be read gives none", ctx do
+      set_source("record")
+      cold_key = "#{ctx.repo_key}-cold"
+      {:ok, :updated} = TicketObservation.observe(cold_key, issue(cold_key, 4), source: :watcher)
+      repos = ctx.repos ++ [%{name: cold_key, team: "ACME", labels: ["api"]}]
+
+      # Only the first repo is due; the second's cache is cold, so after a start nothing dispatches
+      # until each repo's first poll has refreshed its records.
+      {%{dispatchable: []}, _state} = cycle(orchestrator_state(), repos, [issue(ctx.repo_key, 1)], 0)
+
+      # A blank repo key is one the store refuses: its cache is warm, its records give no candidate.
+      blank = [%{name: " ", team: "ACME", labels: []}]
+      {{%{dispatchable: []}, state}, _log} = with_log(fn -> cycle(orchestrator_state(), blank, [issue("blank", 5)], 0) end)
+
+      set_source("poll")
+      {%{dispatchable: [%{identifier: "ACME-5"}]}, _state} = capture_cycle(state, blank, 50)
+    end
+
+    test "a ticket the poll cache also has keeps what only the poll reads, under the record's fields", ctx do
+      set_source("record")
+      comments = [%{author: "Tony", body: "Also cover the retry", created_at: @linear_at}]
+
+      polled =
+        issue(ctx.repo_key, 1,
+          description: "Dispatch from the record",
+          comments: comments,
+          team: %{key: "ACME", name: "Acme"},
+          project: %{id: "project-1", name: "Reads"},
+          branch_name: "acme-1-dispatch"
+        )
+
+      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [polled], 0)
+
+      # A webhook raises its priority: the record has the new priority, the cache the text it read.
+      raised = issue(ctx.repo_key, 1, priority: 2, updated_at: DateTime.add(@linear_at, 60))
+      {:ok, :updated} = TicketObservation.observe(ctx.repo_key, raised, source: :webhook)
+
+      {%{dispatchable: [rebuilt]}, _state} = capture_cycle(state, ctx.repos, 50)
+
+      assert %Issue{priority: 2, description: "Dispatch from the record", comments: ^comments, branch_name: "acme-1-dispatch"} = rebuilt
+      assert {rebuilt.team, rebuilt.project} == {polled.team, polled.project}
+      # The text comes with the `updatedAt` it was read at, which the quality gate keys a verdict on.
+      assert rebuilt.updated_at == @linear_at
+    end
+
+    test "a person's new comment on an approved plan is read, from the comments the poll read", ctx do
+      waiting = "Waiting on sub-tickets"
+      set_source("record", tracker_kind: "memory")
+      SubIssueWait.reset_for_test(waiting)
+      on_exit(fn -> SubIssueWait.reset_for_test(waiting) end)
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      commented_at = ~U[2026-10-29 09:10:00Z]
+
+      parent =
+        issue(ctx.repo_key, 1,
+          state: waiting,
+          labels: ["breakdown"],
+          sub_issues: [%{id: "child-1", identifier: "ACME-2", state: "In Progress"}],
+          comments: [%{author: "Tony", body: "Can we drop the history screen?", created_at: commented_at}]
+        )
+
+      Application.put_env(:symphony_elixir, :memory_tracker_plan_comments, %{
+        parent.id => %{
+          state_changes: [%{at: @linear_at, from: "Plan Review", to: waiting}],
+          comments: [%{id: "c1", body: "Can we drop the history screen?", created_at: commented_at, parent_id: nil, bot?: false}]
+        }
+      })
+
+      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [parent], 0)
+      {%{dispatchable: [rebuilt]}, state} = capture_cycle(state, ctx.repos, 50)
+      assert rebuilt.comments == parent.comments
+
+      {state, _log} = with_log(fn -> Orchestrator.act_on_plan_comments_for_test(state, [rebuilt]) end)
+      parent_id = parent.id
+      assert_received {:memory_tracker_plan_comments, ^parent_id}
+      assert_received {:memory_tracker_reply, ^parent_id, "c1", _reply}
+      assert state.plan_comment_checks == %{parent_id => commented_at}
+    end
+
+    test "with the quality gate on, a verdict on a ticket with comments stays current", ctx do
+      set_source("record")
+      # The stub providers never call out; the gate only needs a key to be configured.
+      System.put_env("ANTHROPIC_API_KEY", "test-anthropic-key")
+      on_exit(fn -> System.delete_env("ANTHROPIC_API_KEY") end)
+      config = %Schema.QualityGate{enabled: true, min_score: 6}
+      polled = issue(ctx.repo_key, 1, description: "Dispatch from the record", comments: [%{author: "Tony", body: "Also the retry", created_at: @linear_at}])
+      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [polled], 0)
+
+      score = fn -> QualityGate.evaluate([polled], config, %{}, provider_module: PassProvider) end
+      {%{passed: [_polled], cache: cache}, _log} = with_log(score)
+      assert %{passed?: true, comment_signature: signature} = cache[polled.id]
+      assert is_binary(signature)
+
+      # The record moves on after the gate scored the text; the text did not change, so neither does the verdict.
+      raised = issue(ctx.repo_key, 1, priority: 2, updated_at: DateTime.add(@linear_at, 60))
+      {:ok, :updated} = TicketObservation.observe(ctx.repo_key, raised, source: :webhook)
+      {%{dispatchable: [rebuilt]}, state} = capture_cycle(state, ctx.repos, 50)
+
+      assert Orchestrator.quality_gate_input_for_test(state, [rebuilt]) == [rebuilt]
+
+      assert %{passed: [^rebuilt], cache: ^cache} =
+               QualityGate.evaluate([rebuilt], config, cache, provider_module: NoScoreProvider)
+    end
+
+    test "with the quality gate on, a ticket only the record has waits for its repo's poll to read its text", ctx do
+      set_source("record")
+      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [issue(ctx.repo_key, 1)], 0)
+      {:ok, :updated} = TicketObservation.observe(ctx.repo_key, issue(ctx.repo_key, 3), source: :watcher)
+
+      {%{dispatchable: dispatchable}, state} = capture_cycle(state, ctx.repos, 50)
+      assert identifiers(dispatchable) == ["ACME-1", "ACME-3"]
+      assert identifiers(Orchestrator.quality_gate_input_for_test(state, dispatchable)) == ["ACME-1"]
+
+      # A retry reads its own issue by id, text and all, so the gate scores it.
+      only_record = Enum.find(dispatchable, &(&1.identifier == "ACME-3"))
+      retry = {:active_retry, only_record, 1, %{}}
+      assert Orchestrator.quality_gate_input_for_test(state, [only_record], retry) == [only_record]
+
+      # Once its repo's poll has read it, the gate scores it.
+      {{:poll_at, 60}, state} = Orchestrator.force_repo_due_for_test(state, ctx.repo_key, 60)
+      {%{dispatchable: polled}, state} = cycle(state, ctx.repos, [issue(ctx.repo_key, 1), issue(ctx.repo_key, 3)], 60)
+      assert identifiers(Orchestrator.quality_gate_input_for_test(state, polled)) == ["ACME-1", "ACME-3"]
+    end
+
+    test "a record change outside the poll asks for a cycle of its repo at once", ctx do
+      set_source("record")
+      :ok = ObservabilityPubSub.subscribe_ticket_records()
+      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [issue(ctx.repo_key, 1)], 0)
+
+      # The poll's own writes are not announced: the cycle that made them dispatches from them.
+      issue_id = "#{ctx.repo_key}-1"
+      refute_received {:ticket_record, _repo_key, ^issue_id, :changed}
+
+      # The PR and CI watcher reads a priority change: the record announces it.
+      changed = issue(ctx.repo_key, 1, priority: 2, updated_at: DateTime.add(@linear_at, 60))
+      {:ok, :updated} = TicketObservation.observe(ctx.repo_key, changed, source: :watcher)
+      assert_receive {:ticket_record, repo_key, ^issue_id, :changed} = message
+      assert repo_key == ctx.repo_key
+
+      state = %{state | poll_check_in_progress: false, next_poll_due_at_ms: nil}
+      assert {:noreply, state} = Orchestrator.handle_info(message, state)
+      assert MapSet.member?(state.repo_poll_forced, ctx.repo_key)
+      assert_receive {:tick, token} when token == state.tick_token
+
+      # The cycle the refresh runs polls the repo and dispatches from the record.
+      {%{dispatchable: [%{identifier: "ACME-1", priority: 2}]}, _state} = cycle(state, ctx.repos, [changed], 1)
+      assert_receive {:polled, _repo}
+    end
+  end
+
+  describe "dispatch.source: poll" do
+    test "dispatch reads the poll cache, and a record change waits for the repo's poll", ctx do
+      set_source("poll")
+      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [issue(ctx.repo_key, 1), issue(ctx.repo_key, 2)], 0)
+
+      :ok = RunStore.delete_ticket_state(ctx.repo_key, "#{ctx.repo_key}-2")
+      {:ok, :updated} = TicketObservation.observe(ctx.repo_key, issue(ctx.repo_key, 3), source: :watcher)
+
+      {%{dispatchable: dispatchable}, state} = capture_cycle(state, ctx.repos, 50)
+      assert identifiers(dispatchable) == ["ACME-1", "ACME-2"]
+
+      message = {:ticket_record, ctx.repo_key, "#{ctx.repo_key}-3", :changed}
+      assert {:noreply, ^state} = Orchestrator.handle_info(message, state)
+    end
+
+    test "switching the source applies at the next cycle, with no restart", ctx do
+      set_source("poll")
+      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [issue(ctx.repo_key, 1)], 0)
+      {:ok, :updated} = TicketObservation.observe(ctx.repo_key, issue(ctx.repo_key, 3), source: :watcher)
+
+      {%{dispatchable: from_poll}, state} = capture_cycle(state, ctx.repos, 50)
+      assert identifiers(from_poll) == ["ACME-1"]
+
+      set_source("record")
+      {%{dispatchable: from_record}, state} = capture_cycle(state, ctx.repos, 60)
+      assert identifiers(from_record) == ["ACME-1", "ACME-3"]
+
+      # Back to the poll: the next cycle reads the cache again, and the shadow kept comparing.
+      set_source("poll")
+      {%{dispatchable: back}, _state} = capture_cycle(state, ctx.repos, 70)
+      assert identifiers(back) == ["ACME-1"]
+      assert %{cycles_compared: 4} = Shadow.summary()
+    end
+  end
+
+  # A cycle with no repo due, whose shadow differences are logged.
+  defp capture_cycle(state, repos, now_ms) do
+    {result, _log} = with_log(fn -> cycle(state, repos, [], now_ms) end)
+    result
+  end
+end
