@@ -281,3 +281,95 @@ public struct SetupLinearKind: Equatable {
         }
     }
 }
+
+/// Setup's Linear webhooks line: whether Linear's deliveries arrive, from `/api/v1/state`'s `linear_webhooks`
+/// (`LinearWebhookHealth`), which the window already polls.
+public struct LinearWebhooksLine: Equatable {
+    public enum State: Equatable {
+        /// The Symphony running predates the deliveries block.
+        case notAvailable
+        case off
+        /// On, with no delivery since Symphony started.
+        case waiting
+        /// On, and deliveries arrive with none refused.
+        case arriving
+        /// On, and Symphony refused at least one delivery, or has no signing secret to check them with.
+        case rejecting
+    }
+
+    public static let title = "Linear webhooks"
+
+    public var state: State
+    /// "Off", "On", "Deliveries refused", "No signing secret", "Not available".
+    public var word: String
+    /// What is true now, as one sentence.
+    public var detail: String
+
+    /// False for an older Symphony: the line is shown greyed out.
+    public var isAvailable: Bool { state != .notAvailable }
+    /// True when the line is called out in the warning colour.
+    public var isWarning: Bool { state == .rejecting }
+
+    /// The line for `health` (nil from an older Symphony), its ages counted from `now`, the state's own time.
+    public init(health: LinearWebhookHealth?, now: Date) {
+        guard let health else {
+            state = .notAvailable
+            word = "Not available"
+            detail = "Not available on this Symphony: update it to see Linear's deliveries here."
+            return
+        }
+        guard health.enabled else {
+            state = .off
+            word = "Off"
+            detail = "Symphony learns of Linear changes by polling. Turn the webhook on in Settings."
+            return
+        }
+        word = "On"
+        let arrived = Self.arrived(health, now: now)
+        if health.rejected > 0 {
+            state = .rejecting
+            word = "Deliveries refused"
+            let when = health.lastRejectedAt.map { " \(Self.ago($0, now: now))" } ?? ""
+            let reason = health.lastRejectedReason.map { " because \(Self.reason($0))" } ?? ""
+            let last = when.isEmpty && reason.isEmpty ? "" : ", the last\(when)\(reason)"
+            detail = (arrived ?? "No delivery accepted yet.") + " \(health.rejected) refused\(last)."
+        } else if !health.secretConfigured {
+            state = .rejecting
+            word = "No signing secret"
+            detail = "No signing secret is set, so Symphony will refuse every delivery. Set the secret in Settings."
+        } else if let arrived {
+            state = .arriving
+            detail = arrived
+        } else {
+            state = .waiting
+            detail = "No deliveries yet since Symphony started."
+        }
+    }
+
+    /// "3 deliveries, last 12 s ago."; nil before the first.
+    static func arrived(_ health: LinearWebhookHealth, now: Date) -> String? {
+        guard health.total > 0 else { return nil }
+        let last = health.lastAt.map { ", last \(ago($0, now: now))" } ?? ""
+        return "\(count(health.total))\(last)."
+    }
+
+    static func count(_ deliveries: Int) -> String {
+        deliveries == 1 ? "1 delivery" : "\(GitHubUpdatesCard.number(deliveries)) deliveries"
+    }
+
+    /// "12 s ago", "3 min ago".
+    static func ago(_ date: Date, now: Date) -> String {
+        "\(Overview.duration(Int(now.timeIntervalSince(date)))) ago"
+    }
+
+    /// A refusal's reason in plain words.
+    static func reason(_ code: String) -> String {
+        switch code {
+        case "missing_secret": "no signing secret is set"
+        case "missing_signature": "it had no signature"
+        case "bad_signature": "its signature didn't match the secret"
+        case "stale_timestamp": "it was more than a minute old"
+        default: code.replacingOccurrences(of: "_", with: " ")
+        }
+    }
+}

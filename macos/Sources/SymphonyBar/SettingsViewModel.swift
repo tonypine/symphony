@@ -127,6 +127,15 @@ final class SettingsViewModel: ObservableObject {
     @Published var dispatchLoopLongWindowMinutes = DispatchLoopLimits.minutes(DispatchLoopLimits.defaultLongWindowMs)
     /// Why `symphony check` rejected the changed dispatch-loop limits, shown in their section.
     @Published private(set) var dispatchLoopError: String?
+    /// `linear.webhooks.enabled` in the configured symphony.yml: whether Symphony accepts Linear's webhook deliveries.
+    @Published var linearWebhooksEnabled = LinearWebhookSettings.defaultEnabled
+    /// `linear.webhooks.secret`: an environment variable's name (written `$NAME`) or the secret itself. The literal
+    /// sits in a secure field and is never shown or logged.
+    @Published var linearWebhookSecretSource = LinearWebhookSettings.SecretSource.environment
+    @Published var linearWebhookSecretName = ""
+    @Published var linearWebhookSecretLiteral = ""
+    /// Why the Linear webhook settings weren't saved, shown in their section.
+    @Published private(set) var linearWebhooksError: String?
     /// `ledger.artifact_max_bytes` in the configured symphony.yml: the largest file Symphony stores, in MB.
     @Published var artifactMaxMegabytes = LedgerSettings.megabytes(LedgerSettings.defaultMaxBytes)
     /// `ledger.prompt_brief_enabled` and `ledger.prompt_brief_max_tokens`: whether agents get the summary of the
@@ -167,6 +176,10 @@ final class SettingsViewModel: ObservableObject {
     /// The dispatch-loop limits read from symphony.yml, or nil when they couldn't be read. Only a limit whose
     /// stepper moved is written.
     private var loadedDispatchLoopLimits: DispatchLoopLimits?
+
+    /// The Linear webhook settings read from symphony.yml, or nil when they couldn't be read. Only a setting that
+    /// changed is written.
+    private var loadedLinearWebhooks: LinearWebhookSettings?
 
     /// The ledger settings read from symphony.yml, or nil when they couldn't be read. Only a setting whose control
     /// moved is written.
@@ -245,6 +258,7 @@ final class SettingsViewModel: ObservableObject {
         loadRiskRules()
         loadTimeouts()
         loadGitHubUpdates()
+        loadLinearWebhooks()
         loadDispatchLoopLimits()
         loadLedgerSettings()
         loadMacAppQA()
@@ -464,6 +478,23 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// The Linear webhook controls are off until a symphony.yml has been read, and while Save checks it.
+    var canEditLinearWebhooks: Bool { loadedLinearWebhooks != nil && !isSaving }
+
+    private func loadLinearWebhooks() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let webhooks = try SymphonyConfigFile(path: path).readLinearWebhookSettings()
+            linearWebhooksEnabled = webhooks.enabled
+            let fields = LinearWebhookSettings.fields(webhooks.secret)
+            (linearWebhookSecretSource, linearWebhookSecretName, linearWebhookSecretLiteral) = (fields.source, fields.name, fields.literal)
+            loadedLinearWebhooks = webhooks
+        } catch {
+            configFileError = "Could not read the Linear webhook settings from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
     /// The ledger controls are off until a symphony.yml has been read, and while Save checks it.
     var canEditLedger: Bool { loadedLedgerSettings != nil && !isSaving }
 
@@ -606,7 +637,7 @@ final class SettingsViewModel: ObservableObject {
     /// Validates and saves, then calls `onSaved` when everything was stored. Changed models, token limits and
     /// timeouts are written only after `symphony check` passes on them; until then the rest isn't saved, and a
     /// failure shows in `configCheckError`, `tokenLimitsError`, `timeoutsError`, `gitHubUpdatesError`,
-    /// `dispatchLoopError`, `ledgerError` or `macAppQAError`.
+    /// `linearWebhooksError`, `dispatchLoopError`, `ledgerError` or `macAppQAError`.
     func save(onSaved: @escaping () -> Void) {
         guard canSave else { return }
         let settings = settings.trimmed()
@@ -630,6 +661,18 @@ final class SettingsViewModel: ObservableObject {
         gitHubUpdatesError = nil
         let updates = loadedGitHubUpdates?.settingMinutes(fallbackPoll: safetyNetCheckMinutes, silenceAlert: silenceAlertMinutes)
         let oldUpdates = loadedGitHubUpdates.flatMap { $0 != updates ? $0 : nil }
+        linearWebhooksError = nil
+        let webhookSecret = LinearWebhookSettings.secret(
+            source: linearWebhookSecretSource, name: linearWebhookSecretName, literal: linearWebhookSecretLiteral
+        )
+        if loadedLinearWebhooks != nil, webhookSecret == nil {
+            linearWebhooksError = LinearWebhookSettings.environmentNameRule
+            return
+        }
+        let webhooks = loadedLinearWebhooks.map { _ in
+            LinearWebhookSettings(enabled: linearWebhooksEnabled, secret: webhookSecret ?? .none)
+        }
+        let oldWebhooks = loadedLinearWebhooks.flatMap { $0 != webhooks ? $0 : nil }
         dispatchLoopError = nil
         let loopLimits = loadedDispatchLoopLimits?.setting(
             runs: dispatchLoopRuns,
@@ -662,8 +705,8 @@ final class SettingsViewModel: ObservableObject {
         let rules = riskRules
         let loadedRules = loadedRiskRules.flatMap { $0 != rules ? $0 : nil }
 
-        guard loadedProfiles != nil || loadedLimits != nil || oldTimeouts != nil || oldUpdates != nil || oldLoopLimits != nil
-            || oldLedger != nil || oldQAPlaybook != nil || loadedPriorities != nil || loadedHostTools != nil || loadedStates != nil
+        guard loadedProfiles != nil || loadedLimits != nil || oldTimeouts != nil || oldUpdates != nil || oldWebhooks != nil
+            || oldLoopLimits != nil || oldLedger != nil || oldQAPlaybook != nil || loadedPriorities != nil || loadedHostTools != nil || loadedStates != nil
             || builtInPatternsChanged || loadedRules != nil else {
             if saveRest(settings, secrets) { onSaved() }
             return
@@ -682,6 +725,9 @@ final class SettingsViewModel: ObservableObject {
             }
             if saved, let updates, let oldUpdates {
                 saved = await saveGitHubUpdates(updates, from: oldUpdates, settings: settings, secrets: secrets)
+            }
+            if saved, let webhooks, let oldWebhooks {
+                saved = await saveLinearWebhooks(webhooks, from: oldWebhooks, settings: settings, secrets: secrets)
             }
             if saved, let loopLimits, let oldLoopLimits {
                 saved = await saveDispatchLoopLimits(loopLimits, from: oldLoopLimits, settings: settings, secrets: secrets)
@@ -875,6 +921,32 @@ final class SettingsViewModel: ObservableObject {
         }
         configFileError = nil
         loadedDispatchLoopLimits = limits
+        return true
+    }
+
+    /// Writes the Linear webhook settings that changed to symphony.yml once `symphony check` passes on the result.
+    private func saveLinearWebhooks(
+        _ webhooks: LinearWebhookSettings,
+        from loaded: LinearWebhookSettings,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
+        do {
+            result = try await SymphonyConfigFile(path: settings.configPath).writeLinearWebhookSettings(webhooks, from: loaded) { path in
+                await check(path, settings, secrets)
+            }
+        } catch {
+            configFileError = "Could not save the Linear webhook settings to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            linearWebhooksError = "symphony check rejected these settings, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
+            return false
+        }
+        configFileError = nil
+        loadedLinearWebhooks = webhooks
         return true
     }
 

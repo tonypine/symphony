@@ -62,7 +62,9 @@ through the same relay as GitHub's; the steps below use the Tailscale Funnel rel
        secret: $SYMPHONY_LINEAR_WEBHOOK_SECRET
    ```
 
-   Run `symphony check`: it prints `Config OK` once the settings load.
+   Run `symphony check`: it prints `Config OK` once the settings load. In the macOS app, Settings →
+   Linear webhooks has the same switch and the secret's variable (or the secret, typed in a secure
+   field), and Save runs the check first.
 
 ## What arrived
 
@@ -89,6 +91,11 @@ dropped: Symphony makes no Linear request for it and writes nothing.
   "recent": [{"type": "Issue", "action": "update", "identifier": "TP-7", "received_at": "2026-10-29T07:40:02Z"}]
 }
 ```
+
+The macOS app's Setup page reads this block from the state it already polls: its Linear webhooks
+line says off, on with no deliveries yet, how many arrived and how long ago the last one came, or,
+in the warning colour, how many were refused and why the last one was. Against a Symphony without
+the block it says the feature is not available.
 
 `recent` holds the last ten accepted deliveries, newest first; a delivery without a `type` or an
 `action` counts as `unknown`. The counts live in memory and start again from zero when Symphony

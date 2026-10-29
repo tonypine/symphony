@@ -44,6 +44,11 @@ extension SymphonyWindowModel {
         githubUpdates.map { GitHubUpdatesCard(section: $0, now: overviewState?.generatedAt ?? now) }
     }
 
+    /// The Linear webhooks line, from the state poll's `linear_webhooks`, its ages counted from the state's time.
+    func linearWebhooksLine(now: Date = Date()) -> LinearWebhooksLine? {
+        overviewState.map { LinearWebhooksLine(health: $0.snapshot.linearWebhooks, now: $0.generatedAt ?? now) }
+    }
+
     func setupPage(now: Date = Date()) -> SetupPage {
         let payload = setupPayload
         return SetupPage(payload: payload, buildWarning: payload == nil ? nil : setupBuildWarning, order: setupOrder, now: now)
@@ -498,7 +503,8 @@ struct SetupContent: View {
                 ScrollView {
                     SetupPageBody(
                         page: page, actions: actions, welcome: model.setupWelcome,
-                        githubUpdates: model.githubUpdatesCard(), githubActions: githubActions
+                        githubUpdates: model.githubUpdatesCard(), githubActions: githubActions,
+                        linearWebhooks: model.linearWebhooksLine()
                     )
                     .sheet(item: githubSheet) { sheet in
                         GitHubUpdatesSheetView(
@@ -589,6 +595,8 @@ struct SetupPageBody: View {
     var githubActions = GitHubUpdatesCardActions()
     /// The card's Details start open (S7's snapshot).
     var githubExpanded = false
+    /// Whether Linear's webhook deliveries arrive; nil while Symphony's state is unknown.
+    var linearWebhooks: LinearWebhooksLine?
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
@@ -624,6 +632,9 @@ struct SetupPageBody: View {
             if let githubUpdates {
                 GitHubUpdatesCardView(card: githubUpdates, actions: githubActions, startsExpanded: githubExpanded)
             }
+            if let linearWebhooks {
+                LinearWebhooksLineView(line: linearWebhooks)
+            }
             if !page.notChecked.isEmpty {
                 Card(title: SetupPage.notCheckedTitle) {
                     VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
@@ -648,6 +659,55 @@ struct SetupPageBody: View {
         }
         .padding(DesignTokens.Space.s5)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The Linear webhooks line: a mark, the state's word and one sentence. Refused deliveries are called out by the mark
+/// and the word in the warning colour (the sentence stays secondary, for contrast); an older Symphony's line is greyed
+/// out.
+struct LinearWebhooksLineView: View {
+    let line: LinearWebhooksLine
+
+    var body: some View {
+        Card(title: LinearWebhooksLine.title) {
+            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s3) {
+                Image(systemName: symbol)
+                    .foregroundStyle(tint)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
+                    Text(line.word)
+                        .font(DesignTokens.TypeStyle.rowTitle.font)
+                        .foregroundStyle(line.isWarning ? SetupSeverityMark.warning.tint : Color.primary)
+                    Text(line.detail)
+                        .font(DesignTokens.TypeStyle.callout.font)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(LinearWebhooksLine.title): \(line.word). \(line.detail)")
+        }
+        .disabled(!line.isAvailable)
+        .opacity(line.isAvailable ? 1 : 0.6)
+    }
+
+    private var symbol: String {
+        switch line.state {
+        case .notAvailable: "questionmark.circle"
+        case .off: DesignTokens.Status.idle.symbol
+        case .waiting: "clock"
+        case .arriving: DesignTokens.Status.done.symbol
+        case .rejecting: SetupSeverityMark.warning.symbol
+        }
+    }
+
+    private var tint: Color {
+        switch line.state {
+        case .notAvailable, .off, .waiting: DesignTokens.Status.idle.tint
+        case .arriving: DesignTokens.Status.done.tint
+        case .rejecting: SetupSeverityMark.warning.tint
+        }
     }
 }
 

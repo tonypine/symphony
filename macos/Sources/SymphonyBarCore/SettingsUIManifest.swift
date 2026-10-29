@@ -8,8 +8,8 @@ import Foundation
 /// nor in `config/settings_ui_exempt.yml`, so a new setting ships with a control. `SettingsUIManifestTests`
 /// checks that every key the line editors (`RepositoriesConfig`, `RunProfilesConfig`, `MaxConcurrentAgents`,
 /// `TokenLimits`, `OperationTimeouts`, `GitHubUpdates`, `DispatchLoopLimits`, `LedgerSettings`,
-/// `BuiltInTicketPatterns`, `RiskRuleSettings`, `QAHostTools`, `MacAppQAPlaybook`) write is here, and that the rest are
-/// `writtenBySymphony`. Keep one string literal per line, sorted.
+/// `LinearWebhookSettings`, `BuiltInTicketPatterns`, `RiskRuleSettings`, `QAHostTools`, `MacAppQAPlaybook`) write is
+/// here, and that the rest are `writtenBySymphony`. Keep one string literal per line, sorted.
 public enum SettingsUIManifest {
     public static let keyPaths: [String] = [
         "agent.command",
@@ -54,6 +54,8 @@ public enum SettingsUIManifest {
         "ledger.artifact_max_bytes",
         "ledger.prompt_brief_enabled",
         "ledger.prompt_brief_max_tokens",
+        "linear.webhooks.enabled",
+        "linear.webhooks.secret",
         "repositories[].acceptance_gate.escalate.ticket_patterns_builtin",
         "repositories[].acceptance_gate.mode",
         "repositories[].agent.effort",

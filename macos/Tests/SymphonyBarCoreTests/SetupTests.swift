@@ -358,6 +358,84 @@ final class SetupTests: XCTestCase {
         XCTAssertEqual(SetupPage.sentenceCounts(errors: 2, warnings: 0), "2 errors")
     }
 
+    // MARK: - The Linear webhooks line
+
+    func testTheLinearWebhooksLineFromAnOlderSymphonyIsNotAvailable() {
+        let line = LinearWebhooksLine(health: nil, now: now)
+        XCTAssertEqual(line.state, .notAvailable)
+        XCTAssertFalse(line.isAvailable)
+        XCTAssertFalse(line.isWarning)
+        XCTAssertEqual(line.word, "Not available")
+        XCTAssertEqual(line.detail, "Not available on this Symphony: update it to see Linear's deliveries here.")
+    }
+
+    func testTheLinearWebhooksLineOff() {
+        let line = LinearWebhooksLine(health: LinearWebhookHealth(enabled: false, total: 4), now: now)
+        XCTAssertEqual(line.state, .off)
+        XCTAssertTrue(line.isAvailable)
+        XCTAssertEqual(line.word, "Off")
+        XCTAssertEqual(line.detail, "Symphony learns of Linear changes by polling. Turn the webhook on in Settings.")
+    }
+
+    func testTheLinearWebhooksLineWaitingForTheFirstDelivery() {
+        let line = LinearWebhooksLine(health: LinearWebhookHealth(enabled: true, secretConfigured: true), now: now)
+        XCTAssertEqual(line.state, .waiting)
+        XCTAssertEqual(line.word, "On")
+        XCTAssertEqual(line.detail, "No deliveries yet since Symphony started.")
+    }
+
+    /// The operator edited a ticket in Linear: the line counts the deliveries and says how long ago the last came.
+    func testTheLinearWebhooksLineWithDeliveriesArriving() {
+        let health = LinearWebhookHealth(enabled: true, secretConfigured: true, total: 1_204, lastAt: now.addingTimeInterval(-12))
+        let line = LinearWebhooksLine(health: health, now: now)
+        XCTAssertEqual(line.state, .arriving)
+        XCTAssertFalse(line.isWarning)
+        XCTAssertEqual(line.word, "On")
+        XCTAssertEqual(line.detail, "1,204 deliveries, last 12 s ago.")
+
+        let one = LinearWebhookHealth(enabled: true, secretConfigured: true, total: 1, lastAt: now.addingTimeInterval(-180))
+        XCTAssertEqual(LinearWebhooksLine(health: one, now: now).detail, "1 delivery, last 3 min ago.")
+        let undated = LinearWebhookHealth(enabled: true, secretConfigured: true, total: 2)
+        XCTAssertEqual(LinearWebhooksLine(health: undated, now: now).detail, "2 deliveries.")
+    }
+
+    func testTheLinearWebhooksLineCallsOutRefusedDeliveriesWithTheLastReason() {
+        let health = LinearWebhookHealth(
+            enabled: true, secretConfigured: true, total: 3, rejected: 2, lastAt: now.addingTimeInterval(-12),
+            lastRejectedAt: now.addingTimeInterval(-240), lastRejectedReason: "bad_signature"
+        )
+        let line = LinearWebhooksLine(health: health, now: now)
+        XCTAssertEqual(line.state, .rejecting)
+        XCTAssertTrue(line.isWarning)
+        XCTAssertEqual(line.word, "Deliveries refused")
+        XCTAssertEqual(
+            line.detail,
+            "3 deliveries, last 12 s ago. 2 refused, the last 4 min ago because its signature didn't match the secret."
+        )
+
+        let none = LinearWebhookHealth(enabled: true, rejected: 1, lastRejectedReason: "missing_secret")
+        XCTAssertEqual(
+            LinearWebhooksLine(health: none, now: now).detail,
+            "No delivery accepted yet. 1 refused, the last because no signing secret is set."
+        )
+        let unexplained = LinearWebhookHealth(enabled: true, secretConfigured: true, rejected: 1)
+        XCTAssertEqual(LinearWebhooksLine(health: unexplained, now: now).detail, "No delivery accepted yet. 1 refused.")
+    }
+
+    func testTheLinearWebhooksLineWarnsWithoutASigningSecret() {
+        let line = LinearWebhooksLine(health: LinearWebhookHealth(enabled: true, secretConfigured: false), now: now)
+        XCTAssertEqual(line.state, .rejecting)
+        XCTAssertTrue(line.isWarning)
+        XCTAssertEqual(line.word, "No signing secret")
+        XCTAssertEqual(line.detail, "No signing secret is set, so Symphony will refuse every delivery. Set the secret in Settings.")
+    }
+
+    func testRefusalReasonsInPlainWords() {
+        XCTAssertEqual(LinearWebhooksLine.reason("missing_signature"), "it had no signature")
+        XCTAssertEqual(LinearWebhooksLine.reason("stale_timestamp"), "it was more than a minute old")
+        XCTAssertEqual(LinearWebhooksLine.reason("too_large"), "too large")
+    }
+
     // MARK: - Open fixes (AC 5)
 
     func testOpenFixesGoWhereTheOperatorFixesIt() {
