@@ -1393,7 +1393,7 @@ A proof is the line at the end of a step:
 
 | Line | Proof | QA |
 | --- | --- | --- |
-| `Proved by: <test>` | the named automated test, run by the repo's `proof_check`: the suite, scenario or test file as the code has it; backticks are dropped, and the `proof_check`'s own name alone names the check without a test | does not walk the step: Symphony's QA pre-check confirms it on the PR head before the agent starts (below), and the agent links the result |
+| `Proved by: <test>` | the named automated test, run by the repo's `proof_check`, as the code or `mix test` names it: a test file (`test/foo_test.exs`), a test or scenario name (`does X`), a describe plus a test name (`foo/1 does X`), or a file and a name (`test/foo_test.exs: does X`, `test/foo_test.exs does X`); backticks, surrounding quotes and a `:line` are dropped, and the `proof_check`'s own name alone names the check without a test | does not walk the step: Symphony's QA pre-check confirms it on the PR head before the agent starts (below), and the agent links the result |
 | `Proved by: <check> › <test>` | the older form, still read: the GitHub check run (or workflow) the step names, then the test; a plain ` > ` works as the separator | as above |
 | `Proved by: QA` | the QA pass: a judgment by sight the author keeps for QA | walks the step |
 | no `Proved by:` line | read as `Proved by: QA` | walks the step |
@@ -1415,7 +1415,13 @@ not run on a PR at all. For each step it:
 - looks for the test in the PR's checkout: a part with a `/` (or a file name such as
   `check_test.exs`, with or without a `:line`) must be a tracked file or folder, and any other part,
   such as a test or scenario name, must appear in the tracked files, within the file named before it
-  when there is one (`test/foo_test.exs › "does X"`);
+  when there is one (`test/foo_test.exs › "does X"`, `test/foo_test.exs: does X` or
+  `test/foo_test.exs does X`). A part that opens with a file the rest is not in is also read as one
+  name, so a test named `WORKFLOW.md front matter cannot set the agent` is found. A name is found
+  as text (a test name or a describe alone) or as ExUnit's full test name, the describe and the
+  test joined by a space, as `mix test` prints it (with its leading `test ` and trailing `(Module)`
+  too), though the two sit on different lines. A name found nowhere fails naming the file it
+  narrowed to (or the checkout) and the forms tried;
 - reads the PR head's status checks with `gh` and finds the ones the step's check names (the
   `proof_check` for `Proved by: <test>`): a check run, a whole workflow, or `workflow / job`.
 
