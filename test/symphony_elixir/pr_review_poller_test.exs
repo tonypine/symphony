@@ -2144,7 +2144,8 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
     assert :ok = PrReviewPoller.complete_pending_reviewer_comments("issue-1780", github: ActionGitHub, now: now)
 
-    assert_receive {:github_reply, "https://github.com/example/repo/pull/1780", %{id: "comment-1"}, reply_body}
+    # The reply is sent within the call.
+    assert_received {:github_reply, "https://github.com/example/repo/pull/1780", %{id: "comment-1"}, reply_body}
 
     assert reply_body ==
              "Automated note from Symphony AI: this review comment was marked complete after the latest follow-up update. " <>

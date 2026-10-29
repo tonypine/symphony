@@ -38,6 +38,8 @@ defmodule SymphonyElixirWeb.ObservabilityReposTest do
     root = Path.join(System.tmp_dir!(), "symphony-repos-api-#{System.unique_integer([:positive])}")
     File.mkdir_p!(root)
     Paths.set_state_root(Path.join(root, "state"))
+    # The fetch log's table belongs to its server, which an earlier test may have left stopped.
+    SymphonyElixir.TestSupport.ensure_fetch_log_started!()
     Enum.each(["repos-app", "repos-web", "repos-docs"], &:ets.delete(FetchLog, &1))
 
     on_exit(fn ->
