@@ -29,6 +29,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
             open_pulls: nil,
             now: ~U[2026-10-16 12:00:00Z],
             cancel_result: {:ok, [1]},
+            update_result: :ok,
             log: "setup\nERROR: specs failed at stub_test.exs:21\nstack"
           }
         end,
@@ -125,7 +126,11 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     end
 
     def squash_merge(pr_url, request, _opts), do: World.call(:merge, {pr_url, request.head_sha})
-    def update_branch(pr_url, head, _opts), do: World.call(:update_branch, {pr_url, head})
+
+    def update_branch(pr_url, head, _opts) do
+      World.call(:update_branch, {pr_url, head})
+      World.get(:update_result)
+    end
 
     def cancel_stale_runs(pr_url, head, _opts) do
       World.call(:cancel_stale_runs, {pr_url, head})
@@ -1373,6 +1378,39 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       tick!(pid)
       assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}]
       assert %{rule: "R4", owner: :symphony} = decision(issue_id)
+    end
+
+    test "an update-branch GitHub refuses on every read stays on the record, and the ticket is a silent wait after two ticks" do
+      World.update(:update_result, fn _ok -> {:error, :forbidden} end)
+      issue_id = ticket!("1", "Code Review", mergeable: :behind)
+      pid = start!()
+
+      log = capture_log(fn -> tick!(pid) end)
+      assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}]
+      assert %{rule: "R28", kind: :wait, owner: :symphony} = decision(issue_id)
+      assert upkept(issue_id) == []
+
+      assert %{rule: "U1", kind: :update_branch, head_sha: "head-1-1", error: ":forbidden", at: %DateTime{}} =
+               watch(issue_id).upkeep_failure
+
+      assert log =~ "rule=U1 action=update_branch head_sha=head-1-1 outcome=error"
+      assert %{ticks: 1, reason: "U1 `update_branch` failed on the head (:forbidden), and only the next read retries it"} = watch(issue_id).silent
+
+      # Retried on every read; one poll interval later the ticket is listed, its line naming the failure.
+      advance!(30_000)
+      log = capture_log(fn -> tick!(pid) end)
+      assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}, {@pr_1, "head-1-1"}]
+      assert log =~ "pr_watch.silent_wait issue_id=#{issue_id} issue_identifier=TP-1"
+      assert log =~ "rule=R28 bound=none reason=\"U1 `update_branch` failed on the head (:forbidden)"
+      assert [%{issue_identifier: "TP-1", rule: "R28", reason: "U1 `update_branch` failed" <> _}] = PrWatch.silent_waits()
+
+      # GitHub takes the update: the failure leaves the record, and the ticket the list.
+      World.update(:update_result, fn _error -> :ok end)
+      tick!(pid)
+      assert watch(issue_id).upkeep_failure == nil
+      assert upkept(issue_id) == [{"U1", :update_branch, "head-1-1"}]
+      assert watch(issue_id).silent == nil
+      assert PrWatch.silent_waits() == []
     end
 
     test "a QA PR behind main is updated only once its run ends, on the read that sees it end" do

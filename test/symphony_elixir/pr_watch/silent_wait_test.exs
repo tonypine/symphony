@@ -48,6 +48,36 @@ defmodule SymphonyElixir.PrWatch.SilentWaitTest do
              SilentWait.check(watch(decision(%{})), ctx())
   end
 
+  test "an upkeep GitHub refused on the head makes a waiting ticket quiet, whatever it waits on, until a read has none" do
+    update = %{rule: "U1", kind: :update_branch, head_sha: "head-1", error: ":forbidden", at: @now}
+    rerun = %{update | rule: "U2", kind: :rerun_failed, error: "{:rerun_failed, \"77\", :gone}"}
+
+    cases = [{update, wait(:symphony, rule: "R28")}, {update, wait(:person, rule: "R18")}, {rerun, wait(:ci, rule: "R19")}]
+
+    for {failure, decision} <- cases do
+      first = SilentWait.check(watch(decision, head_sha: "head-1", upkeep_failure: failure), ctx())
+      assert %{ticks: 1, bound: nil} = first
+      refute SilentWait.listed?(first)
+
+      later = DateTime.add(@now, @interval, :millisecond)
+      second = SilentWait.check(watch(%{decision | decided_at: later}, head_sha: "head-1", upkeep_failure: failure), ctx(now: later, previous: first))
+      assert %{since: @now, ticks: 2} = second
+      assert SilentWait.listed?(second)
+    end
+
+    assert SilentWait.check(watch(wait(:symphony), head_sha: "head-1", upkeep_failure: update), ctx()).reason ==
+             "U1 `update_branch` failed on the head (:forbidden), and only the next read retries it"
+
+    # A failure on another head, none on the read, a run or a hold, or a flow action applied on the
+    # tick: no silence from it.
+    assert SilentWait.check(watch(wait(:symphony), head_sha: "head-2", upkeep_failure: update), ctx()) == nil
+    assert SilentWait.check(watch(wait(:symphony), head_sha: "head-1", upkeep_failure: nil), ctx()) == nil
+    assert SilentWait.check(watch(wait(:symphony), head_sha: "head-1", upkeep_failure: update), ctx(run: :active)) == nil
+    assert SilentWait.check(watch(wait(:symphony), head_sha: "head-1", upkeep_failure: update), ctx(hold: :needs_decision)) == nil
+    moved = decision(rule: "R16", kind: :to_ci_fix, outcome: :applied)
+    assert SilentWait.check(watch(moved, head_sha: "head-1", upkeep_failure: update), ctx()) == nil
+  end
+
   test "a quiet ticket counts its ticks from when it went quiet, and is listed from the second" do
     first = SilentWait.check(watch(decision(%{})), ctx())
     refute SilentWait.listed?(first)

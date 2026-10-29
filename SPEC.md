@@ -2692,7 +2692,9 @@ the Needs Decision hold and the self-heal lane, GitHub calls through `AutoMerge`
   watcher applied on that poll and no decision
   from the last two polls that names who it waits on and what ends the wait, on two polls at least
   a poll interval apart (an extra poll inside an interval counts for none), or a wait on CI past
-  `ci.merging_wait_timeout_ms` or on GitHub's rate limit one poll past its reset. `/api/v1/state` lists it under `silent_waits`, and it logs one `pr_watch.silent_wait`
+  `ci.merging_wait_timeout_ms` or on GitHub's rate limit one poll past its reset. An upkeep GitHub
+  refused on the head (kept on the record as `upkeep_failure`) makes the ticket quiet whatever its
+  decision waits on, so an update-branch refused on every poll is listed after two polls. `/api/v1/state` lists it under `silent_waits`, and it logs one `pr_watch.silent_wait`
   line. `POST /api/v1/issues/<identifier>/watch/check` makes the watcher read and decide on the
   ticket at once and returns its `watch` (`docs/pr-ci-decisions.md#silent-waits`).
 - A CI Fix run sent for a red head spends a red attempt, held against

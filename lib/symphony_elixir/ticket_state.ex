@@ -143,6 +143,15 @@ defmodule SymphonyElixir.TicketState do
   @typedoc "GitHub's rate limit as a read left it: requests remaining of the window's limit, and when it resets."
   @type rate_limit :: %{remaining: non_neg_integer() | nil, limit: pos_integer() | nil, reset_at: DateTime.t() | nil}
 
+  @typedoc "The upkeep action GitHub refused on a read of the PR: its rule, kind, head, the error and when."
+  @type upkeep_failure :: %{
+          rule: String.t(),
+          kind: atom(),
+          head_sha: String.t() | nil,
+          error: String.t(),
+          at: DateTime.t() | nil
+        }
+
   @typedoc """
   What the PR and CI watcher last read of the ticket's PR (`SymphonyElixir.PrWatch`): the facts
   `SymphonyElixir.PrDecision.decide/1` reads, the PR and head they were read on, how they arrived
@@ -161,7 +170,9 @@ defmodule SymphonyElixir.TicketState do
   that called for each arrived, and `silent` the ticket's silence (`SymphonyElixir.PrWatch.SilentWait`),
   nil while something is under way or it waits with a reason. `protected_files` lists, for a head
   red only on a check a person clears (R18), the protected paths its PR changes, read once per
-  head; nil for any other head.
+  head; nil for any other head. `upkeep_failure` is the upkeep action GitHub refused on the last
+  read (`SymphonyElixir.PrDecision.upkeep/1`: its rule, kind, head, the error and when), nil when
+  the read's upkeep had none.
   """
   @type pr_watch :: %{
           facts: PrDecision.Facts.t(),
@@ -183,7 +194,8 @@ defmodule SymphonyElixir.TicketState do
           links: [map()],
           actions: [map()],
           silent: SymphonyElixir.PrWatch.SilentWait.t() | nil,
-          protected_files: %{head_sha: String.t() | nil, paths: [String.t()]} | nil
+          protected_files: %{head_sha: String.t() | nil, paths: [String.t()]} | nil,
+          upkeep_failure: upkeep_failure() | nil
         }
 
   @type t :: %{
@@ -763,7 +775,8 @@ defmodule SymphonyElixir.TicketState do
       links: maps(Map.get(watch, :links)),
       actions: watch |> Map.get(:actions) |> maps() |> Enum.take(5),
       silent: normalize_silent(Map.get(watch, :silent)),
-      protected_files: normalize_protected_files(Map.get(watch, :protected_files))
+      protected_files: normalize_protected_files(Map.get(watch, :protected_files)),
+      upkeep_failure: normalize_upkeep_failure(Map.get(watch, :upkeep_failure))
     }
   end
 
@@ -773,6 +786,12 @@ defmodule SymphonyElixir.TicketState do
     do: %{head_sha: map_string(files, :head_sha), paths: Enum.filter(paths, &is_binary/1)}
 
   defp normalize_protected_files(_files), do: nil
+
+  defp normalize_upkeep_failure(%{rule: rule, kind: kind, error: error} = failure) when is_binary(rule) and is_atom(kind) and is_binary(error) do
+    %{rule: rule, kind: kind, head_sha: map_string(failure, :head_sha), error: error, at: map_datetime(failure, :at)}
+  end
+
+  defp normalize_upkeep_failure(_failure), do: nil
 
   defp normalize_silent(%{since: %DateTime{}, ticks: ticks, reason: reason} = silent) when is_integer(ticks) and ticks > 0 and is_binary(reason),
     do: %{since: silent.since, ticks: ticks, bound: map_string(silent, :bound), reason: reason}

@@ -239,7 +239,8 @@ calls through `SymphonyElixir.AutoMerge`. The record keeps the decision (its rul
 wait is on and what ends it) and the actions applied in the ticket's stay in its phase. An action is
 applied once per head and rule in a stay, so a repeated read never repeats a move, a rerun, an
 update-branch or a fix-ticket filing (a cancelled run's rerun, U2, is kept per cancellation instead); one that fails is not recorded, and the next read decides
-again. The ticket's CI label (`CI green`, `CI red`, `CI running`) follows the facts.
+again. An upkeep action GitHub refuses stays on the record (`upkeep_failure`: its rule, the head,
+the error and when) until a read applies it or no longer calls for it. The ticket's CI label (`CI green`, `CI red`, `CI running`) follows the facts.
 
 The CI and PR review pollers decide nothing in the watched phases: the CI poller keeps the head it
 last read for a landing agent's CI wait, and the PR review poller keeps a PR's reviewer comments for
@@ -286,7 +287,11 @@ until something happens (`owner` and `clears_when`). Any other ticket is quiet: 
 owner (such as `dispatch`) that nothing followed, no decision, or one older than two ticks. A ticket
 quiet for two poll cycles in a row is silent; quiet ticks count poll intervals, not polls, so a
 `poll_now` or Check Now inside an interval adds none. A wait that outlived its bound is silent too: on `ci` past
-`ci.merging_wait_timeout_ms`, or on `github` still rate limited one tick past the reset.
+`ci.merging_wait_timeout_ms`, or on `github` still rate limited one tick past the reset. A ticket
+whose upkeep GitHub refused on its head (`upkeep_failure`) is quiet whatever its decision waits on,
+since only the next read retries the upkeep and no wait ends while it fails: an update-branch
+refused on every read (a token without the `workflow` scope, for main's changes under
+`.github/workflows/`) is listed after two ticks, its reason naming the rule and the error.
 
 A silent ticket is listed in `silent_waits` in `GET /api/v1/state` (its phase, since when, the last
 rule, the bound that passed and why) and logs one `pr_watch.silent_wait` line when it turns silent.

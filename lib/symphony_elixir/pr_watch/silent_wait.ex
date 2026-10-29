@@ -8,10 +8,12 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
   (it moved the ticket, reran a check or called GitHub). Nor is one whose decision, made within the
   last two ticks, leaves it waiting on someone (`owner`) until something happens (`clears_when`),
   unless the wait outlived its bound: CI still running past `ci.merging_wait_timeout_ms`, or
-  GitHub's rate limit still holding one tick past its reset. Any other ticket is quiet, and one
-  quiet for two poll cycles in a row is silent: it is listed in `silent_waits` and logged once.
-  Quiet ticks count poll intervals, not polls, so an extra tick (`poll_now`, Check Now) inside an
-  interval adds none.
+  GitHub's rate limit still holding one tick past its reset. A ticket whose upkeep GitHub refused
+  on its head on the last read (`upkeep_failure`: U1's update-branch, U2's rerun of a cancelled
+  run) is quiet whatever it waits on: only the next read retries the upkeep, and no wait ends while
+  it fails. Any other ticket is quiet, and one quiet for two poll cycles in a row is silent: it is
+  listed in `silent_waits` and logged once. Quiet ticks count poll intervals, not polls, so an extra
+  tick (`poll_now`, Check Now) inside an interval adds none.
   """
 
   alias SymphonyElixir.PrDecision.Action
@@ -48,8 +50,9 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
 
     cond do
       not fresh?(decision, ctx) -> quiet(quiet_reason(decision), ctx)
-      waiting?(decision) -> bound(watch, decision, ctx)
       applied_now?(decision, ctx) -> nil
+      failure = upkeep_failure(watch) -> quiet(failure, ctx)
+      waiting?(decision) -> bound(watch, decision, ctx)
       true -> quiet("#{decision.rule} decided `#{decision.kind}`, but no run started and no wait is recorded", ctx)
     end
   end
@@ -67,6 +70,12 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
   # The watcher acted on this tick (a move, a rerun, a GitHub call): the ticket is moving, not waiting.
   defp applied_now?(%{outcome: :applied, decided_at: at}, ctx), do: DateTime.compare(at, ctx.now) == :eq
   defp applied_now?(_decision, _ctx), do: false
+
+  # The upkeep GitHub refused on the record's head, which nothing but the next read retries.
+  defp upkeep_failure(%{upkeep_failure: %{head_sha: head} = failure, head_sha: head}),
+    do: "#{failure.rule} `#{failure.kind}` failed on the head (#{failure.error}), and only the next read retries it"
+
+  defp upkeep_failure(_watch), do: nil
 
   defp waiting?(%{owner: owner, clears_when: clears_when}), do: owner in Action.owners() and is_binary(clears_when) and clears_when != ""
   defp waiting?(_decision), do: false

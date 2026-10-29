@@ -957,7 +957,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp decided(%{decision: %{kind: kind, reason: reason}}) when is_binary(reason), do: " action=#{kind} decision=#{inspect(reason)}"
   defp decided(_watch), do: ""
 
-  # A read GitHub refused keeps what the record held, its facts marked rate limited: R1 waits.
+  # A read GitHub refused keeps what the record held, its facts marked rate limited: R1 waits. It
+  # applied no upkeep, so it keeps no upkeep failure either.
   defp rate_limited(entry, ticket, previous, limited, now) do
     base =
       previous ||
@@ -967,7 +968,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
     # R1 matches every rate-limited read, so there is always a decision: the wait.
     decision = decision_record(PrDecision.decide(facts), :recorded, base.attempts, facts, base.head_sha, now)
-    Map.merge(base, %{facts: facts, github: limited, decision: decision, links: entry.links})
+    Map.merge(base, %{facts: facts, github: limited, decision: decision, links: entry.links, upkeep_failure: nil})
   end
 
   # The facts, completed with what the watcher keeps, the decision and what applying it did. A stay
@@ -1007,7 +1008,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
       links: entry.links
     }
 
-    {upkept, attempts, applied} = upkeep(ctx, attempts, applied, entry, state)
+    {upkept, upkeep_failure, attempts, applied} = upkeep(ctx, attempts, applied, entry, state)
 
     case decide(facts, entry) do
       {:ok, action} ->
@@ -1021,6 +1022,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
           stay: result.moved_to || entry.phase,
           decision: result.action |> with_landing_hold(entry, facts) |> decision_record(result.outcome, attempts, facts, head, now),
           upkept: upkept,
+          upkeep_failure: upkeep_failure,
           applied: result.applied,
           attempts: attempts,
           fix: result.fix,
@@ -1034,6 +1036,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
           stay: entry.phase,
           decision: nil,
           upkept: upkept,
+          upkeep_failure: upkeep_failure,
           applied: applied,
           attempts: attempts,
           fix: fix,
@@ -1045,19 +1048,26 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   # The upkeep the facts call for (`SymphonyElixir.PrDecision.upkeep/1`), applied before the flow
   # decision on the same read, which it never changes: each action's attempts and ledger carry into
-  # the next and into the flow decision's. Returns what was applied, as `actions` keeps it.
+  # the next and into the flow decision's. Returns what was applied, as `actions` keeps it, and the
+  # last action GitHub refused on this read, which the record keeps until a read has none
+  # (`upkeep_failure`): the silent-wait detector lists a ticket whose upkeep keeps failing.
   defp upkeep(ctx, attempts, applied, entry, state) do
     ctx.facts
     |> PrDecision.upkeep()
-    |> Enum.reduce({[], attempts, applied}, fn action, {upkept, attempts, applied} ->
+    |> Enum.reduce({[], nil, attempts, applied}, fn action, {upkept, failure, attempts, applied} ->
       result = Apply.apply(action, Map.merge(ctx, %{attempts: attempts, applied: applied}))
       log_upkeep(result, ctx, entry, state)
-      {upkept ++ upkept(result, ctx), result.attempts, result.applied}
+      {upkept ++ upkept(result, ctx), upkeep_failure(result, ctx) || failure, result.attempts, result.applied}
     end)
   end
 
   defp upkept(%{outcome: :applied, action: action}, ctx), do: [%{rule: action.rule, kind: action.kind, head_sha: ctx.read[:head_sha], at: ctx.now}]
   defp upkept(_result, _ctx), do: []
+
+  defp upkeep_failure(%{outcome: {:error, reason}, action: action}, ctx),
+    do: %{rule: action.rule, kind: action.kind, head_sha: ctx.read[:head_sha], error: inspect(reason), at: ctx.now}
+
+  defp upkeep_failure(_result, _ctx), do: nil
 
   defp log_upkeep(%{outcome: :recorded}, _ctx, _entry, _state), do: :ok
 
