@@ -3093,6 +3093,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     {other_worker, other_ref} = start_blocked_worker()
     started_at = DateTime.utc_now()
 
+    # A poll that lands later reconciles the runs against the tracker: listing both issues keeps
+    # the other run alive until the test stops it.
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [slow_issue, other_issue])
+    on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_issues) end)
+
     :sys.replace_state(pid, fn state ->
       %{
         state

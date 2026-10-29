@@ -2552,6 +2552,28 @@ The app's Setup page drives it from its **GitHub updates** card: **Turn On Insta
 **Turn Off…** (`enabled`), **Change Relay…** (`relay`), **Re-create Secret…** (`secret`), and the
 events (`events`) listed under Details; the two intervals there are the same as in Settings.
 
+### `linear`
+
+Linear's workspace webhook.
+
+```yaml
+linear:
+  webhooks:
+    enabled: false
+    secret: $SYMPHONY_LINEAR_WEBHOOK_SECRET # the webhook's signing secret, or a literal
+```
+
+`webhooks` describes the one webhook the operator creates for the Linear workspace, so Linear can
+tell Symphony of every ticket change the moment it happens, as GitHub's webhooks do for pull
+requests. Nothing listens for its deliveries yet: Symphony still learns of Linear changes only by
+polling. `enabled` defaults to `false`. `secret` is the signing secret Linear shows when the webhook
+is created, as a literal or an `$ENV` reference resolved like `github.webhooks.secret`; turning
+`enabled` on without a `secret` is refused, naming `linear.webhooks.secret`. A reference to an unset
+variable loads, and every delivery is then refused as having no secret. A delivery is Linear's when
+its `Linear-Signature` header is the HMAC-SHA256 of the raw body with the secret, and its
+`webhookTimestamp` is within sixty seconds of now. See [linear-webhooks.md](linear-webhooks.md).
+Neither key has a control in the macOS app yet.
+
 ### `notifications`
 
 Notification channels.
