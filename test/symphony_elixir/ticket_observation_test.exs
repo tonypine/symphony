@@ -207,6 +207,26 @@ defmodule SymphonyElixir.TicketObservationTest do
     assert {:ok, _pid} = Supervisor.restart_child(SymphonyElixir.Supervisor, TicketObservation)
   end
 
+  test "a changed record is announced, except by the poll and a by-id read, whose cycle dispatches from it", %{repo_key: repo_key} do
+    :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records()
+
+    {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
+    {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(%{priority: 1}), now: @now, source: :by_id)
+    refute_received {:ticket_record, _repo_key, _issue_id, :changed}
+
+    reassigned = linear_issue(%{assignee_id: "user-9"})
+    {:ok, :updated} = TicketObservation.observe(repo_key, reassigned, now: @now, source: :watcher)
+    assert_received {:ticket_record, ^repo_key, "issue-observed", :changed}
+
+    {:ok, :unchanged} = TicketObservation.observe(repo_key, reassigned, now: @now, source: :watcher)
+    {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(%{state: "In Progress"}), now: @now, source: :webhook)
+    assert_received {:ticket_record, ^repo_key, "issue-observed", :changed}
+    refute_received {:ticket_record, _repo_key, _issue_id, :changed}
+
+    assert TicketObservation.observe_delivery({:issue_removed, "issue-observed", "ACME-7"}, now: @now) == :removed
+    assert_received {:ticket_record, ^repo_key, "issue-observed", :changed}
+  end
+
   describe "the comparison with the webhook" do
     test "a read keeps its source on the record: the poll by default", %{repo_key: repo_key} do
       {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)

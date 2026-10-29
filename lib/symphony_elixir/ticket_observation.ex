@@ -11,7 +11,7 @@ defmodule SymphonyElixir.TicketObservation do
   nothing and a write never touches the record's holds, verdicts or other fields. A fact older than
   the record's `linear_updated_at` is dropped. The record keeps which read brought its last change
   (`observed_from`: the poll, a by-id read, the PR and CI watcher or a webhook delivery). Only
-  `SymphonyElixir.Dispatch.Candidates` reads the observed fields yet, and an observation records no
+  `SymphonyElixir.Dispatch.Candidates` reads the observed fields, and an observation records no
   ledger event.
 
   `observe_delivery/2` observes what a Linear webhook delivery says (`SymphonyElixir.Linear.Webhook.parse/1`)
@@ -23,6 +23,12 @@ defmodule SymphonyElixir.TicketObservation do
   at once (`SymphonyElixir.Orchestrator.request_refresh/3`), so dispatch reads the change from Linear
   within seconds instead of at the next timed poll; the orchestrator coalesces the requests as it
   does Symphony's own moves. A by-id read or a poll asks for none.
+
+  A write that changed a record, other than the poll's and a by-id read's, and a removal, are
+  announced as `{:ticket_record, repo_key, issue_id, :changed}`
+  (`SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records/0`): with `dispatch.source: record`
+  the orchestrator asks for a cycle of the ticket's repo at once. The poll's and the by-id reads'
+  changes are not announced, since the cycle that made them dispatches from them right after.
 
   Every read other than a webhook delivery is compared with the webhook: a read that changes a field
   the webhook carries (state, identifier, title, labels, priority, assignee, URL) of an existing
@@ -42,6 +48,7 @@ defmodule SymphonyElixir.TicketObservation do
   alias SymphonyElixir.{Config, Orchestrator, RunStore, TicketState}
   alias SymphonyElixir.Linear.{Issue, Webhook}
   alias SymphonyElixir.Routing.Resolver
+  alias SymphonyElixirWeb.ObservabilityPubSub
 
   @table __MODULE__
   @outcomes [:updated, :unchanged, :stale]
@@ -142,7 +149,7 @@ defmodule SymphonyElixir.TicketObservation do
             {:ok, :unchanged}
 
           {observed, :changed} ->
-            write_and_compare(stored, observed, source, now, opts)
+            stored |> write_and_compare(observed, source, now, opts) |> announce(repo_key, issue_id, source)
         end
       end
 
@@ -271,6 +278,16 @@ defmodule SymphonyElixir.TicketObservation do
   defp observed_delivery?({:issue, _action, %Issue{}, _updated_at}), do: true
   defp observed_delivery?({:issue_removed, issue_id, _identifier}), do: is_binary(issue_id)
   defp observed_delivery?(_parsed), do: false
+
+  # A changed record is announced (`ObservabilityPubSub.subscribe_ticket_records/0`), so dispatch from
+  # the record considers it at once; not for the poll's and the by-id reads, which the cycle that
+  # made them dispatches from right after.
+  defp announce({:ok, :updated} = written, repo_key, issue_id, source) when source not in [:poll, :by_id] do
+    :ok = ObservabilityPubSub.broadcast_ticket_record_changed(repo_key, issue_id)
+    written
+  end
+
+  defp announce(result, _repo_key, _issue_id, _source), do: result
 
   defp write_and_compare(stored, observed, source, now, opts) do
     with {:ok, :updated} = written <- write(stored, observed) do
@@ -425,6 +442,7 @@ defmodule SymphonyElixir.TicketObservation do
     with {:ok, stored} when not is_nil(stored) <- read(repo_key, issue_id),
          removed = TicketState.mark_removed(stored, now),
          :ok <- RunStore.update_ticket_state(repo_key, issue_id, Map.take(removed, [:removed_at, :updated_at])) do
+      :ok = ObservabilityPubSub.broadcast_ticket_record_changed(repo_key, issue_id)
       :removed
     else
       {:ok, nil} -> :no_record

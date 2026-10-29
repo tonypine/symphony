@@ -3,13 +3,14 @@ defmodule SymphonyElixir.Dispatch.Shadow do
   The dispatch shadow: before the dispatcher trusts the ticket records, every poll cycle compares
   the candidates the poll cache gives with the ones the records give
   (`SymphonyElixir.Dispatch.Candidates`) and keeps the differences here, so `/api/v1/state` shows
-  whether the two paths agree (`dispatch_shadow`). Dispatch keeps reading the poll cache.
+  whether the two paths agree (`dispatch_shadow`). Dispatch reads the side `dispatch.source` names
+  and the shadow computes the other, so the comparison keeps running whichever is in use.
 
-  `compare/2` is pure. The report lives in a public ETS table owned by this server, so recording
-  never waits on a process; without the server (some tests), recording is a no-op and the report is
-  empty. It keeps how many cycles were compared and how many had a difference since Symphony
-  started, the differences of the last cycles of the window (`dispatch.shadow_window`), and the
-  last ten differences that appeared, newest first. A difference that lasts over several cycles
+  `compare/2` and `compare/3` are pure. The report lives in a public ETS table owned by this
+  server, so recording never waits on a process; without the server (some tests), recording is a
+  no-op and the report is empty. It keeps how many cycles were compared and how many had a
+  difference since Symphony started, the differences of the last cycles of the window
+  (`dispatch.shadow_window`), and the last ten differences that appeared, newest first. A difference that lasts over several cycles
   appears, and is logged at warning level, once; once it clears, it appears again if it comes back.
   """
 
@@ -73,7 +74,17 @@ defmodule SymphonyElixir.Dispatch.Shadow do
   in both with a different state or priority. Sorted by repo, identifier and field.
   """
   @spec compare([Issue.t()], [Issue.t()]) :: [difference()]
-  def compare(poll_candidates, record_candidates) when is_list(poll_candidates) and is_list(record_candidates) do
+  def compare(poll_candidates, record_candidates), do: compare(poll_candidates, record_candidates, :poll)
+
+  @doc """
+  `compare/2` for the side dispatch uses (`in_use`, `dispatch.source`) and the other: `used` are the
+  candidates dispatch reads, `other` the ones only the shadow computes. The differences name the
+  poll and the record sides whichever is in use, so the report reads the same either way.
+  """
+  @spec compare([Issue.t()], [Issue.t()], :poll | :record) :: [difference()]
+  def compare(used, other, :record), do: compare(other, used, :poll)
+
+  def compare(poll_candidates, record_candidates, :poll) when is_list(poll_candidates) and is_list(record_candidates) do
     poll = Map.new(poll_candidates, &{&1.id, &1})
     record = Map.new(record_candidates, &{&1.id, &1})
 

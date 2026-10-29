@@ -80,7 +80,7 @@ defmodule SymphonyElixir.OrchestratorDispatchShadowTest do
     assert repo_key == ctx.repo_key
   end
 
-  test "a state a webhook changed is named until the next poll reads it, and dispatch stays on the cache with source record", ctx do
+  test "a state a webhook changed is named until the next poll reads it, and dispatch reads the record with source record", ctx do
     write_workflow_file!(Workflow.workflow_file_path())
     File.write!(Workflow.symphony_file_path(), File.read!(Workflow.symphony_file_path()) <> "dispatch:\n  source: record\n  shadow_window: 2\n")
     Cache.clear()
@@ -94,8 +94,8 @@ defmodule SymphonyElixir.OrchestratorDispatchShadowTest do
     {{buckets, state}, log} = with_log(fn -> cycle(state, ctx.repos, [moved], 50) end)
     assert log =~ "issue_identifier=ACME-1 side=both field=state poll=\"Todo\" record=\"In Progress\""
 
-    # `record` is accepted and dispatch still reads the cache.
-    assert [%{identifier: "ACME-1", state: "Todo"}] = buckets.dispatchable
+    # With `record` dispatch reads the record, and the report still names the poll and record sides.
+    assert [%{identifier: "ACME-1", state: "In Progress"}] = buckets.dispatchable
     assert %{window_differences: 1, recent: [%{identifier: "ACME-1", side: :both, field: :state}]} = Shadow.summary()
 
     # The next poll reads the move: the difference clears, and the two-cycle window forgets it.

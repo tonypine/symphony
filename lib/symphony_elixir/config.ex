@@ -602,7 +602,8 @@ defmodule SymphonyElixir.Config do
 
   @doc """
   Where the dispatcher reads its candidates from: symphony.yml's `dispatch.source`, read on each
-  call, else `poll` (the poll cache). `record` (the ticket records) changes nothing yet.
+  call, else `poll` (the poll cache). `record` dispatches from the ticket records
+  (`SymphonyElixir.Dispatch.Candidates`).
   """
   @spec dispatch_source() :: String.t()
   def dispatch_source, do: dispatch_setting(:source)

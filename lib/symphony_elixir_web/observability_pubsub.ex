@@ -11,6 +11,7 @@ defmodule SymphonyElixirWeb.ObservabilityPubSub do
   @dashboard_topic "observability:dashboard"
   @transcript_topic "observability:transcript"
   @ticket_events_topic "ticket_events"
+  @ticket_records_topic "ticket_records"
   @update_message :observability_updated
 
   @spec subscribe() :: :ok | {:error, term()}
@@ -90,6 +91,32 @@ defmodule SymphonyElixirWeb.ObservabilityPubSub do
 
   @spec ticket_events_topic() :: String.t()
   def ticket_events_topic, do: @ticket_events_topic
+
+  @doc """
+  Subscribes the caller to the changes of tickets' records (`SymphonyElixir.TicketObservation`):
+  each arrives as `{:ticket_record, repo_key, issue_id, :changed}`. With no PubSub running it
+  subscribes to nothing.
+  """
+  @spec subscribe_ticket_records() :: :ok | {:error, term()}
+  def subscribe_ticket_records do
+    if Process.whereis(@pubsub), do: Phoenix.PubSub.subscribe(@pubsub, @ticket_records_topic), else: :ok
+  end
+
+  @doc """
+  Tells the subscribers of `subscribe_ticket_records/0` that the record of `issue_id` in `repo_key`
+  changed, best-effort as `broadcast_ticket_event/1` is.
+  """
+  @spec broadcast_ticket_record_changed(String.t(), String.t()) :: :ok
+  def broadcast_ticket_record_changed(repo_key, issue_id) when is_binary(repo_key) and is_binary(issue_id) do
+    message = {:ticket_record, repo_key, issue_id, :changed}
+
+    with pid when is_pid(pid) <- Process.whereis(@pubsub),
+         {:error, reason} <- Phoenix.PubSub.broadcast(@pubsub, @ticket_records_topic, message) do
+      Logger.warning("failed to broadcast ticket record change: #{inspect(reason)}")
+    end
+
+    :ok
+  end
 
   defp repo_key(repo_key) when is_binary(repo_key) do
     case String.trim(repo_key) do

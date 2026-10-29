@@ -227,6 +227,7 @@ defmodule SymphonyElixir.Orchestrator do
     budget_daily_used = hydrate_budget_daily_used(budget_day_started_on)
     budget_exhausted = hydrate_budget_exhausted()
     :ok = ensure_snapshot_table()
+    _ = ObservabilityPubSub.subscribe_ticket_records()
 
     recent_runs = hydrate_recent_runs()
     completed_run_metadata = hydrate_completed_run_metadata(recent_runs, retry_attempts)
@@ -331,6 +332,16 @@ defmodule SymphonyElixir.Orchestrator do
     case force_repo_due(state, repo_key, now_ms) do
       {:coalesced, state} -> {:noreply, state}
       {{:poll_at, due_at_ms}, state} -> {:noreply, request_poll_by(state, due_at_ms, now_ms)}
+    end
+  end
+
+  # A ticket's record changed outside the poll cycle (`TicketObservation`): with dispatch from the
+  # record, its repo gets a cycle at once, as a move made there does, so a ticket the change frees is
+  # considered within seconds. With dispatch from the poll cache the change waits for the repo's poll.
+  defp handle_info_message({:ticket_record, repo_key, _issue_id, :changed}, state) do
+    case dispatch_source_in_use() do
+      :record -> handle_cast_message({:request_refresh, repo_key, :now}, state)
+      :poll -> {:noreply, state}
     end
   end
 
@@ -1752,16 +1763,18 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # The dispatch candidates of the cycle, from the side `dispatch.source` names, read on each cycle so
+  # a change applies at the next one: `poll` from each repo's poll cache, `record` from each repo's
+  # ticket records (`Dispatch.Candidates`), a store read with no Linear read. Either way the cycle
+  # works out the other side too and reports how the two differ (`Dispatch.Shadow`). A repo whose
+  # records can't be read gives no record candidates that cycle. Nothing dispatches until every
+  # repo's cache is warm, so after a start the first poll of each repo has refreshed its records.
   defp candidate_buckets_from_cache(%State{} = state, repos) when is_list(repos) do
-    repo_results =
-      Enum.map(repos, fn repo ->
-        repo_name = repo_name(repo)
-        cache_entry = Map.get(state.repo_poll_cache, repo_name, %{issues: []})
-        {repo_name, Map.get(cache_entry, :issues, [])}
-      end)
-
-    buckets = Client.aggregate_repo_results(repo_results)
-    shadow_dispatch(state, repos)
+    settings = Config.settings!()
+    in_use = dispatch_source_in_use()
+    sides = Enum.map(repos, &dispatch_sides(state, &1, settings, in_use))
+    buckets = Client.aggregate_repo_results(for side <- sides, do: {side.repo_key, dispatch_side(side, in_use)})
+    shadow_dispatch(sides, in_use, settings)
 
     if repo_poll_cache_warmed?(state, repos) do
       buckets
@@ -1770,37 +1783,65 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # Every poll cycle also works out each repo's candidates from its ticket records
-  # (`Dispatch.Candidates`) and reports how they differ from the poll cache's (`Dispatch.Shadow`),
-  # whatever `dispatch.source` says: dispatch keeps reading the cache. It reads the store and no
-  # Linear: `assignee: me` takes the viewer the poll already resolved. A repo whose cache is still
-  # cold, or whose records can't be read, is left out of the cycle.
-  defp shadow_dispatch(%State{} = state, repos) do
-    settings = Config.settings!()
+  defp dispatch_source_in_use do
+    case Config.dispatch_source() do
+      "record" -> :record
+      _poll -> :poll
+    end
+  end
+
+  # One repo's two sides: its poll cache, and its candidates from the records (nil when they can't
+  # be read). With the poll in use, the records of a repo whose cache is cold are not read: the
+  # shadow leaves it out of the cycle.
+  defp dispatch_sides(%State{} = state, repo, settings, in_use) do
+    repo_name = repo_name(repo)
+    warm? = repo_poll_cache_warmed?(state, repo_name)
+    cache = state.repo_poll_cache |> Map.get(repo_name, %{issues: []}) |> Map.get(:issues, [])
+    record = if warm? or in_use == :record, do: record_candidates(repo, settings)
+    %{repo_key: repo_name, warm?: warm?, cache: cache, record: record}
+  end
+
+  defp record_candidates(repo, settings) do
+    repo_name = repo_name(repo)
+
+    case RunStore.list_ticket_states(repo_name) do
+      records when is_list(records) ->
+        Candidates.from_records(repo_name, records, settings, shadow_route_opts(repo, settings)).candidates
+
+      _error ->
+        nil
+    end
+  end
+
+  defp dispatch_side(side, :poll), do: side.cache
+  defp dispatch_side(side, :record), do: side.record || []
+
+  # Every poll cycle compares, for each repo, the candidates the poll cache gives with the ones the
+  # records give and reports how they differ (`Dispatch.Shadow`), whichever side dispatch reads. It
+  # reads the store and no Linear: `assignee: me` takes the viewer the poll already resolved. A repo
+  # whose cache is still cold, or whose records can't be read, is left out of the cycle.
+  defp shadow_dispatch(sides, in_use, settings) do
     filter = {active_state_set(settings), terminal_state_set(settings)}
 
     compared =
-      for repo <- repos,
-          repo_poll_cache_warmed?(state, repo_name(repo)),
-          records = RunStore.list_ticket_states(repo_name(repo)),
-          is_list(records),
-          do: shadow_repo_differences(state, repo, records, settings, filter)
+      for %{warm?: true, record: record} = side <- sides,
+          is_list(record),
+          do: shadow_repo_differences(side, in_use, filter)
 
     if compared != [], do: Shadow.record(List.flatten(compared), Config.dispatch_shadow_window())
     :ok
   end
 
-  defp shadow_repo_differences(%State{} = state, repo, records, settings, {active_states, terminal_states}) do
-    repo_name = repo_name(repo)
-
+  defp shadow_repo_differences(side, in_use, {active_states, terminal_states}) do
     poll =
-      for %Issue{} = issue <- state.repo_poll_cache[repo_name].issues,
+      for %Issue{} = issue <- side.cache,
           candidate_issue?(issue, active_states, terminal_states),
-          do: %{issue | repo_key: repo_name}
+          do: %{issue | repo_key: side.repo_key}
 
-    opts = shadow_route_opts(repo, settings)
-    %{candidates: from_records} = Candidates.from_records(repo_name, records, settings, opts)
-    Shadow.compare(poll, from_records)
+    case in_use do
+      :poll -> Shadow.compare(poll, side.record, :poll)
+      :record -> Shadow.compare(side.record, poll, :record)
+    end
   end
 
   # The route's assignee, else the tracker's, as the poll filters by; `me` is the viewer's id.
