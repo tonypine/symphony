@@ -1516,8 +1516,8 @@ defmodule SymphonyElixir.Orchestrator do
       [] ->
         {:ok, issues}
 
-      unheld ->
-        with {:ok, read} <- fetch_observed_issues_by_ids(Enum.map(unheld, & &1.id)) do
+      unpolled ->
+        with {:ok, read} <- fetch_observed_issues_by_ids(Enum.map(unpolled, & &1.id)) do
           read_by_id = Map.new(read, &{&1.id, &1})
           {:ok, Enum.map(issues, &Map.get(read_by_id, &1.id, &1))}
         end
