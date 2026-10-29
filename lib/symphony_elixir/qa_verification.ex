@@ -926,7 +926,10 @@ defmodule SymphonyElixir.QaVerification do
       run_profile: Keyword.get(opts, :run_profile),
       journey: journey(issue, settings.proof_check),
       proofs: proofs,
-      unprovable: %{unselected: QaPolicy.unselected_playbooks(settings, playbooks), dev_server_ruled_out: SelfHeal.dev_server_ruled_out(settings)}
+      unprovable: %{
+        unselected: QaPolicy.unselected_playbooks(settings, playbooks),
+        dev_server_ruled_out: SelfHeal.dev_server_ruled_out(settings)
+      }
     }
   end
 

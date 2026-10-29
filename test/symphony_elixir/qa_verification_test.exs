@@ -1153,6 +1153,18 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert report =~ "- Start a run: the run never started"
     end
 
+    test "a failing step's own finding is kept when the agent wrote one" do
+      {workspace, _head} = git_workspace!()
+
+      result = %{needs_dev_server([step("Start a run", "fail"), step("Watch the run in the Mac app", "blocked")]) | findings: ["Start a run: the button is gone"]}
+      assert :ok = run_hub(workspace, result)
+
+      assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "- Start a run: the button is gone"
+      refute report =~ "- Start a run: what QA saw"
+    end
+
     test "with nothing provable left the ticket asks a person at once, recommending a merge without a QA result" do
       {workspace, head} = git_workspace!()
 
