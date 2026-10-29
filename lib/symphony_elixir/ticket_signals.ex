@@ -346,7 +346,8 @@ defmodule SymphonyElixir.TicketSignals do
   end
 
   # Only the phase and when it changed are written, so nothing another writer put on the record is lost.
-  defp update_phase(moved, repo_key, issue_id), do: RunStore.update_ticket_state(repo_key, issue_id, Map.take(moved, [:phase, :updated_at]))
+  defp update_phase(moved, repo_key, issue_id),
+    do: RunStore.update_ticket_state(repo_key, issue_id, Map.take(moved, [:phase, :phase_at, :updated_at]))
 
   defp log_error({:error, reason}, action) do
     Logger.warning("Failed to #{action}: #{inspect(reason)}")
