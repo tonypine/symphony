@@ -138,8 +138,7 @@ defmodule SymphonyElixir.TicketPullRequest.LookupTest do
       result = {@repo_key, {:ok, [issue("issue-1", "ACME-1")]}}
 
       assert {:ok, pid} = Lookup.start(repo(), result)
-      ref = Process.monitor(pid)
-      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 5_000
+      assert_sweep_ends(pid)
 
       assert %{pr_url: @auto_pr, source: "github_lookup"} = TicketPullRequest.get(@repo_key, "issue-1")
     end
@@ -150,13 +149,20 @@ defmodule SymphonyElixir.TicketPullRequest.LookupTest do
 
       # Every ticket has an open record: the sweep makes no GitHub request.
       assert {:ok, pid} = Lookup.start(repo(), {@repo_key, {:ok, [issue("issue-1", "ACME-1")]}})
-      ref = Process.monitor(pid)
-      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 5_000
+      assert_sweep_ends(pid)
 
       assert :ok = Lookup.start(nil, :not_due)
       assert :ok = Lookup.start(repo(), {@repo_key, {:error, :rate_limited}})
       assert :ok = Lookup.start(repo(), {@repo_key, {:ok, []}}, :no_such_task_supervisor)
     end
+  end
+
+  # Waits for a sweep started by `Lookup.start/3` to end. A sweep with nothing to wait on can exit
+  # before `Process.monitor/1` runs, and the DOWN then carries `:noproc`; a crash carries its
+  # `{exception, stacktrace}` and still fails.
+  defp assert_sweep_ends(pid) do
+    ref = Process.monitor(pid)
+    assert_receive {:DOWN, ^ref, :process, ^pid, reason} when reason in [:normal, :noproc], 5_000
   end
 
   defp repo, do: %SystemSchema.Repo{name: @repo_key, workspace: %{github: @slug}}
