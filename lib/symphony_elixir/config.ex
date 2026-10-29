@@ -601,6 +601,20 @@ defmodule SymphonyElixir.Config do
   def prompt_brief_max_tokens, do: ledger_setting(:prompt_brief_max_tokens)
 
   @doc """
+  Where the dispatcher reads its candidates from: symphony.yml's `dispatch.source`, read on each
+  call, else `poll` (the poll cache). `record` (the ticket records) changes nothing yet.
+  """
+  @spec dispatch_source() :: String.t()
+  def dispatch_source, do: dispatch_setting(:source)
+
+  @doc """
+  How many poll cycles the dispatch shadow report's window covers (`SymphonyElixir.Dispatch.Shadow`):
+  symphony.yml's `dispatch.shadow_window`, read on each call, else 20.
+  """
+  @spec dispatch_shadow_window() :: pos_integer()
+  def dispatch_shadow_window, do: dispatch_setting(:shadow_window)
+
+  @doc """
   symphony.yml's `linear.webhooks`: whether Linear's workspace webhook is on, and its signing secret
   with a `$ENV` reference resolved. The defaults (off, no secret) while the config can't be read.
   """
@@ -624,6 +638,16 @@ defmodule SymphonyElixir.Config do
       end
 
     Map.fetch!(ledger, field)
+  end
+
+  defp dispatch_setting(field) do
+    dispatch =
+      case system() do
+        {:ok, system_config} -> system_config.dispatch
+        {:error, _reason} -> %Schema.Dispatch{}
+      end
+
+    Map.fetch!(dispatch, field)
   end
 
   # A symphony.yml setting with no default of its own: unset, or while symphony.yml can't be
