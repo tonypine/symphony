@@ -1802,7 +1802,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # One repo's two sides: its poll cache with when it was read, and its candidates from the records
-  # (nil when they can't be read) with when each record's phase was written. With the poll in use,
+  # (nil when they can't be read) with when each record last changed what makes it a candidate: its
+  # phase, or its removal a webhook delivered (`record_written_at/1`). With the poll in use,
   # the records of a repo whose cache is cold are not read: the shadow leaves it out of the cycle.
   defp dispatch_sides(%State{} = state, repo, settings, in_use) do
     repo_name = repo_name(repo)
@@ -1826,11 +1827,18 @@ defmodule SymphonyElixir.Orchestrator do
     case RunStore.list_ticket_states(repo_name) do
       records when is_list(records) ->
         candidates = Candidates.from_records(repo_name, records, settings, shadow_route_opts(repo, settings)).candidates
-        {candidates, Map.new(records, &{Map.get(&1, :issue_id), Map.get(&1, :phase_at)})}
+        {candidates, Map.new(records, &{Map.get(&1, :issue_id), record_written_at(&1)})}
 
       _error ->
         {nil, %{}}
     end
+  end
+
+  # A record a webhook marked removed leaves the candidates without a phase write, so its removal
+  # counts as the write when it is the later of the two.
+  defp record_written_at(record) do
+    for(key <- [:phase_at, :removed_at], %DateTime{} = at <- [Map.get(record, key)], do: at)
+    |> Enum.max(DateTime, fn -> nil end)
   end
 
   @record_issue_fields [
