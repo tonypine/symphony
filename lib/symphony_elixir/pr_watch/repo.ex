@@ -80,6 +80,17 @@ defmodule SymphonyElixir.PrWatch.Repo do
   is while the repository's `gh webhook forward` relay keeps stopping (`SymphonyElixir.GitHub.Relay`
   not `stable`, read once a tick). The watcher of the first repository also reads the app
   repository's newest release on each timed tick (`SymphonyElixir.PrWatch.Release.poll/1`).
+
+  With `dispatch.source: record`, a change of a ticket's record that a decision reads (its phase,
+  blockers or holds, announced by `SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records/0`)
+  makes the watcher re-decide that ticket at once, so a move Symphony or the Director made, or an
+  answer that cleared a hold, is decided on without waiting for the next tick. The re-decision is a
+  tick of that ticket rebuilt from its record, on the last read of its PR the watcher holds: no
+  GitHub read and no Linear read, the open PRs and the landing order as the last tick left them, and
+  the record keeps when and how that read arrived. A ticket whose PR the watcher holds no read of
+  (it just started, the PR changed, or a delivery made the read stale) has that one PR read, as a
+  confirm read does. Changes that arrive while a re-decision is queued join it, so a burst is one
+  re-decision. A change of any other field (a title, a priority) re-decides nothing.
   """
 
   use GenServer
@@ -108,6 +119,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   alias SymphonyElixir.Linear.{Client, Issue}
   alias SymphonyElixir.PrDecision.{Action, Apply, Facts}
   alias SymphonyElixir.PrWatch.{Attempts, Competitors, Fetch, Health, Ingest, Release, SilentWait}
+  alias SymphonyElixirWeb.ObservabilityPubSub
 
   @registry SymphonyElixir.Repo.Registry
   @in_progress_state "In Progress"
@@ -123,6 +135,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # and one GitHub hasn't computed yet is read again, up to 5 times.
   @reread_gap_ms 1_000
   @max_rereads 5
+  # The record's fields a decision reads: a change of one re-decides the ticket.
+  @decided_fields [:phase, :blockers, :holds]
 
   @typedoc "What one tick did."
   @type summary :: %{
@@ -139,7 +153,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
   (`fn message, delay_ms -> ref`, in place of `Process.send_after/3` for the confirm reads),
   `:interval_ms`, `:relay_status` (`fn repo_key -> relay status or nil`, in place of
   `SymphonyElixir.GitHub.RelaySupervisor.status/2`), `app_release: true` to read the app repository's newest release on each timed
-  tick, and `auto: false` to tick only on `poll/2`.
+  tick, `auto: false` to tick only on `poll/2`, and `follow_records: false` to re-decide nothing on a
+  record's change.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -207,9 +222,12 @@ defmodule SymphonyElixir.PrWatch.Repo do
       rereads: [],
       reread_tries: %{},
       reread_timer: nil,
-      relay: nil
+      relay: nil,
+      held: %{},
+      redecide: MapSet.new()
     }
 
+    if Keyword.get(opts, :follow_records, true), do: ObservabilityPubSub.subscribe_ticket_records()
     {:ok, schedule(state, 0)}
   end
 
@@ -249,6 +267,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
     confirmed = Enum.map(confirmed, &patch!(&1, delivery, now, state))
     pushed = Enum.map(pushed, &patch!(&1, {:push, base}, now, state))
+    # A delivery makes the read the watcher holds stale: a re-decision before the confirm read reads
+    # the PR again.
+    state = %{state | held: Map.drop(state.held, confirmed ++ pushed)}
     {:noreply, state |> confirm(confirmed) |> reread(pushed)}
   end
 
@@ -279,6 +300,25 @@ defmodule SymphonyElixir.PrWatch.Repo do
   def handle_info(:tick, state) do
     {reply, state} = tick(state)
     {:noreply, schedule(%{state | timer: nil}, next_tick_ms(reply, state))}
+  end
+
+  def handle_info({:ticket_record, repo_key, issue_id, :changed, fields}, %{repo_key: repo_key} = state) do
+    if Config.dispatch_source() == "record" and Enum.any?(fields, &(&1 in @decided_fields)),
+      do: {:noreply, redecide(state, issue_id)},
+      else: {:noreply, state}
+  end
+
+  def handle_info({:ticket_record, _repo_key, _issue_id, :changed, _fields}, state), do: {:noreply, state}
+
+  def handle_info(:redecide, state) do
+    {_reply, state} = tick(%{state | redecide: MapSet.new()}, {:only, state.redecide}, :record)
+    {:noreply, state}
+  end
+
+  # One re-decision in flight: a change that arrives while one is queued joins it.
+  defp redecide(state, issue_id) do
+    if MapSet.size(state.redecide) == 0, do: send(self(), :redecide)
+    %{state | redecide: MapSet.put(state.redecide, issue_id)}
   end
 
   # The watched records a delivery names, as `{issue_id, issue_identifier, watch}`.
@@ -377,8 +417,10 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp next_tick_ms({:error, _reason}, state), do: backoff_ms(state)
 
   # A tick reads every watched PR (`:all`, the timed tick) or only those a delivery named
-  # (`{:only, issue_ids}`, a confirm read), which keep the landing order of the last timed tick.
-  defp tick(state, scope \\ :all) do
+  # (`{:only, issue_ids}`, a confirm read), which keep the landing order of the last timed tick. A
+  # re-decision (`:record`) decides on the reads it holds, reading only a PR it holds none of, and
+  # never widens.
+  defp tick(state, scope \\ :all, mode \\ :read) do
     now = now(state)
     state = %{state | relay: relay_status(state)}
 
@@ -388,16 +430,17 @@ defmodule SymphonyElixir.PrWatch.Repo do
       running = running_issue_ids(state)
       reviews = review_records(state)
       watched = Enum.flat_map(issues, &watched(&1, settings, {records, reviews}, running, state))
-      {reads, state} = read_all(in_scope(watched, scope), state, now)
-      {reads, state, decided} = widen(scope, watched, reads, state, now)
+      {reads, state} = reads(mode, in_scope(watched, scope), state, now, seen_source(scope))
+      {reads, state, decided} = widen(scope, watched, reads, state, now, mode)
       pulls = if decided == :all, do: open_pulls(watched, reads, state), else: :stale
       {landings, members} = landing(watched, reads, pulls, settings, now)
       race = race(watched, reads, pulls, members, now)
       watched = Enum.map(watched, &settle(&1, pulls, Map.get(landings, &1.issue.id), race, state, settings))
-      seen = {if(scope == :all, do: :poll, else: :webhook), now}
+      seen = {if(mode == :record, do: :record, else: seen_source(scope)), now}
       {watches, health} = write_all(in_scope(watched, decided), {reads, landings, pulls}, race, seen, state, settings)
       state = put_health(state, fn _health -> Health.learn_url(health, repository_url(watched)) end)
       clear_left(records, watched, state)
+      state = if scope == :all, do: %{state | held: Map.take(state.held, Enum.map(watched, & &1.issue.id))}, else: state
       if scope == :all and Keyword.get(state.opts, :app_release, false), do: poll_release(state, now)
       summarize(scope, watched, reads, settings, report_red_bases(watches, state), now)
     else
@@ -411,17 +454,41 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # base that last waited on a PR ahead of it, reads the other watched PRs and the repository's open
   # PRs too, and decides on all of them as a timed tick does: the landing order and the race need
   # every PR, so a delivery reaches the same decision a poll would, and a PR whose leader just landed
-  # is updated on its own reread. Returns the reads and what the tick decides on.
-  defp widen(:all, _watched, reads, state, _now), do: {reads, state, :all}
+  # is updated on its own reread. Returns the reads and what the tick decides on. A re-decision
+  # never widens: it keeps the landing order and the race as the last tick left them.
+  defp widen(scope, _watched, reads, state, _now, :record), do: {reads, state, scope}
+  defp widen(:all, _watched, reads, state, _now, :read), do: {reads, state, :all}
 
-  defp widen(scope, watched, reads, state, now) do
+  defp widen(scope, watched, reads, state, now, :read) do
     if Enum.any?(in_scope(watched, scope), &(competes?(&1, reads) or behind_a_leader?(&1, reads))) do
-      {rest, state} = watched |> Enum.reject(&Map.has_key?(reads, &1.issue.id)) |> read_all(state, now)
+      {rest, state} = watched |> Enum.reject(&Map.has_key?(reads, &1.issue.id)) |> read_all(state, now, :webhook)
       {Map.merge(reads, rest), state, :all}
     else
       {reads, state, scope}
     end
   end
+
+  defp seen_source(:all), do: :poll
+  defp seen_source(_only), do: :webhook
+
+  defp reads(:read, watched, state, now, source), do: read_all(watched, state, now, source)
+
+  # The reads the watcher holds, and a read of each PR it holds none of.
+  defp reads(:record, watched, state, now, source) do
+    {held, unread} = Enum.split_with(watched, &held_read(state, &1))
+    {reads, state} = read_all(unread, state, now, source)
+    {Enum.reduce(held, reads, &Map.put(&2, &1.issue.id, {:ok, held_read(state, &1).read})), state}
+  end
+
+  # The last read of the ticket's PR, while it is still the PR the ticket follows.
+  defp held_read(state, %{issue: %{id: issue_id}, pr_url: pr_url}) when is_binary(pr_url) do
+    case Map.get(state.held, issue_id) do
+      %{pr_url: ^pr_url} = held -> held
+      _none -> nil
+    end
+  end
+
+  defp held_read(_state, _entry), do: nil
 
   defp in_scope(watched, :all), do: watched
   defp in_scope(watched, {:only, issue_ids}), do: Enum.filter(watched, &MapSet.member?(issue_ids, &1.issue.id))
@@ -550,8 +617,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp finished_url(_pr, _record), do: nil
 
   # Reads each watched PR once, in order, until GitHub's rate limit stops the tick: the PRs left
-  # unread are marked with it.
-  defp read_all(watched, state, now) do
+  # unread are marked with it. The watcher holds each read that succeeded, for a re-decision.
+  defp read_all(watched, state, now, source) do
     cache = Map.new([:required, :workflows, :comparisons], &{&1, fresh(Map.fetch!(state, &1), now)})
     fetch = Keyword.get(state.opts, :fetch, Fetch)
 
@@ -564,7 +631,15 @@ defmodule SymphonyElixir.PrWatch.Repo do
           read_unless_limited(fetch, issue, pr_url, reads, cache, state, now)
       end)
 
-    {reads, Map.merge(state, cache)}
+    held =
+      Enum.reduce(watched, state.held, fn %{issue: %{id: issue_id}, pr_url: pr_url}, held ->
+        case Map.get(reads, issue_id) do
+          {:ok, read} -> Map.put(held, issue_id, %{pr_url: pr_url, read: read, read_at: now, source: source})
+          _unread -> Map.delete(held, issue_id)
+        end
+      end)
+
+    {reads, state |> Map.merge(cache) |> Map.put(:held, held)}
   end
 
   # What a base branch was read to have (its required checks, whether it has workflow files), and how
@@ -855,18 +930,19 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp write(entry, read, {landing, ahead, competing}, {source, now}, state, settings) do
     ticket = %{entry.ticket | ahead: ahead, competing: competing}
     previous = previous_watch(entry)
+    {source, read_at} = arrived(source, entry, previous, state, now)
 
     watch =
       case read do
         {:ok, read} ->
           entry
           |> decided(ticket, read, previous, now, state, settings)
-          |> Map.merge(%{pr_url: entry.pr_url, head_sha: read.head_sha, read_at: now, github: :ok, rate_limit: read.rate_limit})
+          |> Map.merge(%{pr_url: entry.pr_url, head_sha: read.head_sha, read_at: read_at, github: :ok, rate_limit: read.rate_limit})
 
         nil ->
           entry
           |> decided(ticket, nil, previous, now, state, settings)
-          |> Map.merge(%{pr_url: nil, head_sha: nil, read_at: now, github: :ok, rate_limit: nil})
+          |> Map.merge(%{pr_url: nil, head_sha: nil, read_at: read_at, github: :ok, rate_limit: nil})
 
         {:rate_limited, _reset_at} = limited ->
           rate_limited(entry, ticket, previous, limited, now)
@@ -900,6 +976,16 @@ defmodule SymphonyElixir.PrWatch.Repo do
     end
   end
 
+  # How and when the facts arrived: a re-decision keeps those of the read it decided on.
+  defp arrived(:record, entry, previous, state, now) do
+    case held_read(state, entry) do
+      %{source: source, read_at: read_at} -> {source, read_at}
+      nil -> {carried(previous, :source, :poll), now}
+    end
+  end
+
+  defp arrived(source, _entry, _previous, _state, now), do: {source, now}
+
   defp base_ref({:ok, %{base_ref: base}}, _previous), do: base
   defp base_ref(_read, previous), do: carried(previous, :base_ref, nil)
 
@@ -907,6 +993,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # that is now red or green), and, on a timed tick with webhooks on, a change of the PR no delivery
   # reported.
   defp observe(health, {:error, _reason}, _watches, _seen, _state, _settings), do: health
+  defp observe(health, _read, _watches, {:record, _now}, _state, _settings), do: health
 
   defp observe(health, _read, {entry, previous, %{github: :ok} = watch}, {source, now}, state, settings) do
     health = if previous && Health.new_result?(previous.read_ci || previous.facts.ci, watch.facts.ci), do: Health.result(health, source), else: health
