@@ -10,10 +10,12 @@ defmodule SymphonyElixir.Dispatch.Candidates do
   counted under the reason it was left out, so the counts explain each ticket missing from the
   candidates.
 
-  The rebuilt issue carries the record's priority, labels and open blockers, so the dispatch gates
-  (`Issue.blocked?/2`, the priority filter, a forced ticket's label) read it as they read a polled
-  issue: the priority filter stays a gate because a forced ticket and a retry waiting for a slot
-  bypass it. The record keeps no sub-issues, parent or creation time, so the rebuilt issue has none.
+  The rebuilt issue carries the record's priority, labels, open blockers and sub-issues (each with its
+  id and state), parent and creation time, so the dispatch gates (`Issue.blocked?/2`, a plan parent's
+  wait on its sub-tickets, the priority filter, a forced ticket's label), the epic lanes
+  (`SymphonyElixir.EpicLanes.plan/4`) and the dispatch order (priority, then age) read it as they read
+  a polled issue: the priority filter stays a gate because a forced ticket and a retry waiting for a
+  slot bypass it.
 
   Everything here is pure: no store read, no Linear read, no process. Nothing calls it yet.
   """
@@ -79,9 +81,10 @@ defmodule SymphonyElixir.Dispatch.Candidates do
 
   @doc """
   The `SymphonyElixir.Linear.Issue` a ticket record describes: its id, identifier, title, state (the
-  record's `phase`), labels, priority, assignee, URL, repo and Linear's `updatedAt`. The record keeps
-  only the blockers that were open when it was observed, by identifier, so each becomes a blocker with
-  no known state, which `Issue.blocked?/2` counts as open.
+  record's `phase`), labels, priority, assignee, blockers, sub-issues, parent, URL, repo, creation time
+  and Linear's `updatedAt`. The record keeps only the blockers that were open when it was observed; one
+  a record read before blockers kept their state has no known state, which `Issue.blocked?/2` counts
+  as open.
   """
   @spec issue_from_record(map()) :: Issue.t()
   def issue_from_record(record) when is_map(record) do
@@ -95,9 +98,12 @@ defmodule SymphonyElixir.Dispatch.Candidates do
       labels: record.labels,
       priority: record.priority,
       assignee_id: record.assignee,
-      blocked_by: Enum.map(record.blockers, &%{id: nil, identifier: &1, state: nil}),
+      blocked_by: record.blockers,
+      sub_issues: record.sub_issues,
+      parent: record.parent,
       url: record.url,
       repo_key: record.repo_key,
+      created_at: record.created_at,
       updated_at: record.linear_updated_at
     }
   end
