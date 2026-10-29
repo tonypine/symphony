@@ -32,7 +32,9 @@ defmodule SymphonyElixir.TransitionGuard do
   fails loud while one still holds a ticket (`SymphonyElixir.RetiredStates`).
   """
 
-  alias SymphonyElixir.{PlanReview, SubIssueWait, Tracker}
+  require Logger
+
+  alias SymphonyElixir.{PlanReview, RunStore, SubIssueWait, TicketSignals, Tracker}
 
   @in_progress_state "In Progress"
   @merging_state "Merging"
@@ -253,6 +255,12 @@ defmodule SymphonyElixir.TransitionGuard do
   A move into `Merging` asks the PR and CI watcher to read now (`opts[:on_merging]` overrides it), so
   a PR that is already green merges at once instead of on the next timer, by when its head may be
   behind.
+
+  The record is written first: with `ctx.repo_key`, the ticket's record takes the target as its
+  phase (`SymphonyElixir.TicketSignals.record_phase/3`) before Linear is asked, so Symphony's record
+  never lags Symphony's own move. Linear is its projection: a write Linear refuses leaves the record
+  moved, is logged with the ticket's identifier (`ctx.issue_identifier`, else the record's) and the
+  target, and comes back as the error it was. The caller records the move's signal after.
   """
   @spec perform(String.t(), signal(), context(), keyword()) :: :ok | {:error, term()}
   def perform(issue_id, signal, ctx \\ %{}, opts \\ []) do
@@ -266,18 +274,38 @@ defmodule SymphonyElixir.TransitionGuard do
         {:error, {:retired_state, target}}
 
       true ->
-        update_state(issue_id, target, opts)
+        :ok = TicketSignals.record_phase(Map.get(ctx, :repo_key), issue_id, target)
+        update_state(issue_id, target, ctx, opts)
     end
   end
 
-  defp update_state(issue_id, target, opts) do
+  defp update_state(issue_id, target, ctx, opts) do
     case Keyword.get(opts, :tracker, Tracker).update_issue_state(issue_id, target) do
       :ok when target == @merging_state ->
         Keyword.get(opts, :on_merging, &SymphonyElixir.PrWatch.poll_now/0).()
         :ok
 
-      result ->
-        result
+      :ok ->
+        :ok
+
+      {:error, reason} = error ->
+        Logger.warning(
+          "Linear refused the move; the record keeps it issue_id=#{issue_id} issue_identifier=#{identifier(issue_id, ctx)} " <>
+            "to=#{target} reason=#{inspect(reason)}"
+        )
+
+        error
+    end
+  end
+
+  defp identifier(issue_id, ctx) do
+    with nil <- Map.get(ctx, :issue_identifier),
+         repo_key when is_binary(repo_key) <- Map.get(ctx, :repo_key),
+         %{issue_identifier: identifier} <- RunStore.get_ticket_state(repo_key, issue_id) do
+      identifier
+    else
+      identifier when is_binary(identifier) -> identifier
+      _unknown -> nil
     end
   end
 

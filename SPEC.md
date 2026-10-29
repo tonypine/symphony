@@ -387,6 +387,12 @@ nothing, and it writes only those fields, never the record's holds, verdicts or 
   a missing `updatedAt` never overwrite the record's value.
 - The observation records no ledger event: a ticket's `phase.entered` stays with Symphony's own
   moves.
+- Symphony's own moves and the Director's write the record first: the move's target becomes the
+  record's `phase` (and nothing else; `linear_updated_at` is left, so a later read still wins on the
+  facts it owns) before Linear is asked, with the `phase.entered` event the move records. Linear is
+  the record's projection: a Linear write that fails leaves the record moved and is logged with the
+  ticket's identifier and the target. A Director move writes the record before its comment, its
+  first Linear write, and `undo` puts the record back as it puts Linear back.
 - A record written before these fields existed reads with them at their defaults (`nil`, or an empty
   list for `labels` and `blockers`); it needs no migration.
 

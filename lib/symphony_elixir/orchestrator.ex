@@ -3597,7 +3597,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp park_breakdown_parent(%Issue{id: issue_id} = issue, waiting_state, settings) do
     issue_id |> RunStore.put_own_state_move(DateTime.utc_now()) |> log_run_store_error("record breakdown parent move")
 
-    case TransitionGuard.perform(issue_id, :plan_approve, %{settings: settings}) do
+    case TransitionGuard.perform(issue_id, :plan_approve, %{settings: settings, repo_key: issue_repo_key(issue)}) do
       :ok ->
         record_ticket_signal(issue, "plan verdict", %{outcome: "approve", to: waiting_state})
         Logger.info("Moved breakdown parent to #{waiting_state} while its sub-issues are open: #{issue_context(issue)}")

@@ -4,9 +4,11 @@ defmodule SymphonyElixir.DirectorMoves do
   (`POST /api/v1/control/<move>`, decision DD4 in `docs/design/director-app-screens.md`).
 
   Each move reads the ticket, refuses one the workflow doesn't allow from its current state
-  (`{:error, {:conflict, message}}`, a 409), posts its comment when it has one, makes the Linear
-  move, writes a `director_move` audit record and a `person.action` event on the ticket (a Decide's
-  event is its `decision.recorded`), and answers with the states it moved between:
+  (`{:error, {:conflict, message}}`, a 409), writes its target as the phase of the ticket's record
+  (`SymphonyElixir.TicketSignals.record_phase/3`) before Linear's first write, so the record never
+  lags the Director's move, posts its comment when it has one, makes the Linear move, writes a
+  `director_move` audit record and a `person.action` event on the ticket (a Decide's event is its
+  `decision.recorded`), and answers with the states it moved between:
 
   - `:approve_plan`: a plan (label `plan` or `breakdown`) in `Plan Review` moves to the waiting
     state (`Waiting on sub-tickets`). It is a person's move, so Symphony promotes the plan's
@@ -430,7 +432,7 @@ defmodule SymphonyElixir.DirectorMoves do
   defp revise(move, issue, comment, opts) do
     store = Keyword.get(opts, :store, RunStore)
     _ = log_own_move_error(store.put_own_state_move(issue.id, DateTime.utc_now()), issue)
-    ctx = %{repo_key: issue.repo_key}
+    ctx = %{repo_key: issue.repo_key, issue_identifier: issue.identifier}
     to_state = TransitionGuard.target(:plan_revise, ctx)
 
     case TransitionGuard.perform(issue.id, :plan_revise, ctx) do
@@ -691,20 +693,38 @@ defmodule SymphonyElixir.DirectorMoves do
     )
   end
 
+  # The record takes the move before Linear's first write, the comment: Linear is its projection, so
+  # a write Linear refuses leaves the record moved and is logged.
   defp comment_then_move(move, issue, comment, to_state, opts) do
-    with :ok <- maybe_post_comment(issue, comment, opts) do
-      case update_state(issue, to_state, move) do
-        :ok ->
-          Agent.update(server(opts), &Map.delete(&1, {:posted, issue.id}))
-          {:ok, comment}
+    :ok = TicketSignals.record_phase(issue.repo_key, issue.id, to_state)
 
-        {:error, {:linear, reason}} when is_binary(comment) ->
-          commented_without_move(move, issue, comment, to_state, reason, opts)
-
-        error ->
-          error
-      end
+    case maybe_post_comment(issue, comment, opts) do
+      :ok -> move_after_comment(move, issue, comment, to_state, opts)
+      error -> projection_refused(issue, to_state, error)
     end
+  end
+
+  defp move_after_comment(move, issue, comment, to_state, opts) do
+    case update_state(issue, to_state, move) do
+      :ok ->
+        Agent.update(server(opts), &Map.delete(&1, {:posted, issue.id}))
+        {:ok, comment}
+
+      {:error, {:linear, reason}} when is_binary(comment) ->
+        commented_without_move(move, issue, comment, to_state, reason, opts)
+
+      error ->
+        error
+    end
+  end
+
+  defp projection_refused(issue, to_state, {:error, {:linear, reason}} = error) do
+    Logger.warning(
+      "Linear refused the Director move's comment; the record keeps the move issue_id=#{issue.id} " <>
+        "issue_identifier=#{issue.identifier} to=#{to_state} reason=#{inspect(reason)}"
+    )
+
+    error
   end
 
   # A comment posted on this ticket, in this state, by a move whose state change Linear refused
@@ -747,7 +767,7 @@ defmodule SymphonyElixir.DirectorMoves do
   # rather than a requested one: the ledger then names the move `restart`, as the design doc's
   # signal vocabulary does.
   defp update_state(issue, to_state, :restart) do
-    case TransitionGuard.perform(issue.id, :restart, %{repo_key: Map.get(issue, :repo_key), settings: Config.settings!()}) do
+    case TransitionGuard.perform(issue.id, :restart, %{repo_key: issue.repo_key, issue_identifier: issue.identifier, settings: Config.settings!()}) do
       :ok ->
         record_move_signal(issue, :restart, to_state)
         :ok
@@ -758,7 +778,7 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   defp update_state(issue, to_state, move) do
-    case TransitionGuard.perform(issue.id, :director_move, %{target: to_state, repo_key: Map.get(issue, :repo_key)}) do
+    case TransitionGuard.perform(issue.id, :director_move, %{target: to_state, repo_key: issue.repo_key, issue_identifier: issue.identifier}) do
       :ok ->
         record_move_signal(issue, move, to_state)
         :ok

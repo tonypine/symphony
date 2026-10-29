@@ -14,12 +14,15 @@ defmodule SymphonyElixir.TicketSignals do
   `decision.recorded`, so each fact is one event.
 
   A signal that maps to `phase.entered` is a move, so it also asks the orchestrator for a cycle on
-  the ticket's repo at once (`SymphonyElixir.Orchestrator.request_refresh/2`).
+  the ticket's repo at once (`SymphonyElixir.Orchestrator.request_refresh/2`), and writes the phase it
+  entered on the ticket's record before its event (`record_phase/3`), the one place a move writes the
+  record's phase. `SymphonyElixir.TransitionGuard` and `SymphonyElixir.DirectorMoves` call it before
+  Linear is asked, so the record holds a move before Linear's board shows it.
   """
 
   require Logger
 
-  alias SymphonyElixir.{Orchestrator, RunStore, TicketEvents}
+  alias SymphonyElixir.{Orchestrator, RunStore, TicketEvents, TicketState}
 
   @phase_signals ["claim", "ci fix return", "review verdict", "merge settled", "restart", "deprioritized"]
   @mirrored_signals ["decision requested", "unblocked", "dispatch_loop", "ci_wait"]
@@ -63,6 +66,31 @@ defmodule SymphonyElixir.TicketSignals do
   end
 
   def record(_repo_key, _issue_id, _name, _details), do: :ok
+
+  @doc """
+  Writes `phase` as the record's phase (`TicketState.put_phase/3`), creating the record when none
+  exists, and leaves every other field as it is: `linear_updated_at` stays, so a later read of Linear
+  still wins on the facts it owns. A record already in `phase` is left alone. Best-effort like every
+  recording here: a store failure is logged and swallowed. No-ops without a repo key, an issue id or
+  a phase.
+  """
+  @spec record_phase(String.t() | nil, String.t() | nil, String.t() | nil) :: :ok
+  def record_phase(repo_key, issue_id, phase) when is_binary(repo_key) and is_binary(issue_id) and is_binary(phase) do
+    moved =
+      case RunStore.get_ticket_state(repo_key, issue_id) do
+        {:error, _reason} = error -> error
+        %{phase: ^phase} -> :ok
+        nil -> repo_key |> TicketState.new(issue_id) |> TicketState.put_phase(phase) |> RunStore.put_ticket_state()
+        record -> record |> TicketState.put_phase(phase) |> update_phase(repo_key, issue_id)
+      end
+
+    case moved do
+      :ok -> :ok
+      error -> log_error(error, "write the record's phase #{phase} on issue_id=#{issue_id}")
+    end
+  end
+
+  def record_phase(_repo_key, _issue_id, _phase), do: :ok
 
   @doc """
   Records a verdict of `kind` with `outcome`, bound to the `head_sha` it judged and carrying
@@ -247,6 +275,7 @@ defmodule SymphonyElixir.TicketSignals do
   # A move changes what dispatch may start (a merge settled unblocks the next ticket of a chain), so
   # the ticket's repo is polled at once instead of at its next timed poll.
   defp record_mapped(repo_key, issue_id, {"phase.entered" = type, payload, opts}) do
+    :ok = record_phase(repo_key, issue_id, payload.to)
     :ok = record_event(repo_key, issue_id, type, payload, opts)
     Orchestrator.request_refresh(repo_key, due: :now)
   end
@@ -281,6 +310,9 @@ defmodule SymphonyElixir.TicketSignals do
   end
 
   defp normalize(_text), do: nil
+
+  # Only the phase and when it changed are written, so nothing another writer put on the record is lost.
+  defp update_phase(moved, repo_key, issue_id), do: RunStore.update_ticket_state(repo_key, issue_id, Map.take(moved, [:phase, :updated_at]))
 
   defp log_error({:error, reason}, action) do
     Logger.warning("Failed to #{action}: #{inspect(reason)}")

@@ -1090,6 +1090,78 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
   end
 
+  describe "the record moves first" do
+    setup do
+      RunStore.delete_ticket_state("repo-director", "plan")
+      RunStore.delete_ticket_state("repo-director", "pr")
+      :ok
+    end
+
+    test "an approved plan's record is in the waiting state at once, and stays there when Linear refuses the move", %{opts: opts} do
+      put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
+
+      assert {:ok, %{to_state: @waiting}} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
+      assert_received {:memory_tracker_state_update, "plan", @waiting}
+      assert %{phase: @waiting} = RunStore.get_ticket_state("repo-director", "plan")
+
+      RunStore.delete_ticket_state("repo-director", "plan")
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :linear_down}])
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:linear, :linear_down}} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
+        end)
+
+      refute_received {:memory_tracker_state_update, "plan", _state}
+      assert %{phase: @waiting} = RunStore.get_ticket_state("repo-director", "plan")
+      assert log =~ "Linear refused the move; the record keeps it issue_id=plan issue_identifier=MOT-30 to=#{@waiting}"
+    end
+
+    test "a rework whose comment Linear refuses leaves the record in Rework and logs the failed projection", %{opts: opts} do
+      put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [{:error, :linear_down}])
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:linear, :linear_down}} = DirectorMoves.move(:rework, "MOT-30", %{reason: "Split it"}, opts)
+        end)
+
+      refute_received {:memory_tracker_state_update, "plan", _state}
+      assert %{phase: "Rework"} = RunStore.get_ticket_state("repo-director", "plan")
+
+      assert log =~
+               "Linear refused the Director move's comment; the record keeps the move issue_id=plan issue_identifier=MOT-30 to=Rework"
+    end
+
+    test "backlog, restart and a decision's move each write the record's phase", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{note: "Later"}, opts)
+      assert %{phase: "Backlog"} = RunStore.get_ticket_state("repo-director", "pr")
+
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      set_decision_hold()
+      assert {:ok, _result} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1", move: "rework"}, opts)
+      assert %{phase: "Rework"} = RunStore.get_ticket_state("repo-director", "pr")
+
+      github_activity(state: "OPEN")
+      RunStore.delete_ticket_state("repo-restart", "pr")
+      put_issues([restart_issue()])
+      assert {:ok, _result} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+      assert %{phase: "In Progress"} = RunStore.get_ticket_state("repo-restart", "pr")
+    end
+
+    test "undo puts the record back as it puts Linear back", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts)
+      assert %{phase: "Backlog"} = RunStore.get_ticket_state("repo-director", "pr")
+
+      put_issues([%{pr("Backlog") | repo_key: "repo-director"}])
+      assert {:ok, %{move: "undo", to_state: "In Progress"}} = DirectorMoves.undo("MOT-40", opts)
+      assert_received {:memory_tracker_state_update, "pr", "In Progress"}
+      assert %{phase: "In Progress"} = RunStore.get_ticket_state("repo-director", "pr")
+    end
+  end
+
   describe "undo" do
     test "moves the ticket back within 10 s, once", %{opts: opts, clock: clock} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])

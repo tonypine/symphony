@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.TicketSignalsTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Orchestrator, TicketEvents, TicketSignals}
+  alias SymphonyElixir.{Orchestrator, TicketEvents, TicketSignals, TicketState}
 
   @repo_key "repo-a"
 
@@ -89,6 +89,50 @@ defmodule SymphonyElixir.TicketSignalsTest do
 
     assert_received {:polled, @repo_key}
     refute_received {:polled, "repo-b"}
+  end
+
+  describe "record_phase/3" do
+    test "creates the record in the phase when the ticket has none" do
+      assert :ok = TicketSignals.record_phase(@repo_key, "issue-1", "In Progress")
+      assert %{phase: "In Progress", updated_at: %DateTime{}} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    end
+
+    test "moves an existing record and leaves what a read of Linear wrote, so a later read still wins" do
+      seen = ~U[2026-10-29 10:00:00Z]
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-1", %{phase: "Todo", issue_identifier: "MT-1", title: "Add checkout", linear_updated_at: seen}))
+
+      assert :ok = TicketSignals.record_phase(@repo_key, "issue-1", "In Progress")
+
+      assert %{phase: "In Progress", issue_identifier: "MT-1", title: "Add checkout", linear_updated_at: ^seen} =
+               RunStore.get_ticket_state(@repo_key, "issue-1")
+    end
+
+    test "a record already in the phase is left as it was" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-1", %{phase: "QA", updated_at: ~U[2026-10-29 10:00:00Z]}))
+      before = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+      assert :ok = TicketSignals.record_phase(@repo_key, "issue-1", "QA")
+      assert RunStore.get_ticket_state(@repo_key, "issue-1") == before
+    end
+
+    test "no-ops without a repo key, an issue id or a phase" do
+      assert :ok = TicketSignals.record_phase(nil, "issue-1", "QA")
+      assert :ok = TicketSignals.record_phase(@repo_key, nil, "QA")
+      assert :ok = TicketSignals.record_phase(@repo_key, "issue-1", nil)
+      assert RunStore.get_ticket_state(@repo_key, "issue-1") == nil
+    end
+
+    test "logs and swallows a store failure" do
+      log = capture_log(fn -> assert :ok = TicketSignals.record_phase("  ", "issue-1", "QA") end)
+      assert log =~ "Failed to write the record's phase QA on issue_id=issue-1"
+    end
+
+    test "a move's signal writes the phase it entered, with its phase.entered event" do
+      assert :ok = TicketSignals.record(@repo_key, "issue-1", "claim", %{from: "Todo", to: "In Progress"})
+
+      assert %{phase: "In Progress"} = RunStore.get_ticket_state(@repo_key, "issue-1")
+      assert [%{type: "phase.entered", phase: "In Progress"}] = RunStore.list_ticket_events(@repo_key, "issue-1", types: ["phase.entered"])
+    end
   end
 
   describe "the event each signal maps to" do
