@@ -28,6 +28,9 @@ defmodule SymphonyElixir.TicketStateTest do
                pr_watch: nil,
                event_seq: 0,
                title: nil,
+               description: nil,
+               team: nil,
+               project: nil,
                labels: [],
                priority: nil,
                assignee: nil,
@@ -140,6 +143,9 @@ defmodule SymphonyElixir.TicketStateTest do
                pr_watch: nil,
                event_seq: 0,
                title: nil,
+               description: nil,
+               team: nil,
+               project: nil,
                labels: [],
                priority: nil,
                assignee: nil,
@@ -206,8 +212,11 @@ defmodule SymphonyElixir.TicketStateTest do
 
       record = TicketState.normalize(stored)
 
-      assert Map.take(record, [:title, :labels, :priority, :assignee, :blockers, :sub_issues, :parent, :url, :created_at, :linear_updated_at, :observed_at]) == %{
+      assert Map.take(record, [:title, :description, :team, :project, :labels, :priority, :assignee, :blockers, :sub_issues, :parent, :url, :created_at, :linear_updated_at, :observed_at]) == %{
                title: nil,
+               description: nil,
+               team: nil,
+               project: nil,
                labels: [],
                priority: nil,
                assignee: nil,
@@ -227,6 +236,9 @@ defmodule SymphonyElixir.TicketStateTest do
       record =
         TicketState.normalize(%{
           title: 42,
+          description: 42,
+          team: "Test",
+          project: :x,
           labels: ["bug", 7, "  ", " ui "],
           priority: "high",
           assignee: :someone,
@@ -240,6 +252,7 @@ defmodule SymphonyElixir.TicketStateTest do
         })
 
       assert {record.title, record.labels, record.priority, record.assignee} == {nil, ["bug", "ui"], nil, nil}
+      assert {record.description, record.team, record.project} == {nil, nil, nil}
       assert {record.blockers, record.sub_issues, record.parent} == {[], [], nil}
       assert {record.url, record.created_at, record.linear_updated_at, record.observed_at} == {nil, nil, nil, nil}
     end
@@ -253,6 +266,19 @@ defmodule SymphonyElixir.TicketStateTest do
 
       assert record.blockers == [%{id: nil, identifier: "ACME-5", state: nil}, %{id: "issue-6", identifier: "ACME-6", state: "Todo"}]
       assert record.sub_issues == [%{id: "issue-7", identifier: nil, state: nil}]
+    end
+
+    test "keeps a description as written, a team by key and name and a project by id, name and slug id" do
+      record =
+        TicketState.normalize(%{
+          description: "  Why\n\nWhat you get  ",
+          team: %{key: " TP ", name: "Tony", id: "dropped"},
+          project: %{id: "project-1", name: " Symphony ", slug_id: ""}
+        })
+
+      assert record.description == "  Why\n\nWhat you get  "
+      assert record.team == %{key: "TP", name: "Tony"}
+      assert record.project == %{id: "project-1", name: "Symphony", slug_id: nil}
     end
 
     test "keeps a parent with an identifier, its counts read as zero when malformed" do
@@ -745,7 +771,9 @@ defmodule SymphonyElixir.TicketStateTest do
     @linear_at ~U[2026-10-29 09:00:00Z]
     @observed_at ~U[2026-10-29 09:05:00Z]
     @created_at ~U[2026-10-01 08:00:00Z]
-    @observed_fields ~w(issue_identifier phase title labels priority assignee blockers sub_issues parent url created_at linear_updated_at)a
+    @team %{key: "ACME", name: "Acme"}
+    @project %{id: "project-1", name: "Symphony", slug_id: "symphony-1a2b"}
+    @observed_fields ~w(issue_identifier phase title description team project labels priority assignee blockers sub_issues parent url created_at linear_updated_at)a
 
     defp linear_issue(attrs \\ %{}) do
       struct!(
@@ -753,6 +781,9 @@ defmodule SymphonyElixir.TicketStateTest do
           id: "issue-1",
           identifier: "ACME-1",
           title: "Observe every poll",
+          description: "## Why\n\nThe record learns from every poll.",
+          team: @team,
+          project: @project,
           state: "In Progress",
           labels: ["backend", "plan"],
           priority: 1,
@@ -775,6 +806,9 @@ defmodule SymphonyElixir.TicketStateTest do
                  issue_identifier: "ACME-1",
                  phase: "In Progress",
                  title: "Observe every poll",
+                 description: "## Why\n\nThe record learns from every poll.",
+                 team: @team,
+                 project: @project,
                  labels: ["backend", "plan"],
                  priority: 1,
                  assignee: "user-1",
@@ -846,6 +880,48 @@ defmodule SymphonyElixir.TicketStateTest do
 
       delivery = linear_issue(%{sub_issues: :unknown, parent: nil, created_at: nil})
       assert {^record, :unchanged} = TicketState.observe(record, delivery, DateTime.add(@observed_at, 60))
+    end
+
+    test "an edited description is one change; a read's empty description, team or project clears the record's" do
+      {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(), @observed_at, :poll)
+
+      edited = linear_issue(%{description: "## Why\n\nEdited.", updated_at: DateTime.add(@linear_at, 60)})
+      assert {observed, :changed} = TicketState.observe(record, edited, DateTime.add(@observed_at, 60), :poll)
+      assert Map.drop(observed, [:description, :linear_updated_at, :observed_at, :updated_at]) == Map.drop(record, [:description, :linear_updated_at, :observed_at, :updated_at])
+      assert observed.description == "## Why\n\nEdited."
+      assert {^observed, :unchanged} = TicketState.observe(observed, edited, DateTime.add(@observed_at, 120), :poll)
+
+      for source <- [:poll, :by_id, :watcher, nil] do
+        cleared = linear_issue(%{description: nil, team: nil, project: nil})
+        assert {%{description: nil, team: nil, project: nil}, :changed} = TicketState.observe(record, cleared, DateTime.add(@observed_at, 60), source)
+      end
+    end
+
+    test "a webhook delivery that leaves out the description, team or project keeps the record's" do
+      {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(), @observed_at, :poll)
+
+      delivery = linear_issue(%{description: nil, team: nil, project: nil})
+      assert {^record, :unchanged} = TicketState.observe(record, delivery, DateTime.add(@observed_at, 60), :webhook)
+
+      moved = linear_issue(%{description: nil, team: %{key: "OPS", name: "Ops"}, project: nil})
+      assert {observed, :changed} = TicketState.observe(record, moved, DateTime.add(@observed_at, 60), :webhook)
+      assert {observed.description, observed.team, observed.project} == {record.description, %{key: "OPS", name: "Ops"}, @project}
+    end
+
+    test "a delivery's project, which has no slug id, keeps the slug id a read recorded for the same project" do
+      {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(), @observed_at, :poll)
+
+      same = linear_issue(%{project: %{id: "project-1", name: "Symphony"}})
+      assert {^record, :unchanged} = TicketState.observe(record, same, DateTime.add(@observed_at, 60), :webhook)
+
+      renamed = linear_issue(%{project: %{id: "project-1", name: "Symphony Engine"}})
+      assert {%{project: %{id: "project-1", name: "Symphony Engine", slug_id: "symphony-1a2b"}}, :changed} = TicketState.observe(record, renamed, DateTime.add(@observed_at, 60), :webhook)
+
+      other = linear_issue(%{project: %{id: "project-2", name: "Director"}})
+      assert {%{project: %{id: "project-2", name: "Director", slug_id: nil}}, :changed} = TicketState.observe(record, other, DateTime.add(@observed_at, 60), :webhook)
+
+      {unprojected, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(%{project: nil}), @observed_at, :poll)
+      assert {%{project: %{id: "project-1", name: "Symphony", slug_id: nil}}, :changed} = TicketState.observe(unprojected, same, DateTime.add(@observed_at, 60), :webhook)
     end
 
     test "observation/1 is the update that writes the observed fields" do

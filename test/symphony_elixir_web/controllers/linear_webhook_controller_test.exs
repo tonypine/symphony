@@ -337,6 +337,8 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
         id: "issue-hook",
         identifier: "ACME-9",
         title: "Hooked",
+        # The team the delivery carries, as the poll reads it.
+        team: %{key: "Test", name: "Test"},
         state: "In Progress",
         labels: ["backend"],
         priority: 2,

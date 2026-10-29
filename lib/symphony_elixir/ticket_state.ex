@@ -11,10 +11,11 @@ defmodule SymphonyElixir.TicketState do
   on it (`SymphonyElixir.Decisions`), which the description's Decisions section projects, and
   the PR and CI watcher's fact record (`pr_watch`, written by `SymphonyElixir.PrWatch.Repo`), and
   the sequence number of the last event in its event stream (`event_seq`, `SymphonyElixir.TicketEvents`),
-  and what the last observation of the ticket in Linear found (`observe/4`): its title, labels,
-  priority, assignee, open blockers and sub-issues (each by id, identifier and state), parent, URL,
-  creation time and Linear's `updatedAt`, with when it was observed, which read brought the last
-  change (`observed_from`) and when a webhook said the ticket was removed (`removed_at`).
+  and what the last observation of the ticket in Linear found (`observe/4`): its title, description,
+  team, project, labels, priority, assignee, open blockers and sub-issues (each by id, identifier and
+  state), parent, URL, creation time and Linear's `updatedAt`, with when it was observed, which read
+  brought the last change (`observed_from`) and when a webhook said the ticket was removed
+  (`removed_at`).
 
   The record is persisted by `SymphonyElixir.RunStore`; this module owns its shape and the
   operations that move it. It is inert by design: nothing dispatches on a record yet. It exists so
@@ -69,6 +70,12 @@ defmodule SymphonyElixir.TicketState do
   identifier and state, each nil when the read didn't carry it.
   """
   @type link :: %{id: String.t() | nil, identifier: String.t() | nil, state: String.t() | nil}
+
+  @typedoc "The ticket's team as the read saw it: its key and name."
+  @type team :: %{key: String.t() | nil, name: String.t() | nil}
+
+  @typedoc "The ticket's project as the read saw it: its id, name and slug id."
+  @type project :: %{id: String.t() | nil, name: String.t() | nil, slug_id: String.t() | nil}
 
   @typedoc "One entry of the signals ledger."
   @type signal :: %{name: String.t(), details: map(), at: DateTime.t()}
@@ -217,6 +224,9 @@ defmodule SymphonyElixir.TicketState do
           pr_watch: pr_watch() | nil,
           event_seq: non_neg_integer(),
           title: String.t() | nil,
+          description: String.t() | nil,
+          team: team() | nil,
+          project: project() | nil,
           labels: [String.t()],
           priority: integer() | nil,
           assignee: String.t() | nil,
@@ -243,8 +253,12 @@ defmodule SymphonyElixir.TicketState do
   # The observed fields a read that doesn't carry them (nil) leaves as the record has them.
   @kept_when_missing [:issue_identifier, :phase, :parent, :created_at, :linear_updated_at]
 
+  # The observed fields a webhook delivery that leaves them out (nil) leaves as the record has them;
+  # Linear's reads always select them, so a nil from one is Linear's own empty value.
+  @kept_when_delivery_lacks [:description, :team, :project]
+
   # The fields an observation of the ticket in Linear writes (`observe/4`).
-  @observed_fields ~w(issue_identifier phase title labels priority assignee blockers sub_issues parent url created_at linear_updated_at)a
+  @observed_fields ~w(issue_identifier phase title description team project labels priority assignee blockers sub_issues parent url created_at linear_updated_at)a
 
   @doc """
   A new record for `repo_key`'s `issue_id`, with any `attrs` applied. `attrs` may set `:phase`,
@@ -283,6 +297,9 @@ defmodule SymphonyElixir.TicketState do
       pr_watch: normalize_pr_watch(Map.get(record, :pr_watch)),
       event_seq: normalize_event_seq(Map.get(record, :event_seq)),
       title: map_string(record, :title),
+      description: text(Map.get(record, :description)),
+      team: normalize_team(Map.get(record, :team)),
+      project: normalize_project(Map.get(record, :project)),
       labels: string_list(Map.get(record, :labels)),
       priority: integer_or_nil(Map.get(record, :priority)),
       assignee: map_string(record, :assignee),
@@ -318,6 +335,9 @@ defmodule SymphonyElixir.TicketState do
       pr_watch: nil,
       event_seq: 0,
       title: nil,
+      description: nil,
+      team: nil,
+      project: nil,
       labels: [],
       priority: nil,
       assignee: nil,
@@ -336,9 +356,10 @@ defmodule SymphonyElixir.TicketState do
 
   @doc """
   Applies what Linear says of the ticket (`issue`, a `SymphonyElixir.Linear.Issue`) to its record:
-  its state as the `phase`, its identifier, title, labels, priority, assignee, blockers (its
-  `blocked_by` by id, identifier and state; the caller keeps only the open ones), sub-issues, parent,
-  URL, `created_at` and `updated_at` as `linear_updated_at`. Returns the record and what happened:
+  its state as the `phase`, its identifier, title, description (as the read gives it, the summary
+  block already stripped), team, project, labels, priority, assignee, blockers (its `blocked_by` by
+  id, identifier and state; the caller keeps only the open ones), sub-issues, parent, URL,
+  `created_at` and `updated_at` as `linear_updated_at`. Returns the record and what happened:
 
   - `:stale` when the issue's `updated_at` is older than the record's `linear_updated_at`: the fact
     is dropped and the record returned as it was;
@@ -350,8 +371,10 @@ defmodule SymphonyElixir.TicketState do
   A field the issue marks `:unknown` (a webhook delivery that doesn't carry it) never overwrites the
   record's value, nor does a missing state, parent, `created_at` or `updated_at`: a missing fact is
   missing information, not a change. The poll reads no parent (only the dispatch-time enrichment
-  does), so the record keeps one once a read carries it. Writing the record never records a ledger
-  event; Symphony's own moves do that.
+  does), so the record keeps one once a read carries it. A webhook delivery (`source: :webhook`) that
+  leaves out the description, team or project keeps the record's, and a delivery's project carries no
+  slug id, so the record keeps the one a read recorded for the same project. Writing the record never
+  records a ledger event; Symphony's own moves do that.
   """
   @spec observe(t(), Issue.t(), DateTime.t(), observation_source() | nil) :: {t(), :changed | :unchanged | :stale}
   def observe(record, %Issue{} = issue, %DateTime{} = observed_at, source \\ nil) do
@@ -362,7 +385,7 @@ defmodule SymphonyElixir.TicketState do
     else
       observed =
         record
-        |> Map.merge(observed_fields(issue))
+        |> Map.merge(observed_fields(issue, record, source))
         |> normalize()
 
       if Map.take(observed, @observed_fields) == Map.take(record, @observed_fields) do
@@ -397,11 +420,16 @@ defmodule SymphonyElixir.TicketState do
   defp stale?(%DateTime{} = known, %DateTime{} = fact), do: DateTime.compare(fact, known) == :lt
   defp stale?(_known, _fact), do: false
 
-  defp observed_fields(issue) do
+  defp observed_fields(issue, record, source) do
+    kept = if source == :webhook, do: @kept_when_missing ++ @kept_when_delivery_lacks, else: @kept_when_missing
+
     [
       issue_identifier: issue.identifier,
       phase: issue.state,
       title: issue.title,
+      description: issue.description,
+      team: issue.team,
+      project: with_known_slug(issue.project, record.project),
       labels: issue.labels,
       priority: issue.priority,
       assignee: issue.assignee_id,
@@ -412,9 +440,26 @@ defmodule SymphonyElixir.TicketState do
       created_at: issue.created_at,
       linear_updated_at: issue.updated_at
     ]
-    |> Enum.reject(fn {field, value} -> value == :unknown or (is_nil(value) and field in @kept_when_missing) end)
+    |> Enum.reject(fn {field, value} -> value == :unknown or (is_nil(value) and field in kept) end)
     |> Map.new()
   end
+
+  # A webhook delivery's project has no `:slug_id` key: the slug a read recorded for the same project stays.
+  defp with_known_slug(%{} = project, %{id: id, slug_id: slug_id}) when not is_map_key(project, :slug_id) and is_binary(id) do
+    if map_string(project, :id) == id, do: Map.put(project, :slug_id, slug_id), else: project
+  end
+
+  defp with_known_slug(project, _known), do: project
+
+  defp normalize_team(%{} = team), do: %{key: map_string(team, :key), name: map_string(team, :name)}
+  defp normalize_team(_team), do: nil
+
+  defp normalize_project(%{} = project), do: %{id: map_string(project, :id), name: map_string(project, :name), slug_id: map_string(project, :slug_id)}
+  defp normalize_project(_project), do: nil
+
+  # A description is kept as the read gave it, not trimmed, so the rebuilt issue's equals the read's.
+  defp text(value) when is_binary(value), do: value
+  defp text(_value), do: nil
 
   # A record read before links kept their id and state holds the blocker's identifier alone.
   defp links(links) when is_list(links), do: Enum.flat_map(links, &link/1)
