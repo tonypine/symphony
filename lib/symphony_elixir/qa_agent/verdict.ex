@@ -11,6 +11,8 @@ defmodule SymphonyElixir.QaAgent.Verdict do
   reviewer's `SymphonyElixir.ReviewAgent.Verdict` is: a verdict or step status in any case or a
   synonym (`PASS`, `Failed`, `block`), `findings` as a list, a single object or a single sentence,
   `steps` as a list or a single object, and `needs_person`/`needs_dev_server` as `true` or `"true"`.
+  A step's `unprovable` status says it needs what no playbook of the pass can give
+  (`SymphonyElixir.QaVerification` then decides the pass from the other steps).
   A finding object (`step`, `viewport`, `expected`, `actual`, `evidence`) is rendered to the one
   line the QA report and the rework run read (`findings`); `finding_details` keeps, per finding and
   in the same order, that line with the finding's `step`, `viewport` and `evidence` as given, for
@@ -36,7 +38,8 @@ defmodule SymphonyElixir.QaAgent.Verdict do
     "blocked" => "blocked",
     "block" => "blocked",
     "skipped" => "skipped",
-    "skip" => "skipped"
+    "skip" => "skipped",
+    "unprovable" => "unprovable"
   }
 
   @identifier_pattern ~r/\A[A-Za-z][A-Za-z0-9]*-\d+\z/
@@ -72,7 +75,11 @@ defmodule SymphonyElixir.QaAgent.Verdict do
     "required" => ["name", "status"],
     "properties" => %{
       "name" => %{"type" => "string", "description" => "What you checked."},
-      "status" => %{"type" => "string", "enum" => ["pass", "fail", "blocked", "skipped"]},
+      "status" => %{
+        "type" => "string",
+        "enum" => ["pass", "fail", "blocked", "skipped", "unprovable"],
+        "description" => "unprovable: the step needs what no playbook of this pass can give (the prompt says when); the reason goes in details."
+      },
       "details" => %{"type" => "string", "description" => "The command and the relevant output, or what you saw."},
       "evidence" => @evidence_schema,
       "checklist" => %{"type" => "boolean", "description" => "Epic review: the step is one of the epic's checklist rows."},
@@ -172,7 +179,7 @@ defmodule SymphonyElixir.QaAgent.Verdict do
   def describe_error(:no_verdict_object), do: "the answer had no qa_verdict call and no JSON verdict object."
   def describe_error(:not_a_json_object), do: "the verdict must be a JSON object."
   def describe_error(:invalid_verdict), do: "`verdict` must be one of pass, fail or blocked."
-  def describe_error(:invalid_steps), do: "each step must be an object with a non-empty `name` and a `status` of pass, fail, blocked or skipped."
+  def describe_error(:invalid_steps), do: "each step must be an object with a non-empty `name` and a `status` of pass, fail, blocked, skipped or unprovable."
   def describe_error(:invalid_findings), do: "`findings` must be a list of findings."
   def describe_error(:invalid_finding), do: "each finding must be a sentence, or an object with a `summary` or the `actual` result."
   def describe_error(:missing_fail_findings), do: "a fail needs at least one finding or failing step."
