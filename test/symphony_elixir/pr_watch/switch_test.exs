@@ -1334,12 +1334,15 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       :ok = Hold.set(@repo_key, issue_id, :needs_decision, %{reason: "A question"}, tracker: Tracker)
       pid = start!()
 
-      tick!(pid)
+      log = capture_log(fn -> tick!(pid) end)
       assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}]
       assert %{rule: "R4", owner: :person} = decision(issue_id)
       assert upkept(issue_id) == [{"U1", :update_branch, "head-1-1"}]
+      assert log =~ "pr_watch.upkeep issue_id=#{issue_id} issue_identifier=TP-1 repo_key=#{@repo_key} phase=merging rule=U1"
+      assert log =~ ~s(rule=U1 action=update_branch head_sha=head-1-1 outcome=applied reason="PR #1 is behind main")
 
-      tick!(pid, 2)
+      # The update is recorded for the head: the next reads neither repeat it nor log it again.
+      refute capture_log(fn -> tick!(pid, 2) end) =~ "pr_watch.upkeep"
       assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}]
     end
 

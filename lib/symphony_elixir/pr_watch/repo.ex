@@ -1043,7 +1043,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     |> PrDecision.upkeep()
     |> Enum.reduce({[], attempts, applied}, fn action, {upkept, attempts, applied} ->
       result = Apply.apply(action, Map.merge(ctx, %{attempts: attempts, applied: applied}))
-      log_upkeep(result, entry, state)
+      log_upkeep(result, ctx, entry, state)
       {upkept ++ upkept(result, ctx), result.attempts, result.applied}
     end)
   end
@@ -1051,12 +1051,13 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp upkept(%{outcome: :applied, action: action}, ctx), do: [%{rule: action.rule, kind: action.kind, head_sha: ctx.read[:head_sha], at: ctx.now}]
   defp upkept(_result, _ctx), do: []
 
-  defp log_upkeep(%{outcome: :recorded}, _entry, _state), do: :ok
+  defp log_upkeep(%{outcome: :recorded}, _ctx, _entry, _state), do: :ok
 
-  defp log_upkeep(%{action: action, outcome: outcome}, entry, state) do
+  defp log_upkeep(%{action: action, outcome: outcome}, ctx, entry, state) do
     Logger.info(
       "pr_watch.upkeep issue_id=#{entry.issue.id} issue_identifier=#{entry.issue.identifier} repo_key=#{state.repo_key} " <>
-        "phase=#{entry.phase} rule=#{action.rule} action=#{action.kind} outcome=#{outcome_name(outcome)} reason=#{inspect(action.reason)}"
+        "phase=#{entry.phase} rule=#{action.rule} action=#{action.kind} head_sha=#{ctx.read[:head_sha]} " <>
+        "outcome=#{outcome_name(outcome)} reason=#{inspect(action.reason)}"
     )
   end
 
