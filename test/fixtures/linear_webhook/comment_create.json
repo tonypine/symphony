@@ -1,0 +1,43 @@
+{
+  "action": "create",
+  "actor": {
+    "id": "8f1c2b3a-0d4e-4f5a-9b6c-7d8e9f0a1b2c",
+    "type": "user",
+    "name": "Ada Operator",
+    "email": "ada@example.com",
+    "url": "https://linear.app/example/profiles/ada"
+  },
+  "createdAt": "2026-10-29T09:20:41.502Z",
+  "data": {
+    "id": "7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+    "createdAt": "2026-10-29T09:20:41.377Z",
+    "updatedAt": "2026-10-29T09:20:41.377Z",
+    "archivedAt": null,
+    "body": "Ship the normaliser first, then the parser.",
+    "edited": false,
+    "issueId": "5a7c1f9e-3b2d-4c8a-9e6f-1d2b3c4d5e6f",
+    "parentId": null,
+    "userId": "8f1c2b3a-0d4e-4f5a-9b6c-7d8e9f0a1b2c",
+    "reactionData": [],
+    "issue": {
+      "id": "5a7c1f9e-3b2d-4c8a-9e6f-1d2b3c4d5e6f",
+      "identifier": "TP-1213",
+      "title": "Webhook payloads become Issue facts",
+      "teamId": "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e",
+      "team": { "id": "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e", "key": "TP", "name": "Tony Pine" },
+      "url": "https://linear.app/example/issue/TP-1213/webhook-payloads-become-issue-facts"
+    },
+    "user": {
+      "id": "8f1c2b3a-0d4e-4f5a-9b6c-7d8e9f0a1b2c",
+      "name": "Ada Operator",
+      "email": "ada@example.com",
+      "avatarUrl": null,
+      "url": "https://linear.app/example/profiles/ada"
+    }
+  },
+  "url": "https://linear.app/example/issue/TP-1213/webhook-payloads-become-issue-facts#comment-7c8d9e0f",
+  "type": "Comment",
+  "organizationId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+  "webhookTimestamp": 1793265641502,
+  "webhookId": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e"
+}
