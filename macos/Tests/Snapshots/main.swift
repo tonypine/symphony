@@ -284,6 +284,33 @@ func githubUpdatesPage(_ section: GitHubUpdatesSection, expanded: Bool = false) 
     .background(DesignTokens.Surface.window.color)
 }
 
+/// A healthy Setup page with the Linear webhooks line for `health` (nil from an older Symphony), beside the sidebar of
+/// a `window` pt wide window (TP-1212).
+@MainActor
+func linearWebhooksPage(_ health: LinearWebhookHealth?, window: CGFloat = 1440) -> some View {
+    let utc = TimeZone(identifier: "UTC")!
+    return SetupPageBody(
+        page: SetupPage(payload: SetupPayload(checkedAt: githubNow), now: githubNow, timeZone: utc),
+        githubUpdates: GitHubUpdatesCard(section: githubSection("github-updates"), now: githubNow, timeZone: utc),
+        linearWebhooks: LinearWebhooksLine(health: health, now: githubNow)
+    )
+    .frame(width: window - DesignTokens.Layout.sidebarWidth)
+    .background(DesignTokens.Surface.window.color)
+}
+
+/// The Linear webhooks line's states, by snapshot name.
+let linearWebhookStates: [(String, LinearWebhookHealth?)] = [
+    ("off", LinearWebhookHealth()),
+    ("waiting", LinearWebhookHealth(enabled: true, secretConfigured: true)),
+    ("arriving", LinearWebhookHealth(enabled: true, secretConfigured: true, total: 1_204, lastAt: githubNow.addingTimeInterval(-12))),
+    ("refused", LinearWebhookHealth(
+        enabled: true, secretConfigured: true, total: 3, rejected: 2, lastAt: githubNow.addingTimeInterval(-12),
+        lastRejectedAt: githubNow.addingTimeInterval(-240), lastRejectedReason: "bad_signature"
+    )),
+    ("no-secret", LinearWebhookHealth(enabled: true)),
+    ("not-available", nil),
+]
+
 /// S10: no webhook secret on this Mac while instant updates are on.
 func githubSecretFailing() -> GitHubUpdatesSection {
     var section = githubSection("github-updates")
@@ -566,6 +593,11 @@ MainActor.assumeIsolated {
         render(githubUpdatesPage(githubNeedsSetup()), scheme, to: "github-updates-needs-setup-\(suffix).png")
         render(githubSheet(.turnOff), scheme, to: "github-updates-turn-off-sheet-\(suffix).png")
         render(githubSheet(.recreateSecret), scheme, to: "github-updates-recreate-secret-sheet-\(suffix).png")
+        // The Linear webhooks line (TP-1212): every state at the laptop viewport, and deliveries arriving at the desktop's.
+        for (name, health) in linearWebhookStates {
+            render(linearWebhooksPage(health), scheme, to: "linear-webhooks-\(name)-laptop-\(suffix).png")
+        }
+        render(linearWebhooksPage(linearWebhookStates[2].1, window: 2560), scheme, to: "linear-webhooks-arriving-desktop-\(suffix).png")
         // The guided setup and Add Repo's Instant updates (TP-954).
         render(githubSetup(.relay), scheme, to: "github-setup-relay-\(suffix).png")
         render(githubSetup(.gitHubCLI, answer: "github_updates/run_step.2.json"), scheme, to: "github-setup-permission-\(suffix).png")

@@ -226,13 +226,6 @@ exemptions:
       - github.webhooks.relay
       - github.webhooks.secret
 
-  # linear
-  - reason: Linear's workspace webhook, nothing listens for its deliveries yet. The Director control comes with TP-1212.
-    ticket: TP-1212
-    keys:
-      - linear.webhooks.enabled
-      - linear.webhooks.secret
-
   # human_actions
   - reason: Human action requests in project updates. No control in the app yet.
     keys:

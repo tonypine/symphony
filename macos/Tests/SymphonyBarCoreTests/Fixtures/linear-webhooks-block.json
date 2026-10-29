@@ -1,0 +1,21 @@
+{
+  "enabled": true,
+  "secret_configured": true,
+  "total": 3,
+  "rejected": 1,
+  "last_at": "2026-10-29T08:00:48Z",
+  "last_type": "Issue",
+  "last_action": "update",
+  "last_rejected_at": "2026-10-29T07:57:00Z",
+  "last_rejected_reason": "bad_signature",
+  "counts": [
+    {"type": "Issue", "action": "update", "count": 2},
+    {"type": "Comment", "action": "create", "count": 1}
+  ],
+  "rejected_reasons": [{"reason": "bad_signature", "count": 1}],
+  "recent": [
+    {"type": "Issue", "action": "update", "identifier": "TP-1212", "received_at": "2026-10-29T08:00:48Z"},
+    {"type": "Comment", "action": "create", "identifier": null, "received_at": "2026-10-29T07:59:10Z"},
+    {"type": "Issue", "action": "update", "identifier": "TP-1213", "received_at": "2026-10-29T07:58:30Z"}
+  ]
+}

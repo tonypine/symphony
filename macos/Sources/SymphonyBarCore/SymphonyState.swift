@@ -31,6 +31,9 @@ public struct StateSnapshot: Equatable {
     public var setup: SetupPayload?
     /// The running Symphony's build (`build.version`), for the app's build warning; nil when it didn't say.
     public var serviceVersion: String?
+    /// Linear's workspace webhook and the deliveries Symphony counted (`linear_webhooks`), nil when Symphony
+    /// predates them.
+    public var linearWebhooks: LinearWebhookHealth?
 
     /// A ticket waiting on the operator, as `/api/v1/state`'s `waiting_on_you` lists it.
     public struct WaitingTicket: Equatable {
@@ -281,7 +284,8 @@ public struct StateSnapshot: Equatable {
         inboxRead: Bool = true,
         sessionKinds: [String]? = nil,
         setup: SetupPayload? = nil,
-        serviceVersion: String? = nil
+        serviceVersion: String? = nil,
+        linearWebhooks: LinearWebhookHealth? = nil
     ) {
         self.running = running
         self.retrying = retrying
@@ -297,6 +301,70 @@ public struct StateSnapshot: Equatable {
         self.sessionKinds = sessionKinds
         self.setup = setup
         self.serviceVersion = serviceVersion
+        self.linearWebhooks = linearWebhooks
+    }
+}
+
+/// Linear's workspace webhook as `/api/v1/state`'s `linear_webhooks` reports it
+/// (`SymphonyElixir.Linear.Webhook.Deliveries`): whether it is on, whether a signing secret resolves, and the deliveries
+/// counted since Symphony started. The counts live in Symphony's memory, so they start again at a restart.
+public struct LinearWebhookHealth: Equatable {
+    public var enabled: Bool
+    /// True when `linear.webhooks.secret` resolves to a value; never the value itself.
+    public var secretConfigured: Bool
+    /// Accepted deliveries.
+    public var total: Int
+    /// Refused deliveries: no secret, no or a bad signature, a stale timestamp.
+    public var rejected: Int
+    public var lastAt: Date?
+    public var lastRejectedAt: Date?
+    /// Why the last refused delivery was refused: `missing_secret`, `missing_signature`, `bad_signature` or
+    /// `stale_timestamp`.
+    public var lastRejectedReason: String?
+
+    public init(
+        enabled: Bool = false,
+        secretConfigured: Bool = false,
+        total: Int = 0,
+        rejected: Int = 0,
+        lastAt: Date? = nil,
+        lastRejectedAt: Date? = nil,
+        lastRejectedReason: String? = nil
+    ) {
+        self.enabled = enabled
+        self.secretConfigured = secretConfigured
+        self.total = total
+        self.rejected = rejected
+        self.lastAt = lastAt
+        self.lastRejectedAt = lastRejectedAt
+        self.lastRejectedReason = lastRejectedReason
+    }
+
+    /// The `linear_webhooks` block of a `/api/v1/state` payload, nil when Symphony predates it. Read on its own, so a
+    /// block this app can't read never fails the rest of the state.
+    public static func decode(state data: Data) -> LinearWebhookHealth? {
+        struct Wire: Decodable {
+            let enabled: Bool?
+            let secretConfigured: Bool?
+            let total: Int?
+            let rejected: Int?
+            let lastAt: String?
+            let lastRejectedAt: String?
+            let lastRejectedReason: String?
+        }
+        struct State: Decodable { let linearWebhooks: Wire? }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        guard let wire = (try? decoder.decode(State.self, from: data))?.linearWebhooks else { return nil }
+        return LinearWebhookHealth(
+            enabled: wire.enabled ?? false,
+            secretConfigured: wire.secretConfigured ?? false,
+            total: wire.total ?? 0,
+            rejected: wire.rejected ?? 0,
+            lastAt: wire.lastAt.flatMap(SymphonyState.parseDate),
+            lastRejectedAt: wire.lastRejectedAt.flatMap(SymphonyState.parseDate),
+            lastRejectedReason: wire.lastRejectedReason
+        )
     }
 }
 
@@ -448,6 +516,7 @@ public enum SymphonyState {
         snapshot.inboxRead = payload.inboxRead ?? true
         snapshot.setup = SetupPayload.decode(state: data)
         snapshot.serviceVersion = payload.build?.version
+        snapshot.linearWebhooks = LinearWebhookHealth.decode(state: data)
         return .state(snapshot)
     }
 

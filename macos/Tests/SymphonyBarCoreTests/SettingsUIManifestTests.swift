@@ -78,6 +78,10 @@ final class SettingsUIManifestTests: XCTestCase {
         yaml = try record("setting timeouts", { try OperationTimeouts.updating($0, from: OperationTimeouts(), to: timeouts) }, from: yaml)
         let updates = GitHubUpdates(fallbackPollMs: 600_000, silenceAlertMinutes: 20)
         yaml = try record("setting the GitHub updates", { try GitHubUpdates.updating($0, from: GitHubUpdates(), to: updates) }, from: yaml)
+        let webhooks = LinearWebhookSettings(enabled: true, secret: .environment("SYMPHONY_LINEAR_WEBHOOK_SECRET"))
+        yaml = try record("setting the Linear webhooks", {
+            try LinearWebhookSettings.updating($0, from: LinearWebhookSettings(), to: webhooks)
+        }, from: yaml)
         let loopLimits = DispatchLoopLimits(runs: 3, windowMs: 300_000, longRuns: 6, longWindowMs: 7_200_000)
         yaml = try record("setting the dispatch-loop limits", {
             try DispatchLoopLimits.updating($0, from: DispatchLoopLimits(), to: loopLimits)

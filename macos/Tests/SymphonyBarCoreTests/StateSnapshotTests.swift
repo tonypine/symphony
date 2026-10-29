@@ -203,6 +203,56 @@ final class StateSnapshotTests: XCTestCase {
         XCTAssertEqual(ReportedRelease(tag: "0.0.1.583").version, "0.0.1.583")
     }
 
+    /// `linear_webhooks` as `SymphonyElixirWeb.Presenter` serves it: the switch, the secret's presence and the counts.
+    func testDecodesTheLinearWebhookDeliveries() throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/linear-webhooks-block.json")
+        let block = try JSONSerialization.jsonObject(with: Data(contentsOf: fixture))
+        guard case .state(let snapshot) = SymphonyState.poll(data: try recordedState(replacing: "linear_webhooks", with: block), statusCode: 200)
+        else { return XCTFail("expected a state") }
+        XCTAssertEqual(
+            snapshot.linearWebhooks,
+            LinearWebhookHealth(
+                enabled: true,
+                secretConfigured: true,
+                total: 3,
+                rejected: 1,
+                lastAt: SymphonyState.parseDate("2026-10-29T08:00:48Z"),
+                lastRejectedAt: SymphonyState.parseDate("2026-10-29T07:57:00Z"),
+                lastRejectedReason: "bad_signature"
+            )
+        )
+    }
+
+    /// Off, with nothing counted yet: the nulls read as nothing.
+    func testDecodesLinearWebhooksTurnedOff() throws {
+        let off: [String: Any] = [
+            "enabled": false, "secret_configured": false, "total": 0, "rejected": 0, "last_at": NSNull(),
+            "last_rejected_at": NSNull(), "last_rejected_reason": NSNull(), "counts": [], "rejected_reasons": [], "recent": [],
+        ]
+        guard case .state(let snapshot) = SymphonyState.poll(data: try recordedState(replacing: "linear_webhooks", with: off), statusCode: 200)
+        else { return XCTFail("expected a state") }
+        XCTAssertEqual(snapshot.linearWebhooks, LinearWebhookHealth())
+    }
+
+    /// An older Symphony sends no `linear_webhooks`, and a block this app can't read is left out: the rest of the state
+    /// decodes either way.
+    func testAnOlderOrUnreadableLinearWebhooksBlockIsNone() throws {
+        guard case .state(let older) = SymphonyState.poll(data: try recordedState(), statusCode: 200) else {
+            return XCTFail("expected a state")
+        }
+        XCTAssertNil(older.linearWebhooks)
+        XCTAssertEqual(older.runs, recordedRuns)
+
+        let unreadable = try recordedState(replacing: "linear_webhooks", with: ["enabled": "yes", "total": "many"])
+        guard case .state(let snapshot) = SymphonyState.poll(data: unreadable, statusCode: 200) else {
+            return XCTFail("expected a state")
+        }
+        XCTAssertNil(snapshot.linearWebhooks)
+        XCTAssertEqual(snapshot.runs, recordedRuns)
+    }
+
     func testANullOrTaglessReleaseIsNone() throws {
         for latest: Any in [NSNull(), ["tag": NSNull()], ["tag": ""]] {
             let data = try recordedState(replacing: "app_update", with: ["unblocks": 0, "latest_release": latest])

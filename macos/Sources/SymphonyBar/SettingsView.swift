@@ -323,6 +323,8 @@ struct SettingsView: View {
                 }
                 .disabled(!model.canEditGitHubUpdates)
 
+                LinearWebhooksSection(model: model)
+
                 Section {
                     DispatchLoopRow(title: "Hold a ticket after", runs: $model.dispatchLoopRuns, minutes: $model.dispatchLoopWindowMinutes)
                     DispatchLoopRow(title: "Or after", runs: $model.dispatchLoopLongRuns, minutes: $model.dispatchLoopLongWindowMinutes)
@@ -554,6 +556,9 @@ struct SettingsView: View {
                 }
                 if model.gitHubUpdatesError != nil {
                     Text("symphony check rejected the GitHub update settings; see GitHub updates.").foregroundStyle(.red)
+                }
+                if model.linearWebhooksError != nil {
+                    Text("The Linear webhook settings weren't saved; see Linear webhooks.").foregroundStyle(.red)
                 }
                 if model.dispatchLoopError != nil {
                     Text("symphony check rejected the dispatch-loop limits; see Dispatch loops.").foregroundStyle(.red)
@@ -1068,6 +1073,65 @@ private struct TimeoutRow: View {
                     .labelsHidden()
             }
         }
+    }
+}
+
+/// `linear.webhooks`: whether Symphony accepts Linear's webhook deliveries, and the signing secret it checks them with,
+/// named by its environment variable or typed in a secure field. The secret's value is never shown.
+private struct LinearWebhooksSection: View {
+    @ObservedObject var model: SettingsViewModel
+
+    var body: some View {
+        Section {
+            Toggle("Accept Linear's webhook deliveries", isOn: $model.linearWebhooksEnabled)
+            Picker("Signing secret", selection: $model.linearWebhookSecretSource) {
+                Text("Environment variable").tag(LinearWebhookSettings.SecretSource.environment)
+                Text("Typed in symphony.yml").tag(LinearWebhookSettings.SecretSource.literal)
+            }
+            switch model.linearWebhookSecretSource {
+            case .environment:
+                LabeledContent("Variable") {
+                    HStack(spacing: DesignTokens.Space.s1) {
+                        Text("$").monospaced().foregroundStyle(.secondary)
+                        TextField(
+                            "Variable",
+                            text: $model.linearWebhookSecretName,
+                            prompt: Text(LinearWebhookSettings.suggestedEnvironmentName)
+                        )
+                        .labelsHidden()
+                        .monospaced()
+                        .accessibilityLabel("Signing secret's environment variable")
+                    }
+                }
+                Text(
+                    "symphony.yml names the variable, never the value. Add the variable under Environment with the "
+                        + "signing secret Linear shows for the webhook; Symphony reads it when it starts."
+                )
+                .foregroundStyle(.secondary)
+            case .literal:
+                SecureField("Secret", text: $model.linearWebhookSecretLiteral, prompt: Text("Linear's signing secret"))
+                    .accessibilityLabel("Signing secret")
+                Text("The secret is saved in symphony.yml in plain text. An environment variable keeps it out of the file.")
+                    .foregroundStyle(.secondary)
+            }
+            Text(
+                "Linear signs every delivery with the webhook's secret, and Symphony refuses one it can't check. "
+                    + "Setup shows whether deliveries arrive."
+            )
+            .foregroundStyle(.secondary)
+            if let error = model.linearWebhooksError {
+                Text(error).foregroundStyle(.red)
+            }
+        } header: {
+            Text("Linear webhooks (saved in symphony.yml)")
+        } footer: {
+            SectionFooter(
+                "linear.webhooks.enabled (default off) and linear.webhooks.secret. Save checks symphony.yml with "
+                    + "symphony check first, which refuses the webhook on without a secret; Symphony reads them on the "
+                    + "next delivery, no restart needed."
+            )
+        }
+        .disabled(!model.canEditLinearWebhooks)
     }
 }
 
