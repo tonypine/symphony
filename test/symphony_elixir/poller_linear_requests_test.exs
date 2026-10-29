@@ -4,7 +4,7 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
   # key's hourly budget stays flat as watched issues and repositories grow.
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{CiPoller, PrReviewPoller, TicketPullRequest}
+  alias SymphonyElixir.{CiPoller, OperatorStop, PrReviewPoller, TicketObservation, TicketPullRequest}
   alias SymphonyElixir.Linear.Usage
 
   @repo_key "default"
@@ -137,6 +137,64 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
       assert linear_requests() == %{"SymphonyLinearPoll" => 2}
       refute_ticket_reads_request_attachments()
     end
+  end
+
+  describe "the orchestrator's tick" do
+    # The repo poll's own requests (the poll, and the reads it makes once per interval) are left
+    # out: the tick's by-id reads are the difference between the sources.
+    test "under dispatch.source: poll reads its running, watched, forced and stopped tickets by id" do
+      start_linear!(4)
+      dispatch_from!("poll")
+      observe_records()
+
+      {result, _state} = Orchestrator.run_repo_poll_task_for_test(tick_state(), repos(), 0)
+
+      assert %{"SymphonyLinearPoll" => _polls, "SymphonyLinearIssuesById" => 4} = linear_requests()
+      assert {:ok, [%Issue{id: "issue-1", state: "Code Review"}]} = result.running_result
+    end
+
+    test "under dispatch.source: record sends no Linear request but the repo poll's" do
+      start_linear!(4)
+      dispatch_from!("record")
+      observe_records()
+      Usage.reset()
+
+      {result, _state} = Orchestrator.run_repo_poll_task_for_test(tick_state(), repos(), 0)
+
+      assert %{"SymphonyLinearPoll" => _polls} = requests = linear_requests()
+      assert Map.keys(requests) -- ["SymphonyLinearPoll", "SymphonyLinearViewer"] == []
+      refute "SymphonyLinearIssuesById" in Enum.map(Usage.snapshot().queries, & &1.query)
+      assert {:ok, [%Issue{id: "issue-1", state: "Code Review"}]} = result.running_result
+      assert {:ok, [%Issue{id: "issue-4"}]} = result.stopped_result
+    end
+  end
+
+  defp dispatch_from!(source) do
+    File.write!(Workflow.symphony_file_path(), File.read!(Workflow.symphony_file_path()) <> "dispatch:\n  source: #{source}\n")
+    Cache.clear()
+  end
+
+  defp observe_records do
+    for index <- 1..4 do
+      issue = %Issue{id: "issue-#{index}", identifier: "TEAM-#{index}", title: "Watched #{index}", state: "Code Review", updated_at: @now}
+      {:ok, :updated} = TicketObservation.observe(@repo_key, issue, source: :poll)
+    end
+  end
+
+  defp repos do
+    {:ok, repos} = Config.repos()
+    Enum.filter(repos, &(&1.name == @repo_key))
+  end
+
+  defp tick_state do
+    running = %Issue{id: "issue-1", identifier: "TEAM-1", state: "Code Review"}
+
+    %Orchestrator.State{
+      running: %{running.id => %{issue: running, identifier: running.identifier}},
+      watching: %{"issue-2" => %{}},
+      forced: %{"issue-3" => %{}},
+      operator_stops: %{"issue-4" => OperatorStop.mark("TEAM-4", @repo_key, @now)}
+    }
   end
 
   defp refute_ticket_reads_request_attachments do
