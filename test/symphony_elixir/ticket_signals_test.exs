@@ -103,8 +103,10 @@ defmodule SymphonyElixir.TicketSignalsTest do
 
       assert :ok = TicketSignals.record_phase(@repo_key, "issue-1", "In Progress")
 
-      assert %{phase: "In Progress", issue_identifier: "MT-1", title: "Add checkout", linear_updated_at: ^seen} =
+      assert %{phase: "In Progress", issue_identifier: "MT-1", title: "Add checkout", linear_updated_at: ^seen, phase_at: %DateTime{} = phase_at} =
                RunStore.get_ticket_state(@repo_key, "issue-1")
+
+      assert DateTime.compare(phase_at, seen) == :gt
     end
 
     test "a record already in the phase is left as it was" do
