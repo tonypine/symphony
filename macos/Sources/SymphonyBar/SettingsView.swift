@@ -349,6 +349,8 @@ struct SettingsView: View {
                 }
                 .disabled(!model.canEditDispatchLoop)
 
+                DispatchSection(model: model)
+
                 Section {
                     LabeledContent("Largest artifact") {
                         HStack {
@@ -562,6 +564,9 @@ struct SettingsView: View {
                 }
                 if model.dispatchLoopError != nil {
                     Text("symphony check rejected the dispatch-loop limits; see Dispatch loops.").foregroundStyle(.red)
+                }
+                if model.dispatchError != nil {
+                    Text("The dispatch settings weren't saved; see Dispatch.").foregroundStyle(.red)
                 }
                 if model.ledgerError != nil {
                     Text("symphony check rejected the ledger settings; see Ledger.").foregroundStyle(.red)
@@ -1132,6 +1137,50 @@ private struct LinearWebhooksSection: View {
             )
         }
         .disabled(!model.canEditLinearWebhooks)
+    }
+}
+
+/// `dispatch`: whether dispatch reads its candidates from the Linear poll or from Symphony's record, and how many poll
+/// cycles Setup's Dispatch shadow line counts their differences over.
+private struct DispatchSection: View {
+    @ObservedObject var model: SettingsViewModel
+
+    var body: some View {
+        Section {
+            Picker("Dispatch from", selection: $model.dispatchSource) {
+                ForEach(DispatchSettings.Source.allCases, id: \.self) { source in
+                    Text(source.title).tag(source)
+                }
+            }
+            LabeledContent("Shadow window") {
+                HStack {
+                    TextField("Shadow window in poll cycles", value: $model.dispatchShadowWindow, format: .number)
+                        .labelsHidden()
+                        .monospacedDigit()
+                        .frame(width: 90)
+                        .accessibilityLabel("Shadow window in poll cycles")
+                    Text("cycles")
+                }
+            }
+            Text(
+                "Every poll cycle Symphony also works out the candidates from its own record and compares them with "
+                    + "the poll's. Setup shows the differences over the window. Move dispatch to the record once the "
+                    + "window stays at zero, and back to the poll if anything looks wrong."
+            )
+            .foregroundStyle(.secondary)
+            if let error = model.dispatchError {
+                Text(error).foregroundStyle(.red)
+            }
+        } header: {
+            Text("Dispatch (saved in symphony.yml)")
+        } footer: {
+            SectionFooter(
+                "dispatch.source (default the Linear poll) and dispatch.shadow_window (default 20 cycles, at least 1). "
+                    + "Save checks symphony.yml with symphony check first; Symphony reads them on its next poll cycle, "
+                    + "no restart needed."
+            )
+        }
+        .disabled(!model.canEditDispatch)
     }
 }
 

@@ -86,6 +86,9 @@ final class SettingsUIManifestTests: XCTestCase {
         yaml = try record("setting the dispatch-loop limits", {
             try DispatchLoopLimits.updating($0, from: DispatchLoopLimits(), to: loopLimits)
         }, from: yaml)
+        yaml = try record("setting where dispatch reads from and the shadow window", {
+            try DispatchSettings.updating($0, from: DispatchSettings(), to: DispatchSettings(source: .record, shadowWindow: 50))
+        }, from: yaml)
         yaml = try record("setting the ledger's artifact size cap and its history summary", {
             try LedgerSettings.updating(
                 $0,

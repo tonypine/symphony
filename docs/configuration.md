@@ -2618,8 +2618,12 @@ dispatch:
 - `shadow_window` (default `20`): how many poll cycles the report's window covers. A whole number
   above 0.
 
-Symphony reads both on each poll cycle, so a change applies without a restart. Neither key has a
-control in the macOS app yet.
+Symphony reads both on each poll cycle, so a change applies without a restart. In the macOS app,
+Settings' Dispatch group holds both: a "Dispatch from" picker (Linear poll, Symphony's record) and
+the window as a number of cycles, which Save refuses below 1. Setup's Dispatch shadow line shows the
+report below: the cycles compared, the differences in the window and when the last one appeared,
+with the last ten differences under a disclosure. Against a Symphony without the report the line
+says it is not available.
 
 **The shadow report.** Every poll cycle, whatever `source` says, Symphony also works out each
 repository's candidates from its ticket records and compares the two sets: a ticket only the poll

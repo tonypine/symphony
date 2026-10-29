@@ -34,6 +34,9 @@ public struct StateSnapshot: Equatable {
     /// Linear's workspace webhook and the deliveries Symphony counted (`linear_webhooks`), nil when Symphony
     /// predates them.
     public var linearWebhooks: LinearWebhookHealth?
+    /// Where dispatch reads its candidates from and how the record's candidates compared with the poll's
+    /// (`dispatch_shadow`), nil when Symphony predates them.
+    public var dispatchShadow: DispatchShadowReport?
 
     /// A ticket waiting on the operator, as `/api/v1/state`'s `waiting_on_you` lists it.
     public struct WaitingTicket: Equatable {
@@ -285,7 +288,8 @@ public struct StateSnapshot: Equatable {
         sessionKinds: [String]? = nil,
         setup: SetupPayload? = nil,
         serviceVersion: String? = nil,
-        linearWebhooks: LinearWebhookHealth? = nil
+        linearWebhooks: LinearWebhookHealth? = nil,
+        dispatchShadow: DispatchShadowReport? = nil
     ) {
         self.running = running
         self.retrying = retrying
@@ -302,6 +306,7 @@ public struct StateSnapshot: Equatable {
         self.setup = setup
         self.serviceVersion = serviceVersion
         self.linearWebhooks = linearWebhooks
+        self.dispatchShadow = dispatchShadow
     }
 }
 
@@ -365,6 +370,144 @@ public struct LinearWebhookHealth: Equatable {
             lastRejectedAt: wire.lastRejectedAt.flatMap(SymphonyState.parseDate),
             lastRejectedReason: wire.lastRejectedReason
         )
+    }
+}
+
+/// Where dispatch reads its candidates from, and how the candidates Symphony's ticket records give compared with the
+/// Linear poll's, as `/api/v1/state`'s `dispatch_shadow` reports it (`SymphonyElixir.Dispatch.Shadow`). The counts live
+/// in Symphony's memory, so they start again at a restart.
+public struct DispatchShadowReport: Equatable {
+    /// One ticket the two sides disagree on.
+    public struct Difference: Equatable {
+        /// Which side has the ticket: only the poll, only the record, or both with a different field.
+        public enum Side: Equatable {
+            case poll
+            case record
+            case both
+            /// A side this app doesn't know yet.
+            case other(String)
+
+            public init(_ text: String) {
+                switch text {
+                case "poll": self = .poll
+                case "record": self = .record
+                case "both": self = .both
+                default: self = .other(text)
+                }
+            }
+        }
+
+        public var identifier: String
+        public var side: Side
+        /// `candidate` (the ticket is a candidate on one side only), `state` or `priority`.
+        public var field: String
+        /// What each side has: the state for `candidate`, nil on the side without the ticket.
+        public var poll: String?
+        public var record: String?
+        public var at: Date?
+
+        public init(identifier: String, side: Side, field: String, poll: String? = nil, record: String? = nil, at: Date? = nil) {
+            self.identifier = identifier
+            self.side = side
+            self.field = field
+            self.poll = poll
+            self.record = record
+            self.at = at
+        }
+    }
+
+    /// `dispatch.source`: `poll` or `record`.
+    public var source: DispatchSettings.Source
+    /// `dispatch.shadow_window`: how many cycles `windowDifferences` counts over.
+    public var window: Int
+    public var cyclesCompared: Int
+    public var cyclesWithDifferences: Int
+    /// The cycles the window holds so far, up to `window`.
+    public var windowCycles: Int
+    public var windowDifferences: Int
+    /// The last ten differences that appeared, newest first.
+    public var recent: [Difference]
+
+    public init(
+        source: DispatchSettings.Source = .poll,
+        window: Int = DispatchSettings.defaultShadowWindow,
+        cyclesCompared: Int = 0,
+        cyclesWithDifferences: Int = 0,
+        windowCycles: Int = 0,
+        windowDifferences: Int = 0,
+        recent: [Difference] = []
+    ) {
+        self.source = source
+        self.window = window
+        self.cyclesCompared = cyclesCompared
+        self.cyclesWithDifferences = cyclesWithDifferences
+        self.windowCycles = windowCycles
+        self.windowDifferences = windowDifferences
+        self.recent = recent
+    }
+
+    /// When the newest difference appeared; nil when none has.
+    public var lastDifferenceAt: Date? { recent.compactMap(\.at).max() }
+
+    /// The `dispatch_shadow` block of a `/api/v1/state` payload, nil when Symphony predates it. Read on its own, so a
+    /// block this app can't read never fails the rest of the state.
+    public static func decode(state data: Data) -> DispatchShadowReport? {
+        struct Wire: Decodable {
+            let source: String?
+            let window: Int?
+            let cyclesCompared: Int?
+            let cyclesWithDifferences: Int?
+            let windowCycles: Int?
+            let windowDifferences: Int?
+            let recent: [WireDifference]?
+        }
+        struct WireDifference: Decodable {
+            let identifier: String?
+            let issueId: String?
+            let side: String
+            let field: String
+            let poll: Value?
+            let record: Value?
+            let at: String?
+        }
+        struct State: Decodable { let dispatchShadow: Wire? }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        guard let wire = (try? decoder.decode(State.self, from: data))?.dispatchShadow else { return nil }
+        return DispatchShadowReport(
+            source: wire.source.flatMap(DispatchSettings.Source.init(rawValue:)) ?? .poll,
+            window: wire.window ?? DispatchSettings.defaultShadowWindow,
+            cyclesCompared: wire.cyclesCompared ?? 0,
+            cyclesWithDifferences: wire.cyclesWithDifferences ?? 0,
+            windowCycles: wire.windowCycles ?? 0,
+            windowDifferences: wire.windowDifferences ?? 0,
+            recent: (wire.recent ?? []).map { difference in
+                Difference(
+                    identifier: difference.identifier ?? difference.issueId ?? "?",
+                    side: .init(difference.side),
+                    field: difference.field,
+                    poll: difference.poll?.text,
+                    record: difference.record?.text,
+                    at: difference.at.flatMap(SymphonyState.parseDate)
+                )
+            }
+        )
+    }
+
+    /// A side's value: a state's name or a priority's number.
+    private struct Value: Decodable {
+        let text: String?
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if container.decodeNil() {
+                text = nil
+            } else if let number = try? container.decode(Int.self) {
+                text = String(number)
+            } else {
+                text = try container.decode(String.self)
+            }
+        }
     }
 }
 
@@ -517,6 +660,7 @@ public enum SymphonyState {
         snapshot.setup = SetupPayload.decode(state: data)
         snapshot.serviceVersion = payload.build?.version
         snapshot.linearWebhooks = LinearWebhookHealth.decode(state: data)
+        snapshot.dispatchShadow = DispatchShadowReport.decode(state: data)
         return .state(snapshot)
     }
 

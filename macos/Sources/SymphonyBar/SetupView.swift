@@ -49,6 +49,11 @@ extension SymphonyWindowModel {
         overviewState.map { LinearWebhooksLine(health: $0.snapshot.linearWebhooks, now: $0.generatedAt ?? now) }
     }
 
+    /// The Dispatch shadow line, from the state poll's `dispatch_shadow`, its ages counted from the state's time.
+    func dispatchShadowLine(now: Date = Date()) -> DispatchShadowLine? {
+        overviewState.map { DispatchShadowLine(report: $0.snapshot.dispatchShadow, now: $0.generatedAt ?? now) }
+    }
+
     func setupPage(now: Date = Date()) -> SetupPage {
         let payload = setupPayload
         return SetupPage(payload: payload, buildWarning: payload == nil ? nil : setupBuildWarning, order: setupOrder, now: now)
@@ -504,7 +509,7 @@ struct SetupContent: View {
                     SetupPageBody(
                         page: page, actions: actions, welcome: model.setupWelcome,
                         githubUpdates: model.githubUpdatesCard(), githubActions: githubActions,
-                        linearWebhooks: model.linearWebhooksLine()
+                        linearWebhooks: model.linearWebhooksLine(), dispatchShadow: model.dispatchShadowLine()
                     )
                     .sheet(item: githubSheet) { sheet in
                         GitHubUpdatesSheetView(
@@ -597,6 +602,10 @@ struct SetupPageBody: View {
     var githubExpanded = false
     /// Whether Linear's webhook deliveries arrive; nil while Symphony's state is unknown.
     var linearWebhooks: LinearWebhooksLine?
+    /// How dispatch from the record compares with the Linear poll; nil while Symphony's state is unknown.
+    var dispatchShadow: DispatchShadowLine?
+    /// The line's last differences start open (its snapshot).
+    var dispatchShadowExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
@@ -634,6 +643,9 @@ struct SetupPageBody: View {
             }
             if let linearWebhooks {
                 LinearWebhooksLineView(line: linearWebhooks)
+            }
+            if let dispatchShadow {
+                DispatchShadowLineView(line: dispatchShadow, startsExpanded: dispatchShadowExpanded)
             }
             if !page.notChecked.isEmpty {
                 Card(title: SetupPage.notCheckedTitle) {
@@ -707,6 +719,116 @@ struct LinearWebhooksLineView: View {
         case .notAvailable, .off, .waiting: DesignTokens.Status.idle.tint
         case .arriving: DesignTokens.Status.done.tint
         case .rejecting: SetupSeverityMark.warning.tint
+        }
+    }
+}
+
+/// The Dispatch shadow line: a mark, the state's word and one sentence, then the last differences under a disclosure.
+/// Differences while the poll drives dispatch are called out by the mark and the word in the warning colour (the
+/// sentence stays secondary, for contrast); from the record they are information. An older Symphony's line is greyed
+/// out, with no disclosure.
+struct DispatchShadowLineView: View {
+    let line: DispatchShadowLine
+    @State private var expanded: Bool
+
+    init(line: DispatchShadowLine, startsExpanded: Bool = false) {
+        self.line = line
+        _expanded = State(initialValue: startsExpanded)
+    }
+
+    var body: some View {
+        Card(title: DispatchShadowLine.title) {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+                HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s3) {
+                    Image(systemName: symbol)
+                        .foregroundStyle(tint)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
+                        Text(line.word)
+                            .font(DesignTokens.TypeStyle.rowTitle.font)
+                            .foregroundStyle(line.isWarning ? SetupSeverityMark.warning.tint : Color.primary)
+                        Text(line.detail)
+                            .font(DesignTokens.TypeStyle.callout.font)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(DispatchShadowLine.title): \(line.word). \(line.detail)")
+                if line.isAvailable {
+                    Button {
+                        withAnimation(.standard) { expanded.toggle() }
+                    } label: {
+                        Label(DispatchShadowLine.disclosureTitle, systemImage: expanded ? "chevron.down" : "chevron.right")
+                            .font(DesignTokens.TypeStyle.callout.font)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(expanded ? "Hide the last dispatch differences" : "Show the last dispatch differences")
+                    if expanded {
+                        differences
+                    }
+                }
+            }
+        }
+        .disabled(!line.isAvailable)
+        .opacity(line.isAvailable ? 1 : 0.6)
+    }
+
+    @ViewBuilder private var differences: some View {
+        if line.rows.isEmpty {
+            Text(DispatchShadowLine.emptyList)
+                .font(DesignTokens.TypeStyle.callout.font)
+                .foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                ForEach(line.rows) { row in
+                    HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s3) {
+                        Text(row.identifier)
+                            .font(DesignTokens.TypeStyle.rowTitle.font)
+                            .monospaced()
+                        VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
+                            Text("\(row.side) · \(row.field)")
+                                .font(DesignTokens.TypeStyle.callout.font)
+                            if let values = row.values {
+                                Text(values)
+                                    .font(DesignTokens.TypeStyle.callout.font)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        Spacer(minLength: DesignTokens.Space.s3)
+                        if let ago = row.ago {
+                            Text(ago)
+                                .font(DesignTokens.TypeStyle.callout.font)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(
+                        [row.identifier, row.side, row.field, row.values, row.ago].compactMap { $0 }.joined(separator: ", ")
+                    )
+                }
+            }
+        }
+    }
+
+    private var symbol: String {
+        switch line.state {
+        case .notAvailable: "questionmark.circle"
+        case .pollClean: DesignTokens.Status.done.symbol
+        case .pollDiffering: SetupSeverityMark.warning.symbol
+        case .record: "info.circle"
+        }
+    }
+
+    private var tint: Color {
+        switch line.state {
+        case .notAvailable, .record: DesignTokens.Status.idle.tint
+        case .pollClean: DesignTokens.Status.done.tint
+        case .pollDiffering: SetupSeverityMark.warning.tint
         }
     }
 }
