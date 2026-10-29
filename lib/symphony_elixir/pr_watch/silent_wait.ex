@@ -11,8 +11,10 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
   GitHub's rate limit still holding one tick past its reset. A ticket whose upkeep GitHub refused
   on its head on the last read (`upkeep_failure`: U1's update-branch, U2's rerun of a cancelled
   run) is quiet whatever it waits on: only the next read retries the upkeep, and no wait ends while
-  it fails. Any other ticket is quiet, and one quiet for two poll cycles in a row is silent: it is
-  listed in `silent_waits` and logged once. Quiet ticks count poll intervals, not polls, so an extra
+  it fails. So is one whose R28 waits on the update U1 already made on its head on an earlier read
+  (GitHub took it, or found a conflict, but the head never moved): U1 never repeats on that head.
+  Any other ticket is quiet, and one quiet for two poll cycles in a row is silent: it is listed in
+  `silent_waits` and logged once. Quiet ticks count poll intervals, not polls, so an extra
   tick (`poll_now`, Check Now) inside an interval adds none.
   """
 
@@ -52,6 +54,7 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
       not fresh?(decision, ctx) -> quiet(quiet_reason(decision), ctx)
       applied_now?(decision, ctx) -> nil
       failure = upkeep_failure(watch) -> quiet(failure, ctx)
+      stalled_update?(watch, decision, ctx) -> quiet("U1 updated the branch on the head on an earlier read, but the head has not moved", ctx)
       waiting?(decision) -> bound(watch, decision, ctx)
       true -> quiet("#{decision.rule} decided `#{decision.kind}`, but no run started and no wait is recorded", ctx)
     end
@@ -76,6 +79,17 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
     do: "#{failure.rule} `#{failure.kind}` failed on the head (#{failure.error}), and only the next read retries it"
 
   defp upkeep_failure(_watch), do: nil
+
+  # R28 with no PR ahead waits on the update U1 made on the record's head before this tick; the
+  # update made on this tick is the watcher acting.
+  defp stalled_update?(%{head_sha: head, applied: applied}, %{rule: "R28"} = decision, ctx) do
+    not match?(%{args: %{prs: [_ | _]}}, decision) and Enum.any?(applied, &earlier_update?(&1, head, ctx.now))
+  end
+
+  defp stalled_update?(_watch, _decision, _ctx), do: false
+
+  defp earlier_update?(%{rule: "U1", head_sha: head, at: %DateTime{} = at}, head, now), do: DateTime.compare(at, now) == :lt
+  defp earlier_update?(_entry, _head, _now), do: false
 
   defp waiting?(%{owner: owner, clears_when: clears_when}), do: owner in Action.owners() and is_binary(clears_when) and clears_when != ""
   defp waiting?(_decision), do: false

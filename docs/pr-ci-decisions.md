@@ -294,7 +294,10 @@ quiet for two poll cycles in a row is silent; quiet ticks count poll intervals, 
 whose upkeep GitHub refused on its head (`upkeep_failure`) is quiet whatever its decision waits on,
 since only the next read retries the upkeep and no wait ends while it fails: an update-branch
 refused on every read (a token without the `workflow` scope, for main's changes under
-`.github/workflows/`) is listed after two ticks, its reason naming the rule and the error.
+`.github/workflows/`) is listed after two ticks, its reason naming the rule and the error. So is
+one whose R28 waits on the update U1 already made on its head on an earlier read: GitHub took the
+update (or found a conflict) but the head never moved, and U1 never repeats on that head, so the
+ticket is listed two ticks after the update.
 
 A silent ticket is listed in `silent_waits` in `GET /api/v1/state` (its phase, since when, the last
 rule, the bound that passed and why) and logs one `pr_watch.silent_wait` line when it turns silent.

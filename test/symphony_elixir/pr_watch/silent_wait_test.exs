@@ -78,6 +78,30 @@ defmodule SymphonyElixir.PrWatch.SilentWaitTest do
     assert SilentWait.check(watch(moved, head_sha: "head-1", upkeep_failure: update), ctx()) == nil
   end
 
+  test "R28 waiting on the update U1 made on the head on an earlier read is quiet, and listed from the second tick" do
+    behind = wait(:symphony, rule: "R28", clears_when: "the branch is updated with main", args: %{})
+    earlier = %{rule: "U1", kind: :update_branch, head_sha: "head-1", at: ago(@interval)}
+
+    first = SilentWait.check(watch(behind, head_sha: "head-1", applied: [earlier]), ctx())
+    assert %{since: @now, ticks: 1, bound: nil, reason: "U1 updated the branch on the head on an earlier read, but the head has not moved"} = first
+    refute SilentWait.listed?(first)
+
+    later = DateTime.add(@now, @interval, :millisecond)
+    second = SilentWait.check(watch(%{behind | decided_at: later}, head_sha: "head-1", applied: [earlier]), ctx(now: later, previous: first))
+    assert %{since: @now, ticks: 2} = second
+    assert SilentWait.listed?(second)
+
+    # The update made on this tick, one on another head, none, a PR ahead, another rule's wait, or
+    # another upkeep: no silence from it.
+    assert SilentWait.check(watch(behind, head_sha: "head-1", applied: [%{earlier | at: @now}]), ctx()) == nil
+    assert SilentWait.check(watch(behind, head_sha: "head-2", applied: [earlier]), ctx()) == nil
+    assert SilentWait.check(watch(behind, head_sha: "head-1", applied: []), ctx()) == nil
+    assert SilentWait.check(watch(%{behind | args: %{prs: [%{identifier: "TP-2"}]}}, head_sha: "head-1", applied: [earlier]), ctx()) == nil
+    assert SilentWait.check(watch(wait(:ci), head_sha: "head-1", applied: [earlier]), ctx()) == nil
+    assert SilentWait.check(watch(behind, head_sha: "head-1", applied: [%{earlier | rule: "U2"}]), ctx()) == nil
+    assert SilentWait.check(watch(behind), ctx()) == nil
+  end
+
   test "a quiet ticket counts its ticks from when it went quiet, and is listed from the second" do
     first = SilentWait.check(watch(decision(%{})), ctx())
     refute SilentWait.listed?(first)

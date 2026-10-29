@@ -1413,6 +1413,45 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert PrWatch.silent_waits() == []
     end
 
+    for {answer, result} <- [{"takes", :ok}, {"answers with a conflict", {:error, :conflict}}] do
+      @update_result result
+
+      test "an update-branch GitHub #{answer} that never moves the head is a silent wait two poll intervals later" do
+        World.update(:update_result, fn _ok -> @update_result end)
+        issue_id = ticket!("1", "Code Review", mergeable: :behind)
+        pid = start!()
+
+        # The read that updates the branch is the watcher acting: no silence.
+        tick!(pid)
+        assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}]
+        assert upkept(issue_id) == [{"U1", :update_branch, "head-1-1"}]
+        assert %{rule: "R28", kind: :wait, owner: :symphony} = decision(issue_id)
+        assert watch(issue_id).upkeep_failure == nil
+        assert watch(issue_id).silent == nil
+
+        # The head never moves, and U1 never repeats on it: quiet one poll interval later, listed the next.
+        advance!(30_000)
+        tick!(pid)
+        assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}]
+        assert %{rule: "R28", kind: :wait} = decision(issue_id)
+        assert %{ticks: 1, reason: "U1 updated the branch on the head on an earlier read, but the head has not moved"} = watch(issue_id).silent
+        assert PrWatch.silent_waits() == []
+
+        advance!(30_000)
+        log = capture_log(fn -> tick!(pid) end)
+        assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}]
+        assert log =~ "pr_watch.silent_wait issue_id=#{issue_id} issue_identifier=TP-1"
+        assert log =~ "rule=R28 bound=none reason=\"U1 updated the branch on the head on an earlier read, but the head has not moved\""
+        assert [%{issue_identifier: "TP-1", rule: "R28", reason: "U1 updated the branch on the head" <> _}] = PrWatch.silent_waits()
+
+        # The update lands at last: a new head, and the ticket leaves the list.
+        pr!("1", head_sha: "head-1-2", mergeable: :clean, ci: :pending)
+        tick!(pid)
+        assert watch(issue_id).silent == nil
+        assert PrWatch.silent_waits() == []
+      end
+    end
+
     test "a QA PR behind main is updated only once its run ends, on the read that sees it end" do
       issue_id = ticket!("1", "QA", mergeable: :behind)
       run!(issue_id, "running")
