@@ -6,10 +6,14 @@ defmodule SymphonyElixir.PrWatch.Repo do
   and the attempts on the ticket's state record (`TicketState.pr_watch`). It serialises those writes
   for its repository.
 
-  The watch set is read from Linear each tick, never from Symphony's runs: every ticket of the
-  repository in `In Progress`, `Code Review`, `QA`, `Rework`, `CI Fix` or `Merging`, except a plan
-  parent with no PR, which never opens one. So a ticket a person moved by hand is watched from the
-  next tick. A ticket that leaves the set loses its record.
+  The watch set is read each tick, never from Symphony's runs: every ticket of the repository in
+  `In Progress`, `Code Review`, `QA`, `Rework`, `CI Fix` or `Merging`, except a plan parent with no
+  PR, which never opens one. So a ticket a person moved by hand is watched from the next tick. A
+  ticket that leaves the set loses its record. With `dispatch.source: poll` it is read from Linear;
+  with `record`, from the repository's ticket records (`SymphonyElixir.Dispatch.Candidates`, the
+  records' phase in place of Linear's state, the worker's tickets only), so neither the tick nor a
+  confirm read makes a Linear request, and a move Symphony or the Director made, which writes the
+  record first, is watched at the next tick.
 
   The facts follow the ticket's PR through its whole life: its open PR
   (`SymphonyElixir.TicketPullRequest`), else the one closed without merging (R8 sends the ticket to
@@ -95,8 +99,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
     Tracker
   }
 
+  alias SymphonyElixir.Dispatch.Candidates
   alias SymphonyElixir.GitHub.{PullRequest, RelaySupervisor}
-  alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Linear.{Client, Issue}
   alias SymphonyElixir.PrDecision.{Action, Apply, Facts}
   alias SymphonyElixir.PrWatch.{Attempts, Competitors, Fetch, Health, Ingest, Release, SilentWait}
 
@@ -448,10 +453,41 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp failures(:all, false, _state), do: 0
   defp failures(_scope, _failed?, state), do: state.failures
 
-  # The repository's tickets in the watched states, read from Linear; an error when its read failed,
-  # so a missing answer never reads as tickets that left the set. The read covers every repo, and
-  # every repo's tickets it returned are written into their records.
+  # The repository's tickets in the watched states: from its records under `dispatch.source: record`,
+  # else read from Linear. An error when they couldn't be read, so a missing answer never reads as
+  # tickets that left the set.
   defp watched_issues(state, settings) do
+    case Config.dispatch_source() do
+      "record" -> recorded_issues(state, settings)
+      _poll -> linear_issues(state, settings)
+    end
+  end
+
+  # The records the dispatch candidates are rebuilt from (`Candidates.from_records/4`), filtered by the
+  # watched states instead of the active ones and by the worker as the Linear read is: no Linear read.
+  # With `assignee: me` before any poll learned the viewer, no record could count as assigned, so the
+  # tick fails instead of dropping every watched ticket.
+  defp recorded_issues(state, settings) do
+    with records when is_list(records) <- store(state).list_ticket_states(state.repo_key),
+         {:ok, route} <- Config.repo(state.repo_key),
+         {:ok, opts} <- assignee_opts(route, settings) do
+      opts = [route: route, states: Enum.map(phases(settings), &elem(&1, 0))] ++ opts
+      {:ok, Candidates.from_records(state.repo_key, records, settings, opts).candidates}
+    end
+  end
+
+  defp assignee_opts(route, settings) do
+    case String.trim(route.assignee || settings.tracker.assignee || "") do
+      "me" -> viewer_opts(Client.known_viewer_id())
+      _assignee -> {:ok, []}
+    end
+  end
+
+  defp viewer_opts(nil), do: {:error, :linear_viewer_unknown}
+  defp viewer_opts(viewer_id), do: {:ok, [assignee_ids: [viewer_id]]}
+
+  # The read covers every repo, and every repo's tickets it returned are written into their records.
+  defp linear_issues(state, settings) do
     tracker = Keyword.get(state.opts, :tracker, Tracker)
 
     with {:ok, issues, failures} <- tracker.fetch_issues_by_states_with_failures(Enum.map(phases(settings), &elem(&1, 0))) do

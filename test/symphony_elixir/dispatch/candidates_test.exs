@@ -212,6 +212,17 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
       # A route's `me` needs the caller's resolved id, as the tracker's does.
       assert %{candidates: [], excluded: %{unassigned: 2}} = from_route.(route.("me"))
     end
+
+    test "`states` names the states a candidate's state must be one of, in place of the active states" do
+      records = [observed(issue("todo", "MT-1", "Todo")), observed(issue("backlog", "MT-2", " backlog ")), observed(issue("done", "MT-3", "Done"))]
+      settings = Config.settings!()
+
+      assert %{candidates: [%Issue{identifier: "MT-1"}], excluded: %{inactive: 1, terminal: 1}} =
+               Candidates.from_records(repo_key(), records, settings)
+
+      assert %{candidates: [%Issue{identifier: "MT-2"}], excluded: %{inactive: 1, terminal: 1}} =
+               Candidates.from_records(repo_key(), records, settings, states: ["In Progress", "Backlog"])
+    end
   end
 
   describe "issue_from_record/1" do

@@ -2,7 +2,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.PrDecision.Facts
-  alias SymphonyElixir.{PrWatch, TicketPullRequest, TicketState}
+  alias SymphonyElixir.{PrWatch, TicketObservation, TicketPullRequest, TicketState}
   alias SymphonyElixir.PrWatch.Repo
 
   @now ~U[2026-10-16 12:00:00Z]
@@ -799,6 +799,136 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       assert %{actions: actions} = watch(repo_key, "1")
       assert Enum.map(actions, & &1.head_sha) == ["sha-6", "sha-5", "sha-4", "sha-3", "sha-2"]
       assert [%{rule: "R22", kind: :rerun_failed, source: :poll, at: %DateTime{}} | _older] = actions
+    end
+  end
+
+  describe "dispatch.source: record" do
+    setup do
+      on_exit(&Client.reset_viewer_cache_for_test/0)
+      :ok
+    end
+
+    defp record_source!(opts \\ []) do
+      write_workflow_file!(Workflow.workflow_file_path(), opts)
+      File.write!(Workflow.symphony_file_path(), File.read!(Workflow.symphony_file_path()) <> "dispatch:\n  source: record\n")
+      Cache.clear()
+    end
+
+    defp watched_ids(repo_key) do
+      for %{pr_watch: %{}, issue_id: id} <- RunStore.list_ticket_states(repo_key), do: id
+    end
+
+    defp observed!(repo_key, %Issue{} = issue), do: {:ok, _outcome} = TicketObservation.observe(repo_key, %{issue | updated_at: @now})
+
+    test "a tick watches the records in the watched states the Linear read would have returned, and reads no Linear", %{repo_key: repo_key} do
+      issues =
+        for issue <- [
+              repo_key |> with_pr(issue("1", "Code Review"), 1),
+              issue("2", "In Progress"),
+              repo_key |> with_pr(issue("3", "In Progress"), 3),
+              issue("4", "Todo"),
+              issue("5", "Rework", labels: ["plan"]),
+              issue("6", "Code Review", repo_key: "other-repo")
+            ],
+            do: %{issue | repo_key: issue.repo_key || repo_key, updated_at: @now}
+
+      # Polling, the Linear read observes every ticket into its record and picks the watched ones.
+      issues!(issues)
+      pid = start_repo!(repo_key)
+      assert {:ok, %{watched: 3}} = Repo.poll(pid)
+      assert_received {:linear_read, _states}
+      polled = Enum.sort(watched_ids(repo_key))
+      assert polled == ["1", "2", "3"]
+
+      # From the records: the same tickets, decided as before, and no Linear read.
+      record_source!()
+      issues!({:error, :linear_must_not_be_read})
+      flush()
+      assert {:ok, %{watched: 3, errors: 0}} = Repo.poll(pid)
+      refute_received {:linear_read, _states}
+      assert Enum.sort(watched_ids(repo_key)) == polled
+      assert %{facts: %Facts{phase: :code_review, pr_number: 1}, decision: %{rule: "R27"}} = watch(repo_key, "1")
+      assert_received {:read, "https://github.com/acme/app/pull/3", _opts}
+    end
+
+    test "a ticket a Director move put in Code Review is watched on the next tick, with no Linear read", %{repo_key: repo_key} do
+      record_source!()
+      issues!({:error, :linear_must_not_be_read})
+      observed!(repo_key, with_pr(repo_key, issue("7", "Todo"), 7))
+      pid = start_repo!(repo_key)
+
+      assert {:ok, %{watched: 0}} = Repo.poll(pid)
+
+      # The move writes the record first (TP-1217); Linear's board may not show it yet.
+      :ok = SymphonyElixir.TicketSignals.record_phase(repo_key, "7", "Code Review")
+      assert {:ok, %{watched: 1}} = Repo.poll(pid)
+      assert %{stay: :code_review, facts: %Facts{phase: :code_review, pr_number: 7}} = watch(repo_key, "7")
+      refute_received {:linear_read, _states}
+    end
+
+    test "the confirm read after a delivery reads GitHub only", %{repo_key: repo_key} do
+      record_source!()
+      issues!({:error, :linear_must_not_be_read})
+      observed!(repo_key, with_pr(repo_key, issue("1", "Code Review"), 1))
+      test_pid = self()
+      pid = start_repo!(repo_key, timer: fn message, _delay_ms -> send(test_pid, {:timer, message}) && make_ref() end)
+      assert {:ok, %{watched: 1}} = Repo.poll(pid)
+      flush()
+
+      delivery =
+        {:ci,
+         %{
+           event: "check_suite",
+           action: "completed",
+           head_sha: "sha-1",
+           conclusion: "success",
+           completed_at: @now,
+           pr_urls: [pr_url(1)],
+           merged: false,
+           base_ref: "main"
+         }}
+
+      Repo.ingest(pid, delivery, "https://github.com/acme/app")
+      assert_receive {:timer, :confirm}
+      send(pid, :confirm)
+      :sys.get_state(pid)
+
+      assert_received {:read, "https://github.com/acme/app/pull/1", _opts}
+      refute_received {:linear_read, _states}
+    end
+
+    test "records that can't be read fail the tick instead of reading as tickets that left", %{repo_key: repo_key} do
+      record_source!()
+      pid = start_repo!(repo_key, run_store: FailingStore)
+
+      log = capture_log(fn -> assert {:error, :store_down} = Repo.poll(pid) end)
+      assert log =~ "PR watch tick failed repo_key=#{repo_key} reason=:store_down"
+      refute_received {:linear_read, _states}
+    end
+
+    test "with assignee me, the tick waits until a poll learned the viewer, then watches the viewer's tickets", %{repo_key: repo_key} do
+      record_source!(tracker_assignee: "me")
+      issues!({:error, :linear_must_not_be_read})
+      observed!(repo_key, with_pr(repo_key, issue("1", "Code Review", assignee_id: "user-2"), 1))
+      observed!(repo_key, with_pr(repo_key, issue("2", "Code Review", assignee_id: "someone-else"), 2))
+      SymphonyElixir.PrWatchSupport.put_watch!(repo_key, "1", phase: :code_review)
+      pid = start_repo!(repo_key)
+
+      # No record can count as the viewer's yet: the tick fails and keeps what it watched.
+      log = capture_log(fn -> assert {:error, :linear_viewer_unknown} = Repo.poll(pid) end)
+      assert log =~ "reason=:linear_viewer_unknown"
+      assert watched_ids(repo_key) == ["1"]
+
+      graphql_fun = fn query, _variables ->
+        if query =~ "SymphonyLinearViewer",
+          do: {:ok, %{"data" => %{"viewer" => %{"id" => "user-2"}}}},
+          else: {:ok, %{"data" => %{"issues" => %{"nodes" => [], "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}}}}}
+      end
+
+      assert {:ok, []} = Client.fetch_candidate_issues_for_test(graphql_fun)
+      assert {:ok, %{watched: 1}} = Repo.poll(pid)
+      assert watched_ids(repo_key) == ["1"]
+      refute_received {:linear_read, _states}
     end
   end
 
