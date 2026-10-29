@@ -4,9 +4,10 @@ defmodule SymphonyElixir.OrchestratorDispatchShadowTest do
   import ExUnit.CaptureLog
 
   alias SymphonyElixir.Dispatch.Shadow
-  alias SymphonyElixir.{RunStore, TicketObservation}
+  alias SymphonyElixir.{RunStore, TicketObservation, TicketSignals}
 
   @linear_at ~U[2026-10-29 09:00:00Z]
+  @review_states ["Todo", "In Progress", "Rework", "Code Review"]
 
   setup do
     Shadow.reset()
@@ -80,7 +81,8 @@ defmodule SymphonyElixir.OrchestratorDispatchShadowTest do
     assert repo_key == ctx.repo_key
   end
 
-  test "a state a webhook changed is named until the next poll reads it, and dispatch reads the record with source record", ctx do
+  test "a state a webhook changed after the poll read is record_newer until the next poll reads it, and dispatch reads the record with source record",
+       ctx do
     write_workflow_file!(Workflow.workflow_file_path())
     File.write!(Workflow.symphony_file_path(), File.read!(Workflow.symphony_file_path()) <> "dispatch:\n  source: record\n  shadow_window: 2\n")
     Cache.clear()
@@ -92,17 +94,49 @@ defmodule SymphonyElixir.OrchestratorDispatchShadowTest do
     {:ok, :updated} = TicketObservation.observe(ctx.repo_key, moved, source: :webhook)
 
     {{buckets, state}, log} = with_log(fn -> cycle(state, ctx.repos, [moved], 50) end)
-    assert log =~ "issue_identifier=ACME-1 side=both field=state poll=\"Todo\" record=\"In Progress\""
+    refute log =~ "Dispatch shadow difference"
 
-    # With `record` dispatch reads the record, and the report still names the poll and record sides.
+    # With `record` dispatch reads the record, and the record being newer is no difference.
     assert [%{identifier: "ACME-1", state: "In Progress"}] = buckets.dispatchable
-    assert %{window_differences: 1, recent: [%{identifier: "ACME-1", side: :both, field: :state}]} = Shadow.summary()
+    assert %{window_differences: 0, recent: [], record_newer: %{count: 1, recent: ["ACME-1"]}} = Shadow.summary()
 
-    # The next poll reads the move: the difference clears, and the two-cycle window forgets it.
-    {%{dispatchable: [%{state: "In Progress"}]}, state} = cycle(state, ctx.repos, [moved], 100)
-    assert %{cycles_compared: 3, window_cycles: 2, window_differences: 1} = Shadow.summary()
-    cycle(state, ctx.repos, [moved], 150)
-    assert %{cycles_compared: 4, cycles_with_differences: 1, window_differences: 0} = Shadow.summary()
+    # The next poll reads the move: nothing is set aside any more, and the count stays.
+    {%{dispatchable: [%{state: "In Progress"}]}, _state} = cycle(state, ctx.repos, [moved], 100)
+    assert %{cycles_compared: 3, cycles_with_differences: 0, record_newer: %{count: 1}} = Shadow.summary()
+  end
+
+  test "TP-1222 replayed: the poll reads Rework, Symphony moves the record to Code Review, and the comparison records no difference",
+       ctx do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_active_states: @review_states)
+    issue_id = "#{ctx.repo_key}-1"
+    {_buckets, state} = cycle(%Orchestrator.State{poll_interval_ms: 100}, ctx.repos, [issue(ctx.repo_key, 1, state: "Rework")], 0)
+
+    # Symphony's own move writes the record first, then Linear; the cache still holds the read before it.
+    :ok = TicketSignals.record_phase(ctx.repo_key, issue_id, "Code Review")
+
+    log = capture_log(fn -> cycle(state, ctx.repos, [issue(ctx.repo_key, 1, state: "Rework")], 50) end)
+    refute log =~ "Dispatch shadow difference"
+
+    summary = Shadow.summary()
+    assert %{cycles_compared: 2, cycles_with_differences: 0, window_differences: 0, recent: []} = summary
+    assert summary.record_newer == %{count: 1, recent: ["ACME-1"]}
+  end
+
+  test "a record whose phase was written before the poll read and still differs is a difference naming the ticket and field", ctx do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_active_states: @review_states)
+    {_buckets, state} = cycle(%Orchestrator.State{poll_interval_ms: 100}, ctx.repos, [issue(ctx.repo_key, 1, state: "Rework")], 0)
+
+    moved = issue(ctx.repo_key, 1, state: "Code Review", updated_at: DateTime.add(@linear_at, 60))
+    {:ok, :updated} = TicketObservation.observe(ctx.repo_key, moved, source: :webhook)
+
+    # The next poll gets a lagging copy (an older updatedAt), so the record keeps the phase it wrote
+    # before this read: the two sides really disagree.
+    log = capture_log(fn -> cycle(state, ctx.repos, [issue(ctx.repo_key, 1, state: "Rework")], 100) end)
+    assert log =~ "issue_identifier=ACME-1 side=both field=state poll=\"Rework\" record=\"Code Review\""
+
+    summary = Shadow.summary()
+    assert %{cycles_with_differences: 1, recent: [%{identifier: "ACME-1", side: :both, field: :state}]} = summary
+    assert summary.record_newer.count == 0
   end
 
   test "a ticket only the record has is a difference on the record side; a repo not polled yet is left out", ctx do

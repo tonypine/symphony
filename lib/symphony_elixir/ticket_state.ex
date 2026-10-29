@@ -6,7 +6,8 @@ defmodule SymphonyElixir.TicketState do
   a CI Fix stay came from (so a mechanical repair can return it), the holds that pause it
   (Blocked / Needs Decision), the CI state of each PR head it has seen, its verdict records, its
   signals ledger (the timeline both the machinery and agents read) and the runs dispatched since it
-  last made progress, which `SymphonyElixir.DispatchLoop` counts, and the decisions a person recorded
+  last made progress, which `SymphonyElixir.DispatchLoop` counts, when the phase was last written
+  (`phase_at`, by a move of Symphony's or an observation that changed it), and the decisions a person recorded
   on it (`SymphonyElixir.Decisions`), which the description's Decisions section projects, and
   the PR and CI watcher's fact record (`pr_watch`, written by `SymphonyElixir.PrWatch.Repo`), and
   the sequence number of the last event in its event stream (`event_seq`, `SymphonyElixir.TicketEvents`),
@@ -203,6 +204,7 @@ defmodule SymphonyElixir.TicketState do
           issue_id: String.t() | nil,
           issue_identifier: String.t() | nil,
           phase: String.t() | nil,
+          phase_at: DateTime.t() | nil,
           ci_fix_origin: String.t() | nil,
           holds: [hold()],
           ci_states: [ci_state()],
@@ -268,6 +270,7 @@ defmodule SymphonyElixir.TicketState do
       issue_id: map_string(record, :issue_id),
       issue_identifier: map_string(record, :issue_identifier),
       phase: map_string(record, :phase),
+      phase_at: map_datetime(record, :phase_at),
       ci_fix_origin: map_string(record, :ci_fix_origin),
       holds: normalize_holds(Map.get(record, :holds)),
       ci_states: normalize_ci_states(Map.get(record, :ci_states)),
@@ -302,6 +305,7 @@ defmodule SymphonyElixir.TicketState do
       issue_id: nil,
       issue_identifier: nil,
       phase: nil,
+      phase_at: nil,
       ci_fix_origin: nil,
       holds: [],
       ci_states: [],
@@ -340,7 +344,8 @@ defmodule SymphonyElixir.TicketState do
     is dropped and the record returned as it was;
   - `:unchanged` when every field already holds what the issue says;
   - `:changed` otherwise, with `observed_at` and `updated_at` set to `observed_at`, and
-    `observed_from` to the read's `source` (`t:observation_source/0`).
+    `observed_from` to the read's `source` (`t:observation_source/0`); `phase_at` too when the
+    phase changed.
 
   A field the issue marks `:unknown` (a webhook delivery that doesn't carry it) never overwrites the
   record's value, nor does a missing state, parent, `created_at` or `updated_at`: a missing fact is
@@ -363,17 +368,18 @@ defmodule SymphonyElixir.TicketState do
       if Map.take(observed, @observed_fields) == Map.take(record, @observed_fields) do
         {record, :unchanged}
       else
-        {Map.merge(observed, %{observed_at: observed_at, observed_from: observation_source(source), updated_at: observed_at}), :changed}
+        stamps = %{observed_at: observed_at, observed_from: observation_source(source), updated_at: observed_at}
+        {observed |> Map.merge(stamps) |> stamp_phase_change(record.phase, observed_at), :changed}
       end
     end
   end
 
   @doc """
-  The fields `observe/4` writes, with `observed_at`, `observed_from` and `updated_at`, as an update of
-  the stored record.
+  The fields `observe/4` writes, with `phase_at`, `observed_at`, `observed_from` and `updated_at`, as
+  an update of the stored record.
   """
   @spec observation(t()) :: map()
-  def observation(record), do: record |> normalize() |> Map.take(@observed_fields ++ [:observed_at, :observed_from, :updated_at])
+  def observation(record), do: record |> normalize() |> Map.take(@observed_fields ++ [:phase_at, :observed_at, :observed_from, :updated_at])
 
   @doc """
   Marks the ticket removed in Linear at `removed_at`, as an `Issue` remove delivery says. Nothing else
@@ -384,6 +390,9 @@ defmodule SymphonyElixir.TicketState do
 
   defp observation_source(source) when source in @observation_sources, do: source
   defp observation_source(_source), do: nil
+
+  defp stamp_phase_change(%{phase: phase} = observed, phase, _observed_at), do: observed
+  defp stamp_phase_change(observed, _phase, observed_at), do: %{observed | phase_at: observed_at}
 
   defp stale?(%DateTime{} = known, %DateTime{} = fact), do: DateTime.compare(fact, known) == :lt
   defp stale?(_known, _fact), do: false
@@ -500,12 +509,16 @@ defmodule SymphonyElixir.TicketState do
   @spec pr_watch(t()) :: pr_watch() | nil
   def pr_watch(record), do: record |> normalize() |> Map.fetch!(:pr_watch)
 
-  @doc "Sets the record's phase, the state the machine believes the ticket is in."
+  @doc """
+  Sets the record's phase, the state the machine believes the ticket is in, and when it was written
+  (`phase_at`).
+  """
   @spec put_phase(t(), String.t() | nil, DateTime.t()) :: t()
   def put_phase(record, phase, at \\ DateTime.utc_now()) do
     record
     |> normalize()
     |> Map.put(:phase, normalize_string(phase))
+    |> Map.put(:phase_at, at)
     |> Map.put(:updated_at, at)
   end
 

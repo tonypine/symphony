@@ -15,6 +15,7 @@ defmodule SymphonyElixir.TicketStateTest do
                issue_id: "issue-1",
                issue_identifier: nil,
                phase: nil,
+               phase_at: nil,
                holds: [],
                ci_states: [],
                verdicts: [],
@@ -126,6 +127,7 @@ defmodule SymphonyElixir.TicketStateTest do
                issue_id: nil,
                issue_identifier: nil,
                phase: nil,
+               phase_at: nil,
                holds: [],
                ci_states: [],
                verdicts: [],
@@ -274,7 +276,7 @@ defmodule SymphonyElixir.TicketStateTest do
     test "sets the phase and stamps the time" do
       record = TicketState.new("repo-a", "issue-1") |> TicketState.put_phase("Merging", @at)
       assert record.phase == "Merging"
-      assert record.updated_at == @at
+      assert {record.phase_at, record.updated_at} == {@at, @at}
     end
 
     test "clears the phase for a blank or non-binary value" do
@@ -805,8 +807,16 @@ defmodule SymphonyElixir.TicketStateTest do
 
       assert {observed, :changed} = TicketState.observe(record, newer, later)
       assert {observed.title, observed.phase, observed.labels, observed.priority, observed.assignee, observed.blockers} == {"Renamed", "Code Review", [], nil, nil, []}
-      assert {observed.linear_updated_at, observed.observed_at} == {DateTime.add(@linear_at, 600), later}
+      assert {observed.linear_updated_at, observed.observed_at, observed.phase_at} == {DateTime.add(@linear_at, 600), later, later}
       assert [%{kind: :blocked, reason: "waiting"}] = observed.holds
+    end
+
+    test "a change that keeps the phase keeps when the phase was written" do
+      {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(), @observed_at)
+      assert record.phase_at == @observed_at
+
+      renamed = linear_issue(%{title: "Renamed", updated_at: DateTime.add(@linear_at, 60)})
+      assert {%{title: "Renamed", phase_at: @observed_at}, :changed} = TicketState.observe(record, renamed, DateTime.add(@observed_at, 60))
     end
 
     test "an older fact is dropped and the record returned as it was" do
@@ -841,7 +851,7 @@ defmodule SymphonyElixir.TicketStateTest do
     test "observation/1 is the update that writes the observed fields" do
       {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(), @observed_at)
 
-      assert TicketState.observation(record) == Map.take(record, @observed_fields ++ [:observed_at, :observed_from, :updated_at])
+      assert TicketState.observation(record) == Map.take(record, @observed_fields ++ [:phase_at, :observed_at, :observed_from, :updated_at])
     end
 
     test "a change keeps which read brought it; an unchanged read keeps the last one" do

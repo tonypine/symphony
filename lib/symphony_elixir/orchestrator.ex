@@ -1790,15 +1790,23 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # One repo's two sides: its poll cache, and its candidates from the records (nil when they can't
-  # be read). With the poll in use, the records of a repo whose cache is cold are not read: the
-  # shadow leaves it out of the cycle.
+  # One repo's two sides: its poll cache with when it was read, and its candidates from the records
+  # (nil when they can't be read) with when each record's phase was written. With the poll in use,
+  # the records of a repo whose cache is cold are not read: the shadow leaves it out of the cycle.
   defp dispatch_sides(%State{} = state, repo, settings, in_use) do
     repo_name = repo_name(repo)
     warm? = repo_poll_cache_warmed?(state, repo_name)
-    cache = state.repo_poll_cache |> Map.get(repo_name, %{issues: []}) |> Map.get(:issues, [])
-    record = if warm? or in_use == :record, do: record_candidates(repo, settings)
-    %{repo_key: repo_name, warm?: warm?, cache: cache, record: record}
+    entry = Map.get(state.repo_poll_cache, repo_name, %{})
+    {record, phase_at} = if warm? or in_use == :record, do: record_candidates(repo, settings), else: {nil, %{}}
+
+    %{
+      repo_key: repo_name,
+      warm?: warm?,
+      cache: Map.get(entry, :issues, []),
+      read_at: Map.get(entry, :read_at),
+      record: record,
+      phase_at: phase_at
+    }
   end
 
   defp record_candidates(repo, settings) do
@@ -1806,10 +1814,11 @@ defmodule SymphonyElixir.Orchestrator do
 
     case RunStore.list_ticket_states(repo_name) do
       records when is_list(records) ->
-        Candidates.from_records(repo_name, records, settings, shadow_route_opts(repo, settings)).candidates
+        candidates = Candidates.from_records(repo_name, records, settings, shadow_route_opts(repo, settings)).candidates
+        {candidates, Map.new(records, &{Map.get(&1, :issue_id), Map.get(&1, :phase_at)})}
 
       _error ->
-        nil
+        {nil, %{}}
     end
   end
 
@@ -1847,17 +1856,24 @@ defmodule SymphonyElixir.Orchestrator do
 
   # Every poll cycle compares, for each repo, the candidates the poll cache gives with the ones the
   # records give and reports how they differ (`Dispatch.Shadow`), whichever side dispatch reads. It
-  # reads the store and no Linear: `assignee: me` takes the viewer the poll already resolved. A repo
-  # whose cache is still cold, or whose records can't be read, is left out of the cycle.
+  # reads the store and no Linear: `assignee: me` takes the viewer the poll already resolved. A
+  # difference whose record phase was written after the cache was read is the record being newer
+  # (a move of Symphony's, a webhook), counted apart. A repo whose cache is still cold, or whose
+  # records can't be read, is left out of the cycle.
   defp shadow_dispatch(sides, in_use, settings) do
     filter = {active_state_set(settings), terminal_state_set(settings)}
 
     compared =
       for %{warm?: true, record: record} = side <- sides,
           is_list(record),
-          do: shadow_repo_differences(side, in_use, filter)
+          do: side |> shadow_repo_differences(in_use, filter) |> Shadow.classify(side.read_at, side.phase_at)
 
-    if compared != [], do: Shadow.record(List.flatten(compared), Config.dispatch_shadow_window())
+    if compared != [] do
+      differences = Enum.flat_map(compared, & &1.differences)
+      record_newer = Enum.flat_map(compared, & &1.record_newer)
+      Shadow.record(%{differences: differences, record_newer: record_newer}, Config.dispatch_shadow_window())
+    end
+
     :ok
   end
 
@@ -1998,8 +2014,11 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # `read_at` is when the snapshot was in the records: the poll's read is written into them
+  # (`TicketObservation.observe_all/3`) just before. The dispatch shadow holds it against when each
+  # record's phase was written, so only a write after the poll's own is newer than the snapshot.
   defp put_repo_poll_cache(%State{} = state, repo_name, issues, now_ms) do
-    cache_entry = %{issues: issues, fetched_at_ms: now_ms}
+    cache_entry = %{issues: issues, fetched_at_ms: now_ms, read_at: DateTime.utc_now()}
     %{state | repo_poll_cache: Map.put(state.repo_poll_cache, repo_name, cache_entry)}
   end
 
