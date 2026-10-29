@@ -4420,8 +4420,8 @@ Orchestrator behavior on tracker errors:
   counts in the status snapshot (`linear_usage` in `/api/v1/state`).
 - Webhook deliveries: with `linear.webhooks.enabled`, accept Linear's workspace webhook at
   `POST /api/v1/linear/webhook` (`404` while off, `401` when the `Linear-Signature` check fails,
-  `202` otherwise) and count each delivery by `type` and `action`, in memory, in the status snapshot
-  (`linear_webhooks` in `/api/v1/state`). Nothing acts on a delivery yet.
+  `200` otherwise, as Linear requires) and count each delivery by `type` and `action`, in memory,
+  in the status snapshot (`linear_webhooks` in `/api/v1/state`). Nothing acts on a delivery yet.
 - Request budget: the CI and PR review pollers each read their watched states once per poll for
   every repository together, not once per repository; the PR review poller takes an issue it needs
   from that read before asking Linear for it. With `assignee: me`, the viewer behind the API key is

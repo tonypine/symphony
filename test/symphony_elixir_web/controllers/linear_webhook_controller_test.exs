@@ -52,13 +52,13 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
     assert %{"enabled" => false, "secret_configured" => true, "total" => 0, "rejected" => 0, "recent" => []} = linear_webhooks_state()
   end
 
-  test "accepts a signed delivery with 202 and shows it in the state: type, action and the ticket's identifier" do
+  test "accepts a signed delivery with 200, as Linear requires, and shows it in the state: type, action and the ticket's identifier" do
     assert %{"enabled" => true, "secret_configured" => true, "total" => 0, "last_at" => nil} = linear_webhooks_state()
 
     body = delivery_body(%{"type" => "Issue", "action" => "update", "data" => %{"identifier" => "TP-7", "title" => "Edited"}})
     conn = post_webhook(body, [{"content-type", "application/json"}, {"linear-signature", sign(body)}])
 
-    assert json_response(conn, 202) == %{"status" => "accepted"}
+    assert json_response(conn, 200) == %{"status" => "accepted"}
 
     assert %{
              "total" => 1,
@@ -77,7 +77,7 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
     body = delivery_body(%{"data" => "not a map"})
     conn = post_webhook(body, [{"content-type", "application/json"}, {"linear-signature", sign(body)}])
 
-    assert json_response(conn, 202) == %{"status" => "accepted"}
+    assert json_response(conn, 200) == %{"status" => "accepted"}
     assert %{"total" => 1, "recent" => [%{"type" => "unknown", "action" => "unknown", "identifier" => nil}]} = linear_webhooks_state()
   end
 

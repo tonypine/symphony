@@ -69,7 +69,9 @@ through the same relay as GitHub's; the steps below use the Tailscale Funnel rel
 ## What arrived
 
 `POST /api/v1/linear/webhook` answers `404` while `enabled` is off, `401` for a delivery that fails
-the check above (logged with its reason only, never its payload), and `202` for an accepted one.
+the check above (logged with its reason only, never its payload), and `200` for an accepted one:
+Linear counts any other status as a failed delivery, retries it after one minute, one hour and
+six hours, and may turn the webhook off after repeated failures.
 An accepted delivery is read only for its `type`, `action` and `data.identifier`, counted, and
 dropped: Symphony makes no Linear request for it and writes nothing.
 
