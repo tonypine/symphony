@@ -16,11 +16,13 @@ defmodule SymphonyElixir.TicketObservation do
 
   `observe_delivery/2` observes what a Linear webhook delivery says (`SymphonyElixir.Linear.Webhook.parse/1`)
   the same way, under the repo that already holds the ticket's record (a ticket with no record yet is
-  left to the poll), or marks the record removed. A delivery that changes a record (`:updated`, or
-  `:removed`) asks for a poll of the record's repo at once (`SymphonyElixir.Orchestrator.request_refresh/3`),
-  so dispatch reads the change from Linear within seconds instead of at the next timed poll; the
-  orchestrator coalesces the requests as it does Symphony's own moves. `observe_held/2` does the same for a by-id read,
+  left to the poll), or marks the record removed. `observe_held/2` does the same for a by-id read,
   which carries no repo key either.
+
+  A delivery that changes a record (`:updated`, or `:removed`) asks for a poll of the record's repo
+  at once (`SymphonyElixir.Orchestrator.request_refresh/3`), so dispatch reads the change from Linear
+  within seconds instead of at the next timed poll; the orchestrator coalesces the requests as it
+  does Symphony's own moves. A by-id read or a poll asks for none.
 
   Every read other than a webhook delivery is compared with the webhook: a read that changes a field
   the webhook carries (state, identifier, title, labels, priority, assignee, URL) of an existing
