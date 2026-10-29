@@ -37,7 +37,7 @@ defmodule SymphonyElixirWeb.LinearWebhookController do
     case Webhook.verify(body, conn.req_headers, secret: Webhook.secret(webhooks)) do
       :ok ->
         Deliveries.accepted(conn.body_params)
-        conn |> put_status(202) |> json(%{status: "accepted"})
+        conn |> put_status(200) |> json(%{status: "accepted"})
 
       {:error, reason} ->
         Logger.warning("Rejected Linear webhook delivery reason=#{reason}")
