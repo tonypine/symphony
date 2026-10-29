@@ -48,10 +48,13 @@ defmodule SymphonyElixir.Dispatch.Candidates do
 
   A record is counted under the first reason, in that order, that leaves it out. `opts`:
 
+  - `:route` — the repo's route as the poll reads it (`SymphonyElixir.Config.SystemSchema.Repo`). Its
+    `assignee`, when set, names the worker instead of `tracker.assignee`, as the poll's assignee
+    filter does (`SymphonyElixir.Linear.Client.repo_scope_filter/1`). Without it, the tracker's counts.
   - `:assignee_ids` — the ids that count as the worker, or nil when any assignee does. It defaults to
-    the configured `tracker.assignee`: none means any assignee, an id means that one. `me` names the
-    API key's user, whose id only Linear knows, so the caller passes it; without it no record counts as
-    assigned.
+    the configured assignee (the route's, else the tracker's): none means any assignee, an id means
+    that one. `me` names the API key's user, whose id only Linear knows, so the caller passes it;
+    without it no record counts as assigned.
   """
   @spec from_records(String.t(), [map()], Schema.t(), keyword()) :: result()
   def from_records(repo_key, records, %Schema{} = settings, opts \\ []) when is_binary(repo_key) and is_list(records) do
@@ -118,9 +121,12 @@ defmodule SymphonyElixir.Dispatch.Candidates do
     case Keyword.fetch(opts, :assignee_ids) do
       {:ok, nil} -> nil
       {:ok, ids} -> Enum.to_list(ids)
-      :error -> configured_assignee_ids(settings.tracker.assignee)
+      :error -> configured_assignee_ids(route_assignee(Keyword.get(opts, :route)) || settings.tracker.assignee)
     end
   end
+
+  defp route_assignee(%{assignee: assignee}), do: assignee
+  defp route_assignee(_route), do: nil
 
   defp configured_assignee_ids(assignee) when is_binary(assignee) do
     case String.trim(assignee) do

@@ -1,8 +1,10 @@
 defmodule SymphonyElixir.Dispatch.CandidatesTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Config.SystemSchema
   alias SymphonyElixir.Dispatch.Candidates
-  alias SymphonyElixir.TicketState
+  alias SymphonyElixir.Linear.Client
+  alias SymphonyElixir.{TicketObservation, TicketState}
 
   @waiting "Waiting on sub-tickets"
   @active_states ["Todo", "In Progress", "Merging", "Rework", @waiting]
@@ -86,6 +88,34 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
       assert Map.take(gate(record), parts) == Map.take(gate(cache), parts)
       assert gate(cache)["MT-12"] == false
     end
+
+    test "on a route whose assignee is not the tracker's, once a webhook reassigns its tickets" do
+      workflow!(tracker_assignee: "tracker-worker")
+      route = %{name: repo_key(), assignee: "route-worker"}
+      [mt_1, mt_2, mt_3] = issues = for n <- 1..3, do: issue("t#{n}", "MT-#{n}", "Todo", assignee_id: "route-worker")
+
+      {cache, _record} = assert_same_candidates!(issues, route)
+      assert identifiers(cache) == ["MT-1", "MT-2", "MT-3"]
+
+      # A webhook gives MT-2 to the tracker's assignee and unassigns MT-3. The next poll asks Linear for
+      # the route's assignee only, so neither comes back, and the record leaves both out.
+      later = ~U[2026-10-29 10:00:00Z]
+      reassigned = [mt_1, %{mt_2 | assignee_id: "tracker-worker", updated_at: later}, %{mt_3 | assignee_id: nil, updated_at: later}]
+
+      for issue <- tl(reassigned) do
+        assert {:ok, :updated} = TicketObservation.observe(repo_key(), issue, source: :webhook)
+      end
+
+      cache = poll!(reassigned, route)
+      records = RunStore.list_ticket_states(repo_key())
+
+      assert identifiers(cache) == ["MT-1"]
+      assert %{candidates: record, excluded: %{unassigned: 2}} = from_records(records, route: route)
+      assert identifiers(record) == identifiers(cache)
+
+      # Without its route, the tracker's assignee would name the worker.
+      assert %{candidates: [%Issue{identifier: "MT-2"}]} = from_records(records)
+    end
   end
 
   describe "the records left out" do
@@ -144,6 +174,20 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
 
       assert %{candidates: [_, _]} = Candidates.from_records(repo_key(), records, settings, assignee_ids: nil)
     end
+
+    test "a route's assignee names the worker before the tracker's, and a route without one leaves it to the tracker's" do
+      records = [observed(issue("route", "MT-1", "Todo", assignee_id: "route-worker")), observed(issue("tracker", "MT-2", "Todo", assignee_id: "tracker-worker"))]
+      settings = settings_with_assignee("tracker-worker")
+      from_route = &Candidates.from_records(repo_key(), records, settings, route: &1)
+      route = fn assignee -> %SystemSchema.Repo{name: repo_key(), assignee: assignee} end
+
+      assert %{candidates: [%Issue{identifier: "MT-1"}], excluded: %{unassigned: 1}} = from_route.(route.("route-worker"))
+      assert %{candidates: [%Issue{identifier: "MT-2"}]} = from_route.(route.(nil))
+      assert %{candidates: [%Issue{identifier: "MT-2"}]} = from_route.(%{name: repo_key()})
+
+      # A route's `me` needs the caller's resolved id, as the tracker's does.
+      assert %{candidates: [], excluded: %{unassigned: 2}} = from_route.(route.("me"))
+    end
   end
 
   describe "issue_from_record/1" do
@@ -175,21 +219,13 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
     end
   end
 
-  defp assert_same_candidates!(issues) do
-    repo_key = repo_key()
+  defp assert_same_candidates!(issues, route \\ %{name: repo_key()}) do
+    cache = poll!(issues, route)
 
-    assert {:ok, %{dispatchable: cache}, _state} =
-             Orchestrator.poll_candidate_issue_buckets_for_test(
-               %Orchestrator.State{poll_interval_ms: 100},
-               [%{name: repo_key}],
-               fn _repo -> {:ok, issues} end,
-               0
-             )
-
-    records = RunStore.list_ticket_states(repo_key)
+    records = RunStore.list_ticket_states(repo_key())
     assert length(records) == length(issues)
 
-    assert %{candidates: record, excluded: excluded} = from_records(records)
+    assert %{candidates: record, excluded: excluded} = from_records(records, route: route)
     assert Enum.all?(Map.values(excluded), &(&1 == 0))
 
     assert identifiers(record) == identifiers(cache)
@@ -199,7 +235,20 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
     {cache, record}
   end
 
-  defp from_records(records), do: Candidates.from_records(repo_key(), records, Config.settings!())
+  # The cache path's poll of `route`, from a Linear that answers the route's filter as Linear does: it
+  # returns only the tickets assigned to the worker the filter names.
+  defp poll!(issues, route) do
+    assert {:ok, filter} = Client.repo_scope_filter(route)
+    assignee_ids = get_in(filter, ["assignee", "id", "in"])
+    linear = fn _repo -> {:ok, Enum.filter(issues, &(is_nil(assignee_ids) or &1.assignee_id in assignee_ids))} end
+
+    state = %Orchestrator.State{poll_interval_ms: 100}
+    assert {:ok, buckets, _state} = Orchestrator.poll_candidate_issue_buckets_for_test(state, [route], linear, 0)
+
+    buckets.dispatchable
+  end
+
+  defp from_records(records, opts \\ []), do: Candidates.from_records(repo_key(), records, Config.settings!(), opts)
 
   defp gate(issues, state \\ orchestrator_state()) do
     Map.new(issues, &{&1.identifier, Orchestrator.should_dispatch_issue_for_test(&1, state)})
