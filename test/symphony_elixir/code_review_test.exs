@@ -560,6 +560,21 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert opts[:base_branch] == "develop"
     end
 
+    test "passes the run's event hook to the reviewer, so its session reaches the orchestrator" do
+      on_message = fn _message -> :ok end
+
+      assert :ok =
+               CodeReview.run(issue(), "/tmp/workspace",
+                 settings: designed_settings(),
+                 review_agent: OptsReviewAgent,
+                 tracker: FakeTracker,
+                 on_message: on_message
+               )
+
+      assert_received {:review_opts, opts}
+      assert opts[:on_message] == on_message
+    end
+
     test "an unknown repo key gives no base branch" do
       assert :ok =
                CodeReview.run(issue(), "/tmp/workspace",
