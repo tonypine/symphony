@@ -406,12 +406,41 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
       Map.new(state.dispatch_skipped, fn {issue_id, entry} -> {issue_id, entry.reason} end)
     end
 
-    {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("operator"))
+    # An update's pause is nobody's: neither its skip line nor its log line names the operator (TP-1315).
+    {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("updating to v0.0.1.756"))
 
-    assert skipped_after.(%{}) == %{
-             "runnable" => "dispatch is paused by the operator",
-             "blocked" => "blocked by MT-B"
-           }
+    log =
+      capture_log(fn ->
+        assert skipped_after.(%{}) == %{
+                 "runnable" => "dispatch is paused: updating to v0.0.1.756",
+                 "blocked" => "blocked by MT-B"
+               }
+      end)
+
+    assert log =~ ~s(Dispatch pause active kind=build reason="updating to v0.0.1.756")
+    refute log =~ "operator"
+
+    {:ok, nil} = Pauses.clear(:symphony)
+    {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("deploy window"))
+
+    log =
+      capture_log(fn ->
+        assert %{"runnable" => "dispatch is paused by the operator: deploy window"} = skipped_after.(%{operator_pause_logged: false})
+      end)
+
+    assert log =~ ~s(Dispatch pause active kind=person reason="deploy window")
+    refute log =~ "kind=build"
+
+    {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("updating to v0.0.1.756"))
+
+    log =
+      capture_log(fn ->
+        assert %{"runnable" => "dispatch is paused by the operator: deploy window; dispatch is paused: updating to v0.0.1.756"} =
+                 skipped_after.(%{operator_pause_logged: false})
+      end)
+
+    assert log =~ "kind=person"
+    assert log =~ "kind=build"
 
     {:ok, nil} = Pauses.clear(:symphony)
     quota = %{paused: true, reason: "workspace free space is low"}
