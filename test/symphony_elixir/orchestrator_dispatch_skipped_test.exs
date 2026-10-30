@@ -171,8 +171,8 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     {:ok, %{id: question_id}} = SymphonyElixir.Questions.ask({:ticket, "default", "asking"}, request)
     :ok = Hold.set("default", "asking", :blocked, %{reason: "the run reported a block", waits_on: %{type: "access", keys: [], question_id: question_id}})
 
-    # A held ticket with no pause names its hold, as before, and so does one whose pause the backfill
-    # gave the hold's own words (an access or CI-wait hold's `:environment` reason).
+    # A held ticket with no pause names its hold, as before; one whose pause the backfill gave the
+    # hold's own words (an access or CI-wait hold's `:environment` reason) reads those words.
     :ok = Hold.set("default", "held", :blocked, %{reason: "the run reported a block", waits_on: %{type: "access", keys: []}})
     :ok = Hold.set("default", "waiting", :blocked, %{reason: "ci_wait: CI on abc was still running after 30 minutes", waits_on: %{type: "ci_wait", keys: []}})
     environment = %{kind: :environment, waits_on: %{condition: "ci_wait"}, text: "ci_wait: CI on abc was still running after 30 minutes"}
@@ -195,10 +195,36 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
              "MT-FIX" => "Waiting for MT-9 to finish: it fixes what stopped this ticket",
              "MT-ASK" => "Waiting for your answer: The run on MT-ASK cannot continue on its own",
              "MT-HELD" => "on a Blocked hold",
-             "MT-WAIT" => "on a Blocked hold"
+             "MT-WAIT" => "ci_wait: CI on abc was still running after 30 minutes"
            }
 
     # The PR watch sweep labels every one of them by its gate.
+    for {identifier, reason} <- reasons do
+      line = ~s(Skipping dispatch: issue_id=x issue_identifier=#{identifier} state="In Progress"; #{reason})
+      assert {:skipped, "gate: " <> _gate} = Sweep.classify(line)
+    end
+  end
+
+  test "a paused ticket reads every reason of its pause, whatever its kind, in the order they were set (TP-1242)" do
+    on_exit(fn -> RunStore.clear() end)
+    :ok = OperatorStop.mark("default", "stopped", ~U[2026-10-20 08:41:25Z])
+    {:ok, _pause} = Pauses.add_reason({:ticket, "default", "stopped"}, Pauses.ticket_reason(:dependency, "MT-1"))
+
+    :ok = Hold.set("default", "held", :blocked, %{reason: "the run reported a block", waits_on: %{type: "access", keys: []}})
+    {:ok, _pause} = Pauses.set({:ticket, "default", "held"}, %{kind: :person, waits_on: %{action: "unblock"}})
+    {:ok, _pause} = Pauses.add_reason({:ticket, "default", "held"}, %{kind: :build, waits_on: %{version: "0.0.1.731"}})
+    {:ok, _pause} = Pauses.add_reason({:ticket, "default", "held"}, %{kind: :environment, waits_on: %{condition: "qa"}})
+
+    issues = [issue("stopped", "MT-STOP", "Todo"), issue("held", "MT-HELD", "In Progress")]
+    tracked(issues)
+    state = Orchestrator.dispatch_chosen_issues_for_test(issues, orchestrator_state())
+    reasons = Map.new(snapshot_of(state).dispatch_skipped, &{&1.identifier, &1.reason})
+
+    assert reasons == %{
+             "MT-STOP" => "Stopped by you at 2026-10-20 08:41:25 UTC. Unblock runs it again; Restart starts it over from main.; Waiting for MT-1 to finish",
+             "MT-HELD" => "Waiting for you to unblock it; Waiting for Symphony version 0.0.1.731, which has the fix; Waiting for the environment to be ready"
+           }
+
     for {identifier, reason} <- reasons do
       line = ~s(Skipping dispatch: issue_id=x issue_identifier=#{identifier} state="In Progress"; #{reason})
       assert {:skipped, "gate: " <> _gate} = Sweep.classify(line)

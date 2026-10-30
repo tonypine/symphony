@@ -109,7 +109,8 @@ defmodule SymphonyElixirWeb.PauseBackfillStateTest do
                  "set_at" => "2026-10-28T09:00:00Z",
                  "releasable" => false
                }
-             ]
+             ],
+             "releasable" => false
            }
   end
 end
