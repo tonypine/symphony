@@ -716,13 +716,18 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp handle_info_message({:retry_issue, issue_id, retry_token}, state) do
     result =
-      if held_for_canary_read?(state, issue_id, retry_token) do
-        {:noreply, keep_held_for_canary_read(state, issue_id)}
-      else
-        case pop_retry_attempt_state(state, issue_id, retry_token) do
-          {:ok, attempt, metadata, state} -> handle_retry_issue(state, issue_id, attempt, metadata)
-          :missing -> {:noreply, state}
-        end
+      cond do
+        due_during_pause?(state, issue_id, retry_token) ->
+          {:noreply, hold_retry_for_pause(state, issue_id)}
+
+        held_for_canary_read?(state, issue_id, retry_token) ->
+          {:noreply, keep_held_for_canary_read(state, issue_id)}
+
+        true ->
+          case pop_retry_attempt_state(state, issue_id, retry_token) do
+            {:ok, attempt, metadata, state} -> handle_retry_issue(state, issue_id, attempt, metadata)
+            :missing -> {:noreply, state}
+          end
       end
 
     notify_dashboard()
@@ -3623,7 +3628,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp continue_after_dispatch_readiness(%State{} = state, :poll, issues) do
     state =
       issues
-      |> park_breakdown_parents(state)
+      |> park_breakdown_parents(release_pause_held_retries(state))
       |> then(&review_breakdown_parents(issues, &1))
       |> close_finished_parents(issues)
       |> act_on_plan_comments(issues)
@@ -4144,6 +4149,7 @@ defmodule SymphonyElixir.Orchestrator do
       reason = dispatch_gate_closed_reason(issue, acc, active_states, terminal_states) || pause_reason
       put_dispatch_skipped(acc, issue, reason)
     end)
+    |> list_pause_held_retries(pause_reason)
     |> settle_dispatch_skipped(state.dispatch_skipped || %{})
   end
 
@@ -6757,28 +6763,72 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp defer_retry_for_operator_pause(%State{} = state, %Issue{} = issue, attempt, metadata) do
-    state
-    |> log_dispatch_pause()
-    |> schedule_issue_retry(
-      issue.id,
-      attempt,
-      Map.merge(metadata, %{
-        identifier: issue.identifier,
-        title: issue.title,
-        error: Pauses.dispatch_skip_reason(symphony_pause())
-      })
-    )
+  # A pause is not a failure. A retry that comes due while Symphony is paused stays in the queue as
+  # it was, its attempt, error and persisted due time unchanged, with no timer; its ticket is listed
+  # under `dispatch_skipped` with the pause's reason, and the lift sends it on at once
+  # (`release_pause_held_retries/1`).
+  defp due_during_pause?(%State{} = state, issue_id, retry_token) do
+    operator_paused?(state) and match?(%{retry_token: ^retry_token}, Map.get(state.retry_attempts, issue_id))
   end
 
-  # Symphony's pause defers a retry; the pause of the issue's repository releases its claim. Nil when
-  # neither holds it.
+  defp hold_retry_for_pause(%State{} = state, issue_id) do
+    retry = Map.put(Map.fetch!(state.retry_attempts, issue_id), :held_by_pause, true)
+    Logger.info("Not dispatching retry of issue_id=#{issue_id} issue_identifier=#{retry[:identifier]} while Symphony is paused; it waits for the pause to lift")
+
+    %{log_dispatch_pause(state) | retry_attempts: Map.put(state.retry_attempts, issue_id, retry)}
+    |> list_pause_held_retries(Pauses.dispatch_skip_reason(symphony_pause()))
+    |> settle_dispatch_skipped(state.dispatch_skipped || %{})
+  end
+
+  # Each retry the pause holds is listed under `dispatch_skipped` with the pause's reason; a ticket
+  # already listed keeps its entry, with the pause's reason.
+  defp list_pause_held_retries(%State{} = state, reason) do
+    entries =
+      for {issue_id, %{held_by_pause: true} = retry} <- state.retry_attempts, into: %{} do
+        {issue_id,
+         %{
+           identifier: Map.get(retry, :identifier) || issue_id,
+           title: Map.get(retry, :title),
+           state: nil,
+           repo_key: Map.get(retry, :repo_key),
+           reason: reason,
+           connected: nil
+         }}
+      end
+
+    %{state | dispatch_skipped: Map.merge(entries, state.dispatch_skipped, fn _issue_id, _held, listed -> %{listed | reason: reason} end)}
+  end
+
+  # Once no Symphony-wide reason stops dispatch, every retry the pause held is sent on at once, with
+  # the attempt it had, and dispatched or left waiting for a slot as any retry is.
+  defp release_pause_held_retries(%State{} = state) do
+    if operator_paused?(state) do
+      state
+    else
+      Enum.reduce(state.retry_attempts, state, fn
+        {issue_id, %{held_by_pause: true, retry_token: retry_token} = retry}, acc ->
+          send(self(), {:retry_issue, issue_id, retry_token})
+          %{acc | retry_attempts: Map.put(acc.retry_attempts, issue_id, Map.delete(retry, :held_by_pause))}
+
+        _retry, acc ->
+          acc
+      end)
+    end
+  end
+
+  # A retry already read again when Symphony's pause was set waits for a slot with its attempt, as
+  # one held for a slot does: the first pass after the lift dispatches it. The pause of the issue's
+  # repository releases its claim. Nil when neither holds it.
   defp pause_held_retry(%State{} = state, %Issue{} = issue, attempt, metadata) do
     cond do
-      operator_paused?(state) -> defer_retry_for_operator_pause(state, issue, attempt, metadata)
+      operator_paused?(state) -> wait_for_lift(state, issue, attempt, metadata)
       reason = repository_pause_reason(issue) -> release_for_repository_pause(state, issue, reason)
       true -> nil
     end
+  end
+
+  defp wait_for_lift(%State{} = state, %Issue{} = issue, attempt, metadata) do
+    wait_for_slot(log_dispatch_pause(state), issue, attempt, metadata, Pauses.dispatch_skip_reason(symphony_pause()))
   end
 
   # A paused repository's ticket finishes its run and is not dispatched again: its claim is released,
@@ -8418,7 +8468,7 @@ defmodule SymphonyElixir.Orchestrator do
         pause = symphony_pause_status()
         Logger.warning("Operator resumed dispatch")
         notify_dashboard()
-        {:reply, {:ok, pause}, schedule_tick(%{state | operator_pause_logged: false}, 0)}
+        {:reply, {:ok, pause}, schedule_tick(release_pause_held_retries(%{state | operator_pause_logged: false}), 0)}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
@@ -8621,8 +8671,10 @@ defmodule SymphonyElixir.Orchestrator do
         }
       end)
 
+    # A retry the pause holds is listed under `dispatch_skipped` with the pause's reason instead.
     retrying =
       state.retry_attempts
+      |> Enum.reject(fn {_issue_id, retry} -> Map.get(retry, :held_by_pause) == true end)
       |> Enum.map(fn {issue_id, %{attempt: attempt, due_at_ms: due_at_ms} = retry} ->
         %{
           issue_id: issue_id,
