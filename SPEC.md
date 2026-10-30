@@ -370,10 +370,10 @@ these Linear reads of its issues: the repo poll, the by-id reads each poll tick 
 watched, forced and operator-stopped tickets, the dispatch prefetch and the revalidation before a
 start, and each PR watcher's read of the watched states, for every repo that read returns. A by-id
 read carries no repo key, so each issue it returns is written under the repo that already holds the
-ticket's record, as a webhook delivery is: the poll filters each repo in Linear (a project by its slug,
+ticket's record: the poll filters each repo in Linear (a project by its slug,
 `assignee: me`), which the issue's own fields can't always match. A ticket no repo has a record of yet
-is skipped and counted unrouted, as the poll creates its record, and so is one held in several repos,
-as the poll counts it a conflict. Observing adds no request to Linear. For every issue a read returns, the
+is skipped and counted unrouted, as the poll creates its record (a webhook delivery files a new ticket
+itself, Section 11.4), and so is one held in several repos, as the poll counts it a conflict. Observing adds no request to Linear. For every issue a read returns, the
 observation writes into the record the ticket's
 Linear state as its `phase`, its `issue_identifier`, `title`, `labels`, `priority`, `assignee` (the
 assignee's ID), `blockers` (the identifiers of its blockers outside the repo's terminal states), `url`
@@ -4633,8 +4633,10 @@ Orchestrator behavior on tracker errors:
   `200` otherwise, as Linear requires) and count each delivery by `type` and `action`, in memory,
   in the status snapshot (`linear_webhooks` in `/api/v1/state`). An `Issue` create or update is
   written into the record the reads already keep of the ticket, as a poll writes it (older than the
-  record: dropped as stale; no repo has a record of it yet, or several do: unrouted, nothing
-  written, and the next poll files a new ticket), and an
+  record: dropped as stale; several repos have a record of it: unrouted, nothing written). A
+  ticket no repo has a record of yet is filed, from a by-id read of it, under the one repo whose
+  poll scope takes the delivery's fields; one no scope or several take, or whose scope the delivery
+  can't settle, is unrouted and the next poll files it. An
   `Issue` remove marks the record removed, within the request and bounded in time; a failure is
   logged and counted and the answer stays `200`. Every other read of Linear counts how often the webhook brought a
   change first (`compare` in `linear_webhooks`). Nothing dispatches from the record yet.

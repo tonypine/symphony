@@ -399,7 +399,7 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert counts().stale == 1
     end
 
-    test "a ticket no repo has a record of is unrouted and writes nothing, whatever its fields match", %{repo_key: repo_key} do
+    test "a ticket no repo has a record of and no repo's poll scope takes is unrouted and writes nothing", %{repo_key: repo_key} do
       assert TicketObservation.observe_delivery(delivery(), now: @now) == :unrouted
       assert TicketObservation.observe_delivery(delivery(%{team: %{key: "NOPE", name: "Nope"}}), now: @now) == :unrouted
       assert RunStore.get_ticket_state(repo_key, "issue-observed") == nil
@@ -417,6 +417,23 @@ defmodule SymphonyElixir.TicketObservationTest do
       %{name: @project_repo, team: "Test", projects: ["building-the-harness-f469eb38bbc5"]}
     ]
     @project %{id: "project-harness", name: "Building the harness"}
+    @project_with_url Map.put(@project, :url, "https://linear.app/acme/project/building-the-harness-f469eb38bbc5")
+    @new_ticket_routes [
+      %{name: @default_repo, team: "Other", default: true},
+      %{name: @project_repo, team: "Test", projects: ["building-the-harness-f469eb38bbc5"]}
+    ]
+
+    # A new ticket's routing reads no settings of these test repos, and its by-id read is the test's.
+    defp new_ticket_opts do
+      if Process.whereis(ReconcileProbe) != self() do
+        Process.register(self(), ReconcileProbe)
+        on_exit(fn -> :persistent_term.erase({ReconcileTracker, :fetch_issue_states_by_ids}) end)
+      end
+
+      scope = %{team: nil, project_slug: nil, labels: [], assignee: nil}
+      routing = [tracker: ReconcileTracker, tracker_settings: fn _repo_key -> {:ok, scope} end]
+      [now: @now, terminal_states: ["Done"], orchestrator: self()] ++ routing
+    end
 
     test "a delivery goes to the repo whose record the poll keeps, not the one its fields would match" do
       poll!(@project_repo, %{project: @project})
@@ -434,17 +451,55 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert compare() == %{webhook_first: 1, poll_first: 0, poll_first_recent: []}
     end
 
-    test "a new ticket's first delivery is unrouted and writes nothing; once the poll files it, a delivery updates it" do
-      created = delivery(%{project: @project})
-      assert TicketObservation.observe_delivery(created, now: @now, repos: @slug_routes) == :unrouted
+    test "a new ticket's delivery two repos' poll scopes take is unrouted, writes nothing and reads nothing" do
+      created = delivery(%{project: @project_with_url})
+      assert TicketObservation.observe_delivery(created, [repos: @slug_routes] ++ new_ticket_opts()) == :unrouted
       assert Enum.map([@default_repo, @project_repo], &RunStore.get_ticket_state(&1, "issue-observed")) == [nil, nil]
+      refute_received {:tracker, _call}
+      refute_received {:"$gen_cast", _request}
+    end
 
-      poll!(@project_repo, %{project: @project})
+    test "a new ticket's create delivery files its record under the one repo whose poll scope takes it, read by id, and asks for a cycle" do
+      :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records()
+      read = linear_issue(%{project: Map.put(@project, :slug_id, "f469eb38bbc5"), title: "Read by id"})
+      reply(:fetch_issue_states_by_ids, {:ok, [linear_issue(%{id: "issue-other"}), read]})
 
-      edited = delivery(%{project: @project, priority: 1, updated_at: DateTime.add(@linear_at, 60)})
-      assert TicketObservation.observe_delivery(edited, now: DateTime.add(@now, 60), repos: @slug_routes) == :updated
-      assert %{priority: 1, observed_from: :webhook} = RunStore.get_ticket_state(@project_repo, "issue-observed")
+      created = {:issue, :create, elem(delivery(%{project: @project_with_url}), 2), @linear_at}
+      assert TicketObservation.observe_delivery(created, [repos: @new_ticket_routes] ++ new_ticket_opts()) == :updated
+
+      assert_received {:tracker, {:fetch_issue_states_by_ids, ["issue-observed"]}}
+      assert_receive {:"$gen_cast", {:request_refresh, @project_repo, :now}}
+      assert_received {:ticket_record, @project_repo, "issue-observed", :changed, fields}
+      assert :phase in fields and :blockers in fields
+
+      record = RunStore.get_ticket_state(@project_repo, "issue-observed")
+      assert %{issue_identifier: "ACME-7", phase: "Todo", title: "Read by id", observed_from: :webhook} = record
+      assert record.project == %{id: "project-harness", name: "Building the harness", slug_id: "f469eb38bbc5"}
+      assert [%{identifier: "ACME-5"}] = record.blockers
+      assert [%{identifier: "ACME-8"}] = record.sub_issues
       assert RunStore.get_ticket_state(@default_repo, "issue-observed") == nil
+
+      edited = delivery(%{project: @project_with_url, priority: 1, updated_at: DateTime.add(@linear_at, 60)})
+      assert TicketObservation.observe_delivery(edited, [repos: @new_ticket_routes, now: DateTime.add(@now, 60)] ++ new_ticket_opts()) == :updated
+      refute_received {:tracker, _call}
+      assert %{priority: 1, title: "Observe every poll"} = RunStore.get_ticket_state(@project_repo, "issue-observed")
+    end
+
+    test "a new ticket the by-id read doesn't return is unrouted; a failed read is an error, and both write nothing" do
+      created = delivery(%{project: @project_with_url})
+      assert TicketObservation.observe_delivery(created, [repos: @new_ticket_routes] ++ new_ticket_opts()) == :unrouted
+
+      reply(:fetch_issue_states_by_ids, {:error, :unavailable})
+
+      log =
+        capture_log(fn ->
+          assert TicketObservation.observe_delivery(created, [repos: @new_ticket_routes] ++ new_ticket_opts()) == :error
+        end)
+
+      assert log =~ "Ticket observation failed for issue_id=issue-observed issue_identifier=ACME-7 repo_key=#{@project_repo}: {:by_id_read, :unavailable}"
+      assert RunStore.get_ticket_state(@project_repo, "issue-observed") == nil
+      assert %{unrouted: 1, errors: 1} = counts()
+      refute_received {:"$gen_cast", _request}
     end
 
     test "a ticket held in several repos is unrouted, both records are left and no poll is asked for" do
