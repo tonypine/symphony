@@ -14,7 +14,8 @@ defmodule SymphonyElixirWeb.SetupController do
   `repo_not_loaded` while the running config has no such repo, as between an Add Repo save and the
   reload or restart that reads it. `POST /api/v1/setup/github_updates/:action` runs an action (`turn_on`,
   `run_step`, `test`, `leave_on_polling`, `restart_relay`, `recreate_secret`, `change_relay`,
-  `turn_off`) and answers with the section as it leaves it.
+  `turn_off`) and answers with the section as it leaves it. While no Setup server runs, the setup
+  problems and their fixes answer 503 `setup_not_running`; in the app the server always runs.
   """
 
   use Phoenix.Controller, formats: [:json]
