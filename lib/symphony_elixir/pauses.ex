@@ -49,12 +49,16 @@ defmodule SymphonyElixir.Pauses do
   blocked by (`:dependency`, the blocked-by sync and a run's block report), the fix ticket self-heal
   filed for it (`:fix_ticket`) or a pull request competing for its files (`:landing`).
 
+  Once a change to a ticket's pause commits, its labels are projected from it
+  (`SymphonyElixir.Pauses.Projector.project_now/2`).
+
   `backfilled: true` marks a reason the backfill from the holds sets (`SymphonyElixir.Pauses.Backfill`):
   its event carries `source: "backfill"` and an idempotency key starting `backfill:`, which the
   ledger's own backfill (`SymphonyElixir.TicketEvents.Backfill`) never takes for a live write, and
   which a second write of the same reason never records again.
   """
 
+  alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.{RunStore, TicketEvents, TicketState}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
@@ -429,6 +433,7 @@ defmodule SymphonyElixir.Pauses do
     with {:ok, pause, events} <- RunStore.update_ticket_pause(repo_key, issue_id, at, fun) do
       Enum.each(events, &TicketEvents.notify/1)
       if Enum.any?(events, &(&1.type in @lifted)), do: ObservabilityPubSub.broadcast_ticket_record_changed(repo_key, issue_id, [:pause])
+      if events != [], do: Projector.project_now({:ticket, repo_key, issue_id})
       {:ok, pause}
     end
   end
