@@ -1107,7 +1107,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     end
 
     test "with assignee me, the tick waits until a poll learned the viewer, then watches the viewer's tickets", %{repo_key: repo_key} do
-      record_source!(tracker_assignee: "me")
+      record_source!(linear_tracker(tracker_assignee: "me"))
       issues!({:error, :linear_must_not_be_read})
       observed!(repo_key, with_pr(repo_key, issue("1", "Code Review", assignee_id: "user-2"), 1))
       observed!(repo_key, with_pr(repo_key, issue("2", "Code Review", assignee_id: "someone-else"), 2))

@@ -74,7 +74,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     SubIssueWait.reset_for_test(@waiting)
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
@@ -166,7 +166,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
 
     test "refuses every plan while the Plan Review state is turned off", %{opts: opts} do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_plan_review_state: nil)
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_plan_review_state: nil)
       put_issues([plan("Plan Review")])
 
       assert {:error, {:conflict, "the Plan Review state is turned off, so the Director can't answer MOT-30 from the app"}} =
@@ -999,7 +999,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
   describe "an answer from the Director writes the Question first (TP-1240)" do
     setup do
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         repos: [[key: "repo-director", workflow: Workflow.workflow_file_path(), team: "MOT"]]
       )
 
@@ -1262,7 +1261,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
   describe "decide" do
     test "a ticket fetched with no repo key is answered and unblocked under the repo its project routes to", %{opts: opts} do
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         repos: [
           [key: "repo-director", workflow: Workflow.workflow_file_path(), team: "MOT", projects: ["Checkout"]],
           [key: "repo-other", workflow: Workflow.workflow_file_path(), team: "MOT", projects: ["Search"]]
@@ -1283,7 +1281,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
     test "a ticket whose repo routes its project by slug id is answered and sent to Rework under that repo", %{opts: opts} do
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         repos: [
           [key: "repo-director", workflow: Workflow.workflow_file_path(), team: "MOT", projects: ["c0ffee12ab34"]],
           [key: "repo-other", workflow: Workflow.workflow_file_path(), team: "MOT", projects: ["5ea4c4ab12cd"]]

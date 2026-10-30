@@ -180,6 +180,7 @@ defmodule SymphonyElixir.ForceIssueTest do
 
   describe "Orchestrator.force_issue/3 with the Linear adapter" do
     setup do
+      write_workflow_file!(Workflow.workflow_file_path(), linear_tracker())
       Application.put_env(:symphony_elixir, :linear_client_module, FakeLinearClient)
       server = spawn(fn -> Process.sleep(:infinity) end)
       on_exit(fn -> Process.exit(server, :kill) end)
@@ -304,7 +305,7 @@ defmodule SymphonyElixir.ForceIssueTest do
       )
 
       Application.delete_env(:symphony_elixir, :memory_tracker_issues)
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_memory_issues_file: issues_file)
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_memory_issues_file: issues_file)
 
       assert :ok = Memory.add_issue_label("id-1", "expedite")
       assert {:ok, %Issue{labels: ["bug", "expedite"]}} = Memory.fetch_issue_by_identifier("MT-1")
@@ -314,7 +315,7 @@ defmodule SymphonyElixir.ForceIssueTest do
       assert {:ok, %Issue{labels: ["bug"]}} = Memory.fetch_issue_by_identifier("MT-1")
 
       # Without an issues file there is nothing to edit.
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      write_workflow_file!(Workflow.workflow_file_path())
       assert :ok = Memory.add_issue_label("id-1", "expedite")
     end
   end
@@ -374,7 +375,6 @@ defmodule SymphonyElixir.ForceIssueTest do
   defp memory_workflow_opts(test_root, overrides) do
     Keyword.merge(
       [
-        tracker_kind: "memory",
         tracker_active_states: ["Todo", "In Progress"],
         tracker_terminal_states: ["Done", "Canceled"],
         workspace_root: Path.join(test_root, "workspaces")

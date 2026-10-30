@@ -8,7 +8,7 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
   @waiting "Waiting on sub-tickets"
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     SubIssueWait.reset_for_test(@waiting)
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
     on_exit(fn -> SubIssueWait.reset_for_test(@waiting) end)
@@ -69,7 +69,6 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
 
   test "a comment sends the parent through Rework and records the move as Symphony's own" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", "Rework"],
       repos: [[key: "default", workflow: Workflow.workflow_file_path(), default: true, team: "Test"]]
     )

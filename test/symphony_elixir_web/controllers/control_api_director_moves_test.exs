@@ -13,7 +13,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     SubIssueWait.reset_for_test("Waiting on sub-tickets")
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 

@@ -37,6 +37,8 @@ defmodule SymphonyElixir.TestSupport do
           write_workflow_file!: 1,
           write_workflow_file!: 2,
           restore_env: 2,
+          linear_tracker: 0,
+          linear_tracker: 1,
           ensure_symphony_started!: 0,
           eventually: 1,
           stop_default_orchestrator: 0,
@@ -248,6 +250,15 @@ defmodule SymphonyElixir.TestSupport do
     ]
     |> Enum.join("\n")
     |> Kernel.<>("\n")
+  end
+
+  @doc """
+  The config of a test of the Linear adapter, to merge into `write_workflow_file!/2`'s overrides:
+  Linear, with a token and an endpoint on this machine, so a request the test didn't stub fails
+  here and never reaches Linear.
+  """
+  def linear_tracker(overrides \\ []) do
+    Keyword.merge([tracker_kind: "linear", tracker_endpoint: "http://127.0.0.1:9/graphql", tracker_api_token: "token"], overrides)
   end
 
   def restore_env(key, nil), do: System.delete_env(key)
@@ -730,13 +741,17 @@ defmodule SymphonyElixir.TestSupport do
     :exit, _reason -> :ok
   end
 
+  # Every test runs on the memory ticket system, never Linear: a test of the Linear adapter opts into
+  # `tracker_kind: "linear"` with an endpoint of its own on 127.0.0.1 (`SymphonyElixir.OutboundGuard`).
+  @default_tracker_kind "memory"
+
   defp workflow_content(overrides) do
     config =
       Keyword.merge(
         [
-          tracker_kind: "linear",
-          tracker_endpoint: "https://api.linear.app/graphql",
-          tracker_api_token: "token",
+          tracker_kind: @default_tracker_kind,
+          tracker_endpoint: nil,
+          tracker_api_token: nil,
           tracker_project_slug: "project",
           tracker_team: nil,
           tracker_labels: [],

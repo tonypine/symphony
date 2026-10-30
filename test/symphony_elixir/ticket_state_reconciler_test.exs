@@ -116,7 +116,7 @@ defmodule SymphonyElixir.TicketStateReconcilerTest do
     end
 
     test "under the record source keeps a phase Symphony owns and moves the ticket back in Linear, with the drift recorded" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      write_workflow_file!(Workflow.workflow_file_path())
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
       :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_events()
       :ok = RunStore.put_ticket_state(TicketState.put_phase(TicketState.new(@repo_key, "issue-1"), "Code Review", @at))

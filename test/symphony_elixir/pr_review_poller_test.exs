@@ -412,7 +412,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     end)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7
@@ -535,7 +534,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     now = ~U[2026-05-01 09:00:00Z]
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_auto_merge: false,
       pr_review_cooldown_minutes: 30,
@@ -563,7 +561,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     comment_at = DateTime.add(now, -45, :minute)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -1070,7 +1067,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     latest_comment_at = DateTime.add(now, -31, :minute)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -1110,7 +1106,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     linkback = "<!-- linear-linkback -->\n<details><summary>TP-5 The search is spread out</summary></details>"
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -1152,7 +1147,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     latest_comment_at = DateTime.add(now, -31, :minute)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7
@@ -1203,7 +1197,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     latest_comment_at = DateTime.add(now, -31, :minute)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7
@@ -1244,7 +1237,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     latest_comment_at = DateTime.add(now, -31, :minute)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7
@@ -1299,7 +1291,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     latest_comment_at = DateTime.add(now, -31, :minute)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7
@@ -1336,7 +1327,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     latest_comment_at = DateTime.add(now, -31, :minute)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -1475,7 +1465,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
   test "discovers a designed repo's Code Review, QA and Rework PRs so a conflict there is polled" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]]
     )
@@ -1517,7 +1506,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
   test "review activity on a designed repo's Code Review ticket does not move it" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]]
     )
@@ -1900,7 +1888,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     commit_sha = add_git_commit!(workspace_path, "docs: address review comments")
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -1955,7 +1942,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     File.write!(skip_file, Jason.encode!(%{"skip_comment_ids" => ["bot-noise"]}))
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -1997,7 +1983,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     )
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -2025,7 +2010,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     now = ~U[2026-05-01 09:00:00Z]
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -2058,7 +2042,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     {workspace_path, reviewed_sha} = git_workspace_with_commit!()
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -2098,7 +2081,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     follow_up_sha = add_git_commit!(workspace_path, "docs: address review comments")
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -2140,7 +2122,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     latest_reviewed_sha = add_git_commit!(workspace_path, "docs: second review commit")
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -2187,7 +2168,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     now = ~U[2026-05-01 09:00:00Z]
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -2221,7 +2201,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     follow_up_head_sha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -2346,7 +2325,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     now = ~U[2026-05-01 09:00:00Z]
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -2384,7 +2362,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     now = ~U[2026-05-01 09:00:00Z]
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -2416,7 +2393,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     now = ~U[2026-05-01 09:00:00Z]
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -2482,7 +2458,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     now = ~U[2026-05-01 09:00:00Z]
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -2541,7 +2516,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     now = ~U[2026-05-01 09:00:00Z]
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -2821,7 +2795,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     latest_review_at = DateTime.add(now, -31, :minute)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -3027,7 +3000,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     File.write!(transcript_path, Jason.encode!(%{event: "tool", command: "mix test"}) <> "\n")
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -3134,7 +3106,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     now = ~U[2026-05-01 09:00:00Z]
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,
@@ -3190,7 +3161,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     now = ~U[2026-05-01 09:00:00Z]
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 30,
       pr_review_stale_days: 7,

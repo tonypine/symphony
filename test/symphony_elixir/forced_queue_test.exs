@@ -13,7 +13,6 @@ defmodule SymphonyElixir.ForcedQueueTest do
     {:ok, clock} = Agent.start_link(fn -> @now end)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress"],
       tracker_terminal_states: ["Done", "Canceled"],
       workspace_root: Path.join(test_root, "workspaces")
@@ -43,7 +42,7 @@ defmodule SymphonyElixir.ForcedQueueTest do
     end
 
     test "uses the configured force label" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", force_label: "Rush")
+      write_workflow_file!(Workflow.workflow_file_path(), force_label: "Rush")
       settings = Config.settings!()
 
       assert Issue.forced?(issue("a", "MT-1", "Todo", ["rush"]), settings)
@@ -61,7 +60,7 @@ defmodule SymphonyElixir.ForcedQueueTest do
         assert message =~ Atom.to_string(key)
       end
 
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", force_label: "")
+      write_workflow_file!(Workflow.workflow_file_path(), force_label: "")
       assert {:error, {:invalid_workflow_config, message}} = Config.settings()
       assert message =~ "force_label"
     end

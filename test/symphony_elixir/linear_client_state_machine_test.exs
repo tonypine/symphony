@@ -6,12 +6,14 @@ defmodule SymphonyElixir.LinearClientStateMachineTest do
   # Every repo polls the machine-owned phase states on top of the tracker's active states.
   describe "per-repo dispatch states" do
     test "every repo polls the active states and the phase states" do
-      write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "linear",
-        repos: [
-          %{key: "first_repo", workflow: Workflow.workflow_file_path(), default: true, team: "FIRST"},
-          %{key: "second_repo", workflow: Workflow.workflow_file_path(), team: "SECOND"}
-        ]
+      write_workflow_file!(
+        Workflow.workflow_file_path(),
+        linear_tracker(
+          repos: [
+            %{key: "first_repo", workflow: Workflow.workflow_file_path(), default: true, team: "FIRST"},
+            %{key: "second_repo", workflow: Workflow.workflow_file_path(), team: "SECOND"}
+          ]
+        )
       )
 
       assert {:ok, []} = Client.fetch_candidate_issues_for_test(graphql_fun())

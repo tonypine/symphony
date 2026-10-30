@@ -668,7 +668,6 @@ defmodule SymphonyElixir.AppServerTest do
       end)
 
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         workspace_root: workspace_root,
         agent_command: "#{codex_binary} app-server",
         agent_approval_policy: "auto_approve_all"
@@ -755,7 +754,6 @@ defmodule SymphonyElixir.AppServerTest do
       end)
 
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         workspace_root: workspace_root,
         agent_command: "#{codex_binary} app-server",
         agent_approval_policy: "auto_approve_all"
@@ -846,7 +844,6 @@ defmodule SymphonyElixir.AppServerTest do
       end)
 
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         workspace_root: workspace_root,
         agent_command: "#{codex_binary} app-server"
       )

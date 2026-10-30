@@ -26,7 +26,6 @@ defmodule SymphonyElixir.AgentRunnerLeftoverProcessesTest do
     File.mkdir_p!(workspace)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress"],
       workspace_root: test_root,
       max_turns: 1

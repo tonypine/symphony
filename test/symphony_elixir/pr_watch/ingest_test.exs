@@ -29,7 +29,6 @@ defmodule SymphonyElixir.PrWatch.IngestTest do
 
   defp workflow!(enabled, webhooks \\ %{}) do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       ci: %{enabled: true, log_excerpt_lines: 20},
       github: %{webhooks: Map.merge(%{enabled: enabled, secret: "s3cret"}, webhooks)}

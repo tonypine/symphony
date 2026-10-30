@@ -14,7 +14,6 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     workflow = Workflow.workflow_file_path()
 
     write_workflow_file!(workflow,
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", "Rework"],
       tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
       repos: [[key: @repo_key, workflow: workflow, team: "Loop"]]
@@ -145,7 +144,6 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     workflow = Workflow.workflow_file_path()
 
     write_workflow_file!(workflow,
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", "Rework"],
       repos: [[key: @repo_key, workflow: workflow, team: "Loop"]],
       watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 600_000, dispatch_loop_runs: 1}

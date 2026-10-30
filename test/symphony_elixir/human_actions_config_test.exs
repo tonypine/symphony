@@ -82,15 +82,15 @@ defmodule SymphonyElixir.HumanActionsConfigTest do
   end
 
   test "starts with the application only for a Linear tracker" do
-    write_workflow_file!(Workflow.workflow_file_path())
+    write_workflow_file!(Workflow.workflow_file_path(), linear_tracker())
     assert HumanActions in SymphonyElixir.Application.child_specs_for_runtime(%{})
 
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     refute HumanActions in SymphonyElixir.Application.child_specs_for_runtime(%{})
   end
 
   test "reads every enabled repository route in the scope it polls" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_api_token: "token", tracker_project_slug: "cycle")
+    write_workflow_file!(Workflow.workflow_file_path(), linear_tracker(tracker_project_slug: "cycle"))
     test_pid = self()
 
     collect = fn repos, opts ->
@@ -104,7 +104,7 @@ defmodule SymphonyElixir.HumanActionsConfigTest do
     assert {:ok, %{"project" => %{"slugId" => %{"eq" => "cycle"}}} = filter} = Client.repo_scope_filter(repo)
     refute Map.has_key?(filter, "state")
 
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_api_token: nil)
+    write_workflow_file!(Workflow.workflow_file_path(), linear_tracker(tracker_api_token: nil))
     assert {:error, :missing_linear_api_token} = Client.repo_scope_filter(repo)
   end
 end

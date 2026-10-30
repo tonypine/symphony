@@ -23,7 +23,6 @@ defmodule SymphonyElixir.PrWatch.IncidentsTest do
     start_supervised!(Parity)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       ci: %{enabled: true, log_excerpt_lines: 20}
     )

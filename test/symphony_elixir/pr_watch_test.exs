@@ -13,7 +13,7 @@ defmodule SymphonyElixir.PrWatchTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", pr_review_mode: "polling")
+    write_workflow_file!(Workflow.workflow_file_path(), pr_review_mode: "polling")
     :ok
   end
 
@@ -69,7 +69,6 @@ defmodule SymphonyElixir.PrWatchTest do
 
       # With auto-merge off, the landing agent always lands it.
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         pr_review_mode: "polling",
         pr_review_auto_merge: false
       )

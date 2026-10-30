@@ -55,6 +55,19 @@ modules your branch changes:
 mix cover.changed
 ```
 
+The suite gives the same result on every machine, whatever the shell exports:
+
+- Every test runs on the memory ticket system. A test of the Linear adapter opts in with
+  `linear_tracker/1` from `test/support/test_support.exs`: Linear, a token, and an endpoint on
+  127.0.0.1.
+- No test reaches the network. In the test env Req's default adapter is
+  `SymphonyElixir.OutboundGuard` (`config/config.exs`): a request to any host but 127.0.0.1,
+  localhost or ::1 raises `OutboundConnectionInTest`, naming the host and the module that sent it.
+  Stub a request with Req's `plug:` or `adapter:` option, or a stub server on 127.0.0.1.
+- The test config clears the secrets Symphony reads from the environment (`LINEAR_API_KEY`,
+  `LINEAR_ASSIGNEE`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GH_TOKEN`,
+  `GITHUB_TOKEN` and the Slack and webhook URLs) before the app boots. A test that needs one sets it.
+
 It runs the changed test files, the `test/<path>_test.exs` of each changed `lib/<path>.ex` and the
 test files that name a changed module, once with `--cover`, then prints each changed module's
 coverage with its uncovered lines and fails when one is below 100%. Changes count from the

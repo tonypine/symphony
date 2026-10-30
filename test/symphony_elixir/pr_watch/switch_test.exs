@@ -168,7 +168,6 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
   defp workflow!(ci \\ %{}) do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       ci: Map.merge(%{enabled: true, log_excerpt_lines: 20}, ci)
     )

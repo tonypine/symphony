@@ -17,7 +17,7 @@ defmodule SymphonyElixir.ClosedPullRequestTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     issue_id = "issue-closed-pr-#{System.unique_integer([:positive])}"

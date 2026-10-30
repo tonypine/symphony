@@ -120,6 +120,21 @@ defmodule SymphonyElixir.LiveE2ETest do
   }
   """
 
+  # The one test that talks to the real Linear, on `make e2e` only: the test env clears the shell's
+  # Linear key and sends every request through `SymphonyElixir.OutboundGuard`, so this module takes
+  # the key `make e2e` hands it under a name of its own, and Req's network adapter, for its tests.
+  setup do
+    previous_key = System.get_env("LINEAR_API_KEY")
+    previous_req = Req.default_options()
+    System.put_env("LINEAR_API_KEY", System.fetch_env!("SYMPHONY_LIVE_E2E_LINEAR_API_KEY"))
+    Req.default_options(Keyword.put(previous_req, :adapter, Req.Finch))
+
+    on_exit(fn ->
+      restore_env("LINEAR_API_KEY", previous_key)
+      Req.default_options(previous_req)
+    end)
+  end
+
   @tag skip: @live_e2e_skip_reason
   test "creates a real Linear project and issue with a local worker" do
     run_live_issue_flow!(:local)
@@ -418,6 +433,8 @@ defmodule SymphonyElixir.LiveE2ETest do
       Workflow.set_workflow_file_path(workflow_file)
 
       write_workflow_file!(workflow_file,
+        tracker_kind: "linear",
+        tracker_endpoint: "https://api.linear.app/graphql",
         tracker_api_token: "$LINEAR_API_KEY",
         tracker_project_slug: "bootstrap",
         workspace_root: worker_setup.workspace_root,
@@ -447,6 +464,8 @@ defmodule SymphonyElixir.LiveE2ETest do
         )
 
       write_workflow_file!(workflow_file,
+        tracker_kind: "linear",
+        tracker_endpoint: "https://api.linear.app/graphql",
         tracker_api_token: "$LINEAR_API_KEY",
         tracker_project_slug: project["slugId"],
         tracker_active_states: active_state_names(team),
