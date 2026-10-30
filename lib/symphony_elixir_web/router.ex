@@ -60,6 +60,7 @@ defmodule SymphonyElixirWeb.Router do
     post("/decisions", ControlApiController, :decisions)
     post("/changes", ControlApiController, :changes)
     post("/backlog", ControlApiController, :backlog)
+    post("/cancel", ControlApiController, :cancel)
     post("/unblock", ControlApiController, :unblock)
     post("/decide", ControlApiController, :decide)
     post("/undo", ControlApiController, :undo)

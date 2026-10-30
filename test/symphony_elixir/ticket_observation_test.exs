@@ -735,6 +735,36 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert drift().detected == 0
     end
 
+    test "a ticket the Director cancelled is terminal: a later Linear state is applied, never drift, and an older read keeps it",
+         %{repo_key: repo_key} do
+      owned!(repo_key, "Canceled")
+
+      before_cancel = hand_move("Backlog", %{updated_at: DateTime.add(@phase_at, -1)})
+      assert {:ok, _written} = on_record(repo_key, before_cancel, @now)
+      assert %{phase: "Canceled", phase_owner: :symphony} = RunStore.get_ticket_state(repo_key, "issue-observed")
+
+      assert {:ok, :updated} = on_record(repo_key, hand_move("Todo"), DateTime.add(@now, 1))
+
+      assert %{phase: "Todo", phase_owner: :external} = RunStore.get_ticket_state(repo_key, "issue-observed")
+      assert ticket_events(repo_key, "issue-observed") == []
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert drift().detected == 0
+    end
+
+    test "a cancel Linear has not taken yet stays Canceled: a newer read of the old state is drift, moved back to Canceled",
+         %{repo_key: repo_key} do
+      owned!(repo_key, "Canceled")
+      :ok = TicketSignals.mark_projection(repo_key, "issue-observed", :phase, :linear_down)
+
+      # The cancel's own edits (the stop's label cleared, the PR closed) make Linear's read newer than
+      # the cancel while it still shows the state before it.
+      assert {:ok, _written} = on_record(repo_key, hand_move("In Progress"), @now)
+
+      assert %{phase: "Canceled", phase_owner: :symphony} = RunStore.get_ticket_state(repo_key, "issue-observed")
+      assert_received {:memory_tracker_state_update, "issue-observed", "Canceled"}
+      assert event_types(repo_key) == ["drift.detected", "drift.reverted"]
+    end
+
     test "a ticket Symphony never moved follows Linear: a new Todo ticket moved to Backlog by hand", %{repo_key: repo_key} do
       {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
 
