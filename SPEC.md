@@ -2975,12 +2975,17 @@ Rules:
   records an access hold. Beside a dependency or fix-ticket hold, the ticket's pause has one `ticket`
   reason per ticket the hold waits on ("Waiting for TP-12 to finish"), set by the same writer
   whoever paused it, and each poll clears the reason of a ticket the hold no longer waits on, so the
-  pause clears with the last. A block report with no open blocker asks a question through the
+  pause clears with the last. A block report's dependency hold names its blockers until the last is
+  terminal, but its pause drops each blocker's reason as soon as that one is terminal (keeping the
+  ones the hold waits on for an app update), and a reason the blocked-by sync, self-heal or a block
+  report set that no hold names any more is cleared on the next poll. A block report with no open
+  blocker asks a question through the
   Question service ("The run on <id> cannot continue on its own": "Unblock and run again" or "Keep it
   paused"), which the access hold names; `Unblock` answers it with the first option, and answering
   it with that option unblocks the ticket. A ticket held back by its blockers or a hold is listed
-  under `dispatch_skipped` with its pause's text, its reasons' lines joined by `; `, when it has a
-  pause. `Needs Decision` is set by an
+  under `dispatch_skipped` with its pause's text, its reasons' lines joined by `; `, when every
+  reason waits on a ticket or an answer; any other pause, or none, keeps the gate's own words.
+  `Needs Decision` is set by an
   agent's `linear_request_human_action`, a Code Review escalation, a stuck self-heal, a manual
   review confirmation, or a ticket whose pull request is closed or whose diff is empty, and clears when the decision is recorded (a reply under the request, the
   Inbox's Decide, or a withdrawal); the ticket continues where it stopped unless the decision
