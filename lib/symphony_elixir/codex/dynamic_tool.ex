@@ -791,6 +791,26 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       }
     },
     %{
+      "name" => "qa_scroll",
+      "description" =>
+        "Scroll the list or scroll view at an element (`path`, such as a row or the AXScrollArea) or a point on screen (`x`, `y`) of the launched app, as a trackpad does: to an `edge` (`bottom` reaches the end and waits for rows a page load adds there) or by `dx`/`dy` (positive `dy` scrolls down toward later rows) in `unit` pixels or lines. Use it to reach rows below the fold or to trigger a list's pagination; arrow, End and Page Down keys do not scroll a SwiftUI list. Returns `visible` (the first and last row shown), `scroll_bars`, `moved` for a delta and `at_edge` for an edge. Fails like qa_click when the target is off screen or covered, and with `no_scroll_area` when nothing scrolls there.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid"],
+        "properties" => %{
+          "pid" => @pid_property,
+          "path" => @element_path_property,
+          "x" => @screen_x_property,
+          "y" => @screen_y_property,
+          "edge" => %{"type" => "string", "enum" => ["top", "bottom", "left", "right"], "description" => "Scroll to this edge, instead of dx/dy."},
+          "dx" => %{"type" => "integer", "description" => "Points (or lines) to scroll right; negative scrolls left."},
+          "dy" => %{"type" => "integer", "description" => "Points (or lines) to scroll down; negative scrolls up."},
+          "unit" => %{"type" => "string", "enum" => ["pixel", "line"], "default" => "pixel", "description" => "The unit of dx and dy."}
+        }
+      }
+    },
+    %{
       "name" => "qa_key",
       "description" =>
         "Press a key, with modifiers, in the launched app's focused window (the app comes to the front first; the key goes to the app alone). Returns the focused window and element. For a keyboard shortcut such as ⌘[ pass key `[` and modifiers [\"command\"].",
@@ -1125,6 +1145,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_click" => ["pid", "path", "clicks"],
     "qa_hover" => ["pid", "path", "x", "y"],
     "qa_context_menu" => ["pid", "path", "x", "y"],
+    "qa_scroll" => ["pid", "path", "x", "y", "edge", "dx", "dy", "unit"],
     "qa_key" => ["pid", "key", "modifiers"],
     "qa_resize_window" => ["pid", "path", "width", "height"],
     "qa_check_app" => ["pid", "page"],

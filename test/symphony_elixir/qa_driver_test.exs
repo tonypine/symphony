@@ -152,6 +152,7 @@ defmodule SymphonyElixir.QaDriverTest do
         "click" => {~s({"ok":true,"clicked":{"x":120,"y":200},"clicks":1,"element":{"path":"0.4","role":"AXButton"}}), 0},
         "hover" => {~s({"ok":true,"hovered":{"x":120,"y":200},"settled":true,"under_pointer":{"role":"AXRow"}}), 0},
         "context-menu" => {~s({"ok":true,"clicked":{"x":120,"y":200},"menu":{"path":"2","role":"AXMenu","items":[{"path":"2.0","role":"AXMenuItem","title":"Pause"}]},"window_id":31}), 0},
+        "scroll" => {~s({"ok":true,"scrolled":{"x":300,"y":200},"via":"pid","edge":"bottom","at_edge":true,"visible":{"count":16,"last":{"role":"AXRow","text":"Run 120"}}}), 0},
         "key" => {~s({"ok":true,"key":"return","modifiers":[],"window":{"role":"AXWindow"},"focused":{"role":"AXOutline"}}), 0}
       },
       Map.get(overrides, :helper_replies, %{})
@@ -798,6 +799,7 @@ defmodule SymphonyElixir.QaDriverTest do
             {"qa_click", %{"path" => "0"}},
             {"qa_hover", %{"path" => "0"}},
             {"qa_context_menu", %{"x" => 1, "y" => 1}},
+            {"qa_scroll", %{"path" => "0", "edge" => "bottom"}},
             {"qa_key", %{"key" => "return"}}
           ] do
         assert {:error, {:qa_tool, "qa_pid_not_launched", message}} = QaDriver.call_tool(driver, tool, Map.put(args, "pid", stranger))
@@ -1004,13 +1006,58 @@ defmodule SymphonyElixir.QaDriverTest do
       for command <- ["hover", "context-menu"], do: refute_received({:cmd, @helper, [^command | _rest], _opts})
     end
 
+    test "scrolls the list at an element or a point to an edge or by a delta through the helper", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree)
+      pid_arg = Integer.to_string(pid)
+
+      assert {:ok, %{"at_edge" => true, "visible" => %{"last" => %{"text" => "Run 120"}}}} =
+               QaDriver.call_tool(driver, "qa_scroll", %{"pid" => pid, "path" => "0.3.1", "edge" => "bottom"})
+
+      assert_received {:cmd, @helper, ["scroll", ^pid_arg, "0.3.1", "bottom", "pixel"], _opts}
+
+      assert {:ok, _reply} = QaDriver.call_tool(driver, "qa_scroll", %{"pid" => pid, "x" => 300, "y" => 200, "dy" => -120})
+      assert_received {:cmd, @helper, ["scroll", ^pid_arg, "300,200", "0,-120", "pixel"], _opts}
+
+      assert {:ok, _reply} = QaDriver.call_tool(driver, "qa_scroll", %{"pid" => pid, "path" => "0.3", "dx" => 2_000, "unit" => "line"})
+      assert_received {:cmd, @helper, ["scroll", ^pid_arg, "0.3", "2000,0", "line"], _opts}
+
+      assert {:ok, _reply} = QaDriver.call_tool(driver, "qa_scroll", %{"pid" => pid, "path" => "0.3", "dx" => 0, "dy" => 20_000, "unit" => "pixel"})
+      assert_received {:cmd, @helper, ["scroll", ^pid_arg, "0.3", "0,20000", "pixel"], _opts}
+    end
+
+    test "validates the scroll target, edge, delta and unit before calling the helper", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree)
+
+      bad = [
+        {%{"edge" => "bottom"}, "both `x` and `y`"},
+        {%{"path" => "0", "x" => 1, "y" => 1, "edge" => "top"}, "not both"},
+        {%{"path" => "0"}, "non-zero `dx` or `dy`"},
+        {%{"path" => "0", "dx" => 0, "dy" => 0}, "non-zero `dx` or `dy`"},
+        {%{"path" => "0", "edge" => "middle"}, "`edge` must be one of top, bottom, left, right"},
+        {%{"path" => "0", "edge" => "bottom", "dy" => 10}, "not both"},
+        {%{"path" => "0", "edge" => "bottom", "dx" => 10}, "not both"},
+        {%{"path" => "0", "dy" => 1.5}, "`dy` must be an integer"},
+        {%{"path" => "0", "dy" => 20_001}, "from -20000 to 20000"},
+        {%{"path" => "0", "dx" => -2_001, "unit" => "line"}, "from -2000 to 2000"},
+        {%{"path" => "0", "dy" => 10, "unit" => "page"}, "`unit` must be pixel or line"}
+      ]
+
+      for {args, message} <- bad do
+        assert {:error, {:qa_tool, "invalid_arguments", reason}} = QaDriver.call_tool(driver, "qa_scroll", Map.put(args, "pid", pid))
+        assert reason =~ message
+      end
+
+      refute_received {:cmd, @helper, ["scroll" | _rest], _opts}
+    end
+
     test "passes the helper's row, click and key errors on to the agent", %{worktree: worktree} do
       replies = %{
         "ax-select" => {~s({"error":{"code":"not_a_row","message":"The element at 0.1 is not a table or outline row."}}), 1},
         "click" => {~s({"error":{"code":"covered","message":"Another app's window covers the element at 0.4"}}), 1},
         "key" => {~s({"error":{"code":"no_window","message":"The app has no focused window to send the key to."}}), 1},
         "hover" => {~s({"error":{"code":"not_on_screen","message":"Point 5,5 is not on screen"}}), 1},
-        "context-menu" => {~s({"error":{"code":"no_menu","message":"No context menu opened at the element at 0.4."}}), 1}
+        "context-menu" => {~s({"error":{"code":"no_menu","message":"No context menu opened at the element at 0.4."}}), 1},
+        "scroll" => {~s({"error":{"code":"no_scroll_area","message":"Nothing scrolls at the element at 0.4."}}), 1}
       }
 
       {driver, pid} = launched_app(worktree, host: host(%{helper_replies: replies}))
@@ -1020,6 +1067,7 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:error, {:qa_tool, "qa_no_window", _message}} = QaDriver.call_tool(driver, "qa_key", %{"pid" => pid, "key" => "escape"})
       assert {:error, {:qa_tool, "qa_not_on_screen", _message}} = QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "x" => 5, "y" => 5})
       assert {:error, {:qa_tool, "qa_no_menu", _message}} = QaDriver.call_tool(driver, "qa_context_menu", %{"pid" => pid, "path" => "0.4"})
+      assert {:error, {:qa_tool, "qa_no_scroll_area", _message}} = QaDriver.call_tool(driver, "qa_scroll", %{"pid" => pid, "path" => "0.4", "edge" => "top"})
     end
 
     test "captures each on-screen window or one window id into qa-evidence", %{worktree: worktree} do
