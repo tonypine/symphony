@@ -202,6 +202,26 @@ final class APIFixturesTests: XCTestCase {
         )
     }
 
+    /// The fixtures QA reads the status-bar menu's release build line in (TP-1307): a ticket held for an update whose
+    /// build isn't published yet, queued (`update-build-queued`) or rerun after GitHub cancelled it (`update-build-rerun`).
+    func testTheUpdateBuildFixturesSayWhatTheReleaseBuildIsAt() throws {
+        let expected = [
+            "update-build-queued": "Waiting for the v0.0.1.750 build with TP-1238's fix: queued on GitHub for 23 min",
+            "update-build-rerun": "Waiting for the v0.0.1.750 build with TP-1238's fix: queued on GitHub for 4 min; "
+                + "cancelled for lack of a machine, rerun 1 of 2",
+        ]
+        for (name, line) in expected {
+            let directory = Self.shippedRunning.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true)
+            let shipped = APIFixtures(directory: directory, requestLog: root.appendingPathComponent("api-requests.jsonl"))
+            let data = shipped.answer(URLRequest(url: SymphonyState.stateURL(base: APIFixtures.baseURL))).0
+            guard case let .state(snapshot) = SymphonyState.poll(data: data, statusCode: 200) else {
+                return XCTFail("the \(name) fixture doesn't read as a state")
+            }
+            XCTAssertEqual(snapshot.updateUnblocks, 1, name)
+            XCTAssertEqual(StatusMenu.detailLines(.running(snapshot, external: false)).last, line, name)
+        }
+    }
+
     /// The update fixtures QA launches with the update feed's `--fake-release 9.9.9 9999`: dispatch paused for an
     /// update to v9.9.9, with two runs finishing (`update-paused`) or none (`update-paused-idle`).
     func testTheUpdateFixturesReadAsDispatchPausedForAnUpdate() throws {
