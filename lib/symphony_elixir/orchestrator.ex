@@ -79,6 +79,8 @@ defmodule SymphonyElixir.Orchestrator do
   @failure_retry_base_ms 10_000
   # Quiet runs a ticket gets on one head before it is held with `handoff_missing`.
   @max_quiet_handoff_runs 2
+  # The control API authenticates one shared token, so a Pause or Resume is the Director's.
+  @director_setter %{kind: :person, name: "Director"}
   # A transient Linear error (timeout, refused connection, 5xx) is not the issue's
   # fault: retry soon, without failure backoff. A rate limit waits for its pause.
   @linear_wait_retry_delay_ms 5_000
@@ -179,7 +181,6 @@ defmodule SymphonyElixir.Orchestrator do
       forced_issues: %{},
       slot_waiting: %{},
       dispatch_skipped: %{},
-      pause: %{paused: false, reason: nil, paused_at: nil},
       operator_pause_logged: false,
       workspace_lifecycle_last_check_at_ms: nil,
       workspace_lifecycle_quota: %{configured?: false, paused: false, reason: nil},
@@ -218,7 +219,6 @@ defmodule SymphonyElixir.Orchestrator do
     :ok = ensure_run_store_started()
     {retry_attempts, claimed} = hydrate_retry_attempts()
     codex_totals = persisted_codex_totals()
-    pause = persisted_pause_state()
     usage_limits = persisted_usage_limits() |> Map.new(fn {key, entry} -> {key, UsageLimit.paused(entry)} end)
     forced = persisted_forced(repo_key)
     quality_gate_cache = hydrate_quality_gate_cache()
@@ -250,7 +250,6 @@ defmodule SymphonyElixir.Orchestrator do
       codex_totals: codex_totals,
       rate_limits: nil,
       tracker_health: empty_tracker_health(config.tracker.kind),
-      pause: pause,
       budget_day_started_on: budget_day_started_on,
       budget_daily_used: budget_daily_used,
       budget_daily_paused_logged: false,
@@ -264,6 +263,8 @@ defmodule SymphonyElixir.Orchestrator do
     }
 
     state = state |> seed_watching_from_completed_run_metadata() |> arm_usage_limit_timers()
+    clear_installed_update_pause(BuildInfo.current().version)
+    sync_usage_limit_reasons(state)
 
     mark_interrupted_runs_for_configured_repos(repo_key)
     TicketStateReconciler.reconcile_all()
@@ -4884,7 +4885,7 @@ defmodule SymphonyElixir.Orchestrator do
           merging_ci_wait?: Map.has_key?(state.merging_ci_waits, issue_id),
           auto_merge?: merging_state?(issue.state) and MapSet.member?(context.auto_merge_ids, issue_id),
           blockers: forced_blockers(issue, state, terminal_states),
-          paused?: match?(%{paused: true}, state.pause),
+          paused?: operator_paused?(state),
           usage_limit?: not is_nil(usage_limit_hold(state, issue)),
           slot_waiting?: Map.has_key?(state.slot_waiting, issue_id)
         }
@@ -7181,19 +7182,34 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp persisted_pause_state do
-    case RunStore.get_paused() do
-      %{} = pause ->
-        Map.merge(unpaused_state(), pause)
-
-      {:error, reason} ->
-        Logger.warning("Failed to read persisted pause state: #{inspect(reason)}")
-        unpaused_state()
+  # Symphony's own pause (`SymphonyElixir.Pauses`, subject `:symphony`), read from its record so a
+  # restart keeps it; one that can't be read is none.
+  defp symphony_pause do
+    case Pauses.get(:symphony) do
+      {:ok, %{} = pause} -> pause
+      _none_or_unreadable -> nil
     end
   end
 
-  defp unpaused_state do
-    %{paused: false, reason: nil, paused_at: nil}
+  defp symphony_pause_status, do: Pauses.dispatch_status(symphony_pause())
+
+  # The app's update pause waits on the build it installs: once Symphony runs that build (or a
+  # later one), the install finished and its reason is cleared.
+  defp clear_installed_update_pause(running_version) do
+    running = version_parts(running_version)
+
+    installed? = fn
+      %{kind: :build, waits_on: %{version: version}} -> running != nil and running >= version_parts(version)
+      _reason -> false
+    end
+
+    with({:ok, _pause} <- Pauses.clear_reasons(:symphony, installed?), do: :ok)
+    |> log_run_store_error("clear the installed update's reason from Symphony's pause")
+  end
+
+  defp version_parts(version) do
+    parts = version |> String.split(".") |> Enum.map(&Integer.parse/1)
+    if Enum.all?(parts, &match?({_number, ""}, &1)), do: Enum.map(parts, &elem(&1, 0))
   end
 
   defp hydrate_quality_gate_cache do
@@ -8233,12 +8249,14 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # The Director's Pause is a reason of Symphony's own pause: theirs, or the app's update to a
+  # version (`Pauses.dispatch_reason/1`).
   defp handle_call_message({:pause_dispatch, reason}, _from, state) do
     already_paused? = operator_paused?(state)
 
-    case RunStore.set_paused(true, reason) do
-      :ok ->
-        pause = persisted_pause_state()
+    case Pauses.set(:symphony, Pauses.dispatch_reason(reason), set_by: @director_setter) do
+      {:ok, _pause} ->
+        pause = symphony_pause_status()
 
         if already_paused? do
           Logger.info("Operator pause requested while dispatch is already paused reason=#{inspect(pause.reason)} paused_at=#{inspect(pause.paused_at)}")
@@ -8247,20 +8265,22 @@ defmodule SymphonyElixir.Orchestrator do
         end
 
         notify_dashboard()
-        {:reply, {:ok, pause}, %{state | pause: pause, operator_pause_logged: true}}
+        {:reply, {:ok, pause}, %{state | operator_pause_logged: true}}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
     end
   end
 
+  # Resume clears the Director's reason and an update's: the app resumes once its update installed
+  # or was postponed. A usage limit's reason stays with its hold.
   defp handle_call_message(:resume_dispatch, _from, state) do
-    case RunStore.set_paused(false, nil) do
-      :ok ->
-        pause = persisted_pause_state()
+    case Pauses.clear_reasons(:symphony, &(&1.kind in [:person, :build]), by: @director_setter) do
+      {:ok, _pause} ->
+        pause = symphony_pause_status()
         Logger.warning("Operator resumed dispatch")
         notify_dashboard()
-        {:reply, {:ok, pause}, schedule_tick(%{state | pause: pause, operator_pause_logged: false}, 0)}
+        {:reply, {:ok, pause}, schedule_tick(%{state | operator_pause_logged: false}, 0)}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
@@ -8274,7 +8294,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_call_message(:pause_status, _from, state) do
-    {:reply, state.pause || unpaused_state(), state}
+    {:reply, symphony_pause_status(), state}
   end
 
   defp handle_call_message({:dispatch_pr, target, opts}, _from, state) do
@@ -8553,7 +8573,7 @@ defmodule SymphonyElixir.Orchestrator do
       codex_totals: state.codex_totals,
       rate_limits: Map.get(state, :rate_limits),
       usage_limits: UsageLimit.snapshot(state.usage_limits, state.usage_windows),
-      pause: state.pause || unpaused_state(),
+      pause: symphony_pause_status(),
       workspace_lifecycle: workspace_lifecycle_snapshot(state),
       budget: budget_snapshot(state),
       dispatch_state: dispatch_state_snapshot(state),
@@ -9201,11 +9221,10 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp operator_paused?(%State{pause: %{paused: true}}), do: true
-  defp operator_paused?(_state), do: false
+  defp operator_paused?(%State{}), do: Pauses.dispatch_reasons(symphony_pause()) != []
 
-  # Usage-limit holds (`agent.usage_limit`) are kept apart from the operator pause: resuming
-  # one never sets or clears the other.
+  # Usage-limit holds (`agent.usage_limit`) are kept apart from the Director's pause: each is its
+  # own reason of Symphony's pause, and resuming one never sets or clears the other.
   defp put_usage_limit(%State{} = state, info, identifier) do
     key = UsageLimit.key(info)
     existing = Map.get(state.usage_limits, key)
@@ -9351,7 +9370,16 @@ defmodule SymphonyElixir.Orchestrator do
     |> RunStore.put_usage_limits()
     |> log_run_store_error("persist usage limits")
 
-    %{state | usage_limits: usage_limits}
+    state = %{state | usage_limits: usage_limits}
+    sync_usage_limit_reasons(state)
+    state
+  end
+
+  # Each hold is a reason of Symphony's pause (`UsageLimit.sync_reasons/3`).
+  defp sync_usage_limit_reasons(%State{} = state) do
+    state.usage_limits
+    |> UsageLimit.sync_reasons(state.clock.())
+    |> log_run_store_error("write the usage limits' reasons on Symphony's pause")
   end
 
   # One event per hold transition: a new hold and its clearing. A refreshed hold, or a run
@@ -9767,10 +9795,10 @@ defmodule SymphonyElixir.Orchestrator do
   defp log_operator_pause(%State{operator_pause_logged: true} = state), do: state
 
   defp log_operator_pause(%State{} = state) do
-    pause = state.pause || unpaused_state()
+    pause = symphony_pause_status()
 
-    if Map.get(pause, :paused) == true do
-      Logger.warning("Operator dispatch pause active reason=#{inspect(Map.get(pause, :reason))} paused_at=#{inspect(Map.get(pause, :paused_at))}; skipping dispatch")
+    if pause.paused do
+      Logger.warning("Operator dispatch pause active reason=#{inspect(pause.reason)} paused_at=#{inspect(pause.paused_at)}; skipping dispatch")
       %{state | operator_pause_logged: true}
     else
       state
@@ -9810,7 +9838,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     SymphonyElixir.DispatchState.compute(
       %{
-        pause: state.pause || unpaused_state(),
+        symphony_pause: symphony_pause(),
         budget_daily_used: state.budget_daily_used,
         budget_day_started_on: state.budget_day_started_on,
         tracker_health: state.tracker_health,

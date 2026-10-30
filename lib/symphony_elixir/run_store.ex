@@ -6,7 +6,7 @@ defmodule SymphonyElixir.RunStore do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{Config, Paths, TicketState}
+  alias SymphonyElixir.{Config, Paths, Pauses, TicketState}
   alias SymphonyElixir.RunStore.RunIndex
   alias SymphonyElixir.TicketEvents.Event
 
@@ -46,7 +46,11 @@ defmodule SymphonyElixir.RunStore do
   ]
   @data_tables Enum.map(@tables, fn {table, _attributes, _opts} -> table end)
   @codex_totals_key :codex_totals
+  # The operator pause's old row: read only until the pauses' backfill moved it (its marker,
+  # `SymphonyElixir.Pauses.Backfill`) onto Symphony's pause, never written.
   @pause_key :dispatch_pause
+  @pause_backfill_marker "pause_backfill_symphony_v1"
+  @director %{kind: :person, name: "Director"}
   @usage_limits_key :usage_limits
   @unpaused %{paused: false, reason: nil, paused_at: nil}
   @quality_gate_cache_key :quality_gate_cache
@@ -1315,21 +1319,36 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
+  @doc """
+  Deprecated, kept for one release: the Director's Pause and Resume of all dispatch are reasons of
+  Symphony's pause (`SymphonyElixir.Pauses`, subject `:symphony`). `true` sets the reason
+  `reason` gives (`Pauses.dispatch_reason/1`); `false` clears the Director's and an update's.
+  """
   @spec set_paused(boolean(), String.t() | nil) :: :ok | {:error, term()}
-  def set_paused(paused, reason) when is_boolean(paused) do
-    with :ok <- ensure_started() do
-      durable_transaction(fn -> write_pause_state(paused, reason) end)
-    end
+  def set_paused(true, reason) do
+    with {:ok, _pause} <- Pauses.set(:symphony, Pauses.dispatch_reason(reason), set_by: @director), do: :ok
+  end
+
+  def set_paused(false, _reason) do
+    with {:ok, _pause} <- Pauses.clear_reasons(:symphony, &(&1.kind in [:person, :build]), by: @director), do: :ok
   end
 
   def set_paused(_paused, _reason), do: {:error, :invalid_pause_state}
 
+  @doc """
+  Deprecated, kept for one release: Symphony's pause as the operator pause read before
+  (`Pauses.dispatch_status/1`). Until the pauses' backfill moved the old operator pause row onto
+  Symphony's pause (its marker), an unpaused Symphony reads that row, so the backfill finds it.
+  """
   @spec get_paused() :: map() | {:error, term()}
   def get_paused do
-    with :ok <- ensure_started() do
-      transaction(fn -> read_pause_record() end)
-    end
+    with :ok <- ensure_started(),
+         {:ok, pause} <- Pauses.get(:symphony),
+         do: pause |> Pauses.dispatch_status() |> legacy_pause()
   end
+
+  defp legacy_pause(%{paused: true} = status), do: status
+  defp legacy_pause(status), do: transaction(fn -> if read_marker(@pause_backfill_marker), do: status, else: read_pause_record() end)
 
   @doc """
   Runs `fun` on the pause of `repo_key`'s ticket `issue_id` (`SymphonyElixir.Pauses`, its only
@@ -2452,52 +2471,6 @@ defmodule SymphonyElixir.RunStore do
         @unpaused
     end
   end
-
-  defp write_pause_state(paused, reason) do
-    current = read_pause_record()
-
-    cond do
-      paused and Map.get(current, :paused) == true ->
-        :ok
-
-      paused ->
-        persist_pause_record(reason)
-
-      Map.get(current, :paused) == true ->
-        :mnesia.delete({@pause_table, @pause_key})
-        :ok
-
-      true ->
-        :ok
-    end
-  end
-
-  defp persist_pause_record(reason) do
-    now = DateTime.utc_now()
-
-    :mnesia.write(
-      {@pause_table, @pause_key,
-       %{
-         paused: true,
-         reason: normalize_pause_reason(reason),
-         paused_at: now,
-         updated_at: now
-       }}
-    )
-
-    :ok
-  end
-
-  defp normalize_pause_reason(reason) when is_binary(reason) do
-    reason
-    |> String.trim()
-    |> case do
-      "" -> nil
-      trimmed -> trimmed
-    end
-  end
-
-  defp normalize_pause_reason(_reason), do: nil
 
   defp read_quality_gate_cache do
     case :mnesia.read(@totals_table, @quality_gate_cache_key) do

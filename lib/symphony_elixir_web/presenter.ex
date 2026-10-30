@@ -1138,17 +1138,24 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Enum.sort()
   end
 
+  # Symphony's own pause (`SymphonyElixir.Pauses.dispatch_status/1`): `paused`, `reason` and
+  # `paused_at` as the operator pause read before (the menu bar app finds an update's version in
+  # `reason`), and every reason with its kind, line, time and what it waits on.
   defp normalize_pause(pause) when is_map(pause) do
     %{
       paused: Map.get(pause, :paused, false),
       reason: Map.get(pause, :reason),
-      paused_at: iso8601(Map.get(pause, :paused_at))
+      paused_at: iso8601(Map.get(pause, :paused_at)),
+      reasons: pause |> Map.get(:reasons, []) |> Enum.map(&pause_reason_payload/1)
     }
   end
 
   defp normalize_pause(_pause) do
-    %{paused: false, reason: nil, paused_at: nil}
+    %{paused: false, reason: nil, paused_at: nil, reasons: []}
   end
+
+  defp pause_reason_payload(reason),
+    do: %{kind: reason.kind, text: reason.text, since: iso8601(Map.get(reason, :since)), waits_on: reason.waits_on}
 
   defp usage_limit_payload(entry, now) do
     %{
@@ -1389,7 +1396,8 @@ defmodule SymphonyElixirWeb.Presenter do
     %{
       kind: :manual,
       reason: Map.get(b, :reason),
-      since: iso8601(Map.get(b, :since))
+      since: iso8601(Map.get(b, :since)),
+      reasons: Map.get(b, :reasons, [])
     }
   end
 
@@ -1435,7 +1443,8 @@ defmodule SymphonyElixirWeb.Presenter do
       window: Map.get(b, :window),
       phase: optional_string(Map.get(b, :phase)),
       resets_at: iso8601(Map.get(b, :resets_at)),
-      resume_at: iso8601(Map.get(b, :resume_at))
+      resume_at: iso8601(Map.get(b, :resume_at)),
+      text: Map.get(b, :text)
     }
   end
 

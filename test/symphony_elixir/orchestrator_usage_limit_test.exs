@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.OrchestratorUsageLimitTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Notifications, UsageLimit}
+  alias SymphonyElixir.{Notifications, Pauses, UsageLimit}
 
   @anthropic {"anthropic", :all}
   @openai {"openai", :all}
@@ -27,6 +27,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
 
     on_exit(fn ->
       Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+      Pauses.clear(:symphony)
       File.rm_rf(test_root)
     end)
 
@@ -570,7 +571,10 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     # Every run profile is Claude, so dispatch is paused.
     assert %{active?: false, blockers: [blocker]} = snapshot.dispatch_state
 
-    assert blocker == %{
+    assert %{text: "Claude's 5-hour limit until " <> time} = blocker
+    assert time =~ ~r/\A\d{2}:\d{2}\z/
+
+    assert Map.delete(blocker, :text) == %{
              kind: :usage_limit,
              provider: "anthropic",
              scope: :all,
@@ -580,6 +584,12 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
              resume_at: resume_at,
              phase: :paused
            }
+
+    # The hold is a reason of Symphony's pause that does not pause all dispatch.
+    text = blocker.text
+
+    assert %{paused: false, reasons: [%{kind: :environment, text: ^text, waits_on: %{condition: "usage_limit:anthropic:all"}}]} =
+             snapshot.pause
 
     assert_receive {:notification_event, %Notifications.Event{event: "usage_limit_paused"} = paused}, 1_000
     assert paused.issue_identifier == "MT-SNAP-1"
@@ -656,6 +666,8 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
       send(pid, {:usage_limit_resume, @anthropic})
       wait_until(fn -> SymphonyElixirWeb.Presenter.state_payload(name, 1_000).usage_limits == [] end)
       assert SymphonyElixirWeb.Presenter.state_payload(name, 1_000).dispatch_state.blockers == []
+      # The hold's reason left Symphony's pause with it.
+      assert Pauses.get(:symphony) == {:ok, nil}
       wait_until(fn -> Enum.find(RunStore.list_runs(:all), &(&1.issue_id == issue.id and &1.status != "usage_limited")) end)
     end)
 
@@ -772,7 +784,6 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
   test "an operator pause set during the hold stays paused after auto-resume", ctx do
     write_usage_workflow!(ctx)
     pid = start_orchestrator(ctx, :OperatorPauseOrchestrator)
-    on_exit(fn -> RunStore.set_paused(false, nil) end)
     issue = issue("issue-usage-operator", "MT-OPERATOR")
     {worker_pid, worker_ref, _run_id} = start_run!(pid, issue)
     send(pid, {:DOWN, worker_ref, :process, worker_pid, {:usage_limited, usage_info(ctx)}})
@@ -782,8 +793,9 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     state = deliver(pid, {:usage_limit_resume, @anthropic})
 
     assert %{phase: :canary, canary_issue_id: "issue-usage-operator"} = state.usage_limits[@anthropic]
-    assert %{paused: true, reason: "maintenance"} = state.pause
-    assert %{paused: true} = RunStore.get_paused()
+    # Symphony's pause holds both reasons; the hold's canary leaves the Director's in place.
+    assert {:ok, %{reasons: [%{kind: :environment}, %{kind: :person, text: "maintenance"}]}} = Pauses.get(:symphony)
+    assert %{paused: true, reason: "maintenance"} = Orchestrator.pause_status(pid)
     assert %{attempt: 3, reason: "usage limit resumed"} = state.slot_waiting[issue.id]
     refute Map.has_key?(state.retry_attempts, issue.id)
     refute MapSet.member?(state.claimed, issue.id)

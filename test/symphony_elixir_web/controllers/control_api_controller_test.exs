@@ -65,6 +65,23 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
     assert calls(pid) == [{:pause_dispatch, "deploy window"}]
   end
 
+  test "POST /control/pause returns Symphony's pause with its reasons, as the menu bar app reads it" do
+    update = %{kind: :build, waits_on: %{version: "0.0.1.42"}, text: "updating to v0.0.1.42", set_at: ~U[2026-10-30 12:00:00Z]}
+    pause = SymphonyElixir.Pauses.normalize(%{subject: :symphony, reasons: [update]})
+    pid = start_stub([{:ok, SymphonyElixir.Pauses.dispatch_status(pause)}])
+
+    conn = send_to(build_conn(:post, "/api/v1/control/pause"), :pause, pid, %{"reason" => "updating to v0.0.1.42"})
+
+    assert json_body(conn) == %{
+             "paused" => true,
+             "reason" => "updating to v0.0.1.42",
+             "paused_at" => "2026-10-30T12:00:00Z",
+             "reasons" => [%{"kind" => "build", "text" => "updating to v0.0.1.42", "since" => "2026-10-30T12:00:00Z", "waits_on" => %{"version" => "0.0.1.42"}}]
+           }
+
+    assert calls(pid) == [{:pause_dispatch, "updating to v0.0.1.42"}]
+  end
+
   test "POST /control/pause accepts a missing reason" do
     pid = start_stub([{:ok, %{paused: true}}])
 

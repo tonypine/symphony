@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.RunStoreTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Pauses
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.RunStore.RunIndex
   alias SymphonyElixir.TicketEvents
@@ -296,13 +297,16 @@ defmodule SymphonyElixir.RunStoreTest do
     assert quality_gate_cache == RunStore.get_quality_gate_cache()
   end
 
-  test "persists dispatch pause state across run store restart" do
+  test "the deprecated operator pause reads and writes Symphony's pause, across run store restart" do
     assert %{paused: false, reason: nil, paused_at: nil} = RunStore.get_paused()
 
     assert :ok = RunStore.set_paused(true, "overnight deploy")
 
     assert %{paused: true, reason: "overnight deploy", paused_at: %DateTime{} = paused_at} =
              RunStore.get_paused()
+
+    assert {:ok, %{set_by: %{kind: :person, name: "Director"}, reasons: [%{kind: :person, waits_on: %{action: "unblock"}}]}} =
+             Pauses.get(:symphony)
 
     restart_run_store()
 
@@ -314,18 +318,33 @@ defmodule SymphonyElixir.RunStoreTest do
     assert %{paused: true, reason: "overnight deploy", paused_at: ^paused_at} =
              RunStore.get_paused()
 
+    assert :ok = RunStore.set_paused(true, "updating to v0.0.1.42")
+    assert {:ok, %{reasons: [_person, %{kind: :build, waits_on: %{version: "0.0.1.42"}}]}} = Pauses.get(:symphony)
+
     assert :ok = RunStore.set_paused(false, nil)
     assert %{paused: false, reason: nil, paused_at: nil} = RunStore.get_paused()
+    assert Pauses.get(:symphony) == {:ok, nil}
+    assert RunStore.set_paused(:yes, nil) == {:error, :invalid_pause_state}
 
     restart_run_store()
   end
 
-  test "keeps a repository's and Symphony's pause by subject next to the operator pause, across restart" do
+  test "the old operator pause row is read only until the pauses' backfill moved it" do
+    paused_at = ~U[2026-10-01 09:00:00Z]
+    row = %{paused: true, reason: "old row", paused_at: paused_at}
+    {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_pause, :dispatch_pause, row}) end)
+
+    assert %{paused: true, reason: "old row", paused_at: ^paused_at} = RunStore.get_paused()
+
+    assert :ok = RunStore.put_marker("pause_backfill_symphony_v1", paused_at)
+    assert %{paused: false, reason: nil, reasons: []} = RunStore.get_paused()
+  end
+
+  test "keeps a repository's and Symphony's pause by subject, across restart" do
     repository = {:repository, @repo_key}
     pause = %{subject: repository, reasons: [%{kind: :environment, waits_on: %{condition: "github_down"}}]}
 
     assert RunStore.get_subject_pause(repository) == nil
-    assert :ok = RunStore.set_paused(true, "overnight deploy")
     assert :ok = RunStore.put_subject_pause(repository, pause)
     assert :ok = RunStore.put_subject_pause(:symphony, %{subject: :symphony, reasons: []})
 
@@ -334,13 +353,11 @@ defmodule SymphonyElixir.RunStoreTest do
     assert RunStore.get_subject_pause(repository) == pause
     assert RunStore.get_subject_pause(:symphony) == %{subject: :symphony, reasons: []}
     assert RunStore.get_subject_pause({:repository, @other_repo_key}) == nil
-    assert %{paused: true, reason: "overnight deploy"} = RunStore.get_paused()
 
     assert :ok = RunStore.delete_subject_pause(repository)
     assert :ok = RunStore.delete_subject_pause(repository)
     assert RunStore.get_subject_pause(repository) == nil
     assert %{subject: :symphony} = RunStore.get_subject_pause(:symphony)
-    assert %{paused: true} = RunStore.get_paused()
 
     for subject <- [{:ticket, @repo_key, "issue-1"}, {:repository, ""}, :dispatch_pause, nil] do
       assert RunStore.get_subject_pause(subject) == {:error, :invalid_subject}

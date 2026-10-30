@@ -10,12 +10,17 @@ defmodule SymphonyElixir.DispatchState do
   dispatch inactive when the holds cover every run profile in use (`config.run_profiles`,
   each a `provider`, `model` and run `kind`): runs on another provider or model still dispatch,
   and so do landing runs under a headroom hold (see `UsageLimit.holds?/2`).
+
+  Both read Symphony's own pause (`state.symphony_pause`, a `SymphonyElixir.Pauses` pause): the
+  Director's or an update's reason (`Pauses.dispatch_reasons/1`) is the `:manual` blocker, with
+  the first one's line and time and every such reason; a hold's `:usage_limit` blocker carries the
+  line of its reason on that pause (`UsageLimit.reason/3`) as `text` when the pause holds it.
   """
 
-  alias SymphonyElixir.UsageLimit
+  alias SymphonyElixir.{Pauses, UsageLimit}
 
   @type blocker ::
-          %{kind: :manual, reason: String.t() | nil, since: DateTime.t() | nil}
+          %{kind: :manual, reason: String.t() | nil, since: DateTime.t() | nil, reasons: [map()]}
           | %{
               kind: :budget,
               used: non_neg_integer(),
@@ -45,7 +50,8 @@ defmodule SymphonyElixir.DispatchState do
               window: String.t() | nil,
               resets_at: DateTime.t() | nil,
               resume_at: DateTime.t(),
-              phase: atom()
+              phase: atom(),
+              text: String.t() | nil
             }
 
   @type t :: %{active?: boolean(), blockers: [blocker]}
@@ -69,10 +75,11 @@ defmodule SymphonyElixir.DispatchState do
       |> Enum.reverse()
 
     holds = Map.get(state, :usage_limits, [])
+    texts = usage_limit_texts(Map.get(state, :symphony_pause))
 
     %{
       active?: blockers == [] and not every_profile_held?(holds, config),
-      blockers: blockers ++ Enum.map(holds, &usage_limit_blocker/1)
+      blockers: blockers ++ Enum.map(holds, &usage_limit_blocker(&1, texts))
     }
   end
 
@@ -84,24 +91,28 @@ defmodule SymphonyElixir.DispatchState do
     |> Enum.all?(fn profile -> Enum.any?(holds, &UsageLimit.holds?(&1, profile)) end)
   end
 
-  defp usage_limit_blocker(hold) do
+  defp usage_limit_blocker(hold, texts) do
     hold
     |> Map.take([:provider, :scope, :reason, :window, :resets_at, :resume_at, :phase])
-    |> Map.put(:kind, :usage_limit)
+    |> Map.merge(%{kind: :usage_limit, text: Map.get(texts, UsageLimit.condition(hold))})
   end
 
-  defp maybe_manual(blockers, %{pause: %{paused: true} = pause}) do
-    [
-      %{
-        kind: :manual,
-        reason: Map.get(pause, :reason),
-        since: Map.get(pause, :paused_at)
-      }
-      | blockers
-    ]
+  # The usage limits' lines on Symphony's pause, by the condition each waits on.
+  defp usage_limit_texts(pause) do
+    for %{kind: :environment, waits_on: %{condition: condition}, text: text} <- (pause && pause.reasons) || [],
+        into: %{},
+        do: {condition, text}
   end
 
-  defp maybe_manual(blockers, _state), do: blockers
+  defp maybe_manual(blockers, state) do
+    case state |> Map.get(:symphony_pause) |> Pauses.dispatch_reasons() do
+      [first | _rest] = reasons ->
+        [%{kind: :manual, reason: first.text, since: first.set_at, reasons: Enum.map(reasons, &Map.take(&1, [:kind, :text, :waits_on]))} | blockers]
+
+      [] ->
+        blockers
+    end
+  end
 
   defp maybe_budget(blockers, state, %{daily_limit: limit})
        when is_integer(limit) and limit > 0 do
