@@ -541,12 +541,15 @@ a ticket is not moving; written only by `SymphonyElixir.Pauses`): `pause.set` fo
 waiting for TP-1194 to finish"), `pause.reason_cleared` for a reason cleared while others remain,
 and `pause.cleared` ("Moving again") when none is left, naming the reasons it cleared. A reason event
 carries the reason's kind (`question`, `ticket`, `build`, `person`, `environment`), its one line of
-plain words (at most 300 characters) and what it waits on (a question's id, a ticket's identifier, a
-Symphony version or pull request, the Director's `unblock` or `restart`, a named condition). The
-event is validated before the ticket's record changes: a reason or a time the ledger would refuse
-leaves the pause as it was. Setting a reason the pause already holds (same kind, same `waits_on`)
-records nothing. A pause is read, changed and written in one store transaction that holds its lock,
-so concurrent writers never lose each other's reasons, and only a change written records its event.
+plain words (at most 300 characters) and what it waits on (a question's id, a ticket's identifier
+such as `TP-1194`, a Symphony release's version such as `0.0.1.731` or a pull request, the
+Director's `unblock` or `restart`, a named condition). The event is validated before the ticket's
+record changes: a reason or a time the ledger would refuse leaves the pause as it was. Setting a
+reason the pause already holds (same kind, same `waits_on`) records nothing. A pause is read,
+changed and written in one store transaction that holds its lock, and a ticket's event is appended
+in that same transaction: concurrent writers never lose each other's reasons, the pause never
+changes without its event, and the events follow the order the changes were written in. The live
+channel's notice of the event goes out once the transaction commits.
 A repository's or Symphony's own pause is kept in the store by subject and records no event.
 Nothing sets a pause yet.
 

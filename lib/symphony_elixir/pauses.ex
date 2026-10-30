@@ -7,9 +7,10 @@ defmodule SymphonyElixir.Pauses do
   A reason says what the subject waits on, structured so the machine can tell when it ends:
 
     * `:question` - an answer to a question (`waits_on: %{question_id: id}`);
-    * `:ticket` - another ticket reaching a terminal state (`waits_on: %{identifier: "TP-12"}`);
-    * `:build` - a Symphony build containing a fix (`waits_on: %{version: "1.4.0"}` or
-      `%{pull_request: 448}`);
+    * `:ticket` - another ticket reaching a terminal state (`waits_on: %{identifier: "TP-12"}`, a
+      ticket's identifier as Linear writes it);
+    * `:build` - a Symphony build containing a fix (`waits_on: %{version: "0.0.1.731"}`, a release's
+      version, or `%{pull_request: 448}`);
     * `:person` - the Director (`waits_on: %{action: "unblock" | "restart"}`);
     * `:environment` - a named condition (`waits_on: %{condition: name}`).
 
@@ -28,8 +29,10 @@ defmodule SymphonyElixir.Pauses do
   A reason is known by its kind and `waits_on`: setting the same one again changes nothing and
   records nothing. Each write reads, changes and writes the pause in one store transaction that
   holds its lock (`RunStore.update_ticket_pause/4`, `RunStore.update_subject_pause/2`), so
-  concurrent writers never lose each other's reasons and each change is recorded once. Nothing
-  calls this module yet.
+  concurrent writers never lose each other's reasons. A ticket's event is appended in that same
+  transaction, so the pause never changes without its event and the events follow the order the
+  changes were written in; the live channel's notice of it goes out once it commits. Nothing calls
+  this module yet.
   """
 
   alias SymphonyElixir.{RunStore, TicketEvents, TicketState}
@@ -40,6 +43,9 @@ defmodule SymphonyElixir.Pauses do
   @symphony %{kind: :symphony, name: "Symphony"}
   # The longest line a reason may have: the ledger (`SymphonyElixir.TicketEvents.Types`) refuses more.
   @max_text 300
+  # The only names a reason's default line shows: a ticket's identifier and a release's version.
+  @identifier ~r/\A[A-Z][A-Z0-9]*-\d+\z/
+  @version ~r/\A\d+(\.\d+)+\z/
 
   @typedoc "What a pause holds: a ticket of a repository, a repository, or Symphony itself."
   @type subject :: {:ticket, String.t(), String.t()} | {:repository, String.t()} | :symphony
@@ -208,32 +214,28 @@ defmodule SymphonyElixir.Pauses do
     end
   end
 
-  defp unchanged(pause), do: {:ok, {pause, nil}}
+  defp unchanged(pause), do: {:ok, pause}
 
-  # A ticket's event is validated before its pause is written, so a pause whose event the ledger
-  # refuses is never stored. Any other subject records no event.
+  # A ticket's event is built (and validated) before anything is written, so a pause whose event the
+  # ledger refuses is never stored, and the store appends it with the pause. Any other subject
+  # records no event.
   defp change({:ticket, repo_key, issue_id}, pause, type, payload, at) do
-    with {:ok, _event} <- TicketEvents.build(repo_key, issue_id, type, payload, at: at),
-         do: {:write, pause, {pause, {type, payload, at}}}
+    with {:ok, event} <- TicketEvents.build(repo_key, issue_id, type, payload, at: at),
+         do: {:write, pause, [event], pause}
   end
 
-  defp change(_subject, pause, _type, _payload, _at), do: {:write, pause, {pause, nil}}
+  defp change(_subject, pause, _type, _payload, _at), do: {:write, pause, pause}
 
-  # The pause is read, changed and written in one store transaction that holds its lock, so
-  # concurrent writers never lose each other's reasons; only then is the change's event recorded,
-  # once per change written.
+  # The pause is read, changed and written in one store transaction that holds its lock, with the
+  # ticket's event appended in it; the event's notice goes out once it commits.
   defp update({:ticket, repo_key, issue_id}, at, fun) do
-    with {:ok, {pause, event}} <- RunStore.update_ticket_pause(repo_key, issue_id, at, fun),
-         {:ok, _event} <- record(repo_key, issue_id, event),
-         do: {:ok, pause}
+    with {:ok, pause, events} <- RunStore.update_ticket_pause(repo_key, issue_id, at, fun) do
+      Enum.each(events, &TicketEvents.notify/1)
+      {:ok, pause}
+    end
   end
 
-  defp update(subject, _at, fun) do
-    with {:ok, {pause, nil}} <- RunStore.update_subject_pause(subject, &fun.(normalize(&1))), do: {:ok, pause}
-  end
-
-  defp record(_repo_key, _issue_id, nil), do: {:ok, nil}
-  defp record(repo_key, issue_id, {type, payload, at}), do: TicketEvents.record(repo_key, issue_id, type, payload, at: at)
+  defp update(subject, _at, fun), do: RunStore.update_subject_pause(subject, &fun.(normalize(&1)))
 
   defp read({:ticket, repo_key, issue_id}) do
     with record when not is_tuple(record) <- RunStore.get_ticket_state(repo_key, issue_id),
@@ -302,16 +304,24 @@ defmodule SymphonyElixir.Pauses do
   defp normalize_reason(_reason), do: []
 
   defp waits_on(:question, waits_on), do: one(waits_on, :question_id)
-  defp waits_on(:ticket, waits_on), do: one(waits_on, :identifier)
+  defp waits_on(:ticket, waits_on), do: matching(waits_on, :identifier, @identifier)
   defp waits_on(:environment, waits_on), do: one(waits_on, :condition)
   defp waits_on(:build, %{pull_request: number}) when is_integer(number) and number > 0, do: %{pull_request: number}
-  defp waits_on(:build, waits_on), do: one(waits_on, :version)
+  defp waits_on(:build, waits_on), do: matching(waits_on, :version, @version)
   defp waits_on(:person, %{action: action}) when is_atom(action), do: waits_on(:person, %{action: Atom.to_string(action)})
   defp waits_on(:person, %{action: action}) when action in @person_actions, do: %{action: action}
   defp waits_on(:person, _waits_on), do: nil
 
   defp one(waits_on, field) do
     if value = line(Map.get(waits_on, field)), do: %{field => value}
+  end
+
+  # A value the default line shows: only one that matches `pattern`.
+  defp matching(waits_on, field, pattern) do
+    with %{^field => value} = waits_on <- one(waits_on, field),
+         true <- value =~ pattern,
+         do: waits_on,
+         else: (_invalid -> nil)
   end
 
   defp default_text(:question, _waits_on), do: "Waiting for your answer"

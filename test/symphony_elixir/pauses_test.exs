@@ -2,6 +2,7 @@ defmodule SymphonyElixir.PausesTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.{Pauses, TicketState}
+  alias SymphonyElixirWeb.ObservabilityPubSub
 
   @repo_key "repo-a"
   @issue_id "issue-1"
@@ -82,6 +83,20 @@ defmodule SymphonyElixir.PausesTest do
 
       assert [%{summary: %{title: "Paused: waiting for your answer"}}, %{summary: %{title: "Also paused: waiting for TP-1194 to finish"}}] =
                RunStore.list_ticket_events(@repo_key, @issue_id, [])
+    end
+
+    test "each change sends the live channel one notice of its event once stored; a no-op sends none" do
+      :ok = ObservabilityPubSub.subscribe_ticket_events()
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id, %{issue_identifier: "TP-1230"}))
+
+      {:ok, _pause} = Pauses.set(@ticket, @question, at: @at)
+      {:ok, _pause} = Pauses.set(@ticket, @question, at: @at)
+      {:ok, nil} = Pauses.clear(@ticket, at: @later)
+
+      [set, cleared] = RunStore.list_ticket_events(@repo_key, @issue_id, [])
+      assert_receive {:ticket_event, %{event_id: id, type: "pause.set", issue_identifier: "TP-1230"}} when id == set.id
+      assert_receive {:ticket_event, %{event_id: id, type: "pause.cleared"}} when id == cleared.id
+      refute_received {:ticket_event, _notice}
     end
 
     test "pauses a ticket whose record exists without touching the rest of it" do
@@ -183,8 +198,9 @@ defmodule SymphonyElixir.PausesTest do
       concurrently(reasons, &Pauses.clear_reason(@ticket, &1, at: @later))
 
       refute Pauses.paused?(@ticket)
+      # Unsorted: the ledger keeps the order the changes were written in.
       cleared = for {type, _payload} <- ticket_events(@repo_key, @issue_id), type != "pause.set" and type != "pause.reason_added", do: type
-      assert Enum.sort(cleared) == ["pause.cleared", "pause.reason_cleared"]
+      assert cleared == ["pause.reason_cleared", "pause.cleared"]
     end
 
     test "a repository's pause keeps every reason added at once" do
@@ -293,6 +309,10 @@ defmodule SymphonyElixir.PausesTest do
             %{kind: :question, waits_on: %{}},
             %{kind: :question, waits_on: %{question_id: "  "}},
             %{kind: :ticket, waits_on: "TP-1"},
+            %{kind: :ticket, waits_on: %{identifier: "3f2a9c1e-0000"}},
+            %{kind: :ticket, waits_on: %{identifier: "tp-1"}},
+            %{kind: :build, waits_on: %{version: "e6d62a75"}},
+            %{kind: :build, waits_on: %{version: "lib/symphony"}},
             %{kind: :build, waits_on: %{pull_request: 0}},
             %{kind: :person, waits_on: %{action: "decide"}},
             %{kind: :person, waits_on: %{action: :decide}},

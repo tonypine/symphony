@@ -65,6 +65,12 @@ defmodule SymphonyElixir.RunStore do
   @typedoc "What a pause update's function returns: a pause to write (nil clears it), or nothing to write."
   @type pause_update :: {:write, map() | nil, term()} | {:ok, term()} | {:error, term()}
 
+  @typedoc """
+  What a ticket's pause update's function returns: a pause to write (nil clears it) with the events
+  to append to the ticket in the same transaction, or nothing to write.
+  """
+  @type ticket_pause_update :: {:write, map() | nil, [Event.t()], term()} | {:ok, term()} | {:error, term()}
+
   defmodule State do
     @moduledoc false
 
@@ -1322,13 +1328,17 @@ defmodule SymphonyElixir.RunStore do
   @doc """
   Runs `fun` on the pause of `repo_key`'s ticket `issue_id` (`SymphonyElixir.Pauses`, its only
   writer), nil when it has none, in one durable transaction that holds the record's write lock, so
-  concurrent pause writes to one ticket are serialized and none is lost. `{:write, pause, result}`
-  writes `pause` (nil clears it) with `updated_at` `at`, creating the record when none exists, and
-  returns `{:ok, result}`; `{:ok, result}` and `{:error, reason}` write nothing and are returned.
-  `fun` may run more than once when the transaction restarts, so it must have no side effects.
+  concurrent pause writes to one ticket are serialized and none is lost.
+  `{:write, pause, events, result}` writes `pause` (nil clears it) with `updated_at` `at`, creating
+  the record when none exists, appends `events` to the ticket in the same transaction (as
+  `append_ticket_events/1` does), and returns `{:ok, result, stored}` with the events as stored: a
+  pause never changes without its events, and the events of two writers follow the order their
+  changes were written in. `{:ok, result}` writes nothing and returns `{:ok, result, []}`;
+  `{:error, reason}` writes nothing and is returned. `fun` may run more than once when the
+  transaction restarts, so it must have no side effects.
   """
-  @spec update_ticket_pause(String.t(), String.t(), DateTime.t(), (map() | nil -> pause_update())) ::
-          {:ok, term()} | {:error, term()}
+  @spec update_ticket_pause(String.t(), String.t(), DateTime.t(), (map() | nil -> ticket_pause_update())) ::
+          {:ok, term(), [Event.t()]} | {:error, term()}
   def update_ticket_pause(repo_key, issue_id, at, fun) when is_binary(issue_id) and is_function(fun, 1) do
     with {:ok, repo_key} <- normalize_repo_key(repo_key),
          :ok <- ensure_started() do
@@ -2366,12 +2376,16 @@ defmodule SymphonyElixir.RunStore do
       end
 
     case fun.(record.pause) do
-      {:write, pause, result} ->
+      {:write, pause, events, result} ->
         :mnesia.write({@ticket_state_table, key, repo_key, issue_id, TicketState.put_pause(record, pause, at)})
-        {:ok, result}
+        {:ok, stored} = write_ticket_events(repo_key, issue_id, events)
+        {:ok, result, stored}
 
-      unchanged ->
-        unchanged
+      {:ok, result} ->
+        {:ok, result, []}
+
+      {:error, _reason} = error ->
+        error
     end
   end
 

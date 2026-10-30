@@ -3,6 +3,8 @@ defmodule SymphonyElixir.RunStoreTest do
 
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.RunStore.RunIndex
+  alias SymphonyElixir.TicketEvents
+  alias SymphonyElixir.TicketEvents.Event
   alias SymphonyElixir.TicketState
 
   @repo_key "repo-a"
@@ -363,17 +365,20 @@ defmodule SymphonyElixir.RunStoreTest do
     assert RunStore.update_subject_pause(:dispatch_pause, fn _pause -> {:ok, nil} end) == {:error, :invalid_subject}
   end
 
-  test "updates a ticket's pause in one transaction, creating the record and keeping the rest of it" do
+  test "updates a ticket's pause and appends its events in one transaction, creating the record and keeping the rest of it" do
     at = ~U[2026-10-30 04:00:00Z]
     later = ~U[2026-10-30 05:00:00Z]
     pause = %{subject: {:ticket, @repo_key, "issue-1"}, reasons: [%{kind: :question, waits_on: %{question_id: "q-1"}}]}
+    event = fn type, payload, at -> TicketEvents.build(@repo_key, "issue-1", type, payload, at: at) |> elem(1) end
+    set = event.("pause.set", %{reason: "question", text: "Waiting for your answer"}, at)
 
-    assert RunStore.update_ticket_pause(@repo_key, "issue-1", at, fn nil -> {:ok, :kept} end) == {:ok, :kept}
+    assert RunStore.update_ticket_pause(@repo_key, "issue-1", at, fn nil -> {:ok, :kept} end) == {:ok, :kept, []}
     assert RunStore.get_ticket_state(@repo_key, "issue-1") == nil
 
-    assert RunStore.update_ticket_pause(@repo_key, "issue-1", at, fn nil -> {:write, pause, :paused} end) == {:ok, :paused}
+    assert {:ok, :paused, [%Event{type: "pause.set", seq: 1, phase: nil}]} =
+             RunStore.update_ticket_pause(@repo_key, "issue-1", at, fn nil -> {:write, pause, [set], :paused} end)
 
-    assert %{pause: %{reasons: [%{kind: :question, text: "Waiting for your answer"}]}, updated_at: ^at} =
+    assert %{pause: %{reasons: [%{kind: :question, text: "Waiting for your answer"}]}, event_seq: 1, updated_at: ^at} =
              RunStore.get_ticket_state(@repo_key, "issue-1")
 
     :ok = RunStore.update_ticket_state(@repo_key, "issue-1", %{phase: "In Progress"})
@@ -381,8 +386,13 @@ defmodule SymphonyElixir.RunStoreTest do
     assert RunStore.update_ticket_pause(@repo_key, "issue-1", later, refuse) == {:error, :refused}
     assert %{phase: "In Progress", pause: %{}, updated_at: ^at} = RunStore.get_ticket_state(@repo_key, "issue-1")
 
-    assert RunStore.update_ticket_pause(@repo_key, "issue-1", later, fn %{} -> {:write, nil, :cleared} end) == {:ok, :cleared}
-    assert %{phase: "In Progress", pause: nil, updated_at: ^later} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    cleared = event.("pause.cleared", %{cleared: []}, later)
+
+    assert {:ok, :cleared, [%Event{type: "pause.cleared", seq: 2, phase: "In Progress"}]} =
+             RunStore.update_ticket_pause(@repo_key, "issue-1", later, fn %{} -> {:write, nil, [cleared], :cleared} end)
+
+    assert %{phase: "In Progress", pause: nil, event_seq: 2, updated_at: ^later} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert ticket_events(@repo_key, "issue-1") |> Enum.map(&elem(&1, 0)) == ["pause.set", "pause.cleared"]
 
     assert RunStore.update_ticket_pause(@repo_key, nil, at, fn _pause -> {:ok, nil} end) == {:error, :invalid_issue_id}
   end
