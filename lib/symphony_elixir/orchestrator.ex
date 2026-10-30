@@ -1898,13 +1898,16 @@ defmodule SymphonyElixir.Orchestrator do
 
   # One repo's two sides: its poll cache with when it was read, and its candidates from the records
   # (nil when they can't be read) with when each record last changed what makes it a candidate: its
-  # phase, or its removal a webhook delivered (`record_written_at/1`). With the poll in use,
-  # the records of a repo whose cache is cold are not read: the shadow leaves it out of the cycle.
+  # phase, or its removal a webhook delivered (`record_written_at/1`), and when Symphony wrote the
+  # phase of each record it owns. With the poll in use, the records of a repo whose cache is cold
+  # are not read: the shadow leaves it out of the cycle.
   defp dispatch_sides(%State{} = state, repo, settings, in_use) do
     repo_name = repo_name(repo)
     warm? = repo_poll_cache_warmed?(state, repo_name)
     entry = Map.get(state.repo_poll_cache, repo_name, %{})
-    {record, phase_at} = if warm? or in_use == :record, do: record_candidates(repo, settings), else: {nil, %{}}
+
+    {record, phase_at, symphony_phase_at} =
+      if warm? or in_use == :record, do: record_candidates(repo, settings), else: {nil, %{}, %{}}
 
     %{
       repo_key: repo_name,
@@ -1912,7 +1915,8 @@ defmodule SymphonyElixir.Orchestrator do
       cache: Map.get(entry, :issues, []),
       read_at: Map.get(entry, :read_at),
       record: record,
-      phase_at: phase_at
+      phase_at: phase_at,
+      symphony_phase_at: symphony_phase_at
     }
   end
 
@@ -1922,11 +1926,19 @@ defmodule SymphonyElixir.Orchestrator do
     case RunStore.list_ticket_states(repo_name) do
       records when is_list(records) ->
         candidates = Candidates.from_records(repo_name, records, settings, shadow_route_opts(repo, settings)).candidates
-        {candidates, Map.new(records, &{Map.get(&1, :issue_id), record_written_at(&1)})}
+        {candidates, Map.new(records, &{Map.get(&1, :issue_id), record_written_at(&1)}), symphony_phase_at(records)}
 
       _error ->
-        {nil, %{}}
+        {nil, %{}, %{}}
     end
+  end
+
+  # When Symphony wrote the phase of each record it owns, for the shadow's own-move rule.
+  defp symphony_phase_at(records) do
+    for record <- records,
+        %{phase_owner: :symphony, issue_id: id, phase_at: %DateTime{} = at} <- [TicketState.normalize(record)],
+        into: %{},
+        do: {id, at}
   end
 
   # A record a webhook marked removed leaves the candidates without a phase write, so its removal
@@ -1974,15 +1986,16 @@ defmodule SymphonyElixir.Orchestrator do
   # records give and reports how they differ (`Dispatch.Shadow`), whichever side dispatch reads. It
   # reads the store and no Linear: `assignee: me` takes the viewer the poll already resolved. A
   # difference whose record phase was written after the cache was read is the record being newer
-  # (a move of Symphony's, a webhook), counted apart. A repo whose cache is still cold, or whose
-  # records can't be read, is left out of the cycle.
+  # (a move of Symphony's, a webhook), counted apart, and so is one whose phase Symphony wrote after
+  # the cached ticket's `updatedAt`: the read came before Linear served the move. A repo whose cache
+  # is still cold, or whose records can't be read, is left out of the cycle.
   defp shadow_dispatch(sides, in_use, settings) do
     filter = {active_state_set(settings), terminal_state_set(settings)}
 
     compared =
       for %{warm?: true, record: record} = side <- sides,
           is_list(record),
-          do: side |> shadow_repo_differences(in_use, filter) |> Shadow.classify(side.read_at, side.phase_at)
+          do: side |> shadow_repo_differences(in_use, filter) |> shadow_classify(side)
 
     if compared != [] do
       differences = Enum.flat_map(compared, & &1.differences)
@@ -1991,6 +2004,12 @@ defmodule SymphonyElixir.Orchestrator do
     end
 
     :ok
+  end
+
+  defp shadow_classify(differences, side) do
+    updated_at = for %Issue{id: id, updated_at: %DateTime{} = at} <- side.cache, into: %{}, do: {id, at}
+    own_moves = [symphony_phase_at: side.symphony_phase_at, updated_at: updated_at]
+    Shadow.classify(differences, side.read_at, side.phase_at, own_moves)
   end
 
   defp shadow_repo_differences(side, in_use, {active_states, terminal_states}) do

@@ -14,13 +14,16 @@ defmodule SymphonyElixir.Dispatch.Shadow do
   appears, and is logged at warning level, once; once it clears, it appears again if it comes back.
 
   A record can be newer than the poll snapshot it is compared with: Symphony writes its own moves to
-  the record first, and a webhook writes a person's, while the snapshot was read before. `classify/3`
+  the record first, and a webhook writes a person's, while the snapshot was read before. `classify/4`
   sets aside a difference in a ticket's presence or state whose record was written after the
   snapshot was read (`record_newer`): a ticket the poll still lists that Symphony closed or a webhook
-  removed since, one Symphony promoted that the poll doesn't list yet, a state moved since. The
-  record is the fresher side, so it is not drift. The report counts those apart, once each like a
-  difference, with the identifier and side of the last five. The next poll reads Linear again, and
-  the comparison on that fresh snapshot shows a lag that is real.
+  removed since, one Symphony promoted that the poll doesn't list yet, a state moved since. A read
+  after Symphony's own move can still predate it in Linear: the cycle the move forces reads before
+  Linear serves the write. So a difference is `record_newer` too when Symphony wrote the record's
+  phase after the ticket's last change in the snapshot (its `updatedAt`): Linear had not seen the
+  move yet. The record is the fresher side, so it is not drift. The report counts those apart, once
+  each like a difference, with the identifier and side of the last five. The next poll reads Linear
+  again, and the comparison on that fresh snapshot shows a lag that is real.
   """
 
   use GenServer
@@ -70,10 +73,18 @@ defmodule SymphonyElixir.Dispatch.Shadow do
         }
 
   @typedoc """
-  One cycle's comparison once classified (`classify/3`): the differences to report, and the ones
+  One cycle's comparison once classified (`classify/4`): the differences to report, and the ones
   the record's newer phase write explains.
   """
   @type classified :: %{differences: [difference()], record_newer: [difference()]}
+
+  @typedoc """
+  The own-move rule's two sides (`classify/4`), each a map by issue id: when Symphony wrote the
+  phase of a record it owns, and the snapshot's `updatedAt` for the ticket.
+  """
+  @type own_move_opt :: {:symphony_phase_at, times_by_id()} | {:updated_at, times_by_id()}
+
+  @typep times_by_id :: %{optional(String.t()) => DateTime.t()}
 
   @type summary :: %{
           cycles_compared: non_neg_integer(),
@@ -122,20 +133,35 @@ defmodule SymphonyElixir.Dispatch.Shadow do
   end
 
   @doc """
-  Splits `differences` by which side is newer: a difference in a ticket's presence or state whose
-  record was written after the poll snapshot was read (`read_at`) is `record_newer`; every other one
-  stays a difference. `phase_at` maps an issue id to when its record last changed what the
-  candidates read from it: its phase, or its removal (`SymphonyElixir.TicketState`). A snapshot or a
-  record with no known time, a ticket with no record, and a priority difference stay differences.
+  Splits `differences` by which side is newer. A difference in a ticket's presence or state is
+  `record_newer` when its record was written after the poll snapshot was read (`read_at`), or when
+  Symphony wrote the record's phase after the ticket last changed in the snapshot: Linear had not
+  served Symphony's own move when it was read. Every other one stays a difference.
+
+  `phase_at` maps an issue id to when its record last changed what the candidates read from it: its
+  phase, or its removal (`SymphonyElixir.TicketState`). The options give the own-move rule its two
+  sides, by issue id: `symphony_phase_at`, when Symphony wrote the phase of a record it owns
+  (`phase_owner: :symphony`), and `updated_at`, the snapshot's `updatedAt` for the ticket. A
+  snapshot or a record with no known time, a ticket with no record, and a priority difference stay
+  differences.
   """
-  @spec classify([difference()], DateTime.t() | nil, %{optional(String.t()) => DateTime.t() | nil}) :: classified()
-  def classify(differences, read_at, phase_at) when is_list(differences) and is_map(phase_at) do
-    {record_newer, differences} = Enum.split_with(differences, &record_newer?(&1, read_at, Map.get(phase_at, &1.issue_id)))
+  @spec classify([difference()], DateTime.t() | nil, %{optional(String.t()) => DateTime.t() | nil}, [own_move_opt()]) ::
+          classified()
+  def classify(differences, read_at, phase_at, opts \\ []) when is_list(differences) and is_map(phase_at) do
+    symphony_phase_at = Keyword.get(opts, :symphony_phase_at, %{})
+    updated_at = Keyword.get(opts, :updated_at, %{})
+
+    {record_newer, differences} =
+      Enum.split_with(differences, fn %{issue_id: id} = difference ->
+        record_newer?(difference, read_at, Map.get(phase_at, id)) or
+          unseen_own_move?(difference, Map.get(updated_at, id), Map.get(symphony_phase_at, id))
+      end)
+
     %{differences: differences, record_newer: record_newer}
   end
 
   @doc """
-  Records one compared cycle and its `differences` (a list, or a cycle `classify/3` split), keeping
+  Records one compared cycle and its `differences` (a list, or a cycle `classify/4` split), keeping
   the last `window` cycles' counts. A difference new since the last cycle joins the recent ones and
   is logged at warning level; a `record_newer` one new since the last cycle is counted apart.
   """
@@ -205,6 +231,13 @@ defmodule SymphonyElixir.Dispatch.Shadow do
     do: DateTime.compare(phase_at, read_at) == :gt
 
   defp record_newer?(_difference, _read_at, _phase_at), do: false
+
+  # Symphony's move is in the record but not yet in the snapshot's copy of the ticket, which last
+  # changed before it: a person's later move would leave `updatedAt` after the phase write.
+  defp unseen_own_move?(%{field: field}, %DateTime{} = updated_at, %DateTime{} = phase_at) when field in @phase_fields,
+    do: DateTime.compare(updated_at, phase_at) == :lt
+
+  defp unseen_own_move?(_difference, _updated_at, _phase_at), do: false
 
   # The differences open now; one not open in the last cycle is new, and one open then but not now
   # has cleared.
