@@ -38,8 +38,8 @@ defmodule SymphonyElixirWeb.PauseBackfillStateTest do
     Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, endpoint_config)
     start_supervised!({SymphonyElixirWeb.Endpoint, []})
 
-    :persistent_term.erase({Backfill, :summary})
-    on_exit(fn -> :persistent_term.erase({Backfill, :summary}) end)
+    Backfill.reset()
+    on_exit(fn -> Backfill.reset() end)
     :ok = RunStore.put_marker(TicketEvents.Backfill.marker(), @set_at)
     :ok
   end

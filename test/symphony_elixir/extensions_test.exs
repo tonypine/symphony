@@ -8,6 +8,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   alias SymphonyElixir.Dispatch.Shadow
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.{Adapter, Client, Usage}
+  alias SymphonyElixir.Pauses.Backfill, as: PauseBackfill
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.Tracker.Memory
 
@@ -577,6 +578,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   test "phoenix observability api preserves state, issue, and refresh responses" do
     SymphonyElixir.TicketObservation.reset()
     Shadow.reset()
+    PauseBackfill.reset()
     put_build(sha: "D3D301B0123456789ABCDEF0123456789ABCDEF0", repo: "https://github.com/acme/symphony", number: "168")
     snapshot = static_snapshot()
     orchestrator_name = Module.concat(__MODULE__, :ObservabilityApiOrchestrator)

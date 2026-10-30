@@ -104,6 +104,13 @@ defmodule SymphonyElixir.Pauses.Backfill do
   @spec summary() :: summary() | %{at: DateTime.t(), error: String.t()} | nil
   def summary, do: :persistent_term.get(@summary_key, nil)
 
+  @doc "Forgets the summary, so `summary/0` reads nil until the next run."
+  @spec reset() :: :ok
+  def reset do
+    _ = :persistent_term.erase(@summary_key)
+    :ok
+  end
+
   @doc """
   Converts every record not converted yet, then the operator's pause (see the module doc), and
   returns what it did. `{:error, :ledger_backfill_pending}` while the ledger's backfill is not done.

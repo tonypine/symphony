@@ -12,7 +12,6 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
   @later ~U[2026-10-30 08:00:00.000000Z]
   @symphony %{kind: :symphony, name: "Symphony"}
   @director %{kind: :person, name: "Director"}
-  @summary_key {Backfill, :summary}
 
   # The run store, with the failures a test asks for in its process.
   defmodule Store do
@@ -32,7 +31,7 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
   setup do
     :ok = RunStore.clear()
     :ok = RunStore.put_marker(TicketEvents.Backfill.marker(), @set_at)
-    on_exit(fn -> :persistent_term.erase(@summary_key) end)
+    on_exit(fn -> Backfill.reset() end)
     :ok
   end
 
@@ -381,6 +380,18 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
 
       assert log =~ "Failed to backfill pauses and questions: :ledger_backfill_pending"
       assert %{error: ":ledger_backfill_pending", at: %DateTime{}} = Backfill.summary()
+    end
+  end
+
+  describe "reset/0" do
+    test "forgets the summary until the next run" do
+      ledger = fn _opts -> {:ok, %{tickets: 0, events: 0}} end
+      capture_log(fn -> Backfill.run_after_ledger(ledger: ledger, now: @now) end)
+      assert %{at: @now} = Backfill.summary()
+
+      assert Backfill.reset() == :ok
+      assert Backfill.summary() == nil
+      assert Backfill.reset() == :ok
     end
   end
 end

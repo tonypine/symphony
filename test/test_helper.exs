@@ -34,9 +34,6 @@ Application.put_env(:symphony_elixir, :agent_run_tmp_bases, [agent_run_tmp_root]
 Application.put_env(:symphony_elixir, :state_root, state_root)
 Application.put_env(:symphony_elixir, :logs_root, logs_root)
 Application.put_env(:symphony_elixir, :audit_log_dir, audit_dir)
-# The orchestrator's boot starts the ticket events backfill in a task; in tests it would race the
-# events a test asserts, so it runs only where a test starts it (`TicketEvents.Backfill.start/1`).
-Application.put_env(:symphony_elixir, :ticket_events_backfill, false)
 
 # Agents launched in tests keep their tool caches here, seeded from host caches that don't
 # exist, so a test never writes the operator's cache folder or copies their Hex packages.

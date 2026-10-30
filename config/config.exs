@@ -36,5 +36,10 @@ if config_env() == :test do
     logs_root: Path.join(System.tmp_dir!(), "symphony-elixir-test-logs-#{System.pid()}-#{System.unique_integer([:positive])}"),
     run_store_dir: Path.join(System.tmp_dir!(), "symphony-elixir-test-run-store-#{System.pid()}-#{System.unique_integer([:positive])}"),
     # A git fetch that fails on `cannot lock ref` is retried at once in tests.
-    repo_fetch_retry_delay_ms: 0
+    repo_fetch_retry_delay_ms: 0,
+    # The orchestrator's boot starts the ticket events backfill, and the pause backfill after it, in
+    # a task; in tests it would race the events and the state payload a test asserts, so it runs only
+    # where a test starts it (`TicketEvents.Backfill.start/1`). Set here, not in `test_helper.exs`:
+    # `mix test` boots the app before the helper runs.
+    ticket_events_backfill: false
 end
