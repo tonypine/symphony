@@ -31,7 +31,7 @@ defmodule SymphonyElixir.QaDriver do
     local API from those JSON files;
   - `qa_quit_app`, `qa_screenshot`, `qa_ax_tree`, `qa_ax_press`,
     `qa_ax_set_value`, `qa_ax_select`, `qa_click`, `qa_hover`,
-    `qa_context_menu`, `qa_key` and `qa_resize_window` accept only a PID this driver launched and that is still
+    `qa_context_menu`, `qa_scroll`, `qa_key` and `qa_resize_window` accept only a PID this driver launched and that is still
     running; `qa_check_app` also reports on one that has exited;
   - `qa_ax_select` selects a table or outline row (which answers no AXPress)
     through `AXSelectedRows` or `AXSelected`; `qa_click` clicks an element's
@@ -43,9 +43,14 @@ defmodule SymphonyElixir.QaDriver do
     links check where it is when the mouse goes up) and presses the element
     with `AXPress` when the click changed nothing; `qa_hover` moves the pointer
     over an element or point and waits for the app to settle, and
-    `qa_context_menu` right-clicks one and lists the menu that opens. They pass
-    the same checks as `qa_click` before the pointer moves.
-    The helper posts their mouse and key events to the app's PID alone;
+    `qa_context_menu` right-clicks one and lists the menu that opens.
+    `qa_scroll` posts scroll-wheel events in the scroll area at an element or
+    point, by a `dx`/`dy` delta or to an `edge`, as a trackpad does: a SwiftUI
+    list answers no key that scrolls it. They pass the same checks as
+    `qa_click` before the pointer moves.
+    The helper posts their mouse and key events to the app's PID alone (a
+    scroll the app took no part of is posted again where the pointer is, over
+    the app's own window);
   - screenshots land in `qa-evidence/` under the worktree, always as new files:
     a name that already exists, symlinks included, is refused rather than
     followed or replaced;
@@ -277,6 +282,9 @@ defmodule SymphonyElixir.QaDriver do
   # display left of or above the main one has negative ones.
   @max_coordinate 32_768
   @pointer_commands %{"qa_hover" => "hover", "qa_context_menu" => "context-menu"}
+  @scroll_edges ~w(top bottom left right)
+  # The largest delta `qa_scroll` takes per unit; an edge scroll covers any length.
+  @max_scroll %{"pixel" => 20_000, "line" => 2_000}
 
   # Clones the bundle `$2` into `$1/checkouts/$3` without hooks (the empty
   # template and `core.hooksPath` keep the operator's out too) and points
@@ -354,7 +362,7 @@ defmodule SymphonyElixir.QaDriver do
   @qa_vm_docs "docs/configuration.md#running-qa-in-a-qa-vm"
 
   @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_ax_select qa_click qa_key) ++
-           ~w(qa_hover qa_context_menu qa_resize_window qa_check_app qa_put_file qa_put_checkout qa_api_requests qa_open_status_menu) ++
+           ~w(qa_hover qa_context_menu qa_scroll qa_resize_window qa_check_app qa_put_file qa_put_checkout qa_api_requests qa_open_status_menu) ++
            ~w(qa_build_release_pair qa_relaunched_app qa_update_feed)
 
   # The QA host's OS boundary: `SymphonyElixir.QaDriver.Remote.host/1`, unless a test overrides it.
@@ -690,6 +698,16 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, target} <- pointer_target(args),
          {:ok, helper} <- helper(driver, config) do
       run_helper(config, helper, [@pointer_commands[tool], Integer.to_string(pid), target])
+    end
+  end
+
+  defp run_tool("qa_scroll", driver, config, args) do
+    with {:ok, pid} <- running_pid(driver, args),
+         {:ok, target} <- pointer_target(args),
+         {:ok, unit} <- scroll_unit(Map.get(args, "unit")),
+         {:ok, amount} <- scroll_amount(args, unit),
+         {:ok, helper} <- helper(driver, config) do
+      run_helper(config, helper, ["scroll", Integer.to_string(pid), target, amount, unit])
     end
   end
 
@@ -1405,6 +1423,29 @@ defmodule SymphonyElixir.QaDriver do
       if x && y,
         do: {:ok, "#{x},#{y}"},
         else: tool_error("invalid_arguments", "Pass an element `path` from qa_ax_tree, or both `x` and `y` of a point on screen.")
+    end
+  end
+
+  defp scroll_unit(nil), do: {:ok, "pixel"}
+  defp scroll_unit(unit) when is_map_key(@max_scroll, unit), do: {:ok, unit}
+  defp scroll_unit(_unit), do: tool_error("invalid_arguments", "`unit` must be pixel or line.")
+
+  # An edge, or a delta as the helper takes it: `dx,dy`.
+  defp scroll_amount(%{"edge" => _edge} = args, _unit) when is_map_key(args, "dx") or is_map_key(args, "dy"),
+    do: tool_error("invalid_arguments", "Pass an `edge` or a `dx`/`dy` delta, not both.")
+
+  defp scroll_amount(%{"edge" => edge}, _unit) when edge in @scroll_edges, do: {:ok, edge}
+  defp scroll_amount(%{"edge" => _edge}, _unit), do: tool_error("invalid_arguments", "`edge` must be one of #{Enum.join(@scroll_edges, ", ")}.")
+
+  defp scroll_amount(args, unit) do
+    max = @max_scroll[unit]
+
+    with {:ok, dx} <- optional_integer(args, "dx", -max, max),
+         {:ok, dy} <- optional_integer(args, "dy", -max, max) do
+      case {dx || 0, dy || 0} do
+        {0, 0} -> tool_error("invalid_arguments", "Pass an `edge` (top, bottom, left, right) or a non-zero `dx` or `dy`.")
+        {x, y} -> {:ok, "#{x},#{y}"}
+      end
     end
   end
 

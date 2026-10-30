@@ -149,6 +149,13 @@ jobs:
         working-directory: macos
         run: time sh Tests/qa-appearance-test.sh
 
+      # `qa_scroll`: the QA driver scrolls a SwiftUI ScrollView that loads pages at its end and a
+      # List to their last rows, and by a delta, in a fixture app with a window.
+      - name: Test the QA driver's scrolling
+        working-directory: macos
+        timeout-minutes: 10
+        run: time python3 -I Tests/qa-scroll-test.py
+
   install-script:
     name: install script
     runs-on: macos-26

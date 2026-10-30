@@ -890,6 +890,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
             {"qa_click", %{"pid" => 1, "path" => "0.1", "clicks" => 2}},
             {"qa_hover", %{"pid" => 1, "x" => -20, "y" => 340}},
             {"qa_context_menu", %{"pid" => 1, "path" => "0.1"}},
+            {"qa_scroll", %{"pid" => 1, "path" => "0.1", "edge" => "bottom"}},
+            {"qa_scroll", %{"pid" => 1, "x" => 20, "y" => 340, "dy" => 120, "unit" => "pixel"}},
             {"qa_key", %{"pid" => 1, "key" => "[", "modifiers" => ["command"]}}
           ] do
         response = DynamicTool.execute(tool, args, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
@@ -899,7 +901,14 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       response = DynamicTool.execute("qa_hover", %{"pid" => 1, "path" => "0.1", "clicks" => 2}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
       assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
 
-      for name <- ["qa_hover", "qa_context_menu"] do
+      response = DynamicTool.execute("qa_scroll", %{"pid" => 1, "path" => "0.1", "clicks" => 2}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+      assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+
+      scroll = Enum.find(DynamicTool.tool_specs(:qa), &(&1["name"] == "qa_scroll"))
+      assert %{"edge" => %{"enum" => ["top", "bottom", "left", "right"]}, "unit" => %{"enum" => ["pixel", "line"]}} = scroll["inputSchema"]["properties"]
+      assert scroll["description"] =~ "pagination"
+
+      for name <- ["qa_hover", "qa_context_menu", "qa_scroll"] do
         spec = Enum.find(DynamicTool.tool_specs(:qa), &(&1["name"] == name))
         assert %{"x" => %{"type" => "integer"}, "y" => %{"type" => "integer"}, "path" => %{"type" => "string"}} = spec["inputSchema"]["properties"]
       end

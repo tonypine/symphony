@@ -40,6 +40,7 @@
 //   hover <pid> <path or x,y>
 //   context-menu <pid> <path or x,y>
 //   key <pid> <key> <modifiers, comma-separated, or "">
+//   scroll <pid> <path or x,y> <top|bottom|left|right or dx,dy> <line|pixel>
 //
 // `ax-set-value` types into a text field the way a person does (see
 // `enterText`), and sets `AXValue` directly only on other controls.
@@ -50,6 +51,8 @@
 // events to the app's PID alone (see `selectRow`, `click` and `pressKey`).
 // `click`, `hover` and `context-menu` move the real pointer to the target first
 // (see `movePointer`), only once the app's own window is in front there.
+// `scroll` posts scroll-wheel events in the scroll area at the target, by a delta
+// or to an edge (see `scroll`).
 //
 // Opened with no arguments (by hand, from Finder or `open`), it asks for both
 // permissions, so that it is listed in System Settings.
@@ -964,9 +967,316 @@ func pressKey(_ pid: pid_t, _ name: String, _ modifiers: String) {
     ])
 }
 
+// -- scrolling ------------------------------------------------------------------
+
+// A SwiftUI `ScrollView` or `List` answers no key that scrolls it and its overlay
+// scroll bar takes no `AXValue`, so it is scrolled as a trackpad does: scroll-wheel
+// events at a point inside it. Positive `dy` scrolls toward the bottom (later
+// rows), positive `dx` toward the right.
+let scrollRoles: Set<String> = [kAXScrollAreaRole as String]
+let scrollBarRoles: Set<String> = [kAXScrollBarRole as String]
+// Largest delta one event carries, as a trackpad sends many small ones.
+let pixelStep = 100
+let lineStep = 5
+let scrollPause: useconds_t = 8_000
+// An edge scroll posts rounds of large steps until two rounds in a row move
+// nothing, so rows a page load adds at the end are scrolled to as well, within
+// the helper's time budget.
+let edgeRoundPixels = 3000
+let edgeDeadline: TimeInterval = 15
+let edgeStableRounds = 2
+
+enum ScrollRoute: String {
+    case pid
+    case hid
+}
+
+func role(_ element: AXUIElement) -> String { attribute(element, kAXRoleAttribute as String) as? String ?? "" }
+
+func cgFrame(_ element: AXUIElement) -> CGRect? {
+    guard let origin = point(attribute(element, kAXPositionAttribute as String)),
+          let extent = size(attribute(element, kAXSizeAttribute as String)) else { return nil }
+    return CGRect(origin: origin, size: extent)
+}
+
+// The scroll area an element is, or sits in.
+func enclosingScrollArea(_ start: AXUIElement) -> AXUIElement? {
+    var current: AXUIElement? = start
+
+    for _ in 0..<16 {
+        guard let candidate = current else { return nil }
+        if scrollRoles.contains(role(candidate)) { return candidate }
+        current = element(attribute(candidate, kAXParentAttribute as String))
+    }
+
+    return nil
+}
+
+// The first scroll area inside an element (a window, a pane), for a target that
+// holds the list rather than sits in it.
+func innerScrollArea(_ start: AXUIElement) -> AXUIElement? {
+    var queue = [start]
+    var visited = 0
+
+    while !queue.isEmpty, visited < visitLimit {
+        let next = queue.removeFirst()
+        visited += 1
+        if scrollRoles.contains(role(next)), (cgFrame(next)?.width ?? 0) >= 1 { return next }
+        queue += children(next)
+    }
+
+    return nil
+}
+
+func scrollBar(_ area: AXUIElement, _ name: String) -> Double? {
+    guard let bar = element(attribute(area, name)) else { return nil }
+    return (attribute(bar, kAXValueAttribute as String) as? NSNumber)?.doubleValue
+}
+
+func scrollBars(_ area: AXUIElement) -> [String: Double] {
+    var bars: [String: Double] = [:]
+    bars["vertical"] = scrollBar(area, kAXVerticalScrollBarAttribute as String)
+    bars["horizontal"] = scrollBar(area, kAXHorizontalScrollBarAttribute as String)
+    return bars
+}
+
+// The area's content: its children but the scroll bars, and then, while that is
+// one container (a SwiftUI stack, a table), the container's children, so the
+// rows themselves are listed.
+func scrollContent(_ area: AXUIElement) -> (containers: [AXUIElement], items: [AXUIElement]) {
+    var containers: [AXUIElement] = []
+    var items = children(area).filter { !scrollBarRoles.contains(role($0)) }
+
+    for _ in 0..<4 {
+        guard items.count == 1, let only = items.first else { break }
+        let inner = children(only).filter { !scrollBarRoles.contains(role($0)) && role($0) != kAXColumnRole as String }
+        if inner.isEmpty { break }
+        containers.append(only)
+        items = inner
+    }
+
+    return (containers, items)
+}
+
+// What moves when the area scrolls: its content's frames and its scroll bars.
+// Equal signatures mean the scroll changed nothing.
+func scrollSignature(_ area: AXUIElement) -> String {
+    let content = scrollContent(area)
+    let frames = (content.containers + content.items.prefix(80)).map { cgFrame($0).map { "\($0)" } ?? "-" }
+    return ([String(content.items.count)] + frames + scrollBars(area).sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }).joined(separator: "|")
+}
+
+// The rows nearest the middle of the area first: a list reuses the view of a
+// row that scrolls out for one that scrolls in, so only a row that stays on
+// screen measures the scroll. Containers come last, as one may stay put.
+func positions(_ area: AXUIElement) -> [(AXUIElement, CGPoint)] {
+    let content = scrollContent(area)
+    let middle = cgFrame(area).map { CGPoint(x: $0.midX, y: $0.midY) } ?? .zero
+    let rows = content.items.compactMap { item in cgFrame(item).map { (item, $0) } }
+        .sorted { hypot($0.1.midX - middle.x, $0.1.midY - middle.y) < hypot($1.1.midX - middle.x, $1.1.midY - middle.y) }
+    let containers = content.containers.compactMap { item in cgFrame(item).map { (item, $0) } }
+    return (rows + containers).map { ($0.0, $0.1.origin) }
+}
+
+// How far the content moved, from an element shown before and after: content
+// moving up is a scroll down.
+func shift(from before: [(AXUIElement, CGPoint)], to after: [(AXUIElement, CGPoint)]) -> CGPoint? {
+    for (item, origin) in before {
+        if let now = after.first(where: { CFEqual($0.0, item) }) {
+            return CGPoint(x: origin.x - now.1.x, y: origin.y - now.1.y)
+        }
+    }
+
+    return nil
+}
+
+// A row's own text, or the first texts inside it.
+func itemText(_ item: AXUIElement) -> String? {
+    var found: [String] = []
+    var queue = [(item, 0)]
+
+    while !queue.isEmpty, found.count < 3 {
+        let (next, depth) = queue.removeFirst()
+        if let shown = text(attribute(next, kAXValueAttribute as String)) ?? text(attribute(next, kAXTitleAttribute as String))
+            ?? text(attribute(next, kAXDescriptionAttribute as String)) {
+            found.append(shown)
+        }
+        if depth < 4 { queue += children(next).map { ($0, depth + 1) } }
+    }
+
+    return found.isEmpty ? nil : found.joined(separator: " · ")
+}
+
+func itemSummary(_ item: AXUIElement) -> [String: Any] {
+    var node: [String: Any] = [:]
+    node["role"] = text(attribute(item, kAXRoleAttribute as String))
+    node["text"] = itemText(item)
+    node["frame"] = frame(item)
+    return node
+}
+
+// The rows on screen in the area: the first and the last, and how many, with a
+// table's own count of its visible and total rows when it reports them.
+func visibleRange(_ area: AXUIElement) -> [String: Any] {
+    guard let bounds = cgFrame(area) else { return [:] }
+    let content = scrollContent(area)
+    let shown = content.items.filter { cgFrame($0).map { $0.intersects(bounds) && $0.height > 0 } ?? false }
+    var range: [String: Any] = ["count": shown.count]
+    range["first"] = shown.first.map(itemSummary)
+    range["last"] = shown.last.map(itemSummary)
+
+    if let table = content.containers.last(where: { tableRoles.contains(role($0)) }) {
+        range["visible_rows"] = (attribute(table, kAXVisibleRowsAttribute as String) as? [AXUIElement])?.count
+        range["rows"] = (attribute(table, kAXRowsAttribute as String) as? [AXUIElement])?.count
+    }
+
+    return range
+}
+
+func postScroll(_ pid: pid_t, _ route: ScrollRoute, at point: CGPoint, window: Int, dx: Int, dy: Int, unit: CGScrollEventUnit) {
+    // A wheel's positive delta scrolls up and left.
+    guard let event = CGEvent(scrollWheelEvent2Source: keySource, units: unit, wheelCount: 2, wheel1: Int32(-dy), wheel2: Int32(-dx), wheel3: 0) else {
+        fail("scroll_failed", "Could not create a scroll event.")
+    }
+    event.location = point
+    event.setIntegerValueField(.scrollWheelEventIsContinuous, value: unit == .pixel ? 1 : 0)
+
+    switch route {
+    case .pid:
+        event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(window))
+        event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(window))
+        event.postToPid(pid)
+    case .hid:
+        event.post(tap: .cghidEventTap)
+    }
+    usleep(scrollPause)
+}
+
+// Posts a delta as a run of small events.
+func postScrollRun(_ pid: pid_t, _ route: ScrollRoute, at point: CGPoint, window: Int, dx: Int, dy: Int, unit: CGScrollEventUnit) {
+    let step = unit == .pixel ? pixelStep : lineStep
+    var left = (x: dx, y: dy)
+
+    while left.x != 0 || left.y != 0 {
+        let x = max(-step, min(step, left.x))
+        let y = max(-step, min(step, left.y))
+        postScroll(pid, route, at: point, window: window, dx: x, dy: y, unit: unit)
+        left = (left.x - x, left.y - y)
+    }
+}
+
+struct ScrollRequest {
+    let edge: String?
+    let dx: Int
+    let dy: Int
+    let unit: CGScrollEventUnit
+}
+
+func scrollRequest(_ amount: String, _ unitName: String) -> ScrollRequest {
+    let unit: CGScrollEventUnit
+    switch unitName {
+    case "pixel": unit = .pixel
+    case "line": unit = .line
+    default: fail("invalid_scroll", "The unit must be line or pixel.")
+    }
+
+    let edges = ["top": (0, -1), "bottom": (0, 1), "left": (-1, 0), "right": (1, 0)]
+    if let (x, y) = edges[amount] {
+        return ScrollRequest(edge: amount, dx: x * edgeRoundPixels, dy: y * edgeRoundPixels, unit: .pixel)
+    }
+
+    let parts = amount.split(separator: ",", omittingEmptySubsequences: false)
+    guard parts.count == 2, let dx = Int(parts[0]), let dy = Int(parts[1]), dx != 0 || dy != 0, abs(dx) <= 100_000, abs(dy) <= 100_000 else {
+        fail("invalid_scroll", "Scroll to an edge (top, bottom, left, right) or by a non-zero delta like 0,120.")
+    }
+    return ScrollRequest(edge: nil, dx: dx, dy: dy, unit: unit)
+}
+
+// Scrolls the scroll area at an element or a point: by a delta, or to an edge.
+// The pointer moves inside the area first, after the same checks as `click`,
+// and the scroll-wheel events go to the app's PID alone, aimed at its window
+// there. When those move nothing, the same events are posted where the pointer
+// is, which `reach` checked is the app's own window, and `via` says so. Returns
+// how far the content moved (a delta), whether an edge scroll stopped at the
+// edge, the area's scroll bars and the rows it shows.
+func scroll(_ pid: pid_t, _ argument: String, _ amount: String, _ unitName: String) {
+    let request = scrollRequest(amount, unitName)
+    let app = application(pid)
+    var target = pointerTarget(app, argument)
+
+    var hit: AXUIElement?
+    if target.element == nil, AXUIElementCopyElementAtPosition(app, Float(target.point.x), Float(target.point.y), &hit) != .success { hit = nil }
+    let start = target.element ?? hit
+    guard let start, let area = enclosingScrollArea(start) ?? innerScrollArea(start), let bounds = cgFrame(area), bounds.width >= 1, bounds.height >= 1 else {
+        fail("no_scroll_area", "Nothing scrolls at \(target.label): no AXScrollArea is there or around it. Point at the list or one of its rows (qa_ax_tree role AXScrollArea).")
+    }
+
+    // An element is scrolled at the middle of the area it shows in, which is on
+    // screen even when the element itself is partly scrolled out.
+    if target.element != nil {
+        target = PointerTarget(point: CGPoint(x: bounds.midX, y: bounds.midY), element: area, path: target.path, label: target.label)
+    }
+
+    let window = reach(app, pid, target)
+    movePointer(to: target.point)
+
+    var route = ScrollRoute.pid
+    var before = scrollSignature(area)
+    let startPositions = positions(area)
+    var rounds = 0
+    var stable = 0
+    var settled = true
+    let deadline = Date().addingTimeInterval(edgeDeadline)
+
+    repeat {
+        postScrollRun(pid, route, at: target.point, window: window, dx: request.dx, dy: request.dy, unit: request.unit)
+        rounds += 1
+        settled = settle(app, pid, within: 1).settled
+        var after = scrollSignature(area)
+
+        // The app took no event posted to its PID: post the same ones at the pointer.
+        if after == before, route == .pid, rounds == 1, coverer(at: target.point, pid: pid, windows: onScreenWindows(at: target.point)) == nil {
+            route = .hid
+            postScrollRun(pid, route, at: target.point, window: window, dx: request.dx, dy: request.dy, unit: request.unit)
+            settled = settle(app, pid, within: 1).settled
+            after = scrollSignature(area)
+            if after == before { route = .pid }
+        }
+
+        stable = after == before ? stable + 1 : 0
+        before = after
+    } while request.edge != nil && stable < edgeStableRounds && Date() < deadline
+
+    var result: [String: Any] = [
+        "ok": true,
+        "scrolled": ["x": Int(target.point.x), "y": Int(target.point.y)],
+        "via": route.rawValue,
+        "settled": settled,
+        "scroll_area": itemSummary(area),
+        "scroll_bars": scrollBars(area),
+        "visible": visibleRange(area)
+    ]
+
+    if let edge = request.edge {
+        result["edge"] = edge
+        result["rounds"] = rounds
+        result["at_edge"] = stable >= edgeStableRounds
+        if stable < edgeStableRounds {
+            result["note"] = "The list still moved after \(Int(edgeDeadline)) seconds of scrolling (it may keep loading rows); call qa_scroll again to go further."
+        }
+    } else {
+        result["requested"] = ["dx": request.dx, "dy": request.dy, "unit": unitName]
+        if let moved = shift(from: startPositions, to: positions(area)) {
+            result["moved"] = ["x": Int(moved.x.rounded()), "y": Int(moved.y.rounded())]
+        }
+    }
+
+    emit(result)
+}
+
 // -- server ---------------------------------------------------------------------
 
-let pidCommands: Set<String> = ["windows", "screenshot", "ax-tree", "ax-press", "ax-set-value", "ax-resize", "ax-ping", "ax-select", "click", "hover", "context-menu", "key"]
+let pidCommands: Set<String> = ["windows", "screenshot", "ax-tree", "ax-press", "ax-set-value", "ax-resize", "ax-ping", "ax-select", "click", "hover", "context-menu", "key", "scroll"]
 let requestLimit = 64 * 1024
 let commandTimeout: TimeInterval = 60
 // Symphony waits 15 s for the helper it opens, so an older owner file was left
@@ -1273,6 +1583,10 @@ case "context-menu" where args.count == 3:
 case "key" where args.count == 4:
     requireAccessibility()
     pressKey(pidArgument(args[1]), args[2], args[3])
+
+case "scroll" where args.count == 5:
+    requireAccessibility()
+    scroll(pidArgument(args[1]), args[2], args[3], args[4])
 
 default:
     fail("usage", "Unknown command or wrong number of arguments.")

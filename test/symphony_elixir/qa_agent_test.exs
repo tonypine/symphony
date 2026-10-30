@@ -510,6 +510,8 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "### Playbook: macos_app"
       assert prompt =~ "wait about 10 seconds"
       assert prompt =~ "qa_permission_missing"
+      assert prompt =~ "`qa_scroll`: scrolls the list or scroll view"
+      assert prompt =~ "trigger a list's pagination"
 
       assert {:run, [%{kind: "macos_app"}]} = Selection.decide(issue(%{labels: ["qa:macos_app"]}), ["README.md"], config)
       assert {:skip, _reason} = Selection.decide(issue(), ["macos/Tests/SymphonyBarCoreTests/QAModeTests.swift"], config)

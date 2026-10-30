@@ -1748,8 +1748,10 @@ The QA agent:
   window in front is not the app's own. `qa_click` moves the pointer to the point before it clicks
   and MAY press the element through accessibility when the click changed nothing, saying so in its
   result; `qa_hover` moves the pointer over an element or point and waits for the app to settle,
-  and `qa_context_menu` right-clicks one and lists the menu that opens. They MUST refuse the same
-  points as `qa_click` before the pointer moves.
+  and `qa_context_menu` right-clicks one and lists the menu that opens; `qa_scroll` scrolls the
+  scroll area at an element or point by a delta or to an edge with scroll-wheel events, and MAY
+  post them again at the pointer, over the app's own window, when the app took none of them. They
+  MUST refuse the same points as `qa_click` before the pointer moves.
   `qa_resize_window` (the playbook's wide pass) sizes a launched app's window to at least 1400×900
   points, or the screen's usable area when that is smaller, through the Accessibility grant alone, and
   `qa_check_app` reports whether the app still runs, answers an accessibility request within 10
