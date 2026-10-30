@@ -589,6 +589,14 @@ joined by `; `. The log line names the kind too (`Dispatch pause active kind=bui
   before the first poll tick, the operator pause's old store row, which the release before wrote,
   is moved onto Symphony's pause (an `updating to v…` row as a `build` reason) and deleted, whether
   or not the pause backfill already ran.
+- The pause stops dispatching runs and nothing else: polling, webhooks, the PR watcher's
+  observations, reconciliation, the control API and runs already in flight go on. It is a known
+  state, not a failure: a retry that comes due while a `person` or `build` reason holds is not
+  dispatched and not rescheduled. It keeps its attempt, error and due time, its ticket is listed
+  under `dispatch_skipped` with the pause's line instead of under `retrying`, and nothing is
+  written. A retry already read again when the pause was set waits for a slot with its attempt.
+  Once no such reason is left, Resume, or the first poll after the lift, sends every held retry
+  on at once, dispatched in the usual slots with the attempt it had.
 
 The four question types are machine-written, one per change of a question to a person on a ticket
 (kept on the ticket's record; written only by `SymphonyElixir.Questions`), each naming the question
