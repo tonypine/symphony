@@ -566,7 +566,10 @@ payload's `all_repositories_paused` says it apart.
 
 Symphony's own pause is the operator pause: the one answer to why Symphony is not dispatching. It
 shows only at the app level (the state payload's `pause`), never on a ticket page; a candidate the
-paused pass skips gives the global reason `dispatch is paused by the operator`.
+paused pass skips gives one line per reason that stops dispatch, worded by its kind from the same
+reasons the payload's `pause` lists: `dispatch is paused: updating to v<version>` for an update's,
+`dispatch is paused by the operator` (then `: <reason>` when the Director gave one) for theirs,
+joined by `; `. The log line names the kind too (`Dispatch pause active kind=build reason=...`).
 
 - The Director's Pause (`POST /api/v1/control/pause`) sets a `person` reason that waits on
   `unblock`, its line the given reason cut to 300 characters (`You paused Symphony` without one).
@@ -3041,10 +3044,9 @@ Rules:
   <commit> to finish"), which clears when the epic review finds CI settled on its commit; beside
   self-heal's access hold, on one naming the broken QA component ("The QA machine is not
   reachable"), which clears when a QA pass or an epic review reaches a pass or fail verdict. `Unblock`
-  clears both. A ticket held back by its blockers or a hold is listed under `dispatch_skipped` with
-  its pause's text, its reasons' lines joined by `; `, when every reason waits on a ticket, an answer,
-  a competing pull request, CI or the QA environment; any other pause, or none, keeps the gate's own
-  words.
+  clears both. A ticket stopped, held back by its blockers or on a hold is listed under
+  `dispatch_skipped` with its pause's text, every reason's line joined by `; ` whatever its kind; a
+  ticket with no pause keeps the gate's own words.
   `Needs Decision` is set by an
   agent's `linear_request_human_action`, a Code Review escalation, a stuck self-heal, a manual
   review confirmation, or a ticket whose pull request is closed or whose diff is empty, and clears when the decision is recorded (a reply under the request, the
@@ -5731,6 +5733,14 @@ Minimum endpoints:
     with that list's name as its `status` (`slot_waiting` or `dispatch_skipped`) and an object under
     the same key with its `state`, the `reason` it waits and `since`. A running, retrying or watched
     issue keeps that status.
+  - The issue, and each entry of `running`, `retrying`, `watching`, `slot_waiting` and
+    `dispatch_skipped` in `/api/v1/state`, carries the one answer to why it does not move, read from
+    its ticket's record: `pause` (null when it moves; else `since`, `set_by`, `reasons` in the order
+    they were set, each with `kind`, `text`, `waits_on`, `set_by`, `set_at` and `releasable`, and
+    `releasable`, whether the Director may release any of them), `open_questions` (each question
+    still waiting for an answer: `id`, `title`, `asked_by`, `asked_at`, `confirm`) and
+    `repository_paused`. A pause or question change records a ticket event, so the live channel
+    (`/api/v1/stream`) sends that ticket's notice once it commits.
   - A running, watched, slot-waiting or passed-over issue MAY carry `connected`: where it sits
     among the others, from what the orchestrator already holds (no tracker read per request).
     `parent` (`identifier`, `title`, `done`, `total`, `children` state types in landing order, or

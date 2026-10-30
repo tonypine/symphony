@@ -3631,7 +3631,7 @@ defmodule SymphonyElixir.Orchestrator do
     state =
       cond do
         operator_paused?(state) ->
-          state |> log_operator_pause() |> skip_paused_pass(issues, "dispatch is paused by the operator")
+          state |> log_dispatch_pause() |> skip_paused_pass(issues, Pauses.dispatch_skip_reason(symphony_pause()))
 
         workspace_quota_paused?(state) ->
           state |> log_workspace_quota_pause() |> skip_paused_pass(issues, "new dispatch is paused: #{workspace_quota_error(state)}")
@@ -4361,7 +4361,7 @@ defmodule SymphonyElixir.Orchestrator do
     repo_key = hold_repo_key(issue)
 
     cond do
-      reason = operator_stop_reason(repo_key, issue) -> reason
+      reason = operator_stop_reason(repo_key, issue) -> pause_reason(repo_key, issue, reason)
       Issue.blocked?(issue, terminal_states) -> pause_reason(repo_key, issue, "blocked by #{open_blocker_names(issue, terminal_states)}")
       is_nil(repo_key) -> "it has no repo key and several repos are configured, so its holds can't be read"
       (held = Hold.held_kinds(repo_key, issue.id)) != [] -> pause_reason(repo_key, issue, "on a #{Enum.map_join(held, " and ", &Hold.label/1)} hold")
@@ -4372,21 +4372,16 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # A ticket held back by its blockers or a hold reads as its pause (`SymphonyElixir.Pauses`) when
-  # every reason waits on another ticket, an answer, or an environment one of the live writers names:
-  # a competing pull request, CI on a commit or a broken QA component. Their lines, in the order they
-  # were set. Any other pause — an `:environment` reason the backfill gave an access or CI-wait hold,
-  # whose line is the hold's own words — or none reads as `unpaused`, the gate's own words, which the
-  # PR watch sweep (`SymphonyElixir.PrWatch.Sweep`) labels.
+  # A ticket stopped, held back by its blockers or on a hold reads as its pause
+  # (`SymphonyElixir.Pauses.why/1`): every reason's line, whatever its kind, in the order they were
+  # set. A ticket with no pause reads as `unpaused`, the gate's own words. The PR watch sweep
+  # (`SymphonyElixir.PrWatch.Sweep`) labels both.
   defp pause_reason(nil = _repo_key, _issue, unpaused), do: unpaused
 
   defp pause_reason(repo_key, %Issue{id: issue_id}, unpaused) do
-    case Pauses.get({:ticket, repo_key, issue_id}) do
-      {:ok, %{reasons: reasons}} ->
-        if Enum.all?(reasons, &gate_reason?/1), do: Enum.map_join(reasons, "; ", & &1.text), else: unpaused
-
-      _not_paused ->
-        unpaused
+    case Pauses.why({:ticket, repo_key, issue_id}) do
+      [] -> unpaused
+      lines -> Enum.join(lines, "; ")
     end
   end
 
@@ -4398,9 +4393,6 @@ defmodule SymphonyElixir.Orchestrator do
       reasons -> issue |> UpdateHold.lines(reasons, cache) |> Enum.join("; ")
     end
   end
-
-  defp gate_reason?(%{kind: kind}) when kind in [:ticket, :question], do: true
-  defp gate_reason?(reason), do: BlockedHold.landing_reason?(reason) or CiWait.reason?(reason) or SelfHeal.environment_reason?(reason)
 
   # The stop is read from the ticket's pause (`SymphonyElixir.OperatorStop`), which lives under its repo.
   defp operator_stop_reason(nil = _repo_key, _issue), do: nil
@@ -6767,14 +6759,14 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp defer_retry_for_operator_pause(%State{} = state, %Issue{} = issue, attempt, metadata) do
     state
-    |> log_operator_pause()
+    |> log_dispatch_pause()
     |> schedule_issue_retry(
       issue.id,
       attempt,
       Map.merge(metadata, %{
         identifier: issue.identifier,
         title: issue.title,
-        error: "dispatch paused by operator"
+        error: Pauses.dispatch_skip_reason(symphony_pause())
       })
     )
   end
@@ -9961,16 +9953,19 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp workspace_quota_error(_state), do: "workspace free-space threshold not met"
 
-  defp log_operator_pause(%State{operator_pause_logged: true} = state), do: state
+  defp log_dispatch_pause(%State{operator_pause_logged: true} = state), do: state
 
-  defp log_operator_pause(%State{} = state) do
-    pause = symphony_pause_status()
+  defp log_dispatch_pause(%State{} = state) do
+    case Pauses.dispatch_reasons(symphony_pause()) do
+      [] ->
+        state
 
-    if pause.paused do
-      Logger.warning("Operator dispatch pause active reason=#{inspect(pause.reason)} paused_at=#{inspect(pause.paused_at)}; skipping dispatch")
-      %{state | operator_pause_logged: true}
-    else
-      state
+      reasons ->
+        for reason <- reasons do
+          Logger.warning("Dispatch pause active kind=#{reason.kind} reason=#{inspect(reason.text)} paused_at=#{inspect(reason.set_at)}; skipping dispatch")
+        end
+
+        %{state | operator_pause_logged: true}
     end
   end
 

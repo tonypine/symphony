@@ -2885,7 +2885,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
                  end)
       end)
 
-    assert warning =~ "Operator dispatch pause active"
+    assert warning =~ ~s(Dispatch pause active kind=person reason="deploy window")
     assert RunStore.list_runs() == []
 
     retry_token = make_ref()
@@ -2916,13 +2916,13 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     send(pid, {:retry_issue, issue.id, retry_token})
 
-    assert %{running: [], retrying: [%{issue_id: "issue-operator-pause", error: "dispatch paused by operator"}]} =
+    assert %{running: [], retrying: [%{issue_id: "issue-operator-pause", error: "dispatch is paused by the operator: deploy window"}]} =
              wait_for_snapshot(
                pid,
                fn
                  %{
                    running: [],
-                   retrying: [%{issue_id: "issue-operator-pause", error: "dispatch paused by operator"}]
+                   retrying: [%{issue_id: "issue-operator-pause", error: "dispatch is paused by the operator: deploy window"}]
                  } ->
                    true
 
