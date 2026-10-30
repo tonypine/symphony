@@ -2168,6 +2168,11 @@ Dynamic reload behavior:
   binding, require restart unless the implementation explicitly supports live rebind/re-supervision.
 - The orchestrator refreshes selected live state from config, including polling cadence and global
   concurrency limit.
+- A reload that changes what dispatch reads (the dispatch source, the configured repositories, a
+  repository's active and terminal states, labels, assignee and ticket priorities, the agent slot
+  limits and token budgets) SHOULD run a dispatch cycle at once, coalesced with one in flight, so a
+  ticket the change frees does not wait for the next poll. A reload that leaves them as they were
+  runs no extra cycle.
 - Other settings are read at point of use by their owning modules and apply to future dispatch,
   retry scheduling, reconciliation decisions, hook execution, and agent launches where applicable.
 - Implementations are not REQUIRED to restart in-flight agent sessions automatically when config
