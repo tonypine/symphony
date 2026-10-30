@@ -306,6 +306,56 @@ defmodule SymphonyElixir.DecisionRequestTest do
     end
   end
 
+  describe "while the pause projector owns the request comment (TP-1252)" do
+    setup do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue(%{state: "Code Review"})])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      Application.put_env(:symphony_elixir, :pause_projector, true)
+
+      on_exit(fn ->
+        Application.put_env(:symphony_elixir, :pause_projector, false)
+
+        for key <- [:memory_tracker_issues, :memory_tracker_recipient, :memory_tracker_create_comment_result],
+            do: Application.delete_env(:symphony_elixir, key)
+      end)
+    end
+
+    test "asking posts nothing itself: the projector posts the comment once, byte for byte as asking posted it" do
+      assert :ok = DecisionRequest.ask(issue(%{state: "Code Review"}), request(), [tracker: CommentTracker], "QA")
+      [%{id: id} = question] = Questions.open(@ticket)
+      assert %{request: true, asked_in: "Code Review"} = question
+
+      expected = Request.render_hold(request(), "Code Review") <> "\n\n<!-- symphony:question #{id} -->"
+      refute_received {:commented, _issue_id, _body}
+      assert_received {:memory_tracker_comment, @issue_id, ^expected}
+      assert %{decision: %{question_id: ^id}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+
+      assert :ok = DecisionRequest.ask(issue(%{state: "Code Review"}), request(), [tracker: CommentTracker], "QA")
+      refute_received {:memory_tracker_comment, _issue_id, _body}
+      refute_received {:commented, _issue_id, _body}
+    end
+
+    test "the Inbox's sweep projects a comment Linear refused, and reports it pending while Linear still refuses it" do
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :linear_down})
+      capture_log(fn -> assert :ok = DecisionRequest.ask(issue(), request(), tracker: CommentTracker) end)
+      refute_received {:memory_tracker_comment, _issue_id, _body}
+      hold = Hold.get(@repo_key, @issue_id, :needs_decision)
+
+      capture_log(fn -> assert :pending = DecisionRequest.repost(@repo_key, @issue_id, hold, "In Progress", []) end)
+      Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_result)
+      assert :posted = DecisionRequest.repost(@repo_key, @issue_id, hold, "In Progress", [])
+      assert_received {:memory_tracker_comment, @issue_id, _body}
+      assert :none = DecisionRequest.repost(@repo_key, @issue_id, hold, "In Progress", [])
+      assert :none = DecisionRequest.repost(@repo_key, @issue_id, nil, "In Progress", [])
+
+      [%{id: id}] = Questions.open(@ticket)
+      {:ok, _withdrawn} = Questions.withdraw(@ticket, id, "Not needed any more.")
+      assert :none = DecisionRequest.repost(@repo_key, @issue_id, hold, "In Progress", [])
+      refute_received {:commented, _issue_id, _body}
+    end
+  end
+
   describe "project/4" do
     test "sets the hold again for a request already posted, without checking it" do
       attrs = NeedsDecisionHold.attrs(request(%{if_unanswered: nil}))

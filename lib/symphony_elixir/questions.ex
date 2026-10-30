@@ -7,7 +7,10 @@ defmodule SymphonyElixir.Questions do
   asked it (`asked_by`), the step it was asked at, its title, question, why it is asked, what waits
   if nobody answers, its options (each with its label, what it does, what it gains, costs and risks,
   whether it is the recommended one and the protected paths it unlocks), why the recommended option
-  is the one to pick, the state a confirmation moves the ticket into (`confirm`, or nil), its state
+  is the one to pick, the state a confirmation moves the ticket into (`confirm`, or nil), what it
+  unblocks (`unblocks`, or nil), whether a request comment shows it in Linear (`request`: nil for a
+  question asked before it said, `SymphonyElixir.Pauses.Projector`), the phase it was asked in
+  (`asked_in`), its state
   (`:open`, `:answered` or `:withdrawn`), its answer and when it was asked or withdrawn.
 
   `ask/3` checks the question against the writing standard (`SymphonyElixir.DecisionRequest.check/1`,
@@ -99,6 +102,9 @@ defmodule SymphonyElixir.Questions do
           options: [option()],
           recommendation_reason: String.t(),
           confirm: String.t() | nil,
+          unblocks: String.t() | nil,
+          request: boolean() | nil,
+          asked_in: String.t() | nil,
           state: :open | :answered | :withdrawn,
           answer: answer() | nil,
           asked_at: DateTime.t(),
@@ -110,13 +116,17 @@ defmodule SymphonyElixir.Questions do
 
   @typedoc """
   `ask/3`'s options: `asked_by:` (`t:asker/0`, default Symphony), `step:` and `confirm:` (strings),
-  and `at:` (a `DateTime`, default now); for the backfill only, `backfilled: true` with `id:`,
+  `request: true` when a `## Decision needed:` comment shows the question in Linear
+  (`SymphonyElixir.DecisionRequest.ask/4`), `asked_in:` (the phase it was asked in, which that comment
+  names) and `at:` (a `DateTime`, default now); for the backfill only, `backfilled: true` with `id:`,
   `answer:` and `legacy_event:` (see the module doc).
   """
   @type ask_opt ::
           {:asked_by, map()}
           | {:step, String.t() | nil}
           | {:confirm, String.t() | nil}
+          | {:request, boolean()}
+          | {:asked_in, String.t() | nil}
           | {:at, DateTime.t()}
           | {:backfilled, boolean()}
           | {:id, String.t()}
@@ -228,7 +238,9 @@ defmodule SymphonyElixir.Questions do
   Withdraws the open questions on `ticket` that lapsed with `lapse` (`lapsed?/2`), each with its
   reason in plain words, and makes the projections follow: the Needs Decision or Blocked hold that
   carried it clears (`SymphonyElixir.Hold.clear/4`), and the `## Action withdrawn` reply goes under
-  its request comment when the Inbox lists it. A question a Blocked hold waits on (a run's block
+  its request comment: the pause projector posts it from the Question
+  (`SymphonyElixir.Pauses.Projector`), or, while it does not own the comments, this function does
+  when the Inbox lists the request. A question a Blocked hold waits on (a run's block
   report, a dispatch loop) ends with that hold, which Unblock and Restart decide, so only a merge
   or a terminal state withdraws it here. Best-effort: a hold or a reply that fails is logged, and the
   Inbox's next read reconciles the hold. Returns the questions withdrawn.
@@ -316,7 +328,8 @@ defmodule SymphonyElixir.Questions do
       end
     end
 
-    reply_withdrawn(issue_id, request_comment_id(issue_id, question.id, opts), reason, opts)
+    # The pause projector posts the reply from the withdrawn Question when it owns the comments.
+    if not Projector.owns?(), do: reply_withdrawn(issue_id, request_comment_id(issue_id, question.id, opts), reason, opts)
   end
 
   defp reply_withdrawn(_issue_id, nil, _reason, _opts), do: :ok
@@ -563,6 +576,9 @@ defmodule SymphonyElixir.Questions do
       options: Enum.map(request.options, &option/1),
       recommendation_reason: String.trim(request.recommendation_reason),
       confirm: line(Keyword.get(opts, :confirm)),
+      unblocks: line(Map.get(request, :unblocks)),
+      request: Keyword.get(opts, :request) == true,
+      asked_in: line(Keyword.get(opts, :asked_in)),
       state: :open,
       answer: nil,
       asked_at: at,
@@ -576,7 +592,8 @@ defmodule SymphonyElixir.Questions do
 
   # A backfilled question keeps the id, the answer and the legacy event the backfill gives it.
   defp backfilled(question, opts, true) do
-    question = %{question | id: Keyword.get(opts, :id) || question.id, legacy_event: Keyword.get(opts, :legacy_event)}
+    # Whether a request comment shows it is read from the holds, as before questions carried it.
+    question = %{question | id: Keyword.get(opts, :id) || question.id, legacy_event: Keyword.get(opts, :legacy_event), request: nil}
 
     case Keyword.get(opts, :answer) do
       %{} = answer -> %{question | state: :answered, answer: answer}

@@ -1258,6 +1258,78 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
   end
 
+  describe "while the pause projector owns the replies (TP-1252)" do
+    setup do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        repos: [[key: "repo-director", workflow: Workflow.workflow_file_path(), team: "MOT"]]
+      )
+
+      Application.put_env(:symphony_elixir, :pause_projector, true)
+
+      on_exit(fn ->
+        Application.put_env(:symphony_elixir, :pause_projector, false)
+        Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_result)
+        Application.delete_env(:symphony_elixir, :memory_tracker_plan_comments)
+      end)
+
+      :ok
+    end
+
+    @signing_reply "Decision from the Director:\n\n1. Add the signing secrets, or ship unsigned builds?\n   **Decision:** Add the secrets"
+
+    test "Decide writes one reply, the projection of the answer, byte for byte as before", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director", description: "Add checkout."}])
+      id = ask_signing()
+      linear_comments("pr", [%{id: "comment-1", body: "## Decision needed: x\n\n<!-- symphony:question #{id} -->", parent_id: nil, created_at: nil}])
+
+      assert {:ok, %{moved: false, commented: true}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), question_id: id, request_comment_id: "comment-1"}, opts)
+
+      assert_received {:memory_tracker_reply, "pr", "comment-1", @signing_reply}
+      refute_received {:memory_tracker_reply, _issue_id, _comment_id, _body}
+      refute_received {:memory_tracker_comment, _issue_id, _body}
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+    end
+
+    test "with Linear down, Decide ends the wait at once and the reply appears once Linear is back", %{opts: opts} do
+      id = ask_signing()
+      ticket = {:ticket, "repo-director", "pr"}
+      put_issues([])
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :linear_down})
+      linear_comments("pr", [%{id: "comment-1", body: "## Decision needed: x\n\n<!-- symphony:question #{id} -->", parent_id: nil, created_at: nil}])
+
+      capture_log(fn -> assert {:ok, %{moved: false}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), question_id: id}, opts) end)
+
+      assert %{state: :answered} = Questions.find(ticket, id)
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+      refute_received {:memory_tracker_reply, _issue_id, _comment_id, _body}
+      record = TicketState.normalize(RunStore.get_ticket_state("repo-director", "pr"))
+      assert Enum.any?(record.pending_projection, &(&1.type == :pause))
+      refute Enum.any?(record.pending_projection, &(&1.type == :question_answer))
+
+      # Linear is back: the reconciler's projection posts the reply once.
+      Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_result)
+      assert :ok = DirectorMoves.project_answer("repo-director", "pr", id, nil)
+      assert_received {:memory_tracker_reply, "pr", "comment-1", @signing_reply}
+      assert :ok = DirectorMoves.project_answer("repo-director", "pr", id, nil)
+      refute_received {:memory_tracker_reply, _issue_id, _comment_id, _body}
+    end
+
+    test "a plan's answers to its requests are replied by their projection, not by the move", %{opts: opts} do
+      put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
+      assert :ok = DecisionRequest.ask(%{id: "plan", state: "Plan Review", repo_key: "repo-director"}, signing_request(), [])
+      assert_received {:memory_tracker_comment, "plan", _body}
+      [%{id: id}] = Questions.open({:ticket, "repo-director", "plan"})
+      linear_comments("plan", [%{id: "c-p", body: "## Decision needed: x\n\n<!-- symphony:question #{id} -->", parent_id: nil, created_at: nil}])
+
+      pick = %{question: signing_request().question, answer: "Add the secrets", question_id: id, request_comment_id: "c-p"}
+      assert {:ok, %{to_state: "Rework"}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: [pick]}, opts)
+
+      assert_received {:memory_tracker_reply, "plan", "c-p", @signing_reply}
+      refute_received {:memory_tracker_reply, _issue_id, _comment_id, _body}
+    end
+  end
+
   describe "decide" do
     test "a ticket fetched with no repo key is answered and unblocked under the repo its project routes to", %{opts: opts} do
       write_workflow_file!(Workflow.workflow_file_path(),
@@ -2089,6 +2161,11 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   defp put_issues(issues), do: Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
+
+  defp linear_comments(issue_id, comments) do
+    linear = %{state_changes: [], comments: comments}
+    Application.put_env(:symphony_elixir, :memory_tracker_plan_comments, %{issue_id => linear})
+  end
 
   defp picks, do: [%{question: "Add the signing secrets, or ship unsigned builds?", answer: "Add the secrets"}]
 

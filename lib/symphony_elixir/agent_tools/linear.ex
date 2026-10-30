@@ -27,6 +27,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.NeedsDecisionHold
   alias SymphonyElixir.PathSafety
   alias SymphonyElixir.PathUnlock
+  alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.Questions
   alias SymphonyElixir.SensitivePath
@@ -1549,10 +1550,24 @@ defmodule SymphonyElixir.AgentTools.Linear do
     ask_opts = [post: &post_request(issue, &1, opts), label_tracker: opts[:tracker], asked_by: @asking_run] ++ Keyword.take(opts, [:store])
 
     # A question the hold already carries was asked before, its comment posted or waiting to be.
+    # While the pause projector posts the comment, a question not open before is a new request.
+    ticket = {:ticket, repo_key, issue["id"]}
+    projected? = Projector.owns?() and is_binary(repo_key) and repo_key != "" and not Questions.same_open?(ticket, request)
+
     case DecisionRequest.ask(held, request, ask_opts) do
       {:ok, result} -> {:ok, result}
+      :ok when projected? -> {:ok, projected_request(ticket, request)}
       :ok -> {:ok, %{"requested" => false, "reason" => "already_open"}}
       {:error, {_step, reason}} -> {:error, reason}
+    end
+  end
+
+  # The request the pause projector posts from the Question: whether its comment is on Linear yet,
+  # or waits for the reconciler to post it.
+  defp projected_request(ticket, request) do
+    case Questions.open_asking(ticket, request) do
+      %{id: id} -> %{"requested" => true, "questionId" => id, "posted" => Projector.commented?(ticket, id)}
+      nil -> %{"requested" => true}
     end
   end
 
@@ -1578,7 +1593,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
   Withdraws open human-action requests on the current issue that are no longer needed: the open
   Questions they were asked as first (`SymphonyElixir.Questions.withdraw/4`, every one or only the
   one titled `title`), then a reply `## Action withdrawn` with `reason` under each request comment,
-  so the next human-action update drops them. Once no open request is left, the `Needs Decision`
+  so the next human-action update drops them. While the pause projector owns the replies
+  (`SymphonyElixir.Pauses.Projector.owns?/0`), the reply under a withdrawn Question's request is its
+  projection, posted when the withdrawal committed, and this tool replies only under the requests no
+  Question carries. Once no open request is left, the `Needs Decision`
   hold is cleared so the ticket continues in place. An issue with no open request is left as it is.
   The reason is refused when it holds a secret pattern.
   """
@@ -1591,7 +1609,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
       ticket = {:ticket, issue_repo_key(context), issue_id}
       withdrawn = withdraw_questions(ticket, reason, title)
 
-      post_withdrawal(issue_id, reason, title, settings, opts)
+      post_withdrawal(issue_id, reason, title, settings, Keyword.put(opts, :projected, projected_titles(ticket, withdrawn)))
       |> with_questions(ticket, withdrawn)
       |> settle_withdrawal(context, issue_id, opts)
     end
@@ -1605,6 +1623,14 @@ defmodule SymphonyElixir.AgentTools.Linear do
         is_nil(title) or Request.normalize_title(question.title) == Request.normalize_title(title),
         match?({:ok, _question}, Questions.withdraw(ticket, question.id, reason, by: @asking_run)),
         do: question.id
+  end
+
+  # The titles of the requests whose withdrawn Question the pause projector replies under, while it
+  # owns the replies: the tool posts no reply under them.
+  defp projected_titles(ticket, ids) do
+    if Projector.owns?(),
+      do: for(id <- ids, %{title: title} <- [Questions.find(ticket, id)], do: Request.normalize_title(title)),
+      else: []
   end
 
   # A Question withdrawn with no request on Linear (its comment never posted) is a withdrawal too.
@@ -1675,7 +1701,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   defp reply_withdrawals(issue_id, withdrawing, reason, opts) do
-    Enum.reduce_while(withdrawing, {:ok, []}, fn {comment_id, _request}, {:ok, ids} ->
+    projected = Keyword.get(opts, :projected, [])
+    {_projected, replying} = Enum.split_with(withdrawing, fn {_comment_id, request} -> Request.normalize_title(request.title) in projected end)
+
+    Enum.reduce_while(replying, {:ok, []}, fn {comment_id, _request}, {:ok, ids} ->
       variables = %{issueId: issue_id, parentId: comment_id, body: Request.render_withdrawal(reason)}
 
       with {:ok, response} <- graphql(@add_reply_mutation, variables, opts),
