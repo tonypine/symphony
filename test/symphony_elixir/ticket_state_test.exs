@@ -16,6 +16,7 @@ defmodule SymphonyElixir.TicketStateTest do
                issue_identifier: nil,
                phase: nil,
                phase_at: nil,
+               phase_owner: :external,
                holds: [],
                ci_states: [],
                verdicts: [],
@@ -131,6 +132,7 @@ defmodule SymphonyElixir.TicketStateTest do
                issue_identifier: nil,
                phase: nil,
                phase_at: nil,
+               phase_owner: :external,
                holds: [],
                ci_states: [],
                verdicts: [],
@@ -298,11 +300,20 @@ defmodule SymphonyElixir.TicketStateTest do
     end
   end
 
-  describe "put_phase/3" do
-    test "sets the phase and stamps the time" do
+  describe "put_phase/4" do
+    test "sets the phase and stamps the time, owned by Symphony unless said otherwise" do
       record = TicketState.new("repo-a", "issue-1") |> TicketState.put_phase("Merging", @at)
       assert record.phase == "Merging"
-      assert {record.phase_at, record.updated_at} == {@at, @at}
+      assert {record.phase_at, record.phase_owner, record.updated_at} == {@at, :symphony, @at}
+
+      assert TicketState.put_phase(record, "Done", @at, :external).phase_owner == :external
+    end
+
+    test "a record written before Symphony kept the owner reads as external; a stored owner is kept" do
+      assert TicketState.normalize(%{phase: "Code Review"}).phase_owner == :external
+      assert TicketState.normalize(%{phase_owner: :unknown}).phase_owner == :external
+      assert TicketState.normalize(%{phase_owner: :symphony}).phase_owner == :symphony
+      assert TicketState.normalize(%{phase_owner: "symphony"}).phase_owner == :symphony
     end
 
     test "clears the phase for a blank or non-binary value" do
@@ -842,6 +853,7 @@ defmodule SymphonyElixir.TicketStateTest do
       assert {observed, :changed} = TicketState.observe(record, newer, later)
       assert {observed.title, observed.phase, observed.labels, observed.priority, observed.assignee, observed.blockers} == {"Renamed", "Code Review", [], nil, nil, []}
       assert {observed.linear_updated_at, observed.observed_at, observed.phase_at} == {DateTime.add(@linear_at, 600), later, later}
+      assert observed.phase_owner == :external
       assert [%{kind: :blocked, reason: "waiting"}] = observed.holds
     end
 
@@ -851,6 +863,15 @@ defmodule SymphonyElixir.TicketStateTest do
 
       renamed = linear_issue(%{title: "Renamed", updated_at: DateTime.add(@linear_at, 60)})
       assert {%{title: "Renamed", phase_at: @observed_at}, :changed} = TicketState.observe(record, renamed, DateTime.add(@observed_at, 60))
+    end
+
+    test "a change that keeps the phase keeps who wrote it; a missing state keeps Symphony's phase" do
+      owned = TicketState.new("repo-a", "issue-1") |> TicketState.put_phase("Code Review", @at)
+      renamed = linear_issue(%{title: "Renamed", state: "Code Review"})
+
+      assert {%{phase_owner: :symphony, phase_at: @at}, :changed} = TicketState.observe(owned, renamed, @observed_at)
+      without_state = %{renamed | state: nil}
+      assert {%{phase: "Code Review", phase_owner: :symphony}, :changed} = TicketState.observe(owned, without_state, @observed_at)
     end
 
     test "an older fact is dropped and the record returned as it was" do
@@ -927,7 +948,7 @@ defmodule SymphonyElixir.TicketStateTest do
     test "observation/1 is the update that writes the observed fields" do
       {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(), @observed_at)
 
-      assert TicketState.observation(record) == Map.take(record, @observed_fields ++ [:phase_at, :observed_at, :observed_from, :updated_at])
+      assert TicketState.observation(record) == Map.take(record, @observed_fields ++ [:phase_at, :phase_owner, :observed_at, :observed_from, :updated_at])
     end
 
     test "a change keeps which read brought it; an unchanged read keeps the last one" do

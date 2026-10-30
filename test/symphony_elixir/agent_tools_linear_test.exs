@@ -3222,12 +3222,14 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     end
 
     test "a plan parent may name Plan Review itself; any other ticket is refused" do
+      :ok = SymphonyElixir.RunStore.clear()
       context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
 
       assert {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}} =
                Linear.update_state(context, "Plan Review", linear_client: plan_review_client(), settings: designed_settings())
 
       assert_received {:moved_to, "state-plan-review"}
+      assert %{phase: "Plan Review", phase_owner: :symphony} = SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
 
       not_a_plan = fn query, variables, opts ->
         case plan_review_client().(query, variables, opts) do
@@ -3248,7 +3250,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     # The CI Fix lane's substantive exit: the fixing agent, finding the repair needs a real change,
     # sends its own ticket to `Rework`. That is an ordinary state request — the guard performs no
     # lane edge for it — so the only thing the lane does is record what the move meant.
-    defp ci_fix_move_client do
+    defp ci_fix_move_client(moved \\ {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}) do
       test_pid = self()
 
       fn query, _variables, _opts ->
@@ -3264,13 +3266,14 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
            }}
         else
           send(test_pid, :state_mutated)
-          {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
+          moved
         end
       end
     end
 
     test "a CI Fix ticket the agent sends to Rework records the substantive fix verdict" do
       :ok = SymphonyElixir.RunStore.clear()
+      :ok = SymphonyElixir.TicketSignals.record_phase("repo-a", "issue-1", "CI Fix")
       context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
 
       assert {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}} =
@@ -3283,6 +3286,24 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       assert [%{name: "fix verdict", details: %{outcome: "substantive", to: "Rework"}}] =
                SymphonyElixir.Handoff.signals("repo-a", "issue-1")
+
+      # The agent's move is Symphony's own: the record holds it before Linear is asked.
+      assert %{phase: "Rework", phase_owner: :symphony} = SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
+    end
+
+    test "a move Linear doesn't make puts the record's phase back, and records no verdict" do
+      :ok = SymphonyElixir.RunStore.clear()
+      :ok = SymphonyElixir.TicketSignals.record_phase("repo-a", "issue-1", "CI Fix")
+      context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
+
+      for moved <- [{:ok, %{"data" => %{"issueUpdate" => %{"success" => false}}}}, {:error, :timeout}] do
+        opts = [linear_client: ci_fix_move_client(moved), settings: designed_settings()]
+        assert {:error, _reason} = Linear.update_state(context, "Rework", opts)
+        assert_received :state_mutated
+        assert %{phase: "CI Fix", phase_owner: :symphony} = SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
+      end
+
+      assert SymphonyElixir.Handoff.signals("repo-a", "issue-1") == []
     end
   end
 

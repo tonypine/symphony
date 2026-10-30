@@ -25,6 +25,10 @@ defmodule SymphonyElixir.TicketEvents.Types do
   then `decision.recorded` or `decision.withdrawn`. The Needs Decision hold is its projection, so
   `hold.set` and `hold.cleared` take only the `blocked` kind and `person.action` has no `decide`.
   State is machinery-only: an agent claims `finding.resolved`, it never records a verdict.
+
+  Drift is machinery-only too: `drift.detected` when Linear shows a state other than the phase
+  Symphony owns, then `drift.reverted` or `drift.revert_failed` for the move back, each with the
+  record's phase and Linear's (`SymphonyElixir.TicketObservation`).
   """
 
   alias SymphonyElixir.RunKind
@@ -57,6 +61,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @evidence {:any_of, [:string, {:list, :string}]}
   @tokens {:any_of, [:non_neg_integer, :map]}
   @signal [signal: :string]
+  @drift [record_phase: :string, linear_phase: :string]
 
   @step %{
     writers: [:agent],
@@ -182,6 +187,15 @@ defmodule SymphonyElixir.TicketEvents.Types do
       run_kinds: :any,
       required: [item: {:string, 500}, answer: {:string, 2_000}],
       optional: [],
+      idempotency: :writer
+    },
+    "drift.detected" => %{writers: [:machine], run_kinds: [], required: @drift, optional: @signal, idempotency: :writer},
+    "drift.reverted" => %{writers: [:machine], run_kinds: [], required: @drift, optional: @signal, idempotency: :writer},
+    "drift.revert_failed" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: @drift,
+      optional: [error: :string] ++ @signal,
       idempotency: :writer
     },
     "note" => %{

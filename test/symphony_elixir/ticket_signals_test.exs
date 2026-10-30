@@ -109,12 +109,26 @@ defmodule SymphonyElixir.TicketSignalsTest do
       assert DateTime.compare(phase_at, seen) == :gt
     end
 
-    test "a record already in the phase is left as it was" do
-      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-1", %{phase: "QA", updated_at: ~U[2026-10-29 10:00:00Z]}))
+    test "a record already in the phase Symphony wrote is left as it was" do
+      record = TicketState.new(@repo_key, "issue-1") |> TicketState.put_phase("QA", ~U[2026-10-29 10:00:00Z])
+      :ok = RunStore.put_ticket_state(record)
       before = RunStore.get_ticket_state(@repo_key, "issue-1")
 
       assert :ok = TicketSignals.record_phase(@repo_key, "issue-1", "QA")
       assert RunStore.get_ticket_state(@repo_key, "issue-1") == before
+    end
+
+    test "a move writes the phase as Symphony's; one into the phase an observation wrote only takes it over, unannounced" do
+      at = ~U[2026-10-29 10:00:00Z]
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-1", %{phase: "Todo", phase_at: at, updated_at: at}))
+      :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records()
+
+      assert :ok = TicketSignals.record_phase(@repo_key, "issue-1", "Todo")
+      assert %{phase: "Todo", phase_at: ^at, phase_owner: :symphony} = RunStore.get_ticket_state(@repo_key, "issue-1")
+      refute_received {:ticket_record, @repo_key, "issue-1", :changed, _fields}
+
+      assert :ok = TicketSignals.record_phase(@repo_key, "issue-2", "In Progress")
+      assert %{phase: "In Progress", phase_owner: :symphony} = RunStore.get_ticket_state(@repo_key, "issue-2")
     end
 
     test "a phase written is announced as a change of the record's phase; one already there is not" do

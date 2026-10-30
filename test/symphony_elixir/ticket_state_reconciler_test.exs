@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.TicketStateReconcilerTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.{RunStore, TicketState, TicketStateReconciler}
 
   @repo_key "repo-a"
@@ -22,6 +23,7 @@ defmodule SymphonyElixir.TicketStateReconcilerTest do
       assert {:stamped, reconciled} = TicketStateReconciler.reconcile(record, "Todo", @at)
       assert reconciled.phase == "Todo"
       assert reconciled.updated_at == @at
+      assert reconciled.phase_owner == :external
     end
 
     test "reports drift when the board state differs" do
@@ -31,6 +33,22 @@ defmodule SymphonyElixir.TicketStateReconcilerTest do
                TicketStateReconciler.reconcile(record, "Done", @at)
 
       assert reconciled.phase == "Done"
+      assert reconciled.phase_owner == :external
+    end
+
+    test "under the record source keeps a phase Symphony owns, and adopts one Linear owns" do
+      owned = TicketState.put_phase(TicketState.new(@repo_key, "issue-1"), "Code Review", @at)
+
+      assert {:kept, ^owned, %{record_phase: "Code Review", linear_phase: "Done"}} =
+               TicketStateReconciler.reconcile(owned, "Done", @at, "record")
+
+      assert {:drift, %{phase: "Done", phase_owner: :external}, _drift} =
+               TicketStateReconciler.reconcile(owned, "Done", @at, "poll")
+
+      external = TicketState.new(@repo_key, "issue-1", %{phase: "Todo"})
+
+      assert {:drift, %{phase: "Backlog", phase_owner: :external}, _drift} =
+               TicketStateReconciler.reconcile(external, "Backlog", @at, "record")
     end
 
     test "leaves the record untouched when Linear returns no state" do
@@ -83,6 +101,58 @@ defmodule SymphonyElixir.TicketStateReconcilerTest do
       assert log =~ "Ticket state drift reconciled issue_id=issue-1"
       assert log =~ "checked=1 drifted=1 missing=0"
       assert %{phase: "Done"} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    end
+
+    test "an adopted phase is stored as Linear's, with when it was adopted" do
+      :ok = RunStore.put_ticket_state(TicketState.put_phase(TicketState.new(@repo_key, "issue-1"), "Code Review", @at))
+      now = DateTime.add(@at, 60)
+
+      fetcher = fn _ids -> {:ok, [%{id: "issue-1", state: "Done"}]} end
+
+      assert TicketStateReconciler.reconcile_all(fetcher: fetcher, now: now, dispatch_source: "poll") ==
+               %{checked: 1, drifted: 1, missing: 0}
+
+      assert %{phase: "Done", phase_owner: :external, phase_at: ^now} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    end
+
+    test "under the record source keeps a phase Symphony owns and moves the ticket back in Linear, with the drift recorded" do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_events()
+      :ok = RunStore.put_ticket_state(TicketState.put_phase(TicketState.new(@repo_key, "issue-1"), "Code Review", @at))
+
+      # Moved to Done by hand while Symphony was down.
+      moved = %Issue{id: "issue-1", identifier: "ACME-1", state: "Done", updated_at: DateTime.add(@at, 60)}
+
+      log =
+        capture_log(fn ->
+          assert TicketStateReconciler.reconcile_all(fetcher: fn _ids -> {:ok, [moved]} end, dispatch_source: "record") ==
+                   %{checked: 1, drifted: 0, missing: 0}
+        end)
+
+      assert log =~ "Ticket state kept: Symphony owns the phase issue_id=issue-1"
+      assert log =~ ~s(record_phase="Code Review" linear_phase="Done")
+      # The move back runs in a task of its own; its outcome is the last thing it records.
+      assert_receive {:ticket_event, %{issue_id: "issue-1", type: "drift.reverted"}}, 2_000
+      assert_received {:memory_tracker_state_update, "issue-1", "Code Review"}
+      assert %{phase: "Code Review", phase_owner: :symphony, phase_at: @at} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+      phases = %{record_phase: "Code Review", linear_phase: "Done"}
+      assert ticket_events(@repo_key, "issue-1") == [{"drift.detected", phases}, {"drift.reverted", phases}]
+    end
+
+    test "under the record source a read that is no Linear issue keeps the phase and moves nothing" do
+      :ok = RunStore.put_ticket_state(TicketState.put_phase(TicketState.new(@repo_key, "issue-1"), "Code Review", @at))
+
+      fetcher = fn _ids -> {:ok, [%{id: "issue-1", state: "Done"}]} end
+
+      capture_log(fn ->
+        assert TicketStateReconciler.reconcile_all(fetcher: fetcher, dispatch_source: "record") ==
+                 %{checked: 1, drifted: 0, missing: 0}
+      end)
+
+      assert %{phase: "Code Review", phase_owner: :symphony} = RunStore.get_ticket_state(@repo_key, "issue-1")
+      assert ticket_events(@repo_key, "issue-1") == []
     end
 
     test "reads the Linear state from string-keyed issues and skips those without an id" do

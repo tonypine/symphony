@@ -5,11 +5,13 @@ defmodule SymphonyElixir.TransitionGuard do
   Every Linear state move routes through this module. The machine's own moves — the orchestrator,
   the PR and CI watcher, the PR review poller, the Code Review, QA and epic review runs, the
   runner, the Director app, the workpad bootstrap, the Linear tool's human-action request and withdrawal, and its sub-issue
-  cancel — are performed by `perform/4`, the only caller of `Tracker.update_issue_state/2`. An
+  cancel — are performed by `perform/4`, the only caller of `Tracker.update_issue_state/2` besides
+  the move back of a hand move under `dispatch.source: record` (`SymphonyElixir.TicketObservation`),
+  which puts Linear back to the phase the record already holds. An
   agent's request to set a state (the Linear tool's `update_state`) is validated by
   `resolve_request/2`, which applies the machine's refusals and redirects and returns the same
   `{:error, reason}` tuples as before, so the existing `refused_agent_action` audit path is
-  unchanged.
+  unchanged; the tool writes the record's phase before Linear is asked, as `perform/4` does.
 
   One state write sits outside this module by design: sub-issue creation's initial state. The
   Linear tool's `issueCreate` sets the state a brand-new issue starts in, which is not a move of an
@@ -248,7 +250,9 @@ defmodule SymphonyElixir.TransitionGuard do
 
   @doc """
   Performs the move `signal` names for `issue_id`, resolving its target from `ctx`. This is the one
-  caller of `Tracker.update_issue_state/2`; `opts[:tracker]` overrides the tracker (tests, a fake).
+  caller of `Tracker.update_issue_state/2` for a move (the drift move back in
+  `SymphonyElixir.TicketObservation` changes no phase); `opts[:tracker]` overrides the tracker
+  (tests, a fake).
   A move into a retired state is refused with `{:error, {:retired_state, target}}`, and one whose
   target resolves to no state name (a requested or configured state that is nil or blank) with
   `{:error, {:unresolved_target, signal}}`, before Linear is asked.

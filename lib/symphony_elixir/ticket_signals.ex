@@ -69,11 +69,13 @@ defmodule SymphonyElixir.TicketSignals do
   def record(_repo_key, _issue_id, _name, _details), do: :ok
 
   @doc """
-  Writes `phase` as the record's phase (`TicketState.put_phase/3`), creating the record when none
-  exists, and leaves every other field as it is: `linear_updated_at` stays, so a later read of Linear
-  still wins on the facts it owns. A phase written is announced as a change of the record's `phase`
+  Writes `phase` as the record's phase (`TicketState.put_phase/4`), owned by Symphony
+  (`phase_owner: :symphony`), creating the record when none exists, and leaves every other field as it
+  is: `linear_updated_at` stays, so a later read of Linear still wins on the facts it owns. A phase
+  written is announced as a change of the record's `phase`
   (`SymphonyElixirWeb.ObservabilityPubSub.broadcast_ticket_record_changed/3`), so the PR watcher
-  re-decides the ticket at once. A record already in `phase` is left alone. Best-effort like every
+  re-decides the ticket at once. A record already in `phase` only takes the ownership, keeping when
+  its phase was written, and is announced as nothing new. Best-effort like every
   recording here: a store failure is logged and swallowed. No-ops without a repo key, an issue id or
   a phase.
   """
@@ -333,21 +335,27 @@ defmodule SymphonyElixir.TicketSignals do
     moved =
       case RunStore.get_ticket_state(repo_key, issue_id) do
         {:error, _reason} = error -> error
-        %{phase: ^phase} -> :unchanged
+        %{phase: ^phase, phase_owner: :symphony} -> :unchanged
+        %{phase: ^phase} -> own_phase(repo_key, issue_id)
         nil -> repo_key |> TicketState.new(issue_id) |> TicketState.put_phase(phase) |> RunStore.put_ticket_state()
         record -> record |> TicketState.put_phase(phase) |> update_phase(repo_key, issue_id)
       end
 
     case moved do
       :ok -> ObservabilityPubSub.broadcast_ticket_record_changed(repo_key, issue_id, [:phase])
-      :unchanged -> :ok
+      unchanged when unchanged in [:unchanged, :owned] -> :ok
       error -> log_error(error, "write the record's phase #{phase} on issue_id=#{issue_id}")
     end
   end
 
   # Only the phase and when it changed are written, so nothing another writer put on the record is lost.
   defp update_phase(moved, repo_key, issue_id),
-    do: RunStore.update_ticket_state(repo_key, issue_id, Map.take(moved, [:phase, :phase_at, :updated_at]))
+    do: RunStore.update_ticket_state(repo_key, issue_id, Map.take(moved, [:phase, :phase_at, :phase_owner, :updated_at]))
+
+  # A move into the phase the record already holds (one an observation wrote) makes it Symphony's.
+  defp own_phase(repo_key, issue_id) do
+    with :ok <- RunStore.update_ticket_state(repo_key, issue_id, %{phase_owner: :symphony}), do: :owned
+  end
 
   defp log_error({:error, reason}, action) do
     Logger.warning("Failed to #{action}: #{inspect(reason)}")

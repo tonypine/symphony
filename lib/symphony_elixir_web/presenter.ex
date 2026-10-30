@@ -117,6 +117,7 @@ defmodule SymphonyElixirWeb.Presenter do
           linear_usage: normalize_linear_usage(get_in(snapshot, [:polling, :linear, :usage])),
           linear_webhooks: linear_webhooks_payload(),
           dispatch_shadow: dispatch_shadow_payload(),
+          reconcile: reconcile_payload(),
           orchestrator: Orchestrator.diagnostics(orchestrator)
         }
 
@@ -670,6 +671,20 @@ defmodule SymphonyElixirWeb.Presenter do
       window_differences: summary.window_differences,
       recent: Enum.map(summary.recent, &%{&1 | at: iso8601(&1.at)}),
       record_newer: summary.record_newer
+    }
+  end
+
+  # The drift observations found on phases Symphony owns under `dispatch.source: record`
+  # (`TicketObservation`): how many, how many were moved back in Linear and how many failed to, and
+  # the last ten, newest first, with the ticket, both states and the outcome.
+  defp reconcile_payload do
+    drift = TicketObservation.summary().drift
+
+    %{
+      detected: drift.detected,
+      reverted: drift.reverted,
+      revert_failed: drift.revert_failed,
+      recent: Enum.map(drift.recent, &%{&1 | at: iso8601(&1.at)})
     }
   end
 
