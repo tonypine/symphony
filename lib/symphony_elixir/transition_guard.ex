@@ -250,8 +250,8 @@ defmodule SymphonyElixir.TransitionGuard do
 
   @doc """
   Performs the move `signal` names for `issue_id`, resolving its target from `ctx`. This is the one
-  caller of `Tracker.update_issue_state/2` for a move (the drift move back in
-  `SymphonyElixir.TicketObservation` changes no phase); `opts[:tracker]` overrides the tracker
+  caller of `Tracker.update_issue_state/2` for a move (the drift move back and the
+  reconciler's projection in `SymphonyElixir.TicketObservation` change no phase); `opts[:tracker]` overrides the tracker
   (tests, a fake).
   A move into a retired state is refused with `{:error, {:retired_state, target}}`, and one whose
   target resolves to no state name (a requested or configured state that is nil or blank) with
@@ -264,7 +264,8 @@ defmodule SymphonyElixir.TransitionGuard do
   phase (`SymphonyElixir.TicketSignals.record_phase/3`) before Linear is asked, so Symphony's record
   never lags Symphony's own move. Linear is its projection: a write Linear refuses leaves the record
   moved, is logged with the ticket's identifier (`ctx.issue_identifier`, else the record's) and the
-  target, and comes back as the error it was. A target the ticket's team doesn't have
+  target, is marked on the record for the reconciler to project again
+  (`SymphonyElixir.TicketSignals.mark_projection/4`), and comes back as the error it was. A target the ticket's team doesn't have
   (`{:error, :state_not_found}`) is no refused projection: the ticket never entered it, so the
   record goes back to the phase it held and nothing is logged, and a caller that tries the team's
   other spelling next (`Canceled`, `Cancelled`) leaves the record in the one the team has. The
@@ -308,6 +309,7 @@ defmodule SymphonyElixir.TransitionGuard do
             "to=#{target} reason=#{inspect(reason)}"
         )
 
+        :ok = TicketSignals.mark_projection(Map.get(ctx, :repo_key), issue_id, :phase, reason)
         error
     end
   end

@@ -2628,10 +2628,11 @@ events (`events`) listed under Details; the two intervals there are the same as 
 
 ### `linear`
 
-Linear's workspace webhook.
+Linear's workspace webhook, and how often the poll reconciles the ticket records with Linear.
 
 ```yaml
 linear:
+  reconcile_interval_ms: 300000
   webhooks:
     enabled: false
     secret: $SYMPHONY_LINEAR_WEBHOOK_SECRET # the webhook's signing secret, or a literal
@@ -2647,6 +2648,12 @@ variable loads, and every delivery is then refused as having no secret. A delive
 its `Linear-Signature` header is the HMAC-SHA256 of the raw body with the secret, and its
 `webhookTimestamp` is within sixty seconds of now. See [linear-webhooks.md](linear-webhooks.md).
 Neither key has a control in the macOS app yet.
+
+`reconcile_interval_ms` (default `300000`, five minutes) is how often each repository's poll of
+Linear runs while `dispatch.source` is `record`, in place of `issues.poll_interval_ms`. A whole
+number of at least `60000` (one minute); a lower value is refused, naming
+`linear.reconcile_interval_ms`. Under `poll` it does nothing. See the reconciler under
+[`dispatch`](#dispatch). It has no control in the macOS app yet (TP-1228).
 
 ### `dispatch`
 
@@ -2758,6 +2765,37 @@ back when Symphony starts, with the same events. Under `poll` every hand move ap
 `/api/v1/state` counts the drift since Symphony started as `reconcile`: `detected`, `reverted`,
 `revert_failed`, and `recent`, the last ten, newest first, each with `identifier`, `record_phase`,
 `linear_phase`, `outcome` (`reverted` or `revert_failed`) and `at`.
+
+**The poll becomes the reconciler under `record`.** Nothing waits on the repository poll any more:
+webhooks and Symphony's own moves keep the records, dispatch and the watchers read them, and a
+record change asks for its repository's cycle at once. So the poll runs every
+`linear.reconcile_interval_ms` (five minutes by default) instead of `issues.poll_interval_ms`, one
+Linear request per repository per run. The first poll of each repository after a start keeps the
+usual stagger over `issues.poll_interval_ms`, as dispatch waits for it, and a poll that fails is
+tried again after `issues.poll_interval_ms`. Each run:
+
+- observes the repository's tickets as any poll does: a change made in Linear while a webhook was
+  lost (Symphony was down, the webhook was off) or that Linear does not deliver is applied, a new
+  ticket gets its record, and drift on a phase Symphony owns is moved back;
+- makes again each write to Linear that failed: a move of Symphony's or the Director's whose Linear
+  write failed leaves the record moved and marked (`pending_projection`), and so does a hold's label
+  that could not be set or cleared; the run reads the record again just before the write, writes its
+  phase, or sets or clears the label as it holds the hold, and drops that mark (a newer one, from a
+  write that failed meanwhile, stays for the next run). A ticket the poll already shows as the record says
+  is not written again; a mark whose phase is no longer Symphony's, or whose ticket was removed, is
+  dropped; a write that fails again stays marked for the next run;
+- reads by id, in one request, up to 50 of the repository's records no read of Linear observed yet
+  and the poll did not return, and fills them. A record Linear does not return (its ticket was
+  archived or deleted) is marked `not_found_at` and never read again, so once they are all read a run
+  makes no request beyond the poll's.
+
+The second and third steps run on their own after the poll, so the cycle never waits on them. The
+reconciler never decides a phase: it only projects the record's own. Under `poll` the repository
+poll runs every `issues.poll_interval_ms` and only observes, as before.
+
+`/api/v1/state`'s `reconcile` also carries `last_run_at`, `interval_ms`, `applied` (changes made in
+Linear its observations applied), `reapplied` (failed writes it made again) and
+`unobserved_filled` (records it filled), counted since Symphony started.
 
 Setting `source` back to `poll` is the rollback: the next cycle dispatches from the poll cache
 again, and no run is stopped or restarted.

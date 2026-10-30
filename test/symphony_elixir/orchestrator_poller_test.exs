@@ -391,3 +391,109 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
     end
   end
 end
+
+defmodule SymphonyElixir.OrchestratorReconcilePollTest do
+  # Writes symphony.yml's `dispatch.source`, which every test reads: not async.
+  use SymphonyElixir.TestSupport
+
+  alias SymphonyElixir.TicketObservation
+
+  @minute 60_000
+
+  setup do
+    write_workflow_file!(Workflow.workflow_file_path())
+    TicketObservation.reset()
+    on_exit(&TicketObservation.reset/0)
+    :ok
+  end
+
+  defp dispatch_from!(source, extra \\ "") do
+    File.write!(Workflow.symphony_file_path(), File.read!(Workflow.symphony_file_path()) <> "dispatch:\n  source: #{source}\n" <> extra)
+    Cache.clear()
+  end
+
+  defp repos, do: [%{name: "web", team: "ACME", labels: ["web"]}, %{name: "api", team: "ACME", labels: ["api"]}]
+
+  # Runs a poll cycle every `issues.poll_interval_ms` from 0 up to (not including) `until_ms` and
+  # returns the repos each cycle read Linear for, in order, with the state left.
+  defp cycles(state, until_ms) do
+    test_pid = self()
+
+    fetcher = fn %{name: name} ->
+      send(test_pid, {:polled, name})
+      {:ok, [%Issue{id: "#{name}-1", identifier: "ACME-#{name}", title: name, state: "Todo", updated_at: ~U[2026-10-29 09:00:00Z]}]}
+    end
+
+    state =
+      Enum.reduce(0..(until_ms - 1)//state.poll_interval_ms, state, fn now_ms, state ->
+        {:ok, _buckets, state} = Orchestrator.poll_candidate_issue_buckets_for_test(state, repos(), fetcher, now_ms)
+        state
+      end)
+
+    {polled_names([]), state}
+  end
+
+  defp polled_names(names) do
+    receive do
+      {:polled, name} -> polled_names([name | names])
+    after
+      0 -> Enum.reverse(names)
+    end
+  end
+
+  # Waits for the reconcile's follow-ups started under the app's task supervisor.
+  defp settle do
+    for pid <- Task.Supervisor.children(SymphonyElixir.TaskSupervisor) do
+      ref = Process.monitor(pid)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 5_000
+    end
+
+    :ok
+  end
+
+  test "on the record source each repo is polled every linear.reconcile_interval_ms, after the usual stagger: three reads per repo in fifteen minutes" do
+    dispatch_from!("record")
+
+    {polled, state} = cycles(%Orchestrator.State{poll_interval_ms: 30_000}, 15 * @minute)
+    settle()
+
+    # Each repo's first poll is spread over `issues.poll_interval_ms`; each one after is five minutes on.
+    assert polled == ["web", "api", "web", "api", "web", "api"]
+    assert state.repo_poll_due_at_ms == %{"web" => 15 * @minute, "api" => 15 * @minute + 30_000}
+
+    # The poll is the reconciler: it ran, and the new tickets it read were applied.
+    assert %{last_run_at: %DateTime{}, applied: 2} = TicketObservation.summary().reconcile
+  end
+
+  test "the interval follows linear.reconcile_interval_ms" do
+    dispatch_from!("record", "linear:\n  reconcile_interval_ms: 60000\n")
+
+    {polled, state} = cycles(%Orchestrator.State{poll_interval_ms: 30_000}, 3 * @minute)
+    settle()
+
+    assert Enum.frequencies(polled) == %{"web" => 3, "api" => 3}
+    assert state.repo_poll_due_at_ms == %{"web" => 3 * @minute, "api" => 3 * @minute + 30_000}
+  end
+
+  test "on the poll source the repo poll keeps issues.poll_interval_ms and only observes" do
+    dispatch_from!("poll")
+
+    {polled, state} = cycles(%Orchestrator.State{poll_interval_ms: 30_000}, 15 * @minute)
+
+    # One repo a cycle, each every other cycle: fifteen reads per repo in fifteen minutes.
+    assert Enum.frequencies(polled) == %{"web" => 15, "api" => 15}
+    assert state.repo_poll_due_at_ms == %{"web" => 15 * @minute - 30_000, "api" => 15 * @minute}
+    assert TicketObservation.summary().reconcile == %{last_run_at: nil, applied: 0, reapplied: 0, unobserved_filled: 0}
+  end
+
+  test "on the record source a failed poll is tried again after issues.poll_interval_ms" do
+    dispatch_from!("record")
+    state = %Orchestrator.State{poll_interval_ms: 30_000}
+
+    failing = fn _repo -> {:error, :linear_unavailable} end
+    result = Orchestrator.poll_candidate_issue_buckets_for_test(state, [hd(repos())], failing, 0)
+    assert {:error, :linear_unavailable, state} = result
+
+    assert state.repo_poll_due_at_ms == %{"web" => 30_000}
+  end
+end

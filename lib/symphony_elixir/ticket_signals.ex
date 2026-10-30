@@ -113,6 +113,27 @@ defmodule SymphonyElixir.TicketSignals do
   def restore_phase(_repo_key, _issue_id, _previous), do: :ok
 
   @doc """
+  Marks a projection of the ticket's record to Linear as failed (`TicketState.mark_projection/4`):
+  `:phase` for a move whose Linear write failed, `{:hold_label, kind}` for a hold's label. The
+  reconciler projects the record again and drops the mark
+  (`SymphonyElixir.TicketObservation.reconcile_all/3`). Only the record's marks are written. A
+  ticket with no record has nothing to project. Best-effort like `record_phase/3`.
+  """
+  @spec mark_projection(String.t() | nil, String.t() | nil, :phase | {:hold_label, atom()}, term()) :: :ok
+  def mark_projection(repo_key, issue_id, projection, error) when is_binary(repo_key) and is_binary(issue_id),
+    do: repo_key |> RunStore.mark_ticket_projection(issue_id, projection, error) |> projection_written("mark", issue_id)
+
+  def mark_projection(_repo_key, _issue_id, _projection, _error), do: :ok
+
+  @doc """
+  Drops `mark`, a mark of `mark_projection/4` projected again: a newer mark of the same projection
+  stays (`TicketState.clear_projection/2`). Best-effort.
+  """
+  @spec clear_projection(String.t(), String.t(), TicketState.projection()) :: :ok
+  def clear_projection(repo_key, issue_id, mark),
+    do: repo_key |> RunStore.clear_ticket_projection(issue_id, mark) |> projection_written("clear", issue_id)
+
+  @doc """
   Records a verdict of `kind` with `outcome`, bound to the `head_sha` it judged and carrying
   `details`, on the ticket's record, then its `verdict.recorded` event, in the kind's phase. No-ops
   when the ticket carries no repo key. Verdicts are never collapsed: two inconclusive verdicts on
@@ -356,6 +377,9 @@ defmodule SymphonyElixir.TicketSignals do
   defp own_phase(repo_key, issue_id) do
     with :ok <- RunStore.update_ticket_state(repo_key, issue_id, %{phase_owner: :symphony}), do: :owned
   end
+
+  defp projection_written(:ok, _action, _issue_id), do: :ok
+  defp projection_written(error, action, issue_id), do: log_error(error, "#{action} a pending projection on issue_id=#{issue_id}")
 
   defp log_error({:error, reason}, action) do
     Logger.warning("Failed to #{action}: #{inspect(reason)}")

@@ -413,6 +413,14 @@ nothing, and it writes only those fields, never the record's holds, verdicts or 
   reconciliation keeps a phase Symphony owns as well and observes the ticket's read the same way, so a
   hand move made while Symphony was down is moved back at startup; a phase it adopts from Linear is
   Linear's.
+- Under `dispatch.source: record` the repository poll is the reconciler and runs every
+  `linear.reconcile_interval_ms` (default five minutes, at least one minute) instead of
+  `issues.poll_interval_ms`; a record change still asks for its repository's poll at once. Each run
+  observes the repository's tickets as above, then, outside the cycle, writes to Linear again each
+  projection the record marks as failed (`pending_projection`: a move whose Linear write failed, a
+  hold's label), from the record's phase or holds as they are just before the write, and drops that
+  mark; and reads by id the repository's records no read observed yet, marking one Linear does not
+  return (`not_found_at`) so it is not read again. It never decides a phase.
 - A record written before these fields existed reads with them at their defaults (`nil`, or an empty
   list for `labels` and `blockers`); it needs no migration.
 

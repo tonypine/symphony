@@ -528,6 +528,30 @@ defmodule SymphonyElixir.RunStoreTest do
     assert {:error, :invalid_repo_key} = RunStore.clear_ticket_hold(nil, "issue-1", :blocked)
   end
 
+  test "marks a failed projection on a ticket's record and clears that mark only, across a restart" do
+    :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-1"))
+
+    assert :ok = RunStore.mark_ticket_projection(@repo_key, "issue-1", :phase, :linear_down)
+    assert :ok = RunStore.mark_ticket_projection(@repo_key, "issue-1", {:hold_label, :blocked}, :linear_down)
+    restart_run_store()
+
+    assert %{pending_projection: [%{type: :hold_label} = label_mark, %{type: :phase} = projected]} =
+             RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    # A newer mark of the projection, written after the reconciler read the older one, stays.
+    assert :ok = RunStore.mark_ticket_projection(@repo_key, "issue-1", :phase, :still_down)
+    assert :ok = RunStore.clear_ticket_projection(@repo_key, "issue-1", projected)
+    assert [%{type: :phase, error: ":still_down"}, ^label_mark] = RunStore.get_ticket_state(@repo_key, "issue-1").pending_projection
+
+    # An issue with no record has nothing to project: neither write creates the record.
+    assert :ok = RunStore.mark_ticket_projection(@repo_key, "issue-missing", :phase, :linear_down)
+    assert :ok = RunStore.clear_ticket_projection(@repo_key, "issue-missing", projected)
+    assert RunStore.get_ticket_state(@repo_key, "issue-missing") == nil
+
+    assert {:error, :invalid_repo_key} = RunStore.mark_ticket_projection(nil, "issue-1", :phase, :linear_down)
+    assert {:error, :invalid_repo_key} = RunStore.clear_ticket_projection(nil, "issue-1", projected)
+  end
+
   test "records a ticket's dispatched runs and how they ended, and a lifted hold ends the count" do
     assert :ok = RunStore.record_ticket_dispatch(@repo_key, "issue-1", %{kind: :rework, run_id: "run-1", state: "Rework", head: "a"})
     assert :ok = RunStore.record_ticket_dispatch_outcome(@repo_key, "issue-1", "run-1", %{exit: "ended normally", head: "a"})

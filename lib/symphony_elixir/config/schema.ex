@@ -706,15 +706,25 @@ defmodule SymphonyElixir.Config.Schema do
 
     @type t :: %__MODULE__{}
 
+    # The repo poll's interval under `dispatch.source: record`, where it only reconciles the record
+    # with Linear (`SymphonyElixir.TicketObservation.reconcile_all/3`).
+    @min_reconcile_interval_ms 60_000
+
     @primary_key false
     embedded_schema do
+      field(:reconcile_interval_ms, :integer, default: 300_000)
       embeds_one(:webhooks, Webhooks, on_replace: :update, defaults_to_struct: true)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [])
+      |> cast(attrs, [:reconcile_interval_ms])
+      |> validate_required([:reconcile_interval_ms])
+      |> validate_number(:reconcile_interval_ms,
+        greater_than_or_equal_to: @min_reconcile_interval_ms,
+        message: "must be at least #{@min_reconcile_interval_ms} (one minute)"
+      )
       |> cast_embed(:webhooks, with: &Webhooks.changeset/2)
     end
   end

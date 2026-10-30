@@ -674,13 +674,20 @@ defmodule SymphonyElixirWeb.Presenter do
     }
   end
 
-  # The drift observations found on phases Symphony owns under `dispatch.source: record`
-  # (`TicketObservation`): how many, how many were moved back in Linear and how many failed to, and
-  # the last ten, newest first, with the ticket, both states and the outcome.
+  # The reconciler under `dispatch.source: record` (`TicketObservation.reconcile_all/3`): when it last
+  # ran, its interval, the changes made in Linear it applied, the failed projections it made again and
+  # the never observed records it filled; and the drift observations found on phases Symphony owns:
+  # how many, how many were moved back in Linear and how many failed to, and the last ten, newest
+  # first, with the ticket, both states and the outcome.
   defp reconcile_payload do
-    drift = TicketObservation.summary().drift
+    %{drift: drift, reconcile: reconcile} = TicketObservation.summary()
 
     %{
+      last_run_at: iso8601(reconcile.last_run_at),
+      interval_ms: Config.linear_reconcile_interval_ms(),
+      applied: reconcile.applied,
+      reapplied: reconcile.reapplied,
+      unobserved_filled: reconcile.unobserved_filled,
       detected: drift.detected,
       reverted: drift.reverted,
       revert_failed: drift.revert_failed,

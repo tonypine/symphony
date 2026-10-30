@@ -950,7 +950,17 @@ defmodule SymphonyElixir.ExtensionsTest do
                "recent" => [],
                "record_newer" => %{"count" => 0, "recent" => []}
              },
-             "reconcile" => %{"detected" => 0, "reverted" => 0, "revert_failed" => 0, "recent" => []},
+             "reconcile" => %{
+               "last_run_at" => nil,
+               "interval_ms" => 300_000,
+               "applied" => 0,
+               "reapplied" => 0,
+               "unobserved_filled" => 0,
+               "detected" => 0,
+               "reverted" => 0,
+               "revert_failed" => 0,
+               "recent" => []
+             },
              "orchestrator" => %{
                "message_queue_len" => 0,
                "snapshot_age_ms" => nil,

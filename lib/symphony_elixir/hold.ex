@@ -13,7 +13,8 @@ defmodule SymphonyElixir.Hold do
   The store is written first and the label second: a label write that fails leaves the hold in
   force and is reported, rather than losing the pause. `drift/2` compares the store against the
   board — a hold label with no store record (a hand-added label) or a store hold missing its
-  label — so the projection can be reported and repaired.
+  label — so the projection can be reported and repaired. A label write that fails is marked on the
+  record (`pending_projection`), and the reconciler writes the label again from the store.
 
   Each hold write that lands in the store is also recorded in the ticket's event stream
   (`SymphonyElixir.TicketEvents`), best-effort. A Blocked hold is `hold.set` and `hold.cleared`. A
@@ -134,7 +135,7 @@ defmodule SymphonyElixir.Hold do
            :ok <- store.set_ticket_hold(repo_key, issue_id, kind, attrs) do
         announce(repo_key, issue_id, is_nil(previous))
         record_set(repo_key, issue_id, kind, attrs)
-        project(Keyword.get(opts, :tracker, Tracker), issue_id, kind, :set)
+        project(Keyword.get(opts, :tracker, Tracker), repo_key, issue_id, kind, :set)
       end
     else
       {:error, {:unknown_hold_kind, kind}}
@@ -157,7 +158,7 @@ defmodule SymphonyElixir.Hold do
            :ok <- store.clear_ticket_hold(repo_key, issue_id, kind) do
         announce(repo_key, issue_id, previous != nil)
         record_clear(repo_key, issue_id, previous, Keyword.get(opts, :answered) == true)
-        project(Keyword.get(opts, :tracker, Tracker), issue_id, kind, :clear)
+        project(Keyword.get(opts, :tracker, Tracker), repo_key, issue_id, kind, :clear)
       end
     else
       {:error, {:unknown_hold_kind, kind}}
@@ -175,7 +176,7 @@ defmodule SymphonyElixir.Hold do
     if label(kind) do
       case get(repo_key, issue_id, kind, opts) do
         nil -> {:error, {:no_hold, kind}}
-        _hold -> project(Keyword.get(opts, :tracker, Tracker), issue_id, kind, :set)
+        _hold -> project(Keyword.get(opts, :tracker, Tracker), repo_key, issue_id, kind, :set)
       end
     else
       {:error, {:unknown_hold_kind, kind}}
@@ -259,7 +260,9 @@ defmodule SymphonyElixir.Hold do
     Logger.warning("Store hold #{inspect(kind)} on issue_id=#{issue_id} is missing its machine label")
   end
 
-  defp project(tracker, issue_id, kind, action) do
+  # A label write that fails is marked on the record, so the reconciler projects the hold again
+  # (`TicketSignals.mark_projection/4`).
+  defp project(tracker, repo_key, issue_id, kind, action) do
     name = label(kind)
 
     result =
@@ -274,7 +277,7 @@ defmodule SymphonyElixir.Hold do
 
       {:error, reason} ->
         Logger.warning("Failed to #{action} the machine label #{inspect(name)} on issue_id=#{issue_id}: #{inspect(reason)}")
-        :ok
+        TicketSignals.mark_projection(repo_key, issue_id, {:hold_label, kind}, reason)
     end
   end
 
