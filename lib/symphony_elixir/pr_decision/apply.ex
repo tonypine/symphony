@@ -41,7 +41,10 @@ defmodule SymphonyElixir.PrDecision.Apply do
       review poller keeps. In `Merging` only with auto-merge on, as the landing rows.
     * `update_branch` – the upkeep's U1 merges the base into the PR's branch, in any phase and
       whatever `pull_requests.auto_merge` says; a conflict GitHub reports shows on the next read.
-    * `merge_now`, `arm`, `disarm` – the GitHub calls of a landing.
+    * `merge_now`, `arm`, `disarm` – the GitHub calls of a landing. A `merge_now` that merged closes
+      the ticket out in the same step, as `close_out` does: Symphony made the merge, so the record
+      holds Done before Linear's GitHub automation moves the ticket there, and the observation reads
+      that move as unchanged instead of moving it back as drift.
     * `land_agent` – says on the ticket that a landing agent takes the PR over; the orchestrator
       dispatches it.
     * `close_out` – a merged PR moves its ticket to Done, or to the waiting state when its started
@@ -363,9 +366,18 @@ defmodule SymphonyElixir.PrDecision.Apply do
     end
   end
 
+  # Symphony made the merge, so it knows the outcome first: the ticket is closed out in the same
+  # step, and the record holds Done before Linear's GitHub automation moves the ticket there too,
+  # which the observation then reads as unchanged, never as drift. A close-out that fails leaves it
+  # to R2 on the next read, as for a PR merged by anyone else.
   defp perform(%Action{kind: :merge_now}, ctx) do
     with :ok <- AutoMerge.merge(ctx.read, github_opts(ctx)) do
       Logger.info("PR watch squash-merged #{label(ctx)} pr_url=#{pr_url(ctx)} head_sha=#{head(ctx)}")
+
+      with {:error, reason} <- perform(Action.new!("R2", :close_out, reason: "#{pr_name(ctx)} was merged"), ctx) do
+        Logger.warning("PR watch merged #{label(ctx)} but could not close it out; R2 follows reason=#{inspect(reason)}")
+      end
+
       {:ok, %{}}
     end
   end

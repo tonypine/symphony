@@ -2614,7 +2614,7 @@ seconds instead of up to one `pull_requests.poll_interval_ms`. Symphony listens 
 the deliveries come through a relay to `POST /api/v1/github/webhook` on the dashboard port. Each
 delivery patches the facts the PR and CI watcher keeps for the PRs it names (`watch.source` reads
 `webhook`), and the watcher reads those PRs 3 seconds later, once a CI run's burst of deliveries
-settled; only that read decides and acts, as the timed poll does, and only a read calls a head
+settled (a PR that closed by merging at once); only that read decides and acts, as the timed poll does, and only a read calls a head
 green. A `push` to a base branch marks every open watched PR on it as of unknown mergeability and
 reads them one by one, 1 second apart; a PR that closed by merging does the same for its base. A
 `ping` (sent when a hook is created) reads every watched PR. A `release` published on

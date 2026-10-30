@@ -52,6 +52,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     end
 
     def create_comment(issue_id, body), do: send(Application.fetch_env!(:symphony_elixir, :pr_watch_test_pid), {:comment, issue_id, body}) && :ok
+    def update_issue_state(issue_id, state), do: send(Application.fetch_env!(:symphony_elixir, :pr_watch_test_pid), {:moved, issue_id, state}) && :ok
   end
 
   # GitHub: the open PRs from the test's env. Every write fails the test.
@@ -1048,6 +1049,9 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       assert {:ok, %{errors: 0}} = Repo.poll(pid)
       assert %{facts: %Facts{ci: :green}, decision: %{rule: "R29"}} = watch(repo_key, "1")
       assert_received {:merged, "https://github.com/acme/app/pull/1", "sha-1"}
+      # The merge closes the ticket out in the same step (TP-1305).
+      assert_received {:moved, "1", "Done"}
+      assert %{phase: "Done", phase_owner: :symphony} = RunStore.get_ticket_state(repo_key, "1")
       refute Hold.held?(repo_key, "1", :needs_decision)
       refute_received {:comment, "1", _body}
       refute_received {:linear_read, _states}

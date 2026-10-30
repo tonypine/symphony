@@ -270,7 +270,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     # A delivery makes the read the watcher holds stale: a re-decision before the confirm read reads
     # the PR again.
     state = %{state | held: Map.drop(state.held, confirmed ++ pushed)}
-    {:noreply, state |> confirm(confirmed) |> reread(pushed)}
+    {:noreply, state |> confirm(confirmed, confirm_delay_ms(delivery)) |> reread(pushed)}
   end
 
   def handle_cast({:reject, _reason, repo_url}, state) do
@@ -353,11 +353,26 @@ defmodule SymphonyElixir.PrWatch.Repo do
     issue_id
   end
 
-  defp confirm(state, []), do: state
+  # A merge is read at once: no burst of deliveries follows it, and the sooner R2 closes the ticket
+  # out, the sooner the record holds Done, which Linear's GitHub automation also moves it to.
+  defp confirm_delay_ms(delivery), do: if(Ingest.merged?(delivery), do: 0, else: @confirm_delay_ms)
 
-  defp confirm(state, issue_ids) do
+  defp confirm(state, [], _delay_ms), do: state
+
+  defp confirm(state, issue_ids, delay_ms) do
     state = %{state | confirm: MapSet.union(state.confirm, MapSet.new(issue_ids))}
-    if state.confirm_timer, do: state, else: %{state | confirm_timer: timer(state, :confirm, @confirm_delay_ms)}
+
+    cond do
+      is_nil(state.confirm_timer) -> %{state | confirm_timer: timer(state, :confirm, delay_ms)}
+      delay_ms < @confirm_delay_ms -> confirm_sooner(state, delay_ms)
+      true -> state
+    end
+  end
+
+  # A merge arriving while a confirm read waits on a burst brings it forward.
+  defp confirm_sooner(state, delay_ms) do
+    if is_reference(state.confirm_timer), do: Process.cancel_timer(state.confirm_timer)
+    %{state | confirm_timer: timer(state, :confirm, delay_ms)}
   end
 
   defp reread(state, []), do: state

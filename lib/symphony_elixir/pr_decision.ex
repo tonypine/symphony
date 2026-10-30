@@ -347,7 +347,7 @@ defmodule SymphonyElixir.PrDecision do
         guard: &behind_waiting?/1,
         build: &behind/1
       },
-      %{id: "R29", phases: [:merging], when: "Green (or no CI) and mergeable now", then: "`merge_now`", guard: &mergeable_now?/1, build: &merge_now/1},
+      %{id: "R29", phases: [:merging], when: "Green (or no CI) and mergeable now", then: "`merge_now`, the ticket closed out in the same step", guard: &mergeable_now?/1, build: &merge_now/1},
       %{
         id: "R30",
         phases: [:merging],
