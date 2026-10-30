@@ -5,6 +5,8 @@ public enum ControlAction: Equatable {
     case pause
     /// Pause Dispatch from the window's sheet, with the reason typed there; the menu's reason when none was.
     case pauseWithReason(String)
+    /// An update's pause: a `build` reason waiting on the version the update installs.
+    case pauseForUpdate(version: String)
     case resume
     /// Adds the force label to the ticket, so it skips the dispatch limits.
     case force(String)
@@ -63,21 +65,10 @@ public enum ControlAction: Equatable {
     /// Reason Symphony records for a pause from the menu; the dashboard and the menu show it.
     public static let pauseReason = "paused from menu bar"
 
-    /// Reason an update's drain records for its pause, for example "updating to v0.0.1.42".
-    public static func updatePauseReason(version: String) -> String {
-        "updating to v\(version)"
-    }
-
-    /// The version an update's pause names, nil for any other reason.
-    public static func updateVersion(pauseReason reason: String?) -> String? {
-        let prefix = updatePauseReason(version: "")
-        guard let reason = reason?.trimmingWhitespace(), reason.hasPrefix(prefix), reason.count > prefix.count else { return nil }
-        return String(reason.dropFirst(prefix.count))
-    }
 
     var path: String {
         switch self {
-        case .pause, .pauseWithReason:
+        case .pause, .pauseWithReason, .pauseForUpdate:
             return "api/v1/control/pause"
         case .resume:
             return "api/v1/control/resume"
@@ -120,7 +111,7 @@ public enum ControlAction: Equatable {
              let .decisions(identifier, _), let .changes(identifier, _), let .backlog(identifier, _),
              let .decide(identifier, _, _, _), let .unblock(identifier), let .undo(identifier):
             return identifier
-        case .pause, .pauseWithReason, .resume, .force, .stopForcing, .stop, .note, .pauseRepository, .resumeRepository:
+        case .pause, .pauseWithReason, .pauseForUpdate, .resume, .force, .stopForcing, .stop, .note, .pauseRepository, .resumeRepository:
             return nil
         }
     }
@@ -131,6 +122,9 @@ public enum ControlAction: Equatable {
             return ["reason": Self.pauseReason]
         case let .pauseWithReason(reason):
             return ["reason": reason.isEmpty ? Self.pauseReason : reason]
+        case let .pauseForUpdate(version):
+            // The reason's kind and its field; `reason` is the line a Symphony that reads no kind makes it from.
+            return ["kind": "build", "version": version, "reason": "updating to v\(version)"]
         case .resume, .resumeRepository:
             return [:]
         case let .pauseRepository(_, reason):
@@ -167,7 +161,7 @@ public enum ControlAction: Equatable {
     /// Start of error messages, for example "Couldn't pause Symphony" or "Couldn't force TP-123".
     var failurePrefix: String {
         switch self {
-        case .pause, .pauseWithReason:
+        case .pause, .pauseWithReason, .pauseForUpdate:
             return "Couldn't pause Symphony"
         case .resume:
             return "Couldn't resume Symphony"

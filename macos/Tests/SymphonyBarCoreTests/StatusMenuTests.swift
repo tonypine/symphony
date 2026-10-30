@@ -342,6 +342,85 @@ final class StatusMenuTests: XCTestCase {
         XCTAssertEqual(StatusMenu.resumingTitle, "Resuming Dispatch…")
     }
 
+    // MARK: The Symphony pause's reasons (TP-1251)
+
+    /// Walkthrough 1: the Director's Pause shows "Paused by you since …" while it holds, and the line goes with the
+    /// Resume that clears the reason.
+    func testTheDirectorsPauseShowsAsPausedByYouUntilResumed() {
+        var paused = snapshot
+        paused.pause = .init(reason: ControlAction.pauseReason, since: pausedAt)
+        paused.pauseReasons = [.init(kind: .person, text: ControlAction.pauseReason, since: pausedAt)]
+        let now = pausedAt.addingTimeInterval(600)
+
+        XCTAssertEqual(
+            StatusMenu.detailLines(.paused(paused, external: false), now: now, timeZone: utc),
+            ["2 running · 1 retrying", "Paused by you since 12:16"]
+        )
+
+        var resumed = snapshot
+        resumed.pauseReasons = []
+        XCTAssertEqual(StatusMenu.detailLines(.running(resumed, external: false), now: now, timeZone: utc), ["2 running · 1 retrying"])
+    }
+
+    /// Walkthrough 2: an update's pause says "Updating to v…" with the version from its field, and the line goes once
+    /// the update resumes dispatch.
+    func testAnUpdatesPauseShowsItsVersionFromTheField() {
+        var updating = snapshot
+        updating.pause = .init(reason: "an older line", since: pausedAt)
+        updating.pauseReasons = [.init(kind: .build, text: "an older line", since: pausedAt, version: "0.0.1.700")]
+
+        XCTAssertEqual(
+            StatusMenu.detailLines(.paused(updating, external: false), now: pausedAt, timeZone: utc),
+            ["2 running · 1 retrying", "Updating to v0.0.1.700"]
+        )
+
+        var done = snapshot
+        done.pauseReasons = []
+        XCTAssertEqual(StatusMenu.detailLines(.running(done, external: false), now: pausedAt, timeZone: utc), ["2 running · 1 retrying"])
+    }
+
+    /// Every reason is its own line, in the order they were set; a usage limit's is Symphony's line, so the hold
+    /// shows once; and "All repositories paused" follows when every repository is.
+    func testEveryReasonIsItsOwnLineThenAllRepositoriesPaused() {
+        var paused = snapshot
+        paused.pause = .init(reason: "Deploy freeze", since: pausedAt)
+        paused.usageLimits = [claudeLimit]
+        paused.pauseReasons = [
+            .init(kind: .person, text: "Deploy freeze", since: pausedAt.addingTimeInterval(-86_400)),
+            .init(kind: .build, text: "updating to v0.0.1.700", version: "0.0.1.700"),
+            .init(kind: .other("environment"), text: "Claude's usage limit until 14:30"),
+            .init(kind: .person, text: "You paused Symphony"),
+            .init(kind: .build, text: "Waiting for a build"),
+            .init(kind: .build),
+            .init(kind: .other("")),
+        ]
+        let repositoryPause = StateSnapshot.RepositoryPause(reasons: ["You paused this repository"])
+        paused.repositories = [.init(key: "web-shop", pause: repositoryPause), .init(key: "api", pause: repositoryPause)]
+
+        XCTAssertEqual(StatusMenu.detailLines(.paused(paused, external: false), now: pausedAt, timeZone: utc), [
+            "2 running · 1 retrying",
+            "Paused by you since Oct 1, 12:16: Deploy freeze",
+            "Updating to v0.0.1.700",
+            "Claude's usage limit until 14:30",
+            "Paused by you",
+            "Waiting for a build",
+            "All repositories paused",
+        ])
+    }
+
+    /// A Symphony that predates the reasons keeps today's lines: the pause's reason and the usage-limit holds.
+    func testAnOlderSymphonyKeepsTodaysPauseLines() {
+        var paused = snapshot
+        paused.pause = .init(reason: "updating to v0.0.1.42", since: pausedAt)
+        paused.usageLimits = [claudeLimit]
+
+        XCTAssertEqual(StatusMenu.detailLines(.paused(paused, external: false), now: pausedAt, timeZone: utc), [
+            "2 running · 1 retrying",
+            "Paused since 12:16: updating to v0.0.1.42",
+            StatusMenu.usageLimitLine(claudeLimit, now: pausedAt, timeZone: utc),
+        ])
+    }
+
     func testPauseLine() {
         let sameDay = pausedAt.addingTimeInterval(3600)
         let nextDay = pausedAt.addingTimeInterval(86_400)

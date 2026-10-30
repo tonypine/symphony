@@ -304,12 +304,4 @@ final class UpdateKindTests: XCTestCase {
         XCTAssertEqual(cancelled.handle(.cancel), [.send(.resume)])
         XCTAssertNil(UpdateHold(release: release, downloading: false, drain: cancelled), "Cancel Update resumes dispatch")
     }
-
-    func testTheUpdatesPauseReasonNamesItsVersion() {
-        XCTAssertEqual(ControlAction.updatePauseReason(version: "0.0.1.42"), "updating to v0.0.1.42")
-        XCTAssertEqual(ControlAction.updateVersion(pauseReason: " updating to v0.0.1.42 "), "0.0.1.42")
-        XCTAssertNil(ControlAction.updateVersion(pauseReason: "updating to v"))
-        XCTAssertNil(ControlAction.updateVersion(pauseReason: ControlAction.pauseReason))
-        XCTAssertNil(ControlAction.updateVersion(pauseReason: nil))
-    }
 }

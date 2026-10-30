@@ -141,9 +141,12 @@ final class DispatchTests: XCTestCase {
 
     private let since = Date(timeIntervalSince1970: 1_000_000)
 
-    private func updatePaused(reason: String = "updating to v0.0.1.42", running: Int = 1) -> OverviewState {
-        OverviewState(
-            snapshot: StateSnapshot(running: running, pause: .init(reason: reason, since: since)),
+    /// Dispatch paused on `reason`: an update's `build` reason carrying `version`, or the Director's without one.
+    private func updatePaused(reason: String = "updating to v0.0.1.42", version: String? = "0.0.1.42", running: Int = 1) -> OverviewState {
+        let pauseReason = version.map { StateSnapshot.PauseReason(kind: .build, text: reason, since: since, version: $0) }
+            ?? StateSnapshot.PauseReason(kind: .person, text: reason, since: since)
+        return OverviewState(
+            snapshot: StateSnapshot(running: running, pause: .init(reason: reason, since: since), pauseReasons: [pauseReason]),
             generatedAt: since,
             running: (0..<running).map { OverviewState.Run(identifier: "TP-\($0 + 1)", title: "Run \($0 + 1)") }
         )
@@ -219,9 +222,25 @@ final class DispatchTests: XCTestCase {
         XCTAssertFalse(control.canCancelUpdate)
     }
 
+    /// The version is the `build` reason's field, never read out of the reason's text: an older Symphony's update
+    /// pause, with no reasons, shows its line as any pause does.
+    func testAnUpdatesVersionComesFromTheReasonsFieldNotItsText() {
+        let field = DispatchControl(
+            window: .connected, paused: true, state: updatePaused(reason: "an update's pause", version: "0.0.1.700"), now: since, timeZone: utc
+        )
+        XCTAssertEqual(field.word, "Paused · Updating to v0.0.1.700")
+        XCTAssertEqual(field.pauseFacts.first, TicketList.Fact(label: "By", value: "an update to v0.0.1.700"))
+
+        let older = OverviewState(snapshot: StateSnapshot(pause: .init(reason: "updating to v0.0.1.42", since: since)), generatedAt: since)
+        let control = DispatchControl(window: .connected, paused: true, state: older, now: since, timeZone: utc)
+        XCTAssertNil(control.updatingTo)
+        XCTAssertEqual(control.word, "Paused · updating to v0.0.1.42")
+        XCTAssertEqual(control.pauseFacts.first, TicketList.Fact(label: "By", value: "You"))
+    }
+
     func testAnUpdateKeepsThePauseTheUserMade() {
         let update = UpdateHold(version: "0.0.1.42", step: .waiting(runs: 1))
-        let control = DispatchControl(window: .connected, paused: true, state: updatePaused(reason: "Deploy freeze"), update: update, now: since, timeZone: utc)
+        let control = DispatchControl(window: .connected, paused: true, state: updatePaused(reason: "Deploy freeze", version: nil), update: update, now: since, timeZone: utc)
         XCTAssertEqual(control.word, "Paused · Updating to v0.0.1.42")
         XCTAssertEqual(control.pauseFacts.first, TicketList.Fact(label: "By", value: "You"))
         XCTAssertEqual(control.pauseFacts.last, TicketList.Fact(label: "Why", value: "Deploy freeze"))

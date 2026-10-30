@@ -215,7 +215,7 @@ final class APIFixturesTests: XCTestCase {
             let shipped = APIFixtures(directory: directory, requestLog: root.appendingPathComponent("api-requests.jsonl"))
             let data = shipped.answer(URLRequest(url: SymphonyState.stateURL(base: APIFixtures.baseURL))).0
             let state = try XCTUnwrap(OverviewState.decode(data), name)
-            XCTAssertEqual(ControlAction.updateVersion(pauseReason: state.snapshot.pause?.reason), "9.9.9", name)
+            XCTAssertEqual(state.snapshot.updatePauseVersion, "9.9.9", name)
 
             let control = DispatchControl(window: .connected, paused: true, state: state, now: Date(), timeZone: utc)
             XCTAssertEqual(control.word, "Paused · Updating to v9.9.9", name)
@@ -225,6 +225,24 @@ final class APIFixturesTests: XCTestCase {
             let overview = Overview(state: state, now: Date(), timeZone: utc)
             XCTAssertEqual(overview.mood, .paused, name)
             XCTAssertEqual(overview.context, context, name)
+        }
+    }
+
+    /// The header's lines QA reads in the update fixtures (TP-1251): one reason while idle, three while runs finish.
+    func testTheUpdateFixturesGiveOneLinePerReasonOfThePause() throws {
+        let utc = TimeZone(identifier: "UTC")!
+        let expected = [
+            "update-paused": ["Updating to v9.9.9", "Paused by you since 14:05: Deploy freeze", "Claude's 5-hour usage limit until 16:30"],
+            "update-paused-idle": ["Updating to v9.9.9"],
+        ]
+        for (name, lines) in expected {
+            let directory = Self.shippedRunning.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true)
+            let shipped = APIFixtures(directory: directory, requestLog: root.appendingPathComponent("api-requests.jsonl"))
+            let data = shipped.answer(URLRequest(url: SymphonyState.stateURL(base: APIFixtures.baseURL))).0
+            let state = try XCTUnwrap(OverviewState.decode(data), name)
+            let now = Date(timeIntervalSince1970: 1_791_385_200) // 2026-10-07 15:00 UTC, the fixtures' day
+            XCTAssertEqual(Overview(state: state, now: now, timeZone: utc).pauseLines, lines, name)
+            XCTAssertEqual(Array(StatusMenu.detailLines(.paused(state.snapshot, external: false), now: now, timeZone: utc).dropFirst()), lines, name)
         }
     }
 

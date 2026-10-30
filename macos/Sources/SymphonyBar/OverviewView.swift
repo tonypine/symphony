@@ -155,6 +155,11 @@ private struct StatusSentence: View {
                 Text(overview.sentence)
                     .font(DesignTokens.TypeStyle.sentence.font)
                     .accessibilityAddTraits(.isHeader)
+                ForEach(Array(overview.pauseLines.enumerated()), id: \.offset) { _, line in
+                    Text(line)
+                        .font(DesignTokens.TypeStyle.body.font)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Text(overview.context)
                     .font(DesignTokens.TypeStyle.callout.font)
                     .foregroundStyle(.secondary)

@@ -128,6 +128,59 @@ final class StateSnapshotTests: XCTestCase {
         )
     }
 
+    /// Symphony's pause carries its reasons (TP-1236): each one's kind, line, time and, for an update's, the version
+    /// as a field; the usage-limit holds' come even while nothing else pauses dispatch.
+    func testDecodesThePausesReasonsWithTheUpdatesVersionAsAField() throws {
+        let data = try recordedState(pause: [
+            "paused": true, "reason": "updating to v0.0.1.700", "paused_at": "2026-10-02T12:16:02Z",
+            "reasons": [
+                ["kind": "build", "text": "updating to v0.0.1.700", "since": "2026-10-02T12:16:02Z", "waits_on": ["version": "0.0.1.700"]],
+                ["kind": "person", "text": " Deploy freeze ", "since": NSNull(), "waits_on": ["action": "unblock"]],
+                ["kind": "environment", "text": "Claude's usage limit until 14:30", "waits_on": ["condition": "usage_limit:anthropic:all"]],
+                ["kind": "build", "waits_on": ["version": " "]],
+                [:],
+            ],
+        ])
+        guard case let .state(snapshot) = SymphonyState.poll(data: data, statusCode: 200) else { return XCTFail("not a state") }
+
+        XCTAssertEqual(snapshot.pauseReasons, [
+            .init(kind: .build, text: "updating to v0.0.1.700", since: Date(timeIntervalSince1970: 1_790_943_362), version: "0.0.1.700"),
+            .init(kind: .person, text: "Deploy freeze"),
+            .init(kind: .other("environment"), text: "Claude's usage limit until 14:30"),
+            .init(kind: .build),
+            .init(kind: .other("")),
+        ])
+        XCTAssertEqual(snapshot.updatePauseVersion, "0.0.1.700")
+
+        let limited = try recordedState(pause: [
+            "paused": false, "reason": NSNull(), "paused_at": NSNull(),
+            "reasons": [["kind": "environment", "text": "Claude's usage limit until 14:30", "waits_on": ["condition": "usage_limit:anthropic:all"]]],
+        ])
+        guard case let .state(held) = SymphonyState.poll(data: limited, statusCode: 200) else { return XCTFail("not a state") }
+        XCTAssertNil(held.pause)
+        XCTAssertEqual(held.pauseReasons, [.init(kind: .other("environment"), text: "Claude's usage limit until 14:30")])
+        XCTAssertNil(held.updatePauseVersion)
+    }
+
+    /// A Symphony that predates the reasons leaves them unknown, and its update's pause names no version field: the
+    /// app no longer reads one out of the reason's text.
+    func testAnOlderSymphonysPauseHasNoReasons() throws {
+        let data = try recordedState(pause: ["paused": true, "reason": "updating to v0.0.1.42", "paused_at": NSNull()])
+        guard case let .state(snapshot) = SymphonyState.poll(data: data, statusCode: 200) else { return XCTFail("not a state") }
+
+        XCTAssertEqual(snapshot.pause, .init(reason: "updating to v0.0.1.42"))
+        XCTAssertNil(snapshot.pauseReasons)
+        XCTAssertNil(snapshot.updatePauseVersion)
+    }
+
+    func testEveryRepositoryPausedIsKnownOnlyWhenEachListedOneIs() {
+        let paused = StateSnapshot.RepositoryPause(reasons: ["You paused this repository"])
+        XCTAssertTrue(StateSnapshot(repositories: [.init(key: "a", pause: paused), .init(key: "b", pause: paused)]).allRepositoriesPaused)
+        XCTAssertFalse(StateSnapshot(repositories: [.init(key: "a", pause: paused), .init(key: "b")]).allRepositoriesPaused)
+        XCTAssertFalse(StateSnapshot(repositories: []).allRepositoriesPaused)
+        XCTAssertFalse(StateSnapshot().allRepositoriesPaused)
+    }
+
     func testDecodesTheRepositoriesAndTheirPauses() throws {
         let data = try recordedState(replacing: "repositories", with: [
             [

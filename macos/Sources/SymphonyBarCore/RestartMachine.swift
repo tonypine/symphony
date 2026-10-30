@@ -109,7 +109,7 @@ public struct RestartMachine: Equatable {
     /// poll can show it resumed since, and then the restart pauses it. After `runsTimeout` seconds of waiting
     /// for agent runs the restart also offers Restart Now Anyway, or an `.automaticUpdate` gives up. An update ends
     /// with `.stopped` instead of starting Symphony. With `alerts` false a failure shows in the menu only, as for an
-    /// `.automaticUpdate`. An update pauses dispatch with the reason "updating to v`updatingTo`", so the window
+    /// `.automaticUpdate`. An update pauses dispatch with a `build` reason carrying `updatingTo`, so the window
     /// tells its pause from one the user made; a restart pauses with the menu's.
     /// Does nothing while a restart is under way.
     public mutating func begin(
@@ -311,9 +311,9 @@ public struct RestartMachine: Equatable {
         offersRestartNow = false
     }
 
-    /// The pause the restart sends: an update's names the version it installs.
+    /// The pause the restart sends: an update's is a `build` reason carrying the version it installs.
     public var pauseAction: ControlAction {
-        updateVersion.map { .pauseWithReason(ControlAction.updatePauseReason(version: $0)) } ?? .pause
+        updateVersion.map { .pauseForUpdate(version: $0) } ?? .pause
     }
 
     /// Before Symphony is stopped, a failed restart or update leaves it running.

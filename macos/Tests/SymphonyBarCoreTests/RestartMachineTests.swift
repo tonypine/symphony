@@ -648,10 +648,17 @@ final class RestartMachineTests: XCTestCase {
 
     // MARK: The update's pause reason (TP-983)
 
-    /// The window tells an update's pause from one the user made by its reason, so every update names its version.
+    /// The window tells an update's pause from one the user made by its reason: a `build` reason carrying the
+    /// version as a field, with the line a Symphony that reads no kind makes the same reason from.
     func testAnUpdatesPauseNamesTheVersionItInstalls() throws {
-        let pause = ControlAction.pauseWithReason("updating to v0.0.1.42")
+        let pause = ControlAction.pauseForUpdate(version: "0.0.1.42")
+        XCTAssertEqual(pause.body["kind"] as? String, "build")
+        XCTAssertEqual(pause.body["version"] as? String, "0.0.1.42")
         XCTAssertEqual(pause.body["reason"] as? String, "updating to v0.0.1.42")
+        XCTAssertEqual(pause.path, "api/v1/control/pause")
+        XCTAssertEqual(pause.failurePrefix, "Couldn't pause Symphony")
+        XCTAssertNil(pause.moveIdentifier)
+        XCTAssertTrue(StatusMenu.isPause(pause))
         for purpose in [RestartMachine.Purpose.update, .automaticUpdate] {
             var machine = RestartMachine()
             _ = machine.begin(alreadyPaused: false, purpose: purpose, updatingTo: "0.0.1.42", runsTimeout: runsTimeout, logPath: log, now: began)
