@@ -52,7 +52,14 @@ defmodule SymphonyElixir.Linear.Issue do
           priority: integer() | nil,
           state: String.t() | nil,
           team: %{key: String.t() | nil, name: String.t() | nil} | nil,
-          project: %{:id => String.t() | nil, :name => String.t() | nil, optional(:slug_id) => String.t() | nil} | nil,
+          project:
+            %{
+              :id => String.t() | nil,
+              :name => String.t() | nil,
+              optional(:slug_id) => String.t() | nil,
+              optional(:url) => String.t()
+            }
+            | nil,
           branch_name: String.t() | nil | :unknown,
           url: String.t() | nil,
           assignee_id: String.t() | nil,

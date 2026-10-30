@@ -31,9 +31,10 @@ defmodule SymphonyElixir.TicketObservation do
   Linear, and under `dispatch.source: poll` every phase does, as before.
 
   `observe_delivery/2` observes what a Linear webhook delivery says (`SymphonyElixir.Linear.Webhook.parse/1`)
-  the same way, under the repo that already holds the ticket's record (a ticket with no record yet is
-  left to the poll), or marks the record removed. `observe_held/2` does the same for a by-id read,
-  which carries no repo key either.
+  the same way, under the repo that already holds the ticket's record, or marks the record removed. A
+  ticket with no record yet is filed under the one repo whose poll scope takes it
+  (`SymphonyElixir.Routing.PollScope`), from a by-id read of it. `observe_held/2` does the same for a
+  by-id read, which carries no repo key either, and leaves a ticket with no record to the poll.
 
   A delivery that changes a record (`:updated`, or `:removed`) asks for a poll of the record's repo
   at once (`SymphonyElixir.Orchestrator.request_refresh/3`), so dispatch reads the change from Linear
@@ -72,7 +73,7 @@ defmodule SymphonyElixir.TicketObservation do
 
   alias SymphonyElixir.{Config, Hold, Orchestrator, RunStore, TicketSignals, TicketState, Tracker}
   alias SymphonyElixir.Linear.{Issue, Webhook}
-  alias SymphonyElixir.Routing.Resolver
+  alias SymphonyElixir.Routing.{PollScope, Resolver}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @table __MODULE__
@@ -211,9 +212,15 @@ defmodule SymphonyElixir.TicketObservation do
   record of the ticket the reads already keep, and an `Issue` remove marks the ticket's record in
   every configured repo removed. Any other delivery is not observed, and gives nil.
 
-  A delivery only updates a record a read already made: a ticket no configured repo has a record of
-  yet is `:unrouted` and nothing is written, and the next poll files it under its repo. A ticket held
-  in several repos is `:unrouted` too, as the poll counts it a conflict.
+  A ticket no configured repo has a record of yet (a new one) is filed under the one repo whose poll
+  would return it, as `SymphonyElixir.Routing.PollScope.route/3` decides from the delivery's fields.
+  A delivery carries no blockers or sub-issues, so the record is written from a by-id read of the
+  ticket (`:tracker`'s `fetch_issue_states_by_ids/1`, default `SymphonyElixir.Tracker`), still with
+  `source: :webhook`: a new record is `:updated`, asks for the poll below and is announced, so under
+  `dispatch.source: record` a new ticket dispatches from its first delivery. A ticket no repo's scope
+  or several take, or whose scope the delivery can't settle, is `:unrouted` and nothing is written:
+  the next poll files it; so is one the read doesn't return, and a failed read is `:error`. A ticket
+  held in several repos is `:unrouted` too, as the poll counts it a conflict.
 
   The work runs in a task bounded by `:timeout_ms` (default two seconds, well under the five Linear
   waits for an answer), so a crash or a hang is logged and returned as `:error`, never raised. A
@@ -221,7 +228,8 @@ defmodule SymphonyElixir.TicketObservation do
   A delivery that updated a record, or marked one removed, asks the orchestrator for a poll of that
   repo at once; no other outcome asks for one.
   `opts`: `:repos`, `:timeout_ms`, `:orchestrator` (the server asked for the poll, default
-  `SymphonyElixir.Orchestrator`), and those of `observe/3`.
+  `SymphonyElixir.Orchestrator`), `:tracker`, `:tracker_settings` and `:viewer_id` (those of
+  `SymphonyElixir.Routing.PollScope.route/3`), and those of `observe/3`.
   """
   @spec observe_delivery(Webhook.parsed(), keyword()) :: delivery_outcome() | nil
   def observe_delivery(parsed, opts \\ []) do
@@ -763,7 +771,7 @@ defmodule SymphonyElixir.TicketObservation do
   defp observe_parsed({:issue, _action, issue, _updated_at}, opts) do
     {repos, opts} = Keyword.pop_lazy(opts, :repos, &configured_repos/0)
     {orchestrator, opts} = Keyword.pop(opts, :orchestrator, Orchestrator)
-    {outcome, repo_key} = observe_held_issue(issue, repos, Keyword.put(opts, :source, :webhook))
+    {outcome, repo_key} = observe_held_issue(issue, repos, Keyword.put(opts, :source, :webhook), :file)
     if outcome == :updated, do: Orchestrator.request_refresh(orchestrator, repo_key, due: :now)
     outcome
   end
@@ -783,29 +791,63 @@ defmodule SymphonyElixir.TicketObservation do
     end
   end
 
-  # A delivery or a by-id read updates only the record the reads already keep: the poll filters each
-  # repo in Linear (a project by its slug, `assignee: me`), which the issue's own fields can't always
-  # match, so a ticket no repo has a record of yet is unrouted until the poll files it. One held in
-  # several repos is unrouted too, as the poll counts a ticket two repos return as a conflict.
-  # Gives the outcome with the repo it was observed under (nil when none).
-  defp observe_held_issue(%Issue{id: issue_id} = issue, repos, opts) when is_binary(issue_id) do
-    case holder(issue, repos) do
-      {:ok, repo_key} ->
-        {delivered(repo_key, issue, observe(repo_key, %{issue | repo_key: repo_key}, opts)), repo_key}
+  # A delivery or a by-id read updates the record the reads already keep. A ticket no repo has a
+  # record of yet is filed by a delivery (`new: :file`) under the one repo whose poll scope takes it
+  # (`PollScope.route/3`), so a new ticket dispatches from its first delivery; a by-id read leaves it
+  # unrouted for the poll. One held in several repos is unrouted, as the poll counts a ticket two
+  # repos return as a conflict. Gives the outcome with the repo it was observed under (nil when none).
+  defp observe_held_issue(issue, repos, opts, new \\ :unrouted)
 
-      :unrouted ->
-        bump(:unrouted)
-        {:unrouted, nil}
-
-      {:error, repo_key, reason} ->
-        bump(:errors)
-        {delivered(repo_key, issue, {:error, reason}), repo_key}
+  defp observe_held_issue(%Issue{id: issue_id} = issue, repos, opts, new) when is_binary(issue_id) do
+    case {holder(issue, repos), new} do
+      {{:ok, repo_key}, _new} -> observe_under(repo_key, issue, opts)
+      {:none, :file} -> file_new(issue, repos, opts)
+      {{:error, repo_key, reason}, _new} -> held_failed(repo_key, issue, reason)
+      {_none_or_several, _new} -> unrouted()
     end
   end
 
-  defp observe_held_issue(_issue, _repos, _opts) do
+  defp observe_held_issue(_issue, _repos, _opts, _new) do
     bump(:errors)
     {:error, nil}
+  end
+
+  defp observe_under(repo_key, issue, opts),
+    do: {delivered(repo_key, issue, observe(repo_key, %{issue | repo_key: repo_key}, opts)), repo_key}
+
+  # A delivery never carries the ticket's blockers or sub-issues, which dispatch reads, so the new
+  # record is filed from a by-id read of the ticket (one Linear request) under the repo its delivery
+  # routes to. A ticket the read doesn't return is left to the poll.
+  defp file_new(issue, repos, opts) do
+    {scope_opts, opts} = Keyword.split(opts, [:tracker_settings, :viewer_id])
+
+    case PollScope.route(issue, repos, scope_opts) do
+      {:ok, repo_key} -> file_read(repo_key, issue, opts)
+      :unrouted -> unrouted()
+    end
+  end
+
+  defp file_read(repo_key, %Issue{id: issue_id} = issue, opts) do
+    case fetch_by_ids(Keyword.get(opts, :tracker, Tracker), [issue_id]) do
+      {:ok, issues} ->
+        case Enum.find(issues, &match?(%Issue{id: ^issue_id}, &1)) do
+          %Issue{} = read -> observe_under(repo_key, read, opts)
+          nil -> unrouted()
+        end
+
+      {:error, reason} ->
+        held_failed(repo_key, issue, {:by_id_read, reason})
+    end
+  end
+
+  defp unrouted do
+    bump(:unrouted)
+    {:unrouted, nil}
+  end
+
+  defp held_failed(repo_key, issue, reason) do
+    bump(:errors)
+    {delivered(repo_key, issue, {:error, reason}), repo_key}
   end
 
   defp held_count_key(:error), do: :errors
@@ -823,7 +865,8 @@ defmodule SymphonyElixir.TicketObservation do
     end)
     |> case do
       {:ok, [repo_key]} -> {:ok, repo_key}
-      {:ok, _none_or_several} -> :unrouted
+      {:ok, []} -> :none
+      {:ok, _several} -> :several
       error -> error
     end
   end
