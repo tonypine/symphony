@@ -123,7 +123,9 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       assert json_response(post_signed(other_team), 200) == %{"status" => "accepted"}
       assert RunStore.get_ticket_state(Config.repo_key!(), "issue-hook") == nil
 
-      assert %{recent: [%{action: "create", observation: :unrouted} | _], observations: %{unrouted: 2, updated: 0}} = Deliveries.summary()
+      summary = Deliveries.summary()
+      assert [%{action: "create", observation: :unrouted} | _] = summary.recent
+      assert %{unrouted: 2, updated: 0} = summary.observations
     end
 
     test "marks the record removed for an Issue remove delivery; a comment is only counted" do
@@ -152,7 +154,7 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       assert json_response(post_signed(issue_delivery("update", %{"priority" => 4, "updatedAt" => "2026-10-29T08:59:00.000Z"})), 200)
       assert json_response(post_signed(issue_delivery("create", %{"id" => "issue-new", "identifier" => "ACME-10"})), 200)
 
-      assert %{recent: [%{observation: :unrouted}, %{observation: :stale}, %{observation: :unchanged}, %{observation: :updated}]} = Deliveries.summary()
+      assert Enum.map(Deliveries.summary().recent, & &1.observation) == [:unrouted, :stale, :unchanged, :updated]
 
       refute_received {:"$gen_cast", _request}
     end
@@ -171,7 +173,7 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       assert json_response(post_signed(unknown), 200)
       assert json_response(post_signed(comment), 200)
 
-      assert %{recent: [%{observation: nil}, %{observation: :no_record}, %{observation: :removed}]} = Deliveries.summary()
+      assert Enum.map(Deliveries.summary().recent, & &1.observation) == [nil, :no_record, :removed]
       refute_received {:"$gen_cast", _request}
     end
 

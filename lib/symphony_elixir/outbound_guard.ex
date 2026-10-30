@@ -28,7 +28,10 @@ defmodule SymphonyElixir.OutboundGuard do
   # The first Symphony module up the stack, past this guard: the code that made the request.
   defp caller do
     {:current_stacktrace, stacktrace} = Process.info(self(), :current_stacktrace)
-    Enum.find_value(stacktrace, :unknown, fn {module, _function, _arity, _location} -> if caller_module?(module), do: module end)
+
+    Enum.find_value(stacktrace, :unknown, fn {module, _function, _arity, _location} ->
+      if caller_module?(module), do: module
+    end)
   end
 
   defp caller_module?(module), do: module != __MODULE__ and String.starts_with?(Atom.to_string(module), "Elixir.SymphonyElixir")

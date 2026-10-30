@@ -355,7 +355,13 @@ defmodule SymphonyElixir.LinearRateLimitTest do
     end
 
     test "a rate-limited dispatch refresh is skipped quietly with no Linear call" do
-      write_workflow_file!(Workflow.workflow_file_path(), linear_tracker(max_concurrent_agents: 1, quality_gate: %{enabled: false}))
+      write_workflow_file!(
+        Workflow.workflow_file_path(),
+        linear_tracker(
+          max_concurrent_agents: 1,
+          quality_gate: %{enabled: false}
+        )
+      )
 
       pause_linear_for(RateLimit.now_ms())
       requests_before = RateLimit.requests_total()
@@ -392,7 +398,13 @@ defmodule SymphonyElixir.LinearRateLimitTest do
     end
 
     test "a retry whose dispatch refresh times out stays queued at the same attempt" do
-      write_workflow_file!(Workflow.workflow_file_path(), linear_tracker(max_concurrent_agents: 1, quality_gate: %{enabled: false}))
+      write_workflow_file!(
+        Workflow.workflow_file_path(),
+        linear_tracker(
+          max_concurrent_agents: 1,
+          quality_gate: %{enabled: false}
+        )
+      )
 
       {state, issue_id, retry} = retry_after_dispatch_refresh(2)
 
@@ -403,7 +415,14 @@ defmodule SymphonyElixir.LinearRateLimitTest do
     end
 
     test "a retry whose dispatch refresh fails for good is rescheduled with the next attempt" do
-      write_workflow_file!(Workflow.workflow_file_path(), linear_tracker(tracker_api_token: nil, max_concurrent_agents: 1, quality_gate: %{enabled: false}))
+      write_workflow_file!(
+        Workflow.workflow_file_path(),
+        linear_tracker(
+          tracker_api_token: nil,
+          max_concurrent_agents: 1,
+          quality_gate: %{enabled: false}
+        )
+      )
 
       {_state, _issue_id, retry} = retry_after_dispatch_refresh(2)
 

@@ -21,7 +21,7 @@ defmodule SymphonyElixir.OutboundGuardTest do
   test "the Linear adapter pointed at the public Linear host fails before a connection opens" do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear", tracker_endpoint: "https://api.linear.app/graphql", tracker_api_token: "token")
 
-    error = assert_raise OutboundConnectionInTest, fn -> SymphonyElixir.Linear.Client.graphql("query { viewer { id } }") end
+    error = assert_raise OutboundConnectionInTest, fn -> Client.graphql("query { viewer { id } }") end
 
     assert %{host: "api.linear.app", caller: SymphonyElixir.Linear.Client} = error
     assert Exception.message(error) =~ "SymphonyElixir.Linear.Client opened a connection to api.linear.app in a test."

@@ -25,6 +25,9 @@ defmodule SymphonyElixir.Setup.Fixes do
   alias SymphonyElixir.Hold.Drift
   alias SymphonyElixir.Setup.Checks.{HoldDrift, Statuses}
 
+  @typedoc "Why a fix didn't run, or ran without the checks after it."
+  @type error :: :not_proposed | :not_running | {:refused, String.t()}
+
   @doc """
   Runs `descriptor` (a fix as the payload lists it, with string keys). Options: `:server` (the Setup
   server, `SymphonyElixir.Setup` by default) and `:tracker`.
@@ -33,15 +36,21 @@ defmodule SymphonyElixir.Setup.Fixes do
   the latest check didn't propose, `{:error, {:refused, message}}` when Linear refused it, or
   `{:error, :not_running}` without a running Setup server.
   """
-  @spec run(map() | term(), keyword()) :: {:ok, Setup.payload()} | {:error, :not_proposed | :not_running | {:refused, String.t()}}
+  @spec run(map() | term(), keyword()) :: {:ok, Setup.payload()} | {:error, error()}
   def run(descriptor, opts) do
     server = Keyword.get(opts, :server, Setup)
 
-    with %{problems: problems} <- Setup.payload(server) do
-      case is_map(descriptor) && to_run(descriptor, problems) do
-        %{} = fix -> with :ok <- apply_fix(fix, Keyword.get(opts, :tracker, Tracker)), do: refreshed(Setup.refresh(server))
-        _not_proposed -> {:error, :not_proposed}
-      end
+    with %{problems: problems} <- Setup.payload(server),
+         {:ok, fix} <- proposed(descriptor, problems),
+         :ok <- apply_fix(fix, Keyword.get(opts, :tracker, Tracker)) do
+      refreshed(Setup.refresh(server))
+    end
+  end
+
+  defp proposed(descriptor, problems) do
+    case is_map(descriptor) && to_run(descriptor, problems) do
+      %{} = fix -> {:ok, fix}
+      _not_proposed -> {:error, :not_proposed}
     end
   end
 

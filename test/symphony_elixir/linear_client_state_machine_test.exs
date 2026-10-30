@@ -9,7 +9,10 @@ defmodule SymphonyElixir.LinearClientStateMachineTest do
       write_workflow_file!(
         Workflow.workflow_file_path(),
         linear_tracker(
-          repos: [%{key: "first_repo", workflow: Workflow.workflow_file_path(), default: true, team: "FIRST"}, %{key: "second_repo", workflow: Workflow.workflow_file_path(), team: "SECOND"}]
+          repos: [
+            %{key: "first_repo", workflow: Workflow.workflow_file_path(), default: true, team: "FIRST"},
+            %{key: "second_repo", workflow: Workflow.workflow_file_path(), team: "SECOND"}
+          ]
         )
       )
 
