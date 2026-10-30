@@ -541,10 +541,12 @@ a ticket is not moving; written only by `SymphonyElixir.Pauses`): `pause.set` fo
 waiting for TP-1194 to finish"), `pause.reason_cleared` for a reason cleared while others remain,
 and `pause.cleared` ("Moving again") when none is left, naming the reasons it cleared. A reason event
 carries the reason's kind (`question`, `ticket`, `build`, `person`, `environment`), its one line of
-plain words and what it waits on (a question's id, a ticket's identifier, a Symphony version or pull
-request, the Director's `unblock` or `restart`, a named condition). Setting a reason the pause
-already holds (same kind, same `waits_on`) records nothing. A repository's or Symphony's own pause
-is kept in the store by subject and records no event. Nothing sets a pause yet.
+plain words (at most 300 characters) and what it waits on (a question's id, a ticket's identifier, a
+Symphony version or pull request, the Director's `unblock` or `restart`, a named condition). The
+event is validated before the ticket's record changes: a reason or a time the ledger would refuse
+leaves the pause as it was. Setting a reason the pause already holds (same kind, same `waits_on`)
+records nothing. A repository's or Symphony's own pause is kept in the store by subject and records
+no event. Nothing sets a pause yet.
 
 A `run.ended` names the run's transcript: a copy kept in the artifact store (Section 4.1.12) as
 kind `transcript`, its id both in the event's `artifacts` and in `payload.transcript`. The

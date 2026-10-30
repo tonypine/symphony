@@ -13,10 +13,11 @@ defmodule SymphonyElixir.Pauses do
     * `:person` - the Director (`waits_on: %{action: "unblock" | "restart"}`);
     * `:environment` - a named condition (`waits_on: %{condition: name}`).
 
-  Each reason has `text`, one line in plain words (a default per kind, or the writer's), `set_by`
-  (`%{kind: :person | :run | :rule | :symphony, name: name}`), `set_at` and `releasable`: whether
-  the Director may release it. A `:person` reason always is; a `:ticket` or `:environment` reason is
-  when its writer says so; a `:question` or `:build` reason never is.
+  Each reason has `text`, one line in plain words of at most 300 characters (a default per kind, or
+  the writer's; a longer one is refused), `set_by` (`%{kind: :person | :run | :rule | :symphony,
+  name: name}`), `set_at` and `releasable`: whether the Director may release it. A `:person` reason
+  always is; a `:ticket` or `:environment` reason is when its writer says so; a `:question` or
+  `:build` reason never is.
 
   A ticket's pause lives on its record (`SymphonyElixir.TicketState`, field `pause`), and each change
   records a ledger event (`SymphonyElixir.TicketEvents`): `pause.set` for the first reason,
@@ -34,6 +35,8 @@ defmodule SymphonyElixir.Pauses do
   @setter_kinds [:person, :run, :rule, :symphony]
   @person_actions ~w(unblock restart)
   @symphony %{kind: :symphony, name: "Symphony"}
+  # The longest line a reason may have: the ledger (`SymphonyElixir.TicketEvents.Types`) refuses more.
+  @max_text 300
 
   @typedoc "What a pause holds: a ticket of a repository, a repository, or Symphony itself."
   @type subject :: {:ticket, String.t(), String.t()} | {:repository, String.t()} | :symphony
@@ -66,7 +69,7 @@ defmodule SymphonyElixir.Pauses do
           optional(:releasable) => boolean()
         }
 
-  @typedoc "`set_by:` (or `by:` when clearing; default Symphony) and `at:` (default now)."
+  @typedoc "`set_by:` (or `by:` when clearing; default Symphony) and `at:` (a `DateTime`, default now)."
   @type opt :: {:set_by, set_by()} | {:by, set_by()} | {:at, DateTime.t()}
 
   @type result :: {:ok, pause() | nil} | {:error, term()}
@@ -116,10 +119,11 @@ defmodule SymphonyElixir.Pauses do
   def clear(subject, opts \\ []) do
     with {:ok, subject} <- subject(subject),
          {:ok, by} <- setter(opts, :by),
+         {:ok, at} <- at(opts),
          {:ok, current} <- read(subject) do
       case current do
         nil -> {:ok, nil}
-        pause -> write(subject, nil, "pause.cleared", cleared_payload(pause.reasons, by), at(opts))
+        pause -> write(subject, nil, "pause.cleared", cleared_payload(pause.reasons, by), at)
       end
     end
   end
@@ -200,9 +204,12 @@ defmodule SymphonyElixir.Pauses do
     end
   end
 
-  # A ticket's pause is written on its record, then its event; any other subject's in the store.
+  # A ticket's pause is written on its record, then its event; any other subject's in the store. The
+  # event is validated before the record changes, so a pause whose event the ledger refuses is never
+  # stored.
   defp write({:ticket, repo_key, issue_id}, pause, type, payload, at) do
-    with :ok <- put_ticket_pause(repo_key, issue_id, pause, at),
+    with {:ok, _event} <- TicketEvents.build(repo_key, issue_id, type, payload, at: at),
+         :ok <- put_ticket_pause(repo_key, issue_id, pause, at),
          {:ok, _event} <- TicketEvents.record(repo_key, issue_id, type, payload, at: at) do
       {:ok, pause}
     end
@@ -249,8 +256,9 @@ defmodule SymphonyElixir.Pauses do
   defp key(reason), do: {reason.kind, reason.waits_on}
 
   defp new_reason(reason, opts, setter_key) when is_map(reason) do
-    with {:ok, set_by} <- setter(opts, setter_key) do
-      case normalize_reason(Map.merge(reason, %{set_by: set_by, set_at: at(opts)})) do
+    with {:ok, set_by} <- setter(opts, setter_key),
+         {:ok, at} <- at(opts) do
+      case normalize_reason(Map.merge(reason, %{set_by: set_by, set_at: at})) do
         [reason] -> {:ok, reason}
         [] -> {:error, {:invalid_reason, reason}}
       end
@@ -259,7 +267,12 @@ defmodule SymphonyElixir.Pauses do
 
   defp new_reason(reason, _opts, _setter_key), do: {:error, {:invalid_reason, reason}}
 
-  defp at(opts), do: Keyword.get_lazy(opts, :at, &DateTime.utc_now/0)
+  defp at(opts) do
+    case Keyword.get_lazy(opts, :at, &DateTime.utc_now/0) do
+      %DateTime{} = at -> {:ok, at}
+      _at -> {:error, {:invalid_option, :at}}
+    end
+  end
 
   defp setter(opts, key) do
     case Keyword.fetch(opts, key) do
@@ -269,21 +282,21 @@ defmodule SymphonyElixir.Pauses do
   end
 
   defp normalize_reason(%{kind: kind, waits_on: %{} = waits_on} = reason) when kind in @kinds do
-    case waits_on(kind, waits_on) do
-      nil ->
-        []
-
-      waits_on ->
-        [
-          %{
-            kind: kind,
-            waits_on: waits_on,
-            text: line(Map.get(reason, :text)) || default_text(kind, waits_on),
-            set_by: set_by(Map.get(reason, :set_by)) || @symphony,
-            set_at: datetime(Map.get(reason, :set_at)),
-            releasable: releasable(kind, Map.get(reason, :releasable))
-          }
-        ]
+    with %{} = waits_on <- waits_on(kind, waits_on),
+         text = line(Map.get(reason, :text)) || default_text(kind, waits_on),
+         true <- String.length(text) <= @max_text do
+      [
+        %{
+          kind: kind,
+          waits_on: waits_on,
+          text: text,
+          set_by: set_by(Map.get(reason, :set_by)) || @symphony,
+          set_at: datetime(Map.get(reason, :set_at)),
+          releasable: releasable(kind, Map.get(reason, :releasable))
+        }
+      ]
+    else
+      _invalid -> []
     end
   end
 
@@ -305,7 +318,7 @@ defmodule SymphonyElixir.Pauses do
   defp default_text(:question, _waits_on), do: "Waiting for your answer"
   defp default_text(:ticket, %{identifier: identifier}), do: "Waiting for #{identifier} to finish"
   defp default_text(:build, %{version: version}), do: "Waiting for Symphony version #{version}, which has the fix"
-  defp default_text(:build, %{pull_request: number}), do: "Waiting for a Symphony build with the fix from PR ##{number}"
+  defp default_text(:build, %{pull_request: _number}), do: "Waiting for a Symphony build with the fix"
   defp default_text(:person, %{action: action}), do: "Waiting for you to #{action} it"
   defp default_text(:environment, _waits_on), do: "Waiting for the environment to be ready"
 

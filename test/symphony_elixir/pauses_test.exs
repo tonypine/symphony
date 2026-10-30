@@ -106,6 +106,33 @@ defmodule SymphonyElixir.PausesTest do
       assert ticket_events(@repo_key, @issue_id) |> Enum.map(&elem(&1, 0)) == ["pause.set"]
     end
 
+    test "a reason or a time the ledger would refuse leaves the ticket's record and its events as they were" do
+      long = %{kind: :question, waits_on: %{question_id: "q-9"}, text: String.duplicate("word ", 70)}
+      long_default = %{kind: :ticket, waits_on: %{identifier: String.duplicate("T", 290)}}
+
+      for reason <- [long, long_default] do
+        assert Pauses.set(@ticket, reason, at: @at) == {:error, {:invalid_reason, reason}}
+      end
+
+      assert Pauses.set(@ticket, @question, at: "now") == {:error, {:invalid_option, :at}}
+      refute Pauses.paused?(@ticket)
+      assert RunStore.get_ticket_state(@repo_key, @issue_id) == nil
+
+      {:ok, pause} = Pauses.set(@ticket, @question, at: @at)
+      assert Pauses.add_reason(@ticket, long, at: @later) == {:error, {:invalid_reason, long}}
+      assert Pauses.clear_reason(@ticket, @question, at: "now") == {:error, {:invalid_option, :at}}
+      assert Pauses.clear(@ticket, at: "now") == {:error, {:invalid_option, :at}}
+
+      assert Pauses.get(@ticket) == {:ok, pause}
+      assert %{pause: ^pause, updated_at: @at} = RunStore.get_ticket_state(@repo_key, @issue_id)
+      assert ticket_events(@repo_key, @issue_id) |> Enum.map(&elem(&1, 0)) == ["pause.set"]
+
+      at_limit = %{long | text: String.duplicate("w", 300)}
+      assert {:ok, %{reasons: [_question, %{text: text}]}} = Pauses.add_reason(@ticket, at_limit, at: @later)
+      assert String.length(text) == 300
+      assert ticket_events(@repo_key, @issue_id) |> Enum.map(&elem(&1, 0)) == ["pause.set", "pause.reason_added"]
+    end
+
     test "add_reason/3 needs a pause to add to" do
       assert Pauses.add_reason(@ticket, @dependency) == {:error, :not_paused}
       refute Pauses.paused?(@ticket)
@@ -132,14 +159,14 @@ defmodule SymphonyElixir.PausesTest do
                "Waiting for your answer",
                "Waiting for TP-1194 to finish",
                "Waiting for Symphony version 1.4.0, which has the fix",
-               "Waiting for a Symphony build with the fix from PR #448",
+               "Waiting for a Symphony build with the fix",
                "Waiting for you to unblock it",
                "Waiting for you to restart it",
                "Waiting for the environment to be ready",
                "Waiting for Linear to answer again"
              ]
 
-      for line <- Pauses.why(@ticket), do: refute(line =~ ~r/[_\/`{}:]|\n/, line)
+      for line <- Pauses.why(@ticket), do: refute(line =~ ~r/[_\/`{}:#]|\n/, line)
     end
 
     test "a subject not paused, or one that can't be read, has no reasons" do
