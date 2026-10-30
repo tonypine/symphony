@@ -20,7 +20,8 @@ defmodule SymphonyElixir.TicketState do
   (`removed_at`), and the projections to Linear that failed and wait for the reconciler
   (`pending_projection`, `mark_projection/4`), and when the reconciler's by-id read of a record no
   read had observed did not find the ticket, archived or deleted in Linear (`not_found_at`), so it
-  does not read it again; dispatch ignores it.
+  does not read it again; dispatch ignores it; and the ticket's `pause` (`SymphonyElixir.Pauses`):
+  why it does not move, with each reason, who set it and since when, nil when nothing pauses it.
 
   The record is persisted by `SymphonyElixir.RunStore`; this module owns its shape and the
   operations that move it. It is inert by design: nothing dispatches on a record yet. It exists so
@@ -30,6 +31,7 @@ defmodule SymphonyElixir.TicketState do
   """
 
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Pauses
   alias SymphonyElixir.PrDecision
   alias SymphonyElixir.PrWatch.Attempts
 
@@ -261,6 +263,7 @@ defmodule SymphonyElixir.TicketState do
           removed_at: DateTime.t() | nil,
           pending_projection: [projection()],
           not_found_at: DateTime.t() | nil,
+          pause: Pauses.pause() | nil,
           updated_at: DateTime.t() | nil
         }
 
@@ -345,6 +348,7 @@ defmodule SymphonyElixir.TicketState do
       removed_at: map_datetime(record, :removed_at),
       pending_projection: normalize_projections(Map.get(record, :pending_projection)),
       not_found_at: map_datetime(record, :not_found_at),
+      pause: Pauses.normalize(Map.get(record, :pause)),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -386,6 +390,7 @@ defmodule SymphonyElixir.TicketState do
       removed_at: nil,
       pending_projection: [],
       not_found_at: nil,
+      pause: nil,
       updated_at: nil
     }
   end
@@ -645,6 +650,27 @@ defmodule SymphonyElixir.TicketState do
   @doc "The watcher's fact record, or nil when the ticket is not watched."
   @spec pr_watch(t()) :: pr_watch() | nil
   def pr_watch(record), do: record |> normalize() |> Map.fetch!(:pr_watch)
+
+  @doc """
+  Sets the ticket's pause (`SymphonyElixir.Pauses`, its only writer); nil, or a pause with no reason
+  left, clears it.
+  """
+  @spec put_pause(t(), map() | nil, DateTime.t()) :: t()
+  def put_pause(record, pause, at \\ DateTime.utc_now()) do
+    record
+    |> normalize()
+    |> Map.put(:pause, Pauses.normalize(pause))
+    |> Map.put(:updated_at, at)
+  end
+
+  @doc "The reasons the ticket is paused for, in the order they were set; empty when it is not paused."
+  @spec pause_reasons(t()) :: [Pauses.reason()]
+  def pause_reasons(record) do
+    case record |> normalize() |> Map.fetch!(:pause) do
+      %{reasons: reasons} -> reasons
+      nil -> []
+    end
+  end
 
   @doc """
   Sets the record's phase, the state the machine believes the ticket is in, when it was written

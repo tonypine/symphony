@@ -46,6 +46,7 @@ defmodule SymphonyElixir.TicketStateTest do
                removed_at: nil,
                pending_projection: [],
                not_found_at: nil,
+               pause: nil,
                updated_at: nil
              }
     end
@@ -164,6 +165,7 @@ defmodule SymphonyElixir.TicketStateTest do
                removed_at: nil,
                pending_projection: [],
                not_found_at: nil,
+               pause: nil,
                updated_at: nil
              }
     end
@@ -301,6 +303,31 @@ defmodule SymphonyElixir.TicketStateTest do
       assert record.verdicts == []
       assert record.ci_states == []
       assert record.signals == []
+    end
+  end
+
+  describe "pause" do
+    @question %{kind: :question, waits_on: %{question_id: "q-1"}, text: "Waiting for your answer", set_at: @at}
+    @dependency %{kind: :ticket, waits_on: %{identifier: "TP-12"}, set_at: @at}
+
+    test "put_pause/3 sets the ticket's pause and pause_reasons/1 lists its reasons in order" do
+      pause = %{subject: {:ticket, "repo-a", "issue-1"}, reasons: [@question, @dependency]}
+      record = TicketState.new("repo-a", "issue-1") |> TicketState.put_pause(pause, @at)
+
+      assert %{set_by: %{kind: :symphony, name: "Symphony"}, since: @at} = record.pause
+      assert record.updated_at == @at
+      assert Enum.map(TicketState.pause_reasons(record), & &1.kind) == [:question, :ticket]
+      assert Enum.map(TicketState.pause_reasons(record), & &1.text) == ["Waiting for your answer", "Waiting for TP-12 to finish"]
+    end
+
+    test "nil, a pause with no valid reason or a malformed one clears it; a record without one reads nil" do
+      record = TicketState.new("repo-a", "issue-1") |> TicketState.put_pause(%{subject: {:ticket, "repo-a", "issue-1"}, reasons: [@question]})
+
+      assert TicketState.put_pause(record, nil).pause == nil
+      assert TicketState.put_pause(record, %{subject: {:ticket, "repo-a", "issue-1"}, reasons: [%{kind: :nope}]}).pause == nil
+      assert TicketState.normalize(%{pause: :junk}).pause == nil
+      assert TicketState.new("repo-a", "issue-1").pause == nil
+      assert TicketState.pause_reasons(%{}) == []
     end
   end
 
