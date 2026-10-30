@@ -961,6 +961,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                "revert_failed" => 0,
                "recent" => []
              },
+             "pause_backfill" => nil,
              "orchestrator" => %{
                "message_queue_len" => 0,
                "snapshot_age_ms" => nil,
@@ -1011,7 +1012,8 @@ defmodule SymphonyElixir.ExtensionsTest do
              "last_error" => nil,
              "tracked" => %{},
              "verdicts" => [],
-             "watch" => nil
+             "watch" => nil,
+             "pause" => nil
            }
 
     conn = get(build_conn(), "/api/v1/MT-RETRY")
@@ -1044,7 +1046,8 @@ defmodule SymphonyElixir.ExtensionsTest do
              "last_error" => nil,
              "tracked" => %{},
              "verdicts" => [],
-             "watch" => nil
+             "watch" => nil,
+             "pause" => nil
            }
 
     conn = get(build_conn(), "/api/v1/MT-MISSING")
@@ -1256,7 +1259,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                "since" => "2026-10-03T06:00:00Z"
              },
              "verdicts" => [],
-             "watch" => nil
+             "watch" => nil,
+             "pause" => nil
            } = skipped = json_response(get(build_conn(), "/api/v1/MT-SKIP"), 200)
 
     refute Map.has_key?(skipped, "slot_waiting")

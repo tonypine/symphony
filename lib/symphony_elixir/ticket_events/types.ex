@@ -33,7 +33,9 @@ defmodule SymphonyElixir.TicketEvents.Types do
   A pause is machinery-only as well (`SymphonyElixir.Pauses`): `pause.set` for its first reason,
   `pause.reason_added` for each further one, `pause.reason_cleared` for a reason cleared while
   others remain and `pause.cleared` when none is left, with the reasons it cleared. A reason event
-  names its kind (`reason`), its one line of plain words (`text`) and what it waits on.
+  names its kind (`reason`), its one line of plain words (`text`) and what it waits on, and
+  `source: "backfill"` when the backfill from the holds wrote it (`SymphonyElixir.Pauses.Backfill`),
+  as `question.asked` does for a question it wrote.
 
   A question to a person is machinery-only too (`SymphonyElixir.Questions`): `question.asked`, then
   `question.answered` (the answer as given, and the option it picked) or `question.withdrawn` (with
@@ -73,12 +75,15 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @signal [signal: :string]
   @drift [record_phase: :string, linear_phase: :string]
   @pause_reasons ~w(question ticket build person environment)
+  # Where a pause's or a question's event came from when no live write recorded it: the backfill
+  # from the holds and decisions (`SymphonyElixir.Pauses.Backfill`).
+  @source {:enum, ~w(backfill)}
   @pause_reason [reason: {:enum, @pause_reasons}, text: {:string, 300}]
   @pause_reason_set %{
     writers: [:machine],
     run_kinds: [],
     required: @pause_reason,
-    optional: [waits_on: :map, set_by: :map, releasable: :boolean] ++ @signal,
+    optional: [waits_on: :map, set_by: :map, releasable: :boolean, source: @source] ++ @signal,
     idempotency: :writer
   }
 
@@ -182,7 +187,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
           recommendation_reason: :string,
           confirm: :string,
           step: :string,
-          asked_by: :map
+          asked_by: :map,
+          source: @source
         ] ++ @signal,
       idempotency: {:fields, [:question_id]}
     },

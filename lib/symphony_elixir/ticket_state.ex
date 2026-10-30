@@ -23,7 +23,9 @@ defmodule SymphonyElixir.TicketState do
   does not read it again; dispatch ignores it; and the ticket's `pause` (`SymphonyElixir.Pauses`):
   why it does not move, with each reason, who set it and since when, nil when nothing pauses it;
   and the `questions` asked of a person on it (`SymphonyElixir.Questions`), open, answered or
-  withdrawn, in the order they were asked.
+  withdrawn, in the order they were asked; and when the backfill from its holds and decisions
+  converted the record into its pause and questions (`pause_backfilled_at`,
+  `SymphonyElixir.Pauses.Backfill`), so it never converts it again.
 
   The record is persisted by `SymphonyElixir.RunStore`; this module owns its shape and the
   operations that move it. It is inert by design: nothing dispatches on a record yet. It exists so
@@ -268,6 +270,7 @@ defmodule SymphonyElixir.TicketState do
           not_found_at: DateTime.t() | nil,
           pause: Pauses.pause() | nil,
           questions: [Questions.question()],
+          pause_backfilled_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
 
@@ -354,6 +357,7 @@ defmodule SymphonyElixir.TicketState do
       not_found_at: map_datetime(record, :not_found_at),
       pause: Pauses.normalize(Map.get(record, :pause)),
       questions: Questions.normalize(Map.get(record, :questions)),
+      pause_backfilled_at: map_datetime(record, :pause_backfilled_at),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -397,6 +401,7 @@ defmodule SymphonyElixir.TicketState do
       not_found_at: nil,
       pause: nil,
       questions: [],
+      pause_backfilled_at: nil,
       updated_at: nil
     }
   end
