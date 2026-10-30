@@ -280,6 +280,69 @@ defmodule SymphonyElixir.QuestionsTest do
     end
   end
 
+  describe "reopen/3" do
+    @reopened ~U[2026-10-30 05:00:05Z]
+
+    test "the Director's Undo takes an answer back: the question is open again and pauses the ticket on it" do
+      question = ask!()
+      {:ok, _answered} = Questions.answer(@ticket, question.id, "1", at: @later)
+      refute Pauses.paused?(@ticket)
+
+      assert {:ok, %{state: :open, answer: nil, reopened_at: @reopened}} = Questions.reopen(@ticket, question.id, at: @reopened)
+      assert reasons() == [{:question, %{question_id: question.id}}]
+      assert [%{id: id}] = Questions.open(@ticket)
+      assert id == question.id
+
+      assert [{"question.reopened", %{question_id: ^id, title: "Ship TP-12 before the release", by: @director}}] = ticket_events(@repo_key, @issue_id, "question.reopened")
+      assert [%{summary: %{title: "You took back your answer: Ship TP-12 before the release"}}] = RunStore.list_ticket_events(@repo_key, @issue_id, types: ["question.reopened"])
+
+      # Answered again, the answer is a second `question.answered`, and reopened again, a second reopen.
+      assert {:ok, %{state: :answered, answer: %{option: 2}}} = Questions.answer(@ticket, id, "2", at: ~U[2026-10-30 05:00:09Z])
+      assert [_first, _second] = ticket_events(@repo_key, @issue_id, "question.answered")
+      assert {:ok, %{state: :open}} = Questions.reopen(@ticket, id, at: ~U[2026-10-30 05:00:12Z])
+      assert [_first_reopen, _second_reopen] = ticket_events(@repo_key, @issue_id, "question.reopened")
+    end
+
+    test "only an answered question is reopened" do
+      question = ask!()
+
+      assert Questions.reopen(@ticket, question.id) == {:error, {:question_not_answered, :open}}
+      assert Questions.reopen(@ticket, "q-nope") == {:error, :question_not_found}
+      assert Questions.reopen(@ticket, question.id, by: %{kind: :robot, name: "R"}) == {:error, {:invalid_actor, %{kind: :robot, name: "R"}}}
+      assert Questions.reopen(@ticket, question.id, at: 1) == {:error, {:invalid_option, :at}}
+      assert Questions.reopen(:symphony, question.id) == {:error, {:invalid_subject, :symphony}}
+    end
+  end
+
+  describe "answers/2" do
+    test "an answered question reads in place of the decision recording it, and before it is recorded at the end" do
+      answered = ask!()
+      {:ok, answered} = Questions.answer(@ticket, answered.id, "Wait for the release", at: @later)
+      unrecorded = ask!("Rename the release")
+      {:ok, unrecorded} = Questions.answer(@ticket, unrecorded.id, "Spring", at: @later)
+      open = ask!("Pick a name")
+
+      legacy = [
+        %{key: "c0", title: "Ship TP-12 before the release", answer: "Ship today"},
+        %{key: "c1", title: "ship tp-12   before the release", answer: "wait for the"},
+        %{key: "c2", title: "Pick a name", answer: "Autumn"},
+        %{key: "c3", answer: "?"}
+      ]
+
+      assert [
+               %{key: "c0"},
+               %{key: key, date: ~D[2026-10-30], title: "Ship TP-12 before the release", answer: "Wait for the release"},
+               %{key: "c2"},
+               %{key: "c3"},
+               %{key: last, answer: "Spring"}
+             ] = Questions.answers(legacy, [answered, unrecorded, open])
+
+      assert {key, last} == {answered.id, unrecorded.id}
+      assert Questions.answers([%{title: "Rename the release", answer: ""}], [unrecorded]) |> length() == 2
+      assert Questions.answers([], []) == []
+    end
+  end
+
   describe "one step" do
     test "the ticket is paused on exactly its open questions, whatever asks, answers and withdraws at once" do
       first = ask!()

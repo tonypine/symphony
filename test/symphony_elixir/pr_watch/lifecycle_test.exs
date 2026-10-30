@@ -387,6 +387,23 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
       assert state(issue_id) == "QA"
     end
 
+    test "the Director's answer reads from its Question before any decision is recorded (TP-1240)" do
+      issue_id = ticket!("33", "QA", base: :changed, base_ref: "release")
+      pid = start!()
+      tick!(pid)
+      assert %{rule: "R7", kind: :decision} = decision(issue_id)
+
+      # Decide writes the Question first; the Decisions section follows once Linear answers.
+      %{decision: %{question_id: id}} = Hold.get(@repo_key, issue_id, :needs_decision)
+      {:ok, _answered} = SymphonyElixir.Questions.answer({:ticket, @repo_key, issue_id}, id, "Accept the new base")
+      :ok = Hold.clear(@repo_key, issue_id, :needs_decision, answered: true)
+      assert RunStore.get_ticket_state(@repo_key, issue_id).decisions == []
+      tick!(pid)
+
+      assert %{rule: "R27", kind: :dispatch} = decision(issue_id)
+      assert World.calls(:change_base) == []
+    end
+
     test "the base is the repo's `base_branch` when its configuration names one" do
       write_workflow_file!(Workflow.workflow_file_path(),
         tracker_kind: "memory",

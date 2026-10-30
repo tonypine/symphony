@@ -32,7 +32,7 @@ defmodule SymphonyElixir.NeedsDecisionHold do
 
   alias SymphonyElixir.{Config, DecisionRequest, Decisions, Handoff, Hold}
   alias SymphonyElixir.HumanActions.{Collector, Request}
-  alias SymphonyElixir.{MergeConfirmation, Questions, TicketSignals, TransitionGuard}
+  alias SymphonyElixir.{MergeConfirmation, Questions, RunStore, TicketSignals, TicketState, TransitionGuard}
 
   @director %{kind: :person, name: "Director"}
 
@@ -103,6 +103,7 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   end
 
   defp sync_ticket(repo_key, %{"id" => issue_id} = node, settings, opts) when is_binary(issue_id) do
+    node = as_recorded(repo_key, node)
     repair_drift(repo_key, issue_id, node, opts)
     # The answers go into the ticket's scope on the read that sees them, whatever the hold does.
     _ = Decisions.sync(node, opts |> Keyword.take([:tracker]) |> Keyword.put(:repo_key, repo_key))
@@ -127,6 +128,62 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   end
 
   defp sync_ticket(_repo_key, _node, _settings, _opts), do: :none
+
+  @doc """
+  The ticket node as Linear read it, with its requests as the ticket's record holds their Questions
+  (`SymphonyElixir.Questions`; a request names its Question in a hidden line,
+  `SymphonyElixir.DecisionRequest.question_id/1`): a request whose Question is answered or withdrawn
+  with no reply under it yet is left out, since the Director's answer is written to the Question
+  first and its reply follows (`SymphonyElixir.DirectorMoves`); and the replies under a request whose
+  Question the Director reopened (`Questions.reopen/3`) count only from the reopen on. A request with
+  no Question, or one the record does not hold, reads as Linear has it.
+  """
+  @spec as_recorded(String.t() | nil, map()) :: map()
+  def as_recorded(repo_key, %{"id" => issue_id} = node) when is_binary(repo_key) and is_binary(issue_id) do
+    questions = recorded_questions(repo_key, issue_id)
+    comments = node |> get_in(["comments", "nodes"]) |> List.wrap()
+
+    if questions == %{} or not is_list(get_in(node, ["comments", "nodes"])) do
+      node
+    else
+      put_in(node, ["comments", "nodes"], recorded_comments(comments, questions))
+    end
+  end
+
+  def as_recorded(_repo_key, node), do: node
+
+  defp recorded_questions(repo_key, issue_id) do
+    case RunStore.get_ticket_state(repo_key, issue_id) do
+      %{} = record -> record |> TicketState.normalize() |> Map.fetch!(:questions) |> Map.new(&{&1.id, &1})
+      _none -> %{}
+    end
+  end
+
+  defp recorded_comments(comments, questions) do
+    under = Enum.group_by(comments, &get_in(&1, ["parent", "id"]))
+
+    requests =
+      for %{"id" => id, "body" => body} <- comments, %{} = question <- [Map.get(questions, DecisionRequest.question_id(body))], into: %{} do
+        {id, question}
+      end
+
+    Enum.reject(comments, fn comment ->
+      case {Map.get(requests, comment["id"]), Map.get(requests, get_in(comment, ["parent", "id"]))} do
+        {%{state: state}, _parent} when state != :open -> Map.get(under, comment["id"], []) == []
+        {_request, %{state: :open} = question} -> before_reopen?(comment, question)
+        _other -> false
+      end
+    end)
+  end
+
+  defp before_reopen?(comment, %{reopened_at: %DateTime{} = reopened_at}) do
+    case DateTime.from_iso8601(comment["createdAt"] || "") do
+      {:ok, at, _offset} -> DateTime.compare(at, reopened_at) == :lt
+      _unknown -> true
+    end
+  end
+
+  defp before_reopen?(_comment, _question), do: false
 
   # The hold carries one question, the newest asked; an older one stays open while its request does.
   # A person who answers that older request meanwhile answers its Question: the newest answer under a

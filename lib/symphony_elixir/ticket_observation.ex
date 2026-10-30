@@ -71,7 +71,7 @@ defmodule SymphonyElixir.TicketObservation do
 
   require Logger
 
-  alias SymphonyElixir.{Config, Hold, Orchestrator, RunStore, TicketSignals, TicketState, Tracker}
+  alias SymphonyElixir.{Config, DirectorMoves, Hold, Orchestrator, RunStore, TicketSignals, TicketState, Tracker}
   alias SymphonyElixir.Linear.{Issue, Webhook}
   alias SymphonyElixir.Routing.{PollScope, Resolver}
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -442,7 +442,7 @@ defmodule SymphonyElixir.TicketObservation do
   end
 
   defp project_again(record, mark, write, tracker) do
-    case project_write(write, record.issue_id, tracker) do
+    case project_write(write, record, tracker) do
       :ok ->
         bump(:reconcile_reapplied)
         TicketSignals.clear_projection(record.repo_key, record.issue_id, mark)
@@ -466,6 +466,15 @@ defmodule SymphonyElixir.TicketObservation do
     end
   end
 
+  # The reply to a question the Director answered while Linear refused it, with its Decisions entry
+  # (`SymphonyElixir.DirectorMoves.project_answer/5`); a question no longer answered (reopened) has none.
+  defp projection_write(record, {:question_answer, question_id, comment_id}, _polled) do
+    case Enum.find(record.questions, &(&1.id == question_id)) do
+      %{state: :answered} -> {:answer, question_id, comment_id}
+      _not_answered -> :none
+    end
+  end
+
   defp projection_write(record, {:hold_label, kind}, polled) do
     held? = TicketState.hold?(record, kind)
     name = Hold.label(kind)
@@ -479,15 +488,19 @@ defmodule SymphonyElixir.TicketObservation do
     end
   end
 
-  defp project_write(write, issue_id, tracker) do
+  defp project_write(write, %{issue_id: issue_id} = record, tracker) do
     case write do
       {:state, phase} -> tracker.update_issue_state(issue_id, phase)
       {:label, name, true} -> tracker.set_machine_label(issue_id, name)
       {:label, name, false} -> tracker.clear_machine_label(issue_id, name)
+      {:answer, question_id, comment_id} -> project_answer(record, question_id, comment_id, tracker)
     end
   catch
     kind, reason -> {:error, {kind, reason}}
   end
+
+  defp project_answer(record, question_id, comment_id, tracker),
+    do: DirectorMoves.project_answer(record.repo_key, record.issue_id, question_id, comment_id, tracker: tracker)
 
   # The repo's records no read observed yet, read by id at most `@fill_limit` a run: one request when there
   # are any, none otherwise. A record Linear does not return (archived or deleted) is marked not found

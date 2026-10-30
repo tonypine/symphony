@@ -107,6 +107,42 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert error(post(:decide, params, moves)) == {409, "move_not_allowed", "MOT-60 is not waiting on a decision"}
   end
 
+  test "decide and decisions take the Question an Inbox row names, the request comment found from it", %{moves: moves} do
+    request = %{
+      title: "Add it",
+      question: "Add it to MOT-60?",
+      why: "It is asked.",
+      if_unanswered: "MOT-60 waits.",
+      recommendation_reason: "It is small.",
+      options: [%{label: "Add it", effect: "It is added.", recommended: true}, %{label: "Leave it", effect: "Nothing changes."}]
+    }
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+      %Issue{id: "plan", identifier: "MOT-30", title: "Plan an MVP", state: "Plan Review", labels: ["plan"], repo_key: "default"},
+      %Issue{id: "held", identifier: "MOT-60", title: "Needs a call", state: "In Progress", repo_key: "default"}
+    ])
+
+    :ok = SymphonyElixir.DecisionRequest.ask(%{id: "held", state: "In Progress", repo_key: "default"}, request, [])
+    [%{id: id}] = SymphonyElixir.Questions.open({:ticket, "default", "held"})
+    inbox = :"control_api_inbox_#{System.unique_integer([:positive])}"
+    :persistent_term.put({SymphonyElixir.Inbox, :items, inbox}, [%{issue_id: "held", review: %{comment_id: "comment-5", question_id: id}}])
+    on_exit(fn -> :persistent_term.erase({SymphonyElixir.Inbox, :items, inbox}) end)
+    moves = Keyword.put(moves, :inbox, inbox)
+
+    conn = post(:decide, %{"issue_identifier" => "MOT-60", "question_id" => id, "picks" => [%{"question" => "Add it?", "answer" => "Leave it"}]}, moves)
+
+    assert conn.status == 200
+    assert_received {:memory_tracker_reply, "held", "comment-5", _body}
+    assert %{state: :answered, answer: %{option: 2}} = SymphonyElixir.Questions.find({:ticket, "default", "held"}, id)
+
+    # A plan's pick naming its Question goes under the request the plan's row lists for it.
+    :persistent_term.put({SymphonyElixir.Inbox, :items, inbox}, [%{issue_id: "plan", review: %{decisions: [%{comment_id: "comment-8", question_id: "q-plan"}]}}])
+    picks = [%{"question" => "Where?", "answer" => "In the checkout", "question_id" => "q-plan"}]
+
+    assert post(:decisions, %{"issue_identifier" => "MOT-30", "picks" => picks}, moves).status == 200
+    assert_received {:memory_tracker_reply, "plan", "comment-8", _reply}
+  end
+
   test "Continue to QA on a Code Review escalation moves the ticket into QA; an unconfigured target is a 422 that keeps the hold", %{moves: moves} do
     held = %Issue{id: "held", identifier: "MOT-60", title: "Escalated", state: "Code Review", repo_key: "repo-api"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [held])
@@ -258,7 +294,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert {422, "invalid_request", _message} = error(post(:decide, %{"issue_identifier" => "MOT-60"}, moves))
 
     assert error(post(:decide, %{"issue_identifier" => "MOT-60", "picks" => [%{"question" => "Where?", "answer" => "B"}]}, moves)) ==
-             {422, "invalid_request", "request_comment_id is required"}
+             {422, "invalid_request", "question_id or request_comment_id is required"}
   end
 
   test "an unknown ticket is a 404 and a Linear failure a 502", %{moves: moves} do

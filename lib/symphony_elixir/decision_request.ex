@@ -27,6 +27,7 @@ defmodule SymphonyElixir.DecisionRequest do
   alias SymphonyElixir.HumanActions.{PlainWords, Request}
 
   @title_max_length 120
+  @question_line ~r/^<!--\s*symphony:question\s+(\S+)\s*-->\s*$/m
   @option_count 2..4
   @max_tradeoffs 3
 
@@ -175,6 +176,17 @@ defmodule SymphonyElixir.DecisionRequest do
 
   # The comment a request posts: rendered for the Director, with the question's id in a hidden line.
   defp comment(request, question, state), do: Request.render_hold(request, state) <> "\n\n<!-- symphony:question #{question.id} -->"
+
+  @doc "The id of the question a request comment's hidden line names (`ask/4` writes it), or nil."
+  @spec question_id(String.t() | nil) :: String.t() | nil
+  def question_id(body) when is_binary(body) do
+    case Regex.run(@question_line, body, capture: :all_but_first) do
+      [id] -> id
+      nil -> nil
+    end
+  end
+
+  def question_id(_body), do: nil
 
   # A confirmation also records the state the ticket waits in, so a person's move made after the
   # request wins over the move the answer would perform (`SymphonyElixir.NeedsDecisionHold`).

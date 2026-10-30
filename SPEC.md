@@ -533,7 +533,7 @@ type does not allow, is refused. The types: `phase.entered`, `hold.set` and `hol
 `restart`), `step.started`, `step.completed`, `step.skipped`, `evidence`, `finding.recorded` (QA
 runs), `finding.resolved`, `checklist.answered`, `drift.detected`, `drift.reverted`,
 `drift.revert_failed`, `pause.set`, `pause.reason_added`, `pause.reason_cleared`, `pause.cleared`,
-`question.asked`, `question.answered`, `question.withdrawn` and `note`.
+`question.asked`, `question.answered`, `question.withdrawn`, `question.reopened` and `note`.
 
 The four pause types are machine-written, one per change of a ticket's pause (the one answer to why
 a ticket is not moving; decided only by `SymphonyElixir.Pauses`): `pause.set` for its first reason
@@ -583,12 +583,14 @@ paused pass skips gives the global reason `dispatch is paused by the operator`.
   is moved onto Symphony's pause (an `updating to v…` row as a `build` reason) and deleted, whether
   or not the pause backfill already ran.
 
-The three question types are machine-written, one per change of a question to a person on a ticket
+The four question types are machine-written, one per change of a question to a person on a ticket
 (kept on the ticket's record; written only by `SymphonyElixir.Questions`), each naming the question
 by `question_id`: `question.asked` ("Asked you: <title>") with the question as asked, its options
 and who asked it; `question.answered` ("You answered: <option or first words>") with the answer as
 given, the option it picked and its scope (`run`, `ticket` or `always`); `question.withdrawn`
-("Question withdrawn: <reason>") with the reason. A question is checked against the decision-writing
+("Question withdrawn: <reason>") with the reason; `question.reopened` ("You took back your answer:
+<title>") when the Director's Undo takes an answer back, after which the question is open again,
+pauses the ticket again, and its next answer is a new `question.answered`. A question is checked against the decision-writing
 standard before anything is written. Asking pauses the ticket with a `question` reason naming the
 question; answering or withdrawing clears that reason only. The question, that change to the
 ticket's pause and the events of both are written in one store transaction that holds the record's
@@ -631,8 +633,8 @@ A decision a person must make has one representation, whoever asks it: `decision
 the person's `decision.recorded` (keyed `decision.recorded:<key>`, the request comment it answers)
 or `decision.withdrawn` when it ends unanswered; both name the request in `request`. A request
 asked through the one writer is a Question first: `question.asked`, ended by `question.answered`
-or `question.withdrawn` naming its `question_id` (or by a `decision.recorded` naming the event), and
-it records no `decision.requested`. The Needs Decision hold and the request comment are the
+or `question.withdrawn` naming its `question_id` (or by a `decision.recorded` naming the event) since
+its last `question.reopened`, and it records no `decision.requested`. The Needs Decision hold and the request comment are the
 projections of an open request, never a hold event: the hold carries the Question's id, and a
 comment whose post failed is posted again by the Inbox's next read. A query with `open_decisions`
 lists the requests no answer or withdrawal names; `open_findings` the findings no unsuperseded
@@ -5913,12 +5915,12 @@ Minimum endpoints:
     | `approve_plan` | a plan in `Plan Review` | the waiting state | none; Symphony promotes its `Backlog` sub-tickets as for a person's approval |
     | `rework` | a plan in `Plan Review` | `Rework` | `reason` (required), posted before the move |
     | `restart` | any open ticket | `In Progress`, after the reset | `reason` (required), posted before the move; the reset (close the pull requests, remove the workspaces, supersede the workpad) runs first, and a reset that fails answers `502` `restart_incomplete` and makes no move |
-    | `decisions` | a plan in `Plan Review` | `Rework` through `plan_revise` for a plan under review (its revision), no move for an approved plan | each pick naming its `request_comment_id` as a reply under that request, the rest in one comment; `picks` are required (`[{"question", "answer", "request_comment_id"}]`) |
+    | `decisions` | a plan in `Plan Review` | `Rework` through `plan_revise` for a plan under review (its revision), no move for an approved plan | each pick naming its `question_id` or its `request_comment_id` answers that Question first, then is posted as a reply under its request, the rest in one comment; `picks` are required (`[{"question", "answer", "question_id", "request_comment_id"}]`) |
     | `changes` | a plan in `Plan Review` | as `decisions` | `reason` (required), posted before the move |
     | `backlog` | any open ticket | `Backlog` | `note` (optional), posted before the move |
     | `unblock` | any ticket waiting on an access, dispatch-loop, quiet-handoff or operator-stop hold | no move; the hold clears and the ticket continues in place | one comment, posted after the hold clears |
-    | `decide` | any ticket waiting on a `Needs Decision` hold | no move, else the state `move` names (`rework` or `done`), through the guard | the answer, posted as a reply under the request comment `request_comment_id` names; `picks` are required |
-    | `undo` | the state the ticket's last move put it in | the state it came from | none |
+    | `decide` | any ticket waiting on a `Needs Decision` hold | no move, else the state `move` names (`rework` or `done`), through the guard | the answer, written to the Question `question_id` names (or the one the request comment `request_comment_id` names in its hidden line, still accepted) before any Linear request, then posted as a reply under the request comment; `picks` are required |
+    | `undo` | the state the ticket's last move put it in | the state it came from; a `decide` also reopens its Question and sets its hold again | none |
 
   - `decisions` and `changes` start the plan's revision themselves, on every round, rather than
     wait for the plan comment poll: the move to `Rework` is recorded as Symphony's own, so the
@@ -5933,7 +5935,14 @@ Minimum endpoints:
     otherwise it answers `409`. A comment the move posted stays. A `restart` is never undoable: it
     closed the pull request, removed the workspace and superseded the workpad, none of which comes
     back, so `undo` answers `409` and the ticket stays in `In Progress`.
-  - A missing `issue_identifier`, `reason`, `picks` or `request_comment_id` answers `422`, an
+  - `decide` reads the ticket from its record, so it answers with Linear down: the Question is
+    answered (`question.answered`), the hold clears, and the Inbox drops the request's row at once.
+    A reply Linear refuses is marked pending on the record (`question_answer`), and the reconciler
+    posts it and records the answer in the Decisions section once Linear answers. A `decide` is
+    undoable whether or not it moved the ticket: `undo` reopens the Question (`question.reopened`),
+    which pauses the ticket on it again, and the replies before the reopen no longer count.
+  - A missing `issue_identifier`, `reason` or `picks`, or a `decide` with neither `question_id` nor
+    `request_comment_id`, answers `422`, an
     unknown ticket `404`, and a
     Linear error `502`.
   - When Linear takes the first of a move's two writes and refuses the second, the move answers
