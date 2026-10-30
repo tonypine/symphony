@@ -698,7 +698,7 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   # The record takes the move before Linear's first write, the comment: Linear is its projection, so
-  # a write Linear refuses leaves the record moved and is logged.
+  # a write Linear refuses leaves the record moved, is logged and is marked for the reconciler.
   defp comment_then_move(move, issue, comment, to_state, opts) do
     :ok = TicketSignals.record_phase(issue.repo_key, issue.id, to_state)
 
@@ -728,6 +728,7 @@ defmodule SymphonyElixir.DirectorMoves do
         "issue_identifier=#{issue.identifier} to=#{to_state} reason=#{inspect(reason)}"
     )
 
+    :ok = TicketSignals.mark_projection(issue.repo_key, issue.id, :phase, reason)
     error
   end
 

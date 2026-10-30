@@ -113,6 +113,24 @@ defmodule SymphonyElixir.TicketSignals do
   def restore_phase(_repo_key, _issue_id, _previous), do: :ok
 
   @doc """
+  Marks a projection of the ticket's record to Linear as failed (`TicketState.mark_projection/4`):
+  `:phase` for a move whose Linear write failed, `{:hold_label, kind}` for a hold's label. The
+  reconciler projects the record again and drops the mark
+  (`SymphonyElixir.TicketObservation.reconcile_all/3`). Only the record's marks are written. A
+  ticket with no record has nothing to project. Best-effort like `record_phase/3`.
+  """
+  @spec mark_projection(String.t() | nil, String.t() | nil, :phase | {:hold_label, atom()}, term()) :: :ok
+  def mark_projection(repo_key, issue_id, projection, error) when is_binary(repo_key) and is_binary(issue_id),
+    do: write_projection(repo_key, issue_id, &TicketState.mark_projection(&1, projection, error), "mark")
+
+  def mark_projection(_repo_key, _issue_id, _projection, _error), do: :ok
+
+  @doc "Drops the mark of a projection made again (`mark_projection/4`). Best-effort."
+  @spec clear_projection(String.t(), String.t(), :phase | {:hold_label, atom()}) :: :ok
+  def clear_projection(repo_key, issue_id, projection),
+    do: write_projection(repo_key, issue_id, &TicketState.clear_projection(&1, projection), "clear")
+
+  @doc """
   Records a verdict of `kind` with `outcome`, bound to the `head_sha` it judged and carrying
   `details`, on the ticket's record, then its `verdict.recorded` event, in the kind's phase. No-ops
   when the ticket carries no repo key. Verdicts are never collapsed: two inconclusive verdicts on
@@ -355,6 +373,17 @@ defmodule SymphonyElixir.TicketSignals do
   # A move into the phase the record already holds (one an observation wrote) makes it Symphony's.
   defp own_phase(repo_key, issue_id) do
     with :ok <- RunStore.update_ticket_state(repo_key, issue_id, %{phase_owner: :symphony}), do: :owned
+  end
+
+  defp write_projection(repo_key, issue_id, change, action) do
+    result =
+      case RunStore.get_ticket_state(repo_key, issue_id) do
+        nil -> :ok
+        {:error, _reason} = error -> error
+        record -> RunStore.update_ticket_state(repo_key, issue_id, Map.take(change.(record), [:pending_projection]))
+      end
+
+    if result == :ok, do: :ok, else: log_error(result, "#{action} a pending projection on issue_id=#{issue_id}")
   end
 
   defp log_error({:error, reason}, action) do

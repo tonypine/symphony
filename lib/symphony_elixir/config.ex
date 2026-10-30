@@ -630,6 +630,19 @@ defmodule SymphonyElixir.Config do
   @spec linear_webhook_settings(Schema.t()) :: Schema.Linear.Webhooks.t()
   def linear_webhook_settings(%Schema{linear: %Schema.Linear{webhooks: webhooks}}), do: webhooks
 
+  @doc """
+  How often the repo poll runs under `dispatch.source: record`, where it only reconciles the ticket
+  records with Linear (`SymphonyElixir.TicketObservation.reconcile_all/3`): symphony.yml's
+  `linear.reconcile_interval_ms`, read on each call, else five minutes.
+  """
+  @spec linear_reconcile_interval_ms() :: pos_integer()
+  def linear_reconcile_interval_ms do
+    case settings() do
+      {:ok, settings} -> settings.linear.reconcile_interval_ms
+      {:error, _reason} -> %Schema.Linear{}.reconcile_interval_ms
+    end
+  end
+
   # While symphony.yml can't be read, the section's defaults apply.
   defp ledger_setting(field) do
     ledger =

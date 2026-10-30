@@ -16,6 +16,23 @@ defmodule SymphonyElixir.TicketSignalsTest do
              RunStore.get_ticket_state(@repo_key, "issue-1")
   end
 
+  test "a pending projection is marked and cleared on a record only; a ticket with no record or no repo key, or a store failure, writes none" do
+    repo_key = Config.repo_key!()
+    :ok = RunStore.put_ticket_state(TicketState.new(repo_key, "issue-projected"))
+
+    assert :ok = TicketSignals.mark_projection(repo_key, "issue-projected", :phase, :boom)
+    assert [%{type: :phase, error: ":boom"}] = RunStore.get_ticket_state(repo_key, "issue-projected").pending_projection
+    assert :ok = TicketSignals.clear_projection(repo_key, "issue-projected", :phase)
+    assert RunStore.get_ticket_state(repo_key, "issue-projected").pending_projection == []
+
+    assert :ok = TicketSignals.mark_projection(repo_key, "issue-unknown", :phase, :boom)
+    assert RunStore.get_ticket_state(repo_key, "issue-unknown") == nil
+    assert :ok = TicketSignals.mark_projection(nil, "issue-projected", :phase, :boom)
+
+    log = ExUnit.CaptureLog.capture_log(fn -> assert :ok = TicketSignals.mark_projection("", "issue-projected", :phase, :boom) end)
+    assert log =~ "Failed to mark a pending projection on issue_id=issue-projected"
+  end
+
   test "records a signal with no details" do
     assert :ok = TicketSignals.record(@repo_key, "issue-1", "merge settled", %{})
 

@@ -1840,11 +1840,12 @@ defmodule SymphonyElixir.Orchestrator do
   # `read_at` is when Linear was read, taken just before the fetch. The read is written into the
   # records as of then, so a write the poll made itself is never newer than its own snapshot, and a
   # write that landed while the poll ran (a move of Symphony's, a webhook, the poll task's by-id
-  # reads) is.
+  # reads) is. Under `dispatch.source: record` the poll is the reconciler: it also projects again what
+  # the records mark as failed and fills the records no read observed (`TicketObservation.reconcile_all/3`).
   defp apply_due_repo_fetch_result(state, repos, repo_name, result, now_ms, read_at) do
     case result do
       {:ok, issues} when is_list(issues) ->
-        TicketObservation.observe_all(repo_name, issues, now: read_at)
+        observe_repo_poll(repo_name, issues, read_at)
 
         state =
           state
@@ -2174,16 +2175,34 @@ defmodule SymphonyElixir.Orchestrator do
     %{state | repo_poll_cache: Map.put(state.repo_poll_cache, repo_name, failure_entry)}
   end
 
-  defp repo_poll_retry_delay_ms(%State{poll_interval_ms: interval_ms} = state, _repos)
+  defp observe_repo_poll(repo_name, issues, read_at) do
+    case dispatch_source_in_use() do
+      :record -> TicketObservation.reconcile_all(repo_name, issues, now: read_at)
+      :poll -> TicketObservation.observe_all(repo_name, issues, now: read_at)
+    end
+  end
+
+  # A failed poll is tried again after `issues.poll_interval_ms` on either source, so a cold cache,
+  # which holds dispatch back, warms as soon as before.
+  defp repo_poll_retry_delay_ms(%State{poll_interval_ms: interval_ms}, _repos)
        when is_integer(interval_ms) and interval_ms > 0 do
-    linear_poll_interval_ms(state)
+    interval_ms * RateLimit.poll_interval_multiplier()
   end
 
   defp repo_poll_retry_delay_ms(state, repos), do: repo_poll_stagger_ms(state, repos)
 
-  # Soft brake: stretch the issue-poll interval while Linear reports little of
-  # the hourly budget left, so Symphony rarely runs it down to zero.
+  # When a repo is polled again after a poll that read Linear: `issues.poll_interval_ms`, or under
+  # `dispatch.source: record`, where nothing waits on the poll any more and it only reconciles the
+  # records, `linear.reconcile_interval_ms`. A record change still asks for its repo's poll at once
+  # (`request_refresh/3`). Soft brake: stretch the interval while Linear reports little of the hourly
+  # budget left, so Symphony rarely runs it down to zero.
   defp linear_poll_interval_ms(%State{poll_interval_ms: interval_ms}) do
+    interval_ms =
+      case dispatch_source_in_use() do
+        :record -> Config.linear_reconcile_interval_ms()
+        :poll -> interval_ms
+      end
+
     interval_ms * RateLimit.poll_interval_multiplier()
   end
 
@@ -2211,6 +2230,8 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # The first poll of each repo after a start is spread over `issues.poll_interval_ms` on either
+  # source, as dispatch waits for every repo's first poll; each repo keeps its offset after.
   defp repo_poll_stagger_ms(%State{poll_interval_ms: interval_ms}, repos)
        when is_integer(interval_ms) and interval_ms > 0 and is_list(repos) do
     repo_count = max(length(repos), 1)

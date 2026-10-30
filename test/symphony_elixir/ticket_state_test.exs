@@ -44,6 +44,7 @@ defmodule SymphonyElixir.TicketStateTest do
                observed_at: nil,
                observed_from: nil,
                removed_at: nil,
+               pending_projection: [],
                updated_at: nil
              }
     end
@@ -160,6 +161,7 @@ defmodule SymphonyElixir.TicketStateTest do
                observed_at: nil,
                observed_from: nil,
                removed_at: nil,
+               pending_projection: [],
                updated_at: nil
              }
     end
@@ -637,6 +639,37 @@ defmodule SymphonyElixir.TicketStateTest do
     test "a non-map bookkeeping value normalizes to nothing" do
       assert TicketState.normalize(%{repo_key: "repo-a", issue_id: "issue-1", self_heal: "junk"}).self_heal == nil
       assert TicketState.normalize(%{repo_key: "repo-a", issue_id: "issue-1", self_heal: %{}}).self_heal == nil
+    end
+  end
+
+  describe "pending projections" do
+    @at ~U[2026-10-29 09:00:00Z]
+
+    test "a mark replaces the same projection's, keeps the others, and is dropped once projected" do
+      record =
+        "repo"
+        |> TicketState.new("issue-1")
+        |> TicketState.mark_projection(:phase, {:error, :boom}, @at)
+        |> TicketState.mark_projection({:hold_label, :blocked}, "label refused", @at)
+        |> TicketState.mark_projection(:phase, nil, @at)
+
+      assert record.pending_projection == [
+               %{type: :phase, hold: nil, error: nil, at: @at},
+               %{type: :hold_label, hold: :blocked, error: "label refused", at: @at}
+             ]
+
+      assert Enum.map(record.pending_projection, &TicketState.projection_of/1) == [:phase, {:hold_label, :blocked}]
+      cleared = TicketState.clear_projection(record, :phase)
+      assert cleared.pending_projection == [%{type: :hold_label, hold: :blocked, error: "label refused", at: @at}]
+      assert TicketState.normalize(record) == record
+      assert %{pending_projection: [%{type: :phase, at: %DateTime{}}]} = TicketState.mark_projection(%{}, :phase, :boom)
+    end
+
+    test "a stored mark of no known projection is dropped" do
+      marks = [%{type: :phase, error: "  ", at: "yesterday"}, %{type: :hold_label, hold: :unknown}, %{type: :other}, "phase"]
+      normalized = TicketState.normalize(%{pending_projection: marks})
+      assert normalized.pending_projection == [%{type: :phase, hold: nil, error: nil, at: nil}]
+      assert TicketState.normalize(%{pending_projection: :phase}).pending_projection == []
     end
   end
 

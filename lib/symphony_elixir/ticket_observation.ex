@@ -54,6 +54,13 @@ defmodule SymphonyElixir.TicketObservation do
   ticket and the fields; a read that changes none of them while the record's last change came from a
   webhook counts as "webhook first", once for each change the webhook brought.
 
+  Reconcile: under `dispatch.source: record` the repo poll runs on `linear.reconcile_interval_ms` and
+  only reconciles the record with Linear (`reconcile_all/3`). It observes the repo's tickets as any
+  poll does (a change made in Linear is applied, drift moved back), then, in a task of its own, projects
+  again what the record marks as failed (`pending_projection`: a move of Symphony's whose Linear write
+  failed, a hold's label) and reads by id the repo's records no read observed yet. It never decides a
+  phase: it re-projects the record's own.
+
   What each observation did, and the drift it found, are counted in a public ETS table owned by this
   server, for the state payload: the counts are diagnostic and start again from zero when Symphony
   restarts. Without the server (some tests), counting is a no-op and the summary is all zeros.
@@ -63,7 +70,7 @@ defmodule SymphonyElixir.TicketObservation do
 
   require Logger
 
-  alias SymphonyElixir.{Config, Orchestrator, RunStore, TicketSignals, TicketState, Tracker}
+  alias SymphonyElixir.{Config, Hold, Orchestrator, RunStore, TicketSignals, TicketState, Tracker}
   alias SymphonyElixir.Linear.{Issue, Webhook}
   alias SymphonyElixir.Routing.Resolver
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -71,6 +78,8 @@ defmodule SymphonyElixir.TicketObservation do
   @table __MODULE__
   @outcomes [:updated, :unchanged, :stale]
   @recent_limit 10
+  # The records no read observed yet that one reconcile reads by id: one Linear page.
+  @fill_limit 50
   # Well under Linear's 5 s delivery timeout, which also covers the signature check and the relay.
   @delivery_timeout_ms 2_000
   # The record's fields an `Issue` webhook delivery carries, which a later read should find unchanged.
@@ -129,6 +138,18 @@ defmodule SymphonyElixir.TicketObservation do
           recent: [drift_entry()]
         }
 
+  @typedoc """
+  What the reconciler did since Symphony started: when it last ran, how many changes made in Linear
+  its observations applied, how many failed projections it made again, and how many records no read
+  had observed it filled.
+  """
+  @type reconcile :: %{
+          last_run_at: DateTime.t() | nil,
+          applied: non_neg_integer(),
+          reapplied: non_neg_integer(),
+          unobserved_filled: non_neg_integer()
+        }
+
   @type summary :: %{
           updated: non_neg_integer(),
           unchanged: non_neg_integer(),
@@ -136,7 +157,8 @@ defmodule SymphonyElixir.TicketObservation do
           unrouted: non_neg_integer(),
           errors: non_neg_integer(),
           compare: compare(),
-          drift: drift()
+          drift: drift(),
+          reconcile: reconcile()
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -228,6 +250,33 @@ defmodule SymphonyElixir.TicketObservation do
   end
 
   @doc """
+  Reconciles `repo_key`'s ticket records with what the repo poll read of Linear (`issues`), as the
+  repo poll does under `dispatch.source: record`. Each issue is observed (`observe_all/3`): a change
+  made in Linear is applied (counted under `applied`), and drift on a phase Symphony owns is moved
+  back. Then, in a task of its own (`:task_supervisor`), so the caller never waits on Linear:
+
+  - each projection the record marks as failed (`TicketState.pending_projection`) is made again from
+    the record: a phase Symphony owns is written to Linear (`Tracker.update_issue_state/2`), a hold's
+    label set or cleared as the record holds the hold (`Tracker.set_machine_label/2`,
+    `Tracker.clear_machine_label/2`), and the mark dropped (counted under `reapplied`). A projection
+    the poll's issue already shows is dropped with no write; one whose phase is no longer Symphony's,
+    or whose ticket was removed, is dropped too; one whose write fails stays for the next run.
+  - the repo's records no read observed yet (no `linear_updated_at`, not removed) and the poll did not
+    return are read by id, at most 50 a run, and observed (counted under `unobserved_filled`).
+
+  Returns the observations' counts. `opts`: `:tracker` (default `SymphonyElixir.Tracker`),
+  `:task_supervisor` (default `SymphonyElixir.TaskSupervisor`), and those of `observe/3`.
+  """
+  @spec reconcile_all(String.t(), [Issue.t()], keyword()) :: counts()
+  def reconcile_all(repo_key, issues, opts) when is_binary(repo_key) and is_list(issues) do
+    now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
+    counts = observe_all(repo_key, issues, opts)
+    remember_reconcile(now, counts.updated)
+    follow_up(repo_key, issues, opts)
+    counts
+  end
+
+  @doc """
   Observes the issues of a by-id read, which carries no repo key, the way `observe_delivery/2`
   observes a delivery: each issue goes through `observe/3` under the repo whose record of the ticket
   the reads already keep. A ticket no configured repo has a record of yet is skipped and counted
@@ -291,12 +340,19 @@ defmodule SymphonyElixir.TicketObservation do
       revert_failed: lookup(entries, :drift_revert_failed, 0),
       recent: recent(entries, :drift, detected)
     })
+    |> Map.put(:reconcile, %{
+      last_run_at: lookup(entries, :reconcile_last_run_at, nil),
+      applied: lookup(entries, :reconcile_applied, 0),
+      reapplied: lookup(entries, :reconcile_reapplied, 0),
+      unobserved_filled: lookup(entries, :reconcile_unobserved_filled, 0)
+    })
   rescue
     ArgumentError ->
       empty_summary()
       |> Map.put(:unrouted, 0)
       |> Map.put(:compare, %{webhook_first: 0, poll_first: 0, poll_first_recent: []})
       |> Map.put(:drift, %{detected: 0, reverted: 0, revert_failed: 0, recent: []})
+      |> Map.put(:reconcile, %{last_run_at: nil, applied: 0, reapplied: 0, unobserved_filled: 0})
   end
 
   @doc "Forgets every count."
@@ -313,6 +369,121 @@ defmodule SymphonyElixir.TicketObservation do
   defp observe_issue(_repo_key, _issue, _opts) do
     bump(:errors)
     {:error, :invalid_issue}
+  end
+
+  defp remember_reconcile(now, applied) do
+    :ets.insert(@table, {:reconcile_last_run_at, now})
+    bump(:reconcile_applied, applied)
+  rescue
+    ArgumentError -> :ok
+  end
+
+  # The reconcile's Linear writes and by-id read, in a task of its own. One that can't start is left
+  # to the next run: the marks and the unobserved records stay as they are.
+  defp follow_up(repo_key, issues, opts) do
+    supervisor = Keyword.get(opts, :task_supervisor, SymphonyElixir.TaskSupervisor)
+    polled = for %Issue{id: issue_id} = issue <- issues, is_binary(issue_id), into: %{}, do: {issue_id, issue}
+    {:ok, _pid} = Task.Supervisor.start_child(supervisor, fn -> reconcile_records(repo_key, polled, opts) end)
+    :ok
+  catch
+    kind, reason -> Logger.warning("Ticket reconcile: the follow-up did not start repo_key=#{repo_key}: #{inspect({kind, reason})}")
+  end
+
+  defp reconcile_records(repo_key, polled, opts) do
+    case RunStore.list_ticket_states(repo_key) do
+      records when is_list(records) ->
+        tracker = Keyword.get(opts, :tracker, Tracker)
+        records = Enum.map(records, &TicketState.normalize/1)
+        for record <- records, mark <- record.pending_projection, do: reproject(record, mark, Map.get(polled, record.issue_id), tracker)
+        fill_unobserved(repo_key, records, polled, tracker, opts)
+
+      {:error, reason} ->
+        Logger.warning("Ticket reconcile: the records could not be read repo_key=#{repo_key}: #{inspect(reason)}")
+    end
+
+    :ok
+  end
+
+  # Makes a failed projection again from the record's truth, unless the poll already shows it or it
+  # no longer applies, and drops its mark once Linear holds it.
+  defp reproject(record, mark, polled, tracker) do
+    projection = TicketState.projection_of(mark)
+
+    case projection_write(record, projection, polled) do
+      :none ->
+        TicketSignals.clear_projection(record.repo_key, record.issue_id, projection)
+
+      write ->
+        case project_write(write, record.issue_id, tracker) do
+          :ok ->
+            bump(:reconcile_reapplied)
+            TicketSignals.clear_projection(record.repo_key, record.issue_id, projection)
+
+          {:error, reason} ->
+            Logger.warning(
+              "Ticket reconcile: projecting #{inspect(projection)} again failed issue_id=#{record.issue_id} " <>
+                "issue_identifier=#{record.issue_identifier}: #{inspect(reason)}"
+            )
+        end
+    end
+  end
+
+  # The write a mark asks for, or `:none` when there is nothing to write.
+  defp projection_write(%{removed_at: %DateTime{}}, _projection, _polled), do: :none
+
+  defp projection_write(record, :phase, polled) do
+    cond do
+      record.phase_owner != :symphony or not is_binary(record.phase) -> :none
+      match?(%Issue{state: state} when state == record.phase, polled) -> :none
+      true -> {:state, record.phase}
+    end
+  end
+
+  defp projection_write(record, {:hold_label, kind}, polled) do
+    held? = TicketState.hold?(record, kind)
+    name = Hold.label(kind)
+
+    case polled do
+      %Issue{labels: labels} when is_list(labels) ->
+        if Enum.any?(labels, &(String.downcase(&1) == String.downcase(name))) == held?, do: :none, else: {:label, name, held?}
+
+      _not_polled ->
+        {:label, name, held?}
+    end
+  end
+
+  defp project_write(write, issue_id, tracker) do
+    case write do
+      {:state, phase} -> tracker.update_issue_state(issue_id, phase)
+      {:label, name, true} -> tracker.set_machine_label(issue_id, name)
+      {:label, name, false} -> tracker.clear_machine_label(issue_id, name)
+    end
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  # The repo's records no read observed yet, read by id at most `@fill_limit` a run: one request when there
+  # are any, none otherwise.
+  defp fill_unobserved(repo_key, records, polled, tracker, opts) do
+    ids =
+      for %{linear_updated_at: nil, removed_at: nil, issue_id: issue_id} <- records,
+          not Map.has_key?(polled, issue_id),
+          do: issue_id
+
+    with [_ | _] = ids <- Enum.take(ids, @fill_limit),
+         {:ok, issues} <- fetch_by_ids(tracker, ids) do
+      counts = observe_all(repo_key, issues, Keyword.put(opts, :source, :by_id))
+      bump(:reconcile_unobserved_filled, counts.updated)
+    else
+      [] -> :ok
+      {:error, reason} -> Logger.warning("Ticket reconcile: reading the unobserved records failed repo_key=#{repo_key}: #{inspect(reason)}")
+    end
+  end
+
+  defp fetch_by_ids(tracker, ids) do
+    tracker.fetch_issue_states_by_ids(ids)
+  catch
+    kind, reason -> {:error, {kind, reason}}
   end
 
   defp observe_record(repo_key, stored, %Issue{id: issue_id} = issue, {now, source}, opts) do
@@ -719,8 +890,8 @@ defmodule SymphonyElixir.TicketObservation do
   defp count({:ok, outcome}), do: bump(outcome)
   defp count({:error, _reason}), do: bump(:errors)
 
-  defp bump(key) do
-    :ets.update_counter(@table, key, 1, {key, 0})
+  defp bump(key, by \\ 1) do
+    :ets.update_counter(@table, key, by, {key, 0})
     :ok
   rescue
     ArgumentError -> :ok

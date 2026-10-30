@@ -136,6 +136,8 @@ defmodule SymphonyElixir.HoldTest do
       assert log =~ "Failed to set the machine label"
       assert Hold.held?(@repo_key, @issue_id, :blocked)
       assert labels() == []
+      # The reconciler sets it again (`TicketObservation.reconcile_all/3`).
+      assert [%{type: :hold_label, hold: :blocked, error: ":boom"}] = pending_projection()
     end
 
     test "a failed label clear keeps the store clear and is reported" do
@@ -146,6 +148,7 @@ defmodule SymphonyElixir.HoldTest do
 
       assert log =~ "Failed to clear the machine label"
       refute Hold.held?(@repo_key, @issue_id, :blocked)
+      assert [%{type: :hold_label, hold: :blocked}] = pending_projection()
     end
   end
 
@@ -397,6 +400,8 @@ defmodule SymphonyElixir.HoldTest do
   defp issue do
     %Issue{id: @issue_id, identifier: "TP-817", title: "T", state: "Todo", labels: []}
   end
+
+  defp pending_projection, do: RunStore.get_ticket_state(@repo_key, @issue_id).pending_projection
 
   defp labels do
     :symphony_elixir

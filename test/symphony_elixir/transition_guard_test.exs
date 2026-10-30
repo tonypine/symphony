@@ -442,6 +442,8 @@ defmodule SymphonyElixir.TransitionGuardTest do
       assert_received {:moved, "issue-10", "Rework", %{phase: "Rework"}}
       assert %{phase: "Rework"} = RunStore.get_ticket_state("repo-guard", "issue-10")
       assert log =~ "Linear refused the move; the record keeps it issue_id=issue-10 issue_identifier=MT-10 to=Rework reason=:unauthorized"
+      # The reconciler projects it again (`TicketObservation.reconcile_all/3`).
+      assert [%{type: :phase, error: ":unauthorized"}] = RunStore.get_ticket_state("repo-guard", "issue-10").pending_projection
 
       # The caller's identifier is the one logged; a move with no repo key writes no record.
       log =

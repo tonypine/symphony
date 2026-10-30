@@ -17,7 +17,8 @@ defmodule SymphonyElixir.TicketState do
   team, project, labels, priority, assignee, open blockers and sub-issues (each by id, identifier and
   state), parent, URL, creation time and Linear's `updatedAt`, with when it was observed, which read
   brought the last change (`observed_from`) and when a webhook said the ticket was removed
-  (`removed_at`).
+  (`removed_at`), and the projections to Linear that failed and wait for the reconciler
+  (`pending_projection`, `mark_projection/3`).
 
   The record is persisted by `SymphonyElixir.RunStore`; this module owns its shape and the
   operations that move it. It is inert by design: nothing dispatches on a record yet. It exists so
@@ -208,6 +209,20 @@ defmodule SymphonyElixir.TicketState do
           upkeep_failure: upkeep_failure() | nil
         }
 
+  @typedoc """
+  A projection of the record to Linear whose write failed, so Linear may not show what the record
+  holds: the phase a move of Symphony's wrote (`type: :phase`), or a hold's machine label
+  (`type: :hold_label`, with the `hold` kind). The reconciler projects the record's truth again and
+  drops the mark (`SymphonyElixir.TicketObservation.reconcile_all/3`); the mark only says what to
+  re-project and when and why it failed.
+  """
+  @type projection :: %{
+          type: :phase | :hold_label,
+          hold: :blocked | :needs_decision | nil,
+          error: String.t() | nil,
+          at: DateTime.t() | nil
+        }
+
   @type t :: %{
           repo_key: String.t() | nil,
           issue_id: String.t() | nil,
@@ -242,6 +257,7 @@ defmodule SymphonyElixir.TicketState do
           observed_at: DateTime.t() | nil,
           observed_from: observation_source() | nil,
           removed_at: DateTime.t() | nil,
+          pending_projection: [projection()],
           updated_at: DateTime.t() | nil
         }
 
@@ -324,6 +340,7 @@ defmodule SymphonyElixir.TicketState do
       observed_at: map_datetime(record, :observed_at),
       observed_from: observation_source(Map.get(record, :observed_from)),
       removed_at: map_datetime(record, :removed_at),
+      pending_projection: normalize_projections(Map.get(record, :pending_projection)),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -363,6 +380,7 @@ defmodule SymphonyElixir.TicketState do
       observed_at: nil,
       observed_from: nil,
       removed_at: nil,
+      pending_projection: [],
       updated_at: nil
     }
   end
@@ -424,6 +442,52 @@ defmodule SymphonyElixir.TicketState do
   """
   @spec mark_removed(t(), DateTime.t()) :: t()
   def mark_removed(record, %DateTime{} = removed_at), do: %{normalize(record) | removed_at: removed_at, updated_at: removed_at}
+
+  @doc """
+  Marks a projection of the record to Linear as failed (`t:projection/0`): `projection` is `:phase`
+  or `{:hold_label, kind}`, and `error` what Linear said. A mark of the same projection is replaced,
+  so a record keeps one per projection, the latest.
+  """
+  @spec mark_projection(t(), :phase | {:hold_label, :blocked | :needs_decision}, term(), DateTime.t()) :: t()
+  def mark_projection(record, projection, error, %DateTime{} = at \\ DateTime.utc_now()) do
+    record = normalize(record)
+    mark = Map.merge(projection_key(projection), %{error: error_text(error), at: at})
+    %{record | pending_projection: [mark | Enum.reject(record.pending_projection, &(projection_of(&1) == projection))]}
+  end
+
+  @doc "Drops the mark of `projection` (`mark_projection/4`), once it was projected again."
+  @spec clear_projection(t(), :phase | {:hold_label, :blocked | :needs_decision}) :: t()
+  def clear_projection(record, projection) do
+    record = normalize(record)
+    %{record | pending_projection: Enum.reject(record.pending_projection, &(projection_of(&1) == projection))}
+  end
+
+  @doc "The projection a mark names: `:phase` or `{:hold_label, kind}`."
+  @spec projection_of(projection()) :: :phase | {:hold_label, :blocked | :needs_decision}
+  def projection_of(%{type: :hold_label, hold: kind}), do: {:hold_label, kind}
+  def projection_of(%{type: :phase}), do: :phase
+
+  defp projection_key(:phase), do: %{type: :phase, hold: nil}
+  defp projection_key({:hold_label, kind}) when kind in @hold_kinds, do: %{type: :hold_label, hold: kind}
+
+  defp error_text(nil), do: nil
+  defp error_text(error) when is_binary(error), do: error
+  defp error_text(error), do: inspect(error)
+
+  defp normalize_projections(marks) when is_list(marks), do: Enum.flat_map(marks, &normalize_projection/1)
+  defp normalize_projections(_marks), do: []
+
+  defp normalize_projection(%{} = mark) do
+    stamps = %{error: map_string(mark, :error), at: map_datetime(mark, :at)}
+
+    case {Map.get(mark, :type), Map.get(mark, :hold)} do
+      {:phase, _hold} -> [Map.merge(%{type: :phase, hold: nil}, stamps)]
+      {:hold_label, kind} when kind in @hold_kinds -> [Map.merge(%{type: :hold_label, hold: kind}, stamps)]
+      _unknown -> []
+    end
+  end
+
+  defp normalize_projection(_mark), do: []
 
   defp observation_source(source) when source in @observation_sources, do: source
   defp observation_source(_source), do: nil
