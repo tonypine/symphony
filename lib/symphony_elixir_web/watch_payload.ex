@@ -95,11 +95,20 @@ defmodule SymphonyElixirWeb.WatchPayload do
   reason of `SymphonyElixir.UpdateHold`), and `latest_release`, the newest published
   release of the repository the app updates from (`SymphonyElixir.PrWatch.Release`), nil until
   Symphony knows one. The app checks for an update at once when it is newer than the build it runs.
+  `build_line` says what the release build those tickets wait for is at while it isn't published
+  (`SymphonyElixir.ReleaseBuild.line/3`: "Waiting for the v0.0.1.750 build: queued on GitHub for 23
+  min"), nil otherwise; the app shows it in place of its update line.
   """
   @spec app_update([map()], SymphonyElixir.PrWatch.Release.t() | nil) :: map()
   def app_update(blocked, release) do
-    identifiers = for %{kind: :app_update, identifier: identifier} <- blocked, do: identifier
-    %{unblocks: length(identifiers), issue_identifiers: identifiers, latest_release: latest_release(release)}
+    held = for %{kind: :app_update} = entry <- blocked, do: entry
+
+    %{
+      unblocks: length(held),
+      issue_identifiers: Enum.map(held, & &1.identifier),
+      latest_release: latest_release(release),
+      build_line: Enum.find_value(held, &Map.get(&1, :build_line))
+    }
   end
 
   defp latest_release(%{} = release),

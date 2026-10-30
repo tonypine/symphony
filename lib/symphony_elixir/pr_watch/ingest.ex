@@ -18,6 +18,7 @@ defmodule SymphonyElixir.PrWatch.Ingest do
   | `pull_request` `closed` | the PR | `pr: :merged` or `pr: :closed`; a merge also moves its base, as a push |
   | `push` to a branch | every open PR on that base | `mergeable: :unknown`, each read 1 second apart; a read that finds it behind updates it (upkeep U1) |
   | `release` `published` | none | the app repository's newest release (`SymphonyElixir.PrWatch.Release`) |
+  | `workflow_run` completed on a commit a held ticket waits on | none | its release build is checked at once (`SymphonyElixir.ReleaseBuild.delivered/2`) |
   | `ping` | none | none: every watched PR is read now, catching up on what the relay missed |
 
   Each delivery also counts for its repository's health (`SymphonyElixir.PrWatch.Health`), and a
@@ -26,6 +27,7 @@ defmodule SymphonyElixir.PrWatch.Ingest do
 
   alias SymphonyElixir.GitHub.Webhook
   alias SymphonyElixir.PrWatch.{Health, Release, Repo}
+  alias SymphonyElixir.ReleaseBuild
 
   @registry SymphonyElixir.Repo.Registry
   @failure_conclusions ["FAILURE", "ERROR", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"]
@@ -40,12 +42,18 @@ defmodule SymphonyElixir.PrWatch.Ingest do
   def deliver(delivery, repo_url, opts \\ []) do
     released? = match?({:release, _release}, delivery)
     if released?, do: Release.record_published(elem(delivery, 1), opts)
+    release_build(delivery, opts)
 
     case watchers(opts) do
       [] -> if released?, do: :ok, else: :unavailable
       watchers -> Enum.each(watchers, &Repo.ingest(&1, delivery, repo_url))
     end
   end
+
+  # A finished workflow run on a commit a held ticket waits on checks that commit's release build at
+  # once (`SymphonyElixir.ReleaseBuild`), whether or not a watcher runs.
+  defp release_build({:ci, %{event: "workflow_run", head_sha: sha}}, opts) when is_binary(sha), do: ReleaseBuild.delivered(sha, opts)
+  defp release_build(_delivery, _opts), do: :ignored
 
   @doc "Counts a delivery that failed its signature check against the repository its payload names."
   @spec reject(atom(), String.t() | nil, keyword()) :: :ok | :unavailable

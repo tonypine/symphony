@@ -187,6 +187,13 @@ GitHub or Linear in QA:
   the same pause with nothing running. Run the feed with `--fake-release 9.9.9 9999`, so the
   release it offers is the one the pause names. When a step needs an update state no fixture
   has, say so in `findings`, so one is committed for the next pass.
+- **Release build line (TP-1307):** pass `macos/Tests/Fixtures/director-app/update-build-queued`
+  as `api_fixtures` and open the status-bar menu: one ticket waits for an update whose build isn't
+  published, and the menu reads "Waiting for the v0.0.1.750 build with TP-1238's fix: queued on
+  GitHub for 23 min" in place of "Update to unblock 1 ticket".
+  `macos/Tests/Fixtures/director-app/update-build-rerun` has the same ticket after GitHub cancelled
+  the build for lack of a machine: "…queued on GitHub for 4 min; cancelled for lack of a machine,
+  rerun 1 of 2".
 - **Update-check interval:** pass `update_check_interval_seconds` (a positive integer, such as
   `30`) and the app checks for a release that often in the background, in every update mode,
   through `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL`. A failed check retries at that interval, except a

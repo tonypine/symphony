@@ -232,6 +232,27 @@ The epic review reads the default branch's CI the same way: a cancelled run on t
 review is rerun and waited on, twice per run and commit, never spending the one rerun of a failed
 run, and the review agent reads a cancelled run as not run, never as a defect to file.
 
+### Release builds
+
+A ticket held for an app update (`SymphonyElixir.UpdateHold`) waits on the `release` workflow's run
+on its blocker's merge commit, which publishes the update. The hold's owner watches that run
+(`SymphonyElixir.ReleaseBuild`), on every poll and at once on a `workflow_run` delivery for the
+commit, as R19 and R19a watch a PR's checks:
+
+- Cancelled before any job ran a step (GitHub had no machine for it): Symphony reruns the whole run,
+  twice per commit, with no attempt spent. Cancelled a third time, it asks a person on the first held
+  ticket: **Keep retrying** gives it two more reruns before asking again; **Wait** stops rerunning
+  it, and the ticket waits until a person reruns it on GitHub or a newer build is published.
+- Failed for a real reason (a step failed, it ran out of time or failed to start, or it was cancelled
+  once a job had started): Symphony's pause gains an `environment` reason with the failure
+  (`release_build:<repo key>:<sha>`) and a person is asked: **Rerun the build** reruns it once and
+  asks again if it fails again; **Wait for a fix** clears the reason, and the ticket waits for a newer
+  build. The reason also clears once no held ticket waits on the commit. It never stops dispatch.
+
+The held ticket's line says what the build is at: "Waiting for the v0.0.1.750 build with TP-1238's
+fix: queued on GitHub for 23 min; cancelled for lack of a machine, rerun 1 of 2". Once the build is
+published, the line is the update hold's own again.
+
 ## What the watcher does
 
 Every read first applies the upkeep the facts call for, then decides and applies the flow action

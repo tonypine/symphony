@@ -131,6 +131,7 @@ defmodule SymphonyElixir.BlockedByGateTest do
                  state: "Todo",
                  kind: :app_update,
                  reason: "Waiting for a Symphony update that includes TP-419's fix",
+                 build_line: nil,
                  blockers: [%{identifier: "TP-419", state: "merged in 9f54098"}]
                }
              ]
@@ -144,6 +145,16 @@ defmodule SymphonyElixir.BlockedByGateTest do
 
       # The same build on the next poll: nothing new to look up, still held.
       assert poll(state, [issue], :no_lookup).blocked == state.blocked
+
+      # While the fix's release build runs on GitHub, the ticket and the snapshot say so (TP-1307).
+      record = %{sha: @merge_sha, state: :running, number: 750, reruns: 1}
+      :ok = RunStore.put_github_updates({:release_build, @merge_sha}, record)
+      building = poll(state, [issue], :no_lookup)
+      version = SymphonyElixir.BuildInfo.release_version(750)
+      line = "Waiting for the v#{version} build with TP-419's fix: building on GitHub; cancelled for lack of a machine, rerun 1 of 2"
+      assert skip_reason(issue, building) == line
+      assert [%{reason: ^line, build_line: "Waiting for the v" <> _rest}] = building.blocked
+      :ok = RunStore.put_github_updates({:release_build, @merge_sha}, %{record | state: :built})
 
       # Symphony restarts on the same build: nothing in memory, and the merge commit's lookup fails.
       # The pause still holds the ticket, and the gate says what it waits for.
