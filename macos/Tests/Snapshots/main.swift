@@ -678,6 +678,27 @@ func ledgerNoteBar(absence: TicketFeedAbsence? = nil, note: TicketNoteComposer) 
         .background(DesignTokens.Surface.content.color)
 }
 
+// The paused line (TP-1244): the `paused-ticket` fixture's tickets with one, two and three pause reasons.
+let pausedAPI = here.appendingPathComponent("../Fixtures/director-app/paused-ticket/api/v1").standardizedFileURL
+
+/// A paused ticket's page in a window `window` pt wide beside the sidebar: the laptop viewport (1440) and the desktop
+/// one (2560); `releasing` while its unblock is on its way.
+@MainActor
+func pausedPage(_ identifier: String, window: CGFloat, releasing: Bool = false) -> some View {
+    let page = TicketPage(
+        identifier: identifier,
+        sources: TicketPage.Sources(
+            state: try? Data(contentsOf: pausedAPI.appendingPathComponent("state.json")),
+            issue: try? Data(contentsOf: pausedAPI.appendingPathComponent("\(identifier).json"))
+        ),
+        now: ledgerNow, timeZone: TimeZone(identifier: "UTC")!
+    )
+    let width = window - DesignTokens.Layout.sidebarWidth
+    return TicketPageBody(page: page, actions: TicketPageActions(releasing: releasing), width: width)
+        .frame(width: width)
+        .background(DesignTokens.Surface.content.color)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -801,5 +822,12 @@ MainActor.assumeIsolated {
         render(repoPauseSection(width: 1220), scheme, to: "repo-pause-repos-laptop-\(suffix).png")
         render(ledgerPage(window: 1440, repositoryPaused: true), scheme, to: "repo-pause-ticket-laptop-\(suffix).png")
         render(repoPausedSidebar(), scheme, to: "repo-pause-sidebar-\(suffix).png")
+        // The paused line (TP-1244): one reason (stopped by you, with Release), two (a question and a dependency) and
+        // three (Release on the releasable one only), at the laptop and desktop viewports; Release while it sends.
+        for (identifier, name) in [("SHOP-421", "one"), ("SHOP-420", "two"), ("SHOP-422", "three")] {
+            render(pausedPage(identifier, window: 1440), scheme, to: "paused-line-\(name)-laptop-\(suffix).png")
+            render(pausedPage(identifier, window: 2560), scheme, to: "paused-line-\(name)-desktop-\(suffix).png")
+        }
+        render(pausedPage("SHOP-421", window: 1440, releasing: true), scheme, to: "paused-line-releasing-laptop-\(suffix).png")
     }
 }
