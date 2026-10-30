@@ -106,10 +106,11 @@ defmodule SymphonyElixir.Hold do
   Whether a hold waits on a person's `Unblock` (see `SymphonyElixir.DirectorMoves`): one waiting on
   an access grant a person hands over — what an agent's block report records — one the
   dispatch-loop guard set (`SymphonyElixir.DispatchLoop`), one an epic review's wait for CI set
-  once it reached its limit (`SymphonyElixir.CiWait`), or one an operator's stop set
-  (`SymphonyElixir.OperatorStop`). A dependency or fix-ticket hold clears on its own when what it
-  waits on goes terminal; these four never clear without a person (a stop's also clears when the
-  ticket leaves the workflow or moves on the board).
+  once it reached its limit (`SymphonyElixir.CiWait`), or one an operator's stop set beside the
+  ticket's pause (`SymphonyElixir.OperatorStop`). A dependency or fix-ticket hold clears on its own
+  when what it waits on goes terminal; these four never clear without a person (a stop's also
+  clears when the ticket leaves the workflow or moves on the board). Unblock also lifts a stop whose
+  pause reason stands beside another kind of hold (`SymphonyElixir.OperatorStop.held?/2`).
   """
   @spec unblockable?(TicketState.hold() | term()) :: boolean()
   def unblockable?(%{waits_on: %{type: type}}) when type in @unblockable_types, do: true

@@ -18,7 +18,8 @@ defmodule SymphonyElixir.DirectorMoves do
     pull requests, removes its workspaces — so the next dispatch branches fresh from the configured
     base branch — and supersedes the workpad, then moves the ticket to `In Progress`
     (`SymphonyElixir.Restart`). A dispatch-loop hold is cleared with it, since the loop's attempt is
-    the one thrown away, and so is an operator's stop (`SymphonyElixir.OperatorStop`);
+    the one thrown away, and so is an operator's stop, its pause reason with its hold
+    (`SymphonyElixir.OperatorStop`);
   - `:decisions`: a plan in `Plan Review` gets the Director's answers to its questions, in place:
     each pick naming its `request_comment_id` is replied under that request and written into the
     Decisions section (`SymphonyElixir.Decisions`), and the Needs Decision hold the requests set is
@@ -33,8 +34,8 @@ defmodule SymphonyElixir.DirectorMoves do
   - `:backlog`: an open ticket gets the note as a comment when there is one, then moves to `Backlog`;
   - `:unblock`: a ticket waiting on an **access** hold — an agent's block report — on a
     dispatch-loop hold (`SymphonyElixir.DispatchLoop`) or on an operator's stop
-    (`SymphonyElixir.OperatorStop`) has the hold cleared by hand and continues
-    in place, with no state move. So does one waiting on its competing pull requests (a landing
+    (`SymphonyElixir.OperatorStop`: its pause reason, then its hold) has the hold cleared by hand
+    and continues in place, with no state move. So does one waiting on its competing pull requests (a landing
     hold, `SymphonyElixir.PrWatch.Competitors`): the blocked-by links Symphony added go, and it no
     longer waits on those pull requests. A dependency or fix-ticket hold clears on its own, so it is
     refused;
@@ -506,35 +507,50 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   # The attempt a dispatch loop held is the one Restart throws away, so its hold goes with it and the
-  # ticket starts again with its count at zero; an operator's stop is lifted by the Restart that
-  # starts the ticket over. A clear the store refuses is reported; the restart stands, and Unblock
-  # still lifts the hold.
+  # ticket starts again with its count at zero; an operator's stop (its pause reason and its hold) is
+  # lifted by the Restart that starts the ticket over. A clear the store refuses is reported; the
+  # restart stands, and Unblock still lifts it.
   defp clear_restarted_hold(issue, opts) do
     hold = blocked_hold(issue, opts)
 
-    with true <- Hold.dispatch_loop?(hold) or OperatorStop.hold?(hold),
-         {:error, reason} <- Hold.clear(issue.repo_key, issue.id, :blocked, store_opts(opts)) do
+    with {:error, reason} <- clear_restarted(issue, hold, opts) do
       Logger.warning("Restarted #{issue.identifier} but couldn't clear its #{restarted_hold_name(hold)} hold: #{inspect(reason)}")
+    end
+  end
+
+  defp clear_restarted(issue, hold, opts) do
+    with :ok <- if(stopped?(issue, hold), do: clear_stop(issue, opts), else: :ok) do
+      if Hold.dispatch_loop?(hold), do: Hold.clear(issue.repo_key, issue.id, :blocked, store_opts(opts)), else: :ok
     end
   end
 
   defp restarted_hold_name(hold), do: if(Hold.dispatch_loop?(hold), do: "dispatch-loop", else: "operator-stop")
 
+  defp stopped?(issue, hold), do: OperatorStop.hold?(hold) or OperatorStop.held?(issue.repo_key, issue.id)
+
+  defp clear_stop(issue, opts), do: OperatorStop.clear_hold(issue.repo_key, issue.id, [by: OperatorStop.director()] ++ store_opts(opts))
+
   # Unblock lifts an access or dispatch-loop hold in place: the store hold is cleared through `Hold`
   # (the store first, then the `Blocked` label), so the ticket keeps its phase and the next poll
   # dispatches it again — for a loop, with its count started again. A landing hold first has the PR
-  # watcher release its competitors, so the next read doesn't wait on them again. A hold waiting on
+  # watcher release its competitors, so the next read doesn't wait on them again. An operator's stop
+  # is lifted with it: its pause reason first, then its hold, which may be missing when another
+  # Blocked hold was there already (that one stays when it clears on its own). A hold waiting on
   # anything else clears on its own, so it is refused.
   defp unblock(%Issue{} = issue, opts) do
     hold = blocked_hold(issue, opts)
+    stopped? = stopped?(issue, hold)
 
     cond do
       Hold.unblockable?(hold) ->
-        clear_access_hold(issue, opts)
+        clear_access_hold(issue, stopped?, opts)
 
       BlockedHold.landing?(hold) ->
         release_competitors(issue, opts)
-        clear_access_hold(issue, opts)
+        clear_access_hold(issue, stopped?, opts)
+
+      stopped? ->
+        lift(issue, fn -> clear_stop(issue, opts) end, opts)
 
       true ->
         access_conflict(issue)
@@ -554,10 +570,17 @@ defmodule SymphonyElixir.DirectorMoves do
 
   defp access_conflict(issue), do: {:error, {:conflict, "#{issue.identifier} is not waiting on an access hold"}}
 
-  defp clear_access_hold(issue, opts) do
+  defp clear_access_hold(issue, stopped?, opts), do: lift(issue, fn -> clear_stop_and_hold(issue, stopped?, opts) end, opts)
+
+  defp clear_stop_and_hold(issue, stopped?, opts) do
+    with :ok <- if(stopped?, do: clear_stop(issue, opts), else: :ok),
+         do: Hold.clear(issue.repo_key, issue.id, :blocked, store_opts(opts))
+  end
+
+  defp lift(issue, clear, opts) do
     comment = unblock_comment(issue.identifier)
 
-    case Hold.clear(issue.repo_key, issue.id, :blocked, store_opts(opts)) do
+    case clear.() do
       :ok ->
         TicketSignals.record(issue.repo_key, issue.id, "unblocked", %{by: "the Director"})
         post_unblock_comment(issue, comment, opts)

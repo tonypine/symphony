@@ -241,14 +241,16 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
     Enum.filter(repos, &(&1.name == @repo_key))
   end
 
+  # The stopped ticket is read from its pause in the store.
   defp tick_state do
     running = %Issue{id: "issue-1", identifier: "TEAM-1", state: "Code Review"}
+    :ok = OperatorStop.mark(@repo_key, "issue-4", @now)
 
     %Orchestrator.State{
+      repo_key: @repo_key,
       running: %{running.id => %{issue: running, identifier: running.identifier}},
       watching: %{"issue-2" => %{}},
-      forced: %{"issue-3" => %{}},
-      operator_stops: %{"issue-4" => OperatorStop.mark("TEAM-4", @repo_key, @now)}
+      forced: %{"issue-3" => %{}}
     }
   end
 
