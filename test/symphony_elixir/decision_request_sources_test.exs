@@ -33,6 +33,8 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
     "lib/symphony_elixir/pr_decision/apply.ex" => [:ask],
     # A QA pass that ends without a result.
     "lib/symphony_elixir/qa_verification.ex" => [:ask],
+    # A release build GitHub keeps cancelling for lack of a machine, or one that failed.
+    "lib/symphony_elixir/release_build.ex" => [:ask],
     # A self-heal with no next step.
     "lib/symphony_elixir/self_heal.ex" => [:ask]
   }
