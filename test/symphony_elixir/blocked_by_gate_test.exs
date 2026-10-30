@@ -101,8 +101,11 @@ defmodule SymphonyElixir.BlockedByGateTest do
 
     setup do
       previous = Application.fetch_env(:symphony_elixir, :build)
+      :ok = RunStore.clear()
 
       on_exit(fn ->
+        :ok = RunStore.clear()
+
         case previous do
           {:ok, value} -> Application.put_env(:symphony_elixir, :build, value)
           :error -> Application.delete_env(:symphony_elixir, :build)
@@ -127,23 +130,54 @@ defmodule SymphonyElixir.BlockedByGateTest do
                  title: "Final verification: Pause",
                  state: "Todo",
                  kind: :app_update,
-                 reason: "waiting for an app update: TP-419 merged in `9f54098`, running `d3d301b`",
+                 reason: "Waiting for a Symphony update that includes TP-419's fix",
                  blockers: [%{identifier: "TP-419", state: "merged in 9f54098"}]
                }
              ]
 
       assert snapshot_of(state).blocked == state.blocked
+      assert skip_reason(issue, state) == "Waiting for a Symphony update that includes TP-419's fix"
+
+      # The wait is on the ticket's pause, set by the update hold.
+      assert {:ok, %{reasons: [%{kind: :build, waits_on: %{pull_request: 132}, set_by: %{name: "App update hold"}}]}} =
+               SymphonyElixir.Pauses.get({:ticket, "default", "verify"})
 
       # The same build on the next poll: nothing new to look up, still held.
       assert poll(state, [issue], :no_lookup).blocked == state.blocked
 
-      # The app updates to a build that includes the merge commit.
+      # Symphony restarts on the same build: nothing in memory, and the merge commit's lookup fails.
+      # The pause still holds the ticket, and the gate says what it waits for.
+      restarted = poll(orchestrator_state(), [issue], :lookup_down)
+      refute Orchestrator.should_dispatch_issue_for_test(issue, restarted)
+      assert skip_reason(issue, restarted) == "Waiting for a Symphony update that includes TP-419's fix"
+
+      # Until the lookup answers, the snapshot names the blocker by the pull request the reason waits on.
+      assert [%{kind: :app_update, reason: "Waiting for a Symphony update that includes TP-419's fix", blockers: [%{identifier: nil, state: "merged in PR #132"}]}] =
+               restarted.blocked
+
+      # The app updates to a build that includes the merge commit: the next poll clears the reason.
       run_build(@new_build)
-      state = poll(state, [issue], fix)
+      state = poll(restarted, [issue], fix)
 
       assert state.blocked == []
-      assert state.update_holds == %{}
+      assert SymphonyElixir.Pauses.get({:ticket, "default", "verify"}) == {:ok, nil}
       assert Orchestrator.should_dispatch_issue_for_test(issue, state)
+    end
+
+    test "the skip-update-hold label clears the wait on the next poll" do
+      run_build(@old_build)
+      issue = %Issue{todo_blocked_by(blocker("TP-419", "Done")) | id: "skipping"}
+      fix = merged_fix("TP-419", @fix_pr)
+
+      state = poll(orchestrator_state(), [issue], fix)
+      refute Orchestrator.should_dispatch_issue_for_test(issue, state)
+
+      labelled = %Issue{issue | labels: [SymphonyElixir.UpdateHold.skip_label()]}
+      state = poll(state, [labelled], :no_lookup)
+
+      assert state.blocked == []
+      assert SymphonyElixir.Pauses.get({:ticket, "default", "skipping"}) == {:ok, nil}
+      assert Orchestrator.should_dispatch_issue_for_test(labelled, state)
     end
 
     test "a blocker merged in another repository releases its dependent at Done, as before" do
@@ -178,6 +212,9 @@ defmodule SymphonyElixir.BlockedByGateTest do
           :no_lookup ->
             [fetch_issues: fn _ids -> flunk("nothing to look up") end, commit_included?: fn _url, _sha, _build -> flunk("cached") end]
 
+          :lookup_down ->
+            [fetch_issues: fn _ids -> {:error, :linear_down} end]
+
           %Issue{} ->
             [
               fetch_issues: fn _ids -> {:ok, [fix]} end,
@@ -186,8 +223,15 @@ defmodule SymphonyElixir.BlockedByGateTest do
             ]
         end
 
+      # The orchestrator resolves a repo's tickets under that repo's key.
+      lookups = [repo_key: "default"] ++ lookups
       cache = SymphonyElixir.UpdateHold.resolve(issues, build, state.update_hold_cache, terminal_states(), lookups)
       Orchestrator.put_blocked_for_test(%{state | update_hold_cache: cache}, issues)
+    end
+
+    defp skip_reason(issue, state) do
+      state = Orchestrator.dispatch_chosen_issues_for_test([issue], state)
+      state.dispatch_skipped[issue.id].reason
     end
   end
 

@@ -40,6 +40,7 @@ defmodule SymphonyElixir.PrWatch.SweepTest do
         "on a Needs Decision and Blocked hold" => "gate: hold",
         "waiting on its sub-tickets" => "gate: sub-tickets",
         "waiting for an app update: TP-2 merged" => "gate: app update",
+        "Waiting for a Symphony update that includes TP-2's fix" => "gate: app update",
         "its plan waits to be replaced before it runs again" => "gate: re-plan",
         "the reviewer is turned off for its repo" => "gate: reviewer off",
         "held in Merging until CI settles on abc" => "gate: Merging CI wait",

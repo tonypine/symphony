@@ -91,7 +91,8 @@ defmodule SymphonyElixirWeb.WatchPayload do
 
   @doc """
   The `app_update` block of `GET /api/v1/state`: the tickets held only for an app update (the
-  `:app_update` entries of the snapshot's `blocked`), and `latest_release`, the newest published
+  `:app_update` entries of the snapshot's `blocked`: the Todo tickets whose pause holds a `:build`
+  reason of `SymphonyElixir.UpdateHold`), and `latest_release`, the newest published
   release of the repository the app updates from (`SymphonyElixir.PrWatch.Release`), nil until
   Symphony knows one. The app checks for an update at once when it is newer than the build it runs.
   """

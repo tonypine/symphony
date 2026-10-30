@@ -97,12 +97,15 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
       |> Map.merge(%{
         claimed: MapSet.new(["running", "claimed"]),
         budget_exhausted: MapSet.new(["spent"]),
-        update_holds: %{"update" => %{reason: "MT-5's fix is not in this build yet"}},
         merging_ci_waits: %{"landing" => %{commit_sha: "abc1234"}}
       })
 
     :ok = RunStore.set_ticket_hold("default", "skipped-decision", :needs_decision, %{reason: "Which reading is right?"})
     on_exit(fn -> RunStore.clear_ticket_hold("default", "skipped-decision", :needs_decision) end)
+    # Waiting for the running app to include a blocker's fix, as the update hold wrote it on the pause.
+    update_reason = %{kind: :build, waits_on: %{pull_request: 5}, text: "Waiting for a Symphony update that includes MT-5's fix"}
+    {:ok, _pause} = Pauses.set({:ticket, "default", "update"}, update_reason, set_by: %{kind: :rule, name: "App update hold"})
+    on_exit(fn -> Pauses.clear({:ticket, "default", "update"}) end)
 
     candidates = [
       issue("unassigned", "MT-UNASSIGNED", "Todo", assigned_to_worker: false),
@@ -127,7 +130,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
              "untitled" => "Linear returned it without an id, identifier or title",
              "blocked" => "blocked by MT-B, an unnamed ticket",
              "skipped-decision" => "on a Needs Decision hold",
-             "update" => "waiting for an app update: MT-5's fix is not in this build yet",
+             "update" => "Waiting for a Symphony update that includes MT-5's fix",
              "landing" => "held in Merging until CI settles on abc1234",
              "running" => "already running",
              "claimed" => "claimed by a retry or a Linear update in flight",
