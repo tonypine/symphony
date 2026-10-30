@@ -3,7 +3,7 @@ defmodule SymphonyElixirWeb.StreamControllerTest do
 
   import Phoenix.ConnTest
 
-  alias SymphonyElixir.TicketEvents
+  alias SymphonyElixir.{Pauses, Questions, TicketEvents, TransitionGuard}
   alias SymphonyElixirWeb.{ControlApiController, ObservabilityPubSub, StreamController}
 
   @endpoint SymphonyElixirWeb.Endpoint
@@ -90,6 +90,29 @@ defmodule SymphonyElixirWeb.StreamControllerTest do
     assert conn.status == 200
     buffer = recv_until!(client, "\"type\":\"person.action\"", 1_000)
     assert [%{"issue_identifier" => "TP-1", "issue_id" => @issue_id, "type" => "person.action"}] = notices(buffer)
+  end
+
+  test "a pause or question change on the record sends the ticket's notice within a second (TP-1242)", %{port: port} do
+    client = open!(port, "?issue_identifier=TP-1")
+    ticket = {:ticket, @repo_key, @issue_id}
+
+    started = System.monotonic_time(:millisecond)
+    {:ok, _pause} = Pauses.set(ticket, Pauses.ticket_reason(:dependency, "TP-9"))
+    buffer = recv_until!(client, "\"type\":\"pause.set\"", 1_000)
+    assert System.monotonic_time(:millisecond) - started < 1_000
+    assert [%{"issue_identifier" => "TP-1", "issue_id" => @issue_id, "type" => "pause.set"}] = notices(buffer)
+
+    started = System.monotonic_time(:millisecond)
+    {:ok, question} = Questions.ask(ticket, TransitionGuard.block_report_question("TP-1"))
+    buffer = recv_until!(client, "\"type\":\"question.asked\"", 1_000)
+    assert System.monotonic_time(:millisecond) - started < 1_000
+    assert "question.asked" in Enum.map(notices(buffer), & &1["type"])
+
+    started = System.monotonic_time(:millisecond)
+    {:ok, _answered} = Questions.answer(ticket, question.id, "1")
+    buffer = recv_until!(client, "\"type\":\"question.answered\"", 1_000)
+    assert System.monotonic_time(:millisecond) - started < 1_000
+    assert "question.answered" in Enum.map(notices(buffer), & &1["type"])
   end
 
   test "repo_key and issue_identifier keep only that ticket's notices", %{port: port} do
