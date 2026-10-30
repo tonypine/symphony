@@ -72,6 +72,7 @@ defmodule SymphonyElixir.EpicReview do
 
   alias SymphonyElixir.{
     AgentTools,
+    CiWait,
     Config,
     Handoff,
     QaVerification,
@@ -341,7 +342,7 @@ defmodule SymphonyElixir.EpicReview do
     case PullRequest.list_commit_runs(sha, [cwd: workspace] ++ Keyword.take(opts, [:gh_runner])) do
       {:ok, runs} ->
         case pending_ci_runs(runs, opts) do
-          [] -> CiRerun.check(repo_key(issue, opts), issue.id, sha, runs, [workspace: workspace] ++ Keyword.take(opts, [:gh_runner]))
+          [] -> ci_settled(issue, sha, runs, workspace, opts)
           pending -> {:wait, pending}
         end
 
@@ -349,6 +350,13 @@ defmodule SymphonyElixir.EpicReview do
         Logger.warning("Epic review could not read CI on #{short_sha(sha)}; reviewing without waiting for it: #{inspect(reason)}")
         {:proceed, nil}
     end
+  end
+
+  # No workflow run on the commit is still going: CI settled, so a CI-wait reason left on the pause
+  # clears (`SymphonyElixir.CiWait`) before a red run is judged for a rerun.
+  defp ci_settled(issue, sha, runs, workspace, opts) do
+    CiWait.clear_pause(repo_key(issue, opts), issue.id)
+    CiRerun.check(repo_key(issue, opts), issue.id, sha, runs, [workspace: workspace] ++ Keyword.take(opts, [:gh_runner]))
   end
 
   defp pending_ci_runs(runs, opts) do
@@ -427,12 +435,15 @@ defmodule SymphonyElixir.EpicReview do
 
   defp apply_outcome(issue, outcome, settings, opts) do
     case check_checklist(outcome, issue) do
-      %{verdict: :pass} = outcome -> pass(issue, outcome, settings, opts)
-      %{verdict: :fail} = outcome -> gaps(issue, outcome, settings, opts)
+      %{verdict: :pass} = outcome -> with :ok <- healthy(issue, opts), do: pass(issue, outcome, settings, opts)
+      %{verdict: :fail} = outcome -> with :ok <- healthy(issue, opts), do: gaps(issue, outcome, settings, opts)
       %{verdict: :blocked} = outcome -> blocked(issue, outcome, settings, opts)
       %{verdict: verdict} -> {:error, {:epic_review_unknown_verdict, verdict}}
     end
   end
+
+  # A review that reached a verdict ran on a working environment (`SymphonyElixir.SelfHeal.healthy/3`).
+  defp healthy(issue, opts), do: SelfHeal.healthy(repo_key(issue, opts), issue.id)
 
   defp pass(issue, outcome, settings, opts) do
     # A carried pass is the one already recorded for this commit: recording it again would leave

@@ -967,6 +967,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     case Hold.set(repo_key, issue_id, :blocked, attrs) do
       :ok ->
+        _ = CiWait.pause(repo_key, issue_id, sha)
         Logger.error("Holding #{running_entry.identifier} instead of waiting longer for CI: #{attrs.reason}")
         record_ticket_signal(repo_key, issue_id, CiWait.hold_type(), %{sha: sha})
         release_issue_claim(state, issue_id)
@@ -4283,21 +4284,25 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # A ticket held back by its blockers or a hold reads as its pause (`SymphonyElixir.Pauses`) when
-  # every reason waits on another ticket or an answer: their lines, in the order they were set. Any
-  # other pause — an `:environment` reason the backfill gave an access or CI-wait hold, whose line is
-  # the hold's own words — or none reads as `unpaused`, the gate's own words, which the PR watch sweep
-  # (`SymphonyElixir.PrWatch.Sweep`) labels.
+  # every reason waits on another ticket, an answer, or an environment one of the live writers names:
+  # a competing pull request, CI on a commit or a broken QA component. Their lines, in the order they
+  # were set. Any other pause — an `:environment` reason the backfill gave an access or CI-wait hold,
+  # whose line is the hold's own words — or none reads as `unpaused`, the gate's own words, which the
+  # PR watch sweep (`SymphonyElixir.PrWatch.Sweep`) labels.
   defp pause_reason(nil = _repo_key, _issue, unpaused), do: unpaused
 
   defp pause_reason(repo_key, %Issue{id: issue_id}, unpaused) do
     case Pauses.get({:ticket, repo_key, issue_id}) do
       {:ok, %{reasons: reasons}} ->
-        if Enum.all?(reasons, &(&1.kind in [:ticket, :question])), do: Enum.map_join(reasons, "; ", & &1.text), else: unpaused
+        if Enum.all?(reasons, &gate_reason?/1), do: Enum.map_join(reasons, "; ", & &1.text), else: unpaused
 
       _not_paused ->
         unpaused
     end
   end
+
+  defp gate_reason?(%{kind: kind}) when kind in [:ticket, :question], do: true
+  defp gate_reason?(reason), do: BlockedHold.landing_reason?(reason) or CiWait.reason?(reason) or SelfHeal.environment_reason?(reason)
 
   # The stop is read from the ticket's pause (`SymphonyElixir.OperatorStop`), which lives under its repo.
   defp operator_stop_reason(nil = _repo_key, _issue), do: nil

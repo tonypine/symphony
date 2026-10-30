@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Hold, OperatorStop, Pauses, RunStore}
+  alias SymphonyElixir.{BlockedHold, CiWait, Hold, OperatorStop, Pauses, RunStore, SelfHeal}
   alias SymphonyElixir.PrWatch.Sweep
   alias SymphonyElixir.QaDriver.DevServerLease
 
@@ -198,6 +198,37 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     # The PR watch sweep labels every one of them by its gate.
     for {identifier, reason} <- reasons do
       line = ~s(Skipping dispatch: issue_id=x issue_identifier=#{identifier} state="In Progress"; #{reason})
+      assert {:skipped, "gate: " <> _gate} = Sweep.classify(line)
+    end
+  end
+
+  test "a ticket waiting on its competing PRs, on CI or on its QA environment is skipped with its pause's text (TP-1250)" do
+    on_exit(fn -> RunStore.clear() end)
+    competitors = [%{issue_identifier: "MT-1", pr_number: 1, files: ["SPEC.md"]}, %{pr_number: 12, title: "Bump deps", files: ["SPEC.md"]}]
+
+    :ok = Hold.set("default", "landing", :blocked, BlockedHold.landing_attrs(competitors))
+    for reason <- BlockedHold.landing_reasons(competitors), do: {:ok, _pause} = Pauses.set({:ticket, "default", "landing"}, reason)
+
+    :ok = Hold.set("default", "ci", :blocked, CiWait.hold_attrs(%{sha: "26758a2471558f89", runs: []}, ~U[2026-10-30 09:00:00Z], ~U[2026-10-30 10:01:00Z]))
+    {:ok, _pause} = CiWait.pause("default", "ci", "26758a2471558f89")
+
+    :ok = Hold.set("default", "qa", :blocked, %{reason: "QA blocked after 2 attempt(s): unreachable", waits_on: %{type: "access", keys: []}})
+    {:ok, _pause} = Pauses.set({:ticket, "default", "qa"}, SelfHeal.environment_reason("worker_host"))
+
+    issues = [issue("landing", "MT-LAND", "Merging"), issue("ci", "MT-CI", "Epic Review"), issue("qa", "MT-QA", "QA")]
+
+    tracked(issues)
+    state = Orchestrator.dispatch_chosen_issues_for_test(issues, orchestrator_state())
+    reasons = Map.new(snapshot_of(state).dispatch_skipped, &{&1.identifier, &1.reason})
+
+    assert reasons == %{
+             "MT-LAND" => "Waiting for MT-1 to land: it changes the same files; Waiting for PR #12 (Bump deps) to land: it changes the same files",
+             "MT-CI" => "Waiting for CI on 26758a247155 to finish",
+             "MT-QA" => "The QA machine is not reachable"
+           }
+
+    for {identifier, reason} <- reasons do
+      line = ~s(Skipping dispatch: issue_id=x issue_identifier=#{identifier} state="QA"; #{reason})
       assert {:skipped, "gate: " <> _gate} = Sweep.classify(line)
     end
   end

@@ -161,6 +161,27 @@ defmodule SymphonyElixir.Pauses do
   end
 
   @doc """
+  Clears each reason of `subject`'s pause that `match?` holds for, one by one as `clear_reason/3`
+  does, in the order they were set. Returns the pause left (nil once cleared); the first refused
+  clear stops there and is the error. A subject not paused is unchanged.
+  """
+  @spec clear_reasons(subject(), (reason() -> boolean()), [opt()]) :: result()
+  def clear_reasons(subject, match?, opts \\ []) when is_function(match?, 1) do
+    with {:ok, %{reasons: reasons} = pause} <- get(subject) do
+      reasons
+      |> Enum.filter(match?)
+      |> Enum.reduce_while({:ok, pause}, fn reason, _left -> clear_next(subject, reason, opts) end)
+    end
+  end
+
+  defp clear_next(subject, reason, opts) do
+    case clear_reason(subject, reason, opts) do
+      {:ok, _pause} = cleared -> {:cont, cleared}
+      error -> {:halt, error}
+    end
+  end
+
+  @doc """
   The change `set/3` makes to `pause`, the pause of ticket `ticket` as its writer read it under the
   record's lock (`RunStore.update_ticket_question/4`): that writer stores the pause and its events in
   its own transaction. Pure: it writes nothing.

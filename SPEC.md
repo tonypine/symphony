@@ -2982,9 +2982,18 @@ Rules:
   blocker asks a question through the
   Question service ("The run on <id> cannot continue on its own": "Unblock and run again" or "Keep it
   paused"), which the access hold names; `Unblock` answers it with the first option, and answering
-  it with that option unblocks the ticket. A ticket held back by its blockers or a hold is listed
-  under `dispatch_skipped` with its pause's text, its reasons' lines joined by `; `, when every
-  reason waits on a ticket or an answer; any other pause, or none, keeps the gate's own words.
+  it with that option unblocks the ticket. Beside a landing hold, the pause has one reason per
+  competing pull request ("Waiting for TP-1 to land: it changes the same files", or "Waiting for
+  PR #12 (Title) to land: …" for a person's pull request with no ticket); the PR watcher clears each
+  as its competitor lands or leaves the race, and `Unblock` clears every one of them and no other
+  reason. Beside a CI-wait hold, the pause waits on an `environment` reason ("Waiting for CI on
+  <commit> to finish"), which clears when the epic review finds CI settled on its commit; beside
+  self-heal's access hold, on one naming the broken QA component ("The QA machine is not
+  reachable"), which clears when a QA pass or an epic review reaches a pass or fail verdict. `Unblock`
+  clears both. A ticket held back by its blockers or a hold is listed under `dispatch_skipped` with
+  its pause's text, its reasons' lines joined by `; `, when every reason waits on a ticket, an answer,
+  a competing pull request, CI or the QA environment; any other pause, or none, keeps the gate's own
+  words.
   `Needs Decision` is set by an
   agent's `linear_request_human_action`, a Code Review escalation, a stuck self-heal, a manual
   review confirmation, or a ticket whose pull request is closed or whose diff is empty, and clears when the decision is recorded (a reply under the request, the

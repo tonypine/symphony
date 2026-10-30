@@ -118,6 +118,25 @@ defmodule SymphonyElixir.PausesTest do
       assert {"pause.cleared", %{cleared: [%{reason: :question}, %{reason: :ticket}], by: @person}} = List.last(ticket_events(@repo_key, @issue_id))
     end
 
+    test "clear_reasons/3 clears each matching reason by who says so, the pause with the last one, and stops at a refusal" do
+      environment = %{kind: :environment, waits_on: %{condition: "ci_wait:abc"}}
+      {:ok, _pause} = Pauses.set(@ticket, @question)
+      {:ok, _pause} = Pauses.set(@ticket, @dependency)
+      {:ok, _pause} = Pauses.set(@ticket, environment)
+
+      not_question? = &(&1.kind != :question)
+      assert {:ok, %{reasons: [%{kind: :question}]}} = Pauses.clear_reasons(@ticket, not_question?, by: @person)
+
+      cleared = ticket_events(@repo_key, @issue_id) |> Enum.filter(&match?({"pause.reason_cleared", _}, &1))
+      assert [{"pause.reason_cleared", %{reason: "ticket", by: @person}}, {"pause.reason_cleared", %{reason: "environment", by: @person}}] = cleared
+
+      assert {:ok, %{reasons: [_question]} = pause} = Pauses.get(@ticket)
+      assert Pauses.clear_reasons(@ticket, &(&1.kind == :ticket)) == {:ok, pause}
+      assert Pauses.clear_reasons(@ticket, &(&1.kind == :question), at: "now") == {:error, {:invalid_option, :at}}
+      assert Pauses.clear_reasons(@ticket, &(&1.kind == :question)) == {:ok, nil}
+      assert Pauses.clear_reasons(@ticket, fn _reason -> true end) == {:ok, nil}
+    end
+
     test "clearing what is not there changes nothing and records nothing" do
       assert Pauses.clear(@ticket) == {:ok, nil}
       assert Pauses.clear_reason(@ticket, @question) == {:ok, nil}

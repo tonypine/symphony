@@ -626,10 +626,12 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   defp apply_outcome(issue, opts, settings, head, %{verdict: :pass} = outcome) do
+    healthy(issue, opts)
     pass(issue, opts, settings, head, outcome)
   end
 
   defp apply_outcome(issue, opts, settings, head, %{verdict: :fail} = outcome) do
+    healthy(issue, opts)
     fail(issue, opts, settings, head, outcome)
   end
 
@@ -644,6 +646,10 @@ defmodule SymphonyElixir.QaVerification do
   defp apply_outcome(_issue, _opts, _settings, _head, %{verdict: verdict}) do
     {:error, {:qa_unknown_verdict, verdict}}
   end
+
+  # A pass or fail verdict ran on a working QA environment, so the reason an access hold set beside
+  # an earlier block clears (`SelfHeal.healthy/3`).
+  defp healthy(issue, opts), do: SelfHeal.healthy(repo_key(issue, opts), issue.id)
 
   defp pass(issue, opts, settings, head, %{scope: :none} = outcome) do
     record_pass_verdict(issue, opts, head, "pass", outcome, %{scope: "none", reason: outcome.reason})

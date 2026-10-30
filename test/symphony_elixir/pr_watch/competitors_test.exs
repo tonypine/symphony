@@ -6,13 +6,14 @@ defmodule SymphonyElixir.PrWatch.CompetitorsTest do
 
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{BlockedHold, Hold, TicketState}
+  alias SymphonyElixir.{BlockedHold, Hold, Pauses, TicketState}
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.PrWatch.Competitors
 
   @repo_key "default"
   @issue %Issue{id: "issue-2", identifier: "TP-2", state: "Merging", blocked_by: []}
   @now ~U[2026-10-16 12:00:00Z]
+  @ticket {:ticket, "default", "issue-2"}
 
   defmodule Linker do
     def add_blocked_by(blocker, issue_id), do: send(self(), {:link, blocker, issue_id}) && Process.get(:link_result, :ok)
@@ -148,6 +149,87 @@ defmodule SymphonyElixir.PrWatch.CompetitorsTest do
     test "a ticket with nothing recorded has nothing to release; a store that can't be read is the error" do
       assert :ok = Competitors.release(@repo_key, "issue-none")
       assert {:error, :store_down} = Competitors.release(@repo_key, @issue.id, store: DownStore)
+    end
+  end
+
+  describe "the pause beside the wait" do
+    test "a wait pauses the ticket once, one reason per competitor, beside the landing hold it always set" do
+      person = %{pr_number: 12, pr_url: "https://github.com/acme/app/pull/12", title: "Bump deps", files: ["SPEC.md"], head_sha: "head-12"}
+      competitors = [Map.take(link(1), [:issue_id, :issue_identifier, :pr_number, :pr_url, :title, :files, :head_sha]), person]
+
+      assert {:ok, _links} = Competitors.wait(@issue, competitors, false, opts(now: @now))
+      assert {:ok, _links} = Competitors.wait(@issue, competitors, false, opts(now: @now))
+
+      assert Hold.get(@repo_key, @issue.id, :blocked).reason == BlockedHold.landing_attrs(competitors).reason
+
+      assert Pauses.why(@ticket) == [
+               "Waiting for TP-1 to land: it changes the same files",
+               "Waiting for PR #12 (Bump deps) to land: it changes the same files"
+             ]
+
+      assert {:ok, %{reasons: [%{kind: :ticket, releasable: true, set_by: setter}, %{kind: :environment, releasable: true}]}} = Pauses.get(@ticket)
+      assert setter == BlockedHold.reason_setter(:landing)
+    end
+
+    test "a competitor that lands loses its reason; the last one clears the pause with the hold" do
+      {:ok, _links} = Competitors.wait(@issue, [link(1), link(3)], false, opts(now: @now))
+      hold = Hold.get(@repo_key, @issue.id, :blocked)
+      issue = %{@issue | blocked_by: [%{id: "issue-1", identifier: "TP-1", state: "Done"}]}
+
+      settled = Competitors.settle(issue, hold, [link(1), link(3)], race([pull(3)]), opts())
+      assert Pauses.why(@ticket) == ["Waiting for TP-3 to land: it changes the same files"]
+
+      issue = %{issue | blocked_by: issue.blocked_by ++ [%{id: "issue-3", identifier: "TP-3", state: "Done"}]}
+      assert %{hold: nil} = Competitors.settle(issue, settled.hold, settled.links, race([]), opts())
+      assert {:ok, nil} = Pauses.get(@ticket)
+    end
+
+    test "a wait still standing has a reason its pause lost set again, and nothing more" do
+      {:ok, _links} = Competitors.wait(@issue, [link(1)], false, opts(now: @now))
+      hold = Hold.get(@repo_key, @issue.id, :blocked)
+      {:ok, nil} = Pauses.clear(@ticket)
+
+      assert %{hold: ^hold} = Competitors.settle(@issue, hold, [link(1)], race([pull(1)]), opts())
+      assert Pauses.why(@ticket) == ["Waiting for TP-1 to land: it changes the same files"]
+    end
+
+    test "a hold the store won't clear keeps the reasons beside it" do
+      {:ok, _links} = Competitors.wait(@issue, [link(1)], false, opts(now: @now))
+      hold = Hold.get(@repo_key, @issue.id, :blocked)
+
+      capture_log(fn -> Competitors.settle(@issue, hold, [link(1, linked: false)], race([]), opts(store: RefusingStore)) end)
+      assert Pauses.why(@ticket) == ["Waiting for TP-1 to land: it changes the same files"]
+    end
+
+    test "with no landing hold left, the landing reasons go and every other reason stays" do
+      {:ok, _pause} = Pauses.set(@ticket, Pauses.ticket_reason(:dependency, "TP-9"))
+      {:ok, _pause} = Pauses.set(@ticket, Map.put(Pauses.ticket_reason(:landing, "TP-1"), :releasable, true))
+
+      Competitors.settle(@issue, nil, [link(1)], race([pull(1)]), opts())
+      assert Pauses.why(@ticket) == ["Waiting for TP-9 to finish"]
+    end
+
+    test "Unblock's release clears every landing reason, the backfill's too, by the Director, and nothing else" do
+      {:ok, _links} = Competitors.wait(@issue, [link(1), link(12, issue_id: nil, issue_identifier: nil, title: nil)], false, opts(now: @now))
+      {:ok, _pause} = Pauses.set(@ticket, Pauses.ticket_reason(:landing, "TP-5"), backfilled: true)
+      {:ok, _pause} = Pauses.set(@ticket, Pauses.ticket_reason(:dependency, "TP-9"))
+
+      assert "Waiting for PR #12 to land: it changes the same files" in Pauses.why(@ticket)
+
+      capture_log(fn -> assert :ok = Competitors.release(@repo_key, @issue.id, linker: Linker) end)
+      assert Pauses.why(@ticket) == ["Waiting for TP-9 to finish"]
+
+      assert %{payload: %{by: %{kind: :person, name: "Director"}}} =
+               @repo_key |> RunStore.list_ticket_events(@issue.id, types: ["pause.reason_cleared"]) |> List.last()
+    end
+
+    test "a ticket the watcher leaves loses its landing reasons with its hold" do
+      {:ok, _links} = Competitors.wait(@issue, [link(1)], false, opts(now: @now))
+      record = TicketState.normalize(RunStore.get_ticket_state(@repo_key, @issue.id))
+
+      capture_log(fn -> assert :ok = Competitors.leave(@repo_key, record, opts()) end)
+      assert {:ok, nil} = Pauses.get(@ticket)
+      refute Hold.held?(@repo_key, @issue.id, :blocked)
     end
   end
 end

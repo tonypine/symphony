@@ -9,9 +9,11 @@ defmodule SymphonyElixir.QaVerificationTest do
   alias SymphonyElixir.Hold
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.MergeConfirmation
+  alias SymphonyElixir.Pauses
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaVerification
   alias SymphonyElixir.RunStore
+  alias SymphonyElixir.SelfHeal
   alias SymphonyElixir.TicketPullRequest
   alias SymphonyElixir.TicketSignals
 
@@ -344,6 +346,13 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
   end
 
+  defp environment_paused! do
+    ticket = {:ticket, @repo_key, @issue_id}
+    {:ok, _pause} = Pauses.set(ticket, SelfHeal.environment_reason("worker_host"))
+    {:ok, _pause} = Pauses.set(ticket, Pauses.ticket_reason(:dependency, "TP-9"))
+    assert Pauses.why(ticket) == ["The QA machine is not reachable", "Waiting for TP-9 to finish"]
+  end
+
   describe "run/3" do
     test "skips every ticket that is not a QA ticket" do
       assert :skip = run("/tmp/workspace", [], "Code Review")
@@ -545,6 +554,23 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       assert [%{name: "qa", details: %{signal: "qa_fail", reason: "`symphony check` exits 1"}}] =
                Handoff.signals(@repo_key, @issue_id)
+    end
+
+    test "a pass verdict ran on a working QA environment: the pause reason self-heal set for it clears (TP-1250)" do
+      {workspace, _head} = git_workspace!()
+      environment_paused!()
+
+      assert :ok = run(workspace, [])
+      assert Pauses.why({:ticket, @repo_key, @issue_id}) == ["Waiting for TP-9 to finish"]
+    end
+
+    test "a fail verdict ran on a working QA environment too (TP-1250)" do
+      {workspace, _head} = git_workspace!()
+      Process.put(:qa_agent_result, {:ok, %{result: %{verdict: :fail, summary: "No.", steps: [], findings: []}, tokens: %{}}})
+      environment_paused!()
+
+      assert :ok = run(workspace, [])
+      assert Pauses.why({:ticket, @repo_key, @issue_id}) == ["Waiting for TP-9 to finish"]
     end
 
     test "a fail with nothing recorded falls back to a default reason" do
