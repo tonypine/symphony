@@ -123,6 +123,33 @@ defmodule SymphonyElixir.OrchestratorDispatchShadowTest do
     assert summary.record_newer == %{count: 1, recent: [%{identifier: "ACME-1", side: :both}]}
   end
 
+  test "TP-1300 replayed: Symphony moves the record to Code Review, the forced cycle reads Linear before the move lands, and the comparison records no difference",
+       ctx do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_active_states: @review_states)
+    issue_id = "#{ctx.repo_key}-1"
+    rework = issue(ctx.repo_key, 1, state: "Rework")
+    {_buckets, state} = cycle(%Orchestrator.State{poll_interval_ms: 100}, ctx.repos, [rework], 0)
+    assert_receive {:polled, _repo}
+
+    # A by-id read during the run already holds a later copy, still in Rework, before the move.
+    later = issue(ctx.repo_key, 1, state: "Rework", updated_at: DateTime.add(@linear_at, 30))
+    {:ok, :updated} = TicketObservation.observe(ctx.repo_key, later, source: :by_id)
+
+    # The move writes the record first; the poll it forces reads after that write, but Linear still
+    # serves a copy from before it (its updatedAt older than the record's phase), which the record
+    # drops as stale.
+    :ok = TicketSignals.record_phase(ctx.repo_key, issue_id, "Code Review")
+
+    log = capture_log(fn -> cycle(state, ctx.repos, [rework], 100) end)
+    assert_receive {:polled, _repo}
+    refute log =~ "Dispatch shadow difference"
+
+    assert %{phase: "Code Review", phase_owner: :symphony} = RunStore.get_ticket_state(ctx.repo_key, issue_id)
+    summary = Shadow.summary()
+    assert %{cycles_compared: 2, cycles_with_differences: 0, window_differences: 0, recent: []} = summary
+    assert summary.record_newer == %{count: 1, recent: [%{identifier: "ACME-1", side: :both}]}
+  end
+
   test "TP-1222 inside the poll: Symphony moves the ticket and a by-id read writes the move after the repo read, before the poll result is applied",
        ctx do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_active_states: @review_states)

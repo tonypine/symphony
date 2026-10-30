@@ -65,7 +65,7 @@ defmodule SymphonyElixir.Dispatch.ShadowTest do
     end
   end
 
-  describe "classify/3" do
+  describe "classify/4" do
     @read_at ~U[2026-10-29 17:50:30Z]
 
     test "a state the record's phase moved to after the snapshot was read is record_newer, not a difference" do
@@ -113,6 +113,60 @@ defmodule SymphonyElixir.Dispatch.ShadowTest do
 
       assert Shadow.classify(promoted, @read_at, %{"b" => DateTime.add(@read_at, 2)}) == %{differences: [], record_newer: promoted}
       assert Shadow.classify(promoted, @read_at, %{"b" => @read_at}) == %{differences: promoted, record_newer: []}
+    end
+
+    test "TP-1300 replayed: the cycle Symphony's own move forces reads Linear before the move lands, so the state is record_newer" do
+      # Symphony wrote Code Review at T; the forced cycle read Linear at T+1s and still got Rework,
+      # last changed at T-60s: Linear had not served the move yet.
+      phase_at = ~U[2026-10-30 09:43:22Z]
+      read_at = DateTime.add(phase_at, 1)
+      differences = Shadow.compare([issue("a", "MT-1", state: "Rework")], [issue("a", "MT-1", state: "Code Review")])
+      own_moves = [symphony_phase_at: %{"a" => phase_at}, updated_at: %{"a" => DateTime.add(phase_at, -60)}]
+
+      classified = Shadow.classify(differences, read_at, %{"a" => phase_at}, own_moves)
+      assert classified == %{differences: [], record_newer: differences}
+
+      refute capture_log(fn -> Shadow.record(classified, 20, @now) end) =~ "Dispatch shadow difference"
+
+      assert %{window_differences: 0, recent: [], record_newer: %{count: 1}} = Shadow.summary()
+
+      # A close of Symphony's that the read predates: the poll still lists the ticket.
+      closed = Shadow.compare([issue("a", "MT-1", state: "Merging")], [])
+      assert Shadow.classify(closed, read_at, %{"a" => phase_at}, own_moves) == %{differences: [], record_newer: closed}
+    end
+
+    test "a hand move after Symphony's phase write leaves Linear's updatedAt after it, and stays a difference" do
+      phase_at = ~U[2026-10-30 09:43:22Z]
+      read_at = DateTime.add(phase_at, 120)
+      differences = Shadow.compare([issue("a", "MT-1", state: "Rework")], [issue("a", "MT-1", state: "Code Review")])
+      written = %{"a" => phase_at}
+      moved_by_hand = DateTime.add(phase_at, 60)
+
+      by_hand = [symphony_phase_at: written, updated_at: %{"a" => moved_by_hand}]
+      assert Shadow.classify(differences, read_at, written, by_hand) == %{differences: differences, record_newer: []}
+
+      # Linear's updatedAt equal to the phase write is no older than it either.
+      assert %{differences: [_difference], record_newer: []} =
+               Shadow.classify(differences, read_at, written, symphony_phase_at: written, updated_at: written)
+    end
+
+    test "the own-move rule needs a phase Symphony wrote, the snapshot's updatedAt, and a state or presence difference" do
+      phase_at = ~U[2026-10-30 09:43:22Z]
+      read_at = DateTime.add(phase_at, 1)
+      older = DateTime.add(phase_at, -60)
+      differences = Shadow.compare([issue("a", "MT-1", state: "Rework")], [issue("a", "MT-1", state: "Code Review")])
+
+      # A phase an observation wrote (not Symphony's), or a ticket whose updatedAt the snapshot lacks.
+      written = %{"a" => phase_at}
+      unchanged = %{differences: differences, record_newer: []}
+      assert Shadow.classify(differences, read_at, written, updated_at: %{"a" => older}) == unchanged
+      assert Shadow.classify(differences, read_at, written, symphony_phase_at: written) == unchanged
+
+      # A priority difference is never a phase write's.
+      priority = Shadow.compare([issue("c", "MT-3")], [issue("c", "MT-3", priority: 3)])
+
+      assert %{differences: [%{field: :priority}], record_newer: []} =
+               Shadow.classify(priority, read_at, %{}, symphony_phase_at: %{"c" => phase_at}, updated_at: %{"c" => older})
     end
 
     test "with no known read time or phase write time, a difference stays a difference" do
