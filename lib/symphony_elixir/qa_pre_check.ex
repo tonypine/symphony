@@ -240,13 +240,15 @@ defmodule SymphonyElixir.QaPreCheck do
 
   # A part is read without the quotes around it first (`"name"`), then, when that misses, as it is
   # written, since a test's own name may open and close with a quote (`"Run" runs it, "Stop" stops "it"`).
+  # A path is never read again with its quotes: it is a tracked file or missing, never searched text.
   defp find_part(part, scope, files, git, workspace) do
     find = &find_text(&1, scope, files, git, workspace)
     part = String.trim(part)
     unquoted = unquote_part(part)
+    retry? = unquoted != part and not Regex.match?(@path_part, String.replace(unquoted, @line_suffix, ""))
 
     case find.(unquoted) do
-      {:missing, _detail} = missing when unquoted != part ->
+      {:missing, _detail} = missing when retry? ->
         with {:missing, _original} <- find.(part), do: missing
 
       found ->

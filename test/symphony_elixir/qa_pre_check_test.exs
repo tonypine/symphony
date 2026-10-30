@@ -64,6 +64,8 @@ defmodule SymphonyElixir.QaPreCheckTest do
     File.write!(Path.join(dir, "test/symphony_elixir/other_test.exs"), ~s(test "only in the other file" do\nend\n# Walkthrough.steps\n))
     File.write!(Path.join(dir, ".github/workflows/macos-e2e.yml"), "jobs:\n  e2e:\n    name: update, restart and rollback\n")
     File.write!(Path.join(dir, "README.md"), "symphony_elixir names are listed here\n")
+    # A missing test file's path in quotes, as text, which a quoted path must never be found as.
+    File.write!(Path.join(dir, "paths.exs"), ~s(x = "test/symphony_elixir/gone_test.exs"\n))
     File.write!(Path.join(dir, "test/symphony_elixir/director_moves_test.exs"), @director_moves_test)
     File.write!(Path.join(dir, "test/symphony_elixir/orchestrator_status_test.exs"), @orchestrator_status_test)
     # Tests whose own names open with a tracked file, as `docs/playbook.md matches …` does in this repo.
@@ -221,6 +223,7 @@ defmodule SymphonyElixir.QaPreCheckTest do
       5. A name that opens like a path stays whole. Proved by: `Walkthrough.steps parses it`
       6. A name opening with a file, found neither in it nor anywhere. Proved by: `docs/x.md is nowhere`
       7. A quoted name found neither inside its quotes nor with them. Proved by: make-all › "never "here""
+      8. A quoted missing file, though a file holds its path in quotes. Proved by: make-all › "test/symphony_elixir/gone_test.exs"
       """
 
       assert {:fail, results} = run(text, context, unused_gh())
@@ -233,7 +236,8 @@ defmodule SymphonyElixir.QaPreCheckTest do
                "`test/symphony_elixir/missing_test.exs` is not in the checkout",
                "`Walkthrough.steps parses it` is not in the checkout (#{@tried})",
                "`is nowhere` is not in `docs/x.md` (#{@tried})",
-               ~s(`never "here"` is not in the checkout \(#{@tried}\))
+               ~s(`never "here"` is not in the checkout \(#{@tried}\)),
+               "`test/symphony_elixir/gone_test.exs` is not in the checkout"
              ]
     end
 
