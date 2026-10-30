@@ -15,6 +15,16 @@ defmodule SymphonyElixir.QaPreCheckTest do
       test "an approved plan's record is in the waiting state at once, and stays there when Linear refuses the move", %{opts: opts} do
         opts
       end
+
+      test "the Inbox lists a quiet handoff, and Unblock lifts it, answering its question \\"Run it again\\"", %{opts: opts} do
+        opts
+      end
+
+      test "\\"Run\\" runs it, \\"Stop\\" stops it" do
+      end
+    end
+
+    test "a quiet handoff stays when its question is answered \\"Keep it paused\\"" do
     end
   end
   """
@@ -177,6 +187,25 @@ defmodule SymphonyElixir.QaPreCheckTest do
       assert Enum.map(results, &{&1.step.number, &1.status}) == Enum.map(1..16, &{&1, :pass})
     end
 
+    # TP-1300: TP-1249's step named a test whose name ends in a quoted phrase, and lost its last quote.
+    test "a test name that ends in a quoted phrase keeps its closing quote, in every form", context do
+      checks = [check("make-all", "COMPLETED", "SUCCESS")]
+      moves = "test/symphony_elixir/director_moves_test.exs"
+      handoff = ~s(the Inbox lists a quiet handoff, and Unblock lifts it, answering its question "Run it again")
+
+      text = """
+      1. TP-1249's file and name. Proved by: `make-all` › #{moves}: #{handoff}
+      2. Describe and name. Proved by: `make-all` › the Director's moves › #{handoff}
+      3. The full name. Proved by: `the Director's moves #{handoff}`
+      4. The whole name quoted. Proved by: make-all › #{moves}: "#{handoff}"
+      5. A test outside a describe. Proved by: make-all › #{moves}: a quiet handoff stays when its question is answered "Keep it paused"
+      6. A name that opens and closes with a quote. Proved by: make-all › #{moves} › "Run" runs it, "Stop" stops it
+      """
+
+      assert {:pass, results} = run(text, context, gh(context.head, checks))
+      assert Enum.map(results, &{&1.step.number, &1.status}) == Enum.map(1..6, &{&1, :pass})
+    end
+
     test "a test named nowhere fails, naming the file it narrowed to and the forms it tried", context do
       status = "test/symphony_elixir/orchestrator_status_test.exs"
 
@@ -187,6 +216,7 @@ defmodule SymphonyElixir.QaPreCheckTest do
       4. A missing file and a name. Proved by: `test/symphony_elixir/missing_test.exs: does it`
       5. A name that opens like a path stays whole. Proved by: `Walkthrough.steps parses it`
       6. A name opening with a file, found neither in it nor anywhere. Proved by: `docs/x.md is nowhere`
+      7. A quoted name found neither inside its quotes nor with them. Proved by: make-all › "never "here""
       """
 
       assert {:fail, results} = run(text, context, unused_gh())
@@ -198,7 +228,8 @@ defmodule SymphonyElixir.QaPreCheckTest do
                "`a name that goes on over two lines` is not in `#{status}` (#{@tried})",
                "`test/symphony_elixir/missing_test.exs` is not in the checkout",
                "`Walkthrough.steps parses it` is not in the checkout (#{@tried})",
-               "`is nowhere` is not in `docs/x.md` (#{@tried})"
+               "`is nowhere` is not in `docs/x.md` (#{@tried})",
+               ~s(`never "here"` is not in the checkout \(#{@tried}\))
              ]
     end
 
