@@ -3,33 +3,18 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
 
   import Phoenix.ConnTest, only: [build_conn: 0, get: 2, post: 3, json_response: 2]
 
+  alias SymphonyElixir.Linear.Webhook, as: LinearWebhook
   alias SymphonyElixir.Linear.Webhook.Deliveries
   alias SymphonyElixir.TicketObservation
 
   @endpoint SymphonyElixirWeb.Endpoint
   @secret "lin_wh_test_secret"
 
-  # Answers `GET /api/v1/state` with an idle snapshot.
-  defmodule IdleOrchestrator do
-    use GenServer
-
-    def start_link(name), do: GenServer.start_link(__MODULE__, nil, name: name)
-
-    @impl true
-    def init(nil), do: {:ok, nil}
-
-    @impl true
-    def handle_call(:snapshot, _from, state), do: {:reply, %{running: [], retrying: [], rate_limits: nil}, state}
-  end
-
   setup do
-    orchestrator = Module.concat(__MODULE__, "Orchestrator#{System.unique_integer([:positive])}")
-    start_supervised!(%{id: IdleOrchestrator, start: {IdleOrchestrator, :start_link, [orchestrator]}})
-
     endpoint_config =
       :symphony_elixir
       |> Application.get_env(SymphonyElixirWeb.Endpoint, [])
-      |> Keyword.merge(server: false, secret_key_base: String.duplicate("s", 64), orchestrator: orchestrator, snapshot_timeout_ms: 1_000)
+      |> Keyword.merge(server: false, secret_key_base: String.duplicate("s", 64))
 
     Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, endpoint_config)
     start_supervised!({SymphonyElixirWeb.Endpoint, []})
@@ -57,11 +42,13 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
     conn = post_webhook(body, [{"content-type", "application/json"}, {"linear-signature", "00"}])
     assert json_response(conn, 404)
 
-    assert %{"enabled" => false, "secret_configured" => true, "total" => 0, "rejected" => 0, "recent" => []} = linear_webhooks_state()
+    assert %{enabled: false, secret_configured: true} = webhook_settings()
+    assert %{total: 0, rejected: 0, recent: []} = Deliveries.summary()
   end
 
-  test "accepts a signed delivery with 200, as Linear requires, and shows it in the state: type, action and the ticket's identifier" do
-    assert %{"enabled" => true, "secret_configured" => true, "total" => 0, "last_at" => nil} = linear_webhooks_state()
+  test "accepts a signed delivery with 200, as Linear requires, and counts it: type, action and the ticket's identifier" do
+    assert %{enabled: true, secret_configured: true} = webhook_settings()
+    assert %{total: 0, last_at: nil} = Deliveries.summary()
 
     body = delivery_body(%{"type" => "Issue", "action" => "update", "data" => %{"identifier" => "TP-7", "title" => "Edited"}})
     conn = post_webhook(body, [{"content-type", "application/json"}, {"linear-signature", sign(body)}])
@@ -69,16 +56,14 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
     assert json_response(conn, 200) == %{"status" => "accepted"}
 
     assert %{
-             "total" => 1,
-             "rejected" => 0,
-             "last_type" => "Issue",
-             "last_action" => "update",
-             "last_at" => last_at,
-             "counts" => [%{"type" => "Issue", "action" => "update", "count" => 1}],
-             "recent" => [%{"type" => "Issue", "action" => "update", "identifier" => "TP-7", "received_at" => last_at}]
-           } = linear_webhooks_state()
-
-    assert {:ok, _at, 0} = DateTime.from_iso8601(last_at)
+             total: 1,
+             rejected: 0,
+             last_type: "Issue",
+             last_action: "update",
+             last_at: %DateTime{} = last_at,
+             counts: [%{type: "Issue", action: "update", count: 1}],
+             recent: [%{type: "Issue", action: "update", identifier: "TP-7", received_at: last_at}]
+           } = Deliveries.summary()
   end
 
   describe "an Issue delivery and the ticket's record" do
@@ -94,17 +79,17 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       assert %{priority: 1, phase: "In Progress", observed_from: :webhook, labels: ["backend"]} = RunStore.get_ticket_state(repo_key, "issue-hook")
 
       assert %{
-               "recent" => [%{"type" => "Issue", "action" => "update", "identifier" => "ACME-9", "observation" => "updated"}],
-               "observations" => %{"updated" => 1, "unrouted" => 0, "stale" => 0, "error" => 0}
-             } = linear_webhooks_state()
+               recent: [%{type: "Issue", action: "update", identifier: "ACME-9", observation: :updated}],
+               observations: %{updated: 1, unrouted: 0, stale: 0, error: 0}
+             } = Deliveries.summary()
 
       # The poll then reads the same ticket from Linear.
       repolled = polled_issue(priority: 1, updated_at: ~U[2026-10-29 09:01:00.000Z])
       assert {:ok, :unchanged} = TicketObservation.observe(repo_key, repolled, compare: true)
-      assert %{"webhook_first" => 1, "poll_first" => 0, "poll_first_recent" => []} = linear_webhooks_state()["compare"]
+      assert %{webhook_first: 1, poll_first: 0, poll_first_recent: []} = TicketObservation.summary().compare
     end
 
-    test "names in the state each ticket and field a read had to correct before the webhook brought it" do
+    test "names each ticket and field a read had to correct before the webhook brought it" do
       repo_key = Config.repo_key!()
       {:ok, :updated} = TicketObservation.observe(repo_key, polled_issue(priority: 2))
 
@@ -113,12 +98,10 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       assert {:ok, :updated} = TicketObservation.observe(repo_key, corrected, source: :by_id, now: ~U[2026-10-29 09:03:00Z])
 
       assert %{
-               "webhook_first" => 0,
-               "poll_first" => 1,
-               "poll_first_recent" => [%{"identifier" => "ACME-9", "fields" => ["priority"], "source" => "by_id", "at" => at}]
-             } = linear_webhooks_state()["compare"]
-
-      assert {:ok, ~U[2026-10-29 09:03:00Z], 0} = DateTime.from_iso8601(at)
+               webhook_first: 0,
+               poll_first: 1,
+               poll_first_recent: [%{identifier: "ACME-9", fields: [:priority], source: :by_id, at: ~U[2026-10-29 09:03:00Z]}]
+             } = TicketObservation.summary().compare
     end
 
     test "drops an older delivery and counts it stale" do
@@ -129,7 +112,7 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       assert json_response(post_signed(older), 200) == %{"status" => "accepted"}
 
       assert RunStore.get_ticket_state(repo_key, "issue-hook").priority == 1
-      assert %{"recent" => [%{"observation" => "stale"}], "observations" => %{"stale" => 1}} = linear_webhooks_state()
+      assert %{recent: [%{observation: :stale}], observations: %{stale: 1}} = Deliveries.summary()
     end
 
     test "writes nothing for a ticket the poll has no record of, and counts it unrouted" do
@@ -140,8 +123,7 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       assert json_response(post_signed(other_team), 200) == %{"status" => "accepted"}
       assert RunStore.get_ticket_state(Config.repo_key!(), "issue-hook") == nil
 
-      assert %{"recent" => [%{"action" => "create", "observation" => "unrouted"} | _], "observations" => %{"unrouted" => 2, "updated" => 0}} =
-               linear_webhooks_state()
+      assert %{recent: [%{action: "create", observation: :unrouted} | _], observations: %{unrouted: 2, updated: 0}} = Deliveries.summary()
     end
 
     test "marks the record removed for an Issue remove delivery; a comment is only counted" do
@@ -154,7 +136,7 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       comment = delivery_body(%{"type" => "Comment", "action" => "create", "data" => %{"id" => "c1", "body" => "hi", "issueId" => "issue-hook"}})
       assert json_response(post_signed(comment), 200)
 
-      assert %{"recent" => [%{"type" => "Comment", "observation" => nil}, %{"action" => "remove", "observation" => "removed"} | _]} = linear_webhooks_state()
+      assert %{recent: [%{type: "Comment", observation: nil}, %{action: "remove", observation: :removed} | _]} = Deliveries.summary()
     end
 
     test "an updated delivery polls the ticket's repo at once; unchanged, stale and unrouted ones ask for nothing" do
@@ -170,8 +152,7 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       assert json_response(post_signed(issue_delivery("update", %{"priority" => 4, "updatedAt" => "2026-10-29T08:59:00.000Z"})), 200)
       assert json_response(post_signed(issue_delivery("create", %{"id" => "issue-new", "identifier" => "ACME-10"})), 200)
 
-      assert %{"recent" => [%{"observation" => "unrouted"}, %{"observation" => "stale"}, %{"observation" => "unchanged"}, %{"observation" => "updated"}]} =
-               linear_webhooks_state()
+      assert %{recent: [%{observation: :unrouted}, %{observation: :stale}, %{observation: :unchanged}, %{observation: :updated}]} = Deliveries.summary()
 
       refute_received {:"$gen_cast", _request}
     end
@@ -190,7 +171,7 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       assert json_response(post_signed(unknown), 200)
       assert json_response(post_signed(comment), 200)
 
-      assert %{"recent" => [%{"observation" => nil}, %{"observation" => "no_record"}, %{"observation" => "removed"}]} = linear_webhooks_state()
+      assert %{recent: [%{observation: nil}, %{observation: :no_record}, %{observation: :removed}]} = Deliveries.summary()
       refute_received {:"$gen_cast", _request}
     end
 
@@ -202,7 +183,7 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
 
       assert log =~ "Linear webhook observation failed for issue_id=issue-hook"
       assert RunStore.get_ticket_state(Config.repo_key!(), "issue-hook") == nil
-      assert %{"recent" => [%{"observation" => "error"}], "observations" => %{"error" => 1}} = linear_webhooks_state()
+      assert %{recent: [%{observation: :error}], observations: %{error: 1}} = Deliveries.summary()
     end
 
     test "still answers 200 within the bound when the record write hangs, logged and counted as an error" do
@@ -212,7 +193,7 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       log = capture_log(fn -> assert json_response(post_signed(issue_delivery("update", %{})), 200) == %{"status" => "accepted"} end)
 
       assert log =~ "Linear webhook observation failed for issue_id=issue-hook: :timeout"
-      assert %{"recent" => [%{"observation" => "error"}], "observations" => %{"error" => 1}} = linear_webhooks_state()
+      assert %{recent: [%{observation: :error}], observations: %{error: 1}} = Deliveries.summary()
     end
   end
 
@@ -221,7 +202,7 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
     conn = post_webhook(body, [{"content-type", "application/json"}, {"linear-signature", sign(body)}])
 
     assert json_response(conn, 200) == %{"status" => "accepted"}
-    assert %{"total" => 1, "recent" => [%{"type" => "unknown", "action" => "unknown", "identifier" => nil}]} = linear_webhooks_state()
+    assert %{total: 1, recent: [%{type: "unknown", action: "unknown", identifier: nil}]} = Deliveries.summary()
   end
 
   test "rejects a wrong signature with 401, counts it with the reason, and logs neither payload nor secret" do
@@ -238,15 +219,13 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
     refute log =~ @secret
 
     assert %{
-             "total" => 0,
-             "rejected" => 1,
-             "last_rejected_reason" => "bad_signature",
-             "last_rejected_at" => at,
-             "rejected_reasons" => [%{"reason" => "bad_signature", "count" => 1}],
-             "recent" => []
-           } = linear_webhooks_state()
-
-    assert is_binary(at)
+             total: 0,
+             rejected: 1,
+             last_rejected_reason: :bad_signature,
+             last_rejected_at: %DateTime{},
+             rejected_reasons: [%{reason: :bad_signature, count: 1}],
+             recent: []
+           } = Deliveries.summary()
   end
 
   test "rejects an unsigned delivery, a stale one, and one in a content type it doesn't read" do
@@ -260,12 +239,12 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       assert json_response(post_webhook(body, [{"content-type", "text/plain"}, {"linear-signature", sign(body)}]), 401)
     end)
 
-    assert %{"total" => 0, "rejected" => 3, "rejected_reasons" => reasons} = linear_webhooks_state()
+    assert %{total: 0, rejected: 3, rejected_reasons: reasons} = Deliveries.summary()
 
-    assert Enum.sort_by(reasons, & &1["reason"]) == [
-             %{"reason" => "bad_signature", "count" => 1},
-             %{"reason" => "missing_signature", "count" => 1},
-             %{"reason" => "stale_timestamp", "count" => 1}
+    assert Enum.sort_by(reasons, & &1.reason) == [
+             %{reason: :bad_signature, count: 1},
+             %{reason: :missing_signature, count: 1},
+             %{reason: :stale_timestamp, count: 1}
            ]
   end
 
@@ -276,7 +255,8 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
     body = delivery_body(%{"type" => "Issue"})
     capture_log(fn -> assert json_response(post_webhook(body, [{"content-type", "application/json"}, {"linear-signature", sign(body)}]), 401) end)
 
-    assert %{"enabled" => true, "secret_configured" => false, "rejected" => 1, "last_rejected_reason" => "missing_secret"} = linear_webhooks_state()
+    assert %{enabled: true, secret_configured: false} = webhook_settings()
+    assert %{rejected: 1, last_rejected_reason: :missing_secret} = Deliveries.summary()
   end
 
   test "only takes POST" do
@@ -296,7 +276,10 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
     Cache.clear()
   end
 
-  defp linear_webhooks_state, do: build_conn() |> get("/api/v1/state") |> json_response(200) |> Map.fetch!("linear_webhooks")
+  defp webhook_settings do
+    settings = LinearWebhook.settings()
+    %{enabled: settings.enabled, secret_configured: LinearWebhook.secret(settings) != nil}
+  end
 
   defp delivery_body(fields), do: fields |> Map.put("webhookTimestamp", System.system_time(:millisecond)) |> Jason.encode!()
 

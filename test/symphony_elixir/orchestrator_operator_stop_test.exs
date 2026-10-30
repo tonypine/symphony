@@ -21,7 +21,6 @@ defmodule SymphonyElixir.OrchestratorOperatorStopTest do
     File.chmod!(fake_claude, 0o755)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: @active_states,
       tracker_terminal_states: ["Done", "Canceled", "Duplicate"],
       workspace_root: Path.join(test_root, "workspaces"),

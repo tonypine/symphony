@@ -179,7 +179,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
 
     test "a person's new comment on an approved plan is read, from the comments the poll read", ctx do
       waiting = "Waiting on sub-tickets"
-      set_source("record", tracker_kind: "memory")
+      set_source("record")
       SubIssueWait.reset_for_test(waiting)
       on_exit(fn -> SubIssueWait.reset_for_test(waiting) end)
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
@@ -284,7 +284,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
 
   describe "the tick's by-id reads under dispatch.source: record" do
     setup ctx do
-      set_source("record", tracker_kind: "memory")
+      set_source("record")
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
       ctx
     end
@@ -431,7 +431,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
 
   describe "the revalidation before a start under dispatch.source: record" do
     setup ctx do
-      set_source("record", tracker_kind: "memory")
+      set_source("record")
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
       ctx
     end
@@ -473,7 +473,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
 
       # Unassigned now, no record at all, or a repo the store refuses.
       observe!(ctx.repo_key, [issue(ctx.repo_key, 2, assignee_id: nil)], :poll)
-      set_source("record", tracker_kind: "memory", tracker_assignee: "user-2")
+      set_source("record", tracker_assignee: "user-2")
       revalidate = &Orchestrator.revalidate_issue_from_record_for_test/2
       assert {:skip, :missing} = revalidate.(issue(ctx.repo_key, 2), ctx.repo_key)
       assert {:skip, :missing} = revalidate.(issue(ctx.repo_key, 3), ctx.repo_key)
@@ -481,7 +481,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
     end
 
     test "a retry's own read is written into its record, so the check before its start is not older than that read" do
-      set_source("record", tracker_kind: "memory", quality_gate: %{enabled: false})
+      set_source("record", quality_gate: %{enabled: false})
       repo_key = Config.repo_key!()
       pid = start_orchestrator!(:RetryOrchestrator)
       polled = issue(repo_key, "retry", state: "In Progress")
@@ -531,7 +531,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       assert Orchestrator.dispatch_refresh_ids_for_test(state, [candidate], :poll) == []
       assert Orchestrator.dispatch_refresh_ids_for_test(state, [candidate], {:active_retry, candidate, 1, %{}}) == []
 
-      set_source("poll", tracker_kind: "memory")
+      set_source("poll")
       assert Orchestrator.dispatch_refresh_ids_for_test(state, [candidate], :poll) == [candidate.id]
       assert Orchestrator.dispatch_refresh_ids_for_test(state, [candidate], {:active_retry, candidate, 1, %{}}) == [candidate.id]
     end

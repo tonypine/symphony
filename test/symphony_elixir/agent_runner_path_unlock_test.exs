@@ -24,7 +24,6 @@ defmodule SymphonyElixir.AgentRunnerPathUnlockTest do
     File.mkdir_p!(test_root)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", "Rework"],
       workspace_root: test_root,
       agent_kind: "claude",

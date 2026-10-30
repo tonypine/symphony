@@ -83,7 +83,7 @@ defmodule SymphonyElixirWeb.Presenter do
           conflicts: snapshot |> Map.get(:conflicts, []) |> Enum.map(&conflict_entry_payload/1),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
           drain_report: drain_report_payload(RetiredStates.drain_report()),
-          setup: setup |> Setup.payload() |> Map.put(:github_updates, WebhookSetupCache.state_section(github_updates)),
+          setup: setup |> setup_payload() |> Map.put(:github_updates, WebhookSetupCache.state_section(github_updates)),
           awaiting_clarification:
             snapshot
             |> Map.get(:awaiting_clarification, [])
@@ -664,6 +664,14 @@ defmodule SymphonyElixirWeb.Presenter do
 
   # The Linear webhook's settings, the deliveries counted since Symphony started with what observing
   # them into the record did, and how often a later read found the webhook first or the poll first.
+  # The Setup server's payload; without a running server, the payload of one that hasn't checked yet.
+  defp setup_payload(setup) do
+    case Setup.payload(setup) do
+      {:error, :not_running} -> Setup.not_checked_yet()
+      payload -> payload
+    end
+  end
+
   defp linear_webhooks_payload do
     settings = LinearWebhook.settings()
     summary = LinearWebhookDeliveries.summary()

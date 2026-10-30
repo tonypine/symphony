@@ -79,7 +79,6 @@ defmodule SymphonyElixir.BlockedHoldDispatchTest do
 
   defp designed_workflow do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: @active_states,
       tracker_terminal_states: @terminal,
       repos: [[key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test"]]
@@ -88,7 +87,6 @@ defmodule SymphonyElixir.BlockedHoldDispatchTest do
 
   defp legacy_workflow do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: @active_states,
       tracker_terminal_states: @terminal,
       repos: [[key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test"]]

@@ -8,7 +8,6 @@ defmodule SymphonyElixir.OrchestratorClaimsTest do
     File.mkdir_p!(test_root)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       workspace_root: Path.join(test_root, "workspaces"),
       quality_gate: %{enabled: false},
       tracker_active_states: ["Todo", "In Progress", "Rework"]

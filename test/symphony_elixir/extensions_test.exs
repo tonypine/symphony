@@ -209,7 +209,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     issue = %Issue{id: "issue-1", identifier: "MT-1", state: "In Progress"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue, %{id: "ignored"}])
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
 
     assert Config.settings!().tracker.kind == "memory"
     assert SymphonyElixir.Tracker.adapter() == Memory
@@ -272,7 +272,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     )
 
     # Relative to the folder holding symphony.yml.
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_memory_issues_file: "issues.json")
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_memory_issues_file: "issues.json")
     assert Config.settings!().tracker.memory_issues_file == issues_file
 
     assert {:ok, [first, second]} = Memory.fetch_candidate_issues()
@@ -303,7 +303,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert log =~ "Memory tracker could not read issues_file=#{issues_file}"
     assert log =~ ":enoent"
 
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     assert {:ok, []} = Memory.fetch_candidate_issues()
 
     File.write!(Workflow.symphony_file_path(), "issues: [\n")

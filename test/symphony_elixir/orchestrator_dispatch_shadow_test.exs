@@ -250,7 +250,7 @@ defmodule SymphonyElixir.OrchestratorDispatchShadowTest do
   end
 
   test "with assignee me, the record side counts the viewer the poll already resolved", ctx do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_assignee: "me")
+    write_workflow_file!(Workflow.workflow_file_path(), linear_tracker(tracker_assignee: "me"))
     issues = [issue(ctx.repo_key, 1)]
 
     # Without the viewer known, no record counts as assigned.

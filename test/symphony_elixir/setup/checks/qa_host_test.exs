@@ -10,11 +10,11 @@ defmodule SymphonyElixir.Setup.Checks.QaHostTest do
 
   setup do
     on_exit(fn -> Application.delete_env(:symphony_elixir, :setup_qa_machine) end)
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     :ok
   end
 
-  defp write_qa_config!(auto_review), do: write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", auto_review: auto_review)
+  defp write_qa_config!(auto_review), do: write_workflow_file!(Workflow.workflow_file_path(), auto_review: auto_review)
 
   defp problems, do: Setup.check(checks: [QaHost], linear_api_key?: true).problems
 

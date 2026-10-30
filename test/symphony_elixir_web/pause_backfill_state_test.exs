@@ -26,7 +26,7 @@ defmodule SymphonyElixirWeb.PauseBackfillStateTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     orchestrator = Module.concat(__MODULE__, "Orchestrator#{System.unique_integer([:positive])}")
     start_supervised!(%{id: IdleOrchestrator, start: {IdleOrchestrator, :start_link, [orchestrator]}})
 

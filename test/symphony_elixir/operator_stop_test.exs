@@ -14,7 +14,7 @@ defmodule SymphonyElixir.OperatorStopTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     issue = %Issue{id: @issue_id, identifier: "MT-1", title: "Stopped", state: "Todo"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
     :ok = RunStore.clear()

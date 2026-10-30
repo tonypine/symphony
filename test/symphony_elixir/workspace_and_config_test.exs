@@ -2288,7 +2288,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   end
 
   test "linear client sends configured assignee in candidate filter" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_assignee: "user-1")
+    write_workflow_file!(Workflow.workflow_file_path(), linear_tracker(tracker_assignee: "user-1"))
 
     graphql_fun = fn query, variables ->
       send(self(), {:candidate_query, query, variables})
@@ -2349,7 +2349,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   end
 
   test "linear client resolves assignee me before sending candidate filter" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_assignee: "me")
+    write_workflow_file!(Workflow.workflow_file_path(), linear_tracker(tracker_assignee: "me"))
 
     graphql_fun = fn query, variables ->
       if query =~ "SymphonyLinearViewer" do
@@ -2380,10 +2380,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   end
 
   test "linear client sends team key in candidate filter" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_project_slug: nil,
-      tracker_team: "ACME"
-    )
+    write_workflow_file!(Workflow.workflow_file_path(), linear_tracker(tracker_project_slug: nil, tracker_team: "ACME"))
 
     variables = capture_candidate_variables!()
 
@@ -2400,10 +2397,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   test "linear client sends team id in candidate filter for UUID team" do
     team_id = "a42df4c4-7416-4a08-8fb2-97087043169f"
 
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_project_slug: nil,
-      tracker_team: team_id
-    )
+    write_workflow_file!(Workflow.workflow_file_path(), linear_tracker(tracker_project_slug: nil, tracker_team: team_id))
 
     variables = capture_candidate_variables!()
 
@@ -2416,10 +2410,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   test "linear client sends uppercase UUID team as id in candidate filter" do
     team_id = "A42DF4C4-7416-4A08-8FB2-97087043169F"
 
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_project_slug: nil,
-      tracker_team: team_id
-    )
+    write_workflow_file!(Workflow.workflow_file_path(), linear_tracker(tracker_project_slug: nil, tracker_team: team_id))
 
     variables = capture_candidate_variables!()
 
@@ -2432,10 +2423,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   test "linear client does not treat loose 36 character team values as ids" do
     team = "------------------------------------"
 
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_project_slug: nil,
-      tracker_team: team
-    )
+    write_workflow_file!(Workflow.workflow_file_path(), linear_tracker(tracker_project_slug: nil, tracker_team: team))
 
     variables = capture_candidate_variables!()
 
@@ -2447,10 +2435,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
   test "linear client sends single and multiple labels with OR semantics" do
     for labels <- [["backend"], ["backend", "infra"]] do
-      write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_project_slug: nil,
-        tracker_labels: labels
-      )
+      write_workflow_file!(Workflow.workflow_file_path(), linear_tracker(tracker_project_slug: nil, tracker_labels: labels))
 
       variables = capture_candidate_variables!()
 
@@ -2463,11 +2448,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   end
 
   test "linear client omits empty labels from candidate filter" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_project_slug: nil,
-      tracker_team: "ACME",
-      tracker_labels: []
-    )
+    write_workflow_file!(Workflow.workflow_file_path(), linear_tracker(tracker_project_slug: nil, tracker_team: "ACME", tracker_labels: []))
 
     variables = capture_candidate_variables!()
 
@@ -2476,11 +2457,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   end
 
   test "linear client normalizes blank candidate scope values before building filter" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_project_slug: " ",
-      tracker_team: " ACME ",
-      tracker_labels: ["", " backend ", " "]
-    )
+    write_workflow_file!(Workflow.workflow_file_path(), linear_tracker(tracker_project_slug: " ", tracker_team: " ACME ", tracker_labels: ["", " backend ", " "]))
 
     variables = capture_candidate_variables!()
 
@@ -2494,11 +2471,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   end
 
   test "linear client combines configured candidate filter dimensions" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_team: "ACME",
-      tracker_labels: ["backend"],
-      tracker_assignee: "user-1"
-    )
+    write_workflow_file!(Workflow.workflow_file_path(), linear_tracker(tracker_team: "ACME", tracker_labels: ["backend"], tracker_assignee: "user-1"))
 
     variables = capture_candidate_variables!()
 
@@ -2514,31 +2487,18 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   test "linear client sends one isolated server-side candidate filter per repo" do
     repo_root = Path.dirname(Workflow.workflow_file_path())
 
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_project_slug: "legacy-project",
-      tracker_team: "LEGACY",
-      tracker_labels: ["legacy"],
-      tracker_assignee: "legacy-user",
-      repos: [
-        %{
-          "name" => "web",
-          "path" => repo_root,
-          "workflow" => "WORKFLOW.md",
-          "team" => "ACME",
-          "projects" => ["Project Alpha"],
-          "labels" => ["web"],
-          "assignee" => "user-web"
-        },
-        %{
-          "name" => "api",
-          "path" => repo_root,
-          "workflow" => "WORKFLOW.md",
-          "team" => "ACME",
-          "projects" => ["Project Beta"],
-          "labels" => ["api"],
-          "assignee" => "user-api"
-        }
-      ]
+    write_workflow_file!(
+      Workflow.workflow_file_path(),
+      linear_tracker(
+        tracker_project_slug: "legacy-project",
+        tracker_team: "LEGACY",
+        tracker_labels: ["legacy"],
+        tracker_assignee: "legacy-user",
+        repos: [
+          %{"name" => "web", "path" => repo_root, "workflow" => "WORKFLOW.md", "team" => "ACME", "projects" => ["Project Alpha"], "labels" => ["web"], "assignee" => "user-web"},
+          %{"name" => "api", "path" => repo_root, "workflow" => "WORKFLOW.md", "team" => "ACME", "projects" => ["Project Beta"], "labels" => ["api"], "assignee" => "user-api"}
+        ]
+      )
     )
 
     graphql_fun = fn query, variables ->
@@ -2591,23 +2551,14 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   test "linear client state reconciliation keeps partial repo successes when one repo errors" do
     repo_root = Path.dirname(Workflow.workflow_file_path())
 
-    write_workflow_file!(Workflow.workflow_file_path(),
-      repos: [
-        %{
-          "name" => "web",
-          "path" => repo_root,
-          "workflow" => "WORKFLOW.md",
-          "team" => "ACME",
-          "labels" => ["web"]
-        },
-        %{
-          "name" => "api",
-          "path" => repo_root,
-          "workflow" => "WORKFLOW.md",
-          "team" => "ACME",
-          "labels" => ["api"]
-        }
-      ]
+    write_workflow_file!(
+      Workflow.workflow_file_path(),
+      linear_tracker(
+        repos: [
+          %{"name" => "web", "path" => repo_root, "workflow" => "WORKFLOW.md", "team" => "ACME", "labels" => ["web"]},
+          %{"name" => "api", "path" => repo_root, "workflow" => "WORKFLOW.md", "team" => "ACME", "labels" => ["api"]}
+        ]
+      )
     )
 
     graphql_fun = fn query, variables ->
@@ -2636,11 +2587,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   end
 
   test "linear client repeats candidate filter while paginating" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_project_slug: nil,
-      tracker_team: "ACME",
-      tracker_labels: ["backend"]
-    )
+    write_workflow_file!(Workflow.workflow_file_path(), linear_tracker(tracker_project_slug: nil, tracker_team: "ACME", tracker_labels: ["backend"]))
 
     graphql_fun = fn query, variables ->
       send(self(), {:candidate_page, query, variables})

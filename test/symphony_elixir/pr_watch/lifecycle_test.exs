@@ -82,7 +82,7 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
 
   setup do
     start_supervised!(World)
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", pr_review_mode: "polling", ci: %{enabled: true})
+    write_workflow_file!(Workflow.workflow_file_path(), pr_review_mode: "polling", ci: %{enabled: true})
     :ok
   end
 
@@ -429,7 +429,6 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
 
     test "the base is the repo's `base_branch` when its configuration names one" do
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         pr_review_mode: "polling",
         repos: [[key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test", base_branch: "develop"]]
       )

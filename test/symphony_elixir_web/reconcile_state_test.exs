@@ -24,7 +24,7 @@ defmodule SymphonyElixirWeb.ReconcileStateTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     orchestrator = Module.concat(__MODULE__, "Orchestrator#{System.unique_integer([:positive])}")
     start_supervised!(%{id: IdleOrchestrator, start: {IdleOrchestrator, :start_link, [orchestrator]}})
 
@@ -71,7 +71,7 @@ defmodule SymphonyElixirWeb.ReconcileStateTest do
 
   test "a reconcile run shows when it ran, the interval, and what it applied, re-applied and filled" do
     repo_key = Config.repo_key!()
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     File.write!(Workflow.symphony_file_path(), File.read!(Workflow.symphony_file_path()) <> "linear:\n  reconcile_interval_ms: 120000\n")
     Cache.clear()
 

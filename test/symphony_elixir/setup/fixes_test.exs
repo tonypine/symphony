@@ -17,7 +17,7 @@ defmodule SymphonyElixir.Setup.FixesTest do
     end)
 
     path = Workflow.workflow_file_path()
-    write_workflow_file!(path, tracker_kind: "memory", repos: [%{key: "app", team: "TP", workflow: path}])
+    write_workflow_file!(path, repos: [%{key: "app", team: "TP", workflow: path}])
 
     labels = for %{names: [name | _]} <- StateProvisioning.machine_labels("expedite", ["needs-human"]), name != "Needs Decision", do: name
     Application.put_env(:symphony_elixir, :memory_tracker_labels_list, Enum.map(labels, &%{id: &1, name: &1, team_id: "TP", team_key: "TP"}))
@@ -29,6 +29,23 @@ defmodule SymphonyElixir.Setup.FixesTest do
   end
 
   defp ids(payload), do: Enum.map(payload.problems, & &1.id)
+
+  # Creates the label, and stops the test's Setup server, as a shutdown between the fix and the
+  # checks after it would.
+  defmodule StoppingTracker do
+    def create_label(_name, _team) do
+      :ok = ExUnit.Callbacks.stop_supervised(Setup)
+      {:ok, %{id: "label"}}
+    end
+  end
+
+  test "without a running Setup server, nothing runs" do
+    assert Fixes.run(@create, server: :no_setup_server) == {:error, :not_running}
+  end
+
+  test "a fix whose Setup server stopped before the checks ran again says so", %{server: server} do
+    assert Fixes.run(@create, server: server, tracker: StoppingTracker) == {:error, :not_running}
+  end
 
   test "a proposed create_label creates exactly that label in that team, and the next check is clean", %{server: server} do
     assert ids(Setup.payload(server)) == ["labels:missing:TP:Needs Decision"]

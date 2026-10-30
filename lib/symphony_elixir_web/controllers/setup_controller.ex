@@ -30,14 +30,14 @@ defmodule SymphonyElixirWeb.SetupController do
   @spec show(Conn.t(), map()) :: Conn.t()
   def show(conn, params) do
     with_repo(conn, params, fn filter ->
-      json(conn, Map.put(filter.(Setup.payload(setup())), :github_updates, WebhookSetup.section(opts())))
+      with_running(conn, Setup.payload(setup()), &json(conn, Map.put(filter.(&1), :github_updates, WebhookSetup.section(opts()))))
     end)
   rescue
     error in ArgumentError -> config_unavailable(conn, error)
   end
 
   @spec refresh(Conn.t(), map()) :: Conn.t()
-  def refresh(conn, params), do: with_repo(conn, params, &json(conn, &1.(Setup.refresh(setup()))))
+  def refresh(conn, params), do: with_repo(conn, params, &with_running(conn, Setup.refresh(setup()), fn payload -> json(conn, &1.(payload)) end))
 
   @spec fixes(Conn.t(), map()) :: Conn.t()
   def fixes(conn, params) do
@@ -50,10 +50,11 @@ defmodule SymphonyElixirWeb.SetupController do
       {:error, :not_proposed} ->
         error_response(conn, 422, "fix_not_proposed", "The latest setup check didn't propose this fix. Check again, then use a fix it lists.")
 
+      {:error, :not_running} ->
+        not_running(conn)
+
       {:error, {:refused, message}} ->
-        conn
-        |> put_status(422)
-        |> json(Map.put(Setup.payload(setup()), :error, %{code: "fix_refused", message: message}))
+        with_running(conn, Setup.payload(setup()), &(conn |> put_status(422) |> json(Map.put(&1, :error, %{code: "fix_refused", message: message}))))
     end
   end
 
@@ -112,6 +113,12 @@ defmodule SymphonyElixirWeb.SetupController do
         Map.put(acc, key, value)
     end)
   end
+
+  # Answers with `answer` on the Setup server's payload, or 503 while no server runs.
+  defp with_running(conn, {:error, :not_running}, _answer), do: not_running(conn)
+  defp with_running(_conn, payload, answer), do: answer.(payload)
+
+  defp not_running(conn), do: error_response(conn, 503, "setup_not_running", "Symphony's setup checks aren't running.")
 
   defp config_unavailable(conn, error) do
     error_response(conn, 503, "config_unavailable", "Symphony couldn't read its configuration: #{Exception.message(error)}")

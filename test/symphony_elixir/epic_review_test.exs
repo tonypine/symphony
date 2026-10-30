@@ -68,7 +68,7 @@ defmodule SymphonyElixir.EpicReviewTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     for id <- [@issue_id, @other_issue_id] do
