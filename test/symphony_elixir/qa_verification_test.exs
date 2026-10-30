@@ -948,8 +948,14 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert decision.title == "QA could not finish its check of TP-816"
       assert decision.question == "QA ran TP-816 (Land the QA state) 2 times on the same change without a pass or a fail. How should it continue?"
       assert decision.why =~ "The last run ended with: The app cannot be pointed at a fake update list."
-      assert [%{label: "Run QA again", recommended: true}, %{label: "Send it back to Rework"}, %{label: "Merge without a QA result", effect: merge}] = decision.options
-      assert merge =~ "you move TP-816 to Merging"
+      assert [again, %{label: "Send it back to Rework", move: %{to: "Rework"}}, %{label: "Merge without a QA result", effect: merge, move: merge_move}] = decision.options
+      assert %{label: "Run QA again", recommended: true} = again
+      refute Map.has_key?(again, :move)
+      # The pick is Symphony's move, never the person's: no option asks them to move the ticket.
+      assert merge == "Symphony moves TP-816 to Merging, and it merges on its review and CI alone"
+      refute Enum.any?(decision.options, &(&1.effect =~ "you move"))
+      assert merge_move == %{to: "Merging", verdict: %{kind: "qa", outcome: "skip", head_sha: head, reason: "skipped by decision"}}
+      assert decision.state == "QA"
 
       assert_received {:memory_tracker_comment, @issue_id, _retrying_report}
       assert_received {:memory_tracker_comment, @issue_id, _report}

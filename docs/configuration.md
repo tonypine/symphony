@@ -1527,6 +1527,13 @@ is then decided by the other steps, the pre-checks and CI:
 | one passes, or a pre-check passed | `pass` → `Merging`, the report naming each unprovable step and its reason |
 | none is left | `blocked` with no retry and no fix ticket: the ticket pauses in `QA` on the "QA could not finish" Needs Decision hold at once, with its three options and **Merge without a QA result** recommended |
 
+Picking an option of that hold is all the person does; Symphony makes the move. **Run QA again**
+clears the hold and QA runs once more on the same change. **Send it back to Rework** moves the
+ticket to `Rework`. **Merge without a QA result** records a `qa` verdict `skip` (skipped by
+decision) on the change QA judged and moves the ticket to `Merging`, where it merges on its review
+and CI alone. The move is made before the hold clears, so QA never starts again in between, and
+under `dispatch.source: record` no hand move is needed or kept.
+
 The QA policy gives a pass `scope: none` up front when a `macos_app` pass is selected (by a
 `qa:macos_app` label) although no changed path matches any selected playbook's `paths`, and the
 ticket has no `## User walkthrough`: the agent is told that building and launching the app are the
