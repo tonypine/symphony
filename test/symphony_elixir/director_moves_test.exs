@@ -362,6 +362,28 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert_received {:close_pr, @restart_pr_url}
     end
 
+    test "Restart withdraws the question its run asked: the pause and the hold clear, the request is answered, and the Inbox row goes", %{opts: opts} do
+      github_activity(state: "OPEN")
+      put_issues([restart_issue()])
+      ticket = {:ticket, "repo-restart", "pr"}
+      {:ok, question} = Questions.ask(ticket, layout_request(), asked_by: %{kind: :run, name: "The run"})
+      :ok = Hold.set("repo-restart", "pr", :needs_decision, %{reason: "Pick a layout", decision: %{title: "Pick a layout", question_id: question.id}})
+
+      row = %{kind: :action, repo_key: "repo-restart", issue_id: "pr", identifier: "MOT-40", state: "Rework", waiting_since: nil, review: %{comment_id: "comment-7", question_id: question.id}}
+      :persistent_term.put({SymphonyElixir.Inbox, :items, :director_moves_restart_inbox}, [row])
+      on_exit(fn -> :persistent_term.erase({SymphonyElixir.Inbox, :items, :director_moves_restart_inbox}) end)
+      assert [_row] = SymphonyElixir.Inbox.items(%{}, :director_moves_restart_inbox)
+
+      opts = Keyword.put(restart_opts(opts), :inbox, :director_moves_restart_inbox)
+      assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "Start over"}, opts)
+
+      assert %{state: :withdrawn, withdrawn: %{reason: "The run that asked was restarted."}} = Questions.find(ticket, question.id)
+      assert {:ok, nil} = Pauses.get(ticket)
+      refute Hold.held?("repo-restart", "pr", :needs_decision)
+      assert_received {:memory_tracker_reply, "pr", "comment-7", "## Action withdrawn\n\nThe run that asked was restarted."}
+      assert SymphonyElixir.Inbox.items(%{}, :director_moves_restart_inbox) == []
+    end
+
     test "the restart comment says what the reset did" do
       assert DirectorMoves.restart_comment("MOT-40", "The approach is wrong") ==
                "Restarted by the Director: MOT-40 starts again from main — its pull requests are closed, its workspace is gone, " <>
@@ -614,6 +636,18 @@ defmodule SymphonyElixir.DirectorMovesTest do
       # A ticket Linear gave no state is open too.
       put_issues([pr(nil)])
       assert {:ok, %{to_state: "Backlog"}} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts)
+    end
+
+    test "a move to Backlog withdraws the questions its run asked and leaves one about the ticket itself", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-backlog"}])
+      ticket = {:ticket, "repo-backlog", "pr"}
+      {:ok, asked} = Questions.ask(ticket, layout_request(), asked_by: %{kind: :run, name: "The run"})
+      {:ok, confirmation} = Questions.ask(ticket, %{layout_request() | title: "Merge the pull request", question: "Merge it now?"}, confirm: "Merging")
+
+      assert {:ok, %{to_state: "Backlog"}} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts)
+
+      assert %{state: :withdrawn, withdrawn: %{reason: "The ticket was moved to Backlog, which stopped the run that asked."}} = Questions.find(ticket, asked.id)
+      assert %{state: :open} = Questions.find(ticket, confirmation.id)
     end
 
     test "refuses a ticket already in Backlog or closed", %{opts: opts} do
@@ -1883,6 +1917,17 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
   defp github_activity(fields) do
     Application.put_env(:symphony_elixir, :director_moves_test_activity, {:ok, Map.merge(%{pr_url: @restart_pr_url, pr_node_id: "PR_node"}, Map.new(fields))})
+  end
+
+  defp layout_request do
+    %{
+      title: "Pick a layout",
+      question: "Which of the two layouts should the settings pane use?",
+      why: "The run built both. Only you can pick.",
+      if_unanswered: "The run waits for your pick.",
+      recommendation_reason: "The list fits the laptop screen.",
+      options: [%{label: "The list", effect: "The pane shows a list.", recommended: true}, %{label: "The grid", effect: "The pane shows a grid."}]
+    }
   end
 
   defp put_issues(issues), do: Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)

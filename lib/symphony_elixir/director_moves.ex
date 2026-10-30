@@ -20,7 +20,8 @@ defmodule SymphonyElixir.DirectorMoves do
     (`SymphonyElixir.Restart`). A dispatch-loop or quiet-handoff hold is cleared with it, since the
     attempt it held is the one thrown away, with the question Symphony asked beside it answered
     "Start it over from main" (`SymphonyElixir.DispatchLoop`), and so is an operator's stop, its
-    pause reason with its hold (`SymphonyElixir.OperatorStop`);
+    pause reason with its hold (`SymphonyElixir.OperatorStop`). Every other open question nobody needs
+    any more is withdrawn with the reason (`SymphonyElixir.Questions.withdraw_lapsed/3`);
   - `:decisions`: a plan in `Plan Review` gets the Director's answers to its questions, in place:
     each pick naming its Question (`question_id`, or the `request_comment_id` whose Inbox row names
     it) answers that Question first (`SymphonyElixir.Questions.answer/4`); each pick naming its
@@ -35,6 +36,7 @@ defmodule SymphonyElixir.DirectorMoves do
     revision the same way: the plan is changed and keeps its sub-tickets. `:rework` is the
     rejection that cancels them. Neither `:decisions` nor `:changes` is taken back by `undo/2`;
   - `:backlog`: an open ticket gets the note as a comment when there is one, then moves to `Backlog`;
+    the questions its run asked are withdrawn with the reason (`SymphonyElixir.Questions.withdraw_lapsed/3`);
   - `:unblock`: a ticket waiting on an **access** hold — an agent's block report, whose question is
     answered "Unblock and run again" (`SymphonyElixir.TransitionGuard.block_report_question/1`) — on a
     dispatch-loop or quiet-handoff hold (`SymphonyElixir.DispatchLoop`: the question Symphony asked
@@ -508,6 +510,7 @@ defmodule SymphonyElixir.DirectorMoves do
     case Restart.perform(issue, restart_opts(opts)) do
       :ok ->
         clear_restarted_hold(issue, opts)
+        withdraw_lapsed(issue, :restart, opts)
         comment_then_move(:restart, issue, restart_comment(issue.identifier, String.trim(input[:reason])), to_state, opts)
 
       {:error, {:restart, message}} ->
@@ -515,10 +518,14 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
+  # The move stops the ticket's run, so the questions it asked are withdrawn once the move is made.
   defp apply_move(:backlog, issue, to_state, input, opts) do
-    if present?(input[:note]),
-      do: comment_then_move(:backlog, issue, backlog_comment(String.trim(input.note)), to_state, opts),
-      else: comment_then_move(:backlog, issue, nil, to_state, opts)
+    comment = if present?(input[:note]), do: backlog_comment(String.trim(input.note))
+
+    with {:ok, _comment} = moved <- comment_then_move(:backlog, issue, comment, to_state, opts) do
+      withdraw_lapsed(issue, :backlog, opts)
+      moved
+    end
   end
 
   # Each answer to one of the plan's requests goes under it, as a Decide's does, and the rest in one
@@ -672,6 +679,13 @@ defmodule SymphonyElixir.DirectorMoves do
       :ok -> :ok
       {:error, reason} -> Logger.warning("Failed to clear the Needs Decision hold on #{issue.identifier} after its plan's answers: #{inspect(reason)}")
     end
+  end
+
+  # The questions the move ends are withdrawn with its reason (`Questions.withdraw_lapsed/3`), their
+  # holds cleared and their requests answered `## Action withdrawn`.
+  defp withdraw_lapsed(issue, lapse, opts) do
+    {:ok, _withdrawn} = Questions.withdraw_lapsed({:ticket, issue.repo_key, issue.id}, lapse, Keyword.take(opts, [:store, :inbox]))
+    :ok
   end
 
   # The attempt a dispatch loop or a quiet handoff held is the one Restart throws away, so its hold
