@@ -23,6 +23,13 @@ defmodule SymphonyElixir.Questions do
   is paused on a question exactly while it is open, whatever else writes the record at the same
   time. Nothing calls this module yet: the Needs Decision hold and its `decision.*` events stay
   with `SymphonyElixir.DecisionRequest`.
+
+  `ask/3` with `backfilled: true` records a question the backfill from the holds and decisions
+  finds (`SymphonyElixir.Pauses.Backfill`): it was asked before, so the writing standard is not
+  checked again, and it keeps the `id:` the backfill gives it, an `answer:` when it was answered
+  (stored answered, with no pause reason: the answer's `decision.recorded` event records it, and
+  `legacy_event:` names that event) and its `question.asked` event carries `source: "backfill"`.
+  A question whose id the record already holds is returned and nothing is recorded.
   """
 
   alias SymphonyElixir.{DecisionRequest, Pauses, RunStore, TicketEvents, TicketState}
@@ -78,14 +85,24 @@ defmodule SymphonyElixir.Questions do
           state: :open | :answered | :withdrawn,
           answer: answer() | nil,
           asked_at: DateTime.t(),
-          withdrawn: %{reason: String.t(), at: DateTime.t()} | nil
+          withdrawn: %{reason: String.t(), at: DateTime.t()} | nil,
+          legacy_event: String.t() | nil
         }
 
   @typedoc """
   `ask/3`'s options: `asked_by:` (`t:asker/0`, default Symphony), `step:` and `confirm:` (strings),
-  and `at:` (a `DateTime`, default now).
+  and `at:` (a `DateTime`, default now); for the backfill only, `backfilled: true` with `id:`,
+  `answer:` and `legacy_event:` (see the module doc).
   """
-  @type ask_opt :: {:asked_by, map()} | {:step, String.t() | nil} | {:confirm, String.t() | nil} | {:at, DateTime.t()}
+  @type ask_opt ::
+          {:asked_by, map()}
+          | {:step, String.t() | nil}
+          | {:confirm, String.t() | nil}
+          | {:at, DateTime.t()}
+          | {:backfilled, boolean()}
+          | {:id, String.t()}
+          | {:answer, answer()}
+          | {:legacy_event, String.t() | nil}
 
   @typedoc """
   `answer/4`'s and `withdraw/4`'s options: `by:` (`t:actor/0`; default the Director for an answer,
@@ -102,11 +119,13 @@ defmodule SymphonyElixir.Questions do
   """
   @spec ask(ticket(), map(), [ask_opt()]) :: {:ok, question()} | {:error, term()}
   def ask(ticket, request, opts \\ []) do
+    backfilled? = Keyword.get(opts, :backfilled) == true
+
     with {:ok, {repo_key, issue_id}} <- ticket(ticket),
-         :ok <- check(request),
+         :ok <- check(request, backfilled?),
          {:ok, asked_by} <- asker(Keyword.get(opts, :asked_by, @symphony)),
          {:ok, at} <- at(opts) do
-      update(repo_key, issue_id, at, &asked(ticket, &1, &2, new_question(request, asked_by, opts, at)))
+      update(repo_key, issue_id, at, &asked(ticket, &1, &2, new_question(request, asked_by, opts, at), backfilled?))
     end
   end
 
@@ -171,16 +190,31 @@ defmodule SymphonyElixir.Questions do
 
   # The changes, from the questions and the pause the store read under its lock: pure, as the store
   # may run them more than once.
-  defp asked(ticket, questions, pause, question) do
-    case Enum.find(questions, &(&1.state == :open and {&1.title, &1.question} == {question.title, question.question})) do
+  defp asked(ticket, questions, pause, question, backfilled?) do
+    case Enum.find(questions, &same?(&1, question)) do
       nil ->
-        paused = Pauses.set_change(ticket, pause, reason(question), set_by: Map.take(question.asked_by, [:kind, :name]), at: question.asked_at)
-        write(ticket, question, {"question.asked", asked_payload(question), question.asked_at}, paused)
+        at = question.asked_at
+        event = {"question.asked", asked_payload(question, backfilled?), [at: at, idempotency: asked_key(question, backfilled?)]}
+        pause_opts = [set_by: Map.take(question.asked_by, [:kind, :name]), at: at, backfilled: backfilled?]
+        write(ticket, question, event, paused(ticket, pause, question, pause_opts))
 
-      open ->
-        {:ok, open}
+      asked ->
+        {:ok, asked}
     end
   end
+
+  # The question already asked: the one with its id, or an open one with its title and text.
+  defp same?(asked, question) do
+    asked.id == question.id or
+      (asked.state == :open and question.state == :open and {asked.title, asked.question} == {question.title, question.question})
+  end
+
+  # An open question pauses the ticket on it; a backfilled answered one leaves the pause as it is.
+  defp paused(ticket, pause, %{state: :open} = question, opts), do: Pauses.set_change(ticket, pause, reason(question), opts)
+  defp paused(_ticket, pause, _answered, _opts), do: {:ok, pause, []}
+
+  defp asked_key(question, true), do: "backfill:question.asked:#{question.id}"
+  defp asked_key(_question, false), do: nil
 
   defp answered(ticket, questions, pause, id, given) do
     with {:ok, question} <- open_question(questions, id) do
@@ -197,7 +231,7 @@ defmodule SymphonyElixir.Questions do
         by: given.by
       }
 
-      write(ticket, question, {"question.answered", payload, given.at}, unpaused(ticket, pause, id, given.by, given.at))
+      write(ticket, question, {"question.answered", payload, [at: given.at]}, unpaused(ticket, pause, id, given.by, given.at))
     end
   end
 
@@ -205,14 +239,14 @@ defmodule SymphonyElixir.Questions do
     with {:ok, question} <- open_question(questions, id) do
       question = %{question | state: :withdrawn, withdrawn: %{reason: reason, at: at}}
       payload = %{question_id: id, title: question.title, reason: reason, by: by}
-      write(ticket, question, {"question.withdrawn", payload, at}, unpaused(ticket, pause, id, by, at))
+      write(ticket, question, {"question.withdrawn", payload, [at: at]}, unpaused(ticket, pause, id, by, at))
     end
   end
 
   # The question with its event, and the pause as its change leaves it with that change's events,
   # for the store to write in one transaction.
-  defp write({:ticket, repo_key, issue_id}, question, {type, payload, at}, pause_change) do
-    with {:ok, event} <- TicketEvents.build(repo_key, issue_id, type, payload, at: at),
+  defp write({:ticket, repo_key, issue_id}, question, {type, payload, event_opts}, pause_change) do
+    with {:ok, event} <- TicketEvents.build(repo_key, issue_id, type, payload, event_opts),
          {:ok, pause, pause_events} <- pause_change,
          do: {:write, question, pause, [event | pause_events], question}
   end
@@ -282,9 +316,23 @@ defmodule SymphonyElixir.Questions do
       state: :open,
       answer: nil,
       asked_at: at,
-      withdrawn: nil
+      withdrawn: nil,
+      legacy_event: nil
     }
+    |> backfilled(opts, Keyword.get(opts, :backfilled) == true)
   end
+
+  # A backfilled question keeps the id, the answer and the legacy event the backfill gives it.
+  defp backfilled(question, opts, true) do
+    question = %{question | id: Keyword.get(opts, :id) || question.id, legacy_event: Keyword.get(opts, :legacy_event)}
+
+    case Keyword.get(opts, :answer) do
+      %{} = answer -> %{question | state: :answered, answer: answer}
+      _open -> question
+    end
+  end
+
+  defp backfilled(question, _opts, false), do: question
 
   defp option(option) do
     tradeoffs = Map.get(option, :tradeoffs) || []
@@ -302,11 +350,20 @@ defmodule SymphonyElixir.Questions do
 
   defp tradeoffs(tradeoffs, kind), do: for(%{kind: ^kind, text: text} <- tradeoffs, do: String.trim(text))
 
-  defp asked_payload(question) do
-    question
-    |> Map.take([:title, :question, :why, :if_unanswered, :options, :recommendation_reason, :confirm, :step, :asked_by])
-    |> Map.put(:question_id, question.id)
+  defp asked_payload(question, backfilled?) do
+    payload =
+      question
+      |> Map.take([:title, :question, :why, :if_unanswered, :options, :recommendation_reason, :confirm, :step, :asked_by])
+      |> Map.put(:question_id, question.id)
+      # A backfilled question may lack the fields the standard asks for; the ledger takes no blank.
+      |> Map.reject(fn {_field, value} -> value == "" end)
+
+    if backfilled?, do: Map.put(payload, :source, :backfill), else: payload
   end
+
+  # A backfilled question was asked before: the standard is not checked again.
+  defp check(request, true) when is_map(request), do: :ok
+  defp check(request, _backfilled?), do: check(request)
 
   defp check(request) when is_map(request) do
     case DecisionRequest.check(request) do

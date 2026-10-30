@@ -162,6 +162,23 @@ defmodule SymphonyElixir.PausesTest do
     end
   end
 
+  describe "a backfilled reason" do
+    test "records its event once, marked as the backfill's, whatever writes it again" do
+      assert {:ok, _pause} = Pauses.set(@ticket, @dependency, at: @at, backfilled: true)
+      assert {:ok, _pause} = Pauses.set(@ticket, @question, at: @at, backfilled: true)
+      assert {:ok, _pause} = Pauses.set(@ticket, @dependency, at: @later, backfilled: true)
+
+      assert [
+               %{type: "pause.set", payload: %{source: "backfill", reason: "ticket"}, idempotency: "backfill:pause.set:ticket:" <> _},
+               %{type: "pause.reason_added", payload: %{source: "backfill", reason: "question"}, idempotency: "backfill:pause.reason_added:question:" <> _}
+             ] = RunStore.list_ticket_events(@repo_key, @issue_id, [])
+
+      assert {:ok, _pause} = Pauses.add_reason(@ticket, %{kind: :environment, waits_on: %{condition: "CI"}}, at: @later)
+      assert %{payload: payload, idempotency: nil} = List.last(RunStore.list_ticket_events(@repo_key, @issue_id, []))
+      refute Map.has_key?(payload, :source)
+    end
+  end
+
   describe "a change for another writer of the ticket's record" do
     test "set_change/4 and clear_reason_change/4 give the pause and its events as set/3 and clear_reason/3 make them, and write nothing" do
       assert {:ok, %{reasons: [%{kind: :question, set_by: @person}], since: @at} = paused, [set]} =

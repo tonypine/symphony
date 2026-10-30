@@ -619,6 +619,20 @@ ticket's events are appended oldest first in one transaction and end with one no
 the history was backfilled. A run store marker (`ticket_events_backfill_v1`) makes a later start a
 no-op.
 
+In the same task, right after it (and never before its marker is set), the pause backfill fills
+each record's pause and questions once from the record alone, never Linear, leaving the holds as
+they are. A Blocked hold becomes a pause reason by what it waits on: a dependency, a fix ticket or a
+landing race waits on a `ticket` (one reason per identifier), an operator stop on a `person`, an
+access need or a CI wait on the `environment` (named from the hold's reason), and a dispatch loop
+or a missing handoff becomes a question Symphony asks ("Run it again", "Start it over from main",
+"Keep it paused"). A Needs Decision hold's request becomes an open question with its `question`
+reason, and each stored decision an answered question naming its `decision.recorded` event
+(`legacy_event`). Each created pause reason and question records one event with
+`source: "backfill"`. A converted record is marked (`pause_backfilled_at`); the operator's pause of
+all dispatch becomes a pause on Symphony once (marker `pause_backfill_symphony_v1`). The last run's
+summary (records read and converted, pauses and questions created, what it skipped and why) is in
+`GET /api/v1/state` under `pause_backfill`.
+
 The stream is read through `GET /api/v1/repos/<repo_key>/tickets/<issue_identifier>/events`
 (Section 13.8.2). Each event a write adds (not a backfilled one, an idempotent no-op or a refused
 write) is also announced, best-effort, on the live channel `GET /api/v1/stream` (Section 13.8.2), so
@@ -5628,6 +5642,9 @@ Minimum endpoints:
     first: `kind` (`code_review` or `qa`), `outcome`, the `head_sha` judged and `recorded_at`. It
     reads no Linear. A ticket Symphony no longer runs or watches still resolves here, with
     `status: "untracked"`, while its ticket state record holds it.
+  - `pause` is why the ticket does not move, from its ticket state record (null when nothing pauses
+    it): `since`, `set_by` and its `reasons`, each with `kind`, `text` (one line in plain words),
+    `waits_on`, `set_by`, `set_at` and `releasable`.
   - Suggested response shape:
 
     ```json

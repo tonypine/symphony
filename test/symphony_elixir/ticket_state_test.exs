@@ -48,6 +48,7 @@ defmodule SymphonyElixir.TicketStateTest do
                not_found_at: nil,
                pause: nil,
                questions: [],
+               pause_backfilled_at: nil,
                updated_at: nil
              }
     end
@@ -168,6 +169,7 @@ defmodule SymphonyElixir.TicketStateTest do
                not_found_at: nil,
                pause: nil,
                questions: [],
+               pause_backfilled_at: nil,
                updated_at: nil
              }
     end

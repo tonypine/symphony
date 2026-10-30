@@ -36,6 +36,11 @@ defmodule SymphonyElixir.Pauses do
   `clear_reason_change/4` and stores both in one transaction: a question
   (`SymphonyElixir.Questions`) and its reason never disagree. Nothing outside
   `SymphonyElixir.Questions`, itself unwired, calls this module yet.
+
+  `backfilled: true` marks a reason the backfill from the holds sets (`SymphonyElixir.Pauses.Backfill`):
+  its event carries `source: "backfill"` and an idempotency key starting `backfill:`, which the
+  ledger's own backfill (`SymphonyElixir.TicketEvents.Backfill`) never takes for a live write, and
+  which a second write of the same reason never records again.
   """
 
   alias SymphonyElixir.{RunStore, TicketEvents, TicketState}
@@ -81,8 +86,11 @@ defmodule SymphonyElixir.Pauses do
           optional(:releasable) => boolean()
         }
 
-  @typedoc "`set_by:` (or `by:` when clearing; default Symphony) and `at:` (a `DateTime`, default now)."
-  @type opt :: {:set_by, set_by()} | {:by, set_by()} | {:at, DateTime.t()}
+  @typedoc """
+  `set_by:` (or `by:` when clearing; default Symphony), `at:` (a `DateTime`, default now) and
+  `backfilled:` (a reason the backfill sets, see the module doc).
+  """
+  @type opt :: {:set_by, set_by()} | {:by, set_by()} | {:at, DateTime.t()} | {:backfilled, boolean()}
 
   @type result :: {:ok, pause() | nil} | {:error, term()}
 
@@ -100,7 +108,7 @@ defmodule SymphonyElixir.Pauses do
   def set(subject, reason, opts \\ []) do
     with {:ok, subject} <- subject(subject),
          {:ok, reason} <- new_reason(reason, opts, :set_by) do
-      update(subject, reason.set_at, &add(subject, &1, reason))
+      update(subject, reason.set_at, &add(subject, &1, reason, source(opts)))
     end
   end
 
@@ -114,7 +122,7 @@ defmodule SymphonyElixir.Pauses do
          {:ok, reason} <- new_reason(reason, opts, :set_by) do
       update(subject, reason.set_at, fn
         nil -> {:error, :not_paused}
-        pause -> add(subject, pause, reason)
+        pause -> add(subject, pause, reason, source(opts))
       end)
     end
   end
@@ -141,7 +149,7 @@ defmodule SymphonyElixir.Pauses do
   def set_change(ticket, pause, reason, opts) do
     with {:ok, ticket} <- ticket(ticket),
          {:ok, reason} <- new_reason(reason, opts, :set_by),
-         do: changed(add(ticket, normalize(pause), reason))
+         do: changed(add(ticket, normalize(pause), reason, source(opts)))
   end
 
   @doc """
@@ -217,18 +225,20 @@ defmodule SymphonyElixir.Pauses do
 
   # The change to a pause, from the pause the store read under its lock (see `update/3`): pure, as
   # the store may run it more than once.
-  defp add(subject, nil, reason) do
+  defp add(subject, nil, reason, source) do
     pause = %{subject: subject, reasons: [reason], set_by: reason.set_by, since: reason.set_at}
-    change(subject, pause, "pause.set", reason_payload(reason), reason.set_at)
+    change(subject, pause, "pause.set", reason_payload(reason, source), reason.set_at)
   end
 
-  defp add(subject, pause, reason) do
+  defp add(subject, pause, reason, source) do
     if Enum.any?(pause.reasons, &(key(&1) == key(reason))) do
       unchanged(pause)
     else
-      change(subject, %{pause | reasons: pause.reasons ++ [reason]}, "pause.reason_added", reason_payload(reason), reason.set_at)
+      change(subject, %{pause | reasons: pause.reasons ++ [reason]}, "pause.reason_added", reason_payload(reason, source), reason.set_at)
     end
   end
+
+  defp source(opts), do: if(Keyword.get(opts, :backfilled) == true, do: :backfill)
 
   defp drop(_subject, nil, _target), do: unchanged(nil)
 
@@ -252,7 +262,7 @@ defmodule SymphonyElixir.Pauses do
   # ledger refuses is never stored, and the store appends it with the pause. Any other subject
   # records no event.
   defp change({:ticket, repo_key, issue_id}, pause, type, payload, at) do
-    with {:ok, event} <- TicketEvents.build(repo_key, issue_id, type, payload, at: at),
+    with {:ok, event} <- TicketEvents.build(repo_key, issue_id, type, payload, at: at, idempotency: idempotency(type, payload)),
          do: {:write, pause, [event], pause}
   end
 
@@ -283,8 +293,20 @@ defmodule SymphonyElixir.Pauses do
     with pause when not is_tuple(pause) <- RunStore.get_subject_pause(subject), do: {:ok, normalize(pause)}
   end
 
-  defp reason_payload(reason) do
-    %{reason: reason.kind, text: reason.text, waits_on: reason.waits_on, set_by: reason.set_by, releasable: reason.releasable}
+  defp reason_payload(reason, source) do
+    payload = %{reason: reason.kind, text: reason.text, waits_on: reason.waits_on, set_by: reason.set_by, releasable: reason.releasable}
+    if source, do: Map.put(payload, :source, source), else: payload
+  end
+
+  # A backfilled reason's event is keyed by its type and the reason, so it is recorded once.
+  defp idempotency(type, %{source: :backfill} = payload), do: "backfill:#{type}:#{payload.reason}:#{hash(payload.waits_on)}"
+  defp idempotency(_type, _payload), do: nil
+
+  defp hash(term) do
+    :sha256
+    |> :crypto.hash(:erlang.term_to_binary(term, [:deterministic]))
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, 16)
   end
 
   defp cleared_payload(reasons, by), do: %{cleared: Enum.map(reasons, &cleared_reason/1), by: by}

@@ -30,6 +30,7 @@ defmodule SymphonyElixirWeb.Presenter do
   alias SymphonyElixir.GitHub.WebhookSetup.Cache, as: WebhookSetupCache
   alias SymphonyElixir.Linear.Webhook, as: LinearWebhook
   alias SymphonyElixir.Linear.Webhook.Deliveries, as: LinearWebhookDeliveries
+  alias SymphonyElixir.Pauses.Backfill, as: PauseBackfill
   alias SymphonyElixir.Repo.Status, as: RepoStatus
   alias SymphonyElixir.TicketEvents.Event
   alias SymphonyElixirWeb.WatchPayload
@@ -118,6 +119,7 @@ defmodule SymphonyElixirWeb.Presenter do
           linear_webhooks: linear_webhooks_payload(),
           dispatch_shadow: dispatch_shadow_payload(),
           reconcile: reconcile_payload(),
+          pause_backfill: pause_backfill_payload(PauseBackfill.summary()),
           orchestrator: Orchestrator.diagnostics(orchestrator)
         }
 
@@ -299,7 +301,7 @@ defmodule SymphonyElixirWeb.Presenter do
         else
           payload = issue_payload_body(issue_identifier, running, retry, watching, waiting)
           record = ticket_state_record(payload.repo_key, payload.issue_id, issue_identifier)
-          {:ok, payload |> Map.put(:verdicts, verdicts_payload(record)) |> Map.put(:watch, WatchPayload.watch(record))}
+          {:ok, record_payload(payload, record)}
         end
 
       _ ->
@@ -325,12 +327,32 @@ defmodule SymphonyElixirWeb.Presenter do
       record ->
         payload = issue_payload_body(issue_identifier, nil, nil, nil, nil)
 
-        {:ok,
-         %{payload | repo_key: record.repo_key, issue_id: record.issue_id}
-         |> Map.put(:verdicts, verdicts_payload(record))
-         |> Map.put(:watch, WatchPayload.watch(record))}
+        {:ok, record_payload(%{payload | repo_key: record.repo_key, issue_id: record.issue_id}, record)}
     end
   end
+
+  # What the ticket's record adds to its payload: its verdicts, the watcher's block and its pause.
+  defp record_payload(payload, record) do
+    payload
+    |> Map.put(:verdicts, verdicts_payload(record))
+    |> Map.put(:watch, WatchPayload.watch(record))
+    |> Map.put(:pause, record_pause_payload(record))
+  end
+
+  # Why the ticket does not move (`SymphonyElixir.Pauses`): each reason in plain words, what it
+  # waits on, who set it and when, and whether the Director may release it; nil when not paused.
+  defp record_pause_payload(%{pause: %{} = pause}) do
+    %{
+      since: iso8601(pause.since),
+      set_by: pause.set_by,
+      reasons:
+        Enum.map(pause.reasons, fn reason ->
+          %{kind: reason.kind, text: reason.text, waits_on: reason.waits_on, set_by: reason.set_by, set_at: iso8601(reason.set_at), releasable: reason.releasable}
+        end)
+    }
+  end
+
+  defp record_pause_payload(_record), do: nil
 
   defp ticket_state_record(repo_key, issue_id, issue_identifier) when is_binary(repo_key) and is_binary(issue_id) do
     case RunStore.get_ticket_state(repo_key, issue_id) do
@@ -673,6 +695,12 @@ defmodule SymphonyElixirWeb.Presenter do
       record_newer: summary.record_newer
     }
   end
+
+  # The last startup's backfill of the holds and decisions into pauses and questions
+  # (`SymphonyElixir.Pauses.Backfill`): the records it read and converted, the pauses and questions
+  # it created and what it skipped; nil before it ran.
+  defp pause_backfill_payload(%{at: at} = summary), do: %{summary | at: iso8601(at)}
+  defp pause_backfill_payload(nil), do: nil
 
   # The reconciler under `dispatch.source: record` (`TicketObservation.reconcile_all/3`): when it last
   # ran, its interval, the changes made in Linear it applied, the failed projections it made again and

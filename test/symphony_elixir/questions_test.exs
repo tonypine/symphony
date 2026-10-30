@@ -135,6 +135,39 @@ defmodule SymphonyElixir.QuestionsTest do
     end
   end
 
+  describe "ask/3 for the backfill" do
+    test "an answered question keeps its id, answer and legacy event, pauses nothing, and is recorded once" do
+      answer = %{text: "Yes", option: nil, by: @director, at: @at, scope: :ticket}
+      request = %{title: "Old title", question: "Old question?", why: "", if_unanswered: "", recommendation_reason: "", options: []}
+      opts = [backfilled: true, id: "backfill-1", answer: answer, legacy_event: "event-1", at: @at]
+
+      assert {:ok, %{id: "backfill-1", state: :answered, answer: ^answer, legacy_event: "event-1"}} = Questions.ask(@ticket, request, opts)
+      assert {:ok, %{id: "backfill-1"}} = Questions.ask(@ticket, %{request | title: "Other"}, opts)
+
+      assert Questions.answered(@ticket) |> Enum.map(& &1.id) == ["backfill-1"]
+      assert reasons() == []
+
+      assert [%{type: "question.asked", idempotency: "backfill:question.asked:backfill-1", payload: payload}] =
+               RunStore.list_ticket_events(@repo_key, @issue_id, [])
+
+      assert %{source: "backfill", title: "Old title"} = payload
+      refute Map.has_key?(payload, :why)
+    end
+
+    test "an open one skips the standard, pauses the ticket on it and marks both events as the backfill's" do
+      request = %{@request | why: "Uses `code` words", options: []}
+
+      assert {:ok, %{id: "backfill-2", state: :open, legacy_event: nil}} = Questions.ask(@ticket, request, backfilled: true, id: "backfill-2", at: @at)
+      assert reasons() == [{:question, %{question_id: "backfill-2"}}]
+
+      assert [%{type: "question.asked", payload: %{source: "backfill"}}, %{type: "pause.set", payload: %{source: "backfill"}}] =
+               RunStore.list_ticket_events(@repo_key, @issue_id, [])
+
+      assert {:error, {:invalid_question, _message}} = Questions.ask(@ticket, request, at: @at)
+      assert {:error, {:invalid_question, :junk}} = Questions.ask(@ticket, :junk, backfilled: true)
+    end
+  end
+
   describe "answer/4" do
     test ~s("2", "option 2" and the second option's label all pick the second option) do
       for {answer, title} <- [{"2", "Ship TP-12 now"}, {"option 2", "Ship TP-12 soon"}, {" Option  2 ", "Ship TP-12 later"}, {"wait for  THE release", "Ship TP-12 at last"}] do
