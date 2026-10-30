@@ -46,6 +46,7 @@ defmodule SymphonyElixir.QaPreCheck do
   @declaration_grep ~S{^[[:space:]]*(describe|test)[[:space:]]+"}
   @test_declaration ~r/^(\s*)(describe|test)\s+"((?:[^"\\]|\\.)*)"/u
   @mix_test_suffix ~r/(?:\s+\([A-Z][\w.]*\)|\s+\(\d+(?:\.\d+)?ms\)|\s+\[L#\d+\])+$/
+  @quoted ~r/^"(.*)"$|^“(.*)”$/su
   @tried_forms "tried as a describe plus a test name, a test name and a describe name"
   @passing_conclusions ["SUCCESS", "NEUTRAL"]
 
@@ -186,8 +187,7 @@ defmodule SymphonyElixir.QaPreCheck do
   defp missing_test(%{proof: %{test: test}}, files, git, workspace) do
     test
     |> String.split(@separator, trim: true)
-    |> Enum.map(&unquote_part/1)
-    |> Enum.reject(&(&1 == ""))
+    |> Enum.reject(&(unquote_part(&1) == ""))
     |> find_parts(nil, &find_reading(&1, &2, files, git, workspace))
     |> case do
       {:missing, missing} -> missing
@@ -211,8 +211,8 @@ defmodule SymphonyElixir.QaPreCheck do
   defp find_reading(part, scope, files, git, workspace) do
     find = &find_part(&1, &2, files, git, workspace)
 
-    case split_path(part, files) do
-      [^part] ->
+    case split_path(unquote_part(part), files) do
+      [_whole] ->
         find.(part, scope)
 
       path_and_name ->
@@ -232,16 +232,34 @@ defmodule SymphonyElixir.QaPreCheck do
     with [_part, path, name] <- Regex.run(@path_then_name, part),
          bare = String.replace(path, @line_suffix, ""),
          true <- Regex.match?(@file_path, bare) or (Regex.match?(@path_like, bare) and Enum.any?(files, &path_match?(&1, bare))) do
-      [path, unquote_part(name)]
+      [path, name]
     else
       _no_path -> [part]
+    end
+  end
+
+  # A part is read without the quotes around it first (`"name"`), then, when that misses, as it is
+  # written, since a test's own name may open and close with a quote (`"Run" runs it, "Stop" stops "it"`).
+  # A path is never read again with its quotes: it is a tracked file or missing, never searched text.
+  defp find_part(part, scope, files, git, workspace) do
+    find = &find_text(&1, scope, files, git, workspace)
+    part = String.trim(part)
+    unquoted = unquote_part(part)
+    retry? = unquoted != part and not Regex.match?(@path_part, String.replace(unquoted, @line_suffix, ""))
+
+    case find.(unquoted) do
+      {:missing, _detail} = missing when retry? ->
+        with {:missing, _original} <- find.(part), do: missing
+
+      found ->
+        found
     end
   end
 
   # A path-like part with a `/` must be tracked. A bare file name (`check_test.exs`) is matched as a
   # path first, and otherwise searched for like any name, since `Walkthrough.steps` looks like one
   # too. A name with spaces (`handles a/b input`) is never a path, whatever it holds.
-  defp find_part(part, scope, files, git, workspace) do
+  defp find_text(part, scope, files, git, workspace) do
     path = String.replace(part, @line_suffix, "")
     path? = Regex.match?(@path_part, path)
     matched = if path?, do: Enum.filter(files, &path_match?(&1, path)), else: []
@@ -279,7 +297,9 @@ defmodule SymphonyElixir.QaPreCheck do
   end
 
   # ExUnit's full name of each test in the scope: its describe's name, a space and its own name. A
-  # test belongs to the last describe indented less than it; one outside a describe is its name.
+  # test belongs to the last describe indented less than it; one outside a describe is its name. A
+  # test in a describe is listed by its own name too, unescaped, since the file escapes its quotes
+  # (`answering \"Run it again\"`) and a search of the text misses it.
   defp full_test_names(git, workspace, scope) do
     case git.(["grep", "-n", "-I", "--null", "-E", "-e", @declaration_grep, "--" | scope_files(scope)], workspace) do
       {output, 0} ->
@@ -308,9 +328,14 @@ defmodule SymphonyElixir.QaPreCheck do
   defp file_test_names(lines) do
     lines
     |> Enum.reduce({nil, []}, fn
-      {_file, indent, "describe", name}, {_describe, names} -> {{indent, name}, [name | names]}
-      {_file, indent, "test", name}, {{outer, describe}, names} when indent > outer -> {{outer, describe}, ["#{describe} #{name}" | names]}
-      {_file, _indent, "test", name}, {describe, names} -> {describe, [name | names]}
+      {_file, indent, "describe", name}, {_describe, names} ->
+        {{indent, name}, [name | names]}
+
+      {_file, indent, "test", name}, {{outer, describe}, names} when indent > outer ->
+        {{outer, describe}, ["#{describe} #{name}", name | names]}
+
+      {_file, _indent, "test", name}, {describe, names} ->
+        {describe, [name | names]}
     end)
     |> elem(1)
   end
@@ -354,14 +379,15 @@ defmodule SymphonyElixir.QaPreCheck do
   def linked(%{detail: detail, url: url}) when is_binary(url), do: "#{detail} (#{url})"
   def linked(%{detail: detail}), do: detail
 
+  # The text inside one pair of quotes around the whole part (`"name"`, `“name”`), or the part as it
+  # is: a name that only ends in a quoted phrase (`answering "Run it again"`) keeps its quotes.
   defp unquote_part(part) do
-    part
-    |> String.trim()
-    |> String.trim_leading("\"")
-    |> String.trim_trailing("\"")
-    |> String.trim_leading("“")
-    |> String.trim_trailing("”")
-    |> String.trim()
+    part = String.trim(part)
+
+    case Regex.run(@quoted, part, capture: :all_but_first) do
+      nil -> part
+      inner -> inner |> Enum.join() |> String.trim()
+    end
   end
 
   defp code(text), do: "`#{text}`"
