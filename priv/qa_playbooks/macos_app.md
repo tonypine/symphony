@@ -55,6 +55,16 @@ worktree's configured app and on apps you launched:
   `qa_screenshot`. Press an item with `qa_ax_press` on its `path`; close the menu with `qa_key`
   and `key: "escape"`. Use it for a row or control whose `AXShowMenu` is `unsupported`. It fails
   with `no_menu` when no menu opened.
+- `qa_scroll`: scrolls the list or scroll view at an element (`path`: a row, or the
+  `AXScrollArea`) or a point, as a trackpad does. `edge: "bottom"` scrolls to the end and keeps
+  going while rows load there (`at_edge: true` once nothing moves); `top`, `left` and `right`
+  likewise. `dy` (or `dx`) scrolls by that many points, or lines with `unit: "line"`; positive
+  `dy` goes down. It returns the rows on screen in `visible` (`first`, `last`, `count`), the
+  `scroll_bars` and, for a delta, how far the content `moved`. Use it to reach rows below the
+  fold or to trigger a list's pagination: `qa_key` with arrows, `end` or `page_down` does not
+  scroll a SwiftUI list, and its overlay scroll bar takes no value. It fails with
+  `no_scroll_area` when nothing scrolls there, and like `qa_click` when the target is off screen
+  or covered.
 - `qa_resize_window`: moves the app's main window (or the `AXWindow` at `path`) to the top left
   of the screen and resizes it to `width`×`height` points, 1400×900 by default, or the screen's
   usable area when that is smaller. It returns the window's new frame in `window` (`x`, `y`, `w`,
@@ -497,6 +507,9 @@ anyway: Symphony's tool does it, or it is host setup. Where it can't be installe
    - any other control: `qa_click` it;
    - a step that hovers over something (to show a button, a highlight) or right-clicks it: use
      `qa_hover` or `qa_context_menu` on it, and screenshot the state it shows.
+   - a step that reads rows below the fold or scrolls a list to its end (to load older rows):
+     `qa_scroll` it with `edge: "bottom"`, read `qa_ax_tree` again for the rows that appeared, and
+     screenshot the bottom of the list.
 4. Let every window settle before you judge it. A window can open at the right size and
    collapse seconds later, so a check right after opening proves nothing:
    - wait about 10 seconds after the window opens (`sleep 10` in your shell);
