@@ -40,7 +40,7 @@ defmodule Mix.Tasks.Symphony.DoneWithOpenSubticketsTest do
   setup do
     previous_shell = Mix.shell()
     Mix.shell(Mix.Shell.Process)
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     on_exit(fn ->
@@ -105,11 +105,14 @@ defmodule Mix.Tasks.Symphony.DoneWithOpenSubticketsTest do
   test "names the repository it could not read and exits non-zero instead of passing the list off as complete" do
     repo_root = Path.dirname(Workflow.workflow_file_path())
 
-    write_workflow_file!(Workflow.workflow_file_path(),
-      repos: [
-        %{"name" => "web", "path" => repo_root, "workflow" => "WORKFLOW.md", "team" => "ACME", "labels" => ["web"]},
-        %{"name" => "api", "path" => repo_root, "workflow" => "WORKFLOW.md", "team" => "ACME", "labels" => ["api"]}
-      ]
+    write_workflow_file!(
+      Workflow.workflow_file_path(),
+      linear_tracker(
+        repos: [
+          %{"name" => "web", "path" => repo_root, "workflow" => "WORKFLOW.md", "team" => "ACME", "labels" => ["web"]},
+          %{"name" => "api", "path" => repo_root, "workflow" => "WORKFLOW.md", "team" => "ACME", "labels" => ["api"]}
+        ]
+      )
     )
 
     Application.put_env(:symphony_elixir, :linear_client_module, PartialLinearClient)
@@ -143,6 +146,7 @@ defmodule Mix.Tasks.Symphony.DoneWithOpenSubticketsTest do
   end
 
   test "the client fails when every repository read fails and reads nothing for no states" do
+    write_workflow_file!(Workflow.workflow_file_path(), linear_tracker())
     graphql_fun = fn _query, _variables -> {:error, :linear_unavailable} end
 
     assert {:error, {:repo_poll_failed, [{"default", :linear_unavailable}]}} =
@@ -166,7 +170,7 @@ defmodule Mix.Tasks.Symphony.DoneWithOpenSubticketsTest do
   end
 
   test "stops when the tracker read fails" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_api_token: nil)
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
 
     assert_raise Mix.Error, ~r/Unable to fetch issues in .*Done: :missing_linear_api_token/, fn ->
       DoneWithOpenSubtickets.run([])

@@ -35,7 +35,7 @@ defmodule SymphonyElixir.Setup.Checks.StatusesTest do
   defp route!(repos \\ [%{key: "app", team: "TP"}], overrides \\ []) do
     path = Workflow.workflow_file_path()
     repos = Enum.map(repos, &Map.put(&1, :workflow, path))
-    write_workflow_file!(path, Keyword.merge([tracker_kind: "memory", repos: repos], overrides))
+    write_workflow_file!(path, Keyword.merge([repos: repos], overrides))
   end
 
   # The board of `team`, but for `except`, with `extra` added.

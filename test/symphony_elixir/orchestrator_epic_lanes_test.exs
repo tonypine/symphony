@@ -8,7 +8,6 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
 
   setup do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", "In Review", "Merging", "Rework", @waiting],
       tracker_terminal_states: ["Done", "Canceled"]
     )
@@ -127,7 +126,6 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
 
   test "epic_lanes 1 with max_total 3 leaves two shared slots" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", @waiting],
       tracker_terminal_states: ["Done", "Canceled"],
       max_concurrent_agents: 3,

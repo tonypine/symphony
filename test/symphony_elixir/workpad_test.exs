@@ -18,7 +18,7 @@ defmodule SymphonyElixir.WorkpadTest do
   end
 
   test "bootstrap two-arity reuses existing workpad comments" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", agent_kind: "claude")
+    write_workflow_file!(Workflow.workflow_file_path(), agent_kind: "claude")
 
     issue = %Issue{
       id: "issue-existing-workpad",
@@ -32,7 +32,7 @@ defmodule SymphonyElixir.WorkpadTest do
   end
 
   test "bootstrap moves Todo issues to In Progress before creating the workpad" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", agent_kind: "claude")
+    write_workflow_file!(Workflow.workflow_file_path(), agent_kind: "claude")
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     workspace = Path.join(System.tmp_dir!(), "symphony-workpad-bootstrap")
@@ -71,7 +71,7 @@ defmodule SymphonyElixir.WorkpadTest do
   end
 
   test "bootstrap returns an error when the Todo state update fails" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", agent_kind: "claude")
+    write_workflow_file!(Workflow.workflow_file_path(), agent_kind: "claude")
     Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :rate_limited})
 
     issue = %Issue{
@@ -86,7 +86,7 @@ defmodule SymphonyElixir.WorkpadTest do
   end
 
   test "bootstrap waits out a Linear rate limit on the Todo state move and the workpad comment" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", agent_kind: "claude")
+    write_workflow_file!(Workflow.workflow_file_path(), agent_kind: "claude")
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
     rate_limited = {:error, {:linear_rate_limited, @now_ms + 30_000}}
     Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [rate_limited])
@@ -155,7 +155,7 @@ defmodule SymphonyElixir.WorkpadTest do
   end
 
   test "bootstrap handles fallback settings and sparse issue comments" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     issue = %Issue{
@@ -178,7 +178,7 @@ defmodule SymphonyElixir.WorkpadTest do
   end
 
   test "bootstrap ignores malformed comments while searching for an existing workpad" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", agent_kind: "claude")
+    write_workflow_file!(Workflow.workflow_file_path(), agent_kind: "claude")
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     issue = %Issue{
@@ -197,7 +197,7 @@ defmodule SymphonyElixir.WorkpadTest do
   end
 
   test "bootstrap skips tracker comment creation when issue id is missing" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", agent_kind: "claude")
+    write_workflow_file!(Workflow.workflow_file_path(), agent_kind: "claude")
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     issue = %Issue{
@@ -213,7 +213,7 @@ defmodule SymphonyElixir.WorkpadTest do
   end
 
   test "bootstrap skips PR-mode runs" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", agent_kind: "claude")
+    write_workflow_file!(Workflow.workflow_file_path(), agent_kind: "claude")
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     issue = %Issue{
@@ -551,7 +551,7 @@ defmodule SymphonyElixir.WorkpadTest do
 
   describe "supersede/2" do
     test "a tracker whose comments Symphony cannot rewrite is a no-op" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", agent_kind: "claude")
+      write_workflow_file!(Workflow.workflow_file_path(), agent_kind: "claude")
 
       issue = %Issue{id: "issue-supersede-memory", identifier: "MT-SUPERSEDE", title: "Supersede", state: "Rework"}
 

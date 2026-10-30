@@ -384,7 +384,7 @@ defmodule SymphonyElixir.UsageLimitTest do
 
   describe "agent.usage_limit config" do
     test "defaults to auto pause with a 120s margin and a 900s unknown-reset retry" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      write_workflow_file!(Workflow.workflow_file_path())
 
       assert %UsageLimitConfig{auto_pause: true, resume_margin_seconds: 120, unknown_reset_retry_seconds: 900} =
                Config.settings!().agent.usage_limit
@@ -392,7 +392,6 @@ defmodule SymphonyElixir.UsageLimitTest do
 
     test "reads the three keys" do
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         agent_usage_limit: %{auto_pause: false, resume_margin_seconds: 0, unknown_reset_retry_seconds: 60}
       )
 
@@ -401,12 +400,11 @@ defmodule SymphonyElixir.UsageLimitTest do
     end
 
     test "headroom_utilization is off by default and takes a share in (0, 1]" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      write_workflow_file!(Workflow.workflow_file_path())
       assert %UsageLimitConfig{headroom_utilization: nil} = Config.settings!().agent.usage_limit
 
       for value <- [0.9, 1] do
         write_workflow_file!(Workflow.workflow_file_path(),
-          tracker_kind: "memory",
           agent_usage_limit: %{headroom_utilization: value}
         )
 
@@ -425,7 +423,7 @@ defmodule SymphonyElixir.UsageLimitTest do
             {%{unknown_reset_retry_seconds: "soon"}, "agent.usage_limit.unknown_reset_retry_seconds"},
             {%{resume_after: 5}, "agent.usage_limit"}
           ] do
-        write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", agent_usage_limit: usage_limit)
+        write_workflow_file!(Workflow.workflow_file_path(), agent_usage_limit: usage_limit)
         assert {:error, {:invalid_workflow_config, message}} = Config.validate_repo_workflows()
         assert message =~ key
       end

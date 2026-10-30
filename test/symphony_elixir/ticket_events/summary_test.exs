@@ -40,6 +40,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
      }, [], %{title: "QA found content clipped at laptop (1440×900): Activity with a job open", detail: "3rd finding of this class on this ticket · 2 screenshots"}},
     {"finding.resolved", %{finding_id: "01FINDING", how: "Let the row wrap", head: "e051234"}, [], %{title: "Finding marked resolved", detail: "Let the row wrap"}},
     {"checklist.answered", %{item: "Dark mode checked?", answer: "Yes, both themes"}, [], %{title: "Checklist item answered", detail: "Dark mode checked?: Yes, both themes"}},
+    {"ticket.cancelled", %{from: "Backlog", to: "Canceled", note: "superseded"}, [], %{title: "Cancelled from Backlog", detail: "superseded"}},
     {"drift.detected", %{record_phase: "Code Review", linear_phase: "Done"}, [], %{title: "Moved to Done in Linear by hand", detail: "Symphony's record holds Code Review"}},
     {"drift.reverted", %{record_phase: "Code Review", linear_phase: "Done"}, [], %{title: "Moved back to Code Review: it was moved to Done in Linear by hand", detail: nil}},
     {"drift.revert_failed", %{record_phase: "Code Review", linear_phase: "Done", error: ":timeout"}, [],

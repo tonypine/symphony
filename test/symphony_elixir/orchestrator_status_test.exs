@@ -80,7 +80,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "snapshot stays responsive while repo poll I/O is in flight" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :memory_tracker_fetch_candidate_sleep_ms, 1)
     assert {:ok, []} = MemoryTracker.fetch_candidate_issues()
     Application.delete_env(:symphony_elixir, :memory_tracker_fetch_candidate_sleep_ms)
@@ -122,7 +122,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "orchestrator publishes snapshots to ETS on configured cadence" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       observability_snapshot_publish_ms: 25
     )
 
@@ -171,7 +170,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "reports its queue and snapshot timings, and logs the callbacks and snapshot builds that are slow" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       observability_snapshot_publish_ms: 25
     )
 
@@ -229,7 +227,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "a retry's Linear read runs outside the orchestrator, which answers and publishes snapshots while it is in flight" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", observability_snapshot_publish_ms: 25)
+    write_workflow_file!(Workflow.workflow_file_path(), observability_snapshot_publish_ms: 25)
     issue = %Issue{id: "issue-slow-linear-retry", identifier: "MT-SLOW-LINEAR", title: "Slow Linear", state: "In Progress"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
 
@@ -298,7 +296,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "a poll's dispatch revalidation reads Linear in the readiness task, so the orchestrator answers while it is in flight" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       quality_gate: %{enabled: false},
       observability_snapshot_publish_ms: 25
     )
@@ -343,7 +340,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "dispatch after a readiness task uses the issues that task read, and reads Linear only for the ones it did not" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", quality_gate: %{enabled: false})
+    write_workflow_file!(Workflow.workflow_file_path(), quality_gate: %{enabled: false})
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
     {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, :PrefetchedDispatchOrchestrator))
 
@@ -389,7 +386,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "an agent's stream of events writes its run's metadata to the run store a bounded number of times" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :orchestrator_running_metadata_persist_ms, 60_000)
     on_exit(fn -> Application.delete_env(:symphony_elixir, :orchestrator_running_metadata_persist_ms) end)
 
@@ -465,7 +462,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [gated_issue, running_issue])
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       max_concurrent_agents: 2,
       quality_gate: %{
         enabled: true,
@@ -748,7 +744,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "orchestrator keeps transcript available when running issue becomes watched" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress"],
       tracker_terminal_states: ["Done", "Canceled"]
     )
@@ -868,7 +863,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "orchestrator serves a tracked ticket's connected tickets, keeping what its run read once it is watched" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress"],
       tracker_terminal_states: ["Done", "Canceled"]
     )
@@ -2021,7 +2015,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "orchestrator stops an issue that exhausts its token budget without retrying" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       max_tokens_per_issue: 10
     )
 
@@ -2171,7 +2164,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "orchestrator pauses new dispatch when the daily token budget is exhausted" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       max_tokens_per_day: 10,
       max_concurrent_agents: 1
     )
@@ -2226,7 +2218,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       )
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       workspace_root: workspace_root,
       max_concurrent_agents: 1,
       workspace_lifecycle: %{
@@ -2293,7 +2284,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     File.mkdir_p!(orphan_workspace)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       workspace_root: workspace_root,
       workspace_lifecycle: %{
         age_gc_enabled: false,
@@ -2333,7 +2323,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     File.touch!(stale_workspace, {{2026, 1, 1}, {0, 0, 0}})
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       workspace_root: workspace_root,
       workspace_lifecycle: %{
         max_age_days: 1,
@@ -2396,7 +2385,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     File.touch!(api_stale_workspace, System.os_time(:second) - 30 * 86_400)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       workspace_root: workspace_root,
       workspace_lifecycle: %{
         max_age_days: 1,
@@ -2461,7 +2449,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       )
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       workspace_root: workspace_root,
       poll_interval_ms: 60_000,
       quality_gate: %{enabled: false},
@@ -2567,7 +2554,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     }
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       workspace_root: workspace_root,
       workspace_lifecycle: %{
         max_age_days: 1,
@@ -2651,7 +2637,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "orchestrator snapshot exposes dispatch_state with active? and blockers" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       max_concurrent_agents: 1
     )
 
@@ -2727,7 +2712,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "review agent repo gate preserves enabled and disabled config without logging errors" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       review_agent: [enabled: true, kind: "codex", command: "codex app-server", max_iterations: 1]
     )
 
@@ -2739,7 +2723,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert enabled_log == ""
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       review_agent: [enabled: false]
     )
 
@@ -2753,7 +2736,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "review agent repo gate logs expected review-agent config failures before returning disabled" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       review_agent: [enabled: "sometimes"]
     )
 
@@ -2767,7 +2749,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "review agent repo gate lets unexpected config exceptions bubble" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     previous_file_reader = Application.fetch_env(:symphony_elixir, :config_cache_file_reader)
 
     on_exit(fn ->
@@ -2848,7 +2830,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "operator pause is exposed in snapshots and preserves retry queue without dispatching" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       max_concurrent_agents: 1,
       quality_gate: %{enabled: false}
     )
@@ -2885,7 +2866,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
                  end)
       end)
 
-    assert warning =~ "Operator dispatch pause active"
+    assert warning =~ ~s(Dispatch pause active kind=person reason="deploy window")
     assert RunStore.list_runs() == []
 
     retry_token = make_ref()
@@ -2916,13 +2897,13 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     send(pid, {:retry_issue, issue.id, retry_token})
 
-    assert %{running: [], retrying: [%{issue_id: "issue-operator-pause", error: "dispatch paused by operator"}]} =
+    assert %{running: [], retrying: [%{issue_id: "issue-operator-pause", error: "dispatch is paused by the operator: deploy window"}]} =
              wait_for_snapshot(
                pid,
                fn
                  %{
                    running: [],
-                   retrying: [%{issue_id: "issue-operator-pause", error: "dispatch paused by operator"}]
+                   retrying: [%{issue_id: "issue-operator-pause", error: "dispatch is paused by the operator: deploy window"}]
                  } ->
                    true
 
@@ -2938,7 +2919,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   describe "Symphony's own pause" do
     setup do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", quality_gate: %{enabled: false})
+      write_workflow_file!(Workflow.workflow_file_path(), quality_gate: %{enabled: false})
       previous = Application.fetch_env(:symphony_elixir, :build)
       {:ok, nil} = Pauses.clear(:symphony)
 
@@ -3046,7 +3027,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     marker = Path.join(workspace_root, "before_remove.marker")
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       workspace_root: workspace_root,
       hook_before_remove: "printf '%s|%s' \"$SYMPHONY_REMOVE_REASON\" \"$SYMPHONY_ISSUE_STATE\" > #{marker}"
     )
@@ -3168,7 +3148,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     release = Path.join(workspace_root, "release")
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       workspace_root: workspace_root,
       poll_interval_ms: 60_000,
       hook_before_remove: """
@@ -3300,7 +3279,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       )
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       workspace_root: workspace_root
     )
 
@@ -3514,7 +3492,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "orchestrator resets daily budget accounting at UTC day boundaries" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       max_tokens_per_day: 10
     )
 
@@ -3546,7 +3523,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "orchestrator rehydrates budget-exhausted issues across restarts while the limit still applies" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       max_tokens_per_issue: 10
     )
 
@@ -3586,7 +3562,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "active state set includes the phase states, but never Plan Review" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress"],
       repos: [
         [key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]
@@ -3611,7 +3586,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "orchestrator hydrates budget state from runs across every repo partition" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       max_tokens_per_issue: 10
     )
 
@@ -3674,7 +3648,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     on_exit(fn -> File.rm_rf(workspace_root) end)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       max_tokens_per_issue: 10,
       workspace_root: workspace_root,
       workspace_lifecycle: %{age_gc_enabled: false, orphan_action: "delete"}
@@ -3744,7 +3717,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
              })
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       max_tokens_per_issue: 20
     )
 
@@ -3756,7 +3728,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     GenServer.stop(raised_limit_pid)
 
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
 
     unset_limit_orchestrator_name = Module.concat(__MODULE__, :BudgetUnsetLimitOrchestrator)
     {:ok, unset_limit_pid} = Orchestrator.start_link(name: unset_limit_orchestrator_name)
@@ -3768,7 +3740,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "orchestrator snapshot includes retry backoff entries" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
 
     orchestrator_name = Module.concat(__MODULE__, :RetryOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
@@ -3808,7 +3780,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "orchestrator retry error includes local codex stderr from port exits" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
 
     issue = %Issue{
       id: "issue-port-exit-stderr",
@@ -3856,7 +3828,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "orchestrator retry error includes claude diagnostic output from exit statuses" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
 
     issue = %Issue{
       id: "issue-exit-status-stderr",
@@ -3920,7 +3892,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     }
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress"],
       tracker_terminal_states: ["Done", "Canceled"]
     )
@@ -4031,7 +4002,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "orchestrator rehydrates persisted retry queue entries on restart" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     :ok = RunStore.clear()
 
     due_at = DateTime.add(DateTime.utc_now(), 60_000, :millisecond)
@@ -4096,7 +4067,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "orchestrator rehydrates persisted retry queue entries from every repo partition" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     :ok = RunStore.clear()
 
     due_at = DateTime.add(DateTime.utc_now(), 60_000, :millisecond)
@@ -4140,7 +4111,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     pull_request_url = "https://github.com/example/repo/pull/789"
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress"],
       tracker_terminal_states: ["Done", "Canceled"]
     )
@@ -4285,7 +4255,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     started_at = DateTime.add(ended_at, -120, :second)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress"],
       tracker_terminal_states: ["Done", "Canceled"]
     )
@@ -4361,7 +4330,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     run_id = "run-terminal-restart"
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress"],
       tracker_terminal_states: ["Done", "Canceled"]
     )
@@ -4474,7 +4442,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     run_id = "run-shipped-rollover"
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress"],
       tracker_terminal_states: ["Done", "Canceled"]
     )
@@ -4557,7 +4524,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     }
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       workspace_root: test_root,
       hook_before_run: "sleep 5",
       poll_interval_ms: 60_000,
@@ -4615,7 +4581,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       )
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       workspace_root: test_root,
       poll_interval_ms: 60_000,
       quality_gate: %{enabled: false},
@@ -4955,7 +4920,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "watchdog does not restart workers after a recent transcript event" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_api_token: nil,
       agent_stall_timeout_ms: 0,
       watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 60_000}
@@ -5016,7 +4980,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "watchdog leaves alone a run that only sends Claude Code tool_progress heartbeats past the threshold" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_api_token: nil,
       agent_stall_timeout_ms: 0,
       watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 1_000}
@@ -5216,6 +5179,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   test "a workspace hook holds the first-turn stall check and the watchdog until its own deadline" do
     # A minute on both clocks, so a check that runs late still sees a hook that just ended as recent.
     write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "linear",
       tracker_api_token: nil,
       agent_stall_timeout_ms: 60_000,
       watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 60_000}
@@ -5301,7 +5265,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "the watchdog alone waits out a workspace hook's deadline, whatever the last transcript event" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_api_token: nil,
       agent_stall_timeout_ms: 0,
       watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 1_000}
@@ -5647,7 +5610,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   defp start_linear_wait_orchestrator!(name, workflow_overrides) do
-    workflow = [tracker_kind: "memory", tracker_api_token: nil] ++ workflow_overrides
+    workflow = [tracker_api_token: nil] ++ workflow_overrides
     write_workflow_file!(Workflow.workflow_file_path(), workflow)
     {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, name))
 
@@ -5748,7 +5711,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   test "status dashboard marks aged ETS snapshot data as stale and logs diagnostics once" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       observability_snapshot_publish_ms: 1_000
     )
 
@@ -5823,7 +5785,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "status dashboard frame keeps the forced tickets from the live snapshot" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", forced_max: 1)
+    write_workflow_file!(Workflow.workflow_file_path(), forced_max: 1)
 
     {:ok, orchestrator_pid} = Orchestrator.start_link()
     dashboard_name = Module.concat(__MODULE__, :ForcedSnapshotDashboard)
@@ -6913,7 +6875,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "tool failure circuit breaker exit holds the ticket in place without scheduling retry" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_api_token: nil)
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_api_token: nil)
 
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 

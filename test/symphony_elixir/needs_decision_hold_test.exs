@@ -56,7 +56,7 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue()])
     :ok = RunStore.clear()
     :ok
@@ -554,7 +554,6 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
 
     test "resolves the repo's settings from its key when the caller passes none" do
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         repos: [[key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test"]]
       )
 

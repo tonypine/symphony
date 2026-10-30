@@ -871,7 +871,6 @@ defmodule SymphonyElixir.VerificationTest do
 
       # A Mac app repo: its server runs on the QA host beside the app, never on this host.
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         max_turns: 1,
         workspace_root: workspace_root,
         agent_command: "#{fake_codex} app-server",

@@ -32,7 +32,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     SubIssueWait.reset_for_test(@waiting)
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
     :ok
@@ -350,7 +350,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
     end
 
     test "rejecting the plan cancels its Backlog sub-tickets before the re-plan dispatches, without touching new ones" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_active_states: ["Todo", "In Progress", "Rework"])
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_active_states: ["Todo", "In Progress", "Rework"])
 
       parent = parent("Rework", [sub("c1", "Backlog"), sub("c2", "Todo"), sub("c3", "Backlog"), sub("c4", "Backlog"), sub("c5", "Backlog")])
 

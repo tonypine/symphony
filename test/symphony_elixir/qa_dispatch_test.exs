@@ -15,7 +15,7 @@ defmodule SymphonyElixir.QaDispatchTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", repos: repos())
+    write_workflow_file!(Workflow.workflow_file_path(), repos: repos())
 
     RunStore.delete_ticket_state(@designed_repo, @issue_id)
     on_exit(fn -> RunStore.delete_ticket_state(@designed_repo, @issue_id) end)

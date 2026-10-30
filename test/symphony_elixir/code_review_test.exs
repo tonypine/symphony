@@ -505,7 +505,7 @@ defmodule SymphonyElixir.CodeReviewTest do
     end
 
     test "moves through the configured tracker when no tracker override is given" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      write_workflow_file!(Workflow.workflow_file_path())
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
       on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
 
@@ -555,7 +555,6 @@ defmodule SymphonyElixir.CodeReviewTest do
   describe "the reviewer's options" do
     test "passes the repo's configured base branch to the reviewer" do
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         repos: [[key: "reviewed-repo", workflow: Workflow.workflow_file_path(), team: "Test", base_branch: "develop"]]
       )
 

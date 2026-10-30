@@ -121,7 +121,7 @@ defmodule SymphonyElixir.SetupTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     # Earlier tests may have left failed fetches of `default` in the shared fetch log, and polls in
     # the poll log.
     FetchLog.record("default", :ok)
@@ -400,7 +400,7 @@ defmodule SymphonyElixir.SetupTest do
       previous = System.get_env("LINEAR_API_KEY")
       System.delete_env("LINEAR_API_KEY")
       on_exit(fn -> restore_env("LINEAR_API_KEY", previous) end)
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_api_token: nil)
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
 
       assert %{problems: [%{id: "secret:LINEAR_API_KEY"}], not_checked: [not_checked, routing, %{id: "teams"}, %{id: "labels"}, %{id: "statuses"}]} =
                Setup.check(checks: [LinearStub | Setup.checks()])
@@ -581,10 +581,14 @@ defmodule SymphonyElixir.SetupTest do
       assert :ok = stop_supervised(Setup)
     end
 
-    test "without a server, payload and refresh run the checks here" do
-      assert %{problems: [], checked_at: checked_at} = Setup.payload(:no_setup_server)
-      assert is_binary(checked_at)
-      assert %{problems: []} = Setup.refresh(:no_setup_server)
+    test "without a server, payload and refresh run nothing and say so" do
+      assert Setup.payload(:no_setup_server) == {:error, :not_running}
+      assert Setup.refresh(:no_setup_server) == {:error, :not_running}
+      refute_received {:ran, _check}
+    end
+
+    test "not_checked_yet is the payload of a server before its first run" do
+      assert Setup.not_checked_yet() == %{problems: [], not_checked: [], checked_at: nil, linear_checked_at: nil}
     end
   end
 

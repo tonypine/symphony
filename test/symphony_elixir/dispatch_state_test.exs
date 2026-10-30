@@ -222,7 +222,7 @@ defmodule SymphonyElixir.DispatchStateTest do
 
     test "non-linear tracker without api key does not block" do
       config =
-        base_config(%{tracker_kind: "memory", tracker_api_key_present?: false})
+        %{tracker_api_key_present?: false} |> base_config() |> Map.put(:tracker_kind, "memory")
 
       result = DispatchState.compute(base_state(), config, full_env())
 

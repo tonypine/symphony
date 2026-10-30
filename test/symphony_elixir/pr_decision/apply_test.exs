@@ -80,7 +80,6 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
 
   setup do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       ci: %{enabled: true, log_excerpt_lines: 50}
     )
@@ -167,7 +166,6 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
 
     test "CI rows wait for `pull_requests.checks`, and landing rows and a Merging conflict for auto-merge" do
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         pr_review_mode: "polling",
         pr_review_auto_merge: false,
         ci: %{enabled: false}

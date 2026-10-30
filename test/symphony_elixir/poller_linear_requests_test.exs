@@ -281,6 +281,7 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "linear",
       tracker_endpoint: "http://127.0.0.1:#{port}/graphql",
+      tracker_api_token: "token",
       tracker_assignee: "me",
       tracker_project_slug: nil,
       pr_review_mode: "polling",

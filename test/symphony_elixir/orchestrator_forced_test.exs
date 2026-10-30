@@ -476,7 +476,7 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
 
       {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("maintenance"))
       {:noreply, held} = retry_forced.(full)
-      assert %{error: "dispatch paused by operator"} = held.retry_attempts["forced-1"]
+      assert %{error: "dispatch is paused by the operator: maintenance"} = held.retry_attempts["forced-1"]
       Process.cancel_timer(held.retry_attempts["forced-1"].timer_ref)
       {:ok, nil} = Pauses.clear(:symphony)
 
@@ -842,7 +842,6 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
       Workflow.workflow_file_path(),
       Keyword.merge(
         [
-          tracker_kind: "memory",
           tracker_active_states: @active_states,
           tracker_terminal_states: ["Done", "Canceled"],
           workspace_root: Path.join(ctx.test_root, "workspaces"),

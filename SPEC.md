@@ -409,7 +409,10 @@ nothing, and it writes only those fields, never the record's holds, verdicts or 
   asked. A failed move back is tried again by the next observation of the same difference, and each
   event is written once per Linear `updatedAt`. A Linear state whose `updatedAt` is older than the
   record's `phase_at` was read before the phase was written: the phase is kept and nothing moves. A
-  phase Linear owns follows Linear, and under `dispatch.source: poll` every phase does. The startup
+  phase Linear owns follows Linear, and under `dispatch.source: poll` every phase does. A phase the
+  Director's cancel (`POST /api/v1/control/cancel`) wrote is terminal once Linear took it: a later
+  Linear state is no drift on it and is applied. Until Linear takes it, the cancel is drifted back
+  to like any phase Symphony owns. The startup
   reconciliation keeps a phase Symphony owns as well and observes the ticket's read the same way, so a
   hand move made while Symphony was down is moved back at startup; a phase it adopts from Linear is
   Linear's.
@@ -530,7 +533,8 @@ type does not allow, is refused. The types: `phase.entered`, `hold.set` and `hol
 `blocked` only), `run.started` and `run.ended` (keyed by run id), `attempt.pushed`,
 `verdict.recorded` (machine only: an agent never records a verdict), `decision.requested`,
 `decision.recorded`, `decision.withdrawn`, `person.action` (`stop`, `move`, `force`, `unblock`,
-`restart`), `step.started`, `step.completed`, `step.skipped`, `evidence`, `finding.recorded` (QA
+`restart`), `ticket.cancelled` (the Director's cancel, with its note), `step.started`,
+`step.completed`, `step.skipped`, `evidence`, `finding.recorded` (QA
 runs), `finding.resolved`, `checklist.answered`, `drift.detected`, `drift.reverted`,
 `drift.revert_failed`, `pause.set`, `pause.reason_added`, `pause.reason_cleared`, `pause.cleared`,
 `question.asked`, `question.answered`, `question.withdrawn`, `question.reopened` and `note`.
@@ -566,7 +570,10 @@ payload's `all_repositories_paused` says it apart.
 
 Symphony's own pause is the operator pause: the one answer to why Symphony is not dispatching. It
 shows only at the app level (the state payload's `pause`), never on a ticket page; a candidate the
-paused pass skips gives the global reason `dispatch is paused by the operator`.
+paused pass skips gives one line per reason that stops dispatch, worded by its kind from the same
+reasons the payload's `pause` lists: `dispatch is paused: updating to v<version>` for an update's,
+`dispatch is paused by the operator` (then `: <reason>` when the Director gave one) for theirs,
+joined by `; `. The log line names the kind too (`Dispatch pause active kind=build reason=...`).
 
 - The Director's Pause (`POST /api/v1/control/pause`) sets a `person` reason that waits on
   `unblock`, its line the given reason cut to 300 characters (`You paused Symphony` without one).

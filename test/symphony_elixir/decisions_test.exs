@@ -684,7 +684,7 @@ defmodule SymphonyElixir.DecisionsTest do
     end
 
     test "a poll cycle writes a person's ruling into the ticket's description" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      write_workflow_file!(Workflow.workflow_file_path())
       ruling = comment("c1", "Decision: defer the legacy partials to TP-891", "2026-10-14T05:00:00Z")
 
       issue = %Issue{
@@ -850,7 +850,7 @@ defmodule SymphonyElixir.DecisionsTest do
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [memory_issue()])
       on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_issues) end)
 
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      write_workflow_file!(Workflow.workflow_file_path())
 
       assert :ok = Tracker.update_issue_description(@issue_id, "New")
       assert {:ok, "New"} = Tracker.fetch_issue_description(@issue_id)

@@ -22,7 +22,7 @@ defmodule SymphonyElixirWeb.PresenterTicketStatusTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     :ok = RunStore.clear()
     on_exit(fn -> RunStore.clear() end)
     :ok

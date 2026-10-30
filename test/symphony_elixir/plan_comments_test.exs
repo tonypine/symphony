@@ -16,7 +16,7 @@ defmodule SymphonyElixir.PlanCommentsTest do
   @terminal ["Done", "Canceled"]
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     SubIssueWait.reset_for_test(@waiting)
     on_exit(fn -> SubIssueWait.reset_for_test(@waiting) end)
     :ok

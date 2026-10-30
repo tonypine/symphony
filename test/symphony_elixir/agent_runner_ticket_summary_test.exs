@@ -131,7 +131,6 @@ defmodule SymphonyElixir.AgentRunnerTicketSummaryTest do
 
   defp workflow!(test_root, ledger) do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", "Rework"],
       workspace_root: test_root,
       agent_kind: "claude",

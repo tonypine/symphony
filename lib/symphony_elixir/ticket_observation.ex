@@ -28,7 +28,11 @@ defmodule SymphonyElixir.TicketObservation do
   Linear fact (its `updatedAt`). A Linear state read before the record's
   phase was written (`updatedAt` older than `phase_at`) is an older fact: the phase is kept and
   nothing is moved. A phase an observation wrote (`:external`, such as a new ticket's Todo) follows
-  Linear, and under `dispatch.source: poll` every phase does, as before.
+  Linear, and under `dispatch.source: poll` every phase does, as before. A record the Director
+  cancelled (`SymphonyElixir.DirectorMoves`' `:cancel`, phase `Canceled` owned by Symphony) is
+  terminal once Linear took the cancel: a later Linear state is no drift on it, and is applied as
+  Linear wrote it. While the cancel's Linear write is still pending (a `:phase` mark on the record),
+  Linear's state is drift as on any phase Symphony owns, and the ticket is moved back to Canceled.
 
   `observe_delivery/2` observes what a Linear webhook delivery says (`SymphonyElixir.Linear.Webhook.parse/1`)
   the same way, under the repo that already holds the ticket's record, or marks the record removed. A
@@ -80,6 +84,7 @@ defmodule SymphonyElixir.TicketObservation do
   @table __MODULE__
   @outcomes [:updated, :unchanged, :stale]
   @recent_limit 10
+  @canceled_phases ["canceled", "cancelled"]
   # The records no read observed yet that one reconcile reads by id: one Linear page.
   @fill_limit 50
   # Well under Linear's 5 s delivery timeout, which also covers the signature check and the relay.
@@ -621,18 +626,28 @@ defmodule SymphonyElixir.TicketObservation do
   # What the observation does with Linear's state: nil applies it; `:older` keeps the record's phase,
   # as Linear's state was read before Symphony wrote it; a drift keeps it and moves Linear back. Only
   # under `dispatch.source: record`, on a record whose phase Symphony owns and Linear contradicts.
+  # A record the Director cancelled is terminal once Linear took the cancel: a later Linear state is
+  # applied, never drift. While the cancel's Linear write is still pending (a `:phase` mark), a Linear
+  # state is drift like any other, so the record stays Canceled until the reconciler projects it.
   defp owned_phase(nil, _issue, _opts), do: nil
 
   defp owned_phase(stored, %Issue{state: linear_phase} = issue, opts) do
     record = TicketState.normalize(stored)
 
     cond do
-      record.phase_owner != :symphony or not is_binary(record.phase) or not is_binary(linear_phase) -> nil
+      not owned?(record, linear_phase) -> nil
       linear_phase == record.phase or not record_source?(opts) -> nil
       older?(issue.updated_at, record.phase_at) -> :older
+      canceled?(record.phase) and not projection_pending?(record) -> nil
       true -> %{identifier: record.issue_identifier || issue.identifier, record_phase: record.phase, linear_phase: linear_phase}
     end
   end
+
+  defp owned?(record, linear_phase), do: record.phase_owner == :symphony and is_binary(record.phase) and is_binary(linear_phase)
+
+  defp canceled?(phase), do: String.downcase(String.trim(phase)) in @canceled_phases
+
+  defp projection_pending?(record), do: Enum.any?(record.pending_projection, &(TicketState.projection_of(&1) == :phase))
 
   defp record_source?(opts), do: Keyword.get_lazy(opts, :dispatch_source, &Config.dispatch_source/0) == "record"
 

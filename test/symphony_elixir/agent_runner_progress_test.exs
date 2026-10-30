@@ -1109,7 +1109,6 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     reviewer? = Keyword.get(opts, :reviewer, false)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
       workspace_root: test_root,
       max_turns: Keyword.get(opts, :max_turns, 3),

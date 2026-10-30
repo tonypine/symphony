@@ -68,21 +68,25 @@ defmodule SymphonyElixir.Setup do
   def checks, do: @checks
 
   @doc """
-  The last run's result. Without a running server (a test, a one-off command) the checks run here
-  and now.
+  The last run's result, read from the running server; `{:error, :not_running}` without one. The
+  app always runs the server; `check/1` runs the checks once without it.
   """
-  @spec payload(GenServer.server()) :: payload()
-  def payload(server) do
-    if GenServer.whereis(server), do: GenServer.call(server, :payload), else: check()
-  end
+  @spec payload(GenServer.server()) :: payload() | {:error, :not_running}
+  def payload(server), do: call(server, :payload, 5_000)
 
   @doc """
   Runs the checks again, with the team cache emptied, and returns their result. A run already going
-  finishes first; this one starts after it.
+  finishes first; this one starts after it. `{:error, :not_running}` without a running server.
   """
-  @spec refresh(GenServer.server()) :: payload()
-  def refresh(server) do
-    if GenServer.whereis(server), do: GenServer.call(server, :refresh, @refresh_timeout_ms), else: check()
+  @spec refresh(GenServer.server()) :: payload() | {:error, :not_running}
+  def refresh(server), do: call(server, :refresh, @refresh_timeout_ms)
+
+  @doc "The payload of a server that hasn't run its checks yet, as the app shows it before the first run."
+  @spec not_checked_yet() :: payload()
+  def not_checked_yet, do: @empty_payload
+
+  defp call(server, request, timeout) do
+    if GenServer.whereis(server), do: GenServer.call(server, request, timeout), else: {:error, :not_running}
   end
 
   @doc """

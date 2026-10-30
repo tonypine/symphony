@@ -21,7 +21,7 @@ defmodule SymphonyElixirWeb.RepositoryPauseStateTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     on_exit(fn -> Pauses.clear({:repository, "hub"}) end)
     {:ok, pause} = Pauses.set({:repository, "hub"}, Pauses.repository_reason(@focus), set_by: %{kind: :person, name: "Director"}, at: @at)
     %{pause: pause}

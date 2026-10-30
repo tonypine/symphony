@@ -3631,7 +3631,7 @@ defmodule SymphonyElixir.Orchestrator do
     state =
       cond do
         operator_paused?(state) ->
-          state |> log_operator_pause() |> skip_paused_pass(issues, "dispatch is paused by the operator")
+          state |> log_dispatch_pause() |> skip_paused_pass(issues, Pauses.dispatch_skip_reason(symphony_pause()))
 
         workspace_quota_paused?(state) ->
           state |> log_workspace_quota_pause() |> skip_paused_pass(issues, "new dispatch is paused: #{workspace_quota_error(state)}")
@@ -6759,14 +6759,14 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp defer_retry_for_operator_pause(%State{} = state, %Issue{} = issue, attempt, metadata) do
     state
-    |> log_operator_pause()
+    |> log_dispatch_pause()
     |> schedule_issue_retry(
       issue.id,
       attempt,
       Map.merge(metadata, %{
         identifier: issue.identifier,
         title: issue.title,
-        error: "dispatch paused by operator"
+        error: Pauses.dispatch_skip_reason(symphony_pause())
       })
     )
   end
@@ -9953,16 +9953,19 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp workspace_quota_error(_state), do: "workspace free-space threshold not met"
 
-  defp log_operator_pause(%State{operator_pause_logged: true} = state), do: state
+  defp log_dispatch_pause(%State{operator_pause_logged: true} = state), do: state
 
-  defp log_operator_pause(%State{} = state) do
-    pause = symphony_pause_status()
+  defp log_dispatch_pause(%State{} = state) do
+    case Pauses.dispatch_reasons(symphony_pause()) do
+      [] ->
+        state
 
-    if pause.paused do
-      Logger.warning("Operator dispatch pause active reason=#{inspect(pause.reason)} paused_at=#{inspect(pause.paused_at)}; skipping dispatch")
-      %{state | operator_pause_logged: true}
-    else
-      state
+      reasons ->
+        for reason <- reasons do
+          Logger.warning("Dispatch pause active kind=#{reason.kind} reason=#{inspect(reason.text)} paused_at=#{inspect(reason.set_at)}; skipping dispatch")
+        end
+
+        %{state | operator_pause_logged: true}
     end
   end
 

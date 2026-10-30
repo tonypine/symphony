@@ -19,7 +19,7 @@ defmodule SymphonyElixir.DependencyGateTest do
   end
 
   test "react_to_hold logs a hold that can't be set and continues" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :rate_limited})
 
     issue = %Issue{
@@ -71,7 +71,7 @@ defmodule SymphonyElixir.DependencyGateTest do
   end
 
   test "react_to_hold and react_to_audit_error never move a terminal issue" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     issue = %Issue{
@@ -102,7 +102,7 @@ defmodule SymphonyElixir.DependencyGateTest do
   end
 
   test "issue_terminal? reads the refreshed state and treats lookup failures as active" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     issue = %Issue{id: "issue-terminal-check", state: "In Progress"}
 
     assert DependencyGate.issue_terminal?(issue, fn ["issue-terminal-check"] -> {:ok, [%{issue | state: " done "}]} end)
