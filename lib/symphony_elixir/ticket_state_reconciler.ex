@@ -11,14 +11,15 @@ defmodule SymphonyElixir.TicketStateReconciler do
   information, not a disagreement. An adopted phase is Linear's (`phase_owner: :external`).
 
   Under `dispatch.source: record` a phase Symphony owns (`phase_owner: :symphony`) is kept: a ticket
-  moved by hand while Symphony was down is drift, which the next observation of the ticket moves back
-  in Linear (`SymphonyElixir.TicketObservation`). The record is left as it is and the difference is
-  logged.
+  moved by hand while Symphony was down is drift. The reconciler observes the ticket's read the way
+  any read of Linear is observed (`SymphonyElixir.TicketObservation.observe/3`), which keeps the
+  record's phase, records the drift on the ticket and moves the ticket back in Linear.
   """
 
   require Logger
 
-  alias SymphonyElixir.{Config, RunStore, TicketState, Tracker}
+  alias SymphonyElixir.{Config, RunStore, TicketObservation, TicketState, Tracker}
+  alias SymphonyElixir.Linear.Issue
 
   @type outcome :: %{checked: non_neg_integer(), drifted: non_neg_integer(), missing: non_neg_integer()}
 
@@ -65,7 +66,7 @@ defmodule SymphonyElixir.TicketStateReconciler do
   - `:store` — the store to read and update records through, defaulting to `RunStore`
   - `:now` — the time stamped on a record whose phase was empty
   - `:dispatch_source` — `"record"` or `"poll"`, defaulting to `dispatch.source`: under `"record"` a
-    phase Symphony owns is kept (`reconcile/4`)
+    phase Symphony owns is kept (`reconcile/4`) and the ticket's read observed, which moves it back
 
   Returns `%{checked:, drifted:, missing:}`. A read or fetch error is logged and leaves the records
   as they are.
@@ -83,7 +84,7 @@ defmodule SymphonyElixir.TicketStateReconciler do
         case fetch_states(Enum.map(records, & &1.issue_id), opts) do
           {:ok, issues} ->
             source = Keyword.get_lazy(opts, :dispatch_source, &Config.dispatch_source/0)
-            reconcile_records(records, index_states(issues), {Keyword.get(opts, :now, DateTime.utc_now()), source}, store)
+            reconcile_records(records, index_issues(issues), {Keyword.get(opts, :now, DateTime.utc_now()), source}, store)
 
           {:error, reason} ->
             fetch_failed(reason)
@@ -110,20 +111,13 @@ defmodule SymphonyElixir.TicketStateReconciler do
     error -> {:error, error}
   end
 
-  defp index_states(issues) when is_list(issues) do
+  defp index_issues(issues) when is_list(issues) do
     Enum.reduce(issues, %{}, fn issue, acc ->
-      case issue_state(issue) do
-        {issue_id, state} when is_binary(issue_id) -> Map.put(acc, issue_id, state)
+      case issue_id(issue) do
+        issue_id when is_binary(issue_id) -> Map.put(acc, issue_id, issue)
         _missing -> acc
       end
     end)
-  end
-
-  defp issue_state(issue) do
-    case issue_id(issue) do
-      issue_id when is_binary(issue_id) -> {issue_id, state_of(issue)}
-      _issue_id -> nil
-    end
   end
 
   defp issue_id(issue) when is_map(issue), do: Map.get(issue, :id) || Map.get(issue, "id")
@@ -131,23 +125,24 @@ defmodule SymphonyElixir.TicketStateReconciler do
 
   defp state_of(issue), do: Map.get(issue, :state) || Map.get(issue, "state")
 
-  defp reconcile_records(records, states, at, store) do
+  defp reconcile_records(records, issues, at, store) do
     Enum.reduce(records, %{checked: 0, drifted: 0, missing: 0}, fn record, acc ->
-      case Map.fetch(states, record.issue_id) do
-        {:ok, state} -> reconcile_record(record, state, at, acc, store)
+      case Map.fetch(issues, record.issue_id) do
+        {:ok, issue} -> reconcile_record(record, issue, at, acc, store)
         :error -> %{acc | missing: acc.missing + 1}
       end
     end)
     |> tap(&log_summary/1)
   end
 
-  defp reconcile_record(record, state, {now, source}, acc, store) do
-    case reconcile(record, state, now, source) do
+  defp reconcile_record(record, issue, {now, source}, acc, store) do
+    case reconcile(record, state_of(issue), now, source) do
       {:ok, _record} ->
         %{acc | checked: acc.checked + 1}
 
       {:kept, _record, kept} ->
         log_kept(record.issue_id, kept)
+        move_back(record, issue, now)
         %{acc | checked: acc.checked + 1}
 
       {:stamped, updated} ->
@@ -173,10 +168,17 @@ defmodule SymphonyElixir.TicketStateReconciler do
     Logger.info("Ticket state drift reconciled issue_id=#{issue_id} from=#{inspect(from)} to=#{inspect(to)}")
   end
 
+  # The ticket's read observed under the record source: the observation keeps the phase, records the
+  # drift and moves the ticket back in Linear, as it does for every read after the start.
+  defp move_back(record, %Issue{} = issue, now),
+    do: TicketObservation.observe(record.repo_key, issue, now: now, source: :by_id, dispatch_source: "record")
+
+  defp move_back(_record, _issue, _now), do: :ok
+
   defp log_kept(issue_id, %{record_phase: record_phase, linear_phase: linear_phase}) do
     Logger.info(
       "Ticket state kept: Symphony owns the phase issue_id=#{issue_id} record_phase=#{inspect(record_phase)} " <>
-        "linear_phase=#{inspect(linear_phase)}; the next read of Linear moves it back"
+        "linear_phase=#{inspect(linear_phase)}; moving it back in Linear"
     )
   end
 

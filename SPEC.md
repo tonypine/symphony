@@ -409,8 +409,9 @@ nothing, and it writes only those fields, never the record's holds, verdicts or 
   event is written once per Linear `updatedAt`. A Linear state whose `updatedAt` is older than the
   record's `phase_at` was read before the phase was written: the phase is kept and nothing moves. A
   phase Linear owns follows Linear, and under `dispatch.source: poll` every phase does. The startup
-  reconciliation keeps a phase Symphony owns as well, and the first observation of the ticket moves
-  Linear back; a phase it adopts from Linear is Linear's.
+  reconciliation keeps a phase Symphony owns as well and observes the ticket's read the same way, so a
+  hand move made while Symphony was down is moved back at startup; a phase it adopts from Linear is
+  Linear's.
 - A record written before these fields existed reads with them at their defaults (`nil`, or an empty
   list for `labels` and `blockers`); it needs no migration.
 

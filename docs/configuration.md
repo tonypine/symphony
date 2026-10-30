@@ -2749,9 +2749,9 @@ difference, never on a timer of its own, and each event is written once for the 
 A Linear state read before Symphony wrote the phase is an older fact: the phase is kept and nothing
 is moved. The ticket's other facts (title, description, labels, priority, assignee, blockers) are
 Linear's and apply as before. A ticket whose phase is Linear's follows Linear: a new Todo ticket a
-person moves to Backlog stays there, and the record follows. At startup Symphony keeps a phase it
-owns too: a ticket moved by hand while Symphony was down is moved back by the first read of it. Under
-`poll` every hand move applies, as before. `/api/v1/state` counts the drift since Symphony started as `reconcile`: `detected`,
+person moves to Backlog stays there, and the record follows. Startup keeps a phase Symphony owns
+too: a ticket moved by hand while Symphony was down is moved back when Symphony starts, with the same
+events. Under `poll` every hand move applies, as before. `/api/v1/state` counts the drift since Symphony started as `reconcile`: `detected`,
 `reverted`, `revert_failed`, and `recent`, the last ten, newest first, each with `identifier`,
 `record_phase`, `linear_phase`, `outcome` (`reverted` or `revert_failed`) and `at`.
 
