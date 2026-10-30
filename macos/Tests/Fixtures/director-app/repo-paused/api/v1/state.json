@@ -283,5 +283,11 @@
       "pause": null
     }
   ],
-  "all_repositories_paused": false
+  "all_repositories_paused": false,
+  "setup": {
+    "checked_at": "2026-10-07T14:03:00Z",
+    "linear_checked_at": "2026-10-07T14:03:00Z",
+    "not_checked": [],
+    "problems": []
+  }
 }

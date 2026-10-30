@@ -262,7 +262,8 @@ struct ReposRestartPopover: View {
     }
 }
 
-/// A sidebar row: key, `owner/repo` or the folder name, Default and the running agents.
+/// A sidebar row: key, then `owner/repo` or the folder name (after a pause mark while paused), Default and the running
+/// agents.
 struct RepoSidebarRow: View {
     let repo: RepoDetail
 
@@ -272,30 +273,52 @@ struct RepoSidebarRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(repo.key)
                     .lineLimit(1)
-                if let subtitle = repo.subtitle {
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                if repo.subtitle != nil || repo.pause?.isPaused == true {
+                    HStack(spacing: 3) {
+                        if let pause = repo.pause, pause.isPaused {
+                            RepoPausedMark(help: pause.line)
+                        }
+                        if let subtitle = repo.subtitle {
+                            Text(subtitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
                 }
             }
+            // The name takes the row's width before the spacer does; the badges keep theirs.
+            .layoutPriority(1)
             Spacer(minLength: 4)
             if repo.isDefault {
                 Badge(text: ReposList.defaultBadge)
                     .help(ReposList.defaultHelp)
-            }
-            if repo.pause?.isPaused == true {
-                Badge(text: RepoPauseControl.pausedBadge)
-                    .help(repo.pause?.line ?? RepoPauseControl.pausedBadge)
+                    .fixedSize()
             }
             if repo.agentCount > 0 {
                 Badge(text: "\(repo.agentCount)", prominent: true)
+                    .fixedSize()
             }
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(repo.accessibilityLabel)
+    }
+}
+
+/// A paused repository's mark under its name in the sidebar: a pause symbol rather than a badge, so the row keeps its
+/// width for the name and the other badges. Its tooltip is the pause line; the row's accessibility label says "paused".
+struct RepoPausedMark: View {
+    let help: String
+
+    var body: some View {
+        Image(systemName: "pause.circle.fill")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(DesignTokens.Status.you.tint)
+            .fixedSize()
+            .help(help)
+            .accessibilityLabel(RepoPauseControl.pausedBadge)
     }
 }
 
@@ -816,9 +839,13 @@ struct RepoPauseView: View {
     private var controls: some View {
         HStack(spacing: DesignTokens.Space.s2) {
             if !control.isPaused {
+                // No Form label: the prompt says what the field is for, and a label would stand beside it in the
+                // Repos window's Form and jump above the field once text is typed.
                 TextField(RepoPauseControl.reasonPrompt, text: $reason, prompt: Text(RepoPauseControl.reasonPrompt))
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder)
-                    .frame(minWidth: 160, idealWidth: 240, maxWidth: 240)
+                    .multilineTextAlignment(.leading)
+                    .frame(width: 240)
                     .disabled(working)
                     .help(RepoPauseControl.reasonHelp)
                     .accessibilityLabel("Reason to pause \(control.key)")

@@ -414,6 +414,31 @@ func repoPauseSection(width: CGFloat) -> some View {
     .background(DesignTokens.Surface.window.color)
 }
 
+/// The Repos window's sidebar rows from the `repo-paused` fixture QA walks (TP-1238): symphony, the default, paused
+/// with an agent running, then api and docs, in a row as wide as a 200 pt sidebar leaves it.
+@MainActor
+func repoPausedSidebar() -> some View {
+    let api = here.appendingPathComponent("../Fixtures/director-app/repo-paused/api/v1").standardizedFileURL
+    let stateData = try! Data(contentsOf: api.appendingPathComponent("state.json"))
+    guard case let .state(snapshot) = SymphonyState.poll(data: stateData, statusCode: 200) else {
+        fatalError("the repo-paused fixture doesn't read as a state")
+    }
+    let window = ReposList.window(
+        status: .running(snapshot, external: false),
+        poll: ReposAPI.poll(data: try! Data(contentsOf: api.appendingPathComponent("repos.json")), statusCode: 200),
+        config: ReposConfig(path: "", repos: .noPath), now: githubNow,
+        isDirectory: { _ in false }, cloneRemoval: { _ in .blocked("") }
+    )
+    return VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+        ForEach(window.repos) { repo in
+            RepoSidebarRow(repo: repo)
+        }
+    }
+    .frame(width: DesignTokens.Layout.sidebarWidth - 2 * DesignTokens.Space.s3, alignment: .leading)
+    .padding(DesignTokens.Space.s3)
+    .background(DesignTokens.Surface.window.color)
+}
+
 /// Ten drifts, as many as Symphony keeps, newest first; every third move back failed.
 let reconcileDrifts: [ReconcileReport.Drift] = (0..<10).map { index in
     let at = githubNow.addingTimeInterval(TimeInterval(-40 - index * 120))
@@ -775,5 +800,6 @@ MainActor.assumeIsolated {
         render(repoPauseSection(width: 500), scheme, to: "repo-pause-repos-narrow-\(suffix).png")
         render(repoPauseSection(width: 1220), scheme, to: "repo-pause-repos-laptop-\(suffix).png")
         render(ledgerPage(window: 1440, repositoryPaused: true), scheme, to: "repo-pause-ticket-laptop-\(suffix).png")
+        render(repoPausedSidebar(), scheme, to: "repo-pause-sidebar-\(suffix).png")
     }
 }
