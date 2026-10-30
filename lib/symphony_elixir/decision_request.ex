@@ -25,6 +25,7 @@ defmodule SymphonyElixir.DecisionRequest do
 
   alias SymphonyElixir.{DecisionMove, Hold, NeedsDecisionHold, Questions, RunStore, TicketSignals, TicketState}
   alias SymphonyElixir.HumanActions.{PlainWords, Request}
+  alias SymphonyElixir.Pauses.Projector
 
   @title_max_length 120
   @question_line ~r/^<!--\s*symphony:question\s+(\S+)\s*-->\s*$/m
@@ -105,6 +106,11 @@ defmodule SymphonyElixir.DecisionRequest do
   the hold stay, the comment is marked pending on the ticket's record (`{:question_comment, id}`) and
   the Inbox's next sweep posts it (`repost/5`); the caller still gets the post's error.
 
+  While the pause projector owns the request comments (`SymphonyElixir.Pauses.Projector.owns?/0`),
+  `ask/4` posts nothing: the Question is asked with `request: true` and the phase it is asked in,
+  and the projector posts its comment once from it (`Request.render_question/2`), marking its
+  projection pending when Linear refuses it. The answer is then `:ok`.
+
   `issue` needs `:id` and `:state`, and `:repo_key` unless `opts[:repo_key]` names it.
   `opts[:post]` posts the rendered comment (`(body -> :ok | {:ok, term} | {:error, term})`), as the
   agent tool does through its own Linear client; without it `opts[:tracker]` (default
@@ -119,12 +125,12 @@ defmodule SymphonyElixir.DecisionRequest do
     hold_opts = opts |> Keyword.take([:store]) |> label_tracker(opts[:label_tracker])
 
     with {:check, :ok} <- {:check, check(request)},
-         {:question, {:ok, question}} <- {:question, ask_question(repo_key, issue_id, request, opts, confirm)},
+         {:question, {:ok, question}} <- {:question, ask_question(repo_key, issue_id, request, Map.get(issue, :state), opts, confirm)},
          asked? = asked?(repo_key, issue_id, question, hold_opts),
          attrs = request |> NeedsDecisionHold.attrs() |> confirming(confirm, Map.get(issue, :state)) |> with_question(question),
          {:hold, :ok} <- {:hold, Hold.set(repo_key, issue_id, :needs_decision, attrs, hold_opts)},
          body = comment(request, question, Map.get(issue, :state)),
-         posted = post_once(asked?, {repo_key, issue_id}, question, body, opts),
+         posted = post_once(asked? or Projector.owns?(), {repo_key, issue_id}, question, body, opts),
          {:post, posted} when posted == :ok or elem(posted, 0) == :ok <- {:post, posted} do
       posted
     else
@@ -146,12 +152,13 @@ defmodule SymphonyElixir.DecisionRequest do
 
   # The Question goes first: it is the truth the hold and the comment project. A ticket with no
   # repo key is refused, and logged, by the hold's own check, as before.
-  defp ask_question(repo_key, issue_id, request, opts, confirm) when is_binary(repo_key) and repo_key != "" do
-    question_opts = [confirm: confirm] ++ Keyword.take(opts, [:asked_by])
+  # A request comment shows it in Linear (`request: true`), naming the phase it was asked in.
+  defp ask_question(repo_key, issue_id, request, state, opts, confirm) when is_binary(repo_key) and repo_key != "" do
+    question_opts = [confirm: confirm, request: true, asked_in: state] ++ Keyword.take(opts, [:asked_by])
     Questions.ask({:ticket, repo_key, issue_id}, request, question_opts)
   end
 
-  defp ask_question(repo_key, issue_id, _request, _opts, _confirm), do: Hold.set(repo_key, issue_id, :needs_decision)
+  defp ask_question(repo_key, issue_id, _request, _state, _opts, _confirm), do: Hold.set(repo_key, issue_id, :needs_decision)
 
   # Whether the hold already carries this question: it was asked before, and its comment posted or
   # marked pending.
@@ -164,8 +171,9 @@ defmodule SymphonyElixir.DecisionRequest do
 
   defp with_question(attrs, question), do: %{attrs | decision: Map.put(attrs.decision, :question_id, question.id)}
 
-  # A comment that can't be posted is marked pending on the record, so the Inbox posts it.
-  defp post_once(true = _asked?, _ticket, _question, _body, _opts), do: :ok
+  # A comment that can't be posted is marked pending on the record, so the Inbox posts it. A question
+  # asked before, or one the pause projector posts from the Question, posts nothing here.
+  defp post_once(true = _skip?, _ticket, _question, _body, _opts), do: :ok
 
   defp post_once(false = _asked?, {repo_key, issue_id}, question, body, opts) do
     with {:error, reason} <- post(issue_id, body, opts) do
@@ -214,9 +222,31 @@ defmodule SymphonyElixir.DecisionRequest do
   Returns `:none` when there is nothing to post (no pending comment, or a question no longer open,
   whose mark is dropped), `:posted` once it is posted and its mark dropped, and `:pending` when the
   post failed again. `opts[:tracker]` (default `SymphonyElixir.Tracker`) creates the comment.
+
+  While the pause projector owns the request comments (`SymphonyElixir.Pauses.Projector.owns?/0`),
+  the projector posts it instead: an open question whose comment it has not recorded yet is
+  projected now, `:posted` once its comment is on Linear and `:pending` while it is not, and
+  `:none` for anything else.
   """
   @spec repost(String.t(), String.t(), map() | nil, String.t() | nil, keyword()) :: :none | :posted | :pending
   def repost(repo_key, issue_id, hold, state, opts) do
+    if Projector.owns?(), do: project_comment(repo_key, issue_id, hold, opts), else: repost_pending(repo_key, issue_id, hold, state, opts)
+  end
+
+  defp project_comment(repo_key, issue_id, hold, opts) do
+    ticket = {:ticket, repo_key, issue_id}
+
+    with id when is_binary(id) <- get_in(hold || %{}, [:decision, :question_id]),
+         %{state: :open} <- Questions.find(ticket, id),
+         false <- Projector.commented?(ticket, id) do
+      _ = Projector.project_now(ticket, Keyword.take(opts, [:tracker]))
+      if Projector.commented?(ticket, id), do: :posted, else: :pending
+    else
+      _nothing_to_post -> :none
+    end
+  end
+
+  defp repost_pending(repo_key, issue_id, hold, state, opts) do
     with id when is_binary(id) <- get_in(hold || %{}, [:decision, :question_id]),
          %{} = mark <- pending_comment(repo_key, issue_id, id) do
       repost_question(repo_key, issue_id, Questions.find({:ticket, repo_key, issue_id}, id), mark, state, opts)
@@ -226,7 +256,7 @@ defmodule SymphonyElixir.DecisionRequest do
   end
 
   defp repost_question(repo_key, issue_id, %{state: :open} = question, mark, state, opts) do
-    case Keyword.get(opts, :tracker, SymphonyElixir.Tracker).create_comment(issue_id, comment(request(question), question, state)) do
+    case Keyword.get(opts, :tracker, SymphonyElixir.Tracker).create_comment(issue_id, comment(Request.question_request(question), question, state)) do
       :ok ->
         TicketSignals.clear_projection(repo_key, issue_id, mark)
         :posted
@@ -247,17 +277,6 @@ defmodule SymphonyElixir.DecisionRequest do
       %{} = record -> record |> TicketState.normalize() |> Map.fetch!(:pending_projection) |> Enum.find(&(TicketState.projection_of(&1) == {:question_comment, id}))
       _none -> nil
     end
-  end
-
-  # The request a Question was asked with, as `Request.render_hold/2` reads it.
-  defp request(question) do
-    options =
-      for option <- question.options do
-        tradeoffs = for {kind, key} <- [{"good", :good}, {"cost", :cost}, {"risk", :risk}], text <- Map.get(option, key, []), do: %{kind: kind, text: text}
-        %{label: option.label, effect: option.effect, recommended: option.recommended?, tradeoffs: tradeoffs, unlocks: option.unlocks}
-      end
-
-    question |> Map.take([:title, :question, :why, :if_unanswered, :recommendation_reason]) |> Map.put(:options, options)
   end
 
   @doc """

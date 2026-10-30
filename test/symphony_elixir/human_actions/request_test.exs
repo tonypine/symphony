@@ -222,6 +222,76 @@ defmodule SymphonyElixir.HumanActions.RequestTest do
     assert Request.parse(body) == nil
   end
 
+  describe "a Question's request and reply (TP-1252)" do
+    @request %{
+      title: "Close TP-612 as a duplicate of TP-668",
+      question: "Close TP-612 as its duplicate?",
+      why: "Nothing is left to build.",
+      if_unanswered: "TP-612 stays open.",
+      unblocks: "the Companies board",
+      recommendation_reason: "TP-668 covers every line.",
+      options: [
+        %{
+          label: "Close as duplicate",
+          effect: "TP-612 moves to Done.",
+          recommended: true,
+          tradeoffs: [%{kind: "good", text: "The board shows only work left."}, %{kind: "risk", text: "A gap is missed."}],
+          unlocks: ["WORKFLOW.md"]
+        },
+        %{label: "Keep it open", effect: "The next run looks again.", tradeoffs: [%{kind: "cost", text: "A run spends time."}]}
+      ]
+    }
+
+    # The Question `SymphonyElixir.Questions.ask/3` records for the request above.
+    @question %{
+      id: "01JQ",
+      title: "Close TP-612 as a duplicate of TP-668",
+      question: "Close TP-612 as its duplicate?",
+      why: "Nothing is left to build.",
+      if_unanswered: "TP-612 stays open.",
+      unblocks: "the Companies board",
+      recommendation_reason: "TP-668 covers every line.",
+      asked_in: "Code Review",
+      state: :open,
+      options: [
+        %{
+          label: "Close as duplicate",
+          effect: "TP-612 moves to Done.",
+          good: ["The board shows only work left."],
+          cost: [],
+          risk: ["A gap is missed."],
+          recommended?: true,
+          unlocks: ["WORKFLOW.md"]
+        },
+        %{label: "Keep it open", effect: "The next run looks again.", good: [], cost: ["A run spends time."], risk: [], recommended?: false, unlocks: []}
+      ]
+    }
+
+    test "the request comment is byte for byte the one rendered from the request, with the question's id in its hidden line" do
+      expected = Request.render_hold(@request, "Code Review") <> "\n\n<!-- symphony:question 01JQ -->"
+
+      assert Request.render_question(@question) == expected
+      assert Request.render_question(Map.delete(@question, :asked_in), "Code Review") == expected
+      assert Request.render_question(Map.delete(@question, :asked_in)) =~ "the ticket stays in its phase until"
+      assert %{title: "Close TP-612 as a duplicate of TP-668", unblocks: "the Companies board"} = Request.parse(expected)
+    end
+
+    test "the reply is the Director's decision once answered, the withdrawal once withdrawn, nothing while open" do
+      answered = %{@question | state: :answered} |> Map.put(:answer, %{text: " Close as duplicate "})
+
+      assert Request.render_reply(answered) == """
+             Decision from the Director:
+
+             1. Close TP-612 as its duplicate?
+                **Decision:** Close as duplicate\
+             """
+
+      withdrawn = %{@question | state: :withdrawn} |> Map.put(:withdrawn, %{reason: " Not needed. "})
+      assert Request.render_reply(withdrawn) == "## Action withdrawn\n\nNot needed."
+      assert Request.render_reply(@question) == nil
+    end
+  end
+
   test "stays open until the issue leaves a state a person moves it out of" do
     request = %{created_at: @created_at}
     active = ["Todo", "In Progress"]

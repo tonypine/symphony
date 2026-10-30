@@ -113,6 +113,53 @@ defmodule SymphonyElixir.HumanActions.Request do
     )
   end
 
+  @doc """
+  Renders the request comment of a Question (`SymphonyElixir.Questions`) as `render_hold/2` renders
+  the request it was asked with, for the phase it was asked in (`asked_in`, else `state`), followed by
+  the hidden line naming its id, `<!-- symphony:question <id> -->`, which the Director never reads.
+  The same content renders the same bytes: the pause projector posts it
+  (`SymphonyElixir.Pauses.Projector`).
+  """
+  @spec render_question(map(), String.t() | nil) :: String.t()
+  def render_question(%{id: id} = question, state \\ nil),
+    do: render_hold(question_request(question), Map.get(question, :asked_in) || state) <> "\n\n<!-- symphony:question #{id} -->"
+
+  @doc """
+  The request a Question was asked with, as `render_hold/2` reads it: its fields, and its options
+  with their trade-offs (good, then cost, then risk) and the paths they unlock.
+  """
+  @spec question_request(map()) :: map()
+  def question_request(question) do
+    options =
+      for option <- question.options do
+        tradeoffs = for {kind, key} <- [{"good", :good}, {"cost", :cost}, {"risk", :risk}], text <- Map.get(option, key, []), do: %{kind: kind, text: text}
+        %{label: option.label, effect: option.effect, recommended: option.recommended?, tradeoffs: tradeoffs, unlocks: option.unlocks}
+      end
+
+    question |> Map.take([:title, :question, :why, :if_unanswered, :recommendation_reason, :unblocks]) |> Map.put(:options, options)
+  end
+
+  @doc """
+  The reply under a Question's request comment once it ended: `Decision from the Director:` with the
+  question and its answer, as the Director's Decide posts it, or `## Action withdrawn` with the
+  reason (`render_withdrawal/1`). nil while the question is open.
+  """
+  @spec render_reply(map()) :: String.t() | nil
+  def render_reply(%{state: :answered, question: text, answer: %{text: answer}}), do: render_decision([%{question: text, answer: answer}])
+  def render_reply(%{state: :withdrawn, withdrawn: %{reason: reason}}), do: render_withdrawal(reason)
+  def render_reply(_question), do: nil
+
+  @doc "Renders the reply a decision posts under its request: each question with the option picked."
+  @spec render_decision([%{question: String.t(), answer: String.t()}]) :: String.t()
+  def render_decision(picks) when is_list(picks) do
+    lines =
+      picks
+      |> Enum.with_index(1)
+      |> Enum.map(fn {%{question: question, answer: answer}, index} -> "#{index}. #{String.trim(question)}\n   **Decision:** #{String.trim(answer)}" end)
+
+    Enum.join(["Decision from the Director:" | lines], "\n\n")
+  end
+
   defp render_request(%{title: title, question: question, why: why, options: options} = request, closing) do
     fields =
       [

@@ -95,6 +95,8 @@ defmodule SymphonyElixir.QuestionsTest do
       {:ok, _pause} = Pauses.set(@ticket, @dependency, at: @at)
 
       assert {:ok, %{asked_by: %{kind: :symphony, name: "Symphony", run_id: nil}, step: nil, confirm: nil} = question} = Questions.ask(@ticket, @request)
+      assert %{request: false, asked_in: nil, unblocks: nil} = question
+
       assert reasons() == [{:ticket, %{identifier: "TP-1194"}}, {:question, %{question_id: question.id}}]
       assert ticket_events(@repo_key, @issue_id) |> Enum.map(&elem(&1, 0)) == ["pause.set", "question.asked", "pause.reason_added"]
     end
@@ -367,6 +369,26 @@ defmodule SymphonyElixir.QuestionsTest do
 
       # Nothing left to withdraw.
       assert Questions.withdraw_lapsed(@ticket, :restart, inbox: @inbox, replies: Replies) == {:ok, []}
+    end
+
+    test "a question a request comment shows keeps what its comment names; the backfill's says nothing (TP-1252)" do
+      request = Map.put(@request, :unblocks, "the  release\nnotes")
+      {:ok, question} = Questions.ask(@ticket, request, request: true, asked_in: "Code Review", at: @at)
+      assert %{request: true, asked_in: "Code Review", unblocks: "the release notes"} = question
+
+      {:ok, backfilled} = Questions.ask(@ticket, %{request | title: "Old"}, backfilled: true, id: "q-old", request: true, at: @at)
+      assert backfilled.request == nil
+    end
+
+    test "while the pause projector owns the replies, a withdrawal posts none itself (TP-1252)" do
+      Application.put_env(:symphony_elixir, :pause_projector, true)
+      on_exit(fn -> Application.put_env(:symphony_elixir, :pause_projector, false) end)
+      question = ask_as!(@symphony, "Merge TP-12", confirm: "Merging")
+      :persistent_term.put({SymphonyElixir.Inbox, :items, @inbox}, [%{issue_id: @issue_id, review: %{comment_id: "c-9", question_id: question.id}}])
+
+      assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, :merged, inbox: @inbox, replies: Replies)
+      refute_received {:reply, _issue_id, _comment_id, _body}
+      assert %{state: :withdrawn} = Questions.find(@ticket, question.id)
     end
 
     test "a merge settled withdraws a merge confirmation that was never answered; a refused reply is only logged" do

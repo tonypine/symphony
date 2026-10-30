@@ -2518,6 +2518,64 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     end
   end
 
+  describe "while the pause projector owns the request comments (TP-1252)" do
+    setup do
+      :ok = SymphonyElixir.RunStore.clear()
+      Application.put_env(:symphony_elixir, :pause_projector, true)
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      on_exit(fn ->
+        Application.put_env(:symphony_elixir, :pause_projector, false)
+        Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+        Application.delete_env(:symphony_elixir, :memory_tracker_plan_comments)
+      end)
+    end
+
+    defp projected_request(context, scope, attrs \\ @human_action) do
+      Linear.request_human_action(context, attrs, human_action_opts(human_action_client(self(), scope)))
+    end
+
+    test "a request is the Question's projection: the tool posts nothing, the projector posts it once" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue: %Issue{id: "issue-24", identifier: "MOT-24", repo_key: "repo-a"}, comment_registry: registry}
+
+      assert {:ok, %{"requested" => true, "questionId" => id, "posted" => true, "held" => true, "state" => "In Progress"}} =
+               projected_request(context, human_action_scope())
+
+      refute_received {:linear_called, "SymphonyAgentAddComment", _variables}
+      assert_received {:memory_tracker_comment, "issue-24", body}
+      assert body =~ "**Unblocks:** the Release workflow on main"
+      assert body =~ "the ticket stays in In Progress until the decision is recorded"
+      assert String.ends_with?(body, "<!-- symphony:question #{id} -->")
+
+      # The same request again is the one Question: nothing is posted.
+      assert {:ok, %{"requested" => false, "reason" => "already_open"}} = projected_request(context, human_action_scope())
+      refute_received {:memory_tracker_comment, _issue_id, _body}
+    end
+
+    test "a withdrawal is replied by the Question's projection; a request no Question carries is replied by the tool" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue: %Issue{id: "issue-24", identifier: "MOT-24", repo_key: "repo-a"}, comment_registry: registry}
+      assert {:ok, %{"questionId" => id}} = projected_request(context, human_action_scope())
+      assert_received {:memory_tracker_comment, "issue-24", body}
+
+      linear = %{state_changes: [], comments: [%{id: "comment-1", body: body, parent_id: nil, created_at: nil}]}
+      Application.put_env(:symphony_elixir, :memory_tracker_plan_comments, %{"issue-24" => linear})
+
+      scope =
+        withdrawal_scope([
+          %{"id" => "comment-1", "body" => body, "createdAt" => "2026-10-04T18:57:00.000Z"},
+          request_node("comment-2", "Re-run the stuck dialyzer job", "2026-10-04T18:58:00.000Z")
+        ])
+
+      assert {:ok, %{"withdrawn" => true, "questionIds" => [^id], "replyCommentIds" => ["reply-to-comment-2"]}} = withdraw_human_action(context, scope)
+
+      assert_received {:memory_tracker_reply, "issue-24", "comment-1", "## Action withdrawn\n\n" <> _reason}
+      refute_received {:linear_called, "SymphonyAgentAddReply", %{parentId: "comment-1"}}
+      assert_received {:linear_called, "SymphonyAgentAddReply", %{parentId: "comment-2"}}
+    end
+  end
+
   describe "withdraw_human_action/3" do
     @withdrawal %{"reason" => "The dialyzer run had started minutes earlier, not 11 hours ago."}
 
