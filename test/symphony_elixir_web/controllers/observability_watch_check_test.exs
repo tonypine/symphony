@@ -24,7 +24,7 @@ defmodule SymphonyElixirWeb.ObservabilityWatchCheckTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", pr_review_mode: "polling")
+    write_workflow_file!(Workflow.workflow_file_path(), pr_review_mode: "polling")
 
     endpoint_config =
       :symphony_elixir

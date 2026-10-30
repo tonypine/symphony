@@ -156,7 +156,6 @@ defmodule SymphonyElixir.WorkspaceTest do
       File.mkdir_p!(outside)
 
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         workspace_root: workspace_root,
         hook_before_run: "touch #{shell_quote(marker)}"
       )

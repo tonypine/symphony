@@ -5,7 +5,7 @@ defmodule SymphonyElixir.PlanReviewTest do
   alias SymphonyElixir.PlanReview
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     :ok
   end
 

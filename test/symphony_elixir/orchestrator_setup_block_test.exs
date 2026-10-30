@@ -29,7 +29,7 @@ defmodule SymphonyElixir.OrchestratorSetupBlockTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_api_token: nil)
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_api_token: nil)
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
     on_exit(fn -> Application.delete_env(:symphony_elixir, :fake_fixer_create_result) end)
     :ok

@@ -62,7 +62,6 @@ defmodule SymphonyElixir.TestSupportTest do
       on_exit(fn -> File.rm_rf(test_root) end)
 
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         workspace_root: Path.join(test_root, "workspaces"),
         hook_before_remove: """
         echo remove-started >> #{hook_log}

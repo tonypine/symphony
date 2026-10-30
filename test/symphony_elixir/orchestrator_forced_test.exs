@@ -842,7 +842,6 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
       Workflow.workflow_file_path(),
       Keyword.merge(
         [
-          tracker_kind: "memory",
           tracker_active_states: @active_states,
           tracker_terminal_states: ["Done", "Canceled"],
           workspace_root: Path.join(ctx.test_root, "workspaces"),

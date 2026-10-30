@@ -13,7 +13,7 @@ defmodule SymphonyElixir.Setup.Checks.RoutingTest do
   @jobs_id "2b7d1e44-0c5f-4a8e-8f3d-6c5b4a392817"
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     :ets.delete_all_objects(PollLog)
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
