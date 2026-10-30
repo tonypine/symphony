@@ -21,6 +21,9 @@ defmodule SymphonyElixir.TicketObservationTest do
     def set_machine_label(issue_id, name), do: answer({:set_machine_label, issue_id, name}, :ok)
     def clear_machine_label(issue_id, name), do: answer({:clear_machine_label, issue_id, name}, :ok)
     def fetch_issue_states_by_ids(issue_ids), do: answer({:fetch_issue_states_by_ids, issue_ids}, {:ok, []})
+    def create_reply(issue_id, comment_id, body), do: answer({:create_reply, issue_id, comment_id, body}, :ok)
+    def fetch_issue_description(issue_id), do: answer({:fetch_issue_description, issue_id}, {:ok, "Do the work."})
+    def update_issue_description(issue_id, description), do: answer({:update_issue_description, issue_id, description}, :ok)
 
     defp answer(call, default) do
       send(ReconcileProbe, {:tracker, call})
@@ -892,7 +895,7 @@ defmodule SymphonyElixir.TicketObservationTest do
 
     setup do
       Process.register(self(), ReconcileProbe)
-      on_exit(fn -> for call <- [:update_issue_state, :set_machine_label, :clear_machine_label, :fetch_issue_states_by_ids], do: :persistent_term.erase({ReconcileTracker, call}) end)
+      on_exit(fn -> for call <- [:update_issue_state, :set_machine_label, :clear_machine_label, :fetch_issue_states_by_ids, :create_reply], do: :persistent_term.erase({ReconcileTracker, call}) end)
       :ok
     end
 
@@ -919,6 +922,44 @@ defmodule SymphonyElixir.TicketObservationTest do
       reconcile(repo_key, [issue])
       refute_received {:tracker, {:update_issue_state, _issue_id, _state}}
       assert TicketObservation.summary().reconcile.reapplied == 1
+    end
+
+    test "a Director's answer Linear refused is replied under its request and recorded in the section once Linear answers (TP-1240)",
+         %{repo_key: repo_key} do
+      ticket = {:ticket, repo_key, "issue-observed"}
+
+      request = %{
+        title: "Add the signing secret",
+        question: "Add the secret?",
+        why: "Releases fail to sign.",
+        if_unanswered: "Every release stays unsigned.",
+        recommendation_reason: "Signing is a one-time setup.",
+        options: [%{label: "Add it", effect: "Releases sign again.", recommended: true}, %{label: "Drop signing", effect: "Unsigned builds."}]
+      }
+
+      marked!(repo_key, "In Progress", :phase)
+      {:ok, question} = SymphonyElixir.Questions.ask(ticket, request)
+      {:ok, _answered} = SymphonyElixir.Questions.answer(ticket, question.id, "Drop signing")
+      :ok = TicketSignals.mark_projection(repo_key, "issue-observed", {:question_answer, question.id, "comment-1"}, :linear_down)
+
+      reply(:create_reply, {:error, :linear_down})
+      capture_log(fn -> reconcile(repo_key, [linear_issue(%{state: "In Progress", updated_at: @read_at})]) end)
+      assert_received {:tracker, {:create_reply, "issue-observed", "comment-1", _refused}}
+      assert [%{type: :question_answer, comment: "comment-1"}] = record(repo_key).pending_projection
+
+      reply(:create_reply, :ok)
+      reconcile(repo_key, [linear_issue(%{state: "In Progress", updated_at: @read_at})])
+      assert_received {:tracker, {:create_reply, "issue-observed", "comment-1", "Decision from the Director:\n\n1. Add the secret?\n   **Decision:** Drop signing"}}
+      assert_received {:tracker, {:update_issue_description, "issue-observed", description}}
+      assert [%{key: "comment-1", answer: "Drop signing"}] = SymphonyElixir.Decisions.recorded(description)
+      assert record(repo_key).pending_projection == []
+
+      # A question the Director reopened meanwhile has no answer to project: its mark goes with no write.
+      {:ok, _reopened} = SymphonyElixir.Questions.reopen(ticket, question.id)
+      :ok = TicketSignals.mark_projection(repo_key, "issue-observed", {:question_answer, question.id, nil}, :linear_down)
+      reconcile(repo_key, [linear_issue(%{state: "In Progress", updated_at: @read_at})])
+      refute_received {:tracker, {:create_reply, _issue_id, _comment_id, _body}}
+      assert record(repo_key).pending_projection == []
     end
 
     test "a failed write that fails again keeps its mark for the next run", %{repo_key: repo_key} do

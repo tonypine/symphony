@@ -107,6 +107,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     PrDecision,
     ProtectedPathsGate,
     PrReviewPoller,
+    Questions,
     RunStore,
     TicketObservation,
     TicketPullRequest,
@@ -1430,7 +1431,10 @@ defmodule SymphonyElixir.PrWatch.Repo do
     end
   end
 
-  defp decisions(%{decisions: decisions}) when is_list(decisions), do: decisions
+  # The ticket's answers: the recorded decisions with the answered Questions in their place, and the
+  # Questions answered since at the end (`SymphonyElixir.Questions.answers/2`), so an answer reads as
+  # soon as it is given, once.
+  defp decisions(%{decisions: decisions} = record) when is_list(decisions), do: Questions.answers(decisions, Map.get(record, :questions, []))
   defp decisions(_record), do: []
 
   # A check red on the base too holds every PR it fails (R23): said once per base and check while it

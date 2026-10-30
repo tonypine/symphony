@@ -593,6 +593,68 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
     end
   end
 
+  describe "as_recorded/2 (TP-1240)" do
+    # The request a Question was asked with, as Linear holds it: its hidden line names the Question.
+    defp asked_comment(id, created_at \\ "2026-10-04T10:00:00.000Z") do
+      request_comment(@comment_id, Request.render_hold(request(), "In Progress") <> "\n\n<!-- symphony:question #{id} -->", created_at)
+    end
+
+    test "a request whose Question the Director answered reads closed before Linear shows the reply" do
+      assert :ok = DecisionRequest.ask(issue(), request(), [])
+      ticket = {:ticket, @repo_key, @issue_id}
+      [%{id: id}] = Questions.open(ticket)
+      node = ticket_node(%{"comments" => %{"nodes" => [asked_comment(id), %{"id" => "note", "body" => "A note"}]}})
+
+      # Open on the record, it reads as Linear has it, replies and all.
+      assert NeedsDecisionHold.as_recorded(@repo_key, node) == node
+      replied_open = ticket_node(%{"comments" => %{"nodes" => [asked_comment(id), reply(@comment_id, "Ship unsigned")]}})
+      assert NeedsDecisionHold.as_recorded(@repo_key, replied_open) == replied_open
+
+      {:ok, _answered} = Questions.answer(ticket, id, "Ship unsigned")
+      :ok = Hold.clear(@repo_key, @issue_id, :needs_decision, answered: true)
+      assert %{"comments" => %{"nodes" => [%{"id" => "note"}]}} = NeedsDecisionHold.as_recorded(@repo_key, node)
+
+      # The read sets no hold again for it, and once the reply is on Linear it reads as Linear has it.
+      assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :none
+      assert stored_hold() == nil
+      replied = ticket_node(%{"comments" => %{"nodes" => [asked_comment(id), reply(@comment_id, "Ship unsigned")]}})
+      assert NeedsDecisionHold.as_recorded(@repo_key, replied) == replied
+    end
+
+    test "replies under a request whose Question the Director reopened count only from the reopen on" do
+      assert :ok = DecisionRequest.ask(issue(), request(), [])
+      ticket = {:ticket, @repo_key, @issue_id}
+      [%{id: id}] = Questions.open(ticket)
+      {:ok, _answered} = Questions.answer(ticket, id, "Ship unsigned", at: ~U[2026-10-04 10:05:00Z])
+      {:ok, _reopened} = Questions.reopen(ticket, id, at: ~U[2026-10-04 10:05:08Z])
+
+      before = Map.put(reply(@comment_id, "Ship unsigned"), "createdAt", "2026-10-04T10:05:01.000Z")
+      undated = %{"id" => "reply-2", "body" => "Hmm", "parent" => %{"id" => @comment_id}}
+      later = %{"id" => "reply-3", "body" => "Add the secrets", "parent" => %{"id" => @comment_id}, "createdAt" => "2026-10-04T10:06:00.000Z"}
+      node = ticket_node(%{"comments" => %{"nodes" => [asked_comment(id), before, undated]}})
+
+      assert %{"comments" => %{"nodes" => [%{"id" => @comment_id}]}} = NeedsDecisionHold.as_recorded(@repo_key, node)
+      # The hold stays: the request reads open, carrying its Question.
+      assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :none
+      assert %{decision: %{question_id: ^id}} = stored_hold()
+
+      # A reply after the reopen answers it again.
+      answered = ticket_node(%{"comments" => %{"nodes" => [asked_comment(id), before, later]}})
+      assert NeedsDecisionHold.sync(@repo_key, answered, settings: designed_settings()) == :clear
+      assert %{state: :answered, answer: %{text: "Add the secrets"}} = Questions.find(ticket, id)
+    end
+
+    test "a ticket with no record, no questions or no comments reads as Linear has it" do
+      node = ticket_node(%{"comments" => %{"nodes" => [request_comment()]}})
+      assert NeedsDecisionHold.as_recorded(@repo_key, node) == node
+      assert NeedsDecisionHold.as_recorded(nil, node) == node
+
+      assert :ok = DecisionRequest.ask(issue(), request(), [])
+      unread = Map.delete(node, "comments")
+      assert NeedsDecisionHold.as_recorded(@repo_key, unread) == unread
+    end
+  end
+
   describe "sweep/3" do
     test "counts the holds it set and cleared over the tickets a route read" do
       open = ticket_node(%{"comments" => %{"nodes" => [request_comment()]}})

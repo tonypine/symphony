@@ -13,8 +13,9 @@ defmodule SymphonyElixir.Inbox do
   2. only the issues whose pair changed since the last read (or that are new) are read in full:
      their description, comments, state history, labels, attachments and sub-tickets
      (`SymphonyElixir.HumanActions.Collector.read_more_pages/2` reads past the first page);
-  3. each becomes an `SymphonyElixir.Inbox.Item`, with, for a ticket no request or plan review
-     covers, the access or dispatch-loop hold its store record carries;
+  3. each becomes an `SymphonyElixir.Inbox.Item`, its requests read as the ticket's record holds
+     their Questions (`SymphonyElixir.NeedsDecisionHold.as_recorded/2`), with, for a ticket no
+     request or plan review covers, the access or dispatch-loop hold its store record carries;
   4. `SymphonyElixir.Inbox.References` adds what each item's text mentions (`references`) and where
      its ticket sits (`context`), in one more Linear query for every item together and a GitHub read
      per pull request. The quality gate's held and skipped tickets, which `items/2` lists from the
@@ -22,7 +23,9 @@ defmodule SymphonyElixir.Inbox do
 
   `items/2` adds the quality gate's holds and skips from the orchestrator snapshot (kind
   `clarify`), drops an issue that is running or that the orchestrator saw leave the state the read
-  listed it in (`Plan Review` for a plan) since, and sorts the list oldest first. A held ticket is
+  listed it in (`Plan Review` for a plan) since, drops a request whose Question the ticket's record
+  no longer holds open (`SymphonyElixir.Questions`: the Director answered it, so its row goes before
+  Linear shows the reply), and sorts the list oldest first. A held ticket is
   kept whatever state the orchestrator reports: the hold is what waits on the Director. A failed
   read keeps the last list.
 
@@ -40,7 +43,7 @@ defmodule SymphonyElixir.Inbox do
 
   require Logger
 
-  alias SymphonyElixir.{Config, Hold, NeedsDecisionHold, Orchestrator, PlanReview}
+  alias SymphonyElixir.{Config, Hold, NeedsDecisionHold, Orchestrator, PlanReview, Questions}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.Collector
   alias SymphonyElixir.Inbox.{Item, References}
@@ -143,7 +146,7 @@ defmodule SymphonyElixir.Inbox do
     items =
       server
       |> cached()
-      |> Enum.reject(&(MapSet.member?(running_ids, &1.issue_id) or left_review?(&1, watched_states)))
+      |> Enum.reject(&(MapSet.member?(running_ids, &1.issue_id) or left_review?(&1, watched_states) or ended_question?(&1)))
       |> Enum.map(&%{&1 | state: Map.get(watched_states, &1.issue_id, &1.state)})
       |> Enum.concat(clarify)
       |> Enum.uniq_by(& &1.issue_id)
@@ -152,6 +155,17 @@ defmodule SymphonyElixir.Inbox do
     live = %{running: running_ids, you: MapSet.new(items, & &1.issue_id)}
     Enum.map(items, &References.live(&1, live))
   end
+
+  # A request whose Question the ticket's record no longer holds open (the Director's Decide answered
+  # it) waits on nobody: the row goes at once, before Linear shows the reply.
+  defp ended_question?(%{kind: :action, repo_key: repo_key, issue_id: issue_id, review: %{question_id: id}}) when is_binary(repo_key) and is_binary(id) do
+    case Questions.find({:ticket, repo_key, issue_id}, id) do
+      %{state: state} -> state != :open
+      nil -> false
+    end
+  end
+
+  defp ended_question?(_item), do: false
 
   defp clarify_items(snapshot) do
     (Map.get(snapshot, :awaiting_clarification, []) ++ Map.get(snapshot, :skipped, []))
@@ -225,7 +239,7 @@ defmodule SymphonyElixir.Inbox do
       items =
         for {repo, light} <- listed,
             %{node: node} <- [Map.get(nodes, light["id"])],
-            item = Item.from_node(node, repo.name, settings(state, repo), lookups(state)),
+            item = Item.from_node(NeedsDecisionHold.as_recorded(repo.name, node), repo.name, settings(state, repo), lookups(state)),
             item != nil,
             do: item
 

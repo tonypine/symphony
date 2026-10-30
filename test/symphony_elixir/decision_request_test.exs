@@ -253,6 +253,14 @@ defmodule SymphonyElixir.DecisionRequestTest do
     end
   end
 
+  describe "question_id/1" do
+    test "reads the Question a request comment's hidden line names" do
+      assert DecisionRequest.question_id("## Decision needed: X\n\n<!-- symphony:question 01QUESTION -->") == "01QUESTION"
+      assert DecisionRequest.question_id("## Decision needed: X") == nil
+      assert DecisionRequest.question_id(nil) == nil
+    end
+  end
+
   describe "repost/5" do
     test "posts a comment whose post failed, rendered from the Question as it was asked, and drops its mark" do
       Process.put(:ask_comment_result, {:error, :linear_down})

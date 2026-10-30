@@ -235,6 +235,12 @@ defmodule SymphonyElixir.TicketEventsTest do
                TicketEvents.record(@repo_key, @issue_id, "decision.recorded", %{answer: "Yes", key: "c3", request: recorded.id}, actor: {:person, "Tony"})
 
       assert [^open, ^legacy] = TicketEvents.query(@repo_key, @issue_id, open_decisions: true)
+
+      # The Director takes the first answer back: that question is open again until it is answered again.
+      assert {:ok, _reopen} = TicketEvents.record(@repo_key, @issue_id, "question.reopened", %{question_id: "q-1"}, idempotency: "reopen-1")
+      assert [^answered, ^open, ^legacy] = TicketEvents.query(@repo_key, @issue_id, open_decisions: true)
+      assert {:ok, _again} = TicketEvents.record(@repo_key, @issue_id, "question.answered", %{question_id: "q-1", answer: "No"}, idempotency: "again-1")
+      assert [^open, ^legacy] = TicketEvents.query(@repo_key, @issue_id, open_decisions: true)
     end
 
     test "a withdrawal closes a decision request too" do

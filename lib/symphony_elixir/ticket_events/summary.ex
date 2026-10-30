@@ -135,6 +135,7 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   end
 
   defp summary("question.withdrawn", payload, _event), do: {"Question withdrawn" <> suffix(": ", text(payload, :reason)), [text(payload, :title)]}
+  defp summary("question.reopened", payload, _event), do: {"You took back your answer" <> suffix(": ", text(payload, :title)), []}
 
   defp summary("note", payload, _event), do: {"Note added", [text(payload, :text)]}
   defp summary(_type, _payload, _event), do: :unknown
