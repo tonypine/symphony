@@ -532,6 +532,119 @@ final class SetupTests: XCTestCase {
         XCTAssertEqual(fresh.detail, "Dispatch runs from Symphony's record. No cycle compared yet since Symphony started.")
     }
 
+    // MARK: - The Reconcile line
+
+    /// Against an older Symphony the line says the feature is not available, greyed out with no drift.
+    func testTheReconcileLineFromAnOlderSymphonyIsNotAvailable() {
+        let line = ReconcileLine(report: nil, now: now)
+        XCTAssertEqual(line.state, .notAvailable)
+        XCTAssertFalse(line.isAvailable)
+        XCTAssertFalse(line.isWarning)
+        XCTAssertEqual(line.word, "Not available")
+        XCTAssertEqual(line.detail, "Not available on this Symphony: update it to see what the reconciler did.")
+        XCTAssertEqual(line.rows, [])
+    }
+
+    /// Before the first run (dispatch still on the poll, or Symphony just started): the interval, nothing done yet.
+    func testTheReconcileLineBeforeItsFirstRun() {
+        let line = ReconcileLine(report: ReconcileReport(), now: now)
+        XCTAssertEqual(line.state, .waiting)
+        XCTAssertTrue(line.isAvailable)
+        XCTAssertFalse(line.isWarning)
+        XCTAssertEqual(line.word, "No run yet")
+        XCTAssertEqual(
+            line.detail,
+            "No run yet since Symphony started. It runs every 5 min while dispatch reads Symphony's record. "
+                + "Since Symphony started: no change from Linear applied, no drift detected."
+        )
+        XCTAssertEqual(line.rows, [])
+    }
+
+    /// It ran and found no drift: when, how often, and the changes made in Linear it applied.
+    func testTheReconcileLineAfterACleanRun() {
+        let report = ReconcileReport(lastRunAt: now.addingTimeInterval(-120), intervalMs: 600_000, applied: 3)
+        let line = ReconcileLine(report: report, now: now)
+        XCTAssertEqual(line.state, .clean)
+        XCTAssertFalse(line.isWarning)
+        XCTAssertEqual(line.word, "No drift")
+        XCTAssertEqual(
+            line.detail,
+            "Last run 2 min ago, every 10 min. Since Symphony started: 3 changes from Linear applied, no drift detected."
+        )
+
+        let busy = ReconcileLine(
+            report: ReconcileReport(lastRunAt: now, applied: 1, reapplied: 2, unobservedFilled: 1_200),
+            now: now
+        )
+        XCTAssertEqual(
+            busy.detail,
+            "Last run 0 s ago, every 5 min. Since Symphony started: 1 change from Linear applied, 2 failed writes to Linear "
+                + "made again, 1,200 tickets read for the first time, no drift detected."
+        )
+        let once = ReconcileLine(report: ReconcileReport(lastRunAt: now, reapplied: 1, unobservedFilled: 1), now: now)
+        XCTAssertEqual(
+            once.detail,
+            "Last run 0 s ago, every 5 min. Since Symphony started: no change from Linear applied, 1 failed write to Linear "
+                + "made again, 1 ticket read for the first time, no drift detected."
+        )
+    }
+
+    /// The operator moved a ticket by hand in Linear on the record source: one drift detected and reverted, and the
+    /// disclosure names the ticket and both states.
+    func testTheReconcileLineShowsADriftDetectedAndReverted() {
+        let report = ReconcileReport(
+            lastRunAt: now.addingTimeInterval(-60), detected: 1, reverted: 1,
+            recent: [.init(identifier: "TP-1300", recordPhase: "Code Review", linearPhase: "Done", outcome: .reverted, at: now.addingTimeInterval(-240))]
+        )
+        let line = ReconcileLine(report: report, now: now)
+        XCTAssertEqual(line.state, .reverted)
+        XCTAssertFalse(line.isWarning)
+        XCTAssertEqual(line.word, "Drift reverted")
+        XCTAssertEqual(
+            line.detail,
+            "Last run 1 min ago, every 5 min. Since Symphony started: no change from Linear applied, 1 drift detected and reverted."
+        )
+        XCTAssertEqual(
+            line.rows,
+            [.init(id: 0, identifier: "TP-1300", states: "Code Review in the record, Done in Linear", outcome: "Reverted", failed: false, ago: "4 min ago")]
+        )
+
+        // A drift a webhook found before the reconciler's first run still counts.
+        let early = ReconcileLine(report: ReconcileReport(detected: 3, reverted: 3), now: now)
+        XCTAssertEqual(early.state, .reverted)
+        XCTAssertTrue(early.detail.hasSuffix("3 drifts detected and reverted."))
+        // A move back still running: detected, not yet reverted.
+        let running = ReconcileLine(report: ReconcileReport(detected: 2, reverted: 1), now: now)
+        XCTAssertEqual(running.state, .reverted)
+        XCTAssertTrue(running.detail.hasSuffix("2 drifts detected, 1 reverted."))
+    }
+
+    /// A move back failed: the line is called out, and the row says which.
+    func testTheReconcileLineCallsOutAFailedMoveBack() {
+        let report = ReconcileReport(
+            lastRunAt: now.addingTimeInterval(-30), detected: 2, reverted: 1, revertFailed: 1,
+            recent: [
+                .init(identifier: "TP-1301", recordPhase: "QA", linearPhase: "Todo", outcome: .failed, at: now.addingTimeInterval(-50)),
+                .init(identifier: "TP-1300", outcome: .other("moved_on")),
+            ]
+        )
+        let line = ReconcileLine(report: report, now: now)
+        XCTAssertEqual(line.state, .failing)
+        XCTAssertTrue(line.isWarning)
+        XCTAssertEqual(line.word, "Drift not reverted")
+        XCTAssertEqual(
+            line.detail,
+            "Last run 30 s ago, every 5 min. Since Symphony started: no change from Linear applied, 2 drifts detected, 1 reverted, 1 failed to revert."
+        )
+        XCTAssertEqual(
+            line.rows,
+            [
+                .init(id: 0, identifier: "TP-1301", states: "QA in the record, Todo in Linear", outcome: "Failed", failed: true, ago: "50 s ago"),
+                .init(id: 1, identifier: "TP-1300", states: "unknown in the record, unknown in Linear", outcome: "Moved On", failed: false, ago: nil),
+            ]
+        )
+    }
+
     // MARK: - Open fixes (AC 5)
 
     func testOpenFixesGoWhereTheOperatorFixesIt() {

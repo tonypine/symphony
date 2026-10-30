@@ -10,6 +10,8 @@ public enum DispatchSettingsError: LocalizedError, Equatable {
     case unreadable(key: String, value: String)
     /// The window to write is 0 or negative, which `symphony check` refuses.
     case windowNotPositive(Int)
+    /// The reconcile interval to write is under one minute, which `symphony check` refuses.
+    case reconcileUnderOneMinute(Int)
 
     public var errorDescription: String? {
         switch self {
@@ -21,13 +23,16 @@ public enum DispatchSettingsError: LocalizedError, Equatable {
             return "`\(key): \(value)` in symphony.yml is not a whole number. Change it by hand."
         case .windowNotPositive:
             return DispatchSettings.windowRule
+        case .reconcileUnderOneMinute:
+            return DispatchSettings.reconcileRule
         }
     }
 }
 
 /// Where dispatch reads its candidates from, in the text of a `symphony.yml`: `dispatch.source`, the Linear poll's cache
 /// (`poll`) or Symphony's ticket records (`record`), and `dispatch.shadow_window`, how many poll cycles the shadow
-/// report (`DispatchShadowReport`) counts its differences over.
+/// report (`DispatchShadowReport`) counts its differences over; and `linear.reconcile_interval_ms`, how often the Linear
+/// poll reconciles the record with Linear while dispatch reads the record (`ReconcileReport`), shown in whole minutes.
 /// Only the lines of the settings that change are rewritten, or inserted with `dispatch:` when missing, so the rest of
 /// the file stays as it is.
 public struct DispatchSettings: Equatable {
@@ -49,36 +54,71 @@ public struct DispatchSettings: Equatable {
 
     public var source: Source
     public var shadowWindow: Int
+    /// `linear.reconcile_interval_ms`, in milliseconds as symphony.yml holds it.
+    public var reconcileIntervalMs: Int
 
     /// What Symphony uses when a key is missing or null.
     public static let defaultSource = Source.poll
     public static let defaultShadowWindow = 20
+    public static let defaultReconcileIntervalMs = 300_000
 
     /// Why Save refused the window: Symphony counts at least one cycle.
     public static let windowRule = "The shadow window is a number of poll cycles: 1 or more."
+    /// Why Save refused the reconcile interval: Symphony reconciles at most once a minute.
+    public static let reconcileRule = "The reconcile interval is a number of minutes: 1 or more."
 
     static let sourcePath = ["dispatch", "source"]
     static let shadowWindowPath = ["dispatch", "shadow_window"]
+    static let reconcileIntervalPath = ["linear", "reconcile_interval_ms"]
 
-    public init(source: Source = defaultSource, shadowWindow: Int = defaultShadowWindow) {
+    public init(
+        source: Source = defaultSource,
+        shadowWindow: Int = defaultShadowWindow,
+        reconcileIntervalMs: Int = defaultReconcileIntervalMs
+    ) {
         self.source = source
         self.shadowWindow = shadowWindow
+        self.reconcileIntervalMs = reconcileIntervalMs
     }
 
     /// True for a window Symphony accepts: 1 cycle or more.
     public static func isValidWindow(_ window: Int) -> Bool { window > 0 }
 
+    /// True for a reconcile interval Symphony accepts: one minute or more.
+    public static func isValidReconcileMinutes(_ minutes: Int) -> Bool { minutes >= 1 }
+
+    /// `ms` in whole minutes for the field, rounded; never under one.
+    public static func reconcileMinutes(_ ms: Int) -> Int {
+        max(Int((Double(ms) / 60_000).rounded()), 1)
+    }
+
+    /// These settings with the controls' values. An interval whose field still shows the minutes it was read as keeps
+    /// its exact value, so one that isn't a whole number of minutes is never rewritten by an untouched field.
+    public func setting(source: Source, shadowWindow: Int, reconcileMinutes: Int) -> DispatchSettings {
+        DispatchSettings(
+            source: source,
+            shadowWindow: shadowWindow,
+            reconcileIntervalMs: reconcileMinutes == Self.reconcileMinutes(reconcileIntervalMs)
+                ? reconcileIntervalMs : reconcileMinutes * 60_000
+        )
+    }
+
     /// The settings, with Symphony's default for a missing or null key.
     public static func values(in yaml: String) throws -> DispatchSettings {
-        DispatchSettings(source: try source(in: yaml), shadowWindow: try window(in: yaml))
+        DispatchSettings(source: try source(in: yaml), shadowWindow: try window(in: yaml), reconcileIntervalMs: try reconcileInterval(in: yaml))
     }
 
     /// The same text with the settings that differ between `old` and `new` set to their `new` values. A missing key is
-    /// inserted at the top of `dispatch:`, so they are written last to first and read in order. Throws
-    /// `windowNotPositive` for a window of 0 or less, and writes nothing then.
+    /// inserted at the top of its section, so they are written last to first and read in order. Throws
+    /// `windowNotPositive` for a window of 0 or less and `reconcileUnderOneMinute` for an interval under one minute,
+    /// and writes nothing then.
     public static func updating(_ yaml: String, from old: DispatchSettings, to new: DispatchSettings) throws -> String {
         guard isValidWindow(new.shadowWindow) else { throw DispatchSettingsError.windowNotPositive(new.shadowWindow) }
+        guard new.reconcileIntervalMs >= 60_000 else {
+            throw DispatchSettingsError.reconcileUnderOneMinute(new.reconcileIntervalMs)
+        }
         let changes: [(path: [String], changed: Bool, value: String)] = [
+            (reconcileIntervalPath, new.reconcileIntervalMs != old.reconcileIntervalMs, String(new.reconcileIntervalMs)),
             (shadowWindowPath, new.shadowWindow != old.shadowWindow, String(new.shadowWindow)),
             (sourcePath, new.source != old.source, new.source.rawValue),
         ]
@@ -97,9 +137,17 @@ public struct DispatchSettings: Equatable {
     }
 
     private static func window(in yaml: String) throws -> Int {
-        guard let value = try present(shadowWindowPath, in: yaml) else { return defaultShadowWindow }
+        try number(shadowWindowPath, default: defaultShadowWindow, in: yaml)
+    }
+
+    private static func reconcileInterval(in yaml: String) throws -> Int {
+        try number(reconcileIntervalPath, default: defaultReconcileIntervalMs, in: yaml)
+    }
+
+    private static func number(_ path: [String], default defaultValue: Int, in yaml: String) throws -> Int {
+        guard let value = try present(path, in: yaml) else { return defaultValue }
         guard let number = Int(value.filter { $0 != "_" }) else {
-            throw DispatchSettingsError.unreadable(key: shadowWindowPath.joined(separator: "."), value: value)
+            throw DispatchSettingsError.unreadable(key: path.joined(separator: "."), value: value)
         }
         return number
     }
@@ -111,7 +159,7 @@ public struct DispatchSettings: Equatable {
         return value
     }
 
-    /// Reports an inline `dispatch:` section as a dispatch settings error.
+    /// Reports an inline `dispatch:` or `linear:` section as a dispatch settings error.
     private static func blockSection<T>(_ body: () throws -> T) throws -> T {
         do {
             return try body()

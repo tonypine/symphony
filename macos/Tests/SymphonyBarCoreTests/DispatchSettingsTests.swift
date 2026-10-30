@@ -11,12 +11,17 @@ final class DispatchSettingsTests: XCTestCase {
           source: poll  # until the shadow stays at zero
           shadow_window: 30
 
+        linear:
+          reconcile_interval_ms: 120_000  # two minutes
+          webhooks:
+            enabled: true
+
         ledger:
           artifact_max_bytes: 10485760
 
         """
 
-    private let configSettings = DispatchSettings(source: .poll, shadowWindow: 30)
+    private let configSettings = DispatchSettings(source: .poll, shadowWindow: 30, reconcileIntervalMs: 120_000)
 
     // MARK: Reading
 
@@ -27,14 +32,19 @@ final class DispatchSettingsTests: XCTestCase {
             DispatchSettings(source: .record, shadowWindow: 1_000)
         )
         XCTAssertEqual(try DispatchSettings.values(in: "dispatch:\n  source: \"record\"\n"), DispatchSettings(source: .record))
+        XCTAssertEqual(
+            try DispatchSettings.values(in: "linear:\n  reconcile_interval_ms: 90000\n"),
+            DispatchSettings(reconcileIntervalMs: 90_000)
+        )
     }
 
     func testMissingAndNullKeysReadAsSymphonysDefaults() throws {
-        let defaults = DispatchSettings(source: .poll, shadowWindow: 20)
+        let defaults = DispatchSettings(source: .poll, shadowWindow: 20, reconcileIntervalMs: 300_000)
         XCTAssertEqual(DispatchSettings(), defaults)
         XCTAssertEqual(try DispatchSettings.values(in: ""), defaults)
         XCTAssertEqual(try DispatchSettings.values(in: "dispatch:\n"), defaults)
         XCTAssertEqual(try DispatchSettings.values(in: "dispatch:\n  source: ~\n  shadow_window: null\n"), defaults)
+        XCTAssertEqual(try DispatchSettings.values(in: "linear:\n  reconcile_interval_ms: ~\n"), defaults)
     }
 
     func testRefusesValuesItCannotRead() {
@@ -46,6 +56,12 @@ final class DispatchSettingsTests: XCTestCase {
         }
         XCTAssertThrowsError(try DispatchSettings.values(in: "dispatch: {source: record}\n")) { error in
             XCTAssertEqual(error as? DispatchSettingsError, .notABlock("dispatch"))
+        }
+        XCTAssertThrowsError(try DispatchSettings.values(in: "linear:\n  reconcile_interval_ms: often\n")) { error in
+            XCTAssertEqual(error as? DispatchSettingsError, .unreadable(key: "linear.reconcile_interval_ms", value: "often"))
+        }
+        XCTAssertThrowsError(try DispatchSettings.values(in: "linear: {reconcile_interval_ms: 60000}\n")) { error in
+            XCTAssertEqual(error as? DispatchSettingsError, .notABlock("linear"))
         }
         XCTAssertEqual(
             DispatchSettingsError.unknownSource("webhook").errorDescription,
@@ -80,6 +96,51 @@ final class DispatchSettingsTests: XCTestCase {
         var window = configSettings
         window.shadowWindow = 50
         XCTAssertEqual(changedLines(config, try DispatchSettings.updating(config, from: configSettings, to: window)), ["  shadow_window: 50"])
+    }
+
+    /// The operator sets the reconcile interval to 10 minutes: only `linear.reconcile_interval_ms` changes, written in
+    /// milliseconds and keeping its comment.
+    func testTheReconcileFieldRewritesOnlyItsLineInMilliseconds() throws {
+        let ten = configSettings.setting(source: .poll, shadowWindow: 30, reconcileMinutes: 10)
+        XCTAssertEqual(ten.reconcileIntervalMs, 600_000)
+        XCTAssertEqual(
+            changedLines(config, try DispatchSettings.updating(config, from: configSettings, to: ten)),
+            ["  reconcile_interval_ms: 600000  # two minutes"]
+        )
+        XCTAssertEqual(
+            try DispatchSettings.updating("linear:\n  webhooks:\n    enabled: true\n", from: configSettings, to: ten),
+            "linear:\n  reconcile_interval_ms: 600000\n  webhooks:\n    enabled: true\n"
+        )
+    }
+
+    /// The field shows whole minutes; an interval it can't show exactly is kept while the field is untouched.
+    func testTheFieldShowsMinutesAndKeepsAnUntouchedInterval() {
+        XCTAssertEqual(DispatchSettings.reconcileMinutes(300_000), 5)
+        XCTAssertEqual(DispatchSettings.reconcileMinutes(90_000), 2)
+        XCTAssertEqual(DispatchSettings.reconcileMinutes(60_000), 1)
+        XCTAssertEqual(DispatchSettings.reconcileMinutes(1_000), 1)
+        let odd = DispatchSettings(reconcileIntervalMs: 90_000)
+        XCTAssertEqual(odd.setting(source: .record, shadowWindow: 20, reconcileMinutes: 2), DispatchSettings(source: .record, reconcileIntervalMs: 90_000))
+        XCTAssertEqual(odd.setting(source: .poll, shadowWindow: 20, reconcileMinutes: 3).reconcileIntervalMs, 180_000)
+    }
+
+    /// The reconcile field refuses anything under one minute: nothing is written.
+    func testRefusesAReconcileIntervalUnderOneMinute() {
+        XCTAssertTrue(DispatchSettings.isValidReconcileMinutes(1))
+        for minutes in [0, -1] {
+            XCTAssertFalse(DispatchSettings.isValidReconcileMinutes(minutes))
+            let new = configSettings.setting(source: .poll, shadowWindow: 30, reconcileMinutes: minutes)
+            XCTAssertThrowsError(try DispatchSettings.updating(config, from: configSettings, to: new)) { error in
+                XCTAssertEqual(error as? DispatchSettingsError, .reconcileUnderOneMinute(minutes * 60_000))
+            }
+        }
+        XCTAssertThrowsError(
+            try DispatchSettings.updating(config, from: configSettings, to: DispatchSettings(reconcileIntervalMs: 59_999))
+        ) { error in
+            XCTAssertEqual(error as? DispatchSettingsError, .reconcileUnderOneMinute(59_999))
+        }
+        XCTAssertEqual(DispatchSettingsError.reconcileUnderOneMinute(0).errorDescription, DispatchSettings.reconcileRule)
+        XCTAssertEqual(DispatchSettings.reconcileRule, "The reconcile interval is a number of minutes: 1 or more.")
     }
 
     func testInsertsTheDispatchSectionWhenMissing() throws {
@@ -141,7 +202,7 @@ final class DispatchSettingsTests: XCTestCase {
         let written = try String(contentsOf: url, encoding: .utf8)
         XCTAssertEqual(checked, written)
         XCTAssertEqual(changedLines(config, written), ["  source: record  # until the shadow stays at zero"])
-        XCTAssertEqual(try file.readDispatchSettings(), DispatchSettings(source: .record, shadowWindow: 30))
+        XCTAssertEqual(try file.readDispatchSettings(), DispatchSettings(source: .record, shadowWindow: 30, reconcileIntervalMs: 120_000))
     }
 
     func testFileWriteLeavesTheFileWhenTheCheckFails() async throws {

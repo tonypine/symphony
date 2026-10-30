@@ -1140,8 +1140,9 @@ private struct LinearWebhooksSection: View {
     }
 }
 
-/// `dispatch`: whether dispatch reads its candidates from the Linear poll or from Symphony's record, and how many poll
-/// cycles Setup's Dispatch shadow line counts their differences over.
+/// `dispatch`: whether dispatch reads its candidates from the Linear poll or from Symphony's record, how many poll
+/// cycles Setup's Dispatch shadow line counts their differences over, and `linear.reconcile_interval_ms`, how often the
+/// Linear poll reconciles the record while dispatch reads it, in minutes.
 private struct DispatchSection: View {
     @ObservedObject var model: SettingsViewModel
 
@@ -1162,10 +1163,26 @@ private struct DispatchSection: View {
                     Text("cycles")
                 }
             }
+            LabeledContent("Reconcile every") {
+                HStack {
+                    TextField("Reconcile interval in minutes", value: $model.dispatchReconcileMinutes, format: .number)
+                        .labelsHidden()
+                        .monospacedDigit()
+                        .frame(width: 90)
+                        .accessibilityLabel("Reconcile interval in minutes")
+                    Text("minutes")
+                }
+            }
             Text(
                 "Every poll cycle Symphony also works out the candidates from its own record and compares them with "
                     + "the poll's. Setup shows the differences over the window. Move dispatch to the record once the "
                     + "window stays at zero, and back to the poll if anything looks wrong."
+            )
+            .foregroundStyle(.secondary)
+            Text(
+                "While dispatch reads the record, the Linear poll only reconciles it with Linear, at this interval: it "
+                    + "applies changes made in Linear and moves back tickets moved by hand. Setup's Reconcile line shows "
+                    + "what it did."
             )
             .foregroundStyle(.secondary)
             if let error = model.dispatchError {
@@ -1175,9 +1192,9 @@ private struct DispatchSection: View {
             Text("Dispatch (saved in symphony.yml)")
         } footer: {
             SectionFooter(
-                "dispatch.source (default the Linear poll) and dispatch.shadow_window (default 20 cycles, at least 1). "
-                    + "Save checks symphony.yml with symphony check first; Symphony reads them on its next poll cycle, "
-                    + "no restart needed."
+                "dispatch.source (default the Linear poll), dispatch.shadow_window (default 20 cycles, at least 1) and "
+                    + "linear.reconcile_interval_ms (default 5 minutes, at least 1). Save checks symphony.yml with "
+                    + "symphony check first; Symphony reads them on its next poll cycle, no restart needed."
             )
         }
         .disabled(!model.canEditDispatch)

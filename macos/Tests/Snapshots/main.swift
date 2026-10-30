@@ -354,6 +354,50 @@ let dispatchShadowStates: [(String, DispatchShadowReport?, Bool)] = [
     ), true),
 ]
 
+/// A healthy Setup page with the Reconcile line for `report` (nil from an older Symphony) under the Dispatch shadow line,
+/// beside the sidebar of a `window` pt wide window, its last drift open or closed (TP-1228).
+@MainActor
+func reconcilePage(_ report: ReconcileReport?, expanded: Bool = false, window: CGFloat = 1440) -> some View {
+    let utc = TimeZone(identifier: "UTC")!
+    return SetupPageBody(
+        page: SetupPage(payload: SetupPayload(checkedAt: githubNow), now: githubNow, timeZone: utc),
+        githubUpdates: GitHubUpdatesCard(section: githubSection("github-updates"), now: githubNow, timeZone: utc),
+        linearWebhooks: LinearWebhooksLine(health: linearWebhookStates[2].1, now: githubNow),
+        dispatchShadow: DispatchShadowLine(report: dispatchShadowStates[5].1, now: githubNow),
+        reconcile: ReconcileLine(report: report, now: githubNow),
+        reconcileExpanded: expanded
+    )
+    .frame(width: window - DesignTokens.Layout.sidebarWidth)
+    .background(DesignTokens.Surface.window.color)
+}
+
+/// Ten drifts, as many as Symphony keeps, newest first; every third move back failed.
+let reconcileDrifts: [ReconcileReport.Drift] = (0..<10).map { index in
+    let at = githubNow.addingTimeInterval(TimeInterval(-40 - index * 120))
+    let phases = [("Code Review", "Done"), ("QA", "In Progress"), ("Merging", "Todo")][index % 3]
+    return .init(
+        identifier: "TP-\(1300 + index)", recordPhase: phases.0, linearPhase: phases.1,
+        outcome: index % 3 == 2 ? .failed : .reverted, at: at
+    )
+}
+
+/// The Reconcile line's states, by snapshot name, and whether the last drift is open.
+let reconcileStates: [(String, ReconcileReport?, Bool)] = [
+    ("not-available", nil, false),
+    ("waiting", ReconcileReport(), false),
+    ("clean-open", ReconcileReport(lastRunAt: githubNow.addingTimeInterval(-120), applied: 14), true),
+    ("reverted", ReconcileReport(
+        lastRunAt: githubNow.addingTimeInterval(-60), applied: 2, detected: 1, reverted: 1, recent: [reconcileDrifts[0]]
+    ), false),
+    ("reverted-open", ReconcileReport(
+        lastRunAt: githubNow.addingTimeInterval(-60), applied: 2, detected: 1, reverted: 1, recent: [reconcileDrifts[0]]
+    ), true),
+    ("failing-open", ReconcileReport(
+        lastRunAt: githubNow.addingTimeInterval(-30), applied: 1_204, reapplied: 3, unobservedFilled: 12,
+        detected: 31, reverted: 28, revertFailed: 3, recent: reconcileDrifts
+    ), true),
+]
+
 /// S10: no webhook secret on this Mac while instant updates are on.
 func githubSecretFailing() -> GitHubUpdatesSection {
     var section = githubSection("github-updates")
@@ -647,6 +691,11 @@ MainActor.assumeIsolated {
         }
         render(dispatchShadowPage(dispatchShadowStates[4].1, expanded: true, window: 2560), scheme,
                to: "dispatch-shadow-poll-differences-open-desktop-\(suffix).png")
+        // The Reconcile line (TP-1228): every state at the laptop viewport, and the ten drifts at the desktop's.
+        for (name, report, expanded) in reconcileStates {
+            render(reconcilePage(report, expanded: expanded), scheme, to: "reconcile-\(name)-laptop-\(suffix).png")
+        }
+        render(reconcilePage(reconcileStates[5].1, expanded: true, window: 2560), scheme, to: "reconcile-failing-open-desktop-\(suffix).png")
         // The guided setup and Add Repo's Instant updates (TP-954).
         render(githubSetup(.relay), scheme, to: "github-setup-relay-\(suffix).png")
         render(githubSetup(.gitHubCLI, answer: "github_updates/run_step.2.json"), scheme, to: "github-setup-permission-\(suffix).png")

@@ -56,6 +56,7 @@ public enum SettingsUIManifest {
         "ledger.artifact_max_bytes",
         "ledger.prompt_brief_enabled",
         "ledger.prompt_brief_max_tokens",
+        "linear.reconcile_interval_ms",
         "linear.webhooks.enabled",
         "linear.webhooks.secret",
         "repositories[].acceptance_gate.escalate.ticket_patterns_builtin",
