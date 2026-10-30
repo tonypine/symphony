@@ -26,6 +26,12 @@ defmodule SymphonyElixir.Pauses do
   others remain and `pause.cleared` when none is left. A repository's or Symphony's pause is kept by
   `SymphonyElixir.RunStore` under its subject and records no event.
 
+  Symphony's own pause stops dispatch while it has the Director's reason (their Pause) or an
+  update's (the menu bar app's, waiting on the version it installs): `dispatch_reason/1` makes
+  either from the control API's reason and `dispatch_status/1` gives the pause as the state
+  payload reads it. A usage limit's `:environment` reason (`SymphonyElixir.UsageLimit`) sits on it
+  too, holding only the runs its hold covers. Ticket pages never show it.
+
   A reason is known by its kind and `waits_on`: setting the same one again changes nothing and
   records nothing. Each write reads, changes and writes the pause in one store transaction that
   holds its lock (`RunStore.update_ticket_pause/4`, `RunStore.update_subject_pause/2`), so
@@ -57,6 +63,9 @@ defmodule SymphonyElixir.Pauses do
   # The only names a reason's default line shows: a ticket's identifier and a release's version.
   @identifier ~r/\A[A-Z][A-Z0-9]*-\d+\z/
   @version ~r/\A\d+(\.\d+)+\z/
+  # The menu bar app's reason for an update's pause (`ControlAction.updatePauseReason`).
+  @update_reason ~r/\Aupdating to v(\d+(?:\.\d+)+)\z/
+  @dispatch_kinds [:person, :build]
 
   @typedoc "What a pause holds: a ticket of a repository, a repository, or Symphony itself."
   @type subject :: {:ticket, String.t(), String.t()} | {:repository, String.t()} | :symphony
@@ -119,6 +128,52 @@ defmodule SymphonyElixir.Pauses do
   @doc "Whether `value` is a ticket's identifier as a `:ticket` reason takes it (`TP-12`)."
   @spec identifier?(term()) :: boolean()
   def identifier?(value), do: is_binary(value) and value =~ @identifier
+
+  @doc """
+  The reason the Director's Pause (`reason`, the control API's) gives Symphony's pause: the
+  menu bar app's update pause (`updating to v0.0.1.42`) waits on that build (`:build`,
+  `waits_on: %{version: version}`), any other the Director (`:person`, `waits_on: %{action:
+  "unblock"}`, `You paused Symphony` without a reason). Either keeps `reason` as its line, cut to a
+  reason's longest line, so a long reason still pauses.
+  """
+  @spec dispatch_reason(String.t() | nil) :: reason_input()
+  def dispatch_reason(reason) do
+    text = with line when is_binary(line) <- line(reason), do: String.slice(line, 0, @max_text)
+
+    case text && Regex.run(@update_reason, text) do
+      [_text, version] -> %{kind: :build, waits_on: %{version: version}, text: text}
+      nil -> %{kind: :person, waits_on: %{action: "unblock"}, text: text || "You paused Symphony", releasable: true}
+    end
+  end
+
+  @doc """
+  The reasons of Symphony's pause that stop all dispatch: the Director's (`:person`) and an
+  update's (`:build`). A usage limit's (`:environment`) holds only the runs it covers.
+  """
+  @spec dispatch_reasons(pause() | nil) :: [reason()]
+  def dispatch_reasons(%{reasons: reasons}), do: Enum.filter(reasons, &(&1.kind in @dispatch_kinds))
+  def dispatch_reasons(nil), do: []
+
+  @doc """
+  Symphony's pause as the state payload and the control API give it: `paused` while a reason
+  stops all dispatch (`dispatch_reasons/1`), with the first one's line as `reason` and its time as
+  `paused_at`, as the operator pause read before it lived here, and every reason (`kind`, `text`,
+  `since`, `waits_on`) in the order they were set.
+  """
+  @spec dispatch_status(pause() | nil) :: %{
+          paused: boolean(),
+          reason: String.t() | nil,
+          paused_at: DateTime.t() | nil,
+          reasons: [%{kind: kind(), text: String.t(), since: DateTime.t() | nil, waits_on: map()}]
+        }
+  def dispatch_status(pause) do
+    reasons = Enum.map((pause && pause.reasons) || [], &%{kind: &1.kind, text: &1.text, since: &1.set_at, waits_on: &1.waits_on})
+
+    case dispatch_reasons(pause) do
+      [first | _rest] -> %{paused: true, reason: first.text, paused_at: first.set_at, reasons: reasons}
+      [] -> %{paused: false, reason: nil, paused_at: nil, reasons: reasons}
+    end
+  end
 
   @doc """
   Pauses `subject` on `reason`: a subject that is not paused records `pause.set`; a paused one gains

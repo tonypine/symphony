@@ -3,7 +3,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   alias SymphonyElixir.ClaudeCode.AppServer
   alias SymphonyElixir.Codex.MessageHumanizer
-  alias SymphonyElixir.RunStore
+  alias SymphonyElixir.{Pauses, RunStore}
   alias SymphonyElixir.StatusDashboard.Renderer
   alias SymphonyElixir.Tracker.Memory, as: MemoryTracker
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -2819,11 +2819,13 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       end
     end)
 
+    {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("maintenance"))
+    on_exit(fn -> Pauses.clear(:symphony) end)
+
     :sys.replace_state(pid, fn state ->
       %{
         state
-        | pause: %{paused: true, reason: "maintenance", paused_at: ~U[2026-05-08 10:00:00Z]},
-          budget_daily_used: 10,
+        | budget_daily_used: 10,
           budget_day_started_on: Date.utc_today(),
           tracker_health: %{
             tracker: :linear,
@@ -2932,6 +2934,106 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     assert {:ok, %{paused: false, reason: nil, paused_at: nil}} =
              Orchestrator.resume_dispatch(orchestrator_name)
+  end
+
+  describe "Symphony's own pause" do
+    setup do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", quality_gate: %{enabled: false})
+      previous = Application.fetch_env(:symphony_elixir, :build)
+      {:ok, nil} = Pauses.clear(:symphony)
+
+      on_exit(fn ->
+        Pauses.clear(:symphony)
+
+        case previous do
+          {:ok, value} -> Application.put_env(:symphony_elixir, :build, value)
+          :error -> Application.delete_env(:symphony_elixir, :build)
+        end
+      end)
+    end
+
+    defp start_paused_orchestrator(name) do
+      {:ok, pid} = Orchestrator.start_link(name: name)
+      on_exit(fn -> stop_process(pid) end)
+      pid
+    end
+
+    test "Pause and an update are reasons of Symphony's pause, kept across a restart, and Resume clears both" do
+      name = Module.concat(__MODULE__, :SymphonyPauseOrchestrator)
+      pid = start_paused_orchestrator(name)
+
+      assert {:ok, %{paused: true, reason: "paused from menu bar", reasons: [%{kind: :person, text: "paused from menu bar", waits_on: %{action: "unblock"}}]}} =
+               Orchestrator.pause_dispatch(name, "paused from menu bar")
+
+      assert {:ok, %{set_by: %{kind: :person, name: "Director"}}} = Pauses.get(:symphony)
+
+      # An update adds its reason, with the version it installs; the payload keeps the first line.
+      assert {:ok, %{paused: true, reason: "paused from menu bar", reasons: [%{kind: :person}, update]}} =
+               Orchestrator.pause_dispatch(name, "updating to v0.0.1.42")
+
+      assert %{kind: :build, text: "updating to v0.0.1.42", waits_on: %{version: "0.0.1.42"}} = update
+
+      # A restart reads the pause from its record.
+      stop_process(pid)
+      start_paused_orchestrator(name)
+      assert %{paused: true, reason: "paused from menu bar", reasons: [%{kind: :person}, %{kind: :build}]} = Orchestrator.pause_status(name)
+      assert %{pause: %{paused: true}, dispatch_state: %{blockers: [%{kind: :manual, reasons: [_person, _build]} | _]}} = GenServer.call(name, :snapshot)
+
+      assert {:ok, %{paused: false, reason: nil, paused_at: nil, reasons: []}} = Orchestrator.resume_dispatch(name)
+      assert Pauses.get(:symphony) == {:ok, nil}
+
+      # A reason longer than a reason's line still pauses, its line cut.
+      assert {:ok, %{paused: true, reason: reason}} = Orchestrator.pause_dispatch(name, String.duplicate("a", 400))
+      assert String.length(reason) == 300
+      assert {:ok, %{paused: false}} = Orchestrator.resume_dispatch(name)
+    end
+
+    test "a pause the release before left on its old row is in force from the first tick, and an installed update's lifts" do
+      write_legacy_pause = fn row ->
+        {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_pause, :dispatch_pause, row}) end)
+      end
+
+      paused_at = ~U[2026-10-01 09:00:00Z]
+      # The release before marked the backfill's step done, then the Director paused it.
+      :ok = RunStore.put_marker("pause_backfill_symphony_v1", ~U[2026-09-30 09:00:00Z])
+      write_legacy_pause.(%{paused: true, reason: "paused from menu bar", paused_at: paused_at, updated_at: paused_at})
+
+      name = Module.concat(__MODULE__, :UpgradedOrchestrator)
+      pid = start_paused_orchestrator(name)
+
+      assert %{paused: true, reason: "paused from menu bar", paused_at: ^paused_at, reasons: [%{kind: :person, waits_on: %{action: "unblock"}}]} =
+               Orchestrator.pause_status(name)
+
+      assert :mnesia.dirty_read(:symphony_run_store_pause, :dispatch_pause) == []
+      stop_process(pid)
+      {:ok, nil} = Pauses.clear(:symphony)
+
+      # The app paused the release before for the update to the build that now runs.
+      Application.put_env(:symphony_elixir, :build, number: "42")
+      write_legacy_pause.(%{paused: true, reason: "updating to v0.0.1.42", paused_at: paused_at, updated_at: paused_at})
+      name = Module.concat(__MODULE__, :UpdatedOrchestrator)
+      start_paused_orchestrator(name)
+
+      assert %{paused: false, reasons: []} = Orchestrator.pause_status(name)
+      assert :mnesia.dirty_read(:symphony_run_store_pause, :dispatch_pause) == []
+    end
+
+    test "an update's reason lifts by itself once Symphony runs the build it waits on" do
+      {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("updating to v0.0.1.42"))
+      {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("updating to v0.0.1.43"))
+
+      # A build from a checkout has no build number: it has neither version.
+      Application.put_env(:symphony_elixir, :build, [])
+      start_paused_orchestrator(Module.concat(__MODULE__, :CheckoutBuildOrchestrator)) |> stop_process()
+      assert Pauses.why(:symphony) == ["updating to v0.0.1.42", "updating to v0.0.1.43"]
+
+      Application.put_env(:symphony_elixir, :build, number: "42")
+      name = Module.concat(__MODULE__, :InstalledBuildOrchestrator)
+      start_paused_orchestrator(name)
+
+      assert %{paused: true, reason: "updating to v0.0.1.43", reasons: [%{kind: :build, waits_on: %{version: "0.0.1.43"}}]} =
+               Orchestrator.pause_status(name)
+    end
   end
 
   test "stop_running stops the tracked session, marks the run stopped, and cleans workspace" do

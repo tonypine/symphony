@@ -551,7 +551,26 @@ in that same transaction: concurrent writers never lose each other's reasons, th
 changes without its event, and the events follow the order the changes were written in. The live
 channel's notice of the event goes out once the transaction commits.
 A repository's or Symphony's own pause is kept in the store by subject and records no event.
-Nothing sets a pause yet.
+Nothing sets a repository's pause yet.
+
+Symphony's own pause is the operator pause: the one answer to why Symphony is not dispatching. It
+shows only at the app level (the state payload's `pause`), never on a ticket page; a candidate the
+paused pass skips gives the global reason `dispatch is paused by the operator`.
+
+- The Director's Pause (`POST /api/v1/control/pause`) sets a `person` reason that waits on
+  `unblock`, its line the given reason cut to 300 characters (`You paused Symphony` without one).
+  The menu bar app's update pause (reason `updating to v<version>`) sets a `build` reason that waits
+  on that version instead. Resume (`POST /api/v1/control/resume`) clears both.
+- A Symphony that starts on the version a `build` reason waits on, or a later one, clears that
+  reason, so the pause of a finished update lifts by itself.
+- Each usage-limit hold (Sections 8.4.1 and 8.4.2) is an `environment` reason waiting on condition
+  `usage_limit:<provider>:<scope>`, its line the hold's (`Claude's 5-hour limit until 14:30`): set
+  with the hold, its line refreshed when the hold changes, cleared when the hold ends. It holds only
+  the runs its hold covers; only a `person` or `build` reason stops all dispatch.
+- Every dispatch check reads the pause from the store, so it is in force across restarts. At start,
+  before the first poll tick, the operator pause's old store row, which the release before wrote,
+  is moved onto Symphony's pause (an `updating to v…` row as a `build` reason) and deleted, whether
+  or not the pause backfill already ran.
 
 The three question types are machine-written, one per change of a question to a person on a ticket
 (kept on the ticket's record; written only by `SymphonyElixir.Questions`), each naming the question
@@ -629,7 +648,8 @@ or a missing handoff becomes a question Symphony asks ("Run it again", "Start it
 reason, and each stored decision an answered question naming its `decision.recorded` event
 (`legacy_event`). Each created pause reason and question records one event with
 `source: "backfill"`. A converted record is marked (`pause_backfilled_at`); the operator's pause of
-all dispatch becomes a pause on Symphony once (marker `pause_backfill_symphony_v1`). The last run's
+all dispatch becomes a pause on Symphony once (marker `pause_backfill_symphony_v1`; the start-up
+move of the old row, above, sets the marker first, so this step finds it set). The last run's
 summary (records read and converted, pauses and questions created, what it skipped and why) is in
 `GET /api/v1/state` under `pause_backfill`.
 
@@ -3477,7 +3497,9 @@ reached (for Claude, a used-up five-hour or weekly window; for Codex, an error w
 - Create or refresh a hold keyed by `{provider, scope}`. Scope is the whole plan, or a model family
   for a model-specific window (`seven_day_opus` holds only runs whose model is Opus). A hold
   records `reason`, `window`, `since`, `resets_at`, `resume_at`, `source` and `phase`, and is
-  persisted next to (not inside) the operator pause and restored on startup.
+  persisted on its own record and restored on startup. It is also an `environment` reason on
+  Symphony's own pause (Section 4.1.11), set with the hold and cleared when it ends;
+  the hold's record keeps its headroom and canary details.
 - `resume_at` is `resets_at + usage_limit.resume_margin_seconds`. With no reset time, use the last
   reset time the provider reported for that window, else `now + usage_limit.unknown_reset_retry_seconds`.
 - Record the run as `usage_limited`, emit no `run_failed` event, keep the workspace, and hold the
@@ -3512,8 +3534,8 @@ reached (for Claude, a used-up five-hour or weekly window; for Codex, an error w
   `since` is kept and no second pause is reported.
 - A canary that leaves the active states before it runs is replaced by the next held retry. A
   canary hold restored on startup starts over from `phase: paused`.
-- Resuming never sets or clears the operator pause; the daily budget, workspace quota and Linear
-  rate-limit gates still apply.
+- Resuming clears only the hold's own `environment` reason on Symphony's pause, never the Director's
+  or an update's reason; the daily budget, workspace quota and Linear rate-limit gates still apply.
 - Emit one `usage_limit_paused` notification when a hold is created (not when a held run refreshes
   it or a canary re-pauses it) and one `usage_limit_resumed` when it clears, which for a canary is
   when the canary clears the hold, not when it starts. A hold restored on startup emits nothing.
@@ -4763,8 +4785,15 @@ SHOULD return:
   `utilization` (the latest utilization seen for the window, else the one the hold recorded, or null)
   and `banner` (the dashboard line for the hold, in Symphony's local time, which the menu bar shows)
 - `pause`, `budget`, `dispatch_state`, and `workspace_lifecycle` when those extensions are enabled.
-  `pause` is the operator pause only. Each usage-limit hold adds a `dispatch_state.blockers` entry
-  `{kind: "usage_limit", provider, scope, window, resets_at, resume_at, phase}`, but
+  `pause` is Symphony's own pause (Section 4.1.11): `paused` while a `person` or `build` reason
+  stops all dispatch, with the first such reason's line as `reason` (an update's is
+  `updating to v<version>`) and its time as `paused_at`, and `reasons`, every reason on the pause in
+  the order it was set (`kind`, `text`, `since`, `waits_on`), the usage limits' `environment`
+  reasons included; `paused` stays false for usage limits alone. The Director's or an update's
+  reason adds a `dispatch_state.blockers` entry `{kind: "manual", reason, since, reasons}` (`reasons`
+  as `{kind, text, waits_on}`). Each usage-limit hold adds an entry
+  `{kind: "usage_limit", provider, scope, window, resets_at, resume_at, phase, text}` (`text` its
+  reason's line on Symphony's pause, null when the pause does not hold it), but
   `dispatch_state.active?` is false only when the holds hold every provider (and model) and run kind
   in use.
 

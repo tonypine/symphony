@@ -1,7 +1,9 @@
 defmodule SymphonyElixir.DispatchStateTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.DispatchState
+  alias SymphonyElixir.{DispatchState, Pauses}
+
+  @limit_reason %{kind: :environment, waits_on: %{condition: "usage_limit:anthropic:all"}, text: "Claude's 5-hour limit until 14:05"}
 
   describe "compute/3" do
     test "returns active when nothing is blocking" do
@@ -34,7 +36,8 @@ defmodule SymphonyElixir.DispatchStateTest do
         window: "five_hour",
         resets_at: ~U[2026-10-03 14:03:00Z],
         resume_at: ~U[2026-10-03 14:05:00Z],
-        phase: :paused
+        phase: :paused,
+        text: nil
       }
 
       anthropic_only = base_config(%{run_profiles: [%{provider: "anthropic", model: "claude-opus-4"}, %{provider: "anthropic", model: nil}]})
@@ -52,24 +55,34 @@ defmodule SymphonyElixir.DispatchStateTest do
 
       assert %{active?: false} = DispatchState.compute(%{state | usage_limits: [opus_hold, hold]}, models, full_env())
 
-      # Listed after the other blockers.
-      paused = Map.put(state, :pause, %{paused: true, reason: nil, paused_at: nil})
+      # Listed after the other blockers, with the line of its reason on Symphony's pause.
+      paused = Map.put(state, :symphony_pause, symphony_pause([person("stop", nil), @limit_reason]))
+      blocker = %{blocker | text: @limit_reason.text}
 
       assert %{active?: false, blockers: [%{kind: :manual}, ^blocker]} =
                DispatchState.compute(paused, mixed, full_env())
     end
 
-    test "manual pause blocker carries reason and timestamp" do
+    test "manual pause blocker carries the first reason of Symphony's pause, its time and every reason that stops dispatch" do
       paused_at = ~U[2026-05-08 10:00:00Z]
+      update = %{kind: :build, waits_on: %{version: "0.0.1.42"}, text: "updating to v0.0.1.42", set_at: ~U[2026-05-08 10:05:00Z]}
 
       state =
         base_state()
-        |> Map.put(:pause, %{paused: true, reason: "investigating", paused_at: paused_at})
+        |> Map.put(:symphony_pause, symphony_pause([person("investigating", paused_at), @limit_reason, update]))
 
       result = DispatchState.compute(state, base_config(), full_env())
 
       assert result.active? == false
-      assert [%{kind: :manual, reason: "investigating", since: ^paused_at}] = result.blockers
+
+      assert [%{kind: :manual, reason: "investigating", since: ^paused_at, reasons: [person, build]}] = result.blockers
+      assert %{kind: :person, text: "investigating"} = person
+      assert %{kind: :build, waits_on: %{version: "0.0.1.42"}} = build
+    end
+
+    test "a usage limit's reason alone on Symphony's pause is no manual blocker" do
+      state = Map.put(base_state(), :symphony_pause, symphony_pause([@limit_reason]))
+      assert %{active?: true, blockers: []} = DispatchState.compute(state, base_config(), full_env())
     end
 
     test "budget exhaustion blocker includes used/limit/reset" do
@@ -354,7 +367,7 @@ defmodule SymphonyElixir.DispatchStateTest do
     test "all blockers stack" do
       state =
         base_state()
-        |> Map.put(:pause, %{paused: true, reason: "stop", paused_at: ~U[2026-05-08 10:00:00Z]})
+        |> Map.put(:symphony_pause, symphony_pause([person("stop", ~U[2026-05-08 10:00:00Z])]))
         |> Map.put(:budget_daily_used, 10_000_000)
         |> Map.put(:budget_day_started_on, ~D[2026-05-08])
         |> Map.put(:workspace_dirty, %{repo: "/r", summary: "M f"})
@@ -385,12 +398,16 @@ defmodule SymphonyElixir.DispatchStateTest do
 
   defp base_state do
     %{
-      pause: %{paused: false, reason: nil, paused_at: nil},
+      symphony_pause: nil,
       budget_daily_used: 0,
       budget_day_started_on: ~D[2026-05-08],
       workspace_dirty: nil
     }
   end
+
+  defp symphony_pause(reasons), do: Pauses.normalize(%{subject: :symphony, reasons: reasons})
+
+  defp person(text, set_at), do: %{kind: :person, waits_on: %{action: "unblock"}, text: text, set_at: set_at}
 
   defp base_config(overrides \\ %{}) do
     %{

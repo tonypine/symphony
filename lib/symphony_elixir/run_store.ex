@@ -6,7 +6,7 @@ defmodule SymphonyElixir.RunStore do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{Config, Paths, TicketState}
+  alias SymphonyElixir.{Config, Paths, Pauses, TicketState}
   alias SymphonyElixir.RunStore.RunIndex
   alias SymphonyElixir.TicketEvents.Event
 
@@ -46,7 +46,12 @@ defmodule SymphonyElixir.RunStore do
   ]
   @data_tables Enum.map(@tables, fn {table, _attributes, _opts} -> table end)
   @codex_totals_key :codex_totals
+  # The operator pause's old row: moved onto Symphony's pause at start (`move_legacy_pause/0`),
+  # never written. The move marks the pauses' backfill step for it done
+  # (`SymphonyElixir.Pauses.Backfill`).
   @pause_key :dispatch_pause
+  @pause_backfill_marker "pause_backfill_symphony_v1"
+  @director %{kind: :person, name: "Director"}
   @usage_limits_key :usage_limits
   @unpaused %{paused: false, reason: nil, paused_at: nil}
   @quality_gate_cache_key :quality_gate_cache
@@ -1315,20 +1320,58 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
+  @doc """
+  Deprecated, kept for one release: the Director's Pause and Resume of all dispatch are reasons of
+  Symphony's pause (`SymphonyElixir.Pauses`, subject `:symphony`). `true` sets the reason
+  `reason` gives (`Pauses.dispatch_reason/1`); `false` clears the Director's and an update's.
+  """
   @spec set_paused(boolean(), String.t() | nil) :: :ok | {:error, term()}
-  def set_paused(paused, reason) when is_boolean(paused) do
-    with :ok <- ensure_started() do
-      durable_transaction(fn -> write_pause_state(paused, reason) end)
-    end
+  def set_paused(true, reason) do
+    with {:ok, _pause} <- Pauses.set(:symphony, Pauses.dispatch_reason(reason), set_by: @director), do: :ok
+  end
+
+  def set_paused(false, _reason) do
+    with {:ok, _pause} <- Pauses.clear_reasons(:symphony, &(&1.kind in [:person, :build]), by: @director), do: :ok
   end
 
   def set_paused(_paused, _reason), do: {:error, :invalid_pause_state}
 
+  @doc """
+  Deprecated, kept for one release: Symphony's pause as the operator pause read before
+  (`Pauses.dispatch_status/1`).
+  """
   @spec get_paused() :: map() | {:error, term()}
   def get_paused do
-    with :ok <- ensure_started() do
-      transaction(fn -> read_pause_record() end)
+    with {:ok, pause} <- Pauses.get(:symphony), do: Pauses.dispatch_status(pause)
+  end
+
+  @doc """
+  Moves the operator pause's old row, which the releases before Symphony's pause wrote, onto
+  Symphony's pause, whatever the pauses' backfill did: a paused row sets its reason
+  (`Pauses.dispatch_reason/1`, the Director's, at the row's time), so an `updating to v…` row
+  waits on that build. Then the row is deleted and the backfill's step for it marked done, so
+  neither reads it again. A start that stops before the delete finds the row and sets the same
+  reason again.
+  """
+  @spec move_legacy_pause() :: :ok | {:error, term()}
+  def move_legacy_pause do
+    with :ok <- ensure_started(),
+         %{} = row <- transaction(fn -> read_pause_record() end),
+         {:ok, _pause} <- set_legacy_pause(row) do
+      durable_transaction(&delete_legacy_pause/0)
     end
+  end
+
+  defp set_legacy_pause(%{paused: true} = row) do
+    Pauses.set(:symphony, Pauses.dispatch_reason(row.reason), set_by: @director, at: row.paused_at || DateTime.utc_now())
+  end
+
+  defp set_legacy_pause(_row), do: {:ok, nil}
+
+  defp delete_legacy_pause do
+    :mnesia.delete({@pause_table, @pause_key})
+    if is_nil(read_marker(@pause_backfill_marker)), do: :mnesia.write({@totals_table, {:marker, @pause_backfill_marker}, DateTime.utc_now()})
+    :ok
   end
 
   @doc """
@@ -2452,52 +2495,6 @@ defmodule SymphonyElixir.RunStore do
         @unpaused
     end
   end
-
-  defp write_pause_state(paused, reason) do
-    current = read_pause_record()
-
-    cond do
-      paused and Map.get(current, :paused) == true ->
-        :ok
-
-      paused ->
-        persist_pause_record(reason)
-
-      Map.get(current, :paused) == true ->
-        :mnesia.delete({@pause_table, @pause_key})
-        :ok
-
-      true ->
-        :ok
-    end
-  end
-
-  defp persist_pause_record(reason) do
-    now = DateTime.utc_now()
-
-    :mnesia.write(
-      {@pause_table, @pause_key,
-       %{
-         paused: true,
-         reason: normalize_pause_reason(reason),
-         paused_at: now,
-         updated_at: now
-       }}
-    )
-
-    :ok
-  end
-
-  defp normalize_pause_reason(reason) when is_binary(reason) do
-    reason
-    |> String.trim()
-    |> case do
-      "" -> nil
-      trimmed -> trimmed
-    end
-  end
-
-  defp normalize_pause_reason(_reason), do: nil
 
   defp read_quality_gate_cache do
     case :mnesia.read(@totals_table, @quality_gate_cache_key) do

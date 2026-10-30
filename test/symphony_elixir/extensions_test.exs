@@ -753,7 +753,8 @@ defmodule SymphonyElixir.ExtensionsTest do
       "pause" => %{
         "paused" => false,
         "reason" => nil,
-        "paused_at" => nil
+        "paused_at" => nil,
+        "reasons" => []
       },
       "usage_limits" => [],
       "stray_processes" => [],
@@ -2550,9 +2551,16 @@ defmodule SymphonyElixir.ExtensionsTest do
             window: "five_hour",
             resets_at: ~U[2026-10-03 14:03:00Z],
             resume_at: resume_at,
-            phase: :paused
+            phase: :paused,
+            text: "Claude's 5-hour limit until 14:05"
           }
         ]
+      })
+      |> Map.put(:pause, %{
+        paused: false,
+        reason: nil,
+        paused_at: nil,
+        reasons: [%{kind: :environment, text: "Claude's 5-hour limit until 14:05", since: ~U[2026-10-03 09:05:00Z], waits_on: %{condition: "usage_limit:anthropic:all"}}]
       })
 
     {:ok, _orchestrator_pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot)
@@ -2592,12 +2600,26 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "window" => "five_hour",
                  "phase" => "paused",
                  "resets_at" => "2026-10-03T14:03:00Z",
-                 "resume_at" => DateTime.to_iso8601(resume_at)
+                 "resume_at" => DateTime.to_iso8601(resume_at),
+                 "text" => "Claude's 5-hour limit until 14:05"
                }
              ]
            }
 
-    assert payload["pause"] == %{"paused" => false, "reason" => nil, "paused_at" => nil}
+    # A usage limit alone is a reason of Symphony's pause that does not pause all dispatch.
+    assert payload["pause"] == %{
+             "paused" => false,
+             "reason" => nil,
+             "paused_at" => nil,
+             "reasons" => [
+               %{
+                 "kind" => "environment",
+                 "text" => "Claude's 5-hour limit until 14:05",
+                 "since" => "2026-10-03T09:05:00Z",
+                 "waits_on" => %{"condition" => "usage_limit:anthropic:all"}
+               }
+             ]
+           }
   end
 
   test "state api tolerates snapshots with partial codex totals" do

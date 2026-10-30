@@ -2,7 +2,7 @@ defmodule SymphonyElixir.UsageLimitTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.Schema.Agent.UsageLimit, as: UsageLimitConfig
-  alias SymphonyElixir.UsageLimit
+  alias SymphonyElixir.{Pauses, UsageLimit}
 
   @now ~U[2026-10-03 03:46:00Z]
   @config %UsageLimitConfig{auto_pause: true, resume_margin_seconds: 120, unknown_reset_retry_seconds: 900}
@@ -320,6 +320,66 @@ defmodule SymphonyElixir.UsageLimitTest do
     assert UsageLimit.remaining_ms(entry, ~U[2026-10-04 00:00:00Z]) == 0
     assert UsageLimit.scope_label(:all) == "all"
     assert UsageLimit.scope_label("opus") == "opus"
+  end
+
+  describe "a hold's reason on Symphony's pause" do
+    @to_local [to_local: &__MODULE__.three_hours_behind/1]
+
+    setup do
+      :ok = RunStore.clear()
+    end
+
+    defp hold(attrs) do
+      Map.merge(
+        %{provider: "anthropic", scope: :all, window: "five_hour", phase: :paused, reason: "claude_usage_limit", resets_at: ~U[2026-10-03 17:00:00Z], resume_at: ~U[2026-10-03 17:30:00Z]},
+        attrs
+      )
+    end
+
+    test "waits on the hold's condition, with its line in local time" do
+      assert UsageLimit.condition(hold(%{scope: "opus"})) == "usage_limit:anthropic:opus"
+
+      assert UsageLimit.reason(hold(%{window: nil}), @now, @to_local) ==
+               %{kind: :environment, waits_on: %{condition: "usage_limit:anthropic:all"}, text: "Claude's usage limit until 14:30"}
+
+      assert UsageLimit.reason(hold(%{}), @now, @to_local).text == "Claude's 5-hour limit until 14:30"
+
+      assert UsageLimit.reason(hold(%{phase: :headroom, window: "seven_day"}), @now, @to_local).text ==
+               "Claude's weekly limit headroom: new runs wait until 14:00"
+
+      assert UsageLimit.reason(hold(%{phase: :headroom, resets_at: nil}), @now, @to_local).text == "Claude's 5-hour limit headroom: new runs wait"
+
+      outage = hold(%{reason: "model_api_unreachable", source: :api_unreachable, window: nil, resets_at: nil})
+      assert UsageLimit.reason(outage, @now, @to_local).text == "Claude API unreachable, retrying at 14:30"
+    end
+
+    test "is set with each hold, refreshed when its line changes and cleared when the hold ends" do
+      other = %{kind: :environment, waits_on: %{condition: "github_down"}}
+      {:ok, _pause} = Pauses.set(:symphony, other)
+      opus = hold(%{scope: "opus", window: "seven_day_opus"})
+
+      assert UsageLimit.sync_reasons(%{{"anthropic", :all} => hold(%{}), {"anthropic", "opus"} => opus}, @now, @to_local) == :ok
+      assert Pauses.why(:symphony) == ["Waiting for the environment to be ready", "Claude's 5-hour limit until 14:30", "Claude's weekly Opus limit until 14:30"]
+
+      # Nothing changed: nothing is written again.
+      {:ok, pause} = Pauses.get(:symphony)
+      assert UsageLimit.sync_reasons(%{{"anthropic", :all} => hold(%{}), {"anthropic", "opus"} => opus}, @now, @to_local) == :ok
+      assert Pauses.get(:symphony) == {:ok, pause}
+
+      later = hold(%{resume_at: ~U[2026-10-03 18:00:00Z]})
+      assert UsageLimit.sync_reasons(%{{"anthropic", :all} => later}, @now, @to_local) == :ok
+      assert Pauses.why(:symphony) == ["Waiting for the environment to be ready", "Claude's 5-hour limit until 15:00"]
+
+      assert UsageLimit.sync_reasons(%{}, @now, @to_local) == :ok
+      assert {:ok, %{reasons: [%{waits_on: %{condition: "github_down"}}]}} = Pauses.get(:symphony)
+    end
+
+    test "passes a refused write on" do
+      too_long = hold(%{provider: String.duplicate("p", 300)})
+      holds = %{{too_long.provider, :all} => too_long}
+      assert {:error, {:invalid_reason, _reason}} = UsageLimit.sync_reasons(holds, @now)
+      assert Pauses.get(:symphony) == {:ok, nil}
+    end
   end
 
   describe "agent.usage_limit config" do

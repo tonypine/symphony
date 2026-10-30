@@ -28,10 +28,14 @@ defmodule SymphonyElixir.UsageLimit do
   the next run finding the outage again doubles the wait as a canary would.
 
   The orchestrator owns the holds and persists them with `RunStore.put_usage_limits/1`;
-  this module builds and matches them.
+  this module builds and matches them. Each hold is also an `:environment` reason of Symphony's
+  pause (`SymphonyElixir.Pauses`, `reason/3`), set with the hold and cleared when it ends
+  (`sync_reasons/3`); the hold keeps its headroom and canary details.
   """
 
-  alias SymphonyElixir.RunStore
+  alias SymphonyElixir.{Pauses, RunStore}
+
+  @condition_prefix "usage_limit:"
 
   @type key :: {String.t(), String.t() | :all}
 
@@ -456,6 +460,74 @@ defmodule SymphonyElixir.UsageLimit do
     |> :calendar.universal_time_to_local_time()
     |> NaiveDateTime.from_erl!()
   end
+
+  @doc """
+  The `:environment` reason `entry` gives Symphony's pause, waiting on condition
+  `usage_limit:<provider>:<scope>`: `Claude's 5-hour limit until 14:30` (its resume time), for a
+  headroom hold `Claude's weekly limit headroom: new runs wait until 14:30` (its reset time) and
+  for an unreachable API `Claude API unreachable, retrying at 14:05`. Times as `local_time/3`.
+  """
+  @spec reason(entry(), DateTime.t(), keyword()) :: Pauses.reason_input()
+  def reason(entry, %DateTime{} = now, opts) when is_map(entry) do
+    %{kind: :environment, waits_on: %{condition: condition(entry)}, text: reason_text(entry, now, opts)}
+  end
+
+  @doc "The condition a hold's reason on Symphony's pause waits on: `usage_limit:anthropic:all`."
+  @spec condition(map()) :: String.t()
+  def condition(%{provider: provider, scope: scope}), do: "#{@condition_prefix}#{provider}:#{scope_label(scope)}"
+
+  defp reason_text(entry, now, opts) do
+    cond do
+      headroom?(entry) ->
+        "#{provider_label(entry.provider)}'s #{window_label(entry.window)} headroom: new runs wait" <> at(" until ", entry.resets_at, now, opts)
+
+      api_unreachable?(entry) ->
+        limit_label(entry) <> at(", retrying at ", entry.resume_at, now, opts)
+
+      true ->
+        "#{provider_label(entry.provider)}'s #{window_label(entry.window)}" <> at(" until ", entry.resume_at, now, opts)
+    end
+  end
+
+  defp at(_words, nil, _now, _opts), do: ""
+  defp at(words, %DateTime{} = at, now, opts), do: words <> local_time(at, now, opts)
+
+  @doc """
+  Brings Symphony's pause in line with `usage_limits`: each hold's reason (`reason/3`) set, or its
+  line refreshed when the hold changed, and the reason of each hold that ended cleared. Returns
+  the first refused write, else `:ok`.
+  """
+  @spec sync_reasons(map(), DateTime.t(), keyword()) :: :ok | {:error, term()}
+  def sync_reasons(usage_limits, %DateTime{} = now, opts \\ []) when is_map(usage_limits) do
+    wanted = usage_limits |> Map.values() |> Map.new(&{condition(&1), reason(&1, now, opts)})
+
+    with {:ok, pause} <- Pauses.get(:symphony) do
+      held = held_reasons(pause)
+      ended = for {condition, reason} <- held, text(wanted, condition) != reason.text, do: {:clear, reason}
+      started = for {condition, reason} <- wanted, text(held, condition) != reason.text, do: {:set, reason}
+      Enum.reduce_while(ended ++ started, :ok, &write_reason/2)
+    end
+  end
+
+  defp held_reasons(nil), do: %{}
+
+  defp held_reasons(pause) do
+    for %{kind: :environment, waits_on: %{condition: @condition_prefix <> _key = condition}} = reason <- pause.reasons,
+        into: %{},
+        do: {condition, reason}
+  end
+
+  defp text(reasons, condition), do: with(%{text: text} <- Map.get(reasons, condition), do: text)
+
+  defp write_reason(write, :ok) do
+    case write_pause(write) do
+      {:ok, _pause} -> {:cont, :ok}
+      error -> {:halt, error}
+    end
+  end
+
+  defp write_pause({:clear, reason}), do: Pauses.clear_reason(:symphony, reason)
+  defp write_pause({:set, reason}), do: Pauses.set(:symphony, reason)
 
   @doc """
   The holds as the status snapshot lists them, soonest resume first, each with the latest

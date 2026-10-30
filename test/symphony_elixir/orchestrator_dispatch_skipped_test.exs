@@ -380,16 +380,18 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
       Map.new(state.dispatch_skipped, fn {issue_id, entry} -> {issue_id, entry.reason} end)
     end
 
-    assert skipped_after.(%{pause: %{paused: true, reason: "operator", paused_at: DateTime.utc_now()}}) == %{
+    {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("operator"))
+
+    assert skipped_after.(%{}) == %{
              "runnable" => "dispatch is paused by the operator",
              "blocked" => "blocked by MT-B"
            }
 
-    unpaused = %{paused: false, reason: nil, paused_at: nil}
+    {:ok, nil} = Pauses.clear(:symphony)
     quota = %{paused: true, reason: "workspace free space is low"}
 
     assert %{"runnable" => "new dispatch is paused: workspace free space is low"} =
-             skipped_after.(%{pause: unpaused, workspace_lifecycle_quota: quota})
+             skipped_after.(%{workspace_lifecycle_quota: quota})
 
     today = Date.utc_today()
     budget = %{workspace_lifecycle_quota: %{paused: false}, budget_daily_used: 10, budget_day_started_on: today}

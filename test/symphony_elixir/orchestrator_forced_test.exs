@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.OrchestratorForcedTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Notifications, UsageLimit}
+  alias SymphonyElixir.{Notifications, Pauses, UsageLimit}
 
   @active_states ["Todo", "In Progress", "Merging", "Rework", "Waiting on sub-tickets"]
   @waiting "Waiting on sub-tickets"
@@ -474,10 +474,11 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
 
       retry_forced = &Orchestrator.handle_retry_issue_for_test(&1, "forced-1", 1, metadata, fetcher)
 
-      paused = %{full | pause: %{paused: true, reason: "maintenance", paused_at: DateTime.utc_now()}}
-      {:noreply, held} = retry_forced.(paused)
+      {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("maintenance"))
+      {:noreply, held} = retry_forced.(full)
       assert %{error: "dispatch paused by operator"} = held.retry_attempts["forced-1"]
       Process.cancel_timer(held.retry_attempts["forced-1"].timer_ref)
+      {:ok, nil} = Pauses.clear(:symphony)
 
       log = capture_log(fn -> send(self(), {:result, retry_forced.(full)}) end)
       assert_received {:result, {:noreply, state}}
@@ -606,8 +607,9 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
                %{issue_id: "merge-1", phase: :waiting_on_ci, waiting_on: :ci}
              ] = snapshot_of(state).forced
 
-      paused = %{state | pause: %{paused: true, reason: "maintenance", paused_at: DateTime.utc_now()}}
-      assert %{waiting_on: :paused} = Enum.find(snapshot_of(paused).forced, &(&1.issue_id == "slot-1"))
+      {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("maintenance"))
+      assert %{waiting_on: :paused} = Enum.find(snapshot_of(state).forced, &(&1.issue_id == "slot-1"))
+      {:ok, nil} = Pauses.clear(:symphony)
 
       held = %{state | usage_limits: %{@anthropic => hold(:paused)}}
       assert %{waiting_on: :usage_limit} = Enum.find(snapshot_of(held).forced, &(&1.issue_id == "slot-1"))

@@ -383,6 +383,57 @@ defmodule SymphonyElixir.PausesTest do
     end
   end
 
+  describe "Symphony's own pause of all dispatch" do
+    test "the Director's Pause waits on them, and the app's update pause on the build it installs" do
+      assert Pauses.dispatch_reason("  Away for the  weekend ") ==
+               %{kind: :person, waits_on: %{action: "unblock"}, text: "Away for the weekend", releasable: true}
+
+      assert %{kind: :person, text: "You paused Symphony"} = Pauses.dispatch_reason(nil)
+      assert %{kind: :person, text: "You paused Symphony"} = Pauses.dispatch_reason(" ")
+      assert Pauses.dispatch_reason("updating to v0.0.1.42") == %{kind: :build, waits_on: %{version: "0.0.1.42"}, text: "updating to v0.0.1.42"}
+      assert %{kind: :person, text: "updating to vnext"} = Pauses.dispatch_reason("updating to vnext")
+    end
+
+    test "a reason longer than a reason's line still pauses, cut to its first 300 characters" do
+      long = String.duplicate("a", 299) <> " " <> String.duplicate("b", 100)
+
+      assert %{kind: :person, text: text} = Pauses.dispatch_reason(long)
+      assert text == String.duplicate("a", 299) <> " "
+
+      assert {:ok, %{reasons: [%{kind: :person, text: line}]}} = Pauses.set(:symphony, Pauses.dispatch_reason(long), set_by: @person, at: @at)
+      assert line == String.duplicate("a", 299)
+      assert Pauses.dispatch_status(elem(Pauses.get(:symphony), 1)).paused
+
+      assert %{text: text} = Pauses.dispatch_reason(String.duplicate("é", 400))
+      assert text == String.duplicate("é", 300)
+    end
+
+    test "only the Director's and an update's reasons pause all dispatch; the status lists every reason" do
+      assert Pauses.dispatch_reasons(nil) == []
+      assert Pauses.dispatch_status(nil) == %{paused: false, reason: nil, paused_at: nil, reasons: []}
+
+      limit = %{kind: :environment, waits_on: %{condition: "usage_limit:anthropic:all"}, text: "Claude's usage limit until 14:30"}
+      {:ok, pause} = Pauses.set(:symphony, limit, at: @at)
+
+      assert Pauses.dispatch_reasons(pause) == []
+
+      assert Pauses.dispatch_status(pause) == %{
+               paused: false,
+               reason: nil,
+               paused_at: nil,
+               reasons: [%{kind: :environment, text: "Claude's usage limit until 14:30", since: @at, waits_on: %{condition: "usage_limit:anthropic:all"}}]
+             }
+
+      {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("updating to v0.0.1.42"), at: @later)
+      {:ok, pause} = Pauses.set(:symphony, Pauses.dispatch_reason("Away"), set_by: @person, at: @later)
+
+      assert [%{kind: :build}, %{kind: :person}] = Pauses.dispatch_reasons(pause)
+
+      assert %{paused: true, reason: "updating to v0.0.1.42", paused_at: @later, reasons: reasons} = Pauses.dispatch_status(pause)
+      assert Enum.map(reasons, & &1.kind) == [:environment, :build, :person]
+    end
+  end
+
   describe "errors" do
     test "refuses a subject, a reason or a setter it doesn't know" do
       subjects = [{:ticket, @repo_key, " "}, {:ticket, @repo_key, nil}, {:repository, ""}, {:repository, :x}, "TP-1", nil]
