@@ -597,6 +597,14 @@ ticket's pause and the events of both are written in one store transaction that 
 lock, so the ticket is paused on a question exactly while it is open. An open question with the
 same title and text is not asked twice, and asking it again writes nothing. The `decision.*` types
 stay for the writer that has not moved over.
+Symphony withdraws an open question nobody needs any more, with the reason in plain words, once
+what it belonged to ends: a Restart (every question), a move to `Backlog` (the questions a run
+asked), a `run.ended` whose run asked it once the ticket is in another phase than the one the run
+started in, a merge settled, a move into a terminal state (every question). A question Symphony, a
+rule or a person asked (a merge confirmation, protected files) is about the ticket itself and
+outlives any run. A question a Blocked hold waits on ends with that hold, unless the ticket merged
+or reached a terminal state. The hold carrying the question clears and its request gets the
+`## Action withdrawn` reply, as `linear_withdraw_human_action` makes them.
 Nothing asks a question this way yet.
 
 A `run.ended` names the run's transcript: a copy kept in the artifact store (Section 4.1.12) as

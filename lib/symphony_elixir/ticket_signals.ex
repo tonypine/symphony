@@ -18,11 +18,16 @@ defmodule SymphonyElixir.TicketSignals do
   entered on the ticket's record before its event (`record_phase/3`), the one place a move writes the
   record's phase. `SymphonyElixir.TransitionGuard` and `SymphonyElixir.DirectorMoves` call it before
   Linear is asked, so the record holds a move before Linear's board shows it.
+
+  An event that ends what a question belonged to withdraws the questions nobody needs any more once
+  it is written (`SymphonyElixir.Questions.withdraw_lapsed/3`): a `merge settled` move, a move into
+  one of the repo's terminal states, and a `run.ended` once the ticket is no longer in the phase the
+  run started in.
   """
 
   require Logger
 
-  alias SymphonyElixir.{Orchestrator, RunStore, TicketEvents, TicketState}
+  alias SymphonyElixir.{Config, Orchestrator, Questions, RunStore, TicketEvents, TicketState}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @phase_signals ["claim", "ci fix return", "review verdict", "merge settled", "restart", "deprioritized"]
@@ -191,13 +196,14 @@ defmodule SymphonyElixir.TicketSignals do
   @doc """
   Records an event through `TicketEvents.record/5`, best-effort: a refused or failed write is
   logged and swallowed, so the write it sits next to returns as it would without it. Payload fields
-  that are nil or blank are left out.
+  that are nil or blank are left out. A `run.ended` or `phase.entered` written withdraws the
+  questions it ends (`SymphonyElixir.Questions.withdraw_lapsed/3`).
   """
   @spec record_event(String.t(), String.t(), String.t(), map(), keyword()) :: :ok
   def record_event(repo_key, issue_id, type, payload, opts \\ []) do
     case TicketEvents.record(repo_key, issue_id, type, compact(payload), opts) do
-      {:ok, _event} ->
-        :ok
+      {:ok, event} ->
+        withdraw_lapsed(repo_key, issue_id, event)
 
       {:error, reason} ->
         Logger.warning("Failed to record the #{type} event on issue_id=#{issue_id}: #{inspect(reason)}")
@@ -327,6 +333,53 @@ defmodule SymphonyElixir.TicketSignals do
 
   defp record_mapped(repo_key, issue_id, {type, payload, opts}), do: record_event(repo_key, issue_id, type, payload, opts)
   defp record_mapped(_repo_key, _issue_id, :mirrored), do: :ok
+
+  defp withdraw_lapsed(repo_key, issue_id, event) do
+    case lapse(repo_key, issue_id, event) do
+      nil -> :ok
+      lapse -> with {:ok, _withdrawn} <- Questions.withdraw_lapsed({:ticket, repo_key, issue_id}, lapse), do: :ok
+    end
+  end
+
+  # What a written event ends (`Questions.lapse/0`), or nil.
+  defp lapse(_repo_key, _issue_id, %TicketEvents.Event{type: "phase.entered", payload: %{signal: "merge settled"}}), do: :merged
+
+  defp lapse(repo_key, _issue_id, %TicketEvents.Event{type: "phase.entered", payload: %{to: to}}) do
+    if terminal?(repo_key, to), do: {:terminal, to}
+  end
+
+  # A run that ended on a ticket now in a terminal state ends every question; otherwise the questions
+  # it asked, once the ticket moved on from the phase it started in.
+  defp lapse(repo_key, issue_id, %TicketEvents.Event{type: "run.ended", payload: %{run_id: run_id}, at: ended_at}) do
+    phase = with {:ok, phase} <- recorded_phase(repo_key, issue_id), do: phase
+
+    cond do
+      is_binary(phase) and terminal?(repo_key, phase) -> {:terminal, phase}
+      started = run_started(repo_key, issue_id, run_id) -> {:run_ended, %{run_id: run_id, started_at: started.at, ended_at: ended_at, moved_to: moved_to(started.phase, phase)}}
+      true -> nil
+    end
+  end
+
+  defp lapse(_repo_key, _issue_id, _event), do: nil
+
+  defp run_started(repo_key, issue_id, run_id) do
+    events = RunStore.list_ticket_events(repo_key, issue_id, types: ["run.started"])
+    if is_list(events), do: Enum.find(events, &(&1.payload[:run_id] == run_id))
+  end
+
+  # The phase the ticket is in once its run ended, when it is not the one the run started in.
+  defp moved_to(started, phase) when is_binary(started) and is_binary(phase) do
+    if normalize(started) != normalize(phase), do: phase
+  end
+
+  defp moved_to(_started, _phase), do: nil
+
+  defp terminal?(repo_key, state) do
+    case Config.settings_for_repo(repo_key) do
+      {:ok, settings} -> Enum.any?(settings.tracker.terminal_states, &(normalize(&1) == normalize(state)))
+      {:error, _reason} -> false
+    end
+  end
 
   defp attempts(repo_key, issue_id) do
     events = RunStore.list_ticket_events(repo_key, issue_id, types: ["attempt.pushed"])

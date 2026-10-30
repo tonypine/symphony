@@ -1,7 +1,15 @@
 defmodule SymphonyElixir.QuestionsTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Pauses, Questions, TicketState}
+  import ExUnit.CaptureLog
+
+  alias SymphonyElixir.{Hold, Pauses, Questions, TicketState}
+  alias SymphonyElixir.TicketEvents.Brief
+
+  defmodule UnclearableStore do
+    def get_ticket_state(repo_key, issue_id), do: SymphonyElixir.RunStore.get_ticket_state(repo_key, issue_id)
+    def clear_ticket_hold(_repo_key, _issue_id, _kind), do: {:error, :boom}
+  end
 
   @repo_key "repo-a"
   @issue_id "issue-1"
@@ -277,6 +285,146 @@ defmodule SymphonyElixir.QuestionsTest do
       assert Questions.withdraw(@ticket, question.id, "Gone", at: 1) == {:error, {:invalid_option, :at}}
       assert Questions.withdraw(:symphony, question.id, "Gone") == {:error, {:invalid_subject, :symphony}}
       assert Questions.open(@ticket) == [question]
+    end
+  end
+
+  describe "lapsed?/2 and withdraw_lapsed/3" do
+    defmodule Replies do
+      def create_reply(issue_id, comment_id, body) do
+        send(self(), {:reply, issue_id, comment_id, body})
+        Application.get_env(:symphony_elixir, :questions_test_reply, :ok)
+      end
+    end
+
+    @inbox :questions_test_inbox
+    @run_started ~U[2026-10-30 03:30:00Z]
+    @run_ended ~U[2026-10-30 04:30:00Z]
+
+    setup do
+      on_exit(fn ->
+        :persistent_term.erase({SymphonyElixir.Inbox, :items, @inbox})
+        Application.delete_env(:symphony_elixir, :questions_test_reply)
+      end)
+    end
+
+    defp ask_as!(asked_by, title, opts \\ []) do
+      {:ok, question} = Questions.ask(@ticket, %{@request | title: title}, [asked_by: asked_by, at: @at] ++ opts)
+      question
+    end
+
+    defp run_end(fields), do: {:run_ended, Map.merge(%{run_id: "run-1", started_at: @run_started, ended_at: @run_ended, moved_to: "Rework"}, Map.new(fields))}
+
+    test "the rule table: what each ending withdraws" do
+      run_asked = ask_as!(%{kind: :run, name: "The run"}, "Pick a layout")
+      named_run = ask_as!(@run, "Pick a colour")
+      confirmation = ask_as!(@symphony, "Merge TP-12", confirm: "Merging")
+      rule_asked = ask_as!(%{kind: :rule, name: "Protected files"}, "Allow the settings file")
+
+      for question <- [run_asked, named_run, confirmation, rule_asked] do
+        assert Questions.lapsed?(question, :restart)
+        assert Questions.lapsed?(question, :merged)
+        assert Questions.lapsed?(question, {:terminal, "Canceled"})
+        refute Questions.lapsed?(%{question | state: :answered}, :merged)
+      end
+
+      assert Questions.lapsed?(run_asked, :backlog)
+      refute Questions.lapsed?(confirmation, :backlog)
+
+      # A run ending withdraws only what it asked, once the ticket moved on.
+      assert Questions.lapsed?(run_asked, run_end([]))
+      assert Questions.lapsed?(named_run, run_end([]))
+      refute Questions.lapsed?(named_run, run_end(run_id: "run-2"))
+      refute Questions.lapsed?(run_asked, run_end(moved_to: nil))
+      refute Questions.lapsed?(run_asked, run_end(started_at: @later, ended_at: ~U[2026-10-30 06:00:00Z]))
+      refute Questions.lapsed?(run_asked, run_end(started_at: nil))
+      refute Questions.lapsed?(confirmation, run_end([]))
+      refute Questions.lapsed?(rule_asked, run_end([]))
+    end
+
+    test "a Restart withdraws a run-asked question with its reason: the pause and the hold clear, and its request is answered" do
+      question = ask_as!(%{kind: :run, name: "The run"}, "Pick a layout")
+      attrs = %{reason: "Pick a layout", decision: %{title: "Pick a layout", question: question.question, question_id: question.id}}
+      :ok = Hold.set(@repo_key, @issue_id, :needs_decision, attrs)
+      :persistent_term.put({SymphonyElixir.Inbox, :items, @inbox}, [%{issue_id: @issue_id, review: %{comment_id: "comment-1", question_id: question.id}}])
+
+      assert {:ok, [%{id: id, state: :withdrawn}]} =
+               Questions.withdraw_lapsed(@ticket, :restart, inbox: @inbox, replies: Replies)
+
+      assert id == question.id
+
+      assert %{state: :withdrawn, withdrawn: %{reason: "The run that asked was restarted."}} = Questions.find(@ticket, id)
+      refute Pauses.paused?(@ticket)
+      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+      assert_received {:reply, @issue_id, "comment-1", "## Action withdrawn\n\nThe run that asked was restarted."}
+
+      assert [%{summary: %{title: "Question withdrawn: The run that asked was restarted."}}] =
+               RunStore.list_ticket_events(@repo_key, @issue_id, types: ["question.withdrawn"])
+
+      # The prompt brief lists it as withdrawn, never as open.
+      assert {:ok, %{text: brief}} = Brief.render(@repo_key, @issue_id)
+      assert brief =~ "Withdrawn"
+      refute brief =~ "Open: it waits"
+
+      # Nothing left to withdraw.
+      assert Questions.withdraw_lapsed(@ticket, :restart, inbox: @inbox, replies: Replies) == {:ok, []}
+    end
+
+    test "a merge settled withdraws a merge confirmation that was never answered; a refused reply is only logged" do
+      Application.put_env(:symphony_elixir, :questions_test_reply, {:error, :linear_down})
+      question = ask_as!(@symphony, "Merge TP-12", confirm: "Merging")
+      :persistent_term.put({SymphonyElixir.Inbox, :items, @inbox}, [%{issue_id: "other"}, %{issue_id: @issue_id, review: %{decisions: [%{comment_id: "c-9", question_id: question.id}]}}])
+
+      log =
+        capture_log(fn ->
+          assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, :merged, inbox: @inbox, replies: Replies)
+        end)
+
+      assert log =~ "Linear refused its withdrawal reply"
+      assert_received {:reply, @issue_id, "c-9", "## Action withdrawn\n\nThe pull request merged before you answered."}
+      assert %{state: :withdrawn} = Questions.find(@ticket, question.id)
+    end
+
+    test "a question about the ticket itself survives its run ending; the run's own question goes once the ticket moved on" do
+      confirmation = ask_as!(@symphony, "Merge TP-12", confirm: "Merging")
+      rule_asked = ask_as!(%{kind: :rule, name: "Protected files"}, "Allow the settings file")
+      run_asked = ask_as!(@run, "Pick a colour")
+
+      assert {:ok, []} = Questions.withdraw_lapsed(@ticket, run_end(moved_to: nil), inbox: @inbox)
+      assert {:ok, [%{id: id}]} = Questions.withdraw_lapsed(@ticket, run_end([]), inbox: @inbox)
+      assert id == run_asked.id
+      assert %{withdrawn: %{reason: "The run that asked ended and the ticket moved on to Rework."}} = Questions.find(@ticket, id)
+      assert Enum.map(Questions.open(@ticket), & &1.id) == [confirmation.id, rule_asked.id]
+
+      # A move to Backlog leaves them too; a cancelled ticket withdraws them.
+      assert {:ok, []} = Questions.withdraw_lapsed(@ticket, :backlog, inbox: @inbox)
+      assert {:ok, [_, _]} = Questions.withdraw_lapsed(@ticket, {:terminal, "Canceled"}, inbox: @inbox)
+      assert %{withdrawn: %{reason: "The ticket was cancelled."}} = Questions.find(@ticket, confirmation.id)
+    end
+
+    test "a question a Blocked hold waits on ends with its hold, but a terminal state withdraws it and clears the hold" do
+      question = ask_as!(@run, "The run cannot continue")
+      :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "the run reported a block", waits_on: %{type: "access", keys: [], question_id: question.id}})
+
+      assert {:ok, []} = Questions.withdraw_lapsed(@ticket, :restart, inbox: @inbox)
+      assert Hold.held?(@repo_key, @issue_id, :blocked)
+
+      assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, {:terminal, "Done"}, inbox: @inbox)
+      assert %{withdrawn: %{reason: "The ticket moved to Done before you answered."}} = Questions.find(@ticket, question.id)
+      refute Hold.held?(@repo_key, @issue_id, :blocked)
+    end
+
+    test "a hold that won't clear is logged, and a malformed ticket withdraws nothing" do
+      question = ask_as!(%{kind: :run, name: "The run"}, "Pick a layout")
+      :ok = Hold.set(@repo_key, @issue_id, :needs_decision, %{reason: "Pick a layout", decision: %{title: "Pick a layout", question_id: question.id}})
+
+      log =
+        capture_log(fn ->
+          assert {:ok, [_withdrawn]} =
+                   Questions.withdraw_lapsed(@ticket, :restart, store: UnclearableStore, inbox: @inbox)
+        end)
+
+      assert log =~ "its needs_decision hold did not clear"
+      assert Questions.withdraw_lapsed(:junk, :restart) == {:ok, []}
     end
   end
 

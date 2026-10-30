@@ -34,9 +34,18 @@ defmodule SymphonyElixir.Questions do
   (stored answered, with no pause reason: the answer's `decision.recorded` event records it, and
   `legacy_event:` names that event) and its `question.asked` event carries `source: "backfill"`.
   A question whose id the record already holds is returned and nothing is recorded.
+
+  `withdraw_lapsed/3` withdraws the open questions nobody needs any more once what they belonged to
+  ended (`lapsed?/2`'s rule table): a Restart, a move to Backlog, a run that asked ending after the
+  ticket moved on, a merge settled, a terminal state. Each keeps its reason in plain words, and the
+  projections follow as `linear_withdraw_human_action` makes them: the hold that carried it clears
+  and the `## Action withdrawn` reply goes under its request.
   """
 
-  alias SymphonyElixir.{DecisionRequest, Pauses, RunStore, TicketEvents, TicketState}
+  require Logger
+
+  alias SymphonyElixir.{DecisionRequest, Hold, Inbox, Pauses, RunStore, TicketEvents, TicketState, Tracker}
+  alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.TicketEvents.Event
 
   @asker_kinds [:run, :rule, :symphony, :person]
@@ -116,6 +125,22 @@ defmodule SymphonyElixir.Questions do
   """
   @type end_opt :: {:by, map()} | {:scope, :run | :ticket | :always} | {:at, DateTime.t()}
 
+  @typedoc """
+  What ended what a question belonged to (`lapsed?/2`): a Restart, a move to Backlog, a merge
+  settled, the ticket entering the terminal state it names, or a run ending (its id, when it started
+  and ended, and the phase the ticket is in once it ended, `nil` when the ticket stayed where the
+  run started).
+  """
+  @type lapse :: :restart | :backlog | :merged | {:terminal, String.t()} | {:run_ended, ended_run()}
+
+  @typedoc "A run that ended, as `lapsed?/2` reads it."
+  @type ended_run :: %{
+          run_id: String.t() | nil,
+          started_at: DateTime.t() | nil,
+          ended_at: DateTime.t(),
+          moved_to: String.t() | nil
+        }
+
   @doc """
   Asks `request` on `ticket`: the map `SymphonyElixir.DecisionRequest.check/1` takes (title,
   question, why, if_unanswered, recommendation_reason and options, each with its label, effect,
@@ -178,6 +203,135 @@ defmodule SymphonyElixir.Questions do
          {:ok, at} <- at(opts) do
       update(repo_key, issue_id, at, &reopened(ticket, &1, &2, id, by, at))
     end
+  end
+
+  @doc """
+  Whether the open `question` lapsed with `lapse`, so nobody needs its answer any more:
+
+    * a Restart ends every question: the run that asked is over and the pull request is closed;
+    * a move to Backlog ends the questions a run asked, as it stops the run;
+    * a run ending ends the questions it asked (by its id when the question names one, else asked
+      while it ran), once the ticket moved to another phase; a question Symphony, a rule or a
+      person asked is about the ticket itself, such as a merge confirmation, and outlives any run;
+    * a merge settled and a terminal state end every question.
+
+  A question no longer open lapses with nothing.
+  """
+  @spec lapsed?(question(), lapse()) :: boolean()
+  def lapsed?(question, lapse), do: lapse_reason(question, lapse) != nil
+
+  @doc """
+  Withdraws the open questions on `ticket` that lapsed with `lapse` (`lapsed?/2`), each with its
+  reason in plain words, and makes the projections follow: the Needs Decision or Blocked hold that
+  carried it clears (`SymphonyElixir.Hold.clear/4`), and the `## Action withdrawn` reply goes under
+  its request comment when the Inbox lists it. A question a Blocked hold waits on (a run's block
+  report, a dispatch loop) ends with that hold, which Unblock and Restart decide, so only a merge
+  or a terminal state withdraws it here. Best-effort: a hold or a reply that fails is logged, and the
+  Inbox's next read reconciles the hold. Returns the questions withdrawn.
+
+  `opts[:store]` and `opts[:tracker]` override the run store and the tracker the holds are read and
+  written through, `opts[:replies]` the tracker the reply is posted with (default
+  `SymphonyElixir.Tracker`), and `opts[:inbox]` the Inbox whose rows name the request comments.
+  """
+  @spec withdraw_lapsed(ticket(), lapse(), keyword()) :: {:ok, [question()]}
+  def withdraw_lapsed(ticket, lapse, opts \\ []) do
+    held = blocked_question(ticket, opts)
+
+    withdrawn =
+      for question <- open(ticket),
+          final?(lapse) or question.id != held,
+          reason <- List.wrap(lapse_reason(question, lapse)),
+          {:ok, withdrawn} <- [withdraw(ticket, question.id, reason)] do
+        project_withdrawal(ticket, withdrawn, reason, opts)
+        withdrawn
+      end
+
+    {:ok, withdrawn}
+  end
+
+  defp lapse_reason(%{state: :open} = question, lapse), do: open_lapse_reason(question, lapse)
+  defp lapse_reason(_question, _lapse), do: nil
+
+  defp open_lapse_reason(question, :restart) do
+    if run_asked?(question),
+      do: "The run that asked was restarted.",
+      else: "The ticket was restarted from main and its pull request closed."
+  end
+
+  defp open_lapse_reason(question, :backlog) do
+    if run_asked?(question), do: "The ticket was moved to Backlog, which stopped the run that asked."
+  end
+
+  defp open_lapse_reason(_question, :merged), do: "The pull request merged before you answered."
+
+  defp open_lapse_reason(_question, {:terminal, state}) do
+    if String.downcase(state) in ["canceled", "cancelled"],
+      do: "The ticket was cancelled.",
+      else: "The ticket moved to #{state} before you answered."
+  end
+
+  defp open_lapse_reason(question, {:run_ended, %{moved_to: to} = run}) when is_binary(to) do
+    if run_asked?(question) and asked_in?(question, run), do: "The run that asked ended and the ticket moved on to #{to}."
+  end
+
+  defp open_lapse_reason(_question, {:run_ended, _run}), do: nil
+
+  defp run_asked?(question), do: question.asked_by.kind == :run
+
+  # The run that asked: the one the question names, else the one running when it was asked.
+  defp asked_in?(question, run) do
+    case Map.get(question.asked_by, :run_id) do
+      id when is_binary(id) -> id == run.run_id
+      nil -> during?(question.asked_at, run)
+    end
+  end
+
+  defp during?(at, %{started_at: %DateTime{} = started, ended_at: ended}),
+    do: DateTime.compare(at, started) != :lt and DateTime.compare(at, ended) != :gt
+
+  defp during?(_at, _run), do: false
+
+  defp final?(lapse), do: lapse == :merged or match?({:terminal, _state}, lapse)
+
+  defp blocked_question({:ticket, repo_key, issue_id}, opts) do
+    case Hold.get(repo_key, issue_id, :blocked, Keyword.take(opts, [:store])) do
+      %{waits_on: %{question_id: id}} -> id
+      _none -> nil
+    end
+  end
+
+  defp blocked_question(_ticket, _opts), do: nil
+
+  defp project_withdrawal({:ticket, repo_key, issue_id}, question, reason, opts) do
+    hold_opts = Keyword.take(opts, [:store, :tracker])
+
+    for {kind, path} <- [needs_decision: [:decision, :question_id], blocked: [:waits_on, :question_id]],
+        get_in(Hold.get(repo_key, issue_id, kind, hold_opts) || %{}, path) == question.id do
+      with {:error, error} <- Hold.clear(repo_key, issue_id, kind, hold_opts) do
+        Logger.warning("Withdrew question #{question.id} on issue_id=#{issue_id}; its #{kind} hold did not clear: #{inspect(error)}")
+      end
+    end
+
+    reply_withdrawn(issue_id, request_comment_id(issue_id, question.id, opts), reason, opts)
+  end
+
+  defp reply_withdrawn(_issue_id, nil, _reason, _opts), do: :ok
+
+  defp reply_withdrawn(issue_id, comment_id, reason, opts) do
+    with {:error, error} <- Keyword.get(opts, :replies, Tracker).create_reply(issue_id, comment_id, Request.render_withdrawal(reason)) do
+      Logger.warning("Withdrew a question on issue_id=#{issue_id}; Linear refused its withdrawal reply: #{inspect(error)}")
+    end
+  end
+
+  # The request comment the Inbox row of the question lists, read from the Inbox's cache: no Linear read.
+  defp request_comment_id(issue_id, question_id, opts) do
+    Enum.find_value(Inbox.cached(Keyword.get(opts, :inbox, Inbox)), fn
+      %{issue_id: ^issue_id, review: %{} = review} ->
+        Enum.find_value([review | List.wrap(Map.get(review, :decisions))], &(Map.get(&1, :question_id) == question_id && Map.get(&1, :comment_id)))
+
+      _other ->
+        nil
+    end)
   end
 
   @doc """
