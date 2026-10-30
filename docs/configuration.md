@@ -2367,12 +2367,14 @@ Discovery is automatic: on start the daemon writes `<state-root>/control_url` an
 
 **Stop** (`POST /api/v1/control/stop`, `mix symphony.stop`, the Director's Stop Run) ends one
 ticket's run and leaves its Linear state as it is, but the ticket is not dispatched again: Symphony's
-copy of it still reads the old state until a poll, so the stop marks it, lists it under
-`dispatch_skipped` as `stopped by the operator at <time>; waiting for the next poll`, and asks for a
-poll at once. The mark is a `Blocked` hold of type `operator_stop` in the run store (it survives a
-restart), shown in the Inbox as "Stopped by you". A poll that finds the ticket closed or out of the
-active states clears it; otherwise the ticket waits for a person: **Unblock** runs it again in place,
-**Restart** starts it over from main, and moving it to another state on the board clears the mark.
+copy of it still reads the old state until a poll, so the stop pauses it on a reason that waits on
+you, lists it under `dispatch_skipped` with the reason's text (`Stopped by you at <time>. Unblock runs
+it again; Restart starts it over from main.`), and asks for a poll at once. The pause is in the run
+store (it survives a restart); beside it the stop sets a `Blocked` hold of type `operator_stop`, its
+Linear label, shown in the Inbox as "Stopped by you". A poll that finds the ticket closed or out of
+the active states clears both; otherwise the ticket waits for a person: **Unblock** runs it again in
+place, **Restart** starts it over from main, and moving it to another state on the board clears the
+stop too.
 
 ### `watchdog`
 

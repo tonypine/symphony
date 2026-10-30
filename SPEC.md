@@ -5788,14 +5788,16 @@ Minimum endpoints:
     run as `stopped`, without changing the ticket's Linear state; answers `{"stopped": false}` when
     nothing runs on it.
   - A stop is not a restart. Symphony's copy of the ticket still reads the state it had until a poll
-    reads Linear again, so the stop marks the ticket: the dispatcher skips it (listed under
-    `dispatch_skipped` as `stopped by the operator at <time>; waiting for the next poll`), and the
-    stop asks for a poll at once. The mark is kept in the run store as a `Blocked` hold of type
-    `operator_stop`, so it survives a restart and the Inbox lists the ticket as "Stopped by you".
+    reads Linear again, so the stop pauses the ticket on a `person` reason that waits on the
+    Director's Unblock: the dispatcher skips it (listed under `dispatch_skipped` with the reason's
+    text, `Stopped by you at <time>. Unblock runs it again; Restart starts it over from main.`), and
+    the stop asks for a poll at once. The pause is kept in the run store, so it survives a restart;
+    beside it, and after it, the stop sets a `Blocked` hold of type `operator_stop`, so the ticket
+    carries the `Blocked` label and the Inbox lists it as "Stopped by you".
   - Each poll reads the stopped tickets by id. One that is gone, terminal or no longer in an active
-    state loses the mark and its hold. One still active stays skipped until a person acts: `unblock`
-    runs it again in place, `restart` starts it over, and a move to another state on the board
-    clears the mark too.
+    state, or whose state was written after the stop (a move on the board), loses the reason and its
+    hold. One still active stays skipped until a person acts: `unblock` runs it again in place and
+    `restart` starts it over, each clearing the reason and the hold.
 
 - `POST /api/v1/control/note` (OPTIONAL)
   - Writes the Director's note on a ticket: `repo_key`, `issue_identifier` and `text`. The ticket

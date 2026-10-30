@@ -398,7 +398,7 @@ defmodule SymphonyElixir.InboxTest do
 
     test "a ticket the Director stopped waits as Stopped by you, which Unblock or Restart lifts" do
       held = issue_node("SHOP-62", %{"state" => %{"name" => "Todo"}, "labels" => %{"nodes" => [%{"name" => "Blocked"}]}})
-      attrs = SymphonyElixir.OperatorStop.hold_attrs(SymphonyElixir.OperatorStop.mark("SHOP-62", "shop", ~U[2026-10-01 06:00:00Z]))
+      attrs = SymphonyElixir.OperatorStop.hold_attrs(~U[2026-10-01 06:00:00Z])
       hold = Map.merge(attrs, %{kind: :blocked, decision: nil, set_at: ~U[2026-10-01 06:00:00Z]})
 
       assert %{kind: :blocked, ask: "Stopped by you at 2026-10-01 06:00:00 UTC. " <> _, waiting_since: ~U[2026-10-01 06:00:00Z]} =

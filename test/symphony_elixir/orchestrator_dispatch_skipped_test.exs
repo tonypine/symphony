@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.{Hold, OperatorStop, Pauses, RunStore}
   alias SymphonyElixir.QaDriver.DevServerLease
-  alias SymphonyElixir.RunStore
 
   @waiting "Waiting on sub-tickets"
   @active_states ["Todo", "In Progress", "Merging", "Rework", @waiting]
@@ -135,6 +135,24 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
 
     # The ticket page shows a passed-over ticket's blockers from the entry (`SymphonyElixir.Connected`).
     assert %{blocked_by: [%{identifier: "MT-B", title: nil, state: "In Progress"}], parent: nil} = state.dispatch_skipped["blocked"].connected
+  end
+
+  test "a stopped ticket is skipped with its pause's text, before any hold; a pause on another reason alone gates nothing yet" do
+    on_exit(fn -> RunStore.clear() end)
+    :ok = OperatorStop.mark("default", "stopped", ~U[2026-10-20 08:41:25Z])
+    :ok = Hold.set("default", "stopped", :blocked, %{reason: "Needs a token", waits_on: %{type: "access", keys: []}})
+    # A reason the backfill wrote for a dependency hold that cleared since; its writer doesn't clear it yet.
+    {:ok, _pause} = Pauses.set({:ticket, "default", "waiting"}, %{kind: :ticket, waits_on: %{identifier: "MT-9"}})
+
+    stopped = issue("stopped", "MT-STOP", "Todo")
+    waiting = issue("waiting", "MT-WAIT", "Todo")
+    tracked([stopped, waiting])
+    state = Orchestrator.dispatch_chosen_issues_for_test([stopped, waiting], orchestrator_state())
+
+    assert Map.has_key?(state.running, "waiting")
+
+    assert [%{identifier: "MT-STOP", reason: "Stopped by you at 2026-10-20 08:41:25 UTC. Unblock runs it again; Restart starts it over from main."}] =
+             snapshot_of(state).dispatch_skipped
   end
 
   # TP-1125: a QA pass waiting for another pass's dev server port on the QA host is running, but
