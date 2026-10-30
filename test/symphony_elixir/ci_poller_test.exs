@@ -3,7 +3,7 @@ defmodule SymphonyElixir.CiPollerTest do
 
   alias SymphonyElixir.CiPoller
   alias SymphonyElixir.PrWatch.Attempts
-  alias SymphonyElixir.TicketPullRequest
+  alias SymphonyElixir.{TicketObservation, TicketPullRequest, TicketState}
 
   @repo_key "default"
   @in_review_pr "https://github.com/example/repo/pull/2401"
@@ -182,6 +182,10 @@ defmodule SymphonyElixir.CiPollerTest do
 
     def update_ci_check(repo_key, issue_id, attrs),
       do: SymphonyElixir.RunStore.update_ci_check(repo_key, issue_id, attrs)
+  end
+
+  defmodule TicketStatesDownRunStore do
+    def list_ticket_states(_repo_key), do: {:error, :store_down}
   end
 
   defmodule RaisingRunStore do
@@ -599,6 +603,51 @@ defmodule SymphonyElixir.CiPollerTest do
     assert [%{status: "red", failed_checks: [%{name: "protected paths"}, %{name: "specs"}]}] = RunStore.list_ci_checks()
   end
 
+  describe "dispatch.source: record" do
+    test "a poll finds the tickets whose records are in its states and reads no Linear" do
+      now = ~U[2026-05-06 09:00:00Z]
+      record_source!()
+      Application.put_env(:symphony_elixir, :ci_test_status, green_status())
+
+      merging = %{in_review_issue() | id: "issue-2402", identifier: "ACME-2402", state: "Merging"}
+      todo = %{in_review_issue() | id: "issue-2403", identifier: "ACME-2403", state: "Todo"}
+      removed = %{in_review_issue() | id: "issue-2404", identifier: "ACME-2404"}
+
+      for issue <- [in_review_issue(), merging, todo, removed] do
+        :ok = TicketPullRequest.record_created(@repo_key, issue.id, "https://github.com/example/repo/pull/#{issue.identifier}", "auto/#{issue.identifier}")
+        put_run(issue, now, "success", "run-#{issue.id}")
+        assert {:ok, :updated} = TicketObservation.observe(@repo_key, %{issue | updated_at: now}, source: :poll)
+      end
+
+      # A webhook said ACME-2404 was removed: its record stays, and it is never listed.
+      assert :ok = RunStore.put_ticket_state(TicketState.mark_removed(RunStore.get_ticket_state(@repo_key, removed.id), now))
+
+      # Linear would answer with a ticket the records don't have: the poll must not ask it.
+      Application.put_env(:symphony_elixir, :ci_test_issues, [%{in_review_issue() | id: "issue-linear-only"}])
+
+      assert {:ok, %{discovered: 2, processed: 2, actions: actions}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+      assert Enum.sort(actions) == [{:observed, "issue-2401", "green"}, {:observed, "issue-2402", "green"}]
+      assert Enum.sort(Enum.map(RunStore.list_ci_checks(@repo_key), & &1.issue_id)) == ["issue-2401", "issue-2402"]
+      refute_received {:fetch_issues_by_states, _states}
+
+      # A poll scoped to one repo reads its tickets from the records too.
+      assert {:ok, %{processed: 2}} =
+               CiPoller.poll_once(repo_key: @repo_key, tracker: FakeTracker, github: FakeGitHub, now: now)
+
+      refute_received {:fetch_issues_by_states, _states}
+    end
+
+    test "records that can't be read fail the poll instead of reading as no tickets" do
+      record_source!()
+
+      opts = [repo_key: @repo_key, tracker: FakeTracker, github: FakeGitHub, run_store: TicketStatesDownRunStore]
+      assert {:error, :store_down} = CiPoller.poll_once(opts)
+      refute_received {:fetch_issues_by_states, _states}
+    end
+  end
+
   describe "with a duplicate run on the head that GitHub cancelled" do
     setup do
       now = ~U[2026-10-06 14:58:00Z]
@@ -859,10 +908,10 @@ defmodule SymphonyElixir.CiPollerTest do
     end
   end
 
-  defp put_run(issue, now, status \\ "success") do
+  defp put_run(issue, now, status \\ "success", run_id \\ "run-1") do
     RunStore.put_run(%{
       repo_key: @repo_key,
-      run_id: "run-1",
+      run_id: run_id,
       issue_id: issue.id,
       issue_identifier: issue.identifier,
       status: status,
@@ -892,6 +941,11 @@ defmodule SymphonyElixir.CiPollerTest do
 
   defp run_ended_at("running", _now), do: nil
   defp run_ended_at(_status, now), do: DateTime.add(now, -1, :minute)
+
+  defp record_source! do
+    File.write!(Workflow.symphony_file_path(), File.read!(Workflow.symphony_file_path()) <> "dispatch:\n  source: record\n")
+    Cache.clear()
+  end
 
   defp multi_repo_config do
     [

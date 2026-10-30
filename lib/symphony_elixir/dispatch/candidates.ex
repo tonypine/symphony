@@ -18,15 +18,17 @@ defmodule SymphonyElixir.Dispatch.Candidates do
   slot bypass it. It also carries the record's description, team and project, equal to the polled
   issue's, for the readers that rebuild a ticket from its record.
 
-  Everything here is pure: no store read, no Linear read, no process. The orchestrator calls it every
-  poll cycle, to dispatch from it under `dispatch.source: record` and for the shadow
-  (`SymphonyElixir.Dispatch.Shadow`) either way. Under `dispatch.source: record` the PR and CI watcher
-  takes its watched tickets from it too, with its watched states in place of the active ones.
+  `from_records/4` and `issue_from_record/1` are pure: no store read, no Linear read, no process. The
+  orchestrator calls them every poll cycle, to dispatch from them under `dispatch.source: record` and
+  for the shadow (`SymphonyElixir.Dispatch.Shadow`) either way. Under `dispatch.source: record` the PR
+  and CI watcher takes its watched tickets from them too, with its watched states in place of the
+  active ones, and the PR review poller and the CI poller take theirs from `issues_in_phases/2`, which
+  reads every repo's records from the store.
   """
 
+  alias SymphonyElixir.{Config, Orchestrator, RunStore, TicketState}
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.{Orchestrator, TicketState}
+  alias SymphonyElixir.Linear.{Client, Issue}
 
   @typedoc "How many records each reason left out."
   @type excluded :: %{
@@ -84,6 +86,55 @@ defmodule SymphonyElixir.Dispatch.Candidates do
 
     %{candidates: Enum.sort_by(candidates, &{&1.identifier, &1.id}), excluded: excluded}
   end
+
+  @doc """
+  The tickets of every configured repo whose records are in one of `phases`, rebuilt as issues: what
+  the Linear read of those states (`SymphonyElixir.Tracker.fetch_issues_by_states/1`) returns, without
+  a Linear request. Each repo's records go through `from_records/4` with its route, its settings and
+  `phases` in place of the active states, so a record a webhook marked removed, one never observed and
+  one assigned to someone else are left out as the Linear read leaves them out.
+
+  An error when a repo's records or settings can't be read, and `{:error, :linear_viewer_unknown}` when
+  a repo is assigned to `me` before any Linear read learned whose key it is: a missing answer never
+  reads as tickets that left those states. `opts[:store]` is the store the records are read from
+  (`SymphonyElixir.RunStore`).
+  """
+  @spec issues_in_phases([String.t()], keyword()) :: {:ok, [Issue.t()]} | {:error, term()}
+  def issues_in_phases(phases, opts \\ []) when is_list(phases) and is_list(opts) do
+    if phases == [], do: {:ok, []}, else: read_issues_in_phases(phases, Keyword.get(opts, :store, RunStore))
+  end
+
+  defp read_issues_in_phases(phases, store) do
+    with {:ok, repos} <- Config.repos() do
+      Enum.reduce_while(repos, {:ok, []}, &add_repo_issues_in_phases(&1, &2, phases, store))
+    end
+  end
+
+  defp add_repo_issues_in_phases(route, {:ok, acc}, phases, store) do
+    case repo_issues_in_phases(route, phases, store) do
+      {:ok, issues} -> {:cont, {:ok, acc ++ issues}}
+      {:error, reason} -> {:halt, {:error, reason}}
+    end
+  end
+
+  defp repo_issues_in_phases(%{name: repo_key} = route, phases, store) do
+    with {:ok, settings} <- Config.settings_for_repo(repo_key),
+         {:ok, assignee_opts} <- viewer_assignee_opts(route, settings),
+         records when is_list(records) <- store.list_ticket_states(repo_key) do
+      {:ok, from_records(repo_key, records, settings, [route: route, states: phases] ++ assignee_opts).candidates}
+    end
+  end
+
+  # `me` names the API key's user, whose id only a Linear read learns: the client keeps it once read.
+  defp viewer_assignee_opts(route, settings) do
+    case String.trim(route_assignee(route) || settings.tracker.assignee || "") do
+      "me" -> viewer_ids(Client.known_viewer_id())
+      _assignee -> {:ok, []}
+    end
+  end
+
+  defp viewer_ids(nil), do: {:error, :linear_viewer_unknown}
+  defp viewer_ids(viewer_id), do: {:ok, [assignee_ids: [viewer_id]]}
 
   @doc """
   The `SymphonyElixir.Linear.Issue` a ticket record describes: its id, identifier, title, description,
