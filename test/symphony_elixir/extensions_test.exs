@@ -611,364 +611,364 @@ defmodule SymphonyElixir.ExtensionsTest do
     state_payload = json_response(conn, 200)
     assert is_integer(state_payload["uptime_seconds"]) and state_payload["uptime_seconds"] >= 0
 
-    assert state_payload == %{
-             "generated_at" => state_payload["generated_at"],
-             "build" => %{"version" => "0.0.1.168", "sha" => "d3d301b0123456789abcdef0123456789abcdef0"},
-             "uptime_seconds" => state_payload["uptime_seconds"],
-             "repos" => ["default"],
-             "counts" => %{
-               "running" => 1,
-               "watching" => 1,
-               "conflicts" => 0,
-               "retrying" => 1,
-               "claimed" => 2,
-               "forced" => 2,
-               "shipped_today" => 1,
-               "waiting_on_you" => 0,
-               "review_inconclusive" => %{"invalid_verdict" => 1}
-             },
-             "running" => [
-               %{
-                 "issue_id" => "issue-http",
-                 "repo_key" => "default",
-                 "issue_identifier" => "MT-HTTP",
-                 "title" => nil,
-                 "state" => "In Progress",
-                 "url" => "https://linear.app/example/issue/MT-HTTP",
-                 "run_kind" => nil,
-                 "run_profile" => nil,
-                 "reviewer_profile" => nil,
-                 "pull_request_url" => nil,
-                 "worker_host" => nil,
-                 "workspace_path" => nil,
-                 "session_id" => "thread-http",
-                 "transcript_path" => nil,
-                 "turn_count" => 7,
-                 "last_event" => "notification",
-                 "last_message" => "rendered",
-                 "linear_wait_until" => nil,
-                 "pending_tool" => nil,
-                 "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at"),
-                 "last_event_at" => nil,
-                 "forced" => false,
-                 "tokens" => %{
-                   "input_tokens" => 4,
-                   "uncached_input_tokens" => 4,
-                   "cached_input_tokens" => 0,
-                   "cache_creation_input_tokens" => 0,
-                   "output_tokens" => 8,
-                   "total_tokens" => 12
-                 }
-               }
-             ],
-             "sessions" => [
-               %{
-                 "kind" => "agent",
-                 "issue_id" => "issue-http",
-                 "issue_identifier" => "MT-HTTP",
-                 "repo_key" => "default",
-                 "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at")
-               }
-             ],
-             "watching" => [
-               %{
-                 "issue_id" => "issue-watch",
-                 "repo_key" => "default",
-                 "issue_identifier" => "MT-WATCH",
-                 "title" => nil,
-                 "state" => "In Review",
-                 "url" => "https://linear.app/example/issue/MT-WATCH",
-                 "pull_request_url" => "https://github.com/example/repo/pull/123",
-                 "last_ran_at" => state_payload["watching"] |> List.first() |> Map.fetch!("last_ran_at"),
-                 "seconds_since_last_run" => 3_600
-               }
-             ],
-             "waiting_on_you" => [],
-             "inbox_read" => true,
-             "conflicts" => [],
-             "retrying" => [
-               %{
-                 "issue_id" => "issue-retry",
-                 "repo_key" => "default",
-                 "issue_identifier" => "MT-RETRY",
-                 "title" => nil,
-                 "attempt" => 2,
-                 "due_at" => state_payload["retrying"] |> List.first() |> Map.fetch!("due_at"),
-                 "error" => "boom",
-                 "worker_host" => nil,
-                 "workspace_path" => nil,
-                 "forced" => false
-               }
-             ],
-             "drain_report" => state_payload["drain_report"],
-             "setup" => %{
-               "problems" => [],
-               "not_checked" => [],
-               "checked_at" => "2026-10-19T09:00:00Z",
-               "linear_checked_at" => nil,
-               "github_updates" => state_payload["setup"]["github_updates"]
-             },
-             "awaiting_clarification" => [],
-             "skipped" => [],
-             "run_history" => [
-               %{
-                 "run_id" => "run-http",
-                 "kind" => "agent",
-                 "run_kind" => nil,
-                 "model" => nil,
-                 "effort" => nil,
-                 "profile_label" => nil,
-                 "reviewer_profile" => nil,
-                 "repo_key" => "default",
-                 "issue_id" => "issue-http",
-                 "issue_identifier" => "MT-HTTP",
-                 "title" => "HTTP snapshot",
-                 "state" => "In Progress",
-                 "status" => "success",
-                 "attempt" => 1,
-                 "started_at" => state_payload["run_history"] |> List.first() |> Map.fetch!("started_at"),
-                 "ended_at" => state_payload["run_history"] |> List.first() |> Map.fetch!("ended_at"),
-                 "error" => nil,
-                 "worker_host" => nil,
-                 "workspace_path" => nil,
-                 "session_id" => "thread-http",
-                 "transcript_path" => nil,
-                 "turn_count" => 7,
-                 "runtime_seconds" => 42,
-                 "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12},
-                 "review_inconclusive_cause" => "invalid_verdict"
-               }
-             ],
-             "codex_totals" => %{
-               "input_tokens" => 4,
-               "uncached_input_tokens" => 4,
-               "cached_input_tokens" => 0,
-               "cache_creation_input_tokens" => 0,
-               "output_tokens" => 8,
-               "total_tokens" => 12,
-               "seconds_running" => 42.5
-             },
-             "pause" => %{
-               "paused" => false,
-               "reason" => nil,
-               "paused_at" => nil
-             },
-             "usage_limits" => [],
-             "stray_processes" => [],
-             "budget" => %{
-               "per_issue_limit" => 500,
-               "daily_limit" => 1_000,
-               "daily_used" => 400,
-               "daily_remaining" => 600,
-               "daily_paused" => false
-             },
-             "dispatch_state" => %{
-               "active?" => true,
-               "blockers" => []
-             },
-             "pollers" => %{
-               "ci" => "unavailable",
-               "pr_review" => "unavailable"
-             },
-             "epic_lanes" => %{
-               "max_total" => 2,
-               "lanes" => [
-                 %{
-                   "issue_id" => "epic-http",
-                   "identifier" => "MT-EPIC",
-                   "title" => "Epic",
-                   "url" => "https://linear.test/MT-EPIC",
-                   "status" => "waiting",
-                   "sub_issue" => %{"issue_id" => "part-http", "identifier" => "MT-PART", "state" => "In Review"}
-                 }
-               ],
-               "queued_epics" => [],
-               "shared" => %{"slots" => 1, "used" => 1}
-             },
-             "finishing" => %{
-               "slots" => 2,
-               "used" => 1,
-               "running" => [%{"issue_id" => "land-http", "identifier" => "MT-LAND", "state" => "Merging"}]
-             },
-             "auto_merge" => [
-               %{
-                 "issue_id" => "merge-http",
-                 "issue_identifier" => "MT-MERGE",
-                 "pull_request_url" => "https://github.com/acme/repo/pull/9",
-                 "state" => "enabled",
-                 "head_sha" => "abc1234def",
-                 "status" => "auto-merge on, waiting for CI on `abc1234`",
-                 "updated_at" => "2026-10-03T06:00:00Z"
-               }
-             ],
-             "landing_waits" => [
-               %{
-                 "issue_id" => "follow-http",
-                 "issue_identifier" => "MT-FOLLOW",
-                 "pull_request_url" => "https://github.com/acme/repo/pull/10",
-                 "state" => "QA",
-                 "waits_for" => %{
-                   "issue_id" => "merge-http",
-                   "issue_identifier" => "MT-MERGE",
-                   "pull_request_url" => "https://github.com/acme/repo/pull/9",
-                   "state" => "Merging"
-                 },
-                 "shared_files" => 2,
-                 "files" => ["lib/a.ex", "lib/b.ex"],
-                 "reason" => "waits for MT-MERGE to land (shares 2 files)",
-                 "since" => "2026-10-03T06:00:00Z"
-               }
-             ],
-             "red_bases" => [],
-             "issues" => [],
-             "silent_waits" => [],
-             "rate_limit" => nil,
-             "slot_waiting" => [
-               %{
-                 "issue_id" => "wait-http",
-                 "issue_identifier" => "MT-WAIT",
-                 "repo_key" => "default",
-                 "title" => "Waiting",
-                 "state" => "Todo",
-                 "reason" => "a Merging issue is waiting for a slot",
-                 "attempt" => nil,
-                 "since" => "2026-10-03T06:00:00Z",
-                 "forced" => false
-               }
-             ],
-             "dispatch_skipped" => [
-               %{
-                 "issue_id" => "skip-http",
-                 "issue_identifier" => "MT-SKIP",
-                 "repo_key" => "default",
-                 "title" => "Skipped",
-                 "state" => "Todo",
-                 "reason" => "priority medium is not in tickets.priorities (urgent, high)",
-                 "since" => "2026-10-03T06:00:00Z"
-               }
-             ],
-             "shipped_today" => [
-               %{
-                 "issue_id" => "shipped-http",
-                 "issue_identifier" => "MT-SHIPPED",
-                 "title" => "Shipped",
-                 "repo_key" => "default",
-                 "completed_at" => "2026-10-03T07:00:00Z"
-               }
-             ],
-             "blocked" => [
-               %{
-                 "issue_id" => "verify-http",
-                 "issue_identifier" => "MT-VERIFY",
-                 "title" => "Final verification: Export",
-                 "state" => "Todo",
-                 "kind" => "blockers",
-                 "reason" => nil,
-                 "blocked_by" => [
-                   %{"issue_identifier" => "MT-GAP", "state" => "In Progress"},
-                   %{"issue_identifier" => nil, "state" => nil}
-                 ],
-                 "summary" => "MT-VERIFY waiting on MT-GAP (In Progress), an unknown issue (unknown state)"
-               },
-               %{
-                 "issue_id" => "update-http",
-                 "issue_identifier" => "MT-UPDATE",
-                 "title" => "Final verification: Pause",
-                 "state" => "Todo",
-                 "kind" => "app_update",
-                 "reason" => "waiting for an app update: MT-FIX merged in `9f54098`, running `d3d301b`",
-                 "blocked_by" => [%{"issue_identifier" => "MT-FIX", "state" => "merged in 9f54098"}],
-                 "summary" => "MT-UPDATE waiting for an app update: MT-FIX merged in `9f54098`, running `d3d301b`"
-               }
-             ],
-             "app_update" => %{"unblocks" => 1, "issue_identifiers" => ["MT-UPDATE"], "latest_release" => nil},
-             "forced" => [
-               %{
-                 "issue_id" => "forced-http",
-                 "issue_identifier" => "MT-FORCED",
-                 "title" => "Fix the release",
-                 "repo_key" => "web",
-                 "state" => "In Review",
-                 "forced_since" => "2026-10-03T05:00:00Z",
-                 "forced_for_seconds" => 3_600,
-                 "stale" => false,
-                 "position" => 1,
-                 "waiting_on_human" => true,
-                 "sub_issue" => nil,
-                 "phase" => "waiting_for_human",
-                 "running" => false,
-                 "waiting_on" => "human",
-                 "blockers" => [],
-                 "summary" => "waiting for a human"
-               },
-               %{
-                 "issue_id" => "forced-parent-http",
-                 "issue_identifier" => "MT-EPIC",
-                 "title" => "Export",
-                 "repo_key" => nil,
-                 "state" => "Waiting on sub-tickets",
-                 "forced_since" => "2026-10-03T06:00:00Z",
-                 "forced_for_seconds" => 300_000,
-                 "stale" => true,
-                 "position" => 2,
-                 "waiting_on_human" => false,
-                 "sub_issue" => %{"issue_id" => "part-http", "issue_identifier" => "MT-PART", "state" => "Todo"},
-                 "phase" => "implementation",
-                 "running" => false,
-                 "waiting_on" => "blocker",
-                 "blockers" => ["MT-GAP"],
-                 "summary" => "implementation · waiting on blocker MT-GAP"
-               }
-             ],
-             "concurrency" => %{"max_total" => 10, "finishing_max" => 2, "forced_max" => 1},
-             "claimed" => ["issue-http", "retry-http"],
-             "rate_limits" => %{"primary" => %{"remaining" => 11}},
-             "linear_usage" => %{"window_ms" => 3_600_000, "total" => 0, "callers" => [], "queries" => []},
-             "linear_webhooks" => %{
-               "enabled" => false,
-               "secret_configured" => false,
-               "total" => 0,
-               "rejected" => 0,
-               "last_at" => nil,
-               "last_type" => nil,
-               "last_action" => nil,
-               "last_rejected_at" => nil,
-               "last_rejected_reason" => nil,
-               "counts" => [],
-               "rejected_reasons" => [],
-               "observations" => %{"updated" => 0, "unchanged" => 0, "stale" => 0, "unrouted" => 0, "removed" => 0, "no_record" => 0, "error" => 0},
-               "recent" => [],
-               "compare" => %{"webhook_first" => 0, "poll_first" => 0, "poll_first_recent" => []}
-             },
-             "dispatch_shadow" => %{
-               "source" => "poll",
-               "window" => 20,
-               "cycles_compared" => 0,
-               "cycles_with_differences" => 0,
-               "window_cycles" => 0,
-               "window_differences" => 0,
-               "recent" => [],
-               "record_newer" => %{"count" => 0, "recent" => []}
-             },
-             "reconcile" => %{
-               "last_run_at" => nil,
-               "interval_ms" => 300_000,
-               "applied" => 0,
-               "reapplied" => 0,
-               "unobserved_filled" => 0,
-               "detected" => 0,
-               "reverted" => 0,
-               "revert_failed" => 0,
-               "recent" => []
-             },
-             "pause_backfill" => nil,
-             "orchestrator" => %{
-               "message_queue_len" => 0,
-               "snapshot_age_ms" => nil,
-               "snapshot_build_ms" => nil,
-               "snapshot_parts_ms" => %{}
-             }
-           }
+    assert_payload(state_payload, %{
+      "generated_at" => state_payload["generated_at"],
+      "build" => %{"version" => "0.0.1.168", "sha" => "d3d301b0123456789abcdef0123456789abcdef0"},
+      "uptime_seconds" => state_payload["uptime_seconds"],
+      "repos" => ["default"],
+      "counts" => %{
+        "running" => 1,
+        "watching" => 1,
+        "conflicts" => 0,
+        "retrying" => 1,
+        "claimed" => 2,
+        "forced" => 2,
+        "shipped_today" => 1,
+        "waiting_on_you" => 0,
+        "review_inconclusive" => %{"invalid_verdict" => 1}
+      },
+      "running" => [
+        %{
+          "issue_id" => "issue-http",
+          "repo_key" => "default",
+          "issue_identifier" => "MT-HTTP",
+          "title" => nil,
+          "state" => "In Progress",
+          "url" => "https://linear.app/example/issue/MT-HTTP",
+          "run_kind" => nil,
+          "run_profile" => nil,
+          "reviewer_profile" => nil,
+          "pull_request_url" => nil,
+          "worker_host" => nil,
+          "workspace_path" => nil,
+          "session_id" => "thread-http",
+          "transcript_path" => nil,
+          "turn_count" => 7,
+          "last_event" => "notification",
+          "last_message" => "rendered",
+          "linear_wait_until" => nil,
+          "pending_tool" => nil,
+          "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at"),
+          "last_event_at" => nil,
+          "forced" => false,
+          "tokens" => %{
+            "input_tokens" => 4,
+            "uncached_input_tokens" => 4,
+            "cached_input_tokens" => 0,
+            "cache_creation_input_tokens" => 0,
+            "output_tokens" => 8,
+            "total_tokens" => 12
+          }
+        }
+      ],
+      "sessions" => [
+        %{
+          "kind" => "agent",
+          "issue_id" => "issue-http",
+          "issue_identifier" => "MT-HTTP",
+          "repo_key" => "default",
+          "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at")
+        }
+      ],
+      "watching" => [
+        %{
+          "issue_id" => "issue-watch",
+          "repo_key" => "default",
+          "issue_identifier" => "MT-WATCH",
+          "title" => nil,
+          "state" => "In Review",
+          "url" => "https://linear.app/example/issue/MT-WATCH",
+          "pull_request_url" => "https://github.com/example/repo/pull/123",
+          "last_ran_at" => state_payload["watching"] |> List.first() |> Map.fetch!("last_ran_at"),
+          "seconds_since_last_run" => 3_600
+        }
+      ],
+      "waiting_on_you" => [],
+      "inbox_read" => true,
+      "conflicts" => [],
+      "retrying" => [
+        %{
+          "issue_id" => "issue-retry",
+          "repo_key" => "default",
+          "issue_identifier" => "MT-RETRY",
+          "title" => nil,
+          "attempt" => 2,
+          "due_at" => state_payload["retrying"] |> List.first() |> Map.fetch!("due_at"),
+          "error" => "boom",
+          "worker_host" => nil,
+          "workspace_path" => nil,
+          "forced" => false
+        }
+      ],
+      "drain_report" => state_payload["drain_report"],
+      "setup" => %{
+        "problems" => [],
+        "not_checked" => [],
+        "checked_at" => "2026-10-19T09:00:00Z",
+        "linear_checked_at" => nil,
+        "github_updates" => state_payload["setup"]["github_updates"]
+      },
+      "awaiting_clarification" => [],
+      "skipped" => [],
+      "run_history" => [
+        %{
+          "run_id" => "run-http",
+          "kind" => "agent",
+          "run_kind" => nil,
+          "model" => nil,
+          "effort" => nil,
+          "profile_label" => nil,
+          "reviewer_profile" => nil,
+          "repo_key" => "default",
+          "issue_id" => "issue-http",
+          "issue_identifier" => "MT-HTTP",
+          "title" => "HTTP snapshot",
+          "state" => "In Progress",
+          "status" => "success",
+          "attempt" => 1,
+          "started_at" => state_payload["run_history"] |> List.first() |> Map.fetch!("started_at"),
+          "ended_at" => state_payload["run_history"] |> List.first() |> Map.fetch!("ended_at"),
+          "error" => nil,
+          "worker_host" => nil,
+          "workspace_path" => nil,
+          "session_id" => "thread-http",
+          "transcript_path" => nil,
+          "turn_count" => 7,
+          "runtime_seconds" => 42,
+          "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12},
+          "review_inconclusive_cause" => "invalid_verdict"
+        }
+      ],
+      "codex_totals" => %{
+        "input_tokens" => 4,
+        "uncached_input_tokens" => 4,
+        "cached_input_tokens" => 0,
+        "cache_creation_input_tokens" => 0,
+        "output_tokens" => 8,
+        "total_tokens" => 12,
+        "seconds_running" => 42.5
+      },
+      "pause" => %{
+        "paused" => false,
+        "reason" => nil,
+        "paused_at" => nil
+      },
+      "usage_limits" => [],
+      "stray_processes" => [],
+      "budget" => %{
+        "per_issue_limit" => 500,
+        "daily_limit" => 1_000,
+        "daily_used" => 400,
+        "daily_remaining" => 600,
+        "daily_paused" => false
+      },
+      "dispatch_state" => %{
+        "active?" => true,
+        "blockers" => []
+      },
+      "pollers" => %{
+        "ci" => "unavailable",
+        "pr_review" => "unavailable"
+      },
+      "epic_lanes" => %{
+        "max_total" => 2,
+        "lanes" => [
+          %{
+            "issue_id" => "epic-http",
+            "identifier" => "MT-EPIC",
+            "title" => "Epic",
+            "url" => "https://linear.test/MT-EPIC",
+            "status" => "waiting",
+            "sub_issue" => %{"issue_id" => "part-http", "identifier" => "MT-PART", "state" => "In Review"}
+          }
+        ],
+        "queued_epics" => [],
+        "shared" => %{"slots" => 1, "used" => 1}
+      },
+      "finishing" => %{
+        "slots" => 2,
+        "used" => 1,
+        "running" => [%{"issue_id" => "land-http", "identifier" => "MT-LAND", "state" => "Merging"}]
+      },
+      "auto_merge" => [
+        %{
+          "issue_id" => "merge-http",
+          "issue_identifier" => "MT-MERGE",
+          "pull_request_url" => "https://github.com/acme/repo/pull/9",
+          "state" => "enabled",
+          "head_sha" => "abc1234def",
+          "status" => "auto-merge on, waiting for CI on `abc1234`",
+          "updated_at" => "2026-10-03T06:00:00Z"
+        }
+      ],
+      "landing_waits" => [
+        %{
+          "issue_id" => "follow-http",
+          "issue_identifier" => "MT-FOLLOW",
+          "pull_request_url" => "https://github.com/acme/repo/pull/10",
+          "state" => "QA",
+          "waits_for" => %{
+            "issue_id" => "merge-http",
+            "issue_identifier" => "MT-MERGE",
+            "pull_request_url" => "https://github.com/acme/repo/pull/9",
+            "state" => "Merging"
+          },
+          "shared_files" => 2,
+          "files" => ["lib/a.ex", "lib/b.ex"],
+          "reason" => "waits for MT-MERGE to land (shares 2 files)",
+          "since" => "2026-10-03T06:00:00Z"
+        }
+      ],
+      "red_bases" => [],
+      "issues" => [],
+      "silent_waits" => [],
+      "rate_limit" => nil,
+      "slot_waiting" => [
+        %{
+          "issue_id" => "wait-http",
+          "issue_identifier" => "MT-WAIT",
+          "repo_key" => "default",
+          "title" => "Waiting",
+          "state" => "Todo",
+          "reason" => "a Merging issue is waiting for a slot",
+          "attempt" => nil,
+          "since" => "2026-10-03T06:00:00Z",
+          "forced" => false
+        }
+      ],
+      "dispatch_skipped" => [
+        %{
+          "issue_id" => "skip-http",
+          "issue_identifier" => "MT-SKIP",
+          "repo_key" => "default",
+          "title" => "Skipped",
+          "state" => "Todo",
+          "reason" => "priority medium is not in tickets.priorities (urgent, high)",
+          "since" => "2026-10-03T06:00:00Z"
+        }
+      ],
+      "shipped_today" => [
+        %{
+          "issue_id" => "shipped-http",
+          "issue_identifier" => "MT-SHIPPED",
+          "title" => "Shipped",
+          "repo_key" => "default",
+          "completed_at" => "2026-10-03T07:00:00Z"
+        }
+      ],
+      "blocked" => [
+        %{
+          "issue_id" => "verify-http",
+          "issue_identifier" => "MT-VERIFY",
+          "title" => "Final verification: Export",
+          "state" => "Todo",
+          "kind" => "blockers",
+          "reason" => nil,
+          "blocked_by" => [
+            %{"issue_identifier" => "MT-GAP", "state" => "In Progress"},
+            %{"issue_identifier" => nil, "state" => nil}
+          ],
+          "summary" => "MT-VERIFY waiting on MT-GAP (In Progress), an unknown issue (unknown state)"
+        },
+        %{
+          "issue_id" => "update-http",
+          "issue_identifier" => "MT-UPDATE",
+          "title" => "Final verification: Pause",
+          "state" => "Todo",
+          "kind" => "app_update",
+          "reason" => "waiting for an app update: MT-FIX merged in `9f54098`, running `d3d301b`",
+          "blocked_by" => [%{"issue_identifier" => "MT-FIX", "state" => "merged in 9f54098"}],
+          "summary" => "MT-UPDATE waiting for an app update: MT-FIX merged in `9f54098`, running `d3d301b`"
+        }
+      ],
+      "app_update" => %{"unblocks" => 1, "issue_identifiers" => ["MT-UPDATE"], "latest_release" => nil},
+      "forced" => [
+        %{
+          "issue_id" => "forced-http",
+          "issue_identifier" => "MT-FORCED",
+          "title" => "Fix the release",
+          "repo_key" => "web",
+          "state" => "In Review",
+          "forced_since" => "2026-10-03T05:00:00Z",
+          "forced_for_seconds" => 3_600,
+          "stale" => false,
+          "position" => 1,
+          "waiting_on_human" => true,
+          "sub_issue" => nil,
+          "phase" => "waiting_for_human",
+          "running" => false,
+          "waiting_on" => "human",
+          "blockers" => [],
+          "summary" => "waiting for a human"
+        },
+        %{
+          "issue_id" => "forced-parent-http",
+          "issue_identifier" => "MT-EPIC",
+          "title" => "Export",
+          "repo_key" => nil,
+          "state" => "Waiting on sub-tickets",
+          "forced_since" => "2026-10-03T06:00:00Z",
+          "forced_for_seconds" => 300_000,
+          "stale" => true,
+          "position" => 2,
+          "waiting_on_human" => false,
+          "sub_issue" => %{"issue_id" => "part-http", "issue_identifier" => "MT-PART", "state" => "Todo"},
+          "phase" => "implementation",
+          "running" => false,
+          "waiting_on" => "blocker",
+          "blockers" => ["MT-GAP"],
+          "summary" => "implementation · waiting on blocker MT-GAP"
+        }
+      ],
+      "concurrency" => %{"max_total" => 10, "finishing_max" => 2, "forced_max" => 1},
+      "claimed" => ["issue-http", "retry-http"],
+      "rate_limits" => %{"primary" => %{"remaining" => 11}},
+      "linear_usage" => %{"window_ms" => 3_600_000, "total" => 0, "callers" => [], "queries" => []},
+      "linear_webhooks" => %{
+        "enabled" => false,
+        "secret_configured" => false,
+        "total" => 0,
+        "rejected" => 0,
+        "last_at" => nil,
+        "last_type" => nil,
+        "last_action" => nil,
+        "last_rejected_at" => nil,
+        "last_rejected_reason" => nil,
+        "counts" => [],
+        "rejected_reasons" => [],
+        "observations" => %{"updated" => 0, "unchanged" => 0, "stale" => 0, "unrouted" => 0, "removed" => 0, "no_record" => 0, "error" => 0},
+        "recent" => [],
+        "compare" => %{"webhook_first" => 0, "poll_first" => 0, "poll_first_recent" => []}
+      },
+      "dispatch_shadow" => %{
+        "source" => "poll",
+        "window" => 20,
+        "cycles_compared" => 0,
+        "cycles_with_differences" => 0,
+        "window_cycles" => 0,
+        "window_differences" => 0,
+        "recent" => [],
+        "record_newer" => %{"count" => 0, "recent" => []}
+      },
+      "reconcile" => %{
+        "last_run_at" => nil,
+        "interval_ms" => 300_000,
+        "applied" => 0,
+        "reapplied" => 0,
+        "unobserved_filled" => 0,
+        "detected" => 0,
+        "reverted" => 0,
+        "revert_failed" => 0,
+        "recent" => []
+      },
+      "pause_backfill" => nil,
+      "orchestrator" => %{
+        "message_queue_len" => 0,
+        "snapshot_age_ms" => nil,
+        "snapshot_build_ms" => nil,
+        "snapshot_parts_ms" => %{}
+      }
+    })
 
     conn = get(build_conn(), "/api/v1/MT-HTTP")
     issue_payload = json_response(conn, 200)
@@ -2782,6 +2782,24 @@ defmodule SymphonyElixir.ExtensionsTest do
       attrs
     )
   end
+
+  # Compares a payload key by key, so a failure names the top-level keys that differ first and
+  # shows their values whole: on a map this size, `assert ==` prints the whole expression and its
+  # diff, and CI's failure annotation keeps only their first few kilobytes.
+  defp assert_payload(actual, expected) do
+    differing = for key <- Enum.sort(Enum.uniq(Map.keys(actual) ++ Map.keys(expected))), Map.fetch(actual, key) != Map.fetch(expected, key), do: key
+
+    if differing != [] do
+      flunk(
+        "The payload differs at #{Enum.join(differing, ", ")}\n" <>
+          Enum.map_join(differing, "\n", fn key ->
+            "#{key}:\n  got:      #{inspect_whole(Map.fetch(actual, key))}\n  expected: #{inspect_whole(Map.fetch(expected, key))}"
+          end)
+      )
+    end
+  end
+
+  defp inspect_whole(value), do: inspect(value, limit: :infinity, printable_limit: :infinity)
 
   defp put_build(build) do
     previous = Application.fetch_env(:symphony_elixir, :build)
