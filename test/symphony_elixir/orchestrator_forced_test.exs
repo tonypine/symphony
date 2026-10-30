@@ -476,7 +476,7 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
 
       {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("maintenance"))
       {:noreply, held} = retry_forced.(full)
-      assert %{error: "dispatch paused by operator"} = held.retry_attempts["forced-1"]
+      assert %{error: "dispatch is paused by the operator: maintenance"} = held.retry_attempts["forced-1"]
       Process.cancel_timer(held.retry_attempts["forced-1"].timer_ref)
       {:ok, nil} = Pauses.clear(:symphony)
 

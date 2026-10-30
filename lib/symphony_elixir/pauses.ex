@@ -71,6 +71,7 @@ defmodule SymphonyElixir.Pauses do
   @update_reason ~r/\Aupdating to v(\d+(?:\.\d+)+)\z/
   @dispatch_kinds [:person, :build]
   @repository_text "You paused this repository"
+  @symphony_text "You paused Symphony"
   # The events of a ticket's pause that lift a reason.
   @lifted ["pause.reason_cleared", "pause.cleared"]
 
@@ -149,7 +150,7 @@ defmodule SymphonyElixir.Pauses do
 
     case text && Regex.run(@update_reason, text) do
       [_text, version] -> %{kind: :build, waits_on: %{version: version}, text: text}
-      nil -> %{kind: :person, waits_on: %{action: "unblock"}, text: text || "You paused Symphony", releasable: true}
+      nil -> %{kind: :person, waits_on: %{action: "unblock"}, text: text || @symphony_text, releasable: true}
     end
   end
 
@@ -184,6 +185,25 @@ defmodule SymphonyElixir.Pauses do
   @spec dispatch_reasons(pause() | nil) :: [reason()]
   def dispatch_reasons(%{reasons: reasons}), do: Enum.filter(reasons, &(&1.kind in @dispatch_kinds))
   def dispatch_reasons(nil), do: []
+
+  @doc """
+  The line a candidate the paused pass skips is given, one text per reason that stops dispatch
+  (`dispatch_reasons/1`) joined by `; `, from the same reasons the pause header shows: an update's
+  `dispatch is paused: updating to v0.0.1.756`, the Director's `dispatch is paused by the
+  operator`, then their note when they gave one. The reason's kind picks the wording. Nil when no
+  reason stops dispatch.
+  """
+  @spec dispatch_skip_reason(pause() | nil) :: String.t() | nil
+  def dispatch_skip_reason(pause) do
+    case dispatch_reasons(pause) do
+      [] -> nil
+      reasons -> Enum.map_join(reasons, "; ", &skip_text/1)
+    end
+  end
+
+  defp skip_text(%{kind: :build, text: text}), do: "dispatch is paused: #{text}"
+  defp skip_text(%{kind: :person, text: @symphony_text}), do: "dispatch is paused by the operator"
+  defp skip_text(%{kind: :person, text: text}), do: "dispatch is paused by the operator: #{text}"
 
   @doc """
   Symphony's pause as the state payload and the control API give it: `paused` while a reason
