@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.TicketSignalsTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Orchestrator, TicketEvents, TicketSignals, TicketState}
+  alias SymphonyElixir.{Orchestrator, Questions, TicketEvents, TicketSignals, TicketState}
 
   @repo_key "repo-a"
 
@@ -391,6 +391,86 @@ defmodule SymphonyElixir.TicketSignalsTest do
     assert log =~ "Failed to record the verdict.recorded event on issue_id=issue-1: {:invalid_payload, [:outcome]}"
     assert %{verdicts: [%{kind: "pre_push_review"}], signals: [%{name: "fix verdict"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
     assert ticket_events(@repo_key, "issue-1") == []
+  end
+
+  describe "the questions an event ends (TP-1241)" do
+    @request %{
+      title: "Pick a layout",
+      question: "Which of the two layouts should the settings pane use?",
+      why: "The run built both. Only you can pick.",
+      if_unanswered: "The run waits for your pick.",
+      recommendation_reason: "The list fits the laptop screen.",
+      options: [%{label: "The list", effect: "The pane shows a list.", recommended: true}, %{label: "The grid", effect: "The pane shows a grid."}]
+    }
+    @confirmation %{@request | title: "Merge the pull request", question: "Should Symphony merge the pull request now?"}
+    @run %{kind: :run, name: "The run"}
+    @started ~U[2026-10-30 04:00:00Z]
+
+    defp start_run(repo_key, issue_id, phase) do
+      :ok = TicketSignals.record_phase(repo_key, issue_id, phase)
+      payload = %{run_id: "run-1", run_kind: "implementation", run_number: 1, state: phase}
+      :ok = TicketSignals.record_event(repo_key, issue_id, "run.started", payload, phase: phase, run_id: "run-1", at: @started)
+    end
+
+    defp end_run(repo_key, issue_id) do
+      payload = %{run_id: "run-1", exit: "success"}
+      TicketSignals.record_event(repo_key, issue_id, "run.ended", payload, run_id: "run-1", at: DateTime.utc_now())
+    end
+
+    defp ask(ticket, request, asked_by) do
+      {:ok, question} = Questions.ask(ticket, request, asked_by: asked_by, at: ~U[2026-10-30 04:10:00Z])
+      question
+    end
+
+    test "a run ending withdraws the question it asked once the ticket moved on, and never a question about the ticket itself" do
+      repo_key = Config.repo_key!()
+      ticket = {:ticket, repo_key, "issue-run"}
+      start_run(repo_key, "issue-run", "In Progress")
+      asked = ask(ticket, @request, @run)
+      confirmation = ask(ticket, @confirmation, %{kind: :symphony, name: "Symphony"})
+
+      # The run ends with the ticket where it started: the question still waits.
+      assert :ok = end_run(repo_key, "issue-run")
+      assert %{state: :open} = Questions.find(ticket, asked.id)
+
+      :ok = TicketSignals.record_phase(repo_key, "issue-run", "Rework")
+      assert :ok = end_run(repo_key, "issue-run")
+      assert %{state: :withdrawn, withdrawn: %{reason: "The run that asked ended and the ticket moved on to Rework."}} = Questions.find(ticket, asked.id)
+      assert %{state: :open} = Questions.find(ticket, confirmation.id)
+    end
+
+    test "a run that ended on a cancelled ticket withdraws every question; one with no start withdraws nothing" do
+      repo_key = Config.repo_key!()
+      ticket = {:ticket, repo_key, "issue-cancel"}
+      asked = ask(ticket, @request, @run)
+
+      assert :ok = end_run(repo_key, "issue-cancel")
+      assert %{state: :open} = Questions.find(ticket, asked.id)
+
+      :ok = TicketSignals.record_phase(repo_key, "issue-cancel", "Canceled")
+      assert :ok = end_run(repo_key, "issue-cancel")
+      assert %{withdrawn: %{reason: "The ticket was cancelled."}} = Questions.find(ticket, asked.id)
+    end
+
+    test "a merge settled withdraws a merge confirmation nobody answered" do
+      ticket = {:ticket, @repo_key, "issue-merge"}
+      question = ask(ticket, @confirmation, %{kind: :symphony, name: "Symphony"})
+
+      assert :ok = TicketSignals.record(@repo_key, "issue-merge", "merge settled", %{to: "Done"})
+      assert %{state: :withdrawn, withdrawn: %{reason: "The pull request merged before you answered."}} = Questions.find(ticket, question.id)
+    end
+
+    test "a move into a terminal state withdraws every open question; a move into an open phase withdraws none" do
+      repo_key = Config.repo_key!()
+      ticket = {:ticket, repo_key, "issue-done"}
+      question = ask(ticket, @confirmation, %{kind: :symphony, name: "Symphony"})
+
+      assert :ok = TicketSignals.record(repo_key, "issue-done", "decision returned", %{move: "rework", from: "QA", to: "Rework"})
+      assert %{state: :open} = Questions.find(ticket, question.id)
+
+      assert :ok = TicketSignals.record(repo_key, "issue-done", "decision returned", %{move: "cancel", from: "Rework", to: "Canceled"})
+      assert %{withdrawn: %{reason: "The ticket was cancelled."}} = Questions.find(ticket, question.id)
+    end
   end
 
   describe "open_decision/4" do
