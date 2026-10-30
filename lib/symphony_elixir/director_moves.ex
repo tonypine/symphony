@@ -80,6 +80,7 @@ defmodule SymphonyElixir.DirectorMoves do
     AuditLog,
     BlockedHold,
     BreakdownReview,
+    CiWait,
     Config,
     Decisions,
     DispatchLoop,
@@ -94,6 +95,7 @@ defmodule SymphonyElixir.DirectorMoves do
     Questions,
     Restart,
     RunStore,
+    SelfHeal,
     SubIssueWait,
     TicketSignals,
     Tracker,
@@ -654,9 +656,15 @@ defmodule SymphonyElixir.DirectorMoves do
 
   defp clear_access_hold(issue, stopped?, opts), do: lift(issue, fn -> clear_stop_and_hold(issue, stopped?, opts) end, opts)
 
+  # Once the hold is gone, so are the environment reasons a CI wait or self-heal's access hold set
+  # beside it (`SymphonyElixir.CiWait`, `SymphonyElixir.SelfHeal`), released by the Director. Those
+  # clears are best-effort, as the writers' own are.
   defp clear_stop_and_hold(issue, stopped?, opts) do
     with :ok <- if(stopped?, do: clear_stop(issue, opts), else: :ok),
-         do: clear_blocked(issue, :unblock, opts)
+         :ok <- clear_blocked(issue, :unblock, opts) do
+      CiWait.clear_pause(issue.repo_key, issue.id, OperatorStop.director())
+      SelfHeal.healthy(issue.repo_key, issue.id, OperatorStop.director())
+    end
   end
 
   defp lift(issue, clear, opts) do

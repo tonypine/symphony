@@ -459,6 +459,9 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
       assert_received {:memory_tracker_label_added, @issue_id, "Blocked"}
       assert log =~ "[error] Holding #{@identifier} instead of waiting longer for CI: #{hold.reason}"
 
+      # Beside the hold, one pause waits for CI on the commit (TP-1250).
+      assert SymphonyElixir.Pauses.why({:ticket, @repo_key, @issue_id}) == ["Waiting for CI on 26758a247155 to finish"]
+
       # The hold's signal ends that wait: once unblocked, the next wait on the commit starts from zero.
       record = RunStore.get_ticket_state(@repo_key, @issue_id)
       assert [%{name: "ci_wait", details: %{sha: @sha}} | _rest] = record.signals

@@ -3,13 +3,16 @@ defmodule SymphonyElixir.EpicReviewTest do
 
   import ExUnit.CaptureLog
 
+  alias SymphonyElixir.CiWait
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.EpicReview
   alias SymphonyElixir.Handoff
   alias SymphonyElixir.Hold
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Pauses
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.RunStore
+  alias SymphonyElixir.SelfHeal
   alias SymphonyElixir.TicketSignals
 
   @repo_key "repo-epic-review"
@@ -1307,6 +1310,27 @@ defmodule SymphonyElixir.EpicReviewTest do
 
       assert_received {:qa_agent_run, _job, _settings, _opts}
       assert [{@issue_id, "Epic Review"}, {@issue_id, "Done"}] = state_updates()
+    end
+
+    test "CI settling clears the CI wait's pause reason, and the verdict the review reached the QA environment's (TP-1250)" do
+      ticket = {:ticket, @repo_key, @issue_id}
+      {:ok, _pause} = CiWait.pause(@repo_key, @issue_id, @sha)
+      {:ok, _pause} = Pauses.set(ticket, SelfHeal.environment_reason("worker_host"))
+
+      assert {:error, {:ci_pending, _info}} = run(epic(), gh_runner: gh_runner([ci_run("macos", "in_progress")]), now: @now)
+      assert Pauses.why(ticket) == ["Waiting for CI on #{String.slice(@sha, 0, 12)} to finish", "The QA machine is not reachable"]
+
+      assert :ok = run(epic(), gh_runner: gh_runner([ci_run("macos", "completed")]), now: @now)
+      assert {:ok, nil} = Pauses.get(ticket)
+    end
+
+    test "a review that reaches a fail verdict saw the QA environment working too" do
+      ticket = {:ticket, @repo_key, @issue_id}
+      {:ok, _pause} = Pauses.set(ticket, SelfHeal.environment_reason("worker_host"))
+      agent_result(:fail, %{summary: "Missing.", findings: ["The export button is absent"]})
+
+      assert :ok = run(epic(), gh_runner: gh_runner([]), now: @now)
+      assert {:ok, nil} = Pauses.get(ticket)
     end
 
     test "a run unfinished for over two hours is stuck, not waited on: the review runs and reports it" do

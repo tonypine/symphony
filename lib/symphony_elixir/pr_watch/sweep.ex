@@ -30,6 +30,9 @@ defmodule SymphonyElixir.PrWatch.Sweep do
   @gates [
     {"blocked by ", "gate: blocked by a ticket"},
     {~r/\bWaiting for [A-Z][A-Z0-9]*-\d+ to (?:finish|land)\b/, "gate: blocked by a ticket"},
+    {~r/\bWaiting for PR #\d+\b.* to land: it changes the same files\b/, "gate: blocked by a ticket"},
+    {~r/\bWaiting for CI on [0-9a-f]+ to finish\b/, "gate: hold"},
+    {~r/\bThe QA (?:machine|environment) (?:is not|cannot|has no)\b/, "gate: hold"},
     {"Waiting for your answer", "gate: hold"},
     {~r/\bon an? [A-Za-z ]+ hold\b/, "gate: hold"},
     {"waiting on its sub-tickets", "gate: sub-tickets"},

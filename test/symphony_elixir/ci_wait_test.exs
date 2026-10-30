@@ -64,3 +64,62 @@ defmodule SymphonyElixir.CiWaitTest do
     end
   end
 end
+
+defmodule SymphonyElixir.CiWaitPauseTest do
+  use SymphonyElixir.TestSupport
+
+  alias SymphonyElixir.{CiWait, Pauses}
+
+  @sha "26758a2471558f89fc0411dcf1f81aa82c0e1dc4"
+  @ticket {:ticket, "default", "issue-1"}
+  @director %{kind: :person, name: "Director"}
+
+  describe "the pause beside a CI-wait hold" do
+    test "waits for CI on the commit, once however often it is set, and the Director may release it" do
+      assert CiWait.reason(@sha) == %{
+               kind: :environment,
+               waits_on: %{condition: "ci_wait:26758a247155"},
+               text: "Waiting for CI on 26758a247155 to finish",
+               releasable: true
+             }
+
+      assert {:ok, _pause} = CiWait.pause("default", "issue-1", @sha)
+      assert {:ok, _pause} = CiWait.pause("default", "issue-1", @sha)
+
+      assert {:ok, %{reasons: [%{set_by: %{kind: :rule, name: "CI wait"}, releasable: true} = reason]}} = Pauses.get(@ticket)
+      assert Pauses.why(@ticket) == ["Waiting for CI on 26758a247155 to finish"]
+      assert CiWait.reason?(reason)
+    end
+
+    test "tells its live reason from the backfill's and from any other" do
+      refute CiWait.reason?(%{kind: :environment, waits_on: %{condition: "ci_wait: CI on 26758a247155 was still running after 61 minutes"}})
+      refute CiWait.reason?(%{kind: :environment, waits_on: %{condition: "self_heal:worker_host"}})
+      refute CiWait.reason?(Pauses.ticket_reason(:dependency, "TP-1"))
+    end
+
+    test "CI settling clears its reasons, the backfill's too, by who says so, and leaves every other reason" do
+      backfilled = %{kind: :environment, waits_on: %{condition: "ci_wait: CI on abc was still running"}, text: "ci_wait: CI on abc was still running", releasable: true}
+      {:ok, _pause} = Pauses.set(@ticket, Pauses.ticket_reason(:dependency, "TP-9"))
+      {:ok, _pause} = Pauses.set(@ticket, backfilled, backfilled: true)
+      {:ok, _pause} = CiWait.pause("default", "issue-1", @sha)
+      {:ok, _pause} = Pauses.set(@ticket, %{kind: :environment, waits_on: %{condition: "self_heal:worker_host"}})
+
+      assert :ok = CiWait.clear_pause("default", "issue-1", @director)
+      assert {:ok, %{reasons: [%{kind: :ticket}, %{waits_on: %{condition: "self_heal:worker_host"}}]}} = Pauses.get(@ticket)
+
+      cleared = RunStore.list_ticket_events("default", "issue-1", types: ["pause.reason_cleared"])
+      assert [%{payload: %{by: @director}}, %{payload: %{by: @director}}] = cleared
+    end
+
+    test "clears the pause with its last reason, and changes nothing on a ticket not paused or with no repo" do
+      {:ok, _pause} = CiWait.pause("default", "issue-1", @sha)
+
+      assert :ok = CiWait.clear_pause("default", "issue-1")
+      assert {:ok, nil} = Pauses.get(@ticket)
+      assert [%{payload: %{by: %{kind: :symphony}}}] = RunStore.list_ticket_events("default", "issue-1", types: ["pause.cleared"])
+
+      assert :ok = CiWait.clear_pause("default", "issue-1")
+      assert :ok = CiWait.clear_pause(nil, "issue-1")
+    end
+  end
+end

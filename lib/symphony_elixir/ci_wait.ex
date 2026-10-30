@@ -15,13 +15,23 @@ defmodule SymphonyElixir.CiWait do
   the hold's own `ci_wait` signal makes the next wait on that commit start again from zero. A wait
   on another commit starts from zero too, and so does the wait for the epic review's rerun of a red
   commit (`SymphonyElixir.EpicReview.CiRerun` records a fresh start when it reruns).
+
+  Beside the hold, the ticket's pause (`SymphonyElixir.Pauses`, the one writer) gets an
+  `:environment` reason (`reason/1`, set by `pause/4`): "Waiting for CI on <commit> to finish",
+  which the Director may release. It clears (`clear_pause/3`) when the epic review finds no workflow
+  run on its commit still going, and with the hold on `Unblock`.
   """
 
-  alias SymphonyElixir.TicketState
+  alias SymphonyElixir.{Pauses, TicketState}
 
   @hold_type "ci_wait"
   @start_signal "ci_wait_started"
   @limit_ms 60 * 60_000
+  @setter %{kind: :rule, name: "CI wait"}
+  @condition_prefix "ci_wait:"
+  # A live reason's condition, `ci_wait:<commit>`; a backfilled one's is the hold's reason, which
+  # starts with `ci_wait: ` (`SymphonyElixir.Pauses.Backfill`).
+  @condition ~r/\Aci_wait:[0-9a-f]+\z/
 
   @typedoc """
   What the run found: the commit and its workflow runs still going, and optionally which run waits
@@ -89,4 +99,40 @@ defmodule SymphonyElixir.CiWait do
       link -> "#{name} (#{link})"
     end
   end
+
+  @doc """
+  The pause reason of a wait for CI on `sha` past the limit: an `:environment` reason the Director
+  may release, `Waiting for CI on <first 12 characters of sha> to finish`.
+  """
+  @spec reason(String.t()) :: Pauses.reason_input()
+  def reason(sha) when is_binary(sha) do
+    short = String.slice(sha, 0, 12)
+    %{kind: :environment, waits_on: %{condition: @condition_prefix <> short}, text: "Waiting for CI on #{short} to finish", releasable: true}
+  end
+
+  @doc "Whether a pause reason is a live CI-wait reason (`reason/1`)."
+  @spec reason?(Pauses.reason() | term()) :: boolean()
+  def reason?(%{kind: :environment, waits_on: %{condition: condition}}) when is_binary(condition), do: condition =~ @condition
+  def reason?(_reason), do: false
+
+  @doc "Pauses the ticket on the wait for CI on `sha`, beside its hold, set by the CI-wait rule."
+  @spec pause(String.t(), String.t(), String.t()) :: Pauses.result()
+  def pause(repo_key, issue_id, sha), do: Pauses.set({:ticket, repo_key, issue_id}, reason(sha), set_by: @setter)
+
+  @doc """
+  Clears every CI-wait reason of the ticket's pause, live or backfilled from a CI-wait hold, by `by`
+  (default Symphony): CI settled, or the Director unblocked it. Any other reason stays. Best-effort:
+  a ticket that can't be read clears nothing.
+  """
+  @spec clear_pause(String.t() | nil, String.t(), Pauses.set_by() | nil) :: :ok
+  def clear_pause(repo_key, issue_id, by \\ nil) do
+    if repo_key, do: Pauses.clear_reasons({:ticket, repo_key, issue_id}, &ci_wait_reason?/1, clear_opts(by))
+    :ok
+  end
+
+  defp clear_opts(nil), do: []
+  defp clear_opts(by), do: [by: by]
+
+  defp ci_wait_reason?(%{kind: :environment, waits_on: %{condition: @condition_prefix <> _rest}}), do: true
+  defp ci_wait_reason?(_reason), do: false
 end

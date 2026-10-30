@@ -1,11 +1,11 @@
 defmodule SymphonyElixir.DirectorMovesTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{AuditLog, BlockedHold}
+  alias SymphonyElixir.{AuditLog, BlockedHold, CiWait}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.{DirectorMoves, DispatchLoop, Hold}
   alias SymphonyElixir.Inbox.Item
-  alias SymphonyElixir.{OperatorStop, Pauses, PlanComments, Questions, RunStore, SubIssueWait}
+  alias SymphonyElixir.{OperatorStop, Pauses, PlanComments, Questions, RunStore, SelfHeal, SubIssueWait}
 
   @waiting "Waiting on sub-tickets"
 
@@ -657,6 +657,26 @@ defmodule SymphonyElixir.DirectorMovesTest do
              ] = ticket_events("repo-director", "pr")
 
       assert [%{actor: %{kind: :person, name: "the Director"}}] = RunStore.list_ticket_events("repo-director", "pr", types: ["person.action"])
+    end
+
+    test "QA that cannot reach its machine pauses the ticket on it; Unblock clears the hold and the reason, and the ticket resumes (TP-1250)", %{opts: opts} do
+      issue = %{pr("QA") | repo_key: "repo-director"}
+      put_issues([issue])
+      ticket = {:ticket, "repo-director", "pr"}
+      outcome = %{verdict: :blocked, cause: {:qa_worker, "qa_worker_unreachable"}, reason: "the QA host did not answer", needs_person: true}
+
+      assert :held = SelfHeal.heal(issue, outcome: outcome, attempts: 2, repo_key: "repo-director")
+      {:ok, _pause} = CiWait.pause("repo-director", "pr", "26758a2471558f89fc0411dcf1f81aa82c0e1dc4")
+      {:ok, _pause} = Pauses.set(ticket, Pauses.ticket_reason(:dependency, "MOT-9"))
+
+      assert Hold.held?("repo-director", "pr", :blocked)
+      assert Pauses.why(ticket) == ["The QA machine is not reachable", "Waiting for CI on 26758a247155 to finish", "Waiting for MOT-9 to finish"]
+
+      assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+
+      refute Hold.held?("repo-director", "pr", :blocked)
+      assert Pauses.why(ticket) == ["Waiting for MOT-9 to finish"]
+      assert [%{payload: %{by: %{kind: :person, name: "Director"}}} | _] = RunStore.list_ticket_events("repo-director", "pr", types: ["pause.reason_cleared"])
     end
 
     test "clears a dispatch-loop hold in place, and the ticket's count starts again", %{opts: opts} do

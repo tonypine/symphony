@@ -27,7 +27,8 @@ defmodule SymphonyElixir.BlockedHold do
   phase, on the open pull requests that change the same files (`SymphonyElixir.PrWatch.Competitors`).
   Only the PR and CI watcher reads those pull requests, so it judges the hold on each of its reads
   (`landing_desired/2`): the hold clears once no competitor is left in the race, and the sweep here
-  leaves it alone. A person's `Unblock` lifts it too.
+  leaves it alone. A person's `Unblock` lifts it too. Beside it, the ticket's pause has one reason
+  per competitor (`landing_reasons/1`), which the watcher keeps in line with the hold.
 
   Only the holds that lift themselves are cleared here — one waiting on an access grant is lifted by
   a person's `Unblock` (see `SymphonyElixir.DirectorMoves`).
@@ -57,6 +58,10 @@ defmodule SymphonyElixir.BlockedHold do
   @listed_files 10
   @reason_sources %{@dependency_type => :dependency, @fix_ticket_type => :fix_ticket}
   @setters %{dependency: %{kind: :rule, name: "Blocked-by links"}, fix_ticket: %{kind: :rule, name: "Self-heal"}}
+  # Kept apart from `@setters`: the sync here never clears a landing reason, which the PR watcher owns.
+  @landing_setter %{kind: :rule, name: "Competing pull requests"}
+  @pull_request_condition ~r/\Apull_request:\d+\z/
+  @max_title 120
 
   @typedoc """
   A pull request a landing hold waits on: its ticket when Symphony tracks it, its number, title and
@@ -111,8 +116,12 @@ defmodule SymphonyElixir.BlockedHold do
 
   def fix_ticket_desired(_hold, _state, _terminal_states), do: :none
 
-  @doc "Who sets the pause reasons of a dependency hold (the blocked-by links) and of a fix-ticket hold (self-heal)."
-  @spec reason_setter(:dependency | :fix_ticket) :: Pauses.set_by()
+  @doc """
+  Who sets the pause reasons of a dependency hold (the blocked-by links), of a fix-ticket hold
+  (self-heal) and of a landing hold (the competing pull requests).
+  """
+  @spec reason_setter(:dependency | :fix_ticket | :landing) :: Pauses.set_by()
+  def reason_setter(:landing), do: @landing_setter
   def reason_setter(source), do: Map.fetch!(@setters, source)
 
   @doc "Whether `hold` is a landing hold: a conflict waiting on the pull requests competing with it."
@@ -148,6 +157,55 @@ defmodule SymphonyElixir.BlockedHold do
       Map.get(hold, :reason) == landing_attrs(racing).reason -> :none
       true -> {:set, landing_attrs(racing)}
     end
+  end
+
+  @doc """
+  The pause reasons beside a landing hold waiting on `competitors`, one each, all releasable by the
+  Director's `Unblock`: a competitor with a ticket is a `:ticket` reason, `Waiting for TP-1 to land: it
+  changes the same files`; a person's pull request with no ticket an `:environment` reason,
+  `Waiting for PR #12 (Title) to land: it changes the same files`.
+  """
+  @spec landing_reasons([competitor()]) :: [Pauses.reason_input()]
+  def landing_reasons(competitors) do
+    competitors
+    |> Enum.flat_map(&landing_reason/1)
+    |> Enum.uniq_by(&{&1.kind, &1.waits_on})
+  end
+
+  @doc "Whether a pause reason is one a landing hold sets (`landing_reasons/1`), whoever wrote it."
+  @spec landing_reason?(Pauses.reason() | term()) :: boolean()
+  def landing_reason?(%{kind: :ticket, waits_on: %{identifier: identifier}, text: text}) when is_binary(identifier),
+    do: text == Pauses.ticket_reason(:landing, identifier).text
+
+  def landing_reason?(%{kind: :environment, waits_on: %{condition: condition}}) when is_binary(condition),
+    do: condition =~ @pull_request_condition
+
+  def landing_reason?(_reason), do: false
+
+  defp landing_reason(competitor) do
+    identifier = Map.get(competitor, :issue_identifier)
+    number = Map.get(competitor, :pr_number)
+
+    cond do
+      Pauses.identifier?(identifier) ->
+        [Map.put(Pauses.ticket_reason(:landing, identifier), :releasable, true)]
+
+      is_integer(number) ->
+        [%{kind: :environment, waits_on: %{condition: "pull_request:#{number}"}, text: pull_request_text(competitor), releasable: true}]
+
+      true ->
+        []
+    end
+  end
+
+  defp pull_request_text(%{pr_number: number} = competitor) do
+    name =
+      case Map.get(competitor, :title) do
+        title when is_binary(title) and title != "" -> "PR ##{number} (#{String.slice(title, 0, @max_title)})"
+        _none -> "PR ##{number}"
+      end
+
+    "Waiting for #{name} to land: it changes the same files"
   end
 
   defp competitor_name(%{issue_identifier: identifier}) when is_binary(identifier), do: identifier

@@ -434,6 +434,22 @@ defmodule SymphonyElixir.SelfHealTest do
       assert reason == "QA blocked after 0 attempt(s): :secret_missing"
     end
 
+    test "a block a person must clear pauses the ticket on the broken component beside its access hold, once" do
+      :ok = SymphonyElixir.RunStore.clear()
+      on_exit(fn -> SymphonyElixir.RunStore.clear() end)
+      ticket = {:ticket, @repo_key, @issue_id}
+      outcome = outcome({:qa_worker, "qa_worker_unreachable"}, %{needs_person: true})
+
+      assert :held = SelfHeal.heal(issue(), heal_opts(outcome))
+      assert :held = SelfHeal.heal(issue(), heal_opts(outcome))
+
+      assert {:blocked, %{waits_on: %{type: "access", keys: []}}} = Process.get(:hold_attrs)
+      assert {:ok, %{reasons: [reason]}} = Pauses.get(ticket)
+      assert %{kind: :environment, waits_on: %{condition: "self_heal:worker_host"}, text: "The QA machine is not reachable", releasable: true} = reason
+      assert reason.set_by == BlockedHold.reason_setter(:fix_ticket)
+      assert SelfHeal.environment_reason?(reason)
+    end
+
     test "reuses the open fix ticket another ticket already filed for the same failure, attaching the evidence" do
       Process.put(:ticket_states, [fix_record(":environment_unreachable")])
       Process.put({:fix_ticket_state, @fix_ticket}, {:ok, %Issue{id: "fix-id", identifier: @fix_ticket, state: "In Progress"}})
@@ -749,6 +765,54 @@ defmodule SymphonyElixir.SelfHealTest do
 
     test "a non-issue is refused" do
       assert {:error, :invalid_issue} = SelfHeal.heal(%{}, heal_opts(outcome(:environment_unreachable)))
+    end
+  end
+
+  describe "environment_reason/1 and healthy/3" do
+    setup do
+      :ok = SymphonyElixir.RunStore.clear()
+      on_exit(fn -> SymphonyElixir.RunStore.clear() end)
+      %{ticket: {:ticket, @repo_key, @issue_id}}
+    end
+
+    test "names each component in plain words" do
+      texts =
+        for component <- ["worker_host", "dev_server", "qa_playbook", "ci:specs", "qa_environment"],
+            do: SelfHeal.environment_reason(component).text
+
+      assert texts == [
+               "The QA machine is not reachable",
+               "The QA machine cannot start the project's dev server",
+               "The QA environment has no playbook for this change",
+               "The QA environment cannot run the specs check",
+               "The QA environment is not ready"
+             ]
+
+      refute SelfHeal.environment_reason?(%{kind: :environment, waits_on: %{condition: "ci_wait:abc"}})
+      refute SelfHeal.environment_reason?(Pauses.ticket_reason(:fix_ticket, @fix_ticket))
+    end
+
+    test "the environment seen healthy clears its reasons, the backfill's too, by who says so, and leaves every other reason", %{ticket: ticket} do
+      director = %{kind: :person, name: "Director"}
+      backfilled = "QA blocked after 2 attempt(s): the QA host refused the connection"
+      {:ok, _pause} = Pauses.set(ticket, Pauses.ticket_reason(:fix_ticket, @fix_ticket))
+      {:ok, _pause} = Pauses.set(ticket, SelfHeal.environment_reason("worker_host"))
+      {:ok, _pause} = Pauses.set(ticket, %{kind: :environment, waits_on: %{condition: backfilled}, text: backfilled}, backfilled: true)
+      {:ok, _pause} = Pauses.set(ticket, %{kind: :environment, waits_on: %{condition: "ci_wait:abc"}})
+
+      assert :ok = SelfHeal.healthy(@repo_key, @issue_id, director)
+
+      assert {:ok, %{reasons: [%{kind: :ticket}, %{waits_on: %{condition: "ci_wait:abc"}}]}} = Pauses.get(ticket)
+      assert [{"pause.reason_cleared", %{by: ^director}}, {"pause.reason_cleared", %{by: ^director}}] = ticket_events(@repo_key, @issue_id) |> Enum.filter(&match?({"pause.reason_cleared", _}, &1))
+    end
+
+    test "clears the pause with its last reason, and changes nothing on a ticket not paused or with no repo", %{ticket: ticket} do
+      {:ok, _pause} = Pauses.set(ticket, SelfHeal.environment_reason("worker_host"))
+
+      assert :ok = SelfHeal.healthy(@repo_key, @issue_id)
+      assert {:ok, nil} = Pauses.get(ticket)
+      assert :ok = SelfHeal.healthy(@repo_key, @issue_id)
+      assert :ok = SelfHeal.healthy(nil, @issue_id)
     end
   end
 

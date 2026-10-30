@@ -464,6 +464,36 @@ defmodule SymphonyElixir.BlockedHoldTest do
       assert BlockedHold.landing_desired(nil, [@tracked]) == :none
     end
 
+    test "has one pause reason per competitor beside it, which the Director may release" do
+      competitors = [@tracked, @person, @untitled, @tracked, %{files: ["SPEC.md"]}, %{issue_identifier: "not-a-ticket", files: []}]
+
+      assert BlockedHold.landing_reasons(competitors) == [
+               %{kind: :ticket, waits_on: %{identifier: "TP-1"}, text: "Waiting for TP-1 to land: it changes the same files", releasable: true},
+               %{
+                 kind: :environment,
+                 waits_on: %{condition: "pull_request:12"},
+                 text: "Waiting for PR #12 (Docs pass) to land: it changes the same files",
+                 releasable: true
+               },
+               %{kind: :environment, waits_on: %{condition: "pull_request:13"}, text: "Waiting for PR #13 to land: it changes the same files", releasable: true}
+             ]
+
+      long = BlockedHold.landing_reasons([%{@person | title: String.duplicate("x", 400)}])
+      assert [%{text: text}] = long
+      assert String.length(text) < 300
+
+      assert BlockedHold.reason_setter(:landing) == %{kind: :rule, name: "Competing pull requests"}
+    end
+
+    test "tells a landing reason from any other, whoever wrote it" do
+      for reason <- BlockedHold.landing_reasons([@tracked, @person]), do: assert(BlockedHold.landing_reason?(reason))
+
+      refute BlockedHold.landing_reason?(Pauses.ticket_reason(:dependency, "TP-1"))
+      refute BlockedHold.landing_reason?(%{kind: :environment, waits_on: %{condition: "pull_request:12 and more"}})
+      refute BlockedHold.landing_reason?(%{kind: :question, waits_on: %{question_id: "q1"}})
+      refute BlockedHold.landing_reason?(nil)
+    end
+
     test "the sweep leaves a landing hold to the PR watcher, in any phase" do
       :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, BlockedHold.landing_attrs([@tracked]))
 
