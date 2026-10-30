@@ -110,7 +110,8 @@ public struct DispatchControl: Equatable {
             mode = .paused
             status = .you
             let reason = pause.reason?.trimmingWhitespace() ?? ""
-            let pausedBy = ControlAction.updateVersion(pauseReason: reason)
+            // The update's version is its `build` reason's field; a Symphony that predates reasons names none.
+            let pausedBy = state?.snapshot.updatePauseVersion
             updatingTo = update?.version ?? pausedBy
             if let updatingTo {
                 word = "Paused · Updating to v\(updatingTo)"

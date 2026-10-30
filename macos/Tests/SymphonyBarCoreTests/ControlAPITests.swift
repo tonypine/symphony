@@ -18,6 +18,15 @@ final class ControlAPITests: XCTestCase {
         XCTAssertEqual(try json(request), ["reason": "paused from menu bar"])
     }
 
+    /// An update's pause names its reason's kind and the version as a field (TP-1251), with the line a Symphony that
+    /// reads no kind makes the same `build` reason from.
+    func testAnUpdatesPauseRequestCarriesABuildReasonAndItsVersion() throws {
+        let request = ControlAPI.request(.pauseForUpdate(version: "0.0.1.700"), base: base, token: "secret")
+
+        XCTAssertEqual(request.url?.absoluteString, "http://127.0.0.1:4010/api/v1/control/pause")
+        XCTAssertEqual(try json(request), ["kind": "build", "version": "0.0.1.700", "reason": "updating to v0.0.1.700"])
+    }
+
     func testResumeRequest() throws {
         let request = ControlAPI.request(.resume, base: base, token: "secret")
 

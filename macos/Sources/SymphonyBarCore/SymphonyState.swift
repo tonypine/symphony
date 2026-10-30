@@ -42,6 +42,56 @@ public struct StateSnapshot: Equatable {
     /// Every configured repository and its pause (`repositories`), in Symphony's order; nil when Symphony predates
     /// the pause of one repository, so the app offers no Pause for it.
     public var repositories: [Repository]?
+    /// Every reason Symphony's own pause holds (`pause.reasons`), in the order they were set, the usage-limit holds'
+    /// included; nil when Symphony predates them, so the header reads `pause` as before.
+    public var pauseReasons: [PauseReason]?
+
+    /// One reason of Symphony's pause: who or what holds dispatch and since when.
+    public struct PauseReason: Equatable {
+        public enum Kind: Equatable {
+            /// The Director paused Symphony.
+            case person
+            /// An update holds dispatch until it installs `version`.
+            case build
+            /// Anything else, a usage limit for one, worded by Symphony.
+            case other(String)
+
+            init(_ kind: String?) {
+                switch kind {
+                case "person": self = .person
+                case "build": self = .build
+                default: self = .other(kind ?? "")
+                }
+            }
+        }
+
+        public var kind: Kind
+        /// The reason's line as Symphony words it, for example "You paused Symphony" or "Claude's usage limit until
+        /// 14:30".
+        public var text: String
+        public var since: Date?
+        /// The version a `build` reason waits on (`waits_on.version`).
+        public var version: String?
+
+        public init(kind: Kind, text: String = "", since: Date? = nil, version: String? = nil) {
+            self.kind = kind
+            self.text = text
+            self.since = since
+            self.version = version
+        }
+    }
+
+    /// Every listed repository is paused, so nothing dispatches even while Symphony itself runs.
+    public var allRepositoriesPaused: Bool {
+        guard let repositories, !repositories.isEmpty else { return false }
+        return repositories.allSatisfy { $0.pause != nil }
+    }
+
+    /// The version an update's pause waits on: its `build` reason's field; nil without one, or from a Symphony that
+    /// predates reasons.
+    public var updatePauseVersion: String? {
+        pauseReasons?.first { $0.kind == .build }?.version
+    }
 
     /// A configured repository as `/api/v1/state`'s `repositories` lists it, with its pause while dispatch for it
     /// is paused.
@@ -324,7 +374,8 @@ public struct StateSnapshot: Equatable {
         linearWebhooks: LinearWebhookHealth? = nil,
         dispatchShadow: DispatchShadowReport? = nil,
         reconcile: ReconcileReport? = nil,
-        repositories: [Repository]? = nil
+        repositories: [Repository]? = nil,
+        pauseReasons: [PauseReason]? = nil
     ) {
         self.running = running
         self.retrying = retrying
@@ -344,6 +395,7 @@ public struct StateSnapshot: Equatable {
         self.dispatchShadow = dispatchShadow
         self.reconcile = reconcile
         self.repositories = repositories
+        self.pauseReasons = pauseReasons
     }
 }
 
@@ -755,6 +807,15 @@ public enum SymphonyState {
         if let pause = payload.pause, pause.paused {
             snapshot.pause = .init(reason: pause.reason, since: pause.pausedAt.flatMap(parseDate))
         }
+        snapshot.pauseReasons = payload.pause?.reasons?.compactMap { reason in
+            let version = reason.waitsOn?.version?.trimmingWhitespace()
+            return StateSnapshot.PauseReason(
+                kind: .init(reason.kind),
+                text: reason.text?.trimmingWhitespace() ?? "",
+                since: reason.since.flatMap(parseDate),
+                version: version?.isEmpty == false ? version : nil
+            )
+        }
         snapshot.usageLimits = (payload.usageLimits ?? []).map { limit in
             StateSnapshot.UsageLimit(
                 provider: limit.provider ?? "anthropic",
@@ -866,9 +927,22 @@ public enum SymphonyState {
         }
 
         struct Pause: Decodable {
+            struct Reason: Decodable {
+                struct WaitsOn: Decodable {
+                    let version: String?
+                }
+
+                let kind: String?
+                let text: String?
+                let since: String?
+                let waitsOn: WaitsOn?
+            }
+
             let paused: Bool
             let reason: String?
             let pausedAt: String?
+            /// Missing before Symphony's pause carried its reasons.
+            let reasons: [Reason]?
         }
 
         struct Failure: Decodable {

@@ -56,10 +56,14 @@ public enum StatusMenu {
             lines = []
         case let .running(snapshot, _), let .paused(snapshot, _):
             // The operator pause first, then the usage-limit holds, then what an update would release. What waits on
-            // the operator's review has its own items (`waitingMenu`).
+            // the operator's review has its own items (`waitingMenu`). A Symphony whose pause carries its reasons
+            // gives one line each, the usage-limit holds' among them.
+            let pauseLines = snapshot.pauseReasons.map { pauseReasonLines($0, now: now, timeZone: timeZone) }
+                ?? (snapshot.pause.map { [pauseLine($0, now: now, timeZone: timeZone)] } ?? [])
+                    + snapshot.usageLimits.map { usageLimitLine($0, now: now, timeZone: timeZone) }
             lines = [countsLine(snapshot)]
-                + (snapshot.pause.map { [pauseLine($0, now: now, timeZone: timeZone)] } ?? [])
-                + snapshot.usageLimits.map { usageLimitLine($0, now: now, timeZone: timeZone) }
+                + pauseLines
+                + (snapshot.allRepositoriesPaused ? [allRepositoriesPausedLine] : [])
                 + (updateUnblocksLine(snapshot.updateUnblocks).map { [$0] } ?? [])
         case let .error(message):
             lines = [message]
@@ -261,6 +265,33 @@ public enum StatusMenu {
         return "\(count) \(count == 1 ? singular : plural)"
     }
 
+    /// Shown under the pause's reasons when every repository is paused on its own.
+    public static let allRepositoriesPausedLine = "All repositories paused"
+
+    /// One line per reason of Symphony's pause, in the order they were set: "Paused by you since 09:12" (with the
+    /// reason typed, as in "Paused by you since 09:12: Deploy freeze"), "Updating to v0.0.1.700" from the update's
+    /// version field, and any other reason, a usage limit for one, as Symphony words it.
+    public static func pauseReasonLines(_ reasons: [StateSnapshot.PauseReason], now: Date, timeZone: TimeZone) -> [String] {
+        reasons.compactMap { reason in
+            switch reason.kind {
+            case .person:
+                var line = "Paused by you"
+                if let since = reason.since {
+                    line += " since \(clockTime(since, now: now, timeZone: timeZone, dateFormat: "MMM d, HH:mm"))"
+                }
+                if !personDefaultTexts.contains(reason.text), !reason.text.isEmpty { line += ": \(reason.text)" }
+                return line
+            case .build where reason.version != nil:
+                return "Updating to v\(reason.version ?? "")"
+            case .build, .other:
+                return reason.text.isEmpty ? nil : reason.text
+            }
+        }
+    }
+
+    /// The lines a Director's pause carries when nobody typed a reason: Symphony's own and the menu's.
+    private static let personDefaultTexts: Set<String> = ["You paused Symphony", ControlAction.pauseReason]
+
     /// For example "Paused since 14:03: deploy freeze". Shows the date too when the pause began on another day.
     public static func pauseLine(_ pause: StateSnapshot.Pause, now: Date, timeZone: TimeZone) -> String {
         var line = "Paused"
@@ -393,7 +424,7 @@ public enum StatusMenu {
     /// Whether `action` pauses dispatch, with or without a reason.
     public static func isPause(_ action: ControlAction) -> Bool {
         switch action {
-        case .pause, .pauseWithReason: true
+        case .pause, .pauseWithReason, .pauseForUpdate: true
         default: false
         }
     }

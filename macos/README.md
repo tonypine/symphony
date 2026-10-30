@@ -828,13 +828,17 @@ reason "rolled back": the line reads **Update rolled back: vX**, and **Retry vX*
 4. **Drain Symphony** like [Restart](#restart), checking `symphony.yml` with the running Symphony: pause
    dispatch, wait for `0 running` (**Update Now Anyway** shows after the restart timeout, **Cancel Update**
    stops waiting), then stop Symphony. A Symphony the app didn't start is left alone. Nothing runs the new
-   version's Symphony yet. The pause's reason is `updating to vX`, not the menu's, in every update mode, so
-   the Symphony window tells it from a pause you made: the toolbar's dispatch control reads "Paused ·
+   version's Symphony yet. The pause is a `build` reason carrying version X as a field (sent with the line
+   `updating to vX` a Symphony that reads no kind makes it from), not the menu's, in every update mode, so
+   the Symphony window tells it from a pause you made without reading the version out of any text: the toolbar's dispatch control reads "Paused ·
    Updating to vX", and its popover says how many agent runs the update waits for and offers **Cancel
    Update** in place of Resume Dispatch, with **Update Now Anyway** after the restart timeout (both do what
    the menu's items do). While the release downloads or Symphony stops, it says "Updating to vX" with
-   nothing to press. The Overview says "Dispatch is paused since HH:MM: updating to vX." and that Symphony
-   updates and resumes dispatch when the runs end.
+   nothing to press. The Overview says "Dispatch is paused." with one line per reason of the pause under it
+   ("Updating to vX", "Paused by you since HH:MM", a usage limit's line, and "All repositories paused" when
+   every repository is), and that Symphony updates and resumes dispatch when the runs end; the menu shows the
+   same lines under its counts. A Symphony that predates the pause's reasons keeps the one line "Dispatch is
+   paused since HH:MM: updating to vX." in the Overview and "Paused since HH:MM: …" in the menu.
 5. **Swap and relaunch:** the app starts a small helper (`Contents/Resources/update-helper.sh`, run from a
    copy in the cache folder) and quits. Once the app has exited, the helper moves it to
    `Symphony (previous).app` next to it (replacing an older one), moves the new app into place, and opens
