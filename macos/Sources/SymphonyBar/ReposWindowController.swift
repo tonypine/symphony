@@ -49,6 +49,8 @@ final class ReposViewModel: ObservableObject {
     var onRestartNow: () -> Void = {}
     var onCancelRestart: () -> Void = {}
     var onFix: (_ fix: RepoHealth.Fix) -> Void = { _ in }
+    /// Sends a repository's Pause or Resume; true once Symphony took it.
+    var onPauseControl: (_ control: RepoPauseControl, _ action: ControlAction) async -> Bool = { _, _ in false }
 
     var selected: RepoDetail? {
         window.repos.first { $0.key == selection }
@@ -90,6 +92,8 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     var checkForUpdates: () -> Void = {}
     /// Opens the Symphony window on the Setup page.
     var openSetup: () -> Void = {}
+    /// Polls Symphony's state at once after a control went through, so the window shows it.
+    var afterControl: () -> Void = {}
     /// Hands Setup's GitHub updates card the section Add Repo's Instant updates step left, so it lists the repo at once.
     var showGitHubUpdates: (GitHubUpdatesSection) -> Void = { _ in }
 
@@ -125,6 +129,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
             model.onRestartNow = { [weak self] in self?.restartNow() }
             model.onCancelRestart = { [weak self] in self?.cancelRestart() }
             model.onFix = { [weak self] fix in self?.fix(fix) }
+            model.onPauseControl = { [weak self] control, action in await self?.sendPause(control, action) ?? false }
             self.model = model
             let hostingController = NSHostingController(
                 rootView: ReposView(model: model).environment(\.openURL, URLOpener.action)
@@ -514,6 +519,21 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
                 model.stopFailures[identifier] = message
             }
             update(status: status)
+        }
+    }
+
+    /// Sends a repository's Pause or Resume and polls at once, so its row shows the pause; the banner says what it did
+    /// or why it failed.
+    private func sendPause(_ control: RepoPauseControl, _ action: ControlAction) async -> Bool {
+        let result = await AppStores.current.sendControl(action, stateRoot: stateRoot())
+        afterControl()
+        switch result {
+        case .done, .moved:
+            show(ReposBanner(key: control.key, text: control.doneMessage(action)))
+            return true
+        case let .failed(message):
+            show(ReposChange.failed(key: control.key, message: message).banner)
+            return false
         }
     }
 

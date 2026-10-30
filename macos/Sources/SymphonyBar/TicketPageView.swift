@@ -542,6 +542,12 @@ private struct TicketHeader: View {
             Text(page.phaseSentence)
                 .font(DesignTokens.TypeStyle.body.font)
                 .foregroundStyle(.secondary)
+            if let note = page.repositoryPausedNote {
+                Label(note, systemImage: "pause.circle")
+                    .font(DesignTokens.TypeStyle.body.font)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let summary { ChipText(text: summary, color: .secondaryLabelColor) }
             if case let .done(pullRequest, _) = page.phase, pullRequest != nil || page.mergedText != nil {
                 DoneLine(pullRequest: pullRequest, merged: page.mergedText, open: { actions.open(pullRequest: $0, repoKey: page.repoKey) })

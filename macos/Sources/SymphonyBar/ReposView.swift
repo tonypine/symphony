@@ -285,6 +285,10 @@ struct RepoSidebarRow: View {
                 Badge(text: ReposList.defaultBadge)
                     .help(ReposList.defaultHelp)
             }
+            if repo.pause?.isPaused == true {
+                Badge(text: RepoPauseControl.pausedBadge)
+                    .help(repo.pause?.line ?? RepoPauseControl.pausedBadge)
+            }
             if repo.agentCount > 0 {
                 Badge(text: "\(repo.agentCount)", prominent: true)
             }
@@ -360,6 +364,11 @@ struct RepoDetailView: View {
                         NeedsAttentionBox(health: repo.health, model: model)
                     }
                 }
+                if let pause = repo.pause {
+                    Section(RepoPauseControl.sectionTitle) {
+                        RepoPauseView(control: pause, send: { await model.onPauseControl(pause, $0) })
+                    }
+                }
                 source
                 routing
                 live
@@ -405,6 +414,10 @@ struct RepoDetailView: View {
             if repo.isDefault {
                 Badge(text: ReposList.defaultBadge)
                     .help(ReposList.defaultHelp)
+            }
+            if let pause = repo.pause, pause.isPaused {
+                Badge(text: RepoPauseControl.pausedBadge)
+                    .help(pause.line)
             }
         }
     }
@@ -753,6 +766,79 @@ struct ReposEmptyView: View {
         case .noRepos: return "square.stack.3d.up"
         case .noConfig: return "gearshape"
         case .unreadable: return "exclamationmark.triangle"
+        }
+    }
+}
+
+/// One repository's dispatch: whether Symphony dispatches its tickets, or why and since when it is paused, with a
+/// reason field and Pause, or Resume. The Repos window's detail and Setup's Repositories card show it. `send` sends
+/// the control and returns once Symphony answered; the button waits on it, and the next poll shows the new state.
+struct RepoPauseView: View {
+    let control: RepoPauseControl
+    let send: (ControlAction) async -> Bool
+    @State private var reason = ""
+    @State private var working = false
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: DesignTokens.Space.s3) {
+                line
+                Spacer(minLength: DesignTokens.Space.s2)
+                controls
+            }
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                line
+                HStack(spacing: DesignTokens.Space.s2) {
+                    Spacer(minLength: 0)
+                    controls
+                }
+            }
+        }
+    }
+
+    private var line: some View {
+        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+            Image(systemName: control.isPaused ? "pause.circle.fill" : "play.circle")
+                .foregroundStyle(control.isPaused ? DesignTokens.Status.you.tint : DesignTokens.Status.idle.tint)
+                .accessibilityHidden(true)
+            Text(control.line)
+                .foregroundStyle(control.isPaused ? Color.primary : Color.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(control.accessibilityLabel)
+    }
+
+    private var controls: some View {
+        HStack(spacing: DesignTokens.Space.s2) {
+            if !control.isPaused {
+                TextField(RepoPauseControl.reasonPrompt, text: $reason, prompt: Text(RepoPauseControl.reasonPrompt))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(minWidth: 160, idealWidth: 240, maxWidth: 240)
+                    .disabled(working)
+                    .help(RepoPauseControl.reasonHelp)
+                    .accessibilityLabel("Reason to pause \(control.key)")
+                    .onSubmit(perform)
+            }
+            if working {
+                ProgressView().controlSize(.small)
+            }
+            Button(control.buttonTitle, action: perform)
+                .disabled(working)
+                .help(control.buttonHelp)
+                .accessibilityLabel(control.buttonAccessibilityLabel)
+        }
+        .fixedSize()
+    }
+
+    private func perform() {
+        guard !working else { return }
+        let action = control.action(reason: reason)
+        working = true
+        Task {
+            if await send(action) { reason = "" }
+            working = false
         }
     }
 }

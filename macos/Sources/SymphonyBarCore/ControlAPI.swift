@@ -34,6 +34,11 @@ public enum ControlAction: Equatable {
     /// Writes the Director's note on the ticket of repo `repoKey`: it shows in the ticket's timeline, and the next
     /// agent run reads it in the ticket's summary.
     case note(repoKey: String, identifier: String, text: String)
+    /// Pauses dispatch for the repository `key` alone, with the Director's reason when they typed one; its tickets
+    /// stay where they are.
+    case pauseRepository(key: String, reason: String)
+    /// Resumes dispatch for the repository `key`.
+    case resumeRepository(key: String)
 
     /// A decision's question and the option the Director picked, or their own words, as `decisions` posts them; a
     /// plan's pick also names the request comment it answers, so the answer goes under it.
@@ -100,6 +105,10 @@ public enum ControlAction: Equatable {
             return "api/v1/control/undo"
         case .note:
             return "api/v1/control/note"
+        case let .pauseRepository(key, _):
+            return "api/v1/control/repos/\(key)/pause"
+        case let .resumeRepository(key):
+            return "api/v1/control/repos/\(key)/resume"
         }
     }
 
@@ -111,7 +120,7 @@ public enum ControlAction: Equatable {
              let .decisions(identifier, _), let .changes(identifier, _), let .backlog(identifier, _),
              let .decide(identifier, _, _, _), let .unblock(identifier), let .undo(identifier):
             return identifier
-        case .pause, .pauseWithReason, .resume, .force, .stopForcing, .stop, .note:
+        case .pause, .pauseWithReason, .resume, .force, .stopForcing, .stop, .note, .pauseRepository, .resumeRepository:
             return nil
         }
     }
@@ -122,8 +131,12 @@ public enum ControlAction: Equatable {
             return ["reason": Self.pauseReason]
         case let .pauseWithReason(reason):
             return ["reason": reason.isEmpty ? Self.pauseReason : reason]
-        case .resume:
+        case .resume, .resumeRepository:
             return [:]
+        case let .pauseRepository(_, reason):
+            // Without one, Symphony gives the pause its own line.
+            let reason = reason.trimmingWhitespace()
+            return reason.isEmpty ? [:] : ["reason": reason]
         case let .force(identifier):
             return ["identifier": identifier]
         case let .stopForcing(identifier):
@@ -184,6 +197,10 @@ public enum ControlAction: Equatable {
             return "Couldn't undo the move on \(identifier)"
         case let .note(_, identifier, _):
             return "Couldn't add the note to \(identifier)"
+        case let .pauseRepository(key, _):
+            return "Couldn't pause \(key)"
+        case let .resumeRepository(key):
+            return "Couldn't resume \(key)"
         }
     }
 }

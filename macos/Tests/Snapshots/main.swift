@@ -371,6 +371,49 @@ func reconcilePage(_ report: ReconcileReport?, expanded: Bool = false, window: C
     .background(DesignTokens.Surface.window.color)
 }
 
+/// The repositories a running Symphony lists (TP-1238): web-shop paused this morning with the Director's reason, the
+/// others dispatching.
+let repositoryPauses: [RepoPauseControl] = [
+    RepoPauseControl(
+        key: "web-shop", state: .paused(reasons: ["focusing on Symphony this week"], since: githubNow.addingTimeInterval(-3_600)),
+        now: githubNow, timeZone: TimeZone(identifier: "UTC")!
+    ),
+    RepoPauseControl(key: "api", state: .dispatching),
+    RepoPauseControl(key: "symphony", state: .dispatching),
+]
+
+/// A healthy Setup page with its Repositories card, beside the sidebar of a `window` pt wide window (TP-1238).
+@MainActor
+func repositoriesPage(window: CGFloat = 1440) -> some View {
+    let utc = TimeZone(identifier: "UTC")!
+    return SetupPageBody(
+        page: SetupPage(payload: SetupPayload(checkedAt: githubNow), now: githubNow, timeZone: utc),
+        linearWebhooks: LinearWebhooksLine(health: linearWebhookStates[2].1, now: githubNow),
+        repositories: repositoryPauses
+    )
+    .frame(width: window - DesignTokens.Layout.sidebarWidth)
+    .background(DesignTokens.Surface.window.color)
+}
+
+/// The Repos window's Dispatch section for each repository, in a detail column `width` pt wide: the narrowest window
+/// (720 pt less its 220 pt sidebar) and a laptop-wide one.
+@MainActor
+func repoPauseSection(width: CGFloat) -> some View {
+    VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
+        ForEach(repositoryPauses) { control in
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                Text("\(control.key) · \(RepoPauseControl.sectionTitle)").font(.headline)
+                RepoPauseView(control: control, send: { _ in true })
+                    .padding(DesignTokens.Space.s3)
+                    .background(DesignTokens.Surface.raised.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous))
+            }
+        }
+    }
+    .padding(20)
+    .frame(width: width, alignment: .leading)
+    .background(DesignTokens.Surface.window.color)
+}
+
 /// Ten drifts, as many as Symphony keeps, newest first; every third move back failed.
 let reconcileDrifts: [ReconcileReport.Drift] = (0..<10).map { index in
     let at = githubNow.addingTimeInterval(TimeInterval(-40 - index * 120))
@@ -571,9 +614,9 @@ let ledgerNow = ISO8601DateFormatter().date(from: "2026-10-18T11:20:00Z")!
 /// SHOP-410's page in a window `window` pt wide beside the sidebar, with the note field pinned under it as the window
 /// shows it: the laptop viewport (1440) and the desktop one (2560).
 @MainActor
-func ledgerPage(window: CGFloat, feed: Bool = true, note: TicketNoteComposer? = nil) -> some View {
+func ledgerPage(window: CGFloat, feed: Bool = true, note: TicketNoteComposer? = nil, repositoryPaused: Bool = false) -> some View {
     let events = feed ? (try? Data(contentsOf: ledgerAPI.appendingPathComponent("repos/web-shop/tickets/SHOP-410/events.json"))).flatMap(TicketEventsPayload.decode) : nil
-    let page = TicketPage(
+    var page = TicketPage(
         identifier: "SHOP-410",
         sources: TicketPage.Sources(
             state: try? Data(contentsOf: ledgerAPI.appendingPathComponent("state.json")),
@@ -583,6 +626,7 @@ func ledgerPage(window: CGFloat, feed: Bool = true, note: TicketNoteComposer? = 
         ),
         now: ledgerNow, timeZone: TimeZone(identifier: "UTC")!
     )
+    page.repositoryPaused = repositoryPaused
     let width = window - DesignTokens.Layout.sidebarWidth
     return VStack(spacing: 0) {
         TicketPageBody(page: page, actions: TicketPageActions(), width: width)
@@ -724,5 +768,12 @@ MainActor.assumeIsolated {
                scheme, to: "ticket-note-refused-\(suffix).png")
         render(ledgerNoteBar(absence: .unsupported, note: TicketNoteComposer(identifier: "SHOP-410")), scheme, to: "ticket-note-no-feed-\(suffix).png")
         render(ledgerNoteBar(absence: .unknownTicket, note: TicketNoteComposer(identifier: "SHOP-410")), scheme, to: "ticket-note-not-run-\(suffix).png")
+        // Pause one repository (TP-1238): Setup's Repositories card, the Repos window's Dispatch section at its
+        // narrowest and at a laptop's width, and a paused repository's ticket.
+        render(repositoriesPage(), scheme, to: "repo-pause-setup-laptop-\(suffix).png")
+        render(repositoriesPage(window: 2560), scheme, to: "repo-pause-setup-desktop-\(suffix).png")
+        render(repoPauseSection(width: 500), scheme, to: "repo-pause-repos-narrow-\(suffix).png")
+        render(repoPauseSection(width: 1220), scheme, to: "repo-pause-repos-laptop-\(suffix).png")
+        render(ledgerPage(window: 1440, repositoryPaused: true), scheme, to: "repo-pause-ticket-laptop-\(suffix).png")
     }
 }

@@ -469,6 +469,26 @@ final class TicketPageTests: XCTestCase {
 
     private func date(_ text: String) -> Date { TicketPage.date(text)! }
 
+    func testAPausedRepositorysTicketSaysSoInOneLine() {
+        func page(_ issue: [String: Any]) -> TicketPage {
+            TicketPage(identifier: "T-1", sources: TicketPage.Sources(issue: json(issue)), now: wallClock, timeZone: utc)
+        }
+        let paused = page(["repo_key": "web-shop", "status": "dispatch_skipped", "repository_paused": true])
+        XCTAssertTrue(paused.repositoryPaused)
+        XCTAssertEqual(paused.repositoryPausedNote, "The repository web-shop is paused: Symphony doesn't dispatch its tickets.")
+        // Nothing else on the page changes with it.
+        let dispatching = page(["repo_key": "web-shop", "status": "dispatch_skipped", "repository_paused": false])
+        XCTAssertNil(dispatching.repositoryPausedNote)
+        var same = paused
+        same.repositoryPaused = false
+        XCTAssertEqual(same, dispatching)
+
+        XCTAssertEqual(page(["repository_paused": true]).repositoryPausedNote, "The repository is paused: Symphony doesn't dispatch its tickets.")
+        // An older Symphony says nothing of it.
+        XCTAssertFalse(page(["repo_key": "web-shop", "status": "dispatch_skipped"]).repositoryPaused)
+        XCTAssertFalse(TicketPage(identifier: "T-1", sources: TicketPage.Sources(), now: wallClock, timeZone: utc).repositoryPaused)
+    }
+
     private func json(_ object: Any) -> Data { try! JSONSerialization.data(withJSONObject: object) }
 
     private func ndjson(_ records: [[String: Any]]) -> Data {
