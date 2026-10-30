@@ -32,6 +32,9 @@ defmodule SymphonyElixir.Pauses do
   payload reads it. A usage limit's `:environment` reason (`SymphonyElixir.UsageLimit`) sits on it
   too, holding only the runs its hold covers. Ticket pages never show it.
 
+  A repository's pause stops dispatch for that repository alone while it has the Director's reason
+  (`repository_reason/1`); its candidates are skipped with `repository_skip_reason/1`.
+
   A reason is known by its kind and `waits_on`: setting the same one again changes nothing and
   records nothing. Each write reads, changes and writes the pause in one store transaction that
   holds its lock (`RunStore.update_ticket_pause/4`, `RunStore.update_subject_pause/2`), so
@@ -66,6 +69,7 @@ defmodule SymphonyElixir.Pauses do
   # The menu bar app's reason for an update's pause (`ControlAction.updatePauseReason`).
   @update_reason ~r/\Aupdating to v(\d+(?:\.\d+)+)\z/
   @dispatch_kinds [:person, :build]
+  @repository_text "You paused this repository"
 
   @typedoc "What a pause holds: a ticket of a repository, a repository, or Symphony itself."
   @type subject :: {:ticket, String.t(), String.t()} | {:repository, String.t()} | :symphony
@@ -138,11 +142,35 @@ defmodule SymphonyElixir.Pauses do
   """
   @spec dispatch_reason(String.t() | nil) :: reason_input()
   def dispatch_reason(reason) do
-    text = with line when is_binary(line) <- line(reason), do: String.slice(line, 0, @max_text)
+    text = cut_line(reason)
 
     case text && Regex.run(@update_reason, text) do
       [_text, version] -> %{kind: :build, waits_on: %{version: version}, text: text}
       nil -> %{kind: :person, waits_on: %{action: "unblock"}, text: text || "You paused Symphony", releasable: true}
+    end
+  end
+
+  @doc """
+  The reason the Director's Pause of a repository (`reason`, the control API's) gives its pause: a
+  `:person` reason waiting on `unblock`, its line `reason` cut to a reason's longest line (`You
+  paused this repository` without one).
+  """
+  @spec repository_reason(String.t() | nil) :: reason_input()
+  def repository_reason(reason) do
+    %{kind: :person, waits_on: %{action: "unblock"}, text: cut_line(reason) || @repository_text, releasable: true}
+  end
+
+  @doc """
+  The line a paused repository's candidates are skipped with: `the repository is paused by you since
+  2026-10-30 12:44 UTC`, then the Director's reasons when they gave any.
+  """
+  @spec repository_skip_reason(pause()) :: String.t()
+  def repository_skip_reason(%{reasons: reasons} = pause) do
+    since = if at = Map.get(pause, :since), do: " since #{Calendar.strftime(at, "%Y-%m-%d %H:%M UTC")}", else: ""
+
+    case for(%{kind: :person, text: text} <- reasons, text != @repository_text, do: text) do
+      [] -> "the repository is paused by you#{since}"
+      texts -> "the repository is paused by you#{since}: #{Enum.join(texts, "; ")}"
     end
   end
 
@@ -513,6 +541,9 @@ defmodule SymphonyElixir.Pauses do
 
   defp ticket({:ticket, _repo_key, _issue_id} = ticket), do: subject(ticket)
   defp ticket(subject), do: {:error, {:invalid_subject, subject}}
+
+  # A reason's line as the control API gives it, cut to a reason's longest line; nil when blank.
+  defp cut_line(value), do: with(line when is_binary(line) <- line(value), do: String.slice(line, 0, @max_text))
 
   # One line: whitespace runs collapse to one space; blank is nil.
   defp line(value) when is_binary(value) do

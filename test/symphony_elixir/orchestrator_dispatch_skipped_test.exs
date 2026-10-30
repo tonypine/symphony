@@ -398,6 +398,120 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     assert %{"runnable" => "the daily token budget is spent (agent.max_tokens_per_day)"} = skipped_after.(budget)
   end
 
+  describe "a repository's pause (TP-1237)" do
+    @focus "focusing on Symphony this week"
+
+    setup ctx do
+      write_skipped_workflow!(ctx,
+        repos: [
+          [key: "default", workflow: Workflow.workflow_file_path(), team: "Test"],
+          [key: "hub", workflow: Workflow.workflow_file_path(), team: "HUB"]
+        ]
+      )
+
+      on_exit(fn -> Pauses.clear({:repository, "hub"}) end)
+      :ok
+    end
+
+    test "skips the paused repository's candidates with the Director's reason while another repository's dispatch; resume dispatches them" do
+      hub = issue("hub-todo", "HUB-1", "Todo", repo_key: "hub", priority: 1)
+      own = issue("own-todo", "MT-OWN", "Todo")
+      tracked([hub, own])
+
+      reply = call({:pause_repository, "hub", @focus}, orchestrator_state())
+      assert {:reply, {:ok, %{repo_key: "hub", pause: %{since: since}}}, state} = reply
+
+      state = Orchestrator.dispatch_chosen_issues_for_test([hub, own], state)
+
+      assert Map.has_key?(state.running, "own-todo")
+      refute Map.has_key?(state.running, "hub-todo")
+      at = Calendar.strftime(since, "%Y-%m-%d %H:%M UTC")
+      assert %{repo_key: "hub", reason: reason} = state.dispatch_skipped["hub-todo"]
+      assert reason == "the repository is paused by you since #{at}: #{@focus}"
+      refute Orchestrator.should_dispatch_issue_for_test(hub, orchestrator_state())
+
+      # The state payload reads each configured repository's pause from its record.
+      assert [%{repo_key: "default", pause: nil}, %{repo_key: "hub", pause: %{reasons: [%{kind: :person, text: @focus}]}}] =
+               snapshot_of(state).repositories
+
+      assert {:reply, {:ok, %{repo_key: "hub", pause: nil}}, _state} = call({:resume_repository, "hub"}, orchestrator_state())
+      state = Orchestrator.dispatch_chosen_issues_for_test([hub], orchestrator_state())
+      assert Map.has_key?(state.running, "hub-todo")
+      refute Map.has_key?(state.dispatch_skipped, "hub-todo")
+    end
+
+    test "a repository Symphony isn't configured with can't be paused or resumed" do
+      for message <- [{:pause_repository, "nope", nil}, {:resume_repository, "nope"}] do
+        assert {:reply, {:error, :repository_not_found}, _state} = call(message, orchestrator_state())
+      end
+
+      refute Pauses.paused?({:repository, "nope"})
+    end
+
+    test "a running ticket of a paused repository finishes its run and is not dispatched again" do
+      hub = issue("hub-running", "HUB-2", "In Progress", repo_key: "hub")
+      tracked([hub])
+      {:reply, {:ok, _status}, _state} = call({:pause_repository, "hub", @focus}, orchestrator_state())
+
+      # Its run ended and asked for a continuation: the claim is released instead.
+      state = %{orchestrator_state() | claimed: MapSet.new(["hub-running"])}
+      metadata = %{identifier: "HUB-2", repo_key: "hub", continuation: true, delay_type: :continuation}
+
+      fetcher = fn ["hub-running"] -> {:ok, [hub]} end
+      result = fn -> Orchestrator.handle_retry_issue_for_test(state, "hub-running", 1, metadata, fetcher) end
+      log = capture_log(fn -> send(self(), {:result, result.()}) end)
+
+      assert_received {:result, {:noreply, state}}
+      assert state.running == %{}
+      assert state.retry_attempts == %{}
+      refute MapSet.member?(state.claimed, "hub-running")
+      assert log =~ "Not dispatching issue_id=hub-running issue_identifier=HUB-2 again: the repository is paused by you"
+
+      # The next poll lists it as skipped with the pause's line.
+      state = Orchestrator.dispatch_chosen_issues_for_test([hub], state)
+      assert state.dispatch_skipped["hub-running"].reason =~ "the repository is paused by you since"
+    end
+
+    test "through the orchestrator: the retry is released, the pause survives a restart and resume asks for a tick" do
+      hub = issue("hub-retry", "HUB-3", "In Progress", repo_key: "hub")
+      tracked([hub])
+      assert Orchestrator.pause_repository("hub", @focus) == :unavailable
+      assert Orchestrator.resume_repository("hub") == :unavailable
+
+      pid = start_orchestrator(:RepositoryPauseOrchestrator)
+      assert {:ok, %{repo_key: "hub", pause: %{}}} = Orchestrator.pause_repository(pid, "hub", @focus)
+
+      stop_process(pid)
+      pid = start_orchestrator(:RepositoryPauseRestarted)
+
+      assert %{repositories: [%{repo_key: "default", pause: nil}, %{repo_key: "hub", pause: %{}}]} =
+               Orchestrator.snapshot(pid, 5_000)
+
+      retry_token = make_ref()
+
+      :sys.replace_state(pid, fn state ->
+        retry = %{attempt: 1, timer_ref: nil, retry_token: retry_token, due_at_ms: 0, identifier: "HUB-3", repo_key: "hub"}
+        %{state | retry_attempts: %{"hub-retry" => retry}, claimed: MapSet.put(state.claimed, "hub-retry")}
+      end)
+
+      send(pid, {:retry_issue, "hub-retry", retry_token})
+      wait_until(pid, &(not MapSet.member?(&1.claimed, "hub-retry") and &1.retry_attempts == %{}))
+      assert :sys.get_state(pid).running == %{}
+
+      assert {:ok, %{repo_key: "hub", pause: nil}} = Orchestrator.resume_repository(pid, "hub")
+      refute Pauses.paused?({:repository, "hub"})
+    end
+
+    defp call(message, state), do: Orchestrator.handle_call(message, {self(), make_ref()}, state)
+
+    defp start_orchestrator(name) do
+      {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, name))
+      on_exit(fn -> stop_process(pid) end)
+      wait_until(pid, &(is_nil(&1.repo_poll_task_ref) and not &1.poll_check_in_progress))
+      pid
+    end
+  end
+
   defp wait_until(pid, predicate) do
     Enum.reduce_while(1..200, nil, fn _attempt, _acc ->
       if predicate.(:sys.get_state(pid)), do: {:halt, :ok}, else: Process.sleep(10) && {:cont, nil}

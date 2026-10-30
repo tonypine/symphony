@@ -6,6 +6,12 @@ defmodule SymphonyElixirWeb.ControlApiController do
   `SymphonyElixir.ControlClient`. A stop that ends a run writes a `run_stopped`
   audit record and a `person.action` event (`stop`) on the ticket.
 
+  `repos/:repo_key/pause` (with an optional `reason`) and `repos/:repo_key/resume` pause and resume
+  dispatch for one configured repository (`SymphonyElixir.Orchestrator.pause_repository/3`): each
+  answers 200 with the repository and its pause (null once resumed), writes a `repository_paused`
+  or `repository_resumed` audit record, and answers 404 for a repository Symphony isn't configured
+  with.
+
   The Director's moves from the Mac app's Inbox (`approve_plan`, `rework`, `restart`, `decisions`,
   `changes`, `backlog`, `unblock`, `decide` and `undo`) are made by
   `SymphonyElixir.DirectorMoves`:
@@ -46,6 +52,21 @@ defmodule SymphonyElixirWeb.ControlApiController do
   @spec resume(Conn.t(), map()) :: Conn.t()
   def resume(conn, _params) do
     respond(conn, Orchestrator.resume_dispatch(orchestrator(conn)))
+  end
+
+  @spec pause_repository(Conn.t(), map()) :: Conn.t()
+  def pause_repository(conn, %{"repo_key" => repo_key} = params) do
+    reason = string_param(params["reason"])
+    result = Orchestrator.pause_repository(orchestrator(conn), repo_key, reason)
+    record_repository_action(conn, "repository_paused", result, %{reason: reason})
+    respond_repository(conn, repo_key, result)
+  end
+
+  @spec resume_repository(Conn.t(), map()) :: Conn.t()
+  def resume_repository(conn, %{"repo_key" => repo_key}) do
+    result = Orchestrator.resume_repository(orchestrator(conn), repo_key)
+    record_repository_action(conn, "repository_resumed", result, %{})
+    respond_repository(conn, repo_key, result)
   end
 
   @spec stop(Conn.t(), map()) :: Conn.t()
@@ -166,6 +187,27 @@ defmodule SymphonyElixirWeb.ControlApiController do
     do: TicketSignals.record_event(repo_key, issue_id, "person.action", %{action: "stop"}, actor: @director)
 
   defp record_stop_action(_repo_key, _issue_id), do: :ok
+
+  # The audit record of a repository's pause or resume, as of the Director's other actions; best
+  # effort, since the pause itself is written.
+  defp record_repository_action(conn, event_type, {:ok, %{repo_key: repo_key}}, attrs) do
+    %{event_type: event_type, repo_key: repo_key}
+    |> Map.merge(attrs)
+    |> AuditLog.record(Map.get(conn.assigns, :audit_log, []))
+    |> case do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Failed to record #{event_type} audit event: repo_key=#{repo_key} reason=#{inspect(reason)}")
+    end
+  end
+
+  defp record_repository_action(_conn, _event_type, _result, _attrs), do: :ok
+
+  defp respond_repository(conn, _repo_key, {:ok, status}), do: json(conn, %{repository: Presenter.repository_payload(status)})
+
+  defp respond_repository(conn, repo_key, {:error, :repository_not_found}),
+    do: error_response(conn, 404, "repository_not_found", "Symphony has no repository #{repo_key}")
+
+  defp respond_repository(conn, _repo_key, result), do: respond(conn, result)
 
   defp note_ticket(params) do
     case {string_param(params["repo_key"]), string_param(params["issue_identifier"])} do
