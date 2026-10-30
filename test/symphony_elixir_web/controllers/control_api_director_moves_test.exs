@@ -13,7 +13,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     SubIssueWait.reset_for_test("Waiting on sub-tickets")
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
@@ -32,7 +32,8 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
           {:decisions, %{"picks" => [%{"question" => "Where?", "answer" => "B"}]}, "MOT-30", "Rework"},
           {:changes, %{"reason" => "Ask it in plain words"}, "MOT-30", "Rework"},
           {:rework, %{"reason" => "Split it differently"}, "MOT-30", "Rework"},
-          {:backlog, %{"note" => "Later"}, "MOT-40", "Backlog"}
+          {:backlog, %{"note" => "Later"}, "MOT-40", "Backlog"},
+          {:cancel, %{"note" => "Superseded"}, "MOT-40", "Canceled"}
         ] do
       conn = post(action, Map.put(params, "issue_identifier", identifier), moves)
 
@@ -273,6 +274,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
       :decisions,
       :changes,
       :backlog,
+      :cancel,
       :unblock,
       :decide,
       :undo

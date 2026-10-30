@@ -66,7 +66,7 @@ defmodule SymphonyElixir.Tracker.MemoryRoutingTest do
         ])
       )
 
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_memory_issues_file: "issues.json")
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_memory_issues_file: "issues.json")
 
       assert Memory.projects_and_teams() ==
                {:ok,

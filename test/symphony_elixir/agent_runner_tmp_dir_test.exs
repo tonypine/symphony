@@ -27,7 +27,6 @@ defmodule SymphonyElixir.AgentRunnerTmpDirTest do
     File.mkdir_p!(hd(bases))
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress"],
       workspace_root: test_root,
       agent_kind: "claude",
@@ -89,7 +88,6 @@ defmodule SymphonyElixir.AgentRunnerTmpDirTest do
 
   test "a codex run gets the folder as TMPDIR", ctx do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress"],
       workspace_root: ctx.test_root,
       agent_kind: "codex",

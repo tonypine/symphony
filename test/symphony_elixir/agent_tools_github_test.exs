@@ -2087,7 +2087,6 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
 
     try do
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         repos: [
           %{
             "name" => repo_key,

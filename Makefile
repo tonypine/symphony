@@ -69,7 +69,7 @@ dialyzer-profile:
 	time $(MIX) dialyzer --format short
 
 e2e:
-	SYMPHONY_RUN_LIVE_E2E=1 $(MIX) test test/symphony_elixir/live_e2e_test.exs
+	SYMPHONY_RUN_LIVE_E2E=1 SYMPHONY_LIVE_E2E_LINEAR_API_KEY="$$LINEAR_API_KEY" $(MIX) test test/symphony_elixir/live_e2e_test.exs
 
 # The shared test helpers' own tests (test/support/README.md): stdlib Python, no build, no sudo.
 support-test:

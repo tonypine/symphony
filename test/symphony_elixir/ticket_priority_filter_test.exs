@@ -7,7 +7,6 @@ defmodule SymphonyElixir.TicketPriorityFilterTest do
   setup do
     # Every test but the ones that set a filter runs with it off.
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", "Rework"],
       tracker_terminal_states: ["Done", "Canceled", "Duplicate"]
     )
@@ -17,7 +16,6 @@ defmodule SymphonyElixir.TicketPriorityFilterTest do
 
   defp filter(priorities) do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", "Rework"],
       tracker_terminal_states: ["Done", "Canceled", "Duplicate"],
       tickets: %{priorities: priorities}

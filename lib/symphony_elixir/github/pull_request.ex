@@ -742,12 +742,15 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   @doc """
   Closes the PR `pr_url` without merging it. Closing an already closed PR is a no-op on GitHub, so
   a restart is idempotent; a pull request id that doesn't exist comes back as the `gh` failure.
-  The Director's `restart` move is the only caller: a full reset starts from a closed PR, so the
-  fresh branch's pull request does not confuse the head the pollers read.
+  The Director's `restart` and `cancel` moves are the callers: a full reset starts from a closed
+  PR, so the fresh branch's pull request does not confuse the head the pollers read, and a
+  cancelled ticket's PR closes with the Director's note. `opts[:comment]` posts that note on the
+  PR before it closes.
   """
   @spec close(String.t(), keyword()) :: :ok | {:error, term()}
   def close(pr_url, opts \\ []) when is_binary(pr_url) and is_list(opts) do
     with {:ok, host, owner, repo, number} <- parse_github_pr_url(pr_url, opts),
+         :ok <- comment_before_close(host, owner, repo, number, Keyword.get(opts, :comment), opts),
          args = github_api_args(host, "repos/#{owner}/#{repo}/pulls/#{number}") ++ ["--method", "PATCH", "-f", "state=closed"],
          {:ok, _output} <- run_gh(args, opts) do
       :ok
@@ -755,6 +758,13 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       :error -> {:error, :invalid_pr_url}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp comment_before_close(_host, _owner, _repo, _number, nil, _opts), do: :ok
+
+  defp comment_before_close(host, owner, repo, number, body, opts) when is_binary(body) do
+    args = github_api_args(host, "repos/#{owner}/#{repo}/issues/#{number}/comments") ++ ["--method", "POST", "-f", "body=#{body}"]
+    with {:ok, _output} <- run_gh(args, opts), do: :ok
   end
 
   @doc "Retargets the PR at `pr_url` to merge into `base`."

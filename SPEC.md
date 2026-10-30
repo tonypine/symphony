@@ -409,7 +409,10 @@ nothing, and it writes only those fields, never the record's holds, verdicts or 
   asked. A failed move back is tried again by the next observation of the same difference, and each
   event is written once per Linear `updatedAt`. A Linear state whose `updatedAt` is older than the
   record's `phase_at` was read before the phase was written: the phase is kept and nothing moves. A
-  phase Linear owns follows Linear, and under `dispatch.source: poll` every phase does. The startup
+  phase Linear owns follows Linear, and under `dispatch.source: poll` every phase does. A phase the
+  Director's cancel (`POST /api/v1/control/cancel`) wrote is terminal once Linear took it: a later
+  Linear state is no drift on it and is applied. Until Linear takes it, the cancel is drifted back
+  to like any phase Symphony owns. The startup
   reconciliation keeps a phase Symphony owns as well and observes the ticket's read the same way, so a
   hand move made while Symphony was down is moved back at startup; a phase it adopts from Linear is
   Linear's.
@@ -530,7 +533,8 @@ type does not allow, is refused. The types: `phase.entered`, `hold.set` and `hol
 `blocked` only), `run.started` and `run.ended` (keyed by run id), `attempt.pushed`,
 `verdict.recorded` (machine only: an agent never records a verdict), `decision.requested`,
 `decision.recorded`, `decision.withdrawn`, `person.action` (`stop`, `move`, `force`, `unblock`,
-`restart`), `step.started`, `step.completed`, `step.skipped`, `evidence`, `finding.recorded` (QA
+`restart`), `ticket.cancelled` (the Director's cancel, with its note), `step.started`,
+`step.completed`, `step.skipped`, `evidence`, `finding.recorded` (QA
 runs), `finding.resolved`, `checklist.answered`, `drift.detected`, `drift.reverted`,
 `drift.revert_failed`, `pause.set`, `pause.reason_added`, `pause.reason_cleared`, `pause.cleared`,
 `question.asked`, `question.answered`, `question.withdrawn`, `question.reopened` and `note`.
@@ -585,6 +589,14 @@ joined by `; `. The log line names the kind too (`Dispatch pause active kind=bui
   before the first poll tick, the operator pause's old store row, which the release before wrote,
   is moved onto Symphony's pause (an `updating to v…` row as a `build` reason) and deleted, whether
   or not the pause backfill already ran.
+- The pause stops dispatching runs and nothing else: polling, webhooks, the PR watcher's
+  observations, reconciliation, the control API and runs already in flight go on. It is a known
+  state, not a failure: a retry that comes due while a `person` or `build` reason holds is not
+  dispatched and not rescheduled. It keeps its attempt, error and due time, its ticket is listed
+  under `dispatch_skipped` with the pause's line instead of under `retrying`, and nothing is
+  written. A retry already read again when the pause was set waits for a slot with its attempt.
+  Once no such reason is left, Resume, or the first poll after the lift, sends every held retry
+  on at once, dispatched in the usual slots with the attempt it had.
 
 The four question types are machine-written, one per change of a question to a person on a ticket
 (kept on the ticket's record; written only by `SymphonyElixir.Questions`), each naming the question

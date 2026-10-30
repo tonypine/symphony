@@ -475,9 +475,10 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
       retry_forced = &Orchestrator.handle_retry_issue_for_test(&1, "forced-1", 1, metadata, fetcher)
 
       {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("maintenance"))
+      # A retry read again when the pause was set waits for the lift with its attempt: no error, no timer.
       {:noreply, held} = retry_forced.(full)
-      assert %{error: "dispatch is paused by the operator: maintenance"} = held.retry_attempts["forced-1"]
-      Process.cancel_timer(held.retry_attempts["forced-1"].timer_ref)
+      refute Map.has_key?(held.retry_attempts, "forced-1")
+      assert %{attempt: 1, reason: "dispatch is paused by the operator: maintenance"} = held.slot_waiting["forced-1"]
       {:ok, nil} = Pauses.clear(:symphony)
 
       log = capture_log(fn -> send(self(), {:result, retry_forced.(full)}) end)
@@ -842,7 +843,6 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
       Workflow.workflow_file_path(),
       Keyword.merge(
         [
-          tracker_kind: "memory",
           tracker_active_states: @active_states,
           tracker_terminal_states: ["Done", "Canceled"],
           workspace_root: Path.join(ctx.test_root, "workspaces"),

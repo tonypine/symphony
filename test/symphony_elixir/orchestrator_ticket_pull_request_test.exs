@@ -9,7 +9,6 @@ defmodule SymphonyElixir.OrchestratorTicketPullRequestTest do
 
   setup do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress"],
       tracker_terminal_states: ["Done", "Canceled"]
     )

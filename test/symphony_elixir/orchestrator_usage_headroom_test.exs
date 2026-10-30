@@ -38,7 +38,6 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
       Workflow.workflow_file_path(),
       Keyword.merge(
         [
-          tracker_kind: "memory",
           workspace_root: Path.join(ctx.test_root, "workspaces"),
           agent_kind: "claude",
           agent_command: ctx.fake_claude,

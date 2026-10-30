@@ -178,6 +178,7 @@ defmodule SymphonyElixir.CoreTest do
     System.delete_env("LINEAR_API_KEY")
 
     write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "linear",
       tracker_api_token: nil,
       tracker_project_slug: nil,
       tracker_team: "ACME"
@@ -291,7 +292,6 @@ defmodule SymphonyElixir.CoreTest do
     assert {:error, {:unsupported_tracker_kind, "123"}} = Config.validate!()
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 15,
       pr_review_stale_days: 3,
@@ -311,7 +311,6 @@ defmodule SymphonyElixir.CoreTest do
     assert config.pr_review.auto_request_review == true
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling"
     )
 
@@ -342,7 +341,6 @@ defmodule SymphonyElixir.CoreTest do
     assert config.pr_review.auto_request_review == false
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       pr_review_cooldown_minutes: 0
     )
@@ -604,7 +602,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "SymphonyElixir.start_link delegates to the orchestrator" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
     orchestrator_pid = Process.whereis(SymphonyElixir.Orchestrator)
 
@@ -673,7 +671,6 @@ defmodule SymphonyElixir.CoreTest do
     refute Enum.any?(tracker_children, &match?({SymphonyElixir.PrWatch, _opts}, &1))
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling"
     )
 
@@ -685,7 +682,6 @@ defmodule SymphonyElixir.CoreTest do
     refute SymphonyElixir.CiPoller in polling_children
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       ci: %{enabled: true}
     )
@@ -1160,7 +1156,6 @@ defmodule SymphonyElixir.CoreTest do
 
     try do
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         workspace_root: test_root,
         tracker_active_states: ["Todo", "In Progress", "In Review"],
         tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate"],
@@ -1593,7 +1588,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "normal worker exit schedules active-state continuation retry" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
     issue_id = "issue-resume"
     ref = make_ref()
@@ -1642,7 +1637,6 @@ defmodule SymphonyElixir.CoreTest do
     workflow = Workflow.workflow_file_path()
 
     write_workflow_file!(workflow,
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", "Rework"],
       tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
       pr_review_mode: "polling",
@@ -1701,7 +1695,6 @@ defmodule SymphonyElixir.CoreTest do
       workflow = Workflow.workflow_file_path()
 
       write_workflow_file!(workflow,
-        tracker_kind: "memory",
         tracker_active_states: ["Todo", "In Progress", "Rework"],
         tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
         pr_review_mode: "polling",
@@ -1865,7 +1858,6 @@ defmodule SymphonyElixir.CoreTest do
     write_workflow_file!(
       Workflow.workflow_file_path(),
       [
-        tracker_kind: "memory",
         quality_gate: %{enabled: false},
         tracker_active_states: ["Todo", "In Progress", "Rework"],
         tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
@@ -1952,7 +1944,6 @@ defmodule SymphonyElixir.CoreTest do
 
   test "retry for a Merging issue with a completed PR re-dispatches it instead of moving it back to review" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       quality_gate: %{enabled: false},
       tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
       tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
@@ -2029,7 +2020,6 @@ defmodule SymphonyElixir.CoreTest do
 
   test "a landing run that ends on pending checks is held in Merging instead of continued" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
       tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
     )
@@ -2081,7 +2071,6 @@ defmodule SymphonyElixir.CoreTest do
 
   test "a held landing issue is dispatched once the CI poller sees its head go green" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
       tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
     )
@@ -2110,7 +2099,6 @@ defmodule SymphonyElixir.CoreTest do
 
   test "a held landing issue is dispatched once every check its base branch requires passed" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
       tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
     )
@@ -2132,7 +2120,6 @@ defmodule SymphonyElixir.CoreTest do
 
   test "a held landing issue whose wait has no head SHA stays held while no head is ready to land" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
       tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
     )
@@ -2149,7 +2136,6 @@ defmodule SymphonyElixir.CoreTest do
 
   test "a held landing issue with a red head goes through the CI-failure path, not a landing dispatch" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
       tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
     )
@@ -2175,7 +2161,6 @@ defmodule SymphonyElixir.CoreTest do
 
   test "a held landing issue is re-dispatched once after the CI wait timeout" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
       tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
       ci: %{merging_wait_timeout_ms: 60_000}
@@ -2235,7 +2220,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "abnormal worker exit increments retry attempt progressively" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
     issue_id = "issue-crash"
     ref = make_ref()
@@ -2278,7 +2263,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "a worker that exits still waiting for Linear keeps its retry attempt and waits for Linear" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
     issue_id = "issue-linear-wait-exit"
     ref = make_ref()
@@ -2321,7 +2306,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "an epic review that exits waiting for CI keeps its retry attempt and starts again after a minute" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
     issue_id = "issue-ci-wait-exit"
     ref = make_ref()
@@ -2371,7 +2356,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "worker exception exits store concise retry errors" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
     issue_id = "issue-exception-summary"
     ref = make_ref()
@@ -2414,7 +2399,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "first abnormal worker exit waits before retrying" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
     issue_id = "issue-crash-initial"
     ref = make_ref()
@@ -2455,7 +2440,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "stale retry timer messages do not consume newer retry entries" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
 
     issue_id = "issue-stale-retry"
@@ -2676,7 +2661,6 @@ defmodule SymphonyElixir.CoreTest do
     File.chmod!(codex_binary, 0o755)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       workspace_root: workspace_root,
       workspace_strategy: "worktree",
       workspace_repo: primary_repo,
@@ -3694,7 +3678,6 @@ defmodule SymphonyElixir.CoreTest do
       File.chmod!(codex_binary, 0o755)
 
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         workspace_root: workspace_root,
         hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
         agent_command: "#{codex_binary} app-server"
@@ -3770,7 +3753,6 @@ defmodule SymphonyElixir.CoreTest do
 
       # Slow on its first try only, like a dependency install on a loaded machine.
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         workspace_root: workspace_root,
         hook_after_create_timeout_ms: 1_000,
         hook_after_create: """
@@ -3856,7 +3838,6 @@ defmodule SymphonyElixir.CoreTest do
 
       # Fails until setup-ready exists, like an install with the registry down.
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         workspace_root: workspace_root,
         hook_after_create: """
         echo run >> #{hook_runs}
@@ -3913,7 +3894,6 @@ defmodule SymphonyElixir.CoreTest do
 
       # after_create fails, so the run stops right after it creates the workspace.
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         workspace_root: workspace_root,
         hook_before_remove: """
         echo remove-started >> #{hook_log}
@@ -4004,7 +3984,6 @@ defmodule SymphonyElixir.CoreTest do
       File.chmod!(codex_binary, 0o755)
 
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         workspace_root: workspace_root,
         hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
         agent_command: "#{codex_binary} app-server",
@@ -4166,7 +4145,6 @@ defmodule SymphonyElixir.CoreTest do
       File.chmod!(codex_binary, 0o755)
 
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         workspace_root: workspace_root,
         hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
         agent_command: "#{codex_binary} app-server"
@@ -4813,7 +4791,6 @@ defmodule SymphonyElixir.CoreTest do
       File.chmod!(codex_binary, 0o755)
 
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         workspace_root: workspace_root,
         hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
         agent_command: "#{codex_binary} app-server",
@@ -5004,7 +4981,6 @@ defmodule SymphonyElixir.CoreTest do
       File.chmod!(codex_binary, 0o755)
 
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
         workspace_root: workspace_root,
         agent_command: "#{codex_binary} app-server",
@@ -5130,7 +5106,6 @@ defmodule SymphonyElixir.CoreTest do
       end)
 
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         workspace_root: workspace_root,
         agent_command: "#{codex_binary} app-server",
         max_turns: 2
@@ -5286,7 +5261,6 @@ defmodule SymphonyElixir.CoreTest do
     File.chmod!(codex_binary, 0o755)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       workspace_root: Path.join(test_root, "workspaces"),
       agent_command: "#{codex_binary} app-server",
       max_turns: 1
@@ -5388,7 +5362,6 @@ defmodule SymphonyElixir.CoreTest do
       File.mkdir_p!(workspace)
 
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         workspace_root: test_root,
         max_turns: 3
       )
@@ -5488,7 +5461,6 @@ defmodule SymphonyElixir.CoreTest do
       File.chmod!(codex_binary, 0o755)
 
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         workspace_root: workspace_root,
         hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
         agent_command: "#{codex_binary} app-server",
@@ -5612,7 +5584,6 @@ defmodule SymphonyElixir.CoreTest do
       File.chmod!(codex_binary, 0o755)
 
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         workspace_root: workspace_root,
         hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
         agent_command: "#{codex_binary} app-server",

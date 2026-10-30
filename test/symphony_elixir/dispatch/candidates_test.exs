@@ -449,7 +449,8 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
     write_workflow_file!(
       Workflow.workflow_file_path(),
       Keyword.merge(
-        [tracker_kind: "memory", tracker_active_states: @active_states, tracker_terminal_states: ["Done", "Canceled", "Duplicate"]],
+        # The record path builds the Linear scope filter, which needs a token; nothing is sent.
+        [tracker_api_token: "token", tracker_active_states: @active_states, tracker_terminal_states: ["Done", "Canceled", "Duplicate"]],
         overrides
       )
     )

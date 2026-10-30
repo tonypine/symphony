@@ -840,7 +840,7 @@ defmodule SymphonyElixir.McpServerTest do
 
     workspace = Path.join(System.tmp_dir!(), "symphony-mcp-github-hold-#{System.unique_integer([:positive])}")
     File.mkdir_p!(workspace)
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     on_exit(fn ->
@@ -931,7 +931,7 @@ defmodule SymphonyElixir.McpServerTest do
 
     workspace = Path.join(System.tmp_dir!(), "symphony-mcp-github-audit-error-#{System.unique_integer([:positive])}")
     File.mkdir_p!(workspace)
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     on_exit(fn ->

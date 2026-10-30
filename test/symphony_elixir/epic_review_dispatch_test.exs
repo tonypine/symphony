@@ -20,7 +20,7 @@ defmodule SymphonyElixir.EpicReviewDispatchTest do
   setup do
     # The poll loop is what dispatches an epic parent: the waiting state is active, and the tick that
     # finds every sub-ticket terminal picks the parent up with no event wiring.
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", repos: repos())
+    write_workflow_file!(Workflow.workflow_file_path(), repos: repos())
     SubIssueWait.reset_for_test(@waiting)
 
     on_exit(fn -> SubIssueWait.reset_for_test(@waiting) end)

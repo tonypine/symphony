@@ -5,7 +5,6 @@ defmodule SymphonyElixir.BlockedByGateTest do
 
   setup do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       tracker_active_states: @states,
       tracker_terminal_states: ["Done", "Canceled", "Duplicate"]
     )

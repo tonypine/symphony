@@ -309,7 +309,6 @@ defmodule SymphonyElixir.CiPollerTest do
     end)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 3}
     )
@@ -321,7 +320,6 @@ defmodule SymphonyElixir.CiPollerTest do
 
   test "disabled ci config makes no GitHub calls" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       ci: %{enabled: false}
     )
@@ -348,7 +346,6 @@ defmodule SymphonyElixir.CiPollerTest do
 
   test "a designed repo's Code Review state is watched so its head can be called green" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 3},
       repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]]
@@ -693,7 +690,6 @@ defmodule SymphonyElixir.CiPollerTest do
     now = ~U[2026-05-06 09:00:00Z]
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       ci: %{enabled: true},
       repos: multi_repo_config()
@@ -729,7 +725,6 @@ defmodule SymphonyElixir.CiPollerTest do
     now = ~U[2026-05-06 09:00:00Z]
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 3},
       repos: multi_repo_config()

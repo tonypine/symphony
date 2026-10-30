@@ -26,6 +26,10 @@ defmodule SymphonyElixir.TicketEvents.Types do
   `hold.set` and `hold.cleared` take only the `blocked` kind and `person.action` has no `decide`.
   State is machinery-only: an agent claims `finding.resolved`, it never records a verdict.
 
+  A person's cancel of a ticket Symphony owns is one `ticket.cancelled` (`SymphonyElixir.DirectorMoves`):
+  the phase it left and the canceled state, the Director's note, whether a run was stopped and the
+  pull requests closed with it.
+
   Drift is machinery-only too: `drift.detected` when Linear shows a state other than the phase
   Symphony owns, then `drift.reverted` or `drift.revert_failed` for the move back, each with the
   record's phase and Linear's (`SymphonyElixir.TicketObservation`).
@@ -253,6 +257,13 @@ defmodule SymphonyElixir.TicketEvents.Types do
       run_kinds: :any,
       required: [item: {:string, 500}, answer: {:string, 2_000}],
       optional: [],
+      idempotency: :writer
+    },
+    "ticket.cancelled" => %{
+      writers: [:person],
+      run_kinds: [],
+      required: [from: :string, to: :string],
+      optional: [note: {:string, 4_000}, run_stopped: :boolean, pull_requests_closed: {:list, :string}] ++ @signal,
       idempotency: :writer
     },
     "drift.detected" => %{writers: [:machine], run_kinds: [], required: @drift, optional: @signal, idempotency: :writer},

@@ -2832,7 +2832,7 @@ defmodule SymphonyElixir.QaAgentTest do
     end
 
     test "runs against a real git workspace without a parent lookup on other trackers" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      write_workflow_file!(Workflow.workflow_file_path())
       repo = Path.join(System.tmp_dir!(), "qa-agent-repo-#{System.unique_integer([:positive])}")
       File.mkdir_p!(repo)
       on_exit(fn -> File.rm_rf(repo) end)
@@ -3251,7 +3251,7 @@ defmodule SymphonyElixir.QaAgentTest do
     end
 
     test "posts a new comment on other trackers" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      write_workflow_file!(Workflow.workflow_file_path())
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
       on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
       assert :ok = Report.publish(issue(), "## Symphony QA Report\n")

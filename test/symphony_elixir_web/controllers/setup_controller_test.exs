@@ -155,6 +155,20 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
     section(post_action("test", "{}"))
   end
 
+  test "without a running Setup server: the setup endpoints answer 503, and the state shows checks not run yet" do
+    :ok = stop_supervised(Setup)
+    not_running = %{"error" => %{"code" => "setup_not_running", "message" => "Symphony's setup checks aren't running."}}
+
+    assert build_conn() |> get("/api/v1/setup") |> json_response(503) == not_running
+    assert refresh() |> json_response(503) == not_running
+
+    fix = Jason.encode!(%{"kind" => "linear", "action" => "create_label", "team" => "TP", "name" => "Needs Decision"})
+    assert build_conn() |> put_req_header("content-type", "application/json") |> post("/api/v1/setup/fixes", fix) |> json_response(503) == not_running
+
+    assert %{"problems" => [], "not_checked" => [], "checked_at" => nil, "linear_checked_at" => nil} =
+             build_conn() |> get("/api/v1/state") |> json_response(200) |> Map.fetch!("setup")
+  end
+
   test "GET /api/v1/setup has github_updates: off, every repository on polling" do
     section = build_conn() |> get("/api/v1/setup") |> section()
 
@@ -229,7 +243,7 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
 
   describe "setup problems" do
     test "a healthy config has no problems and nothing unchecked, next to github_updates" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      write_workflow_file!(Workflow.workflow_file_path())
 
       assert %{"problems" => [], "not_checked" => [], "checked_at" => "2026-10-17T09:00:00Z", "linear_checked_at" => "2026-10-17T09:00:00Z"} =
                refresh() |> json_response(200)
@@ -238,7 +252,7 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
     end
 
     test "a refresh checks the edited config again, and /api/v1/state carries the same payload" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      write_workflow_file!(Workflow.workflow_file_path())
       assert %{"problems" => []} = refresh() |> json_response(200)
 
       File.write!(Workflow.symphony_file_path(), File.read!(Workflow.symphony_file_path()) <> "auto_review:\n  enabled: true\n")
@@ -263,7 +277,7 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
 
     test "a slug route whose tickets carry only the project id is a routing error until its fix is applied" do
       # The `issues` team gives every repo its team, so only routing problems show.
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_team: "TP")
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_team: "TP")
       project_id = "8e6f0c39-6a8b-4c1e-9d0e-1f2a3b4c5d6e"
       Application.put_env(:symphony_elixir, :memory_tracker_projects_list, [%{id: project_id, name: "Symphony", slug_id: "a1abb875ac02"}])
       Application.put_env(:symphony_elixir, :memory_tracker_teams_list, [%{id: "team-tp", key: "TP", name: "Tony Pine"}])
@@ -310,7 +324,6 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
       on_exit(fn -> restore_env("SLACK_URL", previous) end)
 
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         notifications: %{enabled: true, channels: [%{kind: "slack", url: "$SLACK_URL", events: ["run_failed"]}]}
       )
 
@@ -337,14 +350,14 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
       previous = System.get_env("LINEAR_API_KEY")
       System.delete_env("LINEAR_API_KEY")
       on_exit(fn -> restore_env("LINEAR_API_KEY", previous) end)
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_api_token: nil)
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
 
       assert %{"problems" => [%{"id" => "secret:LINEAR_API_KEY", "severity" => "error", "title" => "Symphony can't read Linear: no ticket is picked up"}]} =
                refresh() |> json_response(200)
     end
 
     test "?repo= keeps the problems naming that repo and the global ones, and waits for a repo not loaded yet" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      write_workflow_file!(Workflow.workflow_file_path())
       File.write!(Workflow.symphony_file_path(), File.read!(Workflow.symphony_file_path()) <> "auto_review:\n  enabled: true\n")
 
       # Two repos Symphony clones itself and hasn't yet: one warning each, naming its repo.
@@ -372,7 +385,7 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
       assert %{"error" => %{"code" => "repo_not_loaded"}} = build_conn() |> get("/api/v1/setup?repo=web") |> json_response(404)
 
       # The GET filters the last result the same way, next to github_updates.
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      write_workflow_file!(Workflow.workflow_file_path())
       File.write!(Workflow.symphony_file_path(), File.read!(Workflow.symphony_file_path()) <> "auto_review:\n  enabled: true\n")
       refresh()
       [repo] = Config.system!().repos
@@ -399,7 +412,7 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
             do: Application.delete_env(:symphony_elixir, key)
       end)
 
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_team: "TP")
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_team: "TP")
       wanted = for %{names: [name | _]} <- StateProvisioning.machine_labels("expedite", ["needs-human"]), name != "Needs Decision", do: name
       Application.put_env(:symphony_elixir, :memory_tracker_labels_list, Enum.map(wanted, &%{id: &1, name: &1, team_id: "id-TP", team_key: "TP"}))
       :ok
@@ -495,7 +508,7 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
             do: Application.delete_env(:symphony_elixir, key)
       end)
 
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_team: "TP")
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_team: "TP")
 
       # Team TP's board, every designed state but QA.
       board =
@@ -560,7 +573,7 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
       assert Enum.map(retired["tickets"], & &1["identifier"]) == ["TP-1", "TP-2", "TP-3"]
 
       # 4. A misspelt active state: an error naming the key and the value.
-      config = [tracker_kind: "memory", tracker_team: "TP", tracker_active_states: ["Todo", "In Progres"]]
+      config = [tracker_team: "TP", tracker_active_states: ["Todo", "In Progres"]]
       write_workflow_file!(Workflow.workflow_file_path(), config)
       refresh()
       unknown = problem(setup_payload(), "statuses:unknown:TP:issues.states.active:In Progres")

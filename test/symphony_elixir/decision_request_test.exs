@@ -31,7 +31,7 @@ defmodule SymphonyElixir.DecisionRequestTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     :ok = RunStore.clear()
     on_exit(fn -> Process.delete(:ask_comment_result) end)
     :ok

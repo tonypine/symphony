@@ -43,7 +43,7 @@ defmodule SymphonyElixir.DeprecatedGateSettingsTest do
   defp write_repos!(repos, overrides \\ []) do
     write_workflow_file!(
       Workflow.workflow_file_path(),
-      Keyword.merge([tracker_kind: "memory", agent_kind: "claude", agent_command: "claude", repos: repos], overrides)
+      Keyword.merge([agent_kind: "claude", agent_command: "claude", repos: repos], overrides)
     )
   end
 

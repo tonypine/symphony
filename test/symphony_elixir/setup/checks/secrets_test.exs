@@ -36,7 +36,7 @@ defmodule SymphonyElixir.Setup.Checks.SecretsTest do
       end
     end)
 
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     :ok
   end
 
@@ -67,7 +67,6 @@ defmodule SymphonyElixir.Setup.Checks.SecretsTest do
 
   test "an unset $VAR in a notification channel url is an error naming the key and variable; setting it clears it" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       notifications: %{enabled: true, channels: [%{kind: "slack", url: "$SETUP_TEST_SLACK_URL", events: ["run_failed"]}]}
     )
 
@@ -88,7 +87,6 @@ defmodule SymphonyElixir.Setup.Checks.SecretsTest do
 
   test "an unset $VAR in an MCP server's env is an error, and the agent still gets the literal reference" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       agent_mcp: %{
         servers: %{
           "docs" => %{transport: "http", url: "https://docs.example/mcp", headers: %{Authorization: "$SETUP_TEST_AUTH", Plain: "value"}, runtimes: ["claude"]},
@@ -116,7 +114,6 @@ defmodule SymphonyElixir.Setup.Checks.SecretsTest do
 
   test "an unset webhook_url or header of a channel is an error naming what fails" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       notifications: %{
         enabled: true,
         channels: [
@@ -155,7 +152,6 @@ defmodule SymphonyElixir.Setup.Checks.SecretsTest do
 
   test "an openrouter run profile without OPENROUTER_API_KEY is an error naming the run kinds" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       agent_kind: "claude",
       agent_command: "claude",
       agent_run_profiles: %{
@@ -180,7 +176,7 @@ defmodule SymphonyElixir.Setup.Checks.SecretsTest do
 
   describe "the Linear API key" do
     test "missing is one error, and the Linear-side checks are not checked" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_api_token: nil)
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
 
       refute Secrets.linear_api_key?()
       assert %{problems: [problem], not_checked: [%{id: "linear_check"}]} = Setup.check(checks: [LinearCheck, Secrets])
@@ -196,7 +192,7 @@ defmodule SymphonyElixir.Setup.Checks.SecretsTest do
     end
 
     test "names the variable issues.linear.api_key refers to, then the fallback" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_api_token: "$SETUP_TEST_LINEAR_KEY")
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear", tracker_api_token: "$SETUP_TEST_LINEAR_KEY")
 
       assert [problem] = problems()
       assert detail(problem, "Variable") == "SETUP_TEST_LINEAR_KEY or LINEAR_API_KEY"
@@ -249,7 +245,7 @@ defmodule SymphonyElixir.Setup.Checks.SecretsTest do
     end)
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_api_token: nil,
+      tracker_kind: "linear",
       notifications: %{
         enabled: true,
         channels: [

@@ -4,20 +4,22 @@ defmodule SymphonyElixir.InboxConfigTest do
   alias SymphonyElixir.Inbox
 
   test "starts with the application only for a Linear tracker" do
-    write_workflow_file!(Workflow.workflow_file_path())
+    write_workflow_file!(Workflow.workflow_file_path(), linear_tracker())
     assert Inbox in SymphonyElixir.Application.child_specs_for_runtime(%{})
     assert SymphonyElixir.Initiatives in SymphonyElixir.Application.child_specs_for_runtime(%{})
 
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     refute Inbox in SymphonyElixir.Application.child_specs_for_runtime(%{})
     refute SymphonyElixir.Initiatives in SymphonyElixir.Application.child_specs_for_runtime(%{})
   end
 
   test "reads every Linear repository route in the scope it polls, on the poll interval" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_api_token: "token",
-      tracker_project_slug: "cycle",
-      poll_interval_ms: 12_345
+    write_workflow_file!(
+      Workflow.workflow_file_path(),
+      linear_tracker(
+        tracker_project_slug: "cycle",
+        poll_interval_ms: 12_345
+      )
     )
 
     test_pid = self()
@@ -52,10 +54,12 @@ defmodule SymphonyElixir.InboxConfigTest do
   end
 
   test "the initiatives server reads every Linear repository route on the poll interval" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_api_token: "token",
-      tracker_project_slug: "cycle",
-      poll_interval_ms: 12_345
+    write_workflow_file!(
+      Workflow.workflow_file_path(),
+      linear_tracker(
+        tracker_project_slug: "cycle",
+        poll_interval_ms: 12_345
+      )
     )
 
     test_pid = self()
