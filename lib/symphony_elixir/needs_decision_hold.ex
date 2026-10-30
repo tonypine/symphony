@@ -15,7 +15,9 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   section of the ticket's description on the read that sees it (`SymphonyElixir.Decisions`), so
   the reviewer and later runs honour it. The hold then clears and the ticket continues
   from where it stopped; a merge confirmation's hold carries the move its confirmation performs, so
-  answering that one continues into `Merging` (`SymphonyElixir.MergeConfirmation`).
+  answering that one continues into `Merging` (`SymphonyElixir.MergeConfirmation`), and a reply that
+  picks an option carrying its own move makes that move (`SymphonyElixir.DecisionMove`). The move
+  is made before the hold clears.
 
   A hold whose request comment could not be posted (`SymphonyElixir.DecisionRequest.ask/4` marked it
   pending) has no request on Linear yet: the sweep posts it (`DecisionRequest.repost/5`) instead of
@@ -30,9 +32,9 @@ defmodule SymphonyElixir.NeedsDecisionHold do
 
   require Logger
 
-  alias SymphonyElixir.{Config, DecisionRequest, Decisions, Handoff, Hold}
+  alias SymphonyElixir.{Config, DecisionMove, DecisionRequest, Decisions, Handoff, Hold}
   alias SymphonyElixir.HumanActions.{Collector, Request}
-  alias SymphonyElixir.{MergeConfirmation, Questions, TicketSignals, TransitionGuard}
+  alias SymphonyElixir.{MergeConfirmation, Questions, TicketSignals}
 
   @director %{kind: :person, name: "Director"}
 
@@ -175,20 +177,21 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   # its confirmation performs (`SymphonyElixir.MergeConfirmation`), so a reply under the request
   # that picks that option continues there, one that picks `Send to Rework` goes to `Rework`, and
   # any other reply is a change request sent to `In Progress` (`MergeConfirmation.reply_target/2`).
-  # An ordinary decision carries none and continues in place, so the next poll dispatches it. A
-  # request a reply answered ends with its answer (`Decisions.sync/2` recorded it first); one gone
-  # with no answer (withdrawn, deleted) ends as a withdrawal.
+  # An ordinary decision moves the ticket when the reply picks an option carrying a move
+  # (`SymphonyElixir.DecisionMove`), else continues in place, so the next poll dispatches it. The
+  # move goes before the clear, so the record holds the new phase before the hold lets a dispatch
+  # through. A request a reply answered ends with its answer (`Decisions.sync/2` recorded it first);
+  # one gone with no answer (withdrawn, deleted) ends as a withdrawal.
   defp apply_clear(repo_key, issue_id, current, node, opts) do
     replies = replies(node, current)
+
+    if moved_since_request?(current, node),
+      do: Logger.info("Leaving issue_id=#{issue_id} where a person moved it after its decision request"),
+      else: resume(repo_key, issue_id, current, replies, opts)
 
     case Hold.clear(repo_key, issue_id, :needs_decision, opts |> Keyword.put(:answered, replies != []) |> answer(replies)) do
       :ok ->
         clear_quiet_handoff_hold(repo_key, issue_id, opts)
-
-        if moved_since_request?(current, node),
-          do: Logger.info("Leaving issue_id=#{issue_id} where a person moved it after its decision request"),
-          else: resume(repo_key, issue_id, current, replies, opts)
-
         :clear
 
       {:error, reason} ->
@@ -214,10 +217,13 @@ defmodule SymphonyElixir.NeedsDecisionHold do
 
   defp resume(repo_key, issue_id, current, replies, opts) do
     case MergeConfirmation.reply_target(current, replies) do
-      nil -> :ok
-      target -> continue(repo_key, issue_id, target, opts)
+      nil -> option_move(repo_key, issue_id, DecisionMove.picked(current, replies), opts)
+      target -> continue(repo_key, issue_id, "confirm", %{to: target}, opts)
     end
   end
+
+  defp option_move(_repo_key, _issue_id, nil, _opts), do: :ok
+  defp option_move(repo_key, issue_id, move, opts), do: continue(repo_key, issue_id, "decide", move, opts)
 
   # Whether the ticket left the state it waited in since the request was posted: a person's move
   # wins over the answer's. A hold that recorded no state, or a node read without one, can't tell.
@@ -227,14 +233,14 @@ defmodule SymphonyElixir.NeedsDecisionHold do
     is_binary(waiting) and is_binary(now) and String.downcase(String.trim(waiting)) != String.downcase(String.trim(now))
   end
 
-  defp continue(repo_key, issue_id, target, opts) do
-    case TransitionGuard.perform(issue_id, :director_move, %{target: target, repo_key: repo_key}, Keyword.take(opts, [:tracker])) do
-      :ok ->
-        TicketSignals.record(repo_key, issue_id, "decision returned", %{move: "confirm", to: target})
+  defp continue(repo_key, issue_id, name, move, opts) do
+    case DecisionMove.perform(repo_key, issue_id, move, Keyword.take(opts, [:tracker])) do
+      {:ok, target} ->
+        TicketSignals.record(repo_key, issue_id, "decision returned", %{move: name, to: target})
         :ok
 
       {:error, reason} ->
-        Logger.warning("Failed to continue issue_id=#{issue_id} to #{target} after its decision: #{inspect(reason)}")
+        Logger.warning("Failed to continue issue_id=#{issue_id} to #{move.to} after its decision: #{inspect(reason)}")
         :ok
     end
   end

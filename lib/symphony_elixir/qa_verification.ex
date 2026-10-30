@@ -66,6 +66,7 @@ defmodule SymphonyElixir.QaVerification do
     CiWait,
     ClosedPullRequest,
     Config,
+    DecisionMove,
     DecisionRequest,
     Handoff,
     MergeConfirmation,
@@ -711,7 +712,7 @@ defmodule SymphonyElixir.QaVerification do
         "(attempt #{attempts}/#{@max_inconclusive_attempts}); #{if rerun?, do: "rerunning", else: "asking a person"}: #{details.reason}"
     )
 
-    if rerun?, do: :ok, else: escalate(issue, opts, settings, attempts, details.reason)
+    if rerun?, do: :ok, else: escalate(issue, opts, settings, head, attempts, details.reason)
   end
 
   defp qa_result(outcome) do
@@ -769,7 +770,7 @@ defmodule SymphonyElixir.QaVerification do
     case next do
       :retry -> :ok
       :self_heal -> self_heal(issue, opts, attempts, outcome)
-      :escalate -> escalate(issue, opts, settings, attempts, details.reason, unprovable?(outcome))
+      :escalate -> escalate(issue, opts, settings, head, attempts, details.reason, unprovable?(outcome))
     end
   end
 
@@ -807,32 +808,40 @@ defmodule SymphonyElixir.QaVerification do
   defp tool_cause?(_cause), do: false
 
   # A pass that keeps ending without a verdict and names nothing the machine can repair: the ticket
-  # pauses in QA on a person's decision. Answering it clears the hold and QA runs again on the same
-  # head; each further run that ends the same way asks again.
+  # pauses in QA on a person's decision. "Run QA again" clears the hold and QA runs again on the same
+  # head; each further run that ends the same way asks again. The other two picks are moves Symphony
+  # makes itself (`SymphonyElixir.DecisionMove`): Rework, or the QA pass's target with a `qa`
+  # verdict `skip` bound to this head, recorded as skipped by decision.
   #
   # A pass with nothing it could prove here (every open step `unprovable`) asks at once, with the
   # same three options: another run would end the same way, so merging without a QA result is the
   # recommended one.
-  defp escalate(issue, opts, settings, attempts, reason, unprovable? \\ false) do
+  defp escalate(issue, opts, settings, head, attempts, reason, unprovable? \\ false) do
     Logger.warning("QA for #{issue_label(issue)} could not reach a verdict after #{attempts} run(s); asking a person: #{reason}")
     hold_opts = opts |> Keyword.take([:tracker, :store]) |> Keyword.put(:repo_key, repo_key(issue, opts))
 
-    case DecisionRequest.ask(issue, escalation_request(issue, settings, attempts, reason, unprovable?), hold_opts) do
+    case DecisionRequest.ask(issue, escalation_request(issue, settings, head, attempts, reason, unprovable?), hold_opts) do
       :ok -> :ok
       {:error, error} -> {:error, {:qa_escalation_failed, error}}
     end
   end
 
-  defp escalation_request(issue, settings, attempts, reason, unprovable?) do
+  defp escalation_request(issue, settings, head, attempts, reason, unprovable?) do
+    merging = TransitionGuard.target(:qa_pass, %{settings: settings})
+    skip = %{kind: @verdict_kind, outcome: "skip", head_sha: head, reason: "skipped by decision"}
+
     %{
       title: "QA could not finish its check of #{issue_label(issue)}",
       question: escalation_question(issue, attempts, unprovable?),
       why: escalation_why(reason, unprovable?),
       options: [
         recommend(%{label: "Run QA again", effect: "the ticket continues in QA and QA runs once more on the same change"}, not unprovable?),
-        %{label: "Send it back to Rework", effect: "you move #{issue_label(issue)} to Rework, and its next run reads QA's report"},
+        DecisionMove.option(%{label: "Send it back to Rework", effect: "Symphony moves #{issue_label(issue)} to Rework, and its next run reads QA's report"}, %{to: "Rework"}),
         recommend(
-          %{label: "Merge without a QA result", effect: "you move #{issue_label(issue)} to #{TransitionGuard.target(:qa_pass, %{settings: settings})}, and it merges on its review and CI alone"},
+          DecisionMove.option(
+            %{label: "Merge without a QA result", effect: "Symphony moves #{issue_label(issue)} to #{merging}, and it merges on its review and CI alone"},
+            %{to: merging, verdict: skip}
+          ),
           unprovable?
         )
       ],

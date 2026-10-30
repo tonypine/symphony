@@ -969,6 +969,8 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert request =~ "TP-7 (Add it) is in Code Review, but Symphony finds no pull request for it"
       assert %{decision: %{options: options}} = Hold.get(@repo_key, @issue_id, :needs_decision)
       assert Enum.map(options, & &1.label) == ["Attach the PR", "Restart", "Cancel"]
+      assert %{move: %{to: "Canceled"}} = List.last(options)
+      refute Enum.any?(options, &(&1.effect =~ "you move"))
       refute_received {:move, _id, _state}
 
       signals = TicketState.recent_signals(RunStore.get_ticket_state(@repo_key, @issue_id))

@@ -23,7 +23,7 @@ defmodule SymphonyElixir.DecisionRequest do
 
   require Logger
 
-  alias SymphonyElixir.{Hold, NeedsDecisionHold, Questions, RunStore, TicketSignals, TicketState}
+  alias SymphonyElixir.{DecisionMove, Hold, NeedsDecisionHold, Questions, RunStore, TicketSignals, TicketState}
   alias SymphonyElixir.HumanActions.{PlainWords, Request}
 
   @title_max_length 120
@@ -176,9 +176,13 @@ defmodule SymphonyElixir.DecisionRequest do
   # The comment a request posts: rendered for the Director, with the question's id in a hidden line.
   defp comment(request, question, state), do: Request.render_hold(request, state) <> "\n\n<!-- symphony:question #{question.id} -->"
 
-  # A confirmation also records the state the ticket waits in, so a person's move made after the
-  # request wins over the move the answer would perform (`SymphonyElixir.NeedsDecisionHold`).
-  defp confirming(attrs, nil, _state), do: attrs
+  # A confirmation, or a request whose options carry their own move (`SymphonyElixir.DecisionMove`),
+  # also records the state the ticket waits in, so a person's move made after the request wins over
+  # the move the answer would perform (`SymphonyElixir.NeedsDecisionHold`).
+  defp confirming(attrs, nil, state) do
+    if DecisionMove.moves?(attrs.decision.options), do: %{attrs | decision: Map.put(attrs.decision, :state, state)}, else: attrs
+  end
+
   defp confirming(attrs, confirm, state), do: %{attrs | decision: attrs.decision |> Map.put(:confirm, confirm) |> Map.put(:state, state)}
 
   defp label_tracker(hold_opts, nil), do: hold_opts
