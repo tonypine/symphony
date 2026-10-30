@@ -2873,7 +2873,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     due_at_ms = System.monotonic_time(:millisecond)
 
     # A readiness or quality gate task still in flight when the retry fires must not
-    # hide the pause: the retry reports the pause, not the deferral.
+    # hide the pause: the ticket is listed with the pause's reason, its retry kept as it was.
     :sys.replace_state(pid, fn state ->
       %{
         state
@@ -2897,21 +2897,10 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     send(pid, {:retry_issue, issue.id, retry_token})
 
-    assert %{running: [], retrying: [%{issue_id: "issue-operator-pause", error: "dispatch is paused by the operator: deploy window"}]} =
-             wait_for_snapshot(
-               pid,
-               fn
-                 %{
-                   running: [],
-                   retrying: [%{issue_id: "issue-operator-pause", error: "dispatch is paused by the operator: deploy window"}]
-                 } ->
-                   true
+    assert %{running: [], retrying: [], dispatch_skipped: [%{issue_id: "issue-operator-pause", reason: "dispatch is paused by the operator: deploy window"}]} =
+             wait_for_snapshot(pid, &match?(%{dispatch_skipped: [%{issue_id: "issue-operator-pause"}]}, &1), 1_000)
 
-                 _snapshot ->
-                   false
-               end,
-               1_000
-             )
+    assert %{attempt: 1, error: "agent exited: :boom", held_by_pause: true} = :sys.get_state(pid).retry_attempts[issue.id]
 
     assert {:ok, %{paused: false, reason: nil, paused_at: nil}} =
              Orchestrator.resume_dispatch(orchestrator_name)

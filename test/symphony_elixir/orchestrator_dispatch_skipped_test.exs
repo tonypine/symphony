@@ -453,6 +453,63 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     assert %{"runnable" => "the daily token budget is spent (agent.max_tokens_per_day)"} = skipped_after.(budget)
   end
 
+  test "a retry due during Symphony's pause is held as it was, listed with the pause's reason, and dispatched at the lift (TP-1319)" do
+    held = issue("held", "MT-HELD", "In Progress")
+    tracked([])
+    pid = start_orchestrator(:PauseHeldRetryOrchestrator)
+    {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("deploy window"))
+    on_exit(fn -> Pauses.clear(:symphony) end)
+
+    retry_token = make_ref()
+    due_at = DateTime.add(DateTime.utc_now(), -60, :second)
+    persisted = %{repo_key: "default", issue_id: "held", identifier: "MT-HELD", attempt: 3, due_at: due_at, error: "agent exited: :boom"}
+    :ok = RunStore.put_retry(persisted)
+
+    retry = %{
+      attempt: 3,
+      timer_ref: nil,
+      retry_token: retry_token,
+      due_at_ms: System.monotonic_time(:millisecond),
+      identifier: "MT-HELD",
+      title: "Ticket MT-HELD",
+      error: "agent exited: :boom",
+      repo_key: "default"
+    }
+
+    :sys.replace_state(pid, &%{&1 | retry_attempts: %{"held" => retry}, claimed: MapSet.put(&1.claimed, "held")})
+
+    log = capture_log(fn -> send(pid, {:retry_issue, "held", retry_token}) && :sys.get_state(pid) end)
+    assert log =~ "Not dispatching retry of issue_id=held issue_identifier=MT-HELD while Symphony is paused"
+
+    # Nothing counted, nothing rescheduled: the retry keeps its attempt, error, token and persisted due time.
+    state = :sys.get_state(pid)
+
+    assert %{attempt: 3, error: "agent exited: :boom", retry_token: ^retry_token, timer_ref: nil, held_by_pause: true} =
+             state.retry_attempts["held"]
+
+    assert [%{attempt: 3, error: "agent exited: :boom", due_at: ^due_at}] = RunStore.list_retries(:all)
+    assert %{identifier: "MT-HELD", reason: "dispatch is paused by the operator: deploy window", since: %DateTime{}} = state.dispatch_skipped["held"]
+
+    assert %{retrying: [], dispatch_skipped: [%{issue_id: "held", reason: "dispatch is paused by the operator: deploy window"}]} =
+             Orchestrator.snapshot(pid, 5_000)
+
+    # A poll during the pause lists the held ticket with the pause's reason, not its claim.
+    ref = make_ref()
+    :sys.replace_state(pid, &%{&1 | dispatch_readiness_tasks: %{ref => %{kind: :poll, issues: [held]}}})
+    result = %{now_ms: System.monotonic_time(:millisecond), age_gc_result: :skipped, quota: nil}
+    send(pid, {ref, {:dispatch_readiness_result, result}})
+    state = :sys.get_state(pid)
+    assert state.running == %{}
+    assert %{"held" => %{state: "In Progress", reason: "dispatch is paused by the operator: deploy window"}} = state.dispatch_skipped
+    assert %{attempt: 3, held_by_pause: true} = state.retry_attempts["held"]
+
+    # The lift sends the held retry on at once, with the attempt it had.
+    tracked([held])
+    assert {:ok, %{paused: false}} = Orchestrator.resume_dispatch(pid)
+    wait_until(pid, &Map.has_key?(&1.running, "held"))
+    assert %{retry_attempt: 3} = :sys.get_state(pid).running["held"]
+  end
+
   describe "a repository's pause (TP-1237)" do
     @focus "focusing on Symphony this week"
 
