@@ -718,6 +718,95 @@ defmodule SymphonyElixir.DecisionsTest do
     end
   end
 
+  describe "the section rendered from the record (TP-1243)" do
+    # TP-892's description as Linear stored it once its first decision was recorded: `*` bullets,
+    # the summary block after the section.
+    @stored """
+    Retire the two old review steps.
+
+    ## Acceptance criteria
+
+    * The old steps are gone.
+
+    <!-- symphony:decisions:start -->
+    ### Decisions
+
+    _Symphony records a person's answer to each decision request here. Reviews, QA and later runs follow them._
+
+    * **D1** · 2026-10-13 · Keep the legacy prompt partials <!-- symphony:decision:comment-1 -->
+      * **Question:** Remove the legacy partials here, or leave them for TP-891?
+      * **Answer:** Defer to TP-891: don't make that change here.
+      * **Scope:** Deferred to TP-891
+
+    <!-- symphony:decisions:end -->
+
+    <!-- symphony:summary:start -->
+    ## Symphony
+
+    PR open, waiting on Code Review
+    <!-- symphony:summary:end -->
+    """
+
+    # What the decision store wrote into it for the next two decisions and a ruling.
+    @expected """
+    Retire the two old review steps.
+
+    ## Acceptance criteria
+
+    * The old steps are gone.
+
+    <!-- symphony:decisions:start -->
+    ### Decisions
+
+    _Symphony records a person's answer to each decision request here. Reviews, QA and later runs follow them._
+
+    * **D1** · 2026-10-13 · Keep the legacy prompt partials <!-- symphony:decision:comment-1 -->
+      * **Question:** Remove the legacy partials here, or leave them for TP-891?
+      * **Answer:** Defer to TP-891: don't make that change here.
+      * **Scope:** Deferred to TP-891
+    - **D2** · 2026-10-14 · Let the ticket change the workflow file <!-- symphony:decision:comment-2 -->
+      - **Question:** Allow TP-892 to change the workflow file?
+      - **Answer:** Allow it
+      - **Scope:** As answered
+      <!-- symphony:unlocks WORKFLOW.md -->
+    - **D3** · 2026-10-15 · Keep the old states listed in the docs. <!-- symphony:decision:ruling-comment-3 -->
+      - **Question:** Ruling given in a comment.
+      - **Answer:** Keep the old states listed in the docs.
+      - **Scope:** As answered
+
+    <!-- symphony:decisions:end -->
+
+    <!-- symphony:summary:start -->
+    ## Symphony
+
+    PR open, waiting on Code Review
+    <!-- symphony:summary:end -->
+    """
+
+    test "the projector writes the section byte for byte as the decision store wrote it" do
+      decisions = [
+        Decisions.entry("comment-1", @date, "Keep the legacy prompt partials", "Remove the legacy partials here, or leave them for TP-891?", "Defer to TP-891: don't make that change here."),
+        Decisions.entry("comment-2", ~D[2026-10-14], "Let the ticket change the workflow file", "Allow TP-892 to change the workflow file?", "Allow it", ["WORKFLOW.md"]),
+        Decisions.entry("ruling-comment-3", ~D[2026-10-15], "Keep the old states listed in the docs.", "Ruling given in a comment.", "Keep the old states listed in the docs.")
+      ]
+
+      Process.put({FakeTracker, :description}, {:ok, @stored})
+      assert :ok = Decisions.record("issue-today", decisions, repo_key: @repo_key, tracker: FakeTracker)
+      assert_received {:description_written, "issue-today", today}
+
+      Application.put_env(:symphony_elixir, :pause_projector, true)
+      on_exit(fn -> Application.put_env(:symphony_elixir, :pause_projector, false) end)
+
+      assert :ok = Decisions.record("issue-projected", decisions, repo_key: @repo_key, tracker: FakeTracker)
+      assert_received {:description_written, "issue-projected", ^today}
+      assert today == @expected
+
+      rendered = RunStore.get_ticket_state(@repo_key, "issue-projected") |> Decisions.render_from_questions()
+      assert Enum.map(rendered, & &1.key) == ["comment-1", "comment-2", "ruling-comment-3"]
+      assert {:ok, ^today} = Decisions.put(@stored, rendered)
+    end
+  end
+
   describe "the trackers' description calls" do
     test "the memory tracker reports a refused write and leaves a file-backed list alone" do
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_description_result, [{:error, :boom}])

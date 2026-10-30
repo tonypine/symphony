@@ -583,6 +583,17 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       assert ticket_events(@repo_key, @issue_id) == []
     end
 
+    test "leaves a Needs Decision label with no store hold to the pause projector while it owns the labels (TP-1243)" do
+      Application.put_env(:symphony_elixir, :pause_projector, true)
+      on_exit(fn -> Application.put_env(:symphony_elixir, :pause_projector, false) end)
+      node = with_labels(["Needs Decision"])
+
+      log = capture_log(fn -> assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :none end)
+
+      refute log =~ "with no store hold"
+      assert ticket_events(@repo_key, @issue_id) == []
+    end
+
     test "re-projects a store hold whose Needs Decision label is missing" do
       :ok =
         RunStore.set_ticket_hold(@repo_key, @issue_id, :needs_decision, %{

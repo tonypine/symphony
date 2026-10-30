@@ -73,6 +73,7 @@ defmodule SymphonyElixir.TicketObservation do
 
   alias SymphonyElixir.{Config, DirectorMoves, Hold, Orchestrator, RunStore, TicketSignals, TicketState, Tracker}
   alias SymphonyElixir.Linear.{Issue, Webhook}
+  alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.Routing.{PollScope, Resolver}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
@@ -266,7 +267,9 @@ defmodule SymphonyElixir.TicketObservation do
   - each projection the record marks as failed (`TicketState.pending_projection`) is made again from
     the record as it is right before the write: a phase Symphony owns is written to Linear
     (`Tracker.update_issue_state/2`), a hold's label set or cleared as the record holds the hold
-    (`Tracker.set_machine_label/2`, `Tracker.clear_machine_label/2`), and that mark dropped (counted
+    (`Tracker.set_machine_label/2`, `Tracker.clear_machine_label/2`), the labels and Decisions
+    section the pause projector renders applied again (`SymphonyElixir.Pauses.Projector.apply/2`),
+    and that mark dropped (counted
     under `reapplied`); a newer mark written meanwhile stays. A projection the poll's issue already
     shows is dropped with no write; one whose phase is no longer Symphony's, or whose ticket was
     removed, is dropped too; one whose write fails stays for the next run.
@@ -475,6 +478,9 @@ defmodule SymphonyElixir.TicketObservation do
     end
   end
 
+  # The labels and section the pause projector renders, from the record as it is now.
+  defp projection_write(_record, :pause, _polled), do: :projector
+
   defp projection_write(record, {:hold_label, kind}, polled) do
     held? = TicketState.hold?(record, kind)
     name = Hold.label(kind)
@@ -494,6 +500,7 @@ defmodule SymphonyElixir.TicketObservation do
       {:label, name, true} -> tracker.set_machine_label(issue_id, name)
       {:label, name, false} -> tracker.clear_machine_label(issue_id, name)
       {:answer, question_id, comment_id} -> project_answer(record, question_id, comment_id, tracker)
+      :projector -> Projector.apply(record, tracker: tracker)
     end
   catch
     kind, reason -> {:error, {kind, reason}}

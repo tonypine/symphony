@@ -445,6 +445,42 @@ defmodule SymphonyElixir.HoldTest do
     end
   end
 
+  describe "while the pause projector owns the labels (TP-1243)" do
+    setup do
+      Application.put_env(:symphony_elixir, :pause_projector, true)
+      on_exit(fn -> Application.put_env(:symphony_elixir, :pause_projector, false) end)
+    end
+
+    test "set, clear and reproject keep the store hold and write no label" do
+      assert :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "waiting on TP-1"}, tracker: FailingTracker)
+      assert Hold.held?(@repo_key, @issue_id, :blocked)
+      assert :ok = Hold.reproject(@repo_key, @issue_id, :blocked, tracker: FailingTracker)
+      assert labels() == []
+      assert pending_projection() == []
+
+      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked, tracker: FailingTracker)
+      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      assert pending_projection() == []
+    end
+
+    test "resync applies the projector from the pause, against the labels Linear was last seen with" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id, %{labels: ["Blocked"], projected: %{labels: ["Blocked"]}}))
+      capture_log(fn -> Hold.report_drift(@repo_key, @issue_id, ["Blocked"]) end)
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | labels: ["Blocked"]}])
+
+      assert Hold.resync(@repo_key, @issue_id, :blocked) == :ok
+      assert labels() == []
+      assert Drift.entries() == []
+
+      {:ok, _pause} = Pauses.set({:ticket, @repo_key, @issue_id}, Pauses.ticket_reason(:dependency, "TP-12"))
+      # A person removed the label by hand, and the poll saw it go.
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue()])
+      :ok = RunStore.update_ticket_state(@repo_key, @issue_id, %{labels: []})
+      assert Hold.resync(@repo_key, @issue_id, :blocked) == :ok
+      assert labels() == ["Blocked"]
+    end
+  end
+
   describe "resync/4" do
     test "clears a label with no store hold, sets one a store hold is missing, and forgets the drift" do
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | labels: ["Blocked"]}])

@@ -47,12 +47,18 @@ defmodule SymphonyElixir.Decisions do
   Each decision a write adds to the store is also the Director's `decision.recorded` event
   (`SymphonyElixir.TicketEvents`), naming the open `decision.requested` it answers; the ones taken
   from the description's section record none.
+
+  While the pause projector owns the section (`SymphonyElixir.Pauses.Projector.owns?/0`), `record/3`
+  only writes the store, and the projector renders the section from the record
+  (`render_from_questions/1`), as it renders the labels from the pause and the questions. `sweep/2`
+  still repairs a section that lost an entry.
   """
 
   require Logger
 
   alias SymphonyElixir.{Config, IssueSummary, PathUnlock, PromptSafety, RunStore, TicketSignals, TicketState, Tracker}
   alias SymphonyElixir.HumanActions.Request
+  alias SymphonyElixir.Pauses.Projector
 
   @start_marker "<!-- symphony:decisions:start -->"
   @end_marker "<!-- symphony:decisions:end -->"
@@ -276,6 +282,23 @@ defmodule SymphonyElixir.Decisions do
 
   defp date_text(%Date{} = date), do: Date.to_iso8601(date)
   defp date_text(date), do: date
+
+  @doc """
+  The entries the Decisions section of `record` (a ticket's store record) shows, as `put/2` writes
+  them: a person's answer to each of its questions, keyed by the request comment it answers, then
+  the rulings, in the order they were recorded. Each answer is the decision its question's answer
+  recorded, with the request's id that keys the entry: a question carries no request id, so an
+  answer is rendered once its decision is recorded, never under a second key. A question answered
+  with no decision recorded (an answer a rule or an Unblock gave) shows no entry, as before the
+  projector, and a decision whose answer the Director took back keeps its entry, which the section
+  never drops. So the section rendered from the record is byte for byte the one `record/3` writes.
+  """
+  @spec render_from_questions(map()) :: [entry()]
+  def render_from_questions(record) do
+    record
+    |> TicketState.decisions()
+    |> Enum.uniq_by(& &1.key)
+  end
 
   @doc "The decisions recorded in `description`, in order and each once, with its `D<n>` label."
   @spec recorded(String.t() | nil) :: [recorded()]
@@ -530,7 +553,9 @@ defmodule SymphonyElixir.Decisions do
   """
   @spec record(String.t(), [entry()], keyword()) :: :ok | {:error, term()}
   def record(issue_id, entries, opts) when is_binary(issue_id) and is_list(entries) do
-    case logged(issue_id, project_decisions(issue_id, entries, opts)) do
+    write = if Projector.owns?(), do: &store_and_project/3, else: &project_decisions/3
+
+    case logged(issue_id, write.(issue_id, entries, opts)) do
       {:ok, _written} -> :ok
       error -> error
     end
@@ -552,6 +577,19 @@ defmodule SymphonyElixir.Decisions do
          {:ok, description} <- description(tracker, issue_id, opts),
          {:ok, decisions} <- store_decisions(repo_key, issue_id, entries, description, opts) do
       project(tracker, issue_id, description, decisions, not read?)
+    end
+  end
+
+  # The store only; the projector writes the section from the record. A projection Linear refuses
+  # is pending on the record, which the reconciler applies again, so the decision is recorded.
+  defp store_and_project(issue_id, entries, opts) do
+    tracker = Keyword.get(opts, :tracker, Tracker)
+
+    with {:ok, repo_key} <- repo_key(opts),
+         {:ok, description} <- description(tracker, issue_id, opts),
+         {:ok, _decisions} <- store_decisions(repo_key, issue_id, entries, description, opts) do
+      _ = Projector.project_now({:ticket, repo_key, issue_id}, Keyword.take(opts, [:tracker, :store]))
+      {:ok, :stored}
     end
   end
 

@@ -924,6 +924,37 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert TicketObservation.summary().reconcile.reapplied == 1
     end
 
+    test "the labels and section the pause projector could not write are written once Linear answers (TP-1243)", %{repo_key: repo_key} do
+      ticket = {:ticket, repo_key, "issue-observed"}
+      on_exit(fn -> for call <- [:fetch_issue_description, :update_issue_description], do: :persistent_term.erase({ReconcileTracker, call}) end)
+
+      # Answered while Linear was down: the record is right, its projection pending.
+      marked!(repo_key, "In Progress", :pause)
+      {:ok, _pause} = SymphonyElixir.Pauses.set(ticket, SymphonyElixir.Pauses.ticket_reason(:dependency, "TP-12"))
+      entry = SymphonyElixir.Decisions.entry("comment-1", ~D[2026-10-30], "Add the signing secret", "Add the secret?", "Drop signing")
+      {:ok, _decisions} = RunStore.record_ticket_decisions(repo_key, "issue-observed", [entry], [])
+
+      Application.put_env(:symphony_elixir, :pause_projector, true)
+      on_exit(fn -> Application.put_env(:symphony_elixir, :pause_projector, false) end)
+
+      reply(:set_machine_label, {:error, :linear_down})
+      capture_log(fn -> reconcile(repo_key, [linear_issue(%{state: "In Progress", updated_at: @read_at})]) end)
+      assert_received {:tracker, {:set_machine_label, "issue-observed", "Blocked"}}
+      assert [%{type: :pause}] = Enum.filter(record(repo_key).pending_projection, &(&1.type == :pause))
+
+      reply(:set_machine_label, :ok)
+      reconcile(repo_key, [linear_issue(%{state: "In Progress", updated_at: @read_at})])
+      assert_received {:tracker, {:set_machine_label, "issue-observed", "Blocked"}}
+      assert_received {:tracker, {:update_issue_description, "issue-observed", description}}
+      assert [%{key: "comment-1", answer: "Drop signing"}] = SymphonyElixir.Decisions.recorded(description)
+      assert Enum.filter(record(repo_key).pending_projection, &(&1.type == :pause)) == []
+
+      # Nothing left to project: the next reconcile writes nothing.
+      reconcile(repo_key, [linear_issue(%{state: "In Progress", updated_at: @read_at})])
+      refute_received {:tracker, {:set_machine_label, _issue_id, _name}}
+      refute_received {:tracker, {:update_issue_description, _issue_id, _description}}
+    end
+
     test "a Director's answer Linear refused is replied under its request and recorded in the section once Linear answers (TP-1240)",
          %{repo_key: repo_key} do
       ticket = {:ticket, repo_key, "issue-observed"}

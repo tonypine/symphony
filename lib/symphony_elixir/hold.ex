@@ -16,6 +16,10 @@ defmodule SymphonyElixir.Hold do
   label — so the projection can be reported and repaired. A label write that fails is marked on the
   record (`pending_projection`), and the reconciler writes the label again from the store.
 
+  While the pause projector owns the labels (`SymphonyElixir.Pauses.Projector.owns?/0`), a hold
+  writes none: the projector renders them from the ticket's pause and questions, and `resync/4`
+  applies the projector again instead of writing the hold's label.
+
   Each hold write that lands in the store is also recorded in the ticket's event stream
   (`SymphonyElixir.TicketEvents`), best-effort. A Blocked hold is `hold.set` and `hold.cleared`. A
   Needs Decision hold is the projection of its decision, never a hold event. One that carries the
@@ -38,6 +42,7 @@ defmodule SymphonyElixir.Hold do
   require Logger
 
   alias SymphonyElixir.Hold.Drift
+  alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.{Questions, RunStore, TicketSignals, TicketState, Tracker}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
@@ -244,7 +249,8 @@ defmodule SymphonyElixir.Hold do
   Re-syncs the ticket's `kind` label from the store, as the Setup fix for a drifted ticket asks: the
   label is set when the store holds the hold and cleared when it doesn't. Unlike `set/5` and
   `clear/4`, a label write the tracker refuses is returned, and the ticket's drift is forgotten only
-  once the write went through.
+  once the write went through. While the pause projector owns the labels, it applies them again
+  from the ticket's pause and questions, compared with the labels Linear was last seen with.
   """
   @spec resync(String.t() | nil, String.t() | nil, kind(), keyword()) :: :ok | {:error, term()}
   def resync(repo_key, issue_id, kind, opts \\ []) do
@@ -252,9 +258,15 @@ defmodule SymphonyElixir.Hold do
 
     with name when is_binary(name) <- label(kind) || {:error, {:unknown_hold_kind, kind}},
          :ok <- require_repo_key(repo_key, issue_id),
-         :ok <- resync_label(tracker, issue_id, name, held?(repo_key, issue_id, kind, opts)) do
+         :ok <- resync_labels(tracker, repo_key, issue_id, name, kind, opts) do
       Drift.forget(repo_key, issue_id)
     end
+  end
+
+  defp resync_labels(tracker, repo_key, issue_id, name, kind, opts) do
+    if Projector.owns?(),
+      do: Projector.project_now({:ticket, repo_key, issue_id}, tracker: tracker, store: Keyword.get(opts, :store, RunStore), force: true),
+      else: resync_label(tracker, issue_id, name, held?(repo_key, issue_id, kind, opts))
   end
 
   defp resync_label(tracker, issue_id, name, true = _held?), do: tracker.set_machine_label(issue_id, name)
@@ -281,8 +293,12 @@ defmodule SymphonyElixir.Hold do
   end
 
   # A label write that fails is marked on the record, so the reconciler projects the hold again
-  # (`TicketSignals.mark_projection/4`).
+  # (`TicketSignals.mark_projection/4`). The pause projector writes the labels while it owns them.
   defp project(tracker, repo_key, issue_id, kind, action) do
+    if Projector.owns?(), do: :ok, else: project_label(tracker, repo_key, issue_id, kind, action)
+  end
+
+  defp project_label(tracker, repo_key, issue_id, kind, action) do
     name = label(kind)
 
     result =

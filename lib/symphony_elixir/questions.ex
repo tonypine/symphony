@@ -25,6 +25,9 @@ defmodule SymphonyElixir.Questions do
   is paused on a question exactly while it is open, whatever else writes the record at the same
   time.
 
+  Once a change to a question commits, the ticket's labels and Decisions section are projected from
+  the record (`SymphonyElixir.Pauses.Projector.project_now/2`).
+
   `answers/2` reads the ticket's answers the way the PR watcher reads them: each answered question
   as a decision entry, then the decisions recorded before questions carried them.
 
@@ -46,6 +49,7 @@ defmodule SymphonyElixir.Questions do
 
   alias SymphonyElixir.{DecisionRequest, Hold, Inbox, Pauses, RunStore, TicketEvents, TicketState, Tracker}
   alias SymphonyElixir.HumanActions.Request
+  alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.TicketEvents.Event
 
   @asker_kinds [:run, :rule, :symphony, :person]
@@ -529,6 +533,7 @@ defmodule SymphonyElixir.Questions do
   defp update(repo_key, issue_id, at, fun) do
     with {:ok, question, events} <- RunStore.update_ticket_question(repo_key, issue_id, at, fun) do
       Enum.each(events, &TicketEvents.notify/1)
+      if events != [], do: Projector.project_now({:ticket, repo_key, issue_id})
       {:ok, question}
     end
   end

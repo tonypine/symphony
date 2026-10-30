@@ -25,7 +25,9 @@ defmodule SymphonyElixir.TicketState do
   and the `questions` asked of a person on it (`SymphonyElixir.Questions`), open, answered or
   withdrawn, in the order they were asked; and when the backfill from its holds and decisions
   converted the record into its pause and questions (`pause_backfilled_at`,
-  `SymphonyElixir.Pauses.Backfill`), so it never converts it again.
+  `SymphonyElixir.Pauses.Backfill`), so it never converts it again; and what the pause projector
+  last applied to Linear from the pause and the questions (`projected`,
+  `SymphonyElixir.Pauses.Projector`): the machine labels and the hash of the Decisions section.
 
   The record is persisted by `SymphonyElixir.RunStore`; this module owns its shape and the
   operations that move it. It is inert by design: nothing dispatches on a record yet. It exists so
@@ -225,16 +227,18 @@ defmodule SymphonyElixir.TicketState do
   A projection of the record to Linear whose write failed, so Linear may not show what the record
   holds: the phase a move of Symphony's wrote (`type: :phase`), a hold's machine label
   (`type: :hold_label`, with the `hold` kind), a question's request comment
-  (`type: :question_comment`, with the `question` id), or the reply and Decisions entry of a
+  (`type: :question_comment`, with the `question` id), the reply and Decisions entry of a
   question the Director answered (`type: :question_answer`, with the `question` id and the request
-  `comment` the reply goes under, nil when unknown). The reconciler projects the record's truth
+  `comment` the reply goes under, nil when unknown), or the labels and Decisions section the pause
+  projector renders from the pause and the questions (`type: :pause`,
+  `SymphonyElixir.Pauses.Projector`). The reconciler projects the record's truth
   again and drops the mark (`SymphonyElixir.TicketObservation.reconcile_all/3`); a request comment
   is posted again by the Inbox's sweep, which reads the ticket's comments
   (`SymphonyElixir.NeedsDecisionHold`). The mark only says what to re-project and when and why it
   failed.
   """
   @type projection :: %{
-          required(:type) => :phase | :hold_label | :question_comment | :question_answer,
+          required(:type) => :phase | :hold_label | :question_comment | :question_answer | :pause,
           required(:hold) => :blocked | :needs_decision | nil,
           optional(:question) => String.t(),
           optional(:comment) => String.t() | nil,
@@ -242,12 +246,19 @@ defmodule SymphonyElixir.TicketState do
           required(:at) => DateTime.t() | nil
         }
 
-  @typedoc "What a projection mark names: the phase, a hold's label, a question's request comment or its answer."
+  @typedoc "What a projection mark names: the phase, a hold's label, a question's request comment or its answer, or the pause's labels and section."
   @type projection_name ::
           :phase
+          | :pause
           | {:hold_label, :blocked | :needs_decision}
           | {:question_comment, String.t()}
           | {:question_answer, String.t(), String.t() | nil}
+
+  @typedoc """
+  What the pause projector last applied to Linear (`SymphonyElixir.Pauses.Projector`): the machine
+  labels the ticket carries and the hash of its Decisions section's entries, nil before it wrote one.
+  """
+  @type projected :: %{labels: [String.t()], section: String.t() | nil}
 
   @type t :: %{
           repo_key: String.t() | nil,
@@ -288,6 +299,7 @@ defmodule SymphonyElixir.TicketState do
           pause: Pauses.pause() | nil,
           questions: [Questions.question()],
           pause_backfilled_at: DateTime.t() | nil,
+          projected: projected() | nil,
           updated_at: DateTime.t() | nil
         }
 
@@ -375,6 +387,7 @@ defmodule SymphonyElixir.TicketState do
       pause: Pauses.normalize(Map.get(record, :pause)),
       questions: Questions.normalize(Map.get(record, :questions)),
       pause_backfilled_at: map_datetime(record, :pause_backfilled_at),
+      projected: normalize_projected(Map.get(record, :projected)),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -419,6 +432,7 @@ defmodule SymphonyElixir.TicketState do
       pause: nil,
       questions: [],
       pause_backfilled_at: nil,
+      projected: nil,
       updated_at: nil
     }
   end
@@ -483,7 +497,7 @@ defmodule SymphonyElixir.TicketState do
 
   @doc """
   Marks a projection of the record to Linear as failed (`t:projection/0`): `projection` is `:phase`,
-  `{:hold_label, kind}`, `{:question_comment, question_id}` or
+  `:pause`, `{:hold_label, kind}`, `{:question_comment, question_id}` or
   `{:question_answer, question_id, comment_id}`, and `error` what Linear said. A mark of the same projection is replaced,
   so a record keeps one per projection, the latest.
   """
@@ -505,16 +519,18 @@ defmodule SymphonyElixir.TicketState do
     %{record | pending_projection: Enum.reject(record.pending_projection, &same_mark?(&1, mark))}
   end
 
-  @doc "The projection a mark names: `:phase`, `{:hold_label, kind}`, `{:question_comment, question_id}` or `{:question_answer, question_id, comment_id}`."
+  @doc "The projection a mark names: `:phase`, `:pause`, `{:hold_label, kind}`, `{:question_comment, question_id}` or `{:question_answer, question_id, comment_id}`."
   @spec projection_of(projection()) :: projection_name()
   def projection_of(%{type: :hold_label, hold: kind}), do: {:hold_label, kind}
   def projection_of(%{type: :question_comment, question: id}), do: {:question_comment, id}
   def projection_of(%{type: :question_answer, question: id} = mark), do: {:question_answer, id, Map.get(mark, :comment)}
   def projection_of(%{type: :phase}), do: :phase
+  def projection_of(%{type: :pause}), do: :pause
 
   defp same_mark?(mark, other), do: projection_of(mark) == projection_of(other) and mark.at == Map.get(other, :at)
 
   defp projection_key(:phase), do: %{type: :phase, hold: nil}
+  defp projection_key(:pause), do: %{type: :pause, hold: nil}
   defp projection_key({:hold_label, kind}) when kind in @hold_kinds, do: %{type: :hold_label, hold: kind}
   defp projection_key({:question_comment, id}) when is_binary(id), do: %{type: :question_comment, hold: nil, question: id}
 
@@ -533,6 +549,7 @@ defmodule SymphonyElixir.TicketState do
 
     case {Map.get(mark, :type), Map.get(mark, :hold)} do
       {:phase, _hold} -> [Map.merge(%{type: :phase, hold: nil}, stamps)]
+      {:pause, _hold} -> [Map.merge(%{type: :pause, hold: nil}, stamps)]
       {:hold_label, kind} when kind in @hold_kinds -> [Map.merge(%{type: :hold_label, hold: kind}, stamps)]
       {:question_comment, _hold} -> question_mark(Map.get(mark, :question), stamps)
       {:question_answer, _hold} -> answer_mark(Map.get(mark, :question), map_string(mark, :comment), stamps)
@@ -541,6 +558,12 @@ defmodule SymphonyElixir.TicketState do
   end
 
   defp normalize_projection(_mark), do: []
+
+  defp normalize_projected(%{} = projected) do
+    %{labels: projected |> Map.get(:labels) |> string_list() |> Enum.sort(), section: map_string(projected, :section)}
+  end
+
+  defp normalize_projected(_projected), do: nil
 
   defp question_mark(id, stamps) when is_binary(id), do: [Map.merge(%{type: :question_comment, hold: nil, question: id}, stamps)]
   defp question_mark(_id, _stamps), do: []
