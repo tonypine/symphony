@@ -2907,8 +2907,11 @@ Rules:
   the signal for that head and hands off. A run that ends without it MUST record `handoff_missing`
   and leave the ticket where it is for the retry machinery, which MUST back off its quiet runs and
   hold the ticket `Blocked` with `handoff_missing` after a bounded number on the same head. A
-  ticket on a hold is not counted: it waits on the hold alone. Recording a decision also lifts a
-  `handoff_missing` hold on the same ticket, so the ticket resumes with no other hold to clear.
+  ticket on a hold is not counted: it waits on the hold alone. Before the hold, Symphony asks a
+  question as the dispatch-loop guard does ("<id>'s last two runs ended without a handoff", with the
+  same three options), so a person releases the ticket with `Unblock` or `Restart`. Recording a
+  decision also lifts a `handoff_missing` hold on the same ticket, so the ticket resumes with no
+  other hold to clear.
 - **Dispatch-loop guard.** Every run dispatched for a ticket is recorded in its ticket-state record
   with its run kind and the state and PR head it started on. Before the next dispatch, the runs of
   the same kind since the ticket's last progress are counted against `watchdog.dispatch_loop_runs`
@@ -2920,8 +2923,13 @@ Rules:
   NOT be dispatched: the ticket is held `Blocked` with `waits_on.type` `dispatch_loop` and a reason
   naming the run kind, the count, the window and the last runs' outcomes (exit, whether they left a
   new PR head, the handoff signal or its absence), one error line is logged, and the Inbox (and so
-  `waiting_on_you` in `/api/v1/state`) lists the ticket. A person lifts it with `Unblock` or
-  `Restart`, and the count starts again.
+  `waiting_on_you` in `/api/v1/state`) lists the ticket. Before the hold, Symphony asks a question
+  through the Question service ("<id> ran N times in M minutes without finishing", options "Run it
+  again", "Start it over from main" and "Keep it paused"), which pauses the ticket on a `question`
+  reason; the hold names it (`waits_on.question_id`) and is cleared with it. A person lifts it with
+  `Unblock` or `Restart`, which answer the question with the first or the second option, or answers
+  the question, whose option does the same (the third leaves it paused), and the count starts
+  again.
 - **Green-head gating.** CI state (`running` / `green` / `red`) is an attribute per PR head, not a
   state. A failed check only a person clears (`protected paths`) does not make a head red: with no
   other failure, the head is green once its other checks passed. The reviewer and QA runs MUST
@@ -5829,7 +5837,7 @@ Minimum endpoints:
     | `decisions` | a plan in `Plan Review` | `Rework` through `plan_revise` for a plan under review (its revision), no move for an approved plan | each pick naming its `request_comment_id` as a reply under that request, the rest in one comment; `picks` are required (`[{"question", "answer", "request_comment_id"}]`) |
     | `changes` | a plan in `Plan Review` | as `decisions` | `reason` (required), posted before the move |
     | `backlog` | any open ticket | `Backlog` | `note` (optional), posted before the move |
-    | `unblock` | any ticket waiting on an access, dispatch-loop or operator-stop hold | no move; the hold clears and the ticket continues in place | one comment, posted after the hold clears |
+    | `unblock` | any ticket waiting on an access, dispatch-loop, quiet-handoff or operator-stop hold | no move; the hold clears and the ticket continues in place | one comment, posted after the hold clears |
     | `decide` | any ticket waiting on a `Needs Decision` hold | no move, else the state `move` names (`rework` or `done`), through the guard | the answer, posted as a reply under the request comment `request_comment_id` names; `picks` are required |
     | `undo` | the state the ticket's last move put it in | the state it came from | none |
 

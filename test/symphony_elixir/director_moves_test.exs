@@ -1,7 +1,8 @@
 defmodule SymphonyElixir.DirectorMovesTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{AuditLog, BlockedHold, DirectorMoves, Hold, OperatorStop, PlanComments, RunStore, SubIssueWait}
+  alias SymphonyElixir.{AuditLog, BlockedHold, DirectorMoves, DispatchLoop, Hold, OperatorStop, Pauses, PlanComments}
+  alias SymphonyElixir.{Questions, RunStore, SubIssueWait}
 
   @waiting "Waiting on sub-tickets"
 
@@ -1333,6 +1334,118 @@ defmodule SymphonyElixir.DirectorMovesTest do
     assert log =~ "Failed to record the person.action event on issue_id=pr"
     assert_received {:memory_tracker_state_update, "pr", "Backlog"}
     assert [%{"move" => "backlog"}] = audit_records()
+  end
+
+  describe "a question Symphony asked beside its hold" do
+    @director %{kind: :person, name: "Director"}
+
+    # The question and the hold the orchestrator sets for a dispatch loop or a quiet handoff.
+    defp ask_and_hold(repo_key, stop) do
+      {:ok, question} = Questions.ask({:ticket, repo_key, "pr"}, DispatchLoop.question_attrs(stop, "MOT-40"))
+      type = if match?({:quiet_handoff, _runs}, stop), do: "handoff_missing", else: "dispatch_loop"
+      :ok = Hold.set(repo_key, "pr", :blocked, %{reason: "#{type}: stuck", waits_on: %{type: type, keys: [], question_id: question.id}})
+      question
+    end
+
+    defp loop, do: %{kind: "implementation", count: 4, window_ms: 600_000, runs: []}
+
+    test "Unblock lifts a quiet handoff, answering its question \"Run it again\"", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      question = ask_and_hold("repo-director", {:quiet_handoff, 2})
+
+      assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+
+      refute Hold.held?("repo-director", "pr", :blocked)
+      assert %{state: :answered, answer: %{option: 1, by: @director}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
+      assert {:ok, nil} = Pauses.get({:ticket, "repo-director", "pr"})
+      assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director: MOT-40 continues in place."}
+    end
+
+    test "Restart lifts a dispatch loop or a quiet handoff, answering its question \"Start it over from main\"", %{opts: opts} do
+      for stop <- [loop(), {:quiet_handoff, 2}] do
+        github_activity(state: "OPEN")
+        put_issues([restart_issue()])
+        question = ask_and_hold("repo-restart", stop)
+
+        assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "Start over"}, restart_opts(opts))
+
+        refute Hold.held?("repo-restart", "pr", :blocked)
+        assert %{state: :answered, answer: %{option: 2}} = Questions.find({:ticket, "repo-restart", "pr"}, question.id)
+      end
+    end
+
+    test "a Restart the store refuses to lift names the quiet handoff's hold", %{opts: opts} do
+      github_activity(state: "OPEN")
+      put_issues([restart_issue()])
+      ask_and_hold("repo-restart", {:quiet_handoff, 3})
+
+      log =
+        capture_log(fn ->
+          assert {:ok, _result} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, opts |> restart_opts() |> Keyword.put(:store, UnwritableStore))
+        end)
+
+      assert log =~ "Restarted MOT-40 but couldn't clear its quiet-handoff hold: :boom"
+    end
+
+    test "answering \"Run it again\" is Unblock: the hold goes and the ticket continues in place", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      :ok = RunStore.record_ticket_dispatch("repo-director", "pr", %{kind: :implementation, run_id: "run-1", state: "In Progress"})
+      question = ask_and_hold("repo-director", loop())
+
+      assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Run it again", opts)
+
+      refute Hold.held?("repo-director", "pr", :blocked)
+      assert RunStore.get_ticket_state("repo-director", "pr").dispatches == []
+      assert %{state: :answered, answer: %{option: 1, text: "Run it again", by: @director}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
+    end
+
+    test "answering \"Start it over from main\" is Restart, its comment naming the question", %{opts: opts} do
+      github_activity(state: "OPEN")
+      put_issues([restart_issue()])
+      question = ask_and_hold("repo-restart", loop())
+
+      assert {:ok, %{move: "restart", to_state: "In Progress"}} = DirectorMoves.answer_held_question("MOT-40", question.id, "2", restart_opts(opts))
+
+      assert_received {:close_pr, @restart_pr_url}
+      assert_received {:memory_tracker_comment, "pr", comment}
+      assert comment =~ ~s(You answered "Start it over from main" to: MOT-40 ran 4 times in 10 minutes without finishing)
+      assert_received {:memory_tracker_state_update, "pr", "In Progress"}
+      refute Hold.held?("repo-restart", "pr", :blocked)
+      assert %{state: :answered, answer: %{option: 2}} = Questions.find({:ticket, "repo-restart", "pr"}, question.id)
+    end
+
+    test "answering \"Keep it paused\" or in the Director's own words leaves the ticket held", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+
+      for answer <- ["Keep it paused", "Let me look first"] do
+        question = ask_and_hold("repo-director", {:quiet_handoff, String.length(answer)})
+
+        assert {:ok, %{move: "decide", moved: false, commented: false}} = DirectorMoves.answer_held_question("MOT-40", question.id, answer, opts)
+
+        assert %{waits_on: %{question_id: id}} = Hold.get("repo-director", "pr", :blocked)
+        assert id == question.id
+        assert %{state: :answered, answer: %{text: ^answer}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
+        refute_received {:memory_tracker_comment, "pr", _body}
+      end
+
+      # The hold still waits on a person: Unblock lifts it.
+      assert {:ok, %{move: "unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+      refute Hold.held?("repo-director", "pr", :blocked)
+    end
+
+    test "refuses a question the ticket doesn't have, one already answered and a blank answer", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      question = ask_and_hold("repo-director", loop())
+
+      assert {:error, {:conflict, "MOT-40 has no question q-none"}} = DirectorMoves.answer_held_question("MOT-40", "q-none", "1", opts)
+      assert {:error, {:store, message}} = DirectorMoves.answer_held_question("MOT-40", question.id, "  ", opts)
+      assert message =~ "couldn't answer the question on MOT-40: :blank_answer"
+
+      assert {:ok, _result} = DirectorMoves.answer_held_question("MOT-40", question.id, "Keep it paused", opts)
+      assert {:error, {:conflict, message}} = DirectorMoves.answer_held_question("MOT-40", question.id, "1", opts)
+      assert message == "MOT-40's question #{question.id} is answered, not open"
+      assert {:error, :issue_not_found} = DirectorMoves.answer_held_question("MOT-404", question.id, "1", opts)
+    end
   end
 
   defp github_activity(fields) do

@@ -51,9 +51,12 @@ defmodule SymphonyElixir.TicketState do
   @typedoc """
   What a hold waits on, structured so the machine can clear it on its own: the dependency key(s)
   it is blocked by (`type: "dependency"`), an access need (`type: "access"`) or the fix ticket a
-  self-heal filed (`type: "fix_ticket"`).
+  self-heal filed (`type: "fix_ticket"`). A hold set with a question Symphony asked names it
+  (`question_id`, `SymphonyElixir.Questions`), as the dispatch-loop guard's does
+  (`SymphonyElixir.DispatchLoop`).
   """
-  @type waits_on :: %{type: String.t(), keys: [String.t()]} | nil
+  @type waits_on ::
+          %{required(:type) => String.t(), required(:keys) => [String.t()], optional(:question_id) => String.t()} | nil
 
   @typedoc "A hold pauses the ticket in its phase; the label is only its projection."
   @type hold :: %{
@@ -1265,19 +1268,23 @@ defmodule SymphonyElixir.TicketState do
     end
   end
 
-  # `waits_on` keeps only its structured half: a non-empty string type and a list of string keys.
+  # `waits_on` keeps only its structured half: a non-empty string type, a list of string keys and
+  # the id of the question asked with the hold, when there is one.
   defp map_waits_on(attrs) do
     case Map.get(attrs, :waits_on) do
       %{type: type} = waits_on when is_binary(type) ->
         case String.trim(type) do
           "" -> nil
-          trimmed -> %{type: trimmed, keys: normalize_keys(Map.get(waits_on, :keys))}
+          trimmed -> put_question_id(%{type: trimmed, keys: normalize_keys(Map.get(waits_on, :keys))}, normalize_string(Map.get(waits_on, :question_id)))
         end
 
       _waits_on ->
         nil
     end
   end
+
+  defp put_question_id(waits_on, nil), do: waits_on
+  defp put_question_id(waits_on, question_id), do: Map.put(waits_on, :question_id, question_id)
 
   defp normalize_keys(keys) when is_list(keys) do
     keys

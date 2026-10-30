@@ -2426,8 +2426,12 @@ commit it reviews (that wait has its own one-hour bound, see the epic review). W
 `dispatch_loop_long_window_ms` (8 in an hour), Symphony starts no more. It puts the ticket on a
 `Blocked` hold whose reason names the run kind, the count, the window and how the last runs ended
 (exit, whether they left a new PR head, the handoff signal or its absence), logs one error line, and
-lists the ticket in the Inbox and in `waiting_on_you` of `/api/v1/state`. `Unblock` or `Restart`
-lifts the hold, and the count starts again. Settings in the macOS app edits the limits in its
+lists the ticket in the Inbox and in `waiting_on_you` of `/api/v1/state`. Before the hold, Symphony
+asks a question on the ticket ("<id> ran N times in M minutes without finishing": "Run it again",
+"Start it over from main" or "Keep it paused"), and the hold is cleared with it. `Unblock` or
+`Restart` lifts the hold, answering the question with its first or second option, and the count
+starts again. A ticket whose last two runs ended without a handoff asks the same question and is
+released the same way. Settings in the macOS app edits the limits in its
 Dispatch loops section, as "Hold a ticket after" and "Or after", each a number of runs in minutes.
 
 On every tick the watchdog also reads the host's process table and warns about stray processes.

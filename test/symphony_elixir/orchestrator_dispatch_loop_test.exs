@@ -1,10 +1,10 @@
 defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Artifacts, CiWait, DispatchLoop, Handoff, Hold, Paths, TicketEvents, TicketState}
-  alias SymphonyElixir.{ClaudeCode, Codex}
+  alias SymphonyElixir.{Artifacts, CiWait, ClaudeCode, Codex, DispatchLoop, Handoff, Hold, Paths}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Inbox.Item
+  alias SymphonyElixir.{Pauses, Questions, TicketEvents, TicketState}
 
   @repo_key "loop-repo"
   @issue_id "issue-dispatch-loop"
@@ -35,7 +35,7 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     :ok
   end
 
-  test "a ticket re-dispatched with no progress is held after the limit, with the reason readable in the Inbox" do
+  test "a ticket re-dispatched with no progress asks what now and is held after the limit, with the reason readable in the Inbox" do
     :ok = RunStore.clear()
     put_observed_head!("sha-same")
 
@@ -58,22 +58,61 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     assert [error_line] = log |> String.split("\n") |> Enum.filter(&(&1 =~ "dispatch_loop"))
     assert error_line =~ "[error] Holding issue_id=#{@issue_id} issue_identifier=#{@identifier} instead of dispatching it again"
 
+    # Symphony asks one question, with three ways forward, and the ticket is paused on it.
+    ticket = {:ticket, @repo_key, @issue_id}
+    assert [question] = Questions.open(ticket)
+    assert question.title == "#{@identifier} ran 4 times in 10 minutes without finishing"
+    assert question.asked_by == %{kind: :symphony, name: "Symphony", run_id: nil}
+    assert Enum.map(question.options, & &1.label) == ["Run it again", "Start it over from main", "Keep it paused"]
+    question_id = question.id
+    assert {:ok, %{reasons: [%{kind: :question, waits_on: %{question_id: ^question_id}}]}} = Pauses.get(ticket)
+
     record = RunStore.get_ticket_state(@repo_key, @issue_id)
     hold = TicketState.get_hold(record, :blocked)
-    assert %{waits_on: %{type: "dispatch_loop", keys: ["implementation"]}, clearing_condition: "when a person unblocks or restarts it"} = hold
+
+    assert %{waits_on: %{type: "dispatch_loop", keys: ["implementation"], question_id: ^question_id}, clearing_condition: "when a person unblocks or restarts it"} =
+             hold
+
     assert hold.reason =~ "dispatch_loop: 4 implementation runs in 10 minutes without a state change, a new PR head or a decision"
     assert hold.reason =~ "ended normally, no new PR head, no handoff signal"
     assert [%{name: "dispatch_loop", details: %{kind: "implementation", count: 4, window_ms: 600_000}} | _rest] = record.signals
     assert_received {:memory_tracker_label_added, @issue_id, "Blocked"}
 
-    # The hold is one event: the `dispatch_loop` signal next to it is mirrored by the `hold.set`.
-    assert [{"hold.set", %{kind: "blocked", waits_on: %{type: "dispatch_loop", keys: ["implementation"]}}}] = ticket_events(@repo_key, @issue_id)
+    # The question comes first, then the hold: the `dispatch_loop` signal next to it is mirrored by the `hold.set`.
+    assert [{"question.asked", %{question_id: ^question_id}}, {"pause.set", _pause}, {"hold.set", %{kind: "blocked", waits_on: %{type: "dispatch_loop"}}}] =
+             ticket_events(@repo_key, @issue_id)
 
     # The Inbox, and `/api/v1/state`'s `waiting_on_you` built from it, lists the ticket with the reason.
     node = %{"id" => @issue_id, "identifier" => @identifier, "title" => "Loops", "url" => nil, "state" => %{"name" => "In Progress"}}
     lookups = %{hold: &Hold.get(&1, &2, :blocked)}
     assert %{kind: :blocked, ask: reason} = Item.from_node(node, @repo_key, %Schema{}, lookups)
     assert reason == hold.reason
+  end
+
+  test "a question the store refuses leaves the dispatch-loop hold as it was before questions" do
+    :ok = RunStore.clear()
+    put_observed_head!("sha-same")
+
+    for n <- 1..4 do
+      run = %{kind: :implementation, run_id: "run-#{n}", state: "In Progress", head: "sha-same"}
+      :ok = RunStore.record_ticket_dispatch(@repo_key, @issue_id, run)
+    end
+
+    {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_events, :read_only)
+    on_exit(fn -> :mnesia.change_table_access_mode(:symphony_run_store_ticket_events, :read_write) end)
+
+    log =
+      capture_log(fn ->
+        pid = start_retry(:LoopQuestionRefused)
+        wait_for_state(pid, &(not MapSet.member?(&1.claimed, @issue_id)))
+      end)
+
+    {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_events, :read_write)
+
+    assert log =~ "Failed to ask the question for issue_id=#{@issue_id} issue_identifier=#{@identifier}"
+    assert Questions.open({:ticket, @repo_key, @issue_id}) == []
+    assert %{waits_on: waits_on} = Hold.get(@repo_key, @issue_id, :blocked)
+    assert waits_on == %{type: "dispatch_loop", keys: ["implementation"]}
   end
 
   test "a ticket under the limit is dispatched, and the run is recorded with its kind, state and PR head" do

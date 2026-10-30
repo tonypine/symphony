@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.DispatchLoopTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.{DispatchLoop, Hold, TicketState}
+  alias SymphonyElixir.{DecisionRequest, DispatchLoop, Hold, TicketState}
 
   @limits %{runs: 4, window_ms: 600_000, long_runs: 8, long_window_ms: 3_600_000}
   @now ~U[2026-10-13 18:00:00Z]
@@ -102,6 +102,41 @@ defmodule SymphonyElixir.DispatchLoopTest do
       assert DispatchLoop.hold_attrs(%{kind: "qa", count: 1, window_ms: 90_000, runs: runs}, []).reason =~ "1 qa run in 90 seconds"
       assert DispatchLoop.hold_attrs(%{kind: "qa", count: 1, window_ms: 60_000, runs: runs}, []).reason =~ "in 1 minute without"
       assert DispatchLoop.hold_attrs(%{kind: "qa", count: 1, window_ms: 60_000, runs: runs}, []).reason =~ "started at an unknown time"
+    end
+  end
+
+  describe "question_attrs/2 and answer_move/1" do
+    test "a loop asks what now, in plain words the writing standard takes" do
+      request = DispatchLoop.question_attrs(%{kind: "implementation", count: 4, window_ms: 600_000, runs: []}, "MOT-1")
+
+      assert request.title == "MOT-1 ran 4 times in 10 minutes without finishing"
+      assert request.question == "MOT-1 ran 4 times in 10 minutes without finishing. Should Symphony run it again, start it over from main, or keep it paused?"
+      assert request.if_unanswered == "MOT-1 stays paused and Symphony starts no run on it."
+      assert Enum.map(request.options, &{&1.label, &1.recommended}) == [{"Run it again", true}, {"Start it over from main", false}, {"Keep it paused", false}]
+      assert DecisionRequest.check(request) == :ok
+    end
+
+    test "a quiet handoff asks the same question about its last runs" do
+      request = DispatchLoop.question_attrs({:quiet_handoff, 2}, "MOT-1")
+
+      assert request.title == "MOT-1's last two runs ended without a handoff"
+      assert request.why == "The last runs on MOT-1 stopped without handing the work on, so Symphony started no more runs on it."
+      assert Enum.map(request.options, & &1.label) == ["Run it again", "Start it over from main", "Keep it paused"]
+      assert DecisionRequest.check(request) == :ok
+      assert DispatchLoop.question_attrs({:quiet_handoff, 3}, "MOT-1").title == "MOT-1's last 3 runs ended without a handoff"
+    end
+
+    test "the answer's option is Unblock, Restart or nothing" do
+      options = DispatchLoop.question_attrs({:quiet_handoff, 2}, "MOT-1").options
+      answered = fn option -> %{state: :answered, answer: %{option: option}, options: options} end
+
+      assert DispatchLoop.answer_move(answered.(1)) == :unblock
+      assert DispatchLoop.answer_move(answered.(2)) == :restart
+      assert DispatchLoop.answer_move(answered.(3)) == :keep
+      assert DispatchLoop.answer_move(answered.(nil)) == :keep
+      assert DispatchLoop.answer_move(%{state: :open, answer: nil, options: options}) == :keep
+      assert DispatchLoop.option_label(:unblock) == "Run it again"
+      assert DispatchLoop.option_label(:restart) == "Start it over from main"
     end
   end
 
