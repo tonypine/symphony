@@ -397,9 +397,10 @@ nothing, and it writes only those fields, never the record's holds, verdicts or 
   the one the team has. Every Director move writes the record before its Linear state move; a move
   that posts its comment with the move (rework, restart, backlog) writes it before that comment, a
   restart after its reset, a Decide after its reply, and a plan's answers or changes after their
-  comments. `undo` puts the record back as it puts Linear back. Such a phase is Symphony's
-  (`phase_owner: symphony`); a phase an observation wrote, and a record from before the owner was
-  kept, is Linear's (`external`).
+  comments. `undo` puts the record back as it puts Linear back. An agent's own move through its
+  Linear tool writes the record first the same way, and puts it back when Linear does not make the
+  move. Such a phase is Symphony's (`phase_owner: symphony`); a phase an observation wrote, and a
+  record from before the owner was kept, is Linear's (`external`).
 - Under `dispatch.source: record`, a phase Symphony owns is not read back from Linear. An observation
   that finds the ticket in another Linear state keeps the record's phase (its other fields apply),
   records `drift.detected` with the record's phase and Linear's, moves the ticket back in Linear to the
@@ -407,7 +408,9 @@ nothing, and it writes only those fields, never the record's holds, verdicts or 
   asked. A failed move back is tried again by the next observation of the same difference, and each
   event is written once per Linear `updatedAt`. A Linear state whose `updatedAt` is older than the
   record's `phase_at` was read before the phase was written: the phase is kept and nothing moves. A
-  phase Linear owns follows Linear, and under `dispatch.source: poll` every phase does.
+  phase Linear owns follows Linear, and under `dispatch.source: poll` every phase does. The startup
+  reconciliation keeps a phase Symphony owns as well, and the first observation of the ticket moves
+  Linear back; a phase it adopts from Linear is Linear's.
 - A record written before these fields existed reads with them at their defaults (`nil`, or an empty
   list for `labels` and `blockers`); it needs no migration.
 

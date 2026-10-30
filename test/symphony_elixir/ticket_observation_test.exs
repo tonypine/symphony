@@ -3,7 +3,7 @@ defmodule SymphonyElixir.TicketObservationTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{TicketObservation, TicketSignals, TicketState}
+  alias SymphonyElixir.{AgentTools, TicketObservation, TicketSignals, TicketState}
 
   @linear_at ~U[2026-10-29 09:00:00Z]
   @now ~U[2026-10-29 09:05:00Z]
@@ -630,6 +630,23 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert Enum.map(recent, & &1.outcome) == [:reverted, :revert_failed]
     end
 
+    test "an agent's own move through its Linear tool is not drift: a CI Fix ticket it sends to Rework stays there",
+         %{repo_key: repo_key} do
+      owned!(repo_key, "CI Fix")
+      context = %{issue_id: "issue-observed", issue: %{repo_key: repo_key}}
+
+      assert {:ok, _response} = AgentTools.Linear.update_state(context, "Rework", linear_client: agent_linear("CI Fix", "Rework"))
+
+      # Linear's read of the agent's move, after the record took it.
+      moved_at = DateTime.add(DateTime.utc_now(), 60)
+      assert {:ok, :updated} = on_record(repo_key, hand_move("Rework", %{updated_at: moved_at}), moved_at)
+
+      assert %{phase: "Rework", phase_owner: :symphony} = RunStore.get_ticket_state(repo_key, "issue-observed")
+      assert ticket_events(repo_key, "issue-observed", ["drift.detected", "drift.reverted", "drift.revert_failed"]) == []
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert drift().detected == 0
+    end
+
     test "a ticket Symphony never moved follows Linear: a new Todo ticket moved to Backlog by hand", %{repo_key: repo_key} do
       {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
 
@@ -689,6 +706,19 @@ defmodule SymphonyElixir.TicketObservationTest do
     {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(%{state: "In Progress"}), now: @now)
     record = repo_key |> RunStore.get_ticket_state("issue-observed") |> TicketState.put_phase(phase, @phase_at)
     :ok = RunStore.put_ticket_state(record)
+  end
+
+  # Linear as the agent's Linear tool sees it: the ticket in `from`, its team's `to` state, and the
+  # move made.
+  defp agent_linear(from, to) do
+    fn query, _variables, _opts ->
+      if query =~ "SymphonyAgentIssueTeamStates" do
+        states = [%{"id" => "state-to", "name" => to}]
+        {:ok, %{"data" => %{"issue" => %{"state" => %{"name" => from, "type" => "started"}, "team" => %{"states" => %{"nodes" => states}}}}}}
+      else
+        {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
+      end
+    end
   end
 
   # Linear's read of the ticket after a person moved it to `state` by hand at `@moved_at`.

@@ -8,26 +8,35 @@ defmodule SymphonyElixir.TicketStateReconciler do
   flight) and the drift is logged. When they agree, the ticket is logged as reconciled with no
   drift. A record whose ticket Linear no longer returns is left alone and counted as missing, and a
   ticket Linear returns without a state leaves the record untouched: a missing state is missing
-  information, not a disagreement.
+  information, not a disagreement. An adopted phase is Linear's (`phase_owner: :external`).
+
+  Under `dispatch.source: record` a phase Symphony owns (`phase_owner: :symphony`) is kept: a ticket
+  moved by hand while Symphony was down is drift, which the next observation of the ticket moves back
+  in Linear (`SymphonyElixir.TicketObservation`). The record is left as it is and the difference is
+  logged.
   """
 
   require Logger
 
-  alias SymphonyElixir.{RunStore, TicketState, Tracker}
+  alias SymphonyElixir.{Config, RunStore, TicketState, Tracker}
 
   @type outcome :: %{checked: non_neg_integer(), drifted: non_neg_integer(), missing: non_neg_integer()}
 
   @doc """
-  Reconciles one record against the Linear `state` it now has. Returns `{:ok, record}` when they
-  agree or when the Linear state is nil (missing information leaves the record untouched),
-  `{:stamped, record}` when the record had no phase yet (it adopts the board's), and
-  `{:drift, record, %{from:, to:}}` when the board state differs.
+  Reconciles one record against the Linear `state` it now has, under `dispatch_source` (`"record"` or
+  `"poll"`, the default). Returns `{:ok, record}` when they agree or when the Linear state is nil
+  (missing information leaves the record untouched), `{:stamped, record}` when the record had no
+  phase yet (it adopts the board's), `{:kept, record, %{record_phase:, linear_phase:}}` when the board
+  state differs from a phase Symphony owns under `"record"` (the record is left as it is), and
+  `{:drift, record, %{from:, to:}}` when the board state differs otherwise. A phase adopted from the
+  board is Linear's (`phase_owner: :external`).
   """
-  @spec reconcile(TicketState.t(), String.t() | nil, DateTime.t()) ::
+  @spec reconcile(TicketState.t(), String.t() | nil, DateTime.t(), String.t()) ::
           {:ok, TicketState.t()}
           | {:stamped, TicketState.t()}
+          | {:kept, TicketState.t(), %{record_phase: String.t(), linear_phase: String.t()}}
           | {:drift, TicketState.t(), %{from: String.t() | nil, to: String.t() | nil}}
-  def reconcile(record, state, at \\ DateTime.utc_now()) do
+  def reconcile(record, state, at \\ DateTime.utc_now(), dispatch_source \\ "poll") do
     record = TicketState.normalize(record)
 
     cond do
@@ -39,6 +48,9 @@ defmodule SymphonyElixir.TicketStateReconciler do
 
       is_nil(record.phase) ->
         {:stamped, TicketState.put_phase(record, state, at, :external)}
+
+      dispatch_source == "record" and record.phase_owner == :symphony ->
+        {:kept, record, %{record_phase: record.phase, linear_phase: state}}
 
       true ->
         {:drift, TicketState.put_phase(record, state, at, :external), %{from: record.phase, to: state}}
@@ -52,6 +64,8 @@ defmodule SymphonyElixir.TicketStateReconciler do
     `Tracker.fetch_issue_states_by_ids/1`
   - `:store` — the store to read and update records through, defaulting to `RunStore`
   - `:now` — the time stamped on a record whose phase was empty
+  - `:dispatch_source` — `"record"` or `"poll"`, defaulting to `dispatch.source`: under `"record"` a
+    phase Symphony owns is kept (`reconcile/4`)
 
   Returns `%{checked:, drifted:, missing:}`. A read or fetch error is logged and leaves the records
   as they are.
@@ -68,7 +82,8 @@ defmodule SymphonyElixir.TicketStateReconciler do
       records ->
         case fetch_states(Enum.map(records, & &1.issue_id), opts) do
           {:ok, issues} ->
-            reconcile_records(records, index_states(issues), Keyword.get(opts, :now, DateTime.utc_now()), store)
+            source = Keyword.get_lazy(opts, :dispatch_source, &Config.dispatch_source/0)
+            reconcile_records(records, index_states(issues), {Keyword.get(opts, :now, DateTime.utc_now()), source}, store)
 
           {:error, reason} ->
             fetch_failed(reason)
@@ -116,19 +131,23 @@ defmodule SymphonyElixir.TicketStateReconciler do
 
   defp state_of(issue), do: Map.get(issue, :state) || Map.get(issue, "state")
 
-  defp reconcile_records(records, states, now, store) do
+  defp reconcile_records(records, states, at, store) do
     Enum.reduce(records, %{checked: 0, drifted: 0, missing: 0}, fn record, acc ->
       case Map.fetch(states, record.issue_id) do
-        {:ok, state} -> reconcile_record(record, state, now, acc, store)
+        {:ok, state} -> reconcile_record(record, state, at, acc, store)
         :error -> %{acc | missing: acc.missing + 1}
       end
     end)
     |> tap(&log_summary/1)
   end
 
-  defp reconcile_record(record, state, now, acc, store) do
-    case reconcile(record, state, now) do
+  defp reconcile_record(record, state, {now, source}, acc, store) do
+    case reconcile(record, state, now, source) do
       {:ok, _record} ->
+        %{acc | checked: acc.checked + 1}
+
+      {:kept, _record, kept} ->
+        log_kept(record.issue_id, kept)
         %{acc | checked: acc.checked + 1}
 
       {:stamped, updated} ->
@@ -142,8 +161,9 @@ defmodule SymphonyElixir.TicketStateReconciler do
     end
   end
 
-  defp persist_phase(%{repo_key: repo_key, issue_id: issue_id, phase: phase, updated_at: at}, action, store) do
-    case store.update_ticket_state(repo_key, issue_id, %{phase: phase, updated_at: at}) do
+  # The phase is written with when and by whom, so a phase Symphony owned before is Linear's now.
+  defp persist_phase(%{repo_key: repo_key, issue_id: issue_id} = updated, action, store) do
+    case store.update_ticket_state(repo_key, issue_id, Map.take(updated, [:phase, :phase_at, :phase_owner, :updated_at])) do
       :ok -> :ok
       {:error, reason} -> Logger.warning("Failed to record #{action} for #{issue_id}: #{inspect(reason)}")
     end
@@ -151,6 +171,13 @@ defmodule SymphonyElixir.TicketStateReconciler do
 
   defp log_drift(issue_id, %{from: from, to: to}) do
     Logger.info("Ticket state drift reconciled issue_id=#{issue_id} from=#{inspect(from)} to=#{inspect(to)}")
+  end
+
+  defp log_kept(issue_id, %{record_phase: record_phase, linear_phase: linear_phase}) do
+    Logger.info(
+      "Ticket state kept: Symphony owns the phase issue_id=#{issue_id} record_phase=#{inspect(record_phase)} " <>
+        "linear_phase=#{inspect(linear_phase)}; the next read of Linear moves it back"
+    )
   end
 
   defp log_summary(%{checked: checked, drifted: drifted, missing: missing}) do

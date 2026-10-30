@@ -35,6 +35,21 @@ defmodule SymphonyElixir.TicketStateReconcilerTest do
       assert reconciled.phase_owner == :external
     end
 
+    test "under the record source keeps a phase Symphony owns, and adopts one Linear owns" do
+      owned = TicketState.put_phase(TicketState.new(@repo_key, "issue-1"), "Code Review", @at)
+
+      assert {:kept, ^owned, %{record_phase: "Code Review", linear_phase: "Done"}} =
+               TicketStateReconciler.reconcile(owned, "Done", @at, "record")
+
+      assert {:drift, %{phase: "Done", phase_owner: :external}, _drift} =
+               TicketStateReconciler.reconcile(owned, "Done", @at, "poll")
+
+      external = TicketState.new(@repo_key, "issue-1", %{phase: "Todo"})
+
+      assert {:drift, %{phase: "Backlog", phase_owner: :external}, _drift} =
+               TicketStateReconciler.reconcile(external, "Backlog", @at, "record")
+    end
+
     test "leaves the record untouched when Linear returns no state" do
       record = TicketState.new(@repo_key, "issue-1", %{phase: "In Progress"})
       assert {:ok, ^record} = TicketStateReconciler.reconcile(record, nil, @at)
@@ -85,6 +100,35 @@ defmodule SymphonyElixir.TicketStateReconcilerTest do
       assert log =~ "Ticket state drift reconciled issue_id=issue-1"
       assert log =~ "checked=1 drifted=1 missing=0"
       assert %{phase: "Done"} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    end
+
+    test "an adopted phase is stored as Linear's, with when it was adopted" do
+      :ok = RunStore.put_ticket_state(TicketState.put_phase(TicketState.new(@repo_key, "issue-1"), "Code Review", @at))
+      now = DateTime.add(@at, 60)
+
+      fetcher = fn _ids -> {:ok, [%{id: "issue-1", state: "Done"}]} end
+
+      assert TicketStateReconciler.reconcile_all(fetcher: fetcher, now: now, dispatch_source: "poll") ==
+               %{checked: 1, drifted: 1, missing: 0}
+
+      assert %{phase: "Done", phase_owner: :external, phase_at: ^now} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    end
+
+    test "under the record source keeps a phase Symphony owns: the next observation moves Linear back" do
+      owned = TicketState.put_phase(TicketState.new(@repo_key, "issue-1"), "Code Review", @at)
+      :ok = RunStore.put_ticket_state(owned)
+
+      fetcher = fn _ids -> {:ok, [%{id: "issue-1", state: "Done"}]} end
+
+      log =
+        capture_log(fn ->
+          assert TicketStateReconciler.reconcile_all(fetcher: fetcher, dispatch_source: "record") ==
+                   %{checked: 1, drifted: 0, missing: 0}
+        end)
+
+      assert log =~ "Ticket state kept: Symphony owns the phase issue_id=issue-1"
+      assert log =~ ~s(record_phase="Code Review" linear_phase="Done")
+      assert %{phase: "Code Review", phase_owner: :symphony, phase_at: @at} = RunStore.get_ticket_state(@repo_key, "issue-1")
     end
 
     test "reads the Linear state from string-keyed issues and skips those without an id" do

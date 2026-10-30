@@ -29,6 +29,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.PathUnlock
   alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.SensitivePath
+  alias SymphonyElixir.TicketSignals
   alias SymphonyElixir.Tracker
   alias SymphonyElixir.TransitionGuard
   alias SymphonyElixir.Walkthrough
@@ -725,11 +726,24 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   def update_state(_context, _state_name_or_id, _opts), do: {:error, :invalid_state}
 
+  # The record is written first, as `TransitionGuard.perform/4` does: the agent's move is Symphony's
+  # own, so the ticket's record takes the target as its phase (`TicketSignals.record_phase/3`) before
+  # Linear is asked, and a later read of Linear finds no drift to move back
+  # (`SymphonyElixir.TicketObservation`). A move Linear doesn't make puts the record's phase back: the
+  # agent gets the error and the ticket stays where it was.
   defp apply_state(context, issue_id, state_id, move, opts) do
+    repo_key = issue_repo_key(context)
+    before = TicketSignals.recorded_phase(repo_key, issue_id)
+    :ok = TicketSignals.record_phase(repo_key, issue_id, move.to)
+
     with {:ok, response} <- graphql(@update_issue_state_mutation, %{id: issue_id, stateId: state_id}, opts),
          {:ok, result} <- check_mutation_success(response, "issueUpdate") do
       record_fix_verdict(context, issue_id, move)
       {:ok, result}
+    else
+      error ->
+        :ok = TicketSignals.restore_phase(repo_key, issue_id, before)
+        error
     end
   end
 
