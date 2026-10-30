@@ -138,7 +138,12 @@ defmodule SymphonyElixir.TicketEvents do
     end
   end
 
-  defp notify(%Event{} = event) do
+  @doc """
+  Sends the live channel's notice of `event`, as `record/5` does once it writes one: for a writer
+  that appends a ticket's events in its own transaction, after it commits.
+  """
+  @spec notify(Event.t()) :: :ok
+  def notify(%Event{} = event) do
     ObservabilityPubSub.broadcast_ticket_event(%{
       repo_key: event.repo_key,
       issue_id: event.issue_id,

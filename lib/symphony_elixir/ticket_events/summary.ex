@@ -119,8 +119,25 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     {"Could not move back to #{record_phase(payload)} from #{linear_phase(payload)}", [text(payload, :error), "tried again at the next read of Linear"]}
   end
 
+  defp summary("pause.set", payload, _event), do: {"Paused" <> suffix(": ", waiting(payload)), []}
+  defp summary("pause.reason_added", payload, _event), do: {"Also paused" <> suffix(": ", waiting(payload)), []}
+  defp summary("pause.reason_cleared", payload, _event), do: {"Pause reason cleared" <> suffix(": ", waiting(payload)), []}
+
+  defp summary("pause.cleared", payload, _event) do
+    {"Moving again", for(%{} = reason <- list(field(payload, :cleared)), do: text(reason, :text))}
+  end
+
   defp summary("note", payload, _event), do: {"Note added", [text(payload, :text)]}
   defp summary(_type, _payload, _event), do: :unknown
+
+  # A reason's line as the rest of a title: "Waiting for your answer" reads "waiting for your
+  # answer"; a line opening on a name ("TP-12 has to finish", "GitHub is down") keeps its capitals.
+  defp waiting(payload) do
+    case text(payload, :text) do
+      nil -> nil
+      text -> if text =~ ~r/^\p{Lu}\p{Ll}*(\s|$)/u, do: String.downcase(String.first(text)) <> String.slice(text, 1..-1//1), else: text
+    end
+  end
 
   defp run_name(payload) do
     name = kind_name(text(payload, :run_kind))
@@ -232,6 +249,9 @@ defmodule SymphonyElixir.TicketEvents.Summary do
       _value -> nil
     end
   end
+
+  defp list(value) when is_list(value), do: value
+  defp list(_value), do: []
 
   defp strings(value) when is_binary(value), do: [value]
   defp strings(value) when is_list(value), do: Enum.filter(value, &is_binary/1)
