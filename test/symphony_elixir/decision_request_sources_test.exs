@@ -43,7 +43,9 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
     # times in M minutes without finishing" and "<id>'s last two runs ended without a handoff".
     "lib/symphony_elixir/orchestrator.ex" => [:dispatch_loop, :quiet_handoff],
     # The questions the backfill finds in the holds and decisions already recorded.
-    "lib/symphony_elixir/pauses/backfill.ex" => [:backfill]
+    "lib/symphony_elixir/pauses/backfill.ex" => [:backfill],
+    # A run's block report that names no blocker: "The run on <id> cannot continue on its own".
+    "lib/symphony_elixir/transition_guard.ex" => [:block_report]
   }
 
   @writer "lib/symphony_elixir/decision_request.ex"
@@ -76,6 +78,9 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
     orchestrator = Map.new(lib_files())["lib/symphony_elixir/orchestrator.ex"]
     assert orchestrator =~ "DispatchLoop.question_attrs(loop,"
     assert orchestrator =~ "DispatchLoop.question_attrs({:quiet_handoff,"
+
+    guard = Map.new(lib_files())["lib/symphony_elixir/transition_guard.ex"]
+    assert guard =~ "Questions.ask(ticket, block_report_question("
   end
 
   test "no code but the writer sets a Needs Decision hold or renders a request comment" do

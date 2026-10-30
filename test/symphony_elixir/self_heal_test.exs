@@ -4,10 +4,10 @@ defmodule SymphonyElixir.SelfHealTest do
   import ExUnit.CaptureLog
   import SymphonyElixir.TestSupport, only: [ticket_events: 2]
 
+  alias SymphonyElixir.{BlockedHold, NeedsDecisionHold, Pauses, SelfHeal, TicketState}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.Collector
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.{NeedsDecisionHold, SelfHeal, TicketState}
 
   @repo_key "repo-self-heal"
   @issue_id "issue-self-heal"
@@ -313,6 +313,20 @@ defmodule SymphonyElixir.SelfHealTest do
 
       assert {:blocked, %{waits_on: %{type: "fix_ticket", keys: [@fix_ticket]}}} = Process.get(:hold_attrs)
       assert {@issue_id, "Blocked"} = Process.get(:machine_label)
+    end
+
+    test "pauses the ticket on the fix ticket beside its hold, once however often it heals" do
+      :ok = SymphonyElixir.RunStore.clear()
+      on_exit(fn -> SymphonyElixir.RunStore.clear() end)
+      ticket = {:ticket, @repo_key, @issue_id}
+
+      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable)))
+      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable)))
+
+      assert {:ok, %{reasons: [reason]}} = Pauses.get(ticket)
+      assert %{kind: :ticket, waits_on: %{identifier: @fix_ticket}, text: "Waiting for TP-900 to finish: it fixes what stopped this ticket"} = reason
+      assert reason.set_by == BlockedHold.reason_setter(:fix_ticket)
+      assert [{"pause.set", %{waits_on: %{identifier: @fix_ticket}}}] = ticket_events(@repo_key, @issue_id) |> Enum.filter(&match?({"pause." <> _, _}, &1))
     end
 
     test "a setup block's dev server build files in the project's repo, and the hold gives the cause in words" do

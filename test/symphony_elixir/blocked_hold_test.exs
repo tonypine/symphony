@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.BlockedHoldTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{BlockedHold, Hold, RunStore, UpdateHold, Workflow}
+  alias SymphonyElixir.{BlockedHold, Hold, Pauses, RunStore, UpdateHold, Workflow}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Hold.Drift
   alias SymphonyElixir.Linear.Issue
@@ -9,6 +9,8 @@ defmodule SymphonyElixir.BlockedHoldTest do
   @repo_key "repo-a"
   @issue_id "issue-1"
   @terminal ["Done", "Canceled"]
+  @ticket {:ticket, "repo-a", "issue-1"}
+  @fix_line "Waiting for TP-900 to finish: it fixes what stopped this ticket"
 
   defmodule FailingStore do
     def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :boom}
@@ -146,8 +148,12 @@ defmodule SymphonyElixir.BlockedHoldTest do
       assert stored_hold() == nil
       assert labels() == []
 
-      assert [{"hold.set", %{kind: "blocked", waits_on: %{type: "dependency", keys: ["TP-1"]}}}, {"hold.cleared", %{kind: "blocked"}}] =
-               ticket_events(@repo_key, @issue_id)
+      assert [
+               {"hold.set", %{kind: "blocked", waits_on: %{type: "dependency", keys: ["TP-1"]}}},
+               {"pause.set", %{reason: "ticket", waits_on: %{identifier: "TP-1"}}},
+               {"hold.cleared", %{kind: "blocked"}},
+               {"pause.cleared", %{cleared: [%{waits_on: %{identifier: "TP-1"}}]}}
+             ] = ticket_events(@repo_key, @issue_id)
     end
 
     test "does nothing when the blockers have not changed" do
@@ -315,6 +321,122 @@ defmodule SymphonyElixir.BlockedHoldTest do
     }
   end
 
+  describe "the pause beside a dependency hold (TP-1234)" do
+    test "a Todo ticket blocked by two tickets waits on each; a blocker done clears its reason, the last clears the pause" do
+      both = issue(%{blocked_by: [blocker("TP-1", "In Progress"), blocker("TP-2", "Todo")]})
+      assert BlockedHold.sync(both, @terminal, settings: designed_settings()) == :set
+
+      assert Pauses.why(@ticket) == ["Waiting for TP-1 to finish", "Waiting for TP-2 to finish"]
+      assert {:ok, %{reasons: [%{set_by: setter}, %{set_by: setter}]}} = Pauses.get(@ticket)
+      assert setter == BlockedHold.reason_setter(:dependency)
+      # The hold beside it is as it always was.
+      assert %{reason: "waiting on TP-1, TP-2", waits_on: %{type: "dependency", keys: ["TP-1", "TP-2"]}} = stored_hold()
+
+      one_left = issue(%{blocked_by: [blocker("TP-1", "Done"), blocker("TP-2", "Todo")]})
+      assert BlockedHold.sync(one_left, @terminal, settings: designed_settings()) == :set
+      assert Pauses.why(@ticket) == ["Waiting for TP-2 to finish"]
+      assert %{waits_on: %{keys: ["TP-2"]}} = stored_hold()
+
+      # The same blockers again change nothing and record nothing.
+      events = ticket_events(@repo_key, @issue_id)
+      assert BlockedHold.sync(one_left, @terminal, settings: designed_settings()) == :none
+      assert ticket_events(@repo_key, @issue_id) == events
+
+      done = issue(%{blocked_by: [blocker("TP-1", "Done"), blocker("TP-2", "Done")]})
+      assert BlockedHold.sync(done, @terminal, settings: designed_settings()) == :clear
+      assert Pauses.get(@ticket) == {:ok, nil}
+      assert stored_hold() == nil
+
+      assert ["pause.set", "pause.reason_added", "pause.reason_cleared", "pause.cleared"] =
+               for({type, _payload} <- ticket_events(@repo_key, @issue_id, ~w(pause.set pause.reason_added pause.reason_cleared pause.cleared)), do: type)
+    end
+
+    test "a hold's pause lacking a reason gets it, a reason a rule set that the hold no longer names goes, and others stay" do
+      hold = %{reason: "waiting on TP-2", clearing_condition: "c", waits_on: %{type: "dependency", keys: ["TP-2"]}}
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, hold)
+      :ok = set_reason(Pauses.ticket_reason(:fix_ticket, "TP-900"), BlockedHold.reason_setter(:fix_ticket))
+      :ok = set_reason(Pauses.ticket_reason(:landing, "TP-7"), %{kind: :rule, name: "Landing"})
+      :ok = set_reason(%{kind: :person, waits_on: %{action: "unblock"}}, %{kind: :person, name: "Director"})
+
+      assert BlockedHold.sync(issue(%{blocked_by: [blocker("TP-2", "Todo")]}), @terminal, settings: designed_settings()) == :none
+
+      assert Pauses.why(@ticket) == [
+               "Waiting for TP-7 to land: it changes the same files",
+               "Waiting for you to unblock it",
+               "Waiting for TP-2 to finish"
+             ]
+    end
+
+    test "a blocker with no identifier is waited on by the hold only" do
+      unnamed = issue(%{blocked_by: [%{id: "blocker-x", identifier: nil, state: "Todo"}]})
+      assert BlockedHold.sync(unnamed, @terminal, settings: designed_settings()) == :set
+      assert %{waits_on: %{keys: ["blocker-x"]}} = stored_hold()
+      assert Pauses.get(@ticket) == {:ok, nil}
+    end
+
+    test "a reason the rules or a block report set that no hold names any more goes on the next sync; others stay" do
+      # Its clear failed when the hold cleared, so the ticket has no hold and a reason left over.
+      :ok = set_reason(Pauses.ticket_reason(:dependency, "TP-5"), BlockedHold.reason_setter(:dependency))
+      :ok = set_reason(Pauses.ticket_reason(:dependency, "TP-6"), %{kind: :run, name: "The run"})
+      :ok = set_reason(Pauses.ticket_reason(:dependency, "TP-8"), %{kind: :person, name: "Director"})
+
+      assert BlockedHold.sync(issue(), @terminal, settings: designed_settings()) == :none
+      assert Pauses.why(@ticket) == ["Waiting for TP-8 to finish"]
+
+      # Another writer's hold replaced the fix-ticket one: its reason goes, the landing hold's stays.
+      :ok = RunStore.clear()
+      :ok = set_reason(Pauses.ticket_reason(:fix_ticket, "TP-900"), BlockedHold.reason_setter(:fix_ticket))
+      :ok = set_reason(Pauses.ticket_reason(:landing, "TP-7"), %{kind: :rule, name: "Landing"})
+      landing = BlockedHold.landing_attrs([%{issue_identifier: "TP-7", files: ["a.ex"]}])
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, landing)
+
+      assert BlockedHold.sync(issue(), @terminal, settings: designed_settings()) == :none
+      assert Pauses.why(@ticket) == ["Waiting for TP-7 to land: it changes the same files"]
+      assert BlockedHold.landing?(stored_hold())
+
+      # A ticket nothing paused reads no pause and records nothing.
+      :ok = RunStore.clear()
+      assert BlockedHold.sync(issue(), @terminal, settings: designed_settings()) == :none
+      assert Pauses.get(@ticket) == {:ok, nil}
+      assert ticket_events(@repo_key, @issue_id) == []
+    end
+
+    test "a run's block report outside Todo: a blocker done clears its reason, the hold stays as it was, the last clears both" do
+      hold = %{reason: "the run reported a block: waiting on TP-1, TP-2", clearing_condition: "c", waits_on: %{type: "dependency", keys: ["TP-1", "TP-2"]}}
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, hold)
+      for id <- ["TP-1", "TP-2"], do: :ok = set_reason(Pauses.ticket_reason(:dependency, id), %{kind: :run, name: "The run"})
+      stored = stored_hold()
+
+      both_open = issue(%{state: "In Progress", blocked_by: [blocker("TP-1", "In Progress"), blocker("TP-2", "Todo")]})
+      assert BlockedHold.sync(both_open, @terminal, settings: designed_settings()) == :none
+      assert Pauses.why(@ticket) == ["Waiting for TP-1 to finish", "Waiting for TP-2 to finish"]
+
+      for state <- ["In Progress", "Rework"] do
+        one_left = issue(%{state: state, blocked_by: [blocker("TP-1", "Done"), blocker("TP-2", "Todo")]})
+        assert BlockedHold.sync(one_left, @terminal, settings: designed_settings()) == :none
+        assert Pauses.why(@ticket) == ["Waiting for TP-2 to finish"]
+        assert stored_hold() == stored
+      end
+
+      done = issue(%{state: "Rework", blocked_by: [blocker("TP-1", "Done"), blocker("TP-2", "Done")]})
+      assert BlockedHold.sync(done, @terminal, settings: designed_settings(), build: %{sha: nil}) == :clear
+      assert Pauses.get(@ticket) == {:ok, nil}
+      assert stored_hold() == nil
+    end
+
+    test "a hold the store refuses writes no reason" do
+      blocked = issue(%{blocked_by: [blocker("TP-1", "In Progress")]})
+
+      capture_log(fn -> assert BlockedHold.sync(blocked, @terminal, settings: designed_settings(), store: FailingStore) == :none end)
+
+      assert Pauses.get(@ticket) == {:ok, nil}
+    end
+  end
+
+  defp set_reason(reason, set_by) do
+    with {:ok, _pause} <- Pauses.set(@ticket, reason, set_by: set_by), do: :ok
+  end
+
   describe "the landing hold (TP-989)" do
     @tracked %{issue_identifier: "TP-1", pr_number: 1, pr_url: "https://github.com/acme/app/pull/1", files: ["SPEC.md", "a.ex"]}
     @person %{pr_number: 12, pr_url: "https://github.com/acme/app/pull/12", title: "Docs pass", files: ["SPEC.md", "b.md"]}
@@ -378,9 +500,11 @@ defmodule SymphonyElixir.BlockedHoldTest do
 
       Process.put({:fix_ticket, "TP-900"}, {:ok, %Issue{id: "fix-id", identifier: "TP-900", state: "Done"}})
 
+      :ok = set_reason(Pauses.ticket_reason(:fix_ticket, "TP-900"), BlockedHold.reason_setter(:fix_ticket))
       assert BlockedHold.sync(issue(), @terminal, settings: designed_settings(), tracker: FixTicketTracker) == :clear
 
       assert stored_hold() == nil
+      assert Pauses.get(@ticket) == {:ok, nil}
 
       # Only the stale fix-ticket pointer goes: the component, the signature and the retry count
       # stay, so a break that comes back after the repair is compared against this failure.
@@ -397,6 +521,8 @@ defmodule SymphonyElixir.BlockedHoldTest do
 
       assert BlockedHold.sync(issue(), @terminal, settings: designed_settings(), tracker: FixTicketTracker) == :none
       assert stored_hold() != nil
+      # A hold whose pause lacks its reason gets it on the next sync.
+      assert Pauses.why(@ticket) == [@fix_line]
 
       Process.delete({:fix_ticket, "TP-900"})
 
@@ -478,6 +604,8 @@ defmodule SymphonyElixir.BlockedHoldTest do
       assert %{reason: reason, clearing_condition: condition, waits_on: %{type: "fix_ticket", keys: ["TP-900"]}} = stored_hold()
       assert reason == "waiting for an app update: fix ticket TP-900 merged in `aaaaaaa`, running `bbbbbbb`"
       assert condition == "when the running app includes the fix ticket TP-900's merge"
+      # The pause waits on the fix ticket as long as its hold does.
+      assert Pauses.why(@ticket) == [@fix_line]
 
       # The next poll on the same build changes nothing and looks nothing up again.
       assert {0, ^cache} = sweep_fix_hold(build(), cache)
@@ -489,6 +617,7 @@ defmodule SymphonyElixir.BlockedHoldTest do
       assert {1, _cache} = sweep_fix_hold(build(@next_build_sha), cache)
       assert_received {:commit_included?, @next_build_sha}
       assert stored_hold() == nil
+      assert Pauses.get(@ticket) == {:ok, nil}
     end
 
     test "lifts at once when the build has no sha, a lookup fails, or a skip label opts out" do
@@ -572,6 +701,8 @@ defmodule SymphonyElixir.BlockedHoldTest do
       assert %{reason: reason, clearing_condition: condition, waits_on: %{type: "dependency", keys: ["TP-997"]}} = stored_hold()
       assert reason == "waiting for an app update: TP-997 merged in `aaaaaaa`, running `bbbbbbb`"
       assert condition == "when the running app includes the merge of TP-997"
+      # The pause waits on the blocker as long as its hold waits for the app update.
+      assert Pauses.why(@ticket) == ["Waiting for TP-997 to finish"]
 
       # The next poll on the same build changes nothing and reads nothing again, not even the
       # blocker: an unreadable blocker would have lifted the hold.
@@ -581,10 +712,13 @@ defmodule SymphonyElixir.BlockedHoldTest do
       refute_received {:commit_included?, _sha}
       assert stored_hold().reason == reason
 
+      assert Pauses.why(@ticket) == ["Waiting for TP-997 to finish"]
+
       # The app updates to a build that includes the merge: the hold lifts, the ticket stays in Rework.
       assert {1, _cache} = sweep_dependency_hold(held("Rework", "Done"), build(@next_build_sha), cache)
       assert_received {:commit_included?, @next_build_sha}
       assert stored_hold() == nil
+      assert Pauses.get(@ticket) == {:ok, nil}
     end
 
     test "lifts at once when the build has no sha, the blocker can't be read, or a skip label opts out" do

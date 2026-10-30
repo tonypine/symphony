@@ -1455,6 +1455,62 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
   end
 
+  describe "a run's block report naming no blocker (TP-1234)" do
+    # The access hold and its question, as the Linear tool sets them for an agent's block report.
+    defp report_block(repo_key) do
+      ticket = {:ticket, repo_key, "pr"}
+      ctx = %{settings: %Schema{}, from_state: "In Progress", open_blockers: [], ticket: ticket, issue_identifier: "MOT-40"}
+      {:hold, :blocked, attrs} = SymphonyElixir.TransitionGuard.resolve_request(%{"id" => "backlog", "name" => "Backlog"}, ctx)
+      :ok = Hold.set(repo_key, "pr", :blocked, attrs)
+      [question] = Questions.open({:ticket, repo_key, "pr"})
+      question
+    end
+
+    test ~s(the Inbox lists it with its question, and Unblock answers "Unblock and run again" and lifts it), %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      question = report_block("repo-director")
+      assert question.title == "The run on MOT-40 cannot continue on its own"
+
+      node = %{"id" => "pr", "identifier" => "MOT-40", "title" => "Add checkout", "url" => nil, "state" => %{"name" => "In Progress"}}
+      assert %{kind: :blocked} = Item.from_node(node, "repo-director", %Schema{}, %{hold: &Hold.get(&1, &2, :blocked)})
+
+      assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+
+      refute Hold.held?("repo-director", "pr", :blocked)
+      assert %{state: :answered, answer: %{option: 1, text: "Unblock and run again"}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
+      assert {:ok, nil} = Pauses.get({:ticket, "repo-director", "pr"})
+    end
+
+    test ~s(answering "Unblock and run again" resumes the ticket in place; "Keep it paused" leaves it held), %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      question = report_block("repo-director")
+
+      assert {:ok, %{move: "decide", moved: false}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Keep it paused", opts)
+      assert Hold.held?("repo-director", "pr", :blocked)
+
+      :ok = Hold.clear("repo-director", "pr", :blocked)
+      question = report_block("repo-director")
+
+      assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Unblock and run again", opts)
+      refute Hold.held?("repo-director", "pr", :blocked)
+      assert %{state: :answered, answer: %{option: 1}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
+      assert {:ok, nil} = Pauses.get({:ticket, "repo-director", "pr"})
+      assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director: MOT-40 continues in place."}
+    end
+
+    test "Restart leaves the block report's hold and its question, as it always left the access hold", %{opts: opts} do
+      github_activity(state: "OPEN")
+      put_issues([restart_issue()])
+      question = report_block("repo-restart")
+
+      assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "Start over"}, restart_opts(opts))
+
+      assert %{waits_on: %{type: "access", question_id: id}} = Hold.get("repo-restart", "pr", :blocked)
+      assert id == question.id
+      assert %{state: :open} = Questions.find({:ticket, "repo-restart", "pr"}, question.id)
+    end
+  end
+
   defp github_activity(fields) do
     Application.put_env(:symphony_elixir, :director_moves_test_activity, {:ok, Map.merge(%{pr_url: @restart_pr_url, pr_node_id: "PR_node"}, Map.new(fields))})
   end

@@ -2,6 +2,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.{Hold, OperatorStop, Pauses, RunStore}
+  alias SymphonyElixir.PrWatch.Sweep
   alias SymphonyElixir.QaDriver.DevServerLease
 
   @waiting "Waiting on sub-tickets"
@@ -153,6 +154,52 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
 
     assert [%{identifier: "MT-STOP", reason: "Stopped by you at 2026-10-20 08:41:25 UTC. Unblock runs it again; Restart starts it over from main."}] =
              snapshot_of(state).dispatch_skipped
+  end
+
+  test "a ticket held back by its blockers or a Blocked hold is skipped with its pause's text (TP-1234)" do
+    on_exit(fn -> RunStore.clear() end)
+    blockers = [%{id: "a", identifier: "MT-1", state: "In Progress"}, %{id: "b", identifier: "MT-2", state: "Todo"}]
+    for identifier <- ["MT-1", "MT-2"], do: {:ok, _pause} = Pauses.set({:ticket, "default", "blocked"}, Pauses.ticket_reason(:dependency, identifier))
+
+    :ok = Hold.set("default", "fixing", :blocked, %{reason: "waiting on fix ticket MT-9", waits_on: %{type: "fix_ticket", keys: ["MT-9"]}})
+    {:ok, _pause} = Pauses.set({:ticket, "default", "fixing"}, Pauses.ticket_reason(:fix_ticket, "MT-9"))
+
+    request = SymphonyElixir.TransitionGuard.block_report_question("MT-ASK")
+    {:ok, %{id: question_id}} = SymphonyElixir.Questions.ask({:ticket, "default", "asking"}, request)
+    :ok = Hold.set("default", "asking", :blocked, %{reason: "the run reported a block", waits_on: %{type: "access", keys: [], question_id: question_id}})
+
+    # A held ticket with no pause names its hold, as before, and so does one whose pause the backfill
+    # gave the hold's own words (an access or CI-wait hold's `:environment` reason).
+    :ok = Hold.set("default", "held", :blocked, %{reason: "the run reported a block", waits_on: %{type: "access", keys: []}})
+    :ok = Hold.set("default", "waiting", :blocked, %{reason: "ci_wait: CI on abc was still running after 30 minutes", waits_on: %{type: "ci_wait", keys: []}})
+    environment = %{kind: :environment, waits_on: %{condition: "ci_wait"}, text: "ci_wait: CI on abc was still running after 30 minutes"}
+    {:ok, _pause} = Pauses.set({:ticket, "default", "waiting"}, environment, backfilled: true)
+
+    issues = [
+      issue("blocked", "MT-BLOCKED", "Todo", blocked_by: blockers),
+      issue("fixing", "MT-FIX", "In Progress"),
+      issue("asking", "MT-ASK", "In Progress"),
+      issue("held", "MT-HELD", "In Progress"),
+      issue("waiting", "MT-WAIT", "In Progress")
+    ]
+
+    tracked(issues)
+    state = Orchestrator.dispatch_chosen_issues_for_test(issues, orchestrator_state())
+    reasons = Map.new(snapshot_of(state).dispatch_skipped, &{&1.identifier, &1.reason})
+
+    assert reasons == %{
+             "MT-BLOCKED" => "Waiting for MT-1 to finish; Waiting for MT-2 to finish",
+             "MT-FIX" => "Waiting for MT-9 to finish: it fixes what stopped this ticket",
+             "MT-ASK" => "Waiting for your answer: The run on MT-ASK cannot continue on its own",
+             "MT-HELD" => "on a Blocked hold",
+             "MT-WAIT" => "on a Blocked hold"
+           }
+
+    # The PR watch sweep labels every one of them by its gate.
+    for {identifier, reason} <- reasons do
+      line = ~s(Skipping dispatch: issue_id=x issue_identifier=#{identifier} state="In Progress"; #{reason})
+      assert {:skipped, "gate: " <> _gate} = Sweep.classify(line)
+    end
   end
 
   # TP-1125: a QA pass waiting for another pass's dev server port on the QA host is running, but

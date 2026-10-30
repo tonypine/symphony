@@ -29,6 +29,8 @@ defmodule SymphonyElixir.PrWatch.Sweep do
   # The orchestrator's dispatch gates that are no PR case, by the words of their reasons.
   @gates [
     {"blocked by ", "gate: blocked by a ticket"},
+    {~r/\bWaiting for [A-Z][A-Z0-9]*-\d+ to (?:finish|land)\b/, "gate: blocked by a ticket"},
+    {"Waiting for your answer", "gate: hold"},
     {~r/\bon an? [A-Za-z ]+ hold\b/, "gate: hold"},
     {"waiting on its sub-tickets", "gate: sub-tickets"},
     {"waiting for an app update", "gate: app update"},

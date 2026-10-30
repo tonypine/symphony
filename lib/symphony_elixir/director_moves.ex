@@ -33,7 +33,8 @@ defmodule SymphonyElixir.DirectorMoves do
     revision the same way: the plan is changed and keeps its sub-tickets. `:rework` is the
     rejection that cancels them. Neither `:decisions` nor `:changes` is taken back by `undo/2`;
   - `:backlog`: an open ticket gets the note as a comment when there is one, then moves to `Backlog`;
-  - `:unblock`: a ticket waiting on an **access** hold — an agent's block report — on a
+  - `:unblock`: a ticket waiting on an **access** hold — an agent's block report, whose question is
+    answered "Unblock and run again" (`SymphonyElixir.TransitionGuard.block_report_question/1`) — on a
     dispatch-loop or quiet-handoff hold (`SymphonyElixir.DispatchLoop`: the question Symphony asked
     beside it is answered "Run it again", then the hold is cleared) or on an operator's stop
     (`SymphonyElixir.OperatorStop`: its pause reason, then its hold) has the hold cleared by hand
@@ -198,24 +199,37 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   @doc """
-  Answers the question `question_id` Symphony asked beside the Blocked hold of the ticket
-  `identifier` (a dispatch loop's or a quiet handoff's, `SymphonyElixir.DispatchLoop.question_attrs/2`)
-  with `answer`, as the Director, then does what the answer's option asks
-  (`SymphonyElixir.DispatchLoop.answer_move/1`): "Run it again" is `:unblock`, "Start it over from
-  main" is `:restart`, its comment naming the question, and "Keep it paused" or an answer in the
-  Director's own words leaves the ticket where it is, held. Takes the options of `move/4`.
+  Answers the question `question_id` asked beside the Blocked hold of the ticket `identifier` (a
+  dispatch loop's or a quiet handoff's, `SymphonyElixir.DispatchLoop.question_attrs/2`, or a run's
+  block report's, `SymphonyElixir.TransitionGuard.block_report_question/1`) with `answer`, as the
+  Director, then does what the answer's option asks (`SymphonyElixir.DispatchLoop.answer_move/1`):
+  "Run it again" and "Unblock and run again" are `:unblock`, "Start it over from main" is
+  `:restart`, its comment naming the question, and "Keep it paused" or an answer in the Director's
+  own words leaves the ticket where it is, held. Takes the options of `move/4`.
   """
   @spec answer_held_question(String.t(), String.t(), String.t(), keyword()) :: result()
   def answer_held_question(identifier, question_id, answer, opts) when is_binary(identifier) and is_binary(question_id) do
     with {:ok, issue} <- fetch_issue(identifier),
          {:ok, question} <- answer_question(issue, question_id, answer) do
-      case DispatchLoop.answer_move(question) do
+      case held_answer_move(question) do
         :unblock -> unblock(issue, opts)
         :restart -> do_move(:restart, issue, %{reason: "You answered \"#{DispatchLoop.option_label(:restart)}\" to: #{question.title}"}, opts)
         :keep -> finish(:decide, issue, nil, nil, opts)
       end
     end
   end
+
+  defp held_answer_move(question) do
+    if picked_label(question) == TransitionGuard.unblock_option(),
+      do: :unblock,
+      else: DispatchLoop.answer_move(question)
+  end
+
+  defp picked_label(%{state: :answered, answer: %{option: number}, options: options}) when is_integer(number) do
+    with %{label: label} <- Enum.at(options, number - 1), do: label
+  end
+
+  defp picked_label(_question), do: nil
 
   defp answer_question(issue, question_id, answer) do
     case Questions.answer({:ticket, issue.repo_key, issue.id}, question_id, answer, by: OperatorStop.director()) do
@@ -569,14 +583,30 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  # A Blocked hold set beside a question Symphony asked (`SymphonyElixir.DispatchLoop`).
+  # A Blocked hold set beside a question Symphony asked (`SymphonyElixir.DispatchLoop`). A block
+  # report's access hold names its question too, but a restart leaves it, as it always has.
+  defp asked?(%{waits_on: %{type: "access"}}), do: false
   defp asked?(hold), do: is_binary(get_in(hold || %{}, [:waits_on, :question_id]))
 
   # The Blocked hold cleared by `move`, the question set beside it answered with the option `move` is.
   defp clear_blocked(issue, move, opts) do
-    question = {:answer, DispatchLoop.option_label(move), OperatorStop.director()}
+    question = {:answer, option_label(issue, move, opts), OperatorStop.director()}
     Hold.clear(issue.repo_key, issue.id, :blocked, [question: question] ++ store_opts(opts))
   end
+
+  # Unblock answers a block report's question with its own option, "Unblock and run again"
+  # (`TransitionGuard.block_report_question/1`); any other with the dispatch loop's.
+  defp option_label(issue, :unblock, opts) do
+    with %{waits_on: %{question_id: id}} <- blocked_hold(issue, opts),
+         %{options: options} <- Questions.find({:ticket, issue.repo_key, issue.id}, id),
+         true <- Enum.any?(options, &(&1.label == TransitionGuard.unblock_option())) do
+      TransitionGuard.unblock_option()
+    else
+      _other -> DispatchLoop.option_label(:unblock)
+    end
+  end
+
+  defp option_label(_issue, move, _opts), do: DispatchLoop.option_label(move)
 
   defp stopped?(issue, hold), do: OperatorStop.hold?(hold) or OperatorStop.held?(issue.repo_key, issue.id)
 

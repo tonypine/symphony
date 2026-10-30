@@ -20,7 +20,8 @@ defmodule SymphonyElixir.SelfHeal do
       component and the same failure is reused, not filed again, keeping its priority, and the new
       failure is attached to it as evidence; a terminal one, or one for another failure, is not;
     * links the affected ticket to the fix ticket as blocked-by and gives it a `Blocked` hold
-      waiting on that ticket, which lifts on its own when the fix goes terminal
+      waiting on that ticket, with a pause reason beside it that waits on it too
+      (`SymphonyElixir.Pauses`); both lift on their own when the fix goes terminal
       (`SymphonyElixir.BlockedHold`), or, for a fix merged into the repo the running Symphony was
       built from, once the running build includes it — no decision request and no check for a
       person;
@@ -51,7 +52,7 @@ defmodule SymphonyElixir.SelfHeal do
 
   require Logger
 
-  alias SymphonyElixir.{Config, DecisionRequest, Hold, RunStore, TicketState, Verification}
+  alias SymphonyElixir.{BlockedHold, Config, DecisionRequest, Hold, Pauses, RunStore, TicketState, Verification}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Linear.Issue
@@ -463,12 +464,21 @@ defmodule SymphonyElixir.SelfHeal do
 
     case Hold.set(ctx.repo_key, ctx.issue.id, @blocked_hold, attrs, hold_opts(ctx.opts)) do
       :ok ->
+        pause_on_fix_ticket(ctx, identifier)
         Logger.warning("Self-heal holds #{label(ctx.issue)} on #{identifier} for its #{ctx.component} block; the ticket is Blocked")
         :ok
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # Beside the hold, the ticket's pause waits on the fix ticket (`SymphonyElixir.Pauses`, the one
+  # writer). Best-effort, as the hold's ledger writes are: the Blocked hold's next sync sets a reason
+  # its hold waits on and the pause lacks (`SymphonyElixir.BlockedHold`).
+  defp pause_on_fix_ticket(ctx, identifier) do
+    _ = Pauses.set({:ticket, ctx.repo_key, ctx.issue.id}, Pauses.ticket_reason(:fix_ticket, identifier), set_by: BlockedHold.reason_setter(:fix_ticket))
+    :ok
   end
 
   # The block in words when the outcome gives them (`SymphonyElixir.SetupBlock`), else its signature.

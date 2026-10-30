@@ -51,6 +51,7 @@ defmodule SymphonyElixir.Pauses.Backfill do
   @listed_skips 20
   @identifier ~r/\A[A-Z][A-Z0-9]*-\d+\z/
   @ticket_types ~w(dependency fix_ticket landing)
+  @ticket_sources %{"dependency" => :dependency, "fix_ticket" => :fix_ticket, "landing" => :landing}
   @environment_types ~w(access ci_wait)
   @question_types ~w(dispatch_loop handoff_missing)
   @restart ~r/restart|start(?:s|ed)? (?:it )?over|from main/i
@@ -290,8 +291,7 @@ defmodule SymphonyElixir.Pauses.Backfill do
 
     reasons =
       for identifier <- identifiers do
-        reason = %{kind: :ticket, waits_on: %{identifier: identifier}, text: ticket_text(type, identifier)}
-        {:reason, reason, reason_opts(hold)}
+        {:reason, Pauses.ticket_reason(Map.fetch!(@ticket_sources, type), identifier), reason_opts(hold)}
       end
 
     skipped = for key <- others, do: "#{type} key #{key} names no ticket"
@@ -349,10 +349,6 @@ defmodule SymphonyElixir.Pauses.Backfill do
 
   defp with_at(opts, %DateTime{} = at), do: Keyword.put(opts, :at, at)
   defp with_at(opts, nil), do: opts
-
-  defp ticket_text("dependency", identifier), do: "Waiting for #{identifier} to finish"
-  defp ticket_text("fix_ticket", identifier), do: "Waiting for #{identifier} to finish: it fixes what stopped this ticket"
-  defp ticket_text("landing", identifier), do: "Waiting for #{identifier} to land: it changes the same files"
 
   # The question Symphony asks for a run that made no progress or ended without its handoff.
   defp stuck_request(type, name, hold_reason) do

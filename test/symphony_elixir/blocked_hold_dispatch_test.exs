@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.BlockedHoldDispatchTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Hold, RunStore, Workflow}
+  alias SymphonyElixir.{Hold, Pauses, RunStore, Workflow}
   alias SymphonyElixir.Linear.Issue
 
   @repo_key "designed"
@@ -33,6 +33,26 @@ defmodule SymphonyElixir.BlockedHoldDispatchTest do
       refute Hold.held?(@repo_key, @issue_id, :blocked)
       assert labels() == []
       assert Orchestrator.should_dispatch_issue_for_test(unblocked, orchestrator_state())
+    end
+
+    test "a ticket blocked by two others is paused on both, then on the one left, and runs once both are done" do
+      ticket = {:ticket, @repo_key, @issue_id}
+      both = issue(%{blocked_by: [blocker("TP-1", "In Progress"), blocker("TP-2", "Todo")]})
+
+      assert Orchestrator.sweep_blocked_holds_for_test(@repo_key, [both], @terminal) == 1
+      assert Pauses.why(ticket) == ["Waiting for TP-1 to finish", "Waiting for TP-2 to finish"]
+      refute Orchestrator.should_dispatch_issue_for_test(both, orchestrator_state())
+
+      one_left = %{both | blocked_by: [blocker("TP-1", "Done"), blocker("TP-2", "Todo")]}
+      assert Orchestrator.sweep_blocked_holds_for_test(@repo_key, [one_left], @terminal) == 1
+      assert Pauses.why(ticket) == ["Waiting for TP-2 to finish"]
+      refute Orchestrator.should_dispatch_issue_for_test(one_left, orchestrator_state())
+
+      done = %{both | blocked_by: [blocker("TP-1", "Done"), blocker("TP-2", "Done")]}
+      assert Orchestrator.sweep_blocked_holds_for_test(@repo_key, [done], @terminal) == 1
+      refute Pauses.paused?(ticket)
+      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      assert Orchestrator.should_dispatch_issue_for_test(done, orchestrator_state())
     end
 
     test "a store hold pauses dispatch on its own, with no open blocker on the board" do

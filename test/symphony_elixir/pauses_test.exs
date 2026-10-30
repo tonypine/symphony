@@ -297,6 +297,21 @@ defmodule SymphonyElixir.PausesTest do
       for line <- Pauses.why(@ticket), do: refute(line =~ ~r/[_\/`{}:#]|\n/, line)
     end
 
+    test "a ticket reason's line says why the ticket is waited on: a blocker, a fix ticket or a competing pull request" do
+      for {source, identifier} <- [dependency: "TP-1", fix_ticket: "TP-2", landing: "TP-3"] do
+        {:ok, _pause} = Pauses.set(@ticket, Pauses.ticket_reason(source, identifier))
+      end
+
+      assert Pauses.why(@ticket) == [
+               "Waiting for TP-1 to finish",
+               "Waiting for TP-2 to finish: it fixes what stopped this ticket",
+               "Waiting for TP-3 to land: it changes the same files"
+             ]
+
+      assert Pauses.ticket_reason(:dependency, "TP-1") == %{kind: :ticket, waits_on: %{identifier: "TP-1"}, text: "Waiting for TP-1 to finish"}
+      assert Enum.map(["TP-12", "MT-9", "tp-12", "blocker-uuid", "TP-", nil], &Pauses.identifier?/1) == [true, true, false, false, false, false]
+    end
+
     test "a subject not paused, or one that can't be read, has no reasons" do
       assert Pauses.why(:symphony) == []
       assert Pauses.why(:nonsense) == []
