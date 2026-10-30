@@ -21,6 +21,8 @@ defmodule SymphonyElixir.QaPolicyTest do
     settings!(%{"auto_review" => %{"playbooks" => %{"cli" => %{"enabled" => false}, "macos_app" => macos_app}}})
   end
 
+  defp kinds({:run, playbooks, reason}), do: {:run, Enum.map(playbooks, & &1.kind), reason}
+
   defp issue(attrs \\ %{}) do
     struct!(
       %Issue{
@@ -236,6 +238,29 @@ defmodule SymphonyElixir.QaPolicyTest do
       assert {:run, [macos_app], reason} = QaPolicy.decision(both, settings, server_and_app)
       refute Map.has_key?(macos_app, :live)
       assert reason =~ "the issue has the `qa:fixture` label"
+    end
+
+    test "a server-only change whose walkthrough walks the Director selects the macos_app playbook, live" do
+      live = %{"start_cmd" => "scripts/qa-server-start.sh", "paths" => ["lib/**", "config/**"], "walkthrough_mentions" => ["Director"]}
+      macos_app = %{"build" => "make", "app" => "A.app", "paths" => ["macos/**"], "live" => live}
+      settings = settings!(%{"auto_review" => %{"playbooks" => %{"macos_app" => macos_app}}})
+      director = issue(%{description: "## User walkthrough\n\n1. In the Director, press Decide on the held ticket.\n"})
+
+      server_only = ["lib/symphony_elixir/questions.ex"]
+      macos_app = fn {:run, playbooks, _reason} -> Enum.find(playbooks, &(&1.kind == "macos_app")) end
+
+      assert {:run, ["cli", "macos_app"], reason} = kinds(QaPolicy.decision(director, settings, server_only))
+      assert %{live: true} = macos_app.(QaPolicy.decision(director, settings, server_only))
+      assert reason =~ "the app gets a live server: the PR changes the server and the `## User walkthrough` names `Director`"
+
+      # A `qa:live` label selects it too; a server change no Director step walks, or `qa:fixture`, does not.
+      assert %{live: true} = macos_app.(QaPolicy.decision(issue(%{labels: ["qa:live"]}), settings, server_only))
+
+      menu = issue(%{description: "## User walkthrough\n\n1. Run `symphony status`.\n"})
+      assert {:run, ["cli"], _reason} = kinds(QaPolicy.decision(menu, settings, server_only))
+
+      fixture = issue(%{description: director.description, labels: ["qa:fixture"]})
+      assert {:run, ["cli"], _reason} = kinds(QaPolicy.decision(fixture, settings, server_only))
     end
 
     test "a live server with no walkthrough words is live for any walkthrough, and one with nothing on screen is noted too" do

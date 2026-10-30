@@ -202,14 +202,20 @@ defmodule SymphonyElixir.QaSeed do
   defp transcript_path(file, dir), do: Path.expand(file, dir)
 
   defp pull_request(repo_key, tracker, now, %{"issue" => identifier, "number" => number} = entry) do
-    ci = Map.fetch!(@ci, Map.get(entry, "ci", "pending"))
-
-    with {:ok, issue} <- issue(tracker, identifier),
+    with {:ok, ci} <- ci(identifier, Map.get(entry, "ci", "pending")),
+         {:ok, issue} <- issue(tracker, identifier),
          url = pr_url(number),
          :ok <- tagged(TicketPullRequest.put(repo_key, issue.id, %{pr_url: url, branch: "qa-seed/#{identifier}", source: "created"}), {:pull_request, identifier}) do
       facts = %Facts{phase: Map.get(@phases, issue.state, :in_progress), pr_number: number, ci: ci, failing_check: Map.get(entry, "failing_check")}
       watch = %{facts: facts, pr_url: url, head_sha: head_sha(identifier), source: :poll, read_at: now, read_ci: ci}
       tagged(RunStore.put_ticket_pr_watch(repo_key, issue.id, identifier, watch), {:pr_watch, identifier})
+    end
+  end
+
+  defp ci(identifier, value) do
+    case Map.fetch(@ci, value) do
+      {:ok, ci} -> {:ok, ci}
+      :error -> {:error, {{:pull_request, identifier}, {:unknown_ci, value}}}
     end
   end
 

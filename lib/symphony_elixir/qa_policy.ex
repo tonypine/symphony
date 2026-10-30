@@ -18,11 +18,12 @@ defmodule SymphonyElixir.QaPolicy do
   merge stays gated on the app starting (`SymphonyElixir.QaVerification`).
 
   A `macos_app` playbook with a `live` server (`SymphonyElixir.QaAgent.PlaybookSettings`) is marked
-  `live: true` when the pass should run that server on the QA host beside the app: the diff touches
-  one of the server's `paths` and the ticket's `## User walkthrough` mentions one of its
-  `walkthrough_mentions` (any walkthrough when it lists none). A `qa:live` label marks it live and a
-  `qa:fixture` label never does, whatever the diff. A pass not marked live starts no server, and the
-  app reads its fixtures only.
+  `live: true` when the pass should run that server on the QA host beside the app
+  (`SymphonyElixir.QaAgent.Selection.live/3`): the diff touches one of the server's `paths` and the
+  ticket's `## User walkthrough` mentions one of its `walkthrough_mentions` (any walkthrough when it
+  lists none). A `qa:live` label marks it live and a `qa:fixture` label never does, whatever the
+  diff. The same rule selects the playbook for a server-only diff. A pass not marked live starts no
+  server, and the app reads its fixtures only.
   """
 
   require Logger
@@ -31,11 +32,7 @@ defmodule SymphonyElixir.QaPolicy do
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Selection
   alias SymphonyElixir.Verification
-  alias SymphonyElixir.Walkthrough
   alias SymphonyElixir.Workspace
-
-  @live_label "qa:live"
-  @fixture_label "qa:fixture"
 
   @typedoc """
   Whether the change needs a QA run — and with which playbooks — or skips it, with the recorded
@@ -118,7 +115,7 @@ defmodule SymphonyElixir.QaPolicy do
   defp mark_live(issue, playbooks, paths) do
     Enum.map_reduce(playbooks, "", fn
       %{kind: "macos_app", live_server: live_server} = playbook, note ->
-        case live(issue, live_server, paths) do
+        case Selection.live(issue, live_server, paths) do
           {true, why} -> {Map.put(playbook, :live, true), note <> "; the app gets a live server: " <> why}
           {false, why} -> {playbook, note <> "; the app reads fixtures only: " <> why}
         end
@@ -127,31 +124,6 @@ defmodule SymphonyElixir.QaPolicy do
         {playbook, note}
     end)
   end
-
-  defp live(issue, live_server, paths) do
-    labels = issue |> Issue.label_names() |> Enum.map(&(&1 |> String.trim() |> String.downcase()))
-    section = Walkthrough.section(issue.description)
-
-    cond do
-      @fixture_label in labels -> {false, "the issue has the `#{@fixture_label}` label"}
-      @live_label in labels -> {true, "the issue has the `#{@live_label}` label"}
-      not server_change?(live_server, paths) -> {false, "the PR changes none of the server's paths"}
-      is_nil(section) -> {false, "the ticket has no `## User walkthrough`"}
-      not mentions?(section, live_server.walkthrough_mentions) -> {false, "no `## User walkthrough` step names #{words(live_server)}"}
-      true -> {true, "the PR changes the server and " <> walkthrough_note(live_server)}
-    end
-  end
-
-  defp server_change?(live_server, paths),
-    do: Enum.any?(paths, fn path -> Enum.any?(live_server.paths, &Selection.glob_match?(path, &1)) end)
-
-  defp mentions?(_section, []), do: true
-  defp mentions?(section, words), do: Enum.any?(words, &Regex.match?(~r/\b#{Regex.escape(&1)}\b/iu, section))
-
-  defp words(%{walkthrough_mentions: words}), do: Enum.map_join(words, " or ", &"`#{&1}`")
-
-  defp walkthrough_note(%{walkthrough_mentions: []}), do: "the ticket has a `## User walkthrough`"
-  defp walkthrough_note(live_server), do: "the `## User walkthrough` names #{words(live_server)}"
 
   defp nothing_on_screen?(issue, playbooks, paths) do
     Enum.any?(playbooks, &(&1.kind == "macos_app")) and not Selection.user_walkthrough?(issue) and

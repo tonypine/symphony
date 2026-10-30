@@ -1837,8 +1837,10 @@ change gives a reason.
 
 A pass is live when its PR changes one of `paths` and the ticket's `## User walkthrough` names one
 of `walkthrough_mentions`. A `qa:live` label makes it live whatever the diff, and a `qa:fixture`
-label never does (it wins over `qa:live`). The QA decision's reason says which. A pass that is
-not live starts no server.
+label never does (it wins over `qa:live`). The QA decision's reason says which. The same rule
+selects the `macos_app` playbook when no changed path matches its own `paths`: a server-only change
+whose walkthrough walks the Director gets a live pass of the app. A pass that is not live starts no
+server.
 
 A live pass runs the server through the same path as `dev_server: true`, with the same port lease
 and stop: a server that does not build, exits or fails its health check makes the pass

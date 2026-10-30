@@ -1,8 +1,23 @@
 defmodule SymphonyElixir.QaSeedTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Config, Hold, Pauses, QaSeed, RunStore, TicketPullRequest, Workflow}
+  import Plug.Conn
+  import Plug.Test
+
+  alias SymphonyElixir.{Config, DirectorMoves, Hold, Orchestrator, Pauses, QaSeed, Questions}
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.{RunStore, TicketPullRequest, Workflow}
+  alias SymphonyElixirWeb.ControlApiController
+
+  # The restart's reset, which the QA server's `gh` stand-in answers for the seed's own PRs.
+  defmodule SeedGitHub do
+    def fetch_activity(_pr_url, _opts), do: {:ok, %{state: "OPEN"}}
+    def close(_pr_url, _opts), do: :ok
+  end
+
+  defmodule SeedWorkspace do
+    def remove_issue_workspaces_checked(_issue), do: :ok
+  end
 
   @seed Path.expand("../../priv/qa_seed/symphony", __DIR__)
   @now ~U[2026-10-30 12:00:00Z]
@@ -14,7 +29,15 @@ defmodule SymphonyElixir.QaSeedTest do
 
     issues =
       for entry <- @seed |> Path.join("issues.json") |> File.read!() |> Jason.decode!() do
-        %Issue{id: entry["id"], identifier: entry["identifier"], state: entry["state"], title: entry["title"], labels: entry["labels"]}
+        # The QA server routes the seed's team to its one repository; here the issues carry its key.
+        %Issue{
+          id: entry["id"],
+          identifier: entry["identifier"],
+          state: entry["state"],
+          title: entry["title"],
+          labels: entry["labels"],
+          repo_key: repo_key
+        }
       end
 
     Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
@@ -67,6 +90,68 @@ defmodule SymphonyElixir.QaSeedTest do
     assert %{facts: %{ci: :green, phase: :merging}} = record(repo_key, "qa-seed-107").pr_watch
   end
 
+  test "the seeded server answers every move the Director makes, over the memory tracker", %{repo_key: repo_key, dir: dir} do
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+    assert QaSeed.load(dir, now: @now) == :ok
+
+    # As in the application: the orchestrator starts after the seed, with its pauses.
+    {:ok, orchestrator} = Orchestrator.start_link(name: Module.concat(__MODULE__, :SeededOrchestrator))
+    on_exit(fn -> stop_process(orchestrator) end)
+    moves_server = :"qa_seed_moves_#{System.unique_integer([:positive])}"
+    start_supervised!({DirectorMoves, name: moves_server})
+    moves = [server: moves_server, github: SeedGitHub, workspace: SeedWorkspace]
+    move = &control(&1, &2, orchestrator, moves)
+
+    # Decide answers the seeded question and lifts its hold; Undo brings both back.
+    [%{id: question_id}] = Questions.open({:ticket, repo_key, "qa-seed-108"})
+    picks = [%{"question" => "How long a paused repository stays paused", "answer" => "Stay paused until resumed"}]
+    assert %{"move" => "decide"} = move.(:decide, %{"issue_identifier" => "QA-108", "question_id" => question_id, "picks" => picks})
+    refute Hold.held?(repo_key, "qa-seed-108", :needs_decision)
+    assert %{"move" => "undo", "undone" => "decide"} = move.(:undo, %{"issue_identifier" => "QA-108"})
+    assert [%{id: ^question_id}] = Questions.open({:ticket, repo_key, "qa-seed-108"})
+
+    # Unblock lifts the access hold in place.
+    assert %{"move" => "unblock", "moved" => false} = move.(:unblock, %{"issue_identifier" => "QA-102"})
+    refute Hold.held?(repo_key, "qa-seed-102", :blocked)
+
+    # Rework, restart and backlog move the phased tickets in the tracker.
+    assert %{"to_state" => "Rework"} = move.(:rework, %{"issue_identifier" => "QA-109", "reason" => "Split it differently"})
+    assert_received {:memory_tracker_state_update, "qa-seed-109", "Rework"}
+    assert %{"from_state" => "Rework", "to_state" => "In Progress"} = move.(:restart, %{"issue_identifier" => "QA-105", "reason" => "Start over"})
+    assert_received {:memory_tracker_state_update, "qa-seed-105", "In Progress"}
+    assert %{"to_state" => "Backlog"} = move.(:backlog, %{"issue_identifier" => "QA-101"})
+    assert_received {:memory_tracker_state_update, "qa-seed-101", "Backlog"}
+
+    # Resume and pause, Symphony-wide and for the repository; one pause holds at every step, so nothing starts.
+    assert %{} = move.(:resume, %{})
+    assert Pauses.get(:symphony) == {:ok, nil}
+    assert %{} = move.(:pause, %{"reason" => "QA pauses it again"})
+    assert {:ok, %{}} = Pauses.get(:symphony)
+    assert %{"repository" => %{"repo_key" => ^repo_key, "paused" => false}} = move.(:resume_repository, %{"repo_key" => repo_key})
+    refute Pauses.paused?({:repository, repo_key})
+    assert %{"repository" => %{"paused" => true}} = move.(:pause_repository, %{"repo_key" => repo_key, "reason" => "QA pauses it again"})
+    assert Pauses.paused?({:repository, repo_key})
+
+    # Stop answers for a ticket with no run: the seeded server's agents never start one.
+    assert %{"stopped" => false} = move.(:stop, %{"issue_identifier" => "QA-103"})
+  end
+
+  # Posts a control API move and returns its 200 answer.
+  defp control(action, params, orchestrator, moves) do
+    conn =
+      conn(:post, "/api/v1/control/#{action}", Jason.encode!(params))
+      |> put_req_header("content-type", "application/json")
+      |> Phoenix.Controller.put_view(SymphonyElixirWeb.ErrorJSON)
+      |> assign(:director_moves, moves)
+      |> assign(:orchestrator, orchestrator)
+      |> Map.put(:params, params)
+      |> Map.put(:body_params, params)
+      |> then(&apply(ControlApiController, action, [&1, params]))
+
+    assert {conn.status, action} == {200, action}, conn.resp_body
+    Jason.decode!(conn.resp_body)
+  end
+
   test "a seed with only its repository loads, and the ages count from now", %{repo_key: repo_key} do
     dir = seed_copy(repo_key, fn seed -> Map.take(seed, ["repository"]) end)
     File.write!(Path.join(dir, "seed.json"), Jason.encode!(%{"repository" => repo_key, "runs" => [%{"issue" => "QA-110"}], "pauses" => %{}}))
@@ -90,6 +175,9 @@ defmodule SymphonyElixir.QaSeedTest do
     assert {:error, :no_repository} = QaSeed.load(seed_copy(repo_key, &Map.delete(&1, "repository")))
     no_url = &Map.put(&1, "pull_requests", [%{"issue" => "QA-103", "number" => nil}])
     assert {:error, {{:pull_request, "QA-103"}, _reason}} = QaSeed.load(seed_copy(repo_key, no_url))
+
+    unknown_ci = &Map.put(&1, "pull_requests", [%{"issue" => "QA-103", "number" => 7, "ci" => "amber"}])
+    assert {:error, {{:pull_request, "QA-103"}, {:unknown_ci, "amber"}}} = QaSeed.load(seed_copy(repo_key, unknown_ci))
 
     assert {:error, {:issue, "QA-999", :issue_not_found}} = QaSeed.load(seed_copy(repo_key, &Map.put(&1, "runs", [%{"issue" => "QA-999"}])))
 

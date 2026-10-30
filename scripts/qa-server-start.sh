@@ -8,7 +8,8 @@
 # /api/v1/state.
 #
 # Nothing in it reaches Linear or GitHub: the tracker is the seed's file, no Linear or GitHub token
-# reaches the process, and the `gh` on its PATH is a stand-in that refuses every call.
+# reaches the process, and the `gh` on its PATH is a stand-in that answers only for the seed's own
+# pull requests and refuses every other call (scripts/qa-server-gh.sh).
 #
 # By hand on the QA VM: scripts/qa-server-build.sh, then
 #   SYMPHONY_VERIFICATION_PORT=8090 scripts/qa-server-start.sh
