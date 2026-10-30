@@ -1026,6 +1026,42 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:ok, _result} = DirectorMoves.move(:decisions, "MOT-30", %{picks: [%{question: "Q", answer: "Add the secrets", request_comment_id: "comment-9"}]}, opts)
       assert %{answer: %{option: 2}} = Questions.find(ticket, id)
     end
+
+    test "Send Decisions with Linear refusing a reply: the Question stays answered, the hold clears and the reply is marked pending", %{opts: opts} do
+      put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
+      issue = %{id: "plan", state: "Plan Review", repo_key: "repo-director"}
+      assert :ok = DecisionRequest.ask(issue, signing_request(), [])
+      ticket = {:ticket, "repo-director", "plan"}
+      [%{id: id}] = Questions.open(ticket)
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [{:error, :linear_down}, :ok])
+
+      picks = [
+        %{question: "Q", answer: "Ship unsigned", question_id: id, request_comment_id: "comment-9"},
+        %{question: "Q2", answer: "B", request_comment_id: "comment-8"}
+      ]
+
+      log = capture_log(fn -> assert {:ok, %{to_state: "Rework"}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: picks}, opts) end)
+
+      assert log =~ "Linear refused the reply, posted once Linear answers"
+      assert %{state: :answered} = Questions.find(ticket, id)
+      refute Hold.held?("repo-director", "plan", :needs_decision)
+      assert_received {:memory_tracker_reply, "plan", "comment-8", _reply}
+
+      # The refused reply waits for the reconciler; only the posted one is in the Decisions section.
+      record = RunStore.get_ticket_state("repo-director", "plan")
+      assert [{:question_answer, ^id, "comment-9"}] = for(mark <- record.pending_projection, mark.type == :question_answer, do: TicketState.projection_of(mark))
+      assert ["comment-8"] = Enum.map(record.decisions, & &1.key)
+    end
+
+    test "Send Decisions names no Question for a pick whose Question the record doesn't hold", %{opts: opts} do
+      put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [{:error, :linear_down}])
+
+      picks = [%{question: "Q", answer: "B", question_id: "q-gone", request_comment_id: "comment-9"}]
+      # Nothing is marked pending: the reply has no Question to post it from, so the move fails as before.
+      assert {:error, {:linear, :linear_down}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: picks}, opts)
+      assert RunStore.get_ticket_state("repo-director", "plan") == nil
+    end
   end
 
   describe "decide" do

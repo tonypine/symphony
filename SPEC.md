@@ -5943,7 +5943,10 @@ Minimum endpoints:
     A reply Linear refuses is marked pending on the record (`question_answer`), and the reconciler
     posts it and records the answer in the Decisions section once Linear answers. A `decide` is
     undoable whether or not it moved the ticket: `undo` reopens the Question (`question.reopened`),
-    which pauses the ticket on it again, and the replies before the reopen no longer count.
+    which pauses the ticket on it again, and the replies before the reopen no longer count; the
+    Decisions entry of the answer taken back stays, but the PR watcher no longer reads it as an
+    answer. `decisions` answers each pick's Question first too: a reply Linear refuses is marked
+    pending the same way, and the hold still clears.
   - A missing `issue_identifier`, `reason` or `picks`, or a `decide` with neither `question_id` nor
     `request_comment_id`, answers `422`, an
     unknown ticket `404`, and a

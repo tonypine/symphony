@@ -15,8 +15,8 @@ defmodule SymphonyElixir.Questions do
   the ticket on it (`SymphonyElixir.Pauses`, a `:question` reason naming its id). An open question
   with the same title and text is not asked twice: `ask/3` returns it. `answer/4` and `withdraw/4`
   end it and clear that reason, and only that one. `reopen/3` takes an answer back (the Director's
-  Undo, `SymphonyElixir.DirectorMoves.undo/2`): the question is open again, stamped `reopened_at`,
-  and pauses the ticket on it again.
+  Undo, `SymphonyElixir.DirectorMoves.undo/2`): the question is open again, stamped `reopened_at`
+  with the answer kept in `taken_back`, and pauses the ticket on it again.
 
   Each change records a ledger event (`SymphonyElixir.TicketEvents`): `question.asked`,
   `question.answered`, `question.withdrawn` and `question.reopened`. The question, the change to the ticket's pause
@@ -91,7 +91,8 @@ defmodule SymphonyElixir.Questions do
           asked_at: DateTime.t(),
           withdrawn: %{reason: String.t(), at: DateTime.t()} | nil,
           legacy_event: String.t() | nil,
-          reopened_at: DateTime.t() | nil
+          reopened_at: DateTime.t() | nil,
+          taken_back: [String.t()]
         }
 
   @typedoc """
@@ -185,7 +186,8 @@ defmodule SymphonyElixir.Questions do
   Decide records both) read as that question's entry, then the answered questions no decision
   records yet, in the order they were asked. An answered question reads as a decision entry: its
   title, question and answer text, keyed by its id. So an answer reads as soon as it is given, and
-  once only.
+  once only. A decision recording an answer the Director took back (`reopen/3`) reads as nothing:
+  the Decisions entry stays, but the answer no longer counts.
   """
   @spec answers([map()], [question()]) :: [map()]
   def answers(decisions, questions) when is_list(decisions) and is_list(questions) do
@@ -194,16 +196,24 @@ defmodule SymphonyElixir.Questions do
         %{key: question.id, date: DateTime.to_date(question.answer.at), title: question.title, question: question.question, answer: text}
       end
 
-    {read, unrecorded} = Enum.map_reduce(decisions, answered, &recorded_answer/2)
+    taken_back = for question <- questions, text <- taken_back(question), do: %{title: question.title, answer: text}
+
+    {read, {unrecorded, _taken_back}} = Enum.flat_map_reduce(decisions, {answered, taken_back}, &recorded_answer/2)
     read ++ unrecorded
   end
 
-  defp recorded_answer(decision, answered) do
-    case Enum.find_index(answered, &same_answer?(&1, decision)) do
-      nil -> {decision, answered}
-      index -> {Enum.at(answered, index), List.delete_at(answered, index)}
+  defp recorded_answer(decision, {answered, taken_back}) do
+    matching = &Enum.find_index(&1, fn entry -> same_answer?(entry, decision) end)
+
+    case {matching.(answered), matching.(taken_back)} do
+      {nil, nil} -> {[decision], {answered, taken_back}}
+      {nil, index} -> {[], {answered, List.delete_at(taken_back, index)}}
+      {index, _taken_back} -> {[Enum.at(answered, index)], {List.delete_at(answered, index), taken_back}}
     end
   end
+
+  # The answers taken back from a question, oldest first; none on a question stored before Undo.
+  defp taken_back(question), do: Map.get(question, :taken_back, [])
 
   # The decision section keeps an answer on one line, cut to its length.
   defp same_answer?(entry, decision) do
@@ -302,7 +312,8 @@ defmodule SymphonyElixir.Questions do
   defp reopened(ticket, questions, pause, id, by, at) do
     case Enum.find(questions, &(&1.id == id)) do
       %{state: :answered} = question ->
-        question = question |> Map.merge(%{state: :open, answer: nil, reopened_at: at})
+        taken_back = taken_back(question) ++ [question.answer.text]
+        question = question |> Map.merge(%{state: :open, answer: nil, reopened_at: at, taken_back: taken_back})
         payload = %{question_id: id, title: question.title, by: by}
         event = {"question.reopened", payload, [at: at, idempotency: "question.reopened:#{id}:#{stamp(at)}"]}
         write(ticket, question, event, Pauses.set_change(ticket, pause, reason(question), set_by: by, at: at))
@@ -398,7 +409,8 @@ defmodule SymphonyElixir.Questions do
       asked_at: at,
       withdrawn: nil,
       legacy_event: nil,
-      reopened_at: nil
+      reopened_at: nil,
+      taken_back: []
     }
     |> backfilled(opts, Keyword.get(opts, :backfilled) == true)
   end

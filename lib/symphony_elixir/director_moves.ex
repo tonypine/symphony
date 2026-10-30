@@ -319,7 +319,9 @@ defmodule SymphonyElixir.DirectorMoves do
   # A Decide's answer is taken back with it: the Question is open again, pausing the ticket on it,
   # and the Needs Decision hold its answer cleared is set again through the writer, carrying it
   # (`SymphonyElixir.DecisionRequest.project/4`). The reply and the
-  # Decisions entry stay, as the comment a move posted does; the Inbox reads the request open again,
+  # Decisions entry stay, as the comment a move posted does, but the answer no longer counts: the
+  # Question keeps it as taken back, so the PR watcher's read drops its entry
+  # (`SymphonyElixir.Questions.answers/2`). The Inbox reads the request open again,
   # since replies before the reopen don't count (`SymphonyElixir.NeedsDecisionHold.as_recorded/2`).
   defp reopen(issue, %{question_id: id, hold: hold}, opts) do
     with {:ok, _question} <- reopened(Questions.reopen({:ticket, issue.repo_key, issue.id}, id, by: OperatorStop.director()), issue) do
@@ -520,12 +522,12 @@ defmodule SymphonyElixir.DirectorMoves do
   # them; the answers are in the Decisions section before it reads the ticket.
   defp apply_move(:decisions, issue, nil, %{picks: picks}, opts) do
     picks = Enum.map(picks, &decision_pick(issue, &1, opts))
-    {answers, loose} = Enum.split_with(picks, &present?(&1.request_comment_id))
 
-    with :ok <- answer_questions(issue, picks),
-         {:ok, replies} <- reply_to_requests(issue, answers),
+    with {:ok, picks} <- answer_questions(issue, picks),
+         {answers, loose} = Enum.split_with(picks, &present?(&1.request_comment_id)),
+         {:ok, replies, replied} <- reply_to_requests(issue, answers),
          {:ok, comment} <- post_loose_picks(issue, loose) do
-      record_answers(issue, answers)
+      record_answers(issue, replied)
       clear_answered_hold(issue, answers, opts)
       {:ok, Enum.join(replies ++ List.wrap(comment), "\n\n")}
     end
@@ -584,13 +586,25 @@ defmodule SymphonyElixir.DirectorMoves do
   defp log_own_move_error({:error, reason}, issue),
     do: Logger.warning("Failed to record Symphony's own move of #{issue.identifier} to revise its plan: #{inspect(reason)}")
 
+  # The replies posted and the answers they carry. A reply Linear refuses to an answer whose
+  # Question is answered is marked pending, as a Decide's is, and the reconciler posts it and
+  # records its Decisions entry once Linear answers (`project_answer/5`); one to a request with no
+  # Question (asked before questions) fails the move, as before.
   defp reply_to_requests(issue, answers) do
-    Enum.reduce_while(answers, {:ok, []}, fn answer, {:ok, replies} ->
+    Enum.reduce_while(answers, {:ok, [], []}, fn answer, {:ok, replies, replied} ->
       reply = decide_comment([answer])
 
       case reply_to_request(issue, answer.request_comment_id, reply) do
-        :ok -> {:cont, {:ok, replies ++ [reply]}}
-        {:error, reason} -> {:halt, {:error, {:linear, reason}}}
+        :ok ->
+          {:cont, {:ok, replies ++ [reply], replied ++ [answer]}}
+
+        {:error, reason} when is_binary(answer.question_id) ->
+          Logger.warning("Answered a question on #{issue.identifier}; Linear refused the reply, posted once Linear answers: #{inspect(reason)}")
+          TicketSignals.mark_projection(issue.repo_key, issue.id, {:question_answer, answer.question_id, answer.request_comment_id}, reason)
+          {:cont, {:ok, replies, replied}}
+
+        {:error, reason} ->
+          {:halt, {:error, {:linear, reason}}}
       end
     end)
   end
@@ -610,16 +624,18 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   # Each pick's Question is answered before any reply: the replies, the Decisions section and the
-  # hold's clear are its projections. A Question already answered (a second send) is left as it is.
+  # hold's clear are its projections. A Question already answered (a second send) is left as it is;
+  # a pick whose Question the record doesn't hold names none.
   defp answer_questions(issue, picks) do
-    Enum.reduce_while(picks, :ok, fn
-      %{question_id: nil}, :ok ->
-        {:cont, :ok}
+    Enum.reduce_while(picks, {:ok, []}, fn
+      %{question_id: nil} = pick, {:ok, done} ->
+        {:cont, {:ok, done ++ [pick]}}
 
-      pick, :ok ->
+      pick, {:ok, done} ->
         case answer_decision(issue, pick.question_id, pick.answer, false) do
-          {:ok, _question} -> {:cont, :ok}
-          {:error, {:conflict, _message}} -> {:cont, :ok}
+          {:ok, nil} -> {:cont, {:ok, done ++ [%{pick | question_id: nil}]}}
+          {:ok, _question} -> {:cont, {:ok, done ++ [pick]}}
+          {:error, {:conflict, _message}} -> {:cont, {:ok, done ++ [pick]}}
           error -> {:halt, error}
         end
     end)
