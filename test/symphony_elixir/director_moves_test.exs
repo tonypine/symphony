@@ -1352,7 +1352,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
     defp loop, do: %{kind: "implementation", count: 4, window_ms: 600_000, runs: []}
 
-    test "the Inbox lists a quiet handoff, and Unblock lifts it, answering its question \"Run it again\"", %{opts: opts} do
+    test "the Inbox lists a quiet handoff, and Unblock lifts it, answering its question with Run it again", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       question = ask_and_hold("repo-director", {:quiet_handoff, 2})
 
@@ -1368,7 +1368,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director: MOT-40 continues in place."}
     end
 
-    test "Restart lifts a dispatch loop or a quiet handoff, answering its question \"Start it over from main\"", %{opts: opts} do
+    test "Restart lifts a dispatch loop or a quiet handoff, answering its question with Start it over from main", %{opts: opts} do
       for stop <- [loop(), {:quiet_handoff, 2}] do
         github_activity(state: "OPEN")
         put_issues([restart_issue()])
