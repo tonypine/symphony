@@ -97,6 +97,17 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           created_at: DateTime.t() | nil
         }
 
+  @typedoc "A run of one workflow on a commit (`commit_workflow_runs/4`): its attempt counts its reruns from 1."
+  @type commit_workflow_run :: %{
+          id: String.t() | nil,
+          number: pos_integer() | nil,
+          attempt: pos_integer(),
+          status: String.t() | nil,
+          conclusion: String.t() | nil,
+          url: String.t() | nil,
+          created_at: DateTime.t() | nil
+        }
+
   @type run_job :: %{id: String.t() | nil, name: String.t() | nil, conclusion: String.t() | nil}
 
   @type open_pull_request :: %{
@@ -511,6 +522,53 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   end
 
   defp normalize_run_job(job), do: %{id: normalize_id(job["databaseId"]), name: job["name"], conclusion: upcase(job["conclusion"])}
+
+  @doc """
+  The runs of workflow `workflow` on commit `sha` of `repo` (`owner/repo` or `host/owner/repo`),
+  newest first, in one request: each run's id, number, attempt, status, conclusion, URL and when it
+  was created.
+  """
+  @spec commit_workflow_runs(String.t(), String.t(), String.t(), keyword()) ::
+          {:ok, [commit_workflow_run()]} | {:error, term()}
+  def commit_workflow_runs(repo, sha, workflow, opts \\ []) when is_binary(repo) and is_binary(sha) and is_binary(workflow) do
+    args = ["run", "list", "-R", repo, "--commit", sha, "--workflow", workflow, "--limit", "5", "--json", "databaseId,number,attempt,status,conclusion,url,createdAt"]
+
+    with {:ok, output} <- run_gh(args, opts) do
+      case Jason.decode(output) do
+        {:ok, runs} when is_list(runs) -> {:ok, for(run <- runs, is_map(run), do: normalize_commit_workflow_run(run))}
+        _other -> {:error, :invalid_workflow_runs_payload}
+      end
+    end
+  end
+
+  defp normalize_commit_workflow_run(run) do
+    %{
+      id: normalize_id(run["databaseId"]),
+      number: positive(run["number"]),
+      attempt: positive(run["attempt"]) || 1,
+      status: upcase(run["status"]),
+      conclusion: upcase(run["conclusion"]),
+      url: run["url"],
+      created_at: parse_datetime(run["createdAt"])
+    }
+  end
+
+  defp positive(value) when is_integer(value) and value > 0, do: value
+  defp positive(_value), do: nil
+
+  @doc """
+  Whether any job of workflow run `run_id`'s latest attempt started: ran at least one step. A run
+  GitHub cancelled while it waited for a machine started none. The repository is `:repo` when given.
+  """
+  @spec run_started?(String.t(), keyword()) :: {:ok, boolean()} | {:error, term()}
+  def run_started?(run_id, opts \\ []) when is_binary(run_id) do
+    with {:ok, output} <- run_gh(["run", "view", run_id, "--json", "jobs"] ++ repo_args(opts), opts) do
+      case Jason.decode(output) do
+        {:ok, %{"jobs" => jobs}} when is_list(jobs) -> {:ok, Enum.any?(jobs, &match?(%{"steps" => [_ | _]}, &1))}
+        _other -> {:error, :invalid_run_jobs_payload}
+      end
+    end
+  end
 
   defp list_runs(args, opts) do
     with {:ok, output} <- run_gh(args, opts) do

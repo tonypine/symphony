@@ -1,6 +1,7 @@
 {
   "unblocks": 1,
   "issue_identifiers": ["TP-1037"],
+  "build_line": "Waiting for the v0.0.1.750 build: queued on GitHub for 23 min",
   "latest_release": {
     "repo": "tonypine/symphony",
     "tag": "v0.0.1.583",

@@ -134,7 +134,7 @@ defmodule SymphonyElixirWeb.WatchPayloadTest do
 
   describe "app_update/2" do
     @blocked [
-      %{issue_id: "issue-1037", identifier: "TP-1037", kind: :app_update},
+      %{issue_id: "issue-1037", identifier: "TP-1037", kind: :app_update, build_line: "Waiting for the v0.0.1.750 build: queued on GitHub for 23 min"},
       %{issue_id: "issue-9", identifier: "TP-9", blockers: []}
     ]
 
@@ -153,7 +153,8 @@ defmodule SymphonyElixirWeb.WatchPayloadTest do
     end
 
     test "no release is null, and a release without a publish time keeps its tag" do
-      assert WatchPayload.app_update([], nil) == %{unblocks: 0, issue_identifiers: [], latest_release: nil}
+      empty = %{unblocks: 0, issue_identifiers: [], latest_release: nil, build_line: nil}
+      assert WatchPayload.app_update([], nil) == empty
 
       release = %{repo: "tonypine/symphony", tag: "v2", published_at: nil, etag: nil, source: :poll, recorded_at: @at}
 

@@ -417,7 +417,12 @@ Symphony's own repository needs no setting. A released app knows the commit and 
 built from, so a `Todo` ticket blocked by a fix merged in that repository stays in `Todo` after the
 fix is `Done`, until the running app includes the fix's merge commit. The dashboard and
 `/api/v1/state` say why ("waiting for an app update: TP-419 merged in `9f54098`, running
-`d3d301b`"), and the menu bar shows "Update to unblock N tickets". Put the `skip-update-hold` label
+`d3d301b`"), and the menu bar shows "Update to unblock N tickets". While the fix's release build
+isn't published, the held ticket and the menu bar say what that build is at instead ("Waiting for
+the v0.0.1.750 build with TP-419's fix: queued on GitHub for 23 min"). Symphony reruns a release build
+GitHub cancelled for lack of a machine, twice, then asks whether to keep retrying; a build that
+failed for a real reason pauses Symphony with the failure and asks whether to rerun it
+(`docs/pr-ci-decisions.md`, "Release builds"). Put the `skip-update-hold` label
 on the held ticket, or on a blocker that needs no app update (a docs-only or `WORKFLOW.md` change),
 to release it at `Done`. Blockers merged in other repositories, and every blocker when Symphony runs
 from a checkout, release their tickets at `Done`.

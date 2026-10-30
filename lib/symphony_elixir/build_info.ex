@@ -26,6 +26,15 @@ defmodule SymphonyElixir.BuildInfo do
     }
   end
 
+  @doc """
+  The version the release workflow gives its run `number`, as the menu bar app reads it: the running
+  build's base version (`mix.exs`) and the run number, for example `0.0.1.750`.
+  """
+  @spec release_version(pos_integer()) :: String.t()
+  def release_version(number) when is_integer(number) and number > 0 do
+    :symphony_elixir |> Application.spec(:vsn) |> to_string() |> version(Integer.to_string(number))
+  end
+
   @doc "The first seven characters of a commit sha, as Git abbreviates it."
   @spec short_sha(String.t()) :: String.t()
   def short_sha(sha) when is_binary(sha), do: String.slice(sha, 0, 7)

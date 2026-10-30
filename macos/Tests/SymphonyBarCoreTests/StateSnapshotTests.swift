@@ -231,7 +231,11 @@ final class StateSnapshotTests: XCTestCase {
         let release = ReportedRelease(tag: "v0.0.1.583", publishedAt: Date(timeIntervalSince1970: 1_792_137_600))
         XCTAssertEqual(
             SymphonyState.poll(data: data, statusCode: 200),
-            .state(StateSnapshot(running: 1, budget: recordedBudget, updateUnblocks: 1, latestRelease: release, runs: recordedRuns))
+            .state(StateSnapshot(
+                running: 1, budget: recordedBudget, updateUnblocks: 1,
+                updateBuildLine: "Waiting for the v0.0.1.750 build: queued on GitHub for 23 min", latestRelease: release,
+                runs: recordedRuns
+            ))
         )
         XCTAssertEqual(release.version, "0.0.1.583")
         XCTAssertEqual(ReportedRelease(tag: "0.0.1.583").version, "0.0.1.583")

@@ -12,6 +12,9 @@ public struct StateSnapshot: Equatable {
     public var budget: Budget?
     /// Tickets held only until the running Symphony includes a fix that merged: updating releases them.
     public var updateUnblocks: Int
+    /// What the release build those tickets wait for is at while it isn't published ("Waiting for the v0.0.1.750
+    /// build: queued on GitHub for 23 min"); nil once it is, or when Symphony predates `app_update.build_line`.
+    public var updateBuildLine: String?
     /// The newest published release of the repository the app updates from, as Symphony last heard of it; nil when
     /// Symphony knows none, or predates `app_update.latest_release`.
     public var latestRelease: ReportedRelease?
@@ -313,6 +316,7 @@ public struct StateSnapshot: Equatable {
         usageLimits: [UsageLimit] = [],
         budget: Budget? = nil,
         updateUnblocks: Int = 0,
+        updateBuildLine: String? = nil,
         latestRelease: ReportedRelease? = nil,
         forced: [ForcedTicket] = [],
         runs: [Run] = [],
@@ -332,6 +336,7 @@ public struct StateSnapshot: Equatable {
         self.usageLimits = usageLimits
         self.budget = budget
         self.updateUnblocks = updateUnblocks
+        self.updateBuildLine = updateBuildLine
         self.latestRelease = latestRelease
         self.forced = forced
         self.runs = runs
@@ -749,6 +754,9 @@ public enum SymphonyState {
         var snapshot = StateSnapshot(
             running: counts.running, retrying: counts.retrying ?? 0, updateUnblocks: payload.appUpdate?.unblocks ?? 0
         )
+        if let line = payload.appUpdate?.buildLine?.trimmingCharacters(in: .whitespacesAndNewlines), !line.isEmpty {
+            snapshot.updateBuildLine = line
+        }
         if let release = payload.appUpdate?.latestRelease, let tag = release.tag, !tag.isEmpty {
             snapshot.latestRelease = ReportedRelease(tag: tag, publishedAt: release.publishedAt.flatMap(parseDate))
         }
@@ -905,6 +913,8 @@ public enum SymphonyState {
             let unblocks: Int?
             /// Missing before Symphony reported the newest release.
             let latestRelease: LatestRelease?
+            /// Missing before Symphony watched the release build.
+            let buildLine: String?
         }
 
         struct Forced: Decodable {

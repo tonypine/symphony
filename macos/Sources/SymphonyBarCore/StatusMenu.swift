@@ -60,7 +60,7 @@ public enum StatusMenu {
             lines = [countsLine(snapshot)]
                 + (snapshot.pause.map { [pauseLine($0, now: now, timeZone: timeZone)] } ?? [])
                 + snapshot.usageLimits.map { usageLimitLine($0, now: now, timeZone: timeZone) }
-                + (updateUnblocksLine(snapshot.updateUnblocks).map { [$0] } ?? [])
+                + (updateLine(snapshot).map { [$0] } ?? [])
         case let .error(message):
             lines = [message]
         }
@@ -81,6 +81,13 @@ public enum StatusMenu {
         guard embeddedAvailable else { return "No embedded Symphony: turn on Development mode" }
         guard let version = appVersion?.trimmingWhitespace(), !version.isEmpty else { return "Symphony (embedded)" }
         return "Symphony v\(version) (embedded)"
+    }
+
+    /// What tickets held for an update wait on: the release build's line while it isn't published (an update has nothing
+    /// to install yet), else "Update to unblock 2 tickets"; nil when no ticket waits for an update.
+    public static func updateLine(_ snapshot: StateSnapshot) -> String? {
+        guard snapshot.updateUnblocks > 0 else { return nil }
+        return snapshot.updateBuildLine ?? updateUnblocksLine(snapshot.updateUnblocks)
     }
 
     /// "Update to unblock 2 tickets" while tickets wait only for the running Symphony to include a merged fix,

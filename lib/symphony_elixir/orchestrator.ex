@@ -39,6 +39,7 @@ defmodule SymphonyElixir.Orchestrator do
     Quality,
     QualityGate,
     Questions,
+    ReleaseBuild,
     RetiredStates,
     RunKind,
     RunStore,
@@ -1562,7 +1563,11 @@ defmodule SymphonyElixir.Orchestrator do
     terminal_states = Config.settings!().tracker.terminal_states
     {_changed, cache} = sweep_blocked_holds(repo_name, issues, terminal_states, cache)
     _ = Decisions.sweep(issues, repo_key: repo_name)
-    UpdateHold.resolve(issues, BuildInfo.current(), cache, terminal_states, repo_key: repo_name)
+    build = BuildInfo.current()
+    cache = UpdateHold.resolve(issues, build, cache, terminal_states, repo_key: repo_name)
+    # The release build of each fix a held ticket waits on: rerun when GitHub had no machine for it.
+    :ok = ReleaseBuild.watch(issues, build, cache, repo_name, [])
+    cache
   end
 
   defp resolve_update_holds(_repo_result, cache), do: cache
@@ -4324,7 +4329,7 @@ defmodule SymphonyElixir.Orchestrator do
       is_nil(repo_key) -> "it has no repo key and several repos are configured, so its holds can't be read"
       (held = Hold.held_kinds(repo_key, issue.id)) != [] -> pause_reason(repo_key, issue, "on a #{Enum.map_join(held, " and ", &Hold.label/1)} hold")
       waiting_on_sub_issues?(issue, terminal_states) -> "waiting on its sub-tickets"
-      reason = update_hold_reason(repo_key, issue) -> reason
+      reason = update_hold_reason(repo_key, issue, state.update_hold_cache) -> reason
       replan_pending?(issue, state) -> "its plan waits to be replaced before it runs again"
       true -> nil
     end
@@ -4349,11 +4354,11 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # A Todo ticket waiting for the running app to include a blocker's fix reads as that wait's lines
-  # on its pause (`SymphonyElixir.UpdateHold`).
-  defp update_hold_reason(repo_key, %Issue{id: issue_id}) do
+  # on its pause (`SymphonyElixir.UpdateHold`), each saying what the fix's release build is at.
+  defp update_hold_reason(repo_key, %Issue{id: issue_id} = issue, cache) do
     case UpdateHold.reasons(repo_key, issue_id) do
       [] -> nil
-      reasons -> Enum.map_join(reasons, "; ", & &1.text)
+      reasons -> issue |> UpdateHold.lines(reasons, cache) |> Enum.join("; ")
     end
   end
 
@@ -4479,7 +4484,8 @@ defmodule SymphonyElixir.Orchestrator do
           title: issue.title,
           state: issue.state,
           kind: :app_update,
-          reason: Enum.map_join(reasons, "; ", & &1.text),
+          reason: issue |> UpdateHold.lines(reasons, state.update_hold_cache) |> Enum.join("; "),
+          build_line: issue |> UpdateHold.blockers(reasons, state.update_hold_cache) |> Enum.find_value(&ReleaseBuild.line(&1.merge_sha, nil)),
           blockers: issue |> UpdateHold.blockers(reasons, state.update_hold_cache) |> Enum.map(&update_blocker_snapshot/1)
         }
       end

@@ -32,7 +32,7 @@ defmodule SymphonyElixir.UpdateHold do
 
   require Logger
 
-  alias SymphonyElixir.{BuildInfo, Pauses, TicketPullRequest, Tracker}
+  alias SymphonyElixir.{BuildInfo, Pauses, ReleaseBuild, TicketPullRequest, Tracker}
   alias SymphonyElixir.GitHub.{PullRequest, Repo}
   alias SymphonyElixir.Linear.Issue
 
@@ -134,6 +134,20 @@ defmodule SymphonyElixir.UpdateHold do
     for %{waits_on: %{pull_request: number}} <- reasons do
       merged |> Map.get(number, %{identifier: nil, merge_sha: nil}) |> Map.put(:pull_request, number)
     end
+  end
+
+  @doc """
+  The line of each of `reasons` (`reasons/2`) as a person reads it: while the release build of the
+  fix it waits on isn't published, what that build is at (`SymphonyElixir.ReleaseBuild.line/3`:
+  "Waiting for the v0.0.1.750 build with TP-12's fix: queued on GitHub for 23 min"), else the
+  reason's own line. `opts`: those of `ReleaseBuild.line/3`.
+  """
+  @spec lines(Issue.t(), [Pauses.reason()], cache(), keyword()) :: [String.t()]
+  def lines(%Issue{} = issue, reasons, cache, opts \\ []) do
+    issue
+    |> blockers(reasons, cache)
+    |> Enum.zip(reasons)
+    |> Enum.map(fn {blocker, reason} -> ReleaseBuild.line(blocker.merge_sha, fix_name(blocker), opts) || reason.text end)
   end
 
   defp decide(%Issue{} = issue, %{sha: build_sha, repo: build_repo}, cache, terminal_states)
@@ -360,10 +374,12 @@ defmodule SymphonyElixir.UpdateHold do
 
   defp skip_labelled?(%Issue{labels: labels}), do: Enum.any?(labels, &(is_binary(&1) and normalize(&1) == @skip_label))
 
-  defp build_reason(%{identifier: identifier, pull_request: number}) do
-    fix = if identifier, do: "#{identifier}'s fix", else: "the fix in PR ##{number}"
-    %{kind: :build, waits_on: %{pull_request: number}, text: "Waiting for a Symphony update that includes #{fix}"}
+  defp build_reason(%{pull_request: number} = blocker) do
+    %{kind: :build, waits_on: %{pull_request: number}, text: "Waiting for a Symphony update that includes #{fix_name(blocker)}"}
   end
+
+  defp fix_name(%{identifier: identifier}) when is_binary(identifier), do: "#{identifier}'s fix"
+  defp fix_name(%{pull_request: number}), do: "the fix in PR ##{number}"
 
   # The pull request's number; `same_repo?/2` let through only a URL with one.
   defp pr_number(pr_url) do
