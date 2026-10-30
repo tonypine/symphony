@@ -98,6 +98,7 @@ defmodule SymphonyElixir.Tracker.Memory do
   @spec fetch_issue_states_by_ids([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_issue_states_by_ids(issue_ids) do
     maybe_sleep(:memory_tracker_fetch_states_sleep_ms)
+    send_event({:memory_tracker_fetch_issue_states_by_ids, issue_ids})
     wanted_ids = MapSet.new(issue_ids)
 
     case Application.get_env(:symphony_elixir, :memory_tracker_fetch_issue_states_result) do

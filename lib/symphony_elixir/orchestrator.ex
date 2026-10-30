@@ -1374,45 +1374,156 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp start_repo_poll_task_for_repos(%State{} = state, repos, now_ms) do
-    state = sync_repo_poll_state(state, repos, now_ms)
+    {input, state} = repo_poll_task_input(state, repos, now_ms)
 
-    {due_repo, state} = take_due_repo(state, repos, now_ms)
-    running_ids = Map.keys(state.running)
-    watching_ids = watching_issue_ids(state)
-    forced_ids = Map.keys(state.forced)
-    stopped_ids = Map.keys(state.operator_stops)
-    update_hold_cache = state.update_hold_cache
-
-    case start_async_task(fn ->
-           RetiredStates.refresh_if_due()
-           # When Linear was read: the by-id reads below may write newer facts into the records first.
-           read_at = DateTime.utc_now()
-           repo_result = fetch_due_repo_if_needed(due_repo)
-           TicketPullRequest.Lookup.start(due_repo, repo_result)
-
-           {:repo_poll_result,
-            %{
-              repos: repos,
-              now_ms: now_ms,
-              read_at: read_at,
-              running_ids: running_ids,
-              running_result: fetch_issue_states_if_needed(running_ids),
-              watching_ids: watching_ids,
-              watching_result: fetch_issue_states_if_needed(watching_ids),
-              forced_ids: forced_ids,
-              forced_result: fetch_issue_states_if_needed(forced_ids),
-              stopped_ids: stopped_ids,
-              stopped_result: fetch_issue_states_if_needed(stopped_ids),
-              repo_result: repo_result,
-              update_hold_cache: resolve_update_holds(repo_result, update_hold_cache)
-            }}
-         end) do
+    case start_async_task(fn -> {:repo_poll_result, run_repo_poll_task(input)} end) do
       {:ok, task} ->
         {:ok, task, state}
 
       {:error, reason} ->
         Logger.warning("Failed to start async repo poll task: #{inspect(reason)}")
         {:skip, state}
+    end
+  end
+
+  # `list_records` stands in for the store's read of every ticket record.
+  @doc false
+  @spec run_repo_poll_task_for_test(State.t(), [term()], integer(), (-> [map()] | {:error, term()})) ::
+          {map(), State.t()}
+  def run_repo_poll_task_for_test(%State{} = state, repos, now_ms, list_records \\ &RunStore.list_all_ticket_states/0)
+      when is_list(repos) do
+    {input, state} = repo_poll_task_input(state, repos, now_ms)
+    {run_repo_poll_task(Map.put(input, :list_records, list_records)), state}
+  end
+
+  defp repo_poll_task_input(%State{} = state, repos, now_ms) do
+    state = sync_repo_poll_state(state, repos, now_ms)
+    {due_repo, state} = take_due_repo(state, repos, now_ms)
+    ids = %{running: Map.keys(state.running), watching: watching_issue_ids(state), forced: Map.keys(state.forced), stopped: Map.keys(state.operator_stops)}
+
+    input = %{
+      repos: repos,
+      now_ms: now_ms,
+      due_repo: due_repo,
+      ids: ids,
+      by_id: tick_read_source(state, ids),
+      update_hold_cache: state.update_hold_cache
+    }
+
+    {input, state}
+  end
+
+  defp run_repo_poll_task(%{ids: ids} = input) do
+    RetiredStates.refresh_if_due()
+    # When Linear was read: the by-id reads below may write newer facts into the records first.
+    read_at = DateTime.utc_now()
+    repo_result = fetch_due_repo_if_needed(input.due_repo)
+    TicketPullRequest.Lookup.start(input.due_repo, repo_result)
+    read = tick_reader(input.by_id, Map.get(input, :list_records, &RunStore.list_all_ticket_states/0))
+    {running_ids, running_result} = read.(ids.running)
+    {watching_ids, watching_result} = ids.watching |> read.() |> plan_comments_for(input.by_id)
+    {forced_ids, forced_result} = read.(ids.forced)
+    {stopped_ids, stopped_result} = read.(ids.stopped)
+
+    %{
+      repos: input.repos,
+      now_ms: input.now_ms,
+      read_at: read_at,
+      running_ids: running_ids,
+      running_result: running_result,
+      watching_ids: watching_ids,
+      watching_result: watching_result,
+      forced_ids: forced_ids,
+      forced_result: forced_result,
+      stopped_ids: stopped_ids,
+      stopped_result: stopped_result,
+      repo_result: repo_result,
+      update_hold_cache: resolve_update_holds(repo_result, input.update_hold_cache)
+    }
+  end
+
+  # Where the tick reads its running, watched, forced and operator-stopped tickets: from Linear by id
+  # under `dispatch.source: poll`, from the ticket records under `record`. The record path takes the
+  # text Symphony already holds for each ticket (`with_held_text/2`), read here in the orchestrator.
+  defp tick_read_source(%State{} = state, ids) do
+    case dispatch_source_in_use() do
+      :poll ->
+        :poll
+
+      :record ->
+        wanted = ids |> Map.values() |> List.flatten() |> MapSet.new()
+        {:record, Map.filter(held_issues(state), fn {issue_id, _issue} -> MapSet.member?(wanted, issue_id) end)}
+    end
+  end
+
+  # The issue Symphony already holds for each ticket, with the text only a Linear read gives: the
+  # repo poll's, else the one a run or `symphony force` holds.
+  defp held_issues(%State{} = state) do
+    running = for {issue_id, %{issue: %Issue{} = issue}} <- state.running, into: %{}, do: {issue_id, issue}
+    polled = for {_repo, entry} <- state.repo_poll_cache, %Issue{id: issue_id} = issue <- Map.get(entry, :issues, []), into: %{}, do: {issue_id, issue}
+    running |> Map.merge(state.forced_issues) |> Map.merge(polled)
+  end
+
+  defp tick_reader(:poll, _list_records), do: &{&1, fetch_issue_states_if_needed(&1)}
+  defp tick_reader({:record, held}, list_records), do: recorded_tick_reader(list_records.(), held)
+
+  # Each ticket read from its record: one Linear no longer has (a webhook said it was removed) is
+  # left out, as a by-id read leaves it out, so its run stops and its watch, force or stop ends. One
+  # with no observed record is not judged this tick, as a failed read judges none.
+  defp recorded_tick_reader(records, held) when is_list(records) do
+    recorded = recorded_issues(records)
+
+    fn issue_ids ->
+      {known, issues} = Enum.reduce(issue_ids, {[], []}, &recorded_tick_issue(&1, &2, recorded, held))
+      {Enum.reverse(known), {:ok, Enum.reverse(issues)}}
+    end
+  end
+
+  defp recorded_tick_reader(error, _held), do: &{&1, error}
+
+  defp recorded_tick_issue(issue_id, {known, issues}, recorded, held) do
+    case Map.fetch(recorded, issue_id) do
+      {:ok, :removed} -> {[issue_id | known], issues}
+      {:ok, %Issue{} = issue} -> {[issue_id | known], [with_held_text(issue, Map.get(held, issue_id)) | issues]}
+      :error -> {known, issues}
+    end
+  end
+
+  # The newest observed record of each ticket across the repos, as the issue it describes, or
+  # `:removed`.
+  defp recorded_issues(records) do
+    records
+    |> Enum.map(&TicketState.normalize/1)
+    |> Enum.filter(&(is_binary(&1.issue_id) and &1.linear_updated_at != nil))
+    |> Enum.sort_by(& &1.linear_updated_at, DateTime)
+    |> Map.new(fn
+      %{removed_at: nil} = record -> {record.issue_id, Candidates.issue_from_record(record)}
+      record -> {record.issue_id, :removed}
+    end)
+  end
+
+  # The watched tickets are the only ones the plan-comment reader acts on
+  # (`apply_watching_issue_states_result/3`). A plan parent in `Plan Review` is in no repo poll (it is
+  # not an active state) and its record keeps no comments, so the comments a person leaves on a plan
+  # under review exist only in Linear. Such a watched parent the plan-comment reader acts on
+  # (`PlanComments.action/3`) is read by id, as under `poll`, so it sees the same comments.
+  defp plan_comments_for({known, {:ok, issues}}, {:record, _held}), do: {known, plan_comment_reads(issues)}
+  defp plan_comments_for(read, _by_id), do: read
+
+  defp plan_comment_reads(issues) do
+    settings = Config.settings!()
+    {active_states, terminal_states} = {active_state_set(settings), terminal_state_set(settings)}
+    unpolled? = &(PlanComments.action(&1, terminal_states, settings) != nil and not active_issue_state?(&1.state, active_states))
+
+    case Enum.filter(issues, unpolled?) do
+      [] ->
+        {:ok, issues}
+
+      unpolled ->
+        with {:ok, read} <- fetch_observed_issues_by_ids(Enum.map(unpolled, & &1.id)) do
+          read_by_id = Map.new(read, &{&1.id, &1})
+          {:ok, Enum.map(issues, &Map.get(read_by_id, &1.id, &1))}
+        end
     end
   end
 
@@ -1862,16 +1973,18 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp dispatch_side(side, :record) do
     polled = Map.new(side.cache, &{&1.id, &1})
-    for issue <- side.record || [], do: with_polled_text(issue, Map.get(polled, issue.id))
+    for issue <- side.record || [], do: with_held_text(issue, Map.get(polled, issue.id))
   end
 
-  # A record candidate decides dispatch with what its record says (`Candidates.issue_from_record/1`).
-  # What only the poll reads (the description, comments, rulings, linked issues, team, project and
-  # branch) comes from the poll cache's issue when it has one, with the `updatedAt` it was read at, so
-  # the quality gate keys its verdict on the text it scored and the plan-comment reader sees the
-  # comments. A ticket only the records have has none of it until its repo's poll reads it.
-  defp with_polled_text(%Issue{} = issue, nil), do: issue
-  defp with_polled_text(%Issue{} = issue, %Issue{} = polled), do: struct(polled, Map.take(issue, @record_issue_fields))
+  # An issue rebuilt from its record (`Candidates.issue_from_record/1`) decides with what its record
+  # says. What only a Linear read gives (the description, comments, rulings, linked issues, team,
+  # project and branch) comes from the issue Symphony already holds for the ticket when it has one
+  # (the poll cache's for a candidate, a run's or the started candidate's for the tick and the
+  # revalidation), with the `updatedAt` it was read at, so the quality gate keys its verdict on the
+  # text it scored and the plan-comment reader sees the comments. A ticket only the records have has
+  # none of it until its repo's poll reads it.
+  defp with_held_text(%Issue{} = issue, nil), do: issue
+  defp with_held_text(%Issue{} = issue, %Issue{} = held), do: struct(held, Map.take(issue, @record_issue_fields))
 
   # Every poll cycle compares, for each repo, the candidates the poll cache gives with the ones the
   # records give and reports how they differ (`Dispatch.Shadow`), whichever side dispatch reads. It
@@ -2224,6 +2337,18 @@ defmodule SymphonyElixir.Orchestrator do
   def revalidate_issue_for_dispatch_for_test(%Issue{} = issue, issue_fetcher)
       when is_function(issue_fetcher, 1) do
     revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_state_set())
+  end
+
+  @doc false
+  @spec dispatch_refresh_ids_for_test(State.t(), [Issue.t()], term()) :: [String.t()]
+  def dispatch_refresh_ids_for_test(%State{} = state, issues, context) when is_list(issues), do: dispatch_refresh_ids(state, issues, context)
+
+  @doc false
+  @spec revalidate_issue_from_record_for_test(Issue.t(), String.t(), boolean()) ::
+          {:ok, Issue.t()} | {:skip, Issue.t() | :missing} | {:error, term()}
+  def revalidate_issue_from_record_for_test(%Issue{} = issue, repo_key, sticky_route? \\ false) do
+    opts = [sticky_route?: sticky_route?, repo_key: repo_key, source: :record]
+    revalidate_issue_for_dispatch(issue, dispatch_issue_fetcher(nil, :record, repo_key), terminal_state_set(), opts)
   end
 
   @doc false
@@ -3311,10 +3436,18 @@ defmodule SymphonyElixir.Orchestrator do
 
   # The issues dispatch may start are read from Linear here, in the readiness task, rather than one
   # by one in `dispatch_issue/4`, which runs inside the orchestrator's callback. A poll reads only
-  # the candidates whose dispatch gates are open now; a retry reads its own issue.
-  defp dispatch_refresh_ids(_state, _issues, {:active_retry, %Issue{id: issue_id}, _attempt, _metadata}), do: [issue_id]
+  # the candidates whose dispatch gates are open now; a retry reads its own issue. Under
+  # `dispatch.source: record` nothing is read: the revalidation reads each issue's record.
+  defp dispatch_refresh_ids(%State{} = state, issues, context) do
+    case dispatch_source_in_use() do
+      :record -> []
+      :poll -> poll_dispatch_refresh_ids(state, issues, context)
+    end
+  end
 
-  defp dispatch_refresh_ids(%State{} = state, issues, :poll) do
+  defp poll_dispatch_refresh_ids(_state, _issues, {:active_retry, %Issue{id: issue_id}, _attempt, _metadata}), do: [issue_id]
+
+  defp poll_dispatch_refresh_ids(%State{} = state, issues, :poll) do
     active_states = active_state_set()
     terminal_states = terminal_state_set()
 
@@ -4887,9 +5020,10 @@ defmodule SymphonyElixir.Orchestrator do
     repo_key = dispatch_repo_key(state, issue)
     sticky_route? = retry_attempt?(attempt)
     terminal_states = terminal_state_set()
-    issue_fetcher = dispatch_issue_fetcher(state)
+    source = dispatch_source_in_use()
+    issue_fetcher = dispatch_issue_fetcher(state, source, repo_key)
 
-    revalidate_opts = [sticky_route?: sticky_route?, repo_key: repo_key]
+    revalidate_opts = [sticky_route?: sticky_route?, repo_key: repo_key, source: source]
 
     case revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_states, revalidate_opts) do
       {:ok, %Issue{} = refreshed_issue} ->
@@ -4915,8 +5049,11 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # Dispatch after a readiness task revalidates with the issues that task read; an issue it did not
-  # read (its gates opened in between, or no readiness task ran) is read from Linear here.
-  defp dispatch_issue_fetcher(%State{dispatch_refresh: %{ids: prefetched_ids, result: result}}) do
+  # read (its gates opened in between, or no readiness task ran) is read from Linear here. Under
+  # `dispatch.source: record` it revalidates with the issue's record in its repo instead.
+  defp dispatch_issue_fetcher(_state, :record, repo_key), do: fn [issue_id] -> recorded_dispatch_issue(repo_key, issue_id) end
+
+  defp dispatch_issue_fetcher(%State{dispatch_refresh: %{ids: prefetched_ids, result: result}}, :poll, _repo_key) do
     fn [issue_id] = issue_ids ->
       if MapSet.member?(prefetched_ids, issue_id),
         do: prefetched_dispatch_issue(result, issue_id),
@@ -4924,7 +5061,34 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp dispatch_issue_fetcher(_state), do: &fetch_observed_issues_by_ids/1
+  defp dispatch_issue_fetcher(_state, :poll, _repo_key), do: &fetch_observed_issues_by_ids/1
+
+  # The issue's record, through the filter its candidacy went through (`Candidates.from_records/4`:
+  # observed, not removed, assigned to the worker, not terminal) with its own phase as the only
+  # active one, so the revalidation sees whether it moved. No record, or one the filter leaves out,
+  # reads as an issue Linear no longer returns.
+  defp recorded_dispatch_issue(repo_key, issue_id) do
+    case RunStore.get_ticket_state(repo_key, issue_id) do
+      %{} = record ->
+        settings = Config.settings!()
+        record = TicketState.normalize(record)
+        opts = shadow_route_opts(dispatch_route(repo_key), settings) ++ [states: List.wrap(record.phase)]
+        {:ok, Candidates.from_records(repo_key, [record], settings, opts).candidates}
+
+      nil ->
+        {:ok, []}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp dispatch_route(repo_key) do
+    case Config.repo(repo_key) do
+      {:ok, route} -> route
+      {:error, _reason} -> nil
+    end
+  end
 
   defp prefetched_dispatch_issue({:ok, issues}, issue_id), do: {:ok, Enum.filter(issues, &match?(%Issue{id: ^issue_id}, &1))}
   defp prefetched_dispatch_issue({:error, _reason} = error, _issue_id), do: error
@@ -5466,12 +5630,7 @@ defmodule SymphonyElixir.Orchestrator do
     case issue_fetcher.([issue_id]) do
       {:ok, [%Issue{} = refreshed_issue | _]} ->
         refreshed_issue = freeze_issue_repo_key(refreshed_issue, issue_repo_key(refreshed_issue) || Keyword.get(opts, :repo_key) || issue_repo_key(issue))
-
-        if dispatch_revalidated_issue?(refreshed_issue, terminal_states, Keyword.get(opts, :sticky_route?, false)) do
-          {:ok, refreshed_issue}
-        else
-          {:skip, refreshed_issue}
-        end
+        judge_revalidated_issue(refreshed_issue, issue, terminal_states, opts)
 
       {:ok, []} ->
         {:skip, :missing}
@@ -5482,6 +5641,34 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states, _opts), do: {:ok, issue}
+
+  defp judge_revalidated_issue(refreshed_issue, issue, terminal_states, opts) do
+    source = Keyword.get(opts, :source, :poll)
+
+    if dispatch_revalidated_issue?(refreshed_issue, terminal_states, Keyword.get(opts, :sticky_route?, false)) and
+         unmoved_since?(refreshed_issue, issue, source) do
+      {:ok, revalidated_issue(refreshed_issue, issue, source)}
+    else
+      {:skip, refreshed_issue}
+    end
+  end
+
+  # From the record, the issue starts only when its record still says what the candidate said: the
+  # same phase, and a Linear `updatedAt` no older than the candidate's. A by-id read of Linear is
+  # judged by the gates alone, as it always was.
+  defp unmoved_since?(_refreshed_issue, _issue, :poll), do: true
+
+  defp unmoved_since?(%Issue{} = recorded, %Issue{} = issue, :record) do
+    normalize_issue_state(recorded.state) == normalize_issue_state(issue.state) and not older?(recorded.updated_at, issue.updated_at)
+  end
+
+  defp older?(%DateTime{} = recorded_at, %DateTime{} = candidate_at), do: DateTime.compare(recorded_at, candidate_at) == :lt
+  defp older?(_recorded_at, _candidate_at), do: false
+
+  # The issue the run starts with: Linear's read, or under `record` the record's fields over the text
+  # the candidate carries, as dispatch from the record builds it.
+  defp revalidated_issue(refreshed_issue, _issue, :poll), do: refreshed_issue
+  defp revalidated_issue(recorded, issue, :record), do: with_held_text(recorded, issue)
 
   defp dispatch_revalidated_issue?(%Issue{} = issue, terminal_states, true),
     do: active_retry_issue?(issue, terminal_states) and !flow_gated?(issue)
@@ -5586,10 +5773,11 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # The issue is read again in a task; its claim stays held until the answer is handled, so no poll
-  # dispatches it meanwhile.
+  # dispatches it meanwhile. The read is written into the ticket's record, as every by-id read is, so
+  # the revalidation from the record under `dispatch.source: record` is not older than it.
   defp handle_retry_issue(%State{} = state, issue_id, attempt, metadata) do
     context = %{kind: :retry_refresh, issue_ids: [issue_id], attempt: attempt, metadata: metadata}
-    {:noreply, start_tracker_task(state, context, fn -> Tracker.fetch_issue_states_by_ids([issue_id]) end)}
+    {:noreply, start_tracker_task(state, context, fn -> fetch_observed_issues_by_ids([issue_id]) end)}
   end
 
   defp handle_retry_refresh_result(%State{} = state, issue_id, attempt, metadata, {:ok, issues}) do

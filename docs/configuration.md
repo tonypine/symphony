@@ -2676,11 +2676,15 @@ says it is not available.
 every repository's ticket records instead of the poll cache: a record that says the ticket is in an
 active state, assigned to the worker (the route's `assignee`, else `tracker.assignee`) and not
 terminal is a candidate, rebuilt with the record's state, priority, labels, assignee, open blockers,
-sub-issues and parent. The record keeps no description or comments, so a candidate the last poll
-also returned takes those from the poll, with its team, project, branch and the `updatedAt` they
-were read at: the dispatch gates (holds, the review flow, the slots), the plan-comment reader and
-the quality gate then run on it as on a polled ticket, and the ticket is read again by id from
-Linear just before its run starts, as with `poll`. With `quality_gate.enabled`, a candidate only the
+sub-issues and parent. The record keeps no comments, so a candidate the last poll also returned
+takes its text from the poll, with its team, project, branch and the `updatedAt` they were read at:
+the dispatch gates (holds, the review flow, the slots), the plan-comment reader and the quality gate
+then run on it as on a polled ticket. Just before its run starts the ticket is checked against its
+record instead of being read again from Linear: it starts only while its record is still observed,
+assigned to the worker, not removed and in the phase it was chosen in, with a Linear `updatedAt` no
+older than the candidate's, and its blockers and the other dispatch gates still let it through;
+otherwise it is skipped as a stale dispatch, as a read from Linear would skip it. The run starts with
+the record's fields over the candidate's text. With `quality_gate.enabled`, a candidate only the
 record has waits for its repository's poll to read its text, which a change to its record asks for
 at once, rather than being scored without a description. The polls keep running and keep the
 records up to date; a ticket the record has and the last poll did not return is dispatched, and
@@ -2692,6 +2696,20 @@ A change to a record outside the poll cycle (a webhook delivery, the PR and CI w
 removal) asks for a cycle of the ticket's repository at once while `source` is `record`, as a move
 Symphony or the Director makes there always does, so a ticket the change frees starts within
 seconds instead of at the next timed poll. Under `poll` the change waits for the repository's poll.
+
+**The poll cycle's own reads under `record`.** Each cycle also refreshes the tickets Symphony is
+running, watching after a run, forcing and holding for an operator's stop. Under `record` it takes
+them from their records in one store read instead of reading each group from Linear by id: a running
+ticket whose record left the active states stops its run, a forced ticket keeps its place outside
+them, and a stopped ticket stays skipped while its record is a candidate. A record a webhook marked
+removed reads as a ticket Linear no longer returns; a ticket with no observed record is not judged
+that cycle, as when a read fails. Each keeps the text Symphony already holds for it (the poll's, else
+its run's). The one exception is a watched plan parent in Plan Review with the `plan` label: no poll
+reads that state and the record keeps no comments, so it is still read by id, and the plan-comment
+reader, which acts on watched tickets only, sees a person's new comment as under `poll`. A forced or
+stopped plan parent that is not watched is taken from its record like any other. A retry's own read
+of its ticket is written into the record, so the check before its start is never older than that
+read.
 
 **The PR and CI watcher under `record`.** Each watcher's tick takes its watched tickets (those in
 `In Progress`, the code-review state, the QA state, `Rework`, the CI-fix state and `Merging`) from

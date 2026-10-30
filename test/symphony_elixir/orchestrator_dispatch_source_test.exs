@@ -3,7 +3,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
 
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Dispatch.Shadow
-  alias SymphonyElixir.{QualityGate, SubIssueWait, TicketObservation}
+  alias SymphonyElixir.{OperatorStop, QualityGate, SubIssueWait, TicketObservation}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   defmodule PassProvider do
@@ -282,6 +282,260 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
     end
   end
 
+  describe "the tick's by-id reads under dispatch.source: record" do
+    setup ctx do
+      set_source("record", tracker_kind: "memory")
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      ctx
+    end
+
+    test "running, watched, forced and stopped tickets come from their records, with no by-id read", ctx do
+      comments = [%{author: "Tony", body: "Mind the retry", created_at: @linear_at}]
+      running = issue(ctx.repo_key, 1, state: "In Progress", description: "What the run read", comments: comments)
+      watched = issue(ctx.repo_key, 2, state: "Plan Review")
+      forced = issue(ctx.repo_key, 3, state: "Plan Review", labels: ["expedite"])
+      stopped = issue(ctx.repo_key, 4)
+      gone = issue(ctx.repo_key, 5, state: "In Progress")
+
+      observe!(ctx.repo_key, [running, watched, forced, stopped, gone], :poll)
+      # A webhook raised the running ticket's priority, and said the forced-away one was removed.
+      later = DateTime.add(@linear_at, 60)
+      observe!(ctx.repo_key, [%{running | priority: 2, updated_at: later}], :webhook)
+      :ok = RunStore.update_ticket_state(ctx.repo_key, gone.id, %{removed_at: later})
+
+      state = %{
+        orchestrator_state()
+        | running: %{running.id => %{issue: running, identifier: running.identifier}},
+          watching: %{watched.id => %{}, "#{ctx.repo_key}-unknown" => %{}},
+          forced: %{forced.id => %{}, gone.id => %{}},
+          operator_stops: %{stopped.id => OperatorStop.mark(stopped.identifier, ctx.repo_key, DateTime.utc_now())}
+      }
+
+      {result, _state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0)
+      refute_received {:memory_tracker_fetch_issue_states_by_ids, _ids}
+
+      # The running ticket takes its record's fields over the text its run holds.
+      assert {[running_id], {:ok, [refreshed]}} = {result.running_ids, result.running_result}
+      assert running_id == running.id
+      assert %Issue{state: "In Progress", priority: 2, description: "What the run read", comments: ^comments} = refreshed
+
+      # A ticket no record observed is not judged this tick, as a failed read judges none.
+      assert result.watching_ids == [watched.id]
+      assert {:ok, [%Issue{state: "Plan Review"}]} = result.watching_result
+
+      # A removed record reads as a ticket Linear no longer returns.
+      assert Enum.sort(result.forced_ids) == Enum.sort([forced.id, gone.id])
+      assert {:ok, [%Issue{identifier: "ACME-3", state: "Plan Review", labels: ["expedite"]}]} = result.forced_result
+
+      assert result.stopped_ids == [stopped.id]
+      assert {:ok, [%Issue{identifier: "ACME-4", state: "Todo"}]} = result.stopped_result
+    end
+
+    test "a stop is honoured from the record: the ticket stays skipped while its record stays a candidate", ctx do
+      stopped = issue(ctx.repo_key, 1)
+      moved = issue(ctx.repo_key, 2)
+      observe!(ctx.repo_key, [stopped, moved], :poll)
+      observe!(ctx.repo_key, [%{moved | state: "Backlog", updated_at: DateTime.add(@linear_at, 60)}], :webhook)
+
+      marks = Map.new([stopped, moved], &{&1.id, OperatorStop.mark(&1.identifier, ctx.repo_key, DateTime.utc_now())})
+      state = %{orchestrator_state() | operator_stops: marks}
+
+      {result, state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0)
+      refute_received {:memory_tracker_fetch_issue_states_by_ids, _ids}
+
+      state = Orchestrator.apply_operator_stops_result_for_test(state, result.stopped_ids, result.stopped_result)
+
+      # Still in Todo: the stop is confirmed in that state and keeps the ticket from dispatching.
+      assert %{state: "Todo"} = state.operator_stops[stopped.id]
+      refute Orchestrator.should_dispatch_issue_for_test(stopped, state)
+      # Moved out of the candidates: the stop has done its job and goes.
+      refute Map.has_key?(state.operator_stops, moved.id)
+    end
+
+    test "records the store can't read keep every ticket as it was, as a failed Linear read does", ctx do
+      running = issue(ctx.repo_key, 1, state: "In Progress")
+      state = %{orchestrator_state() | running: %{running.id => %{issue: running, identifier: running.identifier}}}
+
+      {result, _state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0, fn -> {:error, :store_down} end)
+      assert {[_running_id], {:error, :store_down}} = {result.running_ids, result.running_result}
+      refute_received {:memory_tracker_fetch_issue_states_by_ids, _ids}
+    end
+
+    test "a plan parent under review is read by id, so the plan-comment reader sees its comments", ctx do
+      commented_at = ~U[2026-10-29 09:10:00Z]
+      parent = issue(ctx.repo_key, 1, state: "Plan Review", labels: ["plan"])
+      read = %{parent | comments: [%{author: "Tony", body: "Split the history screen out", created_at: commented_at}]}
+      other = issue(ctx.repo_key, 2, state: "Plan Review")
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [read, other])
+      no_new_comments = %{parent.id => %{state_changes: [], comments: []}}
+      Application.put_env(:symphony_elixir, :memory_tracker_plan_comments, no_new_comments)
+      observe!(ctx.repo_key, [parent, other], :poll)
+      state = %{orchestrator_state() | watching: %{parent.id => %{}, other.id => %{}}}
+
+      {result, state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0)
+
+      # Only the plan parent is read: its comments are in no poll and no record.
+      parent_id = parent.id
+      assert_received {:memory_tracker_fetch_issue_states_by_ids, [^parent_id]}
+      assert {:ok, watched} = result.watching_result
+      assert Enum.find(watched, &(&1.id == parent_id)).comments == read.comments
+
+      state = Orchestrator.act_on_plan_comments_for_test(state, watched)
+      assert_received {:memory_tracker_plan_comments, ^parent_id}
+      assert state.plan_comment_checks == %{parent_id => commented_at}
+    end
+
+    test "a forced or stopped plan parent under review is taken from its record; only a watched one is read by id", ctx do
+      forced = issue(ctx.repo_key, 1, state: "Plan Review", labels: ["plan", "expedite"])
+      stopped = issue(ctx.repo_key, 2, state: "Plan Review", labels: ["plan"])
+      forced_and_watched = issue(ctx.repo_key, 3, state: "Plan Review", labels: ["plan"])
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [forced, stopped, forced_and_watched])
+      observe!(ctx.repo_key, [forced, stopped], :poll)
+
+      state = %{
+        orchestrator_state()
+        | forced: %{forced.id => %{}},
+          operator_stops: %{stopped.id => OperatorStop.mark(stopped.identifier, ctx.repo_key, DateTime.utc_now())}
+      }
+
+      # Neither is watched, so neither reaches the plan-comment reader: no by-id read.
+      {result, _state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0)
+      refute_received {:memory_tracker_fetch_issue_states_by_ids, _ids}
+      assert {:ok, [%Issue{identifier: "ACME-1", state: "Plan Review"}]} = result.forced_result
+      assert {:ok, [%Issue{identifier: "ACME-2", state: "Plan Review"}]} = result.stopped_result
+
+      # A forced parent that is also watched is read once, for the watched group.
+      observe!(ctx.repo_key, [forced_and_watched], :poll)
+      both_id = forced_and_watched.id
+      state = %{state | forced: Map.put(state.forced, both_id, %{}), watching: %{both_id => %{}}}
+
+      {result, _state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0)
+      assert_received {:memory_tracker_fetch_issue_states_by_ids, [^both_id]}
+      refute_received {:memory_tracker_fetch_issue_states_by_ids, _ids}
+      assert {:ok, [%Issue{identifier: "ACME-3"}]} = result.watching_result
+      assert {:ok, forced_issues} = result.forced_result
+      assert forced_issues |> Enum.map(& &1.identifier) |> Enum.sort() == ["ACME-1", "ACME-3"]
+    end
+
+    test "a plan parent whose by-id read fails keeps every watched ticket as it was", ctx do
+      parent = issue(ctx.repo_key, 1, state: "Plan Review", labels: ["plan"])
+      {:ok, :updated} = TicketObservation.observe(ctx.repo_key, parent, source: :poll)
+      Application.put_env(:symphony_elixir, :memory_tracker_fetch_issue_states_result, {:error, :linear_down})
+      state = %{orchestrator_state() | watching: %{parent.id => %{}}}
+
+      {result, _state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0)
+      assert result.watching_result == {:error, :linear_down}
+    end
+  end
+
+  describe "the revalidation before a start under dispatch.source: record" do
+    setup ctx do
+      set_source("record", tracker_kind: "memory")
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      ctx
+    end
+
+    test "a candidate whose record still says the same starts with the candidate's text, without a Linear read", ctx do
+      polled = issue(ctx.repo_key, 1, description: "Dispatch from the record", comments: [%{author: "Tony", body: "Also the retry", created_at: @linear_at}])
+      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [polled], 0)
+      {%{dispatchable: [candidate]}, _state} = capture_cycle(state, ctx.repos, 50)
+
+      # A webhook raised its priority after the cycle: same phase, newer record, so it starts with it.
+      {:ok, :updated} = TicketObservation.observe(ctx.repo_key, %{polled | priority: 2, updated_at: DateTime.add(@linear_at, 60)}, source: :webhook)
+
+      assert {:ok, started} = Orchestrator.revalidate_issue_from_record_for_test(candidate, ctx.repo_key)
+      assert %Issue{priority: 2, description: "Dispatch from the record", comments: comments, repo_key: repo_key} = started
+      assert {comments, repo_key} == {polled.comments, ctx.repo_key}
+      refute_received {:memory_tracker_fetch_issue_states_by_ids, _ids}
+    end
+
+    test "a candidate whose record moved since the cycle began is not started, with the stale-dispatch skip", ctx do
+      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [issue(ctx.repo_key, 1)], 0)
+      {%{dispatchable: [candidate]}, state} = capture_cycle(state, ctx.repos, 50)
+
+      # Another Symphony's run moved it on: still an active state, but not the phase it was chosen in.
+      moved = issue(ctx.repo_key, 1, state: "In Progress", updated_at: DateTime.add(@linear_at, 60))
+      {:ok, :updated} = TicketObservation.observe(ctx.repo_key, moved, source: :webhook)
+
+      assert {:skip, %Issue{state: "In Progress"}} = Orchestrator.revalidate_issue_from_record_for_test(candidate, ctx.repo_key)
+
+      {state, log} = with_log(fn -> Orchestrator.dispatch_chosen_issues_for_test([candidate], state) end)
+      assert log =~ "Skipping stale dispatch after issue refresh: issue_id=#{candidate.id}"
+      assert state.running == %{}
+      refute_received {:memory_tracker_fetch_issue_states_by_ids, _ids}
+    end
+
+    test "a record older than the candidate, or one the filter leaves out, starts nothing", ctx do
+      candidate = issue(ctx.repo_key, 1, updated_at: DateTime.add(@linear_at, 60))
+      {:ok, :updated} = TicketObservation.observe(ctx.repo_key, issue(ctx.repo_key, 1), source: :poll)
+      assert {:skip, %Issue{}} = Orchestrator.revalidate_issue_from_record_for_test(candidate, ctx.repo_key)
+
+      # Unassigned now, no record at all, or a repo the store refuses.
+      observe!(ctx.repo_key, [issue(ctx.repo_key, 2, assignee_id: nil)], :poll)
+      set_source("record", tracker_kind: "memory", tracker_assignee: "user-2")
+      revalidate = &Orchestrator.revalidate_issue_from_record_for_test/2
+      assert {:skip, :missing} = revalidate.(issue(ctx.repo_key, 2), ctx.repo_key)
+      assert {:skip, :missing} = revalidate.(issue(ctx.repo_key, 3), ctx.repo_key)
+      assert {:error, _reason} = revalidate.(issue(" ", 4), " ")
+    end
+
+    test "a retry's own read is written into its record, so the check before its start is not older than that read" do
+      set_source("record", tracker_kind: "memory", quality_gate: %{enabled: false})
+      repo_key = Config.repo_key!()
+      pid = start_orchestrator!(:RetryOrchestrator)
+      polled = issue(repo_key, "retry", state: "In Progress")
+      {:ok, :updated} = TicketObservation.observe(repo_key, polled, source: :poll)
+
+      # The agent changed the ticket in Linear after the poll, and no webhook has landed yet: the
+      # record alone is older than what the retry reads, and would stop it.
+      read = %{polled | updated_at: DateTime.add(@linear_at, 60)}
+      assert {:skip, %Issue{}} = Orchestrator.revalidate_issue_from_record_for_test(read, repo_key, true)
+
+      # The retry fires through the orchestrator; no slot is free, so it waits for one after its read.
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [read])
+      token = make_ref()
+      not_due = System.monotonic_time(:millisecond) + 3_600_000
+
+      :sys.replace_state(pid, fn state ->
+        retry = %{attempt: 1, retry_token: token, identifier: read.identifier, repo_key: repo_key}
+
+        %{
+          state
+          | max_concurrent_agents: 0,
+            retry_attempts: %{read.id => retry},
+            claimed: MapSet.new([read.id]),
+            repo_poll_due_at_ms: %{repo_key => not_due}
+        }
+      end)
+
+      send(pid, {:retry_issue, read.id, token})
+      read_id = read.id
+      assert_receive {:memory_tracker_fetch_issue_states_by_ids, [^read_id]}
+      eventually(fn -> Map.has_key?(:sys.get_state(pid).slot_waiting, read_id) end)
+
+      record = RunStore.get_ticket_state(repo_key, read_id)
+      assert {record.observed_from, record.linear_updated_at} == {:by_id, read.updated_at}
+      assert {:ok, %Issue{state: "In Progress"}} = Orchestrator.revalidate_issue_from_record_for_test(read, repo_key, true)
+
+      # A webhook moved it to another active phase after the read: the retry does not start.
+      moved = %{read | state: "Rework", updated_at: DateTime.add(@linear_at, 120)}
+      {:ok, :updated} = TicketObservation.observe(repo_key, moved, source: :webhook)
+      assert {:skip, %Issue{state: "Rework"}} = Orchestrator.revalidate_issue_from_record_for_test(read, repo_key, true)
+    end
+
+    test "the dispatch prefetch reads nothing from Linear, for a poll or a retry", ctx do
+      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [issue(ctx.repo_key, 1)], 0)
+      {%{dispatchable: [candidate]}, state} = capture_cycle(state, ctx.repos, 50)
+
+      assert Orchestrator.dispatch_refresh_ids_for_test(state, [candidate], :poll) == []
+      assert Orchestrator.dispatch_refresh_ids_for_test(state, [candidate], {:active_retry, candidate, 1, %{}}) == []
+
+      set_source("poll", tracker_kind: "memory")
+      assert Orchestrator.dispatch_refresh_ids_for_test(state, [candidate], :poll) == [candidate.id]
+      assert Orchestrator.dispatch_refresh_ids_for_test(state, [candidate], {:active_retry, candidate, 1, %{}}) == [candidate.id]
+    end
+  end
+
   describe "dispatch.source: poll" do
     test "dispatch reads the poll cache, and a record change waits for the repo's poll", ctx do
       set_source("poll")
@@ -317,9 +571,34 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
     end
   end
 
+  defp observe!(repo_key, tickets, source) do
+    for ticket <- tickets, do: {:ok, :updated} = TicketObservation.observe(repo_key, ticket, source: source)
+  end
+
   # A cycle with no repo due, whose shadow differences are logged.
   defp capture_cycle(state, repos, now_ms) do
     {result, _log} = with_log(fn -> cycle(state, repos, [], now_ms) end)
     result
+  end
+
+  # An orchestrator past its startup poll, which finds no ticket.
+  defp start_orchestrator!(name) do
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
+    {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, name))
+
+    on_exit(fn ->
+      try do
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      catch
+        :exit, _reason -> :ok
+      end
+    end)
+
+    eventually(fn ->
+      state = :sys.get_state(pid)
+      is_nil(state.repo_poll_task_ref) and not state.poll_check_in_progress and state.tracker_tasks == %{}
+    end)
+
+    pid
   end
 end
