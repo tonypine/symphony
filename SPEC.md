@@ -566,7 +566,10 @@ payload's `all_repositories_paused` says it apart.
 
 Symphony's own pause is the operator pause: the one answer to why Symphony is not dispatching. It
 shows only at the app level (the state payload's `pause`), never on a ticket page; a candidate the
-paused pass skips gives the global reason `dispatch is paused by the operator`.
+paused pass skips gives one line per reason that stops dispatch, worded by its kind from the same
+reasons the payload's `pause` lists: `dispatch is paused: updating to v<version>` for an update's,
+`dispatch is paused by the operator` (then `: <reason>` when the Director gave one) for theirs,
+joined by `; `. The log line names the kind too (`Dispatch pause active kind=build reason=...`).
 
 - The Director's Pause (`POST /api/v1/control/pause`) sets a `person` reason that waits on
   `unblock`, its line the given reason cut to 300 characters (`You paused Symphony` without one).

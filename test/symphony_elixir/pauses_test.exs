@@ -456,6 +456,25 @@ defmodule SymphonyElixir.PausesTest do
       assert %{paused: true, reason: "updating to v0.0.1.42", paused_at: @later, reasons: reasons} = Pauses.dispatch_status(pause)
       assert Enum.map(reasons, & &1.kind) == [:environment, :build, :person]
     end
+
+    test "a skipped candidate's line names each reason that stops dispatch, worded by its kind (TP-1315)" do
+      assert Pauses.dispatch_skip_reason(nil) == nil
+
+      limit = %{kind: :environment, waits_on: %{condition: "usage_limit:anthropic:all"}, text: "Claude's usage limit until 14:30"}
+      {:ok, pause} = Pauses.set(:symphony, limit, at: @at)
+      assert Pauses.dispatch_skip_reason(pause) == nil
+
+      {:ok, pause} = Pauses.set(:symphony, Pauses.dispatch_reason("updating to v0.0.1.756"), at: @at)
+      assert Pauses.dispatch_skip_reason(pause) == "dispatch is paused: updating to v0.0.1.756"
+      refute Pauses.dispatch_skip_reason(pause) =~ "by the operator"
+
+      {:ok, pause} = Pauses.set(:symphony, Pauses.dispatch_reason("Away"), set_by: @person, at: @later)
+      assert Pauses.dispatch_skip_reason(pause) == "dispatch is paused: updating to v0.0.1.756; dispatch is paused by the operator: Away"
+
+      {:ok, nil} = Pauses.clear(:symphony)
+      {:ok, pause} = Pauses.set(:symphony, Pauses.dispatch_reason(nil), set_by: @person, at: @at)
+      assert Pauses.dispatch_skip_reason(pause) == "dispatch is paused by the operator"
+    end
   end
 
   describe "errors" do
