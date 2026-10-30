@@ -74,18 +74,23 @@ through the same relay as GitHub's; the steps below use the Tailscale Funnel rel
 the check above (logged with its reason only, never its payload), and `200` for an accepted one:
 Linear counts any other status as a failed delivery, retries it after one minute, one hour and
 six hours, and may turn the webhook off after repeated failures.
-An accepted delivery makes no Linear request. Within the request, and bounded to two seconds (well
+An accepted delivery makes no Linear request, except the by-id read that files a new ticket (below).
+Within the request, and bounded to two seconds (well
 under the five Linear waits for the answer), Symphony observes it into the ticket's record
 (`SymphonyElixir.TicketObservation.observe_delivery/2`):
 
 - An `Issue` create or update is read as the poll reads a ticket and written, as a poll writes it
   and with `observed_from: webhook`, into the record the reads already keep of the ticket. A
-  delivery only updates a record a read already made: the poll filters each repo in Linear (a
-  project by its slug, `assignee: me`), which a delivery's own fields can't always match, so a
-  ticket no repo has a record of yet waits for the next poll to file it. Its observation is
-  `updated`, `unchanged`, `stale` (older than the record's `updatedAt`: dropped) or `unrouted`
-  (nothing is written: no repo has a record of the ticket yet, or several repos do, a ticket the
-  poll counts as a conflict).
+  ticket no repo has a record of yet (a new one) is filed under the one repo whose poll would
+  return it (`SymphonyElixir.Routing.PollScope`): each repo's team, projects (by name, id, or the
+  slug the delivery's project URL ends in), labels and assignee, else the tracker's, compared with
+  the delivery as the poll's Linear filter compares them. Its record is written from a by-id read
+  of the ticket, since a delivery carries no blockers or sub-issues. Its observation is `updated`,
+  `unchanged`, `stale` (older than the record's `updatedAt`: dropped) or `unrouted` (nothing is
+  written: several repos have a record of the ticket, a ticket the poll counts as a conflict; or a
+  new ticket no repo's poll would return, or several would, or one whose scope its delivery can't
+  settle, such as `assignee: me` before a poll learned whose key it is, or a team named by its id;
+  or a new ticket the by-id read doesn't return). Such a ticket waits for the next poll.
 - An `Issue` remove sets the record's `removed_at` in every repo that has one (`removed`), or finds
   none (`no_record`).
 - A `Comment` or any other delivery is only counted, with no observation.

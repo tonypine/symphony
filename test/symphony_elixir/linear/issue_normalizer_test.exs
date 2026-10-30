@@ -23,8 +23,8 @@ defmodule SymphonyElixir.Linear.IssueNormalizerTest do
       assert %Issue{identifier: "TP-1213", state: "In Progress", labels: ["elixir", "reads"], priority: 1} = webhook
       assert webhook.assignee_id == "e4f5a6b7-c8d9-4e0f-9a1b-3c4d5e6f7a8b"
       assert webhook.updated_at == ~U[2026-10-29 09:15:02.118Z]
-      assert webhook.project == %{id: "c2d3e4f5-a6b7-4c8d-9e0f-1a2b3c4d5e6f", name: "Symphony"}
-      assert poll.project == Map.put(webhook.project, :slug_id, "0a1b2c3d4e5f")
+      assert webhook.project == %{id: "c2d3e4f5-a6b7-4c8d-9e0f-1a2b3c4d5e6f", name: "Symphony", url: "https://linear.app/example/project/symphony-0a1b2c3d4e5f"}
+      assert poll.project == webhook.project |> Map.delete(:url) |> Map.put(:slug_id, "0a1b2c3d4e5f")
     end
 
     test "leave what a delivery never carries unknown, not empty, where the poll knows it" do

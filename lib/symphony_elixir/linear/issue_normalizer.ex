@@ -70,8 +70,10 @@ defmodule SymphonyElixir.Linear.IssueNormalizer do
   sends it in its REST-like shape: `labels` a list, not a connection. Children, comments (and the
   rulings and linked issues read from them) are never in a delivery, so they are `:unknown`, as are
   `blocked_by` and `branch_name` when the delivery lacks them. A delivery's project has no slug, so
-  its map has no `:slug_id` unless the delivery gives one. `assigned_to_worker` keeps its
-  default: the assignee filter is the poll's, and the record applies it.
+  its map has no `:slug_id` unless the delivery gives one; it keeps the project's `:url`, which ends
+  in the slug (`SymphonyElixir.Routing.PollScope` routes a new ticket by it) and which a record
+  drops. `assigned_to_worker` keeps its default: the assignee filter is the poll's, and the record
+  applies it.
   """
   @spec from_webhook_data(term()) :: Issue.t() | nil
   def from_webhook_data(data) when is_map(data) do
@@ -169,7 +171,8 @@ defmodule SymphonyElixir.Linear.IssueNormalizer do
   # A delivery's project has no `slugId`: the key is left out rather than nil, so the poll's slug
   # (which routes match on) survives a merge.
   defp webhook_project(%{"project" => %{} = project} = data) do
-    if Map.has_key?(project, "slugId"), do: extract_project(data), else: Map.delete(extract_project(data), :slug_id)
+    extracted = if Map.has_key?(project, "slugId"), do: extract_project(data), else: Map.delete(extract_project(data), :slug_id)
+    if is_binary(project["url"]), do: Map.put(extracted, :url, project["url"]), else: extracted
   end
 
   defp webhook_project(_data), do: nil
