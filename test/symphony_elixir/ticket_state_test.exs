@@ -461,6 +461,16 @@ defmodule SymphonyElixir.TicketStateTest do
       assert TicketState.get_hold(record, :needs_decision) == nil
     end
 
+    test "a hold set beside a question keeps the question's id; a blank one is dropped" do
+      asked = TicketState.set_hold(TicketState.new("repo-a", "issue-1"), :blocked, %{waits_on: %{type: "dispatch_loop", keys: ["qa"], question_id: " q-1 "}})
+      assert [%{waits_on: %{type: "dispatch_loop", keys: ["qa"], question_id: "q-1"}}] = asked.holds
+      assert %{waits_on: %{question_id: "q-1"}} = asked |> TicketState.normalize() |> TicketState.get_hold(:blocked)
+
+      blank = TicketState.set_hold(TicketState.new("repo-a", "issue-1"), :blocked, %{waits_on: %{type: "access", question_id: " "}})
+      assert [%{waits_on: waits_on}] = blank.holds
+      assert waits_on == %{type: "access", keys: []}
+    end
+
     test "a malformed waits_on is dropped to nil" do
       blank_type = TicketState.set_hold(TicketState.new("repo-a", "issue-1"), :blocked, %{waits_on: %{type: "  "}})
       assert [%{waits_on: nil}] = blank_type.holds

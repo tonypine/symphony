@@ -25,12 +25,17 @@ defmodule SymphonyElixir.Hold do
 
   A hold of a kind the ticket didn't have, and a clear of one it had, are announced as a change of
   the record's `holds` (`SymphonyElixirWeb.ObservabilityPubSub.broadcast_ticket_record_changed/3`).
+
+  A Blocked hold set beside a question Symphony asked names it (`waits_on.question_id`, as the
+  dispatch-loop guard and the quiet handoff set it, `SymphonyElixir.DispatchLoop`): the hold is set
+  after the question and cleared with it, so `clear/4` ends that question first when it is still
+  open (`SymphonyElixir.Questions`).
   """
 
   require Logger
 
   alias SymphonyElixir.Hold.Drift
-  alias SymphonyElixir.{RunStore, TicketSignals, TicketState, Tracker}
+  alias SymphonyElixir.{Questions, RunStore, TicketSignals, TicketState, Tracker}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @kind_labels %{blocked: "Blocked", needs_decision: "Needs Decision"}
@@ -39,6 +44,7 @@ defmodule SymphonyElixir.Hold do
   @ci_wait_type "ci_wait"
   @operator_stop_type "operator_stop"
   @unblockable_types ["access", @dispatch_loop_type, @ci_wait_type, @operator_stop_type]
+  @symphony %{kind: :symphony, name: "Symphony"}
 
   @typedoc "The holds the design defines."
   @type kind :: :blocked | :needs_decision
@@ -107,13 +113,16 @@ defmodule SymphonyElixir.Hold do
   an access grant a person hands over — what an agent's block report records — one the
   dispatch-loop guard set (`SymphonyElixir.DispatchLoop`), one an epic review's wait for CI set
   once it reached its limit (`SymphonyElixir.CiWait`), or one an operator's stop set beside the
-  ticket's pause (`SymphonyElixir.OperatorStop`). A dependency or fix-ticket hold clears on its own
-  when what it waits on goes terminal; these four never clear without a person (a stop's also
-  clears when the ticket leaves the workflow or moves on the board). Unblock also lifts a stop whose
-  pause reason stands beside another kind of hold (`SymphonyElixir.OperatorStop.held?/2`).
+  ticket's pause (`SymphonyElixir.OperatorStop`), or one set beside a question Symphony asked
+  (`waits_on.question_id`, a quiet handoff's): that question is open while the hold stands, since
+  the hold is cleared with it. A dependency or fix-ticket hold clears on its own when what it waits
+  on goes terminal; these never clear without a person (a stop's also clears when the ticket leaves
+  the workflow or moves on the board). Unblock also lifts a stop whose pause reason stands beside
+  another kind of hold (`SymphonyElixir.OperatorStop.held?/2`).
   """
   @spec unblockable?(TicketState.hold() | term()) :: boolean()
   def unblockable?(%{waits_on: %{type: type}}) when type in @unblockable_types, do: true
+  def unblockable?(%{waits_on: %{question_id: question_id}}) when is_binary(question_id), do: true
   def unblockable?(_hold), do: false
 
   @doc "Whether a hold is the one the dispatch-loop guard set (`SymphonyElixir.DispatchLoop`)."
@@ -147,7 +156,11 @@ defmodule SymphonyElixir.Hold do
   Clears the hold of `kind` from `issue_id`: the store record first, then its event when a hold was
   there, then the machine label. The ticket continues in place. `opts[:answered]` says a person's
   answer ends the Needs Decision hold, so its clear records no withdrawal. Returns
-  `{:error, reason}` only when the store write failed.
+  `{:error, reason}` only when a store write failed.
+
+  A hold that names a question still open (`waits_on.question_id`) ends it before the store's hold
+  is cleared: `opts[:question]` as `{:answer, text, by}` answers it (`Questions.answer/4`, `text` an
+  option's label), and without it Symphony withdraws it, since what it asked no longer waits.
   """
   @spec clear(String.t() | nil, String.t() | nil, kind(), keyword()) :: :ok | {:error, term()}
   def clear(repo_key, issue_id, kind, opts \\ []) do
@@ -156,6 +169,7 @@ defmodule SymphonyElixir.Hold do
 
       with :ok <- require_repo_key(repo_key, issue_id),
            previous = stored_hold(store, repo_key, issue_id, kind),
+           :ok <- end_question(repo_key, issue_id, previous, Keyword.get(opts, :question)),
            :ok <- store.clear_ticket_hold(repo_key, issue_id, kind) do
         announce(repo_key, issue_id, previous != nil)
         record_clear(repo_key, issue_id, previous, Keyword.get(opts, :answered) == true)
@@ -334,6 +348,26 @@ defmodule SymphonyElixir.Hold do
 
     TicketSignals.record_event(repo_key, issue_id, "decision.withdrawn", %{title: title, question: question, request: request && request.id})
   end
+
+  # The question a hold was set beside ends with it; one already answered or withdrawn ends nothing.
+  defp end_question(repo_key, issue_id, %{waits_on: %{question_id: id}}, question) when is_binary(id) do
+    ticket = {:ticket, repo_key, issue_id}
+
+    result =
+      case question do
+        {:answer, text, by} -> Questions.answer(ticket, id, text, by: by)
+        nil -> Questions.withdraw(ticket, id, "Symphony lifted the pause it was asked with.", by: @symphony)
+      end
+
+    case result do
+      {:ok, _question} -> :ok
+      {:error, {:question_not_open, _state}} -> :ok
+      {:error, :question_not_found} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp end_question(_repo_key, _issue_id, _hold, _question), do: :ok
 
   # A hold that appeared or went is a change of the record's holds, which the PR watcher re-decides
   # the ticket on; a hold set again over itself changes nothing it reads.

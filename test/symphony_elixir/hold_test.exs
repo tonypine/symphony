@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.HoldTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Hold, RunStore, TicketState, Workflow}
+  alias SymphonyElixir.{DispatchLoop, Hold, Pauses, Questions, RunStore, TicketState, Workflow}
   alias SymphonyElixir.Hold.Drift
   alias SymphonyElixir.Linear.Issue
 
@@ -61,6 +61,10 @@ defmodule SymphonyElixir.HoldTest do
       refute Hold.unblockable?(%{waits_on: %{type: "dependency", keys: ["TP-1"]}})
       refute Hold.unblockable?(%{reason: "no waits_on"})
       refute Hold.unblockable?(nil)
+
+      # A quiet handoff's hold waits on the question Symphony asked beside it.
+      assert Hold.unblockable?(%{waits_on: %{type: "handoff_missing", keys: [], question_id: "q-1"}})
+      refute Hold.unblockable?(%{waits_on: %{type: "handoff_missing", keys: []}})
 
       assert Hold.dispatch_loop?(%{waits_on: %{type: SymphonyElixir.DispatchLoop.hold_type(), keys: []}})
       refute Hold.dispatch_loop?(%{waits_on: %{type: "access", keys: []}})
@@ -149,6 +153,46 @@ defmodule SymphonyElixir.HoldTest do
       assert log =~ "Failed to clear the machine label"
       refute Hold.held?(@repo_key, @issue_id, :blocked)
       assert [%{type: :hold_label, hold: :blocked}] = pending_projection()
+    end
+  end
+
+  describe "a hold set beside a question" do
+    setup do
+      ticket = {:ticket, @repo_key, @issue_id}
+      {:ok, question} = Questions.ask(ticket, DispatchLoop.question_attrs({:quiet_handoff, 2}, "MOT-1"))
+      :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "quiet", waits_on: %{type: "handoff_missing", keys: [], question_id: question.id}})
+      %{ticket: ticket, question: question}
+    end
+
+    test "keeps the question's id and is cleared with it: the answer given, or Symphony's withdrawal", %{ticket: ticket, question: question} do
+      assert %{waits_on: %{question_id: id}} = Hold.get(@repo_key, @issue_id, :blocked)
+      assert id == question.id
+
+      director = %{kind: :person, name: "Director"}
+      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked, question: {:answer, "Run it again", director})
+      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      assert %{state: :answered, answer: %{option: 1, by: ^director}} = Questions.find(ticket, question.id)
+      assert {:ok, nil} = Pauses.get(ticket)
+
+      {:ok, again} = Questions.ask(ticket, DispatchLoop.question_attrs({:quiet_handoff, 3}, "MOT-1"))
+      :ok = Hold.set(@repo_key, @issue_id, :blocked, %{waits_on: %{type: "dispatch_loop", keys: [], question_id: again.id}})
+      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked)
+      assert %{state: :withdrawn, withdrawn: %{reason: "Symphony lifted the pause it was asked with."}} = Questions.find(ticket, again.id)
+    end
+
+    test "a question already ended, or gone, ends nothing; one the store refuses keeps the hold", %{ticket: ticket, question: question} do
+      {:ok, _withdrawn} = Questions.withdraw(ticket, question.id, "no longer needed")
+      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked)
+      refute Hold.held?(@repo_key, @issue_id, :blocked)
+
+      :ok = Hold.set(@repo_key, @issue_id, :blocked, %{waits_on: %{type: "handoff_missing", keys: [], question_id: "gone"}})
+      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked)
+
+      {:ok, open} = Questions.ask(ticket, DispatchLoop.question_attrs({:quiet_handoff, 4}, "MOT-1"))
+      :ok = Hold.set(@repo_key, @issue_id, :blocked, %{waits_on: %{type: "handoff_missing", keys: [], question_id: open.id}})
+      assert {:error, {:invalid_actor, :nobody}} = Hold.clear(@repo_key, @issue_id, :blocked, question: {:answer, "Run it again", :nobody})
+      assert Hold.held?(@repo_key, @issue_id, :blocked)
+      assert %{state: :open} = Questions.find(ticket, open.id)
     end
   end
 

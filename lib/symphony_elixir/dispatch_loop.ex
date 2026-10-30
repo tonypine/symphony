@@ -20,6 +20,12 @@ defmodule SymphonyElixir.DispatchLoop do
   that found CI still running on its commit: CI takes longer than the window, and that wait has its
   own bound (`SymphonyElixir.CiWait`). Clearing the loop hold
   itself, with `Unblock` or `Restart`, empties them too, so the ticket starts again from zero.
+
+  Before the hold, the guard asks a question (`question_attrs/2`, through `SymphonyElixir.Questions`)
+  that pauses the ticket on a `:question` reason: "Run it again", "Start it over from main" or "Keep
+  it paused". The hold names the question (`waits_on.question_id`) and is cleared with it, and the
+  answer's option is Unblock, Restart or nothing (`answer_move/1`). A quiet handoff, a ticket whose
+  last runs ended without a handoff (`SymphonyElixir.Orchestrator`), asks the same question.
   """
 
   alias SymphonyElixir.TicketState
@@ -28,6 +34,9 @@ defmodule SymphonyElixir.DispatchLoop do
   @handoff_signal "handoff"
   # How many of the last runs the hold reason describes.
   @shown_runs 3
+  @run_again "Run it again"
+  @start_over "Start it over from main"
+  @keep_paused "Keep it paused"
 
   @typedoc "The two limits: `runs` within `window_ms`, and `long_runs` within `long_window_ms`."
   @type limits :: %{
@@ -42,6 +51,9 @@ defmodule SymphonyElixir.DispatchLoop do
 
   @typedoc "A loop: `count` runs of `kind` within `window_ms`, the runs themselves newest first."
   @type loop :: %{kind: String.t(), count: pos_integer(), window_ms: pos_integer(), runs: [TicketState.dispatch()]}
+
+  @typedoc "What made Symphony stop starting runs: a loop, or `runs` quiet runs without a handoff."
+  @type stop :: loop() | {:quiet_handoff, pos_integer()}
 
   @doc "The `waits_on` type of a dispatch-loop hold."
   @spec hold_type() :: String.t()
@@ -97,6 +109,68 @@ defmodule SymphonyElixir.DispatchLoop do
       waits_on: %{type: @hold_type, keys: [kind]}
     }
   end
+
+  @doc """
+  The question Symphony asks when it stops starting runs on the ticket `name` (its identifier): a
+  `SymphonyElixir.Questions.ask/3` request whose options are Unblock ("#{@run_again}", the
+  recommended one: the hold's reason offers Unblock first), Restart ("#{@start_over}") and nothing
+  ("#{@keep_paused}").
+  """
+  @spec question_attrs(stop(), String.t()) :: map()
+  def question_attrs(%{count: count, window_ms: window_ms}, name) do
+    request(
+      "#{name} ran #{count} times in #{window(window_ms)} without finishing",
+      "Symphony started no more runs on #{name}: its last runs changed nothing, with no new state, no new change to its pull request and no decision.",
+      name
+    )
+  end
+
+  def question_attrs({:quiet_handoff, runs}, name) do
+    request(
+      "#{name}'s last #{number(runs)} runs ended without a handoff",
+      "The last runs on #{name} stopped without handing the work on, so Symphony started no more runs on it.",
+      name
+    )
+  end
+
+  @doc """
+  What the answer to a `question_attrs/2` question asks for, by the option it picked: `:unblock`
+  for "#{@run_again}", `:restart` for "#{@start_over}", and `:keep` for "#{@keep_paused}", a
+  free-text answer or a question not answered.
+  """
+  @spec answer_move(map()) :: :unblock | :restart | :keep
+  def answer_move(%{state: :answered, answer: %{option: number}, options: options}) when is_integer(number) do
+    case Enum.at(options, number - 1) do
+      %{label: @run_again} -> :unblock
+      %{label: @start_over} -> :restart
+      _other -> :keep
+    end
+  end
+
+  def answer_move(_question), do: :keep
+
+  @doc "The label of the option a `question_attrs/2` question answers for `move` (`:unblock` or `:restart`)."
+  @spec option_label(:unblock | :restart) :: String.t()
+  def option_label(:unblock), do: @run_again
+  def option_label(:restart), do: @start_over
+
+  defp request(title, why, name) do
+    %{
+      title: title,
+      question: "#{title}. Should Symphony run it again, start it over from main, or keep it paused?",
+      why: why,
+      if_unanswered: "#{name} stays paused and Symphony starts no run on it.",
+      recommendation_reason: "Another run picks up where the last one stopped, with nothing lost.",
+      options: [
+        %{label: @run_again, effect: "Symphony starts a new run on #{name} where it stopped.", recommended: true},
+        %{label: @start_over, effect: "Symphony closes the pull request of #{name} and starts again from the main branch.", recommended: false},
+        %{label: @keep_paused, effect: "#{name} stays paused until you decide.", recommended: false}
+      ]
+    }
+  end
+
+  defp number(2), do: "two"
+  defp number(count), do: Integer.to_string(count)
 
   # Each run is described up to the next newer run's start, or now for the newest.
   defp describe_runs(runs, signals) do
