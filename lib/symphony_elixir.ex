@@ -102,7 +102,9 @@ defmodule SymphonyElixir.Application do
       else
         (core_children ++
            [
-             SymphonyElixir.RunStore
+             SymphonyElixir.RunStore,
+             # After the run store, before the orchestrator: it starts with the seeded runs and pauses.
+             qa_seed_child_spec()
            ] ++
            verification_child_specs(system_config) ++
            [
@@ -186,6 +188,13 @@ defmodule SymphonyElixir.Application do
     end)
   end
 
+  defp qa_seed_child_spec do
+    case SymphonyElixir.QaSeed.configured_dir() do
+      nil -> nil
+      dir -> {SymphonyElixir.QaSeed, dir: dir}
+    end
+  end
+
   defp pr_review_child_spec(%SystemSchema{repos: repos}) do
     if Enum.any?(repos, &pr_review_enabled_for_repo?/1) do
       SymphonyElixir.PrReviewPoller
@@ -211,9 +220,14 @@ defmodule SymphonyElixir.Application do
     end
   end
 
+  # A memory tracker's issues file is a fake Linear (a QA server's seed): the Inbox reads it instead.
   defp inbox_child_spec(%SystemSchema{repos: repos}) do
-    if Enum.any?(repos, &SymphonyElixir.Inbox.enabled?(Config.settings_for_repo!(&1.name))) do
-      SymphonyElixir.Inbox
+    settings = Enum.map(repos, &Config.settings_for_repo!(&1.name))
+
+    cond do
+      Enum.any?(settings, &SymphonyElixir.Inbox.enabled?/1) -> SymphonyElixir.Inbox
+      Enum.any?(settings, &SymphonyElixir.Inbox.enabled?(&1, :memory)) -> {SymphonyElixir.Inbox, source: :memory}
+      true -> nil
     end
   end
 

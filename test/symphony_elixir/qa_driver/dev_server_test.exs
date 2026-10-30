@@ -161,6 +161,28 @@ defmodule SymphonyElixir.QaDriver.DevServerTest do
     assert DevServer.stop(config, server) == :gone
   end
 
+  test "a live server's own variables reach its build and start commands, and the app's are kept on the server", %{config: config, run_dir: run_dir} do
+    spec =
+      spec(%{
+        build_cmd: "printf '%s' \"$SYMPHONY_QA_CONTROL_TOKEN\" > build-token",
+        start_cmd: "printf '%s' \"$SYMPHONY_QA_CONTROL_TOKEN|$QA_NOTE\" > start-env; exec python3 #{@dev_server}",
+        env: [{"SYMPHONY_QA_CONTROL_TOKEN", "tok en"}, {"QA_NOTE", "a=b"}],
+        launch_env: [{"SYMPHONY_BAR_CONTROL_URL", "http://127.0.0.1:1"}]
+      })
+
+    assert {:ok, server} = DevServer.start(config, spec)
+    assert server.launch_env == [{"SYMPHONY_BAR_CONTROL_URL", "http://127.0.0.1:1"}]
+    src = Path.join(run_dir, "dev-server/src")
+    assert File.read!(Path.join(src, "build-token")) == "tok en"
+    assert File.read!(Path.join(src, "start-env")) == "tok en|a=b"
+    assert DevServer.stop(config, server) == :stopped
+
+    # Without them, as `verification.dev_server`, the app gets nothing of the server's.
+    assert {:ok, server} = DevServer.start(config, spec(%{}))
+    assert server.launch_env == []
+    assert DevServer.stop(config, server) == :stopped
+  end
+
   # The server's parent sits outside the group and reaps it only a second after the kill, as a
   # slow reaper on a loaded runner does: the stop waits for it, and a zombie no longer serves.
   test "kills the group when it outlives stop_timeout_ms, and returns once the kill has landed", %{config: config} do

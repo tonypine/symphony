@@ -9,7 +9,8 @@ defmodule SymphonyElixir.QaAgent.Selection do
   - a `qa:<kind>` label always selects that playbook;
   - a diff that only touches docs, tests or `auto_review.skip_globs` is skipped;
   - otherwise each playbook is selected by its trigger paths or, for the `cli`
-    playbook, a `## User walkthrough` section in the ticket;
+    playbook, a `## User walkthrough` section in the ticket, and the `macos_app`
+    playbook also when its `live` server should run (`live/3`);
   - when nothing is selected (an internal refactor, say), QA is skipped.
 
   Built-in playbooks ship as `priv/qa_playbooks/<kind>.md`. `auto_review.playbooks`
@@ -29,7 +30,10 @@ defmodule SymphonyElixir.QaAgent.Selection do
   `dev_server_port`, and its `launch_env` reaches the app (see
   `SymphonyElixir.QaAgent.PlaybookSettings`); it needs only `verification.dev_server`
   (`dev_server_command?: true`), since `verification.enabled` turns on this host's
-  dev server, for agent runs too. The built-in
+  dev server, for agent runs too. Its `live` server, when set, is carried as
+  `:live_server`; when `live/3` says it should run, the playbook is selected even for a
+  diff outside its own paths (a server change the Director's journeys exercise), and
+  `SymphonyElixir.QaPolicy` marks the pass `live: true`. The built-in
   `android_app` playbook is on only when its config names the `build` command the
   QA agent runs in its sandbox, the APKs it writes (`apk_paths`, or one
   `apk_path`) and the apps' `application_ids`, and `auto_review.android.avd` names the emulator that the
@@ -42,8 +46,11 @@ defmodule SymphonyElixir.QaAgent.Selection do
 
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.PlaybookSettings
+  alias SymphonyElixir.Walkthrough
 
   @skip_label "qa:skip"
+  @live_label "qa:live"
+  @fixture_label "qa:fixture"
   @label_prefix "qa:"
   @walkthrough_heading ~r/^\#{2,6}[ \t]*User walkthrough[ \t]*$/mi
 
@@ -140,7 +147,9 @@ defmodule SymphonyElixir.QaAgent.Selection do
           optional(:browser_mcp) => map() | nil,
           optional(:dev_server) => true,
           optional(:requires) => [String.t()],
-          optional(:scope) => :none
+          optional(:scope) => :none,
+          optional(:live_server) => PlaybookSettings.live_server(),
+          optional(:live) => true
         }
   @type decision :: {:run, [playbook()]} | {:skip, String.t()}
 
@@ -178,6 +187,38 @@ defmodule SymphonyElixir.QaAgent.Selection do
         {:skip, "no QA playbook applies: no `## User walkthrough` in the ticket, no entry-point change, and no `qa:<kind>` label"}
     end
   end
+
+  @doc """
+  Whether a `macos_app` playbook's `live` server runs for this change, and why: the diff touches
+  one of the server's `paths` and the ticket's `## User walkthrough` mentions one of its
+  `walkthrough_mentions` (any walkthrough when it lists none). A `qa:live` label makes it run and a
+  `qa:fixture` label never does, whatever the diff; `qa:fixture` wins over `qa:live`.
+  """
+  @spec live(Issue.t(), PlaybookSettings.live_server(), [String.t()]) :: {boolean(), String.t()}
+  def live(%Issue{} = issue, live_server, changed_paths) when is_list(changed_paths) do
+    labels = issue |> Issue.label_names() |> Enum.map(&normalize_label/1)
+    section = Walkthrough.section(issue.description)
+
+    cond do
+      @fixture_label in labels -> {false, "the issue has the `#{@fixture_label}` label"}
+      @live_label in labels -> {true, "the issue has the `#{@live_label}` label"}
+      not server_change?(live_server, changed_paths) -> {false, "the PR changes none of the server's paths"}
+      is_nil(section) -> {false, "the ticket has no `## User walkthrough`"}
+      not mentions?(section, live_server.walkthrough_mentions) -> {false, "no `## User walkthrough` step names #{words(live_server)}"}
+      true -> {true, "the PR changes the server and " <> walkthrough_note(live_server)}
+    end
+  end
+
+  defp server_change?(live_server, paths),
+    do: Enum.any?(paths, fn path -> Enum.any?(live_server.paths, &glob_match?(path, &1)) end)
+
+  defp mentions?(_section, []), do: true
+  defp mentions?(section, words), do: Enum.any?(words, &Regex.match?(~r/\b#{Regex.escape(&1)}\b/iu, section))
+
+  defp words(%{walkthrough_mentions: words}), do: Enum.map_join(words, " or ", &"`#{&1}`")
+
+  defp walkthrough_note(%{walkthrough_mentions: []}), do: "the ticket has a `## User walkthrough`"
+  defp walkthrough_note(live_server), do: "the `## User walkthrough` names #{words(live_server)}"
 
   @doc "Whether the issue body has a `## User walkthrough` section."
   @spec user_walkthrough?(Issue.t()) :: boolean()
@@ -348,13 +389,19 @@ defmodule SymphonyElixir.QaAgent.Selection do
     port = Map.get(override, "dev_server_port")
     launch_env = Map.get(override, "launch_env")
 
-    Map.merge(playbook, %{
-      build: Map.fetch!(override, "build"),
-      app: Map.fetch!(override, "app"),
-      build_timeout_ms: if(is_integer(timeout) and timeout > 0, do: timeout),
-      dev_server_port: if(is_integer(port) and port in 1..65_535, do: port, else: PlaybookSettings.default_port()),
-      launch_env: if(is_map(launch_env), do: stringify_keys(launch_env), else: %{})
-    })
+    playbook =
+      Map.merge(playbook, %{
+        build: Map.fetch!(override, "build"),
+        app: Map.fetch!(override, "app"),
+        build_timeout_ms: if(is_integer(timeout) and timeout > 0, do: timeout),
+        dev_server_port: if(is_integer(port) and port in 1..65_535, do: port, else: PlaybookSettings.default_port()),
+        launch_env: if(is_map(launch_env), do: stringify_keys(launch_env), else: %{})
+      })
+
+    case PlaybookSettings.live_server(override) do
+      nil -> playbook
+      live_server -> Map.put(playbook, :live_server, live_server)
+    end
   end
 
   defp put_host_settings(playbook, "android_app", override) do
@@ -382,10 +429,14 @@ defmodule SymphonyElixir.QaAgent.Selection do
     walkthrough? = user_walkthrough?(issue)
 
     Enum.filter(playbooks, fn playbook ->
-      (walkthrough? and playbook.kind in @walkthrough_kinds) or
+      (walkthrough? and playbook.kind in @walkthrough_kinds) or live_server_runs?(playbook, issue, changed_paths) or
         Enum.any?(changed_paths, fn path -> Enum.any?(playbook.paths, &glob_match?(path, &1)) end)
     end)
   end
+
+  # A `macos_app` playbook whose live server should run is selected for a server-only diff too.
+  defp live_server_runs?(%{live_server: live_server}, issue, changed_paths), do: elem(live(issue, live_server, changed_paths), 0)
+  defp live_server_runs?(_playbook, _issue, _changed_paths), do: false
 
   defp docs_test_or_skipped?(path, skip_globs) do
     docs_or_test?(path) or Enum.any?(skip_globs, &glob_match?(path, &1))

@@ -112,6 +112,12 @@ defmodule SymphonyElixir.QaDriver do
   arguments. The host's own appearance is never switched: a pass that dies would
   leave it switched for the next one, and switching it needs Apple Events.
 
+  Environment: while the pass's `live` server runs (`start_dev_server/3`),
+  `qa_launch_app` gives the app its control URL and token, so the app's moves
+  reach that server; `environment: "fixture"` launches it without them, on its
+  state fixtures, and `environment: "live"` without a live server is refused
+  (`qa_live_server_missing`).
+
   App stand-ins: besides `api_fixtures`, `qa_launch_app` takes five optional
   arguments that point the app at stand-ins instead of real services, all only
   in QA mode:
@@ -216,7 +222,8 @@ defmodule SymphonyElixir.QaDriver do
   while another pass's driver holds it, and gives it back once its own server
   stopped. Every `qa_launch_app` also gives the app the playbook's `launch_env`
   after Symphony's own variables (`SymphonyElixir.QaAgent.PlaybookSettings`),
-  and refuses a name Symphony sets itself.
+  and refuses a name Symphony sets itself, then the running server's own
+  `launch_env` (a `live` server's control URL and token).
   """
 
   use GenServer
@@ -849,7 +856,8 @@ defmodule SymphonyElixir.QaDriver do
   # -- launches ---------------------------------------------------------------
 
   defp launch_build(driver, config, args) do
-    with {:ok, root} <- root_choice(driver, args),
+    with {:ok, environment} <- environment(Map.get(args, "environment")),
+         {:ok, root} <- root_choice(driver, args),
          {:ok, fixtures} <- api_fixtures(config, args),
          {:ok, built} <- fetch_build(driver),
          {:ok, stand_ins} <- stand_ins(driver, config, args),
@@ -861,7 +869,7 @@ defmodule SymphonyElixir.QaDriver do
       app_args = appearance_args(Map.get(args, "appearance"))
       stand_ins = stand_ins ++ library_env
       info = %{name: name, crash_reports: reports, api_fixtures: fixtures_dir, stand_ins: stand_ins, args: app_args}
-      info = Map.put(info, :root, root)
+      info = Map.merge(info, %{root: root, environment: environment})
       GenServer.call(driver, {:launch, built.executable, info})
     end
   end
@@ -870,6 +878,7 @@ defmodule SymphonyElixir.QaDriver do
   # Symphony's relaunch stand-in as the update helper's `open`.
   defp launch_pair(driver, config, args) do
     with :ok <- pair_feed_argument(args),
+         {:ok, environment} <- environment(Map.get(args, "environment")),
          {:ok, root} <- root_choice(driver, args),
          {:ok, fixtures} <- api_fixtures(config, args),
          {:ok, _pair} <- fetch_pair(driver),
@@ -884,7 +893,7 @@ defmodule SymphonyElixir.QaDriver do
       pair_env = [{"SYMPHONY_BAR_UPDATE_URL", ReleasePair.latest_url(feed_port)}, {"SYMPHONY_UPDATE_OPEN", relaunch}]
       stand_ins = stand_ins ++ library_env ++ pair_env
       info = %{name: name, crash_reports: reports, api_fixtures: fixtures_dir, stand_ins: stand_ins, root: root}
-      info = Map.merge(info, %{pair_bundle: bundle, args: appearance_args(Map.get(args, "appearance"))})
+      info = Map.merge(info, %{pair_bundle: bundle, args: appearance_args(Map.get(args, "appearance")), environment: environment})
 
       with {:ok, payload} <- GenServer.call(driver, {:launch, Path.join([bundle, "Contents", "MacOS", name]), info}) do
         note =
@@ -1340,6 +1349,10 @@ defmodule SymphonyElixir.QaDriver do
   defp appearance(_other), do: tool_error("invalid_arguments", "`appearance` must be `light` or `dark`.")
 
   defp appearance_args(appearance), do: Map.get(@appearance_args, appearance, [])
+
+  defp environment(nil), do: {:ok, nil}
+  defp environment(environment) when environment in ["live", "fixture"], do: {:ok, environment}
+  defp environment(_other), do: tool_error("invalid_arguments", "`environment` must be `live` or `fixture`.")
 
   # The environment that injects the appearance library, built in the run directory on the QA host.
   defp appearance_library(_config, nil), do: {:ok, []}
@@ -2122,8 +2135,9 @@ defmodule SymphonyElixir.QaDriver do
   defp launch(executable, info, state) do
     with {:ok, state} <- ensure_stub(state),
          {:ok, playbook_env} <- playbook_env(state.config),
+         {:ok, server_env} <- server_launch_env(state, Map.get(info, :environment)),
          {:ok, root, state} <- launch_root(state, info.root) do
-      start_app(executable, %{info | root: root}, playbook_env, state)
+      start_app(executable, Map.merge(info, %{root: root, live: server_env != []}), playbook_env ++ server_env, state)
     else
       {:error, {:qa_tool, _code, _message}} = error -> {:reply, error, state}
     end
@@ -2143,6 +2157,7 @@ defmodule SymphonyElixir.QaDriver do
         app = Map.merge(info, %{port: port, output: "", exit_status: nil, window: nil})
         payload = %{"pid" => pid, "qa_mode" => true, "root" => info.root, "note" => "Wait for the window to settle before judging it."}
         payload = if info.api_fixtures, do: Map.put(payload, "api_fixtures", info.api_fixtures), else: payload
+        payload = environment_payload(payload, state, info)
         state = if info[:pair_bundle], do: put_in(state.pair_launches[info.pair_bundle], info), else: state
         {:reply, {:ok, payload}, %{state | apps: Map.put(state.apps, pid, app), launched_app?: true, last_root: info.root}}
 
@@ -2283,10 +2298,32 @@ defmodule SymphonyElixir.QaDriver do
   end
 
   # The QA host has its own login environment; only the QA root, the stub's URL,
-  # the launch's own variables (the API fixtures' copy, the stand-ins) and then the
-  # playbook's `launch_env` cross over.
+  # the launch's own variables (the API fixtures' copy, the stand-ins), then the
+  # playbook's `launch_env` and the running dev server's own variables cross over.
   defp launch_env(qa_root, stub_url, app_env, playbook_env),
     do: [{@qa_root_env, qa_root}, {OpenRouter.qa_url_env(), stub_url} | app_env] ++ playbook_env
+
+  # A running dev server's own variables for the app (a `live` server's control URL and token),
+  # unless the launch asks for the fixtures.
+  # Which environment the app reads, said only on a pass that runs a live server.
+  defp environment_payload(payload, state, info) do
+    cond do
+      not match?({:ok, [_ | _]}, server_launch_env(state, nil)) -> payload
+      info.live -> Map.put(payload, "environment", "live")
+      true -> Map.put(payload, "environment", "fixture")
+    end
+  end
+
+  defp server_launch_env(_state, "fixture"), do: {:ok, []}
+  defp server_launch_env(%{dev_server: %{launch_env: [_ | _] = env}}, _environment), do: {:ok, env}
+  defp server_launch_env(_state, nil), do: {:ok, []}
+
+  defp server_launch_env(_state, "live") do
+    tool_error(
+      "qa_live_server_missing",
+      "This pass runs no live server, so the app can only read its state fixtures: launch it without `environment`, or with `fixture`."
+    )
+  end
 
   # The config check refuses these names already; a driver started without it refuses them too.
   defp playbook_env(%{launch_env: {:ok, env}}), do: {:ok, env}

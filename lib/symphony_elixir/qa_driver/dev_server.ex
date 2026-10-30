@@ -52,7 +52,8 @@ defmodule SymphonyElixir.QaDriver.DevServer do
   printf 'symphony-qa-dev-server-port:busy:%s:%s\\n' "$pid" "$ticket"
   """
 
-  # Runs `$4` in `$1/dev-server/src` with the dev server's environment: `build` waits for it and
+  # Runs `$4` in `$1/dev-server/src` with the dev server's environment and the spec's own
+  # `NAME=value` pairs after it: `build` waits for it and
   # prints its exit status and the log's tail when it fails; `start` starts it in a process group
   # of its own (`set -m`) and prints that group's leader, a subshell that writes the exit status
   # (whole, through a rename) before it exits.
@@ -60,15 +61,19 @@ defmodule SymphonyElixir.QaDriver.DevServer do
   dir="$1/dev-server"; log="$dir/server.log"
   cd "$dir/src" || exit 125
   export SYMPHONY_VERIFICATION_PORT="$2" HOME="$dir/home" TMPDIR="$dir/tmp/"
-  case "$3" in
+  mode=$3 command=$4
+  shift 4
+  for pair in "$@"; do export "$pair"; done
+  set --
+  case "$mode" in
     build)
-      /bin/sh -c "$4" < /dev/null >> "$log" 2>&1
+      /bin/sh -c "$command" < /dev/null >> "$log" 2>&1
       status=$?
       if [ "$status" -ne 0 ]; then printf 'symphony-qa-dev-server-exit:%s\\n' "$status"; tail -n #{@log_lines} "$log"; fi
       ;;
     start)
       set -m
-      (/bin/sh -c "$4"; printf '%s\\n' "$?" > "$dir/exit-status.part"; mv "$dir/exit-status.part" "$dir/exit-status") < /dev/null >> "$log" 2>&1 &
+      (/bin/sh -c "$command"; printf '%s\\n' "$?" > "$dir/exit-status.part"; mv "$dir/exit-status.part" "$dir/exit-status") < /dev/null >> "$log" 2>&1 &
       printf 'symphony-qa-dev-server-pid:%s\\n' "$!"
       ;;
   esac
@@ -114,8 +119,14 @@ defmodule SymphonyElixir.QaDriver.DevServer do
   printf 'symphony-qa-dev-server:killed\\n'
   """
 
-  @typedoc "What to run: `verification.dev_server` with its health check URL for `port`."
+  @typedoc """
+  What to run: `verification.dev_server` with its health check URL for `port`, or a playbook's
+  `live` server. `env` (optional) is set on its build and start commands; `launch_env` (optional)
+  is what the app under test gets while it runs (`SymphonyElixir.QaDriver`).
+  """
   @type spec :: %{
+          optional(:env) => [{String.t(), String.t()}],
+          optional(:launch_env) => [{String.t(), String.t()}],
           required(:start_cmd) => String.t(),
           required(:build_cmd) => String.t() | nil,
           required(:health_check_url) => String.t(),
@@ -127,11 +138,12 @@ defmodule SymphonyElixir.QaDriver.DevServer do
           required(:ticket) => String.t() | nil
         }
 
-  @typedoc "A running server: its process group on the QA host and how to stop it."
+  @typedoc "A running server: its process group on the QA host, how to stop it, and what the app gets."
   @type server :: %{
           pid: pos_integer(),
           port: pos_integer(),
           url: String.t(),
+          launch_env: [{String.t(), String.t()}],
           stop_signal: String.t(),
           stop_timeout_ms: non_neg_integer()
         }
@@ -156,7 +168,14 @@ defmodule SymphonyElixir.QaDriver.DevServer do
          :ok <- build(config, spec),
          :ok <- port_free(config, spec),
          {:ok, pid} <- launch(config, spec) do
-      server = %{pid: pid, port: spec.port, url: spec.url, stop_signal: spec.stop_signal, stop_timeout_ms: spec.stop_timeout_ms}
+      server = %{
+        pid: pid,
+        port: spec.port,
+        url: spec.url,
+        launch_env: Map.get(spec, :launch_env, []),
+        stop_signal: spec.stop_signal,
+        stop_timeout_ms: spec.stop_timeout_ms
+      }
 
       case healthy(config, spec, pid) do
         :ok ->
@@ -295,7 +314,8 @@ defmodule SymphonyElixir.QaDriver.DevServer do
     do: {:error, {:dev_server_exit, exit_status(status)}, log_after(output, "symphony-qa-dev-server-exit")}
 
   defp run(config, spec, mode, command, timeout_ms) do
-    script(config, @run_script, [Integer.to_string(spec.port), mode, command], timeout_ms)
+    env = for {name, value} <- Map.get(spec, :env, []), do: "#{name}=#{value}"
+    script(config, @run_script, [Integer.to_string(spec.port), mode, command | env], timeout_ms)
   end
 
   defp script(config, script, args, timeout_ms) do

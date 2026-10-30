@@ -20,7 +20,8 @@ worktree's configured app and on apps you launched:
   "Light and dark, and the status-bar menu" below. It also returns the app's QA `root`: every
   launch shares root 1 and its settings unless you pass `fresh_root: true` (a new, empty root) or
   `root` (one an earlier launch returned). See "QA roots: a first launch, a reset, a clean state"
-  below.
+  below. When the pass runs a live server, `environment` (`live` or `fixture`) picks which one the
+  app reads; see "Fixtures or the live server" below.
 - `qa_ax_tree`: the app's accessibility tree with each element's role, title, value, `help`
   and `frame` (`x`, `y`, `w`, `h` in points). Pass `role` or `text` to list only matching elements.
   `help` is the text of the element's tooltip: a step that hovers to read a tooltip reads it
@@ -118,6 +119,22 @@ API, which is the system under test. For each one:
   app's requests from that log in the step's `details`.
 - When the server cannot listen on the port, or the app still cannot reach it, mark the steps
   that need it `blocked` with the error in `details`.
+
+Fixtures or the live server. Every pass can show the app a state from fixtures (`api_fixtures`).
+When the prompt has a "Live server" section, Symphony also runs the project's own server on the
+QA VM beside the app, over seeded data, and every launch reaches it unless you pass
+`environment: "fixture"`. Choose per step, by what the step proves:
+
+- **How the app draws a state** (a layout, a label, a colour, light and dark): the fixtures. They
+  give the exact state the step names, and nothing changes under you.
+- **A round trip through the server** (press a button, then see what the app shows after it: an
+  Inbox row that goes on Decide and comes back on Undo, a repository that stops starting tickets
+  once paused): the live server, launched with `environment: "live"` or no `environment`. A
+  fixture answers every move with 200 and never changes, so it cannot prove one.
+- Name the environment in each step's `details`: `live server` or `fixture`. `qa_launch_app`
+  returns it as `environment`.
+- A step that needs the round trip on a pass with no live server is `unprovable` here, with that
+  reason; never prove it from a fixture.
 
 QA roots: a first launch, a reset, a clean state. In QA mode the app keeps its settings in a QA
 root, never the real ones, and every `qa_launch_app` of the pass shares root 1: what one launch

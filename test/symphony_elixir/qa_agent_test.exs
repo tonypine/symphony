@@ -1779,7 +1779,7 @@ defmodule SymphonyElixir.QaAgentTest do
         script =~ "lsof -nP" ->
           {:ok, {"symphony-qa-dev-server-port:free\n", 0}}
 
-        script =~ ~s(case "$3") ->
+        script =~ ~s(case "$mode") ->
           send(test, {:qa_host_dev_server, args})
           if Enum.at(args, 1) == "start", do: {:ok, {"symphony-qa-dev-server-pid:4242\n", 0}}, else: {:ok, {"", 0}}
 
@@ -1807,7 +1807,7 @@ defmodule SymphonyElixir.QaAgentTest do
           script =~ "lsof -nP" ->
             {:ok, {"symphony-qa-dev-server-port:free\n", 0}}
 
-          script =~ ~s(case "$3") ->
+          script =~ ~s(case "$mode") ->
             {:ok, {"symphony-qa-dev-server-pid:4242\n", 0}}
 
           script =~ "end=" ->
@@ -1866,6 +1866,51 @@ defmodule SymphonyElixir.QaAgentTest do
       assert_received {:qa_host_cleanup, "/Users/qa/.symphony-qa/runs/run.abc"}
       # This host starts no dev server of its own for the pass.
       refute_received {:dev_server_started, _identifier, _run_id, _worktree, _opts}
+    end
+
+    test "a live macos_app pass runs its live server on the QA host with a fresh control token, and the prompt offers both environments" do
+      health = {:ok, {"symphony-qa-dev-server:healthy\n", 0}}
+      live = %{"build_cmd" => "scripts/qa-server-build.sh", "start_cmd" => "scripts/qa-server-start.sh", "paths" => ["lib/**"]}
+      macos_app = %{"build" => "make app", "app" => "build/App.app", "dev_server_port" => 8095, "live" => live}
+      settings = qa_host_settings()
+      config = %{settings.auto_review | playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => macos_app}}
+      [playbook] = Selection.playbooks(config, Verification.selection_opts(settings))
+
+      {result, _log} =
+        with_log(fn ->
+          QaAgent.run(job(%{playbooks: [Map.put(playbook, :live, true)]}), settings,
+            git: fake_git(),
+            qa_agent_module: FakeSession,
+            verification: FakeVerification,
+            qa_driver_opts: qa_vm_opts(qa_host_dev_server_host(health))
+          )
+        end)
+
+      assert {:ok, %{result: %{verdict: :inconclusive}}} = result
+      assert_received {:qa_host_dev_server, ["8095", "build", "scripts/qa-server-build.sh", "SYMPHONY_QA_CONTROL_TOKEN=" <> token]}
+      assert_received {:qa_host_dev_server, ["8095", "start", "scripts/qa-server-start.sh", "SYMPHONY_QA_CONTROL_TOKEN=" <> ^token]}
+      assert String.length(token) >= 32
+      assert_received {:qa_host_dev_server, :health}
+      assert_received {:qa_turn, _session, prompt, _issue, _opts}
+      flat = String.replace(prompt, ~r/\s+/, " ")
+      assert flat =~ "Live server: Symphony started the project's own server for this PR head on the QA host, beside the app under test, at http://127.0.0.1:8095"
+      assert flat =~ "in each step's evidence name the one that proves it: `live server` or `fixture`"
+      assert_received {:qa_host_dev_server, :stopped}
+
+      # The same playbook not marked live starts no server: the app reads its fixtures.
+      {_result, _log} =
+        with_log(fn ->
+          QaAgent.run(job(%{playbooks: [playbook]}), settings,
+            git: fake_git(),
+            qa_agent_module: FakeSession,
+            verification: FakeVerification,
+            qa_driver_opts: qa_vm_opts(qa_host_dev_server_host(health))
+          )
+        end)
+
+      refute_received {:qa_host_dev_server, _args}
+      assert_received {:qa_turn, _session, prompt, _issue, _opts}
+      refute prompt =~ "Live server:"
     end
 
     test "starts no dev server for a macos_app pass without a QA host, on this host or another, and reports it blocked" do
