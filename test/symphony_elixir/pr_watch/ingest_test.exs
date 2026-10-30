@@ -174,6 +174,37 @@ defmodule SymphonyElixir.PrWatch.IngestTest do
       assert %{deliveries: 2, results_via_webhook: 1} = health()
     end
 
+    test "a merge brings forward a confirm read waiting on a burst; a later delivery leaves it (TP-1305)" do
+      pid = started!([{"1", "Merging", []}, {"2", "QA", []}])
+      flush_timers()
+
+      :ok = Ingest.deliver(check_failed("2", "head-2-1"), @repo_url, watchers: [pid])
+      _state = :sys.get_state(pid)
+      assert_received {:pr_watch_timer, :confirm, 3_000}
+
+      :ok = Ingest.deliver(merged("1"), nil, watchers: [pid])
+      :ok = Ingest.deliver(check_failed("2", "head-2-1"), @repo_url, watchers: [pid])
+      _state = :sys.get_state(pid)
+      assert_received {:pr_watch_timer, :confirm, 0}
+      refute_received {:pr_watch_timer, :confirm, _delay}
+      assert MapSet.equal?(:sys.get_state(pid).confirm, MapSet.new(["issue-1", "issue-2"]))
+      refute Ingest.merged?({:ci, %{event: "pull_request", action: "closed", merged: false}})
+    end
+
+    test "without a test timer, a merge cancels the burst's real timer and arms one for now" do
+      Parity.tickets!(%{tickets: [{"1", "Merging", []}, {"2", "QA", []}]})
+      fakes = [tracker: Parity.Tracker, fetch: Parity.Fetch, github: Parity.GitHub]
+      pid = start_supervised!({Repo, [repo_key: @repo_key, name: nil, auto: false] ++ fakes})
+      Parity.tick!(pid)
+
+      :ok = Ingest.deliver(check_failed("2", "head-2-1"), @repo_url, watchers: [pid])
+      assert %{confirm_timer: burst} = :sys.get_state(pid)
+      :ok = Ingest.deliver(merged("1"), nil, watchers: [pid])
+      assert %{confirm_timer: merge} = :sys.get_state(pid)
+      assert merge != burst
+      refute Process.read_timer(burst)
+    end
+
     test "a confirm read whose Linear read fails leaves the timed tick's backoff alone" do
       Parity.tickets!(%{tickets: [{"1", "Code Review", []}]})
       pid = Parity.start!(tracker: FailingTracker)
@@ -195,7 +226,8 @@ defmodule SymphonyElixir.PrWatch.IngestTest do
       :ok = Ingest.deliver(merged("1"), nil, watchers: [pid])
       _state = :sys.get_state(pid)
 
-      assert_received {:pr_watch_timer, :confirm, 3_000}
+      # A merge is confirmed at once, so R2 closes its ticket out without waiting on a burst.
+      assert_received {:pr_watch_timer, :confirm, 0}
       assert_received {:pr_watch_timer, :reread, 1_000}
       assert %{facts: %{pr: :merged}} = Parity.watch("1")
       assert %{facts: %{mergeable: :unknown}, source: :webhook} = Parity.watch("2")
@@ -223,7 +255,12 @@ defmodule SymphonyElixir.PrWatch.IngestTest do
 
     test "a push to main updates every open PR behind it with no run and no PR ahead sharing its files (TP-1160)" do
       Parity.tickets!(%{
-        tickets: [{"1", "Code Review", []}, {"2", "QA", []}, {"3", "Merging", []}, {"4", "Merging", []}],
+        tickets: [
+          {"1", "Code Review", []},
+          {"2", "QA", []},
+          {"3", "Merging", ci: :pending, auto_merge: :armed},
+          {"4", "Merging", ci: :pending, auto_merge: :armed}
+        ],
         files: %{"3" => ["SPEC.md"], "4" => ["SPEC.md", "lib/b.ex"]},
         running: ["2"]
       })

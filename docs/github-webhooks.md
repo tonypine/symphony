@@ -64,7 +64,8 @@ Symphony's PR and CI watcher reads each watched pull request about once per
 suite, check run or workflow run finishes, when a pull request's head moves or the PR closes, and
 when a branch moves. The watcher patches what it knows of that PR (its state API shows
 `watch.source: webhook`) and reads it 3 seconds later, so a green head lands, or a red one goes to
-the fix run, within seconds. Only that read decides, as the timed poll does: one passing check
+the fix run, within seconds. A pull request that closed by merging is read at once, so its ticket is
+closed out as soon as Symphony learns of the merge. Only that read decides, as the timed poll does: one passing check
 never makes a head green by itself.
 
 A push to a base branch (or a pull request that closes by merging into it) can make every other PR

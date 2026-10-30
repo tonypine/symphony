@@ -1224,7 +1224,7 @@ Fields:
   - `silence_alert_minutes` (integer, default `10`): a repository with no delivery for this long is
     reported as silent.
   - A delivery patches the PR and CI watcher's facts for the PRs it names and the watcher reads
-    them 3 seconds later; only that read decides, through the same decision table as the timed
+    them 3 seconds later (a PR that closed by merging at once); only that read decides, through the same decision table as the timed
     poll, and only a read writes a green head. A `push` to a base branch re-reads every open
     watched PR on it, 1 second apart; a `ping` reads every watched PR. A published `release` of the
     app's repository records its newest release, which the timed poll also reads and

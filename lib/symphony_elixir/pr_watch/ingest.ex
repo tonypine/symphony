@@ -5,7 +5,8 @@ defmodule SymphonyElixir.PrWatch.Ingest do
 
   A delivery becomes a fact patch on the records it names (`patch/2`), marked `source: :webhook`,
   and the watcher reads those PRs 3 seconds later, once the burst of deliveries a CI run sends has
-  settled (the confirm read). Only that read decides and acts, as the timed poll does, so a
+  settled (the confirm read). A PR that closed by merging (`merged?/1`) is read at once, so R2
+  closes its ticket out as soon as Symphony learns of the merge. Only that read decides and acts, as the timed poll does, so a
   delivery changes how soon the watcher acts, never what it does. A patch never says a head is
   green: one passing check doesn't make the head green, only a full read of its rollup does.
 
@@ -109,6 +110,11 @@ defmodule SymphonyElixir.PrWatch.Ingest do
 
   defp failure?(conclusion) when is_binary(conclusion), do: String.upcase(conclusion) in @failure_conclusions
   defp failure?(_conclusion), do: false
+
+  @doc "Whether a delivery says a PR closed by merging, which the watcher reads at once."
+  @spec merged?(Webhook.delivery()) :: boolean()
+  def merged?({:ci, %{event: "pull_request", action: "closed", merged: true}}), do: true
+  def merged?(_delivery), do: false
 
   @doc """
   The push a delivery stands for, when it moved a base branch: a push, or a PR that closed by

@@ -68,7 +68,7 @@ The flow decision: the first rule that matches decides what happens to the ticke
 | R26 | Rework | Not red, not conflicting, no run | `dispatch` the rework run |
 | R27 | Code Review, QA | Green, or no CI configured (counts as green), and not behind main with nothing ahead (the upkeep, U1, updates that one) | `dispatch` the reviewer or the QA agent |
 | R28 | Code Review, QA, Merging | The PR is behind main (in Code Review and QA: with no PR ahead sharing its files) | a PR ahead shares its files: `wait` on `symphony`; otherwise `wait` on `symphony` while the upkeep (U1) updates the branch |
-| R29 | Merging | Green (or no CI) and mergeable now | `merge_now` |
+| R29 | Merging | Green (or no CI) and mergeable now | `merge_now`, the ticket closed out in the same step |
 | R30 | Merging | Auto-merge off, and checks running or branch protection still blocking | `arm` auto-merge |
 | R31 | Merging | Branch protection blocked the merge past the merge wait | `land_agent` |
 | R32 | Merging | Auto-merge armed and checks running | `wait` on `ci`; auto-merge lands it |
