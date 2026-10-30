@@ -21,13 +21,18 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   pending) has no request on Linear yet: the sweep posts it (`DecisionRequest.repost/5`) instead of
   reading the missing request as withdrawn, so the question stays open and the Inbox lists it on the
   next read.
+
+  The hold carries one request, the newest open; an older request asked as a Question stays open
+  beside it. When the newer one is answered the hold is set back to the older one, carrying its
+  Question (`DecisionRequest.project/4`), and an answer a person gives the older request meanwhile
+  answers its Question on the read that sees it.
   """
 
   require Logger
 
   alias SymphonyElixir.{Config, DecisionRequest, Decisions, Handoff, Hold}
   alias SymphonyElixir.HumanActions.{Collector, Request}
-  alias SymphonyElixir.{MergeConfirmation, TicketSignals, TransitionGuard}
+  alias SymphonyElixir.{MergeConfirmation, Questions, TicketSignals, TransitionGuard}
 
   @director %{kind: :person, name: "Director"}
 
@@ -102,6 +107,7 @@ defmodule SymphonyElixir.NeedsDecisionHold do
     # The answers go into the ticket's scope on the read that sees them, whatever the hold does.
     _ = Decisions.sync(node, opts |> Keyword.take([:tracker]) |> Keyword.put(:repo_key, repo_key))
     current = Hold.get(repo_key, issue_id, :needs_decision, opts)
+    answer_unheld_questions(repo_key, issue_id, node, current)
     newest = Collector.newest_request(node, settings)
 
     case pending_comment(desired(newest, current), repo_key, issue_id, current, node, opts) do
@@ -109,6 +115,7 @@ defmodule SymphonyElixir.NeedsDecisionHold do
         :none
 
       {:set, attrs} ->
+        answer_replaced(repo_key, issue_id, current, replies(node, current))
         apply_set(repo_key, issue_id, attrs, opts)
 
       :clear ->
@@ -121,6 +128,24 @@ defmodule SymphonyElixir.NeedsDecisionHold do
 
   defp sync_ticket(_repo_key, _node, _settings, _opts), do: :none
 
+  # The hold carries one question, the newest asked; an older one stays open while its request does.
+  # A person who answers that older request meanwhile answers its Question: the newest answer under a
+  # request with its title, given after it was asked. The held question ends with the hold's clear.
+  defp answer_unheld_questions(repo_key, issue_id, node, current) do
+    ticket = {:ticket, repo_key, issue_id}
+    held = get_in(current || %{}, [:decision, :question_id])
+    answers = Collector.answered_requests(node)
+
+    for %{id: id} = question <- Questions.open(ticket), id != held, %{answer: answer} <- Enum.take(Enum.filter(answers, &answers?(&1, question)), 1) do
+      Questions.answer(ticket, id, answer, by: @director)
+    end
+  end
+
+  defp answers?(%{title: title, at: %DateTime{} = at}, question),
+    do: Request.normalize_title(title) == Request.normalize_title(question.title) and DateTime.compare(at, question.asked_at) != :lt
+
+  defp answers?(_answer, _question), do: false
+
   # A hold whose request is not what Linear reads as open may carry a comment whose post failed: that
   # one is posted now, and the hold is left as it is until the next read sees the request.
   defp pending_comment(:none, _repo_key, _issue_id, _current, _node, _opts), do: :none
@@ -131,6 +156,13 @@ defmodule SymphonyElixir.NeedsDecisionHold do
       _posted_or_pending -> :posted
     end
   end
+
+  # A hold moving on from a request a person answered, to an older one still open, ends the Question
+  # it carried with that answer, as clearing it would.
+  defp answer_replaced(repo_key, issue_id, %{decision: %{question_id: id}}, [_ | _] = replies) when is_binary(id),
+    do: Questions.answer({:ticket, repo_key, issue_id}, id, String.trim(List.last(replies)), by: @director)
+
+  defp answer_replaced(_repo_key, _issue_id, _current, _replies), do: :ok
 
   defp apply_set(repo_key, issue_id, attrs, opts) do
     case DecisionRequest.project(repo_key, issue_id, attrs, opts) do

@@ -96,7 +96,10 @@ defmodule SymphonyElixir.DecisionRequest do
   continues in place once the decision is recorded.
 
   The same question asked again while it is open is the one Question: when the hold already carries
-  it, nothing is posted again and the answer is `:ok`. A hold that can't be set posts nothing, so a
+  it, nothing is posted again and the answer is `:ok`. A different question asked while another is
+  open takes the hold and leaves the other open, as its request is on Linear: once the newer one is
+  answered the Inbox sets the hold back to it (`project/4`), and an answer to it given meanwhile
+  ends it (`SymphonyElixir.NeedsDecisionHold`). A hold that can't be set posts nothing, so a
   retry posts the comment once. A comment that can't be posted takes nothing back: the Question and
   the hold stay, the comment is marked pending on the ticket's record (`{:question_comment, id}`) and
   the Inbox's next sweep posts it (`repost/5`); the caller still gets the post's error.
@@ -245,9 +248,22 @@ defmodule SymphonyElixir.DecisionRequest do
   Sets the Needs Decision hold again for a request already posted on the ticket, with the hold
   payload `attrs` (`SymphonyElixir.NeedsDecisionHold.attrs/1`): the Inbox's reconciliation does it
   for the newest open request, and the agent tool for a request the ticket already has. The
-  request passed the standard when it was asked, so it is not checked again. `opts[:store]` and
+  request passed the standard when it was asked, so it is not checked again. A request asked as a
+  Question still open (the same title and question, `SymphonyElixir.Questions.open_asking/2`) is set
+  carrying it, as `ask/4` sets it: a hold that moved on to a newer request and comes back to this one
+  records no second request, and the answer that clears it ends that Question. `opts[:store]` and
   `opts[:tracker]` override the run store and the tracker the label is written through.
   """
   @spec project(String.t() | nil, String.t(), map(), keyword()) :: :ok | {:error, term()}
-  def project(repo_key, issue_id, attrs, opts), do: Hold.set(repo_key, issue_id, :needs_decision, attrs, Keyword.take(opts, [:store, :tracker]))
+  def project(repo_key, issue_id, attrs, opts),
+    do: Hold.set(repo_key, issue_id, :needs_decision, with_open_question(repo_key, issue_id, attrs), Keyword.take(opts, [:store, :tracker]))
+
+  defp with_open_question(repo_key, issue_id, %{decision: %{} = decision} = attrs) when is_binary(repo_key) and repo_key != "" do
+    case Questions.open_asking({:ticket, repo_key, issue_id}, decision) do
+      %{} = question -> with_question(attrs, question)
+      nil -> attrs
+    end
+  end
+
+  defp with_open_question(_repo_key, _issue_id, attrs), do: attrs
 end

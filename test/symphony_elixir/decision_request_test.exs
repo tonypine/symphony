@@ -2,6 +2,7 @@ defmodule SymphonyElixir.DecisionRequestTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.{DecisionRequest, Hold, MergeConfirmation, NeedsDecisionHold, Pauses, Questions, RunStore}
+  alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.{TicketState, Workflow}
 
@@ -121,6 +122,24 @@ defmodule SymphonyElixir.DecisionRequestTest do
       # The Question's event is the request: no `decision.requested` beside it.
       assert [{"question.asked", %{title: "Add the release signing secrets", confirm: "QA", question_id: ^id}}, {"pause.set", _pause}] =
                ticket_events(@repo_key, @issue_id)
+    end
+
+    test "a different question asked while another is open takes the hold and leaves the other open" do
+      older = request(%{title: "Older", question: "Older?"})
+      assert :ok = DecisionRequest.ask(issue(), older, tracker: CommentTracker)
+      assert :ok = DecisionRequest.ask(issue(), request(%{title: "Newer", question: "Newer?"}), tracker: CommentTracker)
+
+      assert [%{id: older_id, title: "Older"}, %{id: newer_id, title: "Newer"}] = Questions.open(@ticket)
+      assert_received {:commented, @issue_id, _older_body}
+      assert_received {:commented, @issue_id, _newer_body}
+      assert %{decision: %{question_id: ^newer_id}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+
+      # Set back to the older request as Linear reads it, the hold carries its Question again, and
+      # no second request is recorded for it.
+      parsed = older |> Request.render_hold("In Progress") |> Request.parse(DateTime.utc_now())
+      assert :ok = DecisionRequest.project(@repo_key, @issue_id, NeedsDecisionHold.attrs(parsed), [])
+      assert %{decision: %{title: "Older", question_id: ^older_id}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert ["question.asked", "pause.set", "question.asked", "pause.reason_added"] = Enum.map(ticket_events(@repo_key, @issue_id), &elem(&1, 0))
     end
 
     test "names who asks" do
@@ -286,6 +305,11 @@ defmodule SymphonyElixir.DecisionRequestTest do
       assert :ok = DecisionRequest.project(@repo_key, @issue_id, attrs, tracker: CommentTracker)
       assert %{decision: %{title: "Add the release signing secrets"}} = Hold.get(@repo_key, @issue_id, :needs_decision)
       assert_received {:labelled, @issue_id, "Needs Decision"}
+    end
+
+    test "a ticket with no repo key is refused by the hold's own check" do
+      capture_log(fn -> assert {:error, _reason} = DecisionRequest.project(nil, @issue_id, NeedsDecisionHold.attrs(request()), tracker: CommentTracker) end)
+      refute_received {:labelled, @issue_id, _label}
     end
   end
 

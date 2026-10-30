@@ -427,6 +427,73 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       assert NeedsDecisionHold.sync(@repo_key, answered, settings: designed_settings()) == :none
     end
 
+    test "a hold that moved on to a newer question comes back to the older one carrying its Question" do
+      older_request = request(%{title: "Older", question: "Older?"})
+      newer_request = request(%{title: "Newer", question: "Newer?"})
+      assert :ok = DecisionRequest.ask(issue(), older_request, [])
+      assert :ok = DecisionRequest.ask(issue(), newer_request, [])
+      ticket = {:ticket, @repo_key, @issue_id}
+      assert [%{id: older_id, title: "Older"}, %{id: newer_id, title: "Newer"}] = Questions.open(ticket)
+      assert stored_hold().decision.question_id == newer_id
+
+      older = request_comment(@comment_id, Request.render_hold(older_request, "In Progress"), "2026-10-04T09:00:00.000Z")
+      newer = request_comment("comment-2", Request.render_hold(newer_request, "In Progress"), "2026-10-04T11:00:00.000Z")
+      answered_newer = %{"id" => "reply-2", "body" => "Add the secrets", "parent" => %{"id" => "comment-2"}}
+
+      # The newer is answered: its Question ends with the reply, and the hold goes back to the older
+      # one carrying its Question, so no second request is recorded for it.
+      node = ticket_node(%{"comments" => %{"nodes" => [older, newer, answered_newer]}})
+      assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :set
+      assert %{state: :answered, answer: %{text: "Add the secrets"}} = Questions.find(ticket, newer_id)
+      assert %{title: "Older", question_id: ^older_id} = stored_hold().decision
+      assert [%{id: ^older_id}] = Questions.open(ticket)
+      refute Enum.any?(RunStore.list_ticket_events(@repo_key, @issue_id, []), &(&1.type == "decision.requested"))
+
+      # The older is answered next: its hold clears and its Question ends with that answer.
+      answered_older = %{"id" => "reply-1", "body" => "Ship unsigned", "parent" => %{"id" => @comment_id}}
+      node = ticket_node(%{"comments" => %{"nodes" => [older, newer, answered_newer, answered_older]}})
+      assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :clear
+      assert stored_hold() == nil
+      assert %{state: :answered, answer: %{text: "Ship unsigned"}} = Questions.find(ticket, older_id)
+      assert Questions.open(ticket) == []
+    end
+
+    test "an older question answered while a newer one holds ends with that answer, and the newer keeps the hold" do
+      older_request = request(%{title: "Older", question: "Older?"})
+      newer_request = request(%{title: "Newer", question: "Newer?"})
+      assert :ok = DecisionRequest.ask(issue(), older_request, [])
+      assert :ok = DecisionRequest.ask(issue(), newer_request, [])
+      ticket = {:ticket, @repo_key, @issue_id}
+      assert [%{id: older_id}, %{id: newer_id}] = Questions.open(ticket)
+
+      later = DateTime.utc_now() |> DateTime.add(60) |> DateTime.to_iso8601()
+      older = request_comment(@comment_id, Request.render_hold(older_request, "In Progress"), "2026-10-04T09:00:00.000Z")
+      newer = request_comment("comment-2", Request.render_hold(newer_request, "In Progress"), "2026-10-04T11:00:00.000Z")
+      answered_older = %{"id" => "reply-1", "body" => "Ship unsigned", "parent" => %{"id" => @comment_id}, "createdAt" => later}
+
+      node = ticket_node(%{"comments" => %{"nodes" => [older, newer, answered_older]}})
+      assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :none
+      assert %{state: :answered, answer: %{text: "Ship unsigned"}} = Questions.find(ticket, older_id)
+      assert [%{id: ^newer_id}] = Questions.open(ticket)
+      assert stored_hold().decision.question_id == newer_id
+    end
+
+    test "an answer given before an older question was asked again does not answer the new one" do
+      older_request = request(%{title: "Older", question: "Older?"})
+      assert :ok = DecisionRequest.ask(issue(), older_request, [])
+      assert :ok = DecisionRequest.ask(issue(), request(%{title: "Newer", question: "Newer?"}), [])
+      ticket = {:ticket, @repo_key, @issue_id}
+      assert [%{id: older_id}, _newer] = Questions.open(ticket)
+
+      earlier = DateTime.utc_now() |> DateTime.add(-3600) |> DateTime.to_iso8601()
+      older = request_comment(@comment_id, Request.render_hold(older_request, "In Progress"), "2026-10-04T09:00:00.000Z")
+      answered_before = %{"id" => "reply-1", "body" => "Ship unsigned", "parent" => %{"id" => @comment_id}, "createdAt" => earlier}
+
+      node = ticket_node(%{"comments" => %{"nodes" => [older, answered_before]}})
+      capture_log(fn -> NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) end)
+      assert %{state: :open} = Questions.find(ticket, older_id)
+    end
+
     test "does nothing when the request has not changed" do
       node = ticket_node(%{"comments" => %{"nodes" => [request_comment()]}})
       :set = NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings())
