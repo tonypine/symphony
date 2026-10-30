@@ -133,8 +133,13 @@ defmodule SymphonyElixir.TicketStateTest do
   describe "normalize/1" do
     test "keeps what the pause projector applied, its labels sorted, and its :pause mark (TP-1243)" do
       record = TicketState.normalize(%{projected: %{labels: ["Needs Decision", "Blocked", 3], section: "abc"}})
-      assert record.projected == %{labels: ["Blocked", "Needs Decision"], section: "abc"}
+      assert record.projected == %{labels: ["Blocked", "Needs Decision"], section: "abc", comments: nil}
       assert TicketState.normalize(%{projected: "junk"}).projected == nil
+
+      comments = %{"q-1" => %{comment: "c-1", reply: "answered:2026"}, "q-2" => %{}, "q-3" => "junk", 4 => %{}}
+
+      assert TicketState.normalize(%{projected: %{labels: [], comments: comments}}).projected.comments ==
+               %{"q-1" => %{comment: "c-1", reply: "answered:2026"}, "q-2" => %{comment: nil, reply: nil}}
 
       marked = TicketState.mark_projection(record, :pause, :linear_down, ~U[2026-10-30 04:00:00Z])
       assert [%{type: :pause, hold: nil, error: ":linear_down"} = mark] = marked.pending_projection

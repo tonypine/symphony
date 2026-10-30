@@ -135,7 +135,9 @@ defmodule SymphonyElixir.DirectorMoves do
   }
 
   alias SymphonyElixir.GitHub.PullRequest
+  alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.Routing.Resolver
 
   @undo_window_ms 10_000
@@ -410,14 +412,7 @@ defmodule SymphonyElixir.DirectorMoves do
 
   @doc "The reply `:decide` posts under the request: each question with the option the Director picked."
   @spec decide_comment([pick()]) :: String.t()
-  def decide_comment(picks) when is_list(picks) do
-    lines =
-      picks
-      |> Enum.with_index(1)
-      |> Enum.map(fn {%{question: question, answer: answer}, index} -> "#{index}. #{question}\n   **Decision:** #{answer}" end)
-
-    Enum.join(["Decision from the Director:" | lines], "\n\n")
-  end
+  def decide_comment(picks) when is_list(picks), do: Request.render_decision(picks)
 
   defp validate_input(:rework, input) do
     if present?(input[:reason]), do: :ok, else: {:error, {:invalid, "reason is required"}}
@@ -635,11 +630,13 @@ defmodule SymphonyElixir.DirectorMoves do
   # Question is answered is marked pending, as a Decide's is, and the reconciler posts it and
   # records its Decisions entry once Linear answers (`project_answer/5`); one to a request with no
   # Question (asked before questions) fails the move, as before.
+  # While the pause projector owns the replies, an answer whose Question is answered was replied to
+  # by its projection, so nothing is posted for it here.
   defp reply_to_requests(issue, answers) do
     Enum.reduce_while(answers, {:ok, [], []}, fn answer, {:ok, replies, replied} ->
       reply = decide_comment([answer])
 
-      case reply_to_request(issue, answer.request_comment_id, reply) do
+      case projected_reply(issue, answer, reply) do
         :ok ->
           {:cont, {:ok, replies ++ [reply], replied ++ [answer]}}
 
@@ -652,6 +649,10 @@ defmodule SymphonyElixir.DirectorMoves do
           {:halt, {:error, {:linear, reason}}}
       end
     end)
+  end
+
+  defp projected_reply(issue, answer, reply) do
+    if is_binary(answer.question_id) and Projector.owns?(), do: :ok, else: reply_to_request(issue, answer.request_comment_id, reply)
   end
 
   # A plan's pick names the request it answers (`request_comment_id`) or its Question
@@ -1001,7 +1002,20 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
+  # While the pause projector owns the replies, the answered Question's reply is its projection,
+  # posted when the answer committed (`SymphonyElixir.Pauses.Projector`): nothing is posted here.
   defp project_decision(issue, input, hold, question, picks, directed, opts) do
+    if is_map(question) and Projector.owns?(),
+      do: projected_decision(issue, input, hold, question, picks, directed, opts),
+      else: reply_decision(issue, input, hold, question, picks, directed, opts)
+  end
+
+  defp projected_decision(issue, input, hold, question, picks, directed, opts) do
+    record_decision(issue, request_comment_id(issue, input, question, opts) || question.id, question, picks)
+    decision_move(issue, directed, decide_comment(picks), picks, undo_entry(question, hold), opts)
+  end
+
+  defp reply_decision(issue, input, hold, question, picks, directed, opts) do
     comment = decide_comment(picks)
     comment_id = request_comment_id(issue, input, question, opts)
 
@@ -1084,10 +1098,18 @@ defmodule SymphonyElixir.DirectorMoves do
   the reply under the request comment `comment_id` (a comment on the ticket when nil), then the
   answer in the Decisions section. Called by the reconciler
   (`SymphonyElixir.TicketObservation`) once Linear answers. `opts[:tracker]` overrides the tracker.
-  Returns `{:error, reason}` when Linear refuses the reply again.
+  Returns `{:error, reason}` when Linear refuses the reply again. While the pause projector owns the
+  replies (`SymphonyElixir.Pauses.Projector.owns?/0`), the ticket's projection is applied instead,
+  which posts the reply once.
   """
   @spec project_answer(String.t(), String.t(), String.t(), String.t() | nil, keyword()) :: :ok | {:error, term()}
   def project_answer(repo_key, issue_id, question_id, comment_id, opts \\ []) do
+    if Projector.owns?(),
+      do: Projector.project_now({:ticket, repo_key, issue_id}, Keyword.take(opts, [:tracker])),
+      else: reply_answer(repo_key, issue_id, question_id, comment_id, opts)
+  end
+
+  defp reply_answer(repo_key, issue_id, question_id, comment_id, opts) do
     case Questions.find({:ticket, repo_key, issue_id}, question_id) do
       %{state: :answered, answer: %{text: text}} = question ->
         tracker = Keyword.get(opts, :tracker, Tracker)

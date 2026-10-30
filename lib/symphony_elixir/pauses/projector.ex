@@ -14,7 +14,13 @@ defmodule SymphonyElixir.Pauses.Projector do
       (`SymphonyElixir.Hold`), since not every hold writes a pause reason or asks a question. A
       Blocked hold set beside a question (`waits_on.question_id`) is that question's pause and
       shows Needs Decision alone;
-    * the Decisions section's entries (`Decisions.render_from_questions/1`) and their hash.
+    * the Decisions section's entries (`Decisions.render_from_questions/1`) and their hash;
+    * per question a request comment shows in Linear (asked with `request: true`, as
+      `SymphonyElixir.DecisionRequest.ask/4` asks it; one asked before questions said, while the
+      Needs Decision hold carries it), the `## Decision needed:` comment
+      (`Request.render_question/2`, carrying the question's id in its hidden line) and, once it
+      ended, the reply under it (`Request.render_reply/1`): the Director's decision for an answer a
+      person gave, the `## Action withdrawn` reason for a withdrawal.
 
   `apply/2` writes only what differs from what it last applied, which the record keeps
   (`projected`: the labels and the section's hash). A record it never projected compares its labels
@@ -23,7 +29,15 @@ defmodule SymphonyElixir.Pauses.Projector do
   an entry already there is never written twice. A write Linear refuses leaves the record as it is,
   keeps what did land in `projected`, and marks the projection pending (`pending_projection`,
   `:pause`): the reconciler applies it again (`SymphonyElixir.TicketObservation.reconcile_all/3`).
-  A second apply of the same record writes nothing. A repair of a ticket whose labels drifted
+  A second apply of the same record writes nothing.
+
+  Each comment is written once: `projected.comments` keeps, by question id, the request comment's id
+  and the stamp of the ending whose reply was written. Linear's comments (`fetch_plan_comments/1`)
+  are read only when one is to be written, so a request posted before the projector, or a reply a
+  person wrote under it in Linear (which is the answer), is found and not written again. A record
+  whose comments were never projected counts the questions that already ended as replied.
+
+  A repair of a ticket whose labels drifted
   (`force: true`) compares with the labels Linear shows instead, the ones the repair just read
   (`labels:`) or else the last observation's, so a label a person added or removed by hand is put
   back as the record says.
@@ -33,8 +47,10 @@ defmodule SymphonyElixir.Pauses.Projector do
   stored.
 
   The projector owns these writes while the internal flag `:pause_projector` is on (`owns?/0`,
-  default on): the holds' own label writes (`SymphonyElixir.Hold`, `SymphonyElixir.NeedsDecisionHold`)
-  and the decision store's section write are skipped then. The holds themselves are still set and
+  default on): the holds' own label writes (`SymphonyElixir.Hold`, `SymphonyElixir.NeedsDecisionHold`),
+  the decision store's section write, and the request comments and replies `DecisionRequest`,
+  `SymphonyElixir.DirectorMoves`, `linear_withdraw_human_action` and
+  `SymphonyElixir.Questions.withdraw_lapsed/3` post are skipped then. The holds themselves are still set and
   cleared until they are retired.
   """
 
@@ -42,7 +58,8 @@ defmodule SymphonyElixir.Pauses.Projector do
 
   require Logger
 
-  alias SymphonyElixir.{Decisions, RunStore, TicketSignals, TicketState, Tracker}
+  alias SymphonyElixir.{DecisionRequest, Decisions, RunStore, TicketSignals, TicketState, Tracker}
+  alias SymphonyElixir.HumanActions.Request
 
   @blocked "Blocked"
   @needs_decision "Needs Decision"
@@ -50,8 +67,23 @@ defmodule SymphonyElixir.Pauses.Projector do
   # Reasons that show no Blocked label: a question shows Needs Decision, an update's wait shows none.
   @unlabelled_kinds [:question, :build]
 
-  @typedoc "What Linear should show for a record: its machine labels, the section's entries and their hash."
-  @type desired :: %{labels: [String.t()], entries: [Decisions.entry()], section: String.t() | nil}
+  @typedoc """
+  What Linear should show for one question: its request comment (`Request.render_question/2`) and,
+  once it ended, the stamp of how it ended (`answered:` or `withdrawn:` and when) with the reply that
+  goes under the request (`Request.render_reply/1`; nil when the answer came from no person, which
+  posts no reply).
+  """
+  @type comment :: %{
+          question_id: String.t(),
+          title: String.t(),
+          comment: String.t(),
+          since: DateTime.t() | nil,
+          stamp: String.t() | nil,
+          reply: String.t() | nil
+        }
+
+  @typedoc "What Linear should show for a record: its machine labels, the section's entries and their hash, and the questions' comments."
+  @type desired :: %{labels: [String.t()], entries: [Decisions.entry()], section: String.t() | nil, comments: [comment()]}
 
   @typedoc """
   `tracker:` (default `SymphonyElixir.Tracker`), `store:` (default `SymphonyElixir.RunStore`),
@@ -90,7 +122,57 @@ defmodule SymphonyElixir.Pauses.Projector do
       |> Enum.sort()
 
     entries = Decisions.render_from_questions(record)
-    %{labels: labels, entries: entries, section: hash(entries)}
+    %{labels: labels, entries: entries, section: hash(entries), comments: comments(record)}
+  end
+
+  # A question a request comment shows in Linear: one asked with `request: true`; one asked before
+  # questions said, while the Needs Decision hold carries it or once its comment was projected.
+  defp comments(record) do
+    carried = for %{kind: :needs_decision, decision: %{question_id: id}} <- record.holds, do: id
+    projected = Map.keys(projected_comments(record) || %{})
+
+    for question <- record.questions, request?(question, carried ++ projected) do
+      ended = ended(question)
+
+      %{
+        question_id: question.id,
+        title: question.title,
+        comment: Request.render_question(question, record.phase),
+        since: Map.get(question, :reopened_at),
+        stamp: ended && elem(ended, 0),
+        reply: ended && elem(ended, 1)
+      }
+    end
+  end
+
+  defp request?(question, known) do
+    case Map.get(question, :request) do
+      nil -> question.id in known
+      request -> request == true
+    end
+  end
+
+  # How the question ended, as a stamp, and the reply it posts: an answer a person gave posts the
+  # Director's decision, a withdrawal posts its reason. nil while it is open.
+  defp ended(%{state: :answered, answer: %{at: at, by: by}} = question),
+    do: {"answered:" <> DateTime.to_iso8601(at), if(Map.get(by, :kind) == :person, do: Request.render_reply(question))}
+
+  defp ended(%{state: :withdrawn, withdrawn: %{at: at}} = question), do: {"withdrawn:" <> DateTime.to_iso8601(at), Request.render_reply(question)}
+  defp ended(_open), do: nil
+
+  defp projected_comments(%{projected: %{comments: comments}}), do: comments
+  defp projected_comments(_record), do: nil
+
+  @doc """
+  Whether the request comment of the question `question_id` on `ticket` is on Linear as far as the
+  projector knows: posted or found by it (`projected.comments`).
+  """
+  @spec commented?({:ticket, String.t(), String.t()}, String.t(), [opt()]) :: boolean()
+  def commented?({:ticket, repo_key, issue_id}, question_id, opts \\ []) do
+    case Keyword.get(opts, :store, RunStore).get_ticket_state(repo_key, issue_id) do
+      %{} = record -> Map.has_key?(projected_comments(TicketState.normalize(record)) || %{}, question_id)
+      _none -> false
+    end
   end
 
   @doc """
@@ -107,9 +189,10 @@ defmodule SymphonyElixir.Pauses.Projector do
 
     {labels, label_errors} = apply_labels(tracker, record.issue_id, last.labels, desired.labels)
     {section, section_errors} = apply_section(tracker, record.issue_id, last.section, desired)
-    remember(record, %{labels: labels, section: section}, Keyword.get(opts, :store, RunStore))
+    {comments, comment_errors} = apply_comments(tracker, record.issue_id, last.comments, desired.comments)
+    remember(record, %{labels: labels, section: section, comments: comments}, Keyword.get(opts, :store, RunStore))
 
-    case label_errors ++ section_errors do
+    case label_errors ++ section_errors ++ comment_errors do
       [] ->
         :ok
 
@@ -185,6 +268,105 @@ defmodule SymphonyElixir.Pauses.Projector do
     end
   end
 
+  # The comments to write: a request not on Linear yet, a reply for an ending the projector has not
+  # projected. A record whose comments were never projected counts the questions that already ended
+  # as projected, since their comments were written before the projector wrote them. Linear's
+  # comments are read once, and only when there is one to write.
+  defp apply_comments(tracker, issue_id, last, desired) do
+    last = last || ended_as_replied(desired)
+
+    case Enum.filter(desired, &to_write?(&1, Map.get(last, &1.question_id))) do
+      [] -> {last, []}
+      writes -> write_comments(tracker, issue_id, last, writes)
+    end
+  end
+
+  defp ended_as_replied(desired) do
+    for %{stamp: stamp} = comment <- desired, stamp != nil, into: %{} do
+      {comment.question_id, %{comment: nil, reply: stamp}}
+    end
+  end
+
+  defp write_comments(tracker, issue_id, last, writes) do
+    case call(fn -> tracker.fetch_plan_comments(issue_id) end) do
+      {:ok, %{comments: on_linear}} -> Enum.reduce(writes, {last, []}, &write_comment(tracker, issue_id, on_linear, &1, &2))
+      {:error, reason} -> {last, [reason]}
+    end
+  end
+
+  defp to_write?(%{stamp: nil}, entry), do: entry == nil
+  defp to_write?(%{stamp: stamp}, entry), do: entry == nil or entry.reply != stamp
+
+  defp write_comment(tracker, issue_id, on_linear, comment, {written, errors}) do
+    entry = Map.get(written, comment.question_id)
+
+    case comment_write(tracker, issue_id, on_linear, comment, entry) do
+      {:ok, entry} -> {Map.put(written, comment.question_id, entry), errors}
+      {:error, reason} -> {written, errors ++ [reason]}
+    end
+  end
+
+  # An open question: its request, found on Linear or posted once.
+  defp comment_write(tracker, issue_id, on_linear, %{stamp: nil} = comment, _entry) do
+    case request_on_linear(on_linear, comment) do
+      %{id: id} -> {:ok, %{comment: id, reply: nil}}
+      nil -> landed(fn -> tracker.create_comment(issue_id, comment.comment) end, %{comment: nil, reply: nil})
+    end
+  end
+
+  # An ended question: its reply under the request, unless Linear already shows one since it was asked
+  # (a person's reply in Linear is the answer) or the answer posts none. A request the projector never
+  # saw on Linear takes no reply; one it posted but Linear no longer lists takes it as a comment.
+  defp comment_write(tracker, issue_id, on_linear, comment, entry) do
+    case {request_on_linear(on_linear, comment), entry} do
+      {%{id: id}, _entry} ->
+        reply_once(tracker, issue_id, id, comment, replied?(on_linear, id, comment.since))
+
+      {nil, %{comment: id}} when is_binary(id) ->
+        reply_once(tracker, issue_id, id, comment, false)
+
+      {nil, %{}} when is_binary(comment.reply) ->
+        landed(fn -> tracker.create_comment(issue_id, comment.reply) end, %{comment: nil, reply: comment.stamp})
+
+      {nil, _entry} ->
+        {:ok, %{comment: nil, reply: comment.stamp}}
+    end
+  end
+
+  defp reply_once(_tracker, _issue_id, id, %{reply: reply} = comment, replied?) when replied? or reply == nil, do: {:ok, %{comment: id, reply: comment.stamp}}
+  defp reply_once(tracker, issue_id, id, comment, _replied?), do: landed(fn -> tracker.create_reply(issue_id, id, comment.reply) end, %{comment: id, reply: comment.stamp})
+
+  # The entry once the write landed.
+  defp landed(write, entry) do
+    with :ok <- call(write), do: {:ok, entry}
+  end
+
+  # The request comment of the question: the one whose hidden line names it, else the newest one
+  # with its title and no hidden line, as requests posted before questions carried an id.
+  defp request_on_linear(on_linear, %{question_id: id, title: title}) do
+    top = Enum.filter(on_linear, &(&1.parent_id == nil and is_binary(&1.body)))
+
+    Enum.find(top, &(DecisionRequest.question_id(&1.body) == id)) ||
+      top
+      |> Enum.filter(&(DecisionRequest.question_id(&1.body) == nil and titled?(&1.body, title)))
+      |> List.last()
+  end
+
+  defp titled?(body, title) do
+    case Request.parse(body) do
+      %{title: parsed} -> Request.normalize_title(parsed) == Request.normalize_title(title)
+      nil -> false
+    end
+  end
+
+  # A reply under the request, after the question was reopened when it was.
+  defp replied?(on_linear, request_id, since) do
+    Enum.any?(on_linear, &(&1.parent_id == request_id and after?(&1.created_at, since)))
+  end
+
+  defp after?(%DateTime{} = at, %DateTime{} = since), do: DateTime.compare(at, since) == :gt
+  defp after?(_at, _since), do: true
+
   defp write_description(_tracker, _issue_id, description, description), do: :ok
   defp write_description(tracker, issue_id, _description, updated), do: call(fn -> tracker.update_issue_description(issue_id, updated) end)
 
@@ -199,7 +381,7 @@ defmodule SymphonyElixir.Pauses.Projector do
   defp last_applied(record, opts) do
     case {record.projected, Keyword.get(opts, :force) == true} do
       {%{} = projected, false} -> projected
-      _never_projected_or_forced -> %{labels: machine_labels(Keyword.get(opts, :labels, record.labels)), section: nil}
+      _never_projected_or_forced -> %{labels: machine_labels(Keyword.get(opts, :labels, record.labels)), section: nil, comments: projected_comments(record)}
     end
   end
 

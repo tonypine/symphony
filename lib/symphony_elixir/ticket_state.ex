@@ -27,7 +27,8 @@ defmodule SymphonyElixir.TicketState do
   converted the record into its pause and questions (`pause_backfilled_at`,
   `SymphonyElixir.Pauses.Backfill`), so it never converts it again; and what the pause projector
   last applied to Linear from the pause and the questions (`projected`,
-  `SymphonyElixir.Pauses.Projector`): the machine labels and the hash of the Decisions section.
+  `SymphonyElixir.Pauses.Projector`): the machine labels, the hash of the Decisions section and the
+  questions' request comments and replies.
 
   The record is persisted by `SymphonyElixir.RunStore`; this module owns its shape and the
   operations that move it. It is inert by design: nothing dispatches on a record yet. It exists so
@@ -256,9 +257,20 @@ defmodule SymphonyElixir.TicketState do
 
   @typedoc """
   What the pause projector last applied to Linear (`SymphonyElixir.Pauses.Projector`): the machine
-  labels the ticket carries and the hash of its Decisions section's entries, nil before it wrote one.
+  labels the ticket carries, the hash of its Decisions section's entries, nil before it wrote one,
+  and each question's comments by its id (`projected_comment/0`), nil before it wrote any.
   """
-  @type projected :: %{labels: [String.t()], section: String.t() | nil}
+  @type projected :: %{
+          labels: [String.t()],
+          section: String.t() | nil,
+          comments: %{String.t() => projected_comment()} | nil
+        }
+
+  @typedoc """
+  A question's comments the pause projector wrote or found: the id of its request comment (nil until
+  it read it from Linear) and the stamp of the ending whose reply it wrote (nil while none).
+  """
+  @type projected_comment :: %{comment: String.t() | nil, reply: String.t() | nil}
 
   @type t :: %{
           repo_key: String.t() | nil,
@@ -560,10 +572,24 @@ defmodule SymphonyElixir.TicketState do
   defp normalize_projection(_mark), do: []
 
   defp normalize_projected(%{} = projected) do
-    %{labels: projected |> Map.get(:labels) |> string_list() |> Enum.sort(), section: map_string(projected, :section)}
+    %{
+      labels: projected |> Map.get(:labels) |> string_list() |> Enum.sort(),
+      section: map_string(projected, :section),
+      comments: projected_comments(Map.get(projected, :comments))
+    }
   end
 
   defp normalize_projected(_projected), do: nil
+
+  # Each question's projected comments by its id: the request comment's id (nil until the projector
+  # read it) and the stamp of the ending whose reply it wrote. nil before the projector wrote any.
+  defp projected_comments(%{} = comments) do
+    for {id, %{} = entry} <- comments, is_binary(id), into: %{} do
+      {id, %{comment: map_string(entry, :comment), reply: map_string(entry, :reply)}}
+    end
+  end
+
+  defp projected_comments(_comments), do: nil
 
   defp question_mark(id, stamps) when is_binary(id), do: [Map.merge(%{type: :question_comment, hold: nil, question: id}, stamps)]
   defp question_mark(_id, _stamps), do: []

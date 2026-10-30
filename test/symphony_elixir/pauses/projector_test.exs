@@ -3,7 +3,8 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{Decisions, Pauses, Questions, TicketState, Workflow}
+  alias SymphonyElixir.{Decisions, DirectorMoves, Pauses, Questions, TicketState, Workflow}
+  alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Pauses.Projector
 
@@ -29,6 +30,7 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
     def set_machine_label(_issue_id, _name), do: raise("Linear is down")
     def clear_machine_label(_issue_id, _name), do: raise("Linear is down")
     def fetch_issue_description(_issue_id), do: raise("Linear is down")
+    def fetch_plan_comments(_issue_id), do: raise("Linear is down")
   end
 
   defmodule FailingStore do
@@ -55,7 +57,9 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
             :memory_tracker_recipient,
             :memory_tracker_add_issue_label_result,
             :memory_tracker_remove_issue_label_result,
-            :memory_tracker_update_issue_description_result
+            :memory_tracker_update_issue_description_result,
+            :memory_tracker_create_comment_result,
+            :memory_tracker_plan_comments
           ],
           do: Application.delete_env(:symphony_elixir, key)
     end)
@@ -108,7 +112,7 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
       {:ok, question} = Questions.ask(@ticket, @request, at: @at)
       assert_received {:memory_tracker_label_added, @issue_id, "Needs Decision"}
       assert Projector.desired(stored()).labels == ["Blocked", "Needs Decision"]
-      assert stored().projected == %{labels: ["Blocked", "Needs Decision"], section: nil}
+      assert stored().projected == %{labels: ["Blocked", "Needs Decision"], section: nil, comments: %{}}
 
       {:ok, _answered} = Questions.answer(@ticket, question.id, "Ship today")
       assert_received {:memory_tracker_label_removed, @issue_id, "Needs Decision"}
@@ -135,7 +139,7 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
     test "an update's wait shows no label" do
       {:ok, _pause} = Pauses.set(@ticket, %{kind: :build, waits_on: %{pull_request: 448}})
       refute_received {:memory_tracker_label_added, _issue_id, _name}
-      assert stored().projected == %{labels: [], section: nil}
+      assert stored().projected == %{labels: [], section: nil, comments: %{}}
     end
 
     test "a record never projected compares with the labels Linear was last seen with" do
@@ -143,7 +147,7 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
 
       {:ok, _pause} = Pauses.set(@ticket, Pauses.ticket_reason(:dependency, "TP-12"))
       refute_received {:memory_tracker_label_added, _issue_id, _name}
-      assert stored().projected == %{labels: ["Blocked"], section: nil}
+      assert stored().projected == %{labels: ["Blocked"], section: nil, comments: %{}}
     end
 
     test "force compares with the labels Linear was last seen with, so a label removed by hand comes back" do
@@ -217,7 +221,7 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
       assert log =~ "Failed to project the pause"
       assert [%{kind: :ticket}] = stored().pause.reasons
       assert [%{type: :pause, error: ":linear_down"}] = stored().pending_projection
-      assert stored().projected == %{labels: [], section: nil}
+      assert stored().projected == %{labels: [], section: nil, comments: %{}}
 
       assert Projector.project_now(@ticket) == :ok
       assert_received {:memory_tracker_label_added, @issue_id, "Blocked"}
@@ -255,7 +259,7 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
       :ok = RunStore.update_ticket_state(@repo_key, @issue_id, %{projected: nil, decisions: [Decisions.entry("c-1", ~D[2026-10-13], "T", "Q?", "A.")]})
 
       capture_log(fn -> assert {:error, {:error, %RuntimeError{}}} = Projector.apply(stored(), tracker: RaisingTracker) end)
-      assert stored().projected == %{labels: [], section: nil}
+      assert stored().projected == %{labels: [], section: nil, comments: %{}}
     end
 
     test "a projection the store can't record is logged" do
@@ -265,6 +269,182 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
 
       log = capture_log(fn -> assert Projector.apply(stored(), store: UnwritableStore) == :ok end)
       assert log =~ "Failed to record the pause projection"
+    end
+  end
+
+  describe "the request comment and its reply" do
+    test "a request is posted once, byte for byte as the request it was asked with, and a second projection writes nothing" do
+      {:ok, question} = Questions.ask(@ticket, request_with_tradeoffs(), request: true, asked_in: "Rework", at: @at)
+
+      expected = Request.render_hold(request_with_tradeoffs(), "Rework") <> "\n\n<!-- symphony:question #{question.id} -->"
+      assert_received {:memory_tracker_comment, @issue_id, ^expected}
+      assert_received {:memory_tracker_plan_comments, @issue_id}
+      assert stored().projected.comments == %{question.id => %{comment: nil, reply: nil}}
+      assert [%{question_id: id, comment: ^expected, stamp: nil, reply: nil}] = Projector.desired(stored()).comments
+      assert id == question.id
+
+      assert Projector.apply(stored()) == :ok
+      assert Projector.project_now(@ticket) == :ok
+      refute_received {:memory_tracker_comment, _issue_id, _body}
+      refute_received {:memory_tracker_plan_comments, _issue_id}
+    end
+
+    test "a question no request comment shows posts nothing" do
+      {:ok, _question} = Questions.ask(@ticket, @request, at: @at)
+
+      refute_received {:memory_tracker_comment, _issue_id, _body}
+      refute_received {:memory_tracker_plan_comments, _issue_id}
+      assert Projector.desired(stored()).comments == []
+    end
+
+    test "the Director's answer is replied once under the request, byte for byte as the Director's Decide replies" do
+      {:ok, question} = ask_posted()
+
+      {:ok, _answered} = Questions.answer(@ticket, question.id, "Ship today")
+      expected = DirectorMoves.decide_comment([%{question: question.question, answer: "Ship today"}])
+      assert_received {:memory_tracker_reply, @issue_id, "c-1", ^expected}
+      assert %{comment: "c-1", reply: "answered:" <> _at} = stored().projected.comments[question.id]
+
+      assert Projector.apply(stored()) == :ok
+      refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
+      refute_received {:memory_tracker_comment, _issue_id, _body}
+    end
+
+    test "a withdrawal is replied with its reason, as the withdrawal tool replies" do
+      {:ok, question} = ask_posted()
+
+      {:ok, _withdrawn} = Questions.withdraw(@ticket, question.id, "  Not needed any more.  ")
+      expected = Request.render_withdrawal("Not needed any more.")
+      assert_received {:memory_tracker_reply, @issue_id, "c-1", ^expected}
+      assert expected == "## Action withdrawn\n\nNot needed any more."
+    end
+
+    test "a person's reply in Linear is the answer, and an answer no person gave posts no reply" do
+      {:ok, question} = ask_posted()
+      comments!([request_comment("c-1", question), %{id: "r-1", body: "Ship today", parent_id: "c-1", created_at: @at}])
+
+      {:ok, _answered} = Questions.answer(@ticket, question.id, "Ship today")
+      refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
+      assert %{comment: "c-1", reply: "answered:" <> _at} = stored().projected.comments[question.id]
+
+      {:ok, other} = Questions.ask(@ticket, %{@request | title: "Another call"}, request: true, at: @at)
+      comments!([request_comment("c-2", other)])
+      {:ok, _answered} = Questions.answer(@ticket, other.id, "Ship today", by: %{kind: :symphony, name: "Symphony"})
+      refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
+      assert %{comment: "c-2", reply: "answered:" <> _at} = stored().projected.comments[other.id]
+    end
+
+    test "an answer taken back and given again is replied again; a reply before the reopen does not count" do
+      {:ok, question} = ask_posted()
+      {:ok, _answered} = Questions.answer(@ticket, question.id, "Ship today", at: @at)
+      assert_received {:memory_tracker_reply, @issue_id, "c-1", _body}
+
+      {:ok, _reopened} = Questions.reopen(@ticket, question.id, at: DateTime.add(@at, 60))
+      comments!([request_comment("c-1", question), %{id: "r-1", body: "Decision", parent_id: "c-1", created_at: DateTime.add(@at, 1)}])
+      {:ok, _answered} = Questions.answer(@ticket, question.id, "Wait for the release", at: DateTime.add(@at, 120))
+
+      expected = DirectorMoves.decide_comment([%{question: question.question, answer: "Wait for the release"}])
+      assert_received {:memory_tracker_reply, @issue_id, "c-1", ^expected}
+    end
+
+    test "a request already on Linear is found by its hidden line, or by its title when it carries none, and not posted again" do
+      {:ok, question} = ask_unprojected(@request)
+
+      comments!([
+        %{id: "other", body: "A note", parent_id: nil, created_at: @at},
+        %{id: "c-old", body: Request.render_hold(@request, "In Progress"), parent_id: nil, created_at: @at}
+      ])
+
+      assert Projector.project_now(@ticket) == :ok
+      refute_received {:memory_tracker_comment, _issue_id, _body}
+      assert stored().projected.comments == %{question.id => %{comment: "c-old", reply: nil}}
+    end
+
+    test "a question asked before it said whether a request shows it is one while the Needs Decision hold carries it" do
+      {:ok, question} = ask_unprojected(@request)
+      legacy = Map.delete(question, :request)
+      hold = %{kind: :needs_decision, reason: "decision", decision: %{title: @request.title, question_id: question.id}}
+
+      assert Projector.desired(%{questions: [legacy]}).comments == []
+      assert [%{question_id: id}] = Projector.desired(%{questions: [legacy], holds: [hold]}).comments
+      assert id == question.id
+      projected = %{comments: %{id => %{}}}
+      assert [%{question_id: ^id}] = Projector.desired(%{questions: [legacy], projected: projected}).comments
+    end
+
+    test "a record whose comments were never projected counts the questions already ended as replied" do
+      {:ok, question} = ask_unprojected(@request)
+      {:ok, _answered} = Questions.answer(@ticket, question.id, "Ship today")
+      :ok = RunStore.update_ticket_state(@repo_key, @issue_id, %{projected: %{labels: [], section: nil}})
+
+      assert Projector.project_now(@ticket) == :ok
+      refute_received {:memory_tracker_plan_comments, _issue_id}
+      refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
+      assert %{reply: "answered:" <> _at, comment: nil} = stored().projected.comments[question.id]
+    end
+
+    test "a question that ended with its request never on Linear posts no reply" do
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [{:error, :linear_down}])
+      {:ok, question} = capture_log_result(fn -> Questions.ask(@ticket, @request, request: true, at: @at) end)
+      assert stored().projected.comments == %{}
+
+      {:ok, _answered} = Questions.answer(@ticket, question.id, "Ship today")
+      refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
+      refute_received {:memory_tracker_comment, @issue_id, "Decision from the Director:" <> _rest}
+      assert %{comment: nil, reply: "answered:" <> _at} = stored().projected.comments[question.id]
+    end
+
+    test "a request it posted that Linear no longer lists takes the reply under the id it read, else as a comment" do
+      {:ok, question} = ask_unprojected(@request)
+      comments!([%{id: "c-old", body: Request.render_question(question), parent_id: nil, created_at: nil}])
+      assert Projector.project_now(@ticket) == :ok
+      comments!([])
+      {:ok, _answered} = Questions.answer(@ticket, question.id, "Ship today")
+      assert_received {:memory_tracker_reply, @issue_id, "c-old", _body}
+
+      {:ok, other} = Questions.ask(@ticket, %{@request | title: "Another call"}, request: true, at: @at)
+      assert_received {:memory_tracker_comment, @issue_id, _request}
+      {:ok, _answered} = Questions.answer(@ticket, other.id, "Ship today")
+      assert_received {:memory_tracker_comment, @issue_id, "Decision from the Director:" <> _rest}
+      assert %{comment: nil, reply: "answered:" <> _at} = stored().projected.comments[other.id]
+    end
+
+    test "a post Linear refuses leaves the Question right and the projection pending; the next apply posts it once" do
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [{:error, :linear_down}])
+
+      {:ok, question} = capture_log_result(fn -> Questions.ask(@ticket, @request, request: true, at: @at) end)
+      refute_received {:memory_tracker_comment, _issue_id, _body}
+      assert [%{state: :open}] = stored().questions
+      assert [%{type: :pause, error: ":linear_down"}] = stored().pending_projection
+      refute Projector.commented?(@ticket, question.id)
+
+      assert Projector.project_now(@ticket) == :ok
+      assert_received {:memory_tracker_comment, @issue_id, _body}
+      assert Projector.commented?(@ticket, question.id)
+    end
+
+    test "a reply Linear refuses is pending and posted by the next apply; a comment read Linear refuses is pending" do
+      {:ok, question} = ask_posted()
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [{:error, :linear_down}])
+
+      capture_log(fn -> {:ok, _answered} = Questions.answer(@ticket, question.id, "Ship today") end)
+      refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
+      assert %{state: :answered} = Questions.find(@ticket, question.id)
+      assert %{comment: nil, reply: nil} = stored().projected.comments[question.id]
+      assert [%{type: :pause}] = stored().pending_projection
+
+      Application.put_env(:symphony_elixir, :memory_tracker_plan_comments, {:error, :linear_down})
+      capture_log(fn -> assert Projector.project_now(@ticket) == {:error, :linear_down} end)
+
+      comments!([request_comment("c-1", question)])
+      assert Projector.project_now(@ticket) == :ok
+      assert_received {:memory_tracker_reply, @issue_id, "c-1", _body}
+      assert Projector.apply(stored(), tracker: RaisingTracker) == :ok
+    end
+
+    test "commented?/3 is false for a ticket with no record or a store that can't be read" do
+      refute Projector.commented?(@ticket, "q-1")
+      refute Projector.commented?(@ticket, "q-1", store: FailingStore)
     end
   end
 
@@ -284,6 +464,44 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
       assert Projector.labels() == ["Blocked", "Needs Decision"]
       assert Projector.owns?()
     end
+  end
+
+  defp request_with_tradeoffs do
+    put_in(@request, [:options], [
+      %{label: "Ship today", effect: "TP-12 merges today.", recommended: true, tradeoffs: [%{kind: "good", text: "A day of use."}, %{kind: "risk", text: "A late bug."}]},
+      %{label: "Wait for the release", effect: "TP-12 merges with the release.", tradeoffs: [%{kind: "cost", text: "A day lost."}]}
+    ])
+    |> Map.put(:unblocks, "the release notes")
+  end
+
+  # A request asked and posted, with Linear listing it as comment c-1.
+  defp ask_posted do
+    {:ok, question} = Questions.ask(@ticket, @request, request: true, at: @at)
+    assert_received {:memory_tracker_comment, @issue_id, _body}
+    comments!([request_comment("c-1", question)])
+    {:ok, question}
+  end
+
+  # A request question asked while the projector did not own the comments.
+  defp ask_unprojected(request) do
+    Application.put_env(:symphony_elixir, :pause_projector, false)
+    asked = Questions.ask(@ticket, request, request: true, at: @at)
+    Application.put_env(:symphony_elixir, :pause_projector, true)
+    asked
+  end
+
+  defp request_comment(id, question), do: %{id: id, body: Request.render_question(question), parent_id: nil, created_at: question.asked_at}
+
+  defp comments!(comments) do
+    linear = %{state_changes: [], comments: comments}
+    Application.put_env(:symphony_elixir, :memory_tracker_plan_comments, %{@issue_id => linear})
+  end
+
+  defp capture_log_result(fun) do
+    parent = self()
+    capture_log(fn -> send(parent, {:result, fun.()}) end)
+    assert_received {:result, result}
+    result
   end
 
   defp issue, do: %Issue{id: @issue_id, identifier: "TP-817", title: "T", state: "In Progress", labels: [], description: @description}
