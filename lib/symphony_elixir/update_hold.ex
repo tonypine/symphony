@@ -17,16 +17,28 @@ defmodule SymphonyElixir.UpdateHold do
 
   `resolve/5` does the lookups (Linear for the blockers, Symphony's record of each blocker's pull
   request, GitHub for the merge commit and whether the build includes it) and keeps their answers
-  in a cache; `hold/4` only reads the cache. A lookup that fails is left out of the cache, so the
-  ticket is not held, as before.
+  in a cache; `hold/4` decides from the cache alone. A lookup that fails is left out of the cache,
+  so it holds no new ticket.
+
+  The wait lives on the ticket's pause (`SymphonyElixir.Pauses`), so it outlasts a restart: `hold/4`
+  adds one `:build` reason per blocker the build lacks, "Waiting for a Symphony update that includes
+  TP-12's fix" (`waits_on: %{pull_request: number}`), set by the rule "App update hold". `resolve/5`,
+  in the poll task, holds each polled ticket so and clears each of those reasons once its build has
+  arrived: the build includes the merge commit, the ticket is no longer held for a build (the skip
+  label, out of `Todo`, an open blocker, the blocker's fix no longer merged there) or the running
+  build has no sha. A reason it can't answer for yet, a lookup having failed, stays. The dispatch
+  gate and the snapshot read the pause (`reasons/2`).
   """
 
-  alias SymphonyElixir.{BuildInfo, TicketPullRequest, Tracker}
+  require Logger
+
+  alias SymphonyElixir.{BuildInfo, Pauses, TicketPullRequest, Tracker}
   alias SymphonyElixir.GitHub.{PullRequest, Repo}
   alias SymphonyElixir.Linear.Issue
 
   @skip_label "skip-update-hold"
   @todo_state "todo"
+  @setter %{kind: :rule, name: "App update hold"}
 
   @typedoc """
   What a blocker needs from the app: `:skip` (opted out), `:none` (no merged pull request in the
@@ -39,11 +51,10 @@ defmodule SymphonyElixir.UpdateHold do
           included: %{{String.t(), String.t()} => boolean()}
         }
 
-  @type hold :: %{
-          blockers: [%{identifier: String.t() | nil, merge_sha: String.t()}],
-          build_sha: String.t(),
-          reason: String.t()
-        }
+  @typedoc "A blocker the running build lacks: its identifier, the commit it merged as and its pull request's number."
+  @type waiting :: %{identifier: String.t() | nil, merge_sha: String.t() | nil, pull_request: pos_integer()}
+
+  @type hold :: %{blockers: [waiting(), ...], build_sha: String.t(), reasons: [Pauses.reason_input(), ...]}
 
   @spec skip_label() :: String.t()
   def skip_label, do: @skip_label
@@ -64,37 +75,153 @@ defmodule SymphonyElixir.UpdateHold do
       when is_binary(build_sha) and is_binary(build_repo) do
     candidates = Enum.filter(issues, &candidate?(&1, terminal_states))
 
+    cache =
+      cache
+      |> resolve_blockers(candidates, build, terminal_states, opts)
+      |> resolve_included(candidates, build, opts)
+
+    sync_pauses(issues, build, cache, terminal_states, opts)
     cache
-    |> resolve_blockers(candidates, build, terminal_states, opts)
-    |> resolve_included(candidates, build, opts)
   end
 
-  def resolve(_issues, _build, cache, _terminal_states, _opts), do: cache
+  def resolve(issues, build, cache, terminal_states, opts) do
+    sync_pauses(issues, build, cache, terminal_states, opts)
+    cache
+  end
 
   @doc """
   The hold on `issue`, or nil when it may be dispatched as far as app updates go. It is held while a
-  blocker's merge commit is known to be missing from the running build.
+  blocker's merge commit is known to be missing from the running build, and the hold is written on
+  its pause: a `:build` reason per such blocker that the pause doesn't hold yet. An issue without a
+  repo key writes nothing. Each write is best-effort: the next poll makes it again.
   """
   @spec hold(Issue.t(), BuildInfo.t(), cache(), Enumerable.t(String.t())) :: hold() | nil
-  def hold(%Issue{} = issue, %{sha: build_sha, repo: build_repo}, cache, terminal_states)
-      when is_binary(build_sha) and is_binary(build_repo) do
+  def hold(%Issue{} = issue, build, cache, terminal_states) do
+    with %{} = hold <- decide(issue, build, cache, terminal_states) do
+      put_reasons(issue, hold, owned_reasons(issue))
+      hold
+    end
+  end
+
+  @doc "Whether a pause reason is one this hold set: a `:build` reason of the rule \"App update hold\"."
+  @spec reason?(Pauses.reason() | term()) :: boolean()
+  def reason?(%{kind: :build, waits_on: %{pull_request: number}, set_by: @setter}) when is_integer(number), do: true
+  def reason?(_reason), do: false
+
+  @doc "The reasons this hold set on the pause of `repo_key`'s ticket `issue_id`, in the order they were set."
+  @spec reasons(String.t() | nil, String.t() | nil) :: [Pauses.reason()]
+  def reasons(repo_key, issue_id) when is_binary(repo_key) and is_binary(issue_id) do
+    case Pauses.get({:ticket, repo_key, issue_id}) do
+      {:ok, %{reasons: reasons}} -> Enum.filter(reasons, &reason?/1)
+      _none -> []
+    end
+  end
+
+  def reasons(_repo_key, _issue_id), do: []
+
+  @doc """
+  The blocker each of `reasons` (`reasons/2`) waits on, found among `issue`'s blockers by the cached
+  pull request: its identifier and merge commit, both nil when the cache doesn't know it (yet).
+  """
+  @spec blockers(Issue.t(), [Pauses.reason()], cache()) :: [waiting()]
+  def blockers(%Issue{} = issue, reasons, cache) do
+    merged =
+      for %{id: blocker_id} = blocker <- issue.blocked_by,
+          {:merged, pr_url, merge_sha} <- [Map.get(cache.blockers, blocker_id)],
+          into: %{},
+          do: {pr_number(pr_url), %{identifier: Map.get(blocker, :identifier), merge_sha: merge_sha}}
+
+    for %{waits_on: %{pull_request: number}} <- reasons do
+      merged |> Map.get(number, %{identifier: nil, merge_sha: nil}) |> Map.put(:pull_request, number)
+    end
+  end
+
+  defp decide(%Issue{} = issue, %{sha: build_sha, repo: build_repo}, cache, terminal_states)
+       when is_binary(build_sha) and is_binary(build_repo) do
     waiting =
       if candidate?(issue, terminal_states) do
         for %{id: blocker_id} = blocker <- issue.blocked_by,
-            {:merged, _pr_url, merge_sha} <- [Map.get(cache.blockers, blocker_id)],
+            {:merged, pr_url, merge_sha} <- [Map.get(cache.blockers, blocker_id)],
             Map.get(cache.included, {merge_sha, build_sha}) == false do
-          %{identifier: Map.get(blocker, :identifier), merge_sha: merge_sha}
+          %{identifier: Map.get(blocker, :identifier), merge_sha: merge_sha, pull_request: pr_number(pr_url)}
         end
       else
         []
       end
 
     if waiting != [] do
-      %{blockers: waiting, build_sha: build_sha, reason: reason(waiting, build_sha)}
+      %{blockers: waiting, build_sha: build_sha, reasons: Enum.map(waiting, &build_reason/1)}
     end
   end
 
-  def hold(_issue, _build, _cache, _terminal_states), do: nil
+  defp decide(_issue, _build, _cache, _terminal_states), do: nil
+
+  # Each polled ticket's pause follows the decision: the reasons it calls for are set, and those of
+  # its own whose build arrived are cleared.
+  defp sync_pauses(issues, build, cache, terminal_states, opts) do
+    for %Issue{id: issue_id} = issue when is_binary(issue_id) <- issues do
+      issue = %{issue | repo_key: issue.repo_key || Keyword.get(opts, :repo_key)}
+      held = owned_reasons(issue)
+      hold = decide(issue, build, cache, terminal_states)
+      if hold, do: put_reasons(issue, hold, held)
+      waiting = if hold, do: Enum.map(hold.blockers, & &1.pull_request), else: []
+      clear_arrived(issue, held, &arrived?(&1, issue, build, cache, terminal_states, waiting))
+    end
+
+    :ok
+  end
+
+  defp owned_reasons(%Issue{repo_key: repo_key, id: issue_id}), do: reasons(repo_key, issue_id)
+
+  defp put_reasons(%Issue{repo_key: repo_key, id: issue_id} = issue, hold, held) when is_binary(repo_key) and is_binary(issue_id) do
+    keys = Enum.map(held, &{&1.kind, &1.waits_on})
+    missing = Enum.reject(hold.reasons, &({&1.kind, &1.waits_on} in keys))
+    Enum.each(missing, &Pauses.set({:ticket, repo_key, issue_id}, &1, set_by: @setter))
+
+    if held == [] and missing != [] do
+      Logger.info("Holding for an app update: issue_id=#{issue_id} issue_identifier=#{issue.identifier}; #{Enum.map_join(missing, "; ", & &1.text)}")
+    end
+  end
+
+  defp put_reasons(_issue, _hold, _held), do: :ok
+
+  defp clear_arrived(%Issue{repo_key: repo_key, id: issue_id} = issue, held, arrived?) do
+    case Enum.filter(held, arrived?) do
+      [] ->
+        :ok
+
+      arrived ->
+        Enum.each(arrived, &Pauses.clear_reason({:ticket, repo_key, issue_id}, &1, by: @setter))
+        if arrived == held, do: Logger.info("Released from the app update hold: issue_id=#{issue_id} issue_identifier=#{issue.identifier}")
+    end
+  end
+
+  # A reason the decision still calls for stays; any other is answered once the running build has no
+  # sha, the ticket is no longer held for a build, or the cache says its build arrived.
+  defp arrived?(%{waits_on: %{pull_request: number}}, issue, build, cache, terminal_states, waiting) do
+    cond do
+      number in waiting -> false
+      not is_binary(Map.get(build, :sha)) or not is_binary(Map.get(build, :repo)) -> true
+      not candidate?(issue, terminal_states) -> true
+      true -> build_arrived?(issue, number, build.sha, cache)
+    end
+  end
+
+  # The blocker whose fix it waits on is in the build, or every blocker is known and none of them
+  # merged that pull request any more. A blocker the cache doesn't know keeps the reason.
+  defp build_arrived?(%Issue{blocked_by: blockers}, number, build_sha, cache) do
+    facts = for %{id: blocker_id} when is_binary(blocker_id) <- blockers, do: Map.fetch(cache.blockers, blocker_id)
+
+    merge_sha =
+      Enum.find_value(facts, fn
+        {:ok, {:merged, pr_url, merge_sha}} -> if pr_number(pr_url) == number, do: merge_sha
+        _other -> nil
+      end)
+
+    if merge_sha,
+      do: Map.get(cache.included, {merge_sha, build_sha}) == true,
+      else: Enum.all?(facts, &match?({:ok, _fact}, &1))
+  end
 
   @doc """
   Whether the running build still lacks the fix `ticket` merged: the ticket a self-heal hold waits
@@ -233,9 +360,15 @@ defmodule SymphonyElixir.UpdateHold do
 
   defp skip_labelled?(%Issue{labels: labels}), do: Enum.any?(labels, &(is_binary(&1) and normalize(&1) == @skip_label))
 
-  defp reason(waiting, build_sha) do
-    merged = Enum.map_join(waiting, ", ", &"#{&1.identifier || "a blocker"} merged in `#{BuildInfo.short_sha(&1.merge_sha)}`")
-    "waiting for an app update: #{merged}, running `#{BuildInfo.short_sha(build_sha)}`"
+  defp build_reason(%{identifier: identifier, pull_request: number}) do
+    fix = if identifier, do: "#{identifier}'s fix", else: "the fix in PR ##{number}"
+    %{kind: :build, waits_on: %{pull_request: number}, text: "Waiting for a Symphony update that includes #{fix}"}
+  end
+
+  # The pull request's number; `same_repo?/2` let through only a URL with one.
+  defp pr_number(pr_url) do
+    [_match, number] = Regex.run(~r{/pull/(\d+)}, pr_url)
+    String.to_integer(number)
   end
 
   defp normalize(value), do: value |> String.trim() |> String.downcase()

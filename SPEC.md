@@ -3177,14 +3177,19 @@ An issue is dispatch-eligible only if all are true:
     `SYMPHONY_BUILD_REPO`, set by the release workflow), a `Todo` issue whose blockers are all
     terminal stays held while a blocker's merged pull request is in that repository and its merge
     commit is not in the running build (GitHub compares `<merge sha>...<build sha>` as neither
-    `ahead` nor `identical`). Its `blocked` entry has `kind: "app_update"` and a `reason` such as
-    "waiting for an app update: MT-15 merged in `9f54098`, running `d3d301b`", and
-    `app_update.unblocks` counts these issues, and `app_update.latest_release` reports the newest
+    `ahead` nor `identical`). The wait lives on the issue's pause: one `build` reason per such
+    blocker ("Waiting for a Symphony update that includes MT-15's fix", `waits_on:
+    {pull_request: 132}`), written by the poll and kept across a restart, and cleared on the first
+    poll after the running build includes the merge commit, the issue leaves `Todo`, gains an open
+    blocker or the `skip-update-hold` label, or the build has no sha. Its `blocked` entry, read from
+    the pause, has `kind: "app_update"` and the reason's line as its `reason`, the dispatch gate
+    gives the same line, and `app_update.unblocks` counts these issues, and `app_update.latest_release` reports the newest
     published release of the repository the app updates from (`repo`, `tag`, `published_at`,
     `source`: `webhook` or `poll`; null until Symphony knows one), so the app checks for the update
     at once instead of waiting for its own timer. Blockers merged in another repository, a build from a
     checkout (no sha), and the `skip-update-hold` label on the held issue or on the blocker release
-    the issue at once. A lookup that fails releases it too, as before.
+    the issue at once. A lookup that fails holds no new issue, and leaves a reason already set
+    until the lookup answers.
 - Parent rule passes:
   - A plan parent is an issue with the `plan` label, or `breakdown`, the label's older name
     (case-insensitive); both are accepted, and the run kind keeps the name `breakdown`.
@@ -5070,9 +5075,9 @@ Minimum endpoints:
           "title": "Pause a running agent from the menu bar",
           "state": "Todo",
           "kind": "app_update",
-          "reason": "waiting for an app update: MT-659 merged in `9f54098`, running `d3d301b`",
+          "reason": "Waiting for a Symphony update that includes MT-659's fix",
           "blocked_by": [{"issue_identifier": "MT-659", "state": "merged in 9f54098"}],
-          "summary": "MT-658 waiting for an app update: MT-659 merged in `9f54098`, running `d3d301b`"
+          "summary": "MT-658 Waiting for a Symphony update that includes MT-659's fix"
         }
       ],
       "app_update": {

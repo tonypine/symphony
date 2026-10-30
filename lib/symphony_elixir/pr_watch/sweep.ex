@@ -36,6 +36,7 @@ defmodule SymphonyElixir.PrWatch.Sweep do
     {"Waiting for your answer", "gate: hold"},
     {~r/\bon an? [A-Za-z ]+ hold\b/, "gate: hold"},
     {"waiting on its sub-tickets", "gate: sub-tickets"},
+    {"Waiting for a Symphony update that includes", "gate: app update"},
     {"waiting for an app update", "gate: app update"},
     {"its plan waits to be replaced", "gate: re-plan"},
     {"the reviewer is turned off", "gate: reviewer off"},

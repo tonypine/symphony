@@ -172,7 +172,6 @@ defmodule SymphonyElixir.Orchestrator do
       epic_lanes: nil,
       blocked: [],
       update_hold_cache: %{blockers: %{}, included: %{}},
-      update_holds: %{},
       forced: %{},
       forced_waiting_noted: MapSet.new(),
       forced_parts: %{},
@@ -1534,7 +1533,9 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # Runs in the poll task: looks up the blockers of the polled repo's Todo tickets that
-  # `UpdateHold.hold/4` needs. Tickets of repos not polled this cycle were looked up when they were.
+  # `UpdateHold.hold/4` needs and writes each ticket's wait for an app update on its pause, so the
+  # gate and `put_blocked/2` only read it. Tickets of repos not polled this cycle were looked up and
+  # written when they were.
   # The same task writes the rulings people gave in comments into the tickets' Decisions sections.
   defp resolve_update_holds({repo_name, {:ok, issues}}, cache) when is_list(issues) do
     terminal_states = Config.settings!().tracker.terminal_states
@@ -4277,7 +4278,7 @@ defmodule SymphonyElixir.Orchestrator do
       is_nil(repo_key) -> "it has no repo key and several repos are configured, so its holds can't be read"
       (held = Hold.held_kinds(repo_key, issue.id)) != [] -> pause_reason(repo_key, issue, "on a #{Enum.map_join(held, " and ", &Hold.label/1)} hold")
       waiting_on_sub_issues?(issue, terminal_states) -> "waiting on its sub-tickets"
-      Map.has_key?(state.update_holds, issue.id) -> "waiting for an app update: #{state.update_holds[issue.id].reason}"
+      reason = update_hold_reason(repo_key, issue) -> reason
       replan_pending?(issue, state) -> "its plan waits to be replaced before it runs again"
       true -> nil
     end
@@ -4298,6 +4299,15 @@ defmodule SymphonyElixir.Orchestrator do
 
       _not_paused ->
         unpaused
+    end
+  end
+
+  # A Todo ticket waiting for the running app to include a blocker's fix reads as that wait's lines
+  # on its pause (`SymphonyElixir.UpdateHold`).
+  defp update_hold_reason(repo_key, %Issue{id: issue_id}) do
+    case UpdateHold.reasons(repo_key, issue_id) do
+      [] -> nil
+      reasons -> Enum.map_join(reasons, "; ", & &1.text)
     end
   end
 
@@ -4383,12 +4393,11 @@ defmodule SymphonyElixir.Orchestrator do
     %{state | epic_lanes: EpicLanes.plan(issues, max_total, Config.settings!().agent.epic_lanes, terminal_state_set())}
   end
 
-  # Candidates held in `Todo` by open blockers, held by self-heal on a fix ticket, or held by a
-  # blocker's fix the running app does not include yet (`UpdateHold`), recomputed on every poll tick
-  # for the snapshot.
+  # Candidates held in `Todo` by open blockers, held by self-heal on a fix ticket, or waiting for a
+  # blocker's fix the running app does not include yet (the `UpdateHold` reasons on their pauses),
+  # recomputed on every poll tick for the snapshot.
   defp put_blocked(%State{} = state, issues) do
     terminal_states = Config.settings!().tracker.terminal_states
-    build = BuildInfo.current()
 
     blocked =
       for %Issue{} = issue <- issues, Issue.blocked?(issue, terminal_states) do
@@ -4414,30 +4423,27 @@ defmodule SymphonyElixir.Orchestrator do
         }
       end
 
-    update_holds =
-      for %Issue{} = issue <- issues,
-          hold = UpdateHold.hold(issue, build, state.update_hold_cache, terminal_states),
-          into: %{},
-          do: {issue.id, Map.merge(hold, %{identifier: issue.identifier, title: issue.title, state: issue.state})}
-
-    log_update_hold_changes(state.update_holds, update_holds)
-
     update_blocked =
-      for {issue_id, hold} <- update_holds do
+      for %Issue{} = issue <- issues,
+          not Issue.blocked?(issue, terminal_states),
+          (reasons = UpdateHold.reasons(hold_repo_key(issue), issue.id)) != [] do
         %{
-          issue_id: issue_id,
-          identifier: hold.identifier,
-          title: hold.title,
-          state: hold.state,
+          issue_id: issue.id,
+          identifier: issue.identifier,
+          title: issue.title,
+          state: issue.state,
           kind: :app_update,
-          reason: hold.reason,
-          blockers: for(blocker <- hold.blockers, do: %{identifier: blocker.identifier, state: "merged in #{BuildInfo.short_sha(blocker.merge_sha)}"})
+          reason: Enum.map_join(reasons, "; ", & &1.text),
+          blockers: issue |> UpdateHold.blockers(reasons, state.update_hold_cache) |> Enum.map(&update_blocker_snapshot/1)
         }
       end
 
     blocked = Enum.sort_by(blocked ++ fix_ticket_held ++ update_blocked, & &1.identifier)
-    %{state | blocked: blocked, update_holds: update_holds}
+    %{state | blocked: blocked}
   end
+
+  defp update_blocker_snapshot(%{merge_sha: nil} = blocker), do: %{identifier: blocker.identifier, state: "merged in PR ##{blocker.pull_request}"}
+  defp update_blocker_snapshot(blocker), do: %{identifier: blocker.identifier, state: "merged in #{BuildInfo.short_sha(blocker.merge_sha)}"}
 
   # The Blocked hold the self-heal lane set to wait on a fix ticket, or nil.
   defp fix_ticket_hold(%Issue{} = issue) do
@@ -4447,18 +4453,6 @@ defmodule SymphonyElixir.Orchestrator do
     else
       _none -> nil
     end
-  end
-
-  defp log_update_hold_changes(previous, current) do
-    for {issue_id, hold} <- current, not Map.has_key?(previous, issue_id) do
-      Logger.info("Holding for an app update: issue_id=#{issue_id} issue_identifier=#{hold.identifier}; #{hold.reason}")
-    end
-
-    for {issue_id, hold} <- previous, not Map.has_key?(current, issue_id) do
-      Logger.info("Released from the app update hold: issue_id=#{issue_id} issue_identifier=#{hold.identifier}")
-    end
-
-    :ok
   end
 
   # Forced tickets are found in the repo this poll fetched, which only holds active states. Each one
@@ -4902,7 +4896,7 @@ defmodule SymphonyElixir.Orchestrator do
     if Issue.blocked?(issue, terminal_states) do
       issue |> Issue.open_blockers(terminal_states) |> Enum.map(&blocker_label/1)
     else
-      state.update_holds |> Map.get(issue.id, %{blockers: []}) |> Map.fetch!(:blockers) |> Enum.map(&blocker_label/1)
+      for %{kind: :app_update, issue_id: issue_id, blockers: blockers} <- state.blocked, issue_id == issue.id, blocker <- blockers, do: blocker_label(blocker)
     end
   end
 

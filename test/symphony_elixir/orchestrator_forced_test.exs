@@ -613,7 +613,8 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
       assert %{waiting_on: :usage_limit} = Enum.find(snapshot_of(held).forced, &(&1.issue_id == "slot-1"))
 
       # Held until the running app includes a merged blocker's fix, it waits on that blocker.
-      update_held = %{state | update_holds: %{"slot-1" => %{blockers: [%{identifier: "MT-Z", merge_sha: "def"}]}}}
+      app_update = %{issue_id: "slot-1", kind: :app_update, blockers: [%{identifier: "MT-Z", state: "merged in def"}]}
+      update_held = %{state | blocked: [app_update | state.blocked]}
       assert %{waiting_on: :blocker, blockers: ["MT-Z"]} = Enum.find(snapshot_of(update_held).forced, &(&1.issue_id == "slot-1"))
 
       # Before a poll has seen it (just after a restart), what the queue recorded is used.
