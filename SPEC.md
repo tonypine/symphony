@@ -409,7 +409,9 @@ nothing, and it writes only those fields, never the record's holds, verdicts or 
   asked. A failed move back is tried again by the next observation of the same difference, and each
   event is written once per Linear `updatedAt`. A Linear state whose `updatedAt` is older than the
   record's `phase_at` was read before the phase was written: the phase is kept and nothing moves. A
-  phase Linear owns follows Linear, and under `dispatch.source: poll` every phase does. The startup
+  phase Linear owns follows Linear, and under `dispatch.source: poll` every phase does. A phase the
+  Director's cancel (`POST /api/v1/control/cancel`) wrote is terminal: a later Linear state is no
+  drift on it and is applied. The startup
   reconciliation keeps a phase Symphony owns as well and observes the ticket's read the same way, so a
   hand move made while Symphony was down is moved back at startup; a phase it adopts from Linear is
   Linear's.
@@ -530,7 +532,8 @@ type does not allow, is refused. The types: `phase.entered`, `hold.set` and `hol
 `blocked` only), `run.started` and `run.ended` (keyed by run id), `attempt.pushed`,
 `verdict.recorded` (machine only: an agent never records a verdict), `decision.requested`,
 `decision.recorded`, `decision.withdrawn`, `person.action` (`stop`, `move`, `force`, `unblock`,
-`restart`), `step.started`, `step.completed`, `step.skipped`, `evidence`, `finding.recorded` (QA
+`restart`), `ticket.cancelled` (the Director's cancel, with its note), `step.started`,
+`step.completed`, `step.skipped`, `evidence`, `finding.recorded` (QA
 runs), `finding.resolved`, `checklist.answered`, `drift.detected`, `drift.reverted`,
 `drift.revert_failed`, `pause.set`, `pause.reason_added`, `pause.reason_cleared`, `pause.cleared`,
 `question.asked`, `question.answered`, `question.withdrawn`, `question.reopened` and `note`.

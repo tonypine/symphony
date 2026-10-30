@@ -2404,6 +2404,18 @@ the active states clears both; otherwise the ticket waits for a person: **Unbloc
 place, **Restart** starts it over from main, and moving it to another state on the board clears the
 stop too.
 
+**Cancel** (`POST /api/v1/control/cancel` with `issue_identifier` and an optional `note`) drops an
+open ticket for good. Under `dispatch.source: record` a hand move to Canceled on a phase Symphony
+owns is drift and is moved back, so this is the way to cancel one. The record's phase becomes the
+team's canceled state first (`Canceled`, else `Cancelled`), then Linear follows; a running turn is
+stopped as Stop stops it, without the stop's pause; the ticket's open pull request is closed with
+the note as its comment; its open questions are withdrawn and every hold and pause reason is
+cleared; its workspace goes on the usual cleanup of a closed ticket. The ticket's timeline gets one
+`ticket.cancelled` event ("Cancelled from Backlog") with the note. Done or Canceled is refused
+(409), and so is a team with no canceled state. **Undo** within 10 s puts the record and Linear back
+to the phase before; the closed pull request, the stopped run and the withdrawn questions stay as
+they are.
+
 ### `watchdog`
 
 Progress watchdog for stalled runs. A run waiting out a Linear rate limit or outage is not stalled:
@@ -2801,7 +2813,9 @@ next read that finds the same difference, never on a timer of its own, and each 
 once for the same Linear change. A Linear state read before Symphony wrote the phase is an older
 fact: the phase is kept and nothing is moved. The ticket's other facts (title, description, labels,
 priority, assignee, blockers) are Linear's and apply as before. A ticket whose phase is Linear's
-follows Linear: a new Todo ticket a person moves to Backlog stays there, and the record follows.
+follows Linear: a new Todo ticket a person moves to Backlog stays there, and the record follows. A
+ticket the Director cancelled (**Cancel**, above) is closed for good: a later Linear state is no
+drift on it and applies as Linear wrote it.
 Startup keeps a phase Symphony owns too: a ticket moved by hand while Symphony was down is moved
 back when Symphony starts, with the same events. Under `poll` every hand move applies, as before.
 `/api/v1/state` counts the drift since Symphony started as `reconcile`: `detected`, `reverted`,

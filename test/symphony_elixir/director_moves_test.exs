@@ -5,7 +5,8 @@ defmodule SymphonyElixir.DirectorMovesTest do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.{DecisionMove, DecisionRequest, DirectorMoves, DispatchLoop, Hold}
   alias SymphonyElixir.Inbox.Item
-  alias SymphonyElixir.{OperatorStop, Pauses, PlanComments, Questions, RunStore, SelfHeal, SubIssueWait, TicketState}
+  alias SymphonyElixir.{OperatorStop, Pauses, PlanComments, Questions, RunStore, SelfHeal, SubIssueWait}
+  alias SymphonyElixir.{TicketSignals, TicketState}
 
   @waiting "Waiting on sub-tickets"
 
@@ -19,8 +20,9 @@ defmodule SymphonyElixir.DirectorMovesTest do
       Application.fetch_env!(:symphony_elixir, :director_moves_test_activity)
     end
 
-    def close(pr_url, _opts) do
+    def close(pr_url, opts) do
       send(self(), {:close_pr, pr_url})
+      send(self(), {:close_pr_comment, pr_url, opts[:comment]})
       Application.get_env(:symphony_elixir, :director_moves_test_close, :ok)
     end
   end
@@ -45,6 +47,30 @@ defmodule SymphonyElixir.DirectorMovesTest do
     def get_ticket_state(repo_key, issue_id), do: RunStore.get_ticket_state(repo_key, issue_id)
     def clear_ticket_hold(_repo_key, _issue_id, _kind), do: {:error, :boom}
     def put_own_state_move(_issue_id, _at), do: {:error, :boom}
+  end
+
+  # The orchestrator a cancel stops the run through: a stop answers as `Orchestrator.stop_running/2`
+  # does, with the pause an operator's stop writes, and every message reaches the test.
+  defmodule FakeOrchestrator do
+    use GenServer
+
+    def start_link(test_pid), do: GenServer.start_link(__MODULE__, test_pid)
+
+    @impl true
+    def init(test_pid), do: {:ok, test_pid}
+
+    @impl true
+    def handle_call({:stop_running, issue_id}, _from, test_pid) do
+      :ok = OperatorStop.mark("repo-cancel", issue_id, DateTime.utc_now())
+      send(test_pid, {:stop_running, issue_id})
+      {:reply, {:ok, %{stopped: true, issue_id: issue_id}}, test_pid}
+    end
+
+    @impl true
+    def handle_cast(message, test_pid) do
+      send(test_pid, message)
+      {:noreply, test_pid}
+    end
   end
 
   setup do
@@ -655,6 +681,141 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert {:error, {:conflict, "MOT-40 is already in Backlog"}} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts)
       assert {:error, {:conflict, "MOT-41 is Done; only an open ticket moves to Backlog"}} = DirectorMoves.move(:backlog, "MOT-41", %{}, opts)
+    end
+  end
+
+  describe "cancel" do
+    @cancel_pr_url "https://github.com/example/repo/pull/41"
+
+    defp cancel_issue(state) do
+      %{pr(state) | repo_key: "repo-cancel"}
+    end
+
+    test "cancels a Backlog ticket Symphony owns: the record first, then Linear, with one ticket.cancelled event", %{opts: opts} do
+      RunStore.delete_ticket_state("repo-cancel", "pr")
+      :ok = TicketSignals.record_phase("repo-cancel", "pr", "Backlog")
+      put_issues([cancel_issue("Backlog")])
+
+      assert {:ok, result} = DirectorMoves.move(:cancel, "MOT-40", %{note: "  superseded by the secrets redesign  "}, opts)
+
+      assert result == %{
+               move: "cancel",
+               issue_id: "pr",
+               issue_identifier: "MOT-40",
+               from_state: "Backlog",
+               to_state: "Canceled",
+               moved: true,
+               commented: false,
+               undo_window_ms: 10_000
+             }
+
+      assert_received {:memory_tracker_state_update, "pr", "Canceled"}
+      refute_received {:memory_tracker_comment, _id, _body}
+      assert %{phase: "Canceled", phase_owner: :symphony} = RunStore.get_ticket_state("repo-cancel", "pr")
+
+      assert [%{actor: %{kind: :person, name: "the Director"}, payload: payload}] =
+               RunStore.list_ticket_events("repo-cancel", "pr", types: ["ticket.cancelled"])
+
+      assert payload == %{from: "Backlog", to: "Canceled", note: "superseded by the secrets redesign", run_stopped: false, pull_requests_closed: []}
+      assert RunStore.list_ticket_events("repo-cancel", "pr", types: ["person.action"]) == []
+      assert [%{"move" => "cancel", "from_state" => "Backlog", "to_state" => "Canceled"}] = audit_records()
+    end
+
+    test "cancels a running ticket: the run stops, its pull request closes with the note, nothing waits on it", %{opts: opts} do
+      RunStore.delete_ticket_state("repo-cancel", "pr")
+      :ok = SymphonyElixir.TicketPullRequest.record_created("repo-cancel", "pr", @cancel_pr_url, "auto/MOT-40")
+      Application.put_env(:symphony_elixir, :director_moves_test_activity, {:ok, %{pr_url: @cancel_pr_url, state: "OPEN"}})
+      put_issues([cancel_issue("In Progress")])
+
+      ticket = {:ticket, "repo-cancel", "pr"}
+      {:ok, asked} = Questions.ask(ticket, %{layout_request() | title: "Merge the pull request", question: "Merge it now?"}, confirm: "Merging")
+      :ok = Hold.set("repo-cancel", "pr", :blocked, %{reason: "waits", clearing_condition: "a person clears it", waits_on: %{type: "access", keys: []}})
+
+      orchestrator = start_supervised!({FakeOrchestrator, self()})
+
+      assert {:ok, %{to_state: "Canceled"}} = DirectorMoves.move(:cancel, "MOT-40", %{note: "Not needed"}, Keyword.put(opts, :orchestrator, orchestrator))
+
+      assert_received {:stop_running, "pr"}
+      assert_received {:close_pr_comment, @cancel_pr_url, "Closed: the Director cancelled MOT-40.\n\nNot needed"}
+      assert_received {:memory_tracker_state_update, "pr", "Canceled"}
+      assert_receive {:request_refresh, "repo-cancel", :now}
+
+      assert %{state: :withdrawn, withdrawn: %{reason: "The ticket was cancelled."}} = Questions.find(ticket, asked.id)
+      assert Hold.held_kinds("repo-cancel", "pr") == []
+      refute OperatorStop.held?("repo-cancel", "pr")
+
+      assert [%{payload: %{run_stopped: true, pull_requests_closed: [@cancel_pr_url], note: "Not needed"}}] =
+               RunStore.list_ticket_events("repo-cancel", "pr", types: ["ticket.cancelled"])
+    end
+
+    test "a pull request already closed is left, and one GitHub won't read or close is logged", %{opts: opts} do
+      :ok = SymphonyElixir.TicketPullRequest.record_created("repo-cancel", "pr", @cancel_pr_url, "auto/MOT-40")
+      put_issues([cancel_issue("Code Review")])
+
+      Application.put_env(:symphony_elixir, :director_moves_test_activity, {:ok, %{state: "CLOSED"}})
+      assert {:ok, %{to_state: "Canceled"}} = DirectorMoves.move(:cancel, "MOT-40", %{}, opts)
+      refute_received {:close_pr, _url}
+
+      Application.put_env(:symphony_elixir, :director_moves_test_activity, {:ok, %{state: "open"}})
+      Application.put_env(:symphony_elixir, :director_moves_test_close, {:error, :forbidden})
+
+      log = capture_log(fn -> assert {:ok, %{to_state: "Canceled"}} = DirectorMoves.move(:cancel, "MOT-40", %{}, opts) end)
+      assert_received {:close_pr_comment, @cancel_pr_url, "Closed: the Director cancelled MOT-40."}
+      assert log =~ "Cancelled MOT-40 but couldn't close #{@cancel_pr_url}: :forbidden"
+
+      assert [%{payload: %{pull_requests_closed: []}}, %{payload: %{pull_requests_closed: []}}] =
+               RunStore.list_ticket_events("repo-cancel", "pr", types: ["ticket.cancelled"])
+    end
+
+    test "refuses a closed ticket, and a team with no canceled state leaves the record where it was", %{opts: opts} do
+      put_issues([cancel_issue("Done"), %{cancel_issue("Canceled") | id: "gone", identifier: "MOT-41"}])
+      assert {:error, {:conflict, "MOT-40 is Done; only an open ticket can be cancelled"}} = DirectorMoves.move(:cancel, "MOT-40", %{}, opts)
+      assert {:error, {:conflict, "MOT-41 is Canceled; only an open ticket can be cancelled"}} = DirectorMoves.move(:cancel, "MOT-41", %{}, opts)
+
+      RunStore.delete_ticket_state("repo-cancel", "pr")
+      :ok = TicketSignals.record_phase("repo-cancel", "pr", "QA")
+      put_issues([cancel_issue("QA")])
+      not_found = [{:error, :state_not_found}, {:error, :state_not_found}]
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, not_found)
+
+      assert {:error, {:conflict, "MOT-40's team has no Canceled state, so it can't be cancelled"}} = DirectorMoves.move(:cancel, "MOT-40", %{}, opts)
+      assert %{phase: "QA"} = RunStore.get_ticket_state("repo-cancel", "pr")
+      assert audit_records() == []
+    end
+
+    test "a move Linear refuses stands on the record, and the rest of the cancel goes on", %{opts: opts} do
+      put_issues([cancel_issue("Merging")])
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :linear_down}])
+
+      log = capture_log(fn -> assert {:ok, %{to_state: "Canceled"}} = DirectorMoves.move(:cancel, "MOT-40", %{}, opts) end)
+
+      assert log =~ "Cancelled MOT-40 on its record; Linear refused the move, projected again by the reconciler: :linear_down"
+      assert %{phase: "Canceled"} = RunStore.get_ticket_state("repo-cancel", "pr")
+      assert [_event] = RunStore.list_ticket_events("repo-cancel", "pr", types: ["ticket.cancelled"])
+    end
+
+    test "a store that refuses a clear is logged, and the cancel stands", %{opts: opts} do
+      put_issues([cancel_issue("In Progress")])
+      :ok = Hold.set("repo-cancel", "pr", :blocked, %{reason: "waits", clearing_condition: "a person clears it", waits_on: %{type: "access", keys: []}})
+
+      log = capture_log(fn -> assert {:ok, %{to_state: "Canceled"}} = DirectorMoves.move(:cancel, "MOT-40", %{}, Keyword.put(opts, :store, UnwritableStore)) end)
+
+      assert log =~ "Cancelled MOT-40 but couldn't clear its blocked hold: :boom"
+    end
+
+    test "undo within the window puts the record and Linear back to the phase before", %{opts: opts, clock: clock} do
+      RunStore.delete_ticket_state("repo-cancel", "pr")
+      :ok = TicketSignals.record_phase("repo-cancel", "pr", "Backlog")
+      put_issues([cancel_issue("Backlog")])
+      assert {:ok, %{to_state: "Canceled"}} = DirectorMoves.move(:cancel, "MOT-40", %{note: "Oops"}, opts)
+      assert_received {:memory_tracker_state_update, "pr", "Canceled"}
+
+      put_issues([cancel_issue("Canceled")])
+      :counters.add(clock, 1, 5_000)
+
+      assert {:ok, %{move: "undo", undone: "cancel", from_state: "Canceled", to_state: "Backlog"}} = DirectorMoves.undo("MOT-40", opts)
+      assert_received {:memory_tracker_state_update, "pr", "Backlog"}
+      assert %{phase: "Backlog", phase_owner: :symphony} = RunStore.get_ticket_state("repo-cancel", "pr")
     end
   end
 
@@ -1717,7 +1878,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   test "lists its moves and its undo window" do
-    assert DirectorMoves.moves() == [:approve_plan, :rework, :restart, :decisions, :changes, :backlog, :unblock, :decide]
+    assert DirectorMoves.moves() == [:approve_plan, :rework, :restart, :decisions, :changes, :backlog, :cancel, :unblock, :decide]
     assert DirectorMoves.undo_window_ms() == 10_000
   end
 
