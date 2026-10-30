@@ -6960,7 +6960,6 @@ defmodule SymphonyElixir.Orchestrator do
   defp pr_run_entry?(_running_entry), do: false
 
   defp dispatch_repo_key(%State{} = state, %Issue{} = issue), do: issue_repo_key(issue) || state.repo_key
-  defp dispatch_repo_key(%State{} = state, _issue), do: state.repo_key
 
   defp freeze_issue_repo_key(%Issue{} = issue, repo_key) when is_binary(repo_key) and repo_key != "" do
     %{issue | repo_key: repo_key}
