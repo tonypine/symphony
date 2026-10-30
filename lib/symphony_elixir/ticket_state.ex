@@ -18,7 +18,9 @@ defmodule SymphonyElixir.TicketState do
   state), parent, URL, creation time and Linear's `updatedAt`, with when it was observed, which read
   brought the last change (`observed_from`) and when a webhook said the ticket was removed
   (`removed_at`), and the projections to Linear that failed and wait for the reconciler
-  (`pending_projection`, `mark_projection/3`).
+  (`pending_projection`, `mark_projection/4`), and when the reconciler's by-id read of a record no
+  read had observed did not find the ticket, archived or deleted in Linear (`not_found_at`), so it
+  does not read it again; dispatch ignores it.
 
   The record is persisted by `SymphonyElixir.RunStore`; this module owns its shape and the
   operations that move it. It is inert by design: nothing dispatches on a record yet. It exists so
@@ -258,6 +260,7 @@ defmodule SymphonyElixir.TicketState do
           observed_from: observation_source() | nil,
           removed_at: DateTime.t() | nil,
           pending_projection: [projection()],
+          not_found_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
 
@@ -341,6 +344,7 @@ defmodule SymphonyElixir.TicketState do
       observed_from: observation_source(Map.get(record, :observed_from)),
       removed_at: map_datetime(record, :removed_at),
       pending_projection: normalize_projections(Map.get(record, :pending_projection)),
+      not_found_at: map_datetime(record, :not_found_at),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -381,6 +385,7 @@ defmodule SymphonyElixir.TicketState do
       observed_from: nil,
       removed_at: nil,
       pending_projection: [],
+      not_found_at: nil,
       updated_at: nil
     }
   end
@@ -455,17 +460,23 @@ defmodule SymphonyElixir.TicketState do
     %{record | pending_projection: [mark | Enum.reject(record.pending_projection, &(projection_of(&1) == projection))]}
   end
 
-  @doc "Drops the mark of `projection` (`mark_projection/4`), once it was projected again."
-  @spec clear_projection(t(), :phase | {:hold_label, :blocked | :needs_decision}) :: t()
-  def clear_projection(record, projection) do
+  @doc """
+  Drops `mark` (`mark_projection/4`) once it was projected again: the mark of the same projection
+  marked at the same time, so a newer mark of that projection, written while the reconciler wrote
+  the older one, stays.
+  """
+  @spec clear_projection(t(), projection()) :: t()
+  def clear_projection(record, mark) do
     record = normalize(record)
-    %{record | pending_projection: Enum.reject(record.pending_projection, &(projection_of(&1) == projection))}
+    %{record | pending_projection: Enum.reject(record.pending_projection, &same_mark?(&1, mark))}
   end
 
   @doc "The projection a mark names: `:phase` or `{:hold_label, kind}`."
   @spec projection_of(projection()) :: :phase | {:hold_label, :blocked | :needs_decision}
   def projection_of(%{type: :hold_label, hold: kind}), do: {:hold_label, kind}
   def projection_of(%{type: :phase}), do: :phase
+
+  defp same_mark?(mark, other), do: projection_of(mark) == projection_of(other) and mark.at == Map.get(other, :at)
 
   defp projection_key(:phase), do: %{type: :phase, hold: nil}
   defp projection_key({:hold_label, kind}) when kind in @hold_kinds, do: %{type: :hold_label, hold: kind}

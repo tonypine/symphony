@@ -2779,12 +2779,15 @@ tried again after `issues.poll_interval_ms`. Each run:
   ticket gets its record, and drift on a phase Symphony owns is moved back;
 - makes again each write to Linear that failed: a move of Symphony's or the Director's whose Linear
   write failed leaves the record moved and marked (`pending_projection`), and so does a hold's label
-  that could not be set or cleared; the run writes the record's phase, or sets or clears the label as
-  the record holds the hold, and drops the mark. A ticket the poll already shows as the record says
+  that could not be set or cleared; the run reads the record again just before the write, writes its
+  phase, or sets or clears the label as it holds the hold, and drops that mark (a newer one, from a
+  write that failed meanwhile, stays for the next run). A ticket the poll already shows as the record says
   is not written again; a mark whose phase is no longer Symphony's, or whose ticket was removed, is
   dropped; a write that fails again stays marked for the next run;
 - reads by id, in one request, up to 50 of the repository's records no read of Linear observed yet
-  and the poll did not return, and fills them.
+  and the poll did not return, and fills them. A record Linear does not return (its ticket was
+  archived or deleted) is marked `not_found_at` and never read again, so once they are all read a run
+  makes no request beyond the poll's.
 
 The second and third steps run on their own after the poll, so the cycle never waits on them. The
 reconciler never decides a phase: it only projects the record's own. Under `poll` the repository

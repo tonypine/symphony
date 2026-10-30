@@ -965,6 +965,34 @@ defmodule SymphonyElixir.RunStore do
   def clear_ticket_hold(_repo_key, _issue_id, _kind), do: {:error, :invalid_issue_id}
 
   @doc """
+  Marks a projection of the ticket's record to Linear as failed (`TicketState.mark_projection/4`).
+  A record the store does not have has nothing to project, so it is a no-op. The read-modify-write
+  runs in one durable transaction, so a mark written meanwhile is never overwritten.
+  """
+  @spec mark_ticket_projection(String.t(), String.t(), :phase | {:hold_label, :blocked | :needs_decision}, term()) ::
+          :ok | {:error, term()}
+  def mark_ticket_projection(repo_key, issue_id, projection, error) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      mark = &TicketState.mark_projection(&1, projection, error)
+      durable_transaction(fn -> write_ticket_projection(repo_key, issue_id, mark) end)
+    end
+  end
+
+  @doc """
+  Drops `mark`, a mark of the ticket's record projected again (`TicketState.clear_projection/2`): a
+  newer mark of the same projection stays. The read-modify-write runs in one durable transaction.
+  """
+  @spec clear_ticket_projection(String.t(), String.t(), TicketState.projection()) :: :ok | {:error, term()}
+  def clear_ticket_projection(repo_key, issue_id, mark) when is_binary(issue_id) and is_map(mark) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      clear = &TicketState.clear_projection(&1, mark)
+      durable_transaction(fn -> write_ticket_projection(repo_key, issue_id, clear) end)
+    end
+  end
+
+  @doc """
   Writes the ticket's self-heal bookkeeping (the broken component, the repo that owns the fix, the
   failure signature, the fix ticket and the retry count) into the ticket's record, creating the
   record when none exists. The read-modify-write runs in one durable transaction.
@@ -2047,6 +2075,19 @@ defmodule SymphonyElixir.RunStore do
       [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] ->
         updated = TicketState.clear_hold(record, kind)
         :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+        :ok
+
+      [] ->
+        :ok
+    end
+  end
+
+  defp write_ticket_projection(repo_key, issue_id, change) do
+    key = scoped_key(repo_key, issue_id)
+
+    case :mnesia.read(@ticket_state_table, key, :write) do
+      [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] ->
+        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, change.(record)})
         :ok
 
       [] ->

@@ -58,8 +58,8 @@ defmodule SymphonyElixir.TicketObservation do
   only reconciles the record with Linear (`reconcile_all/3`). It observes the repo's tickets as any
   poll does (a change made in Linear is applied, drift moved back), then, in a task of its own, projects
   again what the record marks as failed (`pending_projection`: a move of Symphony's whose Linear write
-  failed, a hold's label) and reads by id the repo's records no read observed yet. It never decides a
-  phase: it re-projects the record's own.
+  failed, a hold's label) and reads by id the repo's records no read observed yet, once each. It never
+  decides a phase: it re-projects the record's own.
 
   What each observation did, and the drift it found, are counted in a public ETS table owned by this
   server, for the state payload: the counts are diagnostic and start again from zero when Symphony
@@ -256,13 +256,16 @@ defmodule SymphonyElixir.TicketObservation do
   back. Then, in a task of its own (`:task_supervisor`), so the caller never waits on Linear:
 
   - each projection the record marks as failed (`TicketState.pending_projection`) is made again from
-    the record: a phase Symphony owns is written to Linear (`Tracker.update_issue_state/2`), a hold's
-    label set or cleared as the record holds the hold (`Tracker.set_machine_label/2`,
-    `Tracker.clear_machine_label/2`), and the mark dropped (counted under `reapplied`). A projection
-    the poll's issue already shows is dropped with no write; one whose phase is no longer Symphony's,
-    or whose ticket was removed, is dropped too; one whose write fails stays for the next run.
-  - the repo's records no read observed yet (no `linear_updated_at`, not removed) and the poll did not
-    return are read by id, at most 50 a run, and observed (counted under `unobserved_filled`).
+    the record as it is right before the write: a phase Symphony owns is written to Linear
+    (`Tracker.update_issue_state/2`), a hold's label set or cleared as the record holds the hold
+    (`Tracker.set_machine_label/2`, `Tracker.clear_machine_label/2`), and that mark dropped (counted
+    under `reapplied`); a newer mark written meanwhile stays. A projection the poll's issue already
+    shows is dropped with no write; one whose phase is no longer Symphony's, or whose ticket was
+    removed, is dropped too; one whose write fails stays for the next run.
+  - the repo's records no read observed yet (no `linear_updated_at`, not removed, never found
+    missing) and the poll did not return are read by id, at most 50 a run, and observed (counted
+    under `unobserved_filled`). One Linear does not return (archived or deleted) is marked
+    `not_found_at` and not read again.
 
   Returns the observations' counts. `opts`: `:tracker` (default `SymphonyElixir.Tracker`),
   `:task_supervisor` (default `SymphonyElixir.TaskSupervisor`), and those of `observe/3`.
@@ -394,7 +397,9 @@ defmodule SymphonyElixir.TicketObservation do
       records when is_list(records) ->
         tracker = Keyword.get(opts, :tracker, Tracker)
         records = Enum.map(records, &TicketState.normalize/1)
-        for record <- records, mark <- record.pending_projection, do: reproject(record, mark, Map.get(polled, record.issue_id), tracker)
+
+        for record <- records, mark <- record.pending_projection, do: reproject(repo_key, record.issue_id, TicketState.projection_of(mark), Map.get(polled, record.issue_id), tracker)
+
         fill_unobserved(repo_key, records, polled, tracker, opts)
 
       {:error, reason} ->
@@ -405,26 +410,35 @@ defmodule SymphonyElixir.TicketObservation do
   end
 
   # Makes a failed projection again from the record's truth, unless the poll already shows it or it
-  # no longer applies, and drops its mark once Linear holds it.
-  defp reproject(record, mark, polled, tracker) do
-    projection = TicketState.projection_of(mark)
+  # no longer applies, and drops its mark once Linear holds it. The record is read again right before
+  # the write, so a move or a hold since the run listed the records is the one written; and only that
+  # read's mark is dropped, so a mark written while Linear is written stays for the next run. A move
+  # that lands in Linear between this read and the write is drift, which the next observation moves back.
+  defp reproject(repo_key, issue_id, projection, polled, tracker) do
+    with %{} = stored <- RunStore.get_ticket_state(repo_key, issue_id),
+         record = TicketState.normalize(stored),
+         %{} = mark <- Enum.find(record.pending_projection, &(TicketState.projection_of(&1) == projection)) do
+      case projection_write(record, projection, polled) do
+        :none -> TicketSignals.clear_projection(repo_key, issue_id, mark)
+        write -> project_again(record, mark, write, tracker)
+      end
+    else
+      # The record is gone or can't be read, or another run dropped the mark: nothing to project now.
+      _none -> :ok
+    end
+  end
 
-    case projection_write(record, projection, polled) do
-      :none ->
-        TicketSignals.clear_projection(record.repo_key, record.issue_id, projection)
+  defp project_again(record, mark, write, tracker) do
+    case project_write(write, record.issue_id, tracker) do
+      :ok ->
+        bump(:reconcile_reapplied)
+        TicketSignals.clear_projection(record.repo_key, record.issue_id, mark)
 
-      write ->
-        case project_write(write, record.issue_id, tracker) do
-          :ok ->
-            bump(:reconcile_reapplied)
-            TicketSignals.clear_projection(record.repo_key, record.issue_id, projection)
-
-          {:error, reason} ->
-            Logger.warning(
-              "Ticket reconcile: projecting #{inspect(projection)} again failed issue_id=#{record.issue_id} " <>
-                "issue_identifier=#{record.issue_identifier}: #{inspect(reason)}"
-            )
-        end
+      {:error, reason} ->
+        Logger.warning(
+          "Ticket reconcile: projecting #{inspect(TicketState.projection_of(mark))} again failed issue_id=#{record.issue_id} " <>
+            "issue_identifier=#{record.issue_identifier}: #{inspect(reason)}"
+        )
     end
   end
 
@@ -463,10 +477,11 @@ defmodule SymphonyElixir.TicketObservation do
   end
 
   # The repo's records no read observed yet, read by id at most `@fill_limit` a run: one request when there
-  # are any, none otherwise.
+  # are any, none otherwise. A record Linear does not return (archived or deleted) is marked not found
+  # and not read again, so the next run reads the next ones.
   defp fill_unobserved(repo_key, records, polled, tracker, opts) do
     ids =
-      for %{linear_updated_at: nil, removed_at: nil, issue_id: issue_id} <- records,
+      for %{linear_updated_at: nil, removed_at: nil, not_found_at: nil, issue_id: issue_id} <- records,
           not Map.has_key?(polled, issue_id),
           do: issue_id
 
@@ -474,9 +489,20 @@ defmodule SymphonyElixir.TicketObservation do
          {:ok, issues} <- fetch_by_ids(tracker, ids) do
       counts = observe_all(repo_key, issues, Keyword.put(opts, :source, :by_id))
       bump(:reconcile_unobserved_filled, counts.updated)
+      returned = MapSet.new(issues, & &1.id)
+      now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
+      for issue_id <- ids, not MapSet.member?(returned, issue_id), do: mark_not_found(repo_key, issue_id, now)
+      :ok
     else
       [] -> :ok
       {:error, reason} -> Logger.warning("Ticket reconcile: reading the unobserved records failed repo_key=#{repo_key}: #{inspect(reason)}")
+    end
+  end
+
+  defp mark_not_found(repo_key, issue_id, now) do
+    case RunStore.update_ticket_state(repo_key, issue_id, %{not_found_at: now, updated_at: now}) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Ticket reconcile: marking a record not found failed issue_id=#{issue_id} repo_key=#{repo_key}: #{inspect(reason)}")
     end
   end
 

@@ -21,9 +21,12 @@ defmodule SymphonyElixir.TicketSignalsTest do
     :ok = RunStore.put_ticket_state(TicketState.new(repo_key, "issue-projected"))
 
     assert :ok = TicketSignals.mark_projection(repo_key, "issue-projected", :phase, :boom)
-    assert [%{type: :phase, error: ":boom"}] = RunStore.get_ticket_state(repo_key, "issue-projected").pending_projection
-    assert :ok = TicketSignals.clear_projection(repo_key, "issue-projected", :phase)
+    assert [%{type: :phase, error: ":boom"} = mark] = RunStore.get_ticket_state(repo_key, "issue-projected").pending_projection
+    assert :ok = TicketSignals.clear_projection(repo_key, "issue-projected", mark)
     assert RunStore.get_ticket_state(repo_key, "issue-projected").pending_projection == []
+
+    log = ExUnit.CaptureLog.capture_log(fn -> assert :ok = TicketSignals.clear_projection("", "issue-projected", mark) end)
+    assert log =~ "Failed to clear a pending projection on issue_id=issue-projected"
 
     assert :ok = TicketSignals.mark_projection(repo_key, "issue-unknown", :phase, :boom)
     assert RunStore.get_ticket_state(repo_key, "issue-unknown") == nil

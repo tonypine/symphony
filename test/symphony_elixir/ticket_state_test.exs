@@ -45,6 +45,7 @@ defmodule SymphonyElixir.TicketStateTest do
                observed_from: nil,
                removed_at: nil,
                pending_projection: [],
+               not_found_at: nil,
                updated_at: nil
              }
     end
@@ -162,6 +163,7 @@ defmodule SymphonyElixir.TicketStateTest do
                observed_from: nil,
                removed_at: nil,
                pending_projection: [],
+               not_found_at: nil,
                updated_at: nil
              }
     end
@@ -659,10 +661,25 @@ defmodule SymphonyElixir.TicketStateTest do
              ]
 
       assert Enum.map(record.pending_projection, &TicketState.projection_of/1) == [:phase, {:hold_label, :blocked}]
-      cleared = TicketState.clear_projection(record, :phase)
-      assert cleared.pending_projection == [%{type: :hold_label, hold: :blocked, error: "label refused", at: @at}]
+      [phase_mark, label_mark] = record.pending_projection
+      cleared = TicketState.clear_projection(record, phase_mark)
+      assert cleared.pending_projection == [label_mark]
       assert TicketState.normalize(record) == record
       assert %{pending_projection: [%{type: :phase, at: %DateTime{}}]} = TicketState.mark_projection(%{}, :phase, :boom)
+    end
+
+    test "a clear drops only the mark it was given: a newer mark of the same projection stays" do
+      older = "repo" |> TicketState.new("issue-1") |> TicketState.mark_projection(:phase, :down, @at)
+      [projected] = older.pending_projection
+      newer = TicketState.mark_projection(older, :phase, :still_down, DateTime.add(@at, 60))
+
+      assert [%{type: :phase, error: ":still_down"}] = TicketState.clear_projection(newer, projected).pending_projection
+      assert TicketState.clear_projection(older, projected).pending_projection == []
+    end
+
+    test "a not-found stamp reads back as a time, and a record without one reads nil" do
+      assert TicketState.normalize(%{not_found_at: @at}).not_found_at == @at
+      assert TicketState.normalize(%{}).not_found_at == nil
     end
 
     test "a stored mark of no known projection is dropped" do

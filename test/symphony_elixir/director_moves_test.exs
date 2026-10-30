@@ -1128,6 +1128,8 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       refute_received {:memory_tracker_state_update, "plan", _state}
       assert %{phase: "Rework"} = RunStore.get_ticket_state("repo-director", "plan")
+      # The reconciler writes the move to Linear (`TicketObservation.reconcile_all/3`).
+      assert [%{type: :phase, error: ":linear_down"}] = RunStore.get_ticket_state("repo-director", "plan").pending_projection
 
       assert log =~
                "Linear refused the Director move's comment; the record keeps the move issue_id=plan issue_identifier=MOT-30 to=Rework"
