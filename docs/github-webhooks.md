@@ -82,7 +82,9 @@ and the `BEHIND` PR its update-branch, on its own read.
 
 A `release` published on `tonypine/symphony`, the repository the macOS app updates from, records its
 newest release in Symphony. `/api/v1/state` reports it under `app_update.latest_release`, and the app
-checks for the update on its next status poll instead of waiting for its own timer.
+checks for the update on its next status poll instead of waiting for its own timer. A
+`workflow_run` that finished on a commit a held ticket waits on checks that commit's release build at
+once (`docs/pr-ci-decisions.md`, "Release builds"), as the poll otherwise does on its next cycle.
 
 Webhooks change how soon Symphony acts, never what it does. The timed poll keeps running and
 catches up on any delivery lost while the Mac sleeps, Symphony restarts or the relay drops. While

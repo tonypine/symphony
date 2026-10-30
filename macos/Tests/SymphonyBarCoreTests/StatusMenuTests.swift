@@ -104,6 +104,19 @@ final class StatusMenuTests: XCTestCase {
         XCTAssertNil(StatusMenu.updateUnblocksLine(-1))
     }
 
+    func testDetailLinesSayWhatTheReleaseBuildIsAtUntilItIsPublished() {
+        let building = StateSnapshot(
+            running: 2, retrying: 1, updateUnblocks: 1,
+            updateBuildLine: "Waiting for the v0.0.1.750 build: queued on GitHub for 23 min"
+        )
+
+        XCTAssertEqual(
+            StatusMenu.detailLines(.running(building, external: false)),
+            ["2 running · 1 retrying", "Waiting for the v0.0.1.750 build: queued on GitHub for 23 min"]
+        )
+        XCTAssertNil(StatusMenu.updateLine(StateSnapshot(running: 0, updateBuildLine: "Waiting for the v0.0.1.750 build")))
+    }
+
     func testDetailLinesLeaveWhatWaitsOnYouToItsItems() {
         var waiting = StateSnapshot(
             running: 2, retrying: 1, updateUnblocks: 1,

@@ -3224,7 +3224,10 @@ An issue is dispatch-eligible only if all are true:
     poll after the running build includes the merge commit, the issue leaves `Todo`, gains an open
     blocker or the `skip-update-hold` label, or the build has no sha. Its `blocked` entry, read from
     the pause, has `kind: "app_update"` and the reason's line as its `reason`, the dispatch gate
-    gives the same line, and `app_update.unblocks` counts these issues, and `app_update.latest_release` reports the newest
+    gives the same line, and `app_update.unblocks` counts these issues. While the release build of
+    the fix's merge commit isn't published, the `reason` and the gate's line say what it is at
+    ("Waiting for the v0.0.1.750 build with MT-15's fix: queued on GitHub for 23 min"), and
+    `app_update.build_line` gives that line without the fix (null otherwise). `app_update.latest_release` reports the newest
     published release of the repository the app updates from (`repo`, `tag`, `published_at`,
     `source`: `webhook` or `poll`; null until Symphony knows one), so the app checks for the update
     at once instead of waiting for its own timer. Blockers merged in another repository, a build from a

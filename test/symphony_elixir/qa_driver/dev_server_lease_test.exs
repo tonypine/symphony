@@ -58,8 +58,10 @@ defmodule SymphonyElixir.QaDriver.DevServerLeaseTest do
 
     log =
       capture_log(fn ->
-        tasks = [acquire_async(lease, holder(second, "TP-2")), acquire_async(lease, holder(third, "TP-3"))]
+        # TP-3 asks only once TP-2 waits, so the queue's order is TP-2 then TP-3.
+        second_task = acquire_async(lease, holder(second, "TP-2"))
         await_waiting(lease, "id-TP-2")
+        tasks = [second_task, acquire_async(lease, holder(third, "TP-3"))]
         await_waiting(lease, "id-TP-3")
         assert DevServerLease.waiting(lease, "id-TP-3") == %{worker_host: "qa@qa-vm", port: 8090, held_by: "TP-1"}
         assert DevServerLease.waiting(lease, "id-TP-1") == nil

@@ -886,7 +886,7 @@ defmodule SymphonyElixir.ExtensionsTest do
           "summary" => "MT-UPDATE waiting for an app update: MT-FIX merged in `9f54098`, running `d3d301b`"
         }
       ],
-      "app_update" => %{"unblocks" => 1, "issue_identifiers" => ["MT-UPDATE"], "latest_release" => nil},
+      "app_update" => %{"unblocks" => 1, "issue_identifiers" => ["MT-UPDATE"], "latest_release" => nil, "build_line" => nil},
       "forced" => [
         %{
           "issue_id" => "forced-http",

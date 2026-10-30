@@ -719,6 +719,18 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     assert {:error, {:gh_failed, _args, 1, "HTTP 404"}} = PullRequest.run_jobs("14", gh_runner: runner)
   end
 
+  test "run_started? says whether a job of the run ran a step, and refuses an answer without jobs" do
+    runner = fn
+      ["run", "view", "21", "--json", "jobs"], _opts -> {Jason.encode!(%{"jobs" => [%{"steps" => []}, %{"steps" => [%{"name" => "Checkout"}]}]}), 0}
+      ["run", "view", "22", "--json", "jobs"], _opts -> {Jason.encode!(%{"jobs" => [%{"name" => "release"}]}), 0}
+      ["run", "view", "23", "--json", "jobs"], _opts -> {Jason.encode!(%{"headSha" => "abc"}), 0}
+    end
+
+    assert PullRequest.run_started?("21", gh_runner: runner) == {:ok, true}
+    assert PullRequest.run_started?("22", gh_runner: runner) == {:ok, false}
+    assert PullRequest.run_started?("23", gh_runner: runner) == {:error, :invalid_run_jobs_payload}
+  end
+
   test "list_commit_runs reads the workflow runs on one commit, of the repo given or the checkout's" do
     runner = fn
       ["run", "list", "--commit", "abc123", "--limit", "100", "--json", "databaseId,workflowName,status,conclusion,url,createdAt"], opts ->
