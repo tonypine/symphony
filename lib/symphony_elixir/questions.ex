@@ -18,10 +18,11 @@ defmodule SymphonyElixir.Questions do
 
   Each change records a ledger event (`SymphonyElixir.TicketEvents`) in the store transaction that
   writes the question (`RunStore.update_ticket_question/4`): `question.asked`, `question.answered`
-  and `question.withdrawn`. The pause's own events follow in their own transaction; the pause is
-  set again on a repeated `ask/3`, so a retry after a failed pause write completes it. Nothing calls
-  this module yet: the Needs Decision hold and its `decision.*` events stay with
-  `SymphonyElixir.DecisionRequest`.
+  and `question.withdrawn`. The pause's own events follow in their own transaction, and a retry
+  completes a failed pause write: a repeated `ask/3` sets the pause again, and a repeated
+  `answer/4` or `withdraw/4` of a question already ended clears its reason before it returns
+  `{:error, {:question_not_open, state}}`. Nothing calls this module yet: the Needs Decision hold
+  and its `decision.*` events stay with `SymphonyElixir.DecisionRequest`.
   """
 
   alias SymphonyElixir.{DecisionRequest, Pauses, RunStore, TicketEvents, TicketState}
@@ -125,7 +126,8 @@ defmodule SymphonyElixir.Questions do
          {:ok, scope} <- scope(Keyword.get(opts, :scope, :ticket)),
          {:ok, at} <- at(opts),
          given = %{text: text, option: nil, by: by, at: at, scope: scope},
-         {:ok, question} <- update(repo_key, issue_id, at, &answered(repo_key, issue_id, &1, id, given)) do
+         stored = update(repo_key, issue_id, at, &answered(repo_key, issue_id, &1, id, given)),
+         {:ok, question} <- ended(stored, ticket, id, by, at) do
       clear(ticket, question, by, at)
     end
   end
@@ -140,7 +142,8 @@ defmodule SymphonyElixir.Questions do
          {:ok, reason} <- text(reason, :blank_reason),
          {:ok, by} <- actor(Keyword.get(opts, :by, @symphony)),
          {:ok, at} <- at(opts),
-         {:ok, question} <- update(repo_key, issue_id, at, &withdrawn(repo_key, issue_id, &1, id, reason, by, at)) do
+         stored = update(repo_key, issue_id, at, &withdrawn(repo_key, issue_id, &1, id, reason, by, at)),
+         {:ok, question} <- ended(stored, ticket, id, by, at) do
       clear(ticket, question, by, at)
     end
   end
@@ -248,10 +251,20 @@ defmodule SymphonyElixir.Questions do
   end
 
   defp clear(ticket, question, by, at) do
-    with {:ok, _pause} <- Pauses.clear_reason(ticket, reason(question), by: by, at: at), do: {:ok, question}
+    with {:ok, _pause} <- Pauses.clear_reason(ticket, waits_on(question.id), by: by, at: at), do: {:ok, question}
   end
 
-  defp reason(question), do: %{kind: :question, waits_on: %{question_id: question.id}, text: "Waiting for your answer: #{question.title}"}
+  # A question no longer open holds no pause reason. One whose answer or withdrawal was stored but
+  # whose reason was not cleared has it cleared now, so a retry completes the failed clear.
+  defp ended({:error, {:question_not_open, _state}} = error, ticket, id, by, at) do
+    with {:ok, _pause} <- Pauses.clear_reason(ticket, waits_on(id), by: by, at: at), do: error
+  end
+
+  defp ended(result, _ticket, _id, _by, _at), do: result
+
+  defp reason(question), do: Map.put(waits_on(question.id), :text, "Waiting for your answer: #{question.title}")
+
+  defp waits_on(id), do: %{kind: :question, waits_on: %{question_id: id}}
 
   defp questions(ticket) do
     with {:ok, {repo_key, issue_id}} <- ticket(ticket),

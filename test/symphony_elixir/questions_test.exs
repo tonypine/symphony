@@ -186,6 +186,19 @@ defmodule SymphonyElixir.QuestionsTest do
       assert {"pause.cleared", %{by: @director}} = List.last(ticket_events(@repo_key, @issue_id))
     end
 
+    test "answering again after a failed clear clears the reason the answered question left behind" do
+      question = ask!()
+      {:ok, _pause} = Pauses.add_reason(@ticket, @dependency, at: @at)
+      {:ok, _answered} = Questions.answer(@ticket, question.id, "1", at: @later)
+      # The question's reason put back stands in for a clear that failed once the answer was stored.
+      {:ok, _pause} = Pauses.add_reason(@ticket, %{kind: :question, waits_on: %{question_id: question.id}}, at: @later)
+
+      assert Questions.answer(@ticket, question.id, "1", by: @tony, at: @later) == {:error, {:question_not_open, :answered}}
+      assert reasons() == [{:ticket, %{identifier: "TP-1194"}}]
+      assert [{"question.answered", %{option: "Ship today", by: @director}}] = ticket_events(@repo_key, @issue_id, "question.answered")
+      assert {"pause.reason_cleared", %{reason: "question", by: @tony}} = List.last(ticket_events(@repo_key, @issue_id))
+    end
+
     test "a blank answer, an unknown question, a malformed answerer, scope or time is refused" do
       question = ask!()
 
@@ -223,6 +236,18 @@ defmodule SymphonyElixir.QuestionsTest do
 
       assert Questions.withdraw(@ticket, question.id, "Again") == {:error, {:question_not_open, :withdrawn}}
       assert Questions.answer(@ticket, question.id, "1") == {:error, {:question_not_open, :withdrawn}}
+    end
+
+    test "withdrawing again after a failed clear clears the reason the withdrawn question left behind" do
+      question = ask!()
+      {:ok, _withdrawn} = Questions.withdraw(@ticket, question.id, "TP-12 was cancelled", at: @later)
+      # The question's reason put back stands in for a clear that failed once the withdrawal was stored.
+      {:ok, _pause} = Pauses.set(@ticket, %{kind: :question, waits_on: %{question_id: question.id}}, at: @later)
+
+      assert Questions.withdraw(@ticket, question.id, "TP-12 was cancelled", at: @later) == {:error, {:question_not_open, :withdrawn}}
+      refute Pauses.paused?(@ticket)
+      assert [{"question.withdrawn", %{reason: "TP-12 was cancelled"}}] = ticket_events(@repo_key, @issue_id, "question.withdrawn")
+      assert {"pause.cleared", %{by: @symphony}} = List.last(ticket_events(@repo_key, @issue_id))
     end
 
     test "a blank reason, an unknown question, a malformed withdrawer or time is refused" do
