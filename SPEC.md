@@ -532,11 +532,11 @@ type does not allow, is refused. The types: `phase.entered`, `hold.set` and `hol
 `decision.recorded`, `decision.withdrawn`, `person.action` (`stop`, `move`, `force`, `unblock`,
 `restart`), `step.started`, `step.completed`, `step.skipped`, `evidence`, `finding.recorded` (QA
 runs), `finding.resolved`, `checklist.answered`, `drift.detected`, `drift.reverted`,
-`drift.revert_failed`, `pause.set`, `pause.reason_added`, `pause.reason_cleared`, `pause.cleared`
-and `note`.
+`drift.revert_failed`, `pause.set`, `pause.reason_added`, `pause.reason_cleared`, `pause.cleared`,
+`question.asked`, `question.answered`, `question.withdrawn` and `note`.
 
 The four pause types are machine-written, one per change of a ticket's pause (the one answer to why
-a ticket is not moving; written only by `SymphonyElixir.Pauses`): `pause.set` for its first reason
+a ticket is not moving; decided only by `SymphonyElixir.Pauses`): `pause.set` for its first reason
 ("Paused: waiting for your answer"), `pause.reason_added` for each further one ("Also paused:
 waiting for TP-1194 to finish"), `pause.reason_cleared` for a reason cleared while others remain,
 and `pause.cleared` ("Moving again") when none is left, naming the reasons it cleared. A reason event
@@ -552,6 +552,20 @@ changes without its event, and the events follow the order the changes were writ
 channel's notice of the event goes out once the transaction commits.
 A repository's or Symphony's own pause is kept in the store by subject and records no event.
 Nothing sets a pause yet.
+
+The three question types are machine-written, one per change of a question to a person on a ticket
+(kept on the ticket's record; written only by `SymphonyElixir.Questions`), each naming the question
+by `question_id`: `question.asked` ("Asked you: <title>") with the question as asked, its options
+and who asked it; `question.answered` ("You answered: <option or first words>") with the answer as
+given, the option it picked and its scope (`run`, `ticket` or `always`); `question.withdrawn`
+("Question withdrawn: <reason>") with the reason. A question is checked against the decision-writing
+standard before anything is written. Asking pauses the ticket with a `question` reason naming the
+question; answering or withdrawing clears that reason only. The question, that change to the
+ticket's pause and the events of both are written in one store transaction that holds the record's
+lock, so the ticket is paused on a question exactly while it is open. An open question with the
+same title and text is not asked twice, and asking it again writes nothing. The `decision.*` types
+stay for the writer that has not moved over.
+Nothing asks a question this way yet.
 
 A `run.ended` names the run's transcript: a copy kept in the artifact store (Section 4.1.12) as
 kind `transcript`, its id both in the event's `artifacts` and in `payload.transcript`. The

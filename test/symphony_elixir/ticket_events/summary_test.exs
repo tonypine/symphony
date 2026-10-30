@@ -49,6 +49,11 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     {"pause.reason_cleared", %{reason: "question", text: "Waiting for your answer", waits_on: %{question_id: "q-1"}}, [], %{title: "Pause reason cleared: waiting for your answer", detail: nil}},
     {"pause.cleared", %{cleared: [%{reason: "ticket", text: "Waiting for TP-1194 to finish", waits_on: %{identifier: "TP-1194"}}]}, [],
      %{title: "Moving again", detail: "Waiting for TP-1194 to finish"}},
+    {"question.asked", %{question_id: "q-1", title: "Ship TP-12 today", question: "Should TP-12 ship before the release?"}, [],
+     %{title: "Asked you: Ship TP-12 today", detail: "Should TP-12 ship before the release?"}},
+    {"question.answered", %{question_id: "q-1", title: "Ship TP-12 today", answer: "2", option: "Wait for the release"}, [],
+     %{title: "You answered: Wait for the release", detail: "Ship TP-12 today"}},
+    {"question.withdrawn", %{question_id: "q-1", title: "Ship TP-12 today", reason: "TP-12 was cancelled"}, [], %{title: "Question withdrawn: TP-12 was cancelled", detail: "Ship TP-12 today"}},
     {"note", %{text: "History before 2026-10-20 was backfilled"}, [], %{title: "Note added", detail: "History before 2026-10-20 was backfilled"}}
   ]
 
@@ -91,6 +96,15 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     assert render("pause.set", %{}) == %{title: "Paused", detail: nil}
     assert render("pause.cleared", %{cleared: "all"}) == %{title: "Moving again", detail: nil}
     assert render("pause.cleared", %{cleared: [:junk, %{text: " "}]}) == %{title: "Moving again", detail: nil}
+  end
+
+  test "a free-text answer shows its first words; a question event missing its text still renders" do
+    answer = "Ship it now, but only once the release notes name the new pause in plain words"
+    assert render("question.answered", %{question_id: "q-1", answer: answer}).title == "You answered: Ship it now, but only once the release…"
+    assert render("question.answered", %{question_id: "q-1", answer: "  Ship   it  "}).title == "You answered: Ship it"
+    assert render("question.answered", %{}) == %{title: "You answered", detail: nil}
+    assert render("question.asked", %{}) == %{title: "Asked you", detail: nil}
+    assert render("question.withdrawn", %{}) == %{title: "Question withdrawn", detail: nil}
   end
 
   test "a pause reason's line keeps the capital of a name it opens on" do

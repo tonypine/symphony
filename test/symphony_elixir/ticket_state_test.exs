@@ -47,6 +47,7 @@ defmodule SymphonyElixir.TicketStateTest do
                pending_projection: [],
                not_found_at: nil,
                pause: nil,
+               questions: [],
                updated_at: nil
              }
     end
@@ -166,6 +167,7 @@ defmodule SymphonyElixir.TicketStateTest do
                pending_projection: [],
                not_found_at: nil,
                pause: nil,
+               questions: [],
                updated_at: nil
              }
     end
@@ -328,6 +330,33 @@ defmodule SymphonyElixir.TicketStateTest do
       assert TicketState.normalize(%{pause: :junk}).pause == nil
       assert TicketState.new("repo-a", "issue-1").pause == nil
       assert TicketState.pause_reasons(%{}) == []
+    end
+  end
+
+  describe "questions" do
+    @open %{id: "q-1", state: :open, title: "Ship it"}
+    @answered %{id: "q-2", state: :answered, title: "Wait"}
+
+    test "put_question/2 adds a question after the others, replaces the one with its id, and open_questions/1 keeps the open ones" do
+      record = TicketState.new("repo-a", "issue-1") |> TicketState.put_question(@open) |> TicketState.put_question(@answered)
+
+      assert Enum.map(record.questions, & &1.id) == ["q-1", "q-2"]
+      assert TicketState.open_questions(record) == [@open]
+
+      record = TicketState.put_question(record, %{@open | state: :withdrawn})
+      assert Enum.map(record.questions, &{&1.id, &1.state}) == [{"q-1", :withdrawn}, {"q-2", :answered}]
+      assert TicketState.open_questions(record) == []
+    end
+
+    test "a malformed question changes nothing; a record without questions reads none" do
+      record = TicketState.put_question(TicketState.new("repo-a", "issue-1"), @open)
+
+      assert TicketState.put_question(record, %{id: "q-3", state: :pending}) == record
+      assert TicketState.put_question(record, :junk) == record
+      assert TicketState.normalize(%{questions: :junk}).questions == []
+      stored = [@open, %{@open | title: "Again"}, %{id: 7, state: :open}]
+      assert TicketState.normalize(%{questions: stored}).questions == [@open]
+      assert TicketState.open_questions(%{}) == []
     end
   end
 
