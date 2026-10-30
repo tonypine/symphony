@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.PrDecision.ApplyTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{CiFix, Hold, TicketPullRequest, TicketState}
+  alias SymphonyElixir.{CiFix, Hold, TicketObservation, TicketPullRequest, TicketSignals, TicketState}
   alias SymphonyElixir.PrDecision.{Action, Apply, Facts}
   alias SymphonyElixir.PrWatch.Attempts
 
@@ -453,6 +453,35 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
 
       Process.put(:squash_merge, {:error, :not_mergeable})
       capture_log(fn -> assert %{outcome: {:error, :not_mergeable}} = Apply.apply(action("R29", :merge_now), ctx(:merging)) end)
+    end
+
+    test "merge_now closes the ticket out in the same step, so Linear's own move to Done is no drift (TP-1305)" do
+      # A record Symphony moved into Merging, under `dispatch.source: record`.
+      merging = %Issue{id: @issue_id, identifier: "TP-7", title: "Add it", state: "Merging", updated_at: DateTime.add(DateTime.utc_now(), -60)}
+      {:ok, :updated} = TicketObservation.observe(@repo_key, merging, dispatch_source: "record")
+      :ok = TicketSignals.record_phase(@repo_key, @issue_id, "Merging")
+
+      assert %{outcome: :applied, moved_to: nil} = Apply.apply(action("R29", :merge_now), ctx(:merging))
+      assert_received {:squash_merge, @pr_url, _merge, _opts}
+      assert_received {:move, @issue_id, "Done"}
+      assert %{phase: "Done", phase_owner: :symphony} = RunStore.get_ticket_state(@repo_key, @issue_id)
+      assert %{state: "merged"} = TicketPullRequest.get(@repo_key, @issue_id)
+
+      # Linear's GitHub automation moves the ticket to Done on the merge: the record already holds it.
+      done = %{merging | state: "Done", updated_at: DateTime.add(DateTime.utc_now(), 60)}
+      assert {:ok, _written} = TicketObservation.observe(@repo_key, done, dispatch_source: "record")
+      refute_received {:move, @issue_id, _state}
+      assert %{phase: "Done", phase_owner: :symphony} = RunStore.get_ticket_state(@repo_key, @issue_id)
+
+      assert ticket_events(@repo_key, @issue_id, ["drift.detected", "drift.reverted", "drift.revert_failed"]) == []
+    end
+
+    test "merge_now that merged but could not close out leaves the close-out to R2" do
+      Process.put(:move_result, {:error, :linear_down})
+
+      log = capture_log(fn -> assert %{outcome: :applied} = Apply.apply(action("R29", :merge_now), ctx(:merging)) end)
+      assert log =~ "PR watch merged TP-7 but could not close it out; R2 follows"
+      assert %{state: "open"} = TicketPullRequest.get(@repo_key, @issue_id)
     end
 
     test "arm turns auto-merge on once; a refusal lands it another way, a moved head is read again" do

@@ -1079,13 +1079,16 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       refute Enum.any?(World.calls(:update_branch), &match?({"https://github.com/acme/app/pull/2", _head}, &1))
     end
 
-    test "CLEAN and green merges now, once" do
+    test "CLEAN and green merges now, once, and closes the ticket out in the same step" do
       issue_id = ticket!("1", "Merging")
       pid = start!()
-      tick!(pid, 3)
-
+      tick!(pid)
       assert %{rule: "R29", kind: :merge_now} = decision(issue_id)
+
+      # Done, the ticket leaves the watch: no second merge, no second move.
+      tick!(pid, 2)
       assert World.calls(:merge) == [{"https://github.com/acme/app/pull/1", "head-1-1"}]
+      assert moves(issue_id) == ["Done"]
     end
 
     test "BLOCKED on a green head past the merge wait hands the PR to the landing agent" do
@@ -1528,7 +1531,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
       assert World.calls(:merge) == [{@pr_1, "head-1-2"}]
       assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}]
-      assert moves(issue_id) == []
+      assert moves(issue_id) == ["Done"]
     end
 
     test "user walkthrough 2: of two Merging PRs on the same file, the second is updated right after the first lands, CI runs once, and it lands" do
