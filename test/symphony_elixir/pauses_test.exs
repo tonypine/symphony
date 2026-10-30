@@ -383,6 +383,30 @@ defmodule SymphonyElixir.PausesTest do
     end
   end
 
+  describe "the Director's pause of a repository (TP-1237)" do
+    test "waits on them, its line the reason they gave cut to 300 characters" do
+      assert Pauses.repository_reason("  focusing on  Symphony this week ") ==
+               %{kind: :person, waits_on: %{action: "unblock"}, text: "focusing on Symphony this week", releasable: true}
+
+      assert %{kind: :person, text: "You paused this repository"} = Pauses.repository_reason(nil)
+      assert %{text: text} = Pauses.repository_reason(String.duplicate("a", 400))
+      assert text == String.duplicate("a", 300)
+    end
+
+    test "its candidates are skipped with when it was paused and the reason given, kept across a read of the store" do
+      repository = {:repository, "hub"}
+      {:ok, _pause} = Pauses.set(repository, Pauses.repository_reason("focusing on Symphony this week"), set_by: @person, at: @at)
+      {:ok, pause} = Pauses.get(repository)
+
+      assert Pauses.repository_skip_reason(pause) == "the repository is paused by you since 2026-10-30 04:00 UTC: focusing on Symphony this week"
+      refute Pauses.paused?({:repository, "other"})
+
+      {:ok, pause} = Pauses.set({:repository, "plain"}, Pauses.repository_reason(nil), at: @at)
+      assert Pauses.repository_skip_reason(pause) == "the repository is paused by you since 2026-10-30 04:00 UTC"
+      assert Pauses.repository_skip_reason(%{pause | since: nil}) == "the repository is paused by you"
+    end
+  end
+
   describe "Symphony's own pause of all dispatch" do
     test "the Director's Pause waits on them, and the app's update pause on the build it installs" do
       assert Pauses.dispatch_reason("  Away for the  weekend ") ==

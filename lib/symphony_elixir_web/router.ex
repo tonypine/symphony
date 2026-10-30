@@ -49,6 +49,8 @@ defmodule SymphonyElixirWeb.Router do
 
     post("/pause", ControlApiController, :pause)
     post("/resume", ControlApiController, :resume)
+    post("/repos/:repo_key/pause", ControlApiController, :pause_repository)
+    post("/repos/:repo_key/resume", ControlApiController, :resume_repository)
     post("/stop", ControlApiController, :stop)
     post("/dispatch_pr", ControlApiController, :dispatch_pr)
     post("/force", ControlApiController, :force)

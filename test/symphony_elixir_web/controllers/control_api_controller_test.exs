@@ -307,6 +307,104 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
     end
   end
 
+  describe "POST /control/repos/:repo_key/pause and resume (TP-1237)" do
+    @describetag :tmp_dir
+
+    defp repository_action(action, replies, params, audit_dir) do
+      pid = start_stub(replies)
+
+      conn =
+        build_conn(:post, "/api/v1/control/repos/#{params["repo_key"]}/#{action}", params)
+        |> Plug.Conn.assign(:audit_log, dir: audit_dir)
+        |> send_to(:"#{action}_repository", pid, params)
+
+      {conn, calls(pid)}
+    end
+
+    defp repository_pause(text) do
+      reason = %{kind: :person, waits_on: %{action: "unblock"}, text: text, set_by: %{kind: :person, name: "Director"}, set_at: ~U[2026-10-30 12:00:00Z]}
+      SymphonyElixir.Pauses.normalize(%{subject: {:repository, "hub"}, reasons: [reason]})
+    end
+
+    test "pause writes the Director's reason on the repository, answers its pause and records it", %{tmp_dir: tmp_dir} do
+      reply = {:ok, %{repo_key: "hub", pause: repository_pause("focusing on Symphony this week")}}
+      params = %{"repo_key" => "hub", "reason" => " focusing on Symphony this week "}
+
+      {conn, calls} = repository_action("pause", [reply], params, tmp_dir)
+
+      assert conn.status == 200
+      assert calls == [{:pause_repository, "hub", "focusing on Symphony this week"}]
+
+      assert %{
+               "repository" => %{
+                 "repo_key" => "hub",
+                 "paused" => true,
+                 "pause" => %{"since" => "2026-10-30T12:00:00Z", "reasons" => [%{"kind" => "person", "text" => "focusing on Symphony this week", "releasable" => true}]}
+               }
+             } = json_body(conn)
+
+      {:ok, stream} = AuditLog.query(dir: tmp_dir, event_type: "repository_paused")
+      assert [%{"repo_key" => "hub", "reason" => "focusing on Symphony this week"}] = Enum.to_list(stream)
+    end
+
+    test "resume clears it, answers the repository unpaused and records it", %{tmp_dir: tmp_dir} do
+      {conn, calls} = repository_action("resume", [{:ok, %{repo_key: "hub", pause: nil}}], %{"repo_key" => "hub"}, tmp_dir)
+
+      assert conn.status == 200
+      assert calls == [{:resume_repository, "hub"}]
+      assert json_body(conn) == %{"repository" => %{"repo_key" => "hub", "paused" => false, "pause" => nil}}
+      {:ok, stream} = AuditLog.query(dir: tmp_dir, event_type: "repository_resumed")
+      assert [%{"repo_key" => "hub"}] = Enum.to_list(stream)
+    end
+
+    test "a repository Symphony isn't configured with is 404 and records nothing", %{tmp_dir: tmp_dir} do
+      {conn, _calls} = repository_action("pause", [{:error, :repository_not_found}], %{"repo_key" => "nope"}, tmp_dir)
+
+      assert conn.status == 404
+      assert json_body(conn)["error"] == %{"code" => "repository_not_found", "message" => "Symphony has no repository nope"}
+      {:ok, stream} = AuditLog.query(dir: tmp_dir)
+      assert Enum.to_list(stream) == []
+    end
+
+    test "an unavailable orchestrator is 503 and an unexpected error 500", %{tmp_dir: tmp_dir} do
+      pid = start_stub([])
+      GenServer.stop(pid)
+      params = %{"repo_key" => "hub"}
+
+      conn = build_conn(:post, "/api/v1/control/repos/hub/resume", params) |> send_to(:resume_repository, pid, params)
+      assert conn.status == 503
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        {conn, _calls} = repository_action("resume", [{:error, :boom}], params, tmp_dir)
+        assert conn.status == 500
+      end)
+    end
+
+    test "still answers when the audit record can't be written", %{tmp_dir: tmp_dir} do
+      blocker = Path.join(tmp_dir, "blocker")
+      File.write!(blocker, "")
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          {conn, _calls} = repository_action("resume", [{:ok, %{repo_key: "hub", pause: nil}}], %{"repo_key" => "hub"}, Path.join(blocker, "audit"))
+          assert conn.status == 200
+        end)
+
+      assert log =~ "Failed to record repository_resumed audit event: repo_key=hub"
+    end
+
+    test "is refused without the control token, like the other control routes" do
+      for action <- ["pause", "resume"] do
+        conn =
+          conn(:post, "/api/v1/control/repos/hub/#{action}", Jason.encode!(%{"reason" => "x"}))
+          |> put_req_header("content-type", "application/json")
+          |> Router.call(Router.init([]))
+
+        assert conn.status == 401
+      end
+    end
+  end
+
   test "POST /control/dispatch_pr forwards target and intent" do
     pid = start_stub([{:ok, %{pull_request_url: "https://example/pr/1"}}])
 

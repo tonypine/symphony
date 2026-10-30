@@ -551,7 +551,18 @@ in that same transaction: concurrent writers never lose each other's reasons, th
 changes without its event, and the events follow the order the changes were written in. The live
 channel's notice of the event goes out once the transaction commits.
 A repository's or Symphony's own pause is kept in the store by subject and records no event.
-Nothing sets a repository's pause yet.
+
+A repository's pause stops dispatch for that repository alone. The Director's Pause of a repository
+(`POST /api/v1/control/repos/<repo_key>/pause`) sets a `person` reason that waits on `unblock`, its
+line the given reason cut to 300 characters (`You paused this repository` without one); its Resume
+(`POST /api/v1/control/repos/<repo_key>/resume`) clears it and asks for a tick. While it holds,
+every candidate of the repository is skipped, first of its gates, with `the repository is paused by
+you since <time>: <reason>`, and a ticket whose run ends is not dispatched again: its claim is
+released and the next poll lists it with that line. Its tickets keep their states, and the PR
+watcher keeps watching its pull requests (landing an approved one is not a dispatch). The state
+payload lists each configured repository under `repositories` with its pause, and a ticket's
+payload carries `repository_paused`; every repository paused is not Symphony's pause, and the
+payload's `all_repositories_paused` says it apart.
 
 Symphony's own pause is the operator pause: the one answer to why Symphony is not dispatching. It
 shows only at the app level (the state payload's `pause`), never on a ticket page; a candidate the

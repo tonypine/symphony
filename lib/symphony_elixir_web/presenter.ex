@@ -11,6 +11,7 @@ defmodule SymphonyElixirWeb.Presenter do
     Inbox,
     Initiatives,
     Orchestrator,
+    Pauses,
     PrWatch,
     Quality,
     RetiredStates,
@@ -56,6 +57,7 @@ defmodule SymphonyElixirWeb.Presenter do
         blocked = Map.get(snapshot, :blocked, [])
         shipped_today = Map.get(snapshot, :shipped_today, [])
         waiting_on_you = Inbox.items(snapshot, inbox)
+        repositories = Map.get(snapshot, :repositories, [])
 
         %{
           generated_at: generated_at,
@@ -94,6 +96,8 @@ defmodule SymphonyElixirWeb.Presenter do
           codex_totals: normalize_codex_totals(Map.get(snapshot, :codex_totals)),
           pollers: normalize_pollers(Map.get(snapshot, :pollers)),
           pause: normalize_pause(Map.get(snapshot, :pause)),
+          repositories: Enum.map(repositories, &repository_payload/1),
+          all_repositories_paused: repositories != [] and Enum.all?(repositories, & &1.pause),
           usage_limits: snapshot |> Map.get(:usage_limits, []) |> Enum.map(&usage_limit_payload(&1, now)),
           stray_processes: stray_processes |> StrayProcesses.warnings() |> Enum.map(&Map.delete(&1, :start_time)),
           budget: normalize_budget(Map.get(snapshot, :budget)),
@@ -331,13 +335,24 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
-  # What the ticket's record adds to its payload: its verdicts, the watcher's block and its pause.
+  # What the ticket's record adds to its payload: its verdicts, the watcher's block, its pause and
+  # whether its repository is paused.
   defp record_payload(payload, record) do
     payload
     |> Map.put(:verdicts, verdicts_payload(record))
     |> Map.put(:watch, WatchPayload.watch(record))
     |> Map.put(:pause, record_pause_payload(record))
+    |> Map.put(:repository_paused, is_binary(payload.repo_key) and Pauses.paused?({:repository, payload.repo_key}))
   end
+
+  @doc """
+  A configured repository and its pause (`SymphonyElixir.Pauses`, subject `{:repository, repo_key}`)
+  as the state payload's `repositories` and the control API give it: `paused`, and the pause's
+  reasons, who set it and since when, as a ticket's pause reads (nil when not paused).
+  """
+  @spec repository_payload(%{repo_key: String.t(), pause: map() | nil}) :: map()
+  def repository_payload(%{repo_key: repo_key} = repository),
+    do: %{repo_key: repo_key, paused: not is_nil(repository.pause), pause: record_pause_payload(repository)}
 
   # Why the ticket does not move (`SymphonyElixir.Pauses`): each reason in plain words, what it
   # waits on, who set it and when, and whether the Director may release it; nil when not paused.

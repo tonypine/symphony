@@ -618,6 +618,8 @@ defmodule SymphonyElixir.ExtensionsTest do
       "build" => %{"version" => "0.0.1.168", "sha" => "d3d301b0123456789abcdef0123456789abcdef0"},
       "uptime_seconds" => state_payload["uptime_seconds"],
       "repos" => ["default"],
+      "all_repositories_paused" => false,
+      "repositories" => [],
       "counts" => %{
         "running" => 1,
         "watching" => 1,
@@ -979,6 +981,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert issue_payload == %{
              "issue_identifier" => "MT-HTTP",
              "repo_key" => "default",
+             "repository_paused" => false,
              "issue_id" => "issue-http",
              "status" => "running",
              "workspace" => %{
@@ -1030,6 +1033,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert watching_payload == %{
              "issue_identifier" => "MT-WATCH",
              "repo_key" => "default",
+             "repository_paused" => false,
              "issue_id" => "issue-watch",
              "status" => "watching",
              "workspace" => nil,

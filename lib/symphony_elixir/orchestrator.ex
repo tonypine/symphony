@@ -4265,11 +4265,23 @@ defmodule SymphonyElixir.Orchestrator do
   # `issue_held?/2`). The review flow parks a Code Review ticket whose repo has no reviewer
   # enabled, and a Code Review or QA ticket whose head is not green yet: the reviewer and
   # the QA agent only run on a green head. A `Merging` issue waits for CI after its landing run, or
-  # is landed by GitHub auto-merge.
+  # is landed by GitHub auto-merge. Symphony's own pause starts no pass at all; a repository's pause
+  # is the first gate of its candidates.
   defp dispatch_gate_closed_reason(%Issue{} = issue, %State{} = state, active_states, terminal_states) do
-    if candidate_issue?(issue, active_states, terminal_states),
-      do: hold_reason(issue, state, terminal_states) || review_flow_reason(issue, state) || taken_reason(issue, state),
-      else: not_candidate_reason(issue, active_states, terminal_states)
+    if candidate_issue?(issue, active_states, terminal_states) do
+      repository_pause_reason(issue) || hold_reason(issue, state, terminal_states) ||
+        review_flow_reason(issue, state) || taken_reason(issue, state)
+    else
+      not_candidate_reason(issue, active_states, terminal_states)
+    end
+  end
+
+  # The Director's pause of the issue's repository (`SymphonyElixir.Pauses`, subject
+  # `{:repository, repo_key}`), read from its record so a restart keeps it; nil when it has none.
+  defp repository_pause_reason(%Issue{} = issue) do
+    with repo_key when is_binary(repo_key) <- hold_repo_key(issue),
+         %{} = pause <- repository_pause(repo_key),
+         do: Pauses.repository_skip_reason(pause)
   end
 
   defp hold_reason(%Issue{} = issue, %State{} = state, terminal_states) do
@@ -6056,17 +6068,11 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp cleanup_issue_workspace(_identifier, _worker_host), do: :ok
 
-  # The operator pause is checked before the quality gate and readiness tasks, so a paused
-  # Symphony reports the pause whatever else is in flight.
+  # Symphony's pause and the issue's repository's are checked before the quality gate and readiness
+  # tasks, so a pause is reported whatever else is in flight.
   defp handle_quality_gated_active_retry(%State{} = state, %Issue{} = issue, attempt, metadata) do
-    state =
-      if operator_paused?(state) do
-        defer_retry_for_operator_pause(state, issue, attempt, metadata)
-      else
-        start_quality_gate_or_dispatch([issue], state, {:active_retry, issue, attempt, metadata})
-      end
-
-    {:noreply, state}
+    held = pause_held_retry(state, issue, attempt, metadata)
+    {:noreply, held || start_quality_gate_or_dispatch([issue], state, {:active_retry, issue, attempt, metadata})}
   end
 
   defp check_tracker_workflow_states do
@@ -6642,8 +6648,8 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp handle_active_retry_after_readiness(state, issue, attempt, metadata) do
     cond do
-      operator_paused?(state) ->
-        defer_retry_for_operator_pause(state, issue, attempt, metadata)
+      held = pause_held_retry(state, issue, attempt, metadata) ->
+        held
 
       hold = usage_limit_hold(state, issue, metadata[:continuation] == true) ->
         hold_retry_for_usage_limit(state, issue, attempt, metadata, hold)
@@ -6697,6 +6703,23 @@ defmodule SymphonyElixir.Orchestrator do
         error: "dispatch paused by operator"
       })
     )
+  end
+
+  # Symphony's pause defers a retry; the pause of the issue's repository releases its claim. Nil when
+  # neither holds it.
+  defp pause_held_retry(%State{} = state, %Issue{} = issue, attempt, metadata) do
+    cond do
+      operator_paused?(state) -> defer_retry_for_operator_pause(state, issue, attempt, metadata)
+      reason = repository_pause_reason(issue) -> release_for_repository_pause(state, issue, reason)
+      true -> nil
+    end
+  end
+
+  # A paused repository's ticket finishes its run and is not dispatched again: its claim is released,
+  # and each poll lists it under `dispatch_skipped` with the pause's line until the repository resumes.
+  defp release_for_repository_pause(%State{} = state, %Issue{} = issue, reason) do
+    Logger.info("Not dispatching #{issue_context(issue)} again: #{reason}; releasing its claim")
+    release_issue_claim(state, issue.id)
   end
 
   defp hold_retry_for_usage_limit(%State{} = state, %Issue{} = issue, attempt, metadata, entry) do
@@ -6937,7 +6960,6 @@ defmodule SymphonyElixir.Orchestrator do
   defp pr_run_entry?(_running_entry), do: false
 
   defp dispatch_repo_key(%State{} = state, %Issue{} = issue), do: issue_repo_key(issue) || state.repo_key
-  defp dispatch_repo_key(%State{} = state, _issue), do: state.repo_key
 
   defp freeze_issue_repo_key(%Issue{} = issue, repo_key) when is_binary(repo_key) and repo_key != "" do
     %{issue | repo_key: repo_key}
@@ -7194,6 +7216,30 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp symphony_pause_status, do: Pauses.dispatch_status(symphony_pause())
+
+  defp configured_repository(repo_key) do
+    if repo_key in configured_repo_keys(), do: :ok, else: {:error, :repository_not_found}
+  end
+
+  defp configured_repo_keys do
+    case Config.repos() do
+      {:ok, repos} -> for %{name: name} <- repos, is_binary(name) and name != "", do: name
+      {:error, _reason} -> []
+    end
+  end
+
+  # Each configured repository with its pause (nil when it has none), read from its record.
+  defp repositories_snapshot, do: Enum.map(configured_repo_keys(), &repository_status(&1, repository_pause(&1)))
+
+  # A repository's pause, nil when it has none or its record can't be read.
+  defp repository_pause(repo_key) do
+    case Pauses.get({:repository, repo_key}) do
+      {:ok, pause} -> pause
+      {:error, _unreadable} -> nil
+    end
+  end
+
+  defp repository_status(repo_key, pause), do: %{repo_key: repo_key, pause: pause}
 
   # The app's update pause waits on the build it installs: once Symphony runs that build (or a
   # later one), the install finished and its reason is cleared.
@@ -8003,6 +8049,30 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  @doc """
+  Pauses dispatch for one configured repository on the Director's `reason`
+  (`SymphonyElixir.Pauses.repository_reason/1`): its candidates are skipped, its running tickets
+  finish their run and are not dispatched again. Returns the repository's pause as the state
+  payload gives it; `{:error, :repository_not_found}` for a repository Symphony isn't configured
+  with.
+  """
+  @spec pause_repository(String.t(), String.t() | nil) :: {:ok, map()} | :unavailable | {:error, term()}
+  def pause_repository(repo_key, reason), do: pause_repository(__MODULE__, repo_key, reason)
+
+  @spec pause_repository(GenServer.server(), String.t(), String.t() | nil) :: {:ok, map()} | :unavailable | {:error, term()}
+  def pause_repository(server, repo_key, reason) do
+    if server_available?(server), do: GenServer.call(server, {:pause_repository, repo_key, reason}), else: :unavailable
+  end
+
+  @doc "Clears the Director's pause of a repository, and dispatch for it starts again on the next tick."
+  @spec resume_repository(String.t()) :: {:ok, map()} | :unavailable | {:error, term()}
+  def resume_repository(repo_key), do: resume_repository(__MODULE__, repo_key)
+
+  @spec resume_repository(GenServer.server(), String.t()) :: {:ok, map()} | :unavailable | {:error, term()}
+  def resume_repository(server, repo_key) do
+    if server_available?(server), do: GenServer.call(server, {:resume_repository, repo_key}), else: :unavailable
+  end
+
   @spec pause_status() :: map() | :unavailable
   def pause_status do
     pause_status(__MODULE__)
@@ -8295,6 +8365,28 @@ defmodule SymphonyElixir.Orchestrator do
     {:reply, {:ok, entry}, state}
   end
 
+  defp handle_call_message({:pause_repository, repo_key, reason}, _from, state) do
+    with :ok <- configured_repository(repo_key),
+         {:ok, pause} <- Pauses.set({:repository, repo_key}, Pauses.repository_reason(reason), set_by: @director_setter) do
+      Logger.warning("Operator paused dispatch for repo_key=#{repo_key} reason=#{inspect(Pauses.repository_skip_reason(pause))}")
+      notify_dashboard()
+      {:reply, {:ok, repository_status(repo_key, pause)}, state}
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp handle_call_message({:resume_repository, repo_key}, _from, state) do
+    with :ok <- configured_repository(repo_key),
+         {:ok, pause} <- Pauses.clear_reasons({:repository, repo_key}, &(&1.kind == :person), by: @director_setter) do
+      Logger.warning("Operator resumed dispatch for repo_key=#{repo_key}")
+      notify_dashboard()
+      {:reply, {:ok, repository_status(repo_key, pause)}, schedule_tick(state, 0)}
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
   defp handle_call_message(:pause_status, _from, state) do
     {:reply, symphony_pause_status(), state}
   end
@@ -8576,6 +8668,7 @@ defmodule SymphonyElixir.Orchestrator do
       rate_limits: Map.get(state, :rate_limits),
       usage_limits: UsageLimit.snapshot(state.usage_limits, state.usage_windows),
       pause: symphony_pause_status(),
+      repositories: repositories_snapshot(),
       workspace_lifecycle: workspace_lifecycle_snapshot(state),
       budget: budget_snapshot(state),
       dispatch_state: dispatch_state_snapshot(state),

@@ -2365,6 +2365,20 @@ Discovery is automatic: on start the daemon writes `<state-root>/control_url` an
 `<state-root>/control_token` (both `0600`). Override either with `SYMPHONY_CONTROL_URL` or
 `SYMPHONY_CONTROL_TOKEN` for remote setups (e.g. when the daemon is reverse-proxied).
 
+**Pause one repository** (`POST /api/v1/control/repos/<repo_key>/pause`, with an optional
+`reason`) stops dispatch for that configured repository alone, and
+`POST /api/v1/control/repos/<repo_key>/resume` starts it again on the next tick. Its tickets keep
+their Linear states: each candidate is listed under `dispatch_skipped` as `the repository is paused
+by you since <time>: <reason>`, and a ticket that is running finishes its run and is not dispatched
+again until the resume. Other repositories dispatch as before. The pause is the Director's reason on
+the repository's pause, kept in the run store, so it survives a restart; each call writes a
+`repository_paused` or `repository_resumed` audit record, and a repository Symphony isn't configured
+with answers 404. The PR watcher keeps watching a paused repository's pull requests: landing a pull
+request that was already approved, with GitHub auto-merge, is not a dispatch. The state payload lists
+every configured repository under `repositories` with its `pause` (null when not paused) and derives
+`all_repositories_paused`, which is not Symphony's own `pause`; a ticket's payload carries
+`repository_paused`.
+
 **Stop** (`POST /api/v1/control/stop`, `mix symphony.stop`, the Director's Stop Run) ends one
 ticket's run and leaves its Linear state as it is, but the ticket is not dispatched again: Symphony's
 copy of it still reads the old state until a poll, so the stop pauses it on a reason that waits on
