@@ -196,6 +196,37 @@ defmodule SymphonyElixir.HoldTest do
     end
   end
 
+  describe "a Needs Decision hold that projects a Question" do
+    setup do
+      ticket = {:ticket, @repo_key, @issue_id}
+      {:ok, question} = Questions.ask(ticket, DispatchLoop.question_attrs({:quiet_handoff, 2}, "MOT-1"))
+      attrs = %{reason: question.question, decision: %{title: question.title, question: question.question, question_id: question.id}}
+      :ok = Hold.set(@repo_key, @issue_id, :needs_decision, attrs)
+      %{ticket: ticket, question: question, attrs: attrs}
+    end
+
+    test "records no decision event: the Question's own events are the request and its end", %{ticket: ticket, question: question} do
+      assert :ok = Hold.clear(@repo_key, @issue_id, :needs_decision)
+      assert %{state: :withdrawn} = Questions.find(ticket, question.id)
+      assert ticket_events(@repo_key, @issue_id, ["decision.requested", "decision.withdrawn"]) == []
+      assert [{"question.asked", _asked}, {"question.withdrawn", _withdrawn}] = ticket_events(@repo_key, @issue_id, ["question.asked", "question.withdrawn"])
+    end
+
+    test "an answered clear answers the Question with the answer given", %{ticket: ticket, question: question} do
+      director = %{kind: :person, name: "Director"}
+      assert :ok = Hold.clear(@repo_key, @issue_id, :needs_decision, answered: true, question: {:answer, "Run it again", director})
+      assert %{state: :answered, answer: %{option: 1, text: "Run it again"}} = Questions.find(ticket, question.id)
+      assert {:ok, nil} = Pauses.get(ticket)
+    end
+
+    test "an answered clear with no answer given leaves the Question to the answer's writer", %{ticket: ticket, question: question} do
+      assert :ok = Hold.clear(@repo_key, @issue_id, :needs_decision, answered: true)
+      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+      assert %{state: :open} = Questions.find(ticket, question.id)
+      assert ticket_events(@repo_key, @issue_id, ["decision.withdrawn"]) == []
+    end
+  end
+
   describe "the events a hold write records" do
     @request %{
       reason: "A or B?",

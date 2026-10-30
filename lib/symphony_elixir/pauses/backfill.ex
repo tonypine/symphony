@@ -313,6 +313,10 @@ defmodule SymphonyElixir.Pauses.Backfill do
     {[{:question, stuck_request(type, record.issue_identifier || "this ticket", hold.reason), question_opts(record, {:blocked, type}, hold.set_at)}], []}
   end
 
+  # A hold that projects a Question asked through the service (`SymphonyElixir.DecisionRequest.ask/4`)
+  # has its question and its pause already.
+  defp hold(_record, %{kind: :needs_decision, decision: %{question_id: id}}) when is_binary(id), do: {[], []}
+
   defp hold(record, %{kind: :needs_decision} = hold) do
     decision = hold.decision || %{}
 

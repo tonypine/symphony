@@ -2,7 +2,7 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{DecisionRequest, Hold, MergeConfirmation, NeedsDecisionHold, RunStore, Workflow}
+  alias SymphonyElixir.{DecisionRequest, Hold, MergeConfirmation, NeedsDecisionHold, Questions, RunStore, Workflow}
   alias SymphonyElixir.HumanActions.{Collector, Request}
   alias SymphonyElixir.Linear.Issue
 
@@ -352,6 +352,42 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
 
       assert log =~ "Failed to clear the handoff_missing Blocked hold"
       assert stored_hold() == nil
+    end
+
+    test "a reply that answers a request asked through the writer answers its Question in the person's words" do
+      assert :ok = DecisionRequest.ask(issue(), request(), [])
+      [%{id: id}] = Questions.open({:ticket, @repo_key, @issue_id})
+
+      answered = ticket_node(%{"comments" => %{"nodes" => [request_comment(), reply(@comment_id, "Ship unsigned\n")]}})
+      assert NeedsDecisionHold.sync(@repo_key, answered, settings: designed_settings()) == :clear
+      assert stored_hold() == nil
+      assert %{state: :answered, answer: %{text: "Ship unsigned", option: 2, by: %{kind: :person}}} = Questions.find({:ticket, @repo_key, @issue_id}, id)
+    end
+
+    test "a hold whose comment could not be posted is posted by the sweep, never read as withdrawn" do
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_result) end)
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      down = {:error, :linear_down}
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [down, down, :ok])
+      capture_log(fn -> assert {:error, {:decision_request_failed, :linear_down}} = DecisionRequest.ask(issue(), request(), []) end)
+      [%{id: id}] = Questions.open({:ticket, @repo_key, @issue_id})
+
+      # Linear reads no request on the ticket: the sweep tries the comment again, and keeps the hold.
+      node = ticket_node(%{"state" => %{"name" => "In Progress"}})
+      capture_log(fn -> assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :none end)
+      refute_received {:memory_tracker_comment, @issue_id, _body}
+      assert %{decision: %{question_id: ^id}} = stored_hold()
+
+      assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :none
+      assert_received {:memory_tracker_comment, @issue_id, body}
+      assert body =~ "## Decision needed: Add the release signing secrets"
+      assert body =~ "<!-- symphony:question #{id} -->"
+      assert %{decision: %{question_id: ^id}} = stored_hold()
+      assert [%{id: ^id}] = Questions.open({:ticket, @repo_key, @issue_id})
+
+      # Posted, a request still missing from Linear is one a person removed: it ends as a withdrawal.
+      assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :clear
+      assert %{state: :withdrawn} = Questions.find({:ticket, @repo_key, @issue_id}, id)
     end
 
     test "clears the hold when the run withdraws the request" do

@@ -773,7 +773,8 @@ defmodule SymphonyElixir.PromptBuilder do
       since (a person who brought the ticket back wins over the answer).
 
   The answers are read from the ticket's ledger: the `decision.recorded` event naming the request,
-  never Linear's text. With the summary off the limit is never checked, and a ticket whose ledger
+  or, for a request asked as a Question, its `question.answered` (`SymphonyElixir.Questions`), never
+  Linear's text. With the summary off the limit is never checked, and a ticket whose ledger
   can't be read starts as it would without the check. `opts[:repo_key]` names the repo when the issue
   doesn't.
   """
@@ -808,15 +809,22 @@ defmodule SymphonyElixir.PromptBuilder do
   # and what that answer picks. A request is told by its title, which names only the ticket.
   defp summary_requests(issue, events) do
     title = summary_title(issue)
-    ends = Enum.filter(events, &(&1.type in ["decision.recorded", "decision.withdrawn"]))
+    ends = Enum.filter(events, &(&1.type in ["decision.recorded", "decision.withdrawn", "question.answered", "question.withdrawn"]))
 
-    for %Event{type: "decision.requested", id: id} = request <- events, TicketSignals.same_text?(payload(request, :title), title) do
-      answer = Enum.find(ends, &(payload(&1, :request) == id))
+    for %Event{type: type} = request <- events,
+        type in ["decision.requested", "question.asked"],
+        TicketSignals.same_text?(payload(request, :title), title) do
+      answer = Enum.find(ends, &ends?(&1, request))
       %{answer: answer, pick: summary_pick(answer)}
     end
   end
 
-  defp summary_pick(%Event{type: "decision.recorded"} = answer) do
+  # A request's answer or withdrawal names it: a decision's by its event, a Question's by its id.
+  defp ends?(%Event{type: "question." <> _end} = ended, %Event{type: "question.asked"} = request), do: payload(ended, :question_id) == payload(request, :question_id)
+  defp ends?(%Event{type: "question." <> _end}, _decision), do: false
+  defp ends?(ended, request), do: payload(ended, :request) == request.id
+
+  defp summary_pick(%Event{type: type} = answer) when type in ["decision.recorded", "question.answered"] do
     case MergeConfirmation.picked_option([@go_on, @cancel], [payload(answer, :answer) || ""]) do
       1 -> :go_on
       2 -> :cancel

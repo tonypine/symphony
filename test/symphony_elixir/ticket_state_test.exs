@@ -736,6 +736,25 @@ defmodule SymphonyElixir.TicketStateTest do
       assert %{pending_projection: [%{type: :phase, at: %DateTime{}}]} = TicketState.mark_projection(%{}, :phase, :boom)
     end
 
+    test "a question's request comment is a mark of its own, by the question's id" do
+      record =
+        "repo"
+        |> TicketState.new("issue-1")
+        |> TicketState.mark_projection({:question_comment, "q-1"}, :linear_down, @at)
+        |> TicketState.mark_projection({:question_comment, "q-2"}, :linear_down, @at)
+        |> TicketState.mark_projection({:question_comment, "q-1"}, :rate_limited, @at)
+
+      assert [%{type: :question_comment, question: "q-1", error: ":rate_limited"}, %{type: :question_comment, question: "q-2"}] =
+               record.pending_projection
+
+      assert Enum.map(record.pending_projection, &TicketState.projection_of/1) == [{:question_comment, "q-1"}, {:question_comment, "q-2"}]
+      assert TicketState.normalize(record) == record
+
+      # A stored mark that names no question is dropped.
+      unnamed = %{pending_projection: [%{type: :question_comment, hold: nil, at: @at}]}
+      assert TicketState.normalize(unnamed).pending_projection == []
+    end
+
     test "a clear drops only the mark it was given: a newer mark of the same projection stays" do
       older = "repo" |> TicketState.new("issue-1") |> TicketState.mark_projection(:phase, :down, @at)
       [projected] = older.pending_projection

@@ -407,6 +407,16 @@ defmodule SymphonyElixir.TicketSignalsTest do
     end
   end
 
+  describe "open_decision/4 and Questions" do
+    test "finds an open Question's request as it finds a decision request, until the Question ends" do
+      {:ok, asked} = TicketEvents.record(@repo_key, "issue-1", "question.asked", %{question_id: "q-1", title: "Pick one", question: "A or B?"})
+      assert TicketSignals.open_decision(@repo_key, "issue-1", "pick one", nil).id == asked.id
+
+      {:ok, _answered} = TicketEvents.record(@repo_key, "issue-1", "question.answered", %{question_id: "q-1", answer: "A"})
+      assert TicketSignals.open_decision(@repo_key, "issue-1", "Pick one", nil) == nil
+    end
+  end
+
   test "same_text?/2 ignores case and spacing, and a blank text matches nothing" do
     assert TicketSignals.same_text?(" A  or\nb? ", "a or B?")
     refute TicketSignals.same_text?("A or B?", "A, B or C?")

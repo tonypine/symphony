@@ -16,6 +16,11 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   the reviewer and later runs honour it. The hold then clears and the ticket continues
   from where it stopped; a merge confirmation's hold carries the move its confirmation performs, so
   answering that one continues into `Merging` (`SymphonyElixir.MergeConfirmation`).
+
+  A hold whose request comment could not be posted (`SymphonyElixir.DecisionRequest.ask/4` marked it
+  pending) has no request on Linear yet: the sweep posts it (`DecisionRequest.repost/5`) instead of
+  reading the missing request as withdrawn, so the question stays open and the Inbox lists it on the
+  next read.
   """
 
   require Logger
@@ -23,6 +28,8 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   alias SymphonyElixir.{Config, DecisionRequest, Decisions, Handoff, Hold}
   alias SymphonyElixir.HumanActions.{Collector, Request}
   alias SymphonyElixir.{MergeConfirmation, TicketSignals, TransitionGuard}
+
+  @director %{kind: :person, name: "Director"}
 
   @typedoc "What the ticket's open decision requests call for: set the hold, clear it, or leave it."
   @type action :: {:set, map()} | :clear | :none
@@ -95,8 +102,12 @@ defmodule SymphonyElixir.NeedsDecisionHold do
     # The answers go into the ticket's scope on the read that sees them, whatever the hold does.
     _ = Decisions.sync(node, opts |> Keyword.take([:tracker]) |> Keyword.put(:repo_key, repo_key))
     current = Hold.get(repo_key, issue_id, :needs_decision, opts)
+    newest = Collector.newest_request(node, settings)
 
-    case desired(Collector.newest_request(node, settings), current) do
+    case pending_comment(desired(newest, current), repo_key, issue_id, current, node, opts) do
+      :posted ->
+        :none
+
       {:set, attrs} ->
         apply_set(repo_key, issue_id, attrs, opts)
 
@@ -109,6 +120,17 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   end
 
   defp sync_ticket(_repo_key, _node, _settings, _opts), do: :none
+
+  # A hold whose request is not what Linear reads as open may carry a comment whose post failed: that
+  # one is posted now, and the hold is left as it is until the next read sees the request.
+  defp pending_comment(:none, _repo_key, _issue_id, _current, _node, _opts), do: :none
+
+  defp pending_comment(action, repo_key, issue_id, current, node, opts) do
+    case DecisionRequest.repost(repo_key, issue_id, current, get_in(node, ["state", "name"]), Keyword.take(opts, [:tracker])) do
+      :none -> action
+      _posted_or_pending -> :posted
+    end
+  end
 
   defp apply_set(repo_key, issue_id, attrs, opts) do
     case DecisionRequest.project(repo_key, issue_id, attrs, opts) do
@@ -127,7 +149,7 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   defp apply_clear(repo_key, issue_id, current, node, opts) do
     replies = replies(node, current)
 
-    case Hold.clear(repo_key, issue_id, :needs_decision, Keyword.put(opts, :answered, replies != [])) do
+    case Hold.clear(repo_key, issue_id, :needs_decision, opts |> Keyword.put(:answered, replies != []) |> answer(replies)) do
       :ok ->
         clear_quiet_handoff_hold(repo_key, issue_id, opts)
 
@@ -231,6 +253,10 @@ defmodule SymphonyElixir.NeedsDecisionHold do
         not Request.withdrawal?(body),
         do: body
   end
+
+  # A reply that answered the request answers the Question the hold projects, in the person's words.
+  defp answer(opts, []), do: opts
+  defp answer(opts, replies), do: Keyword.put(opts, :question, {:answer, String.trim(List.last(replies)), @director})
 
   defp labels(node), do: node |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(& &1["name"])
 

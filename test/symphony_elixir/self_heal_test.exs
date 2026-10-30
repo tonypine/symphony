@@ -4,7 +4,7 @@ defmodule SymphonyElixir.SelfHealTest do
   import ExUnit.CaptureLog
   import SymphonyElixir.TestSupport, only: [ticket_events: 2]
 
-  alias SymphonyElixir.{BlockedHold, NeedsDecisionHold, Pauses, SelfHeal, TicketState}
+  alias SymphonyElixir.{BlockedHold, NeedsDecisionHold, Pauses, Questions, SelfHeal, TicketState}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.Collector
   alias SymphonyElixir.Linear.Issue
@@ -576,7 +576,10 @@ defmodule SymphonyElixir.SelfHealTest do
       assert reason =~ "The qa environment block on TP-816 came back unchanged"
       assert decision.title == "Self-heal is stuck on the qa environment block"
       assert Enum.map(decision.options, &Map.get(&1, :recommended)) == [true, nil]
-      assert [{"decision.requested", %{title: "Self-heal is stuck on the qa environment block"}}] = ticket_events(@repo_key, @issue_id)
+      # The question is asked through the Question service, and the hold carries it.
+      assert [%{id: id, title: "Self-heal is stuck on the qa environment block", options: [_investigate, _drop]}] = Questions.open({:ticket, @repo_key, @issue_id})
+      assert decision.question_id == id
+      assert [{"question.asked", %{title: "Self-heal is stuck on the qa environment block"}}, {"pause.set", _pause}] = ticket_events(@repo_key, @issue_id)
 
       # TP-1019: the decision is posted as a request, so the Inbox's read of the ticket finds it open
       # and keeps the hold. With no request it cleared the hold, and the ticket dispatched again.
@@ -588,12 +591,18 @@ defmodule SymphonyElixir.SelfHealTest do
       assert NeedsDecisionHold.desired(request, %{kind: :needs_decision, decision: decision}) == :none
     end
 
-    test "an escalation whose request can't be posted takes the hold back" do
+    test "an escalation whose request can't be posted keeps the question asked and its hold" do
+      :ok = SymphonyElixir.RunStore.clear()
       Process.put(:ticket_state, recorded(@repo_key, @issue_id, %{component: "qa_environment", scope: @symphony_repo_key, signature: ":environment_unreachable"}))
       Process.put(:comment_result, {:error, :linear_down})
 
-      assert {:error, {:self_heal_escalation_request_failed, :linear_down}} = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable)))
-      assert Process.get(:hold_cleared) == :needs_decision
+      capture_log(fn ->
+        assert {:error, {:self_heal_escalation_request_failed, :linear_down}} = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable)))
+      end)
+
+      assert Process.get(:hold_cleared) == nil
+      assert {:needs_decision, %{decision: %{question_id: id}}} = Process.get(:hold_attrs)
+      assert [%{id: ^id}] = Questions.open({:ticket, @repo_key, @issue_id})
     end
 
     test "a block that recurs after the fix landed, unchanged, escalates instead of filing again" do

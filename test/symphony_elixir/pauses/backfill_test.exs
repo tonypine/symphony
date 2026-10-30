@@ -182,6 +182,14 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
       assert [%{kind: :needs_decision}] = record("issue-1").holds
     end
 
+    test "a Needs Decision hold that projects a Question asked through the service has its question already" do
+      decision = %{title: "Pick a layout", question: "Which layout?", question_id: "q-asked"}
+      put_record("issue-1", %{holds: [%{kind: :needs_decision, reason: "Which layout?", decision: decision, set_at: @set_at}]})
+
+      assert {:ok, %{questions_created: 0, pauses_created: 0, skipped_count: 0}} = Backfill.run(now: @now, store: Store)
+      assert Questions.open(ticket("issue-1")) == []
+    end
+
     test "a record whose write fails is skipped and left unmarked; the next run converts it without asking twice" do
       put_record("issue-7", %{holds: [blocked("dispatch_loop", ["implementation"])]})
 

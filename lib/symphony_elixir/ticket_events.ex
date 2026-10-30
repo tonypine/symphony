@@ -12,7 +12,9 @@ defmodule SymphonyElixir.TicketEvents do
   `finding.resolved` by an agent, then confirmed or reopened by the next QA verdict, whose event
   `supersedes` the resolution. A decision a person must make is `decision.requested`, then
   `decision.recorded` when a person answers it or `decision.withdrawn` when it ends unanswered;
-  both name the request in their payload's `request`.
+  both name the request in their payload's `request`. A question asked through the Question service
+  (`SymphonyElixir.Questions`) is `question.asked`, ended by `question.answered` or
+  `question.withdrawn` naming its `question_id`, or by a `decision.recorded` naming the event.
 
   The machinery writes events next to the snapshot fields of `SymphonyElixir.TicketState`
   (`SymphonyElixir.TicketSignals`, `SymphonyElixir.Hold`, `SymphonyElixir.Decisions`, and the
@@ -46,6 +48,9 @@ defmodule SymphonyElixir.TicketEvents do
           | {:idempotency, String.t() | nil}
           | {:artifacts, [String.t()]}
           | {:at, DateTime.t()}
+
+  # The events that ask a person something: a decision request, and a Question's.
+  @request_types ["decision.requested", "question.asked"]
 
   @typedoc """
   `query/3`'s options: `types:`, `since:` (exclusive, on `at`), `run_id:`, `open_findings:`,
@@ -117,8 +122,9 @@ defmodule SymphonyElixir.TicketEvents do
   `t:query_opt/0` for `opts`).
 
   `open_findings: true` keeps the `finding.recorded` events no unsuperseded `finding.resolved`
-  names in `finding_id`; `open_decisions: true` keeps the `decision.requested` events no
-  `decision.recorded` or `decision.withdrawn` names in `request` (both together keep either).
+  names in `finding_id`; `open_decisions: true` keeps the `decision.requested` and `question.asked`
+  events no `decision.recorded` or `decision.withdrawn` names in `request`, and, for a question, no
+  `question.answered` or `question.withdrawn` names in `question_id` (both together keep either).
 
   A page holds `limit` events, and more when its last event shares its `at` with the next ones: a
   page never ends inside a group of events that share one `at`, so a reader that pages with
@@ -213,8 +219,8 @@ defmodule SymphonyElixir.TicketEvents do
       closed = closed_ids(events)
 
       Enum.filter(events, fn event ->
-        ((findings? and event.type == "finding.recorded") or (decisions? and event.type == "decision.requested")) and
-          not MapSet.member?(closed, event.id)
+        ((findings? and event.type == "finding.recorded") or (decisions? and event.type in @request_types)) and
+          not MapSet.member?(closed, event.id) and not answered_question?(closed, event)
       end)
     else
       events
@@ -230,10 +236,19 @@ defmodule SymphonyElixir.TicketEvents do
     |> Enum.flat_map(fn
       %Event{type: "finding.resolved", id: id, payload: payload} -> if MapSet.member?(superseded, id), do: [], else: [Map.get(payload, :finding_id)]
       %Event{type: type, payload: payload} when type in ["decision.recorded", "decision.withdrawn"] -> [Map.get(payload, :request)]
+      %Event{type: type, payload: payload} when type in ["question.answered", "question.withdrawn"] -> [Map.get(payload, :question_id)]
       _event -> []
     end)
     |> MapSet.new()
   end
+
+  # Whether a `question.asked` event's question is ended by an answer or a withdrawal naming it.
+  defp answered_question?(closed, %Event{type: "question.asked", payload: payload}) do
+    id = Map.get(payload, :question_id)
+    is_binary(id) and MapSet.member?(closed, id)
+  end
+
+  defp answered_question?(_closed, _event), do: false
 
   defp matches?(event, opts) do
     types = Keyword.get(opts, :types)

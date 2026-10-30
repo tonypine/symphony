@@ -8,6 +8,9 @@ defmodule SymphonyElixir.CodeReviewTest do
   alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.MergeConfirmation
+  alias SymphonyElixir.NeedsDecisionHold
+  alias SymphonyElixir.Pauses
+  alias SymphonyElixir.Questions
   alias SymphonyElixir.RunStore
   alias SymphonyElixir.TicketSignals
 
@@ -290,10 +293,14 @@ defmodule SymphonyElixir.CodeReviewTest do
       Process.put(:fake_qa_policy_result, {:nothing_to_verify, "the head changes no files against its base branch"})
       Process.put(:fake_tracker_comment_result, {:error, :linear_down})
 
-      assert {:error, {:code_review_hold_failed, {:decision_request_failed, :linear_down}}} =
-               run(workspace, settings: designed_settings())
+      capture_log(fn ->
+        assert {:error, {:code_review_hold_failed, {:decision_request_failed, :linear_down}}} =
+                 run(workspace, settings: designed_settings())
+      end)
 
-      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+      # The question stays asked and held; its comment waits for the Inbox's sweep.
+      assert [%{id: id}] = Questions.open({:ticket, @repo_key, @issue_id})
+      assert %{decision: %{question_id: ^id}} = Hold.get(@repo_key, @issue_id, :needs_decision)
     end
 
     test "manual review on pauses an approve-skip on a merge confirmation instead of moving to Merging" do
@@ -318,7 +325,8 @@ defmodule SymphonyElixir.CodeReviewTest do
                SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
 
       # The ticket did not move: the confirmation is its request, and no phase was entered.
-      assert [{"decision.requested", %{confirm: "Merging"}}] = ticket_events(@repo_key, @issue_id, ["decision.requested", "phase.entered", "hold.set"])
+      assert [{"question.asked", %{confirm: "Merging"}}] =
+               ticket_events(@repo_key, @issue_id, ["decision.requested", "question.asked", "phase.entered", "hold.set"])
     end
 
     test "a merge confirmation that cannot be posted is reported" do
@@ -453,8 +461,11 @@ defmodule SymphonyElixir.CodeReviewTest do
                SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
 
       # The verdict, then the escalation's request: the escalation signal is no phase move.
-      assert [{"verdict.recorded", %{kind: "code_review", outcome: "block"}}, {"decision.requested", %{title: "Code Review escalated TP-815"}}] =
-               ticket_events(@repo_key, @issue_id)
+      assert [
+               {"verdict.recorded", %{kind: "code_review", outcome: "block"}},
+               {"question.asked", %{title: "Code Review escalated TP-815"}},
+               {"pause.set", %{reason: "question"}}
+             ] = ticket_events(@repo_key, @issue_id)
     end
 
     test "a reviewer block error pauses the ticket on a Needs Decision hold" do
@@ -1058,11 +1069,39 @@ defmodule SymphonyElixir.CodeReviewTest do
       Process.put(:fake_review_result, {:ok, %{verdict: :block, comments: [], reason: "no"}})
       Process.put(:fake_tracker_comment_result, {:error, :rate_limited})
 
-      assert {:error, {:code_review_escalation_failed, {:decision_request_failed, :rate_limited}}} =
-               run("/tmp/workspace", settings: designed_settings())
+      capture_log(fn ->
+        assert {:error, {:code_review_escalation_failed, {:decision_request_failed, :rate_limited}}} =
+                 run("/tmp/workspace", settings: designed_settings())
+      end)
 
       refute_received {:moved, _, _}
-      assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
+      assert_received {:commented, @issue_id, _refused}
+      assert Hold.held?(@repo_key, @issue_id, :needs_decision)
+    end
+
+    test "with Linear down the escalation is a question on the record, and its comment is posted once Linear is back" do
+      :ok = RunStore.clear()
+      Process.put(:fake_review_result, {:ok, %{verdict: :block, comments: [], reason: "touches protected files"}})
+      Process.put(:fake_tracker_comment_result, {:error, :linear_down})
+
+      capture_log(fn ->
+        assert {:error, {:code_review_escalation_failed, _down}} = run("/tmp/workspace", settings: designed_settings())
+      end)
+
+      assert_received {:commented, @issue_id, refused}
+
+      # The Director's ticket page reads the question from the record.
+      assert [%{id: id, title: "Code Review escalated TP-815", confirm: "QA"}] = Questions.open({:ticket, @repo_key, @issue_id})
+      assert {:ok, %{reasons: [%{kind: :question, text: "Waiting for your answer: Code Review escalated TP-815"}]}} = Pauses.get({:ticket, @repo_key, @issue_id})
+
+      # Linear is back: the Inbox's sweep reads the ticket with no request on it and posts the comment.
+      Process.delete(:fake_tracker_comment_result)
+      node = %{"id" => @issue_id, "state" => %{"name" => "Code Review"}, "labels" => %{"nodes" => [%{"name" => "Needs Decision"}]}, "comments" => %{"nodes" => []}}
+      assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings(), tracker: FakeTracker) == :none
+      assert_received {:commented, @issue_id, ^refused}
+      assert refused =~ "<!-- symphony:question #{id} -->"
+      assert Hold.held?(@repo_key, @issue_id, :needs_decision)
+      assert [%{id: ^id}] = Questions.open({:ticket, @repo_key, @issue_id})
     end
 
     test "a dependency manifest's major bump informs the review, read from git in the workspace" do
