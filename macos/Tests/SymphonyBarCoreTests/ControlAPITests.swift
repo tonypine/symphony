@@ -192,6 +192,41 @@ final class ControlAPITests: XCTestCase {
         )
     }
 
+    func testRepositoryPauseRequests() throws {
+        let pause = ControlAPI.request(
+            .pauseRepository(key: "web-shop", reason: "  focusing on Symphony this week "), base: base, token: "secret"
+        )
+        XCTAssertEqual(pause.httpMethod, "POST")
+        XCTAssertEqual(pause.url?.absoluteString, "http://127.0.0.1:4010/api/v1/control/repos/web-shop/pause")
+        XCTAssertEqual(pause.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+        XCTAssertEqual(try json(pause), ["reason": "focusing on Symphony this week"])
+        // Without a reason Symphony gives the pause its own line.
+        XCTAssertEqual(try json(ControlAPI.request(.pauseRepository(key: "web-shop", reason: " "), base: base, token: "secret")), [:])
+
+        let resume = ControlAPI.request(.resumeRepository(key: "web-shop"), base: base, token: "secret")
+        XCTAssertEqual(resume.url?.absoluteString, "http://127.0.0.1:4010/api/v1/control/repos/web-shop/resume")
+        XCTAssertEqual(try json(resume), [:])
+        XCTAssertNil(ControlAction.pauseRepository(key: "web-shop", reason: "").moveIdentifier)
+        XCTAssertNil(ControlAction.resumeRepository(key: "web-shop").moveIdentifier)
+    }
+
+    func testRepositoryPauseResponses() {
+        let answer = Data(#"{"repository":{"repo_key":"web-shop","paused":true,"pause":{"reasons":[]}}}"#.utf8)
+        XCTAssertEqual(ControlAPI.result(.pauseRepository(key: "web-shop", reason: ""), statusCode: 200, data: answer), .done)
+        XCTAssertEqual(ControlAPI.result(.resumeRepository(key: "web-shop"), statusCode: 200, data: answer), .done)
+        XCTAssertEqual(
+            ControlAPI.result(
+                .pauseRepository(key: "gone", reason: ""), statusCode: 404,
+                data: Data(#"{"error":{"code":"repository_not_found","message":"Symphony has no repository gone"}}"#.utf8)
+            ),
+            .failed("Couldn't pause gone: Symphony has no repository gone (HTTP 404)")
+        )
+        XCTAssertEqual(
+            ControlAPI.result(.resumeRepository(key: "web-shop"), statusCode: 401, data: Data()),
+            .failed("Couldn't resume web-shop: it rejected the control token (HTTP 401)")
+        )
+    }
+
     func testSendFallsBackToTheDefaultURL() async throws {
         try "0123abcd".write(to: root.appendingPathComponent("control_token"), atomically: false, encoding: .utf8)
         var sent: URLRequest?

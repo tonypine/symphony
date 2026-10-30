@@ -518,6 +518,66 @@ final class ReposListTests: XCTestCase {
         XCTAssertEqual(window(running, .repos([], warning: nil)).content, .empty(.noRepos))
     }
 
+    func testEachRepoOffersPauseOrResumeFromTheStatesRepositories() {
+        let since = date("2026-10-04T13:05:00Z")
+        let snapshot = StateSnapshot(repositories: [
+            .init(key: "symphony", pause: .init(reasons: ["focusing on Symphony this week"], since: since)),
+            .init(key: "api"),
+        ])
+        let shown = window(.running(snapshot, external: false), .repos([symphony, api, docs], warning: nil))
+
+        XCTAssertEqual(shown.repos.map(\.pause?.state), [.paused(reasons: ["focusing on Symphony this week"], since: since), .dispatching, nil])
+        XCTAssertEqual(shown.repos[0].accessibilityLabel, "symphony, healthy, default, 1 agent running, paused")
+        XCTAssertFalse(shown.repos[1].accessibilityLabel.contains("paused"))
+        // While paused, or from the file while Symphony isn't answering, the same.
+        XCTAssertNotNil(window(.paused(snapshot, external: false), nil).repos.first?.pause)
+        XCTAssertNil(window(.stopped, nil).repos.first?.pause)
+        // An older Symphony lists no repositories: no Pause anywhere.
+        XCTAssertEqual(window(running, .repos([symphony, api], warning: nil)).repos.map(\.pause), [nil, nil])
+    }
+
+    func testThePauseLineTheActionAndTheBanner() throws {
+        let utc = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let paused = RepoPauseControl(
+            key: "web-shop", state: .paused(reasons: ["focusing on Symphony this week", "deploy freeze"], since: date("2026-10-04T13:05:00Z")),
+            now: now, timeZone: utc
+        )
+        XCTAssertTrue(paused.isPaused)
+        XCTAssertEqual(paused.line, "Paused since 13:05: focusing on Symphony this week; deploy freeze")
+        XCTAssertEqual(paused.accessibilityLabel, "web-shop: Paused since 13:05: focusing on Symphony this week; deploy freeze")
+        XCTAssertEqual(paused.buttonTitle, "Resume")
+        XCTAssertEqual(paused.buttonHelp, RepoPauseControl.resumeHelp)
+        XCTAssertEqual(paused.buttonAccessibilityLabel, "Resume web-shop")
+        XCTAssertEqual(paused.action(reason: "ignored"), .resumeRepository(key: "web-shop"))
+        XCTAssertEqual(paused.doneMessage(.resumeRepository(key: "web-shop")), "Resumed web-shop: Symphony dispatches its tickets again.")
+
+        // A pause from another day shows its day; one without reasons or time says only that it is paused.
+        let older = RepoPauseControl(key: "web-shop", state: .paused(reasons: [], since: date("2026-10-02T09:00:00Z")), now: now, timeZone: utc)
+        XCTAssertEqual(older.line, "Paused since Oct 2, 09:00")
+        XCTAssertEqual(RepoPauseControl(key: "web-shop", state: .paused(reasons: [], since: nil)).line, "Paused")
+
+        let dispatching = RepoPauseControl(key: "web-shop", state: .dispatching)
+        XCTAssertFalse(dispatching.isPaused)
+        XCTAssertEqual(dispatching.line, "Dispatching its tickets")
+        XCTAssertEqual(dispatching.buttonTitle, "Pause")
+        XCTAssertEqual(dispatching.buttonHelp, RepoPauseControl.pauseHelp)
+        XCTAssertEqual(dispatching.action(reason: "focusing"), .pauseRepository(key: "web-shop", reason: "focusing"))
+        XCTAssertEqual(
+            dispatching.doneMessage(.pauseRepository(key: "web-shop", reason: "focusing")),
+            "Paused web-shop: Symphony stops dispatching its tickets, which stay where they are."
+        )
+        XCTAssertEqual(dispatching.id, "web-shop")
+    }
+
+    func testSetupListsEveryRepositoryTheStateLists() {
+        let snapshot = StateSnapshot(repositories: [.init(key: "web-shop", pause: .init()), .init(key: "api")])
+
+        XCTAssertEqual(RepoPauseControl.all(snapshot: snapshot, now: now).map(\.key), ["web-shop", "api"])
+        XCTAssertEqual(RepoPauseControl.all(snapshot: snapshot, now: now).map(\.isPaused), [true, false])
+        XCTAssertEqual(RepoPauseControl.all(snapshot: StateSnapshot(), now: now), [])
+        XCTAssertEqual(RepoPauseControl.all(snapshot: nil), [])
+    }
+
     func testJoinsTheRunningAgentsOfTheStateAndThePendingWorkflow() {
         let run = StateSnapshot.Run(
             issueIdentifier: "TP-260",

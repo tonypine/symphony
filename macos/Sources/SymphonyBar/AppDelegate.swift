@@ -198,6 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             self?.runner.stateRoot ?? StateRoot.locate(environment: AppStores.current.environment)
         }
         reposWindow.stateRoot = poller.stateRoot
+        reposWindow.afterControl = { [weak self] in self?.poller.pollNow() }
         reposWindow.restart = { [weak self] in self?.restart() }
         reposWindow.start = { [weak self] in self?.startSymphony(nil) }
         reposWindow.canStart = { [weak self] in

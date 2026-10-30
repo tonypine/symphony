@@ -262,7 +262,8 @@ struct ReposRestartPopover: View {
     }
 }
 
-/// A sidebar row: key, `owner/repo` or the folder name, Default and the running agents.
+/// A sidebar row: key, then `owner/repo` or the folder name (after a pause mark while paused), Default and the running
+/// agents.
 struct RepoSidebarRow: View {
     let repo: RepoDetail
 
@@ -272,26 +273,52 @@ struct RepoSidebarRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(repo.key)
                     .lineLimit(1)
-                if let subtitle = repo.subtitle {
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                if repo.subtitle != nil || repo.pause?.isPaused == true {
+                    HStack(spacing: 3) {
+                        if let pause = repo.pause, pause.isPaused {
+                            RepoPausedMark(help: pause.line)
+                        }
+                        if let subtitle = repo.subtitle {
+                            Text(subtitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
                 }
             }
+            // The name takes the row's width before the spacer does; the badges keep theirs.
+            .layoutPriority(1)
             Spacer(minLength: 4)
             if repo.isDefault {
                 Badge(text: ReposList.defaultBadge)
                     .help(ReposList.defaultHelp)
+                    .fixedSize()
             }
             if repo.agentCount > 0 {
                 Badge(text: "\(repo.agentCount)", prominent: true)
+                    .fixedSize()
             }
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(repo.accessibilityLabel)
+    }
+}
+
+/// A paused repository's mark under its name in the sidebar: a pause symbol rather than a badge, so the row keeps its
+/// width for the name and the other badges. Its tooltip is the pause line; the row's accessibility label says "paused".
+struct RepoPausedMark: View {
+    let help: String
+
+    var body: some View {
+        Image(systemName: "pause.circle.fill")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(DesignTokens.Status.you.tint)
+            .fixedSize()
+            .help(help)
+            .accessibilityLabel(RepoPauseControl.pausedBadge)
     }
 }
 
@@ -360,6 +387,14 @@ struct RepoDetailView: View {
                         NeedsAttentionBox(health: repo.health, model: model)
                     }
                 }
+                if let pause = repo.pause {
+                    Section(RepoPauseControl.sectionTitle) {
+                        // One identity per repository: the typed reason and the in-flight state stay with the
+                        // repository they were meant for, and reset when the selection changes.
+                        RepoPauseView(control: pause, send: { await model.onPauseControl(pause, $0) })
+                            .id(pause.key)
+                    }
+                }
                 source
                 routing
                 live
@@ -405,6 +440,10 @@ struct RepoDetailView: View {
             if repo.isDefault {
                 Badge(text: ReposList.defaultBadge)
                     .help(ReposList.defaultHelp)
+            }
+            if let pause = repo.pause, pause.isPaused {
+                Badge(text: RepoPauseControl.pausedBadge)
+                    .help(pause.line)
             }
         }
     }
@@ -753,6 +792,83 @@ struct ReposEmptyView: View {
         case .noRepos: return "square.stack.3d.up"
         case .noConfig: return "gearshape"
         case .unreadable: return "exclamationmark.triangle"
+        }
+    }
+}
+
+/// One repository's dispatch: whether Symphony dispatches its tickets, or why and since when it is paused, with a
+/// reason field and Pause, or Resume. The Repos window's detail and Setup's Repositories card show it. `send` sends
+/// the control and returns once Symphony answered; the button waits on it, and the next poll shows the new state.
+struct RepoPauseView: View {
+    let control: RepoPauseControl
+    let send: (ControlAction) async -> Bool
+    @State private var reason = ""
+    @State private var working = false
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: DesignTokens.Space.s3) {
+                line
+                Spacer(minLength: DesignTokens.Space.s2)
+                controls
+            }
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                line
+                HStack(spacing: DesignTokens.Space.s2) {
+                    Spacer(minLength: 0)
+                    controls
+                }
+            }
+        }
+    }
+
+    private var line: some View {
+        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+            Image(systemName: control.isPaused ? "pause.circle.fill" : "play.circle")
+                .foregroundStyle(control.isPaused ? DesignTokens.Status.you.tint : DesignTokens.Status.idle.tint)
+                .accessibilityHidden(true)
+            Text(control.line)
+                .foregroundStyle(control.isPaused ? Color.primary : Color.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(control.accessibilityLabel)
+    }
+
+    private var controls: some View {
+        HStack(spacing: DesignTokens.Space.s2) {
+            if !control.isPaused {
+                // No Form label: the prompt says what the field is for, and a label would stand beside it in the
+                // Repos window's Form and jump above the field once text is typed.
+                TextField(RepoPauseControl.reasonPrompt, text: $reason, prompt: Text(RepoPauseControl.reasonPrompt))
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.leading)
+                    .frame(width: 240)
+                    .disabled(working)
+                    .help(RepoPauseControl.reasonHelp)
+                    .accessibilityLabel("Reason to pause \(control.key)")
+                    .onSubmit(perform)
+            }
+            if working {
+                ProgressView().controlSize(.small)
+            }
+            Button(control.buttonTitle, action: perform)
+                .disabled(working)
+                .help(control.buttonHelp)
+                .accessibilityLabel(control.buttonAccessibilityLabel)
+        }
+        .fixedSize()
+    }
+
+    private func perform() {
+        guard !working else { return }
+        let action = control.action(reason: reason)
+        working = true
+        Task {
+            if await send(action) { reason = "" }
+            working = false
         }
     }
 }

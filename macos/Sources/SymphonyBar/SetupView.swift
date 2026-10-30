@@ -59,6 +59,25 @@ extension SymphonyWindowModel {
         overviewState.map { ReconcileLine(report: $0.snapshot.reconcile, now: $0.generatedAt ?? now) }
     }
 
+    /// Every repository Symphony lists with its pause, its times read on the state's clock; empty from a Symphony that
+    /// predates the pause of one repository, so the card hides.
+    func repositoryPauses(now: Date = Date()) -> [RepoPauseControl] {
+        RepoPauseControl.all(snapshot: overviewState?.snapshot, now: overviewState?.generatedAt ?? now)
+    }
+
+    /// Sends a repository's Pause or Resume (the window polls at once after it); true once Symphony took it. The
+    /// banner says what it did or why it failed.
+    func sendRepositoryPause(_ control: RepoPauseControl, _ action: ControlAction) async -> Bool {
+        switch await onControl(action) {
+        case .done, .moved:
+            showSetupBanner(SetupBanner(style: .success, text: control.doneMessage(action)))
+            return true
+        case let .failed(message):
+            showSetupBanner(.failed(message))
+            return false
+        }
+    }
+
     func setupPage(now: Date = Date()) -> SetupPage {
         let payload = setupPayload
         return SetupPage(payload: payload, buildWarning: payload == nil ? nil : setupBuildWarning, order: setupOrder, now: now)
@@ -515,7 +534,8 @@ struct SetupContent: View {
                         page: page, actions: actions, welcome: model.setupWelcome,
                         githubUpdates: model.githubUpdatesCard(), githubActions: githubActions,
                         linearWebhooks: model.linearWebhooksLine(), dispatchShadow: model.dispatchShadowLine(),
-                        reconcile: model.reconcileLine()
+                        reconcile: model.reconcileLine(),
+                        repositories: model.repositoryPauses(), sendPause: model.sendRepositoryPause
                     )
                     .sheet(item: githubSheet) { sheet in
                         GitHubUpdatesSheetView(
@@ -616,6 +636,9 @@ struct SetupPageBody: View {
     var reconcile: ReconcileLine?
     /// The line's last drift starts open (its snapshot).
     var reconcileExpanded = false
+    /// Each repository's pause, with Pause and Resume; empty from a Symphony that predates them, so the card hides.
+    var repositories: [RepoPauseControl] = []
+    var sendPause: (RepoPauseControl, ControlAction) async -> Bool = { _, _ in false }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
@@ -660,6 +683,9 @@ struct SetupPageBody: View {
             if let reconcile {
                 ReconcileLineView(line: reconcile, startsExpanded: reconcileExpanded)
             }
+            if !repositories.isEmpty {
+                RepositoriesCardView(repositories: repositories, send: sendPause)
+            }
             if !page.notChecked.isEmpty {
                 Card(title: SetupPage.notCheckedTitle) {
                     VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
@@ -684,6 +710,29 @@ struct SetupPageBody: View {
         }
         .padding(DesignTokens.Space.s5)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The Repositories card: one row per repository Symphony lists, with its key, whether Symphony dispatches its
+/// tickets or why it is paused, and Pause or Resume.
+struct RepositoriesCardView: View {
+    let repositories: [RepoPauseControl]
+    let send: (RepoPauseControl, ControlAction) async -> Bool
+
+    var body: some View {
+        Card(title: RepoPauseControl.cardTitle) {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+                ForEach(Array(repositories.enumerated()), id: \.element.id) { index, repository in
+                    if index > 0 { Divider() }
+                    VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                        Text(repository.key)
+                            .font(DesignTokens.TypeStyle.rowTitle.font)
+                            .accessibilityAddTraits(.isHeader)
+                        RepoPauseView(control: repository, send: { await send(repository, $0) })
+                    }
+                }
+            }
+        }
     }
 }
 

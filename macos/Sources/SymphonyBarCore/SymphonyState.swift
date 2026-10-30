@@ -39,6 +39,37 @@ public struct StateSnapshot: Equatable {
     public var dispatchShadow: DispatchShadowReport?
     /// What the reconciler did and the drift it found (`reconcile`), nil when Symphony predates it.
     public var reconcile: ReconcileReport?
+    /// Every configured repository and its pause (`repositories`), in Symphony's order; nil when Symphony predates
+    /// the pause of one repository, so the app offers no Pause for it.
+    public var repositories: [Repository]?
+
+    /// A configured repository as `/api/v1/state`'s `repositories` lists it, with its pause while dispatch for it
+    /// is paused.
+    public struct Repository: Equatable {
+        public var key: String
+        public var pause: RepositoryPause?
+
+        public init(key: String, pause: RepositoryPause? = nil) {
+            self.key = key
+            self.pause = pause
+        }
+    }
+
+    /// Why a repository is paused: its reasons' lines, as Symphony words them, and since when.
+    public struct RepositoryPause: Equatable {
+        public var reasons: [String]
+        public var since: Date?
+
+        public init(reasons: [String] = [], since: Date? = nil) {
+            self.reasons = reasons
+            self.since = since
+        }
+    }
+
+    /// The listed repository `key`, nil when Symphony doesn't list it or predates `repositories`.
+    public func repository(_ key: String) -> Repository? {
+        repositories?.first { $0.key == key }
+    }
 
     /// A ticket waiting on the operator, as `/api/v1/state`'s `waiting_on_you` lists it.
     public struct WaitingTicket: Equatable {
@@ -292,7 +323,8 @@ public struct StateSnapshot: Equatable {
         serviceVersion: String? = nil,
         linearWebhooks: LinearWebhookHealth? = nil,
         dispatchShadow: DispatchShadowReport? = nil,
-        reconcile: ReconcileReport? = nil
+        reconcile: ReconcileReport? = nil,
+        repositories: [Repository]? = nil
     ) {
         self.running = running
         self.retrying = retrying
@@ -311,6 +343,7 @@ public struct StateSnapshot: Equatable {
         self.linearWebhooks = linearWebhooks
         self.dispatchShadow = dispatchShadow
         self.reconcile = reconcile
+        self.repositories = repositories
     }
 }
 
@@ -790,6 +823,16 @@ public enum SymphonyState {
         snapshot.linearWebhooks = LinearWebhookHealth.decode(state: data)
         snapshot.dispatchShadow = DispatchShadowReport.decode(state: data)
         snapshot.reconcile = ReconcileReport.decode(state: data)
+        snapshot.repositories = payload.repositories?.compactMap { repository in
+            guard let key = repository.repoKey, !key.isEmpty else { return nil }
+            let pause = repository.pause.map { pause in
+                StateSnapshot.RepositoryPause(
+                    reasons: (pause.reasons ?? []).compactMap { $0.text?.trimmingWhitespace() }.filter { !$0.isEmpty },
+                    since: pause.since.flatMap(parseDate)
+                )
+            }
+            return StateSnapshot.Repository(key: key, pause: pause)
+        }
         return .state(snapshot)
     }
 
@@ -897,6 +940,21 @@ public enum SymphonyState {
             let version: String?
         }
 
+        struct Repository: Decodable {
+            struct Pause: Decodable {
+                struct Reason: Decodable {
+                    let text: String?
+                }
+
+                let since: String?
+                let reasons: [Reason]?
+            }
+
+            let repoKey: String?
+            /// Null while the repository isn't paused.
+            let pause: Pause?
+        }
+
         struct Waiting: Decodable {
             let issueId: String?
             let issueIdentifier: String?
@@ -926,6 +984,8 @@ public enum SymphonyState {
         /// Missing before Symphony said whether it had read the Inbox.
         let inboxRead: Bool?
         let build: Build?
+        /// Missing before Symphony paused one repository at a time.
+        let repositories: [Repository]?
         let error: Failure?
     }
 }

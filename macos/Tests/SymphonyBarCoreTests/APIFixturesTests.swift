@@ -227,4 +227,24 @@ final class APIFixturesTests: XCTestCase {
             XCTAssertEqual(overview.context, context, name)
         }
     }
+
+    /// The fixture QA walks Pause this repository with (TP-1238): `symphony` paused with the Director's reason, the
+    /// others dispatching, its running ticket saying its repository is paused, and a checked setup so Setup shows its
+    /// Repositories card.
+    func testTheRepoPausedFixtureShowsOneRepositoryPaused() throws {
+        let directory = Self.shippedRunning.deletingLastPathComponent().appendingPathComponent("repo-paused", isDirectory: true)
+        let shipped = APIFixtures(directory: directory, requestLog: root.appendingPathComponent("api-requests.jsonl"))
+        let data = shipped.answer(URLRequest(url: SymphonyState.stateURL(base: APIFixtures.baseURL))).0
+        guard case let .state(snapshot) = SymphonyState.poll(data: data, statusCode: 200) else {
+            return XCTFail("the repo-paused fixture doesn't read as a state")
+        }
+        XCTAssertEqual(RepoPauseControl.all(snapshot: snapshot).map(\.isPaused), [true, false, false])
+        XCTAssertEqual(snapshot.repository("symphony")?.pause?.reasons, ["focusing on Symphony this week"])
+        // Setup checks its setup, so its page shows, with the Repositories card.
+        XCTAssertEqual(SetupPage(payload: snapshot.setup, now: Date()).mood, .healthy)
+
+        let issue = shipped.answer(URLRequest(url: APIFixtures.baseURL.appendingPathComponent(TicketPage.issuePath("TP-237")))).0
+        let page = TicketPage(identifier: "TP-237", sources: TicketPage.Sources(state: data, issue: issue))
+        XCTAssertEqual(page.repositoryPausedNote, "The repository symphony is paused: Symphony doesn't dispatch its tickets.")
+    }
 }

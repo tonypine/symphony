@@ -128,6 +128,40 @@ final class StateSnapshotTests: XCTestCase {
         )
     }
 
+    func testDecodesTheRepositoriesAndTheirPauses() throws {
+        let data = try recordedState(replacing: "repositories", with: [
+            [
+                "repo_key": "web-shop", "paused": true,
+                "pause": [
+                    "since": "2026-10-02T12:16:02Z", "set_by": ["kind": "person", "name": "Director"],
+                    "reasons": [
+                        ["kind": "person", "text": "focusing on Symphony this week", "releasable": true, "set_at": "2026-10-02T12:16:02Z"],
+                        ["kind": "person", "text": "  "],
+                        ["kind": "person"],
+                    ],
+                ],
+            ],
+            ["repo_key": "api", "paused": false, "pause": NSNull()],
+            ["repo_key": "", "paused": false],
+            ["paused": true],
+        ])
+        guard case let .state(snapshot) = SymphonyState.poll(data: data, statusCode: 200) else { return XCTFail("not a state") }
+
+        XCTAssertEqual(snapshot.repositories, [
+            .init(key: "web-shop", pause: .init(reasons: ["focusing on Symphony this week"], since: Date(timeIntervalSince1970: 1_790_943_362))),
+            .init(key: "api"),
+        ])
+        XCTAssertEqual(snapshot.repository("api"), .init(key: "api"))
+        XCTAssertNil(snapshot.repository("docs"))
+    }
+
+    func testAnOlderSymphonyListsNoRepositories() throws {
+        guard case let .state(snapshot) = SymphonyState.poll(data: try recordedState(), statusCode: 200) else { return XCTFail("not a state") }
+
+        XCTAssertNil(snapshot.repositories)
+        XCTAssertNil(snapshot.repository("web-shop"))
+    }
+
     func testDecodesUsageLimits() throws {
         let data = try recordedState(replacing: "usage_limits", with: [
             [

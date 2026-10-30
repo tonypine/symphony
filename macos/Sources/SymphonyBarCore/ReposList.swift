@@ -548,6 +548,8 @@ public struct RepoDetail: Equatable, Identifiable {
     public var manualReview: RepoField?
     public var actions: RepoActions
     public var health: RepoHealth
+    /// Pause and Resume for the repo, nil while Symphony isn't answering or predates the pause of one repository.
+    public var pause: RepoPauseControl?
 
     public init(
         key: String,
@@ -589,6 +591,7 @@ public struct RepoDetail: Equatable, Identifiable {
         if isDefault { parts.append("default") }
         let count = agentCount
         if count > 0 { parts.append(count == 1 ? "1 agent running" : "\(count) agents running") }
+        if pause?.isPaused == true { parts.append("paused") }
         return parts.joined(separator: ", ")
     }
 }
@@ -687,6 +690,7 @@ public enum ReposList {
         guard !details.isEmpty else { return ReposWindow(chip: chip, content: .empty(.noRepos)) }
         for index in details.indices {
             details[index].actions = actions(for: details[index], entries: config.entries, cloneRemoval: cloneRemoval)
+            details[index].pause = RepoPauseControl(key: details[index].key, snapshot: snapshot, now: now)
         }
         return ReposWindow(chip: chip, content: .repos(details))
     }
@@ -973,5 +977,86 @@ private extension RepoDetail {
         let entry = entries.first { $0.key == key }
         detail.manualReview = entry.map { ManualReview.repoField($0) }
         return detail
+    }
+}
+
+/// Pause and Resume for one repository, in the Repos window's detail and on Setup's Repositories card: whether
+/// Symphony dispatches its tickets, and why and since when it doesn't. Pausing stops dispatch for that repository
+/// alone; its tickets stay where they are.
+public struct RepoPauseControl: Equatable, Identifiable {
+    public enum State: Equatable {
+        case dispatching
+        /// The pause's reasons as Symphony words them, and since when.
+        case paused(reasons: [String], since: Date?)
+    }
+
+    /// The Repos window's section and Setup's card.
+    public static let sectionTitle = "Dispatch"
+    public static let cardTitle = "Repositories"
+    public static let pauseTitle = "Pause"
+    public static let resumeTitle = "Resume"
+    public static let reasonPrompt = "Reason (optional)"
+    public static let pausedBadge = "Paused"
+    public static let dispatchingLine = "Dispatching its tickets"
+    public static let pauseHelp = "Stop dispatching this repository's tickets. They stay where they are; other repositories keep running."
+    public static let resumeHelp = "Dispatch this repository's tickets again."
+    public static let reasonHelp = "Why you pause it, shown with the pause. Leave it empty to give none."
+
+    public var id: String { key }
+    public var key: String
+    public var state: State
+    /// The clock the line's time is read on: today's pause shows its time, an older one its day.
+    var now: Date
+    var timeZone: TimeZone
+
+    public init(key: String, state: State, now: Date = Date(), timeZone: TimeZone = .current) {
+        self.key = key
+        self.state = state
+        self.now = now
+        self.timeZone = timeZone
+    }
+
+    /// The repository `key` as the state lists it; nil when Symphony doesn't list it or predates `repositories`, so
+    /// no Pause is offered for it.
+    public init?(key: String, snapshot: StateSnapshot?, now: Date = Date(), timeZone: TimeZone = .current) {
+        guard let repository = snapshot?.repository(key) else { return nil }
+        let state = repository.pause.map { State.paused(reasons: $0.reasons, since: $0.since) } ?? .dispatching
+        self.init(key: key, state: state, now: now, timeZone: timeZone)
+    }
+
+    /// Every repository the state lists, in its order; empty when Symphony predates `repositories`.
+    public static func all(snapshot: StateSnapshot?, now: Date = Date(), timeZone: TimeZone = .current) -> [RepoPauseControl] {
+        (snapshot?.repositories ?? []).compactMap { RepoPauseControl(key: $0.key, snapshot: snapshot, now: now, timeZone: timeZone) }
+    }
+
+    public var isPaused: Bool {
+        if case .paused = state { return true }
+        return false
+    }
+
+    /// "Dispatching its tickets", or "Paused since 13:05: focusing on Symphony this week".
+    public var line: String {
+        guard case let .paused(reasons, since) = state else { return Self.dispatchingLine }
+        let time = since.map { " since " + StatusMenu.clockTime($0, now: now, timeZone: timeZone, dateFormat: "MMM d, HH:mm") } ?? ""
+        return reasons.isEmpty ? "Paused\(time)" : "Paused\(time): " + reasons.joined(separator: "; ")
+    }
+
+    /// What VoiceOver reads for the line: "web-shop: Paused since 13:05: …".
+    public var accessibilityLabel: String { "\(key): \(line)" }
+
+    /// The control the row's button sends: Pause with the reason typed, or Resume.
+    public func action(reason: String) -> ControlAction {
+        isPaused ? .resumeRepository(key: key) : .pauseRepository(key: key, reason: reason)
+    }
+
+    /// The button's title and help.
+    public var buttonTitle: String { isPaused ? Self.resumeTitle : Self.pauseTitle }
+    public var buttonHelp: String { isPaused ? Self.resumeHelp : Self.pauseHelp }
+    public var buttonAccessibilityLabel: String { "\(buttonTitle) \(key)" }
+
+    /// The banner after the control went through, until the next poll shows it.
+    public func doneMessage(_ action: ControlAction) -> String {
+        if case .resumeRepository = action { return "Resumed \(key): Symphony dispatches its tickets again." }
+        return "Paused \(key): Symphony stops dispatching its tickets, which stay where they are."
     }
 }

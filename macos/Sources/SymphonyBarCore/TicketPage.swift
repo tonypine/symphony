@@ -209,6 +209,16 @@ public struct TicketPage: Equatable {
 
     /// Why the page has no history from the events feed, as the feed's reader last said.
     public var feedAbsence: TicketFeedAbsence
+    /// Whether the Director paused the ticket's repository, as the ticket's payload says; false from a Symphony that
+    /// predates the pause of one repository.
+    public var repositoryPaused: Bool
+
+    /// The page's one line while the ticket's repository is paused, nil otherwise.
+    public var repositoryPausedNote: String? {
+        guard repositoryPaused else { return nil }
+        return repoKey.map { "The repository \($0) is paused: Symphony doesn't dispatch its tickets." }
+            ?? "The repository is paused: Symphony doesn't dispatch its tickets."
+    }
     /// Whether the ticket is forced past the dispatch limits, so its ⋯ menu offers Stop Forcing instead of Force.
     public var isForced: Bool { badges.contains { $0.status == .forced } }
 
@@ -318,6 +328,7 @@ public struct TicketPage: Equatable {
             || issue.map { !["slot_waiting", "dispatch_skipped"].contains($0.status ?? "") } ?? false
         acceptsNotes = sources.events != nil && repoKey?.isEmpty == false
         feedAbsence = sources.feedAbsence
+        repositoryPaused = issue?.repositoryPaused ?? false
 
         let pullRequest = [running?.pullRequestUrl, watching?.pullRequestUrl, issue?.watching?.pullRequestUrl]
             .compactMap { $0.flatMap(URL.init(string:)) }.first
@@ -764,6 +775,8 @@ public struct TicketPage: Equatable {
         let watching: Watching?
         let lastError: String?
         let verdicts: [Verdict]?
+        /// Missing before Symphony paused one repository at a time.
+        let repositoryPaused: Bool?
     }
 
     private struct RunsPayload: Decodable {
