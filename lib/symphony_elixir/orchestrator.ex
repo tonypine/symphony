@@ -30,6 +30,7 @@ defmodule SymphonyElixir.Orchestrator do
     Initiatives,
     Notifications,
     OperatorStop,
+    Pauses,
     PlanComments,
     PlanReview,
     PrReviewPoller,
@@ -4252,13 +4253,24 @@ defmodule SymphonyElixir.Orchestrator do
 
     cond do
       reason = operator_stop_reason(repo_key, issue) -> reason
-      Issue.blocked?(issue, terminal_states) -> "blocked by #{open_blocker_names(issue, terminal_states)}"
+      Issue.blocked?(issue, terminal_states) -> pause_reason(repo_key, issue, "blocked by #{open_blocker_names(issue, terminal_states)}")
       is_nil(repo_key) -> "it has no repo key and several repos are configured, so its holds can't be read"
-      (held = Hold.held_kinds(repo_key, issue.id)) != [] -> "on a #{Enum.map_join(held, " and ", &Hold.label/1)} hold"
+      (held = Hold.held_kinds(repo_key, issue.id)) != [] -> pause_reason(repo_key, issue, "on a #{Enum.map_join(held, " and ", &Hold.label/1)} hold")
       waiting_on_sub_issues?(issue, terminal_states) -> "waiting on its sub-tickets"
       Map.has_key?(state.update_holds, issue.id) -> "waiting for an app update: #{state.update_holds[issue.id].reason}"
       replan_pending?(issue, state) -> "its plan waits to be replaced before it runs again"
       true -> nil
+    end
+  end
+
+  # A ticket held back by its blockers or a hold reads as its pause (`SymphonyElixir.Pauses`): its
+  # reasons' lines, in the order they were set; `unpaused` when it is not paused, naming the gate.
+  defp pause_reason(nil = _repo_key, _issue, unpaused), do: unpaused
+
+  defp pause_reason(repo_key, %Issue{id: issue_id}, unpaused) do
+    case Pauses.why({:ticket, repo_key, issue_id}) do
+      [] -> unpaused
+      lines -> Enum.join(lines, "; ")
     end
   end
 

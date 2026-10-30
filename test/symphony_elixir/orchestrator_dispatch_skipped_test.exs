@@ -155,6 +155,39 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
              snapshot_of(state).dispatch_skipped
   end
 
+  test "a ticket held back by its blockers or a Blocked hold is skipped with its pause's text (TP-1234)" do
+    on_exit(fn -> RunStore.clear() end)
+    blockers = [%{id: "a", identifier: "MT-1", state: "In Progress"}, %{id: "b", identifier: "MT-2", state: "Todo"}]
+    for identifier <- ["MT-1", "MT-2"], do: {:ok, _pause} = Pauses.set({:ticket, "default", "blocked"}, Pauses.ticket_reason(:dependency, identifier))
+
+    :ok = Hold.set("default", "fixing", :blocked, %{reason: "waiting on fix ticket MT-9", waits_on: %{type: "fix_ticket", keys: ["MT-9"]}})
+    {:ok, _pause} = Pauses.set({:ticket, "default", "fixing"}, Pauses.ticket_reason(:fix_ticket, "MT-9"))
+
+    request = SymphonyElixir.TransitionGuard.block_report_question("MT-ASK")
+    {:ok, %{id: question_id}} = SymphonyElixir.Questions.ask({:ticket, "default", "asking"}, request)
+    :ok = Hold.set("default", "asking", :blocked, %{reason: "the run reported a block", waits_on: %{type: "access", keys: [], question_id: question_id}})
+
+    # A held ticket with no pause names its hold, as before.
+    :ok = Hold.set("default", "held", :blocked, %{reason: "the run reported a block", waits_on: %{type: "access", keys: []}})
+
+    issues = [
+      issue("blocked", "MT-BLOCKED", "Todo", blocked_by: blockers),
+      issue("fixing", "MT-FIX", "In Progress"),
+      issue("asking", "MT-ASK", "In Progress"),
+      issue("held", "MT-HELD", "In Progress")
+    ]
+
+    tracked(issues)
+    state = Orchestrator.dispatch_chosen_issues_for_test(issues, orchestrator_state())
+
+    assert Map.new(snapshot_of(state).dispatch_skipped, &{&1.identifier, &1.reason}) == %{
+             "MT-BLOCKED" => "Waiting for MT-1 to finish; Waiting for MT-2 to finish",
+             "MT-FIX" => "Waiting for MT-9 to finish: it fixes what stopped this ticket",
+             "MT-ASK" => "Waiting for your answer: The run on MT-ASK cannot continue on its own",
+             "MT-HELD" => "on a Blocked hold"
+           }
+  end
+
   # TP-1125: a QA pass waiting for another pass's dev server port on the QA host is running, but
   # says what it waits for instead of "already running".
   test "a running QA pass that waits for the QA host's dev server port names the ticket holding it" do

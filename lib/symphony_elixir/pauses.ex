@@ -34,8 +34,11 @@ defmodule SymphonyElixir.Pauses do
   changes were written in; the live channel's notice of it goes out once it commits. A writer that
   changes a ticket's record with its own change takes the pause's change from `set_change/4` or
   `clear_reason_change/4` and stores both in one transaction: a question
-  (`SymphonyElixir.Questions`) and its reason never disagree. Nothing outside
-  `SymphonyElixir.Questions`, itself unwired, calls this module yet.
+  (`SymphonyElixir.Questions`) and its reason never disagree.
+
+  A `:ticket` reason's line says why the ticket is waited on (`ticket_reason/2`): a blocker it is
+  blocked by (`:dependency`, the blocked-by sync and a run's block report), the fix ticket self-heal
+  filed for it (`:fix_ticket`) or a pull request competing for its files (`:landing`).
 
   `backfilled: true` marks a reason the backfill from the holds sets (`SymphonyElixir.Pauses.Backfill`):
   its event carries `source: "backfill"` and an idempotency key starting `backfill:`, which the
@@ -99,6 +102,23 @@ defmodule SymphonyElixir.Pauses do
   (nil once cleared) and the ledger events that record it, none when nothing changes.
   """
   @type ticket_change :: {:ok, pause() | nil, [SymphonyElixir.TicketEvents.Event.t()]} | {:error, term()}
+
+  @typedoc "Why a `:ticket` reason waits on its ticket (`ticket_reason/2`)."
+  @type ticket_source :: :dependency | :fix_ticket | :landing
+
+  @doc """
+  The `:ticket` reason that waits on `identifier` for `source`, with its line: `Waiting for TP-12 to
+  finish` for a blocker, `Waiting for TP-12 to finish: it fixes what stopped this ticket` for a fix
+  ticket and `Waiting for TP-12 to land: it changes the same files` for a competing pull request.
+  """
+  @spec ticket_reason(ticket_source(), String.t()) :: reason_input()
+  def ticket_reason(source, identifier) when source in [:dependency, :fix_ticket, :landing] and is_binary(identifier) do
+    %{kind: :ticket, waits_on: %{identifier: identifier}, text: ticket_text(source, identifier)}
+  end
+
+  @doc "Whether `value` is a ticket's identifier as a `:ticket` reason takes it (`TP-12`)."
+  @spec identifier?(term()) :: boolean()
+  def identifier?(value), do: is_binary(value) and value =~ @identifier
 
   @doc """
   Pauses `subject` on `reason`: a subject that is not paused records `pause.set`; a paused one gains
@@ -382,6 +402,10 @@ defmodule SymphonyElixir.Pauses do
          do: waits_on,
          else: (_invalid -> nil)
   end
+
+  defp ticket_text(:dependency, identifier), do: "Waiting for #{identifier} to finish"
+  defp ticket_text(:fix_ticket, identifier), do: "Waiting for #{identifier} to finish: it fixes what stopped this ticket"
+  defp ticket_text(:landing, identifier), do: "Waiting for #{identifier} to land: it changes the same files"
 
   defp default_text(:question, _waits_on), do: "Waiting for your answer"
   defp default_text(:ticket, %{identifier: identifier}), do: "Waiting for #{identifier} to finish"

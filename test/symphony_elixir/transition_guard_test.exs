@@ -2,7 +2,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{TicketState, TransitionGuard}
+  alias SymphonyElixir.{Pauses, Questions, TicketState, TransitionGuard}
 
   defmodule FakeTracker do
     def update_issue_state(issue_id, state) do
@@ -662,6 +662,76 @@ defmodule SymphonyElixir.TransitionGuardTest do
 
       assert {:ok, ^state} =
                TransitionGuard.resolve_request(state, %{settings: designed_settings(), from_state: "In Progress"})
+    end
+  end
+
+  describe "the block report's pause (TP-1234)" do
+    @ticket {:ticket, "repo-guard", "issue-12"}
+
+    setup do
+      :ok = RunStore.clear()
+    end
+
+    defp report(open_blockers, ctx \\ %{}) do
+      TransitionGuard.resolve_request(
+        state("Backlog"),
+        Map.merge(%{settings: designed_settings(), from_state: "In Progress", open_blockers: open_blockers, ticket: @ticket, issue_identifier: "MT-12"}, ctx)
+      )
+    end
+
+    test "a report naming blockers pauses the ticket on each, set by the run, beside the dependency hold as before" do
+      assert {:hold, :blocked, attrs} = report(["TP-997", "TP-998", "blocker-uuid"])
+
+      assert attrs == %{
+               reason: "the run reported a block: waiting on TP-997, TP-998, blocker-uuid",
+               clearing_condition: "when every blocker is terminal",
+               waits_on: %{type: "dependency", keys: ["TP-997", "TP-998", "blocker-uuid"]}
+             }
+
+      assert {:ok, %{reasons: reasons}} = Pauses.get(@ticket)
+      assert Enum.map(reasons, & &1.text) == ["Waiting for TP-997 to finish", "Waiting for TP-998 to finish"]
+      assert Enum.uniq(Enum.map(reasons, & &1.set_by)) == [%{kind: :run, name: "The run"}]
+      assert Questions.open(@ticket) == []
+    end
+
+    test "a report naming no blocker asks one question, which the access hold names" do
+      assert {:hold, :blocked, %{waits_on: %{type: "access", keys: [], question_id: question_id}} = attrs} = report([])
+      assert attrs.reason == "the run reported a block"
+
+      assert [%{id: ^question_id, title: "The run on MT-12 cannot continue on its own", asked_by: %{kind: :run}} = question] = Questions.open(@ticket)
+      assert Enum.map(question.options, &{&1.label, &1.recommended?}) == [{"Unblock and run again", true}, {"Keep it paused", false}]
+      assert Pauses.why(@ticket) == ["Waiting for your answer: The run on MT-12 cannot continue on its own"]
+
+      # A second report while the first is open asks nothing more.
+      assert {:hold, :blocked, %{waits_on: %{question_id: ^question_id}}} = report([])
+      assert length(Questions.open(@ticket)) == 1
+    end
+
+    test "a ticket the question can't be asked on keeps the access hold as before; without a ticket nothing is written" do
+      log =
+        capture_log(fn ->
+          unreadable = %{ticket: {:ticket, nil, "issue-12"}, issue_identifier: nil}
+          assert {:hold, :blocked, %{waits_on: %{type: "access", keys: []} = waits_on}} = report([], unreadable)
+          refute Map.has_key?(waits_on, :question_id)
+        end)
+
+      assert log =~ "Failed to ask the block report's question"
+
+      assert {:hold, :blocked, %{waits_on: waits_on}} =
+               TransitionGuard.resolve_request(state("Backlog"), %{
+                 settings: designed_settings(),
+                 from_state: "In Progress",
+                 open_blockers: ["TP-997"]
+               })
+
+      assert waits_on == %{type: "dependency", keys: ["TP-997"]}
+      assert Questions.open(@ticket) == []
+      assert Pauses.get(@ticket) == {:ok, nil}
+    end
+
+    test "the question names the ticket, or this ticket, and passes the writing standard" do
+      assert {:ok, _question} = Questions.ask(@ticket, TransitionGuard.block_report_question("this ticket"))
+      assert TransitionGuard.unblock_option() == "Unblock and run again"
     end
   end
 end

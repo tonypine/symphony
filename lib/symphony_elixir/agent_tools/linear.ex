@@ -715,7 +715,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @spec update_state(context(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def update_state(context, state_name_or_id, opts) when is_binary(state_name_or_id) do
     with {:ok, issue_id} <- current_issue_id(context),
-         result <- resolve_state_id(issue_id, state_name_or_id, opts) do
+         result <- resolve_state_id(context, issue_id, state_name_or_id, opts) do
       case result do
         {:ok, {:state, state_id}, move} -> apply_state(context, issue_id, state_id, move, opts)
         {:hold, kind, attrs} -> apply_hold(context, issue_id, kind, attrs, opts)
@@ -1459,6 +1459,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp issue_repo_key(%{issue: %{repo_key: repo_key}}), do: repo_key
   defp issue_repo_key(_context), do: nil
 
+  defp issue_identifier(%{issue: %{identifier: identifier}}) when is_binary(identifier), do: identifier
+  defp issue_identifier(_context), do: nil
+
   @doc """
   The open human-action requests on the current issue (`SymphonyElixir.HumanActions.Request`),
   as `{comment_id, request}`: requests with no withdrawal reply that the issue hasn't moved on
@@ -2074,7 +2077,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
 
-  defp resolve_state_id(issue_id, state_name_or_id, opts) do
+  defp resolve_state_id(context, issue_id, state_name_or_id, opts) do
     normalized = String.trim(state_name_or_id)
 
     if normalized == "" do
@@ -2083,7 +2086,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
       settings = Keyword.get_lazy(opts, :settings, &Config.settings!/0)
 
       with {:ok, state, issue} <- lookup_team_state(issue_id, normalized, opts) do
-        guard_state(state, settings, issue)
+        ticket = %{ticket: {:ticket, issue_repo_key(context), issue_id}, issue_identifier: issue_identifier(context)}
+        guard_state(state, settings, issue, ticket)
       end
     end
   end
@@ -2091,16 +2095,18 @@ defmodule SymphonyElixir.AgentTools.Linear do
   # The guard's answer decides what the tool does: a state the issue moves to, a hold that pauses it
   # in place, or the refusal the tool passes back. A resolved move carries what recording its signal
   # needs: the state it came from, the state it goes to, the repo key and the lane verdict the move
-  # means (nil for every move but a CI Fix ticket's own request to `Rework`).
-  defp guard_state(state, settings, issue) do
+  # means (nil for every move but a CI Fix ticket's own request to `Rework`). A block report pauses
+  # the ticket named in `ticket` through the guard.
+  defp guard_state(state, settings, issue, ticket) do
     from_state = get_in(issue, ["state", "name"])
 
-    ctx = %{
-      settings: settings,
-      from_state: from_state,
-      plan_parent?: plan_parent?(issue),
-      open_blockers: open_blockers(issue, settings.tracker.terminal_states)
-    }
+    ctx =
+      Map.merge(ticket, %{
+        settings: settings,
+        from_state: from_state,
+        plan_parent?: plan_parent?(issue),
+        open_blockers: open_blockers(issue, settings.tracker.terminal_states)
+      })
 
     case TransitionGuard.resolve_request(state, ctx) do
       {:ok, resolved} -> {:ok, {:state, resolved["id"]}, move_details(from_state, resolved, settings)}

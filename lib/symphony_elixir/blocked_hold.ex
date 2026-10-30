@@ -31,11 +31,19 @@ defmodule SymphonyElixir.BlockedHold do
 
   Only the holds that lift themselves are cleared here — one waiting on an access grant is lifted by
   a person's `Unblock` (see `SymphonyElixir.DirectorMoves`).
+
+  Beside a dependency or fix-ticket hold, the ticket's pause (`SymphonyElixir.Pauses`, the one
+  writer) has one `:ticket` reason per ticket the hold waits on (`Pauses.ticket_reason/2`): "Waiting
+  for TP-12 to finish". Each sync brings the pause in line with the hold as it is stored: a reason the
+  hold waits on and the pause lacks is set (by the rule `reason_setter/1` names), and one the hold no
+  longer waits on is cleared — a blocker that went terminal while another is open, or every one with
+  the hold — so the pause clears with the last. The hold is written first and the reasons after it;
+  a reason write that fails is made on the next sync, which finds it missing.
   """
 
   require Logger
 
-  alias SymphonyElixir.{BuildInfo, Config, Hold, RunStore, UpdateHold}
+  alias SymphonyElixir.{BuildInfo, Config, Hold, Pauses, RunStore, UpdateHold}
   alias SymphonyElixir.Linear.Issue
 
   @todo_state "todo"
@@ -43,6 +51,8 @@ defmodule SymphonyElixir.BlockedHold do
   @fix_ticket_type "fix_ticket"
   @landing_type "landing"
   @listed_files 10
+  @reason_sources %{@dependency_type => :dependency, @fix_ticket_type => :fix_ticket}
+  @setters %{dependency: %{kind: :rule, name: "Blocked-by links"}, fix_ticket: %{kind: :rule, name: "Self-heal"}}
 
   @typedoc """
   A pull request a landing hold waits on: its ticket when Symphony tracks it, its number, title and
@@ -96,6 +106,10 @@ defmodule SymphonyElixir.BlockedHold do
   end
 
   def fix_ticket_desired(_hold, _state, _terminal_states), do: :none
+
+  @doc "Who sets the pause reasons of a dependency hold (the blocked-by links) and of a fix-ticket hold (self-heal)."
+  @spec reason_setter(:dependency | :fix_ticket) :: Pauses.set_by()
+  def reason_setter(source), do: Map.fetch!(@setters, source)
 
   @doc "Whether `hold` is a landing hold: a conflict waiting on the pull requests competing with it."
   @spec landing?(map() | term()) :: boolean()
@@ -193,13 +207,62 @@ defmodule SymphonyElixir.BlockedHold do
 
     case action(issue, terminal_states, current, cache, opts) do
       {{:set, attrs}, cache} ->
-        {apply_action(:set, repo_key, issue_id, attrs, opts), cache}
+        {apply_action(:set, repo_key, issue_id, {current, attrs}, opts), cache}
 
       {:clear, cache} ->
         {apply_action(:clear, repo_key, issue_id, current, opts), cache}
 
       {:none, cache} ->
+        sync_reasons(repo_key, issue_id, current, current)
         {:none, cache}
+    end
+  end
+
+  # The pause follows the hold as stored: the reasons of the tickets it waits on are set, and those of
+  # tickets it no longer waits on cleared — the ones the hold waited on before and the ones either rule
+  # set that it doesn't name now (a ticket has one Blocked hold, so a fix-ticket hold set over a
+  # dependency hold leaves the dependency's reasons to clear). Only a dependency or fix-ticket hold,
+  # before or after, reads the pause. Each write is best-effort, as the hold's ledger writes are: the
+  # next sync makes it again.
+  defp sync_reasons(repo_key, issue_id, before, stored) do
+    case reason_source(stored) || reason_source(before) do
+      nil ->
+        :ok
+
+      source ->
+        ticket = {:ticket, repo_key, issue_id}
+        held = held_reasons(ticket)
+        wanted = ticket_keys(stored)
+        owned = for {identifier, set_by} <- held, set_by in Map.values(@setters), do: identifier
+
+        stale = Enum.uniq(ticket_keys(before) ++ owned) -- wanted
+
+        missing = Enum.reject(wanted, &Map.has_key?(held, &1))
+        Enum.each(missing, &Pauses.set(ticket, Pauses.ticket_reason(source, &1), set_by: reason_setter(source)))
+        Enum.each(Enum.filter(stale, &Map.has_key?(held, &1)), &Pauses.clear_reason(ticket, ticket_reason_key(&1)))
+
+        :ok
+    end
+  end
+
+  defp ticket_reason_key(identifier), do: %{kind: :ticket, waits_on: %{identifier: identifier}}
+
+  defp reason_source(%{waits_on: %{type: type}}), do: Map.get(@reason_sources, type)
+  defp reason_source(_hold), do: nil
+
+  # The tickets a dependency or fix-ticket hold waits on, by the identifiers a reason takes.
+  defp ticket_keys(hold) do
+    if reason_source(hold), do: Enum.filter(hold.waits_on.keys, &Pauses.identifier?/1), else: []
+  end
+
+  # The ticket's `:ticket` reasons, by identifier, with who set each.
+  defp held_reasons(ticket) do
+    case Pauses.get(ticket) do
+      {:ok, %{reasons: reasons}} ->
+        for %{kind: :ticket, waits_on: %{identifier: id}} = reason <- reasons, into: %{}, do: {id, reason.set_by}
+
+      _none ->
+        %{}
     end
   end
 
@@ -336,10 +399,14 @@ defmodule SymphonyElixir.BlockedHold do
 
   defp update_hold_cache(opts), do: Keyword.get_lazy(opts, :update_hold_cache, &UpdateHold.empty_cache/0)
 
-  defp apply_action(:set, repo_key, issue_id, attrs, opts) do
+  defp apply_action(:set, repo_key, issue_id, {current, attrs}, opts) do
     case Hold.set(repo_key, issue_id, :blocked, attrs, opts) do
-      :ok -> :set
-      {:error, reason} -> log_failure("set", issue_id, reason)
+      :ok ->
+        sync_reasons(repo_key, issue_id, current, attrs)
+        :set
+
+      {:error, reason} ->
+        log_failure("set", issue_id, reason)
     end
   end
 
@@ -347,6 +414,7 @@ defmodule SymphonyElixir.BlockedHold do
     case Hold.clear(repo_key, issue_id, :blocked, opts) do
       :ok ->
         drop_stale_fix_ticket(repo_key, issue_id, current, opts)
+        sync_reasons(repo_key, issue_id, current, nil)
         :clear
 
       {:error, reason} ->

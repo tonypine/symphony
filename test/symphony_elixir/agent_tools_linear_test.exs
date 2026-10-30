@@ -3142,6 +3142,27 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       assert %{holds: [%{kind: :blocked, waits_on: %{type: "dependency", keys: ["TP-997", "TP-998"]}}]} =
                SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
+
+      assert SymphonyElixir.Pauses.why({:ticket, "repo-a", "issue-1"}) == ["Waiting for TP-997 to finish", "Waiting for TP-998 to finish"]
+    end
+
+    test "a block report naming no blocker asks its question on the ticket, which the access hold names" do
+      :ok = SymphonyElixir.RunStore.clear()
+
+      context = %{issue_id: "issue-1", issue: %Issue{id: "issue-1", identifier: "TP-816", repo_key: "repo-a"}}
+
+      assert {:ok, %{"held" => true}} =
+               Linear.update_state(context, "Backlog",
+                 linear_client: team_client("In Progress"),
+                 settings: designed_settings(),
+                 store: SymphonyElixir.RunStore,
+                 tracker: HoldTracker
+               )
+
+      assert [%{id: question_id, title: "The run on TP-816 cannot continue on its own"}] = SymphonyElixir.Questions.open({:ticket, "repo-a", "issue-1"})
+
+      assert %{holds: [%{kind: :blocked, waits_on: %{type: "access", question_id: ^question_id}}]} =
+               SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
     end
 
     test "a block report whose blockers are all terminal keeps the access hold" do

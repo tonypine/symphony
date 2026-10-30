@@ -36,13 +36,16 @@ defmodule SymphonyElixir.TransitionGuard do
 
   require Logger
 
-  alias SymphonyElixir.{PlanReview, RunStore, SubIssueWait, TicketSignals, Tracker}
+  alias SymphonyElixir.{Pauses, PlanReview, Questions, RunStore, SubIssueWait, TicketSignals, Tracker}
 
   @in_progress_state "In Progress"
   @merging_state "Merging"
   @rework_state "Rework"
   @backlog_state "Backlog"
   @retired_states ["Auto Review", "In Review", "Human Review"]
+  @run %{kind: :run, name: "The run"}
+  @unblock_option "Unblock and run again"
+  @keep_option "Keep it paused"
 
   @typedoc "A named transition the machine can perform."
   @type signal :: atom()
@@ -346,9 +349,17 @@ defmodule SymphonyElixir.TransitionGuard do
   hold, which `SymphonyElixir.BlockedHold` lifts on its own once they are all terminal; without one
   it is an `access` hold, which a person lifts with `Unblock`.
 
+  With `ctx`'s `:ticket` (the issue as `SymphonyElixir.Pauses` names it), the block report pauses
+  the ticket through the one writer before the hold is set: one `:ticket` reason per open blocker
+  ("Waiting for TP-12 to finish"), set by the run; with no blocker, the question
+  `block_report_question/1` asks (`SymphonyElixir.Questions`), which the access hold then names
+  (`waits_on.question_id`), so the hold and the question are cleared together and the Director's
+  Unblock answers it "#{@unblock_option}". A question that can't be asked leaves the hold as it was.
+
   `ctx` carries `:settings`, `:from_state` (the issue's current state), `:plan_parent?` (the
-  issue carries the `plan` label, so it is an epic parent) and `:open_blockers` (the identifiers of
-  the issue's blockers still outside a terminal state).
+  issue carries the `plan` label, so it is an epic parent), `:open_blockers` (the identifiers of
+  the issue's blockers still outside a terminal state), and optionally `:ticket` and
+  `:issue_identifier`, which names the ticket in the question.
   """
   @spec resolve_request(map(), context()) ::
           {:ok, map()} | {:hold, :blocked | :needs_decision, map()} | {:error, term()}
@@ -378,7 +389,7 @@ defmodule SymphonyElixir.TransitionGuard do
   # the ticket keeps its phase. Every other request is not a hold.
   defp hold_request(state_name, ctx) do
     if state_name_matches?(state_name, @backlog_state) and running_phase?(Map.get(ctx, :from_state)) do
-      {:hold, :blocked, block_report_attrs(Map.get(ctx, :open_blockers, []))}
+      {:hold, :blocked, ctx |> Map.get(:open_blockers, []) |> block_report_attrs() |> pause_block_report(ctx)}
     else
       :not_a_hold
     end
@@ -402,6 +413,54 @@ defmodule SymphonyElixir.TransitionGuard do
       waits_on: %{type: "access", keys: []}
     }
   end
+
+  @doc """
+  The question a run's block report asks when it names no blocker, on the ticket `name` (its
+  identifier): a `SymphonyElixir.Questions.ask/3` request whose options are "#{@unblock_option}"
+  (recommended: the Director answers once what the run needed is in place) and "#{@keep_option}".
+  """
+  @spec block_report_question(String.t()) :: map()
+  def block_report_question(name) do
+    title = "The run on #{name} cannot continue on its own"
+
+    %{
+      title: title,
+      question: "#{title}. Should Symphony unblock it and run it again, or keep it paused?",
+      why:
+        "The run on #{name} reported that it could not go on, and it named no other ticket it waits on. " <>
+          "Only a person can tell when what it needed, such as a secret or an access grant, is in place.",
+      if_unanswered: "#{name} stays paused where it is and Symphony starts no run on it.",
+      recommendation_reason: "Once what the run needed is in place, a new run picks up where the last one stopped.",
+      options: [
+        %{label: @unblock_option, effect: "Symphony lifts the pause on #{name} and starts a new run where the last one stopped.", recommended: true},
+        %{label: @keep_option, effect: "#{name} stays paused until you decide.", recommended: false}
+      ]
+    }
+  end
+
+  @doc "The label of the block report question's option that unblocks the ticket and runs it again."
+  @spec unblock_option() :: String.t()
+  def unblock_option, do: @unblock_option
+
+  # The block report's pause, written before its hold: a reason per blocker it waits on, or, with
+  # none, the question the hold then names. Without the ticket the guard writes nothing.
+  defp pause_block_report(%{waits_on: %{type: "dependency", keys: keys}} = attrs, %{ticket: ticket}) do
+    for key <- keys, Pauses.identifier?(key), do: Pauses.set(ticket, Pauses.ticket_reason(:dependency, key), set_by: @run)
+    attrs
+  end
+
+  defp pause_block_report(attrs, %{ticket: ticket} = ctx) do
+    case Questions.ask(ticket, block_report_question(Map.get(ctx, :issue_identifier) || "this ticket"), asked_by: @run) do
+      {:ok, %{id: question_id}} ->
+        put_in(attrs, [:waits_on, :question_id], question_id)
+
+      {:error, reason} ->
+        Logger.warning("Failed to ask the block report's question for issue_identifier=#{Map.get(ctx, :issue_identifier)}: #{inspect(reason)}")
+        attrs
+    end
+  end
+
+  defp pause_block_report(attrs, _ctx), do: attrs
 
   defp running_phase?(from) when is_binary(from),
     do: state_name_matches?(from, "In Progress") or state_name_matches?(from, "Rework")

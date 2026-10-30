@@ -27,6 +27,9 @@ defmodule SymphonyElixir.PrWatch.SweepTest do
     test "every orchestrator gate that is no PR case has its label" do
       gates = %{
         "blocked by TP-2" => "gate: blocked by a ticket",
+        "Waiting for TP-2 to finish; Waiting for TP-3 to finish" => "gate: blocked by a ticket",
+        "Waiting for TP-2 to land: it changes the same files" => "gate: blocked by a ticket",
+        "Waiting for your answer: The run on TP-2 cannot continue on its own" => "gate: hold",
         "on a Needs Decision and Blocked hold" => "gate: hold",
         "waiting on its sub-tickets" => "gate: sub-tickets",
         "waiting for an app update: TP-2 merged" => "gate: app update",
