@@ -216,6 +216,18 @@ defmodule SymphonyElixir.CLITest do
     assert expanded_path == Path.expand("tmp/custom-state")
   end
 
+  test "accepts --qa-seed and passes the expanded seed directory to runtime deps" do
+    parent = self()
+    deps = base_deps(%{set_qa_seed_dir: fn dir -> send(parent, {:qa_seed, dir}) && :ok end})
+
+    assert :ok = CLI.evaluate(["--qa-seed", "priv/qa_seed/symphony"], deps)
+    assert_received {:qa_seed, dir}
+    assert dir == Path.expand("priv/qa_seed/symphony")
+
+    assert {:error, message} = CLI.evaluate(["--qa-seed", " "], deps)
+    assert message =~ "[--qa-seed <dir>]"
+  end
+
   test "configure applies runtime inputs without starting the application" do
     parent = self()
 

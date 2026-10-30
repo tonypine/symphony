@@ -1791,6 +1791,11 @@ auto_review:
       # dev_server_port: 8090             # optional, default 8090: its port on the QA host
       # launch_env:                       # optional, default {}: extra variables for the app under test
       #   HUB_OWNER_TOKEN: qa-owner-token
+      # live:                             # optional: the project's own server for a live pass (below)
+      #   build_cmd: scripts/qa-server-build.sh
+      #   start_cmd: scripts/qa-server-start.sh
+      #   paths: ["lib/**", "config/**"]
+      #   walkthrough_mentions: [Director]
 ```
 
 | Key | Default | Does |
@@ -1801,12 +1806,68 @@ auto_review:
 | `paths` | Swift, `Info.plist`, xib, storyboard, xcassets | the changed paths that select the playbook |
 | `dev_server` | `false` | the pass starts `verification.dev_server` on the QA VM, beside the app (see [Running QA in a QA VM](#running-qa-in-a-qa-vm)), never on the Symphony host: without a `worker_host` no server starts and the `qa_*` tools say to set up the QA VM |
 | `dev_server_port` | `8090` | the port the QA-host dev server listens on, as `SYMPHONY_VERIFICATION_PORT` |
+| `live` | none | the project's own server for a live pass: see [Two environments: fixtures and a live server](#two-environments-fixtures-and-a-live-server). Not with `dev_server: true`, which would listen on the same port |
 | `launch_env` | `{}` | extra variables `qa_launch_app` sets on the app, after Symphony's own, with `$SYMPHONY_VERIFICATION_PORT` replaced by `dev_server_port`. Names match `^[A-Z][A-Z0-9_]*$`; the variables Symphony sets itself (`SYMPHONY_BAR_QA_ROOT`, `SYMPHONY_QA_OPENROUTER_URL`, `SYMPHONY_BAR_QA_API_FIXTURES` and the stand-ins below), `PATH`, `HOME` and `DYLD_*` fail the config check, naming the key |
 
 `launch_env` values are written in plain text, in `symphony.yml` or a repository's `WORKFLOW.md`,
 which is often public: put only documented QA values there (a QA owner token such as the Job
 Search Hub's `HUB_OWNER_TOKEN`), never a secret. The Director's **Settings → macOS app QA** edits
 `dev_server`, `dev_server_port` and `launch_env` in `symphony.yml`.
+
+##### Two environments: fixtures and a live server
+
+A `macos_app` pass has two environments for the app under test. The **fixtures** are always
+there: the app reads a state from files (`api_fixtures`, the Director's QA mode), which is the fast
+way to judge how it draws that state. A **live server** is the project's own server running on the
+QA VM beside the app, with seeded data behind it, for a step whose point is the round trip through
+the server: press Decide and the Inbox row goes, Undo brings it back; pause a repository and its
+tickets stop starting. The fixtures stay the default; Symphony runs the live server only when the
+change gives a reason.
+
+`live` on the `macos_app` playbook names that server:
+
+| Key | Default | Does |
+| --- | --- | --- |
+| `start_cmd` | none (required) | starts the server on the QA VM, in the pass's own copy of the PR head, as `dev_server: true` starts `verification.dev_server` there: as the QA user, with `SYMPHONY_VERIFICATION_PORT` set to `dev_server_port` and a fresh `HOME` |
+| `build_cmd` | none | runs first, in the same copy |
+| `health_check_url` | `http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state` | polled until it answers 200 before the agent starts |
+| `health_timeout_ms` | `600000` | how long that may take |
+| `paths` | `[]` | the changed paths that make a pass live |
+| `walkthrough_mentions` | `[]` (any walkthrough) | words a `## User walkthrough` step must name for the pass to be live |
+
+A pass is live when its PR changes one of `paths` and the ticket's `## User walkthrough` names one
+of `walkthrough_mentions`. A `qa:live` label makes it live whatever the diff, and a `qa:fixture`
+label never does (it wins over `qa:live`). The QA decision's reason says which. A pass that is
+not live starts no server.
+
+A live pass runs the server through the same path as `dev_server: true`, with the same port lease
+and stop: a server that does not build, exits or fails its health check makes the pass
+`blocked` with its log. Each pass makes a control token of its own. The server gets it as
+`SYMPHONY_QA_CONTROL_TOKEN`, and every `qa_launch_app` while the server runs gives the app the
+server's URL and the token as `SYMPHONY_BAR_CONTROL_URL` and `SYMPHONY_BAR_CONTROL_TOKEN`, so the
+app's moves reach it. `qa_launch_app`'s `environment` argument picks per launch: `live` (the
+default then) or `fixture`, which launches the app without them. `live` on a pass without a live
+server fails with `qa_live_server_missing`. The QA prompt says both environments are open, and the
+agent names the one each step used in that step's evidence. `launch_env` may not set the two
+control variables.
+
+Symphony's own repository runs its server this way. `scripts/qa-server-build.sh` builds the
+escript on the QA VM (Erlang and Elixir through mise), keeping the Hex, deps and build caches under
+the QA user's home (`$SYMPHONY_QA_SERVER_CACHE`, default `~/Library/Caches/symphony-qa-server`), so
+a second pass fetches and compiles only what changed. `scripts/qa-server-start.sh` starts it on
+`127.0.0.1:$SYMPHONY_VERIFICATION_PORT` over the memory tracker, with its agents set to `false`,
+webhooks off and the control API on, and loads the seed in `priv/qa_seed/symphony/` with
+`--qa-seed` (`SymphonyElixir.QaSeed`). The seed holds tickets in each phase, a ticket on a
+Needs Decision hold with an open question, one on an access hold, a paused repository, a
+Symphony-wide pause, finished runs with transcripts, and PRs whose checks are green, red and
+pending. The seed is data, versioned with the fixtures. Nothing in that server reaches Linear or
+GitHub: the tracker is the seed's file, no Linear or GitHub token reaches it, and the `gh` on its
+PATH (`scripts/qa-server-gh.sh`) answers only for the seed's own pull requests. The Inbox reads
+Linear, so the seeded question shows on its ticket's page, not in `waiting_on_you`.
+
+To look at it by hand on the QA VM: run `scripts/qa-server-build.sh`, then
+`SYMPHONY_VERIFICATION_PORT=8090 scripts/qa-server-start.sh` (it prints the control token it
+made), and open `http://127.0.0.1:8090/api/v1/state`.
 
 For Symphony's own app, build with `make -C macos qa-app`, not `make -C macos app`. The app runs
 `symphony check` on every Settings Save, and a plain `make` build has no Symphony to run it with,

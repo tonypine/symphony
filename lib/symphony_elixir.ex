@@ -102,7 +102,9 @@ defmodule SymphonyElixir.Application do
       else
         (core_children ++
            [
-             SymphonyElixir.RunStore
+             SymphonyElixir.RunStore,
+             # After the run store, before the orchestrator: it starts with the seeded runs and pauses.
+             qa_seed_child_spec()
            ] ++
            verification_child_specs(system_config) ++
            [
@@ -184,6 +186,13 @@ defmodule SymphonyElixir.Application do
         SymphonyElixir.Verification.child_specs_for_runtime(settings)
       end
     end)
+  end
+
+  defp qa_seed_child_spec do
+    case SymphonyElixir.QaSeed.configured_dir() do
+      nil -> nil
+      dir -> {SymphonyElixir.QaSeed, dir: dir}
+    end
   end
 
   defp pr_review_child_spec(%SystemSchema{repos: repos}) do

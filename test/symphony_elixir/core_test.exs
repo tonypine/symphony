@@ -652,6 +652,18 @@ defmodule SymphonyElixir.CoreTest do
     assert SymphonyElixir.QaAndroid.Emulator in test_children
   end
 
+  test "application loads a QA seed between the run store and the orchestrator only when one is given" do
+    refute Enum.any?(SymphonyElixir.Application.child_specs_for_runtime(%{}), &match?({SymphonyElixir.QaSeed, _opts}, &1))
+
+    Application.put_env(:symphony_elixir, :qa_seed_dir, "/tmp/qa-seed")
+    on_exit(fn -> Application.delete_env(:symphony_elixir, :qa_seed_dir) end)
+    children = SymphonyElixir.Application.child_specs_for_runtime(%{})
+    index = &Enum.find_index(children, fn child -> child == &1 end)
+
+    assert index.({SymphonyElixir.QaSeed, dir: "/tmp/qa-seed"}) == index.(SymphonyElixir.RunStore) + 1
+    assert index.(SymphonyElixir.Orchestrator) > index.({SymphonyElixir.QaSeed, dir: "/tmp/qa-seed"})
+  end
+
   test "application starts PR review poller and the PR watcher only in polling mode" do
     write_workflow_file!(Workflow.workflow_file_path(), pr_review_mode: "tracker")
     tracker_children = SymphonyElixir.Application.child_specs_for_runtime(%{})

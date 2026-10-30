@@ -2535,7 +2535,7 @@ defmodule SymphonyElixir.QaDriverTest do
     @healthy_dev_server [
       {"rm -rf \"$dir\"", {:ok, {"symphony-qa-dev-server-dir:#{@run_dir}/dev-server\n", 0}}},
       {"lsof -nP", {:ok, {"symphony-qa-dev-server-port:free\n", 0}}},
-      {"case \"$3\"", {:ok, {"symphony-qa-dev-server-pid:4242\n", 0}}},
+      {"case \"$mode\"", {:ok, {"symphony-qa-dev-server-pid:4242\n", 0}}},
       {"end=", {:ok, {"symphony-qa-dev-server:healthy\n", 0}}},
       {"kill -s \"$3\"", {:ok, {"symphony-qa-dev-server:stopped\n", 0}}}
     ]
@@ -2582,7 +2582,7 @@ defmodule SymphonyElixir.QaDriverTest do
       assert dest == @run_dir <> "/dev-server/src"
       assert_received {:dev_server_script, "rm -rf \"$dir\"", ["QA-7"], _opts}
       assert_received {:dev_server_script, "lsof -nP", ["8091"], _opts}
-      assert_received {:dev_server_script, "case \"$3\"", ["8091", "start", "server/scripts/dev-server.sh"], _opts}
+      assert_received {:dev_server_script, "case \"$mode\"", ["8091", "start", "server/scripts/dev-server.sh"], _opts}
       assert_received {:dev_server_script, "end=", ["http://127.0.0.1:8091/health", "5", "4242"], _opts}
 
       # The driver holds the port's lease while its server runs: another pass's driver waits for it.
@@ -2603,7 +2603,7 @@ defmodule SymphonyElixir.QaDriverTest do
       driver = remote_driver(worktree, dev_server_host(answers), &clean_git/2, dev_server_lease: lease)
 
       assert {:error, {:dev_server_port_busy, 8091, 777, "QA-6"}, ""} = QaDriver.start_dev_server(driver, dev_server_spec())
-      refute_received {:dev_server_script, "case \"$3\"", _args, _opts}
+      refute_received {:dev_server_script, "case \"$mode\"", _args, _opts}
 
       other = spawn_link(fn -> Process.sleep(:infinity) end)
       assert DevServerLease.acquire(lease, {"qa@qa-vm", 8091}, %{pid: other, issue_id: "i2", ticket: "QA-8"}) == :ok
@@ -2638,6 +2638,34 @@ defmodule SymphonyElixir.QaDriverTest do
 
       assert [{"SYMPHONY_BAR_QA_ROOT", _root}, {"SYMPHONY_QA_OPENROUTER_URL", _url}, {"HUB_OWNER_TOKEN", "abc"}, {"HUB_URL", "http://127.0.0.1:8091"}] =
                launch_opts[:env]
+    end
+
+    test "while a live server runs, the app gets its control URL and token unless the launch asks for the fixtures", %{worktree: worktree} do
+      host = dev_server_host(@healthy_dev_server)
+      driver = remote_driver(worktree, host, &clean_git/2, playbook: %{launch_env: %{"HUB" => "x"}})
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+
+      # No live server yet: the app reads its fixtures, and asking for the live one is refused.
+      {{:ok, %{"pid" => first} = payload}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{"environment" => "fixture"}) end)
+      refute Map.has_key?(payload, "environment")
+      assert {:ok, _quit} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => first})
+      assert {:error, {:qa_tool, "qa_live_server_missing", _message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"environment" => "live"})
+      assert {:error, {:qa_tool, "invalid_arguments", "`environment` must be `live` or `fixture`."}} = QaDriver.call_tool(driver, "qa_launch_app", %{"environment" => "staging"})
+
+      control = [{"SYMPHONY_BAR_CONTROL_URL", "http://127.0.0.1:8091"}, {"SYMPHONY_BAR_CONTROL_TOKEN", "tok"}]
+      spec = Map.merge(dev_server_spec(), %{env: [{"SYMPHONY_QA_CONTROL_TOKEN", "tok"}], launch_env: control})
+      {{:ok, _server}, _log} = with_log(fn -> QaDriver.start_dev_server(driver, spec) end)
+      assert_received {:dev_server_script, "case \"$mode\"", ["8091", "start", "server/scripts/dev-server.sh", "SYMPHONY_QA_CONTROL_TOKEN=tok"], _opts}
+
+      for {args, environment, env} <- [{%{}, "live", control}, {%{"environment" => "live"}, "live", control}, {%{"environment" => "fixture"}, "fixture", []}] do
+        {{:ok, %{"pid" => pid} = payload}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", args) end)
+        assert payload["environment"] == environment
+        assert_received {:launched, _executable, launch_opts, _port, ^pid}
+        assert Enum.drop(launch_opts[:env], 2) == [{"HUB", "x"} | env]
+        assert {:ok, _quit} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
+      end
+
+      QaDriver.stop(driver)
     end
 
     test "refuses to launch an app with a launch_env name Symphony sets itself", %{worktree: worktree} do

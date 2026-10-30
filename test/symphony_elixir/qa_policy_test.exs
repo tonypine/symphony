@@ -15,6 +15,12 @@ defmodule SymphonyElixir.QaPolicyTest do
     settings
   end
 
+  # A macos_app playbook with a `live` server, and no `cli` one beside it.
+  defp live_settings!(live) do
+    macos_app = %{"build" => "make", "app" => "A.app", "paths" => ["macos/**"], "live" => live}
+    settings!(%{"auto_review" => %{"playbooks" => %{"cli" => %{"enabled" => false}, "macos_app" => macos_app}}})
+  end
+
   defp issue(attrs \\ %{}) do
     struct!(
       %Issue{
@@ -63,6 +69,15 @@ defmodule SymphonyElixir.QaPolicyTest do
 
       assert {:error, {:git_failed, 128, "fatal: not a git repository\n"}} =
                QaPolicy.changed_paths(@workspace, "repo", @sha, git: failing)
+    end
+
+    test "reads the change with git itself by default" do
+      dir = Path.join(System.tmp_dir!(), "qa-policy-no-repo-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf(dir) end)
+
+      assert {:error, {:git_failed, status, _output}} = QaPolicy.changed_paths(dir, "repo", @sha, [])
+      assert status != 0
     end
   end
 
@@ -189,6 +204,51 @@ defmodule SymphonyElixir.QaPolicyTest do
         assert {:run, playbooks, "the change delivers or updates a user journey"} = QaPolicy.decision(ticket, settings, paths)
         refute Enum.any?(playbooks, &Map.has_key?(&1, :scope))
       end
+    end
+
+    test "marks a macos_app pass live when the PR changes the server and the walkthrough names the Director" do
+      live = %{"start_cmd" => "scripts/qa-server-start.sh", "paths" => ["lib/**", "config/**"], "walkthrough_mentions" => ["Director"]}
+      settings = live_settings!(live)
+      director = "## User walkthrough\n\n1. In the Director, press Decide on the held ticket.\n"
+      server_and_app = ["lib/symphony_elixir/questions.ex", "macos/Sources/Inbox.swift"]
+
+      assert {:run, [%{kind: "macos_app", live: true}], reason} =
+               QaPolicy.decision(issue(%{description: director}), settings, server_and_app)
+
+      assert reason =~ "the app gets a live server: the PR changes the server and the `## User walkthrough` names `Director`"
+
+      # A fixture-only Mac change, a walkthrough that never names the Director, or none: no server.
+      for {ticket, paths, why} <- [
+            {issue(%{description: director}), ["macos/Sources/Inbox.swift"], "the PR changes none of the server's paths"},
+            {issue(%{description: "## User walkthrough\n\n1. Open the menu bar menu.\n"}), server_and_app, "no `## User walkthrough` step names `Director`"},
+            {issue(%{description: "Directors' notes"}), server_and_app, "the ticket has no `## User walkthrough`"}
+          ] do
+        assert {:run, [macos_app], reason} = QaPolicy.decision(ticket, settings, paths)
+        refute Map.has_key?(macos_app, :live)
+        assert reason =~ "; the app reads fixtures only: " <> why
+      end
+
+      # The labels override the diff: `qa:fixture` wins over `qa:live`.
+      assert {:run, [%{live: true}], reason} = QaPolicy.decision(issue(%{labels: ["QA:Live"]}), settings, ["macos/Sources/Inbox.swift"])
+      assert reason =~ "the issue has the `qa:live` label"
+
+      both = issue(%{description: director, labels: ["qa:live", "qa:fixture"]})
+      assert {:run, [macos_app], reason} = QaPolicy.decision(both, settings, server_and_app)
+      refute Map.has_key?(macos_app, :live)
+      assert reason =~ "the issue has the `qa:fixture` label"
+    end
+
+    test "a live server with no walkthrough words is live for any walkthrough, and one with nothing on screen is noted too" do
+      live = %{"start_cmd" => "start", "paths" => ["lib/**"]}
+      settings = live_settings!(live)
+
+      assert {:run, [%{live: true}], reason} =
+               QaPolicy.decision(issue(%{description: "## User walkthrough\n\n1. Open the menu.\n"}), settings, ["lib/a.ex", "macos/B.swift"])
+
+      assert reason =~ "the app gets a live server: the PR changes the server and the ticket has a `## User walkthrough`"
+
+      assert {:run, [%{kind: "macos_app", scope: :none}], reason} = QaPolicy.decision(issue(%{labels: ["qa:macos_app"]}), settings, ["lib/a.ex"])
+      assert reason =~ "building and launching the app are the whole check; the app reads fixtures only: the ticket has no `## User walkthrough`"
     end
 
     test "skips a change that reaches no playbook" do

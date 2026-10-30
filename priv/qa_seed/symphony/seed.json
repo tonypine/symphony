@@ -1,0 +1,113 @@
+{
+  "repository": "symphony",
+  "pauses": {
+    "symphony": "Paused for the QA seed: resume to let tickets start again",
+    "repository": "Paused while the release notes are written"
+  },
+  "holds": [
+    {
+      "issue": "QA-102",
+      "reason": "The agent can't reach the package registry: it needs a token only you can add.",
+      "clearing_condition": "when a person unblocks it"
+    }
+  ],
+  "questions": [
+    {
+      "issue": "QA-108",
+      "title": "How long a paused repository stays paused",
+      "question": "QA-108 (Choose how long a paused repository stays paused) can end a pause by itself. Should a paused repository resume after a day, or stay paused until you resume it?",
+      "why": "A pause today lasts until someone resumes it. Two repositories stayed paused for a week last month because nobody remembered them.",
+      "if_unanswered": "QA-108 waits in Code Review and no pause ends by itself.",
+      "recommendation_reason": "A pause that ends by itself can start work you meant to stop.",
+      "options": [
+        {
+          "label": "Stay paused until resumed",
+          "effect": "QA-108 adds a reminder after a day; the pause stays until you resume it.",
+          "recommended": true,
+          "tradeoffs": [
+            {
+              "kind": "good",
+              "text": "Nothing starts without you."
+            },
+            {
+              "kind": "cost",
+              "text": "You still resume each repository yourself."
+            }
+          ]
+        },
+        {
+          "label": "Resume after a day",
+          "effect": "QA-108 ends each repository pause one day after it started.",
+          "recommended": false,
+          "tradeoffs": [
+            {
+              "kind": "risk",
+              "text": "Work can start while you are away."
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "issue": "QA-103",
+      "status": "success",
+      "minutes_ago": 42,
+      "runtime_seconds": 1260,
+      "total_tokens": 184000,
+      "turn_count": 3,
+      "transcript": "transcripts/QA-103.jsonl",
+      "pull_request": 448
+    },
+    {
+      "issue": "QA-105",
+      "status": "success",
+      "minutes_ago": 95,
+      "runtime_seconds": 2140,
+      "total_tokens": 312000,
+      "turn_count": 5,
+      "transcript": "transcripts/QA-105.jsonl",
+      "pull_request": 450
+    },
+    {
+      "issue": "QA-107",
+      "status": "success",
+      "minutes_ago": 20,
+      "runtime_seconds": 980,
+      "total_tokens": 141000,
+      "turn_count": 2,
+      "transcript": "transcripts/QA-107.jsonl",
+      "pull_request": 452
+    }
+  ],
+  "pull_requests": [
+    {
+      "issue": "QA-103",
+      "number": 448,
+      "ci": "green"
+    },
+    {
+      "issue": "QA-104",
+      "number": 449,
+      "ci": "pending"
+    },
+    {
+      "issue": "QA-105",
+      "number": 450,
+      "ci": "red",
+      "failing_check": "make-all"
+    },
+    {
+      "issue": "QA-106",
+      "number": 451,
+      "ci": "red",
+      "failing_check": "release-build"
+    },
+    {
+      "issue": "QA-107",
+      "number": 452,
+      "ci": "green"
+    }
+  ]
+}

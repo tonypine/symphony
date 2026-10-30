@@ -48,7 +48,11 @@ defmodule SymphonyElixir.QaAgent do
   and the QA driver's tools say why. One that fails makes the pass `blocked` with
   `qa_dev_server_failed` and its log, and a port already taken with `qa_dev_server_port_busy`.
   Such a pass first waits for the QA host port's lease while another pass's server holds it
-  (`SymphonyElixir.QaDriver.DevServerLease`). A `web` pass's session alone gets a
+  (`SymphonyElixir.QaDriver.DevServerLease`). A `macos_app` pass `SymphonyElixir.QaPolicy` marked
+  `live` runs the playbook's `live` server the same way, with a control token of its own: the
+  server gets it as `SYMPHONY_QA_CONTROL_TOKEN`, and every app the pass launches gets the server's
+  URL and the token as `SYMPHONY_BAR_CONTROL_URL` and `SYMPHONY_BAR_CONTROL_TOKEN`; the agent is
+  told it may prove each step on the live server or on the fixtures, and to name which. A `web` pass's session alone gets a
   `browser` MCP server: headless Playwright limited to the dev server's localhost origins, or
   the playbook's `browser_mcp`.
   Each pass also gets a private temp folder of its own (see `tmp_dirs/2`), which a Claude
@@ -153,6 +157,7 @@ defmodule SymphonyElixir.QaAgent do
           optional(:run_profile) => SymphonyElixir.RunKind.profile(),
           optional(:dev_server_url) => String.t() | nil,
           optional(:qa_host_dev_server_url) => String.t(),
+          optional(:live_server_url) => String.t(),
           optional(:host_ports) => [pos_integer()],
           optional(:epic_review) => boolean(),
           optional(:base_ref) => String.t(),
@@ -918,6 +923,20 @@ defmodule SymphonyElixir.QaAgent do
     """
   end
 
+  defp dev_server_section(%{live_server_url: url}) when is_binary(url) do
+    """
+
+    Live server:
+    Symphony started the project's own server for this PR head on the QA host, beside the app
+    under test, at #{url}, over a memory tracker with seeded tickets, and stops it when the pass
+    ends. Every app you launch gets its URL and control token, so the app's moves reach it. Your
+    shell cannot reach it. Two environments are open to you: the live server, for a step whose
+    point is the round trip through the server (a move, then what the app shows after it), and
+    the app's state fixtures, for how the app draws a state. Pick per step, and in each step's
+    evidence name the one that proves it: `live server` or `fixture`.
+    """
+  end
+
   defp dev_server_section(_job), do: ""
 
   # The `macos_app` playbook says how to use them.
@@ -1059,14 +1078,49 @@ defmodule SymphonyElixir.QaAgent do
   defp start_qa_host_dev_server(driver, job, settings, opts) do
     lease_opts = Keyword.merge([issue_id: job.issue.id, heartbeat: lease_heartbeat(opts)], Keyword.get(opts, :dev_server_lease_opts, []))
 
-    with %{} = playbook <- qa_host_dev_server_playbook(job, settings),
-         spec = qa_host_dev_server_spec(playbook, settings, job),
+    with {key, spec} <- qa_host_server(job, settings),
          {:ok, %{url: url}} <- QaDriver.start_dev_server(driver, spec, lease_opts) do
-      {:ok, Map.put(job, :qa_host_dev_server_url, url)}
+      {:ok, Map.put(job, key, url)}
     else
       {:error, cause, log} -> {:error, {:qa_dev_server_failed, cause, log}}
       _none -> {:ok, job}
     end
+  end
+
+  # A live pass runs the playbook's `live` server; any other runs `verification.dev_server` when
+  # its playbook asks for it.
+  defp qa_host_server(job, settings) do
+    case Enum.find(job.playbooks, &(Map.get(&1, :kind) == "macos_app" and Map.get(&1, :live) == true and is_map(Map.get(&1, :live_server)))) do
+      %{} = playbook ->
+        {:live_server_url, live_server_spec(playbook, settings, job)}
+
+      nil ->
+        with %{} = playbook <- qa_host_dev_server_playbook(job, settings),
+             do: {:qa_host_dev_server_url, qa_host_dev_server_spec(playbook, settings, job)}
+    end
+  end
+
+  # The live server's control token is fresh for each pass: only this pass's app and server know it.
+  defp live_server_spec(playbook, settings, job) do
+    live = playbook.live_server
+    port = Map.get(playbook, :dev_server_port) || PlaybookSettings.default_port()
+    url = "http://127.0.0.1:#{port}"
+    token = 24 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
+    defaults = settings.verification.dev_server
+
+    %{
+      build_cmd: live.build_cmd,
+      start_cmd: live.start_cmd,
+      health_check_url: Verification.interpolate_port(live.health_check_url, port),
+      health_timeout_ms: live.health_timeout_ms,
+      stop_signal: defaults.stop_signal,
+      stop_timeout_ms: defaults.stop_timeout_ms,
+      port: port,
+      url: url,
+      ticket: job.issue.identifier,
+      env: [{"SYMPHONY_QA_CONTROL_TOKEN", token}],
+      launch_env: [{"SYMPHONY_BAR_CONTROL_URL", url}, {"SYMPHONY_BAR_CONTROL_TOKEN", token}]
+    }
   end
 
   defp lease_heartbeat(opts) do

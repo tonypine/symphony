@@ -29,7 +29,9 @@ defmodule SymphonyElixir.QaAgent.Selection do
   `dev_server_port`, and its `launch_env` reaches the app (see
   `SymphonyElixir.QaAgent.PlaybookSettings`); it needs only `verification.dev_server`
   (`dev_server_command?: true`), since `verification.enabled` turns on this host's
-  dev server, for agent runs too. The built-in
+  dev server, for agent runs too. Its `live` server, when set, is carried as
+  `:live_server`, and `SymphonyElixir.QaPolicy` marks the pass `live: true` when it
+  should run. The built-in
   `android_app` playbook is on only when its config names the `build` command the
   QA agent runs in its sandbox, the APKs it writes (`apk_paths`, or one
   `apk_path`) and the apps' `application_ids`, and `auto_review.android.avd` names the emulator that the
@@ -140,7 +142,9 @@ defmodule SymphonyElixir.QaAgent.Selection do
           optional(:browser_mcp) => map() | nil,
           optional(:dev_server) => true,
           optional(:requires) => [String.t()],
-          optional(:scope) => :none
+          optional(:scope) => :none,
+          optional(:live_server) => PlaybookSettings.live_server(),
+          optional(:live) => true
         }
   @type decision :: {:run, [playbook()]} | {:skip, String.t()}
 
@@ -348,13 +352,19 @@ defmodule SymphonyElixir.QaAgent.Selection do
     port = Map.get(override, "dev_server_port")
     launch_env = Map.get(override, "launch_env")
 
-    Map.merge(playbook, %{
-      build: Map.fetch!(override, "build"),
-      app: Map.fetch!(override, "app"),
-      build_timeout_ms: if(is_integer(timeout) and timeout > 0, do: timeout),
-      dev_server_port: if(is_integer(port) and port in 1..65_535, do: port, else: PlaybookSettings.default_port()),
-      launch_env: if(is_map(launch_env), do: stringify_keys(launch_env), else: %{})
-    })
+    playbook =
+      Map.merge(playbook, %{
+        build: Map.fetch!(override, "build"),
+        app: Map.fetch!(override, "app"),
+        build_timeout_ms: if(is_integer(timeout) and timeout > 0, do: timeout),
+        dev_server_port: if(is_integer(port) and port in 1..65_535, do: port, else: PlaybookSettings.default_port()),
+        launch_env: if(is_map(launch_env), do: stringify_keys(launch_env), else: %{})
+      })
+
+    case PlaybookSettings.live_server(override) do
+      nil -> playbook
+      live_server -> Map.put(playbook, :live_server, live_server)
+    end
   end
 
   defp put_host_settings(playbook, "android_app", override) do

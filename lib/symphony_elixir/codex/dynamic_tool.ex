@@ -623,6 +623,12 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             "description" =>
               "Launch the app light or dark whatever the host's appearance, which QA never changes: any AppKit app, through a library Symphony injects that sets the app's appearance and prints `symphony-qa-appearance: <light|dark>` to its output, and Symphony's own app also through SYMPHONY_BAR_QA_APPEARANCE. Omit it to follow the host. For both, launch once per appearance."
           },
+          "environment" => %{
+            "type" => "string",
+            "enum" => ~w(live fixture),
+            "description" =>
+              "Which environment the app reads when the pass runs a live server (the QA prompt says so): `live` (the default then) gives the app the server's control URL and token, so its moves reach the real server; `fixture` launches it on its state fixtures only. Name the one each step used in its evidence. `live` fails with qa_live_server_missing on a pass without one."
+          },
           "release_pair" => %{
             "type" => "boolean",
             "description" =>
@@ -1129,6 +1135,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "update_feed_port",
       "update_check_interval_seconds",
       "appearance",
+      "environment",
       "release_pair",
       "fresh_root",
       "root"
