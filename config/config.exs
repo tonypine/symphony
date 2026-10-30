@@ -41,7 +41,11 @@ if config_env() == :test do
     # a task; in tests it would race the events and the state payload a test asserts, so it runs only
     # where a test starts it (`TicketEvents.Backfill.start/1`). Set here, not in `test_helper.exs`:
     # `mix test` boots the app before the helper runs.
-    ticket_events_backfill: false
+    ticket_events_backfill: false,
+    # The pause projector (`SymphonyElixir.Pauses.Projector`) writes the labels and the Decisions
+    # section in place of the holds and the decision store. Its tests and the ones that prove its
+    # gates turn it on; off here, the suites of the holds and the decisions keep their own writes.
+    pause_projector: false
 
   # No test reaches the network: every Req request goes through the guard, which lets 127.0.0.1 and
   # localhost through and raises `SymphonyElixir.OutboundConnectionInTest` for any other host. A test

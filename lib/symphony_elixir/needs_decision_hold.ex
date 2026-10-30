@@ -305,11 +305,14 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   # The store is the truth for a hold, so the board is repaired to match it in both directions: a
   # `Needs Decision` label with no store hold is a hand-added label, reported and cleared, and a
   # store hold whose label is missing is re-projected, so a hold that pauses dispatch is never
-  # silently invisible.
+  # silently invisible. While the pause projector owns the labels, the repair has it compare with the
+  # labels this read shows rather than what it last applied.
   defp repair_drift(repo_key, issue_id, node, opts) do
+    repair = Keyword.merge(opts, force: true, labels: labels(node))
+
     case Hold.report_drift(repo_key, issue_id, labels(node), Keyword.merge(opts, identifier: node["identifier"], url: node["url"])) do
-      {:stray_label, :needs_decision} -> clear_label(repo_key, issue_id, opts)
-      {:missing_label, :needs_decision} -> reproject_label(repo_key, issue_id, opts)
+      {:stray_label, :needs_decision} -> clear_label(repo_key, issue_id, repair)
+      {:missing_label, :needs_decision} -> reproject_label(repo_key, issue_id, repair)
       _ok_or_other_kind -> :ok
     end
   end
