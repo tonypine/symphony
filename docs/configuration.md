@@ -1849,7 +1849,8 @@ and stop: a server that does not build, exits or fails its health check makes th
 `blocked` with its log. Each pass makes a control token of its own. The server gets it as
 `SYMPHONY_QA_CONTROL_TOKEN`, and every `qa_launch_app` while the server runs gives the app the
 server's URL and the token as `SYMPHONY_BAR_CONTROL_URL` and `SYMPHONY_BAR_CONTROL_TOKEN`, so the
-app's moves reach it. `qa_launch_app`'s `environment` argument picks per launch: `live` (the
+app's state polls, live channel and moves reach it instead of `api_fixtures`
+([QA mode](../macos/README.md#qa-mode)). `qa_launch_app`'s `environment` argument picks per launch: `live` (the
 default then) or `fixture`, which launches the app without them. `live` on a pass without a live
 server fails with `qa_live_server_missing`. The QA prompt says both environments are open, and the
 agent names the one each step used in that step's evidence. `launch_env` may not set the two

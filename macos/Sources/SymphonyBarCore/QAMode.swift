@@ -7,7 +7,9 @@ import Foundation
 /// `SYMPHONY_BAR_QA_API_FIXTURES` it reads Symphony's local API from files (see `APIFixtures`), with
 /// `SYMPHONY_QA_LINEAR_URL` the Add Repo sheet asks a Linear stub instead of api.linear.app, and with
 /// `SYMPHONY_BAR_QA_OPEN_PANEL_DIR` the sheet's folder picker opens in that folder. With `SYMPHONY_BAR_QA_APPEARANCE`
-/// the app draws in light or dark whatever the Mac's own appearance, which QA never changes.
+/// the app draws in light or dark whatever the Mac's own appearance, which QA never changes. With
+/// `SYMPHONY_BAR_CONTROL_URL` and `SYMPHONY_BAR_CONTROL_TOKEN` it talks to a live Symphony, the QA pass's own server,
+/// instead of the fixtures (see `LiveControl`).
 public struct QAMode: Equatable {
     /// The directory QA mode keeps everything under. QA mode is on while it is set and not blank.
     public static let environmentKey = "SYMPHONY_BAR_QA_ROOT"
@@ -30,6 +32,10 @@ public struct QAMode: Equatable {
     public static let openPanelDirectoryKey = "SYMPHONY_BAR_QA_OPEN_PANEL_DIR"
     /// `light` or `dark`: the appearance the app draws in, so QA can judge both on one Mac without switching the Mac's.
     public static let appearanceKey = "SYMPHONY_BAR_QA_APPEARANCE"
+    /// The control URL of a live Symphony the app talks to instead of the fixtures, such as `http://127.0.0.1:4000`.
+    public static let controlURLKey = "SYMPHONY_BAR_CONTROL_URL"
+    /// The bearer token the live Symphony at `SYMPHONY_BAR_CONTROL_URL` takes control requests with.
+    public static let controlTokenKey = "SYMPHONY_BAR_CONTROL_TOKEN"
     /// Where Symphony writes its logs (`SymphonyElixir.Paths`).
     public static let symphonyLogsRootKey = "SYMPHONY_LOGS_ROOT"
 
@@ -44,6 +50,28 @@ public struct QAMode: Equatable {
     public enum Appearance: String, Equatable {
         case light
         case dark
+    }
+
+    /// A live Symphony the app reads its state from and sends its moves to, in place of the fixtures: the server a
+    /// live QA pass runs on the QA host, with the control token that pass made for it.
+    public struct LiveControl: Equatable {
+        public let url: URL
+        public let token: String
+
+        public init(url: URL, token: String) {
+            self.url = url
+            self.token = token
+        }
+
+        /// The live target from `SYMPHONY_BAR_CONTROL_URL` and `SYMPHONY_BAR_CONTROL_TOKEN`, or nil unless the URL is
+        /// a loopback http(s) URL and the token isn't blank. The server runs beside the app, so no other host is
+        /// accepted and the token never leaves the Mac.
+        public static func detect(environment: [String: String]) -> LiveControl? {
+            guard let url = environment[controlURLKey].flatMap(loopbackURL),
+                  let token = environment[controlTokenKey].flatMap(StateRoot.token(contents:))
+            else { return nil }
+            return LiveControl(url: url, token: token)
+        }
     }
 
     public let root: URL
@@ -63,6 +91,8 @@ public struct QAMode: Equatable {
     public let openPanelDirectory: URL?
     /// The appearance from `SYMPHONY_BAR_QA_APPEARANCE`, nil to follow the Mac's.
     public let appearance: Appearance?
+    /// The live Symphony from `SYMPHONY_BAR_CONTROL_URL` and `SYMPHONY_BAR_CONTROL_TOKEN`, nil for the fixtures.
+    public let liveControl: LiveControl?
 
     public init(
         root: URL,
@@ -73,7 +103,8 @@ public struct QAMode: Equatable {
         apiFixturesDirectory: URL? = nil,
         linearURL: URL? = nil,
         openPanelDirectory: URL? = nil,
-        appearance: Appearance? = nil
+        appearance: Appearance? = nil,
+        liveControl: LiveControl? = nil
     ) {
         self.root = root.standardizedFileURL
         self.scripted = scripted
@@ -84,6 +115,7 @@ public struct QAMode: Equatable {
         self.linearURL = linearURL
         self.openPanelDirectory = openPanelDirectory
         self.appearance = appearance
+        self.liveControl = liveControl
     }
 
     /// QA mode from `SYMPHONY_BAR_QA_ROOT`, or nil when it is unset or blank. `~` is expanded.
@@ -101,7 +133,8 @@ public struct QAMode: Equatable {
             },
             linearURL: environment[linearURLKey].flatMap(loopbackURL),
             openPanelDirectory: environment[openPanelDirectoryKey].flatMap(absoluteFolder),
-            appearance: environment[appearanceKey].flatMap { Appearance(rawValue: $0.trimmingWhitespace()) }
+            appearance: environment[appearanceKey].flatMap { Appearance(rawValue: $0.trimmingWhitespace()) },
+            liveControl: LiveControl.detect(environment: environment)
         )
     }
 
@@ -139,9 +172,10 @@ public struct QAMode: Equatable {
     public var stateRoot: URL { root.appendingPathComponent(Self.stateFolder, isDirectory: true) }
 
     /// The fixtures the app reads Symphony's API from, logging control requests under the QA root; nil without
-    /// `SYMPHONY_BAR_QA_API_FIXTURES`.
+    /// `SYMPHONY_BAR_QA_API_FIXTURES`, and nil with a live Symphony, which answers in their place.
     public var apiFixtures: APIFixtures? {
-        apiFixturesDirectory.map {
+        guard liveControl == nil else { return nil }
+        return apiFixturesDirectory.map {
             APIFixtures(directory: $0, requestLog: root.appendingPathComponent(APIFixtures.requestLogFileName))
         }
     }
@@ -170,8 +204,13 @@ public struct AppStores {
     /// The control URL used while Symphony hasn't written one. Nil in QA mode, so the app never mistakes the
     /// Symphony a normal launch runs, on the default port, for its own.
     public let controlURLFallback: URL?
-    /// The API fixtures that answer instead of Symphony, only in QA mode with `SYMPHONY_BAR_QA_API_FIXTURES`.
+    /// The API fixtures that answer instead of Symphony, only in QA mode with `SYMPHONY_BAR_QA_API_FIXTURES` and no
+    /// live Symphony.
     public let apiFixtures: APIFixtures?
+    /// The live Symphony the app talks to, only in QA mode with `SYMPHONY_BAR_CONTROL_URL` and
+    /// `SYMPHONY_BAR_CONTROL_TOKEN`: the state polls, the live channel and every control request go to it over the
+    /// network, as a normal launch's go to the local Symphony.
+    public let liveControl: QAMode.LiveControl?
     /// The app's environment. In QA mode `SYMPHONY_STATE_ROOT` and `SYMPHONY_LOGS_ROOT` default to folders
     /// under the QA root, so the app neither sees nor controls a Symphony started outside QA mode, and the
     /// Symphony it starts keeps its state and logs there.
@@ -194,6 +233,7 @@ public struct AppStores {
             linearEndpoint = LinearClient.endpoint
             controlURLFallback = SymphonyState.defaultBaseURL
             apiFixtures = nil
+            liveControl = nil
             self.environment = environment
             return
         }
@@ -211,6 +251,7 @@ public struct AppStores {
         linearEndpoint = qaMode.linearURL ?? LinearClient.endpoint
         controlURLFallback = nil
         apiFixtures = qaMode.apiFixtures
+        liveControl = qaMode.liveControl
         var environment = environment
         for (key, folder) in [
             (StateRoot.environmentKey, qaMode.stateRoot),
@@ -233,14 +274,16 @@ public struct AppStores {
         apiFixtures.map { EventStream.buffered($0.transport) } ?? EventStream.streaming()
     }
 
-    /// The base URL used while Symphony hasn't written a control URL: the fixtures' when they answer.
+    /// The base URL used while Symphony hasn't written a control URL: the live Symphony's, else the fixtures' when
+    /// they answer.
     public var apiFallback: URL? {
-        apiFixtures == nil ? controlURLFallback : APIFixtures.baseURL
+        liveControl?.url ?? (apiFixtures == nil ? controlURLFallback : APIFixtures.baseURL)
     }
 
-    /// The control token sent instead of the state directory's while fixtures answer.
+    /// The control token sent instead of the state directory's: the live Symphony's, else the fixtures' when they
+    /// answer.
     public var apiToken: String? {
-        apiFixtures == nil ? nil : APIFixtures.token
+        liveControl?.token ?? (apiFixtures == nil ? nil : APIFixtures.token)
     }
 
     /// The update helper's environment. In QA mode it is the app's, so the app the helper relaunches is in QA mode
@@ -250,6 +293,16 @@ public struct AppStores {
         var environment = environment
         environment["PATH"] = environment["PATH"].flatMap { $0.isEmpty ? nil : $0 } ?? UpdateHelper.path
         return environment
+    }
+
+    /// Sends a control action to Symphony, the live Symphony or the API fixtures when they answer.
+    public func sendControl(_ action: ControlAction, stateRoot: URL) async -> ControlResult {
+        await ControlAPI.send(action, stateRoot: stateRoot, fallback: apiFallback, token: apiToken, transport: apiTransport)
+    }
+
+    /// Asks Symphony, the live Symphony or the API fixtures when they answer, for its repos.
+    public func fetchRepos(stateRoot: URL) async -> ReposPoll {
+        await ReposAPI.fetch(stateRoot: stateRoot, fallback: apiFallback, transport: apiTransport)
     }
 
     public func settingsStore() -> SettingsStore {
