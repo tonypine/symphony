@@ -3,7 +3,7 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{DecisionRequest, Pauses, Questions, TicketEvents, TicketState}
+  alias SymphonyElixir.{DecisionRequest, DispatchLoop, Pauses, Questions, TicketEvents, TicketState}
   alias SymphonyElixir.Pauses.Backfill
 
   @repo_key "repo-a"
@@ -196,6 +196,27 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
       assert [_question] = record("issue-7").questions
       assert events("issue-7") == written
       assert record("issue-7").pause_backfilled_at == @later
+    end
+
+    test "a hold set beside a question asked live is left to it: the ticket keeps one open question and one question reason" do
+      loop = %{kind: "implementation", count: 4, window_ms: 600_000, runs: []}
+      stops = [{"issue-7", "TP-7", "dispatch_loop", loop}, {"issue-8", "TP-8", "handoff_missing", {:quiet_handoff, 2}}]
+
+      for {issue_id, name, type, stop} <- stops do
+        put_record(issue_id, %{})
+        assert {:ok, question} = Questions.ask(ticket(issue_id), DispatchLoop.question_attrs(stop, name))
+        hold = put_in(blocked(type, ["implementation"]), [:waits_on, :question_id], question.id)
+        :ok = RunStore.set_ticket_hold(@repo_key, issue_id, :blocked, hold)
+        assert record(issue_id).pause_backfilled_at == nil
+      end
+
+      assert {:ok, %{records_converted: 2, questions_created: 0, pauses_created: 0, skipped_count: 0}} = Backfill.run(now: @now, store: Store)
+
+      for {issue_id, _name, _type, _stop} <- stops do
+        assert [%{id: id}] = Questions.open(ticket(issue_id))
+        assert [{:question, %{question_id: ^id}, _text}] = reasons(issue_id)
+        assert record(issue_id).pause_backfilled_at == @now
+      end
     end
 
     test "a record whose decision events can't be read is skipped" do

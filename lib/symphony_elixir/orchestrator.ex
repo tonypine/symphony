@@ -37,6 +37,7 @@ defmodule SymphonyElixir.Orchestrator do
     PrWatch,
     Quality,
     QualityGate,
+    Questions,
     RetiredStates,
     RunKind,
     RunStore,
@@ -5245,11 +5246,14 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # Past a limit the ticket is held instead of dispatched again: a Blocked hold whose reason names
-  # the loop, which a person lifts with Unblock or Restart. A store write that fails leaves the
-  # ticket unheld, so the next dispatch finds the same loop and tries again.
+  # Past a limit the ticket is held instead of dispatched again: Symphony asks what now
+  # (`DispatchLoop.question_attrs/2`), which pauses the ticket on the question, then sets a Blocked
+  # hold whose reason names the loop and whose wait names the question, which a person lifts with
+  # Unblock or Restart. A store write that fails leaves the ticket unheld, so the next dispatch finds
+  # the same loop and tries again; the question, still open, is not asked twice.
   defp hold_dispatch_loop(%State{} = state, %Issue{id: issue_id} = issue, repo_key, loop, record) do
-    attrs = DispatchLoop.hold_attrs(loop, record.signals)
+    question_id = ask_held_question(repo_key, issue, DispatchLoop.question_attrs(loop, issue.identifier || issue_id))
+    attrs = loop |> DispatchLoop.hold_attrs(record.signals) |> with_question(question_id)
     _ = Hold.set(repo_key, issue_id, :blocked, attrs)
     Logger.error("Holding #{issue_context(issue)} instead of dispatching it again: #{attrs.reason}")
     record_ticket_signal(repo_key, issue_id, DispatchLoop.hold_type(), %{kind: loop.kind, count: loop.count, window_ms: loop.window_ms})
@@ -5959,11 +5963,18 @@ defmodule SymphonyElixir.Orchestrator do
   defp hold_quiet_handoff(%State{} = state, %Issue{id: issue_id} = issue, head, quiet_runs) do
     repo_key = issue_repo_key(issue)
 
-    attrs = %{
-      reason: "#{Handoff.missing_signal()}: #{quiet_runs} runs went quiet on the PR without handing it off",
-      clearing_condition: "when a person unblocks it",
-      waits_on: %{type: Handoff.missing_signal(), keys: Enum.reject([head], &is_nil/1)}
-    }
+    request = DispatchLoop.question_attrs({:quiet_handoff, quiet_runs}, issue.identifier || issue_id)
+    question_id = ask_held_question(repo_key, issue, request)
+
+    attrs =
+      with_question(
+        %{
+          reason: "#{Handoff.missing_signal()}: #{quiet_runs} runs went quiet on the PR without handing it off",
+          clearing_condition: "when a person unblocks it",
+          waits_on: %{type: Handoff.missing_signal(), keys: Enum.reject([head], &is_nil/1)}
+        },
+        question_id
+      )
 
     # A store write that fails is as best-effort as the ledger's: the claim is released either way.
     _ = Hold.set(repo_key, issue_id, :blocked, attrs)
@@ -5972,6 +5983,22 @@ defmodule SymphonyElixir.Orchestrator do
     record_ticket_signal(issue, Handoff.missing_signal(), %{head: head, quiet_runs: quiet_runs, held: true})
     {:noreply, release_issue_claim(state, issue_id)}
   end
+
+  # The question a hold is set beside, asked through the one writer (`SymphonyElixir.Questions`): its
+  # id, or nil when it could not be asked, which leaves the hold as it was before questions.
+  defp ask_held_question(repo_key, %Issue{id: issue_id} = issue, request) do
+    case Questions.ask({:ticket, repo_key, issue_id}, request) do
+      {:ok, %{id: question_id}} ->
+        question_id
+
+      {:error, reason} ->
+        Logger.warning("Failed to ask the question for #{issue_context(issue)}: #{inspect(reason)}")
+        nil
+    end
+  end
+
+  defp with_question(attrs, nil), do: attrs
+  defp with_question(attrs, question_id), do: put_in(attrs, [:waits_on, :question_id], question_id)
 
   defp dispatch_refresh_error(reason) do
     if TransientRetry.transient?(reason) do

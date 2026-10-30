@@ -5,6 +5,9 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
   request already posted with `DecisionRequest.project/4`), and no other code sets a Needs Decision
   hold, renders a request comment or records `decision.requested`. A new source must call the
   writer and be named here, or this test fails.
+
+  Symphony's own questions with nobody to answer them but a person's pick of what happens next ask
+  through the Question service (`SymphonyElixir.Questions.ask/3`) directly; those are named here too.
   """
   use ExUnit.Case, async: true
 
@@ -34,6 +37,15 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
     "lib/symphony_elixir/self_heal.ex" => [:ask]
   }
 
+  # Each module that asks a Question directly, and what it asks.
+  @question_sources %{
+    # The dispatch-loop guard (`SymphonyElixir.DispatchLoop`) and the quiet handoff: "<id> ran N
+    # times in M minutes without finishing" and "<id>'s last two runs ended without a handoff".
+    "lib/symphony_elixir/orchestrator.ex" => [:dispatch_loop, :quiet_handoff],
+    # The questions the backfill finds in the holds and decisions already recorded.
+    "lib/symphony_elixir/pauses/backfill.ex" => [:backfill]
+  }
+
   @writer "lib/symphony_elixir/decision_request.ex"
   # The store the writer writes through records the ledger event; the backfill rebuilds history from
   # holds already set, and asks nothing.
@@ -55,6 +67,15 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
   test "the sources named here are every module that calls the writer" do
     callers = for {path, text} <- lib_files(), path != @writer, text =~ ~r/DecisionRequest\.(ask|project)\(/, into: MapSet.new(), do: path
     assert callers == MapSet.new(Map.keys(@sources))
+  end
+
+  test "the modules named here are every one that asks a Question directly" do
+    callers = for {path, text} <- lib_files(), path != "lib/symphony_elixir/questions.ex", text =~ "Questions.ask(", into: MapSet.new(), do: path
+    assert callers == MapSet.new(Map.keys(@question_sources))
+
+    orchestrator = Map.new(lib_files())["lib/symphony_elixir/orchestrator.ex"]
+    assert orchestrator =~ "DispatchLoop.question_attrs(loop,"
+    assert orchestrator =~ "DispatchLoop.question_attrs({:quiet_handoff,"
   end
 
   test "no code but the writer sets a Needs Decision hold or renders a request comment" do
