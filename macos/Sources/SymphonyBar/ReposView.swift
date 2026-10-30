@@ -366,7 +366,10 @@ struct RepoDetailView: View {
                 }
                 if let pause = repo.pause {
                     Section(RepoPauseControl.sectionTitle) {
+                        // One identity per repository: the typed reason and the in-flight state stay with the
+                        // repository they were meant for, and reset when the selection changes.
                         RepoPauseView(control: pause, send: { await model.onPauseControl(pause, $0) })
+                            .id(pause.key)
                     }
                 }
                 source
