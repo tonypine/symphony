@@ -1,8 +1,11 @@
 defmodule SymphonyElixir.DirectorMovesTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{AuditLog, BlockedHold, DirectorMoves, DispatchLoop, Hold, OperatorStop, Pauses, PlanComments}
-  alias SymphonyElixir.{Questions, RunStore, SubIssueWait}
+  alias SymphonyElixir.{AuditLog, BlockedHold}
+  alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.{DirectorMoves, DispatchLoop, Hold}
+  alias SymphonyElixir.Inbox.Item
+  alias SymphonyElixir.{OperatorStop, Pauses, PlanComments, Questions, RunStore, SubIssueWait}
 
   @waiting "Waiting on sub-tickets"
 
@@ -1349,9 +1352,13 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
     defp loop, do: %{kind: "implementation", count: 4, window_ms: 600_000, runs: []}
 
-    test "Unblock lifts a quiet handoff, answering its question \"Run it again\"", %{opts: opts} do
+    test "the Inbox lists a quiet handoff, and Unblock lifts it, answering its question \"Run it again\"", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       question = ask_and_hold("repo-director", {:quiet_handoff, 2})
+
+      node = %{"id" => "pr", "identifier" => "MOT-40", "title" => "Add checkout", "url" => nil, "state" => %{"name" => "In Progress"}}
+      lookups = %{hold: &Hold.get(&1, &2, :blocked)}
+      assert %{kind: :blocked} = Item.from_node(node, "repo-director", %Schema{}, lookups)
 
       assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
 
