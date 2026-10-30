@@ -2827,22 +2827,29 @@ Symphony's store, never Linear, and writes nothing. `/api/v1/state` returns the 
 - `record_newer`: the differences the record being newer explains, counted apart: `count` since
   Symphony started, and `recent`, the last five, newest first, each with `identifier` and `side`.
 
-A difference means the two sides disagree on a snapshot at least as new as the record: Linear was
-read for the poll cache no earlier than the record last changed, so one side is behind. A
-difference in a ticket's state, or in whether it is a candidate at all, whose record changed after
-that read is the record being the fresher side, not drift: Symphony's own move, which writes the
-record before Linear (a ticket the poll still lists in Merging that Symphony closed once its PR
-merged, or one Symphony promoted that the poll doesn't list yet), a person's move or a removal a
-webhook delivered, or a newer read of the ticket while the poll ran. It counts under `record_newer`
-instead, once while it lasts, and the repository's next poll compares the two again on a fresh
-snapshot, so a lag that is real still shows. A priority difference, a ticket the record has never
-observed, and a ticket whose record has no phase time yet (written before Symphony kept one) are
-always differences.
+A difference means the two sides disagree and the record is not the fresher side, so one side is
+behind. A difference in a ticket's state, or in whether it is a candidate at all, is the record
+being the fresher side, not drift, in two cases:
+
+- the record changed after Linear was read for the poll cache: Symphony's own move, which writes
+  the record before Linear (a ticket the poll still lists in Merging that Symphony closed once its
+  PR merged, or one Symphony promoted that the poll doesn't list yet), a person's move or a removal
+  a webhook delivered, or a newer read of the ticket while the poll ran;
+- Symphony wrote the record's phase (`phase_owner: symphony`) after the ticket's last change in the
+  poll snapshot (its `updatedAt`), even when the read came later: the cycle Symphony's own move
+  forces can read Linear before Linear serves the move. A person's move leaves `updatedAt` after
+  Symphony's phase write, so it stays a difference.
+
+Either counts under `record_newer` instead, once while it lasts, and the repository's next poll
+compares the two again on a fresh snapshot, so a lag that is real still shows. A priority
+difference, a ticket the record has never observed, and a ticket whose record has no phase time yet
+(written before Symphony kept one) are always differences.
 
 A difference is logged at warning level once while it lasts (`Dispatch shadow difference:`), and
 once more if it comes back after it cleared. `window_differences` staying at zero across a window
 of tickets is the sign that `source: record` will dispatch what the poll would; `record_newer`
-ticking up meanwhile is Symphony's own moves landing between a poll and the comparison.
+ticking up meanwhile is Symphony's own moves landing between a poll and the comparison, or not yet
+served by Linear when the poll read it.
 
 ### `notifications`
 
