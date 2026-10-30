@@ -22,6 +22,9 @@ defmodule SymphonyElixir.QaPreCheckTest do
 
       test "\\"Run\\" runs it, \\"Stop\\" stops it" do
       end
+
+      test "\\"Run\\" runs it, \\"Stop\\" stops \\"it\\"" do
+      end
     end
 
     test "a quiet handoff stays when its question is answered \\"Keep it paused\\"" do
@@ -199,11 +202,12 @@ defmodule SymphonyElixir.QaPreCheckTest do
       3. The full name. Proved by: `the Director's moves #{handoff}`
       4. The whole name quoted. Proved by: make-all › #{moves}: "#{handoff}"
       5. A test outside a describe. Proved by: make-all › #{moves}: a quiet handoff stays when its question is answered "Keep it paused"
-      6. A name that opens and closes with a quote. Proved by: make-all › #{moves} › "Run" runs it, "Stop" stops it
+      6. A name that opens with a quote and ends without one. Proved by: make-all › #{moves} › "Run" runs it, "Stop" stops it
+      7. A name that opens and closes with a quote. Proved by: make-all › #{moves} › "Run" runs it, "Stop" stops "it"
       """
 
       assert {:pass, results} = run(text, context, gh(context.head, checks))
-      assert Enum.map(results, &{&1.step.number, &1.status}) == Enum.map(1..6, &{&1, :pass})
+      assert Enum.map(results, &{&1.step.number, &1.status}) == Enum.map(1..7, &{&1, :pass})
     end
 
     test "a test named nowhere fails, naming the file it narrowed to and the forms it tried", context do

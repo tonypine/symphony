@@ -239,7 +239,7 @@ defmodule SymphonyElixir.QaPreCheck do
   end
 
   # A part is read without the quotes around it first (`"name"`), then, when that misses, as it is
-  # written, since a test's own name may open and close with a quote (`"Run" runs it, "Stop" stops it`).
+  # written, since a test's own name may open and close with a quote (`"Run" runs it, "Stop" stops "it"`).
   defp find_part(part, scope, files, git, workspace) do
     find = &find_text(&1, scope, files, git, workspace)
     part = String.trim(part)
