@@ -34,6 +34,11 @@ defmodule SymphonyElixir.TicketEvents.Types do
   `pause.reason_added` for each further one, `pause.reason_cleared` for a reason cleared while
   others remain and `pause.cleared` when none is left, with the reasons it cleared. A reason event
   names its kind (`reason`), its one line of plain words (`text`) and what it waits on.
+
+  A question to a person is machinery-only too (`SymphonyElixir.Questions`): `question.asked`, then
+  `question.answered` (the answer as given, and the option it picked) or `question.withdrawn` (with
+  the reason), each naming the question by `question_id`. The `decision.*` types stay for the
+  writer that has not moved over yet.
   """
 
   alias SymphonyElixir.RunKind
@@ -164,6 +169,38 @@ defmodule SymphonyElixir.TicketEvents.Types do
       required: [answer: :string],
       optional: [title: :string, question: :string, key: :string, request: :string] ++ @signal,
       idempotency: {:fields, [:key]}
+    },
+    "question.asked" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [question_id: :string, title: {:string, 120}, question: :string],
+      optional:
+        [
+          why: :string,
+          if_unanswered: :string,
+          options: :list,
+          recommendation_reason: :string,
+          confirm: :string,
+          step: :string,
+          asked_by: :map
+        ] ++ @signal,
+      idempotency: {:fields, [:question_id]}
+    },
+    "question.answered" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [question_id: :string, answer: :string],
+      optional:
+        [title: :string, option: :string, option_number: :non_neg_integer, scope: {:enum, ~w(run ticket always)}, by: :map] ++
+          @signal,
+      idempotency: {:fields, [:question_id]}
+    },
+    "question.withdrawn" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [question_id: :string, reason: :string],
+      optional: [title: :string, by: :map] ++ @signal,
+      idempotency: {:fields, [:question_id]}
     },
     "person.action" => %{
       writers: [:person],

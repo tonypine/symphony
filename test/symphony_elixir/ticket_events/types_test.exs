@@ -8,7 +8,8 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
     decision.requested decision.withdrawn decision.recorded person.action
     step.started step.completed step.skipped evidence finding.recorded finding.resolved checklist.answered
     drift.detected drift.reverted drift.revert_failed
-    pause.set pause.reason_added pause.reason_cleared pause.cleared note
+    pause.set pause.reason_added pause.reason_cleared pause.cleared
+    question.asked question.answered question.withdrawn note
   )
 
   describe "catalog/0" do
@@ -124,6 +125,28 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert Types.validate("pause.cleared", payload, :machine, nil) == {:ok, payload}
       assert {:error, {:invalid_payload, [:cleared]}} = Types.validate("pause.cleared", %{}, :machine, nil)
       assert {:error, {:not_allowed, _reason}} = Types.validate("pause.cleared", %{cleared: cleared}, :person, nil)
+    end
+
+    test "a question is the machine's: asked, answered or withdrawn, each naming the question" do
+      asked = %{question_id: "q-1", title: "Ship it", question: "Should it ship today?", options: [%{label: "Ship"}], asked_by: %{kind: :run, name: "Implementation run 1"}}
+      tony = %{kind: :person, name: "Tony"}
+      answered = %{question_id: "q-1", answer: "2", option: "Wait", option_number: 2, scope: :ticket, by: tony}
+      withdrawn = %{question_id: "q-1", reason: "The ticket was cancelled", title: "Ship it"}
+
+      assert Types.validate("question.asked", asked, :machine, nil) == {:ok, asked}
+      assert Types.validate("question.answered", answered, :machine, nil) == {:ok, %{answered | scope: "ticket"}}
+      assert Types.validate("question.withdrawn", withdrawn, :machine, nil) == {:ok, withdrawn}
+
+      long = %{asked | title: String.duplicate("a", 121)}
+      assert {:error, {:invalid_payload, [:title]}} = Types.validate("question.asked", long, :machine, nil)
+      assert {:error, {:invalid_payload, [:scope]}} = Types.validate("question.answered", %{answered | scope: :forever}, :machine, nil)
+      assert {:error, {:invalid_payload, [:reason]}} = Types.validate("question.withdrawn", Map.delete(withdrawn, :reason), :machine, nil)
+
+      for {type, payload} <- [{"question.asked", asked}, {"question.answered", answered}, {"question.withdrawn", withdrawn}] do
+        assert {:error, {:not_allowed, _reason}} = Types.validate(type, payload, :agent, "implementation")
+        assert {:error, {:not_allowed, _reason}} = Types.validate(type, payload, :person, nil)
+        assert Types.idempotency_key(type, payload, nil) == "#{type}:q-1"
+      end
     end
 
     test "rejects an agent with an unknown run kind, and a machine or person outside the writers" do

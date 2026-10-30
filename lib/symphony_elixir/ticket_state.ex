@@ -21,7 +21,9 @@ defmodule SymphonyElixir.TicketState do
   (`pending_projection`, `mark_projection/4`), and when the reconciler's by-id read of a record no
   read had observed did not find the ticket, archived or deleted in Linear (`not_found_at`), so it
   does not read it again; dispatch ignores it; and the ticket's `pause` (`SymphonyElixir.Pauses`):
-  why it does not move, with each reason, who set it and since when, nil when nothing pauses it.
+  why it does not move, with each reason, who set it and since when, nil when nothing pauses it;
+  and the `questions` asked of a person on it (`SymphonyElixir.Questions`), open, answered or
+  withdrawn, in the order they were asked.
 
   The record is persisted by `SymphonyElixir.RunStore`; this module owns its shape and the
   operations that move it. It is inert by design: nothing dispatches on a record yet. It exists so
@@ -34,6 +36,7 @@ defmodule SymphonyElixir.TicketState do
   alias SymphonyElixir.Pauses
   alias SymphonyElixir.PrDecision
   alias SymphonyElixir.PrWatch.Attempts
+  alias SymphonyElixir.Questions
 
   @max_signals 50
   @max_verdicts 50
@@ -264,6 +267,7 @@ defmodule SymphonyElixir.TicketState do
           pending_projection: [projection()],
           not_found_at: DateTime.t() | nil,
           pause: Pauses.pause() | nil,
+          questions: [Questions.question()],
           updated_at: DateTime.t() | nil
         }
 
@@ -349,6 +353,7 @@ defmodule SymphonyElixir.TicketState do
       pending_projection: normalize_projections(Map.get(record, :pending_projection)),
       not_found_at: map_datetime(record, :not_found_at),
       pause: Pauses.normalize(Map.get(record, :pause)),
+      questions: Questions.normalize(Map.get(record, :questions)),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -391,6 +396,7 @@ defmodule SymphonyElixir.TicketState do
       pending_projection: [],
       not_found_at: nil,
       pause: nil,
+      questions: [],
       updated_at: nil
     }
   end
@@ -671,6 +677,30 @@ defmodule SymphonyElixir.TicketState do
       nil -> []
     end
   end
+
+  @doc """
+  Puts `question` on the ticket (`SymphonyElixir.Questions`, its only writer): it replaces the one
+  with its id, else it is added after the others. A malformed question changes nothing.
+  """
+  @spec put_question(t(), map()) :: t()
+  def put_question(record, question) do
+    record = normalize(record)
+
+    case Questions.normalize([question]) do
+      [question] -> %{record | questions: replace_question(record.questions, question)}
+      [] -> record
+    end
+  end
+
+  defp replace_question(questions, %{id: id} = question) do
+    if Enum.any?(questions, &(&1.id == id)),
+      do: Enum.map(questions, &if(&1.id == id, do: question, else: &1)),
+      else: questions ++ [question]
+  end
+
+  @doc "The questions on the ticket still waiting for an answer, in the order they were asked."
+  @spec open_questions(t()) :: [Questions.question()]
+  def open_questions(record), do: record |> normalize() |> Map.fetch!(:questions) |> Enum.filter(&(&1.state == :open))
 
   @doc """
   Sets the record's phase, the state the machine believes the ticket is in, when it was written

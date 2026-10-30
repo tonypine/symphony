@@ -21,6 +21,7 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   @detail_max 200
   @ellipsis "…"
   @separator " · "
+  @first_words 8
 
   @type t :: %{title: String.t(), detail: String.t() | nil}
 
@@ -127,6 +128,14 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     {"Moving again", for(%{} = reason <- list(field(payload, :cleared)), do: text(reason, :text))}
   end
 
+  defp summary("question.asked", payload, _event), do: {"Asked you" <> suffix(": ", text(payload, :title)), [text(payload, :question)]}
+
+  defp summary("question.answered", payload, _event) do
+    {"You answered" <> suffix(": ", text(payload, :option) || first_words(text(payload, :answer))), [text(payload, :title)]}
+  end
+
+  defp summary("question.withdrawn", payload, _event), do: {"Question withdrawn" <> suffix(": ", text(payload, :reason)), [text(payload, :title)]}
+
   defp summary("note", payload, _event), do: {"Note added", [text(payload, :text)]}
   defp summary(_type, _payload, _event), do: :unknown
 
@@ -136,6 +145,16 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     case text(payload, :text) do
       nil -> nil
       text -> if text =~ ~r/^\p{Lu}\p{Ll}*(\s|$)/u, do: String.downcase(String.first(text)) <> String.slice(text, 1..-1//1), else: text
+    end
+  end
+
+  # A free-text answer's opening words, for a title: the rest is cut with an ellipsis.
+  defp first_words(nil), do: nil
+
+  defp first_words(text) do
+    case String.split(text) do
+      words when length(words) > @first_words -> Enum.join(Enum.take(words, @first_words), " ") <> @ellipsis
+      words -> Enum.join(words, " ")
     end
   end
 
