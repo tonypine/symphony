@@ -263,6 +263,8 @@ defmodule SymphonyElixir.Orchestrator do
     }
 
     state = state |> seed_watching_from_completed_run_metadata() |> arm_usage_limit_timers()
+    # Before the first tick: a pause the release before set on its old row is in force.
+    RunStore.move_legacy_pause() |> log_run_store_error("move the old operator pause onto Symphony's pause")
     clear_installed_update_pause(BuildInfo.current().version)
     sync_usage_limit_reasons(state)
 

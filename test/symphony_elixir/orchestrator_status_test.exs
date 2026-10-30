@@ -2983,6 +2983,36 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       assert Pauses.get(:symphony) == {:ok, nil}
     end
 
+    test "a pause the release before left on its old row is in force from the first tick, and an installed update's lifts" do
+      write_legacy_pause = fn row ->
+        {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_pause, :dispatch_pause, row}) end)
+      end
+
+      paused_at = ~U[2026-10-01 09:00:00Z]
+      # The release before marked the backfill's step done, then the Director paused it.
+      :ok = RunStore.put_marker("pause_backfill_symphony_v1", ~U[2026-09-30 09:00:00Z])
+      write_legacy_pause.(%{paused: true, reason: "paused from menu bar", paused_at: paused_at, updated_at: paused_at})
+
+      name = Module.concat(__MODULE__, :UpgradedOrchestrator)
+      pid = start_paused_orchestrator(name)
+
+      assert %{paused: true, reason: "paused from menu bar", paused_at: ^paused_at, reasons: [%{kind: :person, waits_on: %{action: "unblock"}}]} =
+               Orchestrator.pause_status(name)
+
+      assert :mnesia.dirty_read(:symphony_run_store_pause, :dispatch_pause) == []
+      stop_process(pid)
+      {:ok, nil} = Pauses.clear(:symphony)
+
+      # The app paused the release before for the update to the build that now runs.
+      Application.put_env(:symphony_elixir, :build, number: "42")
+      write_legacy_pause.(%{paused: true, reason: "updating to v0.0.1.42", paused_at: paused_at, updated_at: paused_at})
+      name = Module.concat(__MODULE__, :UpdatedOrchestrator)
+      start_paused_orchestrator(name)
+
+      assert %{paused: false, reasons: []} = Orchestrator.pause_status(name)
+      assert :mnesia.dirty_read(:symphony_run_store_pause, :dispatch_pause) == []
+    end
+
     test "an update's reason lifts by itself once Symphony runs the build it waits on" do
       {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("updating to v0.0.1.42"))
       {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("updating to v0.0.1.43"))

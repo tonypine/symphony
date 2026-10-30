@@ -46,8 +46,9 @@ defmodule SymphonyElixir.RunStore do
   ]
   @data_tables Enum.map(@tables, fn {table, _attributes, _opts} -> table end)
   @codex_totals_key :codex_totals
-  # The operator pause's old row: read only until the pauses' backfill moved it (its marker,
-  # `SymphonyElixir.Pauses.Backfill`) onto Symphony's pause, never written.
+  # The operator pause's old row: moved onto Symphony's pause at start (`move_legacy_pause/0`),
+  # never written. The move marks the pauses' backfill step for it done
+  # (`SymphonyElixir.Pauses.Backfill`).
   @pause_key :dispatch_pause
   @pause_backfill_marker "pause_backfill_symphony_v1"
   @director %{kind: :person, name: "Director"}
@@ -1337,18 +1338,41 @@ defmodule SymphonyElixir.RunStore do
 
   @doc """
   Deprecated, kept for one release: Symphony's pause as the operator pause read before
-  (`Pauses.dispatch_status/1`). Until the pauses' backfill moved the old operator pause row onto
-  Symphony's pause (its marker), an unpaused Symphony reads that row, so the backfill finds it.
+  (`Pauses.dispatch_status/1`).
   """
   @spec get_paused() :: map() | {:error, term()}
   def get_paused do
-    with :ok <- ensure_started(),
-         {:ok, pause} <- Pauses.get(:symphony),
-         do: pause |> Pauses.dispatch_status() |> legacy_pause()
+    with {:ok, pause} <- Pauses.get(:symphony), do: Pauses.dispatch_status(pause)
   end
 
-  defp legacy_pause(%{paused: true} = status), do: status
-  defp legacy_pause(status), do: transaction(fn -> if read_marker(@pause_backfill_marker), do: status, else: read_pause_record() end)
+  @doc """
+  Moves the operator pause's old row, which the releases before Symphony's pause wrote, onto
+  Symphony's pause, whatever the pauses' backfill did: a paused row sets its reason
+  (`Pauses.dispatch_reason/1`, the Director's, at the row's time), so an `updating to v…` row
+  waits on that build. Then the row is deleted and the backfill's step for it marked done, so
+  neither reads it again. A start that stops before the delete finds the row and sets the same
+  reason again.
+  """
+  @spec move_legacy_pause() :: :ok | {:error, term()}
+  def move_legacy_pause do
+    with :ok <- ensure_started(),
+         %{} = row <- transaction(fn -> read_pause_record() end),
+         {:ok, _pause} <- set_legacy_pause(row) do
+      durable_transaction(&delete_legacy_pause/0)
+    end
+  end
+
+  defp set_legacy_pause(%{paused: true} = row) do
+    Pauses.set(:symphony, Pauses.dispatch_reason(row.reason), set_by: @director, at: row.paused_at || DateTime.utc_now())
+  end
+
+  defp set_legacy_pause(_row), do: {:ok, nil}
+
+  defp delete_legacy_pause do
+    :mnesia.delete({@pause_table, @pause_key})
+    if is_nil(read_marker(@pause_backfill_marker)), do: :mnesia.write({@totals_table, {:marker, @pause_backfill_marker}, DateTime.utc_now()})
+    :ok
+  end
 
   @doc """
   Runs `fun` on the pause of `repo_key`'s ticket `issue_id` (`SymphonyElixir.Pauses`, its only

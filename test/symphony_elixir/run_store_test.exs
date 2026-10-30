@@ -329,15 +329,56 @@ defmodule SymphonyElixir.RunStoreTest do
     restart_run_store()
   end
 
-  test "the old operator pause row is read only until the pauses' backfill moved it" do
-    paused_at = ~U[2026-10-01 09:00:00Z]
-    row = %{paused: true, reason: "old row", paused_at: paused_at}
-    {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_pause, :dispatch_pause, row}) end)
+  describe "move_legacy_pause/0" do
+    setup do
+      on_exit(fn -> Pauses.clear(:symphony) end)
+    end
 
-    assert %{paused: true, reason: "old row", paused_at: ^paused_at} = RunStore.get_paused()
+    defp write_legacy_pause(row) do
+      {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_pause, :dispatch_pause, row}) end)
+    end
 
-    assert :ok = RunStore.put_marker("pause_backfill_symphony_v1", paused_at)
-    assert %{paused: false, reason: nil, reasons: []} = RunStore.get_paused()
+    defp legacy_pause_row, do: :mnesia.dirty_read(:symphony_run_store_pause, :dispatch_pause)
+
+    test "moves a paused old row onto Symphony's pause even once the pauses' backfill ran, then deletes it" do
+      paused_at = ~U[2026-10-01 09:00:00Z]
+      backfilled_at = ~U[2026-09-30 09:00:00Z]
+      :ok = RunStore.put_marker("pause_backfill_symphony_v1", backfilled_at)
+      write_legacy_pause(%{paused: true, reason: "old row", paused_at: paused_at, updated_at: paused_at})
+
+      assert :ok = RunStore.move_legacy_pause()
+
+      assert {:ok, %{set_by: %{kind: :person, name: "Director"}, reasons: [%{kind: :person, text: "old row", set_at: ^paused_at}]}} =
+               Pauses.get(:symphony)
+
+      assert %{paused: true, reason: "old row", paused_at: ^paused_at} = RunStore.get_paused()
+      assert legacy_pause_row() == []
+      assert RunStore.get_marker("pause_backfill_symphony_v1") == backfilled_at
+
+      # Moved once: a second start sets nothing more.
+      assert :ok = RunStore.move_legacy_pause()
+      assert ["old row"] = Pauses.why(:symphony)
+    end
+
+    test "an update's old row waits on its build; one without a time is paused from now" do
+      write_legacy_pause(%{paused: true, reason: "updating to v0.0.1.42", paused_at: nil})
+
+      assert :ok = RunStore.move_legacy_pause()
+
+      assert {:ok, %{reasons: [%{kind: :build, waits_on: %{version: "0.0.1.42"}, set_at: %DateTime{}}]}} = Pauses.get(:symphony)
+      assert %DateTime{} = RunStore.get_marker("pause_backfill_symphony_v1")
+    end
+
+    test "no old row, or an unpaused one, sets nothing and marks the backfill's step done" do
+      assert :ok = RunStore.move_legacy_pause()
+      assert Pauses.get(:symphony) == {:ok, nil}
+      assert %DateTime{} = RunStore.get_marker("pause_backfill_symphony_v1")
+
+      write_legacy_pause(%{paused: false})
+      assert :ok = RunStore.move_legacy_pause()
+      assert Pauses.get(:symphony) == {:ok, nil}
+      assert legacy_pause_row() == []
+    end
   end
 
   test "keeps a repository's and Symphony's pause by subject, across restart" do
