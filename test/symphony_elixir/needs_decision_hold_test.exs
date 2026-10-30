@@ -11,6 +11,7 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
     NeedsDecisionHold,
     Questions,
     RunStore,
+    TicketState,
     Workflow
   }
 
@@ -123,7 +124,7 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
   end
 
   defp stored_hold do
-    RunStore.get_ticket_state(@repo_key, @issue_id) |> SymphonyElixir.TicketState.get_hold(:needs_decision)
+    RunStore.get_ticket_state(@repo_key, @issue_id) |> TicketState.get_hold(:needs_decision)
   end
 
   describe "desired/2" do
@@ -583,14 +584,18 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       assert ticket_events(@repo_key, @issue_id) == []
     end
 
-    test "leaves a Needs Decision label with no store hold to the pause projector while it owns the labels (TP-1243)" do
+    test "while the pause projector owns the labels, clears a hand-added Needs Decision label against the labels Linear shows (TP-1243)" do
       Application.put_env(:symphony_elixir, :pause_projector, true)
       on_exit(fn -> Application.put_env(:symphony_elixir, :pause_projector, false) end)
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | labels: ["Needs Decision"]}])
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id, %{labels: [], projected: %{labels: []}}))
       node = with_labels(["Needs Decision"])
 
       log = capture_log(fn -> assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :none end)
 
-      refute log =~ "with no store hold"
+      assert log =~ "with no store hold"
+      assert labels() == []
+      assert stored_hold() == nil
       assert ticket_events(@repo_key, @issue_id) == []
     end
 

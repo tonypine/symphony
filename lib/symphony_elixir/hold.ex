@@ -295,12 +295,13 @@ defmodule SymphonyElixir.Hold do
 
   # A label write that fails is marked on the record, so the reconciler projects the hold again
   # (`TicketSignals.mark_projection/4`). While the pause projector owns the labels it writes them,
-  # and marks its own projection when a write fails; the hold stands either way.
+  # and marks its own projection when a write fails; the hold stands either way. A drift repair
+  # passes `force` and the labels Linear shows (`labels:`), so the projector compares with those.
   defp project(opts, repo_key, issue_id, kind, action) do
     tracker = Keyword.get(opts, :tracker, Tracker)
 
     if Projector.owns?() do
-      _ = Projector.project_now({:ticket, repo_key, issue_id}, Keyword.take(opts, [:tracker, :store, :force]))
+      _ = Projector.project_now({:ticket, repo_key, issue_id}, Keyword.take(opts, [:tracker, :store, :force, :labels]))
       :ok
     else
       project_label(tracker, repo_key, issue_id, kind, action)

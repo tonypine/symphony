@@ -23,7 +23,10 @@ defmodule SymphonyElixir.Pauses.Projector do
   an entry already there is never written twice. A write Linear refuses leaves the record as it is,
   keeps what did land in `projected`, and marks the projection pending (`pending_projection`,
   `:pause`): the reconciler applies it again (`SymphonyElixir.TicketObservation.reconcile_all/3`).
-  A second apply of the same record writes nothing.
+  A second apply of the same record writes nothing. A repair of a ticket whose labels drifted
+  (`force: true`) compares with the labels Linear shows instead, the ones the repair just read
+  (`labels:`) or else the last observation's, so a label a person added or removed by hand is put
+  back as the record says.
 
   `project_now/2` is called by `Pauses` and `Questions` after each write that changed the record,
   by `Hold` after each hold it sets or clears, and by `Decisions.record/3` once a decision is
@@ -51,11 +54,12 @@ defmodule SymphonyElixir.Pauses.Projector do
   @type desired :: %{labels: [String.t()], entries: [Decisions.entry()], section: String.t() | nil}
 
   @typedoc """
-  `tracker:` (default `SymphonyElixir.Tracker`), `store:` (default `SymphonyElixir.RunStore`) and
-  `force: true`, which compares with the labels Linear was last seen with instead of what was last
-  applied, and writes the section again, as a repair of a ticket whose labels drifted does.
+  `tracker:` (default `SymphonyElixir.Tracker`), `store:` (default `SymphonyElixir.RunStore`),
+  `force: true`, which compares with the labels Linear shows instead of what was last applied, and
+  writes the section again, as a repair of a ticket whose labels drifted does, and `labels:`, the
+  labels Linear shows, which the repair just read (default: the ones the last observation saw).
   """
-  @type opt :: {:tracker, module()} | {:store, module()} | {:force, boolean()}
+  @type opt :: {:tracker, module()} | {:store, module()} | {:force, boolean()} | {:labels, [String.t()]}
 
   @doc "Whether the projector owns the labels and the Decisions section: the internal flag `:pause_projector`, default on."
   @spec owns?() :: boolean()
@@ -99,7 +103,7 @@ defmodule SymphonyElixir.Pauses.Projector do
     record = TicketState.normalize(record)
     tracker = Keyword.get(opts, :tracker, Tracker)
     desired = desired(record)
-    last = last_applied(record, Keyword.get(opts, :force) == true)
+    last = last_applied(record, opts)
 
     {labels, label_errors} = apply_labels(tracker, record.issue_id, last.labels, desired.labels)
     {section, section_errors} = apply_section(tracker, record.issue_id, last.section, desired)
@@ -118,19 +122,26 @@ defmodule SymphonyElixir.Pauses.Projector do
 
   @doc """
   Applies the projection of `ticket`'s record as the store holds it now (`apply/2`), when the
-  projector owns it (`owns?/0`). A ticket with no record has nothing to project.
+  projector owns it (`owns?/0`). A ticket with no record has nothing to project, unless a repair
+  read its labels (`labels:`): a machine label on a ticket Symphony keeps no record of is cleared.
   """
   @spec project_now({:ticket, String.t(), String.t()}, [opt()]) :: :ok | {:error, term()}
   def project_now({:ticket, repo_key, issue_id}, opts \\ []) do
     if owns?() do
       case Keyword.get(opts, :store, RunStore).get_ticket_state(repo_key, issue_id) do
         %{} = record -> apply(record, opts)
-        nil -> :ok
+        nil -> repair_unrecorded(repo_key, issue_id, opts)
         {:error, _reason} = error -> error
       end
     else
       :ok
     end
+  end
+
+  # A ticket Symphony keeps no record of wants no machine label, which only a repair that read its
+  # labels in Linear can clear.
+  defp repair_unrecorded(repo_key, issue_id, opts) do
+    if is_list(opts[:labels]), do: apply(TicketState.new(repo_key, issue_id), opts), else: :ok
   end
 
   # A Blocked hold pauses the ticket on its own until the holds are retired, since not every one
@@ -185,12 +196,16 @@ defmodule SymphonyElixir.Pauses.Projector do
     end
   end
 
-  defp last_applied(%{projected: %{} = projected}, false = _force?), do: projected
-  defp last_applied(record, _force?), do: %{labels: observed_labels(record), section: nil}
+  defp last_applied(record, opts) do
+    case {record.projected, Keyword.get(opts, :force) == true} do
+      {%{} = projected, false} -> projected
+      _never_projected_or_forced -> %{labels: machine_labels(Keyword.get(opts, :labels, record.labels)), section: nil}
+    end
+  end
 
-  # The machine labels the last observation of the ticket in Linear saw.
-  defp observed_labels(record) do
-    observed = MapSet.new(record.labels, &String.downcase/1)
+  # The machine labels among the ones Linear shows.
+  defp machine_labels(labels) do
+    observed = MapSet.new(labels, &String.downcase/1)
     Enum.filter(@labels, &MapSet.member?(observed, String.downcase(&1)))
   end
 

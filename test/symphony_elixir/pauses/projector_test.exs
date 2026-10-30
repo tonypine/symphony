@@ -156,6 +156,31 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
       assert Projector.project_now(@ticket, force: true) == :ok
       assert_received {:memory_tracker_label_added, @issue_id, "Blocked"}
     end
+
+    test "a repair compares with the labels it read in Linear, so a label added by hand goes, and one the record wants stays" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id, %{labels: [], projected: %{labels: []}}))
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | labels: ["Blocked", "Needs Decision"]}])
+
+      # Compared with what it last applied, nothing differs.
+      assert Projector.project_now(@ticket) == :ok
+      refute_received {:memory_tracker_label_removed, _issue_id, _name}
+
+      {:ok, _question} = Questions.ask(@ticket, @request, at: @at)
+      flush_label_messages()
+      assert Projector.project_now(@ticket, force: true, labels: ["Blocked", "Needs Decision", "bug"]) == :ok
+      assert_received {:memory_tracker_label_removed, @issue_id, "Blocked"}
+      refute_received {:memory_tracker_label_added, _issue_id, _name}
+      refute_received {:memory_tracker_label_removed, _issue_id, _name}
+      assert stored().projected.labels == ["Needs Decision"]
+    end
+
+    test "a repair clears a machine label on a ticket Symphony keeps no record of" do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | labels: ["Blocked"]}])
+
+      assert Projector.project_now(@ticket, force: true, labels: ["Blocked"]) == :ok
+      assert_received {:memory_tracker_label_removed, @issue_id, "Blocked"}
+      assert labels() == []
+    end
   end
 
   describe "the Decisions section" do
@@ -262,6 +287,15 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
   end
 
   defp issue, do: %Issue{id: @issue_id, identifier: "TP-817", title: "T", state: "In Progress", labels: [], description: @description}
+
+  defp flush_label_messages do
+    receive do
+      {:memory_tracker_label_added, _issue_id, _name} -> flush_label_messages()
+      {:memory_tracker_label_removed, _issue_id, _name} -> flush_label_messages()
+    after
+      0 -> :ok
+    end
+  end
 
   defp stored, do: TicketState.normalize(RunStore.get_ticket_state(@repo_key, @issue_id))
 

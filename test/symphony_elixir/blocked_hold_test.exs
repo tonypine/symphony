@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.BlockedHoldTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{BlockedHold, Hold, Pauses, RunStore, UpdateHold, Workflow}
+  alias SymphonyElixir.{BlockedHold, Hold, Pauses, RunStore, TicketState, UpdateHold, Workflow}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Hold.Drift
   alias SymphonyElixir.Linear.Issue
@@ -214,6 +214,20 @@ defmodule SymphonyElixir.BlockedHoldTest do
       assert log =~ "with no store hold"
       assert labels() == []
       assert stored_hold() == nil
+    end
+
+    test "clears a hand-added Blocked label the pause projector last applied as absent, against the labels Linear shows (TP-1243)" do
+      Application.put_env(:symphony_elixir, :pause_projector, true)
+      on_exit(fn -> Application.put_env(:symphony_elixir, :pause_projector, false) end)
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue(%{labels: ["Blocked"]})])
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id, %{labels: [], projected: %{labels: []}}))
+      stray = issue(%{labels: ["Blocked"]})
+
+      log = capture_log(fn -> assert BlockedHold.sync(stray, @terminal, settings: designed_settings()) == :none end)
+
+      assert log =~ "with no store hold"
+      assert labels() == []
+      assert RunStore.get_ticket_state(@repo_key, @issue_id).projected.labels == []
     end
 
     test "a stray Blocked label the poll can't clear is logged once over several syncs, and recorded for Setup" do

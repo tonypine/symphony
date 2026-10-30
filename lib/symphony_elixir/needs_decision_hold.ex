@@ -35,7 +35,6 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   alias SymphonyElixir.{Config, DecisionMove, DecisionRequest, Decisions, Handoff, Hold}
   alias SymphonyElixir.HumanActions.{Collector, Request}
   alias SymphonyElixir.{MergeConfirmation, Questions, RunStore, TicketSignals, TicketState}
-  alias SymphonyElixir.Pauses.Projector
 
   @director %{kind: :person, name: "Director"}
 
@@ -306,16 +305,14 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   # The store is the truth for a hold, so the board is repaired to match it in both directions: a
   # `Needs Decision` label with no store hold is a hand-added label, reported and cleared, and a
   # store hold whose label is missing is re-projected, so a hold that pauses dispatch is never
-  # silently invisible. While the pause projector owns the labels, it renders them from the pause and
-  # the questions, so the hold repairs none.
+  # silently invisible. While the pause projector owns the labels, the repair has it compare with the
+  # labels this read shows rather than what it last applied.
   defp repair_drift(repo_key, issue_id, node, opts) do
-    if Projector.owns?(), do: :ok, else: repair_hold_drift(repo_key, issue_id, node, opts)
-  end
+    repair = Keyword.merge(opts, force: true, labels: labels(node))
 
-  defp repair_hold_drift(repo_key, issue_id, node, opts) do
     case Hold.report_drift(repo_key, issue_id, labels(node), Keyword.merge(opts, identifier: node["identifier"], url: node["url"])) do
-      {:stray_label, :needs_decision} -> clear_label(repo_key, issue_id, opts)
-      {:missing_label, :needs_decision} -> reproject_label(repo_key, issue_id, opts)
+      {:stray_label, :needs_decision} -> clear_label(repo_key, issue_id, repair)
+      {:missing_label, :needs_decision} -> reproject_label(repo_key, issue_id, repair)
       _ok_or_other_kind -> :ok
     end
   end

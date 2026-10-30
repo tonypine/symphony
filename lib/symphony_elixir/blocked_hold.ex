@@ -526,11 +526,14 @@ defmodule SymphonyElixir.BlockedHold do
   # it. A store hold whose label is missing — its label write failed, or a person removed it by
   # hand — is re-projected from the store, so a hold that is pausing dispatch is never silently
   # invisible. The Inbox reads held tickets from the store, not by their label, so this poll is what
-  # keeps a `Needs Decision` label in line with its hold.
+  # keeps a `Needs Decision` label in line with its hold. While the pause projector owns the labels,
+  # the repair has it compare with the labels this read shows rather than what it last applied.
   defp repair_drift(repo_key, issue_id, %Issue{} = issue, opts) do
+    repair = Keyword.merge(opts, force: true, labels: issue.labels)
+
     case Hold.report_drift(repo_key, issue_id, issue.labels, Keyword.merge(opts, identifier: issue.identifier, url: issue.url)) do
-      {:stray_label, kind} -> clear_label(repo_key, issue_id, kind, opts)
-      {:missing_label, kind} -> reproject_label(repo_key, issue_id, kind, opts)
+      {:stray_label, kind} -> clear_label(repo_key, issue_id, kind, repair)
+      {:missing_label, kind} -> reproject_label(repo_key, issue_id, kind, repair)
       :ok -> :ok
     end
   end
