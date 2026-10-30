@@ -12,7 +12,9 @@ defmodule SymphonyElixir.Pauses.Backfill do
       the `:environment`, the condition named from the hold's reason; `dispatch_loop` and
       `handoff_missing` become a question Symphony asks ("Run it again", "Start it over from main"
       or "Keep it paused"; the second recommended when the hold's reason speaks of a restart, else
-      the first), which pauses the ticket on a `:question` reason.
+      the first), which pauses the ticket on a `:question` reason. A Blocked hold set beside a
+      question Symphony asked live (`waits_on.question_id`, as the dispatch-loop guard and the quiet
+      handoff set it, `SymphonyElixir.DispatchLoop`) writes nothing: that question pauses it already.
     * A Needs Decision hold's open request becomes an open question (its title, question, why and
       options from the hold's decision), with its `:question` reason.
     * Each stored decision becomes an answered question (answered by the Director, scope
@@ -279,6 +281,9 @@ defmodule SymphonyElixir.Pauses.Backfill do
         {[{:question, request, with_at(opts, at)}], []}
     end
   end
+
+  # A hold set beside a question asked live already has that question and its `:question` reason.
+  defp hold(_record, %{kind: :blocked, waits_on: %{question_id: id}}) when is_binary(id), do: {[], []}
 
   defp hold(_record, %{kind: :blocked, waits_on: %{type: type, keys: keys}} = hold) when type in @ticket_types do
     {identifiers, others} = Enum.split_with(keys, &(&1 =~ @identifier))
