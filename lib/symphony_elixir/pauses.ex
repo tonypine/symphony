@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.Pauses do
   @moduledoc """
   The one answer to "why is this not moving": a pause on a subject (a ticket, a repository or
-  Symphony itself) with one or more reasons, who set it and since when. This module is the only
-  writer of a pause.
+  Symphony itself) with one or more reasons, who set it and since when. This module decides every
+  change to a pause.
 
   A reason says what the subject waits on, structured so the machine can tell when it ends:
 
@@ -31,8 +31,11 @@ defmodule SymphonyElixir.Pauses do
   holds its lock (`RunStore.update_ticket_pause/4`, `RunStore.update_subject_pause/2`), so
   concurrent writers never lose each other's reasons. A ticket's event is appended in that same
   transaction, so the pause never changes without its event and the events follow the order the
-  changes were written in; the live channel's notice of it goes out once it commits. Nothing calls
-  this module yet.
+  changes were written in; the live channel's notice of it goes out once it commits. A writer that
+  changes a ticket's record with its own change takes the pause's change from `set_change/4` or
+  `clear_reason_change/4` and stores both in one transaction: a question
+  (`SymphonyElixir.Questions`) and its reason never disagree. Nothing outside
+  `SymphonyElixir.Questions`, itself unwired, calls this module yet.
   """
 
   alias SymphonyElixir.{RunStore, TicketEvents, TicketState}
@@ -83,6 +86,12 @@ defmodule SymphonyElixir.Pauses do
 
   @type result :: {:ok, pause() | nil} | {:error, term()}
 
+  @typedoc """
+  A change to a ticket's pause, for a writer that stores it with its own change: the pause to write
+  (nil once cleared) and the ledger events that record it, none when nothing changes.
+  """
+  @type ticket_change :: {:ok, pause() | nil, [SymphonyElixir.TicketEvents.Event.t()]} | {:error, term()}
+
   @doc """
   Pauses `subject` on `reason`: a subject that is not paused records `pause.set`; a paused one gains
   the reason, as with `add_reason/3`. Returns the pause.
@@ -121,6 +130,29 @@ defmodule SymphonyElixir.Pauses do
          {:ok, target} <- new_reason(reason, opts, :by) do
       update(subject, target.set_at, &drop(subject, &1, target))
     end
+  end
+
+  @doc """
+  The change `set/3` makes to `pause`, the pause of ticket `ticket` as its writer read it under the
+  record's lock (`RunStore.update_ticket_question/4`): that writer stores the pause and its events in
+  its own transaction. Pure: it writes nothing.
+  """
+  @spec set_change(subject(), pause() | nil, reason_input(), [opt()]) :: ticket_change()
+  def set_change(ticket, pause, reason, opts) do
+    with {:ok, ticket} <- ticket(ticket),
+         {:ok, reason} <- new_reason(reason, opts, :set_by),
+         do: changed(add(ticket, normalize(pause), reason))
+  end
+
+  @doc """
+  The change `clear_reason/3` makes to `pause`, the pause of ticket `ticket` as its writer read it
+  under the record's lock, as `set_change/4` gives it. Pure: it writes nothing.
+  """
+  @spec clear_reason_change(subject(), pause() | nil, reason_input(), [opt()]) :: ticket_change()
+  def clear_reason_change(ticket, pause, reason, opts) do
+    with {:ok, ticket} <- ticket(ticket),
+         {:ok, target} <- new_reason(reason, opts, :by),
+         do: changed(drop(ticket, normalize(pause), target))
   end
 
   @doc "Clears `subject`'s pause whatever its reasons, recording `pause.cleared`. A subject not paused is unchanged."
@@ -225,6 +257,11 @@ defmodule SymphonyElixir.Pauses do
   end
 
   defp change(_subject, pause, _type, _payload, _at), do: {:write, pause, pause}
+
+  # A ticket's change as a writer of its record stores it: the pause with its events, none when
+  # nothing changes; a refusal passes through.
+  defp changed({:write, pause, events, _pause}), do: {:ok, pause, events}
+  defp changed(unchanged), do: with({:ok, pause} <- unchanged, do: {:ok, pause, []})
 
   # The pause is read, changed and written in one store transaction that holds its lock, with the
   # ticket's event appended in it; the event's notice goes out once it commits.
@@ -351,6 +388,9 @@ defmodule SymphonyElixir.Pauses do
 
   defp subject(:symphony), do: {:ok, :symphony}
   defp subject(subject), do: {:error, {:invalid_subject, subject}}
+
+  defp ticket({:ticket, _repo_key, _issue_id} = ticket), do: subject(ticket)
+  defp ticket(subject), do: {:error, {:invalid_subject, subject}}
 
   # One line: whitespace runs collapse to one space; blank is nil.
   defp line(value) when is_binary(value) do

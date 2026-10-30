@@ -72,10 +72,10 @@ defmodule SymphonyElixir.RunStore do
   @type ticket_pause_update :: {:write, map() | nil, [Event.t()], term()} | {:ok, term()} | {:error, term()}
 
   @typedoc """
-  What a ticket's question update's function returns: a question to put on the record with the
-  events to append in the same transaction, or nothing to write.
+  What a ticket's question update's function returns: a question to put on the record and the pause
+  to write with it, with the events to append in the same transaction, or nothing to write.
   """
-  @type ticket_question_update :: {:write, map(), [Event.t()], term()} | {:ok, term()} | {:error, term()}
+  @type ticket_question_update :: {:write, map(), map() | nil, [Event.t()], term()} | {:ok, term()} | {:error, term()}
 
   defmodule State do
     @moduledoc false
@@ -1355,17 +1355,23 @@ defmodule SymphonyElixir.RunStore do
   def update_ticket_pause(_repo_key, _issue_id, _at, _fun), do: {:error, :invalid_issue_id}
 
   @doc """
-  Runs `fun` on the questions of `repo_key`'s ticket `issue_id` (`SymphonyElixir.Questions`, their
-  only writer) in one durable transaction that holds the record's write lock, as
-  `update_ticket_pause/4` does for its pause: `{:write, question, events, result}` puts `question`
-  on the record (`SymphonyElixir.TicketState.put_question/2`) with `updated_at` `at`, appends
-  `events` in the same transaction and returns `{:ok, result, stored}`; `{:ok, result}` writes
-  nothing and returns `{:ok, result, []}`; `{:error, reason}` writes nothing and is returned. `fun`
-  may run more than once, so it must have no side effects.
+  Runs `fun` on the questions and the pause of `repo_key`'s ticket `issue_id`
+  (`SymphonyElixir.Questions`, the questions' only writer) in one durable transaction that holds the
+  record's write lock, as `update_ticket_pause/4` does for a pause alone:
+  `{:write, question, pause, events, result}` puts `question` on the record
+  (`SymphonyElixir.TicketState.put_question/2`) and writes `pause` (nil clears it) with `updated_at`
+  `at`, appends `events` in the same transaction and returns `{:ok, result, stored}`, so a question
+  and the pause it holds never disagree; `{:ok, result}` writes nothing and returns
+  `{:ok, result, []}`; `{:error, reason}` writes nothing and is returned. `fun` may run more than
+  once, so it must have no side effects.
   """
-  @spec update_ticket_question(String.t(), String.t(), DateTime.t(), ([map()] -> ticket_question_update())) ::
-          {:ok, term(), [Event.t()]} | {:error, term()}
-  def update_ticket_question(repo_key, issue_id, at, fun) when is_binary(issue_id) and is_function(fun, 1) do
+  @spec update_ticket_question(
+          String.t(),
+          String.t(),
+          DateTime.t(),
+          ([map()], map() | nil -> ticket_question_update())
+        ) :: {:ok, term(), [Event.t()]} | {:error, term()}
+  def update_ticket_question(repo_key, issue_id, at, fun) when is_binary(issue_id) and is_function(fun, 2) do
     with {:ok, repo_key} <- normalize_repo_key(repo_key),
          :ok <- ensure_started() do
       durable_transaction(fn -> write_ticket_question(repo_key, issue_id, at, fun) end)
@@ -2412,9 +2418,9 @@ defmodule SymphonyElixir.RunStore do
   defp write_ticket_question(repo_key, issue_id, at, fun) do
     {key, record} = locked_ticket_record(repo_key, issue_id)
 
-    case fun.(record.questions) do
-      {:write, question, events, result} ->
-        record = record |> TicketState.put_question(question) |> Map.put(:updated_at, at)
+    case fun.(record.questions, record.pause) do
+      {:write, question, pause, events, result} ->
+        record = record |> TicketState.put_question(question) |> TicketState.put_pause(pause, at)
         :mnesia.write({@ticket_state_table, key, repo_key, issue_id, record})
         {:ok, stored} = write_ticket_events(repo_key, issue_id, events)
         {:ok, result, stored}

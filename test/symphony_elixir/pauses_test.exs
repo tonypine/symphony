@@ -162,6 +162,43 @@ defmodule SymphonyElixir.PausesTest do
     end
   end
 
+  describe "a change for another writer of the ticket's record" do
+    test "set_change/4 and clear_reason_change/4 give the pause and its events as set/3 and clear_reason/3 make them, and write nothing" do
+      assert {:ok, %{reasons: [%{kind: :question, set_by: @person}], since: @at} = paused, [set]} =
+               Pauses.set_change(@ticket, nil, @question, set_by: @person, at: @at)
+
+      assert %{type: "pause.set", issue_id: @issue_id, at: @at, payload: %{reason: "question", waits_on: %{question_id: "q-1"}}} = set
+
+      assert {:ok, %{reasons: [_question, %{kind: :ticket}]} = both, [%{type: "pause.reason_added"}]} =
+               Pauses.set_change(@ticket, paused, @dependency, at: @later)
+
+      assert Pauses.set_change(@ticket, both, @question, at: @later) == {:ok, both, []}
+
+      assert {:ok, ^paused, [%{type: "pause.reason_cleared", payload: %{by: @person}}]} =
+               Pauses.clear_reason_change(@ticket, both, @dependency, by: @person, at: @later)
+
+      assert {:ok, nil, [%{type: "pause.cleared"}]} = Pauses.clear_reason_change(@ticket, paused, @question, at: @later)
+      assert Pauses.clear_reason_change(@ticket, paused, @dependency, at: @later) == {:ok, paused, []}
+      assert Pauses.clear_reason_change(@ticket, nil, @question, at: @later) == {:ok, nil, []}
+
+      refute Pauses.paused?(@ticket)
+      assert RunStore.get_ticket_state(@repo_key, @issue_id) == nil
+      assert ticket_events(@repo_key, @issue_id) == []
+    end
+
+    test "refuses a subject that is not a ticket, and a reason, setter or time it doesn't know" do
+      for subject <- [{:repository, "repo-a"}, :symphony, {:ticket, @repo_key, " "}] do
+        assert Pauses.set_change(subject, nil, @question, []) == {:error, {:invalid_subject, subject}}
+        assert Pauses.clear_reason_change(subject, nil, @question, []) == {:error, {:invalid_subject, subject}}
+      end
+
+      assert Pauses.set_change(@ticket, nil, :question, []) == {:error, {:invalid_reason, :question}}
+      assert Pauses.set_change(@ticket, nil, @question, set_by: "Tony") == {:error, {:invalid_set_by, "Tony"}}
+      assert Pauses.clear_reason_change(@ticket, nil, @question, by: "Tony") == {:error, {:invalid_set_by, "Tony"}}
+      assert Pauses.clear_reason_change(@ticket, nil, @question, at: "now") == {:error, {:invalid_option, :at}}
+    end
+  end
+
   describe "concurrent writers" do
     test "adding distinct reasons at once keeps every reason and records one pause.reason_added each" do
       {:ok, _pause} = Pauses.set(@ticket, @question, at: @at)

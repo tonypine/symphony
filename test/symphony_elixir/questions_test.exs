@@ -186,17 +186,14 @@ defmodule SymphonyElixir.QuestionsTest do
       assert {"pause.cleared", %{by: @director}} = List.last(ticket_events(@repo_key, @issue_id))
     end
 
-    test "answering again after a failed clear clears the reason the answered question left behind" do
+    test "a question whose reason something else cleared is answered with no pause change" do
       question = ask!()
-      {:ok, _pause} = Pauses.add_reason(@ticket, @dependency, at: @at)
-      {:ok, _answered} = Questions.answer(@ticket, question.id, "1", at: @later)
-      # The question's reason put back stands in for a clear that failed once the answer was stored.
-      {:ok, _pause} = Pauses.add_reason(@ticket, %{kind: :question, waits_on: %{question_id: question.id}}, at: @later)
+      {:ok, nil} = Pauses.clear(@ticket, at: @at)
+      events = ticket_events(@repo_key, @issue_id)
 
-      assert Questions.answer(@ticket, question.id, "1", by: @tony, at: @later) == {:error, {:question_not_open, :answered}}
-      assert reasons() == [{:ticket, %{identifier: "TP-1194"}}]
-      assert [{"question.answered", %{option: "Ship today", by: @director}}] = ticket_events(@repo_key, @issue_id, "question.answered")
-      assert {"pause.reason_cleared", %{reason: "question", by: @tony}} = List.last(ticket_events(@repo_key, @issue_id))
+      assert {:ok, %{state: :answered}} = Questions.answer(@ticket, question.id, "1", at: @later)
+      refute Pauses.paused?(@ticket)
+      assert [{"question.answered", %{option: "Ship today"}}] = ticket_events(@repo_key, @issue_id) -- events
     end
 
     test "a blank answer, an unknown question, a malformed answerer, scope or time is refused" do
@@ -238,18 +235,6 @@ defmodule SymphonyElixir.QuestionsTest do
       assert Questions.answer(@ticket, question.id, "1") == {:error, {:question_not_open, :withdrawn}}
     end
 
-    test "withdrawing again after a failed clear clears the reason the withdrawn question left behind" do
-      question = ask!()
-      {:ok, _withdrawn} = Questions.withdraw(@ticket, question.id, "TP-12 was cancelled", at: @later)
-      # The question's reason put back stands in for a clear that failed once the withdrawal was stored.
-      {:ok, _pause} = Pauses.set(@ticket, %{kind: :question, waits_on: %{question_id: question.id}}, at: @later)
-
-      assert Questions.withdraw(@ticket, question.id, "TP-12 was cancelled", at: @later) == {:error, {:question_not_open, :withdrawn}}
-      refute Pauses.paused?(@ticket)
-      assert [{"question.withdrawn", %{reason: "TP-12 was cancelled"}}] = ticket_events(@repo_key, @issue_id, "question.withdrawn")
-      assert {"pause.cleared", %{by: @symphony}} = List.last(ticket_events(@repo_key, @issue_id))
-    end
-
     test "a blank reason, an unknown question, a malformed withdrawer or time is refused" do
       question = ask!()
 
@@ -259,6 +244,61 @@ defmodule SymphonyElixir.QuestionsTest do
       assert Questions.withdraw(@ticket, question.id, "Gone", at: 1) == {:error, {:invalid_option, :at}}
       assert Questions.withdraw(:symphony, question.id, "Gone") == {:error, {:invalid_subject, :symphony}}
       assert Questions.open(@ticket) == [question]
+    end
+  end
+
+  describe "one step" do
+    test "the ticket is paused on exactly its open questions, whatever asks, answers and withdraws at once" do
+      first = ask!()
+      second = ask!("Ship TP-12 at last")
+      {:ok, _pause} = Pauses.add_reason(@ticket, @dependency, at: @at)
+
+      # The same question asked again while one answer and one withdrawal land: each ask returns the
+      # open question or, once the first is answered, asks it anew.
+      writes =
+        [{:answer, first.id}, {:withdraw, second.id}] ++ for(n <- 1..8, do: {:ask, n})
+
+      writes
+      |> Task.async_stream(
+        fn
+          {:answer, id} -> Questions.answer(@ticket, id, "2")
+          {:withdraw, id} -> Questions.withdraw(@ticket, id, "TP-12 was cancelled")
+          {:ask, _n} -> Questions.ask(@ticket, @request)
+        end,
+        max_concurrency: length(writes),
+        ordered: false
+      )
+      |> Enum.each(fn {:ok, result} -> assert {:ok, _question} = result end)
+
+      open = Questions.open(@ticket)
+      assert length(open) <= 1
+      assert reasons() == [{:ticket, %{identifier: "TP-1194"}} | Enum.map(open, &{:question, %{question_id: &1.id}})]
+      record = RunStore.get_ticket_state(@repo_key, @issue_id)
+      assert [%{state: :answered}, %{state: :withdrawn} | _asked_anew] = record.questions
+    end
+
+    test "asking an open question again writes nothing, so it never puts back a reason cleared since" do
+      question = ask!()
+      # The pause cleared stands in for an answer's clear landing between the repeated ask's read and
+      # any write it would make after it.
+      {:ok, nil} = Pauses.clear(@ticket, at: @at)
+      events = ticket_events(@repo_key, @issue_id)
+
+      assert Questions.ask(@ticket, @request, at: @later) == {:ok, question}
+      refute Pauses.paused?(@ticket)
+      assert ticket_events(@repo_key, @issue_id) == events
+    end
+
+    test "the store writes a question with its pause and their events together, or nothing" do
+      question = ask!()
+      record = RunStore.get_ticket_state(@repo_key, @issue_id)
+      events = ticket_events(@repo_key, @issue_id)
+
+      refuse = fn [^question], %{reasons: [%{kind: :question}]} -> {:error, :refused} end
+      assert RunStore.update_ticket_question(@repo_key, @issue_id, @later, refuse) == {:error, :refused}
+
+      assert RunStore.get_ticket_state(@repo_key, @issue_id) == record
+      assert ticket_events(@repo_key, @issue_id) == events
     end
   end
 
@@ -272,7 +312,7 @@ defmodule SymphonyElixir.QuestionsTest do
     end
 
     test "the store refuses a question update for a malformed issue id" do
-      unchanged = fn _questions -> {:ok, nil} end
+      unchanged = fn _questions, _pause -> {:ok, nil} end
       assert RunStore.update_ticket_question(@repo_key, nil, @at, unchanged) == {:error, :invalid_issue_id}
     end
   end
