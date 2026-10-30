@@ -989,8 +989,7 @@ defmodule SymphonyElixir.RunStore do
   A record the store does not have has nothing to project, so it is a no-op. The read-modify-write
   runs in one durable transaction, so a mark written meanwhile is never overwritten.
   """
-  @spec mark_ticket_projection(String.t(), String.t(), :phase | {:hold_label, :blocked | :needs_decision}, term()) ::
-          :ok | {:error, term()}
+  @spec mark_ticket_projection(String.t(), String.t(), TicketState.projection_name(), term()) :: :ok | {:error, term()}
   def mark_ticket_projection(repo_key, issue_id, projection, error) when is_binary(issue_id) do
     with {:ok, repo_key} <- normalize_repo_key(repo_key),
          :ok <- ensure_started() do

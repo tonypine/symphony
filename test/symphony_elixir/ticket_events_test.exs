@@ -218,6 +218,25 @@ defmodule SymphonyElixir.TicketEventsTest do
       assert TicketEvents.query(@repo_key, @issue_id, open_decisions: true) == []
     end
 
+    test "a Question's request is open until its answer or withdrawal, or a decision recorded, names it" do
+      asked = fn id -> TicketEvents.record(@repo_key, @issue_id, "question.asked", %{question_id: id, title: "Ship #{id}", question: "Ship #{id}?"}) end
+      assert {:ok, answered} = asked.("q-1")
+      assert {:ok, withdrawn} = asked.("q-2")
+      assert {:ok, recorded} = asked.("q-3")
+      assert {:ok, open} = asked.("q-4")
+      assert {:ok, legacy} = TicketEvents.record(@repo_key, @issue_id, "decision.requested", %{question: "Legacy?"})
+
+      assert [^answered, ^withdrawn, ^recorded, ^open, ^legacy] = TicketEvents.query(@repo_key, @issue_id, open_decisions: true)
+
+      assert {:ok, _answer} = TicketEvents.record(@repo_key, @issue_id, "question.answered", %{question_id: "q-1", answer: "Yes"})
+      assert {:ok, _withdrawal} = TicketEvents.record(@repo_key, @issue_id, "question.withdrawn", %{question_id: "q-2", reason: "Not needed"})
+
+      assert {:ok, _decision} =
+               TicketEvents.record(@repo_key, @issue_id, "decision.recorded", %{answer: "Yes", key: "c3", request: recorded.id}, actor: {:person, "Tony"})
+
+      assert [^open, ^legacy] = TicketEvents.query(@repo_key, @issue_id, open_decisions: true)
+    end
+
     test "a withdrawal closes a decision request too" do
       assert {:ok, request} = TicketEvents.record(@repo_key, @issue_id, "decision.requested", %{question: "Q?"}, actor: {:agent, nil, "implementation"})
       assert {:ok, _} = TicketEvents.record(@repo_key, @issue_id, "decision.withdrawn", %{title: "Q", request: request.id})

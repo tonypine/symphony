@@ -43,18 +43,31 @@ defmodule SymphonyElixir.DependencyGateTest do
     :ok = RunStore.clear()
     on_exit(fn -> RunStore.delete_ticket_state("repo-dep-words", issue.id) end)
 
-    for finding <- [{:hold, [%{package: "left_pad", reason: "new package"}]}, {:error, {:enoent, "/tmp/mix.lock"}}] do
-      assert :ok = DependencyGate.pause(issue, finding, "repo-dep-words", tracker: Memory)
-      assert_received {:memory_tracker_comment, "issue-dependency-gate-words", body}
-      assert body =~ "## Decision needed: Approve the dependency changes on ACME-GATE-WORDS"
-      assert body =~ "**If unanswered:** ACME-GATE-WORDS stays where it is and its pull request is not opened."
-      assert body =~ "**Why recommended:**"
-      assert PlainWords.tokens(body) == []
-    end
+    assert :ok = DependencyGate.pause(issue, {:hold, [%{package: "left_pad", reason: "new package"}]}, "repo-dep-words", tracker: Memory)
+    assert_received {:memory_tracker_comment, "issue-dependency-gate-words", body}
+    assert body =~ "## Decision needed: Approve the dependency changes on ACME-GATE-WORDS"
+    assert body =~ "**If unanswered:** ACME-GATE-WORDS stays where it is and its pull request is not opened."
+    assert body =~ "**Why recommended:**"
+    assert PlainWords.tokens(body) == []
 
-    # The second pause asks the same question, so it is the request already open: one event.
-    assert [{"decision.requested", %{title: "Approve the dependency changes on ACME-GATE-WORDS"}}] =
-             ticket_events("repo-dep-words", issue.id, ["decision.requested", "hold.set"])
+    # The second pause asks the same question, so it is the Question already open: no second comment, one event.
+    assert :ok = DependencyGate.pause(issue, {:error, {:enoent, "/tmp/mix.lock"}}, "repo-dep-words", tracker: Memory)
+    refute_received {:memory_tracker_comment, "issue-dependency-gate-words", _body}
+
+    assert [{"question.asked", %{title: "Approve the dependency changes on ACME-GATE-WORDS"}}] =
+             ticket_events("repo-dep-words", issue.id, ["question.asked", "decision.requested", "hold.set"])
+  end
+
+  test "pause/4 says an audit error in plain words" do
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+    issue = %{id: "issue-dependency-gate-error", identifier: "ACME-GATE-ERROR", state: "In Progress"}
+    :ok = RunStore.clear()
+    on_exit(fn -> RunStore.delete_ticket_state("repo-dep-error", issue.id) end)
+
+    assert :ok = DependencyGate.pause(issue, {:error, {:enoent, "/tmp/mix.lock"}}, "repo-dep-error", tracker: Memory)
+    assert_received {:memory_tracker_comment, "issue-dependency-gate-error", body}
+    assert body =~ "## Decision needed: Approve the dependency changes on ACME-GATE-ERROR"
+    assert PlainWords.tokens(body) == []
   end
 
   test "react_to_hold and react_to_audit_error never move a terminal issue" do

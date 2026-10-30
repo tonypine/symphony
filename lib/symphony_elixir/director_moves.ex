@@ -551,8 +551,8 @@ defmodule SymphonyElixir.DirectorMoves do
   # clears it once it sees the answers.
   defp clear_answered_hold(_issue, [], _opts), do: :ok
 
-  defp clear_answered_hold(issue, _answers, opts) do
-    case Hold.clear(issue.repo_key, issue.id, :needs_decision, [answered: true] ++ store_opts(opts)) do
+  defp clear_answered_hold(issue, answers, opts) do
+    case Hold.clear(issue.repo_key, issue.id, :needs_decision, answered_opts(answers, opts)) do
       :ok -> :ok
       {:error, reason} -> Logger.warning("Failed to clear the Needs Decision hold on #{issue.identifier} after its plan's answers: #{inspect(reason)}")
     end
@@ -729,7 +729,7 @@ defmodule SymphonyElixir.DirectorMoves do
       case reply_to_request(issue, input.request_comment_id, comment) do
         :ok ->
           record_decision(issue, input.request_comment_id, hold, picks)
-          clear_decision_hold(issue, to_state, comment, opts)
+          clear_decision_hold(issue, to_state, comment, picks, opts)
 
         {:error, reason} ->
           {:error, {:linear, reason}}
@@ -776,12 +776,19 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   # The decision is answered, so its clear records no withdrawal: the answer's `decision.recorded`
-  # ends the request.
-  defp clear_decision_hold(issue, to_state, comment, opts) do
-    case Hold.clear(issue.repo_key, issue.id, :needs_decision, [answered: true] ++ store_opts(opts)) do
+  # ends the request, and the Question the hold projects is answered.
+  defp clear_decision_hold(issue, to_state, comment, picks, opts) do
+    case Hold.clear(issue.repo_key, issue.id, :needs_decision, answered_opts(picks, opts)) do
       :ok -> decision_finish(issue, to_state, comment, opts)
       {:error, reason} -> {:error, {:store, "couldn't clear the hold on #{issue.identifier}: #{inspect(reason)}"}}
     end
+  end
+
+  # An answered clear: the Question the hold projects is answered with the Director's words
+  # (`Hold.clear/4`), so its pause ends with the hold.
+  defp answered_opts(answers, opts) do
+    text = Enum.map_join(answers, " / ", & &1.answer)
+    [answered: true, question: {:answer, text, %{kind: :person, name: "Director"}}] ++ store_opts(opts)
   end
 
   defp decision_finish(issue, to_state, comment, opts) when is_binary(to_state) do

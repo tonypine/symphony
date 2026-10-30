@@ -114,12 +114,13 @@ defmodule SymphonyElixir.TicketSignals do
 
   @doc """
   Marks a projection of the ticket's record to Linear as failed (`TicketState.mark_projection/4`):
-  `:phase` for a move whose Linear write failed, `{:hold_label, kind}` for a hold's label. The
-  reconciler projects the record again and drops the mark
+  `:phase` for a move whose Linear write failed, `{:hold_label, kind}` for a hold's label,
+  `{:question_comment, question_id}` for a question's request comment. The reconciler projects the
+  record again and drops the mark
   (`SymphonyElixir.TicketObservation.reconcile_all/3`). Only the record's marks are written. A
   ticket with no record has nothing to project. Best-effort like `record_phase/3`.
   """
-  @spec mark_projection(String.t() | nil, String.t() | nil, :phase | {:hold_label, atom()}, term()) :: :ok
+  @spec mark_projection(String.t() | nil, String.t() | nil, TicketState.projection_name(), term()) :: :ok
   def mark_projection(repo_key, issue_id, projection, error) when is_binary(repo_key) and is_binary(issue_id),
     do: repo_key |> RunStore.mark_ticket_projection(issue_id, projection, error) |> projection_written("mark", issue_id)
 
@@ -203,7 +204,8 @@ defmodule SymphonyElixir.TicketSignals do
   end
 
   @doc """
-  The ticket's newest open `decision.requested` event (one no answer or withdrawal names yet) whose
+  The ticket's newest open request, a `decision.requested` or a Question's `question.asked` event
+  (one no answer or withdrawal names yet, `TicketEvents.query/3`'s `open_decisions`), whose
   title, or else question, matches `title` or `question`, ignoring case and spacing; nil when there
   is none or the events can't be read.
   """

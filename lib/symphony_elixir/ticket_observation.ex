@@ -406,7 +406,12 @@ defmodule SymphonyElixir.TicketObservation do
         tracker = Keyword.get(opts, :tracker, Tracker)
         records = Enum.map(records, &TicketState.normalize/1)
 
-        for record <- records, mark <- record.pending_projection, do: reproject(repo_key, record.issue_id, TicketState.projection_of(mark), Map.get(polled, record.issue_id), tracker)
+        # A question's request comment is posted again by the Inbox's sweep, which reads the
+        # ticket's comments (`SymphonyElixir.NeedsDecisionHold`), so it is never posted twice.
+        for record <- records,
+            mark <- record.pending_projection,
+            mark.type != :question_comment,
+            do: reproject(repo_key, record.issue_id, TicketState.projection_of(mark), Map.get(polled, record.issue_id), tracker)
 
         fill_unobserved(repo_key, records, polled, tracker, opts)
 

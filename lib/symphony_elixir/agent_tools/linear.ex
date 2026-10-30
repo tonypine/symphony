@@ -28,12 +28,15 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.PathSafety
   alias SymphonyElixir.PathUnlock
   alias SymphonyElixir.PromptSafety
+  alias SymphonyElixir.Questions
   alias SymphonyElixir.SensitivePath
   alias SymphonyElixir.TicketSignals
   alias SymphonyElixir.Tracker
   alias SymphonyElixir.TransitionGuard
   alias SymphonyElixir.Walkthrough
 
+  # Who asks and withdraws an agent's requests (`SymphonyElixir.Questions`).
+  @asking_run %{kind: :run, name: "The run"}
   @comment_limit_default 50
   @comment_limit_max 100
   @title_max_length 120
@@ -1543,8 +1546,12 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
     # The request already passed `validate_human_action/1`, so the writer's error is the post's or
     # the hold's, returned as the tool returned it before.
-    case DecisionRequest.ask(held, request, [post: &post_request(issue, &1, opts), label_tracker: opts[:tracker]] ++ Keyword.take(opts, [:store])) do
+    ask_opts = [post: &post_request(issue, &1, opts), label_tracker: opts[:tracker], asked_by: @asking_run] ++ Keyword.take(opts, [:store])
+
+    # A question the hold already carries was asked before, its comment posted or waiting to be.
+    case DecisionRequest.ask(held, request, ask_opts) do
       {:ok, result} -> {:ok, result}
+      :ok -> {:ok, %{"requested" => false, "reason" => "already_open"}}
       {:error, {_step, reason}} -> {:error, reason}
     end
   end
@@ -1568,11 +1575,12 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp tracker(opts), do: Keyword.get(opts, :tracker, Tracker)
 
   @doc """
-  Withdraws open human-action requests on the current issue that are no longer needed: replies
-  `## Action withdrawn` with `reason` under each one (or only under the one titled `title`), so the
-  next human-action update drops them. Once no open request is left, the `Needs Decision` hold is
-  cleared so the ticket continues in place. An issue with no open request is left as it is. The
-  reason is refused when it holds a secret pattern.
+  Withdraws open human-action requests on the current issue that are no longer needed: the open
+  Questions they were asked as first (`SymphonyElixir.Questions.withdraw/4`, every one or only the
+  one titled `title`), then a reply `## Action withdrawn` with `reason` under each request comment,
+  so the next human-action update drops them. Once no open request is left, the `Needs Decision`
+  hold is cleared so the ticket continues in place. An issue with no open request is left as it is.
+  The reason is refused when it holds a secret pattern.
   """
   @spec withdraw_human_action(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def withdraw_human_action(context, attrs, opts \\ []) when is_map(attrs) do
@@ -1580,10 +1588,32 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, reason, title} <- validate_withdrawal(attrs),
          :ok <- SecretScanner.reject_fields_if_secret_pattern([reason: reason], context, "linear_withdraw_human_action", opts),
          {:ok, settings} <- human_actions_settings(context, opts) do
+      ticket = {:ticket, issue_repo_key(context), issue_id}
+      withdrawn = withdraw_questions(ticket, reason, title)
+
       post_withdrawal(issue_id, reason, title, settings, opts)
+      |> with_questions(ticket, withdrawn)
       |> settle_withdrawal(context, issue_id, opts)
     end
   end
+
+  # The Questions go first: they are the truth the requests on Linear project.
+  defp withdraw_questions({:ticket, repo_key, _issue_id}, _reason, _title) when repo_key in [nil, ""], do: []
+
+  defp withdraw_questions(ticket, reason, title) do
+    for question <- Questions.open(ticket),
+        is_nil(title) or Request.normalize_title(question.title) == Request.normalize_title(title),
+        match?({:ok, _question}, Questions.withdraw(ticket, question.id, reason, by: @asking_run)),
+        do: question.id
+  end
+
+  # A Question withdrawn with no request on Linear (its comment never posted) is a withdrawal too.
+  defp with_questions({:ok, %{"withdrawn" => true} = withdrawal}, _ticket, ids), do: {:ok, Map.put(withdrawal, "questionIds", ids)}
+
+  defp with_questions({:ok, %{"withdrawn" => false}}, ticket, [_ | _] = ids),
+    do: {:ok, %{"withdrawn" => true, "questionIds" => ids, "requestCommentIds" => [], "replyCommentIds" => [], "remaining" => length(Questions.open(ticket))}}
+
+  defp with_questions(result, _ticket, _ids), do: result
 
   # The withdrawal landed: the hold it releases goes first, so an issue that no longer waits on a
   # person is cleared before the human-action list is refreshed. Anything else `post_withdrawal`

@@ -3,8 +3,9 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
   Every question a person is asked goes through the one writer, `SymphonyElixir.DecisionRequest`:
   each source below raises its requests with `DecisionRequest.ask/4` (or sets the hold again for a
   request already posted with `DecisionRequest.project/4`), and no other code sets a Needs Decision
-  hold, renders a request comment or records `decision.requested`. A new source must call the
-  writer and be named here, or this test fails.
+  hold, renders a request comment or records `decision.requested`. The writer asks each one as a
+  Question first (`SymphonyElixir.Questions.ask/3`). A new source must call the writer and be named
+  here, or this test fails.
 
   Symphony's own questions with nobody to answer them but a person's pick of what happens next ask
   through the Question service (`SymphonyElixir.Questions.ask/3`) directly; those are named here too.
@@ -71,8 +72,14 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
     assert callers == MapSet.new(Map.keys(@sources))
   end
 
+  test "the writer asks every request as a Question before its hold and its comment" do
+    writer = Map.new(lib_files())[@writer]
+    assert writer =~ "Questions.ask({:ticket, repo_key, issue_id}, request,"
+  end
+
   test "the modules named here are every one that asks a Question directly" do
-    callers = for {path, text} <- lib_files(), path != "lib/symphony_elixir/questions.ex", text =~ "Questions.ask(", into: MapSet.new(), do: path
+    writers = ["lib/symphony_elixir/questions.ex", @writer]
+    callers = for {path, text} <- lib_files(), path not in writers, text =~ "Questions.ask(", into: MapSet.new(), do: path
     assert callers == MapSet.new(Map.keys(@question_sources))
 
     orchestrator = Map.new(lib_files())["lib/symphony_elixir/orchestrator.ex"]

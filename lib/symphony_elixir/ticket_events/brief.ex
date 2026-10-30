@@ -7,8 +7,9 @@ defmodule SymphonyElixir.TicketEvents.Brief do
   Its sections, in order:
 
     * **Phase and holds**, from the ticket's record.
-    * **Decisions**: every request with its answer or withdrawal, every open request, and every
-      ruling a person recorded without a request.
+    * **Decisions**: every request (a `decision.requested`, or a Question's `question.asked`) with
+      its answer or withdrawal, every open request, and every ruling a person recorded without a
+      request.
     * **Open findings**: every finding no unsuperseded resolution names, grouped by class with a
       count, each with its viewport, its commit (the event's, else its run's), when it was last
       seen (its event, or a later event that reopened it) and its whole description.
@@ -51,6 +52,8 @@ defmodule SymphonyElixir.TicketEvents.Brief do
     "evidence" => [:caption],
     "decision.requested" => [:title, :question],
     "decision.recorded" => [:answer],
+    "question.asked" => [:title, :question],
+    "question.answered" => [:answer],
     "step.started" => [:title],
     "step.completed" => [:title],
     "step.skipped" => [:title]
@@ -122,20 +125,41 @@ defmodule SymphonyElixir.TicketEvents.Brief do
   # Decisions: each request with the event that ended it (nil while open), and each ruling, in the
   # order they were made.
 
+  # A Question's request is its `question.asked`, ended by the Question's own answer or withdrawal
+  # (naming its `question_id`) or by a `decision.recorded` naming the event, whichever came first.
   defp decisions(events) do
-    requests = events |> Enum.filter(&(&1.type == "decision.requested")) |> MapSet.new(& &1.id)
+    requests = events |> Enum.filter(&(&1.type in ["decision.requested", "question.asked"])) |> MapSet.new(& &1.id)
+
+    questions =
+      for %Event{type: "question.asked", id: id} = event <- events, text(event, :question_id), into: %{} do
+        {text(event, :question_id), id}
+      end
 
     ends =
       events
-      |> Enum.filter(&(&1.type in ["decision.recorded", "decision.withdrawn"] and MapSet.member?(requests, text(&1, :request))))
-      |> Enum.group_by(&text(&1, :request))
+      |> Enum.flat_map(&ended_request(&1, requests, questions))
+      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
 
     Enum.flat_map(events, fn
-      %Event{type: "decision.requested", id: id} = event -> [{:request, event, ends |> Map.get(id, []) |> List.first()}]
+      %Event{type: type, id: id} = event when type in ["decision.requested", "question.asked"] -> [{:request, event, ends |> Map.get(id, []) |> List.first()}]
       %Event{type: "decision.recorded"} = event -> if MapSet.member?(requests, text(event, :request)), do: [], else: [{:ruling, event}]
       _event -> []
     end)
   end
+
+  # The request an event ends, by the request event's id.
+  defp ended_request(%Event{type: type} = event, requests, _questions) when type in ["decision.recorded", "decision.withdrawn"] do
+    if MapSet.member?(requests, text(event, :request)), do: [{text(event, :request), event}], else: []
+  end
+
+  defp ended_request(%Event{type: type} = event, _requests, questions) when type in ["question.answered", "question.withdrawn"] do
+    case Map.get(questions, text(event, :question_id)) do
+      nil -> []
+      request -> [{request, event}]
+    end
+  end
+
+  defp ended_request(_event, _requests, _questions), do: []
 
   defp decisions_section(decisions), do: section("Decisions", decisions, &decision_lines/1)
 
@@ -152,7 +176,7 @@ defmodule SymphonyElixir.TicketEvents.Brief do
   end
 
   defp decision_end(nil), do: "  Open: it waits on the Director's answer."
-  defp decision_end(%Event{type: "decision.withdrawn"} = event), do: "  Withdrawn #{time(event.at)} by #{actor(event.actor)}."
+  defp decision_end(%Event{type: type} = event) when type in ["decision.withdrawn", "question.withdrawn"], do: "  Withdrawn #{time(event.at)} by #{actor(event.actor)}."
   defp decision_end(event), do: "  Answered #{time(event.at)} by #{actor(event.actor)}: " <> (text(event, :answer) || "")
 
   defp options(event) do

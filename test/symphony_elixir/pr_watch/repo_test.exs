@@ -987,9 +987,11 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       end
     end
 
+    # The question as the Director reads it: each ask is a Question of its own, whose id the hidden
+    # last line names.
     defp question(issue_id) do
       assert_received {:comment, ^issue_id, "## Decision needed: Protected files changed on TP-" <> body}
-      body
+      String.replace(body, ~r/\n\n<!-- symphony:question \S+ -->\z/, "")
     end
 
     test "R18's question recommends what it did under poll, from the record's description and the store's rulings, with no Linear read",
