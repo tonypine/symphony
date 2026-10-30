@@ -2981,6 +2981,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
       assert {:ok, %{paused: false, reason: nil, paused_at: nil, reasons: []}} = Orchestrator.resume_dispatch(name)
       assert Pauses.get(:symphony) == {:ok, nil}
+
+      # A reason longer than a reason's line still pauses, its line cut.
+      assert {:ok, %{paused: true, reason: reason}} = Orchestrator.pause_dispatch(name, String.duplicate("a", 400))
+      assert String.length(reason) == 300
+      assert {:ok, %{paused: false}} = Orchestrator.resume_dispatch(name)
     end
 
     test "a pause the release before left on its old row is in force from the first tick, and an installed update's lifts" do

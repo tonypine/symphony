@@ -369,6 +369,17 @@ defmodule SymphonyElixir.RunStoreTest do
       assert %DateTime{} = RunStore.get_marker("pause_backfill_symphony_v1")
     end
 
+    test "an old row with a reason longer than a reason's line is moved, its line cut, and deleted" do
+      write_legacy_pause(%{paused: true, reason: String.duplicate("x", 400), paused_at: ~U[2026-10-01 09:00:00Z]})
+
+      assert :ok = RunStore.move_legacy_pause()
+
+      assert {:ok, %{reasons: [%{kind: :person, text: text}]}} = Pauses.get(:symphony)
+      assert text == String.duplicate("x", 300)
+      assert %{paused: true} = RunStore.get_paused()
+      assert legacy_pause_row() == []
+    end
+
     test "no old row, or an unpaused one, sets nothing and marks the backfill's step done" do
       assert :ok = RunStore.move_legacy_pause()
       assert Pauses.get(:symphony) == {:ok, nil}

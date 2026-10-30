@@ -133,11 +133,12 @@ defmodule SymphonyElixir.Pauses do
   The reason the Director's Pause (`reason`, the control API's) gives Symphony's pause: the
   menu bar app's update pause (`updating to v0.0.1.42`) waits on that build (`:build`,
   `waits_on: %{version: version}`), any other the Director (`:person`, `waits_on: %{action:
-  "unblock"}`, `You paused Symphony` without a reason). Either keeps `reason` as its line.
+  "unblock"}`, `You paused Symphony` without a reason). Either keeps `reason` as its line, cut to a
+  reason's longest line, so a long reason still pauses.
   """
   @spec dispatch_reason(String.t() | nil) :: reason_input()
   def dispatch_reason(reason) do
-    text = line(reason)
+    text = with line when is_binary(line) <- line(reason), do: String.slice(line, 0, @max_text)
 
     case text && Regex.run(@update_reason, text) do
       [_text, version] -> %{kind: :build, waits_on: %{version: version}, text: text}

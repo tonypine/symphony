@@ -394,6 +394,20 @@ defmodule SymphonyElixir.PausesTest do
       assert %{kind: :person, text: "updating to vnext"} = Pauses.dispatch_reason("updating to vnext")
     end
 
+    test "a reason longer than a reason's line still pauses, cut to its first 300 characters" do
+      long = String.duplicate("a", 299) <> " " <> String.duplicate("b", 100)
+
+      assert %{kind: :person, text: text} = Pauses.dispatch_reason(long)
+      assert text == String.duplicate("a", 299) <> " "
+
+      assert {:ok, %{reasons: [%{kind: :person, text: line}]}} = Pauses.set(:symphony, Pauses.dispatch_reason(long), set_by: @person, at: @at)
+      assert line == String.duplicate("a", 299)
+      assert Pauses.dispatch_status(elem(Pauses.get(:symphony), 1)).paused
+
+      assert %{text: text} = Pauses.dispatch_reason(String.duplicate("é", 400))
+      assert text == String.duplicate("é", 300)
+    end
+
     test "only the Director's and an update's reasons pause all dispatch; the status lists every reason" do
       assert Pauses.dispatch_reasons(nil) == []
       assert Pauses.dispatch_status(nil) == %{paused: false, reason: nil, paused_at: nil, reasons: []}
