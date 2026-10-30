@@ -229,12 +229,15 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
     test "lifts an operator's stop, so the ticket the Director stopped runs again from main", %{opts: opts} do
       put_issues([%{pr("Todo") | repo_key: "repo-restart"}])
-      :ok = OperatorStop.set_hold("repo-restart", "pr", OperatorStop.mark("MOT-40", "repo-restart", ~U[2026-10-20 08:41:25Z]))
+      stop("repo-restart")
 
       assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "Start over"}, restart_opts(opts))
       refute Hold.held?("repo-restart", "pr", :blocked)
+      refute OperatorStop.held?("repo-restart", "pr")
 
-      :ok = OperatorStop.set_hold("repo-restart", "pr", OperatorStop.mark("MOT-40", "repo-restart", ~U[2026-10-20 08:41:25Z]))
+      assert [{"pause.cleared", %{by: %{kind: :person, name: "Director"}}}] = ticket_events("repo-restart", "pr", "pause.cleared")
+
+      stop("repo-restart")
 
       log =
         capture_log(fn ->
@@ -242,6 +245,17 @@ defmodule SymphonyElixir.DirectorMovesTest do
         end)
 
       assert log =~ "Restarted MOT-40 but couldn't clear its operator-stop hold: :boom"
+    end
+
+    test "lifts a stop paused beside a dispatch-loop hold, and clears that hold too", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-restart"}])
+      :ok = Hold.set("repo-restart", "pr", :blocked, %{reason: "dispatch_loop: 4 runs", waits_on: %{type: "dispatch_loop", keys: ["implementation"]}})
+      stop("repo-restart")
+      assert %{waits_on: %{type: "dispatch_loop"}} = Hold.get("repo-restart", "pr", :blocked)
+
+      assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "Start over"}, restart_opts(opts))
+      refute OperatorStop.held?("repo-restart", "pr")
+      refute Hold.held?("repo-restart", "pr", :blocked)
     end
 
     test "leaves any other Blocked hold, and stands when the store refuses to clear the loop's", %{opts: opts} do
@@ -675,6 +689,50 @@ defmodule SymphonyElixir.DirectorMovesTest do
       log = capture_log(fn -> assert {:ok, %{move: "unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, Keyword.put(opts, :release_competitors, release)) end)
       assert log =~ "couldn't release its competing pull requests"
       refute Hold.held?("repo-director", "pr", :blocked)
+    end
+
+    test "lifts an operator's stop: its pause reason, then its hold, and the ticket continues in place", %{opts: opts} do
+      put_issues([%{pr("Todo") | repo_key: "repo-director"}])
+      stop("repo-director")
+
+      assert {:ok, %{move: "unblock", moved: false, commented: true}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+
+      refute OperatorStop.held?("repo-director", "pr")
+      refute Hold.held?("repo-director", "pr", :blocked)
+      assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director: MOT-40 continues in place."}
+      assert [{"pause.cleared", %{by: %{kind: :person, name: "Director"}}}] = ticket_events("repo-director", "pr", "pause.cleared")
+    end
+
+    test "lifts a stop paused beside a hold that clears on its own, and leaves that hold", %{opts: opts} do
+      put_issues([%{pr("Todo") | repo_key: "repo-director"}])
+      :ok = Hold.set("repo-director", "pr", :blocked, %{reason: "waiting on MOT-1", waits_on: %{type: "dependency", keys: ["MOT-1"]}})
+      stop("repo-director")
+
+      assert {:ok, %{move: "unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+
+      refute OperatorStop.held?("repo-director", "pr")
+      assert %{waits_on: %{type: "dependency"}} = Hold.get("repo-director", "pr", :blocked)
+    end
+
+    test "lifts a stop paused beside an access hold together with that hold", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      :ok = Hold.set("repo-director", "pr", :blocked, %{reason: "Needs a token", waits_on: %{type: "access", keys: []}})
+      stop("repo-director")
+
+      assert {:ok, %{move: "unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+
+      refute OperatorStop.held?("repo-director", "pr")
+      refute Hold.held?("repo-director", "pr", :blocked)
+    end
+
+    test "a stop whose hold the store refuses to clear comes back as a store error", %{opts: opts} do
+      put_issues([%{pr("Todo") | repo_key: "repo-director"}])
+      stop("repo-director")
+
+      assert {:error, {:store, "couldn't clear the hold on MOT-40: :boom"}} =
+               DirectorMoves.move(:unblock, "MOT-40", %{}, Keyword.put(opts, :store, UnwritableStore))
+
+      assert Hold.held?("repo-director", "pr", :blocked)
     end
 
     test "refuses a ticket with no hold, and one waiting on something other than access", %{opts: opts} do
@@ -1326,6 +1384,12 @@ defmodule SymphonyElixir.DirectorMovesTest do
         clearing_condition: "when the decision is recorded",
         decision: %{title: "Add the release signing secrets", question: "Add the signing secrets, or ship unsigned builds?"}
       })
+  end
+
+  # The Director's Stop as the orchestrator leaves it: the pause reason, then the hold beside it.
+  defp stop(repo_key) do
+    :ok = OperatorStop.mark(repo_key, "pr", ~U[2026-10-20 08:41:25Z])
+    :ok = OperatorStop.set_hold(repo_key, "pr", ~U[2026-10-20 08:41:25Z])
   end
 
   defp plan(state), do: %Issue{id: "plan", identifier: "MOT-30", title: "Plan an MVP", state: state, labels: ["plan"]}

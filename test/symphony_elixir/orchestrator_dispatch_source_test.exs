@@ -307,9 +307,10 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
         orchestrator_state()
         | running: %{running.id => %{issue: running, identifier: running.identifier}},
           watching: %{watched.id => %{}, "#{ctx.repo_key}-unknown" => %{}},
-          forced: %{forced.id => %{}, gone.id => %{}},
-          operator_stops: %{stopped.id => OperatorStop.mark(stopped.identifier, ctx.repo_key, DateTime.utc_now())}
+          forced: %{forced.id => %{}, gone.id => %{}}
       }
+
+      :ok = OperatorStop.mark(ctx.repo_key, stopped.id, DateTime.utc_now())
 
       {result, _state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0)
       refute_received {:memory_tracker_fetch_issue_states_by_ids, _ids}
@@ -337,19 +338,18 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       observe!(ctx.repo_key, [stopped, moved], :poll)
       observe!(ctx.repo_key, [%{moved | state: "Backlog", updated_at: DateTime.add(@linear_at, 60)}], :webhook)
 
-      marks = Map.new([stopped, moved], &{&1.id, OperatorStop.mark(&1.identifier, ctx.repo_key, DateTime.utc_now())})
-      state = %{orchestrator_state() | operator_stops: marks}
+      for issue <- [stopped, moved], do: :ok = OperatorStop.mark(ctx.repo_key, issue.id, DateTime.utc_now())
 
-      {result, state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0)
+      {result, state} = Orchestrator.run_repo_poll_task_for_test(orchestrator_state(), [], 0)
       refute_received {:memory_tracker_fetch_issue_states_by_ids, _ids}
 
       state = Orchestrator.apply_operator_stops_result_for_test(state, result.stopped_ids, result.stopped_result)
 
-      # Still in Todo: the stop is confirmed in that state and keeps the ticket from dispatching.
-      assert %{state: "Todo"} = state.operator_stops[stopped.id]
-      refute Orchestrator.should_dispatch_issue_for_test(stopped, state)
+      # Still in Todo: the stop stays on its pause and keeps the ticket from dispatching.
+      assert OperatorStop.held?(ctx.repo_key, stopped.id)
+      refute Orchestrator.should_dispatch_issue_for_test(%{stopped | repo_key: ctx.repo_key}, state)
       # Moved out of the candidates: the stop has done its job and goes.
-      refute Map.has_key?(state.operator_stops, moved.id)
+      refute OperatorStop.held?(ctx.repo_key, moved.id)
     end
 
     test "records the store can't read keep every ticket as it was, as a failed Linear read does", ctx do
@@ -394,9 +394,10 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
 
       state = %{
         orchestrator_state()
-        | forced: %{forced.id => %{}},
-          operator_stops: %{stopped.id => OperatorStop.mark(stopped.identifier, ctx.repo_key, DateTime.utc_now())}
+        | forced: %{forced.id => %{}}
       }
+
+      :ok = OperatorStop.mark(ctx.repo_key, stopped.id, DateTime.utc_now())
 
       # Neither is watched, so neither reaches the plan-comment reader: no by-id read.
       {result, _state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0)

@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.OrchestratorOperatorStopTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Hold, OperatorStop, RunStore, Tracker}
+  alias SymphonyElixir.{Hold, OperatorStop, Pauses, RunStore, Tracker}
 
   @active_states ["Todo", "In Progress", "Rework"]
 
@@ -41,7 +41,7 @@ defmodule SymphonyElixir.OrchestratorOperatorStopTest do
     :ok
   end
 
-  test "a stopped ticket still in Todo is skipped on the next dispatch tick, and the stop asks for a poll" do
+  test "a stopped ticket still in Todo is paused on the Director's reason, skipped with its text, and the stop asks for a poll" do
     issue = issue("stopped", "MT-STOP", "Todo")
     tracked([issue])
 
@@ -52,45 +52,51 @@ defmodule SymphonyElixir.OrchestratorOperatorStopTest do
     assert token == state.tick_token
     assert state.next_poll_due_at_ms <= System.monotonic_time(:millisecond)
 
-    assert %{"stopped" => %{identifier: "MT-STOP", repo_key: "default", state: nil, held: true}} = state.operator_stops
-    assert %{reason: "Stopped by you at " <> _} = Hold.get("default", "stopped", :blocked)
+    assert {:ok, %{reasons: [%{kind: :person, waits_on: %{action: "unblock"}, text: text}]}} = Pauses.get({:ticket, "default", "stopped"})
+    assert text =~ ~r/^Stopped by you at \d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC\. Unblock runs it again; Restart starts it over from main\.$/
+    assert %{reason: "Stopped by you at " <> _} = hold = Hold.get("default", "stopped", :blocked)
+    assert OperatorStop.hold?(hold)
 
     state = Orchestrator.dispatch_chosen_issues_for_test([issue], state)
 
     assert state.running == %{}
-    assert [%{identifier: "MT-STOP", reason: reason}] = snapshot_of(state).dispatch_skipped
-    assert reason =~ ~r/^stopped by the operator at \d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC; waiting for the next poll$/
+    assert [%{identifier: "MT-STOP", reason: ^text}] = snapshot_of(state).dispatch_skipped
   end
 
-  test "a poll that finds the ticket still active keeps it skipped, and lifting its hold (Restart) dispatches it" do
+  test "a poll that finds the ticket still active keeps it skipped, and lifting the stop (Unblock) dispatches it" do
     issue = issue("stopped", "MT-STOP", "Todo")
     tracked([issue])
     state = stop(running(orchestrator_state(), issue), issue)
 
     state = poll(state)
-    assert %{"stopped" => %{state: "Todo"}} = state.operator_stops
+    assert OperatorStop.held?("default", "stopped")
+    assert Hold.held?("default", "stopped", :blocked)
 
     state = Orchestrator.dispatch_chosen_issues_for_test([issue], state)
     assert state.running == %{}
-    assert [%{reason: reason}] = snapshot_of(state).dispatch_skipped
-    assert reason =~ "; Unblock or Restart in the Director runs it again"
+    assert [%{reason: "Stopped by you at " <> _}] = snapshot_of(state).dispatch_skipped
 
-    # Another poll on the same state changes nothing.
-    assert poll(state).operator_stops == state.operator_stops
-
-    # Restart (and Unblock) clear the hold; the ticket dispatches on the next tick, and the next
-    # poll drops the mark.
-    :ok = Hold.clear("default", "stopped", :blocked)
+    # Unblock (and Restart) clear the reason and the hold; the ticket dispatches on the next tick.
+    :ok = OperatorStop.clear_hold("default", "stopped", by: OperatorStop.director())
     dispatched = Orchestrator.dispatch_chosen_issues_for_test([issue], state)
     assert Map.has_key?(dispatched.running, "stopped")
-
-    log = capture_log(fn -> send(self(), {:state, poll(state)}) end)
-    assert_received {:state, %{operator_stops: stops}}
-    assert stops == %{}
-    assert log =~ "Operator stop lifted by a person: issue_id=stopped issue_identifier=MT-STOP"
   end
 
-  test "a poll that finds the ticket terminal clears the mark and its hold, and leaves nothing running" do
+  test "a Symphony that starts again, with nothing in memory, still skips the ticket its store has stopped" do
+    issue = issue("stopped", "MT-STOP", "Todo")
+    tracked([issue])
+    _stopped = stop(running(orchestrator_state(), issue), issue)
+
+    name = Module.concat(__MODULE__, :Restarted)
+    {:ok, pid} = Orchestrator.start_link(name: name)
+    on_exit(fn -> if Process.alive?(pid), do: stop_process(pid) end)
+
+    restarted = Orchestrator.dispatch_chosen_issues_for_test([issue], :sys.get_state(pid))
+    assert restarted.running == %{}
+    assert [%{identifier: "MT-STOP", reason: "Stopped by you at " <> _}] = snapshot_of(restarted).dispatch_skipped
+  end
+
+  test "a poll that finds the ticket terminal clears the reason and the hold, and leaves nothing running" do
     issue = issue("stopped", "MT-STOP", "Todo")
     tracked([issue])
     state = stop(running(orchestrator_state(), issue), issue)
@@ -98,53 +104,74 @@ defmodule SymphonyElixir.OrchestratorOperatorStopTest do
     tracked([%{issue | state: "Duplicate"}])
     state = poll(state)
 
-    assert state.operator_stops == %{}
+    refute OperatorStop.held?("default", "stopped")
+    assert {:ok, nil} = Pauses.get({:ticket, "default", "stopped"})
     refute Hold.held?("default", "stopped", :blocked)
     assert state.running == %{}
   end
 
-  test "a ticket moved on the board after the poll confirmed it, or no longer returned, is cleared" do
+  test "a ticket moved on the board after the stop, or no longer returned, is cleared" do
     moved = issue("moved", "MT-MOVED", "Todo")
     gone = issue("gone", "MT-GONE", "Todo")
     backlog = issue("backlog", "MT-BACKLOG", "Todo")
-    tracked([moved, gone, backlog])
+    kept = issue("kept", "MT-KEPT", "Todo")
+    tracked([moved, gone, backlog, kept])
 
-    state = orchestrator_state() |> running(moved) |> running(gone) |> running(backlog)
-    state = state |> stop(moved) |> stop(gone) |> stop(backlog)
+    state = orchestrator_state() |> running(moved) |> running(gone) |> running(backlog) |> running(kept)
+    state = state |> stop(moved) |> stop(gone) |> stop(backlog) |> stop(kept)
     state = poll(state)
-    assert map_size(state.operator_stops) == 3
+    assert length(OperatorStop.stopped()) == 4
 
-    tracked([%{moved | state: "In Progress"}, %{backlog | state: "Backlog"}])
-    state = poll(state)
+    # A person moves MT-MOVED on the board: the record's phase is written after the stop.
+    :ok = RunStore.update_ticket_state("default", "moved", %{phase: "In Progress", phase_at: DateTime.add(DateTime.utc_now(), 1)})
+    tracked([%{moved | state: "In Progress"}, %{backlog | state: "Backlog"}, kept])
+    state = poll(state, DateTime.add(DateTime.utc_now(), 2))
 
-    assert state.operator_stops == %{}
+    assert [%{issue_id: "kept"}] = OperatorStop.stopped()
     for issue_id <- ["moved", "gone", "backlog"], do: refute(Hold.held?("default", issue_id, :blocked))
+    assert Hold.held?("default", "kept", :blocked)
+    assert state.running == %{}
   end
 
-  test "a mark cleared while its hold is still being written has the hold cleared once it lands" do
+  test "a stop set after Linear was read is not judged by that read" do
     issue = issue("stopped", "MT-STOP", "Todo")
-    mark = OperatorStop.mark("MT-STOP", "default", DateTime.utc_now())
-    :ok = OperatorStop.set_hold("default", "stopped", mark)
+    tracked([issue])
+    state = stop(running(orchestrator_state(), issue), issue)
 
-    # The poll finds the ticket terminal while the hold write is in flight; that write lands after
-    # the mark went, so the hold is cleared once it does.
+    tracked([])
+    state = poll(state, DateTime.add(DateTime.utc_now(), -60))
+    assert OperatorStop.held?("default", "stopped")
+
+    _state = poll(state)
+    refute OperatorStop.held?("default", "stopped")
+  end
+
+  test "a hold that lands after its stop was cleared is cleared once it lands" do
+    issue = issue("stopped", "MT-STOP", "Todo")
+    tracked([issue])
+    state = stop(running(orchestrator_state(), issue), issue)
+    :ok = OperatorStop.clear_hold("default", "stopped")
+
+    # The hold write was still in flight when a person unblocked the ticket; it lands afterwards.
+    stopped_at = DateTime.utc_now()
+    :ok = OperatorStop.set_hold("default", "stopped", stopped_at)
     ref = make_ref()
     context = %{kind: :operator_stop_hold, issue_ids: ["stopped"], repo_key: "default"}
-    in_flight = %{orchestrator_state() | operator_stops: %{"stopped" => mark}, tracker_tasks: %{ref => context}}
     send(self(), {ref, {:tracker_task_result, :ok}})
 
-    state = Orchestrator.apply_operator_stops_result_for_test(in_flight, ["stopped"], {:ok, [%{issue | state: "Done"}]})
+    state = await_tasks(%{state | tracker_tasks: %{ref => context}})
 
-    assert state.operator_stops == %{}
     assert state.tracker_tasks == %{}
     refute Hold.held?("default", "stopped", :blocked)
   end
 
-  test "a hold the store refuses leaves the mark in force, and a failed read keeps every mark" do
-    mark = OperatorStop.mark("MT-STOP", "default", DateTime.utc_now())
+  test "a hold the store refuses leaves the pause in force, and a failed read keeps every stop" do
+    issue = issue("stopped", "MT-STOP", "Todo")
+    tracked([issue])
+    state = stop(running(orchestrator_state(), issue), issue)
     ref = make_ref()
     context = %{kind: :operator_stop_hold, issue_ids: ["stopped"], repo_key: "default"}
-    state = %{orchestrator_state() | operator_stops: %{"stopped" => mark}, tracker_tasks: %{ref => context}}
+    state = %{state | tracker_tasks: %{ref => context}}
 
     log =
       capture_log(fn ->
@@ -153,7 +180,7 @@ defmodule SymphonyElixir.OrchestratorOperatorStopTest do
       end)
 
     assert_received {:state, state}
-    assert state.operator_stops == %{"stopped" => mark}
+    assert OperatorStop.held?("default", "stopped")
     assert log =~ "Failed to hold a ticket the operator stopped: issue_id=stopped reason=:boom"
 
     log =
@@ -162,28 +189,34 @@ defmodule SymphonyElixir.OrchestratorOperatorStopTest do
       end)
 
     assert log =~ "Failed to read the tickets the operator stopped; they stay skipped: :linear_down"
+    assert OperatorStop.held?("default", "stopped")
 
-    # A mark a person lifted between the poll's start and its result is passed over; no marks, no read.
-    lifted = Orchestrator.apply_operator_stops_result_for_test(%{state | operator_stops: %{}}, ["stopped"], {:ok, []})
-    assert lifted.operator_stops == %{}
+    # A stop a person lifted between the poll's start and its result is passed over; no stops, no read.
+    :ok = OperatorStop.clear_hold("default", "stopped")
+    assert Orchestrator.apply_operator_stops_result_for_test(state, ["stopped"], {:ok, []}) == state
     assert Orchestrator.apply_operator_stops_result_for_test(state, [], {:error, :not_read}) == state
   end
 
-  test "a PR run's stop marks no ticket" do
-    issue = %{issue("pr:default:7", "default#7", "Todo") | run_kind: :pr}
-    state = stop(running(orchestrator_state(), issue), issue)
+  test "a stop whose pause the store refuses is reported, and writes no hold" do
+    issue = %{issue("stopped", "MT-STOP", "Todo") | repo_key: nil}
+    tracked([issue])
+    state = %{running(orchestrator_state(), issue) | repo_key: nil}
+    state = put_in(state.running["stopped"].repo_key, nil)
 
-    assert state.operator_stops == %{}
-    refute_received {:tick, _token}
+    log = capture_log(fn -> send(self(), {:state, stop(state, issue)}) end)
+
+    assert_received {:state, state}
+    assert state.tracker_tasks == %{}
+    assert log =~ "Failed to pause a ticket the operator stopped: issue_id=stopped issue_identifier=MT-STOP reason={:invalid_subject"
+    assert_receive {:tick, _token}
   end
 
-  test "a Symphony that starts again keeps the marks its store holds, to be confirmed by the next poll" do
-    :ok = OperatorStop.set_hold("default", "stopped", OperatorStop.mark("MT-STOP", "default", ~U[2026-10-20 08:41:25Z]))
-    name = Module.concat(__MODULE__, :Restarted)
-    {:ok, pid} = Orchestrator.start_link(name: name)
-    on_exit(fn -> if Process.alive?(pid), do: stop_process(pid) end)
+  test "a PR run's stop pauses no ticket" do
+    issue = %{issue("pr:default:7", "default#7", "Todo") | run_kind: :pr}
+    _state = stop(running(orchestrator_state(), issue), issue)
 
-    assert %{"stopped" => %{repo_key: "default", state: nil, held: true}} = :sys.get_state(pid).operator_stops
+    assert OperatorStop.stopped() == []
+    refute_received {:tick, _token}
   end
 
   defp stop(state, %Issue{} = issue) do
@@ -193,10 +226,10 @@ defmodule SymphonyElixir.OrchestratorOperatorStopTest do
     await_tasks(state)
   end
 
-  defp poll(state) do
-    ids = Map.keys(state.operator_stops)
+  defp poll(state, read_at \\ DateTime.utc_now()) do
+    ids = Enum.map(OperatorStop.stopped(), & &1.issue_id)
     {:ok, issues} = Tracker.fetch_issue_states_by_ids(ids)
-    Orchestrator.apply_operator_stops_result_for_test(state, ids, {:ok, issues})
+    Orchestrator.apply_operator_stops_result_for_test(state, ids, {:ok, issues}, read_at)
   end
 
   # The stop's hold is written in a task whose answer comes to this process, as it would to the
