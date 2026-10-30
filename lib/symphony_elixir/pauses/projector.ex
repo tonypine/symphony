@@ -10,6 +10,10 @@ defmodule SymphonyElixir.Pauses.Projector do
     * `Blocked` while the pause has a reason that is not a question: a ticket, a person or the
       environment. A `:build` reason, the wait for a Symphony update (`SymphonyElixir.UpdateHold`),
       shows no label, as it showed none before the projector;
+    * until the holds are retired, either label also while the record holds its hold
+      (`SymphonyElixir.Hold`), since not every hold writes a pause reason or asks a question. A
+      Blocked hold set beside a question (`waits_on.question_id`) is that question's pause and
+      shows Needs Decision alone;
     * the Decisions section's entries (`Decisions.render_from_questions/1`) and their hash.
 
   `apply/2` writes only what differs from what it last applied, which the record keeps
@@ -22,7 +26,8 @@ defmodule SymphonyElixir.Pauses.Projector do
   A second apply of the same record writes nothing.
 
   `project_now/2` is called by `Pauses` and `Questions` after each write that changed the record,
-  and by `Decisions.record/3` once a decision is stored.
+  by `Hold` after each hold it sets or clears, and by `Decisions.record/3` once a decision is
+  stored.
 
   The projector owns these writes while the internal flag `:pause_projector` is on (`owns?/0`,
   default on): the holds' own label writes (`SymphonyElixir.Hold`, `SymphonyElixir.NeedsDecisionHold`)
@@ -63,7 +68,8 @@ defmodule SymphonyElixir.Pauses.Projector do
   @doc """
   What Linear should show for `record`: its labels, sorted (`Needs Decision` while a question is
   open, `Blocked` while a reason other than a question or an update's wait pauses it), and the
-  Decisions section's entries with their hash (nil when there are none). Pure.
+  Decisions section's entries with their hash (nil when there are none), counting the record's
+  holds until they are retired. Pure.
   """
   @spec desired(map()) :: desired()
   def desired(record) do
@@ -72,8 +78,8 @@ defmodule SymphonyElixir.Pauses.Projector do
 
     labels =
       [
-        {@blocked, Enum.any?(reasons, &(&1.kind not in @unlabelled_kinds))},
-        {@needs_decision, Enum.any?(record.questions, &(&1.state == :open))}
+        {@blocked, Enum.any?(reasons, &(&1.kind not in @unlabelled_kinds)) or Enum.any?(record.holds, &blocked_hold?/1)},
+        {@needs_decision, Enum.any?(record.questions, &(&1.state == :open)) or TicketState.hold?(record, :needs_decision)}
       ]
       |> Enum.filter(&elem(&1, 1))
       |> Enum.map(&elem(&1, 0))
@@ -126,6 +132,13 @@ defmodule SymphonyElixir.Pauses.Projector do
       :ok
     end
   end
+
+  # A Blocked hold pauses the ticket on its own until the holds are retired, since not every one
+  # writes a pause reason; one set beside a question (`waits_on.question_id`) is that question's
+  # pause, which shows Needs Decision.
+  defp blocked_hold?(%{kind: :blocked, waits_on: %{question_id: question_id}}) when is_binary(question_id), do: false
+  defp blocked_hold?(%{kind: :blocked}), do: true
+  defp blocked_hold?(_hold), do: false
 
   # Each label that differs, set or cleared; the labels that landed, sorted, and the errors.
   defp apply_labels(tracker, issue_id, last, desired) do

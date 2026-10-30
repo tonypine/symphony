@@ -79,6 +79,16 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
       assert Projector.desired(record(nil, [%{question | state: :answered}])).labels == []
     end
 
+    test "until the holds are retired, a hold shows its label, but a Blocked hold beside a question shows Needs Decision alone" do
+      access = %{kind: :blocked, reason: "needs the deploy key", waits_on: %{type: "access", keys: []}}
+      assert Projector.desired(%{holds: [access]}).labels == ["Blocked"]
+      assert Projector.desired(%{holds: [%{kind: :needs_decision}]}).labels == ["Needs Decision"]
+
+      {:ok, question} = Questions.ask(@ticket, @request, at: @at)
+      beside = %{kind: :blocked, reason: "loop", waits_on: %{type: "dispatch_loop", keys: [], question_id: question.id}}
+      assert Projector.desired(Map.put(record(pause([reason(:question, %{question_id: question.id})]), [question]), :holds, [beside])).labels == ["Needs Decision"]
+    end
+
     test "the section's entries are the record's decisions, hashed; the same decisions hash the same" do
       decision = Decisions.entry("comment-1", ~D[2026-10-13], "Keep the legacy partials", "Remove them here?", "Defer to TP-891.")
       desired = Projector.desired(%{decisions: [decision]})

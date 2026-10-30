@@ -4,6 +4,7 @@ defmodule SymphonyElixir.HoldTest do
   alias SymphonyElixir.{DispatchLoop, Hold, Pauses, Questions, RunStore, TicketState, Workflow}
   alias SymphonyElixir.Hold.Drift
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Pauses.Projector
 
   @repo_key "repo-a"
   @issue_id "issue-1"
@@ -451,16 +452,48 @@ defmodule SymphonyElixir.HoldTest do
       on_exit(fn -> Application.put_env(:symphony_elixir, :pause_projector, false) end)
     end
 
-    test "set, clear and reproject keep the store hold and write no label" do
-      assert :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "waiting on TP-1"}, tracker: FailingTracker)
-      assert Hold.held?(@repo_key, @issue_id, :blocked)
-      assert :ok = Hold.reproject(@repo_key, @issue_id, :blocked, tracker: FailingTracker)
+    test "a Blocked hold that writes no pause reason gets its label from the projector, and its clear takes it off" do
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
+      access = %{reason: "needs the deploy key", waits_on: %{type: "access", keys: []}}
+
+      assert :ok = Hold.set(@repo_key, @issue_id, :blocked, access)
+      assert RunStore.get_ticket_state(@repo_key, @issue_id).pause == nil
+      assert_received {:memory_tracker_label_added, @issue_id, "Blocked"}
+      assert labels() == ["Blocked"]
+
+      # A re-projection asserts the label again against what Linear was last seen with.
+      assert :ok = Hold.reproject(@repo_key, @issue_id, :blocked)
+      assert_received {:memory_tracker_label_added, @issue_id, "Blocked"}
+      assert :ok = Hold.set(@repo_key, @issue_id, :needs_decision)
+      assert_received {:memory_tracker_label_added, @issue_id, "Needs Decision"}
+      assert labels() == ["Blocked", "Needs Decision"]
+
+      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked)
+      assert :ok = Hold.clear(@repo_key, @issue_id, :needs_decision)
       assert labels() == []
       assert pending_projection() == []
+      refute_received {:memory_tracker_label_added, _issue_id, _name}
+    end
 
-      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked, tracker: FailingTracker)
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
-      assert pending_projection() == []
+    test "a ticket that carries the label and the hold but no pause reason keeps the label" do
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | labels: ["Blocked"]}])
+      hold = %{kind: :blocked, reason: "needs the deploy key", waits_on: %{type: "access", keys: []}}
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id, %{labels: ["Blocked"], holds: [hold]}))
+
+      assert Projector.project_now({:ticket, @repo_key, @issue_id}) == :ok
+      assert RunStore.get_ticket_state(@repo_key, @issue_id).projected.labels == ["Blocked"]
+      assert labels() == ["Blocked"]
+      refute_received {:memory_tracker_label_removed, _issue_id, _name}
+    end
+
+    test "a label write Linear refuses keeps the hold and marks the projection pending" do
+      assert :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "waiting on TP-1"}, tracker: FailingTracker)
+      assert Hold.held?(@repo_key, @issue_id, :blocked)
+      assert [%{type: :pause}] = pending_projection()
+      assert labels() == []
     end
 
     test "resync applies the projector from the pause, against the labels Linear was last seen with" do
