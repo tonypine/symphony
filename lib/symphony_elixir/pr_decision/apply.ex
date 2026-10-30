@@ -84,6 +84,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
     AuditLog,
     AutoMerge,
     CiFix,
+    DecisionMove,
     DecisionRequest,
     Decisions,
     MergeConfirmation,
@@ -841,7 +842,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
           recommended: true
         },
         %{label: "Restart", effect: "you restart the ticket from the Symphony app; it starts again from the main branch with a fresh pull request"},
-        %{label: "Cancel", effect: "you move the ticket to Canceled; nothing is merged"}
+        DecisionMove.option(%{label: "Cancel", effect: "Symphony moves the ticket to Canceled; nothing is merged"}, %{to: "Canceled"})
       ],
       recommendation_reason: "Attaching keeps the work and the reviews already done."
     }

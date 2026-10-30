@@ -2,7 +2,18 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{DecisionRequest, Hold, MergeConfirmation, NeedsDecisionHold, Questions, RunStore, Workflow}
+
+  alias SymphonyElixir.{
+    DecisionMove,
+    DecisionRequest,
+    Hold,
+    MergeConfirmation,
+    NeedsDecisionHold,
+    Questions,
+    RunStore,
+    Workflow
+  }
+
   alias SymphonyElixir.HumanActions.{Collector, Request}
   alias SymphonyElixir.Linear.Issue
 
@@ -252,6 +263,44 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
         assert_received {:memory_tracker_state_update, @issue_id, ^state}, "#{answer} should move to #{state}"
         assert stored_hold() == nil
       end
+    end
+
+    test "a reply that picks an option carrying its own move makes that move, and one that picks none moves nothing" do
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
+
+      skip = %{kind: "qa", outcome: "skip", head_sha: "abc123", reason: "skipped by decision"}
+
+      qa_request =
+        request(%{
+          title: "QA could not finish its check of TP-818",
+          question: "QA could not prove any step of TP-818 here. How should it continue?",
+          options: [
+            %{label: "Run QA again", effect: "QA runs once more on the same change"},
+            DecisionMove.option(%{label: "Send it back to Rework", effect: "Symphony moves TP-818 to Rework"}, %{to: "Rework"}),
+            DecisionMove.option(%{label: "Merge without a QA result", effect: "Symphony moves TP-818 to Merging", recommended: true}, %{to: "Merging", verdict: skip})
+          ]
+        })
+
+      body = Request.render_hold(qa_request, "QA")
+
+      for {answer, state} <- [{"Send it back to Rework", "Rework"}, {"3", "Merging"}, {"Run QA again", nil}, {"Let me look first", nil}] do
+        :ok = DecisionRequest.ask(issue(%{state: "QA"}), qa_request, tracker: SymphonyElixir.Tracker.Memory)
+        assert %{decision: %{state: "QA"}} = stored_hold()
+        comments = [request_comment(@comment_id, body), reply(@comment_id, answer)]
+        node = ticket_node(%{"state" => %{"name" => "QA"}, "comments" => %{"nodes" => comments}})
+
+        assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :clear
+        assert stored_hold() == nil
+
+        if state,
+          do: assert_received({:memory_tracker_state_update, @issue_id, ^state}, "#{answer} should move to #{state}"),
+          else: refute_received({:memory_tracker_state_update, @issue_id, _state}, "#{answer} should move nothing")
+      end
+
+      record = RunStore.get_ticket_state(@repo_key, @issue_id)
+      assert [%{kind: "qa", outcome: "skip", head_sha: "abc123"}] = record.verdicts
+      assert %{name: "decision returned", details: %{move: "decide", to: "Merging"}} = Enum.find(record.signals, &(&1.details[:to] == "Merging"))
     end
 
     test "a ticket a person moved after the request stays where they put it" do

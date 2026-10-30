@@ -3,7 +3,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
   alias SymphonyElixir.{AuditLog, BlockedHold, CiWait}
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{DecisionRequest, DirectorMoves, DispatchLoop, Hold}
+  alias SymphonyElixir.{DecisionMove, DecisionRequest, DirectorMoves, DispatchLoop, Hold}
   alias SymphonyElixir.Inbox.Item
   alias SymphonyElixir.{OperatorStop, Pauses, PlanComments, Questions, RunStore, SelfHeal, SubIssueWait, TicketState}
 
@@ -1283,6 +1283,63 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert [%{name: "decision returned", details: %{move: "decide", from: "Code Review", to: "QA"}}] = RunStore.get_ticket_state("repo-director", "pr").signals
     end
 
+    test "QA's Merge without a QA result moves the ticket to Merging itself, with the skip bound to the head", %{opts: opts} do
+      put_issues([%{pr("QA") | repo_key: "repo-director"}])
+      set_qa_hold()
+
+      merge = [%{question: "How should it continue?", answer: "Merge without a QA result"}]
+      assert {:ok, result} = DirectorMoves.move(:decide, "MOT-40", %{picks: merge, request_comment_id: "comment-1"}, opts)
+      assert %{moved: true, from_state: "QA", to_state: "Merging", undo_window_ms: 10_000} = result
+      assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
+      assert_received {:memory_tracker_state_update, "pr", "Merging"}
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+
+      record = RunStore.get_ticket_state("repo-director", "pr")
+      assert record.phase == "Merging"
+      assert [%{kind: "qa", outcome: "skip", head_sha: "abc123", details: %{reason: "skipped by decision"}}] = record.verdicts
+      assert [%{name: "decision returned", details: %{move: "decide", from: "QA", to: "Merging"}}] = record.signals
+      # The answer and the phase it entered, one decision.
+      assert ["decision.requested", "decision.recorded", "verdict.recorded", "phase.entered"] = Enum.map(ticket_events("repo-director", "pr"), &elem(&1, 0))
+    end
+
+    test "QA's Send it back to Rework moves the ticket to Rework, and Run QA again moves nothing", %{opts: opts} do
+      put_issues([%{pr("QA") | repo_key: "repo-director"}])
+      set_qa_hold()
+
+      rework = [%{question: "How should it continue?", answer: "2"}]
+      assert {:ok, %{moved: true, to_state: "Rework"}} = DirectorMoves.move(:decide, "MOT-40", %{picks: rework, request_comment_id: "comment-1"}, opts)
+      assert_received {:memory_tracker_state_update, "pr", "Rework"}
+      assert RunStore.get_ticket_state("repo-director", "pr").verdicts == []
+
+      put_issues([%{pr("QA") | repo_key: "repo-director"}])
+      set_qa_hold()
+
+      again = [%{question: "How should it continue?", answer: "Run QA again"}]
+      assert {:ok, %{moved: false, to_state: "QA"}} = DirectorMoves.move(:decide, "MOT-40", %{picks: again, request_comment_id: "comment-1"}, opts)
+      refute_received {:memory_tracker_state_update, "pr", _state}
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+    end
+
+    test "a Cancel pick tries the team's other spelling of Canceled", %{opts: opts} do
+      put_issues([%{pr("Code Review") | repo_key: "repo-director"}])
+
+      :ok =
+        Hold.set("repo-director", "pr", :needs_decision, %{
+          reason: "How should it continue?",
+          decision: %{title: "Reopen the pull request of MOT-40", question: "How should it continue?", options: [%{label: "Reopen", effect: "it continues"}, cancel_option()]}
+        })
+
+      # The team spells it Cancelled: the first spelling is not one of its states.
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :state_not_found}])
+
+      cancel = [%{question: "How should it continue?", answer: "Cancel"}]
+      assert {:ok, %{moved: true, to_state: "Cancelled"}} = DirectorMoves.move(:decide, "MOT-40", %{picks: cancel, request_comment_id: "comment-1"}, opts)
+      assert_received {:memory_tracker_state_update, "pr", "Cancelled"}
+      assert RunStore.get_ticket_state("repo-director", "pr").phase == "Cancelled"
+    after
+      Application.delete_env(:symphony_elixir, :memory_tracker_update_issue_state_result)
+    end
+
     test "a decision directing a move into a state the repo has not configured is refused before anything is written", %{opts: opts} do
       put_issues([%{pr("Code Review") | repo_key: "repo-director"}])
       set_code_review_hold("")
@@ -1865,6 +1922,31 @@ defmodule SymphonyElixir.DirectorMovesTest do
         }
       })
   end
+
+  # The hold QA sets when it can't finish its check (`SymphonyElixir.QaVerification`): its last two
+  # options carry the move their pick makes.
+  defp set_qa_hold do
+    :ok =
+      Hold.set("repo-director", "pr", :needs_decision, %{
+        reason: "How should it continue?",
+        clearing_condition: "when the decision is recorded",
+        decision: %{
+          title: "QA could not finish its check of MOT-40",
+          question: "How should it continue?",
+          options: [
+            %{label: "Run QA again", effect: "QA runs once more", recommended: true},
+            DecisionMove.option(%{label: "Send it back to Rework", effect: "Symphony moves MOT-40 to Rework"}, %{to: "Rework"}),
+            DecisionMove.option(%{label: "Merge without a QA result", effect: "Symphony moves MOT-40 to Merging"}, %{
+              to: "Merging",
+              verdict: %{kind: "qa", outcome: "skip", head_sha: "abc123", reason: "skipped by decision"}
+            })
+          ],
+          state: "QA"
+        }
+      })
+  end
+
+  defp cancel_option, do: DecisionMove.option(%{label: "Cancel", effect: "Symphony moves the ticket to Canceled"}, %{to: "Canceled"})
 
   defp signing_request do
     %{

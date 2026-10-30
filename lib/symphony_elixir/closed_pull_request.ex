@@ -24,7 +24,7 @@ defmodule SymphonyElixir.ClosedPullRequest do
 
   require Logger
 
-  alias SymphonyElixir.{DecisionRequest, TicketPullRequest}
+  alias SymphonyElixir.{DecisionMove, DecisionRequest, TicketPullRequest}
   alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Linear.Issue
 
@@ -143,7 +143,7 @@ defmodule SymphonyElixir.ClosedPullRequest do
   defp options({:no_change, _url}) do
     [
       %{label: "Restart", effect: "you restart the ticket from the Symphony app; it starts again from the main branch with a fresh pull request", recommended: true},
-      %{label: "Cancel", effect: "you move the ticket to Canceled; nothing is merged", recommended: false}
+      cancel_option()
     ]
   end
 
@@ -151,9 +151,13 @@ defmodule SymphonyElixir.ClosedPullRequest do
     [
       %{label: "Reopen", effect: "you reopen #{pr_or_its(cause)} on GitHub, then pick this; the ticket continues where it is on that pull request", recommended: true},
       %{label: "Restart", effect: "you restart the ticket from the Symphony app; it starts again from the main branch with a fresh pull request", recommended: false},
-      %{label: "Cancel", effect: "you move the ticket to Canceled; nothing is merged", recommended: false}
+      cancel_option()
     ]
   end
+
+  # Canceling is the person's pick and Symphony's move (`SymphonyElixir.DecisionMove`).
+  defp cancel_option,
+    do: DecisionMove.option(%{label: "Cancel", effect: "Symphony moves the ticket to Canceled; nothing is merged", recommended: false}, %{to: "Canceled"})
 
   defp recommendation_reason({:no_change, _url}), do: "Restarting rebuilds the change, so the review and QA see real work."
   defp recommendation_reason(_cause), do: "Reopening keeps the work, the review and the checks already done."
