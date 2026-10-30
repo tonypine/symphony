@@ -487,3 +487,131 @@ public struct DispatchShadowLine: Equatable {
         )
     }
 }
+
+/// Setup's Reconcile line: when the reconciler last ran and how often it runs, the changes made in Linear it applied, and
+/// the drift found on phases Symphony owns (tickets moved by hand in Linear) and whether Symphony moved each back, from
+/// `/api/v1/state`'s `reconcile` (`ReconcileReport`), which the window already polls. It is the operator's evidence that
+/// dispatch from the record stays in step with Linear.
+public struct ReconcileLine: Equatable {
+    public enum State: Equatable {
+        /// The Symphony running predates the reconciler.
+        case notAvailable
+        /// No run and no drift yet since Symphony started.
+        case waiting
+        /// It ran, and no drift was found.
+        case clean
+        /// Drift was found, and every move back that finished succeeded.
+        case reverted
+        /// At least one move back failed.
+        case failing
+    }
+
+    /// One of the last drifts, as the disclosure lists it.
+    public struct Row: Equatable, Identifiable {
+        public var id: Int
+        public var identifier: String
+        /// "Code Review in the record, Done in Linear".
+        public var states: String
+        /// "Reverted", "Failed".
+        public var outcome: String
+        public var failed: Bool
+        /// "4 min ago"; nil when Symphony didn't say.
+        public var ago: String?
+    }
+
+    public static let title = "Reconcile"
+    public static let disclosureTitle = "Last drift"
+    public static let emptyList = "No drift since Symphony started."
+
+    public var state: State
+    /// "Not available", "No run yet", "No drift", "Drift reverted", "Drift not reverted".
+    public var word: String
+    /// What is true now, as two sentences: the runs, then what they did since Symphony started.
+    public var detail: String
+    /// The last ten drifts, newest first.
+    public var rows: [Row]
+
+    /// False for an older Symphony: the line is shown greyed out, with no disclosure.
+    public var isAvailable: Bool { state != .notAvailable }
+    /// True when the line is called out in the warning colour: a move back failed.
+    public var isWarning: Bool { state == .failing }
+
+    /// The line for `report` (nil from an older Symphony), its ages counted from `now`, the state's own time.
+    public init(report: ReconcileReport?, now: Date) {
+        guard let report else {
+            state = .notAvailable
+            word = "Not available"
+            detail = "Not available on this Symphony: update it to see what the reconciler did."
+            rows = []
+            return
+        }
+        rows = report.recent.enumerated().map { index, drift in Self.row(drift, id: index, now: now) }
+        let every = Overview.duration(report.intervalMs / 1_000)
+        let runs =
+            report.lastRunAt.map { "Last run \(LinearWebhooksLine.ago($0, now: now)), every \(every)." }
+            ?? "No run yet since Symphony started. It runs every \(every) while dispatch reads Symphony's record."
+        detail = "\(runs) Since Symphony started: \(Self.work(report))."
+        if report.revertFailed > 0 {
+            state = .failing
+            word = "Drift not reverted"
+        } else if report.detected > 0 {
+            state = .reverted
+            word = "Drift reverted"
+        } else if report.lastRunAt != nil {
+            state = .clean
+            word = "No drift"
+        } else {
+            state = .waiting
+            word = "No run yet"
+        }
+    }
+
+    /// "3 changes from Linear applied, 1 drift detected and reverted", with the failed writes made again and the tickets
+    /// read for the first time when there were any.
+    static func work(_ report: ReconcileReport) -> String {
+        var parts = [count(report.applied, "change from Linear applied", "changes from Linear applied")]
+        if report.reapplied > 0 {
+            parts.append(count(report.reapplied, "failed write to Linear made again", "failed writes to Linear made again"))
+        }
+        if report.unobservedFilled > 0 {
+            parts.append(count(report.unobservedFilled, "ticket read for the first time", "tickets read for the first time"))
+        }
+        parts.append(drift(report))
+        return parts.joined(separator: ", ")
+    }
+
+    /// "no drift detected", "1 drift detected and reverted", "3 drifts detected, 2 reverted, 1 failed to revert".
+    static func drift(_ report: ReconcileReport) -> String {
+        guard report.detected > 0 else { return "no drift detected" }
+        let detected = count(report.detected, "drift detected", "drifts detected")
+        if report.revertFailed == 0, report.reverted == report.detected { return "\(detected) and reverted" }
+        let failed = report.revertFailed > 0 ? ", \(GitHubUpdatesCard.number(report.revertFailed)) failed to revert" : ""
+        return "\(detected), \(GitHubUpdatesCard.number(report.reverted)) reverted\(failed)"
+    }
+
+    /// "no change from Linear applied", "1 change from Linear applied", "3 changes from Linear applied".
+    static func count(_ count: Int, _ one: String, _ many: String) -> String {
+        switch count {
+        case 0: "no \(one)"
+        case 1: "1 \(one)"
+        default: "\(GitHubUpdatesCard.number(count)) \(many)"
+        }
+    }
+
+    static func row(_ drift: ReconcileReport.Drift, id: Int, now: Date) -> Row {
+        let outcome: String =
+            switch drift.outcome {
+            case .reverted: "Reverted"
+            case .failed: "Failed"
+            case .other(let text): text.replacingOccurrences(of: "_", with: " ").capitalized
+            }
+        return Row(
+            id: id,
+            identifier: drift.identifier,
+            states: "\(drift.recordPhase ?? "unknown") in the record, \(drift.linearPhase ?? "unknown") in Linear",
+            outcome: outcome,
+            failed: drift.outcome == .failed,
+            ago: drift.at.map { LinearWebhooksLine.ago($0, now: now) }
+        )
+    }
+}

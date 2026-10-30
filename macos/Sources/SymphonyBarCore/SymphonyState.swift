@@ -37,6 +37,8 @@ public struct StateSnapshot: Equatable {
     /// Where dispatch reads its candidates from and how the record's candidates compared with the poll's
     /// (`dispatch_shadow`), nil when Symphony predates them.
     public var dispatchShadow: DispatchShadowReport?
+    /// What the reconciler did and the drift it found (`reconcile`), nil when Symphony predates it.
+    public var reconcile: ReconcileReport?
 
     /// A ticket waiting on the operator, as `/api/v1/state`'s `waiting_on_you` lists it.
     public struct WaitingTicket: Equatable {
@@ -289,7 +291,8 @@ public struct StateSnapshot: Equatable {
         setup: SetupPayload? = nil,
         serviceVersion: String? = nil,
         linearWebhooks: LinearWebhookHealth? = nil,
-        dispatchShadow: DispatchShadowReport? = nil
+        dispatchShadow: DispatchShadowReport? = nil,
+        reconcile: ReconcileReport? = nil
     ) {
         self.running = running
         self.retrying = retrying
@@ -307,6 +310,7 @@ public struct StateSnapshot: Equatable {
         self.serviceVersion = serviceVersion
         self.linearWebhooks = linearWebhooks
         self.dispatchShadow = dispatchShadow
+        self.reconcile = reconcile
     }
 }
 
@@ -511,6 +515,130 @@ public struct DispatchShadowReport: Equatable {
     }
 }
 
+/// What the reconciler did while dispatch reads Symphony's record, and the drift found on phases Symphony owns, as
+/// `/api/v1/state`'s `reconcile` reports it (`SymphonyElixir.TicketObservation`). The counts live in Symphony's memory,
+/// so they start again at a restart.
+public struct ReconcileReport: Equatable {
+    /// A ticket moved in Linear off a phase Symphony owns.
+    public struct Drift: Equatable {
+        /// Whether Symphony moved it back in Linear.
+        public enum Outcome: Equatable {
+            case reverted
+            case failed
+            /// An outcome this app doesn't know yet.
+            case other(String)
+
+            public init(_ text: String?) {
+                switch text {
+                case "reverted"?: self = .reverted
+                case "revert_failed"?: self = .failed
+                default: self = .other(text ?? "unknown")
+                }
+            }
+        }
+
+        public var identifier: String
+        /// The phase Symphony's record holds.
+        public var recordPhase: String?
+        /// The state the ticket was moved to in Linear.
+        public var linearPhase: String?
+        public var outcome: Outcome
+        public var at: Date?
+
+        public init(identifier: String, recordPhase: String? = nil, linearPhase: String? = nil, outcome: Outcome, at: Date? = nil) {
+            self.identifier = identifier
+            self.recordPhase = recordPhase
+            self.linearPhase = linearPhase
+            self.outcome = outcome
+            self.at = at
+        }
+    }
+
+    /// When the reconciler last ran; nil before its first run.
+    public var lastRunAt: Date?
+    /// `linear.reconcile_interval_ms`.
+    public var intervalMs: Int
+    /// Changes made in Linear the reconciler applied to the record.
+    public var applied: Int
+    /// Failed writes to Linear (a move or a hold label) the reconciler made again.
+    public var reapplied: Int
+    /// Records no read had seen yet that the reconciler read by id.
+    public var unobservedFilled: Int
+    public var detected: Int
+    public var reverted: Int
+    public var revertFailed: Int
+    /// The last ten drifts, newest first.
+    public var recent: [Drift]
+
+    public init(
+        lastRunAt: Date? = nil,
+        intervalMs: Int = DispatchSettings.defaultReconcileIntervalMs,
+        applied: Int = 0,
+        reapplied: Int = 0,
+        unobservedFilled: Int = 0,
+        detected: Int = 0,
+        reverted: Int = 0,
+        revertFailed: Int = 0,
+        recent: [Drift] = []
+    ) {
+        self.lastRunAt = lastRunAt
+        self.intervalMs = intervalMs
+        self.applied = applied
+        self.reapplied = reapplied
+        self.unobservedFilled = unobservedFilled
+        self.detected = detected
+        self.reverted = reverted
+        self.revertFailed = revertFailed
+        self.recent = recent
+    }
+
+    /// The `reconcile` block of a `/api/v1/state` payload, nil when Symphony predates it. Read on its own, so a block
+    /// this app can't read never fails the rest of the state.
+    public static func decode(state data: Data) -> ReconcileReport? {
+        struct Wire: Decodable {
+            let lastRunAt: String?
+            let intervalMs: Int?
+            let applied: Int?
+            let reapplied: Int?
+            let unobservedFilled: Int?
+            let detected: Int?
+            let reverted: Int?
+            let revertFailed: Int?
+            let recent: [WireDrift]?
+        }
+        struct WireDrift: Decodable {
+            let identifier: String?
+            let recordPhase: String?
+            let linearPhase: String?
+            let outcome: String?
+            let at: String?
+        }
+        struct State: Decodable { let reconcile: Wire? }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        guard let wire = (try? decoder.decode(State.self, from: data))?.reconcile else { return nil }
+        return ReconcileReport(
+            lastRunAt: wire.lastRunAt.flatMap(SymphonyState.parseDate),
+            intervalMs: wire.intervalMs ?? DispatchSettings.defaultReconcileIntervalMs,
+            applied: wire.applied ?? 0,
+            reapplied: wire.reapplied ?? 0,
+            unobservedFilled: wire.unobservedFilled ?? 0,
+            detected: wire.detected ?? 0,
+            reverted: wire.reverted ?? 0,
+            revertFailed: wire.revertFailed ?? 0,
+            recent: (wire.recent ?? []).map { drift in
+                Drift(
+                    identifier: drift.identifier ?? "?",
+                    recordPhase: drift.recordPhase,
+                    linearPhase: drift.linearPhase,
+                    outcome: .init(drift.outcome),
+                    at: drift.at.flatMap(SymphonyState.parseDate)
+                )
+            }
+        )
+    }
+}
+
 /// The newest published release Symphony reports under `/api/v1/state`'s `app_update`, from GitHub's `release`
 /// delivery or its own timed read. The app checks for an update at once when it is newer than the build it runs
 /// (`UpdateCheckSchedule.checksAtOnce`).
@@ -661,6 +789,7 @@ public enum SymphonyState {
         snapshot.serviceVersion = payload.build?.version
         snapshot.linearWebhooks = LinearWebhookHealth.decode(state: data)
         snapshot.dispatchShadow = DispatchShadowReport.decode(state: data)
+        snapshot.reconcile = ReconcileReport.decode(state: data)
         return .state(snapshot)
     }
 

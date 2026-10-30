@@ -132,6 +132,9 @@ final class SettingsViewModel: ObservableObject {
     @Published var dispatchSource = DispatchSettings.defaultSource
     /// `dispatch.shadow_window`: how many poll cycles Setup's Dispatch shadow line counts its differences over.
     @Published var dispatchShadowWindow = DispatchSettings.defaultShadowWindow
+    /// `linear.reconcile_interval_ms`, in whole minutes: how often the Linear poll reconciles the record while
+    /// dispatch reads it.
+    @Published var dispatchReconcileMinutes = DispatchSettings.reconcileMinutes(DispatchSettings.defaultReconcileIntervalMs)
     /// Why the dispatch settings weren't saved, shown in their section.
     @Published private(set) var dispatchError: String?
     /// `linear.webhooks.enabled` in the configured symphony.yml: whether Symphony accepts Linear's webhook deliveries.
@@ -500,6 +503,7 @@ final class SettingsViewModel: ObservableObject {
             let dispatch = try SymphonyConfigFile(path: path).readDispatchSettings()
             dispatchSource = dispatch.source
             dispatchShadowWindow = dispatch.shadowWindow
+            dispatchReconcileMinutes = DispatchSettings.reconcileMinutes(dispatch.reconcileIntervalMs)
             loadedDispatchSettings = dispatch
         } catch {
             configFileError = "Could not read the dispatch settings from symphony.yml: \(error.localizedDescription)"
@@ -714,7 +718,13 @@ final class SettingsViewModel: ObservableObject {
             dispatchError = DispatchSettings.windowRule
             return
         }
-        let dispatch = loadedDispatchSettings.map { _ in DispatchSettings(source: dispatchSource, shadowWindow: dispatchShadowWindow) }
+        if loadedDispatchSettings != nil, !DispatchSettings.isValidReconcileMinutes(dispatchReconcileMinutes) {
+            dispatchError = DispatchSettings.reconcileRule
+            return
+        }
+        let dispatch = loadedDispatchSettings?.setting(
+            source: dispatchSource, shadowWindow: dispatchShadowWindow, reconcileMinutes: dispatchReconcileMinutes
+        )
         let oldDispatch = loadedDispatchSettings.flatMap { $0 != dispatch ? $0 : nil }
         ledgerError = nil
         var ledger = loadedLedgerSettings?.setting(maxMegabytes: artifactMaxMegabytes)

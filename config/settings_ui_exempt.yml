@@ -157,12 +157,6 @@ exemptions:
       - issues.states.terminal
       - issues.states.waiting_on_sub_issues
 
-  # linear.reconcile_interval_ms
-  - reason: How often the Linear poll reconciles the record when dispatch reads it. Its control in the app's Setup lands next.
-    ticket: TP-1228
-    keys:
-      - linear.reconcile_interval_ms
-
   # code_review
   - reason: Whether Code Review's reviewer runs and the runtime it runs on, beyond the model and effort the app's Models section sets. No control in the app yet.
     keys:

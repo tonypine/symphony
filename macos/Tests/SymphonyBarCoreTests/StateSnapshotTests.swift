@@ -320,6 +320,62 @@ final class StateSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.runs, recordedRuns)
     }
 
+    /// `reconcile` as `SymphonyElixirWeb.Presenter` serves it: the last run, the interval, the counts and the last
+    /// drift with both states and the outcome.
+    func testDecodesTheReconcileReport() throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/reconcile-block.json")
+        let block = try JSONSerialization.jsonObject(with: Data(contentsOf: fixture))
+        guard case .state(let snapshot) = SymphonyState.poll(data: try recordedState(replacing: "reconcile", with: block), statusCode: 200)
+        else { return XCTFail("expected a state") }
+        XCTAssertEqual(
+            snapshot.reconcile,
+            ReconcileReport(
+                lastRunAt: SymphonyState.parseDate("2026-10-29T18:00:00Z"),
+                intervalMs: 300_000,
+                applied: 3,
+                reapplied: 1,
+                unobservedFilled: 2,
+                detected: 2,
+                reverted: 1,
+                revertFailed: 1,
+                recent: [
+                    .init(identifier: "TP-1301", recordPhase: "Code Review", linearPhase: "Done", outcome: .failed,
+                          at: SymphonyState.parseDate("2026-10-29T17:59:10Z")),
+                    .init(identifier: "TP-1300", recordPhase: "QA", linearPhase: "In Progress", outcome: .reverted,
+                          at: SymphonyState.parseDate("2026-10-29T17:50:00Z")),
+                ]
+            )
+        )
+        XCTAssertEqual(snapshot.runs, recordedRuns)
+
+        let sparse: [String: Any] = ["last_run_at": NSNull(), "recent": [["identifier": NSNull(), "outcome": "skipped"], [:]]]
+        guard case .state(let bare) = SymphonyState.poll(data: try recordedState(replacing: "reconcile", with: sparse), statusCode: 200)
+        else { return XCTFail("expected a state") }
+        XCTAssertEqual(
+            bare.reconcile,
+            ReconcileReport(recent: [.init(identifier: "?", outcome: .other("skipped")), .init(identifier: "?", outcome: .other("unknown"))])
+        )
+    }
+
+    /// An older Symphony sends no `reconcile`, and a block this app can't read is left out: the rest of the state
+    /// decodes either way.
+    func testAnOlderOrUnreadableReconcileBlockIsNone() throws {
+        guard case .state(let older) = SymphonyState.poll(data: try recordedState(), statusCode: 200) else {
+            return XCTFail("expected a state")
+        }
+        XCTAssertNil(older.reconcile)
+        XCTAssertEqual(older.runs, recordedRuns)
+
+        let unreadable = try recordedState(replacing: "reconcile", with: ["interval_ms": "five minutes", "recent": "none"])
+        guard case .state(let snapshot) = SymphonyState.poll(data: unreadable, statusCode: 200) else {
+            return XCTFail("expected a state")
+        }
+        XCTAssertNil(snapshot.reconcile)
+        XCTAssertEqual(snapshot.runs, recordedRuns)
+    }
+
     func testANullOrTaglessReleaseIsNone() throws {
         for latest: Any in [NSNull(), ["tag": NSNull()], ["tag": ""]] {
             let data = try recordedState(replacing: "app_update", with: ["unblocks": 0, "latest_release": latest])

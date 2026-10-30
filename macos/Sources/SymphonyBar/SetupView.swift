@@ -54,6 +54,11 @@ extension SymphonyWindowModel {
         overviewState.map { DispatchShadowLine(report: $0.snapshot.dispatchShadow, now: $0.generatedAt ?? now) }
     }
 
+    /// The Reconcile line, from the state poll's `reconcile`, its ages counted from the state's time.
+    func reconcileLine(now: Date = Date()) -> ReconcileLine? {
+        overviewState.map { ReconcileLine(report: $0.snapshot.reconcile, now: $0.generatedAt ?? now) }
+    }
+
     func setupPage(now: Date = Date()) -> SetupPage {
         let payload = setupPayload
         return SetupPage(payload: payload, buildWarning: payload == nil ? nil : setupBuildWarning, order: setupOrder, now: now)
@@ -509,7 +514,8 @@ struct SetupContent: View {
                     SetupPageBody(
                         page: page, actions: actions, welcome: model.setupWelcome,
                         githubUpdates: model.githubUpdatesCard(), githubActions: githubActions,
-                        linearWebhooks: model.linearWebhooksLine(), dispatchShadow: model.dispatchShadowLine()
+                        linearWebhooks: model.linearWebhooksLine(), dispatchShadow: model.dispatchShadowLine(),
+                        reconcile: model.reconcileLine()
                     )
                     .sheet(item: githubSheet) { sheet in
                         GitHubUpdatesSheetView(
@@ -606,6 +612,10 @@ struct SetupPageBody: View {
     var dispatchShadow: DispatchShadowLine?
     /// The line's last differences start open (its snapshot).
     var dispatchShadowExpanded = false
+    /// What the reconciler did and the drift it found; nil while Symphony's state is unknown.
+    var reconcile: ReconcileLine?
+    /// The line's last drift starts open (its snapshot).
+    var reconcileExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
@@ -646,6 +656,9 @@ struct SetupPageBody: View {
             }
             if let dispatchShadow {
                 DispatchShadowLineView(line: dispatchShadow, startsExpanded: dispatchShadowExpanded)
+            }
+            if let reconcile {
+                ReconcileLineView(line: reconcile, startsExpanded: reconcileExpanded)
             }
             if !page.notChecked.isEmpty {
                 Card(title: SetupPage.notCheckedTitle) {
@@ -829,6 +842,113 @@ struct DispatchShadowLineView: View {
         case .notAvailable, .record: DesignTokens.Status.idle.tint
         case .pollClean: DesignTokens.Status.done.tint
         case .pollDiffering: SetupSeverityMark.warning.tint
+        }
+    }
+}
+
+/// The Reconcile line: a mark, the state's word and two sentences, then the last drift under a disclosure. A failed
+/// move back is called out by the mark and the word in the warning colour (the sentence stays secondary, for contrast),
+/// and by its row's outcome. An older Symphony's line is greyed out, with no disclosure.
+struct ReconcileLineView: View {
+    let line: ReconcileLine
+    @State private var expanded: Bool
+
+    init(line: ReconcileLine, startsExpanded: Bool = false) {
+        self.line = line
+        _expanded = State(initialValue: startsExpanded)
+    }
+
+    var body: some View {
+        Card(title: ReconcileLine.title) {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+                HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s3) {
+                    Image(systemName: symbol)
+                        .foregroundStyle(tint)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
+                        Text(line.word)
+                            .font(DesignTokens.TypeStyle.rowTitle.font)
+                            .foregroundStyle(line.isWarning ? SetupSeverityMark.warning.tint : Color.primary)
+                        Text(line.detail)
+                            .font(DesignTokens.TypeStyle.callout.font)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(ReconcileLine.title): \(line.word). \(line.detail)")
+                if line.isAvailable {
+                    Button {
+                        withAnimation(.standard) { expanded.toggle() }
+                    } label: {
+                        Label(ReconcileLine.disclosureTitle, systemImage: expanded ? "chevron.down" : "chevron.right")
+                            .font(DesignTokens.TypeStyle.callout.font)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(expanded ? "Hide the last drift" : "Show the last drift")
+                    if expanded {
+                        drifts
+                    }
+                }
+            }
+        }
+        .disabled(!line.isAvailable)
+        .opacity(line.isAvailable ? 1 : 0.6)
+    }
+
+    @ViewBuilder private var drifts: some View {
+        if line.rows.isEmpty {
+            Text(ReconcileLine.emptyList)
+                .font(DesignTokens.TypeStyle.callout.font)
+                .foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                ForEach(line.rows) { row in
+                    HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s3) {
+                        Text(row.identifier)
+                            .font(DesignTokens.TypeStyle.rowTitle.font)
+                            .monospaced()
+                        VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
+                            Text(row.outcome)
+                                .font(DesignTokens.TypeStyle.callout.font)
+                                .foregroundStyle(row.failed ? SetupSeverityMark.warning.tint : Color.primary)
+                            Text(row.states)
+                                .font(DesignTokens.TypeStyle.callout.font)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: DesignTokens.Space.s3)
+                        if let ago = row.ago {
+                            Text(ago)
+                                .font(DesignTokens.TypeStyle.callout.font)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel([row.identifier, row.outcome, row.states, row.ago].compactMap { $0 }.joined(separator: ", "))
+                }
+            }
+        }
+    }
+
+    private var symbol: String {
+        switch line.state {
+        case .notAvailable: "questionmark.circle"
+        case .waiting: "clock"
+        case .clean: DesignTokens.Status.done.symbol
+        case .reverted: "arrow.uturn.backward.circle"
+        case .failing: SetupSeverityMark.warning.symbol
+        }
+    }
+
+    private var tint: Color {
+        switch line.state {
+        case .notAvailable, .waiting: DesignTokens.Status.idle.tint
+        case .clean, .reverted: DesignTokens.Status.done.tint
+        case .failing: SetupSeverityMark.warning.tint
         }
     }
 }
