@@ -339,10 +339,6 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # A ticket's record changed outside the poll cycle (`TicketObservation`, a move, a hold): with
-  # dispatch from the record, its repo gets a cycle at once, as a move made there does, so a ticket
-  # the change frees is considered within seconds. With dispatch from the poll cache the change waits
-  # for the repo's poll.
   # A reason lifted from a ticket's pause (`SymphonyElixir.Pauses`: the update hold released, a
   # blocker landed, a stop lifted) may free it to dispatch, and so may a new decision of the PR
   # watcher that a run starts (`SymphonyElixir.PrWatch.Repo`: the reviewer, QA). Both live in the
@@ -351,6 +347,10 @@ defmodule SymphonyElixir.Orchestrator do
     {:noreply, request_cycle(state)}
   end
 
+  # A ticket's record changed outside the poll cycle (`TicketObservation`, a move, a hold): with
+  # dispatch from the record, its repo gets a cycle at once, as a move made there does, so a ticket
+  # the change frees is considered within seconds. With dispatch from the poll cache the change waits
+  # for the repo's poll.
   defp handle_info_message({:ticket_record, repo_key, _issue_id, :changed, _fields}, state) do
     case dispatch_source_in_use() do
       :record -> handle_cast_message({:request_refresh, repo_key, :now}, state)
@@ -2259,10 +2259,9 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # The first poll of each repo after a start is spread over `issues.poll_interval_ms` on either
-  # source, as dispatch waits for every repo's first poll; each repo keeps its offset after.
   # A repo's first poll (its cache not warm yet) puts its next one on its stagger slot: the repo's
-  # place in the config times `interval_ms / repo_count`. Every later poll is one interval on.
+  # place in the config times `interval_ms / repo_count`, on either source. Every later poll is one
+  # interval on, so each repo keeps its offset.
   defp first_poll_offset_ms(%State{} = state, repos, repo_name) do
     if repo_poll_cache_warmed?(state, repo_name) do
       0
