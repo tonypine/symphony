@@ -5,8 +5,9 @@ It builds priv/qa_driver/symphony-qa-driver.swift as the copy Symphony builds fo
 separate QA host (`-D SYMPHONY_QA_SSH`, which runs its commands directly) and a small
 SwiftUI fixture: a window with a `ScrollView` whose `LazyVStack` loads another page of
 rows when its last row appears (60 at a time, up to 180, as a list of older runs does)
-and a `List` of 200 rows. Rows off screen are not in the accessibility tree, so finding
-the last row there proves the list was scrolled to it. It then checks that:
+and a `List` of 200 rows. Rows off screen are not in the accessibility tree of the `ScrollView` (a `List` is a
+table that lists every row), so finding the last row of the `ScrollView` there, or
+in the scroll area's frame for the `List`, proves the view was scrolled to it. It then checks that:
 
 1. an edge scroll on the `ScrollView` reaches its end, past the pages it loads there, and
    its last row is on screen in the AX tree;
@@ -136,12 +137,12 @@ def wait_for_window(binary, pid):
     return False
 
 
-def scroll_to_end(binary, pid, name, first, last):
+def scroll_to_end(binary, pid, name, first, last, lazy=True):
     failed = len(failures)
     start = find(binary, pid, first)
     if not start:
         return fail(name, f"no row {first!r} in the AX tree")
-    if find(binary, pid, last):
+    if lazy and find(binary, pid, last):
         return fail(name, f"{last!r} is already in the AX tree before scrolling; the fixture shows too much")
 
     reply = driver(binary, "scroll", pid, start["path"], "bottom", "pixel")
@@ -189,7 +190,7 @@ def main():
         scroll_to_end(binary, pid, "scroll view to the end", "Page row 1", "Page row 180")
 
         # 2. The List's last row.
-        list_end = scroll_to_end(binary, pid, "list to the end", "List row 1", "List row 200")
+        list_end = scroll_to_end(binary, pid, "list to the end", "List row 1", "List row 200", lazy=False)
         if list_end:
             check_list_scrolls(binary, pid, list_end["scroll_area"]["frame"])
     finally:
