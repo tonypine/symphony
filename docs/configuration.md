@@ -2814,8 +2814,10 @@ once for the same Linear change. A Linear state read before Symphony wrote the p
 fact: the phase is kept and nothing is moved. The ticket's other facts (title, description, labels,
 priority, assignee, blockers) are Linear's and apply as before. A ticket whose phase is Linear's
 follows Linear: a new Todo ticket a person moves to Backlog stays there, and the record follows. A
-ticket the Director cancelled (**Cancel**, above) is closed for good: a later Linear state is no
-drift on it and applies as Linear wrote it.
+ticket the Director cancelled (**Cancel**, above) is closed for good once Linear shows it Canceled:
+a later Linear state is no drift on it and applies as Linear wrote it. Until Linear takes the cancel
+(the move failed and the reconciler retries it), Linear's older state is drift and is moved back to
+Canceled.
 Startup keeps a phase Symphony owns too: a ticket moved by hand while Symphony was down is moved
 back when Symphony starts, with the same events. Under `poll` every hand move applies, as before.
 `/api/v1/state` counts the drift since Symphony started as `reconcile`: `detected`, `reverted`,
