@@ -107,6 +107,18 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     {"Checklist item answered", [Enum.join(present([text(payload, :item), text(payload, :answer)]), ": ")]}
   end
 
+  defp summary("drift.detected", payload, _event) do
+    {"Moved to #{linear_phase(payload)} in Linear by hand", ["Symphony's record holds #{record_phase(payload)}"]}
+  end
+
+  defp summary("drift.reverted", payload, _event) do
+    {"Moved back to #{record_phase(payload)}: it was moved to #{linear_phase(payload)} in Linear by hand", []}
+  end
+
+  defp summary("drift.revert_failed", payload, _event) do
+    {"Could not move back to #{record_phase(payload)} from #{linear_phase(payload)}", [text(payload, :error), "tried again at the next read of Linear"]}
+  end
+
   defp summary("note", payload, _event), do: {"Note added", [text(payload, :text)]}
   defp summary(_type, _payload, _event), do: :unknown
 
@@ -115,6 +127,9 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     run = if name, do: "#{name} run", else: "Run"
     run <> suffix(" ", count(payload, :run_number))
   end
+
+  defp record_phase(payload), do: text(payload, :record_phase) || "its phase"
+  defp linear_phase(payload), do: text(payload, :linear_phase) || "another state"
 
   defp kind_name(nil), do: nil
 

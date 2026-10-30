@@ -7,7 +7,9 @@ defmodule SymphonyElixir.TicketState do
   (Blocked / Needs Decision), the CI state of each PR head it has seen, its verdict records, its
   signals ledger (the timeline both the machinery and agents read) and the runs dispatched since it
   last made progress, which `SymphonyElixir.DispatchLoop` counts, when the phase was last written
-  (`phase_at`, by a move of Symphony's or an observation that changed it), and the decisions a person recorded
+  (`phase_at`, by a move of Symphony's or an observation that changed it) and by whom (`phase_owner`:
+  `:symphony` for a move of Symphony's or the Director's, `:external` for an observation of Linear),
+  and the decisions a person recorded
   on it (`SymphonyElixir.Decisions`), which the description's Decisions section projects, and
   the PR and CI watcher's fact record (`pr_watch`, written by `SymphonyElixir.PrWatch.Repo`), and
   the sequence number of the last event in its event stream (`event_seq`, `SymphonyElixir.TicketEvents`),
@@ -212,6 +214,7 @@ defmodule SymphonyElixir.TicketState do
           issue_identifier: String.t() | nil,
           phase: String.t() | nil,
           phase_at: DateTime.t() | nil,
+          phase_owner: phase_owner(),
           ci_fix_origin: String.t() | nil,
           holds: [hold()],
           ci_states: [ci_state()],
@@ -247,6 +250,14 @@ defmodule SymphonyElixir.TicketState do
   watcher's read, or a webhook delivery.
   """
   @type observation_source :: :poll | :by_id | :watcher | :webhook
+
+  @typedoc """
+  Who wrote the record's phase: `:symphony` for a move of Symphony's or the Director's (`put_phase/4`),
+  `:external` for an observation of Linear (`observe/4`) and for a record written before Symphony
+  kept the owner. Under `dispatch.source: record` an observation does not take Linear's state over a
+  phase Symphony owns (`SymphonyElixir.TicketObservation`).
+  """
+  @type phase_owner :: :symphony | :external
 
   @observation_sources [:poll, :by_id, :watcher, :webhook]
 
@@ -285,6 +296,7 @@ defmodule SymphonyElixir.TicketState do
       issue_identifier: map_string(record, :issue_identifier),
       phase: map_string(record, :phase),
       phase_at: map_datetime(record, :phase_at),
+      phase_owner: phase_owner(Map.get(record, :phase_owner)),
       ci_fix_origin: map_string(record, :ci_fix_origin),
       holds: normalize_holds(Map.get(record, :holds)),
       ci_states: normalize_ci_states(Map.get(record, :ci_states)),
@@ -323,6 +335,7 @@ defmodule SymphonyElixir.TicketState do
       issue_identifier: nil,
       phase: nil,
       phase_at: nil,
+      phase_owner: :external,
       ci_fix_origin: nil,
       holds: [],
       ci_states: [],
@@ -366,7 +379,7 @@ defmodule SymphonyElixir.TicketState do
   - `:unchanged` when every field already holds what the issue says;
   - `:changed` otherwise, with `observed_at` and `updated_at` set to `observed_at`, and
     `observed_from` to the read's `source` (`t:observation_source/0`); `phase_at` too when the
-    phase changed.
+    phase changed, and `phase_owner` to `:external`, as Linear wrote it.
 
   A field the issue marks `:unknown` (a webhook delivery that doesn't carry it) never overwrites the
   record's value, nor does a missing state, parent, `created_at` or `updated_at`: a missing fact is
@@ -398,11 +411,12 @@ defmodule SymphonyElixir.TicketState do
   end
 
   @doc """
-  The fields `observe/4` writes, with `phase_at`, `observed_at`, `observed_from` and `updated_at`, as
-  an update of the stored record.
+  The fields `observe/4` writes, with `phase_at`, `phase_owner`, `observed_at`, `observed_from` and
+  `updated_at`, as an update of the stored record.
   """
   @spec observation(t()) :: map()
-  def observation(record), do: record |> normalize() |> Map.take(@observed_fields ++ [:phase_at, :observed_at, :observed_from, :updated_at])
+  def observation(record),
+    do: record |> normalize() |> Map.take(@observed_fields ++ [:phase_at, :phase_owner, :observed_at, :observed_from, :updated_at])
 
   @doc """
   Marks the ticket removed in Linear at `removed_at`, as an `Issue` remove delivery says. Nothing else
@@ -415,7 +429,10 @@ defmodule SymphonyElixir.TicketState do
   defp observation_source(_source), do: nil
 
   defp stamp_phase_change(%{phase: phase} = observed, phase, _observed_at), do: observed
-  defp stamp_phase_change(observed, _phase, observed_at), do: %{observed | phase_at: observed_at}
+  defp stamp_phase_change(observed, _phase, observed_at), do: %{observed | phase_at: observed_at, phase_owner: :external}
+
+  defp phase_owner(owner) when owner in [:symphony, "symphony"], do: :symphony
+  defp phase_owner(_owner), do: :external
 
   defp stale?(%DateTime{} = known, %DateTime{} = fact), do: DateTime.compare(fact, known) == :lt
   defp stale?(_known, _fact), do: false
@@ -555,15 +572,17 @@ defmodule SymphonyElixir.TicketState do
   def pr_watch(record), do: record |> normalize() |> Map.fetch!(:pr_watch)
 
   @doc """
-  Sets the record's phase, the state the machine believes the ticket is in, and when it was written
-  (`phase_at`).
+  Sets the record's phase, the state the machine believes the ticket is in, when it was written
+  (`phase_at`) and who wrote it (`phase_owner`, `t:phase_owner/0`): `:symphony` by default, for a move
+  of Symphony's or the Director's; `:external` for a phase taken from Linear.
   """
-  @spec put_phase(t(), String.t() | nil, DateTime.t()) :: t()
-  def put_phase(record, phase, at \\ DateTime.utc_now()) do
+  @spec put_phase(t(), String.t() | nil, DateTime.t(), phase_owner()) :: t()
+  def put_phase(record, phase, at \\ DateTime.utc_now(), owner \\ :symphony) when owner in [:symphony, :external] do
     record
     |> normalize()
     |> Map.put(:phase, normalize_string(phase))
     |> Map.put(:phase_at, at)
+    |> Map.put(:phase_owner, owner)
     |> Map.put(:updated_at, at)
   end
 

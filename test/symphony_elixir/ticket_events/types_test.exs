@@ -7,7 +7,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
     phase.entered hold.set hold.cleared run.started run.ended attempt.pushed verdict.recorded
     decision.requested decision.withdrawn decision.recorded person.action
     step.started step.completed step.skipped evidence finding.recorded finding.resolved checklist.answered
-    note
+    drift.detected drift.reverted drift.revert_failed note
   )
 
   describe "catalog/0" do
@@ -85,6 +85,20 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       for run_kind <- Types.agent_run_kinds() do
         assert {:ok, %{question: "Ship it?"}} = Types.validate("decision.requested", %{question: "Ship it?"}, :agent, run_kind)
       end
+    end
+
+    test "drift is the machine's: both phases, and the error of a failed move back" do
+      phases = %{record_phase: "Code Review", linear_phase: "Done"}
+
+      for type <- ~w(drift.detected drift.reverted drift.revert_failed) do
+        assert Types.validate(type, phases, :machine, nil) == {:ok, phases}, type
+        assert {:error, {:invalid_payload, [:linear_phase]}} = Types.validate(type, %{record_phase: "Code Review"}, :machine, nil)
+        assert {:error, {:not_allowed, _reason}} = Types.validate(type, phases, :agent, "implementation")
+        assert {:error, {:not_allowed, _reason}} = Types.validate(type, phases, :person, nil)
+      end
+
+      assert Types.validate("drift.revert_failed", Map.put(phases, :error, ":timeout"), :machine, nil) == {:ok, Map.put(phases, :error, ":timeout")}
+      assert {:error, {:invalid_payload, [:error]}} = Types.validate("drift.reverted", Map.put(phases, :error, ":timeout"), :machine, nil)
     end
 
     test "rejects an agent with an unknown run kind, and a machine or person outside the writers" do

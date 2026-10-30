@@ -12,7 +12,19 @@ defmodule SymphonyElixir.TicketObservation do
   the record's `linear_updated_at` is dropped. The record keeps which read brought its last change
   (`observed_from`: the poll, a by-id read, the PR and CI watcher or a webhook delivery). Only
   `SymphonyElixir.Dispatch.Candidates` reads the observed fields, and an observation records no
-  ledger event.
+  ledger event, except for drift.
+
+  Drift: under `dispatch.source: record`, the phase of a record Symphony owns (`phase_owner:
+  :symphony`, written by a move of Symphony's or the Director's) is not read back from Linear. When
+  Linear says another state, the observation keeps the record's phase (the other fields apply as
+  usual), records `drift.detected` with both states, moves the ticket back in Linear to the record's
+  phase (`SymphonyElixir.Tracker.update_issue_state/2`) and records `drift.reverted`, or
+  `drift.revert_failed` with the error. Nobody is asked: the hand move is rolled back. A failed move
+  back is tried again by the next observation that finds the same difference, never sooner, and each
+  event is written once per Linear fact (its `updatedAt`). A Linear state read before the record's
+  phase was written (`updatedAt` older than `phase_at`) is an older fact: the phase is kept and
+  nothing is moved. A phase an observation wrote (`:external`, such as a new ticket's Todo) follows
+  Linear, and under `dispatch.source: poll` every phase does, as before.
 
   `observe_delivery/2` observes what a Linear webhook delivery says (`SymphonyElixir.Linear.Webhook.parse/1`)
   the same way, under the repo that already holds the ticket's record (a ticket with no record yet is
@@ -38,16 +50,16 @@ defmodule SymphonyElixir.TicketObservation do
   ticket and the fields; a read that changes none of them while the record's last change came from a
   webhook counts as "webhook first", once for each change the webhook brought.
 
-  What each observation did is counted in a public ETS table owned by this server, for the state
-  payload: the counts are diagnostic and start again from zero when Symphony restarts. Without the
-  server (some tests), counting is a no-op and the summary is all zeros.
+  What each observation did, and the drift it found, are counted in a public ETS table owned by this
+  server, for the state payload: the counts are diagnostic and start again from zero when Symphony
+  restarts. Without the server (some tests), counting is a no-op and the summary is all zeros.
   """
 
   use GenServer
 
   require Logger
 
-  alias SymphonyElixir.{Config, Orchestrator, RunStore, TicketState}
+  alias SymphonyElixir.{Config, Orchestrator, RunStore, TicketSignals, TicketState, Tracker}
   alias SymphonyElixir.Linear.{Issue, Webhook}
   alias SymphonyElixir.Routing.Resolver
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -97,13 +109,30 @@ defmodule SymphonyElixir.TicketObservation do
 
   @type compare :: %{webhook_first: non_neg_integer(), poll_first: non_neg_integer(), poll_first_recent: [poll_first()]}
 
+  @typedoc "A drift an observation found on a phase Symphony owns, and whether moving the ticket back worked."
+  @type drift_entry :: %{
+          identifier: String.t() | nil,
+          record_phase: String.t(),
+          linear_phase: String.t(),
+          outcome: :reverted | :revert_failed,
+          at: DateTime.t()
+        }
+
+  @type drift :: %{
+          detected: non_neg_integer(),
+          reverted: non_neg_integer(),
+          revert_failed: non_neg_integer(),
+          recent: [drift_entry()]
+        }
+
   @type summary :: %{
           updated: non_neg_integer(),
           unchanged: non_neg_integer(),
           stale: non_neg_integer(),
           unrouted: non_neg_integer(),
           errors: non_neg_integer(),
-          compare: compare()
+          compare: compare(),
+          drift: drift()
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -127,6 +156,8 @@ defmodule SymphonyElixir.TicketObservation do
     `tracker.terminal_states`
   - `:compare` — whether a read that changes a webhook field counts as "poll first", defaulting to
     `linear.webhooks.enabled`
+  - `:dispatch_source` — `"record"` or `"poll"`, defaulting to `dispatch.source`: under `"record"` a
+    phase Symphony owns is kept and Linear moved back (see the module doc)
 
   Returns `{:ok, :updated}` when the record changed and was written, `{:ok, :unchanged}` when it
   already held what the issue says, `{:ok, :stale}` when the issue is older than the record (it is
@@ -139,22 +170,8 @@ defmodule SymphonyElixir.TicketObservation do
     issue = %{issue | blocked_by: open_blockers(issue, repo_key, opts)}
 
     result =
-      with {:ok, stored} <- read(repo_key, issue_id) do
-        record = stored || TicketState.new(repo_key, issue_id)
-
-        case TicketState.observe(record, issue, now, source) do
-          {_record, :stale} ->
-            {:ok, :stale}
-
-          {_record, :unchanged} ->
-            compare(source, stored, stored, now, opts)
-            {:ok, :unchanged}
-
-          {observed, :changed} ->
-            change = {repo_key, issue_id, changed(stored, observed)}
-            stored |> write_and_compare(observed, source, now, opts) |> announce(change, source)
-        end
-      end
+      with {:ok, stored} <- read(repo_key, issue_id),
+           do: observe_record(repo_key, stored, issue, {now, source}, opts)
 
     count(result)
     result
@@ -242,24 +259,37 @@ defmodule SymphonyElixir.TicketObservation do
 
   @doc """
   How many observations had each outcome since Symphony started, how many issues of a by-id read or
-  a delivery no single repo holds a record of (`unrouted`), and the comparison with the
+  a delivery no single repo holds a record of (`unrouted`), the comparison with the
   webhook: how many reads found the webhook first, how many the poll first, and the last ten poll
-  first, newest first.
+  first, newest first, and the drift on phases Symphony owns: how many observations found it, how
+  many moved the ticket back and how many failed to, and the last ten, newest first.
   """
   @spec summary() :: summary()
   def summary do
     entries = :ets.tab2list(@table)
     poll_first = lookup(entries, :poll_first, 0)
+    detected = lookup(entries, :drift_detected, 0)
 
     counts = Map.new([:unrouted, :errors | @outcomes], &{&1, lookup(entries, &1, 0)})
 
-    Map.put(counts, :compare, %{
+    counts
+    |> Map.put(:compare, %{
       webhook_first: lookup(entries, :webhook_first, 0),
       poll_first: poll_first,
-      poll_first_recent: for(n <- poll_first..max(poll_first - @recent_limit + 1, 1)//-1, {_key, entry} <- [List.keyfind(entries, {:poll_first, n}, 0)], do: entry)
+      poll_first_recent: recent(entries, :poll_first, poll_first)
+    })
+    |> Map.put(:drift, %{
+      detected: detected,
+      reverted: lookup(entries, :drift_reverted, 0),
+      revert_failed: lookup(entries, :drift_revert_failed, 0),
+      recent: recent(entries, :drift, detected)
     })
   rescue
-    ArgumentError -> empty_summary() |> Map.put(:unrouted, 0) |> Map.put(:compare, %{webhook_first: 0, poll_first: 0, poll_first_recent: []})
+    ArgumentError ->
+      empty_summary()
+      |> Map.put(:unrouted, 0)
+      |> Map.put(:compare, %{webhook_first: 0, poll_first: 0, poll_first_recent: []})
+      |> Map.put(:drift, %{detected: 0, reverted: 0, revert_failed: 0, recent: []})
   end
 
   @doc "Forgets every count."
@@ -276,6 +306,26 @@ defmodule SymphonyElixir.TicketObservation do
   defp observe_issue(_repo_key, _issue, _opts) do
     bump(:errors)
     {:error, :invalid_issue}
+  end
+
+  defp observe_record(repo_key, stored, %Issue{id: issue_id} = issue, {now, source}, opts) do
+    record = stored || TicketState.new(repo_key, issue_id)
+    owned = owned_phase(stored, issue, opts)
+
+    case TicketState.observe(record, keep_phase(issue, owned), now, source) do
+      {_record, :stale} ->
+        {:ok, :stale}
+
+      {_record, :unchanged} ->
+        compare(source, stored, stored, now, opts)
+        revert(owned, stored, issue, now)
+        {:ok, :unchanged}
+
+      {observed, :changed} ->
+        change = {repo_key, issue_id, changed(stored, observed)}
+        revert = fn -> revert(owned, stored, issue, now) end
+        stored |> write_and_compare(observed, source, now, opts, revert) |> announce(change, source)
+    end
   end
 
   defp observed_delivery?({:issue, _action, %Issue{}, _updated_at}), do: true
@@ -303,9 +353,11 @@ defmodule SymphonyElixir.TicketObservation do
         do: field
   end
 
-  defp write_and_compare(stored, observed, source, now, opts) do
+  # `revert` moves a drifted ticket back once the record is written (`revert/4`).
+  defp write_and_compare(stored, observed, source, now, opts, revert) do
     with {:ok, :updated} = written <- write(stored, observed) do
       compare(source, stored, observed, now, opts)
+      revert.()
       written
     end
   end
@@ -323,6 +375,81 @@ defmodule SymphonyElixir.TicketObservation do
       stored.observed_from == :webhook -> webhook_first(stored)
       true -> :ok
     end
+  end
+
+  # The last ten entries kept under `{tag, seq}`, newest first, of `count` so far.
+  defp recent(entries, tag, count),
+    do: for(n <- count..max(count - @recent_limit + 1, 1)//-1, {_key, entry} <- [List.keyfind(entries, {tag, n}, 0)], do: entry)
+
+  # What the observation does with Linear's state: nil applies it; `:older` keeps the record's phase,
+  # as Linear's state was read before Symphony wrote it; a drift keeps it and moves Linear back. Only
+  # under `dispatch.source: record`, on a record whose phase Symphony owns and Linear contradicts.
+  defp owned_phase(nil, _issue, _opts), do: nil
+
+  defp owned_phase(stored, %Issue{state: linear_phase} = issue, opts) do
+    record = TicketState.normalize(stored)
+
+    cond do
+      record.phase_owner != :symphony or not is_binary(record.phase) or not is_binary(linear_phase) -> nil
+      linear_phase == record.phase or not record_source?(opts) -> nil
+      older?(issue.updated_at, record.phase_at) -> :older
+      true -> %{identifier: record.issue_identifier || issue.identifier, record_phase: record.phase, linear_phase: linear_phase}
+    end
+  end
+
+  defp record_source?(opts), do: Keyword.get_lazy(opts, :dispatch_source, &Config.dispatch_source/0) == "record"
+
+  defp older?(%DateTime{} = fact, %DateTime{} = written), do: DateTime.compare(fact, written) == :lt
+  defp older?(_fact, _written), do: false
+
+  # A missing state keeps the record's phase (`TicketState.observe/4`).
+  defp keep_phase(issue, nil), do: issue
+  defp keep_phase(issue, _owned), do: %{issue | state: nil}
+
+  # Records the drift, moves the ticket back in Linear to the record's phase and records how that went.
+  # Each event is keyed by the Linear fact, so the next observation of the same fact, which tries the
+  # move again, adds no duplicate.
+  defp revert(%{record_phase: record_phase, linear_phase: linear_phase} = drift, stored, issue, now) do
+    %{repo_key: repo_key, issue_id: issue_id} = stored
+    payload = %{record_phase: record_phase, linear_phase: linear_phase}
+    fact = drift_fact(drift, issue.updated_at)
+
+    Logger.info("Ticket drift: Linear shows #{linear_phase}, the record holds #{record_phase}; moving it back issue_id=#{issue_id} issue_identifier=#{drift.identifier}")
+    record_drift(repo_key, issue_id, "drift.detected", payload, fact, now)
+
+    {outcome, type, payload} =
+      case Tracker.update_issue_state(issue_id, record_phase) do
+        :ok ->
+          {:reverted, "drift.reverted", payload}
+
+        {:error, reason} ->
+          Logger.warning("Ticket drift: moving back to #{record_phase} failed issue_id=#{issue_id} issue_identifier=#{drift.identifier}: #{inspect(reason)}")
+          {:revert_failed, "drift.revert_failed", Map.put(payload, :error, inspect(reason))}
+      end
+
+    record_drift(repo_key, issue_id, type, payload, fact, now)
+    remember_drift(Map.merge(drift, %{outcome: outcome, at: now}))
+  end
+
+  defp revert(_owned, _stored, _issue, _now), do: :ok
+
+  defp drift_fact(drift, %DateTime{} = updated_at), do: "#{drift.record_phase}:#{drift.linear_phase}:#{DateTime.to_iso8601(updated_at)}"
+  defp drift_fact(_drift, _updated_at), do: nil
+
+  defp record_drift(repo_key, issue_id, type, payload, fact, now) do
+    key = if fact, do: "#{type}:#{fact}"
+    TicketSignals.record_event(repo_key, issue_id, type, payload, idempotency: key, at: now)
+  end
+
+  # Counts the drift and its outcome, and keeps it among the last ten.
+  defp remember_drift(%{outcome: outcome} = entry) do
+    seq = :ets.update_counter(@table, :drift_detected, 1, {:drift_detected, 0})
+    bump(if outcome == :reverted, do: :drift_reverted, else: :drift_revert_failed)
+    :ets.insert(@table, {{:drift, seq}, entry})
+    :ets.delete(@table, {:drift, seq - @recent_limit})
+    :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   defp compare?(opts), do: Keyword.get_lazy(opts, :compare, fn -> Webhook.settings().enabled end)

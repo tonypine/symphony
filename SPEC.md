@@ -386,7 +386,7 @@ nothing, and it writes only those fields, never the record's holds, verdicts or 
 - A field the source marks `:unknown` (a webhook delivery that doesn't carry it), a missing state and
   a missing `updatedAt` never overwrite the record's value.
 - The observation records no ledger event: a ticket's `phase.entered` stays with Symphony's own
-  moves.
+  moves. The one exception is drift, below.
 - Symphony's own moves and the Director's write the record first: the move's target becomes the
   record's `phase` (and nothing else; `linear_updated_at` is left, so a later read still wins on the
   facts it owns) before Linear is asked to move the ticket, with the `phase.entered` event the move
@@ -397,7 +397,17 @@ nothing, and it writes only those fields, never the record's holds, verdicts or 
   the one the team has. Every Director move writes the record before its Linear state move; a move
   that posts its comment with the move (rework, restart, backlog) writes it before that comment, a
   restart after its reset, a Decide after its reply, and a plan's answers or changes after their
-  comments. `undo` puts the record back as it puts Linear back.
+  comments. `undo` puts the record back as it puts Linear back. Such a phase is Symphony's
+  (`phase_owner: symphony`); a phase an observation wrote, and a record from before the owner was
+  kept, is Linear's (`external`).
+- Under `dispatch.source: record`, a phase Symphony owns is not read back from Linear. An observation
+  that finds the ticket in another Linear state keeps the record's phase (its other fields apply),
+  records `drift.detected` with the record's phase and Linear's, moves the ticket back in Linear to the
+  record's phase and records `drift.reverted`, or `drift.revert_failed` with the error. No person is
+  asked. A failed move back is tried again by the next observation of the same difference, and each
+  event is written once per Linear `updatedAt`. A Linear state whose `updatedAt` is older than the
+  record's `phase_at` was read before the phase was written: the phase is kept and nothing moves. A
+  phase Linear owns follows Linear, and under `dispatch.source: poll` every phase does.
 - A record written before these fields existed reads with them at their defaults (`nil`, or an empty
   list for `labels` and `blockers`); it needs no migration.
 

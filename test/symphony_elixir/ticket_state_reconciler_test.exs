@@ -22,6 +22,7 @@ defmodule SymphonyElixir.TicketStateReconcilerTest do
       assert {:stamped, reconciled} = TicketStateReconciler.reconcile(record, "Todo", @at)
       assert reconciled.phase == "Todo"
       assert reconciled.updated_at == @at
+      assert reconciled.phase_owner == :external
     end
 
     test "reports drift when the board state differs" do
@@ -31,6 +32,7 @@ defmodule SymphonyElixir.TicketStateReconcilerTest do
                TicketStateReconciler.reconcile(record, "Done", @at)
 
       assert reconciled.phase == "Done"
+      assert reconciled.phase_owner == :external
     end
 
     test "leaves the record untouched when Linear returns no state" do

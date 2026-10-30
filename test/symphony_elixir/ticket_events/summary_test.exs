@@ -40,6 +40,10 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
      }, [], %{title: "QA found content clipped at laptop (1440×900): Activity with a job open", detail: "3rd finding of this class on this ticket · 2 screenshots"}},
     {"finding.resolved", %{finding_id: "01FINDING", how: "Let the row wrap", head: "e051234"}, [], %{title: "Finding marked resolved", detail: "Let the row wrap"}},
     {"checklist.answered", %{item: "Dark mode checked?", answer: "Yes, both themes"}, [], %{title: "Checklist item answered", detail: "Dark mode checked?: Yes, both themes"}},
+    {"drift.detected", %{record_phase: "Code Review", linear_phase: "Done"}, [], %{title: "Moved to Done in Linear by hand", detail: "Symphony's record holds Code Review"}},
+    {"drift.reverted", %{record_phase: "Code Review", linear_phase: "Done"}, [], %{title: "Moved back to Code Review: it was moved to Done in Linear by hand", detail: nil}},
+    {"drift.revert_failed", %{record_phase: "Code Review", linear_phase: "Done", error: ":timeout"}, [],
+     %{title: "Could not move back to Code Review from Done", detail: ":timeout · tried again at the next read of Linear"}},
     {"note", %{text: "History before 2026-10-20 was backfilled"}, [], %{title: "Note added", detail: "History before 2026-10-20 was backfilled"}}
   ]
 
@@ -78,6 +82,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     assert render("verdict.recorded", %{}) == %{title: "Review verdict", detail: nil}
     assert render("finding.recorded", %{evidence: [1, 2]}) == %{title: "QA found a defect", detail: nil}
     assert render("evidence", %{artifacts: "a-1"}) == %{title: "Evidence recorded with 1 file", detail: nil}
+    assert render("drift.reverted", %{}) == %{title: "Moved back to its phase: it was moved to another state in Linear by hand", detail: nil}
   end
 
   test "reads a stored record whose payload kept string keys" do

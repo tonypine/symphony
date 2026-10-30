@@ -3,11 +3,13 @@ defmodule SymphonyElixir.TicketObservationTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{TicketObservation, TicketState}
+  alias SymphonyElixir.{TicketObservation, TicketSignals, TicketState}
 
   @linear_at ~U[2026-10-29 09:00:00Z]
   @now ~U[2026-10-29 09:05:00Z]
   @created_at ~U[2026-10-01 08:00:00Z]
+  @phase_at ~U[2026-10-29 09:01:00Z]
+  @moved_at ~U[2026-10-29 09:02:00Z]
 
   setup do
     TicketObservation.reset()
@@ -215,8 +217,14 @@ defmodule SymphonyElixir.TicketObservationTest do
                stale: 0,
                unrouted: 0,
                errors: 0,
-               compare: %{webhook_first: 0, poll_first: 0, poll_first_recent: []}
+               compare: %{webhook_first: 0, poll_first: 0, poll_first_recent: []},
+               drift: %{detected: 0, reverted: 0, revert_failed: 0, recent: []}
              }
+
+    owned!(repo_key, "Code Review")
+    assert {:ok, :updated} = on_record(repo_key, hand_move("Done"), @now)
+    assert %{phase: "Code Review"} = RunStore.get_ticket_state(repo_key, "issue-observed")
+    assert TicketObservation.summary().drift == %{detected: 0, reverted: 0, revert_failed: 0, recent: []}
 
     assert :ok = TicketObservation.reset()
     assert {:ok, _pid} = Supervisor.restart_child(SymphonyElixir.Supervisor, TicketObservation)
@@ -550,6 +558,148 @@ defmodule SymphonyElixir.TicketObservationTest do
     end
   end
 
-  defp counts, do: Map.delete(TicketObservation.summary(), :compare)
+  describe "drift on a phase Symphony owns" do
+    setup do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      :ok
+    end
+
+    test "on the record source, a hand move is kept off the record, recorded and moved back in Linear", %{repo_key: repo_key} do
+      owned!(repo_key, "Code Review")
+
+      assert {:ok, :updated} = on_record(repo_key, hand_move("Done", %{title: "Renamed"}), @now)
+
+      assert_received {:memory_tracker_state_update, "issue-observed", "Code Review"}
+
+      assert %{phase: "Code Review", phase_owner: :symphony, phase_at: @phase_at, title: "Renamed", linear_updated_at: @moved_at} =
+               RunStore.get_ticket_state(repo_key, "issue-observed")
+
+      phases = %{record_phase: "Code Review", linear_phase: "Done"}
+      assert ticket_events(repo_key, "issue-observed") == [{"drift.detected", phases}, {"drift.reverted", phases}]
+
+      assert TicketObservation.summary().drift == %{
+               detected: 1,
+               reverted: 1,
+               revert_failed: 0,
+               recent: [%{identifier: "ACME-7", record_phase: "Code Review", linear_phase: "Done", outcome: :reverted, at: @now}]
+             }
+    end
+
+    test "a webhook delivery of a hand move is moved back within the delivery, on the configured record source, with no question",
+         %{repo_key: repo_key} do
+      File.write!(Workflow.symphony_file_path(), File.read!(Workflow.symphony_file_path()) <> "dispatch:\n  source: record\n")
+      Cache.clear()
+      {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(%{state: "In Progress"}), now: @now)
+      :ok = TicketSignals.record_phase(repo_key, "issue-observed", "Code Review")
+
+      later = DateTime.add(DateTime.utc_now(), 60)
+      moved = linear_issue(%{state: "Done", blocked_by: :unknown, sub_issues: :unknown, updated_at: later})
+      assert TicketObservation.observe_delivery({:issue, :update, moved, later}, orchestrator: self()) == :updated
+
+      assert_received {:memory_tracker_state_update, "issue-observed", "Code Review"}
+      assert %{phase: "Code Review", phase_owner: :symphony} = RunStore.get_ticket_state(repo_key, "issue-observed")
+      assert event_types(repo_key) == ["drift.detected", "drift.reverted"]
+      assert RunStore.get_ticket_state(repo_key, "issue-observed").holds == []
+    end
+
+    test "a failed move back is recorded and tried again by the next observation, never sooner", %{repo_key: repo_key} do
+      owned!(repo_key, "Code Review")
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :linear_down}])
+
+      log =
+        capture_log(fn ->
+          assert {:ok, :updated} = on_record(repo_key, hand_move("Done"), @now)
+        end)
+
+      assert log =~ "Ticket drift: moving back to Code Review failed issue_id=issue-observed issue_identifier=ACME-7: :linear_down"
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert %{phase: "Code Review"} = RunStore.get_ticket_state(repo_key, "issue-observed")
+
+      phases = %{record_phase: "Code Review", linear_phase: "Done"}
+      assert ticket_events(repo_key, "issue-observed") == [{"drift.detected", phases}, {"drift.revert_failed", Map.put(phases, :error, ":linear_down")}]
+
+      # The same Linear fact read again: the record already holds it, the move back is tried again,
+      # and the drift it already recorded is not recorded twice.
+      assert {:ok, :unchanged} = on_record(repo_key, hand_move("Done"), DateTime.add(@now, 30))
+      assert_received {:memory_tracker_state_update, "issue-observed", "Code Review"}
+
+      assert event_types(repo_key) == ["drift.detected", "drift.revert_failed", "drift.reverted"]
+
+      assert %{detected: 2, reverted: 1, revert_failed: 1, recent: recent} = drift()
+      assert Enum.map(recent, & &1.outcome) == [:reverted, :revert_failed]
+    end
+
+    test "a ticket Symphony never moved follows Linear: a new Todo ticket moved to Backlog by hand", %{repo_key: repo_key} do
+      {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
+
+      assert {:ok, :updated} = on_record(repo_key, hand_move("Backlog"), @now)
+
+      assert %{phase: "Backlog", phase_owner: :external, phase_at: @now} = RunStore.get_ticket_state(repo_key, "issue-observed")
+      assert ticket_events(repo_key, "issue-observed") == []
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert drift().detected == 0
+    end
+
+    test "on the poll source a hand move applies as before, and the phase is Linear's", %{repo_key: repo_key} do
+      owned!(repo_key, "Code Review")
+
+      assert {:ok, :updated} = TicketObservation.observe(repo_key, hand_move("Done"), now: @now, dispatch_source: "poll")
+      assert %{phase: "Done", phase_owner: :external} = RunStore.get_ticket_state(repo_key, "issue-observed")
+
+      assert {:ok, :unchanged} = TicketObservation.observe(repo_key, hand_move("Done"), now: @now)
+      assert ticket_events(repo_key, "issue-observed") == []
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+    end
+
+    test "Linear's state read before Symphony wrote the phase keeps the phase and moves nothing; an older fact is dropped",
+         %{repo_key: repo_key} do
+      owned!(repo_key, "Code Review")
+
+      before_move = hand_move("In Progress", %{title: "Renamed", updated_at: DateTime.add(@phase_at, -1)})
+      assert {:ok, :updated} = on_record(repo_key, before_move, @now)
+      assert %{phase: "Code Review", phase_owner: :symphony, title: "Renamed"} = RunStore.get_ticket_state(repo_key, "issue-observed")
+
+      stale = hand_move("Done", %{updated_at: @linear_at})
+      assert {:ok, :stale} = on_record(repo_key, stale, @now)
+
+      assert ticket_events(repo_key, "issue-observed") == []
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert drift().detected == 0
+    end
+
+    test "a read without Linear's updatedAt is drift each time, and the last ten are kept, newest first", %{repo_key: repo_key} do
+      owned!(repo_key, "Code Review")
+
+      for n <- 1..11 do
+        at = DateTime.add(@now, n)
+        assert {:ok, _outcome} = on_record(repo_key, hand_move("Done", %{updated_at: nil}), at)
+      end
+
+      assert length(ticket_events(repo_key, "issue-observed", "drift.reverted")) == 11
+      drift = drift()
+      assert {drift.detected, drift.reverted, length(drift.recent)} == {11, 11, 10}
+      assert drift.recent |> hd() |> Map.fetch!(:at) == DateTime.add(@now, 11)
+      assert drift.recent |> List.last() |> Map.fetch!(:at) == DateTime.add(@now, 2)
+    end
+  end
+
+  # A record Symphony moved into `phase` at `@phase_at`, after the poll observed the ticket at `@linear_at`.
+  defp owned!(repo_key, phase) do
+    {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(%{state: "In Progress"}), now: @now)
+    record = repo_key |> RunStore.get_ticket_state("issue-observed") |> TicketState.put_phase(phase, @phase_at)
+    :ok = RunStore.put_ticket_state(record)
+  end
+
+  # Linear's read of the ticket after a person moved it to `state` by hand at `@moved_at`.
+  defp hand_move(state, attrs \\ %{}), do: linear_issue(Map.merge(%{state: state, updated_at: @moved_at}, attrs))
+
+  defp on_record(repo_key, issue, now), do: TicketObservation.observe(repo_key, issue, now: now, dispatch_source: "record")
+
+  defp event_types(repo_key), do: repo_key |> ticket_events("issue-observed") |> Enum.map(&elem(&1, 0))
+
+  defp drift, do: TicketObservation.summary().drift
+
+  defp counts, do: Map.drop(TicketObservation.summary(), [:compare, :drift])
   defp compare, do: TicketObservation.summary().compare
 end

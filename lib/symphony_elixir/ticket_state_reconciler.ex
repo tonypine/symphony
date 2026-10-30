@@ -38,10 +38,10 @@ defmodule SymphonyElixir.TicketStateReconciler do
         {:ok, record}
 
       is_nil(record.phase) ->
-        {:stamped, TicketState.put_phase(record, state, at)}
+        {:stamped, TicketState.put_phase(record, state, at, :external)}
 
       true ->
-        {:drift, TicketState.put_phase(record, state, at), %{from: record.phase, to: state}}
+        {:drift, TicketState.put_phase(record, state, at, :external), %{from: record.phase, to: state}}
     end
   end
 
