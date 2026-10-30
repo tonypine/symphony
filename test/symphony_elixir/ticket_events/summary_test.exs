@@ -54,6 +54,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     {"question.answered", %{question_id: "q-1", title: "Ship TP-12 today", answer: "2", option: "Wait for the release"}, [],
      %{title: "You answered: Wait for the release", detail: "Ship TP-12 today"}},
     {"question.withdrawn", %{question_id: "q-1", title: "Ship TP-12 today", reason: "TP-12 was cancelled"}, [], %{title: "Question withdrawn: TP-12 was cancelled", detail: "Ship TP-12 today"}},
+    {"question.reopened", %{question_id: "q-1", title: "Ship TP-12 today"}, [], %{title: "You took back your answer: Ship TP-12 today", detail: nil}},
     {"note", %{text: "History before 2026-10-20 was backfilled"}, [], %{title: "Note added", detail: "History before 2026-10-20 was backfilled"}}
   ]
 

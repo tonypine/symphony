@@ -156,6 +156,17 @@ defmodule SymphonyElixir.TicketEvents.BriefTest do
       assert brief.text =~ "Orphan"
     end
 
+    test "a Question the Director reopened is open again, and its next answer is the one that stands (TP-1240)" do
+      asked = event(0, "question.asked", %{question_id: "q-1", title: "Merge TP-7", question: "Merge TP-7?"})
+      answered = event(1, "question.answered", %{question_id: "q-1", answer: "Merge"})
+      reopened = event(2, "question.reopened", %{question_id: "q-1", title: "Merge TP-7"})
+
+      assert Brief.build(nil, [asked, answered, reopened]).text =~ "Merge TP-7?\n  Open: it waits on the Director's answer."
+
+      again = event(3, "question.answered", %{question_id: "q-1", answer: "Wait"})
+      assert Brief.build(nil, [asked, answered, reopened, again]).text =~ "Merge TP-7?\n  Answered 2026-10-22T10:03:00Z by Symphony: Wait"
+    end
+
     test "every decision: answered, withdrawn, open, and a ruling with no request" do
       answered = event(0, "decision.requested", %{title: "Large exports", question: "Background?", why: "It takes long.", options: ["Yes", %{label: "No", effect: "The user waits."}, 7, %{}]})
       withdrawn = event(1, "decision.requested", %{question: "Keep the header?"}, actor: {:agent, "run-1", "implementation"})

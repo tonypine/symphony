@@ -18,9 +18,10 @@ defmodule SymphonyElixirWeb.ControlApiController do
   each takes `issue_identifier`, answers 409 when the ticket's state doesn't allow the move, 502
   `move_incomplete` when Linear took one of the move's two writes and refused the other, 502
   `restart_incomplete` when the reset behind `restart` stopped partway, and 200 with the states it
-  moved between. `decide` answers a decision request: it takes the `picks`, the
-  `request_comment_id` they answer and the optional `move` the decision directs. `decisions` takes
-  a plan's `picks`, each with the `request_comment_id` of the question it answers.
+  moved between. `decide` answers a decision request: it takes the `picks`, the `question_id` they
+  answer (the Inbox row's) or the `request_comment_id` of its request (still accepted, resolved to
+  its question), and the optional `move` the decision directs. `decisions` takes a plan's `picks`,
+  each with the `question_id` or the `request_comment_id` of the question it answers.
 
   `note` writes the Director's note on a ticket: it takes `repo_key`, `issue_identifier` and
   `text`, resolves the ticket as the events feed does (`SymphonyElixirWeb.TicketEventsController`),
@@ -132,6 +133,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
   def decide(conn, params) do
     director_move(conn, :decide, params, %{
       picks: picks(params["picks"]),
+      question_id: string_param(params["question_id"]),
       request_comment_id: string_param(params["request_comment_id"]),
       move: string_param(params["move"])
     })
@@ -255,18 +257,19 @@ defmodule SymphonyElixirWeb.ControlApiController do
     end
   end
 
-  # A plan's pick also names the request it answers, so the answer goes under it.
+  # A plan's pick also names the Question it answers or the request comment it goes under.
   defp picks(picks) when is_list(picks) do
     for pick <- picks do
       %{question: string_param(pick_field(pick, "question")), answer: string_param(pick_field(pick, "answer"))}
-      |> put_request_comment_id(string_param(pick_field(pick, "request_comment_id")))
+      |> put_present(:question_id, string_param(pick_field(pick, "question_id")))
+      |> put_present(:request_comment_id, string_param(pick_field(pick, "request_comment_id")))
     end
   end
 
   defp picks(_picks), do: nil
 
-  defp put_request_comment_id(pick, nil), do: pick
-  defp put_request_comment_id(pick, id), do: Map.put(pick, :request_comment_id, id)
+  defp put_present(pick, _key, nil), do: pick
+  defp put_present(pick, key, value), do: Map.put(pick, key, value)
 
   defp pick_field(pick, key) when is_map(pick), do: pick[key]
   defp pick_field(_pick, _key), do: nil

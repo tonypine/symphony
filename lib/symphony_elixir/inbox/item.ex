@@ -30,7 +30,7 @@ defmodule SymphonyElixir.Inbox.Item do
   """
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Hold
+  alias SymphonyElixir.{DecisionRequest, Hold}
   alias SymphonyElixir.HumanActions.{Collector, Waiting}
   alias SymphonyElixir.Inbox.ReviewBrief
   alias SymphonyElixir.MergeConfirmation
@@ -119,8 +119,8 @@ defmodule SymphonyElixir.Inbox.Item do
   defp review(:action, node, repo_key, settings, lookups) do
     {comment_id, request} = Collector.newest_open_request(node, settings)
 
-    comment_id
-    |> request_review(request)
+    node
+    |> request_review(comment_id, request)
     |> Map.merge(%{requested_at: request.created_at, confirm: MergeConfirmation.confirm_target(store_hold(repo_key, node["id"], lookups))})
   end
 
@@ -135,10 +135,12 @@ defmodule SymphonyElixir.Inbox.Item do
 
   # A request as the Inbox shows it, an action's or a plan's: what it asks, why, what waits until it
   # is answered, the options with their trade-offs and why the recommended one. `comment_id` is what
-  # the answer replies under.
-  defp request_review(comment_id, request) do
+  # the answer replies under, and `question_id` the Question its hidden line names (nil for a request
+  # written before questions carried it), which the Director's answer answers.
+  defp request_review(node, comment_id, request) do
     %{
       comment_id: comment_id,
+      question_id: question_id(node, comment_id),
       title: request.title,
       question: request.question,
       why: request.why,
@@ -158,7 +160,7 @@ defmodule SymphonyElixir.Inbox.Item do
     |> Collector.open_requests(settings)
     |> Enum.filter(fn {_comment_id, request} -> request.options != [] end)
     |> Enum.sort_by(&posted_at/1)
-    |> Enum.map(fn {comment_id, request} -> request_review(comment_id, request) end)
+    |> Enum.map(fn {comment_id, request} -> request_review(node, comment_id, request) end)
   end
 
   # The answers to the plan's requests given since the plan last came back to `Plan Review`: the
@@ -249,6 +251,10 @@ defmodule SymphonyElixir.Inbox.Item do
   defp clarify_ask(_entry), do: "Rewrite the ticket: the quality gate skipped it"
 
   defp comments(node), do: node |> get_in(["comments", "nodes"]) |> List.wrap()
+
+  defp question_id(node, comment_id) do
+    with %{"body" => body} <- Enum.find(comments(node), &(&1["id"] == comment_id)), do: DecisionRequest.question_id(body)
+  end
 
   defp blank_to_nil(text) do
     case String.trim(text) do

@@ -228,18 +228,27 @@ defmodule SymphonyElixir.TicketEvents do
   end
 
   # The ids of the findings an unsuperseded resolution names and of the decision requests an answer
-  # or a withdrawal names. Event ids are unique, so one set holds both.
+  # or a withdrawal names, in the order they happened: a question the Director reopened since its
+  # answer is open again. Event ids are unique, so one set holds both.
   defp closed_ids(events) do
     superseded = events |> Enum.map(& &1.supersedes) |> MapSet.new()
 
-    events
-    |> Enum.flat_map(fn
-      %Event{type: "finding.resolved", id: id, payload: payload} -> if MapSet.member?(superseded, id), do: [], else: [Map.get(payload, :finding_id)]
-      %Event{type: type, payload: payload} when type in ["decision.recorded", "decision.withdrawn"] -> [Map.get(payload, :request)]
-      %Event{type: type, payload: payload} when type in ["question.answered", "question.withdrawn"] -> [Map.get(payload, :question_id)]
-      _event -> []
+    Enum.reduce(events, MapSet.new(), fn
+      %Event{type: "finding.resolved", id: id, payload: payload}, closed ->
+        if MapSet.member?(superseded, id), do: closed, else: MapSet.put(closed, Map.get(payload, :finding_id))
+
+      %Event{type: type, payload: payload}, closed when type in ["decision.recorded", "decision.withdrawn"] ->
+        MapSet.put(closed, Map.get(payload, :request))
+
+      %Event{type: type, payload: payload}, closed when type in ["question.answered", "question.withdrawn"] ->
+        MapSet.put(closed, Map.get(payload, :question_id))
+
+      %Event{type: "question.reopened", payload: payload}, closed ->
+        MapSet.delete(closed, Map.get(payload, :question_id))
+
+      _event, closed ->
+        closed
     end)
-    |> MapSet.new()
   end
 
   # Whether a `question.asked` event's question is ended by an answer or a withdrawal naming it.

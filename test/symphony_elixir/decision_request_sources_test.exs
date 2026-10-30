@@ -23,6 +23,8 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
     "lib/symphony_elixir/closed_pull_request.ex" => [:ask],
     # A Code Review escalation.
     "lib/symphony_elixir/code_review.ex" => [:ask],
+    # The Director's Undo of a Decide: the request's hold set again, carrying its reopened Question.
+    "lib/symphony_elixir/director_moves.ex" => [:project],
     # A dependency change the package check keeps out.
     "lib/symphony_elixir/dependency_gate.ex" => [:ask],
     # The step into Merging with manual review on.

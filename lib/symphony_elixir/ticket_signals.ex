@@ -115,7 +115,9 @@ defmodule SymphonyElixir.TicketSignals do
   @doc """
   Marks a projection of the ticket's record to Linear as failed (`TicketState.mark_projection/4`):
   `:phase` for a move whose Linear write failed, `{:hold_label, kind}` for a hold's label,
-  `{:question_comment, question_id}` for a question's request comment. The reconciler projects the
+  `{:question_comment, question_id}` for a question's request comment,
+  `{:question_answer, question_id, comment_id}` for the reply to a question the Director answered.
+  The reconciler projects the
   record again and drops the mark
   (`SymphonyElixir.TicketObservation.reconcile_all/3`). Only the record's marks are written. A
   ticket with no record has nothing to project. Best-effort like `record_phase/3`.

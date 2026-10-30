@@ -126,7 +126,8 @@ defmodule SymphonyElixir.TicketEvents.Brief do
   # order they were made.
 
   # A Question's request is its `question.asked`, ended by the Question's own answer or withdrawal
-  # (naming its `question_id`) or by a `decision.recorded` naming the event, whichever came first.
+  # (naming its `question_id`) or by a `decision.recorded` naming the event, whichever came first
+  # since the Director last reopened it (`question.reopened`).
   defp decisions(events) do
     requests = events |> Enum.filter(&(&1.type in ["decision.requested", "question.asked"])) |> MapSet.new(& &1.id)
 
@@ -141,10 +142,15 @@ defmodule SymphonyElixir.TicketEvents.Brief do
       |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
 
     Enum.flat_map(events, fn
-      %Event{type: type, id: id} = event when type in ["decision.requested", "question.asked"] -> [{:request, event, ends |> Map.get(id, []) |> List.first()}]
+      %Event{type: type, id: id} = event when type in ["decision.requested", "question.asked"] -> [{:request, event, ends |> Map.get(id, []) |> first_end()}]
       %Event{type: "decision.recorded"} = event -> if MapSet.member?(requests, text(event, :request)), do: [], else: [{:ruling, event}]
       _event -> []
     end)
+  end
+
+  # The end that stands: the first one after the Director last reopened the question, nil while open.
+  defp first_end(ends) do
+    ends |> Enum.reverse() |> Enum.take_while(&(&1.type != "question.reopened")) |> List.last()
   end
 
   # The request an event ends, by the request event's id.
@@ -152,7 +158,7 @@ defmodule SymphonyElixir.TicketEvents.Brief do
     if MapSet.member?(requests, text(event, :request)), do: [{text(event, :request), event}], else: []
   end
 
-  defp ended_request(%Event{type: type} = event, _requests, questions) when type in ["question.answered", "question.withdrawn"] do
+  defp ended_request(%Event{type: type} = event, _requests, questions) when type in ["question.answered", "question.withdrawn", "question.reopened"] do
     case Map.get(questions, text(event, :question_id)) do
       nil -> []
       request -> [{request, event}]

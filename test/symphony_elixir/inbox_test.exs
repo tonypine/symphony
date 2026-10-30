@@ -427,6 +427,47 @@ defmodule SymphonyElixir.InboxTest do
   end
 
   describe "the poller" do
+    test "a read sees a request as the record holds its Question: the row names it, and goes once it is answered (TP-1240)" do
+      test_pid = self()
+      repo = %{name: "shop-#{System.unique_integer([:positive])}"}
+      ticket = {:ticket, repo.name, "id-SHOP-93"}
+
+      request = %{
+        title: "Add the signing secret",
+        question: "Add the secret?",
+        why: "Releases fail to sign.",
+        if_unanswered: "Every release stays unsigned.",
+        recommendation_reason: "Signing is a one-time setup.",
+        options: [%{label: "Add it", effect: "Releases sign again.", recommended: true}, %{label: "Drop signing", effect: "Unsigned builds."}]
+      }
+
+      {:ok, question} = SymphonyElixir.Questions.ask(ticket, request)
+      body = request_body() <> "\n\n<!-- symphony:question #{question.id} -->"
+
+      held =
+        issue_node("SHOP-93", %{
+          "state" => %{"name" => "In Progress"},
+          "labels" => %{"nodes" => []},
+          "history" => %{"nodes" => []},
+          "comments" => %{"nodes" => [comment("request", body, "2026-10-01T08:00:01Z")]}
+        })
+
+      client = linear(test_pid, fn _variables -> page([light(held)]) end, %{held["id"] => held})
+      settings_fun = fn _repo -> designed_settings() end
+      state = state(client, repos: fn -> {:ok, [repo]} end, settings_fun: settings_fun, tracker: DescriptionTracker)
+
+      state = Inbox.run_once(state)
+      assert [%{kind: :action, review: %{comment_id: "request", question_id: id}}] = Inbox.cached(state.opts[:name])
+      assert id == question.id
+
+      # Answered on the record, with no reply on Linear yet: the next read lists nothing and sets no hold.
+      {:ok, _answered} = SymphonyElixir.Questions.answer(ticket, question.id, "Add it")
+      :ok = SymphonyElixir.Hold.clear(repo.name, "id-SHOP-93", :needs_decision, answered: true, tracker: DescriptionTracker)
+      state = Inbox.run_once(state)
+      assert Inbox.cached(state.opts[:name]) == []
+      assert TicketState.get_hold(RunStore.get_ticket_state(repo.name, "id-SHOP-93"), :needs_decision) == nil
+    end
+
     test "the read is also the one that sets and clears the Needs Decision hold" do
       test_pid = self()
 
@@ -787,6 +828,46 @@ defmodule SymphonyElixir.InboxTest do
   end
 
   describe "items/2" do
+    test "a request whose Question the Director answered is gone at once, before Linear shows the reply (TP-1240)" do
+      name = {:test, make_ref()}
+      repo_key = "shop-#{System.unique_integer([:positive])}"
+      ticket = {:ticket, repo_key, "id-SHOP-95"}
+
+      request = %{
+        title: "Add the signing secret",
+        question: "Add the secret?",
+        why: "Releases fail to sign.",
+        if_unanswered: "Every release stays unsigned.",
+        recommendation_reason: "Signing is a one-time setup.",
+        options: [%{label: "Add it", effect: "Releases sign again.", recommended: true}, %{label: "Drop signing", effect: "Unsigned builds."}]
+      }
+
+      {:ok, question} = SymphonyElixir.Questions.ask(ticket, request)
+
+      row = fn identifier, question_id ->
+        %{
+          issue_id: "id-" <> identifier,
+          identifier: identifier,
+          title: nil,
+          repo_key: repo_key,
+          kind: :action,
+          state: "In Progress",
+          ask: "Add the signing secret",
+          waiting_since: ~U[2026-10-01 08:00:00Z],
+          url: nil,
+          review: %{comment_id: "request", question_id: question_id}
+        }
+      end
+
+      # A request with no Question, or one the record doesn't hold, stays as Linear lists it.
+      :persistent_term.put({Inbox, :items, name}, [row.("SHOP-95", question.id), row.("SHOP-96", nil), row.("SHOP-97", "q-unknown")])
+      on_exit(fn -> :persistent_term.erase({Inbox, :items, name}) end)
+      assert Enum.map(Inbox.items(%{}, name), & &1.identifier) == ["SHOP-95", "SHOP-96", "SHOP-97"]
+
+      {:ok, _answered} = SymphonyElixir.Questions.answer(ticket, question.id, "Drop signing")
+      assert Enum.map(Inbox.items(%{}, name), & &1.identifier) == ["SHOP-96", "SHOP-97"]
+    end
+
     test "adds the quality gate's holds and skips, drops running tickets and ones that left review, oldest first" do
       name = {:test, make_ref()}
 

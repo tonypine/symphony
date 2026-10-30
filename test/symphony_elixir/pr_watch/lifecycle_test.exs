@@ -387,6 +387,46 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
       assert state(issue_id) == "QA"
     end
 
+    test "the Director's answer reads from its Question before any decision is recorded (TP-1240)" do
+      issue_id = ticket!("33", "QA", base: :changed, base_ref: "release")
+      pid = start!()
+      tick!(pid)
+      assert %{rule: "R7", kind: :decision} = decision(issue_id)
+
+      # Decide writes the Question first; the Decisions section follows once Linear answers.
+      %{decision: %{question_id: id}} = Hold.get(@repo_key, issue_id, :needs_decision)
+      {:ok, _answered} = SymphonyElixir.Questions.answer({:ticket, @repo_key, issue_id}, id, "Accept the new base")
+      :ok = Hold.clear(@repo_key, issue_id, :needs_decision, answered: true)
+      assert RunStore.get_ticket_state(@repo_key, issue_id).decisions == []
+      tick!(pid)
+
+      assert %{rule: "R27", kind: :dispatch} = decision(issue_id)
+      assert World.calls(:change_base) == []
+    end
+
+    test "an answer the Director took back with Undo no longer counts, though its decision stays recorded (TP-1240)" do
+      issue_id = ticket!("34", "QA", base: :changed, base_ref: "release")
+      pid = start!()
+      tick!(pid)
+      assert %{rule: "R7", kind: :decision} = decision(issue_id)
+
+      # Decide: the Question is answered, the decision recorded and the hold cleared.
+      %{decision: %{question_id: id}} = hold = Hold.get(@repo_key, issue_id, :needs_decision)
+      ticket = {:ticket, @repo_key, issue_id}
+      {:ok, question} = SymphonyElixir.Questions.answer(ticket, id, "Accept the new base")
+      answer!(issue_id, question.title, "Accept the new base")
+
+      # Undo: the Question is open again and the hold is set again; the decision stays.
+      {:ok, _reopened} = SymphonyElixir.Questions.reopen(ticket, id)
+      :ok = SymphonyElixir.DecisionRequest.project(@repo_key, issue_id, Map.take(hold, [:reason, :clearing_condition, :decision]), [])
+      assert [%{answer: "Accept the new base"}] = RunStore.get_ticket_state(@repo_key, issue_id).decisions
+      tick!(pid)
+
+      # The base still reads as changed: the ticket waits on the person, asked again.
+      assert %{facts: %Facts{base: :changed}, decision: %{rule: "R4", kind: :wait, owner: :person}} = watch(issue_id)
+      assert World.calls(:change_base) == []
+    end
+
     test "the base is the repo's `base_branch` when its configuration names one" do
       write_workflow_file!(Workflow.workflow_file_path(),
         tracker_kind: "memory",
