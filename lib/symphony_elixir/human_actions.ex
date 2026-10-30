@@ -35,7 +35,8 @@ defmodule SymphonyElixir.HumanActions do
   alias SymphonyElixir.HumanActions.{CiSecrets, Collector, Update, Waiting}
   alias SymphonyElixir.Linear.{Client, Usage}
 
-  @initial_delay_ms 60_000
+  # Startup is a trigger: the first read runs as soon as the server starts, after the store is reconciled.
+  @initial_delay_ms 0
   @refresh_delay_ms 5_000
   @recent_updates 10
 

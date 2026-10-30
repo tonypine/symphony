@@ -182,6 +182,7 @@ defmodule SymphonyElixir.Orchestrator do
       slot_waiting: %{},
       dispatch_skipped: %{},
       operator_pause_logged: false,
+      cycle_requested: false,
       workspace_lifecycle_last_check_at_ms: nil,
       workspace_lifecycle_quota: %{configured?: false, paused: false, reason: nil},
       workspace_quota_logged: false,
@@ -342,6 +343,14 @@ defmodule SymphonyElixir.Orchestrator do
   # dispatch from the record, its repo gets a cycle at once, as a move made there does, so a ticket
   # the change frees is considered within seconds. With dispatch from the poll cache the change waits
   # for the repo's poll.
+  # A reason lifted from a ticket's pause (`SymphonyElixir.Pauses`: the update hold released, a
+  # blocker landed, a stop lifted) may free it to dispatch, and so may a new decision of the PR
+  # watcher that a run starts (`SymphonyElixir.PrWatch.Repo`: the reviewer, QA). Both live in the
+  # store, so a dispatch cycle reads them with no Linear read, on either dispatch source.
+  defp handle_info_message({:ticket_record, _repo_key, _issue_id, :changed, [field]}, state) when field in [:pause, :pr_watch] do
+    {:noreply, request_cycle(state)}
+  end
+
   defp handle_info_message({:ticket_record, repo_key, _issue_id, :changed, _fields}, state) do
     case dispatch_source_in_use() do
       :record -> handle_cast_message({:request_refresh, repo_key, :now}, state)
@@ -749,6 +758,15 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp redispatch_slot_waiting(%State{} = state), do: state
+
+  # Runs a dispatch cycle at once, coalesced with the one in flight or already due. One in flight may
+  # have read its candidates before the change that asked, so it is followed by another
+  # (`finish_poll_cycle/2`); requests made meanwhile share it.
+  defp request_cycle(%State{poll_check_in_progress: true} = state), do: %{state | cycle_requested: true}
+
+  defp request_cycle(%State{} = state) do
+    if poll_tick_coalesced?(state, System.monotonic_time(:millisecond)), do: state, else: schedule_tick(state, 0)
+  end
 
   # Polls now unless a poll is already running or due; true when it was.
   defp request_poll(%State{} = state) do
@@ -1620,9 +1638,12 @@ defmodule SymphonyElixir.Orchestrator do
       | linear_requests_last_poll: max(requests_total - state.linear_requests_mark, 0),
         linear_requests_mark: requests_total
     }
-    |> schedule_tick(max(next_repo_poll_delay_ms(state, now_ms), RateLimit.remaining_pause_ms()))
-    |> Map.put(:poll_check_in_progress, false)
+    |> schedule_tick(max(next_cycle_delay_ms(state, now_ms), RateLimit.remaining_pause_ms()))
+    |> Map.merge(%{poll_check_in_progress: false, cycle_requested: false})
   end
+
+  defp next_cycle_delay_ms(%State{cycle_requested: true}, _now_ms), do: 0
+  defp next_cycle_delay_ms(%State{} = state, now_ms), do: next_repo_poll_delay_ms(state, now_ms)
 
   # A claim is only held by a running agent, a queued retry, a retry whose async quality gate or
   # dispatch readiness check is in flight, or a Linear task that keeps it until its answer is
@@ -1835,11 +1856,12 @@ defmodule SymphonyElixir.Orchestrator do
     case result do
       {:ok, issues} when is_list(issues) ->
         observe_repo_poll(repo_name, issues, read_at)
+        next_due_ms = now_ms + linear_poll_interval_ms(state) + first_poll_offset_ms(state, repos, repo_name)
 
         state =
           state
           |> put_repo_poll_cache(repo_name, issues, now_ms, read_at)
-          |> put_repo_next_due(repo_name, now_ms + linear_poll_interval_ms(state))
+          |> put_repo_next_due(repo_name, next_due_ms)
           |> keep_forced_repo_due(repo_name)
           |> record_tracker_poll_success()
 
@@ -2041,19 +2063,15 @@ defmodule SymphonyElixir.Orchestrator do
   defp route_assignee(%{assignee: assignee}), do: assignee
   defp route_assignee(_repo), do: nil
 
+  # A repo Symphony has not polled yet (every repo at boot, or one a config reload adds) is due at
+  # once: startup is a trigger, and nothing dispatches until every repo's cache is warm. Its first
+  # poll then puts its next one on its stagger slot (`first_poll_offset_ms/3`), so the timed polls
+  # stay spread over the interval.
   defp sync_repo_poll_state(%State{} = state, repos, now_ms) do
     repo_names = Enum.map(repos, &repo_name/1)
     existing_due = state.repo_poll_due_at_ms || %{}
     existing_cache = state.repo_poll_cache || %{}
-    stagger_ms = repo_poll_stagger_ms(state, repos)
-
-    repo_poll_due_at_ms =
-      repos
-      |> Enum.with_index()
-      |> Map.new(fn {repo, index} ->
-        name = repo_name(repo)
-        {name, Map.get(existing_due, name, now_ms + index * stagger_ms)}
-      end)
+    repo_poll_due_at_ms = Map.new(repo_names, &{&1, Map.get(existing_due, &1, now_ms)})
 
     %{
       state
@@ -2128,10 +2146,13 @@ defmodule SymphonyElixir.Orchestrator do
     do: MapSet.member?(state.repo_poll_forced, repo_name) and state.repo_poll_forced_at_ms[repo_name] <= now_ms
 
   defp next_timed_due_repo(%State{} = state, repos, now_ms) do
+    # Repos due at the same time (every repo at boot) go in the order they are configured.
     sorted_repos =
       repos
-      |> Enum.map(fn repo -> {repo, Map.get(state.repo_poll_due_at_ms, repo_name(repo), now_ms)} end)
-      |> Enum.sort_by(fn {repo, due_at_ms} -> {due_at_ms, repo_name(repo)} end)
+      |> Enum.with_index()
+      |> Enum.map(fn {repo, index} -> {repo, Map.get(state.repo_poll_due_at_ms, repo_name(repo), now_ms), index} end)
+      |> Enum.sort_by(fn {_repo, due_at_ms, index} -> {due_at_ms, index} end)
+      |> Enum.map(fn {repo, due_at_ms, _index} -> {repo, due_at_ms} end)
 
     sorted_repos
     |> Enum.find(fn {_repo, due_at_ms} -> due_at_ms <= now_ms end)
@@ -2240,6 +2261,17 @@ defmodule SymphonyElixir.Orchestrator do
 
   # The first poll of each repo after a start is spread over `issues.poll_interval_ms` on either
   # source, as dispatch waits for every repo's first poll; each repo keeps its offset after.
+  # A repo's first poll (its cache not warm yet) puts its next one on its stagger slot: the repo's
+  # place in the config times `interval_ms / repo_count`. Every later poll is one interval on.
+  defp first_poll_offset_ms(%State{} = state, repos, repo_name) do
+    if repo_poll_cache_warmed?(state, repo_name) do
+      0
+    else
+      index = Enum.find_index(repos, &(repo_name(&1) == repo_name)) || 0
+      index * repo_poll_stagger_ms(state, repos)
+    end
+  end
+
   defp repo_poll_stagger_ms(%State{poll_interval_ms: interval_ms}, repos)
        when is_integer(interval_ms) and interval_ms > 0 and is_list(repos) do
     repo_count = max(length(repos), 1)

@@ -981,9 +981,10 @@ Elixir implementation note: when `repositories` is configured, Linear candidate 
 repo with one server-side issue filter per repo. The service does not widen this into a team-union
 query. Duplicate issue IDs across repo result sets are classified as conflicts and excluded from
 dispatch. Repo-level route selectors are optional; a single unscoped repo, or an explicit default
-repo, can rely on the issue-level Linear scope. Repo polls are staggered across the configured
-`issues.poll_interval_ms`, so the scheduler ticks roughly every `interval_ms / repo_count` while
-each healthy repo is still polled once per full interval. Dispatch
+repo, can rely on the issue-level Linear scope. At start every repo is polled once, back to back,
+in configured order: startup is a trigger, not a timer. After that, repo polls are staggered across
+the configured `issues.poll_interval_ms`, so the scheduler ticks roughly every
+`interval_ms / repo_count` while each healthy repo is still polled once per full interval. Dispatch
 stays empty until every repo cache has warmed once; after three consecutive cold failures for a repo,
 that repo is treated as warmed with an empty result so healthy repos can keep dispatching.
 

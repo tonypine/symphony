@@ -2790,9 +2790,10 @@ back when Symphony starts, with the same events. Under `poll` every hand move ap
 webhooks and Symphony's own moves keep the records, dispatch and the watchers read them, and a
 record change asks for its repository's cycle at once. So the poll runs every
 `linear.reconcile_interval_ms` (five minutes by default) instead of `issues.poll_interval_ms`, one
-Linear request per repository per run. The first poll of each repository after a start keeps the
-usual stagger over `issues.poll_interval_ms`, as dispatch waits for it, and a poll that fails is
-tried again after `issues.poll_interval_ms`. Each run:
+Linear request per repository per run. Every repository is polled once at start, back to back, as
+dispatch waits for every repository's first poll; each one's next poll then lands on its stagger
+slot over `issues.poll_interval_ms`, and a poll that fails is tried again after
+`issues.poll_interval_ms`. Each run:
 
 - observes the repository's tickets as any poll does: a change made in Linear while a webhook was
   lost (Symphony was down, the webhook was off) or that Linear does not deliver is applied, a new

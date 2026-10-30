@@ -56,6 +56,7 @@ defmodule SymphonyElixir.Pauses do
   """
 
   alias SymphonyElixir.{RunStore, TicketEvents, TicketState}
+  alias SymphonyElixirWeb.ObservabilityPubSub
 
   @kinds [:question, :ticket, :build, :person, :environment]
   @setter_kinds [:person, :run, :rule, :symphony]
@@ -70,6 +71,8 @@ defmodule SymphonyElixir.Pauses do
   @update_reason ~r/\Aupdating to v(\d+(?:\.\d+)+)\z/
   @dispatch_kinds [:person, :build]
   @repository_text "You paused this repository"
+  # The events of a ticket's pause that lift a reason.
+  @lifted ["pause.reason_cleared", "pause.cleared"]
 
   @typedoc "What a pause holds: a ticket of a repository, a repository, or Symphony itself."
   @type subject :: {:ticket, String.t(), String.t()} | {:repository, String.t()} | :symphony
@@ -398,10 +401,14 @@ defmodule SymphonyElixir.Pauses do
   defp changed(unchanged), do: with({:ok, pause} <- unchanged, do: {:ok, pause, []})
 
   # The pause is read, changed and written in one store transaction that holds its lock, with the
-  # ticket's event appended in it; the event's notice goes out once it commits.
+  # ticket's event appended in it; the event's notice goes out once it commits. A reason lifted may
+  # free the ticket to dispatch, so the record's change is announced once the write committed: the
+  # orchestrator runs a dispatch cycle at once (`SymphonyElixir.Orchestrator`). A reason set holds
+  # the ticket back, which the next cycle reads anyway.
   defp update({:ticket, repo_key, issue_id}, at, fun) do
     with {:ok, pause, events} <- RunStore.update_ticket_pause(repo_key, issue_id, at, fun) do
       Enum.each(events, &TicketEvents.notify/1)
+      if Enum.any?(events, &(&1.type in @lifted)), do: ObservabilityPubSub.broadcast_ticket_record_changed(repo_key, issue_id, [:pause])
       {:ok, pause}
     end
   end
