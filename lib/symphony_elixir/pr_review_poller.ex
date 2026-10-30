@@ -6,12 +6,17 @@ defmodule SymphonyElixir.PrReviewPoller do
   watcher's (`SymphonyElixir.PrWatch`), and so are the review comments in `Code Review`, `QA` and
   `Merging`: the watcher reads them here (`review_comments/5`) and its rule R13 sends the ticket
   back to `In Progress`. Only a ticket in another phase is sent back by this poller.
+
+  Its watched tickets come from Linear under `dispatch.source: poll`, and from Symphony's ticket
+  records under `record` (`SymphonyElixir.Dispatch.Candidates.issues_in_phases/2`), with no Linear
+  request.
   """
 
   use GenServer
   require Logger
 
   alias SymphonyElixir.{AuditLog, AutoMerge, Config, Notifications, RunStore}
+  alias SymphonyElixir.Dispatch.Candidates
   alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
   alias SymphonyElixir.Learnings.Reflection
   alias SymphonyElixir.Linear.{Issue, Usage}
@@ -473,14 +478,12 @@ defmodule SymphonyElixir.PrReviewPoller do
   # repository watches serves them all this cycle; each repository keeps only the states its own
   # settings watch.
   defp prefetch_watched_issues(repo_keys, opts) do
-    tracker = Keyword.get(opts, :tracker, Tracker)
-
     case repo_keys |> Enum.flat_map(&repo_watched_states/1) |> Enum.uniq() do
       [] ->
         {:ok, opts}
 
       states ->
-        with {:ok, issues} <- tracker.fetch_issues_by_states(states) do
+        with {:ok, issues} <- issues_in_states(states, opts) do
           {:ok, Keyword.put(opts, :watched_issues, issues)}
         end
     end
@@ -524,10 +527,9 @@ defmodule SymphonyElixir.PrReviewPoller do
     now = Keyword.get(opts, :now, DateTime.utc_now())
     run_store = Keyword.get(opts, :run_store, RunStore)
     repo_key = repo_key_from_opts(opts)
-    tracker = Keyword.get(opts, :tracker, Tracker)
     current_gh_user = resolve_current_gh_user(opts)
 
-    with {:ok, found, merging_ids, phase_ids} <- discover_reviews(settings, run_store, tracker, repo_key, now, opts),
+    with {:ok, found, merging_ids, phase_ids} <- discover_reviews(settings, run_store, repo_key, now, opts),
          {:ok, reviews} <- list_pr_reviews(run_store, repo_key) do
       opts =
         opts
@@ -572,8 +574,8 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  defp discover_reviews(settings, run_store, tracker, repo_key, now, opts) do
-    with {:ok, issues} <- fetch_watched_issues(settings, tracker, opts),
+  defp discover_reviews(settings, run_store, repo_key, now, opts) do
+    with {:ok, issues} <- fetch_watched_issues(settings, opts),
          {:ok, existing} <- list_pr_reviews(run_store, repo_key) do
       existing_by_issue = Map.new(existing, &{Map.get(&1, :issue_id), &1})
       issues = Enum.filter(issues, &match?(%Issue{}, &1))
@@ -611,10 +613,19 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp phase_states(settings), do: [settings.tracker.code_review_state, settings.tracker.qa_state, @rework_state]
 
-  defp fetch_watched_issues(settings, tracker, opts) do
+  defp fetch_watched_issues(settings, opts) do
     case Keyword.fetch(opts, :watched_issues) do
       {:ok, issues} -> {:ok, Enum.filter(issues, &issue_in_states?(&1, watched_states(settings)))}
-      :error -> tracker.fetch_issues_by_states(watched_states(settings))
+      :error -> issues_in_states(watched_states(settings), opts)
+    end
+  end
+
+  # The tickets of every repository in `states`: from their records under `dispatch.source: record`,
+  # with no Linear request, else read from Linear.
+  defp issues_in_states(states, opts) do
+    case Config.dispatch_source() do
+      "record" -> Candidates.issues_in_phases(states, store: Keyword.get(opts, :run_store, RunStore))
+      _poll -> Keyword.get(opts, :tracker, Tracker).fetch_issues_by_states(states)
     end
   end
 

@@ -4,7 +4,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Notifications.Event
   alias SymphonyElixir.PrReviewPoller
-  alias SymphonyElixir.TicketPullRequest
+  alias SymphonyElixir.{TicketObservation, TicketPullRequest, TicketState}
 
   @repo_key "default"
 
@@ -71,6 +71,18 @@ defmodule SymphonyElixir.PrReviewPollerTest do
         false
       end
     end
+  end
+
+  # The tracker of a poll on the record source: any Linear read fails the test.
+  defmodule LinearReadRaisingTracker do
+    def fetch_issues_by_states(states), do: raise("Linear read of #{inspect(states)}")
+    def fetch_issue_states_by_ids(ids), do: raise("Linear read of #{inspect(ids)}")
+    def update_issue_state(issue_id, state_name), do: FakeTracker.update_issue_state(issue_id, state_name)
+    def create_comment(issue_id, body), do: FakeTracker.create_comment(issue_id, body)
+  end
+
+  defmodule TicketStatesDownRunStore do
+    def list_ticket_states(_repo_key), do: {:error, :store_down}
   end
 
   defmodule IssueReadFailingTracker do
@@ -621,6 +633,57 @@ defmodule SymphonyElixir.PrReviewPollerTest do
            ] = RunStore.list_pr_reviews("secondary")
 
     assert [%{id: "comment-pin-1"}] = PrReviewPoller.pending_reviewer_comments("issue-pin-84")
+  end
+
+  describe "dispatch.source: record" do
+    test "a poll finds the tickets whose records are in its states, reads no Linear, and a review comment still sends its ticket back" do
+      now = ~U[2026-05-01 09:00:00Z]
+      comment_at = DateTime.add(now, -45, :minute)
+      record_source!()
+
+      issue = in_review_issue(updated_at: now, state: "Code Review")
+      removed = in_review_issue(id: "issue-1781", identifier: "ACME-1781", pr_url: "https://github.com/example/repo/pull/1781", updated_at: now, state: "Code Review")
+      todo = in_review_issue(id: "issue-1782", identifier: "ACME-1782", pr_url: "https://github.com/example/repo/pull/1782", updated_at: now, state: "Todo")
+
+      for ticket <- [issue, removed, todo] do
+        assert {:ok, :updated} = TicketObservation.observe(@repo_key, ticket, source: :poll)
+        assert :ok = RunStore.put_run(Map.put(review_run(ticket, "/tmp/workspaces/#{ticket.identifier}", now), :repo_key, @repo_key))
+      end
+
+      # A webhook said ACME-1781 was removed: its record stays, and it is never listed.
+      assert :ok = RunStore.put_ticket_state(TicketState.mark_removed(RunStore.get_ticket_state(@repo_key, removed.id), now))
+
+      comment = %{id: "comment-1", kind: "inline_comment", author: "reviewer", body: "Please handle this edge case.", path: "lib/a.ex", line: 1}
+      comment = Map.merge(comment, %{created_at: comment_at, updated_at: comment_at})
+      Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(comment_at, comments: [comment]))
+
+      # Found in Code Review from its record, whose review comments are the reviewer run's to act on: watched only.
+      assert {:ok, %{discovered: 1, processed: 1, actions: [{:watching, "issue-1780"}]}} =
+               PrReviewPoller.poll_once(tracker: LinearReadRaisingTracker, github: FakeGitHub, now: now)
+
+      assert [%{issue_id: "issue-1780", status: "watching"}] = RunStore.list_pr_reviews(@repo_key)
+
+      # Once its record left the phase, the comment sends it back to work on the same PR, with no Linear read.
+      :ok = SymphonyElixir.TicketSignals.record_phase(@repo_key, issue.id, "In Progress")
+
+      assert {:ok, %{processed: 1, actions: [{:state_transitioned, "issue-1780", :rework, "In Progress"}]}} =
+               PrReviewPoller.poll_once(
+                 repo_key: @repo_key,
+                 tracker: LinearReadRaisingTracker,
+                 github: FakeGitHub,
+                 now: now
+               )
+
+      assert_receive {:issue_state_update, "issue-1780", "In Progress"}
+      assert [%{id: "comment-1"}] = PrReviewPoller.pending_reviewer_comments("issue-1780")
+    end
+
+    test "records that can't be read fail the poll instead of reading as no tickets" do
+      record_source!()
+
+      opts = [repo_key: @repo_key, tracker: LinearReadRaisingTracker, github: FakeGitHub]
+      assert {:error, :store_down} = PrReviewPoller.poll_once([run_store: TicketStatesDownRunStore] ++ opts)
+    end
   end
 
   test "polling ignores malicious Linear GitHub attachments before GitHub fetch" do
@@ -3723,6 +3786,11 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
     assert [%{last_action: "rework", last_action_at: %DateTime{}, pending_reviewer_comments: [%{id: "comment-1"}]}] =
              StatefulRunStore.list_pr_reviews()
+  end
+
+  defp record_source! do
+    File.write!(Workflow.symphony_file_path(), File.read!(Workflow.symphony_file_path()) <> "dispatch:\n  source: record\n")
+    Cache.clear()
   end
 
   defp put_finished_run(issue, now) do

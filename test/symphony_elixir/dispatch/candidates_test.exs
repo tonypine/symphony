@@ -225,6 +225,74 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
     end
   end
 
+  describe "issues_in_phases/2" do
+    defmodule FailingStore do
+      def list_ticket_states(_repo_key), do: {:error, :store_down}
+    end
+
+    defmodule UnreadStore do
+      def list_ticket_states(repo_key), do: raise("the records of #{repo_key} were read")
+    end
+
+    test "lists every repo's tickets whose records are in the phases, as the Linear read of those states would" do
+      workflow!(repos: two_repos())
+
+      for {repo_key, issue} <- [
+            {"default", issue("review", "MT-1", "Code Review")},
+            {"default", issue("todo", "MT-2", "Todo")},
+            {"default", issue("someone-elses", "MT-3", " qa ", assignee_id: "someone")},
+            {"secondary", issue("qa", "OT-1", "QA")},
+            {"secondary", issue("done", "OT-2", "Done")}
+          ] do
+        assert {:ok, :updated} = TicketObservation.observe(repo_key, issue, source: :poll)
+      end
+
+      # A webhook said MT-4 was removed, and MT-5 was never observed: neither is listed.
+      removed = "removed" |> issue("MT-4", "Code Review") |> observed() |> TicketState.mark_removed(@observed_at)
+      assert :ok = RunStore.put_ticket_state(removed)
+      unobserved = %{issue_identifier: "MT-5", phase: "Code Review", title: "Held"}
+      assert :ok = RunStore.put_ticket_state(TicketState.new("default", "unobserved", unobserved))
+
+      assert {:ok, issues} = Candidates.issues_in_phases(["Code Review", "QA"])
+      listed = Enum.map(issues, &{&1.repo_key, &1.identifier, &1.state})
+      assert listed == [{"default", "MT-1", "Code Review"}, {"default", "MT-3", "qa"}, {"secondary", "OT-1", "QA"}]
+
+      # Assigned to one worker, each repo keeps that worker's tickets, as its Linear read does.
+      workflow!(repos: two_repos(), tracker_assignee: "someone")
+      assert {:ok, [%Issue{identifier: "MT-3"}]} = Candidates.issues_in_phases(["Code Review", "QA"])
+    end
+
+    test "no phases list nothing and read no record" do
+      assert {:ok, []} = Candidates.issues_in_phases([], store: UnreadStore)
+    end
+
+    test "records that can't be read fail the read instead of listing no tickets" do
+      assert {:error, :store_down} = Candidates.issues_in_phases(["Code Review"], store: FailingStore)
+    end
+
+    test "with assignee me, the read fails until a Linear read learned the viewer, then lists the viewer's tickets" do
+      on_exit(&Client.reset_viewer_cache_for_test/0)
+      Client.reset_viewer_cache_for_test()
+      workflow!(tracker_assignee: "me")
+
+      for {id, assignee} <- [{"mine", "viewer"}, {"theirs", "someone"}] do
+        ticket = issue(id, "MT-#{id}", "Code Review", assignee_id: assignee)
+        assert {:ok, :updated} = TicketObservation.observe(repo_key(), ticket, source: :poll)
+      end
+
+      assert {:error, :linear_viewer_unknown} = Candidates.issues_in_phases(["Code Review"])
+
+      graphql_fun = fn query, _variables ->
+        if query =~ "SymphonyLinearViewer",
+          do: {:ok, %{"data" => %{"viewer" => %{"id" => "viewer"}}}},
+          else: {:ok, %{"data" => %{"issues" => %{"nodes" => [], "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}}}}}
+      end
+
+      assert {:ok, []} = Client.fetch_candidate_issues_for_test(graphql_fun)
+      assert {:ok, [%Issue{id: "mine"}]} = Candidates.issues_in_phases(["Code Review"])
+    end
+  end
+
   describe "issue_from_record/1" do
     test "a ticket rebuilt from its record has the description, team and project the poll read" do
       polled =
@@ -346,6 +414,13 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
   end
 
   defp repo_key, do: Config.repo_key!()
+
+  defp two_repos do
+    [
+      %{key: "default", workflow: Workflow.workflow_file_path(), default: true, team: "MT"},
+      %{key: "secondary", workflow: Workflow.workflow_file_path(), team: "OT"}
+    ]
+  end
 
   defp issue(id, identifier, state, attrs \\ []) do
     struct!(

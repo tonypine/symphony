@@ -139,6 +139,32 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
     end
   end
 
+  describe "under dispatch.source: record" do
+    # The operator's usage block after an hour: neither poller counts a Linear request, and each still
+    # reads its tickets' PRs from GitHub, so CI results and review comments still reach them.
+    test "the CI poller and the PR review poller send no Linear request and still read every watched ticket's PR" do
+      start_linear!(5)
+      dispatch_from!("record")
+      learn_viewer!()
+      observe_watched(5)
+      Usage.reset()
+
+      assert {:ok, %{discovered: 5, processed: 5, actions: ci_actions}} =
+               Usage.with_caller(:ci_poller, fn -> CiPoller.poll_once(github: GreenGitHub, now: @now) end)
+
+      assert Enum.sort(ci_actions) == for(n <- 1..5, do: {:observed, "issue-#{n}", "green"})
+
+      assert {:ok, %{discovered: 5, processed: 5}} =
+               Usage.with_caller(:pr_review_poller, fn ->
+                 PrReviewPoller.poll_once(github: GreenGitHub, current_gh_user: nil, now: @now)
+               end)
+
+      assert RunStore.list_pr_reviews(@repo_key) |> Enum.map(& &1.issue_id) |> Enum.sort() == for(n <- 1..5, do: "issue-#{n}")
+      assert linear_requests() == %{}
+      assert Usage.snapshot().callers |> Enum.map(& &1.caller) |> Enum.filter(&(&1 in ["ci_poller", "pr_review_poller"])) == []
+    end
+  end
+
   describe "the orchestrator's tick" do
     # The repo poll's own requests (the poll, and the reads it makes once per interval) are left
     # out: the tick's by-id reads are the difference between the sources.
@@ -177,6 +203,35 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
   defp observe_records do
     for index <- 1..4 do
       issue = %Issue{id: "issue-#{index}", identifier: "TEAM-#{index}", title: "Watched #{index}", state: "Code Review", updated_at: @now}
+      {:ok, :updated} = TicketObservation.observe(@repo_key, issue, source: :poll)
+    end
+  end
+
+  # `assignee: me`: the viewer a Linear read already learned, as the orchestrator's poll does once per key.
+  defp learn_viewer! do
+    graphql_fun = fn query, _variables ->
+      if query =~ "SymphonyLinearViewer",
+        do: {:ok, %{"data" => %{"viewer" => %{"id" => "viewer-1"}}}},
+        else: {:ok, %{"data" => %{"issues" => %{"nodes" => [], "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}}}}}
+    end
+
+    on_exit(&Client.reset_viewer_cache_for_test/0)
+    assert {:ok, []} = Client.fetch_candidate_issues_for_test(graphql_fun)
+  end
+
+  # The records the poll observed of the watched tickets, assigned to the API key's user.
+  defp observe_watched(count) do
+    for index <- 1..count do
+      issue = %Issue{
+        id: "issue-#{index}",
+        identifier: "TEAM-#{index}",
+        title: "Watched #{index}",
+        state: "Code Review",
+        url: "https://linear.test/TEAM-#{index}",
+        assignee_id: "viewer-1",
+        updated_at: @now
+      }
+
       {:ok, :updated} = TicketObservation.observe(@repo_key, issue, source: :poll)
     end
   end

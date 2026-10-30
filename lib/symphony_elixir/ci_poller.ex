@@ -8,12 +8,17 @@ defmodule SymphonyElixir.CiPoller do
 
   GitHub's webhook deliveries go to the PR and CI watcher (`SymphonyElixir.PrWatch.Ingest`), not
   here; `status/0` shows their health beside the poller's own.
+
+  Its watched tickets come from Linear under `dispatch.source: poll`, and from Symphony's ticket
+  records under `record` (`SymphonyElixir.Dispatch.Candidates.issues_in_phases/2`), with no Linear
+  request.
   """
 
   use GenServer
   require Logger
 
   alias SymphonyElixir.{AuditLog, AutoMerge, Config, PrWatch}
+  alias SymphonyElixir.Dispatch.Candidates
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.{Issue, Usage}
   alias SymphonyElixir.PrWatch.Ingest
@@ -189,14 +194,12 @@ defmodule SymphonyElixir.CiPoller do
   # repository watches serves them all this cycle; each repository keeps only the states its own
   # settings watch.
   defp prefetch_watched_issues(repo_keys, opts) do
-    tracker = Keyword.get(opts, :tracker, Tracker)
-
     case repo_keys |> Enum.flat_map(&repo_watched_states/1) |> Enum.uniq() do
       [] ->
         {:ok, opts}
 
       states ->
-        with {:ok, issues} <- tracker.fetch_issues_by_states(states) do
+        with {:ok, issues} <- issues_in_states(states, opts) do
           {:ok, Keyword.put(opts, :watched_issues, issues)}
         end
     end
@@ -243,9 +246,8 @@ defmodule SymphonyElixir.CiPoller do
     now = Keyword.get(opts, :now, DateTime.utc_now())
     run_store = Keyword.get(opts, :run_store, RunStore)
     repo_key = repo_key_from_opts(opts)
-    tracker = Keyword.get(opts, :tracker, Tracker)
 
-    with {:ok, discovered, landing_issue_ids} <- discover_ci_checks(settings, run_store, tracker, repo_key, now, opts),
+    with {:ok, discovered, landing_issue_ids} <- discover_ci_checks(settings, run_store, repo_key, now, opts),
          {:ok, checks} <- list_ci_checks(run_store, repo_key) do
       opts = Keyword.put(opts, :landing_issue_ids, landing_issue_ids)
       actions = Enum.map(checks, &process_ci_check(&1, opts, now))
@@ -274,8 +276,8 @@ defmodule SymphonyElixir.CiPoller do
 
   defp observed(record), do: {Map.get(record, :last_observed_sha), Map.get(record, :last_observed_conclusion)}
 
-  defp discover_ci_checks(settings, run_store, tracker, repo_key, now, opts) do
-    with {:ok, issues} <- fetch_watched_issues(settings, tracker, opts),
+  defp discover_ci_checks(settings, run_store, repo_key, now, opts) do
+    with {:ok, issues} <- fetch_watched_issues(settings, opts),
          {:ok, existing} <- list_ci_checks(run_store, repo_key) do
       existing_by_issue = Map.new(existing, &{Map.get(&1, :issue_id), &1})
       issues = Enum.filter(issues, &match?(%Issue{}, &1))
@@ -304,10 +306,19 @@ defmodule SymphonyElixir.CiPoller do
   # Every `Merging` issue: its head's CI is read as a landing reads it (see `landing_action/1`).
   defp landing_issue_ids(issues), do: issues |> Enum.filter(&AutoMerge.merging?/1) |> MapSet.new(& &1.id)
 
-  defp fetch_watched_issues(settings, tracker, opts) do
+  defp fetch_watched_issues(settings, opts) do
     case Keyword.fetch(opts, :watched_issues) do
       {:ok, issues} -> {:ok, Enum.filter(issues, &issue_in_states?(&1, watched_states(settings)))}
-      :error -> tracker.fetch_issues_by_states(watched_states(settings))
+      :error -> issues_in_states(watched_states(settings), opts)
+    end
+  end
+
+  # The tickets of every repository in `states`: from their records under `dispatch.source: record`,
+  # with no Linear request, else read from Linear.
+  defp issues_in_states(states, opts) do
+    case Config.dispatch_source() do
+      "record" -> Candidates.issues_in_phases(states, store: Keyword.get(opts, :run_store, RunStore))
+      _poll -> Keyword.get(opts, :tracker, Tracker).fetch_issues_by_states(states)
     end
   end
 

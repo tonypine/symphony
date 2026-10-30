@@ -2725,6 +2725,15 @@ project, as under `poll`, with no Linear read. With `assignee: me`, the watcher 
 learn whose tickets are the worker's: until then its tick fails and keeps what it watched. Under
 `poll` it reads Linear each tick, as before.
 
+**The PR review poller and the CI poller under `record`.** Each poll takes its tickets (those in the
+code-review state, the QA state, `Rework` and, where it watches it, `Merging`) from every
+repository's records, by the same filter as dispatch with its states in place of the active ones,
+instead of reading those states from Linear: a poll makes no Linear request, and a record a webhook
+marked removed is never listed. Review comments and CI results still reach their tickets: the
+GitHub reads are unchanged. With `assignee: me` the pollers, like the watcher, wait for a poll to
+learn whose tickets are the worker's, and fail that poll until then. Under `poll` each poll reads
+those states from Linear, as before.
+
 Setting `source` back to `poll` is the rollback: the next cycle dispatches from the poll cache
 again, and no run is stopped or restarted.
 
