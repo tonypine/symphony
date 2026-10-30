@@ -429,6 +429,41 @@ final class OverviewTests: XCTestCase {
         )
         XCTAssertTrue(overview(running: 1, updating: false).showsResume, "a pause an update left behind can be resumed")
     }
+
+    /// The window's header gives each reason of Symphony's pause its own line under the sentence (TP-1251): an
+    /// update's version from its field, so a pause an update left behind still says Symphony updates next.
+    func testThePausesReasonsAreLinesUnderTheSentence() {
+        let since = Date(timeIntervalSince1970: 1_000_000)
+        var snapshot = StateSnapshot(pause: .init(reason: "Deploy freeze", since: since))
+        snapshot.pauseReasons = [
+            .init(kind: .person, text: "Deploy freeze", since: since),
+            .init(kind: .build, text: "updating to v0.0.1.700", since: since, version: "0.0.1.700"),
+            .init(kind: .other("environment"), text: "Claude's usage limit until 14:30", since: since),
+        ]
+        let overview = Overview(state: OverviewState(snapshot: snapshot, generatedAt: since), now: since, timeZone: utc)
+
+        XCTAssertEqual(overview.mood, .paused)
+        XCTAssertEqual(overview.sentence, "Dispatch is paused.")
+        XCTAssertEqual(overview.pauseLines, ["Paused by you since 13:46: Deploy freeze", "Updating to v0.0.1.700", "Claude's usage limit until 14:30"])
+        XCTAssertEqual(overview.context, "Nothing is running. Symphony updates and resumes dispatch next; no new run starts until then.")
+        XCTAssertTrue(overview.showsResume, "no update is under way, so the pause it left behind can be resumed")
+    }
+
+    /// Every repository paused adds its line, whether or not Symphony itself is; an older Symphony's pause keeps its
+    /// one-line sentence and adds no lines.
+    func testEveryRepositoryPausedAddsItsLineAndAnOlderSymphonyAddsNone() {
+        let repositoryPause = StateSnapshot.RepositoryPause(reasons: ["You paused this repository"])
+        let repositories: [StateSnapshot.Repository] = [.init(key: "web-shop", pause: repositoryPause)]
+        let running = Overview(state: OverviewState(snapshot: StateSnapshot(repositories: repositories)), now: wallClock, timeZone: utc)
+        XCTAssertEqual(running.pauseLines, ["All repositories paused"])
+
+        let older = Overview(
+            state: OverviewState(snapshot: StateSnapshot(pause: .init(reason: "updating to v0.0.1.42"))), now: wallClock, timeZone: utc
+        )
+        XCTAssertEqual(older.sentence, "Dispatch is paused: updating to v0.0.1.42.")
+        XCTAssertEqual(older.pauseLines, [])
+        XCTAssertEqual(older.context, "Nothing is running. No new run starts until you resume, forced tickets included.")
+    }
 }
 
 final class ReposEndpointResultTests: XCTestCase {

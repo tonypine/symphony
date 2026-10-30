@@ -126,7 +126,17 @@
   "pause": {
     "paused": true,
     "paused_at": "2026-10-07T14:18:00Z",
-    "reason": "updating to v9.9.9"
+    "reason": "updating to v9.9.9",
+    "reasons": [
+      {
+        "kind": "build",
+        "text": "updating to v9.9.9",
+        "since": "2026-10-07T14:18:00Z",
+        "waits_on": {
+          "version": "9.9.9"
+        }
+      }
+    ]
   },
   "pollers": {
     "ci": {

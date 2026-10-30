@@ -133,7 +133,33 @@
   "pause": {
     "paused": true,
     "paused_at": "2026-10-07T14:03:00Z",
-    "reason": "updating to v9.9.9"
+    "reason": "updating to v9.9.9",
+    "reasons": [
+      {
+        "kind": "build",
+        "text": "updating to v9.9.9",
+        "since": "2026-10-07T14:03:00Z",
+        "waits_on": {
+          "version": "9.9.9"
+        }
+      },
+      {
+        "kind": "person",
+        "text": "Deploy freeze",
+        "since": "2026-10-07T14:05:00Z",
+        "waits_on": {
+          "action": "unblock"
+        }
+      },
+      {
+        "kind": "environment",
+        "text": "Claude's 5-hour usage limit until 16:30",
+        "since": "2026-10-07T14:10:00Z",
+        "waits_on": {
+          "condition": "usage_limit:anthropic:all"
+        }
+      }
+    ]
   },
   "pollers": {
     "ci": {

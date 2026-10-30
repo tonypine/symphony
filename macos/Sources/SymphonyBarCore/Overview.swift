@@ -311,6 +311,10 @@ public struct Overview: Equatable {
     public var reposLine: String?
     /// An update is under way (S3a, S3b): it resumes the dispatch it paused, or Cancel Update does.
     public var updating: Bool
+    /// Under the sentence: while dispatch is paused, one line per reason of Symphony's pause ("Paused by you since
+    /// 09:12", "Updating to v0.0.1.700"), none from a Symphony that predates reasons, whose sentence names its one
+    /// reason; then "All repositories paused" when every repository is.
+    public var pauseLines: [String]
 
     /// The sentence offers Resume Dispatch while dispatch is paused, unless an update holds it.
     public var showsResume: Bool { mood == .paused && !updating }
@@ -421,12 +425,18 @@ public struct Overview: Equatable {
 
         // The sentence and its context line (P1).
         let inProgress = Self.unique(queued + working + review + waitingOnYou.map(\.identifier) + merging)
+        pauseLines = []
         if let pause = state.snapshot.pause {
             mood = .paused
-            sentence = Self.pauseSentence(pause, reference: reference, timeZone: timeZone)
+            if let reasons = state.snapshot.pauseReasons {
+                sentence = "Dispatch is paused."
+                pauseLines = StatusMenu.pauseReasonLines(reasons, now: reference, timeZone: timeZone)
+            } else {
+                sentence = Self.pauseSentence(pause, reference: reference, timeZone: timeZone)
+            }
             let finishing = scopedRuns.count
             let runs = finishing == 0 ? "Nothing is running." : finishing == 1 ? "1 run is finishing." : "\(finishing) runs are finishing."
-            if ControlAction.updateVersion(pauseReason: pause.reason) != nil {
+            if updating || state.snapshot.updatePauseVersion != nil {
                 context = runs + (finishing == 0 ? " Symphony updates and resumes dispatch next" : " Symphony updates and resumes dispatch when they end")
                     + "; no new run starts until then."
             } else {
@@ -445,6 +455,7 @@ public struct Overview: Equatable {
             sentence = "The factory is flowing."
             context = Self.flowContext(inProgress: inProgress, index: index, scope: scope, waitingOnYou: waitingOnYou.count, oldest: oldestWaitingOnYou)
         }
+        if state.snapshot.allRepositoriesPaused { pauseLines.append(StatusMenu.allRepositoriesPausedLine) }
 
         // Now working: agent runs and landings in the order they started, so a new run joins at the end, then the
         // QA passes.
