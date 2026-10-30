@@ -92,7 +92,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
       {:ok, if(repo.name == @repo_key, do: [%{next | blocked_by: [%{id: "issue-1", identifier: "ACME-1", state: "Done"}]}], else: [])}
     end
 
-    # Both repos polled once, on their staggered timed cadence; the repo's next timed poll is far off.
+    # Both repos polled once, back to back as at boot; the repo's next timed poll is far off.
     state = %Orchestrator.State{poll_interval_ms: 600_000}
     {:ok, _buckets, state} = Orchestrator.poll_candidate_issue_buckets_for_test(state, repos, fetcher, 0)
     {:ok, _buckets, state} = Orchestrator.poll_candidate_issue_buckets_for_test(state, repos, fetcher, 300_000)

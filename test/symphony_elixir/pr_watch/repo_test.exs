@@ -4,6 +4,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
   alias SymphonyElixir.{Hold, PrWatch, TicketObservation, TicketPullRequest, TicketState}
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.PrWatch.Repo
+  alias SymphonyElixirWeb.ObservabilityPubSub
 
   @now ~U[2026-10-16 12:00:00Z]
 
@@ -221,6 +222,22 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     assert_receive {:read, "https://github.com/acme/app/pull/1", _opts}
     assert Repo.poll_now(pid) == :ok
     assert_receive {:read, "https://github.com/acme/app/pull/1", _opts}
+  end
+
+  test "started as at boot, the watcher decides on a green reviewed PR before its first timed tick", %{repo_key: repo_key} do
+    :ok = ObservabilityPubSub.subscribe_ticket_records()
+    issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+    pid = start_repo!(repo_key, auto: true, interval_ms: 3_600_000)
+
+    # The first tick runs at start, not one interval on: the reviewer is asked for at once, and the
+    # orchestrator is told so it dispatches the reviewer in its next cycle, not at its next tick.
+    assert_receive {:read, "https://github.com/acme/app/pull/1", _opts}
+    assert_receive {:ticket_record, ^repo_key, "1", :changed, [:pr_watch]}
+    assert %{decision: %{rule: "R27", kind: :dispatch}} = watch(repo_key, "1")
+
+    # The same decision on the next tick tells nobody again.
+    assert {:ok, _summary} = Repo.poll(pid)
+    refute_received {:ticket_record, ^repo_key, "1", :changed, [:pr_watch]}
   end
 
   test "a fact no rule matches is logged and leaves no decision, and a record from before stays counts its phase", %{repo_key: repo_key} do

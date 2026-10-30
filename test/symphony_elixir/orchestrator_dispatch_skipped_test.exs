@@ -473,7 +473,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     end
 
     test "through the orchestrator: the retry is released, the pause survives a restart and resume asks for a tick" do
-      hub = issue("hub-retry", "HUB-3", "In Progress", repo_key: "hub")
+      hub = issue("hub-retry", "HUB-3", "In Progress", repo_key: "hub", team: %{key: "HUB"})
       tracked([hub])
       assert Orchestrator.pause_repository("hub", @focus) == :unavailable
       assert Orchestrator.resume_repository("hub") == :unavailable

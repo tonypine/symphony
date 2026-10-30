@@ -987,9 +987,20 @@ defmodule SymphonyElixir.PrWatch.Repo do
     if watch do
       watch = silence(watch, entry, previous, now, state, settings)
       store(state).put_ticket_pr_watch(state.repo_key, entry.issue.id, entry.issue.identifier, watch) |> log_write(entry)
+      announce_dispatch(watch, previous, entry, state)
       watch
     end
   end
+
+  # A new decision that a run starts (the reviewer, QA, a CI Fix run) is the orchestrator's to act
+  # on: the record's change is announced once written, so it runs a dispatch cycle at once rather
+  # than at its next tick.
+  defp announce_dispatch(%{decision: %{kind: :dispatch} = decision}, previous, entry, state) do
+    unless same_decision?(decision, previous && previous.decision),
+      do: ObservabilityPubSub.broadcast_ticket_record_changed(state.repo_key, entry.issue.id, [:pr_watch])
+  end
+
+  defp announce_dispatch(_watch, _previous, _entry, _state), do: :ok
 
   # How and when the facts arrived: a re-decision keeps those of the read it decided on.
   defp arrived(:record, entry, previous, state, now) do
