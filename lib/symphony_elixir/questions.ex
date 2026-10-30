@@ -172,12 +172,16 @@ defmodule SymphonyElixir.Questions do
   @spec find(ticket(), String.t()) :: question() | nil
   def find(ticket, id), do: ticket |> questions() |> Enum.find(&(&1.id == id))
 
+  @doc "The open question on `ticket` with `request`'s title and question, as `ask/3` would return it, or nil."
+  @spec open_asking(ticket(), map()) :: question() | nil
+  def open_asking(ticket, request) when is_map(request) do
+    key = {line(Map.get(request, :title)), line(Map.get(request, :question))}
+    ticket |> open() |> Enum.find(&({&1.title, &1.question} == key))
+  end
+
   @doc "Whether `ticket` has an open question with `request`'s title and question, as `ask/3` would return."
   @spec same_open?(ticket(), map()) :: boolean()
-  def same_open?(ticket, request) when is_map(request) do
-    key = {line(Map.get(request, :title)), line(Map.get(request, :question))}
-    ticket |> open() |> Enum.any?(&({&1.title, &1.question} == key))
-  end
+  def same_open?(ticket, request) when is_map(request), do: open_asking(ticket, request) != nil
 
   @doc "The questions as stored or given: each a map with a string `id` and a known `state`, once by id; anything else is dropped."
   @spec normalize(term()) :: [question()]

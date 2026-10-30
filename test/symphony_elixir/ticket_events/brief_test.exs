@@ -103,6 +103,59 @@ defmodule SymphonyElixir.TicketEvents.BriefTest do
       assert text =~ "\n- Hold: needs_decision (no reason recorded; clears when no clearing condition recorded)\n"
     end
 
+    test "a Question's request shows as a decision request does: open, answered or withdrawn" do
+      options = [%{label: "Merge", effect: "the ticket moves to Merging", good: [], cost: [], risk: [], recommended?: true, unlocks: []}]
+
+      asked = fn minute, id, title ->
+        event(minute, "question.asked", %{question_id: id, title: title, question: "#{title}?", why: "It waits.", options: options})
+      end
+
+      open = asked.(0, "q-1", "Protected files changed on TP-7")
+      answered = asked.(1, "q-2", "Merge TP-7")
+      withdrawn = asked.(2, "q-3", "Run it again")
+      recorded = asked.(3, "q-4", "Split it")
+
+      events = [
+        open,
+        answered,
+        withdrawn,
+        recorded,
+        event(4, "question.answered", %{question_id: "q-2", answer: "Merge"}),
+        event(5, "question.withdrawn", %{question_id: "q-3", reason: "Not needed"}),
+        event(6, "decision.recorded", %{answer: "Two tickets.", request: recorded.id}, actor: {:person, "Sam"}),
+        event(7, "question.answered", %{question_id: "q-unknown", answer: "Orphan"})
+      ]
+
+      brief = Brief.build(nil, events)
+
+      assert brief.decisions == 4
+
+      assert brief.text =~
+               """
+               Decisions (4):
+               - Asked 2026-10-22T10:00:00Z by Symphony: Protected files changed on TP-7: Protected files changed on TP-7?
+                 Why: It waits.
+                 Option: Merge: the ticket moves to Merging
+                 Open: it waits on the Director's answer.
+               - Asked 2026-10-22T10:01:00Z by Symphony: Merge TP-7: Merge TP-7?
+                 Why: It waits.
+                 Option: Merge: the ticket moves to Merging
+                 Answered 2026-10-22T10:04:00Z by Symphony: Merge
+               - Asked 2026-10-22T10:02:00Z by Symphony: Run it again: Run it again?
+                 Why: It waits.
+                 Option: Merge: the ticket moves to Merging
+                 Withdrawn 2026-10-22T10:05:00Z by Symphony.
+               - Asked 2026-10-22T10:03:00Z by Symphony: Split it: Split it?
+                 Why: It waits.
+                 Option: Merge: the ticket moves to Merging
+                 Answered 2026-10-22T10:06:00Z by the Director (Sam): Two tickets.
+               """
+
+      # An answer naming no question the brief shows is one of the other events.
+      assert brief.text =~ "Other events"
+      assert brief.text =~ "Orphan"
+    end
+
     test "every decision: answered, withdrawn, open, and a ruling with no request" do
       answered = event(0, "decision.requested", %{title: "Large exports", question: "Background?", why: "It takes long.", options: ["Yes", %{label: "No", effect: "The user waits."}, 7, %{}]})
       withdrawn = event(1, "decision.requested", %{question: "Keep the header?"}, actor: {:agent, "run-1", "implementation"})

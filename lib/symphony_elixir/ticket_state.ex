@@ -223,17 +223,24 @@ defmodule SymphonyElixir.TicketState do
 
   @typedoc """
   A projection of the record to Linear whose write failed, so Linear may not show what the record
-  holds: the phase a move of Symphony's wrote (`type: :phase`), or a hold's machine label
-  (`type: :hold_label`, with the `hold` kind). The reconciler projects the record's truth again and
-  drops the mark (`SymphonyElixir.TicketObservation.reconcile_all/3`); the mark only says what to
-  re-project and when and why it failed.
+  holds: the phase a move of Symphony's wrote (`type: :phase`), a hold's machine label
+  (`type: :hold_label`, with the `hold` kind), or a question's request comment
+  (`type: :question_comment`, with the `question` id). The reconciler projects the record's truth
+  again and drops the mark (`SymphonyElixir.TicketObservation.reconcile_all/3`); a request comment
+  is posted again by the Inbox's sweep, which reads the ticket's comments
+  (`SymphonyElixir.NeedsDecisionHold`). The mark only says what to re-project and when and why it
+  failed.
   """
   @type projection :: %{
-          type: :phase | :hold_label,
-          hold: :blocked | :needs_decision | nil,
-          error: String.t() | nil,
-          at: DateTime.t() | nil
+          required(:type) => :phase | :hold_label | :question_comment,
+          required(:hold) => :blocked | :needs_decision | nil,
+          optional(:question) => String.t(),
+          required(:error) => String.t() | nil,
+          required(:at) => DateTime.t() | nil
         }
+
+  @typedoc "What a projection mark names: the phase, a hold's label or a question's request comment."
+  @type projection_name :: :phase | {:hold_label, :blocked | :needs_decision} | {:question_comment, String.t()}
 
   @type t :: %{
           repo_key: String.t() | nil,
@@ -468,11 +475,11 @@ defmodule SymphonyElixir.TicketState do
   def mark_removed(record, %DateTime{} = removed_at), do: %{normalize(record) | removed_at: removed_at, updated_at: removed_at}
 
   @doc """
-  Marks a projection of the record to Linear as failed (`t:projection/0`): `projection` is `:phase`
-  or `{:hold_label, kind}`, and `error` what Linear said. A mark of the same projection is replaced,
+  Marks a projection of the record to Linear as failed (`t:projection/0`): `projection` is `:phase`,
+  `{:hold_label, kind}` or `{:question_comment, question_id}`, and `error` what Linear said. A mark of the same projection is replaced,
   so a record keeps one per projection, the latest.
   """
-  @spec mark_projection(t(), :phase | {:hold_label, :blocked | :needs_decision}, term(), DateTime.t()) :: t()
+  @spec mark_projection(t(), projection_name(), term(), DateTime.t()) :: t()
   def mark_projection(record, projection, error, %DateTime{} = at \\ DateTime.utc_now()) do
     record = normalize(record)
     mark = Map.merge(projection_key(projection), %{error: error_text(error), at: at})
@@ -490,15 +497,17 @@ defmodule SymphonyElixir.TicketState do
     %{record | pending_projection: Enum.reject(record.pending_projection, &same_mark?(&1, mark))}
   end
 
-  @doc "The projection a mark names: `:phase` or `{:hold_label, kind}`."
-  @spec projection_of(projection()) :: :phase | {:hold_label, :blocked | :needs_decision}
+  @doc "The projection a mark names: `:phase`, `{:hold_label, kind}` or `{:question_comment, question_id}`."
+  @spec projection_of(projection()) :: projection_name()
   def projection_of(%{type: :hold_label, hold: kind}), do: {:hold_label, kind}
+  def projection_of(%{type: :question_comment, question: id}), do: {:question_comment, id}
   def projection_of(%{type: :phase}), do: :phase
 
   defp same_mark?(mark, other), do: projection_of(mark) == projection_of(other) and mark.at == Map.get(other, :at)
 
   defp projection_key(:phase), do: %{type: :phase, hold: nil}
   defp projection_key({:hold_label, kind}) when kind in @hold_kinds, do: %{type: :hold_label, hold: kind}
+  defp projection_key({:question_comment, id}) when is_binary(id), do: %{type: :question_comment, hold: nil, question: id}
 
   defp error_text(nil), do: nil
   defp error_text(error) when is_binary(error), do: error
@@ -513,11 +522,15 @@ defmodule SymphonyElixir.TicketState do
     case {Map.get(mark, :type), Map.get(mark, :hold)} do
       {:phase, _hold} -> [Map.merge(%{type: :phase, hold: nil}, stamps)]
       {:hold_label, kind} when kind in @hold_kinds -> [Map.merge(%{type: :hold_label, hold: kind}, stamps)]
+      {:question_comment, _hold} -> question_mark(Map.get(mark, :question), stamps)
       _unknown -> []
     end
   end
 
   defp normalize_projection(_mark), do: []
+
+  defp question_mark(id, stamps) when is_binary(id), do: [Map.merge(%{type: :question_comment, hold: nil, question: id}, stamps)]
+  defp question_mark(_id, _stamps), do: []
 
   defp observation_source(source) when source in @observation_sources, do: source
   defp observation_source(_source), do: nil

@@ -1,9 +1,10 @@
 defmodule SymphonyElixir.MergeConfirmationTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Handoff, Hold, MergeConfirmation, RunStore, TicketPullRequest, TicketSignals, Workflow}
+  alias SymphonyElixir.{Handoff, Hold, MergeConfirmation, Questions, RunStore, TicketPullRequest, TicketSignals}
   alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Workflow
 
   @repo_key "repo-a"
   @issue_id "issue-1"
@@ -195,7 +196,12 @@ defmodule SymphonyElixir.MergeConfirmationTest do
       assert Hold.held?(@repo_key, @issue_id, :needs_decision)
       assert MergeConfirmation.confirm_target(stored_hold()) == "Merging"
       assert log =~ "manual review is on, so the step into Merging waits"
-      assert [{"decision.requested", %{title: "Merge TP-825", question: "Merge TP-825 (T) into its base branch?", confirm: "Merging"}}] = ticket_events(@repo_key, @issue_id)
+      # The question is asked through the Question service: one open Question with what was asked.
+      assert [%{id: id, title: "Merge TP-825", question: "Merge TP-825 (T) into its base branch?", confirm: "Merging", options: [_merge, _rework]}] =
+               Questions.open({:ticket, @repo_key, @issue_id})
+
+      assert %{decision: %{question_id: ^id}} = stored_hold()
+      assert [{"question.asked", %{title: "Merge TP-825", confirm: "Merging"}}, {"pause.set", %{reason: "question"}}] = ticket_events(@repo_key, @issue_id)
     end
 
     test "round-trips through Request.parse, as Linear reads its own comment back" do
@@ -208,13 +214,16 @@ defmodule SymphonyElixir.MergeConfirmationTest do
       assert Enum.any?(parsed.options, &(&1 =~ "Merge"))
     end
 
-    test "a failed comment is reported and leaves no hold behind" do
+    test "a failed comment is reported and leaves the question asked, its comment waiting for the Inbox" do
       Application.put_env(:symphony_elixir, :merge_confirmation_comment_result, {:error, :rate_limited})
 
-      assert {:error, {:merge_confirmation_request_failed, :rate_limited}} =
-               MergeConfirmation.pause(issue(), opts(), parts())
+      capture_log(fn ->
+        assert {:error, {:merge_confirmation_request_failed, :rate_limited}} =
+                 MergeConfirmation.pause(issue(), opts(), parts())
+      end)
 
-      refute Hold.held_any?(@repo_key, @issue_id)
+      assert [%{id: id}] = Questions.open({:ticket, @repo_key, @issue_id})
+      assert %{decision: %{question_id: ^id}} = stored_hold()
     end
 
     test "a failed hold write is reported, and nothing is posted, so a retry posts the request once" do

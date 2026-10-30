@@ -1191,6 +1191,19 @@ defmodule SymphonyElixir.PromptBuilderTest do
       assert PromptBuilder.ticket_ledger_gate(issue, []) == :start
     end
 
+    test "a request asked as a Question is read from its own answer, and another Question's ends nothing", %{issue: issue} do
+      title = "MT-SL's ticket summary is over its size limit"
+      ask = fn id, at -> TicketEvents.record("r", "i", "question.asked", %{question_id: id, title: title, question: "How should MT-SL go on?"}, at: at) end
+
+      _legacy = request!(issue, ~U[2026-10-22 09:50:00Z])
+      {:ok, _asked} = ask.("q-1", ~U[2026-10-22 10:00:00Z])
+      {:ok, _other} = TicketEvents.record("r", "i", "question.withdrawn", %{question_id: "q-other", reason: "Not needed"}, at: ~U[2026-10-22 10:01:00Z])
+      assert PromptBuilder.ticket_ledger_gate(issue, []) == :waiting
+
+      {:ok, _answered} = TicketEvents.record("r", "i", "question.answered", %{question_id: "q-1", answer: "Go on with the whole summary"}, at: ~U[2026-10-22 10:05:00Z])
+      assert PromptBuilder.ticket_ledger_gate(issue, []) == :start
+    end
+
     test "an answer picking the first option by its number goes on too", %{issue: issue} do
       issue |> request!(~U[2026-10-22 10:00:00Z]) |> answer!("1", ~U[2026-10-22 10:05:00Z])
 

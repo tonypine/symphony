@@ -629,10 +629,14 @@ logged.
 
 A decision a person must make has one representation, whoever asks it: `decision.requested`, then
 the person's `decision.recorded` (keyed `decision.recorded:<key>`, the request comment it answers)
-or `decision.withdrawn` when it ends unanswered; both name the request in `request`. The Needs
-Decision hold is the projection of an open request, never a hold event. A query with
-`open_decisions` lists the requests no answer or withdrawal names; `open_findings` the findings no
-unsuperseded resolution names.
+or `decision.withdrawn` when it ends unanswered; both name the request in `request`. A request
+asked through the one writer is a Question first: `question.asked`, ended by `question.answered`
+or `question.withdrawn` naming its `question_id` (or by a `decision.recorded` naming the event), and
+it records no `decision.requested`. The Needs Decision hold and the request comment are the
+projections of an open request, never a hold event: the hold carries the Question's id, and a
+comment whose post failed is posted again by the Inbox's next read. A query with `open_decisions`
+lists the requests no answer or withdrawal names; `open_findings` the findings no unsuperseded
+resolution names.
 
 At startup the ledger's backfill converts each ticket's history from before the stream existed,
 once, in a task the startup does not wait for (a failure is logged). For every ticket record of

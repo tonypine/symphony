@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.PrDecision.ApplyTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{CiFix, Hold, TicketObservation, TicketPullRequest, TicketSignals, TicketState}
+  alias SymphonyElixir.{CiFix, Hold, Questions, TicketObservation, TicketPullRequest, TicketSignals, TicketState}
   alias SymphonyElixir.PrDecision.{Action, Apply, Facts}
   alias SymphonyElixir.PrWatch.Attempts
 
@@ -867,8 +867,19 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     assert question =~ "changes the list of settings that need no control in the Mac app. Agents may change these only with a person's permission."
     signals = TicketState.recent_signals(RunStore.get_ticket_state(@repo_key, @issue_id))
     assert [%{name: "decision requested", details: %{reason: "protected_paths"}} | _] = signals
-    assert [{"decision.requested", %{title: "Protected files changed on TP-7"}}] = ticket_events(@repo_key, @issue_id, ["decision.requested", "hold.set"])
+    assert [%{id: id, title: "Protected files changed on TP-7"}] = Questions.open({:ticket, @repo_key, @issue_id})
+    assert %{decision: %{question_id: ^id}} = Hold.get(@repo_key, @issue_id, :needs_decision)
 
+    # The watcher asks again on its next pass: the same question, with no second comment, and the
+    # ticket's timeline shows it asked once.
+    assert %{outcome: :applied} = Apply.apply(action, ctx(:merging, read: read))
+    refute_received {:comment, @issue_id, "## Decision needed:" <> _rest}
+    assert [%{summary: %{title: "Asked you: Protected files changed on TP-7"}}] = RunStore.list_ticket_events(@repo_key, @issue_id, types: ["question.asked"])
+    assert ticket_events(@repo_key, @issue_id, ["decision.requested", "hold.set"]) == []
+
+    # A request Linear refuses is reported.
+    :ok = RunStore.clear()
+    :ok = TicketPullRequest.record_created(@repo_key, @issue_id, @pr_url, "auto/TP-7")
     Process.put(:comment_result, {:error, :linear_down})
     capture_log(fn -> assert %{outcome: {:error, {:decision_request_failed, :linear_down}}} = Apply.apply(action, ctx(:merging, read: read)) end)
   end

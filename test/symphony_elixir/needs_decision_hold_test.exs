@@ -2,7 +2,7 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{DecisionRequest, Hold, MergeConfirmation, NeedsDecisionHold, RunStore, Workflow}
+  alias SymphonyElixir.{DecisionRequest, Hold, MergeConfirmation, NeedsDecisionHold, Questions, RunStore, Workflow}
   alias SymphonyElixir.HumanActions.{Collector, Request}
   alias SymphonyElixir.Linear.Issue
 
@@ -354,6 +354,42 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       assert stored_hold() == nil
     end
 
+    test "a reply that answers a request asked through the writer answers its Question in the person's words" do
+      assert :ok = DecisionRequest.ask(issue(), request(), [])
+      [%{id: id}] = Questions.open({:ticket, @repo_key, @issue_id})
+
+      answered = ticket_node(%{"comments" => %{"nodes" => [request_comment(), reply(@comment_id, "Ship unsigned\n")]}})
+      assert NeedsDecisionHold.sync(@repo_key, answered, settings: designed_settings()) == :clear
+      assert stored_hold() == nil
+      assert %{state: :answered, answer: %{text: "Ship unsigned", option: 2, by: %{kind: :person}}} = Questions.find({:ticket, @repo_key, @issue_id}, id)
+    end
+
+    test "a hold whose comment could not be posted is posted by the sweep, never read as withdrawn" do
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_result) end)
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      down = {:error, :linear_down}
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [down, down, :ok])
+      capture_log(fn -> assert {:error, {:decision_request_failed, :linear_down}} = DecisionRequest.ask(issue(), request(), []) end)
+      [%{id: id}] = Questions.open({:ticket, @repo_key, @issue_id})
+
+      # Linear reads no request on the ticket: the sweep tries the comment again, and keeps the hold.
+      node = ticket_node(%{"state" => %{"name" => "In Progress"}})
+      capture_log(fn -> assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :none end)
+      refute_received {:memory_tracker_comment, @issue_id, _body}
+      assert %{decision: %{question_id: ^id}} = stored_hold()
+
+      assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :none
+      assert_received {:memory_tracker_comment, @issue_id, body}
+      assert body =~ "## Decision needed: Add the release signing secrets"
+      assert body =~ "<!-- symphony:question #{id} -->"
+      assert %{decision: %{question_id: ^id}} = stored_hold()
+      assert [%{id: ^id}] = Questions.open({:ticket, @repo_key, @issue_id})
+
+      # Posted, a request still missing from Linear is one a person removed: it ends as a withdrawal.
+      assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :clear
+      assert %{state: :withdrawn} = Questions.find({:ticket, @repo_key, @issue_id}, id)
+    end
+
     test "clears the hold when the run withdraws the request" do
       node = ticket_node(%{"comments" => %{"nodes" => [request_comment()]}})
       assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :set
@@ -389,6 +425,73 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       assert stored_hold().decision.title == "Older"
 
       assert NeedsDecisionHold.sync(@repo_key, answered, settings: designed_settings()) == :none
+    end
+
+    test "a hold that moved on to a newer question comes back to the older one carrying its Question" do
+      older_request = request(%{title: "Older", question: "Older?"})
+      newer_request = request(%{title: "Newer", question: "Newer?"})
+      assert :ok = DecisionRequest.ask(issue(), older_request, [])
+      assert :ok = DecisionRequest.ask(issue(), newer_request, [])
+      ticket = {:ticket, @repo_key, @issue_id}
+      assert [%{id: older_id, title: "Older"}, %{id: newer_id, title: "Newer"}] = Questions.open(ticket)
+      assert stored_hold().decision.question_id == newer_id
+
+      older = request_comment(@comment_id, Request.render_hold(older_request, "In Progress"), "2026-10-04T09:00:00.000Z")
+      newer = request_comment("comment-2", Request.render_hold(newer_request, "In Progress"), "2026-10-04T11:00:00.000Z")
+      answered_newer = %{"id" => "reply-2", "body" => "Add the secrets", "parent" => %{"id" => "comment-2"}}
+
+      # The newer is answered: its Question ends with the reply, and the hold goes back to the older
+      # one carrying its Question, so no second request is recorded for it.
+      node = ticket_node(%{"comments" => %{"nodes" => [older, newer, answered_newer]}})
+      assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :set
+      assert %{state: :answered, answer: %{text: "Add the secrets"}} = Questions.find(ticket, newer_id)
+      assert %{title: "Older", question_id: ^older_id} = stored_hold().decision
+      assert [%{id: ^older_id}] = Questions.open(ticket)
+      refute Enum.any?(RunStore.list_ticket_events(@repo_key, @issue_id, []), &(&1.type == "decision.requested"))
+
+      # The older is answered next: its hold clears and its Question ends with that answer.
+      answered_older = %{"id" => "reply-1", "body" => "Ship unsigned", "parent" => %{"id" => @comment_id}}
+      node = ticket_node(%{"comments" => %{"nodes" => [older, newer, answered_newer, answered_older]}})
+      assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :clear
+      assert stored_hold() == nil
+      assert %{state: :answered, answer: %{text: "Ship unsigned"}} = Questions.find(ticket, older_id)
+      assert Questions.open(ticket) == []
+    end
+
+    test "an older question answered while a newer one holds ends with that answer, and the newer keeps the hold" do
+      older_request = request(%{title: "Older", question: "Older?"})
+      newer_request = request(%{title: "Newer", question: "Newer?"})
+      assert :ok = DecisionRequest.ask(issue(), older_request, [])
+      assert :ok = DecisionRequest.ask(issue(), newer_request, [])
+      ticket = {:ticket, @repo_key, @issue_id}
+      assert [%{id: older_id}, %{id: newer_id}] = Questions.open(ticket)
+
+      later = DateTime.utc_now() |> DateTime.add(60) |> DateTime.to_iso8601()
+      older = request_comment(@comment_id, Request.render_hold(older_request, "In Progress"), "2026-10-04T09:00:00.000Z")
+      newer = request_comment("comment-2", Request.render_hold(newer_request, "In Progress"), "2026-10-04T11:00:00.000Z")
+      answered_older = %{"id" => "reply-1", "body" => "Ship unsigned", "parent" => %{"id" => @comment_id}, "createdAt" => later}
+
+      node = ticket_node(%{"comments" => %{"nodes" => [older, newer, answered_older]}})
+      assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :none
+      assert %{state: :answered, answer: %{text: "Ship unsigned"}} = Questions.find(ticket, older_id)
+      assert [%{id: ^newer_id}] = Questions.open(ticket)
+      assert stored_hold().decision.question_id == newer_id
+    end
+
+    test "an answer given before an older question was asked again does not answer the new one" do
+      older_request = request(%{title: "Older", question: "Older?"})
+      assert :ok = DecisionRequest.ask(issue(), older_request, [])
+      assert :ok = DecisionRequest.ask(issue(), request(%{title: "Newer", question: "Newer?"}), [])
+      ticket = {:ticket, @repo_key, @issue_id}
+      assert [%{id: older_id}, _newer] = Questions.open(ticket)
+
+      earlier = DateTime.utc_now() |> DateTime.add(-3600) |> DateTime.to_iso8601()
+      older = request_comment(@comment_id, Request.render_hold(older_request, "In Progress"), "2026-10-04T09:00:00.000Z")
+      answered_before = %{"id" => "reply-1", "body" => "Ship unsigned", "parent" => %{"id" => @comment_id}, "createdAt" => earlier}
+
+      node = ticket_node(%{"comments" => %{"nodes" => [older, answered_before]}})
+      capture_log(fn -> NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) end)
+      assert %{state: :open} = Questions.find(ticket, older_id)
     end
 
     test "does nothing when the request has not changed" do

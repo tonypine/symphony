@@ -918,6 +918,31 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert [%{path: "WORKFLOW.md", decision: "D1"}] = SymphonyElixir.PathUnlock.grants(%{pr("In Progress") | description: description})
     end
 
+    test "Decide answers the Question the hold projects with the Director's pick", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+
+      request = %{
+        title: "Add the release signing secrets",
+        question: "Add the signing secrets, or ship unsigned builds?",
+        why: "Every Release run on main fails without them.",
+        if_unanswered: "Every Release run on main keeps failing.",
+        recommendation_reason: "Signing is a one-time setup.",
+        options: [%{label: "Add the secrets", effect: "Releases are signed again.", recommended: true}, %{label: "Ship unsigned", effect: "The agent drops the signing step."}]
+      }
+
+      issue = %{id: "pr", state: "In Progress", repo_key: "repo-director"}
+      assert :ok = SymphonyElixir.DecisionRequest.ask(issue, request, [])
+      ticket = {:ticket, "repo-director", "pr"}
+      [%{id: id}] = SymphonyElixir.Questions.open(ticket)
+
+      pick = [%{question: request.question, answer: "Ship unsigned"}]
+      assert {:ok, %{move: "decide"}} = DirectorMoves.move(:decide, "MOT-40", %{picks: pick, request_comment_id: "comment-1"}, opts)
+
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+      assert %{state: :answered, answer: %{option: 2, text: "Ship unsigned", by: %{kind: :person, name: "Director"}}} = SymphonyElixir.Questions.find(ticket, id)
+      assert {:ok, nil} = SymphonyElixir.Pauses.get(ticket)
+    end
+
     test "a pick of an option that unlocks nothing records no path", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director", description: "Add the hook."}])
 

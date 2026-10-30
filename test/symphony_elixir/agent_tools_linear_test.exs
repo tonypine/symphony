@@ -3393,8 +3393,11 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert %{holds: [%{kind: :needs_decision, decision: %{title: "Add the release signing secrets", question: "Add the signing secrets, or ship unsigned builds?"}}]} =
                SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-24")
 
-      # The request is one event, the decision's own: no hold event.
-      assert [{"decision.requested", %{title: "Add the release signing secrets", question: "Add the signing secrets, or ship unsigned builds?"}}] =
+      # The request is asked as a Question, by the run: its event and its pause, no hold event.
+      assert [%{id: id, asked_by: %{kind: :run}, title: "Add the release signing secrets"}] = SymphonyElixir.Questions.open({:ticket, "repo-a", "issue-24"})
+      assert body =~ "<!-- symphony:question #{id} -->"
+
+      assert [{"question.asked", %{title: "Add the release signing secrets", question: "Add the signing secrets, or ship unsigned builds?"}}, {"pause.set", _pause}] =
                ticket_events("repo-a", "issue-24")
 
       assert_received :refreshed
@@ -3531,8 +3534,45 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       # Nothing moved: the ticket never left its phase.
       refute_received {:tracker_moved, _issue_id, _state}
 
-      assert [%{type: "decision.requested", id: request_id}, %{type: "decision.withdrawn", payload: %{title: "Add the release signing secrets", request: request_id}}] =
-               SymphonyElixir.RunStore.list_ticket_events("repo-a", "issue-24", [])
+      # The Question is withdrawn first, with the run's reason; its events are the request's end.
+      assert [
+               {"question.asked", %{question_id: id}},
+               {"pause.set", _set},
+               {"question.withdrawn", %{question_id: id, reason: "Not needed yet", by: %{kind: :run}}},
+               {"pause.cleared", _cleared}
+             ] = ticket_events("repo-a", "issue-24")
+    end
+
+    test "the same request asked again while its comment waits to be posted is the one already open" do
+      :ok = SymphonyElixir.RunStore.clear()
+      context = designed_context()
+      opts = designed_opts(human_action_client(self(), human_action_scope()))
+
+      assert {:ok, %{"requested" => true}} = Linear.request_human_action(context, @human_action, opts)
+      assert_received {:linear_called, "SymphonyAgentAddComment", _variables}
+
+      # Linear doesn't read the request back yet, so the tool asks again: the same Question, no second comment.
+      assert {:ok, %{"requested" => false, "reason" => "already_open", "held" => true}} = Linear.request_human_action(context, @human_action, opts)
+      refute_received {:linear_called, "SymphonyAgentAddComment", _variables}
+      assert [_question] = SymphonyElixir.Questions.open({:ticket, "repo-a", "issue-24"})
+    end
+
+    test "a withdrawal of a question whose comment never reached Linear withdraws the Question and clears the hold" do
+      :ok = SymphonyElixir.RunStore.clear()
+      context = designed_context()
+      opts = designed_opts(human_action_client(self(), human_action_scope()))
+      assert {:ok, %{"requested" => true}} = Linear.request_human_action(context, @human_action, opts)
+      assert [%{id: id}] = SymphonyElixir.Questions.open({:ticket, "repo-a", "issue-24"})
+
+      # Another title withdraws nothing.
+      assert {:ok, %{"withdrawn" => false, "reason" => "no_open_request"}} =
+               Linear.withdraw_human_action(context, %{"reason" => "Done", "title" => "Rotate the CI token"}, opts)
+
+      assert {:ok, %{"withdrawn" => true, "questionIds" => [^id], "requestCommentIds" => [], "remaining" => 0}} =
+               Linear.withdraw_human_action(context, %{"reason" => "Not needed yet", "title" => "Add the release signing secrets"}, opts)
+
+      assert SymphonyElixir.Questions.open({:ticket, "repo-a", "issue-24"}) == []
+      refute SymphonyElixir.Hold.held?("repo-a", "issue-24", :needs_decision)
     end
 
     defp held_comment(id, title) do
