@@ -13,6 +13,18 @@ defmodule SymphonyElixir.InboxConfigTest do
     refute SymphonyElixir.Initiatives in SymphonyElixir.Application.child_specs_for_runtime(%{})
   end
 
+  test "over a memory tracker's issues file it reads the file, and the initiatives server does not start" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_memory_issues_file: "issues.json")
+    specs = SymphonyElixir.Application.child_specs_for_runtime(%{})
+    assert {Inbox, source: :memory} in specs
+    refute Inbox in specs
+    refute SymphonyElixir.Initiatives in specs
+
+    settings = Config.settings!()
+    assert Inbox.enabled?(settings, :memory)
+    refute Inbox.enabled?(settings)
+  end
+
   test "reads every Linear repository route in the scope it polls, on the poll interval" do
     write_workflow_file!(
       Workflow.workflow_file_path(),

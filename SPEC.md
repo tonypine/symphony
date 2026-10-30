@@ -2290,7 +2290,8 @@ not require recognizing or validating extension fields unless that extension is 
 - At least one issue-level or repository route selector is REQUIRED when provider is linear.
 - `issues.memory.issues_file`: optional path, relative to `symphony.yml`, of a JSON list of issues
   the memory provider reads on every fetch; entries with `"kind": "project"` or `"kind": "team"`
-  are its projects and teams
+  are its projects and teams. State moves, labels, comments and replies are written back into it,
+  and the Inbox reads it instead of Linear
 - `issues.linear.assignee`: optional string or `$VAR`, canonical env `LINEAR_ASSIGNEE`;
   `"me"` resolves the current Linear viewer
 - `issues.states.active`: list of strings, default `["Todo", "In Progress"]`

@@ -220,9 +220,14 @@ defmodule SymphonyElixir.Application do
     end
   end
 
+  # A memory tracker's issues file is a fake Linear (a QA server's seed): the Inbox reads it instead.
   defp inbox_child_spec(%SystemSchema{repos: repos}) do
-    if Enum.any?(repos, &SymphonyElixir.Inbox.enabled?(Config.settings_for_repo!(&1.name))) do
-      SymphonyElixir.Inbox
+    settings = Enum.map(repos, &Config.settings_for_repo!(&1.name))
+
+    cond do
+      Enum.any?(settings, &SymphonyElixir.Inbox.enabled?/1) -> SymphonyElixir.Inbox
+      Enum.any?(settings, &SymphonyElixir.Inbox.enabled?(&1, :memory)) -> {SymphonyElixir.Inbox, source: :memory}
+      true -> nil
     end
   end
 

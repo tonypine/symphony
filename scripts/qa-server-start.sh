@@ -34,7 +34,9 @@ fi
 
 mkdir -p "$root/state" "$root/logs" "$root/workspaces" "$root/bin"
 (umask 077 && printf '%s' "$token" > "$root/state/control_token")
-# The tracker writes the seed's labels back into its issues file: a copy of its own.
+# The tracker writes moves, labels, requests and replies back into its issues file, as Linear keeps
+# them: a copy of its own. The Inbox reads it on every poll, so a Decide or an Undo shows within
+# seconds.
 cp "$seed/issues.json" "$root/issues.json"
 
 cp "$repo/scripts/qa-server-gh.sh" "$root/bin/gh"
@@ -48,6 +50,7 @@ WORKFLOW
 cat >"$root/symphony.yml" <<YAML
 issues:
   provider: memory
+  poll_interval_ms: 3000
   memory:
     issues_file: $root/issues.json
 repositories:

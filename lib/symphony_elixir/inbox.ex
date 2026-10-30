@@ -36,6 +36,12 @@ defmodule SymphonyElixir.Inbox do
   (`SymphonyElixir.Decisions`). Those tickets are listed by their store hold wherever in the workflow
   they sit, never by the label, which is only the hold's projection.
 
+  Started with `source: :memory`, the server reads the memory tracker's issues file instead of
+  Linear (`SymphonyElixir.Tracker.Memory.issue_nodes/1`), a fake Linear that keeps the requests,
+  replies and moves Symphony writes into it: a QA server's seed (TP-1311) lists its held question
+  as Linear would, and the Director's Decide and Undo take its row away and bring it back. That
+  read makes no Linear request.
+
   The server tags itself `inbox` in `SymphonyElixir.Linear.Usage`.
   """
 
@@ -48,6 +54,7 @@ defmodule SymphonyElixir.Inbox do
   alias SymphonyElixir.HumanActions.Collector
   alias SymphonyElixir.Inbox.{Item, References}
   alias SymphonyElixir.Linear.{Client, Usage}
+  alias SymphonyElixir.Tracker.Memory
 
   # Startup is a trigger: the first read runs as soon as the Inbox starts, after the store is reconciled.
   @initial_delay_ms 0
@@ -103,10 +110,17 @@ defmodule SymphonyElixir.Inbox do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
-  @doc "Whether the Inbox reads Linear for these settings: a Linear tracker."
+  @doc """
+  Whether the Inbox reads these settings' tracker from `source`: Linear for a Linear tracker
+  (`:linear`, the default), or the issues file of a memory tracker that has one (`:memory`).
+  """
   @spec enabled?(Schema.t()) :: boolean()
-  def enabled?(%Schema{tracker: %{kind: "linear"}}), do: true
-  def enabled?(_settings), do: false
+  def enabled?(settings), do: enabled?(settings, :linear)
+
+  @spec enabled?(Schema.t(), :linear | :memory) :: boolean()
+  def enabled?(%Schema{tracker: %{kind: "linear"}}, :linear), do: true
+  def enabled?(%Schema{tracker: %{kind: "memory", memory_issues_file: path}}, :memory) when is_binary(path), do: true
+  def enabled?(_settings, _source), do: false
 
   @doc """
   The items the server named `server` last read from Linear, empty before its first read or when it
@@ -319,14 +333,29 @@ defmodule SymphonyElixir.Inbox do
   end
 
   defp list_repo(repo, state) do
-    scope_filter = Keyword.get(state.opts, :scope_filter, &Client.repo_scope_filter/1)
     held_issue_ids = Keyword.get(state.opts, :held_issue_ids, &Hold.held_issue_ids/1)
 
-    with {:ok, scope} <- scope_filter.(repo),
-         {:ok, held} <- held(held_issue_ids, repo) do
+    with {:ok, held} <- held(held_issue_ids, repo) do
+      list_scope(source(state), repo, held, state)
+    end
+  end
+
+  # The issues file holds each issue whole, so the list is already the read.
+  defp list_scope(:memory, repo, held, state) do
+    plan_review = PlanReview.state(settings(state, repo))
+    listed? = &(&1["id"] in held or same_state?(get_in(&1, ["state", "name"]), plan_review))
+    {:ok, Enum.filter(Memory.issue_nodes(repo), listed?)}
+  end
+
+  defp list_scope(:linear, repo, held, state) do
+    scope_filter = Keyword.get(state.opts, :scope_filter, &Client.repo_scope_filter/1)
+
+    with {:ok, scope} <- scope_filter.(repo) do
       list_pages(%{"and" => [scope, %{"or" => list_conditions(settings(state, repo), held)}]}, nil, [], state)
     end
   end
+
+  defp source(state), do: Keyword.get(state.opts, :source, :linear)
 
   defp held(held_issue_ids, repo) do
     case held_issue_ids.(repo.name) do
@@ -358,8 +387,16 @@ defmodule SymphonyElixir.Inbox do
   defp issues_page(%{"data" => %{"issues" => %{"nodes" => nodes} = issues}}) when is_list(nodes), do: {:ok, nodes, issues["pageInfo"]}
   defp issues_page(body), do: {:error, {:inbox_query_failed, body}}
 
-  # An issue is read again only when it or one of its comments changed since the last read.
+  # An issue is read again only when it or one of its comments changed since the last read; the
+  # issues file's are read whole by the list.
   defp read_changed(listed, state) do
+    case source(state) do
+      :memory -> {:ok, Map.new(listed, fn {_repo, node} -> {node["id"], %{fingerprint: nil, node: node}} end)}
+      :linear -> read_linear(listed, state)
+    end
+  end
+
+  defp read_linear(listed, state) do
     cached =
       Map.new(listed, fn {_repo, light} -> {light["id"], Map.get(state.nodes, light["id"])} end)
 
@@ -410,13 +447,13 @@ defmodule SymphonyElixir.Inbox do
   defp repos(state) do
     case Keyword.fetch(state.opts, :repos) do
       {:ok, repos_fun} -> repos_fun.()
-      :error -> configured_repos()
+      :error -> configured_repos(source(state))
     end
   end
 
-  defp configured_repos do
+  defp configured_repos(source) do
     with {:ok, repos} <- Config.repos() do
-      {:ok, Enum.filter(repos, &enabled?(Config.settings_for_repo!(&1.name)))}
+      {:ok, Enum.filter(repos, &enabled?(Config.settings_for_repo!(&1.name), source))}
     end
   end
 
@@ -427,7 +464,11 @@ defmodule SymphonyElixir.Inbox do
     end
   end
 
-  defp linear_client(state), do: Keyword.get(state.opts, :linear_client, &Client.graphql/3)
+  defp linear_client(state), do: Keyword.get(state.opts, :linear_client, default_client(source(state)))
+
+  defp default_client(:linear), do: &Client.graphql/3
+  # Over the issues file nothing is read from Linear: what the items mention is read as nothing.
+  defp default_client(:memory), do: fn _query, _variables, _opts -> {:ok, %{"data" => %{}}} end
 
   defp graphql(state, query, variables) do
     case linear_client(state).(query, variables, []) do

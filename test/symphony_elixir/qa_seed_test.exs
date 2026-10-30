@@ -4,9 +4,8 @@ defmodule SymphonyElixir.QaSeedTest do
   import Plug.Conn
   import Plug.Test
 
-  alias SymphonyElixir.{Config, DirectorMoves, Hold, Orchestrator, Pauses, QaSeed, Questions}
-  alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.{RunStore, TicketPullRequest, Workflow}
+  alias SymphonyElixir.{Config, DirectorMoves, Hold, Inbox, Orchestrator, Pauses, QaSeed, Questions}
+  alias SymphonyElixir.{RunStore, TicketPullRequest, Tracker, Workflow}
   alias SymphonyElixirWeb.ControlApiController
 
   # The restart's reset, which the QA server's `gh` stand-in answers for the seed's own PRs.
@@ -23,24 +22,20 @@ defmodule SymphonyElixir.QaSeedTest do
   @now ~U[2026-10-30 12:00:00Z]
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    # As on the QA server: the tracker reads a copy of the seed's issues, and the repository routes
+    # the seed's team.
+    issues_file = Path.join(Path.dirname(Workflow.symphony_file_path()), "issues.json")
+    File.cp!(Path.join(@seed, "issues.json"), issues_file)
+    Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_memory_issues_file: issues_file,
+      tracker_team: "QA"
+    )
+
     :ok = RunStore.clear()
     repo_key = Config.repo_key!()
-
-    issues =
-      for entry <- @seed |> Path.join("issues.json") |> File.read!() |> Jason.decode!() do
-        # The QA server routes the seed's team to its one repository; here the issues carry its key.
-        %Issue{
-          id: entry["id"],
-          identifier: entry["identifier"],
-          state: entry["state"],
-          title: entry["title"],
-          labels: entry["labels"],
-          repo_key: repo_key
-        }
-      end
-
-    Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
     on_exit(fn -> Application.delete_env(:symphony_elixir, :qa_seed_dir) end)
     %{repo_key: repo_key, dir: seed_copy(repo_key)}
   end
@@ -91,36 +86,51 @@ defmodule SymphonyElixir.QaSeedTest do
   end
 
   test "the seeded server answers every move the Director makes, over the memory tracker", %{repo_key: repo_key, dir: dir} do
-    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
     assert QaSeed.load(dir, now: @now) == :ok
 
-    # As in the application: the orchestrator starts after the seed, with its pauses.
+    # As in the application: the orchestrator starts after the seed, with its pauses, and the Inbox
+    # reads the tracker's issues file.
     {:ok, orchestrator} = Orchestrator.start_link(name: Module.concat(__MODULE__, :SeededOrchestrator))
     on_exit(fn -> stop_process(orchestrator) end)
+    inbox = {:qa_seed_inbox, make_ref()}
+    inbox_state = %{opts: [name: inbox, source: :memory, snapshot: fn -> %{} end], nodes: %{}, timer: make_ref()}
+    read_inbox = fn -> inbox_state |> Inbox.run_once() |> then(fn _state -> rows(inbox) end) end
     moves_server = :"qa_seed_moves_#{System.unique_integer([:positive])}"
     start_supervised!({DirectorMoves, name: moves_server})
-    moves = [server: moves_server, github: SeedGitHub, workspace: SeedWorkspace]
+    moves = [server: moves_server, github: SeedGitHub, workspace: SeedWorkspace, inbox: inbox]
     move = &control(&1, &2, orchestrator, moves)
 
-    # Decide answers the seeded question and lifts its hold; Undo brings both back.
+    # The held question is a row in the Inbox, beside the access hold and the plan in review. Decide
+    # takes the row away and lifts the hold; Undo brings both back.
     [%{id: question_id}] = Questions.open({:ticket, repo_key, "qa-seed-108"})
+
+    assert [
+             {"QA-102", :blocked, %{reason: "The agent can't reach the package registry: it needs a token only you can add."}},
+             {"QA-108", :action, %{question_id: ^question_id, comment_id: "memory-comment-" <> _id}},
+             {"QA-109", :plan, _plan}
+           ] = read_inbox.()
+
     picks = [%{"question" => "How long a paused repository stays paused", "answer" => "Stay paused until resumed"}]
     assert %{"move" => "decide"} = move.(:decide, %{"issue_identifier" => "QA-108", "question_id" => question_id, "picks" => picks})
     refute Hold.held?(repo_key, "qa-seed-108", :needs_decision)
+    assert [{"QA-102", :blocked, _hold}, {"QA-109", :plan, _plan}] = rows(inbox)
+    assert [{"QA-102", :blocked, _hold}, {"QA-109", :plan, _plan}] = read_inbox.()
     assert %{"move" => "undo", "undone" => "decide"} = move.(:undo, %{"issue_identifier" => "QA-108"})
     assert [%{id: ^question_id}] = Questions.open({:ticket, repo_key, "qa-seed-108"})
+    assert [{"QA-102", :blocked, _hold}, {"QA-108", :action, %{question_id: ^question_id}}, {"QA-109", :plan, _plan}] = read_inbox.()
 
-    # Unblock lifts the access hold in place.
+    # Unblock lifts the access hold in place, and its row goes.
     assert %{"move" => "unblock", "moved" => false} = move.(:unblock, %{"issue_identifier" => "QA-102"})
     refute Hold.held?(repo_key, "qa-seed-102", :blocked)
+    assert [{"QA-108", :action, _request}, {"QA-109", :plan, _plan}] = read_inbox.()
 
-    # Rework, restart and backlog move the phased tickets in the tracker.
+    # Rework, restart and backlog move the phased tickets in the tracker, and the next read sees them.
     assert %{"to_state" => "Rework"} = move.(:rework, %{"issue_identifier" => "QA-109", "reason" => "Split it differently"})
-    assert_received {:memory_tracker_state_update, "qa-seed-109", "Rework"}
+    assert {:ok, %{state: "Rework"}} = Tracker.fetch_issue_by_identifier("QA-109")
     assert %{"from_state" => "Rework", "to_state" => "In Progress"} = move.(:restart, %{"issue_identifier" => "QA-105", "reason" => "Start over"})
-    assert_received {:memory_tracker_state_update, "qa-seed-105", "In Progress"}
+    assert {:ok, %{state: "In Progress"}} = Tracker.fetch_issue_by_identifier("QA-105")
     assert %{"to_state" => "Backlog"} = move.(:backlog, %{"issue_identifier" => "QA-101"})
-    assert_received {:memory_tracker_state_update, "qa-seed-101", "Backlog"}
+    assert {:ok, %{state: "Backlog"}} = Tracker.fetch_issue_by_identifier("QA-101")
 
     # Resume and pause, Symphony-wide and for the repository; one pause holds at every step, so nothing starts.
     assert %{} = move.(:resume, %{})
@@ -135,6 +145,8 @@ defmodule SymphonyElixir.QaSeedTest do
     # Stop answers for a ticket with no run: the seeded server's agents never start one.
     assert %{"stopped" => false} = move.(:stop, %{"issue_identifier" => "QA-103"})
   end
+
+  defp rows(inbox), do: %{} |> Inbox.items(inbox) |> Enum.map(&{&1.identifier, &1.kind, &1.review}) |> Enum.sort()
 
   # Posts a control API move and returns its 200 answer.
   defp control(action, params, orchestrator, moves) do

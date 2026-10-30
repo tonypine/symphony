@@ -160,8 +160,10 @@ issues:
   can change them while Symphony runs. Entries with `"kind": "project"` (`id`, `name`, `slug_id`) or
   `"kind": "team"` (`id`, `key`, `name`) are the fake workspace's projects and teams: a route that
   names a project by any of them polls its issues, as Linear does. A project's optional `"teams"`
-  lists its team keys; without it, the project is in the teams of its issues. Comments and state
-  changes go nowhere.
+  lists its team keys; without it, the project is in the teams of its issues. Symphony writes into
+  the file as into Linear: a state move (with an entry in the issue's `"history"`), a label, a
+  comment and a reply (`"comments"`), each moving the issue's `"updatedAt"`. With an issues file the
+  Inbox reads the file instead of Linear, so a decision request a run posts is an Inbox row there.
 - `poll_interval_ms`: issue candidate polling cadence. Each scheduler tick costs roughly one Linear
   request per running, watched, and due-repo lookup (about 3 per tick with work in flight), so the
   default `30000` spends about 360 of a personal key's 2,500 requests/hour before agent tool calls.
@@ -1864,8 +1866,11 @@ Needs Decision hold with an open question, one on an access hold, a paused repos
 Symphony-wide pause, finished runs with transcripts, and PRs whose checks are green, red and
 pending. The seed is data, versioned with the fixtures. Nothing in that server reaches Linear or
 GitHub: the tracker is the seed's file, no Linear or GitHub token reaches it, and the `gh` on its
-PATH (`scripts/qa-server-gh.sh`) answers only for the seed's own pull requests. The Inbox reads
-Linear, so the seeded question shows on its ticket's page, not in `waiting_on_you`.
+PATH (`scripts/qa-server-gh.sh`) answers only for the seed's own pull requests. The tracker keeps
+the moves, requests and replies Symphony writes in its copy of the seed's issues, and the Inbox
+reads that copy every 3 seconds: the seeded question, the access hold and the plan in review are
+Inbox rows, Decide takes the question's row away and Undo brings it back, and Rework, Restart and
+Backlog move their tickets.
 
 To look at it by hand on the QA VM: run `scripts/qa-server-build.sh`, then
 `SYMPHONY_VERIFICATION_PORT=8090 scripts/qa-server-start.sh` (it prints the control token it
