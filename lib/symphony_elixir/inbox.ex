@@ -46,7 +46,8 @@ defmodule SymphonyElixir.Inbox do
   alias SymphonyElixir.Inbox.{Item, References}
   alias SymphonyElixir.Linear.{Client, Usage}
 
-  @initial_delay_ms 1_000
+  # Startup is a trigger: the first read runs as soon as the Inbox starts, after the store is reconciled.
+  @initial_delay_ms 0
   @page_size 50
   @detail_batch 25
   @comment_last 30
