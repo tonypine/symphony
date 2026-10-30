@@ -545,8 +545,10 @@ plain words (at most 300 characters) and what it waits on (a question's id, a ti
 Symphony version or pull request, the Director's `unblock` or `restart`, a named condition). The
 event is validated before the ticket's record changes: a reason or a time the ledger would refuse
 leaves the pause as it was. Setting a reason the pause already holds (same kind, same `waits_on`)
-records nothing. A repository's or Symphony's own pause is kept in the store by subject and records
-no event. Nothing sets a pause yet.
+records nothing. A pause is read, changed and written in one store transaction that holds its lock,
+so concurrent writers never lose each other's reasons, and only a change written records its event.
+A repository's or Symphony's own pause is kept in the store by subject and records no event.
+Nothing sets a pause yet.
 
 A `run.ended` names the run's transcript: a copy kept in the artifact store (Section 4.1.12) as
 kind `transcript`, its id both in the event's `artifacts` and in `payload.transcript`. The

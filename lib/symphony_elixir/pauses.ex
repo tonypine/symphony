@@ -26,7 +26,10 @@ defmodule SymphonyElixir.Pauses do
   `SymphonyElixir.RunStore` under its subject and records no event.
 
   A reason is known by its kind and `waits_on`: setting the same one again changes nothing and
-  records nothing. Nothing calls this module yet.
+  records nothing. Each write reads, changes and writes the pause in one store transaction that
+  holds its lock (`RunStore.update_ticket_pause/4`, `RunStore.update_subject_pause/2`), so
+  concurrent writers never lose each other's reasons and each change is recorded once. Nothing
+  calls this module yet.
   """
 
   alias SymphonyElixir.{RunStore, TicketEvents, TicketState}
@@ -81,9 +84,8 @@ defmodule SymphonyElixir.Pauses do
   @spec set(subject(), reason_input(), [opt()]) :: result()
   def set(subject, reason, opts \\ []) do
     with {:ok, subject} <- subject(subject),
-         {:ok, reason} <- new_reason(reason, opts, :set_by),
-         {:ok, current} <- read(subject) do
-      add(subject, current, reason)
+         {:ok, reason} <- new_reason(reason, opts, :set_by) do
+      update(subject, reason.set_at, &add(subject, &1, reason))
     end
   end
 
@@ -94,9 +96,11 @@ defmodule SymphonyElixir.Pauses do
   @spec add_reason(subject(), reason_input(), [opt()]) :: result()
   def add_reason(subject, reason, opts \\ []) do
     with {:ok, subject} <- subject(subject),
-         {:ok, reason} <- new_reason(reason, opts, :set_by),
-         {:ok, %{} = current} <- paused(read(subject)) do
-      add(subject, current, reason)
+         {:ok, reason} <- new_reason(reason, opts, :set_by) do
+      update(subject, reason.set_at, fn
+        nil -> {:error, :not_paused}
+        pause -> add(subject, pause, reason)
+      end)
     end
   end
 
@@ -108,9 +112,8 @@ defmodule SymphonyElixir.Pauses do
   @spec clear_reason(subject(), reason_input(), [opt()]) :: result()
   def clear_reason(subject, reason, opts \\ []) do
     with {:ok, subject} <- subject(subject),
-         {:ok, target} <- new_reason(reason, opts, :by),
-         {:ok, current} <- read(subject) do
-      drop(subject, current, target)
+         {:ok, target} <- new_reason(reason, opts, :by) do
+      update(subject, target.set_at, &drop(subject, &1, target))
     end
   end
 
@@ -119,12 +122,11 @@ defmodule SymphonyElixir.Pauses do
   def clear(subject, opts \\ []) do
     with {:ok, subject} <- subject(subject),
          {:ok, by} <- setter(opts, :by),
-         {:ok, at} <- at(opts),
-         {:ok, current} <- read(subject) do
-      case current do
-        nil -> {:ok, nil}
-        pause -> write(subject, nil, "pause.cleared", cleared_payload(pause.reasons, by), at)
-      end
+         {:ok, at} <- at(opts) do
+      update(subject, at, fn
+        nil -> unchanged(nil)
+        pause -> change(subject, nil, "pause.cleared", cleared_payload(pause.reasons, by), at)
+      end)
     end
   end
 
@@ -175,63 +177,63 @@ defmodule SymphonyElixir.Pauses do
     end
   end
 
+  # The change to a pause, from the pause the store read under its lock (see `update/3`): pure, as
+  # the store may run it more than once.
   defp add(subject, nil, reason) do
     pause = %{subject: subject, reasons: [reason], set_by: reason.set_by, since: reason.set_at}
-    write(subject, pause, "pause.set", reason_payload(reason), reason.set_at)
+    change(subject, pause, "pause.set", reason_payload(reason), reason.set_at)
   end
 
   defp add(subject, pause, reason) do
     if Enum.any?(pause.reasons, &(key(&1) == key(reason))) do
-      {:ok, pause}
+      unchanged(pause)
     else
-      write(subject, %{pause | reasons: pause.reasons ++ [reason]}, "pause.reason_added", reason_payload(reason), reason.set_at)
+      change(subject, %{pause | reasons: pause.reasons ++ [reason]}, "pause.reason_added", reason_payload(reason), reason.set_at)
     end
   end
 
-  defp drop(_subject, nil, _target), do: {:ok, nil}
+  defp drop(_subject, nil, _target), do: unchanged(nil)
 
   defp drop(subject, pause, target) do
     case Enum.split_with(pause.reasons, &(key(&1) == key(target))) do
       {[], _reasons} ->
-        {:ok, pause}
+        unchanged(pause)
 
       {cleared, []} ->
-        write(subject, nil, "pause.cleared", cleared_payload(cleared, target.set_by), target.set_at)
+        change(subject, nil, "pause.cleared", cleared_payload(cleared, target.set_by), target.set_at)
 
       {[cleared], reasons} ->
         payload = cleared |> cleared_reason() |> Map.put(:by, target.set_by)
-        write(subject, %{pause | reasons: reasons}, "pause.reason_cleared", payload, target.set_at)
+        change(subject, %{pause | reasons: reasons}, "pause.reason_cleared", payload, target.set_at)
     end
   end
 
-  # A ticket's pause is written on its record, then its event; any other subject's in the store. The
-  # event is validated before the record changes, so a pause whose event the ledger refuses is never
-  # stored.
-  defp write({:ticket, repo_key, issue_id}, pause, type, payload, at) do
+  defp unchanged(pause), do: {:ok, {pause, nil}}
+
+  # A ticket's event is validated before its pause is written, so a pause whose event the ledger
+  # refuses is never stored. Any other subject records no event.
+  defp change({:ticket, repo_key, issue_id}, pause, type, payload, at) do
     with {:ok, _event} <- TicketEvents.build(repo_key, issue_id, type, payload, at: at),
-         :ok <- put_ticket_pause(repo_key, issue_id, pause, at),
-         {:ok, _event} <- TicketEvents.record(repo_key, issue_id, type, payload, at: at) do
-      {:ok, pause}
-    end
+         do: {:write, pause, {pause, {type, payload, at}}}
   end
 
-  defp write(subject, nil, _type, _payload, _at) do
-    with :ok <- RunStore.delete_subject_pause(subject), do: {:ok, nil}
+  defp change(_subject, pause, _type, _payload, _at), do: {:write, pause, {pause, nil}}
+
+  # The pause is read, changed and written in one store transaction that holds its lock, so
+  # concurrent writers never lose each other's reasons; only then is the change's event recorded,
+  # once per change written.
+  defp update({:ticket, repo_key, issue_id}, at, fun) do
+    with {:ok, {pause, event}} <- RunStore.update_ticket_pause(repo_key, issue_id, at, fun),
+         {:ok, _event} <- record(repo_key, issue_id, event),
+         do: {:ok, pause}
   end
 
-  defp write(subject, pause, _type, _payload, _at) do
-    with :ok <- RunStore.put_subject_pause(subject, pause), do: {:ok, pause}
+  defp update(subject, _at, fun) do
+    with {:ok, {pause, nil}} <- RunStore.update_subject_pause(subject, &fun.(normalize(&1))), do: {:ok, pause}
   end
 
-  defp put_ticket_pause(repo_key, issue_id, pause, at) do
-    case RunStore.update_ticket_state(repo_key, issue_id, %{pause: pause, updated_at: at}) do
-      {:error, :ticket_state_not_found} ->
-        repo_key |> TicketState.new(issue_id) |> TicketState.put_pause(pause, at) |> RunStore.put_ticket_state()
-
-      result ->
-        result
-    end
-  end
+  defp record(_repo_key, _issue_id, nil), do: {:ok, nil}
+  defp record(repo_key, issue_id, {type, payload, at}), do: TicketEvents.record(repo_key, issue_id, type, payload, at: at)
 
   defp read({:ticket, repo_key, issue_id}) do
     with record when not is_tuple(record) <- RunStore.get_ticket_state(repo_key, issue_id),
@@ -241,9 +243,6 @@ defmodule SymphonyElixir.Pauses do
   defp read(subject) do
     with pause when not is_tuple(pause) <- RunStore.get_subject_pause(subject), do: {:ok, normalize(pause)}
   end
-
-  defp paused({:ok, nil}), do: {:error, :not_paused}
-  defp paused(read), do: read
 
   defp reason_payload(reason) do
     %{reason: reason.kind, text: reason.text, waits_on: reason.waits_on, set_by: reason.set_by, releasable: reason.releasable}

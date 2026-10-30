@@ -62,6 +62,9 @@ defmodule SymphonyElixir.RunStore do
   @table_load_timeout_ms 120_000
   @table_load_progress_ms 10_000
 
+  @typedoc "What a pause update's function returns: a pause to write (nil clears it), or nothing to write."
+  @type pause_update :: {:write, map() | nil, term()} | {:ok, term()} | {:error, term()}
+
   defmodule State do
     @moduledoc false
 
@@ -1317,6 +1320,39 @@ defmodule SymphonyElixir.RunStore do
   end
 
   @doc """
+  Runs `fun` on the pause of `repo_key`'s ticket `issue_id` (`SymphonyElixir.Pauses`, its only
+  writer), nil when it has none, in one durable transaction that holds the record's write lock, so
+  concurrent pause writes to one ticket are serialized and none is lost. `{:write, pause, result}`
+  writes `pause` (nil clears it) with `updated_at` `at`, creating the record when none exists, and
+  returns `{:ok, result}`; `{:ok, result}` and `{:error, reason}` write nothing and are returned.
+  `fun` may run more than once when the transaction restarts, so it must have no side effects.
+  """
+  @spec update_ticket_pause(String.t(), String.t(), DateTime.t(), (map() | nil -> pause_update())) ::
+          {:ok, term()} | {:error, term()}
+  def update_ticket_pause(repo_key, issue_id, at, fun) when is_binary(issue_id) and is_function(fun, 1) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_ticket_pause(repo_key, issue_id, at, fun) end)
+    end
+  end
+
+  def update_ticket_pause(_repo_key, _issue_id, _at, _fun), do: {:error, :invalid_issue_id}
+
+  @doc """
+  Runs `fun` on the pause of `subject` (see `get_subject_pause/1`) in one durable transaction that
+  holds its row's write lock, as `update_ticket_pause/4` does for a ticket: `{:write, pause, result}`
+  writes `pause` (nil removes it) and returns `{:ok, result}`; `{:ok, result}` and
+  `{:error, reason}` write nothing and are returned.
+  """
+  @spec update_subject_pause(term(), (map() | nil -> pause_update())) :: {:ok, term()} | {:error, term()}
+  def update_subject_pause(subject, fun) when is_function(fun, 1) do
+    with :ok <- valid_pause_subject(subject),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_subject_pause(subject, fun) end)
+    end
+  end
+
+  @doc """
   The pause of a subject that is not a ticket (`SymphonyElixir.Pauses`): a repository
   (`{:repository, repo_key}`) or Symphony itself (`:symphony`), or nil when it has none. It is kept
   in the pause table under `{:subject, subject}`, next to the operator pause, which keeps its key.
@@ -2298,10 +2334,44 @@ defmodule SymphonyElixir.RunStore do
   defp valid_pause_subject({:repository, repo_key}) when is_binary(repo_key) and repo_key != "", do: :ok
   defp valid_pause_subject(_subject), do: {:error, :invalid_subject}
 
-  defp read_subject_pause(subject) do
-    case :mnesia.read(@pause_table, {:subject, subject}) do
+  defp read_subject_pause(subject, lock \\ :read) do
+    case :mnesia.read(@pause_table, {:subject, subject}, lock) do
       [{@pause_table, {:subject, ^subject}, pause}] when is_map(pause) -> pause
       _none -> nil
+    end
+  end
+
+  defp write_subject_pause(subject, fun) do
+    case fun.(read_subject_pause(subject, :write)) do
+      {:write, nil, result} ->
+        :mnesia.delete({@pause_table, {:subject, subject}})
+        {:ok, result}
+
+      {:write, pause, result} ->
+        :mnesia.write({@pause_table, {:subject, subject}, pause})
+        {:ok, result}
+
+      unchanged ->
+        unchanged
+    end
+  end
+
+  defp write_ticket_pause(repo_key, issue_id, at, fun) do
+    key = scoped_key(repo_key, issue_id)
+
+    record =
+      case :mnesia.read(@ticket_state_table, key, :write) do
+        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> TicketState.normalize(record)
+        [] -> TicketState.new(repo_key, issue_id)
+      end
+
+    case fun.(record.pause) do
+      {:write, pause, result} ->
+        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, TicketState.put_pause(record, pause, at)})
+        {:ok, result}
+
+      unchanged ->
+        unchanged
     end
   end
 

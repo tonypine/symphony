@@ -349,6 +349,44 @@ defmodule SymphonyElixir.RunStoreTest do
     assert RunStore.put_subject_pause(repository, :paused) == {:error, :invalid_pause}
   end
 
+  test "updates a subject's pause in one transaction: writes it, keeps it, refuses or removes it" do
+    repository = {:repository, @repo_key}
+    pause = %{subject: repository, reasons: []}
+
+    assert RunStore.update_subject_pause(repository, fn nil -> {:write, pause, :set} end) == {:ok, :set}
+    assert RunStore.get_subject_pause(repository) == pause
+    assert RunStore.update_subject_pause(repository, fn ^pause -> {:ok, :kept} end) == {:ok, :kept}
+    assert RunStore.update_subject_pause(repository, fn ^pause -> {:error, :refused} end) == {:error, :refused}
+    assert RunStore.get_subject_pause(repository) == pause
+    assert RunStore.update_subject_pause(repository, fn ^pause -> {:write, nil, :cleared} end) == {:ok, :cleared}
+    assert RunStore.get_subject_pause(repository) == nil
+    assert RunStore.update_subject_pause(:dispatch_pause, fn _pause -> {:ok, nil} end) == {:error, :invalid_subject}
+  end
+
+  test "updates a ticket's pause in one transaction, creating the record and keeping the rest of it" do
+    at = ~U[2026-10-30 04:00:00Z]
+    later = ~U[2026-10-30 05:00:00Z]
+    pause = %{subject: {:ticket, @repo_key, "issue-1"}, reasons: [%{kind: :question, waits_on: %{question_id: "q-1"}}]}
+
+    assert RunStore.update_ticket_pause(@repo_key, "issue-1", at, fn nil -> {:ok, :kept} end) == {:ok, :kept}
+    assert RunStore.get_ticket_state(@repo_key, "issue-1") == nil
+
+    assert RunStore.update_ticket_pause(@repo_key, "issue-1", at, fn nil -> {:write, pause, :paused} end) == {:ok, :paused}
+
+    assert %{pause: %{reasons: [%{kind: :question, text: "Waiting for your answer"}]}, updated_at: ^at} =
+             RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    :ok = RunStore.update_ticket_state(@repo_key, "issue-1", %{phase: "In Progress"})
+    refuse = fn %{reasons: [_question]} -> {:error, :refused} end
+    assert RunStore.update_ticket_pause(@repo_key, "issue-1", later, refuse) == {:error, :refused}
+    assert %{phase: "In Progress", pause: %{}, updated_at: ^at} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    assert RunStore.update_ticket_pause(@repo_key, "issue-1", later, fn %{} -> {:write, nil, :cleared} end) == {:ok, :cleared}
+    assert %{phase: "In Progress", pause: nil, updated_at: ^later} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    assert RunStore.update_ticket_pause(@repo_key, nil, at, fn _pause -> {:ok, nil} end) == {:error, :invalid_issue_id}
+  end
+
   test "persists Symphony's own state moves across run store restart" do
     moved_at = ~U[2026-10-04 00:23:15Z]
 

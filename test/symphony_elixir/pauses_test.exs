@@ -19,6 +19,13 @@ defmodule SymphonyElixir.PausesTest do
 
   defp kinds(subject), do: subject |> Pauses.get() |> elem(1) |> Map.fetch!(:reasons) |> Enum.map(& &1.kind)
 
+  # Runs `fun` on every input at once, each in its own process, and returns the results.
+  defp concurrently(inputs, fun) do
+    inputs
+    |> Task.async_stream(fun, max_concurrency: Enum.count(inputs), ordered: false)
+    |> Enum.map(fn {:ok, result} -> result end)
+  end
+
   describe "a ticket's pause" do
     test "a ticket paused on a question that then gains a dependency shows both reasons, and answering the question leaves it paused on the dependency" do
       assert {:ok, %{reasons: [%{kind: :question}]}} = Pauses.set(@ticket, @question, at: @at)
@@ -44,7 +51,7 @@ defmodule SymphonyElixir.PausesTest do
       {:ok, _pause} = Pauses.set(@ticket, @question, set_by: @person, at: @at)
       {:ok, _pause} = Pauses.set(@ticket, @dependency, at: @at)
 
-      assert {:ok, %{reasons: [%{kind: :question}]}} = Pauses.clear_reason(@ticket, @dependency)
+      assert {:ok, %{reasons: [%{kind: :question}]}} = Pauses.clear_reason(@ticket, @dependency, at: @later)
       assert Pauses.paused?(@ticket)
       assert {:ok, nil} = Pauses.clear_reason(@ticket, @question, at: @later)
 
@@ -64,7 +71,7 @@ defmodule SymphonyElixir.PausesTest do
       assert Pauses.set(@ticket, Map.put(@question, :text, "Another line"), at: @later) == {:ok, pause}
       assert Pauses.add_reason(@ticket, @question, at: @later) == {:ok, pause}
       other = %{@question | waits_on: %{question_id: "q-2"}}
-      assert {:ok, %{reasons: [_question, _other]}} = Pauses.add_reason(@ticket, other)
+      assert {:ok, %{reasons: [_question, _other]}} = Pauses.add_reason(@ticket, other, at: @later)
 
       assert ticket_events(@repo_key, @issue_id) |> Enum.map(&elem(&1, 0)) == ["pause.set", "pause.reason_added"]
     end
@@ -137,6 +144,57 @@ defmodule SymphonyElixir.PausesTest do
       assert Pauses.add_reason(@ticket, @dependency) == {:error, :not_paused}
       refute Pauses.paused?(@ticket)
       assert ticket_events(@repo_key, @issue_id) == []
+    end
+  end
+
+  describe "concurrent writers" do
+    test "adding distinct reasons at once keeps every reason and records one pause.reason_added each" do
+      {:ok, _pause} = Pauses.set(@ticket, @question, at: @at)
+      identifiers = for n <- 1..20, do: "TP-#{n}"
+
+      add = &Pauses.add_reason(@ticket, %{kind: :ticket, waits_on: %{identifier: &1}}, at: @later)
+
+      for result <- concurrently(identifiers, add) do
+        assert {:ok, %{reasons: [%{kind: :question} | _dependencies]}} = result
+      end
+
+      assert {:ok, %{reasons: [%{kind: :question} | dependencies]}} = Pauses.get(@ticket)
+      assert dependencies |> Enum.map(& &1.waits_on.identifier) |> Enum.sort() == Enum.sort(identifiers)
+
+      added = for {"pause.reason_added", %{waits_on: %{identifier: identifier}}} <- ticket_events(@repo_key, @issue_id), do: identifier
+      assert Enum.sort(added) == Enum.sort(identifiers)
+      assert ticket_events(@repo_key, @issue_id, "pause.set") |> length() == 1
+    end
+
+    test "setting the same reason at once pauses once, with one pause.set" do
+      for result <- concurrently(1..20, fn _n -> Pauses.set(@ticket, @question, at: @at) end) do
+        assert {:ok, %{reasons: [%{kind: :question}]}} = result
+      end
+
+      assert kinds(@ticket) == [:question]
+      assert ticket_events(@repo_key, @issue_id) |> Enum.map(&elem(&1, 0)) == ["pause.set"]
+    end
+
+    test "clearing two reasons at once clears the pause, with one pause.reason_cleared and one pause.cleared" do
+      {:ok, _pause} = Pauses.set(@ticket, @question, at: @at)
+      {:ok, _pause} = Pauses.add_reason(@ticket, @dependency, at: @at)
+
+      reasons = List.duplicate(@question, 10) ++ List.duplicate(@dependency, 10)
+      concurrently(reasons, &Pauses.clear_reason(@ticket, &1, at: @later))
+
+      refute Pauses.paused?(@ticket)
+      cleared = for {type, _payload} <- ticket_events(@repo_key, @issue_id), type != "pause.set" and type != "pause.reason_added", do: type
+      assert Enum.sort(cleared) == ["pause.cleared", "pause.reason_cleared"]
+    end
+
+    test "a repository's pause keeps every reason added at once" do
+      repository = {:repository, @repo_key}
+      conditions = for n <- 1..20, do: "condition-#{n}"
+
+      concurrently(conditions, &Pauses.set(repository, %{kind: :environment, waits_on: %{condition: &1}}))
+
+      assert {:ok, %{reasons: reasons}} = Pauses.get(repository)
+      assert reasons |> Enum.map(& &1.waits_on.condition) |> Enum.sort() == Enum.sort(conditions)
     end
   end
 
