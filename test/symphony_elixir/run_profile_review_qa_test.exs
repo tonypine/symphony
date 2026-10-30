@@ -191,7 +191,6 @@ defmodule SymphonyElixir.RunProfileReviewQaTest do
         Workflow.workflow_file_path(),
         Keyword.merge(
           [
-            tracker_kind: "memory",
             workspace_root: ctx.workspace_root,
             agent_kind: "claude",
             agent_command: ctx.fake_claude,

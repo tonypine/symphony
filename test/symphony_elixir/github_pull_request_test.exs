@@ -1143,6 +1143,29 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
       assert {:error, {:gh_failed, _args, 1, "gh: Resource not accessible" <> _}} = PullRequest.close(pr_url, gh_runner: denied)
     end
 
+    test "close with a comment posts it on the pull request first, and a refused comment leaves it open" do
+      pr_url = "https://github.com/org/repo/pull/42"
+      test_pid = self()
+
+      runner = fn args, _opts ->
+        send(test_pid, {:gh, args})
+        {"{}", 0}
+      end
+
+      assert :ok = PullRequest.close(pr_url, gh_runner: runner, comment: "Cancelled: superseded")
+      assert_received {:gh, ["api", "repos/org/repo/issues/42/comments", "--method", "POST", "-f", "body=Cancelled: superseded"]}
+      assert_received {:gh, ["api", "repos/org/repo/pulls/42", "--method", "PATCH", "-f", "state=closed"]}
+
+      denied = fn args, _opts ->
+        send(test_pid, {:gh, args})
+        {"gh: Resource not accessible by integration", 1}
+      end
+
+      assert {:error, {:gh_failed, _args, 1, _output}} = PullRequest.close(pr_url, gh_runner: denied, comment: "Cancelled")
+      assert_received {:gh, ["api", "repos/org/repo/issues/42/comments" | _rest]}
+      refute_received {:gh, ["api", "repos/org/repo/pulls/42" | _rest]}
+    end
+
     test "change_base retargets the pull request to another base branch" do
       pr_url = "https://github.com/org/repo/pull/42"
 

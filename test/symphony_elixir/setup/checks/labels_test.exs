@@ -18,7 +18,7 @@ defmodule SymphonyElixir.Setup.Checks.LabelsTest do
   defp route!(repos \\ [%{key: "app", team: "TP"}], overrides \\ []) do
     path = Workflow.workflow_file_path()
     repos = Enum.map(repos, &Map.put(&1, :workflow, path))
-    write_workflow_file!(path, Keyword.merge([tracker_kind: "memory", repos: repos], overrides))
+    write_workflow_file!(path, Keyword.merge([repos: repos], overrides))
   end
 
   # Every label the check wants, as team labels of `team`, but for `except`, plus `extra`.

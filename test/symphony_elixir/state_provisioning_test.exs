@@ -115,7 +115,7 @@ defmodule SymphonyElixir.StateProvisioningTest do
     test "startup provisioning creates a state missing from a project-routed repo's team" do
       path = Workflow.workflow_file_path()
       repos = [%{key: "app", workflow: path, projects: ["Symphony"]}]
-      write_workflow_file!(path, tracker_kind: "memory", tracker_project_slug: nil, repos: repos)
+      write_workflow_file!(path, tracker_project_slug: nil, repos: repos)
       code_review = %{id: "s1", name: "Code Review", team_id: "t1", team_key: "TP"}
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
       Application.put_env(:symphony_elixir, :memory_tracker_projects_list, [@symphony_project])

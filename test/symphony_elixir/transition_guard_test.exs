@@ -483,7 +483,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
     end
 
     test "defaults to the configured tracker" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      write_workflow_file!(Workflow.workflow_file_path())
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
       on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)

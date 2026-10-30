@@ -49,7 +49,6 @@ defmodule SymphonyElixir.QaPolicyTest do
 
     test "resolves the base branch from the repo's config" do
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         repos: [[key: "branched-repo", workflow: Workflow.workflow_file_path(), team: "Test", base_branch: "develop"]]
       )
 

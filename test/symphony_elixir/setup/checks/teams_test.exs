@@ -21,7 +21,7 @@ defmodule SymphonyElixir.Setup.Checks.TeamsTest do
   defp route!(route, overrides \\ []) do
     path = Workflow.workflow_file_path()
     repos = [Map.merge(%{key: "app", workflow: path}, route)]
-    write_workflow_file!(path, Keyword.merge([tracker_kind: "memory", repos: repos], overrides))
+    write_workflow_file!(path, Keyword.merge([repos: repos], overrides))
   end
 
   defp projects!(projects), do: Application.put_env(:symphony_elixir, :memory_tracker_projects_list, projects)

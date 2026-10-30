@@ -13,7 +13,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
   with.
 
   The Director's moves from the Mac app's Inbox (`approve_plan`, `rework`, `restart`, `decisions`,
-  `changes`, `backlog`, `unblock`, `decide` and `undo`) are made by
+  `changes`, `backlog`, `cancel`, `unblock`, `decide` and `undo`) are made by
   `SymphonyElixir.DirectorMoves`:
   each takes `issue_identifier`, answers 409 when the ticket's state doesn't allow the move, 502
   `move_incomplete` when Linear took one of the move's two writes and refused the other, 502
@@ -125,6 +125,9 @@ defmodule SymphonyElixirWeb.ControlApiController do
 
   @spec backlog(Conn.t(), map()) :: Conn.t()
   def backlog(conn, params), do: director_move(conn, :backlog, params, %{note: string_param(params["note"])})
+
+  @spec cancel(Conn.t(), map()) :: Conn.t()
+  def cancel(conn, params), do: director_move(conn, :cancel, params, %{note: string_param(params["note"])})
 
   @spec unblock(Conn.t(), map()) :: Conn.t()
   def unblock(conn, params), do: director_move(conn, :unblock, params, %{})

@@ -20,7 +20,7 @@ defmodule SymphonyElixir.PrWatch.ReleaseTest do
 
   setup do
     start_supervised!(Parity)
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", pr_review_mode: "polling", ci: %{enabled: true})
+    write_workflow_file!(Workflow.workflow_file_path(), pr_review_mode: "polling", ci: %{enabled: true})
     :ok
   end
 
@@ -73,7 +73,6 @@ defmodule SymphonyElixir.PrWatch.ReleaseTest do
 
   test "with webhooks off, one safety-net tick reports the release to the app as a delivery does" do
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       pr_review_mode: "polling",
       ci: %{enabled: true},
       github: %{webhooks: %{enabled: false}}

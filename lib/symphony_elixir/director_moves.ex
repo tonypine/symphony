@@ -37,6 +37,18 @@ defmodule SymphonyElixir.DirectorMoves do
     rejection that cancels them. Neither `:decisions` nor `:changes` is taken back by `undo/2`;
   - `:backlog`: an open ticket gets the note as a comment when there is one, then moves to `Backlog`;
     the questions its run asked are withdrawn with the reason (`SymphonyElixir.Questions.withdraw_lapsed/3`);
+  - `:cancel`: an open ticket is dropped for good, a person's decision (principle 6) that a hand
+    move to Canceled can't make on a phase Symphony owns, since that is drift moved back. The
+    record's phase becomes the team's canceled state first, then Linear follows, through the guard
+    (`SymphonyElixir.DecisionMove.perform/4`, which tries `Canceled`, then `Cancelled`). A running
+    turn is stopped as `/control/stop` stops it, without the stop's pause or hold; the ticket's open
+    pull request is closed with the Director's note as its comment; every open question is withdrawn
+    (`SymphonyElixir.Questions.withdraw_lapsed/3`, "The ticket was cancelled."), and every hold and
+    pause reason is cleared. The ticket's events get one `ticket.cancelled` with the note, the stop
+    and the pull requests closed; its workspace goes on the usual cleanup of a terminal ticket. A
+    record cancelled this way is terminal: a later Linear state is no drift on it
+    (`SymphonyElixir.TicketObservation`). Undo puts the record and Linear back to the phase before;
+    the pull request it closed, the run it stopped and the questions it withdrew stay as they are;
   - `:unblock`: a ticket waiting on an **access** hold — an agent's block report, whose question is
     answered "Unblock and run again" (`SymphonyElixir.TransitionGuard.block_report_question/1`) — on a
     dispatch-loop or quiet-handoff hold (`SymphonyElixir.DispatchLoop`: the question Symphony asked
@@ -106,6 +118,7 @@ defmodule SymphonyElixir.DirectorMoves do
     OperatorStop,
     Orchestrator,
     PathUnlock,
+    Pauses,
     PlanComments,
     PlanReview,
     PrWatch,
@@ -114,12 +127,14 @@ defmodule SymphonyElixir.DirectorMoves do
     RunStore,
     SelfHeal,
     SubIssueWait,
+    TicketPullRequest,
     TicketSignals,
     TicketState,
     Tracker,
     TransitionGuard
   }
 
+  alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Routing.Resolver
 
@@ -133,6 +148,7 @@ defmodule SymphonyElixir.DirectorMoves do
   @done_state "Done"
   @backlog_state "Backlog"
   @todo_state "Todo"
+  @canceled_state "Canceled"
   @comment_preview_chars 500
   @director {:person, "the Director"}
 
@@ -143,6 +159,7 @@ defmodule SymphonyElixir.DirectorMoves do
           | :decisions
           | :changes
           | :backlog
+          | :cancel
           | :unblock
           | :decide
   @type pick :: %{
@@ -169,7 +186,7 @@ defmodule SymphonyElixir.DirectorMoves do
           | {:partial, String.t()}
   @type result :: {:ok, map()} | {:error, error()}
 
-  @moves [:approve_plan, :rework, :restart, :decisions, :changes, :backlog, :unblock, :decide]
+  @moves [:approve_plan, :rework, :restart, :decisions, :changes, :backlog, :cancel, :unblock, :decide]
   @decide_targets %{"rework" => @rework_state, "done" => @done_state, "merging" => @merging_state, "todo" => @todo_state}
 
   @spec start_link(keyword()) :: Agent.on_start()
@@ -187,13 +204,15 @@ defmodule SymphonyElixir.DirectorMoves do
 
   @doc """
   Makes `move` on the ticket `identifier` (its identifier or id). `input` carries the rework
-  `:reason` (required), the backlog `:note` (optional), the decisions' `:picks` (required) or the
+  `:reason` (required), the backlog or cancel `:note` (optional), the decisions' `:picks` (required) or the
   decision's `:picks` (required) with the `:request_comment_id` they answer (required) and the
   optional `:move` the decision directs.
 
   Options: `:server` (the Agent, default this module), `:clock` (monotonic milliseconds, for the undo
-  window), `:orchestrator` (asked to poll again after the move, default `SymphonyElixir.Orchestrator`)
-  and `:store` (the run store read and written, default `SymphonyElixir.RunStore`).
+  window), `:orchestrator` (asked to poll again after the move, and to stop a cancelled ticket's run,
+  default `SymphonyElixir.Orchestrator`), `:store` (the run store read and written, default
+  `SymphonyElixir.RunStore`) and `:github` (the pull request module a restart or a cancel closes
+  with, default `SymphonyElixir.GitHub.PullRequest`).
   """
   @spec move(move(), String.t(), input(), keyword()) :: result()
   def move(move, identifier, input, opts \\ []) when move in @moves and is_binary(identifier) and is_map(input) do
@@ -233,6 +252,10 @@ defmodule SymphonyElixir.DirectorMoves do
   # Decide is a decision, not a state: it answers the request and clears the hold, and only moves
   # when the decision directs one.
   defp do_move(:decide, issue, input, opts), do: decide(issue, input, opts)
+
+  # Cancel moves through the team's canceled state under either spelling, so its target is the one
+  # Linear took.
+  defp do_move(:cancel, issue, input, opts), do: cancel(issue, blank_to_nil(input[:note]), opts)
 
   defp do_move(move, issue, input, opts) do
     settings = Config.settings!()
@@ -375,6 +398,11 @@ defmodule SymphonyElixir.DirectorMoves do
   @spec backlog_comment(String.t()) :: String.t()
   def backlog_comment(note) when is_binary(note), do: "Moved to Backlog by the Director:\n\n#{note}"
 
+  @doc "The comment `:cancel` posts on the pull request it closes: the cancel, then the Director's note."
+  @spec cancel_pr_comment(String.t(), String.t() | nil) :: String.t()
+  def cancel_pr_comment(identifier, nil) when is_binary(identifier), do: "Closed: the Director cancelled #{identifier}."
+  def cancel_pr_comment(identifier, note) when is_binary(identifier) and is_binary(note), do: cancel_pr_comment(identifier, nil) <> "\n\n" <> note
+
   @doc "The comment `:unblock` posts: the hold is cleared and the ticket continues in place."
   @spec unblock_comment(String.t()) :: String.t()
   def unblock_comment(identifier) when is_binary(identifier),
@@ -479,6 +507,12 @@ defmodule SymphonyElixir.DirectorMoves do
       Enum.any?(settings.tracker.terminal_states, &same_state?(&1, state)) -> conflict("#{issue.identifier} is #{state}; only an open ticket moves to Backlog")
       true -> {:ok, @backlog_state}
     end
+  end
+
+  defp require_open(%Issue{state: state} = issue, settings) do
+    if Enum.any?(settings.tracker.terminal_states, &same_state?(&1, state)),
+      do: conflict("#{issue.identifier} is #{state}; only an open ticket can be cancelled"),
+      else: :ok
   end
 
   defp require_plan(issue, move) do
@@ -743,6 +777,102 @@ defmodule SymphonyElixir.DirectorMoves do
   defp stopped?(issue, hold), do: OperatorStop.hold?(hold) or OperatorStop.held?(issue.repo_key, issue.id)
 
   defp clear_stop(issue, opts), do: OperatorStop.clear_hold(issue.repo_key, issue.id, [by: OperatorStop.director()] ++ store_opts(opts))
+
+  # The record takes the canceled state first and Linear follows (`DecisionMove.perform/4`); a team
+  # with neither spelling leaves the record where it was and refuses the move. A move Linear refuses
+  # otherwise stands on the record, marked for the reconciler to project, so the rest of the cancel
+  # goes on: the run is stopped, the pull request closed, the questions, holds and pauses cleared.
+  defp cancel(issue, note, opts) do
+    with :ok <- require_open(issue, Config.settings!()),
+         {:ok, to_state} <- cancel_in_linear(issue) do
+      stopped? = stop_cancelled_run(issue, opts)
+      closed = close_cancelled_pull_requests(issue, note, opts)
+      clear_cancelled(issue, to_state, opts)
+
+      TicketSignals.record_event(
+        issue.repo_key,
+        issue.id,
+        "ticket.cancelled",
+        %{from: issue.state, to: to_state, note: note, run_stopped: stopped?, pull_requests_closed: closed},
+        actor: @director
+      )
+
+      finish(:cancel, issue, to_state, nil, opts)
+    end
+  end
+
+  defp cancel_in_linear(issue) do
+    case DecisionMove.perform(issue.repo_key, issue.id, %{to: @canceled_state}, issue_identifier: issue.identifier) do
+      {:ok, to_state} ->
+        record_move_signal(issue, :cancel, to_state)
+        {:ok, to_state}
+
+      {:error, :state_not_found} ->
+        conflict("#{issue.identifier}'s team has no Canceled state, so it can't be cancelled")
+
+      {:error, reason} ->
+        Logger.warning("Cancelled #{issue.identifier} on its record; Linear refused the move, projected again by the reconciler: #{inspect(reason)}")
+        {:ok, @canceled_state}
+    end
+  end
+
+  # The run is stopped as `/control/stop` stops it, then the stop's pause and hold are lifted: the
+  # ticket is cancelled, not stopped. The hold the stop writes in a task finds no pause when it lands,
+  # so the orchestrator clears it again. True when a run was stopped.
+  defp stop_cancelled_run(issue, opts) do
+    case Orchestrator.stop_running(Keyword.get(opts, :orchestrator, Orchestrator), issue.id) do
+      {:ok, %{stopped: true}} ->
+        _ = clear_stop(issue, opts)
+        true
+
+      _nothing_stopped ->
+        false
+    end
+  end
+
+  # Each open pull request of the ticket closes with the Director's note as its comment. A pull
+  # request GitHub won't read or close is logged: the ticket is cancelled whatever GitHub says, and
+  # the PR watcher sees the PR of a terminal ticket. Returns the pull requests closed.
+  defp close_cancelled_pull_requests(issue, note, opts) do
+    github = Keyword.get(opts, :github, PullRequest)
+    comment = cancel_pr_comment(issue.identifier, note)
+
+    for pr_url <- TicketPullRequest.current_urls(issue),
+        close_open_pull_request(github, issue, pr_url, comment) == :ok,
+        do: pr_url
+  end
+
+  defp close_open_pull_request(github, issue, pr_url, comment) do
+    with {:ok, activity} <- github.fetch_activity(pr_url, []),
+         true <- same_state?(activity[:state], "OPEN"),
+         :ok <- github.close(pr_url, comment: comment) do
+      Logger.info("Cancel closed pull request issue_id=#{issue.id} issue_identifier=#{issue.identifier} pr_url=#{pr_url}")
+      :ok
+    else
+      false ->
+        :not_open
+
+      {:error, reason} ->
+        Logger.warning("Cancelled #{issue.identifier} but couldn't close #{pr_url}: #{inspect(reason)}")
+        :error
+    end
+  end
+
+  # Nothing waits on a cancelled ticket: its open questions are withdrawn with the cancel's reason,
+  # then every hold and every pause reason left is cleared. Best-effort: a clear the store refuses
+  # is logged, and the ticket is terminal whatever it still carries.
+  defp clear_cancelled(issue, to_state, opts) do
+    withdraw_lapsed(issue, {:terminal, to_state}, opts)
+
+    for kind <- Hold.held_kinds(issue.repo_key, issue.id, store_opts(opts)) do
+      log_cancel_clear(Hold.clear(issue.repo_key, issue.id, kind, store_opts(opts)), issue, "#{kind} hold")
+    end
+
+    log_cancel_clear(Pauses.clear_reasons({:ticket, issue.repo_key, issue.id}, fn _reason -> true end, by: OperatorStop.director()), issue, "pause")
+  end
+
+  defp log_cancel_clear({:error, reason}, issue, what), do: Logger.warning("Cancelled #{issue.identifier} but couldn't clear its #{what}: #{inspect(reason)}")
+  defp log_cancel_clear(_cleared, _issue, _what), do: :ok
 
   # Unblock lifts an access or dispatch-loop hold in place: the store hold is cleared through `Hold`
   # (the store first, then the `Blocked` label), so the ticket keeps its phase and the next poll
@@ -1258,8 +1388,9 @@ defmodule SymphonyElixir.DirectorMoves do
 
   # Each move the audit records is also the Director's action on the ticket's events, best effort.
   # A Decide records none: its answer is the `decision.recorded` that `SymphonyElixir.Decisions`
-  # writes. The control API authenticates one shared token, so the actor is the Director.
-  defp record_person_action("decide", _issue, _from_state, _to_state), do: :ok
+  # writes, and a Cancel's is its `ticket.cancelled`. The control API authenticates one shared
+  # token, so the actor is the Director.
+  defp record_person_action(move, _issue, _from_state, _to_state) when move in ["decide", "cancel"], do: :ok
 
   defp record_person_action(move, %Issue{repo_key: repo_key, id: issue_id}, from_state, to_state) when is_binary(repo_key) do
     payload = if move in ["unblock", "restart"], do: %{action: move}, else: %{action: "move", move: move}

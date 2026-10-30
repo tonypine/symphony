@@ -94,7 +94,6 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       quality_gate: %{
         enabled: true,
         provider: "anthropic",
@@ -142,7 +141,6 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       quality_gate: %{
         enabled: true,
         provider: "anthropic",
@@ -193,7 +191,6 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       quality_gate: %{
         enabled: true,
         provider: "anthropic",
@@ -255,7 +252,6 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       quality_gate: %{
         enabled: true,
         provider: "anthropic",
@@ -293,9 +289,7 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory"
-    )
+    write_workflow_file!(Workflow.workflow_file_path())
 
     name = Module.concat(__MODULE__, :DefaultOffOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: name)
@@ -311,9 +305,7 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
   test "orchestrator logs active quality gate configuration on startup" do
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
 
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory"
-    )
+    write_workflow_file!(Workflow.workflow_file_path())
 
     name = Module.concat(__MODULE__, :StartupLogOrchestrator)
 
@@ -347,7 +339,6 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       quality_gate: %{enabled: false}
     )
 
@@ -379,7 +370,6 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       quality_gate: %{
         enabled: true,
         provider: "anthropic",
@@ -434,7 +424,6 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       quality_gate: %{
         enabled: true,
         provider: "anthropic",
@@ -514,7 +503,6 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       quality_gate: %{
         enabled: true,
         provider: "anthropic",
@@ -582,7 +570,6 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       quality_gate: %{
         enabled: true,
         provider: "anthropic",
@@ -631,7 +618,6 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       quality_gate: %{
         enabled: true,
         provider: "anthropic",

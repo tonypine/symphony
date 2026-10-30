@@ -9,7 +9,7 @@ defmodule SymphonyElixir.OrchestratorConfigReloadTest do
   @waiting %{"waiting" => %{identifier: "MT-2", reason: "work slots full", since: ~U[2026-10-30 12:00:00Z]}}
 
   defp write_config!(overrides) do
-    write_workflow_file!(Workflow.workflow_file_path(), Keyword.merge([tracker_kind: "memory", poll_interval_ms: 60_000], overrides))
+    write_workflow_file!(Workflow.workflow_file_path(), Keyword.merge([poll_interval_ms: 60_000], overrides))
   end
 
   defp reload_handlers, do: :telemetry.list_handlers(Cache.reloaded_event())

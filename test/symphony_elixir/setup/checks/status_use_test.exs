@@ -18,7 +18,7 @@ defmodule SymphonyElixir.Setup.Checks.StatusUseTest do
       Application.delete_env(:symphony_elixir, :memory_tracker_issues)
     end)
 
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     :ok
   end
 
@@ -92,7 +92,7 @@ defmodule SymphonyElixir.Setup.Checks.StatusUseTest do
   end
 
   test "a phase state listed as active is a warning whose fix removes it" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_active_states: ["Todo", "In Progress", "code review"])
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_active_states: ["Todo", "In Progress", "code review"])
 
     assert %{problems: [problem]} = check()
     assert problem.id == "status_use:active_phase:Code Review"

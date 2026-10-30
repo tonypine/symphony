@@ -42,7 +42,7 @@ defmodule SymphonyElixir.RestartTest do
   end
 
   defp opts(extra \\ []) do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", agent_kind: "claude")
+    write_workflow_file!(Workflow.workflow_file_path(), agent_kind: "claude")
     Keyword.merge([github: FakeGitHub, workspace: FakeWorkspace, settings: Config.settings!()], extra)
   end
 
@@ -157,7 +157,6 @@ defmodule SymphonyElixir.RestartTest do
         File.ln_s!(outside, escape_workspace)
 
         write_workflow_file!(Workflow.workflow_file_path(),
-          tracker_kind: "memory",
           agent_kind: "claude",
           workspace_root: workspace_root
         )

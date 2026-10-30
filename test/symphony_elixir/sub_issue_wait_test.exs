@@ -16,7 +16,7 @@ defmodule SymphonyElixir.SubIssueWaitTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    write_workflow_file!(Workflow.workflow_file_path())
     SubIssueWait.reset_for_test(@waiting)
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
@@ -40,7 +40,6 @@ defmodule SymphonyElixir.SubIssueWaitTest do
 
     test "is not listed twice when the active states already name it" do
       write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
         tracker_active_states: ["Todo", "In Progress", " waiting on sub-tickets"]
       )
 

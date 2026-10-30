@@ -15,7 +15,6 @@ defmodule SymphonyElixir.CodeReviewDispatchTest do
   setup do
     # The reviewer is what a designed repo's Code Review ticket is dispatched to run.
     write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
       review_agent: %{enabled: true, kind: "codex", command: "codex app-server"},
       repos: designed_repos()
     )
@@ -111,7 +110,7 @@ defmodule SymphonyElixir.CodeReviewDispatchTest do
     test "a designed Code Review ticket whose repo has the reviewer off is parked, not approved" do
       # Nothing to review with: the reviewer answers a disabled run with a fabricated approval, so
       # the ticket must never be dispatched, even on a green head.
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", repos: designed_repos())
+      write_workflow_file!(Workflow.workflow_file_path(), repos: designed_repos())
       record_ci!(@designed_repo, "abc123", "green")
       review_ticket = issue(@designed_repo, "Code Review")
 
@@ -152,7 +151,7 @@ defmodule SymphonyElixir.CodeReviewDispatchTest do
       assert [%{details: %{head: "abc123", status: "red"}}] = head_signals(@designed_repo)
 
       # The reviewer turned off holds a retry back too.
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", repos: designed_repos())
+      write_workflow_file!(Workflow.workflow_file_path(), repos: designed_repos())
       record_ci!(@designed_repo, "def456", "green")
 
       refute Orchestrator.dispatch_revalidated_issue_for_test(review_ticket, true)
