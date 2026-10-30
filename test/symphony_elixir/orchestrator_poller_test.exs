@@ -46,7 +46,7 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
     assert RunStore.get_ticket_state(repo_key, issue.id) == record
   end
 
-  test "staggered repo poll cache routes cross-repo duplicates to conflicts before dispatch" do
+  test "every repo is due at boot, polled in config order; cross-repo duplicates go to conflicts before dispatch" do
     repos = [
       %{name: "web", team: "ACME", labels: ["web"]},
       %{name: "api", team: "ACME", labels: ["api"]}
@@ -71,21 +71,23 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
 
     assert_receive {:polled, "web"}
     refute_receive {:polled, "api"}, 10
-    assert state.repo_poll_due_at_ms == %{"web" => 100, "api" => 50}
+    assert state.repo_poll_due_at_ms == %{"web" => 100, "api" => 0}
     assert Map.has_key?(state.repo_poll_cache, "web")
     refute Map.has_key?(state.repo_poll_cache, "api")
 
     assert {:ok, %{dispatchable: [], conflicts: [conflict]}, state} =
-             Orchestrator.poll_candidate_issue_buckets_for_test(state, repos, fetcher, 50)
+             Orchestrator.poll_candidate_issue_buckets_for_test(state, repos, fetcher, 0)
 
     assert_receive {:polled, "api"}
+    # api's next poll is on its stagger slot, half an interval after web's.
+    assert state.repo_poll_due_at_ms == %{"web" => 100, "api" => 150}
     assert conflict.id == "issue-1"
     assert conflict.repo_key == nil
     assert conflict.conflict_repo_keys == ["api", "web"]
     assert state.conflicts["issue-1"].conflict_repo_keys == ["api", "web"]
   end
 
-  test "warmed stagger cache dispatches unique issues with repo metadata" do
+  test "the boot polls warm every repo cache back to back and dispatch unique issues with repo metadata" do
     repos = [
       %{name: "web", team: "ACME", labels: ["web"]},
       %{name: "api", team: "ACME", labels: ["api"]}
@@ -105,7 +107,7 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
              Orchestrator.poll_candidate_issue_buckets_for_test(state, repos, fetcher, 0)
 
     assert {:ok, %{dispatchable: dispatchable, conflicts: []}, _state} =
-             Orchestrator.poll_candidate_issue_buckets_for_test(state, repos, fetcher, 50)
+             Orchestrator.poll_candidate_issue_buckets_for_test(state, repos, fetcher, 0)
 
     assert Enum.map(dispatchable, &{&1.identifier, &1.repo_key}) == [
              {"ACME-API", "api"},
@@ -246,7 +248,7 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
     defp warmed_state do
       state = %Orchestrator.State{poll_interval_ms: 10_000}
       {:ok, _buckets, state} = poll(state, 0)
-      {:ok, _buckets, state} = poll(state, 5_000)
+      {:ok, _buckets, state} = poll(state, 0)
       assert_received {:polled, "web"}
       assert_received {:polled, "api"}
       assert state.repo_poll_due_at_ms == %{"web" => 10_000, "api" => 15_000}
@@ -414,8 +416,9 @@ defmodule SymphonyElixir.OrchestratorReconcilePollTest do
 
   defp repos, do: [%{name: "web", team: "ACME", labels: ["web"]}, %{name: "api", team: "ACME", labels: ["api"]}]
 
-  # Runs a poll cycle every `issues.poll_interval_ms` from 0 up to (not including) `until_ms` and
-  # returns the repos each cycle read Linear for, in order, with the state left.
+  # Runs a poll cycle every `issues.poll_interval_ms` from 0 up to (not including) `until_ms`, after
+  # the boot's back-to-back first poll of each repo, and returns the repos each cycle read Linear
+  # for, in order, with the state left.
   defp cycles(state, until_ms) do
     test_pid = self()
 
@@ -425,7 +428,7 @@ defmodule SymphonyElixir.OrchestratorReconcilePollTest do
     end
 
     state =
-      Enum.reduce(0..(until_ms - 1)//state.poll_interval_ms, state, fn now_ms, state ->
+      Enum.reduce(Enum.concat(List.duplicate(0, length(repos()) - 1), 0..(until_ms - 1)//state.poll_interval_ms), state, fn now_ms, state ->
         {:ok, _buckets, state} = Orchestrator.poll_candidate_issue_buckets_for_test(state, repos(), fetcher, now_ms)
         state
       end)
@@ -480,9 +483,10 @@ defmodule SymphonyElixir.OrchestratorReconcilePollTest do
 
     {polled, state} = cycles(%Orchestrator.State{poll_interval_ms: 30_000}, 15 * @minute)
 
-    # One repo a cycle, each every other cycle: fifteen reads per repo in fifteen minutes.
-    assert Enum.frequencies(polled) == %{"web" => 15, "api" => 15}
-    assert state.repo_poll_due_at_ms == %{"web" => 15 * @minute - 30_000, "api" => 15 * @minute}
+    # Both repos at boot, then one repo a cycle, each every other cycle: fifteen reads per repo in
+    # fifteen minutes, and web's at the start of the next one.
+    assert Enum.frequencies(polled) == %{"web" => 16, "api" => 15}
+    assert state.repo_poll_due_at_ms == %{"web" => 15 * @minute, "api" => 15 * @minute - 30_000}
     assert TicketObservation.summary().reconcile == %{last_run_at: nil, applied: 0, reapplied: 0, unobserved_filled: 0}
   end
 
