@@ -65,7 +65,9 @@ that repository.
 
 Relative repository workflow paths resolve from the directory containing `symphony.yml`.
 
-Symphony reloads both files when they change. An edit it rejects (an unknown or removed key, an
+Symphony reloads both files when they change. An edit that changes what dispatch reads (a slot
+limit, `tickets.priorities`, the active states, `dispatch.source`) runs a dispatch cycle at once, so
+a ticket it frees starts within seconds instead of at the next poll. An edit it rejects (an unknown or removed key, an
 invalid value, YAML that doesn't parse) does not stop it: it keeps running the last settings that
 loaded, logs the reason, and lists the rejected file under `problems` in `GET /api/v1/setup`
 (the key or line, the reason, and since when) until the file loads again. The same list warns

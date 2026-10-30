@@ -68,8 +68,8 @@ defmodule SymphonyElixir.Orchestrator do
   }
 
   alias SymphonyElixir.Artifacts.Transcript
-  alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Dispatch.{Candidates, Shadow}
+  alias SymphonyElixir.Config.{Cache, Schema}
+  alias SymphonyElixir.Dispatch.{Candidates, Settings, Shadow}
   alias SymphonyElixir.Linear.{Client, Issue, RateLimit, TransientRetry, Usage}
   alias SymphonyElixir.QaDriver.DevServerLease
   alias SymphonyElixir.Routing.PollLog
@@ -183,6 +183,8 @@ defmodule SymphonyElixir.Orchestrator do
       dispatch_skipped: %{},
       operator_pause_logged: false,
       cycle_requested: false,
+      dispatch_settings: nil,
+      config_reload_handler: nil,
       workspace_lifecycle_last_check_at_ms: nil,
       workspace_lifecycle_quota: %{configured?: false, paused: false, reason: nil},
       workspace_quota_logged: false,
@@ -229,6 +231,7 @@ defmodule SymphonyElixir.Orchestrator do
     budget_exhausted = hydrate_budget_exhausted()
     :ok = ensure_snapshot_table()
     _ = ObservabilityPubSub.subscribe_ticket_records()
+    config_reload_handler = attach_config_reload_handler(Keyword.get(opts, :name, __MODULE__))
 
     recent_runs = hydrate_recent_runs()
     completed_run_metadata = hydrate_completed_run_metadata(recent_runs, retry_attempts)
@@ -260,7 +263,9 @@ defmodule SymphonyElixir.Orchestrator do
       usage_limits: usage_limits,
       forced: forced,
       self_heal_opts: Keyword.get(opts, :self_heal_opts, []),
-      clock: Keyword.get(opts, :clock, &DateTime.utc_now/0)
+      clock: Keyword.get(opts, :clock, &DateTime.utc_now/0),
+      dispatch_settings: Settings.read(),
+      config_reload_handler: config_reload_handler
     }
 
     state = state |> seed_watching_from_completed_run_metadata() |> arm_usage_limit_timers()
@@ -294,6 +299,28 @@ defmodule SymphonyElixir.Orchestrator do
         Logger.warning("Skipping async startup workspace lifecycle; failed to start task: #{inspect(reason)}")
         {:noreply, state}
     end
+  end
+
+  # One handler per orchestrator name: a restarted orchestrator replaces the one its predecessor left
+  # attached (a supervisor's shutdown skips `terminate/2`) instead of attaching a second.
+  defp attach_config_reload_handler(name) do
+    handler = {__MODULE__, :config_reloaded, name}
+    _ = :telemetry.detach(handler)
+    :ok = :telemetry.attach(handler, Cache.reloaded_event(), &__MODULE__.handle_config_reloaded/4, self())
+    handler
+  end
+
+  @doc false
+  @spec handle_config_reloaded([atom()], map(), map(), pid()) :: :ok
+  def handle_config_reloaded(_event, _measurements, metadata, server) do
+    send(server, {:config_reloaded, metadata[:path]})
+    :ok
+  end
+
+  @impl true
+  def terminate(_reason, %State{config_reload_handler: handler}) do
+    if handler, do: :telemetry.detach(handler)
+    :ok
   end
 
   defp log_quality_gate_config(%SymphonyElixir.Config.Schema.QualityGate{} = config) do
@@ -345,6 +372,16 @@ defmodule SymphonyElixir.Orchestrator do
   # store, so a dispatch cycle reads them with no Linear read, on either dispatch source.
   defp handle_info_message({:ticket_record, _repo_key, _issue_id, :changed, [field]}, state) when field in [:pause, :pr_watch] do
     {:noreply, request_cycle(state)}
+  end
+
+  # A reload of `symphony.yml` or a repository's workflow that changes what dispatch reads (a slot
+  # limit raised, a priority or an active state added, the dispatch source switched) may free a
+  # ticket, so it runs a cycle at once. A reload that leaves them as they were runs none.
+  defp handle_info_message({:config_reloaded, _path}, state) do
+    case Settings.read() do
+      settings when settings == state.dispatch_settings -> {:noreply, state}
+      settings -> {:noreply, request_cycle(%{state | dispatch_settings: settings})}
+    end
   end
 
   # A ticket's record changed outside the poll cycle (`TicketObservation`, a move, a hold): with
