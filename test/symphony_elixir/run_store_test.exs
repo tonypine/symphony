@@ -318,6 +318,37 @@ defmodule SymphonyElixir.RunStoreTest do
     restart_run_store()
   end
 
+  test "keeps a repository's and Symphony's pause by subject next to the operator pause, across restart" do
+    repository = {:repository, @repo_key}
+    pause = %{subject: repository, reasons: [%{kind: :environment, waits_on: %{condition: "github_down"}}]}
+
+    assert RunStore.get_subject_pause(repository) == nil
+    assert :ok = RunStore.set_paused(true, "overnight deploy")
+    assert :ok = RunStore.put_subject_pause(repository, pause)
+    assert :ok = RunStore.put_subject_pause(:symphony, %{subject: :symphony, reasons: []})
+
+    restart_run_store()
+
+    assert RunStore.get_subject_pause(repository) == pause
+    assert RunStore.get_subject_pause(:symphony) == %{subject: :symphony, reasons: []}
+    assert RunStore.get_subject_pause({:repository, @other_repo_key}) == nil
+    assert %{paused: true, reason: "overnight deploy"} = RunStore.get_paused()
+
+    assert :ok = RunStore.delete_subject_pause(repository)
+    assert :ok = RunStore.delete_subject_pause(repository)
+    assert RunStore.get_subject_pause(repository) == nil
+    assert %{subject: :symphony} = RunStore.get_subject_pause(:symphony)
+    assert %{paused: true} = RunStore.get_paused()
+
+    for subject <- [{:ticket, @repo_key, "issue-1"}, {:repository, ""}, :dispatch_pause, nil] do
+      assert RunStore.get_subject_pause(subject) == {:error, :invalid_subject}
+      assert RunStore.put_subject_pause(subject, pause) == {:error, :invalid_subject}
+      assert RunStore.delete_subject_pause(subject) == {:error, :invalid_subject}
+    end
+
+    assert RunStore.put_subject_pause(repository, :paused) == {:error, :invalid_pause}
+  end
+
   test "persists Symphony's own state moves across run store restart" do
     moved_at = ~U[2026-10-04 00:23:15Z]
 

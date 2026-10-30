@@ -44,6 +44,11 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     {"drift.reverted", %{record_phase: "Code Review", linear_phase: "Done"}, [], %{title: "Moved back to Code Review: it was moved to Done in Linear by hand", detail: nil}},
     {"drift.revert_failed", %{record_phase: "Code Review", linear_phase: "Done", error: ":timeout"}, [],
      %{title: "Could not move back to Code Review from Done", detail: ":timeout · tried again at the next read of Linear"}},
+    {"pause.set", %{reason: "question", text: "Waiting for your answer", waits_on: %{question_id: "q-1"}}, [], %{title: "Paused: waiting for your answer", detail: nil}},
+    {"pause.reason_added", %{reason: "ticket", text: "Waiting for TP-1194 to finish", waits_on: %{identifier: "TP-1194"}}, [], %{title: "Also paused: waiting for TP-1194 to finish", detail: nil}},
+    {"pause.reason_cleared", %{reason: "question", text: "Waiting for your answer", waits_on: %{question_id: "q-1"}}, [], %{title: "Pause reason cleared: waiting for your answer", detail: nil}},
+    {"pause.cleared", %{cleared: [%{reason: "ticket", text: "Waiting for TP-1194 to finish", waits_on: %{identifier: "TP-1194"}}]}, [],
+     %{title: "Moving again", detail: "Waiting for TP-1194 to finish"}},
     {"note", %{text: "History before 2026-10-20 was backfilled"}, [], %{title: "Note added", detail: "History before 2026-10-20 was backfilled"}}
   ]
 
@@ -83,6 +88,14 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     assert render("finding.recorded", %{evidence: [1, 2]}) == %{title: "QA found a defect", detail: nil}
     assert render("evidence", %{artifacts: "a-1"}) == %{title: "Evidence recorded with 1 file", detail: nil}
     assert render("drift.reverted", %{}) == %{title: "Moved back to its phase: it was moved to another state in Linear by hand", detail: nil}
+    assert render("pause.set", %{}) == %{title: "Paused", detail: nil}
+    assert render("pause.cleared", %{cleared: "all"}) == %{title: "Moving again", detail: nil}
+    assert render("pause.cleared", %{cleared: [:junk, %{text: " "}]}) == %{title: "Moving again", detail: nil}
+  end
+
+  test "a pause reason's line keeps the capital of a name it opens on" do
+    assert render("pause.set", %{reason: "ticket", text: "TP-12 has to finish first"}).title == "Paused: TP-12 has to finish first"
+    assert render("pause.reason_added", %{reason: "environment", text: "GitHub is down"}).title == "Also paused: GitHub is down"
   end
 
   test "reads a stored record whose payload kept string keys" do

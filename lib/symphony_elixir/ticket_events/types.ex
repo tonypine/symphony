@@ -29,6 +29,11 @@ defmodule SymphonyElixir.TicketEvents.Types do
   Drift is machinery-only too: `drift.detected` when Linear shows a state other than the phase
   Symphony owns, then `drift.reverted` or `drift.revert_failed` for the move back, each with the
   record's phase and Linear's (`SymphonyElixir.TicketObservation`).
+
+  A pause is machinery-only as well (`SymphonyElixir.Pauses`): `pause.set` for its first reason,
+  `pause.reason_added` for each further one, `pause.reason_cleared` for a reason cleared while
+  others remain and `pause.cleared` when none is left, with the reasons it cleared. A reason event
+  names its kind (`reason`), its one line of plain words (`text`) and what it waits on.
   """
 
   alias SymphonyElixir.RunKind
@@ -62,6 +67,15 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @tokens {:any_of, [:non_neg_integer, :map]}
   @signal [signal: :string]
   @drift [record_phase: :string, linear_phase: :string]
+  @pause_reasons ~w(question ticket build person environment)
+  @pause_reason [reason: {:enum, @pause_reasons}, text: {:string, 300}]
+  @pause_reason_set %{
+    writers: [:machine],
+    run_kinds: [],
+    required: @pause_reason,
+    optional: [waits_on: :map, set_by: :map, releasable: :boolean] ++ @signal,
+    idempotency: :writer
+  }
 
   @step %{
     writers: [:agent],
@@ -196,6 +210,22 @@ defmodule SymphonyElixir.TicketEvents.Types do
       run_kinds: [],
       required: @drift,
       optional: [error: :string] ++ @signal,
+      idempotency: :writer
+    },
+    "pause.set" => @pause_reason_set,
+    "pause.reason_added" => @pause_reason_set,
+    "pause.reason_cleared" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: @pause_reason,
+      optional: [waits_on: :map, by: :map] ++ @signal,
+      idempotency: :writer
+    },
+    "pause.cleared" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [cleared: :list],
+      optional: [by: :map] ++ @signal,
       idempotency: :writer
     },
     "note" => %{

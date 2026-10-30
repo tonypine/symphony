@@ -7,7 +7,8 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
     phase.entered hold.set hold.cleared run.started run.ended attempt.pushed verdict.recorded
     decision.requested decision.withdrawn decision.recorded person.action
     step.started step.completed step.skipped evidence finding.recorded finding.resolved checklist.answered
-    drift.detected drift.reverted drift.revert_failed note
+    drift.detected drift.reverted drift.revert_failed
+    pause.set pause.reason_added pause.reason_cleared pause.cleared note
   )
 
   describe "catalog/0" do
@@ -99,6 +100,30 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
 
       assert Types.validate("drift.revert_failed", Map.put(phases, :error, ":timeout"), :machine, nil) == {:ok, Map.put(phases, :error, ":timeout")}
       assert {:error, {:invalid_payload, [:error]}} = Types.validate("drift.reverted", Map.put(phases, :error, ":timeout"), :machine, nil)
+    end
+
+    test "a pause is the machine's: a reason event names its kind, its line and what it waits on" do
+      reason = %{reason: :ticket, text: "Waiting for TP-1194 to finish", waits_on: %{identifier: "TP-1194"}}
+
+      for type <- ~w(pause.set pause.reason_added pause.reason_cleared) do
+        assert Types.validate(type, reason, :machine, nil) == {:ok, %{reason | reason: "ticket"}}, type
+        assert {:error, {:invalid_payload, [:reason]}} = Types.validate(type, %{reason | reason: :hold}, :machine, nil)
+        long = %{reason | text: String.duplicate("a", 301)}
+        assert {:error, {:invalid_payload, [:text]}} = Types.validate(type, long, :machine, nil)
+        assert {:error, {:not_allowed, _reason}} = Types.validate(type, reason, :agent, "implementation")
+        assert {:error, {:not_allowed, _reason}} = Types.validate(type, reason, :person, nil)
+      end
+
+      set_by = %{kind: :person, name: "Tony"}
+      assert {:ok, %{set_by: ^set_by, releasable: true}} = Types.validate("pause.set", Map.merge(reason, %{set_by: set_by, releasable: true}), :machine, nil)
+      assert {:ok, %{by: ^set_by}} = Types.validate("pause.reason_cleared", Map.put(reason, :by, set_by), :machine, nil)
+      assert {:error, {:invalid_payload, [:releasable]}} = Types.validate("pause.reason_cleared", Map.put(reason, :releasable, true), :machine, nil)
+
+      cleared = [%{reason: :question, text: "Waiting for your answer", waits_on: %{question_id: "q-1"}}]
+      payload = %{cleared: cleared, by: set_by}
+      assert Types.validate("pause.cleared", payload, :machine, nil) == {:ok, payload}
+      assert {:error, {:invalid_payload, [:cleared]}} = Types.validate("pause.cleared", %{}, :machine, nil)
+      assert {:error, {:not_allowed, _reason}} = Types.validate("pause.cleared", %{cleared: cleared}, :person, nil)
     end
 
     test "rejects an agent with an unknown run kind, and a machine or person outside the writers" do

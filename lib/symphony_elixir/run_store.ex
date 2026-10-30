@@ -1317,6 +1317,39 @@ defmodule SymphonyElixir.RunStore do
   end
 
   @doc """
+  The pause of a subject that is not a ticket (`SymphonyElixir.Pauses`): a repository
+  (`{:repository, repo_key}`) or Symphony itself (`:symphony`), or nil when it has none. It is kept
+  in the pause table under `{:subject, subject}`, next to the operator pause, which keeps its key.
+  """
+  @spec get_subject_pause(term()) :: map() | nil | {:error, term()}
+  def get_subject_pause(subject) do
+    with :ok <- valid_pause_subject(subject),
+         :ok <- ensure_started() do
+      transaction(fn -> read_subject_pause(subject) end)
+    end
+  end
+
+  @doc "Replaces the pause of `subject` (see `get_subject_pause/1`)."
+  @spec put_subject_pause(term(), map()) :: :ok | {:error, term()}
+  def put_subject_pause(subject, pause) when is_map(pause) do
+    with :ok <- valid_pause_subject(subject),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> :mnesia.write({@pause_table, {:subject, subject}, pause}) end)
+    end
+  end
+
+  def put_subject_pause(_subject, _pause), do: {:error, :invalid_pause}
+
+  @doc "Removes the pause of `subject` (see `get_subject_pause/1`); one it has none of is `:ok`."
+  @spec delete_subject_pause(term()) :: :ok | {:error, term()}
+  def delete_subject_pause(subject) do
+    with :ok <- valid_pause_subject(subject),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> :mnesia.delete({@pause_table, {:subject, subject}}) end)
+    end
+  end
+
+  @doc """
   Replaces the usage-limit holds, keyed by `{provider, scope}`. They are stored next to the
   operator pause, not inside it, so clearing one never touches the other.
   """
@@ -2258,6 +2291,17 @@ defmodule SymphonyElixir.RunStore do
     case :mnesia.read(@pause_table, @usage_limits_key) do
       [{@pause_table, @usage_limits_key, usage_limits}] when is_map(usage_limits) -> usage_limits
       _ -> %{}
+    end
+  end
+
+  defp valid_pause_subject(:symphony), do: :ok
+  defp valid_pause_subject({:repository, repo_key}) when is_binary(repo_key) and repo_key != "", do: :ok
+  defp valid_pause_subject(_subject), do: {:error, :invalid_subject}
+
+  defp read_subject_pause(subject) do
+    case :mnesia.read(@pause_table, {:subject, subject}) do
+      [{@pause_table, {:subject, ^subject}, pause}] when is_map(pause) -> pause
+      _none -> nil
     end
   end
 
