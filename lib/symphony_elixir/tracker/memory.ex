@@ -2,11 +2,13 @@ defmodule SymphonyElixir.Tracker.Memory do
   @moduledoc """
   In-memory tracker adapter used for tests and local development.
 
-  Each fetch/create function calls `maybe_sleep/1`, which is a test-only seam:
-  tests can set `Application.put_env(:symphony_elixir, <key>, ms)` to simulate
-  slow tracker I/O and exercise the orchestrator's async-task paths
-  (e.g. snapshot responsiveness while a Linear call is in flight). In
-  production this module is unused, and with no env set the sleep is a no-op.
+  Each fetch/create function, and `update_issue_state/2`, calls `maybe_sleep/1`,
+  which is a test-only seam: tests can set
+  `Application.put_env(:symphony_elixir, <key>, ms)` to simulate slow tracker
+  I/O and exercise the async-task paths (e.g. snapshot responsiveness while a
+  Linear call is in flight, or a drift's move back outlasting a webhook
+  delivery). In production this module is unused, and with no env set the
+  sleep is a no-op.
 
   The issues come from `:memory_tracker_issues` when it is set. Otherwise they
   are read on every fetch from the JSON file `issues.memory.issues_file` names, a
@@ -170,6 +172,8 @@ defmodule SymphonyElixir.Tracker.Memory do
 
   @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
   def update_issue_state(issue_id, state_name) do
+    maybe_sleep(:memory_tracker_update_issue_state_sleep_ms)
+
     case next_result(:memory_tracker_update_issue_state_result) do
       :ok ->
         send_event({:memory_tracker_state_update, issue_id, state_name})

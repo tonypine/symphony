@@ -118,6 +118,7 @@ defmodule SymphonyElixir.TicketStateReconcilerTest do
     test "under the record source keeps a phase Symphony owns and moves the ticket back in Linear, with the drift recorded" do
       write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_events()
       :ok = RunStore.put_ticket_state(TicketState.put_phase(TicketState.new(@repo_key, "issue-1"), "Code Review", @at))
 
       # Moved to Done by hand while Symphony was down.
@@ -131,6 +132,8 @@ defmodule SymphonyElixir.TicketStateReconcilerTest do
 
       assert log =~ "Ticket state kept: Symphony owns the phase issue_id=issue-1"
       assert log =~ ~s(record_phase="Code Review" linear_phase="Done")
+      # The move back runs in a task of its own; its outcome is the last thing it records.
+      assert_receive {:ticket_event, %{issue_id: "issue-1", type: "drift.reverted"}}, 2_000
       assert_received {:memory_tracker_state_update, "issue-1", "Code Review"}
       assert %{phase: "Code Review", phase_owner: :symphony, phase_at: @at} = RunStore.get_ticket_state(@repo_key, "issue-1")
 

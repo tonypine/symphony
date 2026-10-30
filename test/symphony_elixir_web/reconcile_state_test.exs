@@ -54,8 +54,11 @@ defmodule SymphonyElixirWeb.ReconcileStateTest do
     owned = repo_key |> RunStore.get_ticket_state("issue-1") |> TicketState.put_phase("Code Review", @phase_at)
     :ok = RunStore.put_ticket_state(owned)
 
+    :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_events()
     hand_move = %{issue | state: "Done", updated_at: @moved_at}
     {:ok, :updated} = TicketObservation.observe(repo_key, hand_move, now: @now, dispatch_source: "record")
+    # The move back runs in a task of its own and counts itself before it records its outcome.
+    assert_receive {:ticket_event, %{issue_id: "issue-1", type: "drift.reverted"}}, 2_000
 
     assert reconcile_state() == %{
              "detected" => 1,

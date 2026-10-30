@@ -10,10 +10,13 @@ defmodule SymphonyElixir.TicketObservationTest do
   @created_at ~U[2026-10-01 08:00:00Z]
   @phase_at ~U[2026-10-29 09:01:00Z]
   @moved_at ~U[2026-10-29 09:02:00Z]
+  # The drift's moves back run under this supervisor, so a test waits for them (`settle/0`).
+  @moves SymphonyElixir.TicketObservationTest.Moves
 
   setup do
     TicketObservation.reset()
     on_exit(&TicketObservation.reset/0)
+    start_supervised!({Task.Supervisor, name: @moves})
     %{repo_key: Config.repo_key!()}
   end
 
@@ -586,7 +589,7 @@ defmodule SymphonyElixir.TicketObservationTest do
              }
     end
 
-    test "a webhook delivery of a hand move is moved back within the delivery, on the configured record source, with no question",
+    test "a webhook delivery of a hand move is moved back, on the configured record source, with no question",
          %{repo_key: repo_key} do
       File.write!(Workflow.symphony_file_path(), File.read!(Workflow.symphony_file_path()) <> "dispatch:\n  source: record\n")
       Cache.clear()
@@ -595,7 +598,9 @@ defmodule SymphonyElixir.TicketObservationTest do
 
       later = DateTime.add(DateTime.utc_now(), 60)
       moved = linear_issue(%{state: "Done", blocked_by: :unknown, sub_issues: :unknown, updated_at: later})
-      assert TicketObservation.observe_delivery({:issue, :update, moved, later}, orchestrator: self()) == :updated
+      delivery = {:issue, :update, moved, later}
+      assert TicketObservation.observe_delivery(delivery, orchestrator: self(), task_supervisor: @moves) == :updated
+      settle()
 
       assert_received {:memory_tracker_state_update, "issue-observed", "Code Review"}
       assert %{phase: "Code Review", phase_owner: :symphony} = RunStore.get_ticket_state(repo_key, "issue-observed")
@@ -699,6 +704,86 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert drift.recent |> hd() |> Map.fetch!(:at) == DateTime.add(@now, 11)
       assert drift.recent |> List.last() |> Map.fetch!(:at) == DateTime.add(@now, 2)
     end
+
+    test "the move back outlasts the webhook delivery's bound, and its outcome is still recorded", %{repo_key: repo_key} do
+      owned!(repo_key, "Code Review")
+      :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_events()
+      # Linear answers the move after the delivery's bound: the delivery is not cut off, and the move
+      # is not either.
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_sleep_ms, 400)
+
+      delivery = {:issue, :update, hand_move("Done", %{blocked_by: :unknown, sub_issues: :unknown}), @moved_at}
+      opts = [orchestrator: self(), task_supervisor: @moves, timeout_ms: 200, dispatch_source: "record", now: @now]
+      assert TicketObservation.observe_delivery(delivery, opts) == :updated
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+
+      assert_receive {:ticket_event, %{issue_id: "issue-observed", type: "drift.reverted"}}, 2_000
+      assert_received {:memory_tracker_state_update, "issue-observed", "Code Review"}
+      assert event_types(repo_key) == ["drift.detected", "drift.reverted"]
+      assert %{detected: 1, reverted: 1} = drift()
+    end
+
+    test "a move back that crashes is recorded as failed, and tried again by the next observation", %{repo_key: repo_key} do
+      owned!(repo_key, "Code Review")
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [:not_an_answer])
+
+      log =
+        capture_log(fn ->
+          assert {:ok, :updated} = on_record(repo_key, hand_move("Done"), @now)
+        end)
+
+      assert log =~ "Ticket drift: moving back to Code Review failed issue_id=issue-observed"
+      assert [{"drift.detected", _phases}, {"drift.revert_failed", %{error: error}}] = ticket_events(repo_key, "issue-observed")
+      assert error == "{:error, {:case_clause, :not_an_answer}}"
+
+      assert {:ok, :unchanged} = on_record(repo_key, hand_move("Done"), DateTime.add(@now, 30))
+      assert event_types(repo_key) == ["drift.detected", "drift.revert_failed", "drift.reverted"]
+    end
+
+    test "a move back that can't start is logged and left to the next observation, as the record keeps its phase",
+         %{repo_key: repo_key} do
+      owned!(repo_key, "Code Review")
+
+      opts = [now: @now, dispatch_source: "record", task_supervisor: SymphonyElixir.TicketObservationTest.Missing]
+
+      log =
+        capture_log(fn ->
+          assert {:ok, :updated} = TicketObservation.observe(repo_key, hand_move("Done"), opts)
+        end)
+
+      assert log =~ "Ticket drift: the move back did not start issue_id=issue-observed issue_identifier=ACME-7"
+      assert %{phase: "Code Review"} = RunStore.get_ticket_state(repo_key, "issue-observed")
+      assert ticket_events(repo_key, "issue-observed") == []
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+
+      assert {:ok, :unchanged} = on_record(repo_key, hand_move("Done"), DateTime.add(@now, 30))
+      assert_received {:memory_tracker_state_update, "issue-observed", "Code Review"}
+      assert event_types(repo_key) == ["drift.detected", "drift.reverted"]
+    end
+
+    test "a ticket has one move back under way at a time, and one whose task was killed is taken over", %{repo_key: repo_key} do
+      owned!(repo_key, "Code Review")
+      :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_events()
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_sleep_ms, 10_000)
+
+      # Two observations while Linear is slow: one move back waits on Linear, the other adds nothing.
+      assert {:ok, :updated} = observe_on_record(repo_key, hand_move("Done"), @now)
+      assert {:ok, :unchanged} = observe_on_record(repo_key, hand_move("Done"), DateTime.add(@now, 10))
+      assert_receive {:ticket_event, %{issue_id: "issue-observed", type: "drift.detected"}}, 2_000
+      mover = eventually(&only_move_back/0)
+
+      # The move back is killed while it waits: the next observation takes the ticket over.
+      ref = Process.monitor(mover)
+      Process.exit(mover, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^mover, :killed}
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_sleep_ms, 0)
+
+      assert {:ok, :unchanged} = on_record(repo_key, hand_move("Done"), DateTime.add(@now, 20))
+      assert_received {:memory_tracker_state_update, "issue-observed", "Code Review"}
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert event_types(repo_key) == ["drift.detected", "drift.reverted"]
+      assert %{detected: 1, reverted: 1, revert_failed: 0} = drift()
+    end
   end
 
   # A record Symphony moved into `phase` at `@phase_at`, after the poll observed the ticket at `@linear_at`.
@@ -724,7 +809,33 @@ defmodule SymphonyElixir.TicketObservationTest do
   # Linear's read of the ticket after a person moved it to `state` by hand at `@moved_at`.
   defp hand_move(state, attrs \\ %{}), do: linear_issue(Map.merge(%{state: state, updated_at: @moved_at}, attrs))
 
-  defp on_record(repo_key, issue, now), do: TicketObservation.observe(repo_key, issue, now: now, dispatch_source: "record")
+  # Observes on the record source and waits for the move back it started.
+  defp on_record(repo_key, issue, now) do
+    result = observe_on_record(repo_key, issue, now)
+    settle()
+    result
+  end
+
+  defp observe_on_record(repo_key, issue, now),
+    do: TicketObservation.observe(repo_key, issue, now: now, dispatch_source: "record", task_supervisor: @moves)
+
+  # The one move back under way, once the others have finished; nil until then.
+  defp only_move_back do
+    case Task.Supervisor.children(@moves) do
+      [mover] -> mover
+      _none_or_several -> nil
+    end
+  end
+
+  # Waits for every move back under way to finish.
+  defp settle do
+    for pid <- Task.Supervisor.children(@moves) do
+      ref = Process.monitor(pid)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 5_000
+    end
+
+    :ok
+  end
 
   defp event_types(repo_key), do: repo_key |> ticket_events("issue-observed") |> Enum.map(&elem(&1, 0))
 

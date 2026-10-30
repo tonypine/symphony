@@ -19,9 +19,13 @@ defmodule SymphonyElixir.TicketObservation do
   Linear says another state, the observation keeps the record's phase (the other fields apply as
   usual), records `drift.detected` with both states, moves the ticket back in Linear to the record's
   phase (`SymphonyElixir.Tracker.update_issue_state/2`) and records `drift.reverted`, or
-  `drift.revert_failed` with the error. Nobody is asked: the hand move is rolled back. A failed move
-  back is tried again by the next observation that finds the same difference, never sooner, and each
-  event is written once per Linear fact (its `updatedAt`). A Linear state read before the record's
+  `drift.revert_failed` with the error (a crash of the move included). Nobody is asked: the hand move
+  is rolled back. The move back runs in a task of its own once the record is written, so a slow
+  Linear never holds up the read that found the drift, and a webhook delivery's bound never cuts it
+  off before its outcome is recorded. A ticket has one move back under way at a time: an observation
+  that finds the drift meanwhile adds nothing. A failed move back is tried again by the next
+  observation that finds the same difference, never sooner, and each event is written once per
+  Linear fact (its `updatedAt`). A Linear state read before the record's
   phase was written (`updatedAt` older than `phase_at`) is an older fact: the phase is kept and
   nothing is moved. A phase an observation wrote (`:external`, such as a new ticket's Todo) follows
   Linear, and under `dispatch.source: poll` every phase does, as before.
@@ -158,6 +162,8 @@ defmodule SymphonyElixir.TicketObservation do
     `linear.webhooks.enabled`
   - `:dispatch_source` — `"record"` or `"poll"`, defaulting to `dispatch.source`: under `"record"` a
     phase Symphony owns is kept and Linear moved back (see the module doc)
+  - `:task_supervisor` — the `Task.Supervisor` the move back runs under, defaulting to
+    `SymphonyElixir.TaskSupervisor`
 
   Returns `{:ok, :updated}` when the record changed and was written, `{:ok, :unchanged}` when it
   already held what the issue says, `{:ok, :stale}` when the issue is older than the record (it is
@@ -188,7 +194,8 @@ defmodule SymphonyElixir.TicketObservation do
   in several repos is `:unrouted` too, as the poll counts it a conflict.
 
   The work runs in a task bounded by `:timeout_ms` (default two seconds, well under the five Linear
-  waits for an answer), so a crash or a hang is logged and returned as `:error`, never raised.
+  waits for an answer), so a crash or a hang is logged and returned as `:error`, never raised. A
+  drift's move back runs outside that bound, in a task of its own.
   A delivery that updated a record, or marked one removed, asks the orchestrator for a poll of that
   repo at once; no other outcome asks for one.
   `opts`: `:repos`, `:timeout_ms`, `:orchestrator` (the server asked for the poll, default
@@ -318,12 +325,12 @@ defmodule SymphonyElixir.TicketObservation do
 
       {_record, :unchanged} ->
         compare(source, stored, stored, now, opts)
-        revert(owned, stored, issue, now)
+        revert(owned, stored, issue, now, opts)
         {:ok, :unchanged}
 
       {observed, :changed} ->
         change = {repo_key, issue_id, changed(stored, observed)}
-        revert = fn -> revert(owned, stored, issue, now) end
+        revert = fn -> revert(owned, stored, issue, now, opts) end
         stored |> write_and_compare(observed, source, now, opts, revert) |> announce(change, source)
     end
   end
@@ -353,7 +360,7 @@ defmodule SymphonyElixir.TicketObservation do
         do: field
   end
 
-  # `revert` moves a drifted ticket back once the record is written (`revert/4`).
+  # `revert` moves a drifted ticket back once the record is written (`revert/5`).
   defp write_and_compare(stored, observed, source, now, opts, revert) do
     with {:ok, :updated} = written <- write(stored, observed) do
       compare(source, stored, observed, now, opts)
@@ -406,39 +413,92 @@ defmodule SymphonyElixir.TicketObservation do
   defp keep_phase(issue, nil), do: issue
   defp keep_phase(issue, _owned), do: %{issue | state: nil}
 
-  # Records the drift, moves the ticket back in Linear to the record's phase and records how that went.
-  # Each event is keyed by the Linear fact, so the next observation of the same fact, which tries the
-  # move again, adds no duplicate.
-  defp revert(%{record_phase: record_phase, linear_phase: linear_phase} = drift, stored, issue, now) do
-    %{repo_key: repo_key, issue_id: issue_id} = stored
-    payload = %{record_phase: record_phase, linear_phase: linear_phase}
-    fact = drift_fact(drift, issue.updated_at)
-
-    Logger.info("Ticket drift: Linear shows #{linear_phase}, the record holds #{record_phase}; moving it back issue_id=#{issue_id} issue_identifier=#{drift.identifier}")
-    record_drift(repo_key, issue_id, "drift.detected", payload, fact, now)
-
-    {outcome, type, payload} =
-      case Tracker.update_issue_state(issue_id, record_phase) do
-        :ok ->
-          {:reverted, "drift.reverted", payload}
-
-        {:error, reason} ->
-          Logger.warning("Ticket drift: moving back to #{record_phase} failed issue_id=#{issue_id} issue_identifier=#{drift.identifier}: #{inspect(reason)}")
-          {:revert_failed, "drift.revert_failed", Map.put(payload, :error, inspect(reason))}
-      end
-
-    record_drift(repo_key, issue_id, type, payload, fact, now)
-    remember_drift(Map.merge(drift, %{outcome: outcome, at: now}))
+  # Starts moving a drifted ticket back in a task of its own (`:task_supervisor`), so the Linear call
+  # lies outside the read that found the drift: a webhook delivery's bound can't cut it off before its
+  # outcome is recorded. A move back that can't start is left to the next observation, as the record
+  # already keeps its phase.
+  defp revert(%{} = drift, stored, issue, now, opts) do
+    move = Map.merge(drift, %{repo_key: stored.repo_key, issue_id: stored.issue_id, fact: drift_fact(drift, issue.updated_at), at: now})
+    supervisor = Keyword.get(opts, :task_supervisor, SymphonyElixir.TaskSupervisor)
+    {:ok, _pid} = Task.Supervisor.start_child(supervisor, fn -> move_back(move) end)
+    :ok
+  catch
+    kind, reason ->
+      Logger.warning("Ticket drift: the move back did not start issue_id=#{stored.issue_id} issue_identifier=#{drift.identifier}: #{inspect({kind, reason})}")
   end
 
-  defp revert(_owned, _stored, _issue, _now), do: :ok
+  defp revert(_owned, _stored, _issue, _now, _opts), do: :ok
+
+  # Records the drift, moves the ticket back in Linear to the record's phase and records how that
+  # went, one move back of a ticket at a time: one that finds another under way adds nothing. Each
+  # event is keyed by the Linear fact, so the next observation of the same fact, which tries the move
+  # again, adds no duplicate. The counts are kept and the ticket let go before the outcome is
+  # recorded, so whoever reads that outcome finds both settled.
+  defp move_back(%{repo_key: repo_key, issue_id: issue_id, record_phase: record_phase, linear_phase: linear_phase} = move) do
+    slot = {:moving_back, repo_key, issue_id}
+
+    if claim(slot) do
+      payload = %{record_phase: record_phase, linear_phase: linear_phase}
+
+      Logger.info("Ticket drift: Linear shows #{linear_phase}, the record holds #{record_phase}; moving it back issue_id=#{issue_id} issue_identifier=#{move.identifier}")
+      record_drift(move, "drift.detected", payload)
+
+      {outcome, type, payload} =
+        case move_in_linear(issue_id, record_phase) do
+          :ok ->
+            {:reverted, "drift.reverted", payload}
+
+          {:error, reason} ->
+            Logger.warning("Ticket drift: moving back to #{record_phase} failed issue_id=#{issue_id} issue_identifier=#{move.identifier}: #{inspect(reason)}")
+            {:revert_failed, "drift.revert_failed", Map.put(payload, :error, inspect(reason))}
+        end
+
+      remember_drift(move |> Map.take([:identifier, :record_phase, :linear_phase, :at]) |> Map.put(:outcome, outcome))
+      release(slot)
+      record_drift(move, type, payload)
+    end
+
+    :ok
+  end
+
+  # A crash of the move is a failed move, so the drift always gets its outcome.
+  defp move_in_linear(issue_id, phase) do
+    Tracker.update_issue_state(issue_id, phase)
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  # The ticket's move back slot, held by the task moving it back. A slot whose task died without
+  # letting go (a crash, or its supervisor restarted) is taken over. Without the table (some tests)
+  # nothing is held.
+  defp claim(slot) do
+    :ets.insert_new(@table, {slot, self()}) or take_over(slot)
+  rescue
+    ArgumentError -> true
+  end
+
+  defp take_over(slot) do
+    with [{^slot, holder}] <- :ets.lookup(@table, slot),
+         false <- Process.alive?(holder) do
+      :ets.delete_object(@table, {slot, holder})
+      :ets.insert_new(@table, {slot, self()})
+    else
+      _held_or_let_go -> false
+    end
+  end
+
+  defp release(slot) do
+    :ets.delete_object(@table, {slot, self()})
+  rescue
+    ArgumentError -> true
+  end
 
   defp drift_fact(drift, %DateTime{} = updated_at), do: "#{drift.record_phase}:#{drift.linear_phase}:#{DateTime.to_iso8601(updated_at)}"
   defp drift_fact(_drift, _updated_at), do: nil
 
-  defp record_drift(repo_key, issue_id, type, payload, fact, now) do
+  defp record_drift(%{repo_key: repo_key, issue_id: issue_id, fact: fact, at: at}, type, payload) do
     key = if fact, do: "#{type}:#{fact}"
-    TicketSignals.record_event(repo_key, issue_id, type, payload, idempotency: key, at: now)
+    TicketSignals.record_event(repo_key, issue_id, type, payload, idempotency: key, at: at)
   end
 
   # Counts the drift and its outcome, and keeps it among the last ten.

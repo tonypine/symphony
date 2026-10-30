@@ -404,7 +404,8 @@ nothing, and it writes only those fields, never the record's holds, verdicts or 
 - Under `dispatch.source: record`, a phase Symphony owns is not read back from Linear. An observation
   that finds the ticket in another Linear state keeps the record's phase (its other fields apply),
   records `drift.detected` with the record's phase and Linear's, moves the ticket back in Linear to the
-  record's phase and records `drift.reverted`, or `drift.revert_failed` with the error. No person is
+  record's phase and records `drift.reverted`, or `drift.revert_failed` with the error. The move back
+  runs in a task of its own, outside the read's bound, one per ticket at a time. No person is
   asked. A failed move back is tried again by the next observation of the same difference, and each
   event is written once per Linear `updatedAt`. A Linear state whose `updatedAt` is older than the
   record's `phase_at` was read before the phase was written: the phase is kept and nothing moves. A
