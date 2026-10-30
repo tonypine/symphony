@@ -1,0 +1,191 @@
+[
+  {
+    "id": "qa-seed-101",
+    "identifier": "QA-101",
+    "state": "Todo",
+    "title": "Show each run's cost beside its ticket",
+    "description": "Show each run's cost beside its ticket.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [],
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
+  },
+  {
+    "id": "qa-seed-102",
+    "identifier": "QA-102",
+    "state": "In Progress",
+    "title": "Sort the Inbox by how long each question has waited",
+    "description": "Sort the Inbox by how long each question has waited.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [],
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
+  },
+  {
+    "id": "qa-seed-103",
+    "identifier": "QA-103",
+    "state": "Code Review",
+    "title": "Name the repository in every pause reason",
+    "description": "Name the repository in every pause reason.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [],
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
+  },
+  {
+    "id": "qa-seed-104",
+    "identifier": "QA-104",
+    "state": "QA",
+    "title": "Keep the Activity tab's filter between launches",
+    "description": "Keep the Activity tab's filter between launches.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [],
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
+  },
+  {
+    "id": "qa-seed-105",
+    "identifier": "QA-105",
+    "state": "Rework",
+    "title": "Undo a Director move within ten seconds",
+    "description": "Undo a Director move within ten seconds.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [],
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
+  },
+  {
+    "id": "qa-seed-106",
+    "identifier": "QA-106",
+    "state": "CI Fix",
+    "title": "Retry a release build GitHub cancelled",
+    "description": "Retry a release build GitHub cancelled.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [],
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
+  },
+  {
+    "id": "qa-seed-107",
+    "identifier": "QA-107",
+    "state": "Merging",
+    "title": "Show the PR's checks in the ticket's detail",
+    "description": "Show the PR's checks in the ticket's detail.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [],
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
+  },
+  {
+    "id": "qa-seed-108",
+    "identifier": "QA-108",
+    "state": "Code Review",
+    "title": "Choose how long a paused repository stays paused",
+    "description": "Choose how long a paused repository stays paused.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [],
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
+  },
+  {
+    "id": "qa-seed-109",
+    "identifier": "QA-109",
+    "state": "Plan Review",
+    "title": "Plan: a live server for the Director's QA",
+    "description": "Plan: a live server for the Director's QA.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [
+      "plan"
+    ],
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
+  },
+  {
+    "id": "qa-seed-110",
+    "identifier": "QA-110",
+    "state": "Backlog",
+    "title": "Export the run history as CSV",
+    "description": "Export the run history as CSV.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [],
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
+  },
+  {
+    "id": "qa-seed-111",
+    "identifier": "QA-111",
+    "state": "Done",
+    "title": "Open the transcript from a notification",
+    "description": "Open the transcript from a notification.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [],
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
+  }
+]

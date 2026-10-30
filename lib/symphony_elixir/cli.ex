@@ -26,6 +26,7 @@ defmodule SymphonyElixir.CLI do
     host: :string,
     logs_root: :string,
     port: :integer,
+    qa_seed: :string,
     state_root: :string
   ]
   @run_switches [
@@ -61,6 +62,7 @@ defmodule SymphonyElixir.CLI do
           set_logs_root_from_env: (-> :ok | {:error, term()}),
           set_server_host_override: (String.t() | nil -> :ok | {:error, term()}),
           set_server_port_override: (non_neg_integer() | nil -> :ok | {:error, term()}),
+          set_qa_seed_dir: (String.t() -> :ok),
           ensure_all_started: (-> ensure_started_result()),
           run_one_shot: (String.t(), keyword() -> one_shot_result()),
           control_url: (-> String.t()),
@@ -389,7 +391,8 @@ defmodule SymphonyElixir.CLI do
         with :ok <- set_symphony_config(opts, deps),
              :ok <- maybe_set_state_root(opts, deps),
              :ok <- maybe_set_logs_root(opts, deps),
-             :ok <- maybe_set_server_host(opts, deps) do
+             :ok <- maybe_set_server_host(opts, deps),
+             :ok <- maybe_set_root(opts, :qa_seed, &deps.set_qa_seed_dir.(&1)) do
           maybe_set_server_port(opts, deps)
         end
 
@@ -515,7 +518,7 @@ defmodule SymphonyElixir.CLI do
       "       symphony dashboard [--url <control-url>]\n" <>
       "       symphony force [--clear] <issue-identifier>\n" <>
       "       symphony openrouter-stub [--port <port>]\n" <>
-      "       symphony [--config <path-to-symphony.yml>] [--state-root <path>] [--logs-root <path>] [--host <host>|unix:<socket>] [--port <port>]\n" <>
+      "       symphony [--config <path-to-symphony.yml>] [--state-root <path>] [--logs-root <path>] [--host <host>|unix:<socket>] [--port <port>] [--qa-seed <dir>]\n" <>
       "       symphony pr <url-or-number> [--intent \"address review comments\"]\n" <>
       "       symphony run <issue-identifier> [--config <path-to-symphony.yml>] [--timeout <duration>] [--no-retry] [--state-root <path>] [--logs-root <path>]\n" <>
       "       symphony workflow preview [--file WORKFLOW.md] [--agent codex|claude]"
@@ -556,6 +559,7 @@ defmodule SymphonyElixir.CLI do
       set_logs_root_from_env: &Paths.set_logs_root_from_env/0,
       set_server_host_override: &set_server_host_override/1,
       set_server_port_override: &set_server_port_override/1,
+      set_qa_seed_dir: &set_qa_seed_dir/1,
       ensure_all_started: fn -> Application.ensure_all_started(:symphony_elixir) end,
       run_one_shot: &SymphonyElixir.OneShot.run/2,
       control_url: fn -> ControlClient.control_url() end,
@@ -655,6 +659,12 @@ defmodule SymphonyElixir.CLI do
 
   defp set_server_port_override(port) when is_integer(port) and port >= 0 do
     Application.put_env(:symphony_elixir, :server_port_override, port)
+    :ok
+  end
+
+  # The QA server's seed (`SymphonyElixir.QaSeed`), loaded once the run store starts.
+  defp set_qa_seed_dir(dir) do
+    Application.put_env(:symphony_elixir, :qa_seed_dir, dir)
     :ok
   end
 

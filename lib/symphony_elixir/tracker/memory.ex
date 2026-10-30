@@ -19,6 +19,11 @@ defmodule SymphonyElixir.Tracker.Memory do
   Symphony runs. Entries with `"kind": "project"` or `"kind": "team"` are the
   workspace's projects and teams instead (`projects_and_teams/0`); a project's
   optional `"teams"` lists its team keys.
+
+  The issues file is a fake Linear: a state move, a label, a comment and a reply are written into
+  it, so the next read sees them (each issue's `"history"`, `"comments"` and `"updatedAt"`), and
+  `issue_nodes/1` reads its issues as the Inbox reads Linear's (a QA server's seed, TP-1311). With
+  `:memory_tracker_issues` set, a state move or a comment only reports its event.
   """
 
   @behaviour SymphonyElixir.Tracker
@@ -41,6 +46,35 @@ defmodule SymphonyElixir.Tracker.Memory do
     maybe_sleep(:memory_tracker_fetch_candidate_sleep_ms)
     repo = with_named_projects(repo)
     {:ok, Enum.filter(issue_entries(), &Resolver.matches?(&1, repo))}
+  end
+
+  @doc """
+  The issues `repo` routes to, as Linear's issue nodes read them for the Inbox
+  (`SymphonyElixir.Inbox`): with the comments, replies and state moves the issues file keeps, and
+  its `updatedAt`. With `:memory_tracker_issues` set, they have none.
+  """
+  @spec issue_nodes(term()) :: [map()]
+  def issue_nodes(repo) do
+    {:ok, issues} = fetch_candidate_issues_for_repo(repo)
+    entries = for %{"id" => id} = entry <- file_entries(), into: %{}, do: {id, entry}
+    Enum.map(issues, &issue_node(&1, Map.get(entries, &1.id, %{})))
+  end
+
+  defp issue_node(%Issue{} = issue, entry) do
+    %{
+      "id" => issue.id,
+      "identifier" => issue.identifier,
+      "title" => issue.title,
+      "description" => issue.description,
+      "url" => issue.url,
+      "updatedAt" => entry["updatedAt"],
+      "state" => %{"name" => issue.state},
+      "labels" => %{"nodes" => Enum.map(List.wrap(issue.labels), &%{"name" => &1})},
+      "attachments" => %{"nodes" => []},
+      "children" => %{"nodes" => []},
+      "comments" => %{"nodes" => List.wrap(entry["comments"]), "pageInfo" => %{"hasPreviousPage" => false}},
+      "history" => %{"nodes" => List.wrap(entry["history"]), "pageInfo" => %{"hasNextPage" => false}}
+    }
   end
 
   # Linear filters a route's projects on its side, by id, slug id or name, so a route value polls
@@ -124,6 +158,7 @@ defmodule SymphonyElixir.Tracker.Memory do
 
     case next_result(:memory_tracker_create_comment_result) do
       :ok ->
+        put_file_comment(issue_id, body, nil)
         send_event({:memory_tracker_comment, issue_id, body})
         :ok
 
@@ -176,6 +211,7 @@ defmodule SymphonyElixir.Tracker.Memory do
 
     case next_result(:memory_tracker_update_issue_state_result) do
       :ok ->
+        put_file_state(issue_id, state_name)
         send_event({:memory_tracker_state_update, issue_id, state_name})
         :ok
 
@@ -226,6 +262,7 @@ defmodule SymphonyElixir.Tracker.Memory do
   def create_reply(issue_id, parent_comment_id, body) do
     case next_result(:memory_tracker_create_comment_result) do
       :ok ->
+        put_file_comment(issue_id, body, parent_comment_id)
         send_event({:memory_tracker_reply, issue_id, parent_comment_id, body})
         :ok
 
@@ -400,20 +437,66 @@ defmodule SymphonyElixir.Tracker.Memory do
   end
 
   defp put_file_issue_labels(issue_id, update) do
-    with {:ok, %{tracker: %{memory_issues_file: path}}} when is_binary(path) <- Config.settings(),
-         {:ok, body} <- File.read(path),
+    update_file_issue(issue_id, fn entry -> Map.put(entry, "labels", update.(Enum.filter(List.wrap(entry["labels"]), &is_binary/1))) end)
+  end
+
+  # A move in the issues file, as Linear records it: the new state and an entry in its history.
+  defp put_file_state(issue_id, state_name) do
+    file_only(fn ->
+      update_file_issue(issue_id, fn entry ->
+        move = %{"createdAt" => now_iso8601(), "fromState" => %{"name" => entry["state"]}, "toState" => %{"name" => state_name}}
+        entry |> Map.put("state", state_name) |> Map.put("history", List.wrap(entry["history"]) ++ [move])
+      end)
+    end)
+  end
+
+  # A comment, or a reply under `parent_id`, in the issues file, with an id of its own.
+  defp put_file_comment(issue_id, body, parent_id) do
+    file_only(fn ->
+      update_file_issue(issue_id, fn entry ->
+        comment = %{
+          "id" => "memory-comment-" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower),
+          "body" => body,
+          "createdAt" => now_iso8601(),
+          "parent" => parent_id && %{"id" => parent_id}
+        }
+
+        Map.put(entry, "comments", List.wrap(entry["comments"]) ++ [comment])
+      end)
+    end)
+  end
+
+  defp file_only(write) do
+    case Application.fetch_env(:symphony_elixir, :memory_tracker_issues) do
+      {:ok, _issues} -> :ok
+      :error -> write.()
+    end
+  end
+
+  # Edits one issue of the issues file, one writer at a time, and moves its `updatedAt`, so the
+  # Inbox reads it again.
+  defp update_file_issue(issue_id, update) do
+    with {:ok, %{tracker: %{memory_issues_file: path}}} when is_binary(path) <- Config.settings() do
+      :global.trans({__MODULE__, path}, fn -> rewrite_file_issue(path, issue_id, update) end)
+    end
+
+    :ok
+  end
+
+  defp rewrite_file_issue(path, issue_id, update) do
+    with {:ok, body} <- File.read(path),
          {:ok, entries} when is_list(entries) <- Jason.decode(body) do
       entries =
         Enum.map(entries, fn
-          %{"id" => ^issue_id} = entry -> Map.put(entry, "labels", update.(Enum.filter(List.wrap(entry["labels"]), &is_binary/1)))
+          %{"id" => ^issue_id} = entry -> entry |> update.() |> Map.put("updatedAt", now_iso8601())
           entry -> entry
         end)
 
       File.write!(path, Jason.encode!(entries, pretty: true))
     end
-
-    :ok
   end
+
+  defp now_iso8601, do: DateTime.utc_now() |> DateTime.to_iso8601()
 
   defp update_labels(%Issue{id: issue_id, labels: labels} = issue, issue_id, update), do: %{issue | labels: update.(labels)}
   defp update_labels(issue, _issue_id, _update), do: issue

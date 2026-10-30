@@ -16,6 +16,14 @@ defmodule SymphonyElixir.QaPolicy do
   ticket has no `## User walkthrough`. Its `macos_app` playbook is then marked `scope: :none`, so
   the QA agent is told up front that building and launching the app are the whole check, and the
   merge stays gated on the app starting (`SymphonyElixir.QaVerification`).
+
+  A `macos_app` playbook with a `live` server (`SymphonyElixir.QaAgent.PlaybookSettings`) is marked
+  `live: true` when the pass should run that server on the QA host beside the app
+  (`SymphonyElixir.QaAgent.Selection.live/3`): the diff touches one of the server's `paths` and the
+  ticket's `## User walkthrough` mentions one of its `walkthrough_mentions` (any walkthrough when it
+  lists none). A `qa:live` label marks it live and a `qa:fixture` label never does, whatever the
+  diff. The same rule selects the playbook for a server-only diff. A pass not marked live starts no
+  server, and the app reads its fixtures only.
   """
 
   require Logger
@@ -92,13 +100,29 @@ defmodule SymphonyElixir.QaPolicy do
   end
 
   defp run(issue, playbooks, paths) do
+    {playbooks, live_note} = mark_live(issue, playbooks, paths)
+
     if nothing_on_screen?(issue, playbooks, paths) do
       {:run, Enum.map(playbooks, &scope_none/1),
        "nothing on screen to judge: the PR changes none of the selected playbooks' paths and the ticket has no `## User walkthrough`, " <>
-         "so building and launching the app are the whole check"}
+         "so building and launching the app are the whole check" <> live_note}
     else
-      {:run, playbooks, "the change delivers or updates a user journey"}
+      {:run, playbooks, "the change delivers or updates a user journey" <> live_note}
     end
+  end
+
+  # Marks the `macos_app` playbook live when its `live` server should run, and says why in the reason.
+  defp mark_live(issue, playbooks, paths) do
+    Enum.map_reduce(playbooks, "", fn
+      %{kind: "macos_app", live_server: live_server} = playbook, note ->
+        case Selection.live(issue, live_server, paths) do
+          {true, why} -> {Map.put(playbook, :live, true), note <> "; the app gets a live server: " <> why}
+          {false, why} -> {playbook, note <> "; the app reads fixtures only: " <> why}
+        end
+
+      playbook, note ->
+        {playbook, note}
+    end)
   end
 
   defp nothing_on_screen?(issue, playbooks, paths) do

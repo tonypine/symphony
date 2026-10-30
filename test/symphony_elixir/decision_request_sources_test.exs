@@ -34,6 +34,8 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
     # The PR and CI watcher's questions: a protected file, a missing pull request, another base
     # branch, a check that never reported or keeps being cancelled.
     "lib/symphony_elixir/pr_decision/apply.ex" => [:ask],
+    # The QA server's seed: the held ticket's open Question, over the memory tracker.
+    "lib/symphony_elixir/qa_seed.ex" => [:ask],
     # A QA pass that ends without a result.
     "lib/symphony_elixir/qa_verification.ex" => [:ask],
     # A release build GitHub keeps cancelling for lack of a machine, or one that failed.
