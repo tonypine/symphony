@@ -365,7 +365,7 @@ defmodule SymphonyElixir.TicketStateTest do
       record = TicketState.new("repo-a", "issue-1") |> TicketState.put_question(@open) |> TicketState.put_question(@answered)
 
       assert Enum.map(record.questions, & &1.id) == ["q-1", "q-2"]
-      assert TicketState.open_questions(record) == [@open]
+      assert [%{id: "q-1", state: :open, title: "Ship it"}] = TicketState.open_questions(record)
 
       record = TicketState.put_question(record, %{@open | state: :withdrawn})
       assert Enum.map(record.questions, &{&1.id, &1.state}) == [{"q-1", :withdrawn}, {"q-2", :answered}]
@@ -379,7 +379,7 @@ defmodule SymphonyElixir.TicketStateTest do
       assert TicketState.put_question(record, :junk) == record
       assert TicketState.normalize(%{questions: :junk}).questions == []
       stored = [@open, %{@open | title: "Again"}, %{id: 7, state: :open}]
-      assert TicketState.normalize(%{questions: stored}).questions == [@open]
+      assert [%{id: "q-1", title: "Ship it"}] = TicketState.normalize(%{questions: stored}).questions
       assert TicketState.open_questions(%{}) == []
     end
   end

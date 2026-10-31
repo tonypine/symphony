@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.Inbox.FromRecordTest do
   use SymphonyElixir.TestSupport
 
+  import ExUnit.CaptureLog
+
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Inbox
@@ -10,6 +12,7 @@ defmodule SymphonyElixir.Inbox.FromRecordTest do
 
   @repo_key "inbox-from-record"
   @fixture "test/fixtures/inbox/situation.exs"
+  @backfilled "test/fixtures/inbox/backfilled_questions.exs"
   @director %{kind: :person, name: "Director"}
 
   setup do
@@ -224,6 +227,60 @@ defmodule SymphonyElixir.Inbox.FromRecordTest do
 
       assert %{kind: :blocked, ask: "Paused by you", review: %{reason: "Paused by you", clearing_condition: nil}} =
                Item.from_pause(record, %{reasons: [question, person_reason("Paused by you", nil)]})
+    end
+  end
+
+  describe "a Question the backfill stored" do
+    defp backfilled do
+      {questions, _binding} = Code.eval_file(@backfilled)
+      questions
+    end
+
+    defp backfilled_record(questions, repo_key \\ @repo_key, identifier \\ "TP-1074") do
+      repo_key
+      |> TicketState.new("id-" <> identifier, %{issue_identifier: identifier, title: "QA fixtures for the go-back screens", phase: "Todo", questions: questions})
+      |> TicketState.normalize()
+    end
+
+    test "the TP-1074 Question from the v0.0.1.773 log renders its row, with nothing it unblocks" do
+      [tp_1074 | _others] = backfilled()
+      refute Map.has_key?(tp_1074, :unblocks)
+
+      assert [%{kind: :action, identifier: "TP-1074", ask: "Make the move of TP-1074 to the Job Search Hub project", review: review}] =
+               items([backfilled_record([tp_1074])])
+
+      assert %{question_id: "backfill-e36e1800010dcd90", unblocks: nil, steps: [], confirm: nil} = review
+      assert review.requested_at == ~U[2026-10-12 14:03:00.000000Z]
+      assert [%{label: "Move it by hand", recommended: true, tradeoffs: [good]}, %{label: "Leave it", recommended: false}] = review.options
+      assert good == %{kind: "good", text: "One move"}
+    end
+
+    test "every backfilled Question reads as rows, alone and together, through the Inbox" do
+      questions = backfilled()
+
+      for question <- questions do
+        rows = items([backfilled_record([question])])
+        assert length(rows) == if(question.state == :open, do: 1, else: 0)
+      end
+
+      record = backfilled_record(questions)
+      assert [_tp_1074, _no_why, %{review: %{confirm: "Merging", options: merge_options}}] = items([record])
+      assert [[], []] == Enum.map(merge_options, & &1.tradeoffs)
+      assert length(served([record], %{})) == 3
+    end
+
+    test "a record whose rows raise is logged with its ticket and skipped; the other tickets still list" do
+      settings_fun = fn
+        @repo_key -> settings()
+        "broken" -> raise "no settings"
+      end
+
+      records = [backfilled_record(backfilled(), "broken", "TP-9"), backfilled_record(Enum.take(backfilled(), 1))]
+
+      log = capture_log(fn -> assert [%{identifier: "TP-1074"}] = FromRecord.items(records, %{}, settings_fun: settings_fun) end)
+
+      assert log =~ "Inbox skipped a ticket whose record it could not read issue_id=id-TP-9 issue_identifier=TP-9"
+      assert log =~ "no settings"
     end
   end
 end
