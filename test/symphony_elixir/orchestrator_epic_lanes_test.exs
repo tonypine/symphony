@@ -22,6 +22,7 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
     other = %Issue{id: "s2", identifier: "MT-21", title: "Other", state: "Todo"}
     epic = epic("e1", "MT-10", [part_1, part_2])
 
+    sweep([part_2])
     state = Orchestrator.put_epic_lanes_for_test(orchestrator_state(2), [epic, part_2, standalone, other])
 
     assert state.epic_lanes.lanes == []
@@ -61,6 +62,7 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
     final = %Issue{id: "p2", identifier: "MT-12", title: "Final verification", state: "Todo", blocked_by: [%{id: "b1", identifier: "MT-30", state: "Todo"}]}
     standalone = %Issue{id: "s1", identifier: "MT-20", title: "Standalone", state: "Todo"}
     epic = epic("e1", "MT-10", [%{id: "p1", identifier: "MT-11", state: "Done"}, final])
+    sweep([final])
 
     state =
       orchestrator_state(2)
@@ -220,4 +222,7 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
       retry_attempts: %{}
     }
   end
+
+  # The poll's dependency sweep: each Todo ticket is paused on its open blockers, which the gate reads.
+  defp sweep(issues), do: Orchestrator.sweep_dependencies_for_test(Config.repo_key!(), issues, Config.settings!().tracker.terminal_states)
 end

@@ -2879,6 +2879,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       blocked_by: [%{id: "blocker-1", identifier: "MT-1002", state: "In Progress"}]
     }
 
+    # The poll pauses it on its open blocker; the gate reads the pause.
+    assert Orchestrator.sweep_dependencies_for_test(Config.repo_key!(), [issue], Config.settings!().tracker.terminal_states) == 1
     refute Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 

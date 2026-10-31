@@ -5764,6 +5764,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp judge_revalidated_issue(refreshed_issue, issue, terminal_states, opts) do
     source = Keyword.get(opts, :source, :poll)
+    sync_read_dependencies(refreshed_issue, terminal_states)
 
     if dispatch_revalidated_issue?(refreshed_issue, terminal_states, Keyword.get(opts, :sticky_route?, false)) and
          unmoved_since?(refreshed_issue, issue, source) do
@@ -5771,6 +5772,12 @@ defmodule SymphonyElixir.Orchestrator do
     else
       {:skip, refreshed_issue}
     end
+  end
+
+  # The read right before dispatch may find a blocker the last poll didn't: the ticket is paused on
+  # it (`Pauses.Dependencies.sync_issue/4`) before the gate reads its pause.
+  defp sync_read_dependencies(%Issue{} = issue, terminal_states) do
+    with repo_key when is_binary(repo_key) <- hold_repo_key(issue), do: Dependencies.sync_issue(repo_key, issue, terminal_states)
   end
 
   # From the record, the issue starts only when its record still says what the candidate said: the

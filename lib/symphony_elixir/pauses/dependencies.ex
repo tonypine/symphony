@@ -8,7 +8,8 @@ defmodule SymphonyElixir.Pauses.Dependencies do
   its labels and its open blockers. Under `dispatch.source: record`, where dispatch reads every
   repo's records each cycle, `sync_records/3` also brings each `Todo` record's pause in line with the
   open blockers it observed, from the store alone, so a blocker a read wrote into a record holds the
-  ticket before its repo's next poll.
+  ticket before its repo's next poll; and `sync_issue/4` does the same for one ticket from a read of
+  it (the read of a candidate right before dispatch).
 
     * A `Todo` ticket has one reason per open blocker ("Waiting for TP-12 to finish", set by the rule
       "Blocked-by links"), and a blocker's reason clears once it is no longer open: the ticket
@@ -139,6 +140,22 @@ defmodule SymphonyElixir.Pauses.Dependencies do
       Enum.each(held -- open, &clear(ticket, &1))
       count + length(open -- held) + length(held -- open)
     end)
+  end
+
+  @doc """
+  Brings the pause of `issue`, read from Linear under `repo_key`, in line with its open blockers as
+  `sync_records/3` does for a `Todo` record, from that read: the dispatch gate reads the pause right
+  after. Returns how many reasons it set or cleared; a record the store (`opts[:store]`, default
+  `SymphonyElixir.RunStore`) can't read is left as it is.
+  """
+  @spec sync_issue(String.t(), Issue.t(), Enumerable.t(String.t()), keyword()) :: non_neg_integer()
+  def sync_issue(repo_key, %Issue{} = issue, terminal_states, opts \\ []) do
+    terminal = Enum.to_list(terminal_states)
+
+    case observed(repo_key, issue, terminal, DateTime.utc_now(), opts) do
+      {:ok, record} -> sync_records([record], terminal)
+      :error -> 0
+    end
   end
 
   # The identifiers of the `:ticket` reasons of `source`.

@@ -172,6 +172,24 @@ defmodule SymphonyElixir.Pauses.DependenciesTest do
     end
   end
 
+  describe "sync_issue/4" do
+    test "pauses a Todo ticket read right before dispatch on the blockers that read found" do
+      read = issue(%{repo_key: nil, blocked_by: [blocker("TP-1", "In Progress"), blocker("TP-2", "Done")]})
+
+      assert Dependencies.sync_issue(@repo_key, read, @terminal) == 1
+      assert Pauses.why(@ticket) == ["Waiting for TP-1 to finish"]
+      assert Dependencies.sync_issue(@repo_key, %{read | blocked_by: []}, @terminal) == 1
+      refute Pauses.paused?(@ticket)
+
+      # Outside Todo nothing is set; a record the store can't read is left alone.
+      assert Dependencies.sync_issue(@repo_key, %{read | state: "In Progress"}, @terminal) == 0
+
+      log = capture_log(fn -> assert Dependencies.sync_issue(@repo_key, read, @terminal, store: UnreadableStore) == 0 end)
+      assert log =~ "Failed to read the record"
+      refute Pauses.paused?(@ticket)
+    end
+  end
+
   describe "a run's block report outside Todo" do
     setup do
       {:ok, _pause} = Pauses.set(@ticket, Pauses.ticket_reason(:dependency, "TP-997"), set_by: @run)

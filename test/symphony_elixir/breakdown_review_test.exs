@@ -334,18 +334,21 @@ defmodule SymphonyElixir.BreakdownReviewTest do
 
     test "after promotion only the sub-ticket no blocked-by link holds dispatches first" do
       state = orchestrator_state()
-      first = %Issue{id: "c1", identifier: "MT-c1", title: "First", state: "Todo", blocked_by: []}
-      blocker = %{id: "c1", identifier: "MT-c1", state: "Todo"}
-      second = %Issue{id: "c2", identifier: "MT-c2", title: "Second", state: "Todo", blocked_by: [blocker]}
-      verification = %Issue{id: "c3", identifier: "MT-c3", title: "Final verification: X", state: "Todo", blocked_by: [blocker, %{blocker | id: "c2"}]}
+      first = %Issue{id: "c1", identifier: "MT-71", title: "First", state: "Todo", blocked_by: []}
+      blocker = %{id: "c1", identifier: "MT-71", state: "Todo"}
+      second = %Issue{id: "c2", identifier: "MT-72", title: "Second", state: "Todo", blocked_by: [blocker]}
+      verification = %Issue{id: "c3", identifier: "MT-73", title: "Final verification: X", state: "Todo", blocked_by: [blocker, %{blocker | id: "c2", identifier: "MT-72"}]}
+      sweep([first, second, verification])
 
       assert Orchestrator.should_dispatch_issue_for_test(first, state)
       refute Orchestrator.should_dispatch_issue_for_test(second, state)
       refute Orchestrator.should_dispatch_issue_for_test(verification, state)
 
       done = %{blocker | state: "Done"}
-      assert Orchestrator.should_dispatch_issue_for_test(%{second | blocked_by: [done]}, state)
-      still_blocked = %{verification | blocked_by: [done, %{done | id: "c2", state: "In Progress"}]}
+      unblocked = %{second | blocked_by: [done]}
+      still_blocked = %{verification | blocked_by: [done, %{done | id: "c2", identifier: "MT-72", state: "In Progress"}]}
+      sweep([unblocked, still_blocked])
+      assert Orchestrator.should_dispatch_issue_for_test(unblocked, state)
       refute Orchestrator.should_dispatch_issue_for_test(still_blocked, state)
     end
 
@@ -560,4 +563,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       retry_attempts: %{}
     }
   end
+
+  # The poll's dependency sweep: each Todo ticket is paused on its open blockers, which the gate reads.
+  defp sweep(issues), do: Orchestrator.sweep_dependencies_for_test(Config.repo_key!(), issues, Config.settings!().tracker.terminal_states)
 end
