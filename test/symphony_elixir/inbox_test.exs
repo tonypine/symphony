@@ -352,6 +352,9 @@ defmodule SymphonyElixir.InboxTest do
 
       assert %{kind: :clarify, ask: "The quality gate couldn't score the ticket", waiting_since: ~U[2026-10-01 07:00:00Z], review: %{held: false, found: "LLM call failed"}} =
                Item.from_quality_gate(%{kind: :error, issue_id: "id-1", reason: "LLM call failed", updated_at: ~U[2026-10-01 07:00:00Z]})
+
+      assert %{kind: :clarify, ask: "Rewrite the ticket: the quality gate skipped it", waiting_since: ~U[2026-10-01 07:30:00Z], review: %{held: false, questions: []}} =
+               Item.from_quality_gate(%{kind: :scored, issue_id: "id-2", score: 2, reason: "Empty.", scored_at: ~U[2026-10-01 07:30:00Z]})
     end
   end
 
