@@ -46,7 +46,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert %{"move" => "approve_plan", "to_state" => "Waiting on sub-tickets"} = Jason.decode!(conn.resp_body)
   end
 
-  test "move puts a ticket Symphony owns in the phase named, answers a move to where it is, and refuses one it doesn't own", %{moves: moves} do
+  test "move puts any ticket Symphony tracks in the phase named, answers a move to where it is, and refuses one it doesn't track", %{moves: moves} do
     owned = %Issue{id: "owned", identifier: "MOT-70", title: "Parked work", state: "Backlog", repo_key: "repo-api"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [owned])
     RunStore.delete_ticket_state("repo-api", "owned")
@@ -63,9 +63,13 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert {409, "move_not_allowed", "Shipping is not a phase of MOT-70's workflow" <> _rest} = error(post(:move, %{"issue_identifier" => "MOT-70", "to" => "Shipping"}, moves))
 
     :ok = RunStore.update_ticket_state("repo-api", "owned", %{phase_owner: :external})
+    assert %{"to_state" => "Backlog", "moved" => true} = Jason.decode!(post(:move, %{"issue_identifier" => "MOT-70", "to" => "Backlog"}, moves).resp_body)
+    assert %{phase: "Backlog", phase_owner: :symphony} = RunStore.get_ticket_state("repo-api", "owned")
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{owned | repo_key: nil}])
 
     assert error(post(:move, %{"issue_identifier" => "MOT-70", "to" => "Todo"}, moves)) ==
-             {409, "move_not_allowed", "MOT-70 is not Symphony's: its phase is the one Linear shows (owner external), so move it in Linear"}
+             {409, "move_not_allowed", "MOT-70 is in no repository Symphony is configured for, so Symphony doesn't track it"}
   end
 
   test "decisions answers each of a plan's questions under the request its pick names", %{moves: moves} do

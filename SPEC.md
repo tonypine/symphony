@@ -413,8 +413,8 @@ nothing, and it writes only those fields, never the record's holds, verdicts or 
   Director's cancel (`POST /api/v1/control/cancel`) wrote is terminal once Linear took it: a later
   Linear state is no drift on it and is applied. Until Linear takes it, the cancel is drifted back
   to like any phase Symphony owns. The Director's free move (`POST /api/v1/control/move`) is how a
-  person moves a ticket whose phase Symphony owns: its target becomes the record's phase first, so the
-  reconciler never moves it back. The startup
+  person moves any ticket Symphony tracks, whoever set its phase: its target becomes the record's
+  phase first and the phase becomes Symphony's, so the reconciler never moves it back. The startup
   reconciliation keeps a phase Symphony owns as well and observes the ticket's read the same way, so a
   hand move made while Symphony was down is moved back at startup; a phase it adopts from Linear is
   Linear's.
@@ -5014,6 +5014,15 @@ Minimum endpoints:
     `Orchestrator snapshot build slow` with the parts for a snapshot build that does.
   - `uptime_seconds` is how long the Symphony answering has run, in whole seconds; the Mac app's
     Diagnostics view shows it.
+  - `phases` lists the phases of the one ticket state machine (Section 7), once and in board
+    order: `Backlog`, `Todo`, `In Progress`, `Code Review`, `QA`, `Merging`, `Rework`, `Plan
+    Review`, `Epic Review`, `Waiting on sub-tickets`, `CI Fix`, then any other active state, then
+    the closed states. Each has its `name` as the workflow names it (a renamed phase state goes by
+    its configured name, the one the repo's Linear team shows) and `dispatches`, true when entering
+    it starts a run: the active states and the phase states Symphony runs in, never `Backlog`,
+    `Plan Review`, `Waiting on sub-tickets` or a closed state. A phase the config leaves out (a
+    phase state turned off with `null`, an unlisted active state) is not listed. The Director's
+    Move to… menu lists them, and `POST /api/v1/control/move` accepts any of their names.
   - `shipped_today` lists the tickets Symphony saw reach a done state today, newest first, each with
     its `repo_key` and `completed_at` (UTC); `counts.shipped_today` is their number. "Today" is the
     local calendar day of the host Symphony runs on, in its time zone, not the UTC day, so the count

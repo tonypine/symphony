@@ -58,4 +58,55 @@ defmodule SymphonyElixir.StateMachineTest do
       assert StateMachine.phase_states(settings) == ["Code Review", "QA", "CI Fix"]
     end
   end
+
+  describe "phases/1" do
+    test "lists the runtime settings' phases once each, in board order, with whether entering one dispatches a run" do
+      assert StateMachine.phases(Config.settings!()) == [
+               %{name: "Backlog", dispatches: false},
+               %{name: "Todo", dispatches: true},
+               %{name: "In Progress", dispatches: true},
+               %{name: "Code Review", dispatches: true},
+               %{name: "QA", dispatches: true},
+               %{name: "Plan Review", dispatches: false},
+               %{name: "Epic Review", dispatches: true},
+               %{name: "Waiting on sub-tickets", dispatches: false},
+               %{name: "CI Fix", dispatches: true},
+               %{name: "Done", dispatches: false},
+               %{name: "Canceled", dispatches: false},
+               %{name: "Cancelled", dispatches: false},
+               %{name: "Closed", dispatches: false},
+               %{name: "Duplicate", dispatches: false}
+             ]
+    end
+
+    test "names a renamed phase state as configured, places unknown states, and leaves out one turned off" do
+      settings = %{
+        tracker: %{
+          active_states: ["Rework", "Todo", "Shaping", "Merging", "In Progress", "todo"],
+          terminal_states: ["Won't Do", "Done"],
+          waiting_on_sub_issues_state: nil
+        },
+        code_review_state: "Peer Review",
+        qa_state: nil,
+        plan_review_state: "Plan Review",
+        epic_review_state: "Epic Review",
+        ci_fix_state: "Red Checks"
+      }
+
+      assert StateMachine.phases(settings) == [
+               %{name: "Backlog", dispatches: false},
+               %{name: "Todo", dispatches: true},
+               %{name: "In Progress", dispatches: true},
+               %{name: "Peer Review", dispatches: true},
+               %{name: "Merging", dispatches: true},
+               %{name: "Rework", dispatches: true},
+               %{name: "Plan Review", dispatches: false},
+               %{name: "Epic Review", dispatches: true},
+               %{name: "Red Checks", dispatches: true},
+               %{name: "Shaping", dispatches: true},
+               %{name: "Done", dispatches: false},
+               %{name: "Won't Do", dispatches: false}
+             ]
+    end
+  end
 end

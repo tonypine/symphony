@@ -78,18 +78,19 @@ defmodule SymphonyElixir.DirectorMoves do
     report's) is answered with the first pick, as `answer_held_question/4` says; any other is
     refused.
 
-  - `:move`: the free move. A ticket Symphony owns (its record's phase is Symphony's, not one read
-    from Linear) goes to `:to`, any phase the repo's workflow names (`phases/1`), keeping its
-    workspace, branch and pull request: nothing is reset. The record's phase is written first, then
-    Linear (`SymphonyElixir.TransitionGuard`), and a move Linear refuses stands on the record for
-    the reconciler to project, as a Cancel's does. A dispatch loop's, a quiet handoff's or a park's
-    pause lifts with it (a person moving the ticket answers "it looks stuck": its question is
-    answered "Run it again"); every other pause reason stays. A move into `Backlog` or a closed phase
-    stops a running turn as Stop does, without the stop's pause. The refresh `finish/6` asks for
-    starts a phase that dispatches at once. The ticket's events get one `ticket.moved` with the
-    note. A move to the phase the ticket is in answers `moved: false` and writes nothing; one to a
-    phase the repo doesn't name, or of a ticket whose phase is Linear's, is refused. Undo puts the
-    record and Linear back to the phase before.
+  - `:move`: the free move. A ticket Symphony tracks (it has a record under a configured
+    repository, whoever set its phase) goes to `:to`, any phase the repo's workflow names
+    (`phases/1`), keeping its workspace, branch and pull request: nothing is reset. The record's
+    phase is written first, then Linear (`SymphonyElixir.TransitionGuard`), so the phase is
+    Symphony's from then on (`phase_owner: :symphony`) and Linear never moves it back; a move Linear
+    refuses stands on the record for the reconciler to project, as a Cancel's does. A dispatch
+    loop's, a quiet handoff's or a park's pause lifts with it (a person moving the ticket answers
+    "it looks stuck": its question is answered "Run it again"); every other pause reason stays. A
+    move into `Backlog` or a closed phase stops a running turn as Stop does, without the stop's
+    pause. The refresh `finish/6` asks for starts a phase that dispatches at once. The ticket's
+    events get one `ticket.moved` with the note. A move to the phase the ticket is in answers
+    `moved: false` and writes nothing; one to a phase the repo doesn't name, or of a ticket in no
+    configured repository, is refused. Undo puts the record and Linear back to the phase before.
 
   `answer_held_question/4` answers the question a dispatch loop, a quiet handoff or a block report
   paused the ticket on, and does what the picked option asks: Unblock, Restart, or nothing.
@@ -140,7 +141,7 @@ defmodule SymphonyElixir.DirectorMoves do
     Questions,
     Restart,
     RunStore,
-    StateProvisioning,
+    StateMachine,
     SubIssueWait,
     TicketPullRequest,
     TicketSignals,
@@ -865,28 +866,21 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   @doc """
-  The phases a free move (`:move`) may put a ticket in, as the workflow `settings` name them:
-  `Backlog`, the active states, the machine's phase states (Code Review, QA, Plan Review, Epic
-  Review, CI Fix), the waiting state and the closed states, each once.
+  The phases a free move (`:move`) may put a ticket in, as the workflow `settings` name them: the
+  machine's phases in board order (`SymphonyElixir.StateMachine.phases/1`), each once.
   """
   @spec phases(Schema.t()) :: [String.t()]
-  def phases(%Schema{tracker: tracker} = settings) do
-    machine = for {_key, name} <- StateProvisioning.machine_states(settings), do: name
+  def phases(%Schema{} = settings), do: for(%{name: name} <- StateMachine.phases(settings), do: name)
 
-    ([@backlog_state | tracker.active_states] ++ machine ++ List.wrap(tracker.waiting_on_sub_issues_state) ++ tracker.terminal_states)
-    |> Enum.filter(&present?/1)
-    |> Enum.uniq_by(&String.downcase(String.trim(&1)))
-  end
-
-  # The free move: the target is checked, then the owner, then the record and Linear move. The
+  # The free move: the target is checked, then the record, then the record and Linear move. The
   # phase the ticket leaves is the record's, not the one Linear shows: the two part when Linear
-  # refused a move, and the record is the truth for a ticket Symphony owns. A move to where the
+  # refused a move, and the record is the truth for a ticket Symphony tracks. A move to where the
   # record is answers it without writing anything.
   defp free_move(issue, to, note, opts) do
     settings = Config.settings!()
 
     with {:ok, to_state} <- repo_phase(issue, to, settings),
-         {:ok, phase} <- require_owned(issue, opts) do
+         {:ok, phase} <- require_tracked(issue, opts) do
       issue = %{issue | state: phase || issue.state}
 
       if same_state?(issue.state, to_state),
@@ -904,24 +898,18 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  # Only a phase Symphony owns moves through the Director: one Linear wrote follows Linear, so a
-  # move in Linear is the way to change it. An owned record answers with its phase.
-  defp require_owned(%Issue{repo_key: nil} = issue, _opts), do: not_owned(issue)
+  # Any ticket Symphony tracks moves, whoever set its phase: the move writes the record first, so
+  # the phase it sets is Symphony's (`phase_owner: :symphony`) either way. A ticket in no configured
+  # repository, or one Symphony has no record of, is refused. A record answers with its phase.
+  defp require_tracked(%Issue{repo_key: nil} = issue, _opts),
+    do: conflict("#{issue.identifier} is in no repository Symphony is configured for, so Symphony doesn't track it")
 
-  defp require_owned(issue, opts) do
+  defp require_tracked(issue, opts) do
     case Keyword.get(opts, :store, RunStore).get_ticket_state(issue.repo_key, issue.id) do
-      %{} = record ->
-        case TicketState.normalize(record) do
-          %{phase_owner: :symphony, phase: phase} -> {:ok, phase}
-          _external -> not_owned(issue)
-        end
-
-      _none ->
-        not_owned(issue)
+      %{} = record -> {:ok, TicketState.normalize(record).phase}
+      _none -> conflict("Symphony has no record of #{issue.identifier} yet, so it can't move it")
     end
   end
-
-  defp not_owned(issue), do: conflict("#{issue.identifier} is not Symphony's: its phase is the one Linear shows (owner external), so move it in Linear")
 
   defp unmoved(issue) do
     %{

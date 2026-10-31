@@ -2499,19 +2499,20 @@ cleared; its workspace goes on the usual cleanup of a closed ticket. The ticket'
 to the phase before; the closed pull request, the stopped run and the withdrawn questions stay as
 they are.
 
-**Move** (`POST /api/v1/control/move` with `issue_identifier`, `to` and an optional `note`) puts a
-ticket Symphony owns in any phase the repo's workflow names: Backlog, the active states, Code Review,
-QA, Plan Review, Epic Review, CI Fix, the waiting state and the closed states. Under
-`dispatch.source: record` a hand move in Linear on such a ticket is drift and is moved back, so this
-is the way to move one freely. The ticket keeps its workspace, branch and pull request; nothing is
+**Move** (`POST /api/v1/control/move` with `issue_identifier`, `to` and an optional `note`) puts any
+ticket Symphony tracks in any phase the repo's workflow names, the `phases` `GET /api/v1/state`
+lists: Backlog, the active states, Code Review, QA, Plan Review, Epic Review, CI Fix, the waiting
+state and the closed states. Whoever set the ticket's phase, Symphony or Linear (a ticket a person
+just created in Todo), the move makes it Symphony's. Under `dispatch.source: record` a hand move in
+Linear on such a ticket is drift and is moved back, so this is the way to move one freely. The ticket keeps its workspace, branch and pull request; nothing is
 reset. The record's phase is written first, then Linear, and a move Linear refuses stands on the
 record for the reconciler to project. A phase that dispatches starts a cycle at once; a move into
 Backlog or a closed state stops a running turn as Stop does, without the stop's pause. A pause from a
 dispatch loop, a quiet handoff or an idle park lifts with the move (its question is answered "Run it
 again"); every other pause reason stays. The ticket's timeline gets one `ticket.moved` event ("Moved
 to In Progress from Backlog") with the note. A move to the phase the ticket is already in answers
-200 with `moved: false`. A ticket whose phase is Linear's (owner external) and a `to` the repo
-doesn't name are refused (409), each saying why. **Undo** within 10 s puts the record and Linear back
+200 with `moved: false`. A ticket in no configured repository, one Symphony has no record of
+yet and a `to` the repo doesn't name are refused (409), each saying why. **Undo** within 10 s puts the record and Linear back
 to the phase before.
 
 ### `watchdog`
