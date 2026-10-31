@@ -60,7 +60,6 @@ defmodule SymphonyElixir.Questions do
   @scopes [:run, :ticket, :always]
   @symphony %{kind: :symphony, name: "Symphony"}
   @director %{kind: :person, name: "Director"}
-  # An answer that names an option by its number: "2" or "option 2".
   # What a field of a stored question reads as when the question was stored before it existed.
   @question_defaults %{
     asked_by: %{kind: :symphony, name: "Symphony", run_id: nil},
@@ -83,6 +82,7 @@ defmodule SymphonyElixir.Questions do
     taken_back: []
   }
   @option_defaults %{label: "", effect: "", good: [], cost: [], risk: [], recommended?: false, unlocks: []}
+  # An answer that names an option by its number: "2" or "option 2".
   @option_number ~r/\A\s*(?:option\s*)?(\d+)\s*\z/i
 
   @typedoc "A ticket, as `SymphonyElixir.Pauses` names it."
