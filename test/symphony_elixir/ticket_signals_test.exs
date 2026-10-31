@@ -439,6 +439,29 @@ defmodule SymphonyElixir.TicketSignalsTest do
       assert %{state: :open} = Questions.find(ticket, confirmation.id)
     end
 
+    test "a protected-path request outlives the run that asked it, which claimed the ticket; a cancel withdraws it (TP-1321)" do
+      repo_key = Config.repo_key!()
+      ticket = {:ticket, repo_key, "issue-protected"}
+      # The run starts in Todo and claims the ticket into In Progress, then asks through the Inbox path.
+      start_run(repo_key, "issue-protected", "Todo")
+      :ok = TicketSignals.record_phase(repo_key, "issue-protected", "In Progress")
+      {:ok, asked} = Questions.ask(ticket, @request, asked_by: @run, request: true, asked_in: "In Progress", at: ~U[2026-10-30 04:10:00Z])
+
+      # The run ends to wait on the answer, and five minutes on nothing has withdrawn it.
+      assert :ok = end_run(repo_key, "issue-protected")
+      payload = %{run_id: "run-1", exit: "success"}
+      assert :ok = TicketSignals.record_event(repo_key, "issue-protected", "run.ended", payload, run_id: "run-1", at: DateTime.add(DateTime.utc_now(), 300))
+      assert [%{id: id, state: :open}] = Questions.open(ticket)
+      assert id == asked.id
+
+      # Asking it again is the one question.
+      assert {:ok, %{id: ^id}} = Questions.ask(ticket, @request, asked_by: @run, request: true, asked_in: "In Progress")
+
+      assert :ok = TicketSignals.record(repo_key, "issue-protected", "decision returned", %{move: "cancel", from: "In Progress", to: "Canceled"})
+      assert %{withdrawn: %{reason: "The ticket was cancelled."}} = Questions.find(ticket, id)
+      assert [%{payload: %{cause: "ticket_moved"}}] = RunStore.list_ticket_events(repo_key, "issue-protected", types: ["question.withdrawn"])
+    end
+
     test "a run that ended on a cancelled ticket withdraws every question; one with no start withdraws nothing" do
       repo_key = Config.repo_key!()
       ticket = {:ticket, repo_key, "issue-cancel"}
