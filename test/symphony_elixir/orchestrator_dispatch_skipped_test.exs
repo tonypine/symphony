@@ -503,11 +503,13 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     assert %{"held" => %{state: "In Progress", reason: "dispatch is paused by the operator: deploy window"}} = state.dispatch_skipped
     assert %{attempt: 3, held_by_pause: true} = state.retry_attempts["held"]
 
-    # The lift sends the held retry on at once, with the attempt it had.
+    # The lift sends the held retry on at once, with the attempt it had. The running entry lives
+    # only as long as the fake agent, and `wait_until/2` gives up silently after two seconds on a
+    # loaded runner (TP-1325): the run's record, written as it starts, is what stays.
     tracked([held])
     assert {:ok, %{paused: false}} = Orchestrator.resume_dispatch(pid)
-    wait_until(pid, &Map.has_key?(&1.running, "held"))
-    assert %{retry_attempt: 3} = :sys.get_state(pid).running["held"]
+    # A continuation may follow it once it ends; the first run is the retry's.
+    assert %{issue_id: "held", attempt: 3} = "default" |> await_issue_runs("held") |> List.last()
   end
 
   describe "a repository's pause (TP-1237)" do
@@ -621,6 +623,14 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
       on_exit(fn -> stop_process(pid) end)
       wait_until(pid, &(is_nil(&1.repo_poll_task_ref) and not &1.poll_check_in_progress))
       pid
+    end
+  end
+
+  defp await_issue_runs(repo_key, issue_id, tries \\ 1_000) do
+    case RunStore.list_issue_runs(repo_key, issue_id) do
+      [_run | _] = runs -> runs
+      _none when tries > 0 -> Process.sleep(10) && await_issue_runs(repo_key, issue_id, tries - 1)
+      none -> flunk("#{issue_id} was never dispatched: #{inspect(none)}")
     end
   end
 
