@@ -1301,7 +1301,7 @@ example `ERL_EPMD_PORT=24369`, and use a `symphony.yml` whose `dashboard.port` i
 Each `symphony check` the app runs (on Save in Settings, and before Restart) goes to the app's stderr in QA
 mode: its exit status and output, which start with the build that checked, `Symphony <version> (<commit>)`.
 
-Eight more variables, read only in QA mode:
+Ten more variables, read only in QA mode:
 
 - `SYMPHONY_BAR_UPDATE_URL` replaces GitHub's `releases/latest` URL for update checks, for a local update feed
   that answers in the same format. An update in QA mode relaunches the app with its environment, so the new
@@ -1351,6 +1351,19 @@ Eight more variables, read only in QA mode:
   ```bash
   SYMPHONY_BAR_QA_ROOT="$(mktemp -d)" SYMPHONY_BAR_QA_API_FIXTURES="$PWD/Tests/Fixtures/director-app/running" \
     ./build/Symphony.app/Contents/MacOS/SymphonyBar
+  ```
+- `SYMPHONY_BAR_CONTROL_URL` and `SYMPHONY_BAR_CONTROL_TOKEN` point the app at a live Symphony instead of
+  the fixtures: a live QA pass's own server on the QA host and the control token that pass made for it
+  ([live QA passes](../docs/configuration.md#qa-passes)). With both set, the state polls, the live channel, the
+  Repos window and every control POST (Pause, Resume, Stop Run, and the Inbox's moves and Undo) go over the
+  network to that URL, with that token, as a normal launch's go to the local Symphony, and
+  `SYMPHONY_BAR_QA_API_FIXTURES` is ignored. Without either, QA mode reads the fixtures as before, so the same
+  build serves both. Only an `http` or `https` URL on a loopback host counts, so the token never leaves the Mac,
+  and the app still reads its secrets from the QA root, never the Keychain:
+
+  ```bash
+  SYMPHONY_BAR_QA_ROOT="$(mktemp -d)" SYMPHONY_BAR_CONTROL_URL=http://127.0.0.1:4000 \
+    SYMPHONY_BAR_CONTROL_TOKEN="$QA_CONTROL_TOKEN" ./build/Symphony.app/Contents/MacOS/SymphonyBar
   ```
 - `SYMPHONY_QA_LINEAR_URL` points the Add Repo sheet's Linear queries (projects and labels) at a stub GraphQL
   endpoint instead of `https://api.linear.app/graphql`, such as `http://localhost:4101/graphql`. Only an `http`

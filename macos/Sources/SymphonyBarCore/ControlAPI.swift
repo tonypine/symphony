@@ -259,7 +259,7 @@ public enum ControlAPI {
 
     /// Sends `action` to the control URL in `stateRoot`, with the bearer token from the same directory.
     /// `fallback` is the control URL used while Symphony hasn't written one, and `token`, when given, is sent instead
-    /// of the state directory's (the API fixtures' in QA mode).
+    /// of the state directory's (the live Symphony's or the API fixtures' in QA mode).
     public static func send(
         _ action: ControlAction,
         stateRoot: URL,
