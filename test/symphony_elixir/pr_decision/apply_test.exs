@@ -69,11 +69,6 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
   end
 
   # A store that refuses to set a hold.
-  defmodule FailingHoldStore do
-    def get_ticket_state(_repo_key, _issue_id), do: nil
-    def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :store_down}
-  end
-
   defmodule FailingOriginStore do
     def set_ci_fix_origin(_repo_key, _issue_id, _origin), do: {:error, :store_down}
   end
@@ -791,10 +786,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert %{issue_identifier: "TP-1", pr_number: 1, files: ["SPEC.md"], progress_at: @now} = link
       assert %{linked: true, step_behind: false, released: false} = link
 
-      assert %{reason: "Waiting on TP-1 to land: they change the same files (SPEC.md)", waits_on: %{type: "landing", keys: ["TP-1"]}} =
-               Hold.get(@repo_key, @issue_id, :blocked)
-
-      assert_received {:label, @issue_id, "Blocked"}
+      assert SymphonyElixir.Pauses.why({:ticket, @repo_key, @issue_id}) == ["Waiting for TP-1 to land: it changes the same files"]
       refute_received {:move, _id, _state}
 
       assert %{outcome: :applied} = Apply.apply(action, ctx(:merging, facts: %{auto_merge: :armed}))
@@ -824,8 +816,10 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert %{linked: false, step_behind: true} = leader
       assert %{pr_number: 12, linked: false, title: "Docs pass"} = other
 
-      assert Hold.get(@repo_key, @issue_id, :blocked).reason ==
-               "Waiting on TP-1 and PR #12 (Docs pass) to land: they change the same files (SPEC.md, README.md)"
+      assert SymphonyElixir.Pauses.why({:ticket, @repo_key, @issue_id}) == [
+               "Waiting for TP-1 to land: it changes the same files",
+               "Waiting for PR #12 (Docs pass) to land: it changes the same files"
+             ]
     end
 
     test "a link Symphony recorded is still its own; one Linear refuses is logged and the ticket waits without it" do
@@ -838,16 +832,16 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       Process.put(:add_blocked_by, {:error, :linear_down})
       log = capture_log(fn -> assert %{outcome: :applied, links: [%{linked: false}]} = Apply.apply(action, ctx(:qa)) end)
       assert log =~ "could not link TP-1 as a blocker"
-      assert Hold.held?(@repo_key, @issue_id, :blocked)
+      assert SymphonyElixir.Pauses.paused?({:ticket, @repo_key, @issue_id})
     end
 
-    test "applies again on a head it waited on before, and fails when the hold can't be set" do
+    test "applies again on a head it waited on before, and fails when the pause can't be set" do
       action = action("R14a", :wait_for_competitors, args: %{prs: [@leader], step_behind: false})
       applied = [%{head_sha: "head-1", rule: "R14a", kind: :wait_for_competitors, at: @now}]
       assert %{outcome: :applied} = Apply.apply(action, ctx(:qa, applied: applied))
 
-      ctx = ctx(:qa, opts: [run_store: FailingHoldStore])
-      capture_log(fn -> assert %{outcome: {:error, :store_down}, links: []} = Apply.apply(action, ctx) end)
+      ctx = %{ctx(:qa) | repo_key: nil}
+      capture_log(fn -> assert %{outcome: {:error, {:invalid_subject, _subject}}, links: []} = Apply.apply(action, ctx) end)
     end
   end
 

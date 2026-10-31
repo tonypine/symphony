@@ -6915,9 +6915,12 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert body =~ "Configured threshold: 5"
     assert body =~ "on a Blocked hold"
 
-    assert_receive {:memory_tracker_label_added, "issue-tool-failure-breaker", "Blocked"}, @min_wait_ms
 
     completed_state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
+    # The ticket waits on a reason the Director releases with Unblock.
+    assert {:ok, %{reasons: [%{kind: :environment, waits_on: %{condition: "circuit_breaker"}, releasable: true}]}} =
+             SymphonyElixir.Pauses.get({:ticket, Config.repo_key!(), issue.id})
+
     refute_received {:memory_tracker_state_update, "issue-tool-failure-breaker", _state}
     refute Map.has_key?(completed_state.retry_attempts, issue.id)
     refute MapSet.member?(completed_state.claimed, issue.id)
