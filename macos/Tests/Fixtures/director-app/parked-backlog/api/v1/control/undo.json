@@ -1,0 +1,8 @@
+{
+  "from_state": "In Progress",
+  "issue_id": "i-430",
+  "issue_identifier": "SHOP-430",
+  "move": "undo",
+  "to_state": "Backlog",
+  "undone": "move"
+}

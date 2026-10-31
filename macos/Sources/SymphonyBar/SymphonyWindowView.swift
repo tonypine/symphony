@@ -168,6 +168,14 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var stopInFlight = false
     /// What went wrong with them, shown in the sheet.
     @Published var stopError: String?
+    /// The Move to… sheet shown (TP-1328); nothing moves until its button is pressed.
+    @Published var moveSheet: MoveSheet?
+    /// True while the sheet's move is on its way to Symphony.
+    @Published var moveInFlight = false
+    /// What went wrong with it, shown in the sheet.
+    @Published var moveError: String?
+    /// The banner a Move to… showed, which the ticket page and Tickets show while it stays.
+    @Published var moveBannerID: UUID?
     /// Stops made from the app, shown on the timeline until their audit record arrives.
     @Published var localStops: [TicketPage.LocalStop] = []
     /// Tickets' scope bar choice, search and selected row (D6).
@@ -549,7 +557,7 @@ final class SymphonyWindowModel: ObservableObject {
         inboxBanner = nil
     }
 
-    private func showBanner(_ banner: InboxBanner) {
+    func showBanner(_ banner: InboxBanner) {
         bannerTask?.cancel()
         inboxBanner = banner
         NSAccessibility.post(
@@ -792,6 +800,7 @@ struct SymphonyWindowView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(DesignTokens.Surface.window.color)
                 .modifier(StopRunSheetPresenter(model: model))
+                .modifier(MoveSheetPresenter(model: model))
                 .modifier(DispatchSheetsPresenter(model: model))
                 .toolbar {
                     ToolbarItemGroup(placement: .navigation) {
