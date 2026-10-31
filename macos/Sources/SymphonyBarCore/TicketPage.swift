@@ -7,8 +7,10 @@ import Foundation
 public struct TicketPage: Equatable {
     /// What the ticket is doing now, the line under the header.
     public enum Phase: Equatable {
-        /// An agent runs on it; `stuck` after `Overview.stuckAfter` without an agent event.
-        case working(stuck: Bool)
+        /// An agent runs on it.
+        case working
+        /// Symphony paused it, for the reasons in `TicketPage.paused`.
+        case paused
         /// It waits on something: "you", "CI", "a blocker", "a slot", "a retry at 14:32".
         case waiting(on: String)
         /// In review: Code Review or QA, with the QA pass when it is running or queued.
@@ -23,6 +25,44 @@ public struct TicketPage: Equatable {
     public struct Badge: Equatable {
         public var status: DesignTokens.Status
         public var word: String
+    }
+
+    /// Why the ticket is paused, as Symphony's `pause` block says: one row per reason, in the order they were set.
+    public struct Paused: Equatable {
+        public struct Reason: Equatable, Identifiable {
+            public var id: Int
+            /// `question`, `ticket`, `build`, `person` or `environment`.
+            public var kind: String?
+            /// "Waiting for your answer", Symphony's own words.
+            public var text: String
+            /// "14:02", or "Oct 6, 14:02" before today: when it was set.
+            public var since: String?
+            /// Whether the Director may release it, so its row offers Release.
+            public var releasable: Bool
+
+            /// The row's Release for VoiceOver: "Release: waiting for TP-1194 to finish".
+            public var releaseAccessibilityLabel: String { "\(TicketPage.releaseTitle): \(Paused.lowercasedLead(text))" }
+        }
+
+        /// "14:02": when the ticket was paused.
+        public var since: String?
+        public var reasons: [Reason]
+
+        /// The line under the title: "Paused: waiting for your answer", or "Paused for 2 reasons" over their rows.
+        public var sentence: String {
+            guard reasons.count == 1, let reason = reasons.first else { return "Paused for \(reasons.count) reasons" }
+            return "Paused: \(Self.lowercasedLead(reason.text))"
+        }
+
+        /// "since 14:02", nil when Symphony didn't say.
+        public var sinceText: String? { since.map { "since \($0)" } }
+
+        /// "Waiting for TP-1194" reads "waiting for TP-1194" after a colon; a word in capitals ("TP-1194 …") stays.
+        static func lowercasedLead(_ text: String) -> String {
+            let characters = Array(text)
+            guard characters.count > 1, characters[0].isUppercase, characters[1].isLowercase else { return text }
+            return characters[0].lowercased() + String(characters.dropFirst())
+        }
     }
 
     /// Now: the run under way.
@@ -160,6 +200,8 @@ public struct TicketPage: Equatable {
     public static let copyAPIURLTitle = "Copy API URL"
     public static let showAuditRecordsTitle = "Show Audit Records"
     public static let revealWorktreeTitle = "Reveal Worktree"
+    /// A releasable pause reason's button: it sends the unblock move.
+    public static let releaseTitle = "Release"
     /// The audit record types the timeline reads; each is its own query, as the API filters on one type.
     public static let auditTypes = ["run_stopped", "director_move"]
     /// How many days of audit records the page reads.
@@ -176,6 +218,10 @@ public struct TicketPage: Equatable {
     public var url: URL?
     public var badges: [Badge]
     public var phase: Phase
+    /// Why it is paused, nil while it moves or before Symphony said (a Symphony without the `pause` block).
+    public var paused: Paused?
+    /// The ticket's questions still waiting for an answer, by title; empty from a Symphony without the block.
+    public var openQuestions: [String]
     public var now: Now?
     /// Oldest first; the current step last.
     public var timeline: [Step]
@@ -225,8 +271,8 @@ public struct TicketPage: Equatable {
     /// The line under the header: "Working", "Waiting on a retry at 14:32", "Done, merged 13:40".
     public var phaseSentence: String {
         switch phase {
-        case .working(stuck: false): return "Working"
-        case .working(stuck: true): return "Working, but no agent activity for a while"
+        case .working: return "Working"
+        case .paused: return paused?.sentence ?? "Paused"
         case let .waiting(on): return "Waiting on \(on)"
         case let .inReview(qa):
             return (["In review"] + [qa].compactMap { $0 }).joined(separator: " · ")
@@ -329,6 +375,12 @@ public struct TicketPage: Equatable {
         acceptsNotes = sources.events != nil && repoKey?.isEmpty == false
         feedAbsence = sources.feedAbsence
         repositoryPaused = issue?.repositoryPaused ?? false
+        // Symphony's one answer to why it doesn't move: the ticket's own payload, else its entry in the state. A
+        // Symphony that predates it sends no `open_questions`, and the page derives the phase from the lists.
+        let status = sources.issue.flatMap { try? Self.decoder.decode(TicketStatus.Carrier.self, from: $0) }?.status
+            ?? sources.state.flatMap { try? Self.decoder.decode(TicketStatus.Lists.self, from: $0) }?.status(of: identifier)
+        paused = status?.pause.flatMap { Self.paused($0, clock: { StatusMenu.clockTime($0, now: reference, timeZone: timeZone, dateFormat: "MMM d, HH:mm") }) }
+        openQuestions = status?.openQuestions.compactMap { $0.title?.nonEmpty } ?? []
 
         let pullRequest = [running?.pullRequestUrl, watching?.pullRequestUrl, issue?.watching?.pullRequestUrl]
             .compactMap { $0.flatMap(URL.init(string:)) }.first
@@ -343,14 +395,16 @@ public struct TicketPage: Equatable {
         let idle = running.flatMap { run in
             (run.lastEventAt ?? run.startedAt).flatMap(Self.date).map { Int(reference.timeIntervalSince($0)) }
         }
-        let stuck = idle.map(Overview.isStuck(idleSeconds:)) ?? false
 
-        // What it is doing now, the first answer that applies.
+        // What it is doing now, the first answer that applies. With Symphony's answer a ticket is running, paused or
+        // moving; the Inbox and blocked lists are its pauses then.
         if running != nil {
-            phase = .working(stuck: stuck)
+            phase = .working
         } else if let shipped {
             phase = .done(pullRequest: pullRequest, mergedAt: shipped.completedAt.flatMap(Self.date))
-        } else if waitingOnYou != nil {
+        } else if paused != nil {
+            phase = .paused
+        } else if status == nil, waitingOnYou != nil {
             phase = .waiting(on: "you")
         } else if Self.isState(watching?.state, "Merging") {
             phase = .waiting(on: watchCard?.waitingOn ?? "CI")
@@ -359,7 +413,7 @@ public struct TicketPage: Equatable {
         } else if let retry {
             let due = retry.dueAt.flatMap(Self.date)
             phase = .waiting(on: due.map { "a retry at \(StatusMenu.clockTime($0, now: reference, timeZone: timeZone, dateFormat: "MMM d, HH:mm"))" } ?? "a retry")
-        } else if let blocked {
+        } else if status == nil, let blocked {
             let blockers = (blocked.blockedBy ?? []).compactMap(\.issueIdentifier)
             phase = .waiting(on: blockers.isEmpty ? (blocked.reason.map { "a blocker (\($0))" } ?? "a blocker") : "a blocker: \(blockers.joined(separator: ", "))")
         } else if let slot {
@@ -374,7 +428,10 @@ public struct TicketPage: Equatable {
 
         var badges: [Badge] = []
         switch phase {
-        case let .working(stuck): badges.append(stuck ? Badge(status: .problem, word: "Needs attention") : Badge(status: .working, word: "Working"))
+        case .working: badges.append(Badge(status: .working, word: "Working"))
+        case .paused:
+            let you = paused?.reasons.contains { $0.kind == "question" || $0.kind == "person" } ?? false
+            badges.append(you ? Badge(status: .you, word: "Waiting on you") : Badge(status: .idle, word: "Paused"))
         case .waiting(on: "you"): badges.append(Badge(status: .you, word: "Waiting on you"))
         case .waiting: badges.append(Badge(status: .idle, word: "Waiting"))
         case .inReview: badges.append(Badge(status: .working, word: "In review"))
@@ -450,7 +507,7 @@ public struct TicketPage: Equatable {
             if let started {
                 steps.append(Step(
                     id: "run-current", time: started, timeText: clock(started), title: "\(name) run \(number)",
-                    result: .current, resultWord: stuck ? "no activity for \(idle.map(Overview.duration) ?? "a while")" : "running",
+                    result: .current, resultWord: "running",
                     durationSeconds: elapsed, tokens: total, detail: nil
                 ))
             }
@@ -498,6 +555,19 @@ public struct TicketPage: Equatable {
     }
 
     // MARK: - Parts
+
+    /// The pause block as the page shows it; nil when it has no reason to show.
+    private static func paused(_ pause: TicketStatus.Pause, clock: (Date) -> String) -> Paused? {
+        let reasons = (pause.reasons ?? []).enumerated().compactMap { index, reason -> Paused.Reason? in
+            guard let text = reason.text?.nonEmpty else { return nil }
+            return Paused.Reason(
+                id: index, kind: reason.kind, text: text,
+                since: reason.setAt.flatMap(date).map(clock), releasable: reason.releasable ?? false
+            )
+        }
+        guard !reasons.isEmpty else { return nil }
+        return Paused(since: pause.since.flatMap(date).map(clock), reasons: reasons)
+    }
 
     /// "Stopped by you", joined with a Backlog move right after it, and the Director's other moves.
     private static func eventSteps(audit: [AuditRecord], stops: [LocalStop], clock: (Date) -> String) -> [Step] {
@@ -646,6 +716,71 @@ public struct TicketPage: Equatable {
         let toState: String?
         let comment: String?
         let recordHash: String?
+    }
+
+    /// Why the ticket does not move (TP-1242): its pause, nil while it moves, and its open questions. The ticket
+    /// payload and each of its state entries carry it; a Symphony that predates it sends neither field.
+    struct TicketStatus: Decodable {
+        struct Pause: Decodable {
+            struct Reason: Decodable {
+                let kind: String?
+                let text: String?
+                let setAt: String?
+                let releasable: Bool?
+            }
+
+            let since: String?
+            let reasons: [Reason]?
+        }
+
+        struct Question: Decodable {
+            let id: String?
+            let title: String?
+        }
+
+        let pause: Pause?
+        let openQuestions: [Question]
+
+        private enum CodingKeys: String, CodingKey { case pause, openQuestions }
+
+        /// Nil when the payload has no `open_questions`, the field every Symphony with the block sends.
+        static func decode(_ decoder: Decoder) -> TicketStatus? {
+            guard let container = try? decoder.container(keyedBy: CodingKeys.self),
+                  let questions = try? container.decode([Question].self, forKey: .openQuestions) else { return nil }
+            return TicketStatus(pause: try? container.decodeIfPresent(Pause.self, forKey: .pause), openQuestions: questions)
+        }
+
+        init(pause: Pause?, openQuestions: [Question]) {
+            self.pause = pause
+            self.openQuestions = openQuestions
+        }
+
+        /// A payload that may carry the block: the ticket's, or one entry of a state list.
+        struct Carrier: Decodable {
+            private enum CodingKeys: String, CodingKey { case issueIdentifier }
+
+            let issueIdentifier: String?
+            let status: TicketStatus?
+
+            init(from decoder: Decoder) throws {
+                issueIdentifier = try? decoder.container(keyedBy: CodingKeys.self).decodeIfPresent(String.self, forKey: .issueIdentifier)
+                status = TicketStatus.decode(decoder)
+            }
+        }
+
+        /// The state lists whose entries carry the block.
+        struct Lists: Decodable {
+            let running: [Carrier]?
+            let retrying: [Carrier]?
+            let watching: [Carrier]?
+            let slotWaiting: [Carrier]?
+            let dispatchSkipped: [Carrier]?
+
+            func status(of identifier: String) -> TicketStatus? {
+                [running, retrying, watching, slotWaiting, dispatchSkipped].lazy
+                    .compactMap { $0?.first { $0.issueIdentifier == identifier }?.status }.first
+            }
+        }
     }
 
     /// The fields any state list's entry may carry; each list fills some.

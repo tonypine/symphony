@@ -1,0 +1,40 @@
+{
+  "issue_id": "i-421",
+  "issue_identifier": "SHOP-421",
+  "last_error": null,
+  "open_questions": [],
+  "pause": {
+    "reasons": [
+      {
+        "kind": "person",
+        "releasable": true,
+        "set_at": "2026-10-18T11:04:00Z",
+        "set_by": {
+          "kind": "person",
+          "name": "the Director"
+        },
+        "text": "Stopped by you at 11:04. Unblock runs it again; Restart starts it over from main.",
+        "waits_on": {
+          "action": "unblock"
+        }
+      }
+    ],
+    "releasable": true,
+    "set_by": {
+      "kind": "person",
+      "name": "the Director"
+    },
+    "since": "2026-10-18T11:04:00Z"
+  },
+  "repo_key": "web-shop",
+  "repository_paused": false,
+  "retry": null,
+  "running": null,
+  "status": "dispatch_skipped",
+  "verdicts": [],
+  "watching": null,
+  "workspace": {
+    "host": null,
+    "path": null
+  }
+}
