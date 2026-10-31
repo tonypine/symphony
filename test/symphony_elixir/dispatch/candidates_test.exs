@@ -359,6 +359,8 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
 
   defp assert_same_candidates!(issues, route \\ %{name: repo_key()}) do
     cache = poll!(issues, route)
+    # The poll pauses each Todo ticket on its open blockers (`Pauses.Dependencies`), which the gate reads.
+    _changed = Orchestrator.sweep_dependencies_for_test(repo_key(), issues, terminal_states())
 
     records = RunStore.list_ticket_states(repo_key())
     assert length(records) == length(issues)
