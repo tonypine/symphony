@@ -351,8 +351,7 @@ defmodule SymphonyElixir.DirectorMoves do
   # (`SymphonyElixir.DecisionRequest.project/4`). The reply and the
   # Decisions entry stay, as the comment a move posted does, but the answer no longer counts: the
   # Question keeps it as taken back, so the PR watcher's read drops its entry
-  # (`SymphonyElixir.Questions.answers/2`). The Inbox reads the request open again,
-  # since replies before the reopen don't count (`SymphonyElixir.NeedsDecisionHold.as_recorded/2`).
+  # (`SymphonyElixir.Questions.answers/2`). The Inbox lists the Question open again.
   defp reopen(issue, %{question_id: id, hold: hold}, opts) do
     with {:ok, _question} <- reopened(Questions.reopen({:ticket, issue.repo_key, issue.id}, id, by: OperatorStop.director()), issue) do
       attrs = Map.take(hold, [:reason, :clearing_condition, :decision])
@@ -693,8 +692,7 @@ defmodule SymphonyElixir.DirectorMoves do
     with :ok <- post_comment(issue, comment), do: {:ok, comment}
   end
 
-  # Best-effort, as a Decide's: the answers are under the requests, and the Inbox's next read writes
-  # them from there when this write fails (`SymphonyElixir.Decisions.sync/2`).
+  # Best-effort, as a Decide's: the answers are already on the Questions.
   defp record_answers(_issue, []), do: :ok
 
   defp record_answers(issue, answers) do
@@ -1141,8 +1139,7 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   # The answer goes into the ticket's scope now, so the run the cleared hold lets through reads it.
-  # Best-effort: the decision is already recorded under the request, and the Inbox's next read
-  # writes it from there when this write fails (`SymphonyElixir.Decisions.sync/2`). A pick of an
+  # Best-effort: the answer is already on the Question. A pick of an
   # option that unlocks protected paths records them, read from the Question or the hold's decision
   # (`SymphonyElixir.PathUnlock.picked_paths/2`), which carry the same options.
   defp record_decision(issue, request_comment_id, decision, picks, opts \\ []) do

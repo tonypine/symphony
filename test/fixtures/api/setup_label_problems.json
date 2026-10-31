@@ -27,36 +27,6 @@
       "severity": "error",
       "tickets": [],
       "title": "Team TP has no \"Needs Decision\" label"
-    },
-    {
-      "category": "labels",
-      "consequence": "A ticket's label says it is paused when it isn't, or a paused ticket doesn't show it, and Symphony couldn't put it right on its own. Re-sync sets the label from the hold Symphony keeps.",
-      "details": [
-        {
-          "label": "TP-7",
-          "value": "Blocked label with no hold, since 2026-10-17 09:00 UTC"
-        }
-      ],
-      "fix": {
-        "action": "resync_hold",
-        "kind": "linear",
-        "repo": "default",
-        "tickets": [
-          "TP-7"
-        ]
-      },
-      "id": "hold_drift:default",
-      "repos": [
-        "default"
-      ],
-      "severity": "warning",
-      "tickets": [
-        {
-          "identifier": "TP-7",
-          "url": "https://linear.app/t/issue/TP-7"
-        }
-      ],
-      "title": "TP-7's hold label doesn't match its hold (default)"
     }
   ]
 }

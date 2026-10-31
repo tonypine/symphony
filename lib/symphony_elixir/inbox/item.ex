@@ -22,21 +22,16 @@ defmodule SymphonyElixir.Inbox.Item do
   answers given since the plan last came back to `Plan Review`, which no revision has applied yet:
   the Inbox warns before such a plan is approved.
 
-  A hold only becomes a `:blocked` item when nothing else already waits on the ticket: `from_node/4`
-  reads the store's hold after `SymphonyElixir.HumanActions.Waiting` found no entry, so an open
-  request or a plan review keeps its own, richer item. A dependency or fix-ticket hold clears on its
-  own and is not listed at all — only an access or dispatch-loop hold waits on a person
-  (`Hold.unblockable?/1`).
-
-  `from_question/2`, `from_plan_brief/2` and `from_pause/2` build the same items from the ticket's
-  record (`SymphonyElixir.TicketState`) instead of its Linear node: an open Question
-  (`SymphonyElixir.Questions`), the plan's brief captured as it entered `Plan Review`
-  (`SymphonyElixir.PlanBrief`) and a pause with a reason the Director may release
-  (`SymphonyElixir.Pauses`). `SymphonyElixir.Inbox.FromRecord` lists them.
+  `from_question/2`, `from_plan_brief/2` and `from_pause/2` build the items from the ticket's record
+  (`SymphonyElixir.TicketState`): an open Question (`SymphonyElixir.Questions`), the plan's brief
+  captured as it entered `Plan Review` (`SymphonyElixir.PlanBrief`, which reads it with
+  `plan_from_node/2`) and a pause with a reason the Director may release
+  (`SymphonyElixir.Pauses`). `SymphonyElixir.Inbox.FromRecord` lists them; nothing here reads a
+  Linear comment for an answer.
   """
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{DecisionRequest, Hold, PlanBrief, TicketState}
+  alias SymphonyElixir.{DecisionRequest, PlanBrief, TicketState}
   alias SymphonyElixir.HumanActions.{Collector, Waiting}
   alias SymphonyElixir.Inbox.ReviewBrief
   alias SymphonyElixir.Linear.Issue
@@ -60,84 +55,17 @@ defmodule SymphonyElixir.Inbox.Item do
   @option_pattern ~r/^\*\*(.+?)\*\*(\s*\(recommended\))?\s*[:—-]?\s*(.*)$/i
 
   @doc """
-  The item of an issue node read from Linear (the fields of `SymphonyElixir.Inbox`'s detail query),
-  or nil when nothing about it waits on a person. `lookups` reads what Symphony knows locally:
-  `:hold` (`(repo_key, issue_id) -> hold | nil`).
+  What the Inbox shows of a plan, read from its Linear issue node (the fields
+  `SymphonyElixir.PlanBrief` reads), or nil when the node is no plan (label `plan` or `breakdown`) in
+  `settings`' `Plan Review`: its latest `## Review brief` comment parsed, its sub-tickets in landing
+  order and its open choices, each the request the plan run raised with the id of its Question.
   """
-  @spec from_node(map(), String.t() | nil, Schema.t(), map()) :: t() | nil
-  def from_node(node, repo_key, settings, lookups) do
-    case Waiting.entries([node], settings) do
-      [entry] -> build(node, entry, repo_key, settings, lookups)
-      [] -> from_hold(node, repo_key, lookups)
-    end
-  end
+  @spec plan_from_node(map(), Schema.t()) :: %{brief: map() | nil, sub_tickets: [map()], decisions: [map()]} | nil
+  def plan_from_node(node, settings) do
+    labels = node |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(& &1["name"])
 
-  defp build(node, entry, repo_key, settings, lookups) do
-    %{
-      issue_id: entry.issue_id,
-      identifier: entry.identifier,
-      title: entry.title,
-      repo_key: repo_key,
-      kind: entry.kind,
-      state: entry.state,
-      ask: ask(entry, node, settings),
-      waiting_since: entry.waiting_since,
-      url: entry.url,
-      review: review(entry.kind, node, repo_key, settings, lookups)
-    }
-  end
-
-  # A ticket an access or dispatch-loop hold pauses in place waits on a person's Unblock, so it is
-  # listed with the reason the hold recorded even though no review covers it. A dependency or
-  # fix-ticket hold clears on its own, so it is not listed.
-  defp from_hold(node, repo_key, lookups) do
-    with hold when is_map(hold) <- store_hold(repo_key, node["id"], lookups),
-         true <- Hold.unblockable?(hold) do
-      %{
-        issue_id: node["id"],
-        identifier: node["identifier"],
-        title: node["title"],
-        repo_key: repo_key,
-        kind: :blocked,
-        state: get_in(node, ["state", "name"]),
-        ask: Map.get(hold, :reason) || "Unblock the ticket and it continues",
-        waiting_since: Map.get(hold, :set_at),
-        url: node["url"],
-        review: %{reason: Map.get(hold, :reason), clearing_condition: Map.get(hold, :clearing_condition)}
-      }
-    else
-      _none -> nil
-    end
-  end
-
-  defp store_hold(repo_key, issue_id, lookups) do
-    case Map.get(lookups, :hold) do
-      fun when is_function(fun, 2) -> fun.(repo_key, issue_id)
-      _none -> nil
-    end
-  end
-
-  defp ask(%{kind: :action}, node, settings), do: Collector.newest_request(node, settings).title
-  defp ask(%{headline: headline}, _node, _settings) when is_binary(headline), do: headline
-  defp ask(%{kind: :plan}, _node, _settings), do: "Approve the plan"
-
-  # A merge confirmation's hold carries the move its confirmation performs (`Merging`), so the
-  # Inbox's Decide says the ticket moves; an ordinary decision's carries none.
-  defp review(:action, node, repo_key, settings, lookups) do
-    {comment_id, request} = Collector.newest_open_request(node, settings)
-
-    node
-    |> request_review(comment_id, request)
-    |> Map.merge(%{requested_at: request.created_at, confirm: MergeConfirmation.confirm_target(store_hold(repo_key, node["id"], lookups))})
-  end
-
-  defp review(:plan, node, _repo_key, settings, _lookups) do
-    %{
-      brief: brief(node),
-      sub_tickets: sub_tickets(node),
-      decisions: plan_decisions(node, settings),
-      unapplied_answers: unapplied_answers(node, settings)
-    }
+    if PlanReview.in_state?(get_in(node, ["state", "name"]), settings) and Enum.any?(labels, &Issue.breakdown_label?/1),
+      do: %{brief: brief(node), sub_tickets: sub_tickets(node), decisions: plan_decisions(node, settings)}
   end
 
   # A request as the Inbox shows it, an action's or a plan's: what it asks, why, what waits until it
@@ -169,28 +97,6 @@ defmodule SymphonyElixir.Inbox.Item do
     |> Enum.sort_by(&posted_at/1)
     |> Enum.map(fn {comment_id, request} -> request_review(node, comment_id, request) end)
   end
-
-  # The answers to the plan's requests given since the plan last came back to `Plan Review`: the
-  # revision that applies them has not handed the plan back yet, so approving it now approves a plan
-  # written without them. A plan whose history shows no move into review counts none.
-  defp unapplied_answers(node, settings) do
-    case entered_review_at(node, settings) do
-      %DateTime{} = entered_at -> node |> Collector.answered_requests() |> Enum.count(&later?(&1.at, entered_at))
-      nil -> 0
-    end
-  end
-
-  defp entered_review_at(node, settings) do
-    for %{"toState" => %{"name" => to}, "createdAt" => created_at} <- node |> get_in(["history", "nodes"]) |> List.wrap(),
-        PlanReview.in_state?(to, settings),
-        {:ok, at, _offset} <- [DateTime.from_iso8601(created_at || "")] do
-      at
-    end
-    |> Enum.max(DateTime, fn -> nil end)
-  end
-
-  defp later?(%DateTime{} = at, since), do: DateTime.compare(at, since) == :gt
-  defp later?(_at, _since), do: false
 
   defp posted_at({_comment_id, %{created_at: %DateTime{} = at}}), do: DateTime.to_unix(at, :microsecond)
   defp posted_at(_request), do: 0
@@ -228,7 +134,7 @@ defmodule SymphonyElixir.Inbox.Item do
 
   @doc """
   The `:action` item of `question`, an open Question on `record` (a normalized
-  `SymphonyElixir.TicketState`): what it asks, as `from_node/4` reads its request comment. It has
+  `SymphonyElixir.TicketState`): what it asks, as its request comment shows it. It has
   waited since the later of the move into the record's phase and when it was asked; `comment_id` is
   the request comment the pause projector wrote or found for it, nil while none.
   """
@@ -339,7 +245,7 @@ defmodule SymphonyElixir.Inbox.Item do
     |> Enum.concat(Enum.reject(choices, &MapSet.member?(held, Map.get(&1, :question_id))))
   end
 
-  defp answered_since?(%{state: :answered, answer: %{at: %DateTime{} = at}}, %DateTime{} = since), do: later?(at, since)
+  defp answered_since?(%{state: :answered, answer: %{at: %DateTime{} = at}}, %DateTime{} = since), do: DateTime.compare(at, since) == :gt
   defp answered_since?(_question, _since), do: false
 
   defp brief_headline(%{format: "parsed", headline: headline, what_to_review: items}) do

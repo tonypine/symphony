@@ -2,7 +2,6 @@ defmodule SymphonyElixir.DecisionsTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.{Decisions, IssueSummary, RunStore}
-  alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.{Adapter, Client}
   alias SymphonyElixir.Tracker.Memory
 
@@ -50,36 +49,6 @@ defmodule SymphonyElixir.DecisionsTest do
     )
   end
 
-  defp request_body(title \\ "Keep the legacy partials") do
-    Request.render_hold(
-      %{
-        title: title,
-        question: "Remove the legacy partials here, or leave them for TP-891?",
-        why: "The reviewer keeps flagging them.",
-        options: [
-          %{label: "Defer to TP-891", effect: "The partials stay; TP-891 removes them.", recommended: true},
-          %{label: "Remove them here", effect: "This PR removes the partials."}
-        ]
-      },
-      "Code Review"
-    )
-  end
-
-  defp unlock_request_body do
-    Request.render_hold(
-      %{
-        title: "Change the workflow settings",
-        question: "May TP-1 change the workflow settings file?",
-        why: "The new hook lives there.",
-        options: [
-          %{label: "Allow this ticket to change the workflow settings file", effect: "the next run changes it", recommended: true, unlocks: ["WORKFLOW.md"]},
-          %{label: "Keep it as it is", effect: "nothing changes"}
-        ]
-      },
-      "In Progress"
-    )
-  end
-
   # What Linear stores of a written description: `*` bullets, nested ones indented by four.
   defp linear_stored(description), do: description |> String.replace("\n  - ", "\n    * ") |> String.replace("\n- ", "\n* ")
 
@@ -92,10 +61,8 @@ defmodule SymphonyElixir.DecisionsTest do
     before <> Decisions.start_marker() <> head <> "\n\n" <> copies <> "\n" <> Decisions.end_marker()
   end
 
-  defp ticket(comments, attrs \\ %{}), do: Map.merge(%{"id" => @issue_id, "description" => "Fix it.", "comments" => %{"nodes" => comments}}, attrs)
-
-  defp comment(id, body, created_at \\ "2026-10-13T05:40:00Z", parent \\ nil),
-    do: %{"id" => id, "body" => body, "createdAt" => created_at, "parent" => parent && %{"id" => parent}}
+  defp comment(id, body, created_at),
+    do: %{"id" => id, "body" => body, "createdAt" => created_at}
 
   describe "entry/5 and scope/1" do
     test "reads the scope from the answer" do
@@ -306,42 +273,34 @@ defmodule SymphonyElixir.DecisionsTest do
 
   describe "the store record" do
     test "an answer to a decision request is in the ticket's store record and in its description" do
-      node = ticket([comment("c1", request_body()), comment("r1", "Defer to TP-891", nil, "c1")])
-
-      assert :ok = Decisions.sync(node, tracker: FakeTracker, repo_key: @repo_key)
+      assert :ok = Decisions.record(@issue_id, [entry(%{key: "c1"})], tracker: FakeTracker, repo_key: @repo_key)
 
       assert_received {:description_written, @issue_id, description}
       assert [%{id: "D1", key: "c1", scope: "Deferred to TP-891"}] = Decisions.recorded(description)
       assert [%{key: "c1", date: ~D[2026-10-13], title: "Keep the legacy partials", scope: "Deferred to TP-891"}] = RunStore.get_ticket_state(@repo_key, @issue_id).decisions
     end
 
-    test "a section removed by hand is rewritten from the store on the next read, with the same entries" do
-      node = ticket([comment("c1", request_body()), comment("r1", "Defer to TP-891", nil, "c1"), comment("c2", "Ruling: keep the flag")])
-      assert :ok = Decisions.sync(node, tracker: FakeTracker, repo_key: @repo_key)
+    test "a section removed by hand is rewritten from the store on the next write, with the same entries" do
+      assert :ok = Decisions.record(@issue_id, [entry(%{key: "c1"})], tracker: FakeTracker, repo_key: @repo_key)
       assert_received {:description_written, @issue_id, written}
 
-      # A person deletes the section, and the comments that recorded the answers are gone too.
-      Process.put({FakeTracker, :description}, {:ok, "Fix it."})
-      assert :ok = Decisions.sync(ticket([]), tracker: FakeTracker, repo_key: @repo_key)
+      # A person deletes the section.
+      assert :ok = Decisions.record(@issue_id, [], tracker: FakeTracker, repo_key: @repo_key, description: "Fix it.")
       assert_received {:description_written, @issue_id, ^written}
 
-      # The poll rewrites it the same way, and leaves a section that shows every decision alone.
-      issues = [%Issue{id: @issue_id, description: "Fix it."}, %Issue{id: "other", description: "Other."}]
-      assert Decisions.sweep(issues, tracker: FakeTracker, repo_key: @repo_key) == 1
-      assert_received {:description_written, @issue_id, ^written}
-
+      # A section that shows every decision is left alone.
       Process.put({FakeTracker, :description}, {:error, :must_not_read})
-      assert Decisions.sweep([%Issue{id: @issue_id, description: written}], tracker: FakeTracker, repo_key: @repo_key) == 0
+      assert :ok = Decisions.record(@issue_id, [], tracker: FakeTracker, repo_key: @repo_key, description: written)
       refute_received {:description_written, _issue_id, _description}
     end
 
     test "an existing ticket's section is backfilled into the store once, with no duplicate entries" do
       {:ok, description} = Decisions.put("Fix it.", [entry(%{key: "c1"})])
       Process.put({FakeTracker, :description}, {:error, :must_not_read})
-      node = ticket([comment("c1", request_body()), comment("r1", "Defer to TP-891", nil, "c1")], %{"description" => description})
+      opts = [tracker: FakeTracker, repo_key: @repo_key, description: description]
 
-      assert :ok = Decisions.sync(node, tracker: FakeTracker, repo_key: @repo_key)
-      assert :ok = Decisions.sync(node, tracker: FakeTracker, repo_key: @repo_key)
+      assert :ok = Decisions.record(@issue_id, [entry(%{key: "c1"})], opts)
+      assert :ok = Decisions.record(@issue_id, [entry(%{key: "c1"})], opts)
 
       refute_received {:description_written, _issue_id, _description}
       assert [%{key: "c1", date: @date}] = RunStore.get_ticket_state(@repo_key, @issue_id).decisions
@@ -356,29 +315,27 @@ defmodule SymphonyElixir.DecisionsTest do
   end
 
   describe "the events an answer records" do
-    test "a reply records one decision.recorded by the Director, naming its request, however often it is synced" do
+    test "an answer records one decision.recorded by the Director, naming its request, however often it is written" do
       decision = %{title: "Keep the legacy partials", question: "Remove the legacy partials here, or leave them for TP-891?"}
       :ok = SymphonyElixir.Hold.set(@repo_key, @issue_id, :needs_decision, %{reason: decision.question, decision: decision})
       [%{id: request_id}] = RunStore.list_ticket_events(@repo_key, @issue_id, [])
-      node = ticket([comment("c1", request_body()), comment("r1", "Defer to TP-891", nil, "c1")])
+      answer = entry(%{key: "c1"})
 
-      assert :ok = Decisions.sync(node, tracker: FakeTracker, repo_key: @repo_key)
-      assert :ok = Decisions.sync(node, tracker: FakeTracker, repo_key: @repo_key)
-      assert :ok = Decisions.record(@issue_id, Decisions.answered(node), tracker: FakeTracker, repo_key: @repo_key)
+      for _write <- 1..3, do: assert(:ok = Decisions.record(@issue_id, [answer], tracker: FakeTracker, repo_key: @repo_key))
 
       assert [_requested, %{type: "decision.recorded", actor: %{kind: :person, name: "the Director"}, idempotency: "decision.recorded:c1"} = recorded] =
                RunStore.list_ticket_events(@repo_key, @issue_id, [])
 
-      assert %{answer: "Defer to TP-891 (option: **Defer to TP-891** (recommended): The partials stay; TP-891 removes them.)", key: "c1", request: ^request_id} =
-               recorded.payload
+      assert %{answer: "Defer to TP-891: don't make that change.", key: "c1", request: ^request_id} = recorded.payload
 
       assert recorded.payload.title == "Keep the legacy partials"
     end
 
-    test "a ruling records its decision.recorded naming no request" do
+    test "a ruling recorded before records its decision.recorded naming no request" do
       :ok = SymphonyElixir.Hold.set(@repo_key, @issue_id, :needs_decision, %{decision: %{title: "Keep the flag", question: "Keep it?"}})
+      ruling = Decisions.entry("ruling-c2", @date, "Keep the flag", "Ruling given in a comment.", "Keep the flag")
 
-      assert :ok = Decisions.sync(ticket([comment("c2", "Ruling: Keep the flag")]), tracker: FakeTracker, repo_key: @repo_key)
+      assert :ok = Decisions.record(@issue_id, [ruling], tracker: FakeTracker, repo_key: @repo_key)
 
       assert [{"decision.requested", _requested}, {"decision.recorded", %{answer: "Keep the flag", key: "ruling-c2"} = ruling}] =
                ticket_events(@repo_key, @issue_id)
@@ -404,54 +361,10 @@ defmodule SymphonyElixir.DecisionsTest do
     end
   end
 
-  describe "answered/1" do
-    test "reads a request answered by a reply, with the option the reply picks" do
-      node =
-        ticket([
-          comment("c1", request_body()),
-          comment("r2", "Something later", "2026-10-14T09:00:00Z", "c1"),
-          comment("r1", "Defer to TP-891", "2026-10-13T05:48:00Z", "c1")
-        ])
-
-      assert [
-               %{
-                 key: "c1",
-                 date: ~D[2026-10-13],
-                 title: "Keep the legacy partials",
-                 answer: "Defer to TP-891 (option: **Defer to TP-891** (recommended): The partials stay; TP-891 removes them.)",
-                 scope: "Deferred to TP-891"
-               }
-             ] = Decisions.answered(node)
-    end
-
-    test "keeps a reply that already says what the option does as it is" do
-      node = ticket([comment("c1", request_body()), comment("r1", "Defer to TP-891: The partials stay; TP-891 removes them.", nil, "c1")])
-
-      assert [%{answer: "Defer to TP-891: The partials stay; TP-891 removes them.", date: ~D[2026-10-13]}] = Decisions.answered(node)
-    end
-
-    test "takes the request's date when the reply has none it can read, and today when neither does" do
-      assert [%{date: ~D[2026-10-13]}] = Decisions.answered(ticket([comment("c1", request_body()), comment("r1", "Remove them", "not a date", "c1")]))
-      assert [%{date: today}] = Decisions.answered(ticket([comment("c1", request_body(), nil), comment("r1", "Remove them", nil, "c1")]))
-      assert today == Date.utc_today()
-    end
-
-    test "is no decision while unanswered, when withdrawn, or for an ordinary comment" do
-      assert Decisions.answered(ticket([comment("c1", request_body())])) == []
-      withdrawal = comment("w1", Request.render_withdrawal("Not needed"), nil, "c1")
-      assert Decisions.answered(ticket([comment("c1", request_body()), withdrawal])) == []
-      assert Decisions.answered(ticket([comment("c1", "Just a note"), comment("r1", "Reply", nil, "c1")])) == []
-      assert Decisions.answered(%{"id" => @issue_id}) == []
-      assert Decisions.answered(nil) == []
-    end
-  end
-
   describe "an answer that picks an option unlocking protected paths" do
-    test "a reply that picks it records the paths, in a hidden line of the entry that reads back, and in the store" do
-      node = ticket([comment("c1", unlock_request_body()), comment("r1", "1", nil, "c1")])
-
-      assert [%{key: "c1", unlocks: ["WORKFLOW.md"]}] = Decisions.answered(node)
-      assert :ok = Decisions.sync(node, tracker: FakeTracker, repo_key: @repo_key)
+    test "an answer that picks it records the paths, in a hidden line of the entry that reads back, and in the store" do
+      answer = Decisions.entry("c1", @date, "Change the workflow settings", "May TP-1 change the workflow settings file?", "1", ["WORKFLOW.md"])
+      assert :ok = Decisions.record(@issue_id, [answer], tracker: FakeTracker, repo_key: @repo_key)
 
       assert_received {:description_written, @issue_id, description}
       assert description =~ "  - **Scope:** As answered\n  <!-- symphony:unlocks WORKFLOW.md -->\n"
@@ -459,14 +372,6 @@ defmodule SymphonyElixir.DecisionsTest do
       assert [%{id: "D1", key: "c1", unlocks: ["WORKFLOW.md"]}] = Decisions.recorded(description)
       assert [%{id: "D1", key: "c1", unlocks: ["WORKFLOW.md"]}] = Decisions.recorded(linear_stored(description))
       assert [%{key: "c1", unlocks: ["WORKFLOW.md"]}] = RunStore.get_ticket_state(@repo_key, @issue_id).decisions
-    end
-
-    test "a reply that picks another option, or none, records no paths" do
-      for reply <- ["Keep it as it is", "Not sure yet"] do
-        node = ticket([comment("c1", unlock_request_body()), comment("r1", reply, nil, "c1")])
-        assert [decision] = Decisions.answered(node)
-        refute Map.has_key?(decision, :unlocks), reply
-      end
     end
 
     test "only protected paths are kept, and a hidden line naming none adds nothing" do
@@ -480,7 +385,7 @@ defmodule SymphonyElixir.DecisionsTest do
     end
   end
 
-  describe "ruling?/1 and rulings/1" do
+  describe "ruling?/1" do
     test "a comment opening with Decision: or Ruling: is a ruling, in any case and bold or not" do
       for body <- ["Decision: defer it to TP-891", "ruling: keep it", "  **Decision:** keep it", "**Ruling**: keep it", "DECISION : keep it"],
           do: assert(Decisions.ruling?(body), body)
@@ -488,118 +393,46 @@ defmodule SymphonyElixir.DecisionsTest do
       for body <- ["Decision:", "Decision:   ", "## Decision needed: Keep it", "The decision: keep it", "Decisions: keep it", nil],
           do: refute(Decisions.ruling?(body), inspect(body))
     end
-
-    test "reads a person's ruling, keyed by its comment, titled by its first sentence and scoped by its text" do
-      node = ticket([comment("c1", "Decision: defer the legacy partials to TP-891. They go with the retired states.", "2026-10-13T05:48:00Z")])
-
-      assert [
-               %{
-                 key: "ruling-c1",
-                 date: ~D[2026-10-13],
-                 title: "defer the legacy partials to TP-891.",
-                 question: "Ruling given in a comment.",
-                 answer: "defer the legacy partials to TP-891. They go with the retired states.",
-                 scope: "Deferred to TP-891"
-               }
-             ] = Decisions.rulings(node)
-    end
-
-    test "cuts a long first sentence on a word for the title" do
-      long = "keep " <> String.duplicate("every legacy partial ", 6) <> "here"
-      assert [%{title: title, answer: "keep every" <> _rest}] = Decisions.rulings(ticket([comment("c1", "Ruling: " <> long)]))
-      assert String.ends_with?(title, " every legacy…")
-      assert String.length(title) <= 81
-    end
-
-    test "Symphony's own comments, a supervisor's note and a reply under a decision request are no ruling" do
-      node =
-        ticket([
-          comment("w1", "## Symphony Workpad\n\nDecision: keep the partials"),
-          comment("b1", "## Review brief\n\n**Decisions needed:**\n\nNone."),
-          comment("s1", "Supervisor note: Decision: keep the partials"),
-          comment("c1", request_body()),
-          comment("r1", "Decision: Defer to TP-891", nil, "c1"),
-          comment("n1", "Just a note"),
-          %{"id" => "x1", "body" => nil},
-          %{"body" => "Decision: no id"},
-          comment("t1", "Ruling: keep it", nil, "n1")
-        ])
-
-      assert [%{key: "ruling-t1", answer: "keep it"}] = Decisions.rulings(node)
-      assert [%{key: "c1"}] = Decisions.answered(node)
-      assert Decisions.rulings(%{"id" => @issue_id}) == []
-      assert Decisions.rulings(nil) == []
-    end
   end
 
-  describe "sync/2 and record/3" do
-    test "writes a person's ruling once, and the same ruling commented again adds nothing" do
-      ruling = comment("c1", "Decision: defer the legacy partials to TP-891", "2026-10-14T05:00:00Z")
-      node = ticket([comment("w1", "## Symphony Workpad\n\nWorking."), ruling])
-
-      assert :ok = Decisions.sync(node, tracker: FakeTracker)
-
-      assert_received {:description_written, @issue_id, description}
-      assert [%{id: "D1", key: "ruling-c1", answer: "defer the legacy partials to TP-891", scope: "Deferred to TP-891"}] = Decisions.recorded(description)
-
-      Process.put({FakeTracker, :description}, {:error, :must_not_read})
-      again = comment("c2", "**Decision:** Defer the legacy partials to TP-891 ", "2026-10-14T06:00:00Z")
-      stored = linear_stored(description)
-
-      assert :ok = Decisions.sync(%{node | "description" => stored, "comments" => %{"nodes" => [ruling, again]}}, tracker: FakeTracker)
-      refute_received {:description_written, _issue_id, _description}
-
-      # Two copies of a new ruling in one read are written once, after an answered request.
-      Process.put({FakeTracker, :description}, {:ok, "Fix it."})
-      node = ticket([comment("r0", request_body()), comment("a0", "Remove them", nil, "r0"), ruling, again], %{"id" => "issue-2"})
-
-      assert :ok = Decisions.sync(node, tracker: FakeTracker)
-      assert_received {:description_written, "issue-2", description}
-      assert [%{id: "D1", key: "r0"}, %{id: "D2", key: "ruling-c1"}] = Decisions.recorded(description)
-    end
-
-    test "a ruling the section already records as a request's answer adds nothing, an escaped one neither" do
+  describe "record/3" do
+    test "a ruling whose answer the section already records as a request's answer adds nothing, an escaped one neither" do
       {:ok, description} = Decisions.put("Fix it.", [entry(%{key: "r0", answer: "Keep the \\_legacy\\_ partials"})])
       Process.put({FakeTracker, :description}, {:ok, description})
+      ruling = Decisions.entry("ruling-c1", @date, "keep the _legacy_ partials", "Ruling given in a comment.", "keep the _legacy_ partials")
 
-      assert :ok = Decisions.record(@issue_id, Decisions.rulings(ticket([comment("c1", "Ruling: keep the _legacy_ partials")])), tracker: FakeTracker)
+      assert :ok = Decisions.record(@issue_id, [ruling, ruling], tracker: FakeTracker)
       refute_received {:description_written, _issue_id, _description}
     end
 
     test "writes an answered request that the description does not record yet" do
-      node = ticket([comment("c1", request_body()), comment("r1", "Defer to TP-891", nil, "c1")])
-
-      assert :ok = Decisions.sync(node, tracker: FakeTracker)
+      assert :ok = Decisions.record(@issue_id, [entry(%{key: "c1"})], tracker: FakeTracker)
 
       assert_received {:description_written, @issue_id, description}
       assert [%{id: "D1", key: "c1", scope: "Deferred to TP-891"}] = Decisions.recorded(description)
       assert String.starts_with?(description, "Fix it.\n\n")
     end
 
-    test "costs no Linear call when the node already records every answer" do
+    test "costs no Linear call when the description read already records every answer" do
       {:ok, description} = Decisions.put("Fix it.", [entry(%{key: "c1"})])
-      node = ticket([comment("c1", request_body()), comment("r1", "Defer to TP-891", nil, "c1")], %{"description" => description})
-
       Process.put({FakeTracker, :description}, {:error, :must_not_read})
 
-      assert :ok = Decisions.sync(node, tracker: FakeTracker)
-      assert :ok = Decisions.sync(%{"comments" => %{"nodes" => []}}, tracker: FakeTracker)
+      assert :ok = Decisions.record(@issue_id, [entry(%{key: "c1"})], tracker: FakeTracker, description: description)
       refute_received {:description_written, _issue_id, _description}
     end
 
     test "rewrites a section that holds an answer twice once, then writes nothing" do
       {:ok, once} = Decisions.put("Fix it.", [entry(%{key: "c1"})])
       twice = once |> linear_stored() |> repeated(2)
-      node = ticket([comment("c1", request_body()), comment("r1", "Defer to TP-891", nil, "c1")], %{"description" => twice})
       Process.put({FakeTracker, :description}, {:ok, twice})
 
-      assert :ok = Decisions.sync(node, tracker: FakeTracker)
+      assert :ok = Decisions.record(@issue_id, [entry(%{key: "c1"})], tracker: FakeTracker, description: twice)
 
       assert_received {:description_written, @issue_id, repaired}
       assert [%{id: "D1", key: "c1"}] = Decisions.recorded(repaired)
       assert length(Regex.scan(~r/symphony:decision:c1/, repaired)) == 1
 
-      assert :ok = Decisions.sync(%{node | "description" => repaired}, tracker: FakeTracker)
+      assert :ok = Decisions.record(@issue_id, [entry(%{key: "c1"})], tracker: FakeTracker, description: repaired)
       refute_received {:description_written, _issue_id, _description}
     end
 
@@ -642,79 +475,16 @@ defmodule SymphonyElixir.DecisionsTest do
   end
 
   describe "the poll" do
-    test "a polled issue carries the rulings its comments give" do
+    test "a polled issue carries no ruling from a comment opening with Decision:" do
       issue =
         Client.normalize_issue_for_test(%{
           "id" => @issue_id,
           "identifier" => "TP-1",
           "description" => "Fix it.",
-          "comments" => %{
-            "nodes" => [
-              comment("w1", "## Symphony Workpad\n\nWorking."),
-              comment("c1", "Decision: defer the legacy partials to TP-891", "2026-10-14T05:00:00Z")
-            ]
-          }
+          "comments" => %{"nodes" => [comment("c1", "Decision: defer the legacy partials to TP-891", "2026-10-14T05:00:00Z")]}
         })
 
-      assert [%{key: "ruling-c1", scope: "Deferred to TP-891"}] = issue.rulings
-      assert Client.normalize_issue_for_test(%{"id" => @issue_id}).rulings == []
-    end
-
-    test "sweep/2 writes the rulings a description does not record yet, and costs nothing otherwise" do
-      rulings = Decisions.rulings(ticket([comment("c1", "Decision: defer the legacy partials to TP-891")]))
-      {:ok, recorded} = Decisions.put("Fix it.", rulings)
-
-      Process.put({FakeTracker, :description}, {:ok, "Fix it."})
-
-      issues = [
-        %Issue{id: @issue_id, description: "Fix it.", rulings: rulings},
-        %Issue{id: "recorded", description: recorded, rulings: rulings},
-        %Issue{id: "none", description: "Fix it."},
-        %Issue{id: nil, rulings: rulings}
-      ]
-
-      assert Decisions.sweep(issues, tracker: FakeTracker) == 1
-      assert_received {:description_written, @issue_id, description}
-      assert [%{id: "D1", key: "ruling-c1"}] = Decisions.recorded(description)
-      refute_received {:description_written, _issue_id, _description}
-
-      Process.put({FakeTracker, :update}, {:error, :boom})
-      assert capture_log(fn -> assert Decisions.sweep(issues, tracker: FakeTracker) == 0 end) =~ ":boom"
-      assert Decisions.sweep(nil) == 0
-    end
-
-    test "a poll cycle writes a person's ruling into the ticket's description" do
-      write_workflow_file!(Workflow.workflow_file_path())
-      ruling = comment("c1", "Decision: defer the legacy partials to TP-891", "2026-10-14T05:00:00Z")
-
-      issue = %Issue{
-        id: "ruled",
-        identifier: "TP-2",
-        title: "Remove the legacy partials",
-        description: "Remove them.",
-        state: "In Progress",
-        team: %{key: "Test"},
-        rulings: Decisions.rulings(ticket([ruling])),
-        # Polled, never dispatched: the test starts no agent.
-        assigned_to_worker: false
-      }
-
-      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
-      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
-
-      on_exit(fn ->
-        Application.delete_env(:symphony_elixir, :memory_tracker_issues)
-        Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
-      end)
-
-      {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, :RulingOrchestrator))
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
-
-      send(pid, :run_poll_cycle)
-
-      assert_receive {:memory_tracker_description_update, "ruled", description}, 2_000
-      assert String.starts_with?(description, "Remove them.\n\n")
-      assert [%{id: "D1", key: "ruling-c1", answer: "defer the legacy partials to TP-891", scope: "Deferred to TP-891"}] = Decisions.recorded(description)
+      assert issue.rulings == []
     end
   end
 

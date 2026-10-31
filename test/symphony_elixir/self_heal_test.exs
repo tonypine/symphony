@@ -587,7 +587,7 @@ defmodule SymphonyElixir.SelfHealTest do
       node = %{"id" => @issue_id, "comments" => %{"nodes" => [%{"id" => "c1", "body" => body, "createdAt" => "2026-10-14T22:35:27.000Z"}]}}
       assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}})
 
-      request = Collector.newest_request(node, settings)
+      assert [{"c1", request}] = Collector.open_requests(node, settings)
       assert NeedsDecisionHold.desired(request, %{kind: :needs_decision, decision: decision}) == :none
     end
 

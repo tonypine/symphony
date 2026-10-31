@@ -264,7 +264,6 @@ defmodule SymphonyElixir.BlockedHold do
   defp with_repo_key(issue, _repo_key), do: issue
 
   defp sync_issue(%Issue{id: issue_id, repo_key: repo_key} = issue, terminal_states, cache, opts) do
-    repair_drift(repo_key, issue_id, issue, opts)
     current = Hold.get(repo_key, issue_id, :blocked, opts)
 
     case action(issue, terminal_states, current, cache, opts) do
@@ -520,33 +519,6 @@ defmodule SymphonyElixir.BlockedHold do
   end
 
   defp drop_stale_fix_ticket(_repo_key, _issue_id, _current, _opts), do: :ok
-
-  # The store is the truth for a hold, so the board is repaired to match it in both directions, for
-  # both kinds of hold. A hold label with no store hold is a hand-added label: report it and clear
-  # it. A store hold whose label is missing — its label write failed, or a person removed it by
-  # hand — is re-projected from the store, so a hold that is pausing dispatch is never silently
-  # invisible. The Inbox reads held tickets from the store, not by their label, so this poll is what
-  # keeps a `Needs Decision` label in line with its hold. While the pause projector owns the labels,
-  # the repair has it compare with the labels this read shows rather than what it last applied.
-  defp repair_drift(repo_key, issue_id, %Issue{} = issue, opts) do
-    repair = Keyword.merge(opts, force: true, labels: issue.labels)
-
-    case Hold.report_drift(repo_key, issue_id, issue.labels, Keyword.merge(opts, identifier: issue.identifier, url: issue.url)) do
-      {:stray_label, kind} -> clear_label(repo_key, issue_id, kind, repair)
-      {:missing_label, kind} -> reproject_label(repo_key, issue_id, kind, repair)
-      :ok -> :ok
-    end
-  end
-
-  defp clear_label(repo_key, issue_id, kind, opts) do
-    _ = Hold.clear(repo_key, issue_id, kind, opts)
-    :ok
-  end
-
-  defp reproject_label(repo_key, issue_id, kind, opts) do
-    _ = Hold.reproject(repo_key, issue_id, kind, opts)
-    :ok
-  end
 
   defp log_failure(action, issue_id, reason) do
     Logger.warning("Failed to #{action} the Blocked hold on issue_id=#{issue_id}: #{inspect(reason)}")

@@ -1,9 +1,8 @@
 defmodule SymphonyElixir.BlockedHoldTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{BlockedHold, Hold, Pauses, RunStore, TicketState, UpdateHold, Workflow}
+  alias SymphonyElixir.{BlockedHold, Hold, Pauses, RunStore, UpdateHold, Workflow}
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Hold.Drift
   alias SymphonyElixir.Linear.Issue
 
   @repo_key "repo-a"
@@ -202,96 +201,6 @@ defmodule SymphonyElixir.BlockedHoldTest do
       assert %{waits_on: %{type: "dependency", keys: ["TP-1"]}} = stored_hold()
       refute log =~ "hand-added"
       refute log =~ "repo key"
-    end
-
-    test "reports and clears a hand-added Blocked label with no store hold" do
-      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue(%{labels: ["Blocked"]})])
-      stray = issue(%{labels: ["Blocked"]})
-
-      log = capture_log(fn -> assert BlockedHold.sync(stray, @terminal, settings: designed_settings()) == :none end)
-
-      assert log =~ "with no store hold"
-      assert labels() == []
-      assert stored_hold() == nil
-    end
-
-    test "clears a hand-added Blocked label the pause projector last applied as absent, against the labels Linear shows (TP-1243)" do
-      Application.put_env(:symphony_elixir, :pause_projector, true)
-      on_exit(fn -> Application.put_env(:symphony_elixir, :pause_projector, false) end)
-      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue(%{labels: ["Blocked"]})])
-      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id, %{labels: [], projected: %{labels: []}}))
-      stray = issue(%{labels: ["Blocked"]})
-
-      log = capture_log(fn -> assert BlockedHold.sync(stray, @terminal, settings: designed_settings()) == :none end)
-
-      assert log =~ "with no store hold"
-      assert labels() == []
-      assert RunStore.get_ticket_state(@repo_key, @issue_id).projected.labels == []
-    end
-
-    test "a stray Blocked label the poll can't clear is logged once over several syncs, and recorded for Setup" do
-      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue(%{labels: ["Blocked"]})])
-      Application.put_env(:symphony_elixir, :memory_tracker_remove_issue_label_result, {:error, :forbidden})
-      stray = issue(%{labels: ["Blocked"]})
-
-      log = capture_log(fn -> for _poll <- 1..4, do: BlockedHold.sync(stray, @terminal, settings: designed_settings()) end)
-
-      assert length(String.split(log, "with no store hold")) == 2
-      assert labels() == ["Blocked"]
-      assert [%{issue_id: @issue_id, identifier: "TP-817", drift: {:stray_label, :blocked}}] = Drift.entries()
-    end
-
-    test "re-projects a store hold whose Blocked label is missing" do
-      # The hold's label write failed (or a person removed it): the store has the hold, the board
-      # does not. The sweep re-asserts the label from the store truth.
-      :ok =
-        RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, %{
-          reason: "waiting on TP-1",
-          clearing_condition: "when every blocker is terminal",
-          waits_on: %{type: "dependency", keys: ["TP-1"]}
-        })
-
-      open_issue = issue(%{blocked_by: [blocker("TP-1", "In Progress")]})
-      assert labels() == []
-
-      assert BlockedHold.sync(open_issue, @terminal, settings: designed_settings()) == :none
-      assert labels() == ["Blocked"]
-      assert stored_hold() != nil
-    end
-
-    test "puts back a missing Needs Decision label within one poll, and the warning stops once it is back" do
-      # The label went missing while the store kept the hold: the Inbox lists its tickets by that
-      # label, so without it the answer is never read and the hold never clears.
-      :ok =
-        RunStore.set_ticket_hold(@repo_key, @issue_id, :needs_decision, %{
-          reason: "Add the signing secrets?",
-          clearing_condition: "when the decision is recorded",
-          decision: %{title: "Add the release signing secrets", question: "Add the signing secrets?"}
-        })
-
-      log = capture_log(fn -> assert BlockedHold.sync(issue(%{state: "QA"}), @terminal, settings: designed_settings()) == :none end)
-
-      assert log =~ "Store hold :needs_decision on issue_id=#{@issue_id} is missing its machine label"
-      assert labels() == ["Needs Decision"]
-      assert Hold.held?(@repo_key, @issue_id, :needs_decision)
-      assert Hold.get(@repo_key, @issue_id, :blocked) == nil
-
-      # The next poll reads the label back and has nothing to warn about.
-      log = capture_log(fn -> assert BlockedHold.sync(issue(%{state: "QA", labels: labels()}), @terminal, settings: designed_settings()) == :none end)
-
-      refute log =~ "missing its machine label"
-      assert labels() == ["Needs Decision"]
-    end
-
-    test "reports and clears a hand-added Needs Decision label with no store hold" do
-      # The Inbox reads held tickets from the store, so it never reads this one: the poll clears it.
-      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue(%{labels: ["Needs Decision"]})])
-
-      log = capture_log(fn -> assert BlockedHold.sync(issue(%{labels: ["Needs Decision"]}), @terminal, settings: designed_settings()) == :none end)
-
-      assert log =~ "with no store hold"
-      assert labels() == []
-      assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
     end
 
     test "a store failure is logged and reports no change" do

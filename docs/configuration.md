@@ -3121,9 +3121,9 @@ lists:
   the PR when the rest of the ticket is done) and updates its workpad. A request whose title
   matches one still open on the issue is not posted again. An agent that finds its request is not
   needed after all withdraws it with `linear_withdraw_human_action` (`reason`, optional `title`):
-  Symphony replies `## Action withdrawn` with the reason under the request, which closes it. A
-  person's reply under the request (or **Send Decision…** in the Inbox) answers it and closes it
-  too. Once no open request is left on the issue, the hold clears and the ticket continues where
+  Symphony replies `## Action withdrawn` with the reason under the request, which closes it. The
+  Director's **Send Decision…** in the Inbox answers it and closes it too; a reply under the
+  request in Linear, or a comment opening with `Decision:`, answers nothing. Once no open request is left on the issue, the hold clears and the ticket continues where
   it stopped;
 - with `pull_requests.checks.enabled`, a GitHub Actions workflow on the repository's base branch
   (`repositories[].base_branch`, default `main`) that keeps failing on a missing secret: its two

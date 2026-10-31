@@ -13,9 +13,7 @@ defmodule SymphonyElixir.Setup.Problem do
       through `POST /api/v1/setup/fixes` (`SymphonyElixir.Setup.Fixes`). `create_label` creates the
       label `name` in the team `team`. `create_state` (`after`, `position`) creates the workflow
       state `name` of the type `type` in the team `team`, at `position` in its board: just after the
-      state `after` (nil when the state goes first of its type). `resync_hold` (`repo`, `tickets`)
-      re-syncs each ticket's hold label from the store; the operator may send it for one of its
-      tickets or for all of them.
+      state `after` (nil when the state goes first of its type).
     * `open` (`target` `settings` | `symphony_yml` | `linear` | `drain_report` | `repos`, `url`): no
       fix is safe, so the app shows the button that goes where the operator fixes it.
   """
@@ -82,12 +80,6 @@ defmodule SymphonyElixir.Setup.Problem do
   @spec create_state(String.t(), String.t(), String.t(), String.t() | nil, number() | nil) :: fix()
   def create_state(team, name, type, after_state, position) when is_binary(type) do
     Map.merge(linear("create_state", team, name, type), %{after: after_state, position: position})
-  end
-
-  @doc "Re-syncs the hold labels of `tickets` (identifiers) in the repo `repo` from the store."
-  @spec resync_hold(String.t(), [String.t()]) :: fix()
-  def resync_hold(repo, tickets) when is_binary(repo) and is_list(tickets) do
-    %{kind: "linear", action: "resync_hold", repo: repo, tickets: tickets}
   end
 
   @doc "No safe fix: the place where the operator fixes it."

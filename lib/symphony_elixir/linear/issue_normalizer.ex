@@ -12,7 +12,7 @@ defmodule SymphonyElixir.Linear.IssueNormalizer do
   delivery reads as nothing, never a raise.
   """
 
-  alias SymphonyElixir.{AgentLabels, Decisions, IssueSummary, Linear.Issue}
+  alias SymphonyElixir.{AgentLabels, IssueSummary, Linear.Issue}
 
   @comment_limit 3
   @comment_body_limit 800
@@ -55,8 +55,6 @@ defmodule SymphonyElixir.Linear.IssueNormalizer do
       sub_issues: extract_sub_issues(issue),
       labels: extract_labels(issue),
       comments: comments(issue),
-      # A person's rulings in plain comments, which the poll records in the description.
-      rulings: Decisions.rulings(issue),
       assigned_to_worker: assigned_to_worker?(assignee, assignee_filter),
       created_at: parse_datetime(issue["createdAt"]),
       updated_at: parse_datetime(issue["updatedAt"])

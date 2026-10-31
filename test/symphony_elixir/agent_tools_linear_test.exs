@@ -3490,7 +3490,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       refute Linear.CommentRegistry.human_action_requested?(context.comment_registry)
     end
 
-    test "an answered request the Inbox has not written into the description yet is not asked again either" do
+    test "a reply under a request in Linear answers nothing, so the question is asked" do
       :ok = SymphonyElixir.RunStore.clear()
       context = designed_context()
 
@@ -3512,10 +3512,10 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       scope = human_action_scope(%{issue: %{"comments" => %{"nodes" => comments}}})
 
-      assert {:ok, %{"reason" => "already_decided", "decision" => %{"answer" => "Add the secrets (option: **Add the secrets** (recommended): Releases are signed again.)"}}} =
+      assert {:ok, %{"requested" => true, "hold" => "Needs Decision"}} =
                Linear.request_human_action(context, @human_action, designed_opts(human_action_client(self(), scope)))
 
-      refute_received {:linear_called, "SymphonyAgentAddComment", _variables}
+      assert_received {:linear_called, "SymphonyAgentAddComment", _variables}
     end
 
     test "a request the ticket already has is the one the hold records, and nothing is posted again" do

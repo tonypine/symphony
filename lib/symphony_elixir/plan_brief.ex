@@ -5,7 +5,7 @@ defmodule SymphonyElixir.PlanBrief do
 
   `capture/2` reads the ticket once from Linear (its comments, sub-issues, labels and state moves,
   the fields the Inbox reads) and builds what the Inbox shows of a plan with the same code
-  (`SymphonyElixir.Inbox.Item.from_node/4`): the `## Review brief` comment parsed
+  (`SymphonyElixir.Inbox.Item.plan_from_node/2`): the `## Review brief` comment parsed
   (`SymphonyElixir.Inbox.ReviewBrief`), the sub-tickets in landing order with their state, and the
   open choices the plan run asked, each with the id of its Question. It stores them with when they
   were read (`read_at`) and clears `plan_brief_error`; a capture that fails stores `plan_brief: nil`
@@ -106,7 +106,7 @@ defmodule SymphonyElixir.PlanBrief do
       {:ok, %{tracker: %{kind: "linear"}} = settings} ->
         result =
           with {:ok, node} <- read(issue_id, opts),
-               do: plan(node, repo_key, settings, now)
+               do: plan(node, settings, now)
 
         store(repo_key, issue_id, result)
 
@@ -114,7 +114,7 @@ defmodule SymphonyElixir.PlanBrief do
       {:ok, %{tracker: %{kind: "memory", memory_issues_file: path}} = settings} when is_binary(path) ->
         result =
           with {:ok, node} <- memory_node(repo_key, issue_id),
-               do: plan(node, repo_key, settings, now)
+               do: plan(node, settings, now)
 
         store(repo_key, issue_id, result)
 
@@ -271,15 +271,12 @@ defmodule SymphonyElixir.PlanBrief do
 
   # The node is read as the phase the record holds: the move into `Plan Review` is written on the
   # record first, and Linear's may not have landed yet.
-  defp plan(node, repo_key, settings, now) do
+  defp plan(node, settings, now) do
     node = Map.put(node, "state", %{"name" => PlanReview.state(settings)})
 
-    case Item.from_node(node, repo_key, settings, %{}) do
-      %{kind: :plan, review: review} ->
-        {:ok, %{brief: review.brief, sub_tickets: review.sub_tickets, choices: review.decisions, read_at: now}}
-
-      _other ->
-        {:error, :not_a_plan}
+    case Item.plan_from_node(node, settings) do
+      %{} = plan -> {:ok, %{brief: plan.brief, sub_tickets: plan.sub_tickets, choices: plan.decisions, read_at: now}}
+      nil -> {:error, :not_a_plan}
     end
   end
 

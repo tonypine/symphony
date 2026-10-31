@@ -1491,10 +1491,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
-  # A question a person already answered is not asked again: the description's Decisions section,
-  # or an answered request the Inbox has not written there yet (`SymphonyElixir.Decisions`).
+  # A question a person already answered is not asked again: the description's Decisions section
+  # (`SymphonyElixir.Decisions`). A reply under a request answers nothing.
   defp decided(issue, request) do
-    Decisions.find(Decisions.recorded(issue["description"]) ++ Decisions.answered(issue), request.title, request.question)
+    Decisions.find(Decisions.recorded(issue["description"]), request.title, request.question)
   end
 
   defp already_decided(decision) do
@@ -2465,9 +2465,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
       else: PromptSafety.linear_issue_comment_body(body)
   end
 
-  # A comment opening with `Decision:` or `Ruling:` is a person's ruling, which Symphony records in
-  # the ticket's scope (`Decisions.rulings/1`). Agents post as the operator's Linear user, so the
-  # opener is all that tells a ruling apart: an agent may not write one. Nor may it write a grant
+  # A comment opening with `Decision:` or `Ruling:` reads as a person's ruling. Symphony records none
+  # (answers come from the Director), but agents post as the operator's Linear user, so an agent
+  # may still not write one. Nor may it write a grant
   # that unlocks a protected path (`PathUnlock`), which a reply under a decision request would
   # record as the person's answer.
   defp reject_ruling(body) do

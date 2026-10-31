@@ -350,7 +350,6 @@ defmodule SymphonyElixir.SetupTest do
                "teams",
                "labels",
                "deprecated_label",
-               "hold_drift",
                "statuses",
                "status_use",
                "qa_host"

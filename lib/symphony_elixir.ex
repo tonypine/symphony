@@ -85,7 +85,6 @@ defmodule SymphonyElixir.Application do
           SymphonyElixir.Linear.Webhook.Deliveries,
           SymphonyElixir.Repo.FetchLog,
           SymphonyElixir.Routing.PollLog,
-          SymphonyElixir.Hold.Drift,
           SymphonyElixir.TicketObservation,
           SymphonyElixir.Dispatch.Shadow,
           SymphonyElixir.PullRequestPage,

@@ -20,7 +20,6 @@ defmodule SymphonyElixir.Orchestrator do
     CiWait,
     Config,
     Connected,
-    Decisions,
     DispatchLoop,
     EpicLanes,
     ForcedQueue,
@@ -1600,11 +1599,9 @@ defmodule SymphonyElixir.Orchestrator do
   # `UpdateHold.hold/4` needs and writes each ticket's wait for an app update on its pause, so the
   # gate and `put_blocked/2` only read it. Tickets of repos not polled this cycle were looked up and
   # written when they were.
-  # The same task writes the rulings people gave in comments into the tickets' Decisions sections.
   defp resolve_update_holds({repo_name, {:ok, issues}}, cache) when is_list(issues) do
     terminal_states = Config.settings!().tracker.terminal_states
     {_changed, cache} = sweep_blocked_holds(repo_name, issues, terminal_states, cache)
-    _ = Decisions.sweep(issues, repo_key: repo_name)
     build = BuildInfo.current()
     cache = UpdateHold.resolve(issues, build, cache, terminal_states, repo_key: repo_name)
     # The release build of each fix a held ticket waits on: rerun when GitHub had no machine for it.

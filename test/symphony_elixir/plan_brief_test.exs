@@ -153,11 +153,11 @@ defmodule SymphonyElixir.PlanBriefTest do
       assert %{plan_brief: ^brief, plan_brief_error: nil} = record()
       assert PlanBrief.from_record(record()) == brief
 
-      # The same plan, read in `Plan Review`, is what the Inbox lists today.
-      inbox = Item.from_node(plan_node(%{"state" => %{"name" => "Plan Review"}}), @repo_key, settings(), %{})
-      assert inbox.review.brief == brief.brief
-      assert inbox.review.sub_tickets == brief.sub_tickets
-      assert inbox.review.decisions == brief.choices
+      # The same plan, read in `Plan Review`, is what the Inbox's plan builder reads.
+      plan = Item.plan_from_node(plan_node(%{"state" => %{"name" => "Plan Review"}}), settings())
+      assert plan.brief == brief.brief
+      assert plan.sub_tickets == brief.sub_tickets
+      assert plan.decisions == brief.choices
     end
 
     test "a revision's capture replaces the brief" do
