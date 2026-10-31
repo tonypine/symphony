@@ -45,7 +45,11 @@ if config_env() == :test do
     # The pause projector (`SymphonyElixir.Pauses.Projector`) writes the labels and the Decisions
     # section in place of the holds and the decision store. Its tests and the ones that prove its
     # gates turn it on; off here, the suites of the holds and the decisions keep their own writes.
-    pause_projector: false
+    pause_projector: false,
+    # A move into `Plan Review` captures the plan's brief from Linear in a task
+    # (`SymphonyElixir.PlanBrief`); in tests it would race the records a test asserts, so it runs
+    # only where a test turns it on.
+    plan_brief_capture: false
 
   # No test reaches the network: every Req request goes through the guard, which lets 127.0.0.1 and
   # localhost through and raises `SymphonyElixir.OutboundConnectionInTest` for any other host. A test

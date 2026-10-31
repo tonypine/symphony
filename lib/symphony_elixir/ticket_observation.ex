@@ -78,6 +78,7 @@ defmodule SymphonyElixir.TicketObservation do
   alias SymphonyElixir.{Config, DirectorMoves, Hold, Orchestrator, RunStore, TicketSignals, TicketState, Tracker}
   alias SymphonyElixir.Linear.{Issue, Webhook}
   alias SymphonyElixir.Pauses.Projector
+  alias SymphonyElixir.PlanBrief
   alias SymphonyElixir.Routing.{PollScope, Resolver}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
@@ -282,6 +283,8 @@ defmodule SymphonyElixir.TicketObservation do
     missing) and the poll did not return are read by id, at most 50 a run, and observed (counted
     under `unobserved_filled`). One Linear does not return (archived or deleted) is marked
     `not_found_at` and not read again.
+  - each record in `Plan Review` whose capture of the plan's brief failed (`plan_brief_error`) is
+    captured again (`SymphonyElixir.PlanBrief.retry_failed/3`).
 
   Returns the observations' counts. `opts`: `:tracker` (default `SymphonyElixir.Tracker`),
   `:task_supervisor` (default `SymphonyElixir.TaskSupervisor`), and those of `observe/3`.
@@ -422,6 +425,7 @@ defmodule SymphonyElixir.TicketObservation do
             do: reproject(repo_key, record.issue_id, TicketState.projection_of(mark), Map.get(polled, record.issue_id), tracker)
 
         fill_unobserved(repo_key, records, polled, tracker, opts)
+        PlanBrief.retry_failed(repo_key, records, [])
 
       {:error, reason} ->
         Logger.warning("Ticket reconcile: the records could not be read repo_key=#{repo_key}: #{inspect(reason)}")

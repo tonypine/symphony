@@ -28,7 +28,9 @@ defmodule SymphonyElixir.TicketState do
   `SymphonyElixir.Pauses.Backfill`), so it never converts it again; and what the pause projector
   last applied to Linear from the pause and the questions (`projected`,
   `SymphonyElixir.Pauses.Projector`): the machine labels, the hash of the Decisions section and the
-  questions' request comments and replies.
+  questions' request comments and replies; and the plan's brief as it entered `Plan Review`
+  (`plan_brief`, `SymphonyElixir.PlanBrief`): the review brief, the sub-tickets and the open choices,
+  with when they were read, and why the last capture failed (`plan_brief_error`, nil when it didn't).
 
   The record is persisted by `SymphonyElixir.RunStore`; this module owns its shape and the
   operations that move it. It is inert by design: nothing dispatches on a record yet. It exists so
@@ -39,6 +41,7 @@ defmodule SymphonyElixir.TicketState do
 
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Pauses
+  alias SymphonyElixir.PlanBrief
   alias SymphonyElixir.PrDecision
   alias SymphonyElixir.PrWatch.Attempts
   alias SymphonyElixir.Questions
@@ -312,6 +315,8 @@ defmodule SymphonyElixir.TicketState do
           questions: [Questions.question()],
           pause_backfilled_at: DateTime.t() | nil,
           projected: projected() | nil,
+          plan_brief: PlanBrief.t() | nil,
+          plan_brief_error: String.t() | nil,
           updated_at: DateTime.t() | nil
         }
 
@@ -400,6 +405,8 @@ defmodule SymphonyElixir.TicketState do
       questions: Questions.normalize(Map.get(record, :questions)),
       pause_backfilled_at: map_datetime(record, :pause_backfilled_at),
       projected: normalize_projected(Map.get(record, :projected)),
+      plan_brief: PlanBrief.normalize(Map.get(record, :plan_brief)),
+      plan_brief_error: map_string(record, :plan_brief_error),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -445,6 +452,8 @@ defmodule SymphonyElixir.TicketState do
       questions: [],
       pause_backfilled_at: nil,
       projected: nil,
+      plan_brief: nil,
+      plan_brief_error: nil,
       updated_at: nil
     }
   end

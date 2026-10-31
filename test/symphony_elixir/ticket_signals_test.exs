@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.TicketSignalsTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.{Orchestrator, Questions, TicketEvents, TicketSignals, TicketState}
 
   @repo_key "repo-a"
@@ -162,6 +163,33 @@ defmodule SymphonyElixir.TicketSignalsTest do
 
       assert :ok = TicketSignals.record_phase(@repo_key, "issue-1", "Code Review")
       refute_received {:ticket_record, _repo_key, _issue_id, :changed, _fields}
+    end
+
+    test "a move into Plan Review, and a revision's move back into it, read the plan's brief onto the record; a move elsewhere reads nothing" do
+      test_pid = self()
+      {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "linear"}})
+      linear = fn _query, %{id: id}, _opts -> send(test_pid, {:plan_read, id}) && {:error, :offline} end
+      Application.put_env(:symphony_elixir, :plan_brief_capture, true)
+      Application.put_env(:symphony_elixir, :plan_brief_opts, linear_client: linear, settings: settings)
+
+      on_exit(fn ->
+        Application.put_env(:symphony_elixir, :plan_brief_capture, false)
+        Application.delete_env(:symphony_elixir, :plan_brief_opts)
+      end)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :ok = TicketSignals.record_phase(@repo_key, "plan-1", "In Progress")
+        refute_received {:plan_read, _id}
+
+        assert :ok = TicketSignals.record_phase(@repo_key, "plan-1", "Plan Review")
+        assert_receive {:plan_read, "plan-1"}, 5_000
+
+        assert :ok = TicketSignals.record_phase(@repo_key, "plan-1", "Rework")
+        assert :ok = TicketSignals.record_phase(@repo_key, "plan-1", "Plan Review")
+        assert_receive {:plan_read, "plan-1"}, 5_000
+
+        eventually(fn -> match?(%{plan_brief: nil, plan_brief_error: ":offline"}, RunStore.get_ticket_state(@repo_key, "plan-1")) end)
+      end)
     end
 
     test "no-ops without a repo key, an issue id or a phase" do
