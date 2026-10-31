@@ -11,9 +11,8 @@ defmodule SymphonyElixir.HumanActions.Collector do
 
   A ticket outside a project is skipped: there is no project to post the update to.
 
-  The issue node helpers (`open_requests/2`, `newest_open_request/2`, `newest_request/2`,
-  `answered_requests/1` and `read_more_pages/2`) read a ticket's Linear comments for the callers
-  that still parse them.
+  The issue node helpers (`open_requests/2` and `read_more_pages/2`) read a ticket's Linear
+  comments for the callers that still parse them.
   """
 
   alias SymphonyElixir.Config.Schema
@@ -207,52 +206,6 @@ defmodule SymphonyElixir.HumanActions.Collector do
     Enum.filter(requests(node), fn {comment_id, request} ->
       not MapSet.member?(closed, comment_id) and Request.open?(request, changes, owned)
     end)
-  end
-
-  @doc """
-  The newest open request on the issue node and the id of the comment that carries it, or nil when
-  none is open. The comment id is what a reply answers, so the Director app can close it.
-  """
-  @spec newest_open_request(map(), Schema.t()) :: {String.t(), Request.t()} | nil
-  def newest_open_request(node, settings) do
-    node
-    |> open_requests(settings)
-    |> Enum.max_by(&request_at/1, fn -> nil end)
-  end
-
-  # When the request was posted, as a comparable integer; a request whose comment carried no
-  # `createdAt` sorts oldest.
-  defp request_at({_comment_id, request}) do
-    (request.created_at && DateTime.to_unix(request.created_at, :microsecond)) || 0
-  end
-
-  @doc "The newest open request on the issue node, or nil when none is open."
-  @spec newest_request(map(), Schema.t()) :: Request.t() | nil
-  def newest_request(node, settings), do: node |> newest_open_request(settings) |> then(&(&1 && elem(&1, 1)))
-
-  @doc """
-  The requests on the issue node a person answered, newest answer first: each one's title, the
-  answer (the `**Decision:**` lines of the Inbox's Decide, else the first reply on one line) and
-  when it was given. A withdrawn request was never answered and is left out.
-  """
-  @spec answered_requests(map()) :: [%{at: DateTime.t() | nil, title: String.t(), answer: String.t()}]
-  def answered_requests(node) do
-    replies = node |> comments() |> Enum.filter(&is_binary(&1["body"])) |> Enum.group_by(&get_in(&1, ["parent", "id"]))
-
-    for {comment_id, request} <- requests(node),
-        under = Enum.sort_by(Map.get(replies, comment_id, []), &(&1["createdAt"] || "")),
-        not Enum.any?(under, &Request.withdrawal?(&1["body"])),
-        %{"body" => body} = reply <- Enum.take(under, 1) do
-      %{at: parse_datetime(reply["createdAt"]), title: request.title, answer: answer(body)}
-    end
-    |> Enum.sort_by(&((&1.at && DateTime.to_unix(&1.at, :microsecond)) || 0), :desc)
-  end
-
-  defp answer(body) do
-    case Regex.scan(~r/^\s*\*\*Decision:\*\*\s*(.+)$/m, body) do
-      [] -> Request.one_line(body)
-      decisions -> Enum.map_join(decisions, "; ", fn [_, decision] -> Request.one_line(decision) end)
-    end
   end
 
   defp withdrawn_ids(node) do
