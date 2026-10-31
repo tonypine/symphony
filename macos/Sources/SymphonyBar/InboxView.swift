@@ -1243,14 +1243,19 @@ private struct ClarifyCards: View {
     }
 }
 
-/// A ticket an access hold pauses in place: why it waits, and what clears it. The Unblock in the toolbar lifts it.
+/// A ticket an access hold pauses in place: why it waits, one line per pause reason ("Stopped by you"), and what
+/// the toolbar's Unblock, Release or Restart does.
 private struct BlockedCards: View {
     let blocked: InboxReview.Blocked
 
     var body: some View {
         Card(title: "Why it is blocked") {
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-                if let reason = blocked.reason { ChipText(text: reason) }
+                if blocked.reasonLines.count > 1 {
+                    BulletList(lines: blocked.reasonLines)
+                } else if let line = blocked.reasonLines.first {
+                    ChipText(text: line)
+                }
                 ChipText(text: blocked.nextLine, font: DesignTokens.TypeStyle.callout.nsFont, color: .secondaryLabelColor)
             }
         }

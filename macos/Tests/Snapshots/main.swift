@@ -680,6 +680,18 @@ func ledgerNoteBar(absence: TicketFeedAbsence? = nil, note: TicketNoteComposer) 
 
 // The paused line (TP-1244): the `paused-ticket` fixture's tickets with one, two and three pause reasons.
 let pausedAPI = here.appendingPathComponent("../Fixtures/director-app/paused-ticket/api/v1").standardizedFileURL
+let inboxPausedAPI = here.appendingPathComponent("../Fixtures/director-app/inbox-paused/api/v1").standardizedFileURL
+
+/// A blocked Inbox row's review reading its ticket's pause (TP-1253), in a window `window` pt wide: what is left
+/// beside the sidebar and the list column, at the laptop viewport (1440) and the desktop one (2560).
+@MainActor
+func blockedReview(_ identifier: String, window: CGFloat) -> some View {
+    guard let inbox = InboxPayload.decode(try! Data(contentsOf: inboxPausedAPI.appendingPathComponent("inbox.json")))?
+        .withPauses(fromState: try? Data(contentsOf: inboxPausedAPI.appendingPathComponent("state.json"))),
+        let item = inbox.items.first(where: { $0.identifier == identifier })
+    else { fatalError("\(identifier) is missing from the paused Inbox fixture") }
+    return review(item, width: window - DesignTokens.Layout.sidebarWidth - DesignTokens.Layout.listColumnWidth)
+}
 
 /// A paused ticket's page in a window `window` pt wide beside the sidebar: the laptop viewport (1440) and the desktop
 /// one (2560); `releasing` while its unblock is on its way.
@@ -829,5 +841,10 @@ MainActor.assumeIsolated {
             render(pausedPage(identifier, window: 2560), scheme, to: "paused-line-\(name)-desktop-\(suffix).png")
         }
         render(pausedPage("SHOP-421", window: 1440, releasing: true), scheme, to: "paused-line-releasing-laptop-\(suffix).png")
+        // A blocked Inbox row's pause (TP-1253): stopped by the Director, and two reasons, one releasable.
+        for (identifier, name) in [("TP-897", "stopped"), ("TP-899", "two-reasons")] {
+            render(blockedReview(identifier, window: 1440), scheme, to: "inbox-blocked-\(name)-laptop-\(suffix).png")
+            render(blockedReview(identifier, window: 2560), scheme, to: "inbox-blocked-\(name)-desktop-\(suffix).png")
+        }
     }
 }

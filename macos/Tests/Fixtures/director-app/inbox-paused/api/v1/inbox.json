@@ -1,0 +1,621 @@
+{
+  "counts": {
+    "action": 1,
+    "blocked": 3,
+    "clarify": 1,
+    "plan": 1,
+    "pr": 1,
+    "total": 7
+  },
+  "generated_at": "2026-10-07T14:20:00Z",
+  "items": [
+    {
+      "ask": "The plan to redesign the Inbox decision screen.",
+      "context": {
+        "blocked_by": [],
+        "blocks": [],
+        "earlier_decisions": [],
+        "parent": null,
+        "pull_request": null,
+        "related": []
+      },
+      "identifier": "TP-923",
+      "issue_id": "i-923",
+      "kind": "plan",
+      "references": {
+        "TP-923": {
+          "identifier": "TP-923",
+          "kind": "ticket",
+          "parent": null,
+          "pull_request": null,
+          "repo_key": "symphony",
+          "state": "Plan Review",
+          "summary": "The plan to redesign the Inbox decision screen, in ten sub-tickets.",
+          "title": "Improve decision handling in the app",
+          "url": "https://linear.app/tonypine/issue/TP-923",
+          "waiting_on": "you"
+        },
+        "TP-947": {
+          "identifier": "TP-947",
+          "kind": "ticket",
+          "parent": {
+            "identifier": "TP-923",
+            "title": "Improve decision handling in the app"
+          },
+          "pull_request": null,
+          "repo_key": "symphony",
+          "state": "Backlog",
+          "summary": "Agents write each decision request in plain words, with trade-offs and what waits if nobody answers.",
+          "title": "Write decisions in the Director's words",
+          "url": "https://linear.app/tonypine/issue/TP-947",
+          "waiting_on": "you"
+        }
+      },
+      "repo_key": "symphony",
+      "review": {
+        "brief": {
+          "decisions": [],
+          "format": "parsed",
+          "headline": "The plan to redesign the Inbox decision screen.",
+          "moves": [
+            {
+              "move": "approve",
+              "text": "move TP-923 to Waiting on sub-tickets; Symphony promotes its sub-tickets to Todo."
+            },
+            {
+              "move": "change",
+              "text": "comment on any part of the plan."
+            },
+            {
+              "move": "reject",
+              "text": "move TP-923 to Rework."
+            }
+          ],
+          "what_changed": [],
+          "what_to_review": [
+            {
+              "links": [],
+              "text": "TP-947: agents write decisions in your words, with trade-offs and what waits."
+            }
+          ]
+        },
+        "sub_tickets": [
+          {
+            "identifier": "TP-947",
+            "state": "Backlog",
+            "title": "Write decisions in the Director's words",
+            "url": "https://linear.app/tonypine/issue/TP-947"
+          }
+        ]
+      },
+      "state": "Plan Review",
+      "title": "Improve decision handling in the app",
+      "url": "https://linear.app/tonypine/issue/TP-923",
+      "waiting_seconds": 8100,
+      "waiting_since": "2026-10-07T12:05:00Z"
+    },
+    {
+      "ask": "Update the old workflow's instructions now, or leave them to TP-891?",
+      "context": {
+        "blocked_by": [],
+        "blocks": [
+          {
+            "identifier": "TP-893",
+            "state": "Todo",
+            "title": "Show the new review steps in the app"
+          }
+        ],
+        "earlier_decisions": [
+          {
+            "answer": "Remove it with the rest, in TP-880",
+            "at": "2026-10-07T05:48:00Z",
+            "title": "Keep the Supervisor check's log for a week"
+          }
+        ],
+        "parent": {
+          "children": [
+            "completed",
+            "completed",
+            "completed",
+            "completed",
+            "started",
+            "unstarted",
+            "unstarted"
+          ],
+          "done": 4,
+          "identifier": "TP-870",
+          "title": "Simplify the review flow",
+          "total": 7
+        },
+        "pull_request": {
+          "checks": "passed",
+          "number": 448,
+          "sent_back": 2,
+          "url": "https://github.com/tonypine/symphony/pull/448"
+        },
+        "related": [
+          {
+            "identifier": "TP-891",
+            "state": "Code Review",
+            "title": "Remove the retired review states and the version switch from the code"
+          }
+        ]
+      },
+      "identifier": "TP-892",
+      "issue_id": "i-892",
+      "kind": "action",
+      "references": {
+        "#448": {
+          "additions": 120,
+          "checks": "passed",
+          "deletions": 486,
+          "files": 14,
+          "kind": "pull_request",
+          "number": 448,
+          "repo_key": "symphony",
+          "review_rounds": 2,
+          "review_state": "changes_requested",
+          "summary": "The Final verification and Supervisor check steps are gone, so a ticket goes from QA straight to Merging.",
+          "ticket": "TP-892",
+          "title": "Remove the Final verification and Supervisor check flows",
+          "url": "https://github.com/tonypine/symphony/pull/448"
+        },
+        "TP-880": {
+          "identifier": "TP-880",
+          "kind": "ticket",
+          "parent": {
+            "identifier": "TP-870",
+            "title": "Simplify the review flow"
+          },
+          "pull_request": {
+            "checks": "passed",
+            "number": 431,
+            "url": "https://github.com/tonypine/symphony/pull/431"
+          },
+          "repo_key": "symphony",
+          "state": "Done",
+          "summary": "The Supervisor check no longer runs; tickets go from QA straight to Merging.",
+          "title": "Remove the Supervisor check",
+          "url": "https://linear.app/tonypine/issue/TP-880",
+          "waiting_on": null
+        },
+        "TP-891": {
+          "identifier": "TP-891",
+          "kind": "ticket",
+          "parent": {
+            "identifier": "TP-880",
+            "title": "Remove the Supervisor check"
+          },
+          "pull_request": {
+            "checks": "pending",
+            "number": 446,
+            "url": "https://github.com/tonypine/symphony/pull/446"
+          },
+          "repo_key": "symphony",
+          "state": "Code Review",
+          "summary": "Removes the review states nobody uses any more, and the switch between the old and new flows.",
+          "title": "Remove the retired review states and the version switch from the code",
+          "url": "https://linear.app/tonypine/issue/TP-891",
+          "waiting_on": null
+        },
+        "TP-892": {
+          "identifier": "TP-892",
+          "kind": "ticket",
+          "parent": {
+            "identifier": "TP-870",
+            "title": "Simplify the review flow"
+          },
+          "pull_request": {
+            "checks": "passed",
+            "number": 448,
+            "url": "https://github.com/tonypine/symphony/pull/448"
+          },
+          "repo_key": "symphony",
+          "state": "Rework",
+          "summary": "PR open, sent back by Code Review twice over old wording.",
+          "title": "Retire two old review steps",
+          "url": "https://linear.app/tonypine/issue/TP-892",
+          "waiting_on": "you"
+        },
+        "TP-893": {
+          "identifier": "TP-893",
+          "kind": "ticket",
+          "parent": {
+            "identifier": "TP-870",
+            "title": "Simplify the review flow"
+          },
+          "pull_request": null,
+          "repo_key": "symphony",
+          "state": "Todo",
+          "summary": "The ticket page shows Code Review and QA as the only review steps.",
+          "title": "Show the new review steps in the app",
+          "url": "https://linear.app/tonypine/issue/TP-893",
+          "waiting_on": "a blocker: TP-892"
+        }
+      },
+      "repo_key": "symphony",
+      "review": {
+        "comment_id": "c-892-request",
+        "confirm": null,
+        "if_unanswered": "TP-892 stays in Rework, and TP-893 can't start because it waits on TP-892.",
+        "options": [
+          {
+            "effect": "TP-892 goes back to Code Review with a note that TP-891 removes the old instructions.",
+            "label": "Leave them to TP-891",
+            "recommended": true,
+            "tradeoffs": [
+              {
+                "kind": "good",
+                "text": "TP-892 can merge today, and TP-893 can start."
+              },
+              {
+                "kind": "risk",
+                "text": "The old instructions stay until TP-891 lands, about two days."
+              }
+            ]
+          },
+          {
+            "effect": "The next run removes Final verification from the old instructions, and TP-892 goes back to Code Review.",
+            "label": "Update them in TP-892 now",
+            "recommended": false,
+            "tradeoffs": [
+              {
+                "kind": "cost",
+                "text": "Another review round, about half a day."
+              },
+              {
+                "kind": "risk",
+                "text": "TP-891 then has to work around the change and may conflict with it."
+              }
+            ]
+          },
+          {
+            "effect": "TP-892 waits in Rework until TP-891 is done, then goes back to Code Review unchanged.",
+            "label": "Wait for TP-891 to land first",
+            "recommended": false,
+            "tradeoffs": [
+              {
+                "kind": "good",
+                "text": "TP-892 needs no change at all."
+              },
+              {
+                "kind": "cost",
+                "text": "TP-892 and TP-893 wait about two days."
+              }
+            ]
+          }
+        ],
+        "question": "TP-892 (Retire two old review steps) is done except that the old workflow's instructions still describe the Final verification step. TP-891 (Remove the retired review states) deletes those instructions anyway. Should TP-892 update them now, or leave them to TP-891?",
+        "question_id": "q-892",
+        "recommendation_reason": "TP-891 removes these instructions this week, so updating them twice adds work without changing what you see.",
+        "requested_at": "2026-10-07T13:20:00Z",
+        "steps": [],
+        "title": "Update the old workflow's instructions now, or leave them to TP-891?",
+        "unblocks": "TP-893, the app's view of the new review steps",
+        "why": "Code Review sent #448 back twice. Both times its only finding was that the old instructions still describe Final verification.\n\nTP-880 already removed the Supervisor check. TP-891 removes the rest of the old review states, with these instructions, this week."
+      },
+      "state": "Rework",
+      "title": "Retire two old review steps",
+      "url": "https://linear.app/tonypine/issue/TP-892",
+      "waiting_seconds": 3600,
+      "waiting_since": "2026-10-07T13:20:00Z"
+    },
+    {
+      "ask": "Count how many times Code Review sends a pull request back.",
+      "context": {
+        "blocked_by": [],
+        "blocks": [],
+        "earlier_decisions": [],
+        "parent": null,
+        "pull_request": null,
+        "related": []
+      },
+      "identifier": "TP-895",
+      "issue_id": "i-895",
+      "kind": "pr",
+      "references": {
+        "#448": {
+          "additions": 120,
+          "checks": "passed",
+          "deletions": 486,
+          "files": 14,
+          "kind": "pull_request",
+          "number": 448,
+          "repo_key": "symphony",
+          "review_rounds": 2,
+          "review_state": "changes_requested",
+          "summary": "The Final verification and Supervisor check steps are gone, so a ticket goes from QA straight to Merging.",
+          "ticket": "TP-892",
+          "title": "Remove the Final verification and Supervisor check flows",
+          "url": "https://github.com/tonypine/symphony/pull/448"
+        },
+        "PR #451": {
+          "additions": 64,
+          "checks": "passed",
+          "deletions": 9,
+          "files": 5,
+          "kind": "pull_request",
+          "number": 451,
+          "repo_key": "symphony",
+          "review_rounds": 1,
+          "review_state": "approved",
+          "summary": "Each pull request counts the times Code Review sent it back.",
+          "ticket": "TP-895",
+          "title": "Count review rounds per pull request",
+          "url": "https://github.com/tonypine/symphony/pull/451"
+        },
+        "TP-892": {
+          "identifier": "TP-892",
+          "kind": "ticket",
+          "parent": {
+            "identifier": "TP-870",
+            "title": "Simplify the review flow"
+          },
+          "pull_request": {
+            "checks": "passed",
+            "number": 448,
+            "url": "https://github.com/tonypine/symphony/pull/448"
+          },
+          "repo_key": "symphony",
+          "state": "Rework",
+          "summary": "PR open, sent back by Code Review twice over old wording.",
+          "title": "Retire two old review steps",
+          "url": "https://linear.app/tonypine/issue/TP-892",
+          "waiting_on": "you"
+        },
+        "TP-895": {
+          "identifier": "TP-895",
+          "kind": "ticket",
+          "parent": {
+            "identifier": "TP-870",
+            "title": "Simplify the review flow"
+          },
+          "pull_request": {
+            "checks": "passed",
+            "number": 451,
+            "url": "https://github.com/tonypine/symphony/pull/451"
+          },
+          "repo_key": "symphony",
+          "state": "QA",
+          "summary": "PR open, QA passed; waiting on your merge.",
+          "title": "Count review rounds per pull request",
+          "url": "https://linear.app/tonypine/issue/TP-895",
+          "waiting_on": "you"
+        }
+      },
+      "repo_key": "symphony",
+      "review": {
+        "brief": {
+          "decisions": [],
+          "format": "parsed",
+          "headline": "Count how many times Code Review sends a pull request back.",
+          "moves": [
+            {
+              "move": "approve",
+              "text": "move TP-895 to Merging; Symphony merges PR #451."
+            },
+            {
+              "move": "change",
+              "text": "leave review comments on PR #451."
+            },
+            {
+              "move": "reject",
+              "text": "move TP-895 to Rework."
+            }
+          ],
+          "what_changed": [
+            "Rebased on #448, so the two no longer touch the same lines."
+          ],
+          "what_to_review": [
+            {
+              "links": [
+                {
+                  "label": "PR #451",
+                  "url": "https://github.com/tonypine/symphony/pull/451"
+                }
+              ],
+              "text": "PR #451"
+            },
+            {
+              "links": [],
+              "text": "PR #451 counts each time Code Review sends a pull request back; #448 reads 2, as TP-892's popover shows."
+            }
+          ]
+        },
+        "comment_id": "c-895-merge",
+        "confirm": "Merging",
+        "if_unanswered": "TP-895 waits in QA and is not merged.",
+        "options": [
+          {
+            "effect": "the ticket moves to Merging and Symphony merges its pull request",
+            "label": "Merge",
+            "recommended": true,
+            "tradeoffs": []
+          },
+          {
+            "effect": "the ticket moves to Rework with this summary, where a run changes PR #451",
+            "label": "Send to Rework",
+            "recommended": false,
+            "tradeoffs": []
+          }
+        ],
+        "pull_request": {
+          "ci": "passed",
+          "qa": {
+            "report_url": "https://linear.app/tonypine/issue/TP-895#comment-qa-895",
+            "verdict": "pass"
+          },
+          "url": "https://github.com/tonypine/symphony/pull/451"
+        },
+        "question": "Merge TP-895 (Count review rounds per pull request) into its base branch?",
+        "requested_at": "2026-10-07T13:40:00Z",
+        "steps": [],
+        "title": "Merge TP-895",
+        "why": "Recommendation: merge. Code Review: the count matches #448's two rounds. QA: passed 4 of 4 walkthrough steps. PR #451."
+      },
+      "state": "QA",
+      "title": "Count review rounds per pull request",
+      "url": "https://linear.app/tonypine/issue/TP-895",
+      "waiting_seconds": 2400,
+      "waiting_since": "2026-10-07T13:40:00Z"
+    },
+    {
+      "ask": "Answer the quality gate's questions",
+      "context": {
+        "blocked_by": [],
+        "blocks": [],
+        "earlier_decisions": [],
+        "parent": null,
+        "pull_request": null,
+        "related": []
+      },
+      "identifier": "TP-896",
+      "issue_id": "i-896",
+      "kind": "clarify",
+      "references": {
+        "#448": {
+          "additions": 120,
+          "checks": "passed",
+          "deletions": 486,
+          "files": 14,
+          "kind": "pull_request",
+          "number": 448,
+          "repo_key": "symphony",
+          "review_rounds": 2,
+          "review_state": "changes_requested",
+          "summary": "The Final verification and Supervisor check steps are gone, so a ticket goes from QA straight to Merging.",
+          "ticket": "TP-892",
+          "title": "Remove the Final verification and Supervisor check flows",
+          "url": "https://github.com/tonypine/symphony/pull/448"
+        },
+        "TP-892": {
+          "identifier": "TP-892",
+          "kind": "ticket",
+          "parent": {
+            "identifier": "TP-870",
+            "title": "Simplify the review flow"
+          },
+          "pull_request": {
+            "checks": "passed",
+            "number": 448,
+            "url": "https://github.com/tonypine/symphony/pull/448"
+          },
+          "repo_key": "symphony",
+          "state": "Rework",
+          "summary": "PR open, sent back by Code Review twice over old wording.",
+          "title": "Retire two old review steps",
+          "url": "https://linear.app/tonypine/issue/TP-892",
+          "waiting_on": "you"
+        },
+        "TP-896": {
+          "identifier": "TP-896",
+          "kind": "ticket",
+          "parent": {
+            "identifier": "TP-870",
+            "title": "Simplify the review flow"
+          },
+          "pull_request": null,
+          "repo_key": "symphony",
+          "state": "Todo",
+          "summary": "Held by the quality gate: it doesn't say what is slow.",
+          "title": "Make the Inbox faster",
+          "url": "https://linear.app/tonypine/issue/TP-896",
+          "waiting_on": "you"
+        }
+      },
+      "repo_key": "symphony",
+      "review": {
+        "found": "TP-896 says the Inbox is slow but not where: it names no screen, and #448's review suggests the list, not the review.",
+        "held": true,
+        "max_rounds": 2,
+        "pass_threshold": 6,
+        "questions": [
+          "Is it the list, or the review TP-892 opens?",
+          "Did it start with #448, or before?"
+        ],
+        "round": 1,
+        "score": 3
+      },
+      "state": "Todo",
+      "title": "Make the Inbox faster",
+      "url": "https://linear.app/tonypine/issue/TP-896",
+      "waiting_seconds": 900,
+      "waiting_since": "2026-10-07T14:05:00Z"
+    },
+    {
+      "ask": "Stopped by you at 14:13. Unblock runs it again where it stopped; Restart starts it over from main.",
+      "context": {
+        "blocked_by": [],
+        "blocks": [],
+        "earlier_decisions": [],
+        "parent": null,
+        "pull_request": null,
+        "related": []
+      },
+      "identifier": "TP-897",
+      "issue_id": "i-897",
+      "kind": "blocked",
+      "references": {},
+      "repo_key": "symphony",
+      "review": {
+        "clearing_condition": "when the Director unblocks or restarts it",
+        "reason": "Stopped by you at 14:13. Unblock runs it again where it stopped; Restart starts it over from main."
+      },
+      "state": "In Progress",
+      "title": "Post QA screenshots to the pull request",
+      "url": "https://linear.app/tonypine/issue/TP-897",
+      "waiting_seconds": 420,
+      "waiting_since": "2026-10-07T14:13:00Z"
+    },
+    {
+      "ask": "Waits on its competing pull requests",
+      "context": {
+        "blocked_by": [],
+        "blocks": [],
+        "earlier_decisions": [],
+        "parent": null,
+        "pull_request": null,
+        "related": []
+      },
+      "identifier": "TP-898",
+      "issue_id": "i-898",
+      "kind": "blocked",
+      "references": {},
+      "repo_key": "symphony",
+      "review": {
+        "clearing_condition": "when the competing pull requests land or leave the race",
+        "reason": "Waits on its competing pull requests"
+      },
+      "state": "In Progress",
+      "title": "Show the new review steps in the app",
+      "url": "https://linear.app/tonypine/issue/TP-898",
+      "waiting_seconds": 360,
+      "waiting_since": "2026-10-07T14:14:00Z"
+    },
+    {
+      "ask": "The upload host refused the release twice",
+      "context": {
+        "blocked_by": [],
+        "blocks": [],
+        "earlier_decisions": [],
+        "parent": null,
+        "pull_request": null,
+        "related": []
+      },
+      "identifier": "TP-899",
+      "issue_id": "i-899",
+      "kind": "blocked",
+      "references": {},
+      "repo_key": "symphony",
+      "review": {
+        "clearing_condition": "when a person clears the hold",
+        "reason": "The upload host refused the release twice"
+      },
+      "state": "In Progress",
+      "title": "Retry the release upload",
+      "url": "https://linear.app/tonypine/issue/TP-899",
+      "waiting_seconds": 300,
+      "waiting_since": "2026-10-07T14:15:00Z"
+    }
+  ]
+}
