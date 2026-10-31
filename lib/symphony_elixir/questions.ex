@@ -135,9 +135,20 @@ defmodule SymphonyElixir.Questions do
 
   @typedoc """
   `answer/4`'s and `withdraw/4`'s options: `by:` (`t:actor/0`; default the Director for an answer,
-  Symphony for a withdrawal), `scope:` (an answer's, default `:ticket`) and `at:` (default now).
+  Symphony for a withdrawal), `scope:` (an answer's, default `:ticket`), `cause:` (a withdrawal's,
+  `t:cause/0`, which its `question.withdrawn` event records) and `at:` (default now).
   """
-  @type end_opt :: {:by, map()} | {:scope, :run | :ticket | :always} | {:at, DateTime.t()}
+  @type end_opt :: {:by, map()} | {:scope, :run | :ticket | :always} | {:cause, cause()} | {:at, DateTime.t()}
+
+  @typedoc """
+  Why a question was withdrawn, as its `question.withdrawn` event records it: the ticket moved on
+  (Backlog, a merge, a terminal state), it was restarted, the hold it was asked with cleared, the
+  one who asked withdrew it as not needed, or the run that asked ended (only a question that holds
+  nothing, `withdraw_lapsed/3`).
+  """
+  @type cause :: String.t()
+
+  @causes ~w(ticket_moved restarted hold_cleared superseded run_ended)
 
   @typedoc """
   What ended what a question belonged to (`lapsed?/2`): a Restart, a move to Backlog, a merge
@@ -193,15 +204,17 @@ defmodule SymphonyElixir.Questions do
 
   @doc """
   Withdraws the open question `id` on `ticket`, which nobody answers now, for `reason`. Records
-  `question.withdrawn` with the reason, which history keeps, and clears the question's pause reason.
+  `question.withdrawn` with the reason, which history keeps, and `opts[:cause]` (`t:cause/0`) when
+  given, and clears the question's pause reason.
   """
   @spec withdraw(ticket(), String.t(), String.t(), [end_opt()]) :: {:ok, question()} | {:error, term()}
   def withdraw(ticket, id, reason, opts \\ []) do
     with {:ok, {repo_key, issue_id}} <- ticket(ticket),
          {:ok, reason} <- text(reason, :blank_reason),
+         {:ok, cause} <- cause(Keyword.get(opts, :cause)),
          {:ok, by} <- actor(Keyword.get(opts, :by, @symphony)),
          {:ok, at} <- at(opts) do
-      update(repo_key, issue_id, at, &withdrawn(ticket, &1, &2, id, reason, by, at))
+      update(repo_key, issue_id, at, &withdrawn(ticket, &1, &2, id, {reason, cause}, by, at))
     end
   end
 
@@ -227,6 +240,10 @@ defmodule SymphonyElixir.Questions do
     * a run ending ends the questions it asked (by its id when the question names one, else asked
       while it ran), once the ticket moved to another phase; a question Symphony, a rule or a
       person asked is about the ticket itself, such as a merge confirmation, and outlives any run;
+      so does a question a request comment shows (`request: true`, the agent's
+      `linear_request_human_action`: a protected-path authorization, a plan's choice): the run
+      ended because it asked, and the question holds the ticket until it is answered or the hold
+      ends for another reason (TP-1321);
     * a merge settled and a terminal state end every question.
 
   A question no longer open lapses with nothing.
@@ -242,7 +259,8 @@ defmodule SymphonyElixir.Questions do
   (`SymphonyElixir.Pauses.Projector`), or, while it does not own the comments, this function does
   when the Inbox lists the request. A question a Blocked hold waits on (a run's block
   report, a dispatch loop) ends with that hold, which Unblock and Restart decide, so only a merge
-  or a terminal state withdraws it here. Best-effort: a hold or a reply that fails is logged, and the
+  or a terminal state withdraws it here. A question a hold carries (Needs Decision or Blocked) holds
+  the ticket, so a run ending never withdraws it. Each withdrawal records its `t:cause/0`. Best-effort: a hold or a reply that fails is logged, and the
   Inbox's next read reconciles the hold. Returns the questions withdrawn.
 
   `opts[:store]` and `opts[:tracker]` override the run store and the tracker the holds are read and
@@ -251,13 +269,15 @@ defmodule SymphonyElixir.Questions do
   """
   @spec withdraw_lapsed(ticket(), lapse(), keyword()) :: {:ok, [question()]}
   def withdraw_lapsed(ticket, lapse, opts \\ []) do
-    held = blocked_question(ticket, opts)
+    blocked = held_question(ticket, :blocked, opts)
+    holding = [blocked, held_question(ticket, :needs_decision, opts)]
 
     withdrawn =
       for question <- open(ticket),
-          final?(lapse) or question.id != held,
+          final?(lapse) or question.id != blocked,
+          not (run_ended?(lapse) and question.id in holding),
           reason <- List.wrap(lapse_reason(question, lapse)),
-          {:ok, withdrawn} <- [withdraw(ticket, question.id, reason)] do
+          {:ok, withdrawn} <- [withdraw(ticket, question.id, reason, cause: lapse_cause(lapse))] do
         project_withdrawal(ticket, withdrawn, reason, opts)
         withdrawn
       end
@@ -287,7 +307,7 @@ defmodule SymphonyElixir.Questions do
   end
 
   defp open_lapse_reason(question, {:run_ended, %{moved_to: to} = run}) when is_binary(to) do
-    if run_asked?(question) and asked_in?(question, run), do: "The run that asked ended and the ticket moved on to #{to}."
+    if run_asked?(question) and question.request != true and asked_in?(question, run), do: "The run that asked ended and the ticket moved on to #{to}."
   end
 
   defp open_lapse_reason(_question, {:run_ended, _run}), do: nil
@@ -309,14 +329,22 @@ defmodule SymphonyElixir.Questions do
 
   defp final?(lapse), do: lapse == :merged or match?({:terminal, _state}, lapse)
 
-  defp blocked_question({:ticket, repo_key, issue_id}, opts) do
-    case Hold.get(repo_key, issue_id, :blocked, Keyword.take(opts, [:store])) do
+  defp run_ended?(lapse), do: match?({:run_ended, _run}, lapse)
+
+  defp lapse_cause(:restart), do: "restarted"
+  defp lapse_cause({:run_ended, _run}), do: "run_ended"
+  defp lapse_cause(_moved), do: "ticket_moved"
+
+  # The question the ticket's hold of `kind` carries, or nil.
+  defp held_question({:ticket, repo_key, issue_id}, kind, opts) do
+    case Hold.get(repo_key, issue_id, kind, Keyword.take(opts, [:store])) do
       %{waits_on: %{question_id: id}} -> id
+      %{decision: %{question_id: id}} -> id
       _none -> nil
     end
   end
 
-  defp blocked_question(_ticket, _opts), do: nil
+  defp held_question(_ticket, _kind, _opts), do: nil
 
   defp project_withdrawal({:ticket, repo_key, issue_id}, question, reason, opts) do
     hold_opts = Keyword.take(opts, [:store, :tracker])
@@ -472,10 +500,10 @@ defmodule SymphonyElixir.Questions do
     end
   end
 
-  defp withdrawn(ticket, questions, pause, id, reason, by, at) do
+  defp withdrawn(ticket, questions, pause, id, {reason, cause}, by, at) do
     with {:ok, question} <- open_question(questions, id) do
       question = %{question | state: :withdrawn, withdrawn: %{reason: reason, at: at}}
-      payload = %{question_id: id, title: question.title, reason: reason, by: by}
+      payload = %{question_id: id, title: question.title, reason: reason, by: by} |> put_present(:cause, cause)
       write(ticket, question, {"question.withdrawn", payload, [at: at]}, unpaused(ticket, pause, id, by, at))
     end
   end
@@ -663,6 +691,12 @@ defmodule SymphonyElixir.Questions do
 
   defp scope(scope) when scope in @scopes, do: {:ok, scope}
   defp scope(scope), do: {:error, {:invalid_option, {:scope, scope}}}
+
+  defp cause(cause) when is_nil(cause) or cause in @causes, do: {:ok, cause}
+  defp cause(cause), do: {:error, {:invalid_option, {:cause, cause}}}
+
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
 
   defp at(opts) do
     case Keyword.get_lazy(opts, :at, &DateTime.utc_now/0) do

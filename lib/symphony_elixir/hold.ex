@@ -392,7 +392,7 @@ defmodule SymphonyElixir.Hold do
       {nil, _question, _answered?} -> :ok
       {id, {:answer, text, by}, _answered?} -> ended(Questions.answer({:ticket, repo_key, issue_id}, id, text, by: by))
       {_id, nil, true} -> :ok
-      {id, nil, false} -> ended(Questions.withdraw({:ticket, repo_key, issue_id}, id, "Symphony lifted the pause it was asked with.", by: @symphony))
+      {id, nil, false} -> ended(Questions.withdraw({:ticket, repo_key, issue_id}, id, "Symphony lifted the pause it was asked with.", by: @symphony, cause: "hold_cleared"))
     end
   end
 
