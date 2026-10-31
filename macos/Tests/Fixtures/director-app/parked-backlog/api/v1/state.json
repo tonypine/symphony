@@ -1,0 +1,344 @@
+{
+  "auto_merge": [],
+  "awaiting_clarification": [],
+  "blocked": [],
+  "budget": {
+    "daily_limit": 5000000,
+    "daily_paused": false,
+    "daily_remaining": 5000000,
+    "daily_used": 0,
+    "per_issue_limit": 2000000
+  },
+  "build": {
+    "sha": "9f54098c3a1e5b7d2f4c6a8e0b1d3f5a7c9e1b3d",
+    "version": "0.0.1.412"
+  },
+  "codex_totals": {
+    "cache_creation_input_tokens": 6568666,
+    "cached_input_tokens": 149857148,
+    "input_tokens": 156430436,
+    "output_tokens": 629302,
+    "seconds_running": 23413,
+    "total_tokens": 156465114,
+    "uncached_input_tokens": 4622
+  },
+  "concurrency": {
+    "finishing_max": 2,
+    "forced_max": 1,
+    "max_total": 10
+  },
+  "conflicts": [],
+  "counts": {
+    "claimed": 0,
+    "conflicts": 0,
+    "forced": 0,
+    "retrying": 0,
+    "running": 0,
+    "shipped_today": 0,
+    "watching": 1
+  },
+  "dispatch_skipped": [
+    {
+      "issue_id": "i-430",
+      "issue_identifier": "SHOP-430",
+      "open_questions": [
+        {
+          "asked_at": "2026-10-18T10:40:00Z",
+          "asked_by": "Symphony",
+          "confirm": null,
+          "id": "q-430",
+          "title": "SHOP-430 looks stuck: run it again?"
+        }
+      ],
+      "pause": {
+        "reasons": [
+          {
+            "kind": "question",
+            "releasable": false,
+            "set_at": "2026-10-18T10:40:00Z",
+            "set_by": {
+              "kind": "symphony",
+              "name": "Symphony"
+            },
+            "text": "Parked in Backlog: its last two runs changed nothing. Waiting for your answer",
+            "waits_on": {
+              "question_id": "q-430"
+            }
+          }
+        ],
+        "releasable": false,
+        "set_by": {
+          "kind": "symphony",
+          "name": "Symphony"
+        },
+        "since": "2026-10-18T10:40:00Z"
+      },
+      "reason": "held: parked by the dispatch loop",
+      "repo_key": "web-shop",
+      "repository_paused": false,
+      "state": "Backlog",
+      "title": "Gift card balance on the receipt",
+      "url": "https://linear.app/acme/issue/SHOP-430"
+    }
+  ],
+  "dispatch_state": {
+    "active?": true,
+    "blockers": []
+  },
+  "epic_lanes": {
+    "lanes": [
+      {
+        "id": "e1",
+        "identifier": "SHOP-300",
+        "status": "running",
+        "sub_issue": {
+          "identifier": "SHOP-302",
+          "issue_id": "i-302",
+          "state": "In Progress",
+          "via": "blocked_by"
+        },
+        "title": "Gift cards"
+      },
+      {
+        "id": "e2",
+        "identifier": "API-120",
+        "status": "waiting",
+        "sub_issue": null,
+        "title": "Rate limits"
+      }
+    ],
+    "max_total": 10,
+    "queued_epics": [
+      {
+        "id": "e3",
+        "identifier": "WEB-88",
+        "title": "Dark mode"
+      }
+    ],
+    "shared": {
+      "slots": 8,
+      "used": 2
+    }
+  },
+  "finishing": {
+    "running": [],
+    "slots": 2,
+    "used": 0
+  },
+  "forced": [],
+  "generated_at": "2026-10-18T11:20:00Z",
+  "linear_usage": {
+    "callers": [
+      {
+        "caller": "poll",
+        "requests": 720
+      },
+      {
+        "caller": "reconcile",
+        "requests": 402
+      },
+      {
+        "caller": "agent_tool",
+        "requests": 151
+      },
+      {
+        "caller": "qa",
+        "requests": 11
+      }
+    ],
+    "queries": [
+      {
+        "query": "CandidateIssues",
+        "requests": 720
+      }
+    ],
+    "total": 1284,
+    "window_ms": 3600000
+  },
+  "orchestrator": {
+    "message_queue_len": 0,
+    "snapshot_age_ms": 420,
+    "snapshot_build_ms": 12,
+    "snapshot_parts_ms": {}
+  },
+  "pause": {
+    "paused": false,
+    "paused_at": null,
+    "reason": null
+  },
+  "phases": [
+    {
+      "dispatches": false,
+      "name": "Backlog"
+    },
+    {
+      "dispatches": true,
+      "name": "Todo"
+    },
+    {
+      "dispatches": true,
+      "name": "In Progress"
+    },
+    {
+      "dispatches": true,
+      "name": "Code Review"
+    },
+    {
+      "dispatches": true,
+      "name": "QA"
+    },
+    {
+      "dispatches": true,
+      "name": "Merging"
+    },
+    {
+      "dispatches": true,
+      "name": "Rework"
+    },
+    {
+      "dispatches": false,
+      "name": "Plan Review"
+    },
+    {
+      "dispatches": true,
+      "name": "Epic Review"
+    },
+    {
+      "dispatches": false,
+      "name": "Waiting on sub-tickets"
+    },
+    {
+      "dispatches": true,
+      "name": "CI Fix"
+    },
+    {
+      "dispatches": false,
+      "name": "Done"
+    },
+    {
+      "dispatches": false,
+      "name": "Canceled"
+    }
+  ],
+  "pollers": {
+    "ci": {
+      "consecutive_failures": 0,
+      "current_backoff_ms": null,
+      "poll_interval_ms": 60000,
+      "status": "running",
+      "webhooks": {
+        "enabled": true,
+        "events_received": 214,
+        "last_event_at": "2026-10-07T13:58:40Z",
+        "rejected": 2,
+        "relay": "smee.io",
+        "results_via_poll": 7,
+        "results_via_webhook": 96
+      }
+    },
+    "pr_review": {
+      "consecutive_failures": 0,
+      "current_backoff_ms": null,
+      "poll_interval_ms": 60000,
+      "status": "running",
+      "webhooks": null
+    }
+  },
+  "qa": {
+    "queued": [],
+    "running": [
+      {
+        "identifier": "SHOP-410",
+        "issue_id": "i-410"
+      }
+    ]
+  },
+  "rate_limits": null,
+  "repos": [
+    "api",
+    "docs",
+    "web-shop"
+  ],
+  "retrying": [],
+  "run_history": [
+    {
+      "attempt": 1,
+      "effort": "high",
+      "ended_at": "2026-10-18T10:20:00Z",
+      "error": null,
+      "issue_id": "i-410",
+      "issue_identifier": "SHOP-410",
+      "kind": "agent",
+      "model": "claude-opus-5-5",
+      "profile_label": "implementation",
+      "repo_key": "web-shop",
+      "reviewer_profile": null,
+      "run_id": "run-impl-1",
+      "run_kind": "implementation",
+      "runtime_seconds": 1020,
+      "session_id": "session-run-impl-1",
+      "started_at": "2026-10-18T10:02:00Z",
+      "state": "In Progress",
+      "status": "success",
+      "title": "Keep the run header visible",
+      "tokens": {
+        "total_tokens": 640000
+      },
+      "transcript_path": null,
+      "turn_count": 6,
+      "worker_host": null,
+      "workspace_path": "/Users/director/symphony-workspaces/web-shop/SHOP-410"
+    },
+    {
+      "attempt": 1,
+      "effort": "high",
+      "ended_at": "2026-10-18T10:46:00Z",
+      "error": null,
+      "issue_id": "i-410",
+      "issue_identifier": "SHOP-410",
+      "kind": "qa",
+      "model": "claude-opus-5-5",
+      "profile_label": "qa",
+      "repo_key": "web-shop",
+      "reviewer_profile": null,
+      "run_id": "run-qa-1",
+      "run_kind": "qa",
+      "runtime_seconds": 900,
+      "session_id": "session-run-qa-1",
+      "started_at": "2026-10-18T10:31:00Z",
+      "state": "QA",
+      "status": "success",
+      "title": "Keep the run header visible",
+      "tokens": {
+        "total_tokens": 210000
+      },
+      "transcript_path": null,
+      "turn_count": 6,
+      "worker_host": null,
+      "workspace_path": "/Users/director/symphony-workspaces/web-shop/SHOP-410"
+    }
+  ],
+  "running": [],
+  "shipped_today": [],
+  "skipped": [],
+  "slot_waiting": [],
+  "stray_processes": [],
+  "uptime_seconds": 11580,
+  "usage_limits": [],
+  "watching": [
+    {
+      "issue_id": "i-410",
+      "issue_identifier": "SHOP-410",
+      "last_ran_at": "2026-10-18T11:11:00Z",
+      "open_questions": [],
+      "pause": null,
+      "pull_request_url": "https://github.com/acme/web-shop/pull/512",
+      "repo_key": "web-shop",
+      "repository_paused": false,
+      "seconds_since_last_run": 540,
+      "state": "QA",
+      "title": "Keep the run header visible",
+      "url": "https://linear.app/acme/issue/SHOP-410"
+    }
+  ]
+}

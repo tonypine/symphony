@@ -1,0 +1,48 @@
+{
+  "issue_id": "i-430",
+  "issue_identifier": "SHOP-430",
+  "last_error": null,
+  "open_questions": [
+    {
+      "asked_at": "2026-10-18T10:40:00Z",
+      "asked_by": "Symphony",
+      "confirm": null,
+      "id": "q-430",
+      "title": "SHOP-430 looks stuck: run it again?"
+    }
+  ],
+  "pause": {
+    "reasons": [
+      {
+        "kind": "question",
+        "releasable": false,
+        "set_at": "2026-10-18T10:40:00Z",
+        "set_by": {
+          "kind": "symphony",
+          "name": "Symphony"
+        },
+        "text": "Parked in Backlog: its last two runs changed nothing. Waiting for your answer",
+        "waits_on": {
+          "question_id": "q-430"
+        }
+      }
+    ],
+    "releasable": false,
+    "set_by": {
+      "kind": "symphony",
+      "name": "Symphony"
+    },
+    "since": "2026-10-18T10:40:00Z"
+  },
+  "repo_key": "web-shop",
+  "repository_paused": false,
+  "retry": null,
+  "running": null,
+  "status": "dispatch_skipped",
+  "verdicts": [],
+  "watching": null,
+  "workspace": {
+    "host": null,
+    "path": "/Users/qa/symphony-workspaces/web-shop/SHOP-430"
+  }
+}

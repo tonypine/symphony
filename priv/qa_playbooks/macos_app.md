@@ -281,6 +281,24 @@ GitHub or Linear in QA:
   Symphony to add one."; typing is impossible and no request is logged. Walk it at 1440×900 and
   2560×1440, light and dark: the field and its line are never clipped, and at 2560×1440 the
   field stops at 720 pt wide.
+- **Move to… (TP-1328):** pass `macos/Tests/Fixtures/director-app/parked-backlog` as
+  `api_fixtures` and open SHOP-430 from Tickets. The dispatch loop parked it in Backlog with its
+  question ("SHOP-430 looks stuck: run it again?"). The page's action bar has **Move to…** beside
+  Stop Run…. It lists the fixture's thirteen phases in board order, Backlog to Canceled, with
+  Backlog checked and dimmed. Pick **In Progress**: a sheet asks "Move SHOP-430 to In Progress?"
+  and says Symphony starts its run there at once. Type "resume with the work" in the note field
+  and press **Move to In Progress**. The sheet closes, the banner above the note field says
+  "SHOP-430 Moved to In Progress" with **Undo**, and `qa_api_requests` lists one
+  `POST /api/v1/control/move` whose body has `issue_identifier` `SHOP-430`, `to` `In Progress`
+  and `note` `resume with the work`. Press **Undo** within ten seconds: the banner says "Moved
+  back", and the log gains one `POST /api/v1/control/undo` for SHOP-430. Without Undo, the banner
+  goes after ten seconds. The fixture's state stays the same, so the page still shows Backlog.
+  The live server proves that the page shows In Progress and its running line after the move. On
+  Tickets, right-click SHOP-430's row: its menu has the same **Move to…** submenu. VoiceOver reads
+  the menu as "Move SHOP-430 to another phase", an entry as "Move to In Progress", and the
+  checked one as "Backlog, the phase it is in". Walk it at 1440×900 and 2560×1440, light and
+  dark. At 1440×900 the menu is on screen without scrolling, and nothing on the action bar is
+  clipped.
 - **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
   state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one
   warning, `symphony.yml sets auto_review.enabled, which is deprecated` (**Remove…**). Before

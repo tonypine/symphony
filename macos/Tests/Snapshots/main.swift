@@ -711,6 +711,43 @@ func pausedPage(_ identifier: String, window: CGFloat, releasing: Bool = false) 
         .background(DesignTokens.Surface.content.color)
 }
 
+// Move to… (TP-1328): the `parked-backlog` fixture's SHOP-430, parked in Backlog by the dispatch loop.
+let parkedAPI = here.appendingPathComponent("../Fixtures/director-app/parked-backlog/api/v1").standardizedFileURL
+
+/// SHOP-430's page in a window `window` pt wide beside the sidebar, its action bar with Move to…, and the banner after
+/// the move when `banner`.
+@MainActor
+func parkedPage(window: CGFloat, banner: Bool = false) -> some View {
+    let page = TicketPage(
+        identifier: "SHOP-430",
+        sources: TicketPage.Sources(
+            state: try? Data(contentsOf: parkedAPI.appendingPathComponent("state.json")),
+            issue: try? Data(contentsOf: parkedAPI.appendingPathComponent("SHOP-430.json"))
+        ),
+        now: ledgerNow, timeZone: TimeZone(identifier: "UTC")!
+    )
+    let width = window - DesignTokens.Layout.sidebarWidth
+    let moved = InboxBanner(itemID: "SHOP-430", identifier: "SHOP-430", text: "Moved to In Progress", undo: true)
+    return VStack(spacing: 0) {
+        TicketPageBody(page: page, actions: TicketPageActions(), width: width)
+        if banner {
+            InboxBannerView(banner: moved, undo: {}, close: {})
+                .padding(.horizontal, DesignTokens.Space.s5)
+                .padding(.bottom, DesignTokens.Space.s3)
+        }
+    }
+    .frame(width: width)
+    .background(DesignTokens.Surface.content.color)
+}
+
+/// The sheet Move to… → In Progress opens on SHOP-430, with the walkthrough's note typed.
+@MainActor
+func moveSheet(error: String? = nil) -> some View {
+    let sheet = MoveSheet(identifier: "SHOP-430", from: "Backlog", to: MachinePhase(name: "In Progress", dispatches: true))
+    return MoveSheetView(sheet: sheet, working: false, error: error, note: "resume with the work", cancel: {}, confirm: { _ in })
+        .background(DesignTokens.Surface.window.color)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -841,6 +878,14 @@ MainActor.assumeIsolated {
             render(pausedPage(identifier, window: 2560), scheme, to: "paused-line-\(name)-desktop-\(suffix).png")
         }
         render(pausedPage("SHOP-421", window: 1440, releasing: true), scheme, to: "paused-line-releasing-laptop-\(suffix).png")
+        // Move to… (TP-1328): the parked ticket's action bar at the laptop and desktop viewports, the banner after the
+        // move, and the move's sheet, also with a refusal.
+        render(parkedPage(window: 1440), scheme, to: "move-to-laptop-\(suffix).png")
+        render(parkedPage(window: 2560), scheme, to: "move-to-desktop-\(suffix).png")
+        render(parkedPage(window: 1440, banner: true), scheme, to: "move-to-banner-laptop-\(suffix).png")
+        render(moveSheet(), scheme, to: "move-sheet-\(suffix).png")
+        render(moveSheet(error: "Couldn't move SHOP-430 to In Progress: Symphony has no record of SHOP-430 yet, so it can't move it (HTTP 409)"),
+               scheme, to: "move-sheet-refused-\(suffix).png")
         // A blocked Inbox row's pause (TP-1253): stopped by the Director, and two reasons, one releasable.
         for (identifier, name) in [("TP-897", "stopped"), ("TP-899", "two-reasons")] {
             render(blockedReview(identifier, window: 1440), scheme, to: "inbox-blocked-\(name)-laptop-\(suffix).png")

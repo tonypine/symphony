@@ -238,6 +238,10 @@ public struct TicketPage: Equatable {
     public var isRunning: Bool
     /// Whether Symphony tracks the ticket now, so its transcript endpoint answers.
     public var isTracked: Bool
+    /// The phase the ticket is in, as the State fact shows it; nil while Symphony didn't say.
+    public var phaseName: String?
+    /// Move to… (TP-1328): every phase of the state payload, the ticket's own checked; nil when there is none to offer.
+    public var moveMenu: TicketMoveMenu?
     /// Whether the note field takes a note: Symphony serves the ticket's events feed, which a note is written to, and
     /// the ticket's repo is known. An older Symphony doesn't.
     public var acceptsNotes: Bool
@@ -539,6 +543,10 @@ public struct TicketPage: Equatable {
             }.map(\.element)
         }
 
+        phaseName = ticketState
+        moveMenu = TicketMoveMenu(
+            identifier: identifier, current: ticketState, repoKey: repoKey, phases: TicketMoveMenu.phases(inState: sources.state)
+        )
         var facts: [Fact] = []
         if let ticketState { facts.append(Fact(label: "State", value: ticketState)) }
         facts.append(Fact(label: "Type", value: Self.type(title: title, inboxKind: waitingOnYou?.kind)))

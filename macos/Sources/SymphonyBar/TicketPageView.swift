@@ -181,6 +181,67 @@ extension SymphonyWindowModel {
         }
     }
 
+    /// A Move to… pick (TP-1328): opens the move's sheet; nothing moves until its button is pressed.
+    func openMove(_ sheet: MoveSheet) {
+        guard !moveInFlight else { return }
+        moveError = nil
+        moveSheet = sheet
+    }
+
+    func cancelMove() {
+        guard !moveInFlight else { return }
+        moveSheet = nil
+        moveError = nil
+    }
+
+    /// The sheet's button: the move with the note. On success the sheet closes, the banner offers Undo for 10 s and
+    /// the state and the page are read again at once; a failure keeps the sheet open and says why.
+    func confirmMove(_ sheet: MoveSheet, note: String) {
+        guard !moveInFlight else { return }
+        moveInFlight = true
+        moveError = nil
+        Task {
+            let result = await onControl(sheet.action(note: note))
+            moveInFlight = false
+            switch result {
+            case .done, .moved:
+                moveSheet = nil
+                showMoveBanner(sheet.banner(after: result.moveOutcome ?? sheet.expectedOutcome))
+            case let .failed(message):
+                moveError = message
+            }
+            client.refresh()
+            readTicket(force: true)
+        }
+    }
+
+    /// The banner of the last Move to…, while it shows.
+    var moveBanner: InboxBanner? {
+        guard let banner = inboxBanner, banner.id == moveBannerID else { return nil }
+        return banner
+    }
+
+    private func showMoveBanner(_ banner: InboxBanner) {
+        moveBannerID = banner.id
+        showBanner(banner)
+    }
+
+    /// Undo on a Move to… banner: Symphony takes the move back; the banner says it did, or why it couldn't.
+    func undoMove(_ banner: InboxBanner) {
+        guard banner.undo else { return }
+        dismissBanner()
+        Task {
+            switch await onControl(.undo(banner.identifier)) {
+            case .done, .moved:
+                showMoveBanner(.undone(itemID: banner.itemID, identifier: banner.identifier))
+            case let .failed(message):
+                showMoveBanner(.failed(itemID: banner.itemID, identifier: banner.identifier, message: message))
+            }
+            client.refresh()
+            readTicket(force: true)
+        }
+    }
+
     /// Return in the note field: the note goes on the shown ticket, then the page reads what is new in its feed, so
     /// the note shows at once.
     func submitNote() {
@@ -223,6 +284,8 @@ struct TicketPageActions {
     var viewTranscript: (_ newWindow: Bool) -> Void = { _ in }
     var openURL: (URL) -> Void = { _ in }
     var stopRun: () -> Void = {}
+    /// A Move to… pick: its sheet.
+    var move: (MoveSheet) -> Void = { _ in }
     var copyAPIURL: () -> Void = {}
     var showAuditRecords: () -> Void = {}
     var revealWorktree: (String) -> Void = { _ in }
@@ -278,6 +341,7 @@ struct TicketPageContent: View {
                     viewTranscript: { newWindow in model.onOpenTranscript(page.identifier, page.repoKey, newWindow) },
                     openURL: model.onOpenURL,
                     stopRun: { model.openStopRun(page.identifier, origin: .ticketPage) },
+                    move: model.openMove,
                     copyAPIURL: { model.copyAPIURL(page) },
                     showAuditRecords: { model.showAuditRecords(page) },
                     revealWorktree: model.revealWorktree,
@@ -294,7 +358,10 @@ struct TicketPageContent: View {
                 ),
                 images: model.artifactImages,
                 note: model.ticketNote,
-                submitNote: model.submitNote
+                submitNote: model.submitNote,
+                banner: model.moveBanner.flatMap { $0.identifier == page.identifier ? $0 : nil },
+                undo: model.undoMove,
+                closeBanner: model.dismissBanner
             )
         } else {
             EmptyState(title: "Reading the ticket…", symbol: "doc.text.magnifyingglass", showsSpinner: true)
@@ -312,6 +379,10 @@ struct TicketPageView: View {
     /// The note field pinned under the page, so it stays reachable however long the timeline is.
     var note: TicketNoteComposer?
     var submitNote: () -> Void = {}
+    /// A Move to…'s banner, with its Undo for 10 s, above the note field.
+    var banner: InboxBanner?
+    var undo: (InboxBanner) -> Void = { _ in }
+    var closeBanner: () -> Void = {}
     @State private var width: CGFloat = DesignTokens.Layout.windowWidth - DesignTokens.Layout.sidebarWidth
     /// The run groups folded, by run id: they stay folded as the feed is read again.
     @State private var folded = Set<String>()
@@ -327,7 +398,14 @@ struct TicketPageView: View {
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if let note { TicketNoteBar(page: page, composer: note, submit: submitNote) }
+            VStack(spacing: 0) {
+                if let banner {
+                    InboxBannerView(banner: banner, undo: { undo(banner) }, close: closeBanner)
+                        .padding(.horizontal, DesignTokens.Space.s5)
+                        .padding(.bottom, DesignTokens.Space.s3)
+                }
+                if let note { TicketNoteBar(page: page, composer: note, submit: submitNote) }
+            }
         }
         .sheet(item: $fullScreenshot) { shot in
             ScreenshotSheet(shot: shot, images: images, close: { fullScreenshot = nil })
@@ -658,7 +736,7 @@ private struct DoneLine: View {
     }
 }
 
-/// View Transcript (the default), Open in Linear, Stop Run…, and the ⋯ menu.
+/// View Transcript (the default), Open in Linear, Stop Run…, Move to…, and the ⋯ menu.
 private struct TicketActions: View {
     let page: TicketPage
     let actions: TicketPageActions
@@ -678,6 +756,9 @@ private struct TicketActions: View {
             }
             Button(StopRunSheet.buttonTitle, action: actions.stopRun)
                 .disabled(!page.isRunning)
+            if let moveMenu = page.moveMenu {
+                MoveToMenu(menu: moveMenu, move: actions.move)
+            }
             if offscreenSnapshot {
                 // `ImageRenderer` can't draw a menu.
                 Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
@@ -1147,6 +1228,147 @@ struct WrappingStack: Layout {
             widest = max(widest, x - spacing)
         }
         return (places, CGSize(width: widest, height: y + lineHeight))
+    }
+}
+
+// MARK: - TP-1328: Move to…
+
+/// Move to… as a button-styled menu: every phase, the ticket's own checked and disabled. Offscreen, where
+/// `ImageRenderer` can't draw a menu, its button alone.
+struct MoveToMenu: View {
+    let menu: TicketMoveMenu
+    let move: (MoveSheet) -> Void
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+
+    var body: some View {
+        if offscreenSnapshot {
+            Button {} label: {
+                HStack(spacing: DesignTokens.Space.s1) {
+                    Text(TicketMoveMenu.title)
+                    Image(systemName: "chevron.down").imageScale(.small).accessibilityHidden(true)
+                }
+            }
+        } else {
+            Menu(TicketMoveMenu.title) { MoveToMenuItems(menu: menu, move: move) }
+                .menuStyle(.button)
+                .fixedSize()
+                .help("Put \(menu.identifier) in another phase; its workspace and branch stay")
+                .accessibilityLabel("Move \(menu.identifier) to another phase")
+        }
+    }
+}
+
+/// The menu's entries, in the page's Move to… and in a Tickets row's context menu.
+struct MoveToMenuItems: View {
+    let menu: TicketMoveMenu
+    let move: (MoveSheet) -> Void
+
+    var body: some View {
+        ForEach(menu.entries) { entry in
+            if entry.isCurrent {
+                // A checked item, off: the phase the ticket is in.
+                Toggle(entry.name, isOn: .constant(true))
+                    .disabled(true)
+                    .accessibilityLabel(TicketMoveMenu.accessibilityLabel(entry))
+            } else {
+                Button(entry.name) { menu.sheet(for: entry).map(move) }
+                    .accessibilityLabel(TicketMoveMenu.accessibilityLabel(entry))
+            }
+        }
+    }
+}
+
+/// The move's sheet: the question, what happens and what stays, the optional note, then Cancel and the move.
+struct MoveSheetView: View {
+    let sheet: MoveSheet
+    let working: Bool
+    let error: String?
+    let cancel: () -> Void
+    let confirm: (_ note: String) -> Void
+    @State private var note: String
+    @FocusState private var noteFocused: Bool
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+
+    init(sheet: MoveSheet, working: Bool, error: String?, note: String = "", cancel: @escaping () -> Void,
+         confirm: @escaping (String) -> Void) {
+        self.sheet = sheet
+        self.working = working
+        self.error = error
+        self.cancel = cancel
+        self.confirm = confirm
+        _note = State(initialValue: note)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
+            Text(sheet.title)
+                .font(DesignTokens.TypeStyle.sentence.font)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
+            Text(sheet.happens)
+                .font(DesignTokens.TypeStyle.body.font)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(sheet.stays)
+                .font(DesignTokens.TypeStyle.body.font)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if offscreenSnapshot {
+                // `ImageRenderer` can't draw a text field: its text stands in.
+                Text(note.isEmpty ? MoveSheet.notePlaceholder : note)
+                    .font(DesignTokens.TypeStyle.body.font)
+                    .foregroundStyle(note.isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
+                    .padding(.horizontal, DesignTokens.Space.s2)
+                    .padding(.vertical, DesignTokens.Space.s1)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .topLeading)
+                    .background(DesignTokens.Surface.content.color, in: RoundedRectangle(cornerRadius: 5))
+                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(DesignTokens.Surface.separator.color))
+            } else {
+                TextField(MoveSheet.notePlaceholder, text: $note, axis: .vertical)
+                    .lineLimit(2...5)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($noteFocused)
+                    .accessibilityLabel(MoveSheet.notePrompt)
+            }
+            if let error {
+                Label(error, systemImage: DesignTokens.Status.problem.symbol)
+                    .font(DesignTokens.TypeStyle.callout.font)
+                    .foregroundStyle(DesignTokens.Status.problem.tint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: DesignTokens.Space.s2) {
+                if working {
+                    ProgressView().controlSize(.small).accessibilityLabel("Working")
+                }
+                Spacer(minLength: 0)
+                Button("Cancel", role: .cancel, action: cancel)
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(working)
+                Button(sheet.verb) { confirm(note) }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(working)
+            }
+        }
+        .padding(DesignTokens.Space.s5)
+        .frame(width: 460)
+        .onAppear { noteFocused = true }
+    }
+}
+
+/// Presents the window model's Move to… sheet on any view that offers Move to….
+struct MoveSheetPresenter: ViewModifier {
+    @ObservedObject var model: SymphonyWindowModel
+
+    func body(content: Content) -> some View {
+        content.sheet(item: $model.moveSheet) { sheet in
+            MoveSheetView(
+                sheet: sheet,
+                working: model.moveInFlight,
+                error: model.moveError,
+                cancel: model.cancelMove,
+                confirm: { note in model.confirmMove(sheet, note: note) }
+            )
+        }
     }
 }
 

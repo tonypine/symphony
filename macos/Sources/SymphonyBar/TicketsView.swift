@@ -169,6 +169,13 @@ struct TicketsContent: View {
                 EmptyState(title: "Reading Symphony's state…", symbol: SymphonyView.tickets.symbol, showsSpinner: true)
             }
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            // A row's Move to… banner, with its Undo for 10 s.
+            if let banner = model.moveBanner {
+                InboxBannerView(banner: banner, undo: { model.undoMove(banner) }, close: model.dismissBanner)
+                    .padding(DesignTokens.Space.s4)
+            }
+        }
         .searchable(text: $model.ticketSearch, placement: .toolbar, prompt: TicketList.searchPrompt)
         .searchFocused($searchFocused)
         .onChange(of: model.searchRequested, initial: true) { _, requested in
@@ -183,7 +190,9 @@ struct TicketsContent: View {
             open: model.openTicket,
             force: { model.openForceSheet($0) },
             stopForcing: model.stopForcing,
-            canForce: model.dispatchControl.canForce
+            canForce: model.dispatchControl.canForce,
+            phases: TicketMoveMenu.phases(inState: client.stateJSON),
+            move: model.openMove
         )
     }
 }
@@ -194,6 +203,15 @@ struct TicketsActions {
     var force: (String) -> Void = { _ in }
     var stopForcing: (String) -> Void = { _ in }
     var canForce = true
+    /// The state payload's phases, for a row's Move to….
+    var phases: [MachinePhase] = []
+    /// A Move to… pick: its sheet.
+    var move: (MoveSheet) -> Void = { _ in }
+
+    /// A row's Move to… menu, nil when there is none to offer.
+    func moveMenu(_ row: TicketList.Row) -> TicketMoveMenu? {
+        TicketMoveMenu(identifier: row.identifier, current: row.state, repoKey: row.repoKey, phases: phases)
+    }
 }
 
 /// The scope bar, the table (C19) and the inspector.
@@ -339,6 +357,9 @@ struct TicketsTable: View {
             if let identifier = identifiers.first, let row = rows.first(where: { $0.identifier == identifier }) {
                 Button(TicketList.openTitle) { actions.open(identifier) }
                 TicketForceButton(row: row, actions: actions)
+                if let menu = actions.moveMenu(row) {
+                    Menu(TicketMoveMenu.title) { MoveToMenuItems(menu: menu, move: actions.move) }
+                }
             }
         } primaryAction: { identifiers in
             identifiers.first.map(actions.open)

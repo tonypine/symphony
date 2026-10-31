@@ -1,0 +1,10 @@
+{
+  "commented": false,
+  "from_state": "Backlog",
+  "issue_id": "i-430",
+  "issue_identifier": "SHOP-430",
+  "move": "move",
+  "moved": true,
+  "to_state": "In Progress",
+  "undo_window_ms": 10000
+}
