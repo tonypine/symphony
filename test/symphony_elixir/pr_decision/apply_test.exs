@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.PrDecision.ApplyTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{CiFix, Hold, Questions, TicketObservation, TicketPullRequest, TicketSignals, TicketState}
+  alias SymphonyElixir.{CiFix, Questions, TicketObservation, TicketPullRequest, TicketSignals, TicketState}
   alias SymphonyElixir.PrDecision.{Action, Apply, Facts}
   alias SymphonyElixir.PrWatch.Attempts
 
@@ -424,7 +424,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     assert_received {:move, @issue_id, "Rework"}
     assert_received {:comment, @issue_id, "Symphony moved this ticket to Rework: " <> rest}
     assert rest =~ reason
-    refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+    refute deciding()
   end
 
   describe "landing" do
@@ -658,14 +658,14 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert body =~ "3. **Fix the workflow in Rework**"
       assert body =~ "within 30 minutes"
 
-      assert %{decision: %{options: options, confirm: "Rework"}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert %{options: options, confirm: "Rework"} = deciding()
       assert Enum.map(options, & &1.label) == ["Proceed without it for this PR", "Rerun the checks", "Fix the workflow in Rework"]
       signals = TicketState.recent_signals(RunStore.get_ticket_state(@repo_key, @issue_id))
       assert [%{name: "decision requested", details: %{reason: "required_check_missing"}} | _] = signals
       refute_received {:disable_auto_merge, _url, _node, _opts}
 
       # No ticket record of decisions: none came before.
-      Hold.clear(@repo_key, @issue_id, :needs_decision)
+      withdraw_questions()
       assert %{attempts: %{unreported: %{asked: %{prior: 0}}}} = Apply.apply(action, Map.delete(ctx, :decisions))
     end
 
@@ -684,8 +684,8 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert body =~ "GitHub cancels a check it can't find a machine for"
       assert body =~ "1. **Keep retrying** (recommended)"
       assert body =~ "2. **Wait**"
-      assert %{decision: %{options: options} = decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
-      refute decision[:confirm]
+      assert %{options: options} = decision = deciding()
+      refute decision.confirm
       assert Enum.map(options, & &1.label) == ["Keep retrying", "Wait"]
       signals = TicketState.recent_signals(RunStore.get_ticket_state(@repo_key, @issue_id))
       assert [%{name: "decision requested", details: %{reason: "check_cancelled"}} | _] = signals
@@ -727,7 +727,8 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert body =~ "**Drop the change in Rework** (recommended): the ticket moves to Rework"
       assert body =~ "<!-- symphony:unlocks option=1 WORKFLOW.md .agents/skills -->"
       refute body =~ ~r/label/i
-      assert %{decision: %{confirm: "Rework", unlocks: [["WORKFLOW.md", ".agents/skills"], []]}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert %{confirm: "Rework", options: options} = deciding()
+      assert Enum.map(options, & &1.unlocks) == [["WORKFLOW.md", ".agents/skills"], []]
       refute_received {:disable_auto_merge, _url, _node, _opts}
     end
 
@@ -736,7 +737,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       read = read(protected_paths: ["WORKFLOW.md"])
 
       for asked <- [[description: "Add the hook to `WORKFLOW.md`."], [rulings: [%{answer: "Change workflow.md too."}]]] do
-        Hold.clear(@repo_key, @issue_id, :needs_decision)
+        withdraw_questions()
         assert %{outcome: :applied} = Apply.apply(action, ctx(:qa, [read: read] ++ asked))
 
         assert_received {:comment, @issue_id, "## Decision needed: Protected files changed on TP-7" <> body}
@@ -757,7 +758,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       end)
 
       refute_received {:comment, @issue_id, _body}
-      assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
+      assert deciding() == nil
     end
 
     test "an answer to R17 picks an option by its number or label, or none" do
@@ -855,12 +856,12 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
 
     assert_received {:disable_auto_merge, @pr_url, "PR_node", _opts}
     assert_received {:comment, @issue_id, "## Decision needed: Protected files changed on TP-7" <> _rest}
-    assert %{decision: %{question: question}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+    assert %{question: question} = deciding()
     assert question =~ "changes the list of settings that need no control in the Mac app. Agents may change these only with a person's permission."
     signals = TicketState.recent_signals(RunStore.get_ticket_state(@repo_key, @issue_id))
     assert [%{name: "decision requested", details: %{reason: "protected_paths"}} | _] = signals
     assert [%{id: id, title: "Protected files changed on TP-7"}] = Questions.open({:ticket, @repo_key, @issue_id})
-    assert %{decision: %{question_id: ^id}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+    assert %{id: ^id} = deciding()
 
     # The watcher asks again on its next pass: the same question, with no second comment, and the
     # ticket's timeline shows it asked once.
@@ -901,7 +902,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert_received {:comment, @issue_id, "Symphony moved this ticket to Rework: PR #7 was closed without merging. A rework run opens a new pull request from main."}
       refute_received {:comment, @issue_id, _other}
       assert %{state: "closed"} = TicketPullRequest.get(@repo_key, @issue_id)
-      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+      refute deciding()
       signals = TicketState.recent_signals(RunStore.get_ticket_state(@repo_key, @issue_id))
       assert [%{name: "review verdict", details: %{outcome: "pr_closed", to: "Rework"}} | _] = signals
 
@@ -959,7 +960,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
 
       assert_received {:comment, @issue_id, "## Decision needed: No pull request on TP-7" <> request}
       assert request =~ "TP-7 (Add it) is in Code Review, but Symphony finds no pull request for it"
-      assert %{decision: %{options: options}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert %{options: options} = deciding()
       assert Enum.map(options, & &1.label) == ["Attach the PR", "Restart", "Cancel"]
       assert %{move: %{to: "Canceled"}} = List.last(options)
       refute Enum.any?(options, &(&1.effect =~ "you move"))
@@ -969,7 +970,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert [%{name: "decision requested", details: %{reason: "pr_missing"}} | _] = signals
 
       # A ticket read without its title is named by its identifier alone.
-      Hold.clear(@repo_key, @issue_id, :needs_decision)
+      withdraw_questions()
       untitled = ctx(:merging, read: nil, facts: %{pr: :missing})
       assert %{outcome: :applied} = Apply.apply(action, %{untitled | issue: %{untitled.issue | title: nil}})
       assert_received {:comment, @issue_id, "## Decision needed: No pull request on TP-7\n\n**Question:** TP-7 is in Merging, but" <> _rest}
@@ -982,7 +983,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert %{outcome: :applied} = Apply.apply(action, ctx(:qa, read: read, facts: %{base: :changed}))
       assert_received {:comment, @issue_id, "## Decision needed: PR #7 of TP-7 merges into release, not main" <> request}
       assert request =~ "PR #7 of TP-7 (Add it) merges into the release branch, not into main"
-      assert %{decision: %{options: [%{label: "Put the base back", recommended: true}, %{label: "Accept the new base"}]}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert %{options: [%{label: "Put the base back", recommended?: true}, %{label: "Accept the new base"}]} = deciding()
       refute_received {:change_base, _url, _base, _opts}
 
       put_back = ctx(:qa, read: Map.put(read, :base_answer, :put_back), facts: %{base: :changed})
@@ -1017,5 +1018,15 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert Apply.base_answer([decision.("PR #7 of TP-7 merges into hotfix, not main", "Accept the new base")], issue, read) == nil
       assert Apply.base_answer([decision.("The pull request of TP-7 merges into release, not main", "1")], issue, %{read | pr_url: nil}) == :put_back
     end
+  end
+
+  # The decision request's question the ticket waits on, or nil.
+  defp deciding, do: Questions.deciding({:ticket, @repo_key, @issue_id})
+
+  # Withdraws every open question, so the next ask is a new one.
+  defp withdraw_questions do
+    ticket = {:ticket, @repo_key, @issue_id}
+    for question <- Questions.open(ticket), do: {:ok, _withdrawn} = Questions.withdraw(ticket, question.id, "The test asks again.")
+    :ok
   end
 end

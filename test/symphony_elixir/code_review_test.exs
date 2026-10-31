@@ -4,7 +4,6 @@ defmodule SymphonyElixir.CodeReviewTest do
   alias SymphonyElixir.CiFix
   alias SymphonyElixir.CodeReview
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.MergeConfirmation
@@ -127,6 +126,14 @@ defmodule SymphonyElixir.CodeReviewTest do
 
   defp verdicts, do: SymphonyElixir.Handoff.verdicts(@repo_key, @issue_id, "code_review")
   defp signals, do: SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
+  defp deciding, do: Questions.deciding({:ticket, @repo_key, @issue_id})
+
+  # The person's answer to the ticket's open decision request.
+  defp answer_deciding do
+    %{id: id} = deciding()
+    {:ok, _question} = Questions.answer({:ticket, @repo_key, @issue_id}, id, "1")
+    :ok
+  end
 
   # A reviewer result carrying the diff it judged, the way `ReviewAgent.evaluate/4` returns one.
   defp approve_from(range, inventory) do
@@ -170,8 +177,7 @@ defmodule SymphonyElixir.CodeReviewTest do
     assert PlainWords.tokens(body) == []
     refute_received {:moved, @issue_id, _state}
 
-    hold = Hold.get(@repo_key, @issue_id, :needs_decision)
-    assert MergeConfirmation.confirm_target(hold) == "QA"
+    assert MergeConfirmation.confirm_target(deciding()) == "QA"
     body
   end
 
@@ -283,7 +289,7 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert request =~ "## Decision needed: Restart or cancel TP-815"
       assert request =~ "has a pull request that changes nothing against the main branch"
       assert request =~ "the ticket stays in Code Review until the decision is recorded"
-      assert %{decision: %{options: [%{label: "Restart", recommended: true}, %{label: "Cancel"}]}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert %{options: [%{label: "Restart", recommended?: true}, %{label: "Cancel"}]} = deciding()
       refute Enum.any?(signals(), &(&1.details[:signal] == "code_review_approve_skip"))
     end
 
@@ -297,9 +303,9 @@ defmodule SymphonyElixir.CodeReviewTest do
                  run(workspace, settings: designed_settings())
       end)
 
-      # The question stays asked and held; its comment waits for the Inbox's sweep.
+      # The question stays asked and pauses the ticket; its comment is marked pending.
       assert [%{id: id}] = Questions.open({:ticket, @repo_key, @issue_id})
-      assert %{decision: %{question_id: ^id}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert %{id: ^id} = deciding()
     end
 
     test "manual review on pauses an approve-skip on a merge confirmation instead of moving to Merging" do
@@ -317,8 +323,7 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert request =~ "QA: QA skipped: the PR only changes docs, tests or auto_review.skip_globs paths"
       assert request =~ "the ticket stays in Code Review until the decision is recorded"
 
-      assert Hold.held?(@repo_key, @issue_id, :needs_decision)
-      assert MergeConfirmation.confirm_target(Hold.get(@repo_key, @issue_id, :needs_decision)) == "Merging"
+      assert MergeConfirmation.confirm_target(deciding()) == "Merging"
 
       assert [%{name: "code_review", details: %{signal: "merge_confirmation", target: "Merging", qa_decision: "skip"}}] =
                SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
@@ -342,7 +347,7 @@ defmodule SymphonyElixir.CodeReviewTest do
 
       assert :ok = run(workspace, settings: designed_settings(%{"manual_review" => "on"}))
       assert_received {:moved, @issue_id, "QA"}
-      refute Hold.held_any?(@repo_key, @issue_id)
+      refute deciding()
     end
 
     test "with no policy override the repo's own skip rule decides" do
@@ -418,7 +423,7 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert_received {:moved, @issue_id, "QA"}
       refute_received {:moved, @issue_id, "Rework"}
       refute_received {:commented, @issue_id, _body}
-      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+      refute deciding()
       assert [%{outcome: "approve"}] = verdicts()
     end
 
@@ -799,7 +804,7 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert_received {:commented, @issue_id, body}
       assert body =~ "## Symphony Code Review"
       assert_received {:moved, @issue_id, "Rework"}
-      assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
+      assert deciding() == nil
     end
 
     test "a risky change is not reviewed when the reviewer is off" do
@@ -950,9 +955,9 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert_received {:reviewed, @issue_id, "Code Review"}
       assert [%{details: %{signal: "code_review_escalate", head: ^head}}] = signals() |> Enum.filter(&(&1.name == "code_review"))
 
-      # The person's decision clears the hold, but its move into QA did not land: the ticket is
+      # The person answers the question, but its move into QA did not land: the ticket is
       # dispatched again on the same head, and performs the decision instead of reviewing.
-      :ok = Hold.clear(@repo_key, @issue_id, :needs_decision)
+      :ok = answer_deciding()
       TicketSignals.record(@repo_key, @issue_id, "decision returned", %{move: "decide", from: "Code Review", to: "Code Review"})
       Process.put(:fake_review_result, {:ok, %{verdict: :request_changes, comments: ["A second opinion"], reason: "a second opinion"}})
 
@@ -977,7 +982,7 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert :ok = run(workspace, settings: designed_settings())
       assert_escalated("Send to Rework")
 
-      :ok = Hold.clear(@repo_key, @issue_id, :needs_decision)
+      :ok = answer_deciding()
       TicketSignals.record(@repo_key, @issue_id, "decision returned", %{move: "decide", from: "Code Review", to: "Rework"})
       Process.put(:fake_review_result, {:ok, %{verdict: :approve, comments: [], reason: "looks good"}})
 
@@ -1019,7 +1024,7 @@ defmodule SymphonyElixir.CodeReviewTest do
                )
 
       assert_received {:moved, @issue_id, "QA"}
-      assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
+      assert deciding() == nil
     end
 
     test "a ticket without a title is named by its identifier alone" do
@@ -1060,7 +1065,7 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert :ok = CodeReview.run(named, "/tmp/workspace", settings: designed_settings(), review_agent: FakeReviewAgent, tracker: FakeTracker, qa_policy: FakeQaPolicy)
 
       assert_received {:moved, @issue_id, "QA"}
-      assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
+      assert deciding() == nil
     end
 
     test "a failed decision request is reported and nothing moves" do
@@ -1074,7 +1079,7 @@ defmodule SymphonyElixir.CodeReviewTest do
 
       refute_received {:moved, _, _}
       assert_received {:commented, @issue_id, _refused}
-      assert Hold.held?(@repo_key, @issue_id, :needs_decision)
+      assert deciding()
     end
 
     test "with Linear down the escalation is a question on the record, its comment kept for the projector" do
@@ -1094,7 +1099,7 @@ defmodule SymphonyElixir.CodeReviewTest do
 
       # The refused comment names its Question, so the pause projector posts it once Linear is back.
       assert refused =~ "<!-- symphony:question #{id} -->"
-      assert Hold.held?(@repo_key, @issue_id, :needs_decision)
+      assert deciding()
     end
 
     test "a dependency manifest's major bump informs the review, read from git in the workspace" do

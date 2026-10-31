@@ -17,7 +17,6 @@ defmodule SymphonyElixir.TicketStateTest do
                phase: nil,
                phase_at: nil,
                phase_owner: :external,
-               holds: [],
                ci_states: [],
                verdicts: [],
                signals: [],
@@ -144,7 +143,7 @@ defmodule SymphonyElixir.TicketStateTest do
                %{"q-1" => %{comment: "c-1", reply: "answered:2026"}, "q-2" => %{comment: nil, reply: nil}}
 
       marked = TicketState.mark_projection(record, :pause, :linear_down, ~U[2026-10-30 04:00:00Z])
-      assert [%{type: :pause, hold: nil, error: ":linear_down"} = mark] = marked.pending_projection
+      assert [%{type: :pause, error: ":linear_down"} = mark] = marked.pending_projection
       assert TicketState.projection_of(mark) == :pause
       assert TicketState.normalize(marked).pending_projection == marked.pending_projection
     end
@@ -157,7 +156,6 @@ defmodule SymphonyElixir.TicketStateTest do
                phase: nil,
                phase_at: nil,
                phase_owner: :external,
-               holds: [],
                ci_states: [],
                verdicts: [],
                signals: [],
@@ -202,7 +200,6 @@ defmodule SymphonyElixir.TicketStateTest do
           repo_key: "repo-a",
           issue_id: "issue-1",
           phase: "  ",
-          holds: [%{kind: :blocked, reason: "waiting"}, %{kind: :nope}, "junk", %{kind: :blocked, reason: "duplicate"}],
           verdicts: [%{kind: "review verdict", outcome: "approve"}, %{kind: :atom}, "junk"],
           ci_states: [%{head_sha: "abc", status: "green"}, %{head_sha: 42}, "junk"],
           signals: [%{name: "handoff"}, %{name: :atom}, "junk"],
@@ -210,7 +207,6 @@ defmodule SymphonyElixir.TicketStateTest do
         })
 
       assert record.phase == nil
-      assert [%{kind: :blocked, reason: "waiting"}] = record.holds
       assert [%{kind: "review verdict", outcome: "approve"}] = record.verdicts
       assert [%{head_sha: "abc", status: "green"}] = record.ci_states
       assert [%{name: "handoff", details: %{}, at: nil}] = record.signals
@@ -325,7 +321,7 @@ defmodule SymphonyElixir.TicketStateTest do
 
     test "treats non-list collections as empty" do
       record = TicketState.normalize(%{holds: :x, verdicts: :x, ci_states: :x, signals: :x})
-      assert record.holds == []
+      refute Map.has_key?(record, :holds)
       assert record.verdicts == []
       assert record.ci_states == []
       assert record.signals == []
@@ -434,83 +430,35 @@ defmodule SymphonyElixir.TicketStateTest do
     end
   end
 
-  describe "holds" do
-    test "sets, replaces and clears a hold" do
-      record = TicketState.new("repo-a", "issue-1")
-      refute TicketState.hold?(record, :blocked)
+  describe "the holds a record kept from before they were retired" do
+    test "are dropped, and a question an old hold carried reads as asked with a request" do
+      carried = %{id: "q-1", state: :open, title: "Pick", question: "Which?", request: nil}
+      other = %{id: "q-2", state: :open, title: "Other", question: "Which?", request: nil}
+      already = %{id: "q-3", state: :open, title: "Known", question: "Which?", request: false}
 
-      record = TicketState.set_hold(record, :blocked, %{reason: "tooling", clearing_condition: "fix lands"}, @at)
-      assert TicketState.hold?(record, :blocked)
-      assert [%{kind: :blocked, reason: "tooling", clearing_condition: "fix lands", decision: nil, set_at: @at}] = record.holds
-
-      record = TicketState.set_hold(record, :blocked, %{reason: "again"}, @at)
-      assert [%{kind: :blocked, reason: "again"}] = record.holds
-
-      record = TicketState.clear_hold(record, :blocked, @at)
-      refute TicketState.hold?(record, :blocked)
-      assert record.holds == []
-    end
-
-    test "a Needs Decision hold carries its decision payload" do
       record =
-        TicketState.set_hold(TicketState.new("repo-a", "issue-1"), :needs_decision, %{
-          reason: "pick one",
-          decision: %{question: "Which?", options: ["a", "b"]}
+        TicketState.normalize(%{
+          repo_key: "repo-a",
+          issue_id: "issue-1",
+          holds: [
+            %{kind: :blocked, reason: "waiting"},
+            %{decision: %{question_id: "q-1"}},
+            %{decision: %{question_id: "q-3"}},
+            %{decision: %{question_id: 7}}
+          ],
+          questions: [carried, other, already]
         })
 
-      assert [%{kind: :needs_decision, decision: %{question: "Which?"}}] = record.holds
+      refute Map.has_key?(record, :holds)
+      assert Enum.map(record.questions, &{&1.id, &1.request}) == [{"q-1", true}, {"q-2", nil}, {"q-3", false}]
     end
 
-    test "a non-map decision is dropped" do
-      record = TicketState.set_hold(TicketState.new("repo-a", "issue-1"), :needs_decision, %{decision: "nope"})
-      assert [%{decision: nil}] = record.holds
-    end
+    test "a record with no holds, or holds that are not a list, keeps its questions as they are" do
+      question = %{id: "q-1", state: :open, title: "Pick", question: "Which?", request: nil}
 
-    test "clearing an unset hold is a no-op" do
-      record = TicketState.clear_hold(TicketState.new("repo-a", "issue-1"), :needs_decision, @at)
-      assert record.holds == []
-    end
-
-    test "a hold records what it waits on, and get_hold/2 reads it back" do
-      record =
-        TicketState.set_hold(TicketState.new("repo-a", "issue-1"), :blocked, %{
-          reason: "waiting on TP-1",
-          waits_on: %{type: " dependency ", keys: [" TP-1 ", nil, 5]}
-        })
-
-      assert [%{kind: :blocked, waits_on: %{type: "dependency", keys: ["TP-1"]}}] = record.holds
-      assert %{kind: :blocked, waits_on: %{type: "dependency", keys: ["TP-1"]}} = TicketState.get_hold(record, :blocked)
-      assert TicketState.get_hold(record, :needs_decision) == nil
-    end
-
-    test "a hold set beside a question keeps the question's id; a blank one is dropped" do
-      asked = TicketState.set_hold(TicketState.new("repo-a", "issue-1"), :blocked, %{waits_on: %{type: "dispatch_loop", keys: ["qa"], question_id: " q-1 "}})
-      assert [%{waits_on: %{type: "dispatch_loop", keys: ["qa"], question_id: "q-1"}}] = asked.holds
-      assert %{waits_on: %{question_id: "q-1"}} = asked |> TicketState.normalize() |> TicketState.get_hold(:blocked)
-
-      blank = TicketState.set_hold(TicketState.new("repo-a", "issue-1"), :blocked, %{waits_on: %{type: "access", question_id: " "}})
-      assert [%{waits_on: waits_on}] = blank.holds
-      assert waits_on == %{type: "access", keys: []}
-    end
-
-    test "a malformed waits_on is dropped to nil" do
-      blank_type = TicketState.set_hold(TicketState.new("repo-a", "issue-1"), :blocked, %{waits_on: %{type: "  "}})
-      assert [%{waits_on: nil}] = blank_type.holds
-
-      not_a_map = TicketState.set_hold(TicketState.new("repo-a", "issue-1"), :blocked, %{waits_on: "nope"})
-      assert [%{waits_on: nil}] = not_a_map.holds
-
-      no_keys = TicketState.set_hold(TicketState.new("repo-a", "issue-1"), :blocked, %{waits_on: %{type: "access", keys: "nope"}})
-      assert [%{waits_on: %{type: "access", keys: []}}] = no_keys.holds
-    end
-
-    test "a stored record keeps its waits_on through normalization" do
-      record =
-        TicketState.new("repo-a", "issue-1")
-        |> TicketState.set_hold(:blocked, %{waits_on: %{type: "fix_ticket", keys: ["TP-900"]}})
-        |> TicketState.normalize()
-
-      assert %{waits_on: %{type: "fix_ticket", keys: ["TP-900"]}} = TicketState.get_hold(record, :blocked)
+      for holds <- [nil, :x] do
+        assert [%{id: "q-1", request: nil}] = TicketState.normalize(%{holds: holds, questions: [question]}).questions
+      end
     end
   end
 
@@ -595,16 +543,9 @@ defmodule SymphonyElixir.TicketStateTest do
       assert TicketState.normalize(%{dispatches: [%{kind: "qa", outcome: %{}}]}).dispatches |> hd() |> Map.fetch!(:outcome) == %{exit: "", head: nil, at: nil}
     end
 
-    test "a hold that lifts and a verdict end the count; clearing no hold keeps it" do
+    test "a verdict ends the count" do
       record = TicketState.record_dispatch(TicketState.new("repo-a", "issue-1"), %{kind: "implementation", run_id: "run-1"}, @at)
-
-      assert [_run] = TicketState.clear_hold(record, :blocked, @at).dispatches
-      assert record |> TicketState.set_hold(:blocked, %{reason: "loop"}) |> TicketState.dispatches() |> length() == 1
-
-      for kind <- [:blocked, :needs_decision] do
-        lifted = record |> TicketState.set_hold(kind, %{reason: "loop"}) |> TicketState.clear_hold(kind, @at)
-        assert TicketState.dispatches(lifted) == []
-      end
+      assert [_run] = TicketState.dispatches(record)
 
       assert record |> TicketState.record_verdict("code_review", "a", "approve", @at) |> TicketState.dispatches() == []
     end
@@ -742,15 +683,15 @@ defmodule SymphonyElixir.TicketStateTest do
         "repo"
         |> TicketState.new("issue-1")
         |> TicketState.mark_projection(:phase, {:error, :boom}, @at)
-        |> TicketState.mark_projection({:hold_label, :blocked}, "label refused", @at)
+        |> TicketState.mark_projection(:pause, "label refused", @at)
         |> TicketState.mark_projection(:phase, nil, @at)
 
       assert record.pending_projection == [
-               %{type: :phase, hold: nil, error: nil, at: @at},
-               %{type: :hold_label, hold: :blocked, error: "label refused", at: @at}
+               %{type: :phase, error: nil, at: @at},
+               %{type: :pause, error: "label refused", at: @at}
              ]
 
-      assert Enum.map(record.pending_projection, &TicketState.projection_of/1) == [:phase, {:hold_label, :blocked}]
+      assert Enum.map(record.pending_projection, &TicketState.projection_of/1) == [:phase, :pause]
       [phase_mark, label_mark] = record.pending_projection
       cleared = TicketState.clear_projection(record, phase_mark)
       assert cleared.pending_projection == [label_mark]
@@ -773,7 +714,7 @@ defmodule SymphonyElixir.TicketStateTest do
       assert TicketState.normalize(record) == record
 
       # A stored mark that names no question is dropped.
-      unnamed = %{pending_projection: [%{type: :question_comment, hold: nil, at: @at}]}
+      unnamed = %{pending_projection: [%{type: :question_comment, at: @at}]}
       assert TicketState.normalize(unnamed).pending_projection == []
     end
 
@@ -792,7 +733,7 @@ defmodule SymphonyElixir.TicketStateTest do
       assert TicketState.normalize(record) == record
 
       # A stored mark that names no question is dropped.
-      unnamed = %{pending_projection: [%{type: :question_answer, hold: nil, comment: "c", at: @at}]}
+      unnamed = %{pending_projection: [%{type: :question_answer, comment: "c", at: @at}]}
       assert TicketState.normalize(unnamed).pending_projection == []
     end
 
@@ -810,10 +751,16 @@ defmodule SymphonyElixir.TicketStateTest do
       assert TicketState.normalize(%{}).not_found_at == nil
     end
 
-    test "a stored mark of no known projection is dropped" do
-      marks = [%{type: :phase, error: "  ", at: "yesterday"}, %{type: :hold_label, hold: :unknown}, %{type: :other}, "phase"]
+    test "a stored mark of a retired hold's label reads as a mark of the pause" do
+      marks = [%{type: :hold_label, hold: :blocked, error: "down", at: @at}]
       normalized = TicketState.normalize(%{pending_projection: marks})
-      assert normalized.pending_projection == [%{type: :phase, hold: nil, error: nil, at: nil}]
+      assert normalized.pending_projection == [%{type: :pause, error: "down", at: @at}]
+    end
+
+    test "a stored mark of no known projection is dropped" do
+      marks = [%{type: :phase, error: "  ", at: "yesterday"}, %{type: :other}, "phase"]
+      normalized = TicketState.normalize(%{pending_projection: marks})
+      assert normalized.pending_projection == [%{type: :phase, error: nil, at: nil}]
       assert TicketState.normalize(%{pending_projection: :phase}).pending_projection == []
     end
   end
@@ -836,10 +783,8 @@ defmodule SymphonyElixir.TicketStateTest do
     record = TicketState.new("repo-a", "issue-1")
 
     assert %DateTime{} = TicketState.put_phase(record, "Todo").updated_at
-    assert %DateTime{} = TicketState.clear_hold(record, :blocked).updated_at
     assert %DateTime{} = TicketState.record_verdict(record, "review verdict", "sha", "approve").updated_at
     assert %DateTime{} = TicketState.record_ci_state(record, "sha", "green").updated_at
-    assert %DateTime{} = TicketState.set_hold(record, :blocked).updated_at
     assert %DateTime{} = TicketState.record_signal(record, "handoff").updated_at
     assert %DateTime{} = TicketState.record_dispatch(record, %{kind: "qa"}).updated_at
   end
@@ -1022,7 +967,7 @@ defmodule SymphonyElixir.TicketStateTest do
       {record, :changed} =
         "repo-a"
         |> TicketState.new("issue-1")
-        |> TicketState.set_hold(:blocked, %{reason: "waiting"}, @at)
+        |> TicketState.record_verdict("review verdict", "abc", "approve", @at)
         |> TicketState.observe(linear_issue(), @observed_at)
 
       newer = linear_issue(%{title: "Renamed", state: "Code Review", labels: [], priority: nil, assignee_id: nil, blocked_by: [], updated_at: DateTime.add(@linear_at, 600)})
@@ -1032,7 +977,7 @@ defmodule SymphonyElixir.TicketStateTest do
       assert {observed.title, observed.phase, observed.labels, observed.priority, observed.assignee, observed.blockers} == {"Renamed", "Code Review", [], nil, nil, []}
       assert {observed.linear_updated_at, observed.observed_at, observed.phase_at} == {DateTime.add(@linear_at, 600), later, later}
       assert observed.phase_owner == :external
-      assert [%{kind: :blocked, reason: "waiting"}] = observed.holds
+      assert [%{kind: "review verdict", outcome: "approve"}] = observed.verdicts
     end
 
     test "a change that keeps the phase keeps when the phase was written" do

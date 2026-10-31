@@ -688,10 +688,10 @@ defmodule SymphonyElixir.PromptBuilder do
 
   defp ticket_state_section(_ticket_state), do: nil
 
-  # Verdicts are deliberately not part of the section (only phase, holds, CI and signals are
+  # Verdicts are deliberately not part of the section (only phase, pauses, CI and signals are
   # rendered), so they do not count as content here: a verdict-only record adds nothing.
   defp ticket_state_empty?(state) do
-    state.phase == nil and state.holds == [] and state.ci_states == [] and state.signals == []
+    state.phase == nil and TicketState.pause_reasons(state) == [] and state.ci_states == [] and state.signals == []
   end
 
   # With the ticket's history summary on, the summary holds the ticket's events, so the signals
@@ -701,7 +701,7 @@ defmodule SymphonyElixir.PromptBuilder do
       "Ticket state:",
       "",
       "- Phase: #{blank_fallback(state.phase, "unknown")}",
-      "- Holds: #{ticket_state_holds(state.holds)}",
+      "- Pauses: #{ticket_state_pauses(TicketState.pause_reasons(state))}",
       "- CI: #{ticket_state_ci(state.ci_states)}"
     ]
     |> Kernel.++(ticket_state_signals(state.signals, signals?))
@@ -910,15 +910,8 @@ defmodule SymphonyElixir.PromptBuilder do
     |> Enum.join("\n")
   end
 
-  defp ticket_state_holds([]), do: "none"
-
-  defp ticket_state_holds(holds) do
-    Enum.map_join(holds, "; ", fn hold ->
-      reason = blank_fallback(hold.reason, "no reason recorded")
-      clearing = blank_fallback(hold.clearing_condition, "no clearing condition recorded")
-      "#{hold.kind} (#{reason}; clears when #{clearing})"
-    end)
-  end
+  defp ticket_state_pauses([]), do: "none"
+  defp ticket_state_pauses(reasons), do: Enum.map_join(reasons, "; ", &"#{&1.kind} (#{blank_fallback(&1.text, "no reason recorded")})")
 
   defp ticket_state_ci([]), do: "unknown"
 

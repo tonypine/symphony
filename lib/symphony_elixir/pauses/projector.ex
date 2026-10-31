@@ -10,13 +10,10 @@ defmodule SymphonyElixir.Pauses.Projector do
     * `Blocked` while the pause has a reason that is not a question: a ticket, a person or the
       environment. A `:build` reason, the wait for a Symphony update (`SymphonyElixir.UpdateHold`),
       shows no label, as it showed none before the projector;
-    * until the Needs Decision hold is retired, `Needs Decision` also while the record holds it
-      (`SymphonyElixir.Hold`). A Blocked hold a record kept from before its retirement shows
-      nothing: the pause alone says `Blocked`;
     * the Decisions section's entries (`Decisions.render_from_questions/1`) and their hash;
     * per question a request comment shows in Linear (asked with `request: true`, as
-      `SymphonyElixir.DecisionRequest.ask/4` asks it; one asked before questions said, while the
-      Needs Decision hold carries it), the `## Decision needed:` comment
+      `SymphonyElixir.DecisionRequest.ask/4` asks it; one asked before questions said, once its
+      comment was projected), the `## Decision needed:` comment
       (`Request.render_question/2`, carrying the question's id in its hidden line) and, once it
       ended, the reply under it (`Request.render_reply/1`): the Director's decision for an answer a
       person gave, the `## Action withdrawn` reason for a withdrawal.
@@ -42,15 +39,14 @@ defmodule SymphonyElixir.Pauses.Projector do
   back as the record says.
 
   `project_now/2` is called by `Pauses` and `Questions` after each write that changed the record,
-  by `Hold` after each hold it sets or clears, and by `Decisions.record/3` once a decision is
-  stored.
+  and by `Decisions.record/3` once a decision is stored.
 
-  The projector owns these writes while the internal flag `:pause_projector` is on (`owns?/0`,
-  default on): the holds' own label writes (`SymphonyElixir.Hold`, `SymphonyElixir.NeedsDecisionHold`),
+  The projector is the only writer of its two labels (`labels/0`), which
+  `SymphonyElixir.MachineLabels` keeps machine-only. It owns the Decisions section and the request
+  comments and replies while the internal flag `:pause_projector` is on (`owns?/0`, default on):
   the decision store's section write, and the request comments and replies `DecisionRequest`,
   `SymphonyElixir.DirectorMoves`, `linear_withdraw_human_action` and
-  `SymphonyElixir.Questions.withdraw_lapsed/3` post are skipped then. The holds themselves are still set and
-  cleared until they are retired.
+  `SymphonyElixir.Questions.withdraw_lapsed/3` post are skipped then.
   """
 
   import Kernel, except: [apply: 2]
@@ -61,8 +57,8 @@ defmodule SymphonyElixir.Pauses.Projector do
   alias SymphonyElixir.HumanActions.Request
 
   @blocked "Blocked"
-  @needs_decision "Needs Decision"
-  @labels [@blocked, @needs_decision]
+  @question_label "Needs Decision"
+  @labels [@blocked, @question_label]
   # Reasons that show no Blocked label: a question shows Needs Decision, an update's wait shows none.
   @unlabelled_kinds [:question, :build]
 
@@ -100,11 +96,14 @@ defmodule SymphonyElixir.Pauses.Projector do
   @spec labels() :: [String.t()]
   def labels, do: @labels
 
+  @doc "The label a ticket with an open question shows: `Needs Decision`."
+  @spec question_label() :: String.t()
+  def question_label, do: @question_label
+
   @doc """
   What Linear should show for `record`: its labels, sorted (`Needs Decision` while a question is
   open, `Blocked` while a reason other than a question or an update's wait pauses it), and the
-  Decisions section's entries with their hash (nil when there are none), counting the record's
-  Needs Decision hold until it is retired. Pure.
+  Decisions section's entries with their hash (nil when there are none). Pure.
   """
   @spec desired(map()) :: desired()
   def desired(record) do
@@ -114,7 +113,7 @@ defmodule SymphonyElixir.Pauses.Projector do
     labels =
       [
         {@blocked, Enum.any?(reasons, &(&1.kind not in @unlabelled_kinds))},
-        {@needs_decision, Enum.any?(record.questions, &(&1.state == :open)) or TicketState.hold?(record, :needs_decision)}
+        {@question_label, Enum.any?(record.questions, &(&1.state == :open))}
       ]
       |> Enum.filter(&elem(&1, 1))
       |> Enum.map(&elem(&1, 0))
@@ -125,12 +124,11 @@ defmodule SymphonyElixir.Pauses.Projector do
   end
 
   # A question a request comment shows in Linear: one asked with `request: true`; one asked before
-  # questions said, while the Needs Decision hold carries it or once its comment was projected.
+  # questions said, once its comment was projected.
   defp comments(record) do
-    carried = for %{kind: :needs_decision, decision: %{question_id: id}} <- record.holds, do: id
     projected = Map.keys(projected_comments(record) || %{})
 
-    for question <- record.questions, request?(question, carried ++ projected) do
+    for question <- record.questions, request?(question, projected) do
       ended = ended(question)
 
       %{

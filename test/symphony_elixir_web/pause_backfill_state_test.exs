@@ -49,8 +49,13 @@ defmodule SymphonyElixirWeb.PauseBackfillStateTest do
   # A startup: the ledger's backfill (already done), then this one.
   defp restart(now), do: capture_log(fn -> Backfill.run_after_ledger(ledger: fn _opts -> {:ok, %{tickets: 0, events: 0}} end, now: now) end)
 
+  # A record as one stored before the holds were retired: its holds as they were written, which the
+  # record's normalization no longer reads.
   defp put_record(issue_id, identifier, attrs) do
-    :ok = RunStore.put_ticket_state(TicketState.new(Config.repo_key!(), issue_id, Map.put(attrs, :issue_identifier, identifier)))
+    repo_key = Config.repo_key!()
+    {holds, attrs} = Map.pop(attrs, :holds)
+    record = repo_key |> TicketState.new(issue_id, Map.put(attrs, :issue_identifier, identifier)) |> Map.put(:holds, holds)
+    {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_ticket_states, {repo_key, issue_id}, repo_key, issue_id, record}) end)
   end
 
   test "before the backfill ran the state has no summary" do

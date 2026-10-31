@@ -69,9 +69,9 @@ defmodule SymphonyElixir.TicketEvents.BriefTest do
       assert %{text: text, decisions: 0, open_findings: 0, notes: 0, runs: 0} = Brief.build(nil, [])
 
       assert text == """
-             Phase and holds:
+             Phase and pauses:
              - Phase: unknown
-             - Holds: none
+             - Pauses: none
 
              Decisions (0):
              - none
@@ -90,17 +90,26 @@ defmodule SymphonyElixir.TicketEvents.BriefTest do
              """
     end
 
-    test "phase and holds come from the record" do
-      record =
-        TicketState.new(@repo_key, @issue_id, %{phase: "QA"})
-        |> TicketState.set_hold(:blocked, %{reason: "tooling", clearing_condition: "the fix lands"}, @at)
-        |> TicketState.set_hold(:needs_decision, %{}, nil)
+    test "phase and pauses come from the record" do
+      symphony = %{kind: :symphony, name: "Symphony"}
+
+      pause = %{
+        subject: {:ticket, @repo_key, @issue_id},
+        set_by: symphony,
+        since: @at,
+        reasons: [
+          %{kind: :environment, waits_on: %{condition: "tooling"}, text: "tooling", set_by: symphony, set_at: @at, releasable: true},
+          %{kind: :question, waits_on: %{question_id: "q-1"}, text: "Waiting for your answer: Ship it", set_by: symphony, set_at: nil, releasable: false}
+        ]
+      }
+
+      record = TicketState.new(@repo_key, @issue_id, %{phase: "QA"}) |> TicketState.put_pause(pause, @at)
 
       text = Brief.build(record, []).text
 
-      assert text =~ "- Phase: QA\n"
-      assert text =~ "\n- Hold: blocked (tooling; clears when the fix lands), since 2026-10-22T10:00:00Z\n"
-      assert text =~ "\n- Hold: needs_decision (no reason recorded; clears when no clearing condition recorded)\n"
+      assert text =~ "Phase and pauses:\n- Phase: QA\n"
+      assert text =~ "\n- Paused: environment (tooling), since 2026-10-22T10:00:00Z\n"
+      assert text =~ "\n- Paused: question (Waiting for your answer: Ship it)\n"
     end
 
     test "a Question's request shows as a decision request does: open, answered or withdrawn" do

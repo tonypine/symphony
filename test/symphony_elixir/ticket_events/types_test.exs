@@ -33,8 +33,8 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       end
     end
 
-    test "the retired Blocked hold's types are legacy: still in the catalog, so history reads them" do
-      assert Types.legacy_types() == ["hold.set", "hold.cleared"]
+    test "the retired holds' and decision requests' types are legacy: still in the catalog, so history reads them" do
+      assert Types.legacy_types() == ["hold.set", "hold.cleared", "decision.requested", "decision.recorded", "decision.withdrawn"]
 
       for type <- Types.legacy_types() do
         assert Types.legacy?(type)
@@ -42,6 +42,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       end
 
       refute Types.legacy?("pause.set")
+      refute Types.legacy?("question.asked")
       refute Types.legacy?(nil)
     end
 

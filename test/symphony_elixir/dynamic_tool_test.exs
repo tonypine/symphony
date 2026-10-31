@@ -1716,7 +1716,9 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       response = DynamicTool.execute("linear_request_human_action", @request, opts)
       assert response["success"] == true
       assert %{"requested" => true, "commentId" => "comment-1", "state" => "In Progress", "hold" => "Needs Decision"} = Jason.decode!(response["output"])
-      assert_received {:machine_label_set, "issue-current", "Needs Decision"}
+      # The Question pauses the ticket; its label is the pause projector's, off in this suite.
+      refute_received {:machine_label_set, "issue-current", "Needs Decision"}
+      assert %{request: true} = SymphonyElixir.Questions.deciding({:ticket, "default", "issue-current"})
 
       response = DynamicTool.execute("linear_request_human_action", put_in(@request, ["decision", "options"], []), opts)
 

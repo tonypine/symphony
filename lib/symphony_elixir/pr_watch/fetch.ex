@@ -145,7 +145,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   @type ticket :: %{
           required(:phase) => Facts.phase(),
           required(:origin) => Facts.phase() | nil,
-          required(:hold) => :none | :needs_decision | :blocked,
+          required(:hold) => :none | :question | :blocked,
           required(:run) => :none | :active,
           required(:max_red_attempts) => pos_integer(),
           required(:ahead) => [Facts.competitor()],

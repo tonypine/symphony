@@ -6,7 +6,8 @@ defmodule SymphonyElixir.TicketEvents.Brief do
 
   Its sections, in order:
 
-    * **Phase and holds**, from the ticket's record.
+    * **Phase and pauses**, from the ticket's record: its phase and each reason its pause
+      (`SymphonyElixir.Pauses`) waits on.
     * **Decisions**: every request (a `decision.requested`, or a Question's `question.asked`) with
       its answer or withdrawal, every open request, and every ruling a person recorded without a
       request.
@@ -108,19 +109,13 @@ defmodule SymphonyElixir.TicketEvents.Brief do
     }
   end
 
-  # Phase and holds
+  # Phase and pauses
 
-  defp phase_section(state), do: Enum.join(["Phase and holds:", "- Phase: #{state.phase || "unknown"}" | hold_lines(state.holds)], "\n")
+  defp phase_section(state),
+    do: Enum.join(["Phase and pauses:", "- Phase: #{state.phase || "unknown"}" | pause_lines(TicketState.pause_reasons(state))], "\n")
 
-  defp hold_lines([]), do: ["- Holds: none"]
-
-  defp hold_lines(holds) do
-    Enum.map(holds, fn hold ->
-      reason = hold.reason || "no reason recorded"
-      clearing = hold.clearing_condition || "no clearing condition recorded"
-      "- Hold: #{hold.kind} (#{reason}; clears when #{clearing})" <> suffix(", since ", time(hold.set_at))
-    end)
-  end
+  defp pause_lines([]), do: ["- Pauses: none"]
+  defp pause_lines(reasons), do: Enum.map(reasons, &("- Paused: #{&1.kind} (#{&1.text})" <> suffix(", since ", time(&1.set_at))))
 
   # Decisions: each request with the event that ended it (nil while open), and each ruling, in the
   # order they were made.

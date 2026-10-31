@@ -21,9 +21,8 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
     end
   end
 
-  defmodule FailingHoldStore do
-    def get_ticket_state(_repo_key, _issue_id), do: nil
-    def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :disk_full}
+  defmodule FailingCommentTracker do
+    def create_comment(_issue_id, _body), do: {:error, :linear_down}
   end
 
   setup do
@@ -362,12 +361,12 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
       refute_received {:qa_verification, _issue, _workspace, _opts}
       assert_received {:memory_tracker_comment, "issue-qa-closed", request}
       assert request =~ "PR #512 closed"
-      assert SymphonyElixir.Hold.held?(repo_key, "issue-qa-closed", :needs_decision)
+      assert SymphonyElixir.Questions.deciding({:ticket, repo_key, "issue-qa-closed"})
       refute File.exists?(workspace)
       assert argv_lines(ctx.argv_trace) == []
     end
 
-    test "a closed pull request whose hold cannot be set fails the run", ctx do
+    test "a closed pull request whose decision request cannot be posted fails the run", ctx do
       write_profile_workflow!(ctx)
       run_issue = issue("issue-qa-closed-fail", "MT-QA-CLOSED-FAIL", %{state: "Code Review"})
       repo_key = Config.repo_key!()
@@ -375,9 +374,10 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
 
       :ok = SymphonyElixir.TicketPullRequest.put(repo_key, "issue-qa-closed-fail", %{pr_url: pr_url})
       :ok = SymphonyElixir.TicketPullRequest.mark_finished(repo_key, pr_url, "closed")
+      on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state(repo_key, "issue-qa-closed-fail") end)
 
       assert_raise RuntimeError, ~r/closed_pull_request_hold_failed/, fn ->
-        AgentRunner.run(run_issue, nil, store: FailingHoldStore, issue_enricher: fn issue -> {:ok, issue} end)
+        AgentRunner.run(run_issue, nil, tracker: FailingCommentTracker, issue_enricher: fn issue -> {:ok, issue} end)
       end
 
       assert argv_lines(ctx.argv_trace) == []

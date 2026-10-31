@@ -420,8 +420,8 @@ nothing, and it writes only those fields, never the record's holds, verdicts or 
   `linear.reconcile_interval_ms` (default five minutes, at least one minute) instead of
   `issues.poll_interval_ms`; a record change still asks for its repository's poll at once. Each run
   observes the repository's tickets as above, then, outside the cycle, writes to Linear again each
-  projection the record marks as failed (`pending_projection`: a move whose Linear write failed, a
-  hold's label), from the record's phase or holds as they are just before the write, and drops that
+  projection the record marks as failed (`pending_projection`: a move whose Linear write failed, the
+  pause's labels), from the record's phase or pause as they are just before the write, and drops that
   mark; and reads by id the repository's records no read observed yet, marking one Linear does not
   return (`not_found_at`) so it is not read again. It never decides a phase.
 - A record written before these fields existed reads with them at their defaults (`nil`, or an empty
@@ -510,7 +510,7 @@ spec says a run's or a ticket's "attached PR", it means the PR the record answer
 Each ticket has one durable, typed, append-only event stream, kept in the durable run store per
 `repo_key` and issue ID. It is Symphony's record of the ticket's history; the tracker is a projection
 of it. Until readers move over, the snapshot fields of the ticket's state record (`signals`,
-`verdicts`, `dispatches`, `holds`, `decisions`) stay the source of truth and keep being written:
+`verdicts`, `dispatches`, `decisions`) stay the source of truth and keep being written:
 every write to them also records its event (dual-write), and nothing user-facing reads the stream
 yet.
 
@@ -530,9 +530,9 @@ The event:
 The catalog is closed. Each type names who may write it (machine, agent, person), which agent run
 kinds may, its payload schema and its idempotency rule; a payload outside its schema, or a writer the
 type does not allow, is refused. The types: `phase.entered`, `hold.set` and `hold.cleared` (kind
-`blocked` only), `run.started` and `run.ended` (keyed by run id), `attempt.pushed`,
+`blocked` only, legacy), `run.started` and `run.ended` (keyed by run id), `attempt.pushed`,
 `verdict.recorded` (machine only: an agent never records a verdict), `decision.requested`,
-`decision.recorded`, `decision.withdrawn`, `person.action` (`stop`, `move`, `force`, `unblock`,
+`decision.recorded`, `decision.withdrawn` (legacy), `person.action` (`stop`, `move`, `force`, `unblock`,
 `restart`), `ticket.cancelled` (the Director's cancel, with its note), `step.started`,
 `step.completed`, `step.skipped`, `evidence`, `finding.recorded` (QA
 runs), `finding.resolved`, `checklist.answered`, `drift.detected`, `drift.reverted`,
@@ -618,13 +618,13 @@ asked), a `run.ended` whose run asked it once the ticket is in another phase tha
 started in, a merge settled, a move into a terminal state (every question). A question Symphony, a
 rule or a person asked (a merge confirmation, protected files) is about the ticket itself and
 outlives any run, and so does a question that holds the ticket: one a request comment shows (a run's
-`linear_request_human_action`, such as a protected-path authorization), one a Needs Decision hold
-carries, or one the Director's Unblock answers (a run's block report, a dispatch loop). The run ended
+`linear_request_human_action`, such as a protected-path authorization), or one the Director's
+Unblock answers (a run's block report, a dispatch loop). The run ended
 because it asked, so its ending never withdraws it. Each `question.withdrawn` records its `cause`:
 `ticket_moved`, `restarted`, `hold_cleared`, `superseded`, or `run_ended` for a question that holds
 nothing. A question Unblock answers is decided by Unblock or Restart, unless the ticket merged or
-reached a terminal state. The hold carrying the question clears and its request gets the
-`## Action withdrawn` reply, as `linear_withdraw_human_action` makes them.
+reached a terminal state. Its request gets the `## Action withdrawn` reply, as
+`linear_withdraw_human_action` makes it.
 Nothing asks a question this way yet.
 
 A `run.ended` names the run's transcript: a copy kept in the artifact store (Section 4.1.12) as
@@ -657,14 +657,13 @@ step it names when it cites none. Handling the same outcome again writes none of
 the files or writing the events never changes the verdict or the ticket's next state; a failure is
 logged.
 
-A decision a person must make has one representation, whoever asks it: `decision.requested`, then
-the person's `decision.recorded` (keyed `decision.recorded:<key>`, the request comment it answers)
-or `decision.withdrawn` when it ends unanswered; both name the request in `request`. A request
-asked through the one writer is a Question first: `question.asked`, ended by `question.answered`
-or `question.withdrawn` naming its `question_id` (or by a `decision.recorded` naming the event) since
-its last `question.reopened`, and it records no `decision.requested`. The Needs Decision hold and the request comment are the
-projections of an open request, never a hold event: the hold carries the Question's id, and a
-comment whose post failed is posted again by the Inbox's next read. A query with `open_decisions`
+A decision a person must make has one representation, whoever asks it: a Question,
+`question.asked`, ended by `question.answered` or `question.withdrawn` naming its `question_id`
+since its last `question.reopened`. The `decision.*` types are legacy: a ticket's history still
+reads them (an older `decision.requested`, ended by the `decision.recorded` or `decision.withdrawn`
+naming it), and no live writer records them. The `Needs Decision` label and the request comment are
+the pause projector's projections of an open Question, never an event of their own; a write Linear
+refuses is marked pending and applied again by the reconciler. A query with `open_decisions`
 lists the requests no answer or withdrawal names; `open_findings` the findings no unsuperseded
 resolution names.
 
@@ -673,19 +672,18 @@ once, in a task the startup does not wait for (a failure is logged). For every t
 every repo it converts the snapshot's signals (through the same mapping as the live writes),
 verdicts and dispatches, and the last 14 days of `run_stopped` and `director_move` audit records,
 older than the ticket's first live event, into events keyed `backfill:<source>:<hash>` at their
-original time. A signal live writes leave to a hold write becomes that write's event (a held block,
-a dispatch loop or CI wait is `hold.set`, an unblock `hold.cleared`). A decision-requested signal,
-which carries no question, becomes a `note`, so no request from before the ledger stays open. Each
-recorded decision becomes `decision.recorded` under its live key, so an answer already recorded live
-is not recorded twice; a hold still set that the stream doesn't show open becomes its opening event
-(`hold.set`, or `decision.requested` with the hold's question, which its live answer closes). Each
+original time. A signal live writes leave to a pause or a question (a held block, a dispatch loop
+or CI wait, an unblock, a decision request) is no event: the pause backfill below records those.
+Each recorded decision becomes `decision.recorded` under its key, so an answer already recorded is
+not recorded twice and the ticket's history shows every decision with its answer. Each
 ticket's events are appended oldest first in one transaction and end with one note saying until when
 the history was backfilled. A run store marker (`ticket_events_backfill_v1`) makes a later start a
 no-op.
 
 In the same task, right after it (and never before its marker is set), the pause backfill fills
-each record's pause and questions once from the record alone, never Linear, leaving the holds as
-they are. A Blocked hold becomes a pause reason by what it waits on: a dependency, a fix ticket or a
+each record's pause and questions once from the record alone, never Linear, reading the holds a
+record stored before they were retired (the record's `holds` field is no longer read otherwise, and
+dropped from a record as it is read). A Blocked hold becomes a pause reason by what it waits on: a dependency, a fix ticket or a
 landing race waits on a `ticket` (one reason per identifier), an operator stop on a `person`, an
 access need or a CI wait on the `environment` (named from the hold's reason), and a dispatch loop
 or a missing handoff becomes a question Symphony asks ("Run it again", "Start it over from main",

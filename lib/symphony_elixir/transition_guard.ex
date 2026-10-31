@@ -111,7 +111,7 @@ defmodule SymphonyElixir.TransitionGuard do
   # The lane's other two exits have no row, because they are not machine moves: a repair the fixing
   # agent judges substantive is the agent's own request to set `Rework` (an agent state request is
   # validated by `resolve_request/2`, never performed through this table), and a repair it cannot
-  # make without access or a secret is a Needs Decision hold (`SymphonyElixir.Hold`), which never
+  # make without access or a secret is a Needs Decision hold (a question, `SymphonyElixir.Questions`), which never
   # moves the ticket at all. Both are recorded as a `fix verdict`.
   #
   # The `:epic_review_*` rows are the epic path's close (`SymphonyElixir.EpicReview`). An epic

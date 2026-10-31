@@ -19,26 +19,20 @@ defmodule SymphonyElixir.DecisionMoveTest do
     :ok
   end
 
-  defp hold(options), do: %{decision: %{options: options}}
+  defp question(options), do: %{options: options}
 
   defp rework, do: DecisionMove.option(%{label: "Send it back to Rework", effect: "Symphony moves it to Rework"}, %{to: "Rework"})
 
   test "picked/2 reads the move of the one option the answers pick, by label or number" do
     options = [%{label: "Run QA again", effect: "QA runs once more"}, rework()]
 
-    assert DecisionMove.picked(hold(options), ["Send it back to Rework"]) == %{to: "Rework"}
-    assert DecisionMove.picked(hold(options), ["2"]) == %{to: "Rework"}
-    assert DecisionMove.picked(hold(options), ["Run QA again"]) == nil
-    assert DecisionMove.picked(hold(options), ["something else"]) == nil
-    # Options read back from Linear as lines, and a hold with no decision, carry no move.
-    assert DecisionMove.picked(hold(["**Send it back to Rework**: Symphony moves it"]), ["1"]) == nil
+    assert DecisionMove.picked(question(options), ["Send it back to Rework"]) == %{to: "Rework"}
+    assert DecisionMove.picked(question(options), ["2"]) == %{to: "Rework"}
+    assert DecisionMove.picked(question(options), ["Run QA again"]) == nil
+    assert DecisionMove.picked(question(options), ["something else"]) == nil
+    # Options read back from Linear as lines, and no question, carry no move.
+    assert DecisionMove.picked(question(["**Send it back to Rework**: Symphony moves it"]), ["1"]) == nil
     assert DecisionMove.picked(nil, ["1"]) == nil
-  end
-
-  test "moves?/1 says whether any option carries a move" do
-    assert DecisionMove.moves?([%{label: "a", effect: "b"}, rework()])
-    refute DecisionMove.moves?([%{label: "a", effect: "b"}, "a line"])
-    refute DecisionMove.moves?(nil)
   end
 
   test "perform/4 records the verdict, then moves through the guard with the record written first" do

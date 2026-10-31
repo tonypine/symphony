@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.PrWatch.RepoTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Hold, PrWatch, TicketObservation, TicketPullRequest, TicketState}
   alias SymphonyElixir.PrDecision.Facts
+  alias SymphonyElixir.{PrWatch, Questions, TicketObservation, TicketPullRequest, TicketState}
   alias SymphonyElixir.PrWatch.Repo
   alias SymphonyElixirWeb.ObservabilityPubSub
 
@@ -576,7 +576,8 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     :ok = RunStore.put_ticket_state(TicketState.new(repo_key, "1", %{ci_fix_origin: "QA"}))
     {:ok, _pause} = SymphonyElixir.Pauses.set({:ticket, repo_key, "1"}, SymphonyElixir.SelfHeal.environment_reason("dev_server"))
 
-    :ok = RunStore.put_ticket_state(repo_key |> TicketState.new("2", %{ci_fix_origin: "Todo"}) |> TicketState.set_hold(:needs_decision, %{}))
+    :ok = RunStore.put_ticket_state(TicketState.new(repo_key, "2", %{ci_fix_origin: "Todo"}))
+    {:ok, _question} = Questions.ask({:ticket, repo_key, "2"}, decision_request("Which base?"), request: true)
     {:ok, _pause} = SymphonyElixir.Pauses.set({:ticket, repo_key, "2"}, SymphonyElixir.SelfHeal.environment_reason("dev_server"))
 
     :ok = RunStore.put_run(%{repo_key: repo_key, run_id: "run-3", issue_id: "3", status: "running"})
@@ -585,7 +586,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     assert {:ok, _summary} = repo_key |> start_repo!() |> Repo.poll()
 
     assert %{facts: %Facts{phase: :ci_fix, origin: :qa, hold: :blocked, run: :none}} = watch(repo_key, "1")
-    assert %{facts: %Facts{phase: :ci_fix, origin: nil, hold: :needs_decision}} = watch(repo_key, "2")
+    assert %{facts: %Facts{phase: :ci_fix, origin: nil, hold: :question}} = watch(repo_key, "2")
     assert %{facts: %Facts{phase: :rework, origin: nil, hold: :none, run: :active}} = watch(repo_key, "3")
   end
 
@@ -1006,7 +1007,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       # From the record, as if the watcher had not asked yet: the record's description gives the
       # same question, and no Linear is read.
       ask_again = fn ->
-        Hold.clear(repo_key, "1", :needs_decision)
+        withdraw_questions(repo_key, "1")
         :ok = RunStore.put_ticket_pr_watch(repo_key, "1", "TP-1", nil)
         flush()
         assert {:ok, %{errors: 0}} = Repo.poll(pid)
@@ -1045,7 +1046,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       pid = start_repo!(repo_key, tracker: AskingTracker, github: LandingGitHub, git: git)
 
       assert {:ok, %{errors: 0}} = Repo.poll(pid)
-      assert %{decision: decision} = Hold.get(repo_key, "1", :needs_decision)
+      assert %{} = decision = Questions.deciding({:ticket, repo_key, "1"})
       assert question("1") =~ "**Drop the change in Rework** (recommended)"
       unlocks = SymphonyElixir.PathUnlock.picked_paths(decision, ["Allow the change"])
       assert unlocks == ["WORKFLOW.md"]
@@ -1055,7 +1056,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       picked = SymphonyElixir.Decisions.entry("request-1", ~D[2026-10-16], decision.title, decision.question, "Allow the change", unlocks)
       {:ok, projected} = SymphonyElixir.Decisions.put("Ship it.", [picked])
       :ok = SymphonyElixir.Decisions.record("1", [picked], repo_key: repo_key, description: projected)
-      :ok = Hold.clear(repo_key, "1", :needs_decision)
+      {:ok, _answered} = Questions.answer({:ticket, repo_key, "1"}, decision.id, "Allow the change")
       assert %{description: "Ship it."} = RunStore.get_ticket_state(repo_key, "1")
 
       # The head is still red only on that check: the grant covers it, so it reads as green and lands,
@@ -1067,7 +1068,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       # The merge closes the ticket out in the same step (TP-1305).
       assert_received {:moved, "1", "Done"}
       assert %{phase: "Done", phase_owner: :symphony} = RunStore.get_ticket_state(repo_key, "1")
-      refute Hold.held?(repo_key, "1", :needs_decision)
+      refute Questions.deciding({:ticket, repo_key, "1"})
       refute_received {:comment, "1", _body}
       refute_received {:linear_read, _states}
       refute_received {:linear_read_by_id, _ids}
@@ -1221,15 +1222,15 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       record_source!()
       issues!({:error, :linear_must_not_be_read})
       observed!(repo_key, with_pr(repo_key, issue("1", "Code Review"), 1))
-      :ok = Hold.set(repo_key, "1", :needs_decision, %{reason: "Which base?", decision: %{title: "Which base?", question: "Which base?"}})
+      {:ok, question} = Questions.ask({:ticket, repo_key, "1"}, decision_request("Which base?"), request: true)
       pid = start_repo!(repo_key, follow_records: true)
       assert {:ok, %{watched: 1}} = Repo.poll(pid)
-      assert %{facts: %Facts{hold: :needs_decision}, decision: %{kind: kind}} = watch(repo_key, "1")
+      assert %{facts: %Facts{hold: :question}, decision: %{kind: kind}} = watch(repo_key, "1")
       refute kind == :dispatch
       assert dispatch_reason(repo_key, "1", "Code Review") =~ "the PR watcher ("
       flush()
 
-      :ok = Hold.clear(repo_key, "1", :needs_decision, answered: true)
+      {:ok, _answered} = Questions.answer({:ticket, repo_key, "1"}, question.id, "Keep main")
       redecided!(pid)
 
       assert %{facts: %Facts{hold: :none}, decision: %{kind: :dispatch}} = watch(repo_key, "1")
@@ -1308,7 +1309,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       # As if the watcher had not asked yet: the hold's clear re-decides, and the description the
       # record holds gives the same question.
       :ok = :sys.suspend(pid)
-      :ok = Hold.clear(repo_key, "1", :needs_decision)
+      withdraw_questions(repo_key, "1")
       :ok = RunStore.put_ticket_pr_watch(repo_key, "1", "TP-1", nil)
       :ok = :sys.resume(pid)
       redecided!(pid)
@@ -1339,5 +1340,24 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
         {:ok, _pid} = GenServer.start(RunStore, [], name: RunStore)
         :ok
     end
+  end
+
+  # A decision request a rule asks, written to the standard.
+  defp decision_request(title) do
+    %{
+      title: title,
+      question: title,
+      why: "The pull request merges somewhere else.",
+      if_unanswered: "The ticket waits.",
+      options: [%{label: "Keep main", effect: "It merges into main.", recommended: true}, %{label: "Accept it", effect: "It merges there."}],
+      recommendation_reason: "Main is where it belongs."
+    }
+  end
+
+  # Withdraws every open question on the ticket, as if none was asked yet.
+  defp withdraw_questions(repo_key, issue_id) do
+    ticket = {:ticket, repo_key, issue_id}
+    for question <- Questions.open(ticket), do: {:ok, _withdrawn} = Questions.withdraw(ticket, question.id, "The test asks again.")
+    :ok
   end
 end

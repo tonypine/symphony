@@ -5,6 +5,7 @@ defmodule SymphonyElixir.McpServerTest do
   alias SymphonyElixir.DependencyGate
   alias SymphonyElixir.McpServer
   alias SymphonyElixir.PromptSafety
+  alias SymphonyElixir.Questions
 
   defmodule AllowAudit do
     @moduledoc false
@@ -909,7 +910,9 @@ defmodule SymphonyElixir.McpServerTest do
       refute_receive {:git_called, _args, _opts}, 100
       refute_receive {:gh_called, _args, _opts}, 100
 
-      assert_receive {:memory_tracker_label_added, "issue-mcp-hold", "Needs Decision"}, 500
+      # The question pauses it; its Needs Decision label is the pause projector's, off in this suite.
+      assert_receive {:memory_tracker_comment, "issue-mcp-hold", "## Decision needed:" <> _body}, 500
+      assert %{request: true} = Questions.deciding({:ticket, "default", "issue-mcp-hold"})
       refute_received {:memory_tracker_state_update, "issue-mcp-hold", _state}
 
       assert_receive {:notification_event,
@@ -1000,7 +1003,9 @@ defmodule SymphonyElixir.McpServerTest do
       refute_receive {:git_called, _args, _opts}, 100
       refute_receive {:gh_called, _args, _opts}, 100
 
-      assert_receive {:memory_tracker_label_added, "issue-mcp-audit-error", "Needs Decision"}, 500
+      # The question pauses it; its Needs Decision label is the pause projector's, off in this suite.
+      assert_receive {:memory_tracker_comment, "issue-mcp-audit-error", "## Decision needed:" <> _body}, 500
+      assert %{request: true} = Questions.deciding({:ticket, "default", "issue-mcp-audit-error"})
       refute_received {:memory_tracker_state_update, "issue-mcp-audit-error", _state}
 
       assert_receive {:notification_event,

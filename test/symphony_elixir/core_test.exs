@@ -1784,7 +1784,6 @@ defmodule SymphonyElixir.CoreTest do
 
       record = RunStore.get_ticket_state("designed-repo", issue_id)
       assert log =~ "handoff_missing: 2 runs"
-      assert record.holds == []
       assert [%{name: "handoff_missing", details: %{held: true, quiet_runs: 2}} | _rest] = record.signals
 
       # The question is the one Unblock answers.
@@ -1792,7 +1791,17 @@ defmodule SymphonyElixir.CoreTest do
     end
 
     test "a quiet run waiting on its decision request is not counted or capped, and waits for the decision", %{issue_id: issue_id, completed: completed} do
-      :ok = SymphonyElixir.Hold.set("designed-repo", issue_id, :needs_decision, %{reason: "Is the drain report empty?"})
+      request = %{
+        title: "Is the drain report empty?",
+        question: "Is the drain report empty?",
+        why: "Only a person can read it.",
+        if_unanswered: "The ticket waits.",
+        recommendation_reason: "It is the usual case.",
+        options: [%{label: "Yes", effect: "It goes on.", recommended: true}, %{label: "No", effect: "It stops."}]
+      }
+
+      ticket = {:ticket, "designed-repo", issue_id}
+      {:ok, %{id: question_id}} = SymphonyElixir.Questions.ask(ticket, request, request: true)
 
       log =
         capture_log(fn ->
@@ -1805,9 +1814,8 @@ defmodule SymphonyElixir.CoreTest do
         end)
 
       refute log =~ "without the handoff signal"
-      record = RunStore.get_ticket_state("designed-repo", issue_id)
-      assert SymphonyElixir.TicketState.get_hold(record, :needs_decision)
-      refute SymphonyElixir.TicketState.get_hold(record, :blocked)
+      assert %{id: ^question_id} = SymphonyElixir.Questions.deciding(ticket)
+      assert {:ok, %{reasons: [%{kind: :question, waits_on: %{question_id: ^question_id}}]}} = SymphonyElixir.Pauses.get(ticket)
     end
 
     test "a quiet count is dropped once the issue leaves the active states", %{issue_id: issue_id, completed: completed} do
@@ -5124,6 +5132,10 @@ defmodule SymphonyElixir.CoreTest do
 
       RunStore.delete_ticket_state(Config.repo_key!(), "issue-dep-hold")
 
+      # The Needs Decision label is the pause projector's to write.
+      Application.put_env(:symphony_elixir, :pause_projector, true)
+      on_exit(fn -> Application.put_env(:symphony_elixir, :pause_projector, false) end)
+
       test_pid = self()
 
       state_fetcher = fn ids ->
@@ -5143,7 +5155,7 @@ defmodule SymphonyElixir.CoreTest do
       assert_receive {:memory_tracker_label_added, "issue-dep-hold", "Needs Decision"}, 500
       refute_received {:memory_tracker_state_update, "issue-dep-hold", _state}
 
-      assert [%{name: "decision requested", details: %{hold: "needs_decision", reason: "dependency_source_requires_approval"}}] =
+      assert [%{name: "decision requested", details: %{question: true, reason: "dependency_source_requires_approval"}}] =
                RunStore.get_ticket_state(Config.repo_key!(), "issue-dep-hold").signals
 
       assert_receive {:notification_event,

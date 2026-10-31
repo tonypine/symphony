@@ -341,13 +341,10 @@ defmodule SymphonyElixir.SelfHeal do
 
   # The same failure with no new information, or a head that used up its attempts: there is no next
   # step to try, so only here does the machine ask a person, with the decision structured. It goes
-  # through the one writer (`SymphonyElixir.DecisionRequest`), which sets the hold and posts the
-  # `## Decision needed:` comment next to it: the Inbox clears a Needs Decision hold whose request it
-  # no longer reads as open (`SymphonyElixir.NeedsDecisionHold`), so a hold with no request would
-  # lift on its next read and the ticket would dispatch again. A comment that can't be posted takes
-  # the hold back.
+  # through the one writer (`SymphonyElixir.DecisionRequest`), which asks the Question that pauses
+  # the ticket and posts the `## Decision needed:` comment next to it.
   defp escalate(ctx, stuck) do
-    opts = [repo_key: ctx.repo_key, label_tracker: ctx.opts[:tracker]] ++ Keyword.take(ctx.opts, [:store, :tracker])
+    opts = [repo_key: ctx.repo_key] ++ Keyword.take(ctx.opts, [:tracker])
 
     case DecisionRequest.ask(ctx.issue, decision(ctx, stuck), opts) do
       :ok ->

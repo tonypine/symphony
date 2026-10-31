@@ -21,7 +21,7 @@ defmodule SymphonyElixir.PrWatch.SilentWaitTest do
 
   test "a ticket with a run or a hold is never silent" do
     assert SilentWait.check(watch(nil), ctx(run: :active)) == nil
-    assert SilentWait.check(watch(nil), ctx(hold: :needs_decision)) == nil
+    assert SilentWait.check(watch(nil), ctx(hold: :question)) == nil
     assert SilentWait.check(watch(nil), ctx(hold: :blocked)) == nil
   end
 
@@ -73,7 +73,7 @@ defmodule SymphonyElixir.PrWatch.SilentWaitTest do
     assert SilentWait.check(watch(wait(:symphony), head_sha: "head-2", upkeep_failure: update), ctx()) == nil
     assert SilentWait.check(watch(wait(:symphony), head_sha: "head-1", upkeep_failure: nil), ctx()) == nil
     assert SilentWait.check(watch(wait(:symphony), head_sha: "head-1", upkeep_failure: update), ctx(run: :active)) == nil
-    assert SilentWait.check(watch(wait(:symphony), head_sha: "head-1", upkeep_failure: update), ctx(hold: :needs_decision)) == nil
+    assert SilentWait.check(watch(wait(:symphony), head_sha: "head-1", upkeep_failure: update), ctx(hold: :question)) == nil
     moved = decision(rule: "R16", kind: :to_ci_fix, outcome: :applied)
     assert SilentWait.check(watch(moved, head_sha: "head-1", upkeep_failure: update), ctx()) == nil
   end

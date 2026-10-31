@@ -150,8 +150,8 @@ defmodule SymphonyElixir.DependencyGate do
   Pauses `issue` in its phase on a Needs Decision hold for what the dependency audit found: the
   changes it holds for approval (`{:hold, items}`) or the failure that kept it from running
   (`{:error, reason}`). The `## Decision needed:` comment asks whether to allow the changes or drop
-  them; the decision clears the hold and the ticket continues in place
-  (`SymphonyElixir.NeedsDecisionHold`). `repo_key` names the repo the hold is recorded under when
+  them; the answer ends the question and the ticket continues in place
+  (`SymphonyElixir.Questions`). `repo_key` names the repo the question is recorded under when
   the issue carries none; `opts` go to `DecisionRequest.ask/4` (`:tracker`, `:store`).
   """
   @spec pause(map(), {:hold, [map()]} | {:error, term()}, String.t() | nil, keyword()) :: :ok | {:error, term()}
@@ -262,7 +262,7 @@ defmodule SymphonyElixir.DependencyGate do
   # failure never changes the hold). Runs only after the hold is set.
   defp record_hold_signal(issue, issue_id, repo_key) do
     TicketSignals.record(Map.get(issue, :repo_key) || repo_key, issue_id, "decision requested", %{
-      hold: "needs_decision",
+      question: true,
       reason: "dependency_source_requires_approval"
     })
   end

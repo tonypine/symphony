@@ -291,10 +291,21 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   end
 
   describe "a run whose ticket waits on a decision" do
-    test "ends after the turn that set the Needs Decision hold, without parking it or handing it off" do
+    test "ends after the turn that asked a decision request, without parking it or handing it off" do
+      request = %{
+        title: "Which reading is right?",
+        question: "Which reading is right?",
+        why: "The ticket reads two ways.",
+        if_unanswered: "The ticket waits.",
+        recommendation_reason: "It is the narrower reading.",
+        options: [%{label: "The first", effect: "It builds the first.", recommended: true}, %{label: "The second", effect: "It builds the second."}]
+      }
+
       Application.put_env(:symphony_elixir, :progress_turn_hook, fn _opts ->
-        :ok = SymphonyElixir.Hold.set("default", "issue-progress", :needs_decision, %{reason: "Which reading is right?"})
+        {:ok, _question} = SymphonyElixir.Questions.ask({:ticket, "default", "issue-progress"}, request, request: true)
       end)
+
+      on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("default", "issue-progress") end)
 
       run_issue!("In Progress", heads: ["sha-rework"], repos: designed_repos(), max_turns: 5)
 
@@ -303,7 +314,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       refute_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue" <> _note}
     end
 
-    test "ends after the turn that posted the request, even before its hold is in the store" do
+    test "ends after the turn that posted the request, even before its question is in the store" do
       Application.put_env(:symphony_elixir, :progress_turn_hook, fn opts ->
         CommentRegistry.record_human_action_request(Keyword.fetch!(opts, :linear_comment_registry))
       end)

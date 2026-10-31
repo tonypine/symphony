@@ -977,13 +977,18 @@ defmodule SymphonyElixir.PromptBuilderTest do
       refute PromptBuilder.build_prompt(issue, ticket_state: record) =~ "Ticket state:"
     end
 
-    test "renders the phase, holds, CI and recent signals", %{issue: issue} do
+    test "renders the phase, pauses, CI and recent signals", %{issue: issue} do
       ledger!("prompt_brief_enabled: false")
       at = ~U[2026-10-04 00:23:15Z]
 
+      reasons = [
+        %{kind: :environment, waits_on: %{condition: "tooling"}, text: "Waiting for the tooling fix", set_at: at},
+        %{kind: :ticket, waits_on: %{identifier: "MT-7"}, set_at: at}
+      ]
+
       record =
         TicketState.new("r", "i", %{phase: "In Progress"})
-        |> TicketState.set_hold(:blocked, %{reason: "tooling", clearing_condition: "the fix lands"}, at)
+        |> TicketState.put_pause(%{subject: {:ticket, "r", "i"}, reasons: reasons}, at)
         |> TicketState.record_ci_state("abc123", "green", at)
         |> TicketState.record_signal("handoff", %{to: "Code Review"}, at)
 
@@ -991,19 +996,19 @@ defmodule SymphonyElixir.PromptBuilderTest do
 
       assert prompt =~ "Ticket state:"
       assert prompt =~ "- Phase: In Progress"
-      assert prompt =~ "- Holds: blocked (tooling; clears when the fix lands)"
+      assert prompt =~ "- Pauses: environment (Waiting for the tooling fix); ticket (Waiting for MT-7"
       assert prompt =~ "- CI: green at abc123"
       assert prompt =~ "Recent signals:"
       assert prompt =~ "- handoff at #{at} to=Code Review"
     end
 
-    test "renders the fallbacks for a bare hold, no CI and no signals", %{issue: issue} do
+    test "renders the fallbacks for no pause, no CI and no signals", %{issue: issue} do
       ledger!("prompt_brief_enabled: false")
-      record = TicketState.new("r", "i", %{phase: "Merging", holds: [%{kind: :needs_decision}]})
+      record = TicketState.new("r", "i", %{phase: "Merging", holds: [%{kind: :blocked}]})
 
       prompt = PromptBuilder.build_prompt(issue, ticket_state: record)
 
-      assert prompt =~ "- Holds: needs_decision (no reason recorded; clears when no clearing condition recorded)"
+      assert prompt =~ "- Pauses: none"
       assert prompt =~ "- CI: unknown"
       assert prompt =~ "Recent signals:\n"
     end
@@ -1050,7 +1055,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
         refute prompt =~ "handoff at"
         [state, history] = String.split(prompt, "Ticket history (every decision, open finding and note in full;")
         assert state =~ "Ticket state:"
-        assert history =~ "\n<ticket_ledger>\nPhase and holds:\n- Phase: QA"
+        assert history =~ "\n<ticket_ledger>\nPhase and pauses:\n- Phase: QA"
         assert history =~ "- 2026-10-22T10:00:00Z, the Director (Sam): Keep the &lt;b&gt;button&lt;/b&gt; where it is."
         assert history =~ "- 2026-10-22T10:01:00Z Blocked hold set: tooling"
         assert history =~ "</ticket_ledger>"

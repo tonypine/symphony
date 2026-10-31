@@ -3,8 +3,7 @@ defmodule SymphonyElixir.TicketState do
   The canonical per-ticket state machine record.
 
   A record holds everything the machine owns for one ticket: its current phase, the phase
-  a CI Fix stay came from (so a mechanical repair can return it), the holds that pause it
-  (Blocked / Needs Decision), the CI state of each PR head it has seen, its verdict records, its
+  a CI Fix stay came from (so a mechanical repair can return it), the CI state of each PR head it has seen, its verdict records, its
   signals ledger (the timeline both the machinery and agents read) and the runs dispatched since it
   last made progress, which `SymphonyElixir.DispatchLoop` counts, when the phase was last written
   (`phase_at`, by a move of Symphony's or an observation that changed it) and by whom (`phase_owner`:
@@ -51,28 +50,6 @@ defmodule SymphonyElixir.TicketState do
   @max_ci_states 20
   # The dispatch-loop limits are validated to at most this many runs (`Config.Schema.Watchdog`).
   @max_dispatches 50
-
-  @hold_kinds [:blocked, :needs_decision]
-
-  @typedoc """
-  What a hold waits on, structured so the machine can clear it on its own: the dependency key(s)
-  it is blocked by (`type: "dependency"`), an access need (`type: "access"`) or the fix ticket a
-  self-heal filed (`type: "fix_ticket"`). A hold set with a question Symphony asked names it
-  (`question_id`, `SymphonyElixir.Questions`), as the dispatch-loop guard's does
-  (`SymphonyElixir.DispatchLoop`).
-  """
-  @type waits_on ::
-          %{required(:type) => String.t(), required(:keys) => [String.t()], optional(:question_id) => String.t()} | nil
-
-  @typedoc "A hold pauses the ticket in its phase; the label is only its projection."
-  @type hold :: %{
-          kind: :blocked | :needs_decision,
-          reason: String.t() | nil,
-          clearing_condition: String.t() | nil,
-          waits_on: waits_on(),
-          decision: map() | nil,
-          set_at: DateTime.t() | nil
-        }
 
   @typedoc """
   A verdict record binds an outcome to the head SHA it judged. `details` is what the verdict
@@ -229,32 +206,29 @@ defmodule SymphonyElixir.TicketState do
 
   @typedoc """
   A projection of the record to Linear whose write failed, so Linear may not show what the record
-  holds: the phase a move of Symphony's wrote (`type: :phase`), a hold's machine label
-  (`type: :hold_label`, with the `hold` kind), a question's request comment
+  holds: the phase a move of Symphony's wrote (`type: :phase`), a question's request comment
   (`type: :question_comment`, with the `question` id), the reply and Decisions entry of a
   question the Director answered (`type: :question_answer`, with the `question` id and the request
   `comment` the reply goes under, nil when unknown), or the labels and Decisions section the pause
   projector renders from the pause and the questions (`type: :pause`,
   `SymphonyElixir.Pauses.Projector`). The reconciler projects the record's truth
-  again and drops the mark (`SymphonyElixir.TicketObservation.reconcile_all/3`); a request comment
-  is posted again by the Inbox's sweep, which reads the ticket's comments
-  (`SymphonyElixir.NeedsDecisionHold`). The mark only says what to re-project and when and why it
+  again and drops the mark (`SymphonyElixir.TicketObservation.reconcile_all/3`). A mark a record
+  kept from before the holds were retired, of a hold's machine label, reads as a mark of the pause,
+  whose projector writes the labels now. The mark only says what to re-project and when and why it
   failed.
   """
   @type projection :: %{
-          required(:type) => :phase | :hold_label | :question_comment | :question_answer | :pause,
-          required(:hold) => :blocked | :needs_decision | nil,
+          required(:type) => :phase | :question_comment | :question_answer | :pause,
           optional(:question) => String.t(),
           optional(:comment) => String.t() | nil,
           required(:error) => String.t() | nil,
           required(:at) => DateTime.t() | nil
         }
 
-  @typedoc "What a projection mark names: the phase, a hold's label, a question's request comment or its answer, or the pause's labels and section."
+  @typedoc "What a projection mark names: the phase, a question's request comment or its answer, or the pause's labels and section."
   @type projection_name ::
           :phase
           | :pause
-          | {:hold_label, :blocked | :needs_decision}
           | {:question_comment, String.t()}
           | {:question_answer, String.t(), String.t() | nil}
 
@@ -283,7 +257,6 @@ defmodule SymphonyElixir.TicketState do
           phase_at: DateTime.t() | nil,
           phase_owner: phase_owner(),
           ci_fix_origin: String.t() | nil,
-          holds: [hold()],
           ci_states: [ci_state()],
           verdicts: [verdict()],
           signals: [signal()],
@@ -348,7 +321,7 @@ defmodule SymphonyElixir.TicketState do
 
   @doc """
   A new record for `repo_key`'s `issue_id`, with any `attrs` applied. `attrs` may set `:phase`,
-  `:issue_identifier`, `:holds`, `:ci_states`, `:verdicts` and `:signals`; anything else is kept.
+  `:issue_identifier`, `:ci_states`, `:verdicts` and `:signals`; anything else is kept.
   """
   @spec new(String.t(), String.t(), map()) :: t()
   def new(repo_key, issue_id, attrs \\ %{}) when is_binary(issue_id) do
@@ -373,7 +346,6 @@ defmodule SymphonyElixir.TicketState do
       phase_at: map_datetime(record, :phase_at),
       phase_owner: phase_owner(Map.get(record, :phase_owner)),
       ci_fix_origin: map_string(record, :ci_fix_origin),
-      holds: normalize_holds(Map.get(record, :holds)),
       ci_states: normalize_ci_states(Map.get(record, :ci_states)),
       verdicts: normalize_verdicts(Map.get(record, :verdicts)),
       signals: normalize_signals(Map.get(record, :signals)),
@@ -402,7 +374,7 @@ defmodule SymphonyElixir.TicketState do
       pending_projection: normalize_projections(Map.get(record, :pending_projection)),
       not_found_at: map_datetime(record, :not_found_at),
       pause: Pauses.normalize(Map.get(record, :pause)),
-      questions: Questions.normalize(Map.get(record, :questions)),
+      questions: record |> Map.get(:questions) |> Questions.normalize() |> carried_requests(Map.get(record, :holds)),
       pause_backfilled_at: map_datetime(record, :pause_backfilled_at),
       projected: normalize_projected(Map.get(record, :projected)),
       plan_brief: PlanBrief.normalize(Map.get(record, :plan_brief)),
@@ -420,7 +392,6 @@ defmodule SymphonyElixir.TicketState do
       phase_at: nil,
       phase_owner: :external,
       ci_fix_origin: nil,
-      holds: [],
       ci_states: [],
       verdicts: [],
       signals: [],
@@ -518,8 +489,7 @@ defmodule SymphonyElixir.TicketState do
 
   @doc """
   Marks a projection of the record to Linear as failed (`t:projection/0`): `projection` is `:phase`,
-  `:pause`, `{:hold_label, kind}`, `{:question_comment, question_id}` or
-  `{:question_answer, question_id, comment_id}`, and `error` what Linear said. A mark of the same projection is replaced,
+  `:pause`, `{:question_comment, question_id}` or `{:question_answer, question_id, comment_id}`, and `error` what Linear said. A mark of the same projection is replaced,
   so a record keeps one per projection, the latest.
   """
   @spec mark_projection(t(), projection_name(), term(), DateTime.t()) :: t()
@@ -540,9 +510,8 @@ defmodule SymphonyElixir.TicketState do
     %{record | pending_projection: Enum.reject(record.pending_projection, &same_mark?(&1, mark))}
   end
 
-  @doc "The projection a mark names: `:phase`, `:pause`, `{:hold_label, kind}`, `{:question_comment, question_id}` or `{:question_answer, question_id, comment_id}`."
+  @doc "The projection a mark names: `:phase`, `:pause`, `{:question_comment, question_id}` or `{:question_answer, question_id, comment_id}`."
   @spec projection_of(projection()) :: projection_name()
-  def projection_of(%{type: :hold_label, hold: kind}), do: {:hold_label, kind}
   def projection_of(%{type: :question_comment, question: id}), do: {:question_comment, id}
   def projection_of(%{type: :question_answer, question: id} = mark), do: {:question_answer, id, Map.get(mark, :comment)}
   def projection_of(%{type: :phase}), do: :phase
@@ -550,13 +519,12 @@ defmodule SymphonyElixir.TicketState do
 
   defp same_mark?(mark, other), do: projection_of(mark) == projection_of(other) and mark.at == Map.get(other, :at)
 
-  defp projection_key(:phase), do: %{type: :phase, hold: nil}
-  defp projection_key(:pause), do: %{type: :pause, hold: nil}
-  defp projection_key({:hold_label, kind}) when kind in @hold_kinds, do: %{type: :hold_label, hold: kind}
-  defp projection_key({:question_comment, id}) when is_binary(id), do: %{type: :question_comment, hold: nil, question: id}
+  defp projection_key(:phase), do: %{type: :phase}
+  defp projection_key(:pause), do: %{type: :pause}
+  defp projection_key({:question_comment, id}) when is_binary(id), do: %{type: :question_comment, question: id}
 
   defp projection_key({:question_answer, id, comment}) when is_binary(id) and (is_binary(comment) or is_nil(comment)),
-    do: %{type: :question_answer, hold: nil, question: id, comment: comment}
+    do: %{type: :question_answer, question: id, comment: comment}
 
   defp error_text(nil), do: nil
   defp error_text(error) when is_binary(error), do: error
@@ -568,12 +536,12 @@ defmodule SymphonyElixir.TicketState do
   defp normalize_projection(%{} = mark) do
     stamps = %{error: map_string(mark, :error), at: map_datetime(mark, :at)}
 
-    case {Map.get(mark, :type), Map.get(mark, :hold)} do
-      {:phase, _hold} -> [Map.merge(%{type: :phase, hold: nil}, stamps)]
-      {:pause, _hold} -> [Map.merge(%{type: :pause, hold: nil}, stamps)]
-      {:hold_label, kind} when kind in @hold_kinds -> [Map.merge(%{type: :hold_label, hold: kind}, stamps)]
-      {:question_comment, _hold} -> question_mark(Map.get(mark, :question), stamps)
-      {:question_answer, _hold} -> answer_mark(Map.get(mark, :question), map_string(mark, :comment), stamps)
+    # A hold's label, which the pause projector writes since the holds were retired, is the pause's.
+    case Map.get(mark, :type) do
+      type when type in [:pause, :hold_label] -> [Map.merge(%{type: :pause}, stamps)]
+      :phase -> [Map.merge(%{type: :phase}, stamps)]
+      :question_comment -> question_mark(Map.get(mark, :question), stamps)
+      :question_answer -> answer_mark(Map.get(mark, :question), map_string(mark, :comment), stamps)
       _unknown -> []
     end
   end
@@ -600,10 +568,10 @@ defmodule SymphonyElixir.TicketState do
 
   defp projected_comments(_comments), do: nil
 
-  defp question_mark(id, stamps) when is_binary(id), do: [Map.merge(%{type: :question_comment, hold: nil, question: id}, stamps)]
+  defp question_mark(id, stamps) when is_binary(id), do: [Map.merge(%{type: :question_comment, question: id}, stamps)]
   defp question_mark(_id, _stamps), do: []
 
-  defp answer_mark(id, comment, stamps) when is_binary(id), do: [Map.merge(%{type: :question_answer, hold: nil, question: id, comment: comment}, stamps)]
+  defp answer_mark(id, comment, stamps) when is_binary(id), do: [Map.merge(%{type: :question_answer, question: id, comment: comment}, stamps)]
   defp answer_mark(_id, _comment, _stamps), do: []
 
   defp observation_source(source) when source in @observation_sources, do: source
@@ -882,55 +850,6 @@ defmodule SymphonyElixir.TicketState do
   end
 
   @doc """
-  Sets (or replaces) a hold of `kind`. A hold records why the ticket waits and what clears it; a
-  Needs Decision hold also carries its decision payload.
-  """
-  @spec set_hold(t(), :blocked | :needs_decision, map(), DateTime.t()) :: t()
-  def set_hold(record, kind, attrs \\ %{}, at \\ DateTime.utc_now()) when kind in @hold_kinds do
-    hold = %{
-      kind: kind,
-      reason: map_string(attrs, :reason),
-      clearing_condition: map_string(attrs, :clearing_condition),
-      waits_on: map_waits_on(attrs),
-      decision: map_decision(attrs),
-      set_at: at
-    }
-
-    record
-    |> normalize()
-    |> Map.update!(:holds, fn holds -> [hold | Enum.reject(holds, &(&1.kind == kind))] end)
-    |> Map.put(:updated_at, at)
-  end
-
-  @doc """
-  Clears the hold of `kind`, if set; the ticket continues in place. A hold that lifts is progress —
-  a person unblocked it, answered its decision, or what it waited on landed — so the runs dispatched
-  before it are no longer counted as a loop.
-  """
-  @spec clear_hold(t(), :blocked | :needs_decision, DateTime.t()) :: t()
-  def clear_hold(record, kind, at \\ DateTime.utc_now()) when kind in @hold_kinds do
-    record = normalize(record)
-    held? = Enum.any?(record.holds, &(&1.kind == kind))
-
-    record
-    |> Map.update!(:holds, &Enum.reject(&1, fn hold -> hold.kind == kind end))
-    |> Map.update!(:dispatches, &if(held?, do: [], else: &1))
-    |> Map.put(:updated_at, at)
-  end
-
-  @doc "The hold of `kind` on the record, or nil."
-  @spec get_hold(t(), :blocked | :needs_decision) :: hold() | nil
-  def get_hold(record, kind) when kind in @hold_kinds do
-    record |> normalize() |> Map.fetch!(:holds) |> Enum.find(&(&1.kind == kind))
-  end
-
-  @doc "Whether a hold of `kind` is set."
-  @spec hold?(t(), :blocked | :needs_decision) :: boolean()
-  def hold?(record, kind) when kind in @hold_kinds do
-    record |> normalize() |> Map.fetch!(:holds) |> Enum.any?(&(&1.kind == kind))
-  end
-
-  @doc """
   Records a verdict bound to the head SHA it judged, with the `details` it carries. A verdict is a
   decision recorded, so the runs dispatched before it are no longer counted as a loop.
   """
@@ -1158,29 +1077,6 @@ defmodule SymphonyElixir.TicketState do
   defp datetime(%DateTime{} = datetime), do: datetime
   defp datetime(_value), do: nil
 
-  defp normalize_holds(holds) when is_list(holds) do
-    holds
-    |> Enum.flat_map(&normalize_hold/1)
-    |> Enum.uniq_by(& &1.kind)
-  end
-
-  defp normalize_holds(_holds), do: []
-
-  defp normalize_hold(%{kind: kind} = hold) when kind in @hold_kinds do
-    [
-      %{
-        kind: kind,
-        reason: map_string(hold, :reason),
-        clearing_condition: map_string(hold, :clearing_condition),
-        waits_on: map_waits_on(hold),
-        decision: map_decision(hold),
-        set_at: map_datetime(hold, :set_at)
-      }
-    ]
-  end
-
-  defp normalize_hold(_hold), do: []
-
   defp normalize_verdicts(verdicts) when is_list(verdicts) do
     verdicts
     |> Enum.flat_map(&normalize_verdict/1)
@@ -1361,31 +1257,15 @@ defmodule SymphonyElixir.TicketState do
     end
   end
 
-  # `waits_on` keeps only its structured half: a non-empty string type, a list of string keys and
-  # the id of the question asked with the hold, when there is one.
-  defp map_waits_on(attrs) do
-    case Map.get(attrs, :waits_on) do
-      %{type: type} = waits_on when is_binary(type) ->
-        case String.trim(type) do
-          "" -> nil
-          trimmed -> put_question_id(%{type: trimmed, keys: normalize_keys(Map.get(waits_on, :keys))}, normalize_string(Map.get(waits_on, :question_id)))
-        end
-
-      _waits_on ->
-        nil
-    end
+  # A record kept from before the Needs Decision hold was retired may hold one carrying a question
+  # asked before questions said whether a request comment shows them (`request: nil`): that one did,
+  # so it reads as asked with a request. The hold itself is dropped: the question is the truth.
+  defp carried_requests(questions, holds) when is_list(holds) do
+    carried = for %{decision: %{question_id: id}} <- holds, is_binary(id), do: id
+    Enum.map(questions, &if(&1.id in carried and &1.request == nil, do: %{&1 | request: true}, else: &1))
   end
 
-  defp put_question_id(waits_on, nil), do: waits_on
-  defp put_question_id(waits_on, question_id), do: Map.put(waits_on, :question_id, question_id)
-
-  defp normalize_keys(keys) when is_list(keys) do
-    keys
-    |> Enum.map(&normalize_string/1)
-    |> Enum.reject(&is_nil/1)
-  end
-
-  defp normalize_keys(_keys), do: []
+  defp carried_requests(questions, _holds), do: questions
 
   defp normalize_event_seq(seq) when is_integer(seq) and seq >= 0, do: seq
   defp normalize_event_seq(_seq), do: 0

@@ -35,7 +35,7 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
   """
   @type context :: %{
           run: :active | :none,
-          hold: :none | :needs_decision | :blocked,
+          hold: :none | :question | :blocked,
           now: DateTime.t(),
           interval_ms: pos_integer(),
           ci_wait_ms: pos_integer(),

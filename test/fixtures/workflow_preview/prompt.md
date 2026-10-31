@@ -1034,14 +1034,14 @@ Viewports (see `Visual work`) for the Director's `macos_app`: laptop 1440×900 p
 Ticket state:
 
 - Phase: Rework
-- Holds: none
+- Pauses: none
 - CI: unknown
 
 Ticket history (every decision, open finding and note in full; earlier runs one line each, the latest run in full):
 <ticket_ledger>
-Phase and holds:
+Phase and pauses:
 - Phase: Rework
-- Holds: none
+- Pauses: none
 
 Decisions (2):
 - Asked 2026-01-05T11:50:00Z by an agent (QA run): Large exports: Should an export over 10,000 rows run in the background?

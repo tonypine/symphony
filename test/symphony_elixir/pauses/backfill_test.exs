@@ -37,10 +37,24 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
 
   defp blocked(type, keys, reason \\ "held"), do: %{kind: :blocked, reason: reason, clearing_condition: "when it clears", waits_on: %{type: type, keys: keys}, set_at: @set_at}
 
+  # A record as one stored before the holds were retired: the holds sit on it as they were written,
+  # which the record's normalization no longer reads.
   defp put_record(issue_id, attrs) do
-    record = TicketState.new(@repo_key, issue_id, Map.merge(%{issue_identifier: "TP-#{String.replace(issue_id, ~r/\D/, "")}"}, attrs))
-    :ok = RunStore.put_ticket_state(record)
+    record = raw_record(issue_id, Map.merge(%{issue_identifier: "TP-#{String.replace(issue_id, ~r/\D/, "")}"}, attrs))
+    {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_ticket_states, {@repo_key, issue_id}, @repo_key, issue_id, record}) end)
     record
+  end
+
+  # Puts `holds` on the stored record as they were stored, after a write that normalized it.
+  defp put_holds(issue_id, holds) do
+    stored = Map.put(RunStore.get_ticket_state(@repo_key, issue_id), :holds, holds)
+    {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_ticket_states, {@repo_key, issue_id}, @repo_key, issue_id, stored}) end)
+  end
+
+  defp raw_record(issue_id, attrs) do
+    {holds, attrs} = Map.pop(attrs, :holds)
+    record = TicketState.new(@repo_key, issue_id, attrs)
+    if holds, do: Map.put(record, :holds, holds), else: record
   end
 
   defp record(issue_id), do: TicketState.normalize(RunStore.get_ticket_state(@repo_key, issue_id))
@@ -96,7 +110,7 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
       assert %{reasons: [%{releasable: true}]} = record("issue-6").pause
 
       for issue_id <- Enum.map(1..8, &"issue-#{&1}") do
-        assert [%{kind: :blocked}] = record(issue_id).holds
+        refute Map.has_key?(record(issue_id), :holds)
         assert record(issue_id).pause_backfilled_at == @now
       end
 
@@ -179,7 +193,6 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
              ] = options
 
       assert [{:question, %{question_id: ^id}, _text}] = reasons("issue-1")
-      assert [%{kind: :needs_decision}] = record("issue-1").holds
     end
 
     test "a Needs Decision hold that projects a Question asked through the service has its question already" do
@@ -214,7 +227,7 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
         put_record(issue_id, %{})
         assert {:ok, question} = Questions.ask(ticket(issue_id), DispatchLoop.question_attrs(stop, name))
         hold = put_in(blocked(type, ["implementation"]), [:waits_on, :question_id], question.id)
-        :ok = RunStore.set_ticket_hold(@repo_key, issue_id, :blocked, hold)
+        put_holds(issue_id, [hold])
         assert record(issue_id).pause_backfilled_at == nil
       end
 
@@ -276,8 +289,9 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
     end
 
     test "a record that is already paused gains the reasons without counting a new pause" do
-      put_record("issue-1", %{holds: [blocked("dependency", ["TP-11"])]})
+      put_record("issue-1", %{})
       {:ok, _pause} = Pauses.set(ticket("issue-1"), %{kind: :ticket, waits_on: %{identifier: "TP-99"}})
+      put_holds("issue-1", [blocked("dependency", ["TP-11"])])
 
       assert {:ok, %{pauses_created: 0, records_converted: 1}} = Backfill.run(now: @now, store: Store)
       assert [{:ticket, %{identifier: "TP-99"}, _}, {:ticket, %{identifier: "TP-11"}, _}] = reasons("issue-1")
@@ -334,7 +348,7 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
 
   describe "backfill_record/1" do
     test "a stuck run's question is in plain words and recommends a restart only when the hold says so" do
-      record = TicketState.new(@repo_key, "issue-7", %{holds: [blocked("dispatch_loop", ["qa"], "Restart it from main")]})
+      record = raw_record("issue-7", %{holds: [blocked("dispatch_loop", ["qa"], "Restart it from main")]})
 
       assert %{items: [{:question, request, opts}], skipped: []} = Backfill.backfill_record(record)
       assert DecisionRequest.check(request) == :ok
@@ -343,7 +357,7 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
       assert request.recommendation_reason =~ "start it over"
       assert %{backfilled: true, id: "backfill-" <> _, at: @set_at} = Map.new(opts)
 
-      plain = TicketState.new(@repo_key, "issue-8", %{issue_identifier: "TP-8", holds: [blocked("handoff_missing", [], nil)]})
+      plain = raw_record("issue-8", %{issue_identifier: "TP-8", holds: [blocked("handoff_missing", [], nil)]})
       assert %{items: [{:question, request, _opts}]} = Backfill.backfill_record(plain)
       assert DecisionRequest.check(request) == :ok
       assert Enum.map(request.options, & &1.recommended) == [true, false, false]
@@ -353,7 +367,7 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
       asked = %{kind: :needs_decision, reason: "Ship it?", decision: nil, set_at: ~U[2026-10-01 00:00:00Z]}
 
       record =
-        TicketState.new(@repo_key, "issue-1", %{
+        raw_record("issue-1", %{
           holds: [blocked("operator_stop", [], nil), asked],
           decisions: [%{key: "c-1", date: ~D[2026-10-20], title: "T", question: "Q", answer: "A"}]
         })
@@ -371,7 +385,7 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
     test "a request is asked when its decision says, else when the hold was set" do
       asked_at = fn asked ->
         hold = %{kind: :needs_decision, reason: "Ship it?", decision: %{asked_at: asked}, set_at: @set_at}
-        %{items: [{:question, _request, opts}]} = Backfill.backfill_record(TicketState.new(@repo_key, "issue-1", %{holds: [hold]}))
+        %{items: [{:question, _request, opts}]} = Backfill.backfill_record(raw_record("issue-1", %{holds: [hold]}))
         opts[:at]
       end
 
@@ -381,8 +395,26 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
       assert asked_at.(nil) == @set_at
     end
 
+    test "the holds are read as they were stored: anything not a hold is dropped, one hold per kind, keys trimmed" do
+      dependency = %{blocked("dependency", [" TP-11 ", "", 7, "TP-12"]) | set_at: "2026-10-28T09:00:00Z"}
+      later = blocked("dependency", ["TP-13"])
+      odd = [dependency, later, %{kind: nil}, %{kind: "blocked"}, %{reason: "no kind"}, "a line"]
+
+      assert %{items: [{:reason, %{waits_on: %{identifier: "TP-11"}}, opts}, {:reason, second, _second}], skipped: []} =
+               Backfill.backfill_record(raw_record("issue-1", %{holds: odd}))
+
+      assert second.waits_on == %{identifier: "TP-12"}
+
+      assert DateTime.compare(opts[:at], @set_at) == :eq
+      assert %{items: [], skipped: []} = Backfill.backfill_record(raw_record("issue-1", %{holds: :none}))
+      assert %{items: [], skipped: []} = Backfill.backfill_record(TicketState.new(@repo_key, "issue-1"))
+
+      unnamed = %{kind: :blocked, reason: "old", waits_on: %{type: "", keys: []}, set_at: nil}
+      assert %{skipped: ["a Blocked hold waiting on nothing named, which no pause reason covers"]} = Backfill.backfill_record(raw_record("issue-1", %{holds: [unnamed]}))
+    end
+
     test "an environment hold without a reason waits on a condition named after its kind" do
-      record = TicketState.new(@repo_key, "issue-5", %{holds: [%{blocked("access", [], "  ") | set_at: nil}]})
+      record = raw_record("issue-5", %{holds: [%{blocked("access", [], "  ") | set_at: nil}]})
 
       assert %{items: [{:reason, environment, [backfilled: true]}]} = Backfill.backfill_record(record)
       assert environment == %{kind: :environment, waits_on: %{condition: "access"}, text: "access", releasable: true}

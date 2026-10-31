@@ -23,8 +23,8 @@ defmodule SymphonyElixir.HumanActions.Update do
   """
 
   alias SymphonyElixir.AgentTools.SecretScanner
-  alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions.{Action, Request}
+  alias SymphonyElixir.Pauses.Projector
 
   @max_actions 25
   @list_id_pattern ~r/list `([0-9a-f]{8})`/
@@ -126,7 +126,7 @@ defmodule SymphonyElixir.HumanActions.Update do
   defp done_line(_done_when), do: nil
 
   defp more([]), do: []
-  defp more(hidden), do: "_…and #{length(hidden)} more: see the issues labelled `#{Hold.label(:needs_decision)}`._"
+  defp more(hidden), do: "_…and #{length(hidden)} more: see the issues labelled `#{Projector.question_label()}`._"
 
   defp footer(list_id), do: "---\n_Symphony posts a new update when this list changes · list `#{list_id}`_"
 end

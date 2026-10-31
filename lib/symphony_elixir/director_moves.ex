@@ -26,8 +26,7 @@ defmodule SymphonyElixir.DirectorMoves do
     each pick naming its Question (`question_id`, or the `request_comment_id` whose Inbox row names
     it) answers that Question first (`SymphonyElixir.Questions.answer/4`); each pick naming its
     `request_comment_id` is replied under that request and written into the
-    Decisions section (`SymphonyElixir.Decisions`), and the Needs Decision hold the requests set is
-    cleared; a pick without one goes into one comment with the picked options. The move itself then
+    Decisions section (`SymphonyElixir.Decisions`); a pick without one goes into one comment with the picked options. The move itself then
     starts Symphony's plan revision, on every round: a plan under review moves to `Rework` through the
     `:plan_revise` transition, recorded as Symphony's own move, so the revision run keeps the plan's
     sub-tickets (`SymphonyElixir.PlanComments` sends a comment written in Linear the same way).
@@ -41,10 +40,10 @@ defmodule SymphonyElixir.DirectorMoves do
     move to Canceled can't make on a phase Symphony owns, since that is drift moved back. The
     record's phase becomes the team's canceled state first, then Linear follows, through the guard
     (`SymphonyElixir.DecisionMove.perform/4`, which tries `Canceled`, then `Cancelled`). A running
-    turn is stopped as `/control/stop` stops it, without the stop's pause or hold; the ticket's open
+    turn is stopped as `/control/stop` stops it, without the stop's pause; the ticket's open
     pull request is closed with the Director's note as its comment; every open question is withdrawn
-    (`SymphonyElixir.Questions.withdraw_lapsed/3`, "The ticket was cancelled."), and every hold and
-    pause reason is cleared. The ticket's events get one `ticket.cancelled` with the note, the stop
+    (`SymphonyElixir.Questions.withdraw_lapsed/3`, "The ticket was cancelled."), and every pause
+    reason is cleared. The ticket's events get one `ticket.cancelled` with the note, the stop
     and the pull requests closed; its workspace goes on the usual cleanup of a terminal ticket. A
     record cancelled this way is terminal: a later Linear state is no drift on it
     (`SymphonyElixir.TicketObservation`). Undo puts the record and Linear back to the phase before;
@@ -61,19 +60,20 @@ defmodule SymphonyElixir.DirectorMoves do
     and branch as they are, then its question is answered "Run it again", and it is dispatched at
     once. A wait on a blocker or a fix ticket lifts on its own and stays; a ticket with nothing to
     release is refused;
-  - `:decide`: a ticket waiting on a `Needs Decision` hold has the Director's answer written to its
-    Question first (`SymphonyElixir.Questions.answer/4`: `question_id`, the Inbox row's, else the
-    Question the row of `request_comment_id` names, else the hold's), before any Linear request: the
-    ticket is read from its record, so a Decide answers with Linear down. Then come its projections:
-    a reply under the request comment, the answer in the Decisions section of the description
-    (`SymphonyElixir.Decisions`), the hold cleared so the ticket continues in its phase. A reply
+  - `:decide`: a ticket waiting on a decision request's Question (`SymphonyElixir.Questions.deciding/1`,
+    or the open one `question_id` names) has the Director's answer written to that Question first
+    (`SymphonyElixir.Questions.answer/4`: `question_id`, the Inbox row's, else the Question the row
+    of `request_comment_id` names, else the one it waits on), before any Linear request: the ticket
+    is read from its record, so a Decide answers with Linear down. The answer ends the Question's
+    pause reason, so the ticket continues in its phase. Then come its projections: a reply under the
+    request comment and the answer in the Decisions section of the description
+    (`SymphonyElixir.Decisions`). A reply
     Linear refuses is marked pending on the record, and the reconciler posts it and records the
     section once Linear answers (`project_answer/5`). The optional `:move` names a state the
     decision directs — `rework` or `done` — and the move goes through
     `SymphonyElixir.TransitionGuard`. Without one, a pick of an option that carries its own move
-    (`SymphonyElixir.DecisionMove`, QA's "Merge without a QA result") makes that move. The move is
-    made before the hold clears, so no dispatch sees the ticket released in its old phase. A ticket
-    with no such hold whose pause waits on the Question `question_id` that Unblock answers
+    (`SymphonyElixir.DecisionMove`, QA's "Merge without a QA result") makes that move. A ticket
+    with no such Question whose pause waits on the Question `question_id` that Unblock answers
     (`SymphonyElixir.Questions.held/1`: a dispatch loop's, a quiet handoff's, a park's, a block
     report's) is answered with the first pick, as `answer_held_question/4` says; any other is
     refused.
@@ -100,7 +100,7 @@ defmodule SymphonyElixir.DirectorMoves do
   the ticket is still in the state the move put it in, and, for an approved plan, before Symphony
   promoted its sub-tickets. A Decide that answered a Question is taken back whether or not it moved
   the ticket: its Question is reopened (`SymphonyElixir.Questions.reopen/3`), pausing the ticket on
-  it again, and its hold is set again. The last move per ticket is kept in this module's Agent, so a restart
+  it again. The last move per ticket is kept in this module's Agent, so a restart
   forgets it.
   """
 
@@ -113,11 +113,9 @@ defmodule SymphonyElixir.DirectorMoves do
     BreakdownReview,
     Config,
     DecisionMove,
-    DecisionRequest,
     Decisions,
     DispatchLoop,
     Handoff,
-    Hold,
     IdlePark,
     MergeConfirmation,
     Orchestrator,
@@ -345,7 +343,7 @@ defmodule SymphonyElixir.DirectorMoves do
     with {:ok, issue} <- fetch_issue(identifier),
          {:ok, last} <- undoable(issue, opts),
          :ok <- undo_state(issue, last),
-         :ok <- reopen(issue, last, opts) do
+         :ok <- reopen(issue, last) do
       Agent.update(server(opts), &Map.delete(&1, issue.id))
       record_audit("undo", issue, issue.state, last.from_state, nil)
       Logger.info("Director undid #{last.move} issue_id=#{issue.id} issue_identifier=#{issue.identifier} state=#{last.from_state}")
@@ -369,23 +367,15 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   # A Decide's answer is taken back with it: the Question is open again, pausing the ticket on it,
-  # and the Needs Decision hold its answer cleared is set again through the writer, carrying it
-  # (`SymphonyElixir.DecisionRequest.project/4`). The reply and the
+  # and its label follows (`SymphonyElixir.Pauses.Projector`). The reply and the
   # Decisions entry stay, as the comment a move posted does, but the answer no longer counts: the
   # Question keeps it as taken back, so the PR watcher's read drops its entry
   # (`SymphonyElixir.Questions.answers/2`). The Inbox lists the Question open again.
-  defp reopen(issue, %{question_id: id, hold: hold}, opts) do
-    with {:ok, _question} <- reopened(Questions.reopen({:ticket, issue.repo_key, issue.id}, id, by: Pauses.director()), issue) do
-      attrs = Map.take(hold, [:reason, :clearing_condition, :decision])
-
-      case DecisionRequest.project(issue.repo_key, issue.id, attrs, store_opts(opts)) do
-        :ok -> :ok
-        {:error, reason} -> {:error, {:store, "reopened the question on #{issue.identifier} but couldn't set its hold again: #{inspect(reason)}"}}
-      end
-    end
+  defp reopen(issue, %{question_id: id}) do
+    with {:ok, _question} <- reopened(Questions.reopen({:ticket, issue.repo_key, issue.id}, id, by: Pauses.director()), issue), do: :ok
   end
 
-  defp reopen(_issue, _last, _opts), do: :ok
+  defp reopen(_issue, _last), do: :ok
 
   defp reopened({:ok, question}, _issue), do: {:ok, question}
   defp reopened({:error, reason}, issue), do: {:error, {:store, "couldn't reopen the question on #{issue.identifier}: #{inspect(reason)}"}}
@@ -588,7 +578,6 @@ defmodule SymphonyElixir.DirectorMoves do
          {:ok, replies, replied} <- reply_to_requests(issue, answers),
          {:ok, comment} <- post_loose_picks(issue, loose) do
       record_answers(issue, replied)
-      clear_answered_hold(issue, answers, opts)
       {:ok, Enum.join(replies ++ List.wrap(comment), "\n\n")}
     end
   end
@@ -689,8 +678,8 @@ defmodule SymphonyElixir.DirectorMoves do
     }
   end
 
-  # Each pick's Question is answered before any reply: the replies, the Decisions section and the
-  # hold's clear are its projections. A Question already answered (a second send) is left as it is;
+  # Each pick's Question is answered before any reply: the replies and the Decisions section are its
+  # projections. A Question already answered (a second send) is left as it is;
   # a pick whose Question the record doesn't hold names none.
   defp answer_questions(issue, picks) do
     Enum.reduce_while(picks, {:ok, []}, fn
@@ -723,20 +712,8 @@ defmodule SymphonyElixir.DirectorMoves do
     :ok
   end
 
-  # The requests are answered, so the hold they set clears with no withdrawal, and the revision run
-  # the replies start is dispatched. A clear the store refuses is reported; the Inbox's next read
-  # clears it once it sees the answers.
-  defp clear_answered_hold(_issue, [], _opts), do: :ok
-
-  defp clear_answered_hold(issue, answers, opts) do
-    case Hold.clear(issue.repo_key, issue.id, :needs_decision, answered_opts(answers, opts)) do
-      :ok -> :ok
-      {:error, reason} -> Logger.warning("Failed to clear the Needs Decision hold on #{issue.identifier} after its plan's answers: #{inspect(reason)}")
-    end
-  end
-
   # The questions the move ends are withdrawn with its reason (`Questions.withdraw_lapsed/3`), their
-  # holds cleared and their requests answered `## Action withdrawn`.
+  # requests answered `## Action withdrawn`.
   defp withdraw_lapsed(issue, lapse, opts) do
     {:ok, _withdrawn} = Questions.withdraw_lapsed({:ticket, issue.repo_key, issue.id}, lapse, Keyword.take(opts, [:store, :inbox]))
     :ok
@@ -856,15 +833,10 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   # Nothing waits on a cancelled ticket: its open questions are withdrawn with the cancel's reason,
-  # then every hold and every pause reason left is cleared. Best-effort: a clear the store refuses
-  # is logged, and the ticket is terminal whatever it still carries.
+  # then every pause reason left is cleared. Best-effort: a clear the store refuses is logged, and
+  # the ticket is terminal whatever it still carries.
   defp clear_cancelled(issue, to_state, opts) do
     withdraw_lapsed(issue, {:terminal, to_state}, opts)
-
-    for kind <- Hold.held_kinds(issue.repo_key, issue.id, store_opts(opts)) do
-      issue.repo_key |> Hold.clear(issue.id, kind, store_opts(opts)) |> log_failed("Cancelled #{issue.identifier} but couldn't clear its #{kind} hold")
-    end
-
     issue |> ticket() |> Pauses.clear_reasons(fn _reason -> true end, by: Pauses.director()) |> log_failed("Cancelled #{issue.identifier} but couldn't clear its pause")
   end
 
@@ -990,23 +962,33 @@ defmodule SymphonyElixir.DirectorMoves do
     finish(:unblock, issue, to_state, comment, opts)
   end
 
-  # Decide answers a decision request. The reply under the request comment is what marks it answered
-  # in Linear, so the next read no longer finds the request and the hold it set clears; the hold is
-  # cleared here too, so the ticket continues at once. The move the decision directs — when it
-  # directs one — goes through the guard first, so the record holds the new phase before the hold
-  # lets a dispatch through: a restart between them leaves the record moved, and the answered
-  # request clears the hold on the next read.
+  # Decide answers a decision request's Question, which ends its pause reason, so the ticket
+  # continues at once; the reply under the request comment and the Decisions entry are its
+  # projections. The move the decision directs — when it directs one — goes through the guard.
   #
-  # A merge confirmation's hold carries the move confirming performs (`SymphonyElixir.MergeConfirmation`),
+  # A merge confirmation's Question carries the move confirming performs (`SymphonyElixir.MergeConfirmation`),
   # as a Code Review escalation's carries its QA state, so an answer that picks that option moves
   # the ticket exactly as it would with manual review off, and one that picks nothing moves nothing.
   # Any other decision moves the ticket when the picked option carries a move
   # (`SymphonyElixir.DecisionMove`); an explicit `:move` (the Inbox's Send to Rework) directs its
   # own move instead.
   defp decide(%Issue{} = issue, input, opts) do
-    case decision_hold(issue, opts) do
-      {:ok, hold} -> answer(issue, input, hold, decide_target(input[:move], picked_move(hold, input.picks)), opts)
-      :error -> decide_held_question(issue, input, opts)
+    case deciding(issue, input) do
+      %{} = question -> answer(issue, input, question, decide_target(input[:move], picked_move(question, input.picks)), opts)
+      nil -> decide_held_question(issue, input, opts)
+    end
+  end
+
+  # The decision request's Question the Director answers: the open one the Inbox row names, else the
+  # newest the ticket waits on (`Questions.deciding/1`). A question Unblock answers is never one.
+  defp deciding(issue, input) do
+    ticket = ticket(issue)
+
+    with id when is_binary(id) <- blank_to_nil(input[:question_id]),
+         %{state: :open, request: true} = question <- Questions.find(ticket, String.trim(id)) do
+      question
+    else
+      _none -> Questions.deciding(ticket)
     end
   end
 
@@ -1024,62 +1006,58 @@ defmodule SymphonyElixir.DirectorMoves do
 
   defp decide_held_question(issue, _input, _opts), do: conflict("#{issue.identifier} is not waiting on a decision")
 
-  # The move a decision makes: the Director's explicit move, else the one the hold or the picked
+  # The move a decision makes: the Director's explicit move, else the one the Question or the picked
   # option carries (a merge confirmation's `Merging`, a Code Review escalation's QA state, QA's
   # merge without a result). nil when the decision moves nothing.
   defp decide_target(nil, carried), do: carried
   defp decide_target(move, _carried), do: %{to: Map.fetch!(@decide_targets, String.downcase(String.trim(move)))}
 
   # The target is resolved before anything is written: a decision directing a move into a state the
-  # repo has not configured is refused while the request is still open and the hold still set,
-  # rather than recorded, the hold cleared, and the move left to fail with the ticket in place.
+  # repo has not configured is refused while the Question is still open, rather than answered and
+  # the move left to fail with the ticket in place.
   #
   # The answer is the Question's first (`SymphonyElixir.Questions.answer/4`), before any Linear
-  # request; the reply, the Decisions section, the hold's clear and the move are its projections. A
-  # reply Linear refuses is marked pending on the record, and the reconciler posts it and records the
-  # section once Linear answers (`project_answer/5`). A hold whose request carries no Question (one
-  # asked before questions) is answered in Linear first, as before.
-  defp answer(issue, input, hold, directed, opts) do
+  # request; the reply, the Decisions section and the move are its projections. A reply Linear
+  # refuses is marked pending on the record, and the reconciler posts it and records the section
+  # once Linear answers (`project_answer/5`).
+  defp answer(issue, input, deciding, directed, opts) do
     if match?(%{to: to} when is_binary(to), directed) and String.trim(directed.to) == "" do
-      {:error, {:invalid, "#{issue.identifier}'s decision moves it to a state not configured for repo #{issue.repo_key}; the hold stays"}}
+      {:error, {:invalid, "#{issue.identifier}'s decision moves it to a state not configured for repo #{issue.repo_key}; the question stays open"}}
     else
       picks = Enum.map(input.picks, &%{question: String.trim(&1.question), answer: String.trim(&1.answer)})
 
-      with {:ok, question} <- answer_held(issue, input, hold, picks, opts) do
-        project_decision(linear_issue(issue), input, hold, question, picks, directed, opts)
+      with {:ok, question} <- answer_deciding(issue, input, deciding, picks) do
+        project_decision(linear_issue(issue), input, question, picks, directed, opts)
       end
     end
   end
 
   # While the pause projector owns the replies, the answered Question's reply is its projection,
   # posted when the answer committed (`SymphonyElixir.Pauses.Projector`): nothing is posted here.
-  defp project_decision(issue, input, hold, question, picks, directed, opts) do
-    if is_map(question) and Projector.owns?(),
-      do: projected_decision(issue, input, hold, question, picks, directed, opts),
-      else: reply_decision(issue, input, hold, question, picks, directed, opts)
+  defp project_decision(issue, input, question, picks, directed, opts) do
+    if Projector.owns?(),
+      do: projected_decision(issue, input, question, picks, directed, opts),
+      else: reply_decision(issue, input, question, picks, directed, opts)
   end
 
-  defp projected_decision(issue, input, hold, question, picks, directed, opts) do
-    record_decision(issue, request_comment_id(issue, input, question, opts) || question.id, question, picks)
-    decision_move(issue, directed, decide_comment(picks), picks, undo_entry(question, hold), opts)
+  defp projected_decision(issue, input, question, picks, directed, opts) do
+    record_decision(issue, request_comment_id(issue, input, question) || question.id, question, picks)
+    decision_move(issue, directed, decide_comment(picks), %{question_id: question.id}, opts)
   end
 
-  defp reply_decision(issue, input, hold, question, picks, directed, opts) do
+  defp reply_decision(issue, input, question, picks, directed, opts) do
     comment = decide_comment(picks)
-    comment_id = request_comment_id(issue, input, question, opts)
+    comment_id = request_comment_id(issue, input, question)
 
     case reply(issue, comment_id, comment) do
       :ok ->
-        record_decision(issue, comment_id || question.id, question || Map.get(hold, :decision) || %{}, picks)
-        decision_move(issue, directed, comment, picks, undo_entry(question, hold), opts)
-
-      {:error, reason} when is_map(question) ->
-        Logger.warning("Answered #{issue.identifier}'s question; Linear refused the reply, posted once Linear answers: #{inspect(reason)}")
-        TicketSignals.mark_projection(issue.repo_key, issue.id, {:question_answer, question.id, comment_id}, reason)
-        decision_move(issue, directed, nil, picks, undo_entry(question, hold), opts)
+        record_decision(issue, comment_id || question.id, question, picks)
+        decision_move(issue, directed, comment, %{question_id: question.id}, opts)
 
       {:error, reason} ->
-        {:error, {:linear, reason}}
+        Logger.warning("Answered #{issue.identifier}'s question; Linear refused the reply, posted once Linear answers: #{inspect(reason)}")
+        TicketSignals.mark_projection(issue.repo_key, issue.id, {:question_answer, question.id, comment_id}, reason)
+        decision_move(issue, directed, nil, %{question_id: question.id}, opts)
     end
   end
 
@@ -1091,16 +1069,12 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  # The Question the hold's request asks, answered with the Director's picks: the one the Inbox row
-  # names (`question_id`), else the one the row of the request comment names, else the hold's. A
-  # hold with none (asked before questions) answers no Question.
-  defp answer_held(issue, input, hold, picks, _opts) do
-    given = blank_to_nil(input[:question_id])
-
-    case given || row_question_id(issue, input[:request_comment_id]) || get_in(hold, [:decision, :question_id]) do
-      nil -> {:ok, nil}
-      id -> answer_decision(issue, id, Enum.map_join(picks, " / ", & &1.answer), given != nil)
-    end
+  # The Question the request asks, answered with the Director's picks: the one the Inbox row names
+  # (`question_id`), else the one the row of the request comment names, else the one the ticket
+  # waits on. A Question the record doesn't hold is refused, never answered as nothing.
+  defp answer_deciding(issue, input, deciding, picks) do
+    id = blank_to_nil(input[:question_id]) || row_question_id(issue, input[:request_comment_id]) || deciding.id
+    answer_decision(issue, id, Enum.map_join(picks, " / ", & &1.answer), true)
   end
 
   defp answer_decision(issue, id, text, given?) do
@@ -1115,8 +1089,8 @@ defmodule SymphonyElixir.DirectorMoves do
 
   # The request comment the reply goes under: the one the Director answered, else the one the Inbox
   # row of the Question lists. nil when neither is known: the reply is then a comment on the ticket.
-  defp request_comment_id(issue, input, question, _opts) do
-    blank_to_nil(input[:request_comment_id]) || (question && row_comment_id(issue, question.id))
+  defp request_comment_id(issue, input, question) do
+    blank_to_nil(input[:request_comment_id]) || row_comment_id(issue, question.id)
   end
 
   defp reply(issue, nil, comment), do: with({:error, {:linear, reason}} <- post_comment(issue, comment), do: {:error, reason})
@@ -1140,10 +1114,6 @@ defmodule SymphonyElixir.DirectorMoves do
         []
     end
   end
-
-  # What Undo needs to take an answer back: the Question and the hold it cleared.
-  defp undo_entry(nil, _hold), do: %{}
-  defp undo_entry(question, hold), do: %{question_id: question.id, hold: hold}
 
   @doc """
   Projects the answer to the question `question_id` on the ticket `issue_id` that Linear refused when
@@ -1182,18 +1152,9 @@ defmodule SymphonyElixir.DirectorMoves do
   defp projected_reply(tracker, issue_id, nil, comment), do: tracker.create_comment(issue_id, comment)
   defp projected_reply(tracker, issue_id, comment_id, comment), do: tracker.create_reply(issue_id, comment_id, comment)
 
-  # The ticket's open Needs Decision hold; a ticket with no hold has no decision to answer.
-  defp decision_hold(%Issue{repo_key: repo_key, id: issue_id}, opts) do
-    case Hold.get(repo_key, issue_id, :needs_decision, store_opts(opts)) do
-      nil -> :error
-      hold -> {:ok, hold}
-    end
-  end
-
-  # The answer goes into the ticket's scope now, so the run the cleared hold lets through reads it.
-  # Best-effort: the answer is already on the Question. A pick of an
-  # option that unlocks protected paths records them, read from the Question or the hold's decision
-  # (`SymphonyElixir.PathUnlock.picked_paths/2`), which carry the same options.
+  # The answer goes into the ticket's scope now, so the run the answer lets through reads it.
+  # Best-effort: the answer is already on the Question. A pick of an option that unlocks protected
+  # paths records them, read from the Question (`SymphonyElixir.PathUnlock.picked_paths/2`).
   defp record_decision(issue, request_comment_id, decision, picks, opts \\ []) do
     title = Map.get(decision, :title)
     question = Map.get(decision, :question) || Enum.map_join(picks, " / ", & &1.question)
@@ -1204,12 +1165,12 @@ defmodule SymphonyElixir.DirectorMoves do
     :ok
   end
 
-  defp picked_move(hold, picks) do
+  defp picked_move(question, picks) do
     answers = Enum.map(picks, & &1.answer)
 
-    case MergeConfirmation.confirm_target(hold) && MergeConfirmation.picked(hold, answers) do
+    case MergeConfirmation.confirm_target(question) && MergeConfirmation.picked(question, answers) do
       {:ok, target} when is_binary(target) -> %{to: target}
-      nil -> DecisionMove.picked(hold, answers)
+      nil -> DecisionMove.picked(question, answers)
       _moves_nothing -> nil
     end
   end
@@ -1221,42 +1182,24 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  # The move goes first, then the hold clears. With nothing to move, the ticket continues in its
-  # phase: the decision is recorded and the hold is gone, so the next poll dispatches it again.
-  defp decision_move(issue, nil, comment, picks, undo, opts) do
-    with :ok <- clear_decision_hold(issue, picks, opts) do
-      TicketSignals.record(issue.repo_key, issue.id, "decision returned", %{move: "decide", from: issue.state, to: issue.state})
-      finish(:decide, issue, nil, comment, opts, undo)
-    end
+  # With nothing to move, the ticket continues in its phase: the Question is answered, so its pause
+  # reason is gone and the next poll dispatches it again.
+  defp decision_move(issue, nil, comment, undo, opts) do
+    TicketSignals.record(issue.repo_key, issue.id, "decision returned", %{move: "decide", from: issue.state, to: issue.state})
+    finish(:decide, issue, nil, comment, opts, undo)
   end
 
-  # The decision is recorded in Linear, so a refused move is reported without taking it back: the
-  # hold still clears and the ticket continues in place, with the decision on it.
-  defp decision_move(issue, directed, comment, picks, undo, opts) do
+  # The decision is recorded, so a refused move is reported without taking it back: the ticket
+  # continues in place, with the decision on it.
+  defp decision_move(issue, directed, comment, undo, opts) do
     case DecisionMove.perform(issue.repo_key, issue.id, directed, issue_identifier: issue.identifier) do
       {:ok, to_state} ->
         record_move_signal(issue, :decide, to_state)
-        with :ok <- clear_decision_hold(issue, picks, opts), do: finish(:decide, issue, to_state, comment, opts, undo)
+        finish(:decide, issue, to_state, comment, opts, undo)
 
       {:error, reason} ->
-        with :ok <- clear_decision_hold(issue, picks, opts), do: decision_move_refused(issue, directed.to, reason, comment, opts)
+        decision_move_refused(issue, directed.to, reason, comment, opts)
     end
-  end
-
-  # The decision is answered, so its clear records no withdrawal: the answer's `decision.recorded`
-  # ends the request, and the Question the hold projects is answered.
-  defp clear_decision_hold(issue, picks, opts) do
-    case Hold.clear(issue.repo_key, issue.id, :needs_decision, answered_opts(picks, opts)) do
-      :ok -> :ok
-      {:error, reason} -> {:error, {:store, "couldn't clear the hold on #{issue.identifier}: #{inspect(reason)}"}}
-    end
-  end
-
-  # An answered clear: the Question the hold projects is answered with the Director's words
-  # (`Hold.clear/4`), so its pause ends with the hold.
-  defp answered_opts(answers, opts) do
-    text = Enum.map_join(answers, " / ", & &1.answer)
-    [answered: true, question: {:answer, text, %{kind: :person, name: "Director"}}] ++ store_opts(opts)
   end
 
   defp decision_move_refused(issue, to_state, reason, comment, opts) do
@@ -1264,7 +1207,7 @@ defmodule SymphonyElixir.DirectorMoves do
     request_refresh(issue, opts)
 
     partial(
-      "recorded the decision on #{issue.identifier} and cleared the hold, but Linear refused the move to " <>
+      "recorded the decision on #{issue.identifier}, but Linear refused the move to " <>
         "#{to_state} (#{inspect(reason)}); #{issue.identifier} continues in place"
     )
   end

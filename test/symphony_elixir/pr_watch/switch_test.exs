@@ -8,7 +8,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{CiFix, Hold, Pauses, PrWatch, TicketPullRequest, TicketState}
+  alias SymphonyElixir.{CiFix, Pauses, PrWatch, Questions, TicketPullRequest, TicketState}
   alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.PrWatch.{Attempts, Competitors, Repo}
   alias SymphonyElixirWeb.WatchPayload
@@ -412,7 +412,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert description =~ "https://github.com/acme/app/pull/1"
       assert World.calls(:blocked_by) == [{issue_id, "TP-901"}]
       assert fix_waits(issue_id) == ["TP-901"]
-      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+      refute deciding(issue_id)
 
       assert %{rule: "R20", kind: :file_fix_ticket, reason: "CI keeps failing: waiting on TP-901, a fix ticket for the `specs` check", owner: :symphony} =
                decision(issue_id)
@@ -480,7 +480,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       tick!(pid, 3)
 
       assert [{"TP-901", _attrs}] = World.calls(:fix_ticket)
-      assert %{decision: %{title: "Self-heal is stuck on the ci specs block"}} = Hold.get(@repo_key, issue_id, :needs_decision)
+      assert %{title: "Self-heal is stuck on the ci specs block"} = deciding(issue_id)
       assert [_one] = Enum.filter(comments(issue_id), &String.starts_with?(&1, "## Decision needed: Self-heal is stuck"))
       assert %{rule: "R4", owner: :person} = decision(issue_id)
     end
@@ -570,7 +570,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     defp answer!(issue_id, key, title, answer) do
       entry = SymphonyElixir.Decisions.entry(key, ~D[2026-10-16], title, title, answer)
       {:ok, _decisions} = RunStore.record_ticket_decisions(@repo_key, issue_id, [entry], [])
-      :ok = Hold.clear(@repo_key, issue_id, :needs_decision, tracker: Tracker)
+      withdraw!(issue_id)
     end
 
     defp asked(issue_id, title), do: Enum.count(comments(issue_id), &(&1 =~ "## Decision needed: #{title}"))
@@ -603,11 +603,11 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       # Within the wait the head reads as running, in any phase.
       tick!(pid)
       assert %{rule: "R24", kind: :wait} = decision(issue_id)
-      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+      refute deciding(issue_id)
 
       advance!(timeout_ms())
       tick!(pid, 3)
-      assert %{decision: %{title: ^title, options: options}} = Hold.get(@repo_key, issue_id, :needs_decision)
+      assert %{title: ^title, options: options} = deciding(issue_id)
       assert Enum.map(options, & &1.label) == ["Proceed without it for this PR", "Rerun the checks", "Fix the workflow in Rework"]
       assert asked(issue_id, title) == 1
       assert %{rule: "R4", owner: :person} = decision(issue_id)
@@ -780,7 +780,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       cancel!.(4)
       tick!(pid, 2)
       assert World.calls(:rerun) == ["39571199843", "39571199843"]
-      assert %{decision: %{title: ^title, question: question, why: why, options: options}} = Hold.get(@repo_key, issue_id, :needs_decision)
+      assert %{title: ^title, question: question, why: why, options: options} = deciding(issue_id)
       assert question == "GitHub cancelled the install script check on PR #1 of TP-1 3 times in a row without running it. Should Symphony keep retrying it, or wait?"
       assert why =~ "GitHub cancels a check it can't find a machine for, as happens when its macOS machines are busy."
       assert Enum.map(options, & &1.label) == ["Keep retrying", "Wait"]
@@ -831,7 +831,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       tick!(pid)
       assert %{rule: "R27", kind: :dispatch, reason: reason} = decision(issue_id)
       assert reason =~ "`install script`, cancelled again after 2 reruns, is set aside"
-      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+      refute deciding(issue_id)
       assert World.calls(:rerun) == ["22", "22"]
       assert %{ci: :green, set_aside: ["install script"]} = watch(issue_id).facts
     end
@@ -872,7 +872,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
       assert World.calls(:blocked_by) == [{issue_id, "TP-901"}]
       assert fix_waits(issue_id) == ["TP-901"]
-      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+      refute deciding(issue_id)
       assert state(issue_id) == "Code Review"
 
       # The lane keeps the same signature the streak compared.
@@ -1059,7 +1059,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert List.last(moves(issue_id)) == "Rework"
       assert Enum.any?(comments(issue_id), &(&1 =~ reason))
       assert pr("1").auto_merge == :off
-      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+      refute deciding(issue_id)
     end
 
     test "a person's push in Merging turns auto-merge off and sends the ticket back to Code Review (D4)" do
@@ -1159,7 +1159,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
     test "the leader gains a hold: it leaves the race" do
       {pid, leader, follower} = waiting!()
-      :ok = Hold.set(@repo_key, leader, :needs_decision, %{reason: "A question"}, tracker: Tracker)
+      ask!(leader)
       left_race!(pid, follower)
     end
 
@@ -1359,7 +1359,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
     test "a Merging PR behind main on a Needs Decision hold is updated on the next read, once per head; the hold's wait stands" do
       issue_id = ticket!("1", "Merging", mergeable: :behind)
-      :ok = Hold.set(@repo_key, issue_id, :needs_decision, %{reason: "A question"}, tracker: Tracker)
+      ask!(issue_id)
       pid = start!()
 
       log = capture_log(fn -> tick!(pid) end)
@@ -1381,7 +1381,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       tick!(pid)
       assert World.calls(:update_branch) == [{@pr_1, "head-1-1"}]
       assert %{rule: "R18", kind: :decision} = decision(issue_id)
-      assert Hold.held?(@repo_key, issue_id, :needs_decision)
+      assert deciding(issue_id)
     end
 
     test "a PR behind main while its checks run is updated; the CI wait stands" do
@@ -1527,7 +1527,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       issue_id = protected_merging!()
       pid = start!(git: protected_git(["WORKFLOW.md"]))
       tick!(pid)
-      assert %{decision: request} = Hold.get(@repo_key, issue_id, :needs_decision)
+      assert %{} = request = deciding(issue_id)
 
       # Another PR lands on main while the operator hasn't answered: updated within one read.
       pr!("1", mergeable: :behind)
@@ -1546,7 +1546,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       picked = SymphonyElixir.Decisions.entry("request-1", ~D[2026-10-29], request.title, request.question, "Allow the change", ["WORKFLOW.md"])
       {:ok, description} = SymphonyElixir.Decisions.put("Ship it.", [picked])
       World.update(:issues, &Map.update!(&1, issue_id, fn issue -> %{issue | description: description} end))
-      :ok = Hold.clear(@repo_key, issue_id, :needs_decision, tracker: Tracker)
+      withdraw!(issue_id)
       tick!(pid)
 
       assert World.calls(:merge) == [{@pr_1, "head-1-2"}]
@@ -1586,7 +1586,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
   describe "holds and phases (G7, G8)" do
     test "a ticket on a Needs Decision hold with a red head is not moved" do
       issue_id = ticket!("1", "Code Review", red())
-      :ok = Hold.set(@repo_key, issue_id, :needs_decision, %{reason: "a question"}, tracker: Tracker)
+      ask!(issue_id)
       pid = start!()
       tick!(pid, 3)
 
@@ -1669,7 +1669,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       seed_attempts!(issue_id, %{red: 10})
       tick!(pid)
       assert %{rule: "R20"} = decision(issue_id)
-      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+      refute deciding(issue_id)
     end
 
     test "CiPoller.back_from_ci_fix_on_red_head? → R21: a ticket back from CI Fix on the same red head goes to CI Fix again" do
@@ -1689,7 +1689,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
         tick!(pid, 3)
         assert %{rule: ^rule, kind: :dispatch} = decision(issue_id)
         assert PrWatch.dispatch_reason(Map.fetch!(World.get(:issues), issue_id), Config.settings!()) == nil
-        refute Hold.held?(@repo_key, issue_id, :needs_decision)
+        refute deciding(issue_id)
         assert {issue_id, "CI green"} in World.calls(:label)
         assert %{facts: %{ci: :green, failing_check: "protected paths"}} = watch(issue_id)
         assert moves(issue_id) == []
@@ -1717,7 +1717,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       pid = start!()
       tick!(pid)
       assert moves(issue_id) == ["Code Review"]
-      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+      refute deciding(issue_id)
     end
 
     test "R18's evidence: a head red only on protected paths lists the protected files its PR changes, read once per head, in every phase" do
@@ -1776,10 +1776,10 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       pid = start!(git: protected_git(["WORKFLOW.md"]))
       tick!(pid, 3)
       assert World.calls(:disarm) == ["https://github.com/acme/app/pull/1"]
-      assert %{decision: %{title: "Protected files changed on TP-1", options: options}} = Hold.get(@repo_key, issue_id, :needs_decision)
+      assert %{title: "Protected files changed on TP-1", options: options} = deciding(issue_id)
       assert Enum.map(options, & &1.label) == ["Allow the change", "Drop the change in Rework"]
       assert [%{unlocks: ["WORKFLOW.md"]}, drop] = options
-      refute Map.has_key?(drop, :unlocks)
+      assert drop.unlocks == []
       assert [_one] = Enum.filter(comments(issue_id), &String.starts_with?(&1, "## Decision needed: Protected files"))
       assert moves(issue_id) == []
       # The check holds the merge back, yet the head's other checks passed: the label stays green.
@@ -1801,7 +1801,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       pid = start!(git: protected_git(["WORKFLOW.md"]))
       tick!(pid)
 
-      assert %{decision: decision} = Hold.get(@repo_key, issue_id, :needs_decision)
+      assert %{} = decision = deciding(issue_id)
       unlocks = SymphonyElixir.PathUnlock.picked_paths(decision, ["Allow the change"])
       assert unlocks == ["WORKFLOW.md"]
 
@@ -1809,13 +1809,13 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       picked = SymphonyElixir.Decisions.entry("request-1", ~D[2026-10-20], decision.title, decision.question, "Allow the change", unlocks)
       {:ok, description} = SymphonyElixir.Decisions.put("Ship it.", [picked])
       World.update(:issues, &Map.update!(&1, issue_id, fn issue -> %{issue | description: description} end))
-      :ok = Hold.clear(@repo_key, issue_id, :needs_decision, tracker: Tracker)
+      withdraw!(issue_id)
 
       pr!("1", head_sha: "head-1-2")
       tick!(pid)
 
       assert %{ci: :green} = watch(issue_id).facts
-      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+      refute deciding(issue_id)
       assert [_one] = Enum.filter(comments(issue_id), &String.starts_with?(&1, "## Decision needed: Protected files"))
     end
 
@@ -1832,7 +1832,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       pid = start!()
       capture_log(fn -> tick!(pid, 2) end)
 
-      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+      refute deciding(issue_id)
       assert Enum.filter(comments(issue_id), &String.starts_with?(&1, "## Decision needed: Protected files")) == []
     end
 
@@ -1903,7 +1903,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       seed_attempts!(issue_id, %{conflict: 3})
       tick!(pid)
       assert List.last(moves(issue_id)) == "Rework"
-      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+      refute deciding(issue_id)
     end
 
     test "PrReviewPoller.wait_to_land and AutoMerge's landing-order check → R14a and R28: wait for the PR ahead" do
@@ -2081,7 +2081,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert %{ci: :green} = watch(issue_id).facts
       assert %{rule: "R29", kind: :merge_now} = decision(issue_id)
       assert_received {:git, _args, ^workspace}
-      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+      refute deciding(issue_id)
     end
 
     test "Attempts is the watcher's own: a ticket that left the watched phases starts again" do
@@ -2093,5 +2093,30 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert watch(issue_id) == nil
       assert Attempts.normalize(nil) == Attempts.new()
     end
+  end
+
+  # The decision request's question the ticket waits on, or nil.
+  defp deciding(issue_id), do: Questions.deciding({:ticket, @repo_key, issue_id})
+
+  # A rule asks a person a question on the ticket, which pauses it.
+  defp ask!(issue_id) do
+    request = %{
+      title: "A question",
+      question: "A question?",
+      why: "A person decides.",
+      if_unanswered: "The ticket waits.",
+      options: [%{label: "Go on", effect: "It goes on.", recommended: true}, %{label: "Stop", effect: "It stops."}],
+      recommendation_reason: "It is ready."
+    }
+
+    {:ok, _question} = Questions.ask({:ticket, @repo_key, issue_id}, request, request: true)
+    :ok
+  end
+
+  # Withdraws every open question on the ticket.
+  defp withdraw!(issue_id) do
+    ticket = {:ticket, @repo_key, issue_id}
+    for question <- Questions.open(ticket), do: {:ok, _withdrawn} = Questions.withdraw(ticket, question.id, "The test answers it.")
+    :ok
   end
 end

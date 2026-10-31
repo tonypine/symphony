@@ -314,33 +314,14 @@ defmodule SymphonyElixir.DecisionsTest do
     end
   end
 
-  describe "the events an answer records" do
-    test "an answer records one decision.recorded by the Director, naming its request, however often it is written" do
-      decision = %{title: "Keep the legacy partials", question: "Remove the legacy partials here, or leave them for TP-891?"}
-      :ok = SymphonyElixir.Hold.set(@repo_key, @issue_id, :needs_decision, %{reason: decision.question, decision: decision})
-      [%{id: request_id}] = RunStore.list_ticket_events(@repo_key, @issue_id, [])
-      answer = entry(%{key: "c1"})
-
-      for _write <- 1..3, do: assert(:ok = Decisions.record(@issue_id, [answer], tracker: FakeTracker, repo_key: @repo_key))
-
-      assert [_requested, %{type: "decision.recorded", actor: %{kind: :person, name: "the Director"}, idempotency: "decision.recorded:c1"} = recorded] =
-               RunStore.list_ticket_events(@repo_key, @issue_id, [])
-
-      assert %{answer: "Defer to TP-891: don't make that change.", key: "c1", request: ^request_id} = recorded.payload
-
-      assert recorded.payload.title == "Keep the legacy partials"
-    end
-
-    test "a ruling recorded before records its decision.recorded naming no request" do
-      :ok = SymphonyElixir.Hold.set(@repo_key, @issue_id, :needs_decision, %{decision: %{title: "Keep the flag", question: "Keep it?"}})
+  describe "the events an answer records (none: its Question records the answer)" do
+    test "an answer and a ruling record no legacy decision event, however often they are written" do
       ruling = Decisions.entry("ruling-c2", @date, "Keep the flag", "Ruling given in a comment.", "Keep the flag")
 
-      assert :ok = Decisions.record(@issue_id, [ruling], tracker: FakeTracker, repo_key: @repo_key)
+      for _write <- 1..3, do: assert(:ok = Decisions.record(@issue_id, [entry(%{key: "c1"}), ruling], tracker: FakeTracker, repo_key: @repo_key))
 
-      assert [{"decision.requested", _requested}, {"decision.recorded", %{answer: "Keep the flag", key: "ruling-c2"} = ruling}] =
-               ticket_events(@repo_key, @issue_id)
-
-      refute Map.has_key?(ruling, :request)
+      assert [%{key: "c1"}, %{key: "ruling-c2"}] = RunStore.get_ticket_state(@repo_key, @issue_id).decisions
+      assert ticket_events(@repo_key, @issue_id) == []
     end
 
     test "the decisions backfilled from the description and a write the store refuses record nothing" do

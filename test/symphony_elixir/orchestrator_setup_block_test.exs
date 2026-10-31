@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.OrchestratorSetupBlockTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Hold, Pauses, RunStore, SelfHeal, SetupBlock}
+  alias SymphonyElixir.{Pauses, Questions, RunStore, SelfHeal, SetupBlock}
   alias SymphonyElixirWeb.Presenter
 
   @symphony_repo_key "symphony-self"
@@ -122,7 +122,7 @@ defmodule SymphonyElixir.OrchestratorSetupBlockTest do
 
     assert log =~ "Setup block for MT-SETUP-AGAIN: dev_server — verification.dev_server build failed with exit 2; self-heal asks a person to decide"
     refute_received {:fake_fixer_create, _attrs}
-    assert Hold.held?(Config.repo_key!(), issue.id, :needs_decision)
+    assert Questions.deciding({:ticket, Config.repo_key!(), issue.id})
   end
 
   test "a block self-heal cannot record falls back to the crash retry" do

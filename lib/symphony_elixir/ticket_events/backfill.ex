@@ -7,14 +7,12 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
   and `dispatches`, and the last 14 days of `run_stopped` and `director_move` audit records, into the
   events the live writes record for them:
 
-    * A signal goes through `SymphonyElixir.TicketSignals.event/2`, the live mapping. The snapshot
-      keeps no hold history, so a signal live writes leave to its hold write becomes the event that
-      write records: a held `blocked`, `dispatch_loop`, `ci_wait` or held `handoff_missing` is
-      `hold.set` (kind blocked), and `unblocked` is `hold.cleared`. A `decision requested` signal and
-      a review's merge confirmation or escalation are a machine `note` ("Decision requested: …"):
-      they carry no question and can't be paired with their answers, so `open_decisions: true`
-      lists only requests that are really open. A Decide that moved nothing is no event: its answer
-      comes from `decisions`.
+    * A signal goes through `SymphonyElixir.TicketSignals.event/2`, the live mapping. A signal live
+      writes leave to a pause or a question (`:mirrored`: a held `blocked`, `dispatch_loop`,
+      `ci_wait`, a held `handoff_missing`, `unblocked`, a `decision requested` and a review's merge
+      confirmation or escalation) is no event: the holds and decision requests they stood beside
+      are retired, and the pauses and questions record their own (`SymphonyElixir.Pauses.Backfill`).
+      A Decide that moved nothing is no event either: its answer comes from `decisions`.
     * A verdict is `verdict.recorded`, a dispatch `run.started` and, once it ended, `run.ended`.
     * A stop is the Director's `person.action` `stop`, and an Inbox move the action that names it, as
       the live writes record them; a Decide is none.
@@ -24,14 +22,10 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
   live event converts everything. Each event's idempotency key is `backfill:<source>:<hash>` and
   its `at` the entry's own timestamp.
 
-  Decisions and holds follow the one-representation rule:
-
-    * Each entry of `decisions` is the Director's `decision.recorded`, keyed `decision.recorded:<key>`
-      as a live answer is, so an answer already recorded live is never recorded twice. It names no
-      request: requests from before the event stream were never events.
-    * A hold still set that the events do not show open becomes its opening event: a Blocked hold
-      `hold.set` at its `set_at`, a Needs Decision hold `decision.requested` with the hold's title,
-      question, why and options at its `asked_at`, so its live answer closes it.
+  Each entry of `decisions` is the Director's `decision.recorded`, keyed `decision.recorded:<key>`
+  as an answer recorded before the Questions was, so an answer already recorded is never recorded
+  twice, and a ticket's history shows every decision it holds. It names no request: requests from
+  before the event stream were never events.
 
   Each ticket's events are appended oldest first in one transaction
   (`SymphonyElixir.RunStore.append_ticket_events/1`), ending with one `note`: "History before <date>
@@ -51,9 +45,6 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
   @audit_days 14
   @audit_types ["run_stopped", "director_move"]
   @director {:person, "the Director"}
-  @hold_signals ["blocked", "dispatch_loop", "ci_wait", "handoff_missing"]
-  @hold_types ["hold.set", "hold.cleared"]
-  @note_max 4_000
 
   @typedoc "How many tickets the run backfilled and how many events it wrote."
   @type outcome :: %{tickets: non_neg_integer(), events: non_neg_integer()}
@@ -174,10 +165,9 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
     cutoff = existing |> Enum.find(&(not backfilled?(&1))) |> live_cutoff()
     history = record |> entries(audit) |> Enum.filter(&(DateTime.compare(&1.at, cutoff || now) == :lt)) |> Enum.sort_by(& &1.at, DateTime)
     built = build(record, history)
-    opened = holds(record, existing ++ built, now)
 
     events =
-      (built ++ opened ++ decisions(record, now))
+      (built ++ decisions(record, now))
       |> Enum.sort_by(& &1.at, DateTime)
       |> Kernel.++(note(record, cutoff, now))
 
@@ -216,20 +206,9 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
 
   defp signal_mapping(%{name: name, details: details}) do
     case TicketSignals.event(name, details) do
-      :mirrored -> mirrored(name, details)
+      :mirrored -> nil
       mapping -> mapping
     end
-  end
-
-  defp mirrored(name, details) when name in @hold_signals,
-    do: {"hold.set", compact(%{kind: "blocked", reason: text(details, :reason) || name, signal: name}), []}
-
-  defp mirrored("unblocked" = name, details), do: {"hold.cleared", compact(%{kind: "blocked", by: text(details, :by), signal: name}), []}
-  defp mirrored("decision returned", _details), do: nil
-
-  defp mirrored(name, details) do
-    reason = text(details, :reason) || text(details, :signal) || name
-    {"note", %{text: String.slice("Decision requested: #{reason}", 0, @note_max)}, []}
   end
 
   defp dispatch_entries(%{run_id: run_id} = dispatch) when is_binary(run_id) do
@@ -326,65 +305,6 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
     end
   end
 
-  # A hold still set that the events don't show open is opened at the time it was set.
-  defp holds(record, events, now) do
-    Enum.flat_map(record.holds, &open_hold(record, &1, events, now))
-  end
-
-  defp open_hold(record, %{kind: :blocked} = hold, events, now) do
-    if blocked_open?(events) do
-      []
-    else
-      payload = compact(%{kind: "blocked", reason: hold.reason, waits_on: hold.waits_on})
-      built(record, "hold.set", payload, at: hold.set_at || now, idempotency: "#{@prefix}hold:#{hash(hold)}")
-    end
-  end
-
-  defp open_hold(record, %{kind: :needs_decision} = hold, _events, now) do
-    decision = hold.decision || %{}
-    title = text(decision, :title)
-    question = text(decision, :question) || title || hold.reason
-
-    if question_open?(record, title, question) do
-      []
-    else
-      asked = %{question: question, title: title, why: text(decision, :why), confirm: text(decision, :confirm)}
-      payload = compact(Map.put(asked, :options, options(decision)))
-
-      at = datetime(value(decision, :asked_at)) || hold.set_at || now
-      built(record, "decision.requested", payload, at: at, idempotency: "#{@prefix}hold:#{hash(hold)}")
-    end
-  end
-
-  # The newest Blocked hold event is a `hold.set`.
-  defp blocked_open?(events) do
-    events
-    |> Enum.filter(&(&1.type in @hold_types))
-    |> Enum.sort_by(& &1.at, DateTime)
-    |> List.last()
-    |> case do
-      %Event{type: "hold.set"} -> true
-      _cleared_or_none -> false
-    end
-  end
-
-  # A hold that names no question opens no request.
-  defp question_open?(_record, _title, nil), do: true
-
-  defp question_open?(record, title, question) do
-    case TicketSignals.open_decision(record.repo_key, record.issue_id, title, question) do
-      %Event{payload: payload} -> TicketSignals.same_text?(payload[:question], question)
-      nil -> false
-    end
-  end
-
-  defp options(decision) do
-    case value(decision, :options) do
-      [_option | _rest] = options -> options
-      _none -> nil
-    end
-  end
-
   defp decisions(record, now) do
     Enum.flat_map(record.decisions, fn decision ->
       payload = compact(%{answer: decision.answer, title: decision.title, question: decision.question, key: decision.key})
@@ -407,25 +327,6 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
     |> Base.encode16(case: :lower)
     |> binary_part(0, 16)
   end
-
-  defp datetime(%DateTime{} = at), do: at
-
-  defp datetime(text) when is_binary(text) do
-    case DateTime.from_iso8601(text) do
-      {:ok, at, _offset} -> at
-      {:error, _reason} -> nil
-    end
-  end
-
-  defp datetime(_value), do: nil
-
-  defp value(map, key), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
-
-  defp text(map, key), do: map |> value(key) |> string()
-
-  defp string(value) when is_binary(value), do: blank_to_nil(value)
-  defp string(value) when is_atom(value) and value not in [nil, true, false], do: Atom.to_string(value)
-  defp string(_value), do: nil
 
   defp blank_to_nil(value), do: if(String.trim(value) == "", do: nil, else: value)
 

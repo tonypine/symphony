@@ -1,20 +1,15 @@
 defmodule SymphonyElixir.DecisionRequestTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{DecisionRequest, Hold, MergeConfirmation, NeedsDecisionHold, Pauses, Questions, RunStore}
+  alias SymphonyElixir.{DecisionRequest, MergeConfirmation, Pauses, Questions, RunStore}
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.{TicketState, Workflow}
 
   @repo_key "repo-a"
   @issue_id "issue-1"
   @ticket {:ticket, @repo_key, @issue_id}
-
-  defmodule FailingStore do
-    def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :boom}
-    def clear_ticket_hold(_repo_key, _issue_id, _kind), do: {:error, :boom}
-    def get_ticket_state(_repo_key, _issue_id), do: {:error, :boom}
-  end
 
   defmodule CommentTracker do
     def create_comment(issue_id, body) do
@@ -97,7 +92,7 @@ defmodule SymphonyElixir.DecisionRequestTest do
   end
 
   describe "ask/4" do
-    test "asks the Question first, then sets the hold carrying it and posts the comment naming it" do
+    test "asks the Question, which pauses the ticket, and posts the comment naming it" do
       assert :ok = DecisionRequest.ask(issue(%{state: "Code Review"}), request(), [tracker: CommentTracker], "QA")
 
       assert [question] = Questions.open(@ticket)
@@ -116,15 +111,15 @@ defmodule SymphonyElixir.DecisionRequestTest do
       assert_received {:commented, @issue_id, body}
       assert body =~ "the ticket stays in Code Review until the decision is recorded"
       assert String.ends_with?(body, "\n\n<!-- symphony:question #{id} -->")
-      assert %{decision: %{question_id: ^id}} = hold = Hold.get(@repo_key, @issue_id, :needs_decision)
-      assert MergeConfirmation.confirm_target(hold) == "QA"
+      assert %{id: ^id} = deciding = Questions.deciding(@ticket)
+      assert MergeConfirmation.confirm_target(deciding) == "QA"
 
       # The Question's event is the request: no `decision.requested` beside it.
       assert [{"question.asked", %{title: "Add the release signing secrets", confirm: "QA", question_id: ^id}}, {"pause.set", _pause}] =
                ticket_events(@repo_key, @issue_id)
     end
 
-    test "a different question asked while another is open takes the hold and leaves the other open" do
+    test "a different question asked while another is open is a second Question, and both stay open" do
       older = request(%{title: "Older", question: "Older?"})
       assert :ok = DecisionRequest.ask(issue(), older, tracker: CommentTracker)
       assert :ok = DecisionRequest.ask(issue(), request(%{title: "Newer", question: "Newer?"}), tracker: CommentTracker)
@@ -132,14 +127,12 @@ defmodule SymphonyElixir.DecisionRequestTest do
       assert [%{id: older_id, title: "Older"}, %{id: newer_id, title: "Newer"}] = Questions.open(@ticket)
       assert_received {:commented, @issue_id, _older_body}
       assert_received {:commented, @issue_id, _newer_body}
-      assert %{decision: %{question_id: ^newer_id}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert %{id: ^newer_id} = Questions.deciding(@ticket)
 
-      # Set back to the older request as Linear reads it, the hold carries its Question again, and
-      # no second request is recorded for it.
-      parsed = older |> Request.render_hold("In Progress") |> Request.parse(DateTime.utc_now())
-      assert :ok = DecisionRequest.project(@repo_key, @issue_id, NeedsDecisionHold.attrs(parsed), [])
-      assert %{decision: %{title: "Older", question_id: ^older_id}} = Hold.get(@repo_key, @issue_id, :needs_decision)
-      assert ["question.asked", "pause.set", "question.asked", "pause.reason_added"] = Enum.map(ticket_events(@repo_key, @issue_id), &elem(&1, 0))
+      # Answering the newer one leaves the older one as the one the ticket waits on.
+      assert {:ok, _answered} = Questions.answer(@ticket, newer_id, "Newer it is")
+      assert %{id: ^older_id} = Questions.deciding(@ticket)
+      assert ["question.asked", "pause.set", "question.asked", "pause.reason_added", "question.answered", "pause.reason_cleared"] = Enum.map(ticket_events(@repo_key, @issue_id), &elem(&1, 0))
     end
 
     test "names who asks" do
@@ -163,8 +156,8 @@ defmodule SymphonyElixir.DecisionRequestTest do
         {:ok, %{"commentId" => "comment-9"}}
       end
 
-      assert {:ok, %{"commentId" => "comment-9"}} = DecisionRequest.ask(issue(), request(), post: post, label_tracker: CommentTracker)
-      assert :ok = DecisionRequest.ask(issue(), request(), post: post, label_tracker: CommentTracker)
+      assert {:ok, %{"commentId" => "comment-9"}} = DecisionRequest.ask(issue(), request(), post: post)
+      assert :ok = DecisionRequest.ask(issue(), request(), post: post)
       assert_received {:posted, _body}
       refute_received {:posted, _body}
     end
@@ -175,27 +168,27 @@ defmodule SymphonyElixir.DecisionRequestTest do
           assert {:error, {:decision_hold_failed, :missing_repo_key}} = DecisionRequest.ask(issue(%{repo_key: nil}), request(), tracker: CommentTracker)
         end)
 
-      assert log =~ "Refused a hold write on issue_id=#{@issue_id} with no repo key"
+      assert log =~ "Refused a decision request on issue_id=#{@issue_id} with no repo key"
       refute_received {:commented, _issue_id, _body}
       assert Questions.open(@ticket) == []
     end
 
-    test "a request the Question service refuses sets no hold and posts nothing" do
+    test "a request the Question service refuses asks nothing and posts nothing" do
       assert {:error, {:decision_hold_failed, {:invalid_subject, {:ticket, @repo_key, " "}}}} =
                DecisionRequest.ask(issue(%{id: " "}), request(), tracker: CommentTracker)
 
       refute_received {:commented, _issue_id, _body}
-      assert Hold.get(@repo_key, " ", :needs_decision) == nil
+      assert Questions.open({:ticket, @repo_key, " "}) == []
     end
 
     test "without a confirmation the ticket continues in place once decided" do
       assert :ok = DecisionRequest.ask(issue(), request(), tracker: CommentTracker)
 
-      assert %{decision: decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
-      refute Map.has_key?(decision, :confirm)
+      assert %{confirm: nil} = deciding = Questions.deciding(@ticket)
+      assert MergeConfirmation.confirm_target(deciding) == nil
     end
 
-    test "refuses a request that misses the standard: nothing is posted and no hold is set" do
+    test "refuses a request that misses the standard: nothing is posted and nothing is asked" do
       log =
         capture_log(fn ->
           assert {:error, {:invalid_decision_request, "`if_unanswered` must say what waits or repeats until someone answers."}} =
@@ -204,11 +197,11 @@ defmodule SymphonyElixir.DecisionRequestTest do
 
       assert log =~ "Refused a decision request on issue_id=#{@issue_id} that misses the standard"
       refute_received {:commented, _issue_id, _body}
-      assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
+      assert Questions.open(@ticket) == []
       assert ticket_events(@repo_key, @issue_id) == []
     end
 
-    test "a request that can't be posted takes nothing back: its comment waits for the Inbox's sweep" do
+    test "a request that can't be posted takes nothing back: its comment is marked pending" do
       Process.put(:ask_comment_result, {:error, :rate_limited})
 
       log =
@@ -216,9 +209,8 @@ defmodule SymphonyElixir.DecisionRequestTest do
           assert {:error, {:decision_request_failed, :rate_limited}} = DecisionRequest.ask(issue(), request(), tracker: CommentTracker)
         end)
 
-      assert log =~ "Failed to post the decision request on issue_id=#{@issue_id}; the question stays open and the Inbox posts it"
+      assert log =~ "Failed to post the decision request on issue_id=#{@issue_id}; the question stays open"
       assert [%{id: id}] = Questions.open(@ticket)
-      assert %{decision: %{question_id: ^id}} = Hold.get(@repo_key, @issue_id, :needs_decision)
       assert [%{type: :question_comment, question: ^id, error: ":rate_limited"}] = pending_projection()
       assert [{"question.asked", _asked}, {"pause.set", _pause}] = ticket_events(@repo_key, @issue_id)
 
@@ -229,27 +221,14 @@ defmodule SymphonyElixir.DecisionRequestTest do
       refute_received {:commented, _issue_id, _body}
     end
 
-    test "a hold that can't be set posts nothing, so the retry posts the comment once" do
-      assert {:error, {:decision_hold_failed, :boom}} =
-               DecisionRequest.ask(issue(), request(), tracker: CommentTracker, store: FailingStore, repo_key: @repo_key)
-
-      refute_received {:commented, _issue_id, _body}
-
-      assert :ok = DecisionRequest.ask(issue(), request(), tracker: CommentTracker)
-      assert_received {:commented, @issue_id, _body}
-      refute_received {:commented, _issue_id, _body}
-      assert Hold.get(@repo_key, @issue_id, :needs_decision)
-    end
-
-    test "a custom post answers what it posted, and the label goes through the label tracker" do
+    test "a custom post answers what it posted" do
       post = fn body ->
         send(self(), {:posted, body})
         {:ok, %{"commentId" => "comment-9"}}
       end
 
-      assert {:ok, %{"commentId" => "comment-9"}} = DecisionRequest.ask(issue(), request(), post: post, label_tracker: CommentTracker)
+      assert {:ok, %{"commentId" => "comment-9"}} = DecisionRequest.ask(issue(), request(), post: post)
       assert_received {:posted, "## Decision needed: Add the release signing secrets" <> _rest}
-      assert_received {:labelled, @issue_id, "Needs Decision"}
     end
   end
 
@@ -258,51 +237,6 @@ defmodule SymphonyElixir.DecisionRequestTest do
       assert DecisionRequest.question_id("## Decision needed: X\n\n<!-- symphony:question 01QUESTION -->") == "01QUESTION"
       assert DecisionRequest.question_id("## Decision needed: X") == nil
       assert DecisionRequest.question_id(nil) == nil
-    end
-  end
-
-  describe "repost/5" do
-    test "posts a comment whose post failed, rendered from the Question as it was asked, and drops its mark" do
-      Process.put(:ask_comment_result, {:error, :linear_down})
-      capture_log(fn -> DecisionRequest.ask(issue(%{state: "Code Review"}), request(), tracker: CommentTracker) end)
-      assert_received {:commented, @issue_id, asked_body}
-      hold = Hold.get(@repo_key, @issue_id, :needs_decision)
-
-      # Linear is still down.
-      log = capture_log(fn -> assert :pending = DecisionRequest.repost(@repo_key, @issue_id, hold, "Code Review", tracker: CommentTracker) end)
-      assert log =~ "Failed again to post the decision request on issue_id=#{@issue_id}: :linear_down"
-      assert_received {:commented, @issue_id, ^asked_body}
-      assert [_mark] = pending_projection()
-
-      Process.delete(:ask_comment_result)
-      assert :posted = DecisionRequest.repost(@repo_key, @issue_id, hold, "Code Review", tracker: CommentTracker)
-      assert_received {:commented, @issue_id, ^asked_body}
-      assert pending_projection() == []
-
-      assert :none = DecisionRequest.repost(@repo_key, @issue_id, hold, "Code Review", tracker: CommentTracker)
-      refute_received {:commented, _issue_id, _body}
-    end
-
-    test "a question no longer open has nothing to post: its mark is dropped" do
-      Process.put(:ask_comment_result, {:error, :linear_down})
-      capture_log(fn -> DecisionRequest.ask(issue(), request(), tracker: CommentTracker) end)
-      assert_received {:commented, @issue_id, _body}
-      hold = Hold.get(@repo_key, @issue_id, :needs_decision)
-      [%{id: id}] = Questions.open(@ticket)
-      {:ok, _withdrawn} = Questions.withdraw(@ticket, id, "Not needed any more.")
-
-      assert :none = DecisionRequest.repost(@repo_key, @issue_id, hold, "In Progress", tracker: CommentTracker)
-      refute_received {:commented, _issue_id, _body}
-      assert pending_projection() == []
-    end
-
-    test "a hold that carries no question, or no pending comment, posts nothing" do
-      assert :none = DecisionRequest.repost(@repo_key, @issue_id, nil, "In Progress", tracker: CommentTracker)
-      assert :none = DecisionRequest.repost(@repo_key, @issue_id, %{decision: %{title: "Old"}}, "In Progress", tracker: CommentTracker)
-      assert :none = DecisionRequest.repost(@repo_key, @issue_id, %{decision: %{question_id: "q-1"}}, "In Progress", tracker: CommentTracker)
-
-      assert :ok = DecisionRequest.ask(issue(), request(), tracker: CommentTracker)
-      assert :none = DecisionRequest.repost(@repo_key, @issue_id, Hold.get(@repo_key, @issue_id, :needs_decision), "In Progress", tracker: CommentTracker)
     end
   end
 
@@ -329,45 +263,25 @@ defmodule SymphonyElixir.DecisionRequestTest do
       expected = Request.render_hold(request(), "Code Review") <> "\n\n<!-- symphony:question #{id} -->"
       refute_received {:commented, _issue_id, _body}
       assert_received {:memory_tracker_comment, @issue_id, ^expected}
-      assert %{decision: %{question_id: ^id}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert %{id: ^id} = Questions.deciding(@ticket)
 
       assert :ok = DecisionRequest.ask(issue(%{state: "Code Review"}), request(), [tracker: CommentTracker], "QA")
       refute_received {:memory_tracker_comment, _issue_id, _body}
       refute_received {:commented, _issue_id, _body}
     end
 
-    test "the Inbox's sweep projects a comment Linear refused, and reports it pending while Linear still refuses it" do
+    test "a comment Linear refused stays pending on the record, and the projector posts it once Linear answers" do
       Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :linear_down})
       capture_log(fn -> assert :ok = DecisionRequest.ask(issue(), request(), tracker: CommentTracker) end)
       refute_received {:memory_tracker_comment, _issue_id, _body}
-      hold = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert [%{type: :pause}] = pending_projection()
 
-      capture_log(fn -> assert :pending = DecisionRequest.repost(@repo_key, @issue_id, hold, "In Progress", []) end)
       Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_result)
-      assert :posted = DecisionRequest.repost(@repo_key, @issue_id, hold, "In Progress", [])
+      assert :ok = Projector.project_now(@ticket)
       assert_received {:memory_tracker_comment, @issue_id, _body}
-      assert :none = DecisionRequest.repost(@repo_key, @issue_id, hold, "In Progress", [])
-      assert :none = DecisionRequest.repost(@repo_key, @issue_id, nil, "In Progress", [])
-
-      [%{id: id}] = Questions.open(@ticket)
-      {:ok, _withdrawn} = Questions.withdraw(@ticket, id, "Not needed any more.")
-      assert :none = DecisionRequest.repost(@repo_key, @issue_id, hold, "In Progress", [])
+      assert :ok = Projector.project_now(@ticket)
+      refute_received {:memory_tracker_comment, _issue_id, _body}
       refute_received {:commented, _issue_id, _body}
-    end
-  end
-
-  describe "project/4" do
-    test "sets the hold again for a request already posted, without checking it" do
-      attrs = NeedsDecisionHold.attrs(request(%{if_unanswered: nil}))
-
-      assert :ok = DecisionRequest.project(@repo_key, @issue_id, attrs, tracker: CommentTracker)
-      assert %{decision: %{title: "Add the release signing secrets"}} = Hold.get(@repo_key, @issue_id, :needs_decision)
-      assert_received {:labelled, @issue_id, "Needs Decision"}
-    end
-
-    test "a ticket with no repo key is refused by the hold's own check" do
-      capture_log(fn -> assert {:error, _reason} = DecisionRequest.project(nil, @issue_id, NeedsDecisionHold.attrs(request()), tracker: CommentTracker) end)
-      refute_received {:labelled, @issue_id, _label}
     end
   end
 

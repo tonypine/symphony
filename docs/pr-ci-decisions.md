@@ -82,7 +82,7 @@ Each fact a rule decides on, the values the table test enumerates, and when the 
 | --- | --- | --- |
 | `phase` | `in_progress`, `code_review`, `qa`, `rework`, `ci_fix`, `merging` | always |
 | `github` | `ok`, `rate_limited` | always |
-| `hold` | `none`, `needs_decision`, `blocked` | always |
+| `hold` | `none`, `question`, `blocked` | always |
 | `run` | `none`, `active` | always |
 | `auto_merge` | `off`, `armed` | always |
 | `pr` | `missing`, `open`, `draft`, `closed`, `merged` | always |

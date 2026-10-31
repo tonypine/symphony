@@ -40,9 +40,9 @@ defmodule SymphonyElixir.Decisions do
   `stored/2` reads a ticket's decisions from the store, and `prompt_section/1` renders them for the
   implementation, reviewer and QA prompts, with no Linear read.
 
-  Each decision a write adds to the store is also the Director's `decision.recorded` event
-  (`SymphonyElixir.TicketEvents`), naming the open `decision.requested` it answers; the ones taken
-  from the description's section record none.
+  A decision records no event of its own: the answer is its Question's `question.answered`
+  (`SymphonyElixir.Questions`). The `decision.*` events a ticket recorded before stay in its history
+  (`SymphonyElixir.TicketEvents.Types`).
 
   While the pause projector owns the section (`SymphonyElixir.Pauses.Projector.owns?/0`), `record/3`
   only writes the store, and the projector renders the section from the record
@@ -51,7 +51,7 @@ defmodule SymphonyElixir.Decisions do
 
   require Logger
 
-  alias SymphonyElixir.{Config, IssueSummary, PathUnlock, PromptSafety, RunStore, TicketSignals, TicketState, Tracker}
+  alias SymphonyElixir.{Config, IssueSummary, PathUnlock, PromptSafety, RunStore, TicketState, Tracker}
   alias SymphonyElixir.Pauses.Projector
 
   @start_marker "<!-- symphony:decisions:start -->"
@@ -74,7 +74,6 @@ defmodule SymphonyElixir.Decisions do
   @ruling_pattern ~r/\A\s*(?:\*\*|__)?(?:decision|ruling)\s*(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*(\S.*)\z/isu
   @ruling_prefix "ruling-"
   @prompt_limit 10_000
-  @director {:person, "the Director"}
 
   @typedoc """
   One recorded decision. `key` is the id of the request comment it answers; `unlocks`, when the
@@ -498,23 +497,7 @@ defmodule SymphonyElixir.Decisions do
   end
 
   defp write_decisions(store, repo_key, issue_id, new, backfill) do
-    case store.record_ticket_decisions(repo_key, issue_id, new, backfill) do
-      {:ok, _decisions} = written -> record_events(repo_key, issue_id, new, written)
-      error -> error
-    end
-  end
-
-  # Each decision the write added is the Director's `decision.recorded`, naming the request it
-  # answers while that request is open; a ruling answers none. The ones the description's section
-  # backfilled record nothing. Its key makes a second write of the same answer a no-op.
-  defp record_events(repo_key, issue_id, new, written) do
-    for entry <- new do
-      request = if not ruling_key?(entry.key), do: TicketSignals.open_decision(repo_key, issue_id, entry.title, entry.question)
-      payload = %{answer: entry.answer, title: entry.title, question: entry.question, key: entry.key, request: request && request.id}
-      TicketSignals.record_event(repo_key, issue_id, "decision.recorded", payload, actor: @director)
-    end
-
-    written
+    store.record_ticket_decisions(repo_key, issue_id, new, backfill)
   end
 
   defp read_decisions(store, repo_key, issue_id) do

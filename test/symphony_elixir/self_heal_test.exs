@@ -7,7 +7,7 @@ defmodule SymphonyElixir.SelfHealTest do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.Collector
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.{NeedsDecisionHold, Pauses, Questions, RunStore, SelfHeal, TicketState}
+  alias SymphonyElixir.{Pauses, Questions, RunStore, SelfHeal, TicketState}
   alias SymphonyElixir.Pauses.Dependencies
 
   @repo_key "repo-self-heal"
@@ -23,16 +23,6 @@ defmodule SymphonyElixir.SelfHealTest do
     def record_ticket_self_heal(_repo_key, _issue_id, attrs) do
       Process.put(:recorded_self_heal, attrs)
       Process.get(:record_result, :ok)
-    end
-
-    def set_ticket_hold(_repo_key, _issue_id, kind, attrs) do
-      Process.put(:hold_attrs, {kind, attrs})
-      Process.get(:hold_result, :ok)
-    end
-
-    def clear_ticket_hold(_repo_key, _issue_id, kind) do
-      Process.put(:hold_cleared, kind)
-      :ok
     end
   end
 
@@ -139,6 +129,9 @@ defmodule SymphonyElixir.SelfHealTest do
         []
     end
   end
+
+  # The decision the ticket waits on: the question the escalation asked.
+  defp deciding, do: Questions.deciding({:ticket, @repo_key, @issue_id})
 
   defp issue(attrs \\ %{}) do
     struct!(%Issue{id: @issue_id, identifier: "TP-816", repo_key: @repo_key}, attrs)
@@ -579,26 +572,22 @@ defmodule SymphonyElixir.SelfHealTest do
 
       assert :escalated = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable)))
 
-      assert {:needs_decision, %{decision: decision, reason: reason}} = Process.get(:hold_attrs)
-      assert reason =~ "The qa environment block on TP-816 came back unchanged"
-      assert decision.title == "Self-heal is stuck on the qa environment block"
-      assert Enum.map(decision.options, &Map.get(&1, :recommended)) == [true, nil]
-      # The question is asked through the Question service, and the hold carries it.
-      assert [%{id: id, title: "Self-heal is stuck on the qa environment block", options: [_investigate, _drop]}] = Questions.open({:ticket, @repo_key, @issue_id})
-      assert decision.question_id == id
+      # The question is asked through the Question service: the decision the ticket waits on.
+      assert %{id: id, question: question, title: "Self-heal is stuck on the qa environment block", options: options} = deciding()
+      assert question =~ "The qa environment block on TP-816 came back unchanged"
+      assert Enum.map(options, & &1.recommended?) == [true, false]
+      assert [%{id: ^id}] = Questions.open({:ticket, @repo_key, @issue_id})
       assert [{"question.asked", %{title: "Self-heal is stuck on the qa environment block"}}, {"pause.set", _pause}] = ticket_events(@repo_key, @issue_id)
 
-      # TP-1019: the decision is posted as a request, so the Inbox's read of the ticket finds it open
-      # and keeps the hold. With no request it cleared the hold, and the ticket dispatched again.
+      # TP-1019: the decision is posted as a request, so the Inbox's read of the ticket finds it open.
       assert {@issue_id, "## Decision needed: Self-heal is stuck on the qa environment block" <> _rest = body} = Process.get(:comment)
       node = %{"id" => @issue_id, "comments" => %{"nodes" => [%{"id" => "c1", "body" => body, "createdAt" => "2026-10-14T22:35:27.000Z"}]}}
       assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}})
 
-      assert [{"c1", request}] = Collector.open_requests(node, settings)
-      assert NeedsDecisionHold.desired(request, %{kind: :needs_decision, decision: decision}) == :none
+      assert [{"c1", %{title: "Self-heal is stuck on the qa environment block"}}] = Collector.open_requests(node, settings)
     end
 
-    test "an escalation whose request can't be posted keeps the question asked and its hold" do
+    test "an escalation whose request can't be posted keeps the question asked" do
       :ok = SymphonyElixir.RunStore.clear()
       Process.put(:ticket_state, recorded(@repo_key, @issue_id, %{component: "qa_environment", scope: @symphony_repo_key, signature: ":environment_unreachable"}))
       Process.put(:comment_result, {:error, :linear_down})
@@ -607,8 +596,7 @@ defmodule SymphonyElixir.SelfHealTest do
         assert {:error, {:self_heal_escalation_request_failed, :linear_down}} = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable)))
       end)
 
-      assert Process.get(:hold_cleared) == nil
-      assert {:needs_decision, %{decision: %{question_id: id}}} = Process.get(:hold_attrs)
+      assert %{id: id} = deciding()
       assert [%{id: ^id}] = Questions.open({:ticket, @repo_key, @issue_id})
     end
 
@@ -627,7 +615,7 @@ defmodule SymphonyElixir.SelfHealTest do
 
       assert :escalated = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable)))
 
-      assert {:needs_decision, _attrs} = Process.get(:hold_attrs)
+      assert %{title: "Self-heal is stuck on the qa environment block"} = deciding()
       assert Process.get(:fixer_create) == nil
     end
 
@@ -647,7 +635,7 @@ defmodule SymphonyElixir.SelfHealTest do
       assert %{fix_ticket: @fix_ticket, signature: "{:dev_server_exit, 3}"} = Process.get(:recorded_self_heal)
       assert {@fix_ticket, evidence} = Process.get(:fixer_attach)
       assert evidence =~ "{:dev_server_exit, 3}"
-      assert Process.get(:hold_attrs) == nil
+      assert deciding() == nil
     end
 
     test "the same blocked steps found to need the project's own server after a Symphony repair file in the project's repo" do
@@ -698,8 +686,7 @@ defmodule SymphonyElixir.SelfHealTest do
 
       reworded = %{first | reason: "The app cannot be pointed at a fake update feed"}
       assert :escalated = SelfHeal.heal(issue(), heal_opts(reworded, attempts: 3))
-      assert {:needs_decision, %{decision: decision}} = Process.get(:hold_attrs)
-      assert decision.question =~ "came back unchanged after 3 attempt(s)"
+      assert deciding().question =~ "came back unchanged after 3 attempt(s)"
     end
 
     test "a changed failure retries only while the head has attempts left" do
@@ -708,7 +695,7 @@ defmodule SymphonyElixir.SelfHealTest do
 
       Process.put(:ticket_state, previous)
       assert :retry = SelfHeal.heal(issue(), heal_opts(outcome, attempts: 4))
-      assert Process.get(:hold_attrs) == nil
+      assert deciding() == nil
 
       Process.put(:ticket_state, previous)
 
@@ -718,10 +705,10 @@ defmodule SymphonyElixir.SelfHealTest do
         end)
 
       assert log =~ "stuck on the qa_environment block"
-      assert {:needs_decision, %{decision: decision, reason: reason}} = Process.get(:hold_attrs)
-      assert reason =~ "blocked steps: Watch the update banner"
-      assert decision.question =~ "kept coming back over 5 blocked runs of the same change"
-      assert decision.why =~ "only 5 times for one change"
+      assert %{question: question, why: why} = deciding()
+      assert question =~ "blocked steps: Watch the update banner"
+      assert question =~ "kept coming back over 5 blocked runs of the same change"
+      assert why =~ "only 5 times for one change"
     end
 
     test "an open covering ticket holds the ticket on it even after an earlier failure was recorded" do
@@ -766,9 +753,10 @@ defmodule SymphonyElixir.SelfHealTest do
         })
 
       Process.put(:ticket_state, previous)
-      Process.put(:hold_result, {:error, :disk_full})
 
-      assert {:error, {:self_heal_escalation_failed, :disk_full}} = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable)))
+      # A ticket the Question service can't name asks nothing.
+      assert {:error, {:self_heal_escalation_failed, {:invalid_subject, {:ticket, @repo_key, " "}}}} =
+               SelfHeal.heal(issue(%{id: " "}), heal_opts(outcome(:environment_unreachable)))
     end
 
     test "reports a pause on a block a person must clear that could not be set" do

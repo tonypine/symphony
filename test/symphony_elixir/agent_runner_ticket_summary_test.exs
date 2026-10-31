@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.AgentRunnerTicketSummaryTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Hold, Questions, TicketEvents, TicketState}
+  alias SymphonyElixir.{Questions, TicketEvents, TicketState}
 
   @note String.duplicate("The export kept timing out on the large workspace. ", 10)
 
@@ -46,8 +46,7 @@ defmodule SymphonyElixir.AgentRunnerTicketSummaryTest do
     assert [body] = requests()
     assert body =~ "TP-77's ticket summary is over its size limit"
     assert body =~ "Go on with the whole summary"
-    assert_received {:memory_tracker_label_added, "issue-sum", "Needs Decision"}
-    assert %{decision: %{title: "TP-77's ticket summary is over its size limit"}} = Hold.get(ctx.repo_key, ctx.issue.id, :needs_decision)
+    assert %{title: "TP-77's ticket summary is over its size limit"} = Questions.deciding({:ticket, ctx.repo_key, ctx.issue.id})
 
     assert :ok = run(ctx)
     refute_received {:turn, _prompt}
@@ -100,7 +99,7 @@ defmodule SymphonyElixir.AgentRunnerTicketSummaryTest do
     assert_raise RuntimeError, ~r/ticket_summary_request_failed/, fn -> run(ctx) end
     refute_received {:turn, _prompt}
     assert [%{id: id, title: "TP-77's ticket summary is over its size limit"}] = Questions.open({:ticket, ctx.repo_key, ctx.issue.id})
-    assert %{decision: %{question_id: ^id}} = Hold.get(ctx.repo_key, ctx.issue.id, :needs_decision)
+    assert %{id: ^id} = Questions.deciding({:ticket, ctx.repo_key, ctx.issue.id})
     assert [%{type: :question_comment, question: ^id}] = TicketState.normalize(RunStore.get_ticket_state(ctx.repo_key, ctx.issue.id)).pending_projection
   end
 
@@ -122,11 +121,12 @@ defmodule SymphonyElixir.AgentRunnerTicketSummaryTest do
     end
   end
 
-  # The Director's answer as the ledger records it: the open Question answered, as the hold it
-  # projects clears.
+  # The Director's answer as the ledger records it: the open Question answered.
   defp answer!(ctx, answer) do
-    [_question] = Questions.open({:ticket, ctx.repo_key, ctx.issue.id})
-    :ok = Hold.clear(ctx.repo_key, ctx.issue.id, :needs_decision, answered: true, question: {:answer, answer, %{kind: :person, name: "Sam"}})
+    ticket = {:ticket, ctx.repo_key, ctx.issue.id}
+    [question] = Questions.open(ticket)
+    {:ok, _answered} = Questions.answer(ticket, question.id, answer, by: %{kind: :person, name: "Sam"})
+    :ok
   end
 
   defp workflow!(test_root, ledger) do

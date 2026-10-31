@@ -3,17 +3,16 @@ defmodule SymphonyElixir.ClosedPullRequestTest do
 
   alias SymphonyElixir.ClosedPullRequest
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Hold
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Questions
   alias SymphonyElixir.RunStore
   alias SymphonyElixir.TicketPullRequest
 
   @repo_key "repo-closed-pull-request"
   @pr_url "https://github.com/acme/repo/pull/512"
 
-  defmodule FailingStore do
-    def get_ticket_state(_repo_key, _issue_id), do: nil
-    def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :disk_full}
+  defmodule FailingTracker do
+    def create_comment(_issue_id, _body), do: {:error, :disk_full}
   end
 
   setup do
@@ -58,13 +57,13 @@ defmodule SymphonyElixir.ClosedPullRequestTest do
       assert request =~ "you reopen PR #512 on GitHub"
       assert request =~ "the ticket stays in QA until the decision is recorded"
 
-      assert %{reason: reason, decision: %{options: options}} = Hold.get(@repo_key, issue_id, :needs_decision)
-      assert reason =~ "PR #512 closed"
-      assert Enum.map(options, &{&1.label, &1.recommended}) == [{"Reopen", true}, {"Restart", false}, {"Cancel", false}]
+      assert %{question: question, options: options} = Questions.deciding({:ticket, @repo_key, issue_id})
+      assert question =~ "PR #512 closed"
+      assert Enum.map(options, &{&1.label, &1.recommended?}) == [{"Reopen", true}, {"Restart", false}, {"Cancel", false}]
       # Cancel is the person's pick and Symphony's move.
       assert %{effect: "Symphony moves the ticket to Canceled; nothing is merged", move: %{to: "Canceled"}} = List.last(options)
       assert [{"question.asked", %{title: "Reopen the pull request of TP-983"}}, {"pause.set", _pause}] = ticket_events(@repo_key, issue_id)
-      assert [%{title: "Reopen the pull request of TP-983", options: [_reopen, _restart, _cancel]}] = SymphonyElixir.Questions.open({:ticket, @repo_key, issue_id})
+      assert [%{title: "Reopen the pull request of TP-983", options: [_reopen, _restart, _cancel]}] = Questions.open({:ticket, @repo_key, issue_id})
     end
 
     test "holds every phase that judges, repairs or lands the existing pull request", %{issue_id: issue_id} do
@@ -73,7 +72,7 @@ defmodule SymphonyElixir.ClosedPullRequestTest do
       for state <- ["Code Review", "QA", "CI Fix", " merging "] do
         RunStore.delete_ticket_state(@repo_key, issue_id)
         assert :held = ClosedPullRequest.guard(issue(issue_id, state), settings!(), [])
-        assert Hold.held?(@repo_key, issue_id, :needs_decision)
+        assert Questions.deciding({:ticket, @repo_key, issue_id})
       end
     end
 
@@ -98,23 +97,26 @@ defmodule SymphonyElixir.ClosedPullRequestTest do
       close_pull_request(issue_id, @pr_url, "merged")
       assert :run = ClosedPullRequest.guard(issue(issue_id, "Merging"), settings!(), [])
 
-      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+      refute Questions.deciding({:ticket, @repo_key, issue_id})
     end
 
     test "reads the record under the lane's repo key when the issue carries none", %{issue_id: issue_id} do
       close_pull_request(issue_id)
 
       assert :held = ClosedPullRequest.guard(issue(issue_id, "QA", %{repo_key: nil}), settings!(), repo_key: @repo_key)
-      assert Hold.held?(@repo_key, issue_id, :needs_decision)
+      assert Questions.deciding({:ticket, @repo_key, issue_id})
     end
 
-    test "reports a hold that cannot be set", %{issue_id: issue_id} do
+    test "reports a request whose comment cannot be posted, its question left open", %{issue_id: issue_id} do
       close_pull_request(issue_id)
 
-      assert {:error, {:closed_pull_request_hold_failed, {:decision_hold_failed, :disk_full}}} =
-               ClosedPullRequest.guard(issue(issue_id, "QA"), settings!(), store: FailingStore)
+      capture_log(fn ->
+        assert {:error, {:closed_pull_request_hold_failed, {:decision_request_failed, :disk_full}}} =
+                 ClosedPullRequest.guard(issue(issue_id, "QA"), settings!(), tracker: FailingTracker)
+      end)
 
       refute_received {:memory_tracker_comment, _, _}
+      assert Questions.deciding({:ticket, @repo_key, issue_id})
     end
   end
 

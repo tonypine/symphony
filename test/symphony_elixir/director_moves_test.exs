@@ -3,7 +3,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
   alias SymphonyElixir.{AuditLog, CiWait}
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{DecisionMove, DecisionRequest, DirectorMoves, DispatchLoop, Hold, IdlePark}
+  alias SymphonyElixir.{DecisionMove, DecisionRequest, DirectorMoves, DispatchLoop, IdlePark}
   alias SymphonyElixir.Inbox.{FromRecord, Item}
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.{Pauses, PlanComments, Questions, RunStore, SelfHeal, SubIssueWait}
@@ -40,14 +40,8 @@ defmodule SymphonyElixir.DirectorMovesTest do
     def fetch_issue_by_identifier(_identifier), do: Application.fetch_env!(:symphony_elixir, :director_moves_test_fetch)
   end
 
-  defmodule UnsettableStore do
-    def get_ticket_state(repo_key, issue_id), do: RunStore.get_ticket_state(repo_key, issue_id)
-    def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :boom}
-  end
-
   defmodule UnwritableStore do
     def get_ticket_state(repo_key, issue_id), do: RunStore.get_ticket_state(repo_key, issue_id)
-    def clear_ticket_hold(_repo_key, _issue_id, _kind), do: {:error, :boom}
     def put_own_state_move(_issue_id, _at), do: {:error, :boom}
   end
 
@@ -369,12 +363,11 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert_received {:close_pr, @restart_pr_url}
     end
 
-    test "Restart withdraws the question its run asked: the pause and the hold clear, the request is answered, and the Inbox row goes", %{opts: opts} do
+    test "Restart withdraws the question its run asked: the pause clears, the request is answered, and the Inbox row goes", %{opts: opts} do
       github_activity(state: "OPEN")
       put_issues([restart_issue()])
       ticket = {:ticket, "repo-restart", "pr"}
       {:ok, question} = Questions.ask(ticket, layout_request(), asked_by: %{kind: :run, name: "The run"})
-      :ok = Hold.set("repo-restart", "pr", :needs_decision, %{reason: "Pick a layout", decision: %{title: "Pick a layout", question_id: question.id}})
 
       project_comment("repo-restart", "pr", question.id, "comment-7")
       inbox = [settings_fun: fn _repo_key -> %SymphonyElixir.Config.Schema{} end, github_repos: %{}]
@@ -385,7 +378,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert %{state: :withdrawn, withdrawn: %{reason: "The run that asked was restarted."}} = Questions.find(ticket, question.id)
       assert {:ok, nil} = Pauses.get(ticket)
-      refute Hold.held?("repo-restart", "pr", :needs_decision)
       assert_received {:memory_tracker_reply, "pr", "comment-7", "## Action withdrawn\n\nThe run that asked was restarted."}
       assert Enum.filter(SymphonyElixir.Inbox.items(%{}, inbox), &(&1.repo_key == "repo-restart")) == []
     end
@@ -474,9 +466,8 @@ defmodule SymphonyElixir.DirectorMovesTest do
                DirectorMoves.move(:decisions, "MOT-40", %{picks: [%{question: "Q", answer: "B"}]}, opts)
     end
 
-    test "answers each of the plan's questions under its request, records them, and clears the hold, in place", %{opts: opts} do
+    test "answers each of the plan's questions under its request and records them, in place", %{opts: opts} do
       put_issues([%{plan("Plan Review") | repo_key: "repo-director", description: "Plan the MVP."}])
-      :ok = Hold.set("repo-director", "plan", :needs_decision, %{reason: "Which currency?", decision: %{title: "Card currency", question: "Which currency?"}})
 
       picks = [
         %{question: "Where are gift cards bought?", answer: "In the checkout", request_comment_id: "q1"},
@@ -495,7 +486,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
       # The answers are the ticket's decisions before the revision run reads it.
       assert_received {:memory_tracker_description_update, "plan", description}
       assert [%{key: "q1", answer: "In the checkout"}, %{key: "q2", answer: "The buyer's, converted at checkout"}] = SymphonyElixir.Decisions.recorded(description)
-      refute Hold.held?("repo-director", "plan", :needs_decision)
 
       # The replies are the Director's comments on a plan under review: a reply written in Linear
       # starts the same revision through the comment poll.
@@ -521,9 +511,8 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert audit_records() == []
     end
 
-    test "a hold the store refuses to clear is reported, and the answers stand", %{opts: opts} do
+    test "a store that refuses Symphony's own move is reported, and the answers stand", %{opts: opts} do
       put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
-      :ok = Hold.set("repo-director", "plan", :needs_decision, %{reason: "Q", decision: %{title: "Q", question: "Q"}})
 
       log =
         capture_log(fn ->
@@ -531,7 +520,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
                    DirectorMoves.move(:decisions, "MOT-30", %{picks: [%{question: "Q", answer: "B", request_comment_id: "q1"}]}, Keyword.put(opts, :store, UnwritableStore))
         end)
 
-      assert log =~ "Failed to clear the Needs Decision hold on MOT-30 after its plan's answers"
       # The revision still starts: the store is best effort, as the comment poll's own record is.
       assert log =~ "Failed to record Symphony's own move of MOT-30 to revise its plan: :boom"
       assert_received {:memory_tracker_state_update, "plan", "Rework"}
@@ -721,7 +709,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert_receive {:request_refresh, "repo-cancel", :now}
 
       assert %{state: :withdrawn, withdrawn: %{reason: "The ticket was cancelled."}} = Questions.find(ticket, asked.id)
-      assert Hold.held_kinds("repo-cancel", "pr") == []
       assert {:ok, nil} = Pauses.get(ticket)
 
       assert [%{payload: %{run_stopped: true, pull_requests_closed: [@cancel_pr_url], note: "Not needed"}}] =
@@ -772,15 +759,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert log =~ "Cancelled MOT-40 on its record; Linear refused the move, projected again by the reconciler: :linear_down"
       assert %{phase: "Canceled"} = RunStore.get_ticket_state("repo-cancel", "pr")
       assert [_event] = RunStore.list_ticket_events("repo-cancel", "pr", types: ["ticket.cancelled"])
-    end
-
-    test "a store that refuses a clear is logged, and the cancel stands", %{opts: opts} do
-      put_issues([cancel_issue("In Progress")])
-      :ok = RunStore.set_ticket_hold("repo-cancel", "pr", :needs_decision, %{reason: "waits"})
-
-      log = capture_log(fn -> assert {:ok, %{to_state: "Canceled"}} = DirectorMoves.move(:cancel, "MOT-40", %{}, Keyword.put(opts, :store, UnwritableStore)) end)
-
-      assert log =~ "Cancelled MOT-40 but couldn't clear its needs_decision hold: :boom"
     end
 
     test "undo within the window puts the record and Linear back to the phase before", %{opts: opts, clock: clock} do
@@ -965,7 +943,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
                Questions.find(ticket, id)
 
       assert {:ok, nil} = Pauses.get(ticket)
-      refute Hold.held?("repo-director", "pr", :needs_decision)
+      refute deciding("pr")
       # The ticket's timeline says so in the Director's words.
       assert [%{summary: %{title: "You answered: Sign them with the old key for now"}}] =
                RunStore.list_ticket_events("repo-director", "pr", types: ["question.answered"])
@@ -975,12 +953,13 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert_received {:memory_tracker_description_update, "pr", description}
       assert [%{key: "comment-1", answer: "Sign them with the old key for now"}] = SymphonyElixir.Decisions.recorded(description)
 
-      # The Question is answered before Linear's reply records the decision under the request.
+      # The answer is the Question's own event: the decision records no `decision.recorded`.
       types = "repo-director" |> RunStore.list_ticket_events("pr", []) |> Enum.map(& &1.type)
-      assert Enum.find_index(types, &(&1 == "question.answered")) < Enum.find_index(types, &(&1 == "decision.recorded"))
+      assert "question.answered" in types
+      refute "decision.recorded" in types
     end
 
-    test "with Linear down, Decide answers the Question and clears the hold; the reply waits on the record", %{opts: opts} do
+    test "with Linear down, Decide answers the Question and ends its pause; the reply waits on the record", %{opts: opts} do
       id = ask_signing()
       ticket = {:ticket, "repo-director", "pr"}
       # Linear reads nothing and refuses the reply: the ticket is read from its record.
@@ -996,7 +975,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert log =~ "Linear refused the reply"
       assert %{state: :answered, answer: %{option: 1, text: "Add the secrets"}} = Questions.find(ticket, id)
       assert {:ok, nil} = Pauses.get(ticket)
-      refute Hold.held?("repo-director", "pr", :needs_decision)
+      refute deciding("pr")
       refute_received {:memory_tracker_reply, _issue_id, _comment_id, _body}
 
       record = TicketState.normalize(RunStore.get_ticket_state("repo-director", "pr"))
@@ -1063,26 +1042,27 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert polled.rulings == []
       assert %{state: :open} = Questions.find(ticket, id)
-      assert Hold.held?("repo-director", "pr", :needs_decision)
+      assert deciding("pr")
       assert SymphonyElixir.Decisions.stored(%{id: "pr", description: nil}, repo_key: "repo-director") == []
       assert [%{kind: :action, review: %{question_id: ^id}}] = inbox.()
 
       assert {:ok, _result} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), question_id: id}, opts)
       assert %{state: :answered, answer: %{text: "Add the secrets"}} = Questions.find(ticket, id)
-      refute Hold.held?("repo-director", "pr", :needs_decision)
+      refute deciding("pr")
       assert inbox.() == []
     end
 
-    test "a request comment's row names the Question it answers, whatever the hold carries", %{opts: opts} do
+    test "a request comment's row names the Question it answers, whichever the ticket asked last", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       id = ask_signing()
       ticket = {:ticket, "repo-director", "pr"}
-      # The hold moved on to a request that carries no Question; the row of the answered one names it.
-      :ok = Hold.set("repo-director", "pr", :needs_decision, %{reason: "q", decision: %{title: "Add the release signing secrets", question: "q"}})
+      # A newer request is the one the ticket waits on; the row of the older one names it.
+      newer = ask_decision(layout_request())
       project_comment("repo-director", "pr", id, "comment-1")
 
       assert {:ok, _result} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, opts)
       assert %{state: :answered, answer: %{text: "Add the secrets"}} = Questions.find(ticket, id)
+      assert %{state: :open} = Questions.find(ticket, newer.id)
     end
 
     test "a Question the ticket doesn't have, or one already answered, is refused before anything is written", %{opts: opts} do
@@ -1091,9 +1071,11 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert {:error, {:conflict, "MOT-40 has no question q-none"}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), question_id: "q-none"}, opts)
       refute_received {:memory_tracker_reply, _issue_id, _comment_id, _body}
-      assert Hold.held?("repo-director", "pr", :needs_decision)
+      assert deciding("pr")
 
       {:ok, _answered} = Questions.answer({:ticket, "repo-director", "pr"}, id, "1")
+      # Still waiting on another request, the answered one is named and refused.
+      ask_decision(layout_request())
       assert {:error, {:conflict, "MOT-40's question " <> _rest}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), question_id: id}, opts)
     end
 
@@ -1106,13 +1088,13 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute_received {:memory_tracker_reply, _issue_id, _comment_id, _body}
     end
 
-    test "Undo within its window reopens the Question, pauses the ticket on it and sets the hold again", %{opts: opts, clock: clock} do
+    test "Undo within its window reopens the Question and pauses the ticket on it again", %{opts: opts, clock: clock} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       id = ask_signing()
       ticket = {:ticket, "repo-director", "pr"}
 
       assert {:ok, %{moved: false, undo_window_ms: 10_000}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), question_id: id, request_comment_id: "comment-1"}, opts)
-      refute Hold.held?("repo-director", "pr", :needs_decision)
+      refute deciding("pr")
       :counters.put(clock, 1, 9_000)
 
       assert {:ok, %{move: "undo", undone: "decide", from_state: "In Progress", to_state: "In Progress"}} = DirectorMoves.undo("MOT-40", opts)
@@ -1121,7 +1103,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert %{state: :open, answer: nil, reopened_at: %DateTime{}} = Questions.find(ticket, id)
       assert {:ok, %{reasons: [%{kind: :question, waits_on: %{question_id: ^id}}]}} = Pauses.get(ticket)
-      assert %{decision: %{question_id: ^id}} = Hold.get("repo-director", "pr", :needs_decision)
+      assert %{id: ^id} = deciding("pr")
       assert "question.reopened" in Enum.map(RunStore.list_ticket_events("repo-director", "pr", []), & &1.type)
 
       # The answer given again is a new answer.
@@ -1154,17 +1136,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:error, {:store, "couldn't reopen the question on MOT-40: {:question_not_answered, :open}"}} = DirectorMoves.undo("MOT-40", opts)
     end
 
-    test "an Undo whose hold the store won't set again says so, with the Question reopened", %{opts: opts} do
-      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
-      id = ask_signing()
-      assert {:ok, _result} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), question_id: id, request_comment_id: "comment-1"}, opts)
-
-      assert {:error, {:store, "reopened the question on MOT-40 but couldn't set its hold again: :boom"}} =
-               DirectorMoves.undo("MOT-40", Keyword.put(opts, :store, UnsettableStore))
-
-      assert %{state: :open} = Questions.find({:ticket, "repo-director", "pr"}, id)
-    end
-
     test "Send Decisions answers each pick's Question before its reply", %{opts: opts} do
       put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
       issue = %{id: "plan", state: "Plan Review", repo_key: "repo-director"}
@@ -1178,7 +1149,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert %{state: :answered, answer: %{option: 2}} = Questions.find(ticket, id)
       assert_received {:memory_tracker_reply, "plan", "comment-9", _reply}
-      refute Hold.held?("repo-director", "plan", :needs_decision)
+      refute deciding("plan")
 
       # Sent again, the Question already answered is left as it is.
       put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
@@ -1186,7 +1157,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert %{answer: %{option: 2}} = Questions.find(ticket, id)
     end
 
-    test "Send Decisions with Linear refusing a reply: the Question stays answered, the hold clears and the reply is marked pending", %{opts: opts} do
+    test "Send Decisions with Linear refusing a reply: the Question stays answered and the reply is marked pending", %{opts: opts} do
       put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
       issue = %{id: "plan", state: "Plan Review", repo_key: "repo-director"}
       assert :ok = DecisionRequest.ask(issue, signing_request(), [])
@@ -1203,7 +1174,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert log =~ "Linear refused the reply, posted once Linear answers"
       assert %{state: :answered} = Questions.find(ticket, id)
-      refute Hold.held?("repo-director", "plan", :needs_decision)
+      refute deciding("plan")
       assert_received {:memory_tracker_reply, "plan", "comment-8", _reply}
 
       # The refused reply waits for the reconciler; only the posted one is in the Decisions section.
@@ -1253,7 +1224,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert_received {:memory_tracker_reply, "pr", "comment-1", @signing_reply}
       refute_received {:memory_tracker_reply, _issue_id, _comment_id, _body}
       refute_received {:memory_tracker_comment, _issue_id, _body}
-      refute Hold.held?("repo-director", "pr", :needs_decision)
+      refute deciding("pr")
     end
 
     test "with Linear down, Decide ends the wait at once and the reply appears once Linear is back", %{opts: opts} do
@@ -1266,7 +1237,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       capture_log(fn -> assert {:ok, %{moved: false}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), question_id: id}, opts) end)
 
       assert %{state: :answered} = Questions.find(ticket, id)
-      refute Hold.held?("repo-director", "pr", :needs_decision)
+      refute deciding("pr")
       refute_received {:memory_tracker_reply, _issue_id, _comment_id, _body}
       record = TicketState.normalize(RunStore.get_ticket_state("repo-director", "pr"))
       assert Enum.any?(record.pending_projection, &(&1.type == :pause))
@@ -1308,7 +1279,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       set_decision_hold()
 
       assert {:ok, %{moved: false}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, opts)
-      refute Hold.held?("repo-director", "pr", :needs_decision)
+      refute deciding("pr")
 
       {:ok, _pause} = Pauses.set({:ticket, "repo-director", "pr"}, %{kind: :environment, waits_on: %{condition: "block_report"}, text: "The run reported a block", releasable: true})
 
@@ -1331,13 +1302,13 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:ok, %{moved: true, to_state: "Rework"}} =
                DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1", move: "rework"}, opts)
 
-      refute Hold.held?("repo-director", "pr", :needs_decision)
+      refute deciding("pr")
 
       # A Decide that moves the ticket is its answer and the phase it entered.
-      assert ["decision.requested", "decision.recorded", "phase.entered"] = Enum.map(ticket_events("repo-director", "pr"), &elem(&1, 0))
+      assert ["question.asked", "pause.set", "question.answered", "pause.cleared", "phase.entered"] = Enum.map(ticket_events("repo-director", "pr"), &elem(&1, 0))
     end
 
-    test "records the decision in place: the reply goes under the request and the hold clears", %{opts: opts} do
+    test "records the decision in place: the reply goes under the request and the pause ends", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       set_decision_hold()
 
@@ -1351,22 +1322,24 @@ defmodule SymphonyElixir.DirectorMovesTest do
                to_state: "In Progress",
                moved: false,
                commented: true,
-               undo_window_ms: nil
+               undo_window_ms: 10_000
              }
 
       assert_received {:memory_tracker_reply, "pr", "comment-1", comment}
       assert comment == "Decision from the Director:\n\n1. Add the signing secrets, or ship unsigned builds?\n   **Decision:** Add the secrets"
-      refute Hold.held?("repo-director", "pr", :needs_decision)
+      refute deciding("pr")
       # The decision continues the flow in place: nothing moves.
       refute_received {:memory_tracker_state_update, _issue_id, _state}
       assert [%{name: "decision returned", details: %{move: "decide", from: "In Progress", to: "In Progress"}}] = RunStore.get_ticket_state("repo-director", "pr").signals
       assert [%{"move" => "decide", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
 
-      # The request, then the Director's answer naming it: the clear is no withdrawal, and the
-      # Decide that moved nothing has no event of its own.
+      # The question, then the Director's answer naming it: the Decide that moved nothing has no
+      # event of its own.
       assert [
-               %{type: "decision.requested", id: request_id},
-               %{type: "decision.recorded", actor: %{kind: :person, name: "the Director"}, payload: %{answer: "Add the secrets", key: "comment-1", request: request_id}}
+               %{type: "question.asked", payload: %{question_id: question_id}},
+               %{type: "pause.set"},
+               %{type: "question.answered", payload: %{question_id: question_id, answer: "Add the secrets", by: %{kind: :person, name: "Director"}}},
+               %{type: "pause.cleared"}
              ] = RunStore.list_ticket_events("repo-director", "pr", [])
     end
 
@@ -1403,7 +1376,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
         ]
       }
 
-      :ok = Hold.set("repo-director", "pr", :needs_decision, SymphonyElixir.NeedsDecisionHold.attrs(request))
+      ask_decision(request)
       pick = [%{question: request.question, answer: "Allow this ticket to change the workflow settings file"}]
 
       assert {:ok, %{move: "decide", moved: false}} = DirectorMoves.move(:decide, "MOT-40", %{picks: pick, request_comment_id: "comment-1"}, opts)
@@ -1415,7 +1388,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert [%{path: "WORKFLOW.md", decision: "D1"}] = SymphonyElixir.PathUnlock.grants(%{pr("In Progress") | description: description})
     end
 
-    test "Decide answers the Question the hold projects with the Director's pick", %{opts: opts} do
+    test "Decide answers the Question the ticket waits on with the Director's pick", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
 
       request = %{
@@ -1435,7 +1408,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       pick = [%{question: request.question, answer: "Ship unsigned"}]
       assert {:ok, %{move: "decide"}} = DirectorMoves.move(:decide, "MOT-40", %{picks: pick, request_comment_id: "comment-1"}, opts)
 
-      refute Hold.held?("repo-director", "pr", :needs_decision)
+      refute deciding("pr")
       assert %{state: :answered, answer: %{option: 2, text: "Ship unsigned", by: %{kind: :person, name: "Director"}}} = SymphonyElixir.Questions.find(ticket, id)
       assert {:ok, nil} = SymphonyElixir.Pauses.get(ticket)
     end
@@ -1443,8 +1416,8 @@ defmodule SymphonyElixir.DirectorMovesTest do
     test "a pick of an option that unlocks nothing records no path", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director", description: "Add the hook."}])
 
-      options = [%{label: "Allow it", effect: "x", unlocks: ["WORKFLOW.md"]}, %{label: "Keep it as it is", effect: "nothing changes"}]
-      :ok = Hold.set("repo-director", "pr", :needs_decision, %{reason: "q", decision: %{title: "t", question: "q", options: options}})
+      options = [%{label: "Allow it", effect: "x", unlocks: ["WORKFLOW.md"], recommended: true}, %{label: "Keep it as it is", effect: "nothing changes"}]
+      ask_decision(%{title: "t", question: "q", options: options})
       pick = [%{question: "q", answer: "Keep it as it is"}]
 
       assert {:ok, %{move: "decide"}} = DirectorMoves.move(:decide, "MOT-40", %{picks: pick, request_comment_id: "comment-1"}, opts)
@@ -1467,7 +1440,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert log =~ "Failed to record decisions on issue_id=pr"
       assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
-      refute Hold.held?("repo-director", "pr", :needs_decision)
+      refute deciding("pr")
     end
 
     test "a decision that directs a move sends the ticket there through the guard", %{opts: opts} do
@@ -1481,13 +1454,13 @@ defmodule SymphonyElixir.DirectorMovesTest do
         assert %{moved: true, to_state: ^target, undo_window_ms: 10_000} = result
         assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
         assert_received {:memory_tracker_state_update, "pr", ^target}
-        refute Hold.held?("repo-director", "pr", :needs_decision)
+        refute deciding("pr")
       end
 
       assert [%{"move" => "decide", "to_state" => "Rework"}, %{"to_state" => "Done"}] = audit_records()
     end
 
-    test "a merge confirmation's hold is what Decide does when the pick is Merge: into Merging", %{opts: opts} do
+    test "a merge confirmation's question is what Decide does when the pick is Merge: into Merging", %{opts: opts} do
       put_issues([%{pr("QA") | repo_key: "repo-director"}])
       set_merge_hold()
 
@@ -1496,7 +1469,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert %{moved: true, to_state: "Merging", undo_window_ms: 10_000} = result
       assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
       assert_received {:memory_tracker_state_update, "pr", "Merging"}
-      refute Hold.held?("repo-director", "pr", :needs_decision)
+      refute deciding("pr")
     end
 
     test "a Code Review escalation answered Continue to QA moves the ticket into QA", %{opts: opts} do
@@ -1508,7 +1481,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert %{moved: true, from_state: "Code Review", to_state: "QA", undo_window_ms: 10_000} = result
       assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
       assert_received {:memory_tracker_state_update, "pr", "QA"}
-      refute Hold.held?("repo-director", "pr", :needs_decision)
+      refute deciding("pr")
       assert [%{name: "decision returned", details: %{move: "decide", from: "Code Review", to: "QA"}}] = RunStore.get_ticket_state("repo-director", "pr").signals
     end
 
@@ -1521,14 +1494,15 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert %{moved: true, from_state: "QA", to_state: "Merging", undo_window_ms: 10_000} = result
       assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
       assert_received {:memory_tracker_state_update, "pr", "Merging"}
-      refute Hold.held?("repo-director", "pr", :needs_decision)
+      refute deciding("pr")
 
       record = RunStore.get_ticket_state("repo-director", "pr")
       assert record.phase == "Merging"
       assert [%{kind: "qa", outcome: "skip", head_sha: "abc123", details: %{reason: "skipped by decision"}}] = record.verdicts
       assert [%{name: "decision returned", details: %{move: "decide", from: "QA", to: "Merging"}}] = record.signals
       # The answer and the phase it entered, one decision.
-      assert ["decision.requested", "decision.recorded", "verdict.recorded", "phase.entered"] = Enum.map(ticket_events("repo-director", "pr"), &elem(&1, 0))
+      assert ["question.asked", "pause.set", "question.answered", "pause.cleared", "verdict.recorded", "phase.entered"] =
+               Enum.map(ticket_events("repo-director", "pr"), &elem(&1, 0))
     end
 
     test "QA's Send it back to Rework moves the ticket to Rework, and Run QA again moves nothing", %{opts: opts} do
@@ -1546,17 +1520,17 @@ defmodule SymphonyElixir.DirectorMovesTest do
       again = [%{question: "How should it continue?", answer: "Run QA again"}]
       assert {:ok, %{moved: false, to_state: "QA"}} = DirectorMoves.move(:decide, "MOT-40", %{picks: again, request_comment_id: "comment-1"}, opts)
       refute_received {:memory_tracker_state_update, "pr", _state}
-      refute Hold.held?("repo-director", "pr", :needs_decision)
+      refute deciding("pr")
     end
 
     test "a Cancel pick tries the team's other spelling of Canceled", %{opts: opts} do
       put_issues([%{pr("Code Review") | repo_key: "repo-director"}])
 
-      :ok =
-        Hold.set("repo-director", "pr", :needs_decision, %{
-          reason: "How should it continue?",
-          decision: %{title: "Reopen the pull request of MOT-40", question: "How should it continue?", options: [%{label: "Reopen", effect: "it continues"}, cancel_option()]}
-        })
+      ask_decision(%{
+        title: "Reopen the pull request of MOT-40",
+        question: "How should it continue?",
+        options: [%{label: "Reopen", effect: "it continues", recommended: true}, cancel_option()]
+      })
 
       # The team spells it Cancelled: the first spelling is not one of its states.
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :state_not_found}])
@@ -1571,18 +1545,27 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
     test "a decision directing a move into a state the repo has not configured is refused before anything is written", %{opts: opts} do
       put_issues([%{pr("Code Review") | repo_key: "repo-director"}])
-      set_code_review_hold("")
+
+      # An option whose move names no state, as a repo with no QA state configured leaves it.
+      ask_decision(%{
+        title: "Code Review escalated MOT-40",
+        question: "How should MOT-40 continue after Code Review escalated it?",
+        options: [
+          DecisionMove.option(%{label: "Continue to QA", effect: "Symphony moves MOT-40 to QA", recommended: true}, %{to: " "}),
+          %{label: "Send to Rework", effect: "the ticket moves to Rework"}
+        ]
+      })
 
       continue = [%{question: "How should MOT-40 continue after Code Review escalated it?", answer: "1"}]
 
       assert {:error, {:invalid, message}} =
                DirectorMoves.move(:decide, "MOT-40", %{picks: continue, request_comment_id: "comment-1"}, opts)
 
-      assert message == "MOT-40's decision moves it to a state not configured for repo repo-director; the hold stays"
-      # The request stays open and the hold set, so the person can decide again once the state is configured.
+      assert message == "MOT-40's decision moves it to a state not configured for repo repo-director; the question stays open"
+      # The question stays open, so the person can decide again once the state is configured.
       refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
       refute_received {:memory_tracker_state_update, _issue_id, _state}
-      assert Hold.held?("repo-director", "pr", :needs_decision)
+      assert deciding("pr")
       assert audit_records() == []
     end
 
@@ -1593,7 +1576,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       neither = [%{question: "Merge MOT-40 into its base branch?", answer: "Neither: fix the flaky test first"}]
       assert {:ok, %{moved: false}} = DirectorMoves.move(:decide, "MOT-40", %{picks: neither, request_comment_id: "comment-1"}, opts)
       refute_received {:memory_tracker_state_update, "pr", _state}
-      refute Hold.held?("repo-director", "pr", :needs_decision)
+      refute deciding("pr")
     end
 
     test "refuses a decision that names no answer, no request, or an unknown move", %{opts: opts} do
@@ -1629,22 +1612,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
     end
 
-    test "a reply Linear refuses leaves the hold in place", %{opts: opts} do
-      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
-      set_decision_hold()
-      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :reply_failed})
-
-      assert {:error, {:linear, :reply_failed}} =
-               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "c"}, opts)
-
-      assert Hold.held?("repo-director", "pr", :needs_decision)
-      refute_received {:memory_tracker_state_update, _issue_id, _state}
-      assert audit_records() == []
-    after
-      Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_result)
-    end
-
-    test "a refused directed move is partial: the decision stays recorded and the hold is gone", %{opts: opts} do
+    test "a refused directed move is partial: the decision stays recorded and the question answered", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       set_decision_hold()
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :state_failed})
@@ -1652,13 +1620,13 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:error, {:partial, message}} =
                DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1", move: "rework"}, opts)
 
-      assert message =~ "recorded the decision on MOT-40 and cleared the hold, but Linear refused the move to Rework"
+      assert message =~ "recorded the decision on MOT-40, but Linear refused the move to Rework"
       # The decision is already in Linear, so the refusal reports the move rather than taking it back.
       assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
-      refute Hold.held?("repo-director", "pr", :needs_decision)
+      refute deciding("pr")
       assert [%{"move" => "decide", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
       # Its answer is its one event: a Decide records no person action, even when its move was refused.
-      assert ["decision.requested", "decision.recorded"] = Enum.map(ticket_events("repo-director", "pr"), &elem(&1, 0))
+      assert ["question.asked", "pause.set", "question.answered", "pause.cleared"] = Enum.map(ticket_events("repo-director", "pr"), &elem(&1, 0))
     after
       Application.delete_env(:symphony_elixir, :memory_tracker_update_issue_state_result)
     end
@@ -1684,20 +1652,9 @@ defmodule SymphonyElixir.DirectorMovesTest do
                DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, Keyword.put(opts, :orchestrator, busy))
 
       assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
-      refute Hold.held?("repo-director", "pr", :needs_decision)
+      refute deciding("pr")
       # The refresh is a cast for a cycle on the ticket's repo at once, so nothing waits on its answer.
       assert_receive {:orchestrator_got, {:"$gen_cast", {:request_refresh, "repo-director", :now}}}
-    end
-
-    test "a hold the store refuses to clear comes back as a store error", %{opts: opts} do
-      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
-      set_decision_hold()
-
-      assert {:error, {:store, "couldn't clear the hold on MOT-40: :boom"}} =
-               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "c"}, Keyword.put(opts, :store, UnwritableStore))
-
-      assert_received {:memory_tracker_reply, "pr", "c", _comment}
-      assert Hold.held?("repo-director", "pr", :needs_decision)
     end
 
     test "decide_comment/1 numbers each question with the answer the Director picked" do
@@ -2222,61 +2179,62 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
   defp picks, do: [%{question: "Add the signing secrets, or ship unsigned builds?", answer: "Add the secrets"}]
 
+  # A decision request asked as `SymphonyElixir.DecisionRequest.ask/4` asks it: a Question shown by
+  # a request comment (`request: true`), filled out to the writing standard.
+  defp ask_decision(request, opts \\ []) do
+    request = Map.merge(%{why: "Only you can decide.", if_unanswered: "MOT-40 waits.", recommendation_reason: "It is the safe pick."}, request)
+    {:ok, question} = Questions.ask({:ticket, "repo-director", "pr"}, request, [request: true] ++ opts)
+    question
+  end
+
+  defp deciding(issue_id), do: Questions.deciding({:ticket, "repo-director", issue_id})
+
   defp set_merge_hold do
-    :ok =
-      Hold.set("repo-director", "pr", :needs_decision, %{
-        reason: "Merge MOT-40 into its base branch?",
-        clearing_condition: "when the decision is recorded",
-        decision: %{
-          title: "Merge MOT-40",
-          question: "Merge MOT-40 into its base branch?",
-          options: [%{label: "Merge", effect: "the ticket moves to Merging"}, %{label: "Send to Rework", effect: "the ticket moves to Rework"}],
-          confirm: "Merging"
-        }
-      })
+    ask_decision(
+      %{
+        title: "Merge MOT-40",
+        question: "Merge MOT-40 into its base branch?",
+        options: [%{label: "Merge", effect: "the ticket moves to Merging", recommended: true}, %{label: "Send to Rework", effect: "the ticket moves to Rework"}]
+      },
+      confirm: "Merging"
+    )
   end
 
-  # The hold `SymphonyElixir.CodeReview` sets on an escalation: its confirmation continues into the
-  # repo's QA state, as `NeedsDecisionHold.pause/4` records it.
+  # The question `SymphonyElixir.CodeReview` asks on an escalation: its confirmation continues into
+  # the repo's QA state.
   defp set_code_review_hold(qa_state) do
-    :ok =
-      Hold.set("repo-director", "pr", :needs_decision, %{
-        reason: "How should MOT-40 continue after Code Review escalated it?",
-        clearing_condition: "when the decision is recorded",
-        decision: %{
-          title: "Code Review escalated MOT-40",
-          question: "How should MOT-40 continue after Code Review escalated it?",
-          options: [
-            %{label: "Continue to #{qa_state}", effect: "the ticket moves to #{qa_state} and its QA run starts", recommended: true},
-            %{label: "Send to Rework", effect: "the ticket moves to Rework with these reasons", recommended: false}
-          ],
-          confirm: qa_state,
-          state: "Code Review"
-        }
-      })
+    ask_decision(
+      %{
+        title: "Code Review escalated MOT-40",
+        question: "How should MOT-40 continue after Code Review escalated it?",
+        options: [
+          %{label: "Continue to #{qa_state}", effect: "the ticket moves to #{qa_state} and its QA run starts", recommended: true},
+          %{label: "Send to Rework", effect: "the ticket moves to Rework with these reasons", recommended: false}
+        ]
+      },
+      confirm: qa_state,
+      asked_in: "Code Review"
+    )
   end
 
-  # The hold QA sets when it can't finish its check (`SymphonyElixir.QaVerification`): its last two
-  # options carry the move their pick makes.
+  # The question QA asks when it can't finish its check (`SymphonyElixir.QaVerification`): its last
+  # two options carry the move their pick makes.
   defp set_qa_hold do
-    :ok =
-      Hold.set("repo-director", "pr", :needs_decision, %{
-        reason: "How should it continue?",
-        clearing_condition: "when the decision is recorded",
-        decision: %{
-          title: "QA could not finish its check of MOT-40",
-          question: "How should it continue?",
-          options: [
-            %{label: "Run QA again", effect: "QA runs once more", recommended: true},
-            DecisionMove.option(%{label: "Send it back to Rework", effect: "Symphony moves MOT-40 to Rework"}, %{to: "Rework"}),
-            DecisionMove.option(%{label: "Merge without a QA result", effect: "Symphony moves MOT-40 to Merging"}, %{
-              to: "Merging",
-              verdict: %{kind: "qa", outcome: "skip", head_sha: "abc123", reason: "skipped by decision"}
-            })
-          ],
-          state: "QA"
-        }
-      })
+    ask_decision(
+      %{
+        title: "QA could not finish its check of MOT-40",
+        question: "How should it continue?",
+        options: [
+          %{label: "Run QA again", effect: "QA runs once more", recommended: true},
+          DecisionMove.option(%{label: "Send it back to Rework", effect: "Symphony moves MOT-40 to Rework"}, %{to: "Rework"}),
+          DecisionMove.option(%{label: "Merge without a QA result", effect: "Symphony moves MOT-40 to Merging"}, %{
+            to: "Merging",
+            verdict: %{kind: "qa", outcome: "skip", head_sha: "abc123", reason: "skipped by decision"}
+          })
+        ]
+      },
+      asked_in: "QA"
+    )
   end
 
   defp cancel_option, do: DecisionMove.option(%{label: "Cancel", effect: "Symphony moves the ticket to Canceled"}, %{to: "Canceled"})
@@ -2301,14 +2259,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
     id
   end
 
-  defp set_decision_hold do
-    :ok =
-      Hold.set("repo-director", "pr", :needs_decision, %{
-        reason: "Add the signing secrets, or ship unsigned builds?",
-        clearing_condition: "when the decision is recorded",
-        decision: %{title: "Add the release signing secrets", question: "Add the signing secrets, or ship unsigned builds?"}
-      })
-  end
+  defp set_decision_hold, do: ask_decision(signing_request())
 
   # The Director's Stop as the orchestrator leaves it: the pause reason, then the hold beside it.
   defp stop(repo_key), do: :ok = Pauses.stop({:ticket, repo_key, "pr"}, ~U[2026-10-20 08:41:25Z])

@@ -70,7 +70,7 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       audit!(audit, %{event_type: "run_stopped", repo_key: @repo_key, issue_id: "issue-unknown"}, at(18))
       audit!(audit, %{event_type: "run_stopped", repo_key: @repo_key}, at(18))
 
-      log = capture_log(fn -> assert {:ok, %{tickets: 1, events: 19}} = Backfill.run(now: @now, audit_log: audit) end)
+      log = capture_log(fn -> assert {:ok, %{tickets: 1, events: 14}} = Backfill.run(now: @now, audit_log: audit) end)
       assert log =~ "Skipped a backfilled verdict.recorded event"
 
       events = events()
@@ -78,11 +78,6 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       assert Enum.map(events, & &1.type) == [
                "phase.entered",
                "attempt.pushed",
-               "hold.set",
-               "hold.cleared",
-               "hold.set",
-               "note",
-               "note",
                "note",
                "verdict.recorded",
                "run.started",
@@ -100,20 +95,15 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       assert events |> Enum.map(& &1.at) |> Enum.chunk_every(2, 1, :discard) |> Enum.all?(fn [a, b] -> DateTime.compare(a, b) != :gt end)
       assert Enum.all?(events, &String.starts_with?(&1.idempotency, "backfill:"))
       assert Enum.all?(events, &is_binary(&1.summary.title))
-      assert Enum.map(events, & &1.seq) == Enum.to_list(1..19)
+      assert Enum.map(events, & &1.seq) == Enum.to_list(1..14)
 
-      [entered, pushed, blocked, cleared, looped, waiting, confirming, requested, verdict | runs] = events
+      [entered, pushed, waiting, verdict | runs] = events
       [started, ended, started2, ended2, ended3, started4, stop, rework, unblock, note] = runs
 
       assert %{at: at1, phase: "In Progress", payload: %{to: "In Progress", from: "Todo", signal: "claim"}} = entered
       assert at1 == at(1)
       assert %{payload: %{head: "aaa1111", attempt: 1, pr_url: "https://github.com/acme/app/pull/1"}, head_sha: "aaa1111"} = pushed
-      assert %{phase: "In Progress", actor: %{kind: :machine}, payload: %{kind: "blocked", reason: "waiting on TP-1", signal: "blocked"}} = blocked
-      assert cleared.payload == %{kind: "blocked", by: "operator", signal: "unblocked"}
-      assert looped.payload == %{kind: "blocked", reason: "dispatch_loop", signal: "dispatch_loop"}
       assert waiting.payload.text =~ "Waiting for CI"
-      assert confirming.payload == %{text: "Decision requested: ready to merge"}
-      assert requested.payload == %{text: "Decision requested: decision requested"}
       assert %{phase: "QA", payload: %{kind: "qa", outcome: "pass", head: "aaa1111"}} = verdict
       assert %{run_id: "run-1", phase: "In Progress", payload: %{run_kind: "implementation", run_number: 1, state: "In Progress"}} = started
       assert %{run_id: "run-1", payload: %{exit: "handoff", run_number: 1, duration_ms: 60_000, head: "aaa1111"}} = ended
@@ -179,74 +169,23 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       assert c3_at == at(30)
     end
 
-    test "a ticket waiting on a decision opens one request its live answer closes, and holds no hold event", %{audit: audit} do
+    test "a hold's or a decision request's signal is no event, and the record's decisions are still the Director's answers", %{audit: audit} do
       put_ticket(%{
-        signals: [signal(1, "decision requested", %{hold: "needs_decision", reason: :dependency_source_requires_approval})],
-        holds: [
-          %{
-            kind: :needs_decision,
-            reason: "Ship TP-1 now?",
-            decision: %{title: "Ship it?", question: "Ship TP-1 now?", why: "It is ready.", options: ["Ship: it ships", "Wait: it waits"], asked_at: "2026-10-18T10:05:00Z"},
-            set_at: at(6)
-          }
+        signals: [
+          signal(1, "decision requested", %{question: true, reason: :dependency_source_requires_approval}),
+          signal(2, "blocked", %{reason: "waits on TP-1", held: true}),
+          signal(3, "unblocked", %{by: :operator}),
+          signal(4, "qa", %{signal: "code_review_escalate", reason: "needs a person"})
         ],
         decisions: [decision("c-1", ~D[2026-10-17], "Keep the old copy")]
       })
 
-      assert {:ok, %{tickets: 1, events: 4}} = Backfill.run(now: @now, audit_log: audit)
+      assert {:ok, %{tickets: 1, events: 2}} = Backfill.run(now: @now, audit_log: audit)
 
-      assert Enum.map(events(), & &1.type) == ["decision.recorded", "note", "decision.requested", "note"]
-      assert events(types: ["hold.set", "hold.cleared"]) == []
-      assert [%{type: "note", payload: %{text: "Decision requested: dependency_source_requires_approval"}} | _rest] = events(types: ["note"])
-
-      assert [open] = TicketEvents.query(@repo_key, @issue_id, open_decisions: true)
-      assert DateTime.compare(open.at, at(5)) == :eq
-      assert open.actor == %{kind: :machine}
-      assert open.payload == %{question: "Ship TP-1 now?", title: "Ship it?", why: "It is ready.", options: ["Ship: it ships", "Wait: it waits"]}
-
-      answer = %{answer: "Ship", key: "c-2", title: "Ship it?", question: "Ship TP-1 now?", request: open.id}
-      {:ok, _answer} = TicketEvents.record(@repo_key, @issue_id, "decision.recorded", answer, actor: @director)
+      assert Enum.map(events(), & &1.type) == ["decision.recorded", "note"]
+      assert events(types: ["hold.set", "hold.cleared", "decision.requested"]) == []
+      assert [%{payload: %{text: "History before " <> _}}] = events(types: ["note"])
       assert TicketEvents.query(@repo_key, @issue_id, open_decisions: true) == []
-    end
-
-    test "a Needs Decision hold opens at its asked time, else when it was set, unless its request is open", %{audit: audit} do
-      hold = fn decision, reason -> [%{kind: :needs_decision, reason: reason, decision: decision, set_at: at(3)}] end
-
-      put_ticket(%{issue_id: "issue-a", holds: hold.(%{"title" => "Pick", "question" => "Pick one?", "asked_at" => at(2)}, nil)})
-      put_ticket(%{issue_id: "issue-b", holds: hold.(%{question: "Pick two?", asked_at: "not a date", options: []}, nil)})
-      put_ticket(%{issue_id: "issue-c", holds: hold.(nil, "Pick three?")})
-      put_ticket(%{issue_id: "issue-d", holds: hold.(nil, nil)})
-      put_ticket(%{issue_id: "issue-e", holds: hold.(%{question: "Pick five?"}, nil)})
-      {:ok, _open} = TicketEvents.record(@repo_key, "issue-e", "decision.requested", %{question: "Pick five?"}, at: at(1))
-
-      assert {:ok, %{tickets: 5, events: 8}} = Backfill.run(now: @now, audit_log: audit)
-
-      assert [%{at: a_at, payload: %{title: "Pick", question: "Pick one?"}}] = events("issue-a", types: ["decision.requested"])
-      assert a_at == at(2)
-      assert [%{at: b_at, payload: b_payload}] = events("issue-b", types: ["decision.requested"])
-      assert b_at == at(3)
-      assert b_payload == %{question: "Pick two?"}
-      assert [%{payload: %{question: "Pick three?"}}] = events("issue-c", types: ["decision.requested"])
-      assert events("issue-d", types: ["decision.requested"]) == []
-      assert [%{idempotency: nil}] = events("issue-e", types: ["decision.requested"])
-    end
-
-    test "a Blocked hold still set opens unless the events show it open", %{audit: audit} do
-      blocked = [%{kind: :blocked, reason: "waits on TP-1", waits_on: %{type: "dependency", keys: ["TP-1"]}, set_at: at(5)}]
-
-      put_ticket(%{issue_id: "issue-a", holds: blocked})
-      put_ticket(%{issue_id: "issue-b", holds: blocked, signals: [signal(1, "blocked", %{reason: "waits on TP-1", held: true})]})
-      put_ticket(%{issue_id: "issue-c", holds: blocked})
-      {:ok, _set} = TicketEvents.record(@repo_key, "issue-c", "hold.set", %{kind: "blocked"}, at: at(1))
-      {:ok, _cleared} = TicketEvents.record(@repo_key, "issue-c", "hold.cleared", %{kind: "blocked"}, at: at(2))
-
-      assert {:ok, %{tickets: 3, events: 6}} = Backfill.run(now: @now, audit_log: audit)
-
-      assert [%{at: a_at, payload: payload}] = events("issue-a", types: ["hold.set"])
-      assert a_at == at(5)
-      assert payload == %{kind: "blocked", reason: "waits on TP-1", waits_on: %{type: "dependency", keys: ["TP-1"]}}
-      assert [%{payload: %{signal: "blocked"}}] = events("issue-b", types: ["hold.set"])
-      assert ["hold.set", "hold.cleared", "hold.set"] = "issue-c" |> events(types: ["hold.set", "hold.cleared"]) |> Enum.map(& &1.type)
     end
 
     test "a ticket that can't be read or written leaves the marker unset for the next run", %{audit: audit} do
