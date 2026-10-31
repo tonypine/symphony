@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{BlockedHold, CiWait, Hold, OperatorStop, Pauses, RunStore, SelfHeal}
-  alias SymphonyElixir.PrWatch.Sweep
+  alias SymphonyElixir.{CiWait, Pauses, RunStore, SelfHeal}
+  alias SymphonyElixir.PrWatch.{Competitors, Sweep}
   alias SymphonyElixir.QaDriver.DevServerLease
 
   @waiting "Waiting on sub-tickets"
@@ -45,6 +45,9 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     standalone = issue("standalone", "MT-888", "Todo", priority: 3)
     candidates = epics ++ [yielded, fix, standalone | parts]
     tracked([standalone])
+    on_exit(fn -> RunStore.clear() end)
+    # The poll pauses each part on its open blocker before the dispatch gate reads it.
+    assert Orchestrator.sweep_dependencies_for_test("default", parts, ["Done", "Canceled"]) == 6
 
     state = Orchestrator.put_epic_lanes_for_test(%{orchestrator_state() | max_concurrent_agents: nil}, candidates)
     assert {length(state.epic_lanes.lanes), length(state.epic_lanes.queued), length(state.epic_lanes.yielded)} == {1, 5, 1}
@@ -56,7 +59,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     # Every candidate passed over says why; the one dispatched does not appear.
     skipped = Map.new(snapshot_of(state).dispatch_skipped, &{&1.identifier, &1.reason})
     refute Map.has_key?(skipped, "MT-888")
-    assert skipped["MT-11"] == "blocked by MT-99"
+    assert skipped["MT-11"] == "Waiting for MT-99 to finish"
     assert skipped["MT-10"] == "waiting on its sub-tickets"
     assert skipped["MT-99"] == "already running"
   end
@@ -106,13 +109,16 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     update_reason = %{kind: :build, waits_on: %{pull_request: 5}, text: "Waiting for a Symphony update that includes MT-5's fix"}
     {:ok, _pause} = Pauses.set({:ticket, "default", "update"}, update_reason, set_by: %{kind: :rule, name: "App update hold"})
     on_exit(fn -> Pauses.clear({:ticket, "default", "update"}) end)
+    # The poll paused the blocked ticket on its named blocker.
+    {:ok, _pause} = Pauses.set({:ticket, "default", "blocked"}, Pauses.ticket_reason(:dependency, "MT-7"))
+    on_exit(fn -> Pauses.clear({:ticket, "default", "blocked"}) end)
 
     candidates = [
       issue("unassigned", "MT-UNASSIGNED", "Todo", assigned_to_worker: false),
       issue("done", "MT-DONE", "Done"),
       issue("backlog", "MT-BACKLOG", "Backlog"),
       issue("untitled", "MT-UNTITLED", "Todo", title: nil),
-      issue("blocked", "MT-BLOCKED", "Todo", blocked_by: [%{id: "b", identifier: "MT-B", state: "In Progress"}, %{id: "c", state: "Todo"}]),
+      issue("blocked", "MT-BLOCKED", "Todo", blocked_by: [%{id: "b", identifier: "MT-7", state: "In Progress"}, %{id: "c", state: "Todo"}]),
       issue("skipped-decision", "MT-DECISION", "In Progress"),
       issue("update", "MT-UPDATE", "Todo"),
       issue("landing", "MT-LANDING", "Merging"),
@@ -128,7 +134,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
              "done" => "Done is a terminal state",
              "backlog" => "\"Backlog\" is not an active state",
              "untitled" => "Linear returned it without an id, identifier or title",
-             "blocked" => "blocked by MT-B, an unnamed ticket",
+             "blocked" => "Waiting for MT-7 to finish",
              "skipped-decision" => "on a Needs Decision hold",
              "update" => "Waiting for a Symphony update that includes MT-5's fix",
              "landing" => "held in Merging until CI settles on abc1234",
@@ -138,43 +144,40 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
            }
 
     # The ticket page shows a passed-over ticket's blockers from the entry (`SymphonyElixir.Connected`).
-    assert %{blocked_by: [%{identifier: "MT-B", title: nil, state: "In Progress"}], parent: nil} = state.dispatch_skipped["blocked"].connected
+    assert %{blocked_by: [%{identifier: "MT-7", title: nil, state: "In Progress"}], parent: nil} = state.dispatch_skipped["blocked"].connected
   end
 
-  test "a stopped ticket is skipped with its pause's text, before any hold; a pause on another reason alone gates nothing yet" do
+  test "a stopped ticket, and one paused on anything else, are skipped with their pause's text; an unpaused one runs" do
     on_exit(fn -> RunStore.clear() end)
-    :ok = OperatorStop.mark("default", "stopped", ~U[2026-10-20 08:41:25Z])
-    :ok = Hold.set("default", "stopped", :blocked, %{reason: "Needs a token", waits_on: %{type: "access", keys: []}})
-    # A reason the backfill wrote for a dependency hold that cleared since; its writer doesn't clear it yet.
+    :ok = Pauses.stop({:ticket, "default", "stopped"}, ~U[2026-10-20 08:41:25Z])
     {:ok, _pause} = Pauses.set({:ticket, "default", "waiting"}, %{kind: :ticket, waits_on: %{identifier: "MT-9"}})
 
     stopped = issue("stopped", "MT-STOP", "Todo")
     waiting = issue("waiting", "MT-WAIT", "Todo")
-    tracked([stopped, waiting])
-    state = Orchestrator.dispatch_chosen_issues_for_test([stopped, waiting], orchestrator_state())
+    free = issue("free", "MT-FREE", "Todo")
+    tracked([stopped, waiting, free])
+    state = Orchestrator.dispatch_chosen_issues_for_test([stopped, waiting, free], orchestrator_state())
 
-    assert Map.has_key?(state.running, "waiting")
+    assert Map.keys(state.running) == ["free"]
 
-    assert [%{identifier: "MT-STOP", reason: "Stopped by you at 2026-10-20 08:41:25 UTC. Unblock runs it again; Restart starts it over from main."}] =
-             snapshot_of(state).dispatch_skipped
+    assert %{
+             "MT-STOP" => "Stopped by you at 2026-10-20 08:41:25 UTC. Unblock runs it again; Restart starts it over from main.",
+             "MT-WAIT" => "Waiting for MT-9 to finish"
+           } == Map.new(snapshot_of(state).dispatch_skipped, &{&1.identifier, &1.reason})
   end
 
-  test "a ticket held back by its blockers or a Blocked hold is skipped with its pause's text (TP-1234)" do
+  test "a ticket held back by its blockers, a fix ticket or a question is skipped with its pause's text (TP-1234)" do
     on_exit(fn -> RunStore.clear() end)
     blockers = [%{id: "a", identifier: "MT-1", state: "In Progress"}, %{id: "b", identifier: "MT-2", state: "Todo"}]
     for identifier <- ["MT-1", "MT-2"], do: {:ok, _pause} = Pauses.set({:ticket, "default", "blocked"}, Pauses.ticket_reason(:dependency, identifier))
 
-    :ok = Hold.set("default", "fixing", :blocked, %{reason: "waiting on fix ticket MT-9", waits_on: %{type: "fix_ticket", keys: ["MT-9"]}})
     {:ok, _pause} = Pauses.set({:ticket, "default", "fixing"}, Pauses.ticket_reason(:fix_ticket, "MT-9"))
 
     request = SymphonyElixir.TransitionGuard.block_report_question("MT-ASK")
-    {:ok, %{id: question_id}} = SymphonyElixir.Questions.ask({:ticket, "default", "asking"}, request)
-    :ok = Hold.set("default", "asking", :blocked, %{reason: "the run reported a block", waits_on: %{type: "access", keys: [], question_id: question_id}})
+    {:ok, %{id: _question_id}} = SymphonyElixir.Questions.ask({:ticket, "default", "asking"}, request)
 
-    # A held ticket with no pause names its hold, as before; one whose pause the backfill gave the
-    # hold's own words (an access or CI-wait hold's `:environment` reason) reads those words.
-    :ok = Hold.set("default", "held", :blocked, %{reason: "the run reported a block", waits_on: %{type: "access", keys: []}})
-    :ok = Hold.set("default", "waiting", :blocked, %{reason: "ci_wait: CI on abc was still running after 30 minutes", waits_on: %{type: "ci_wait", keys: []}})
+    # One whose pause the backfill gave a retired hold's own words (an access or CI-wait hold's
+    # `:environment` reason) reads those words.
     environment = %{kind: :environment, waits_on: %{condition: "ci_wait"}, text: "ci_wait: CI on abc was still running after 30 minutes"}
     {:ok, _pause} = Pauses.set({:ticket, "default", "waiting"}, environment, backfilled: true)
 
@@ -182,7 +185,6 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
       issue("blocked", "MT-BLOCKED", "Todo", blocked_by: blockers),
       issue("fixing", "MT-FIX", "In Progress"),
       issue("asking", "MT-ASK", "In Progress"),
-      issue("held", "MT-HELD", "In Progress"),
       issue("waiting", "MT-WAIT", "In Progress")
     ]
 
@@ -194,7 +196,6 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
              "MT-BLOCKED" => "Waiting for MT-1 to finish; Waiting for MT-2 to finish",
              "MT-FIX" => "Waiting for MT-9 to finish: it fixes what stopped this ticket",
              "MT-ASK" => "Waiting for your answer: The run on MT-ASK cannot continue on its own",
-             "MT-HELD" => "on a Blocked hold",
              "MT-WAIT" => "ci_wait: CI on abc was still running after 30 minutes"
            }
 
@@ -207,10 +208,9 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
 
   test "a paused ticket reads every reason of its pause, whatever its kind, in the order they were set (TP-1242)" do
     on_exit(fn -> RunStore.clear() end)
-    :ok = OperatorStop.mark("default", "stopped", ~U[2026-10-20 08:41:25Z])
+    :ok = Pauses.stop({:ticket, "default", "stopped"}, ~U[2026-10-20 08:41:25Z])
     {:ok, _pause} = Pauses.add_reason({:ticket, "default", "stopped"}, Pauses.ticket_reason(:dependency, "MT-1"))
 
-    :ok = Hold.set("default", "held", :blocked, %{reason: "the run reported a block", waits_on: %{type: "access", keys: []}})
     {:ok, _pause} = Pauses.set({:ticket, "default", "held"}, %{kind: :person, waits_on: %{action: "unblock"}})
     {:ok, _pause} = Pauses.add_reason({:ticket, "default", "held"}, %{kind: :build, waits_on: %{version: "0.0.1.731"}})
     {:ok, _pause} = Pauses.add_reason({:ticket, "default", "held"}, %{kind: :environment, waits_on: %{condition: "qa"}})
@@ -235,13 +235,10 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     on_exit(fn -> RunStore.clear() end)
     competitors = [%{issue_identifier: "MT-1", pr_number: 1, files: ["SPEC.md"]}, %{pr_number: 12, title: "Bump deps", files: ["SPEC.md"]}]
 
-    :ok = Hold.set("default", "landing", :blocked, BlockedHold.landing_attrs(competitors))
-    for reason <- BlockedHold.landing_reasons(competitors), do: {:ok, _pause} = Pauses.set({:ticket, "default", "landing"}, reason)
+    for reason <- Competitors.landing_reasons(competitors), do: {:ok, _pause} = Pauses.set({:ticket, "default", "landing"}, reason)
 
-    :ok = Hold.set("default", "ci", :blocked, CiWait.hold_attrs(%{sha: "26758a2471558f89", runs: []}, ~U[2026-10-30 09:00:00Z], ~U[2026-10-30 10:01:00Z]))
     {:ok, _pause} = CiWait.pause("default", "ci", "26758a2471558f89")
 
-    :ok = Hold.set("default", "qa", :blocked, %{reason: "QA blocked after 2 attempt(s): unreachable", waits_on: %{type: "access", keys: []}})
     {:ok, _pause} = Pauses.set({:ticket, "default", "qa"}, SelfHeal.environment_reason("worker_host"))
 
     issues = [issue("landing", "MT-LAND", "Merging"), issue("ci", "MT-CI", "Epic Review"), issue("qa", "MT-QA", "QA")]
@@ -346,7 +343,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     {state, log} = dispatch_with_log([unkeyed], orchestrator_state())
 
     refute Map.has_key?(state.running, "unkeyed")
-    assert state.dispatch_skipped["unkeyed"].reason == "it has no repo key and several repos are configured, so its holds can't be read"
+    assert state.dispatch_skipped["unkeyed"].reason == "it has no repo key and several repos are configured, so its pause can't be read"
     refute log =~ "with no repo key;"
     refute Orchestrator.should_dispatch_issue_for_test(unkeyed, orchestrator_state())
     refute Orchestrator.dispatch_revalidated_issue_for_test(unkeyed, true)
@@ -390,7 +387,9 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     wait_until(pid, &(is_nil(&1.repo_poll_task_ref) and not &1.poll_check_in_progress))
 
     runnable = issue("runnable", "MT-RUNNABLE", "Todo")
-    blocked = issue("blocked", "MT-BLOCKED", "Todo", blocked_by: [%{id: "b", identifier: "MT-B", state: "In Progress"}])
+    blocked = issue("blocked", "MT-BLOCKED", "Todo", blocked_by: [%{id: "b", identifier: "MT-7", state: "In Progress"}])
+    {:ok, _pause} = Pauses.set({:ticket, "default", "blocked"}, Pauses.ticket_reason(:dependency, "MT-7"))
+    on_exit(fn -> RunStore.clear() end)
     waiting = issue("waiting", "MT-WAITING", "Todo")
     slot_waiting = %{"waiting" => %{identifier: "MT-WAITING", reason: "work slots full", since: DateTime.utc_now()}}
     readiness = %{kind: :poll, issues: [runnable, blocked, waiting]}
@@ -413,7 +412,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
       capture_log(fn ->
         assert skipped_after.(%{}) == %{
                  "runnable" => "dispatch is paused: updating to v0.0.1.756",
-                 "blocked" => "blocked by MT-B"
+                 "blocked" => "Waiting for MT-7 to finish"
                }
       end)
 
