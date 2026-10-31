@@ -40,76 +40,59 @@ defmodule SymphonyElixir.HoldTest do
   end
 
   describe "kinds and labels" do
-    test "labels the two holds and matches them back ignoring case and space" do
-      assert Hold.kinds() == [:blocked, :needs_decision]
-      assert Hold.label(:blocked) == "Blocked"
+    test "labels the Needs Decision hold and matches it back ignoring case and space; the Blocked hold is retired" do
+      assert Hold.kinds() == [:needs_decision]
       assert Hold.label(:needs_decision) == "Needs Decision"
+      assert Hold.label(:blocked) == nil
       assert Hold.label(:other) == nil
 
-      assert Hold.kind_for_label("blocked") == :blocked
+      assert Hold.kind_for_label("blocked") == nil
       assert Hold.kind_for_label(" NEEDS DECISION ") == :needs_decision
       assert Hold.kind_for_label("bug") == nil
       assert Hold.kind_for_label(nil) == nil
-    end
-  end
 
-  describe "unblockable?/1 and dispatch_loop?/1" do
-    test "an access or dispatch-loop hold waits on a person's Unblock; only the latter is a loop" do
-      assert Hold.unblockable?(%{waits_on: %{type: "access", keys: []}})
-      assert Hold.unblockable?(%{waits_on: %{type: "dispatch_loop", keys: ["implementation"]}})
-      assert Hold.unblockable?(%{waits_on: %{type: "operator_stop", keys: []}})
-      refute Hold.unblockable?(%{waits_on: %{type: "dependency", keys: ["TP-1"]}})
-      refute Hold.unblockable?(%{reason: "no waits_on"})
-      refute Hold.unblockable?(nil)
-
-      # A quiet handoff's hold waits on the question Symphony asked beside it.
-      assert Hold.unblockable?(%{waits_on: %{type: "handoff_missing", keys: [], question_id: "q-1"}})
-      refute Hold.unblockable?(%{waits_on: %{type: "handoff_missing", keys: []}})
-
-      assert Hold.dispatch_loop?(%{waits_on: %{type: SymphonyElixir.DispatchLoop.hold_type(), keys: []}})
-      refute Hold.dispatch_loop?(%{waits_on: %{type: "access", keys: []}})
-      refute Hold.dispatch_loop?(nil)
+      assert Hold.set(@repo_key, @issue_id, :blocked, %{reason: "waiting on TP-1"}) == {:error, {:unknown_hold_kind, :blocked}}
+      assert Hold.clear(@repo_key, @issue_id, :blocked) == {:error, {:unknown_hold_kind, :blocked}}
     end
   end
 
   describe "set/5 and clear/4" do
     test "set writes the store first, then projects the label" do
-      assert :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "waiting on TP-1"})
+      assert :ok = Hold.set(@repo_key, @issue_id, :needs_decision, %{reason: "waiting on TP-1"})
 
-      assert [%{kind: :blocked, reason: "waiting on TP-1"}] =
+      assert [%{kind: :needs_decision, reason: "waiting on TP-1"}] =
                RunStore.get_ticket_state(@repo_key, @issue_id) |> Map.fetch!(:holds)
 
-      assert Hold.held?(@repo_key, @issue_id, :blocked)
-      assert %{reason: "waiting on TP-1"} = Hold.get(@repo_key, @issue_id, :blocked)
-      assert labels() == ["Blocked"]
+      assert Hold.held?(@repo_key, @issue_id, :needs_decision)
+      assert %{reason: "waiting on TP-1"} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert labels() == ["Needs Decision"]
     end
 
     test "clear drops the store hold and the label, leaving the ticket in place" do
-      :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "waiting"})
+      :ok = Hold.set(@repo_key, @issue_id, :needs_decision, %{reason: "waiting"})
 
-      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked)
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      assert :ok = Hold.clear(@repo_key, @issue_id, :needs_decision)
+      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
       assert labels() == []
     end
 
     test "a hold that appears or goes is announced as a change of the record's holds; one set over itself is not" do
       :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records()
 
-      :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "waiting"})
+      :ok = Hold.set(@repo_key, @issue_id, :needs_decision, %{reason: "waiting"})
       assert_received {:ticket_record, @repo_key, @issue_id, :changed, [:holds]}
 
-      :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "still waiting"})
-      :ok = Hold.clear(@repo_key, @issue_id, :needs_decision)
+      :ok = Hold.set(@repo_key, @issue_id, :needs_decision, %{reason: "still waiting"})
       refute_received {:ticket_record, _repo_key, _issue_id, :changed, _fields}
 
-      :ok = Hold.clear(@repo_key, @issue_id, :blocked)
+      :ok = Hold.clear(@repo_key, @issue_id, :needs_decision)
       assert_received {:ticket_record, @repo_key, @issue_id, :changed, [:holds]}
     end
 
     test "refuses a write with no repo key, touching neither the store nor the label" do
       log =
         capture_log(fn ->
-          assert Hold.set(nil, @issue_id, :blocked) == {:error, :missing_repo_key}
+          assert Hold.set(nil, @issue_id, :needs_decision) == {:error, :missing_repo_key}
           assert Hold.clear("", @issue_id, :needs_decision) == {:error, :missing_repo_key}
         end)
 
@@ -124,8 +107,8 @@ defmodule SymphonyElixir.HoldTest do
     end
 
     test "a failed store write fails the set and touches no label" do
-      assert Hold.set(@repo_key, @issue_id, :blocked, %{}, store: FailingStore) == {:error, :boom}
-      assert Hold.clear(@repo_key, @issue_id, :blocked, store: FailingStore) == {:error, :boom}
+      assert Hold.set(@repo_key, @issue_id, :needs_decision, %{}, store: FailingStore) == {:error, :boom}
+      assert Hold.clear(@repo_key, @issue_id, :needs_decision, store: FailingStore) == {:error, :boom}
       assert labels() == []
     end
 
@@ -134,65 +117,25 @@ defmodule SymphonyElixir.HoldTest do
 
       log =
         capture_log(fn ->
-          assert :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "waiting"})
+          assert :ok = Hold.set(@repo_key, @issue_id, :needs_decision, %{reason: "waiting"})
         end)
 
       assert log =~ "Failed to set the machine label"
-      assert Hold.held?(@repo_key, @issue_id, :blocked)
+      assert Hold.held?(@repo_key, @issue_id, :needs_decision)
       assert labels() == []
       # The reconciler sets it again (`TicketObservation.reconcile_all/3`).
-      assert [%{type: :hold_label, hold: :blocked, error: ":boom"}] = pending_projection()
+      assert [%{type: :hold_label, hold: :needs_decision, error: ":boom"}] = pending_projection()
     end
 
     test "a failed label clear keeps the store clear and is reported" do
-      :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "waiting"})
+      :ok = Hold.set(@repo_key, @issue_id, :needs_decision, %{reason: "waiting"})
       Application.put_env(:symphony_elixir, :memory_tracker_remove_issue_label_result, {:error, :boom})
 
-      log = capture_log(fn -> assert :ok = Hold.clear(@repo_key, @issue_id, :blocked) end)
+      log = capture_log(fn -> assert :ok = Hold.clear(@repo_key, @issue_id, :needs_decision) end)
 
       assert log =~ "Failed to clear the machine label"
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
-      assert [%{type: :hold_label, hold: :blocked}] = pending_projection()
-    end
-  end
-
-  describe "a hold set beside a question" do
-    setup do
-      ticket = {:ticket, @repo_key, @issue_id}
-      {:ok, question} = Questions.ask(ticket, DispatchLoop.question_attrs({:quiet_handoff, 2}, "MOT-1"))
-      :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "quiet", waits_on: %{type: "handoff_missing", keys: [], question_id: question.id}})
-      %{ticket: ticket, question: question}
-    end
-
-    test "keeps the question's id and is cleared with it: the answer given, or Symphony's withdrawal", %{ticket: ticket, question: question} do
-      assert %{waits_on: %{question_id: id}} = Hold.get(@repo_key, @issue_id, :blocked)
-      assert id == question.id
-
-      director = %{kind: :person, name: "Director"}
-      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked, question: {:answer, "Run it again", director})
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
-      assert %{state: :answered, answer: %{option: 1, by: ^director}} = Questions.find(ticket, question.id)
-      assert {:ok, nil} = Pauses.get(ticket)
-
-      {:ok, again} = Questions.ask(ticket, DispatchLoop.question_attrs({:quiet_handoff, 3}, "MOT-1"))
-      :ok = Hold.set(@repo_key, @issue_id, :blocked, %{waits_on: %{type: "dispatch_loop", keys: [], question_id: again.id}})
-      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked)
-      assert %{state: :withdrawn, withdrawn: %{reason: "Symphony lifted the pause it was asked with."}} = Questions.find(ticket, again.id)
-    end
-
-    test "a question already ended, or gone, ends nothing; one the store refuses keeps the hold", %{ticket: ticket, question: question} do
-      {:ok, _withdrawn} = Questions.withdraw(ticket, question.id, "no longer needed")
-      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked)
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
-
-      :ok = Hold.set(@repo_key, @issue_id, :blocked, %{waits_on: %{type: "handoff_missing", keys: [], question_id: "gone"}})
-      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked)
-
-      {:ok, open} = Questions.ask(ticket, DispatchLoop.question_attrs({:quiet_handoff, 4}, "MOT-1"))
-      :ok = Hold.set(@repo_key, @issue_id, :blocked, %{waits_on: %{type: "handoff_missing", keys: [], question_id: open.id}})
-      assert {:error, {:invalid_actor, :nobody}} = Hold.clear(@repo_key, @issue_id, :blocked, question: {:answer, "Run it again", :nobody})
-      assert Hold.held?(@repo_key, @issue_id, :blocked)
-      assert %{state: :open} = Questions.find(ticket, open.id)
+      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+      assert [%{type: :hold_label, hold: :needs_decision}] = pending_projection()
     end
   end
 
@@ -234,31 +177,13 @@ defmodule SymphonyElixir.HoldTest do
       decision: %{title: "Pick one", question: "A or B?", why: "Both work.", options: ["**A**: do A", "**B**: do B"], asked_at: nil}
     }
 
-    test "a Blocked hold records one hold.set, and one hold.cleared when it clears" do
-      attrs = %{reason: "waiting on TP-1", clearing_condition: "when TP-1 is done", waits_on: %{type: "dependency", keys: ["TP-1"]}}
-
-      assert :ok = Hold.set(@repo_key, @issue_id, :blocked, attrs)
-      assert :ok = Hold.set(@repo_key, @issue_id, :blocked, attrs)
-      assert [{"hold.set", %{kind: "blocked", reason: "waiting on TP-1", waits_on: %{type: "dependency", keys: ["TP-1"]}}}] = ticket_events(@repo_key, @issue_id)
-
-      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked)
-      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked)
-      assert [{"hold.set", _set}, {"hold.cleared", %{kind: "blocked"}}] = ticket_events(@repo_key, @issue_id)
-
-      assert :ok = Hold.set(@repo_key, @issue_id, :blocked, attrs)
-      assert :ok = Hold.set(@repo_key, @issue_id, :blocked, %{attrs | reason: "waiting on TP-1 and TP-2"})
-      assert ["hold.set", "hold.cleared", "hold.set", "hold.set"] = Enum.map(ticket_events(@repo_key, @issue_id), &elem(&1, 0))
-    end
-
     test "a clear with no hold, a failed store write and an unreadable record record nothing" do
-      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked)
       assert :ok = Hold.clear(@repo_key, @issue_id, :needs_decision)
-      assert {:error, :boom} = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "x"}, store: FailingStore)
       assert {:error, :boom} = Hold.set(@repo_key, @issue_id, :needs_decision, @request, store: FailingStore)
 
-      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, %{reason: "x"})
-      assert {:error, :boom} = Hold.clear(@repo_key, @issue_id, :blocked, store: FailingStore)
-      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked, store: UnreadableStore)
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :needs_decision, %{reason: "x"})
+      assert {:error, :boom} = Hold.clear(@repo_key, @issue_id, :needs_decision, store: FailingStore)
+      assert :ok = Hold.clear(@repo_key, @issue_id, :needs_decision, store: UnreadableStore)
 
       assert ticket_events(@repo_key, @issue_id) == []
     end
@@ -310,17 +235,17 @@ defmodule SymphonyElixir.HoldTest do
     test "read nothing without a repo key or an issue id, and say so for a ticket read with no repo key" do
       log =
         capture_log(fn ->
-          refute Hold.held?(nil, @issue_id, :blocked)
-          assert Hold.get("", @issue_id, :blocked) == nil
+          refute Hold.held?(nil, @issue_id, :needs_decision)
+          assert Hold.get("", @issue_id, :needs_decision) == nil
         end)
 
       assert log =~ "Read the holds of issue_id=#{@issue_id} with no repo key"
-      refute Hold.held?(@repo_key, nil, :blocked)
-      refute Hold.held?(@repo_key, 42, :blocked)
+      refute Hold.held?(@repo_key, nil, :needs_decision)
+      refute Hold.held?(@repo_key, 42, :needs_decision)
     end
 
     test "a store read error is reported and treated as no hold" do
-      log = capture_log(fn -> refute Hold.held?(@repo_key, @issue_id, :blocked, store: FailingStore) end)
+      log = capture_log(fn -> refute Hold.held?(@repo_key, @issue_id, :needs_decision, store: FailingStore) end)
       assert log =~ "Failed to read the ticket state"
     end
   end
@@ -344,28 +269,28 @@ defmodule SymphonyElixir.HoldTest do
 
   describe "reproject/4" do
     test "re-asserts a store hold's label without touching the store" do
-      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, %{reason: "waiting"})
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :needs_decision, %{reason: "waiting"})
       assert labels() == []
 
-      assert :ok = Hold.reproject(@repo_key, @issue_id, :blocked)
-      assert labels() == ["Blocked"]
-      assert %{reason: "waiting"} = Hold.get(@repo_key, @issue_id, :blocked)
+      assert :ok = Hold.reproject(@repo_key, @issue_id, :needs_decision)
+      assert labels() == ["Needs Decision"]
+      assert %{reason: "waiting"} = Hold.get(@repo_key, @issue_id, :needs_decision)
     end
 
     test "reports a hold the store does not have and refuses an unknown kind" do
-      assert Hold.reproject(@repo_key, @issue_id, :blocked) == {:error, {:no_hold, :blocked}}
+      assert Hold.reproject(@repo_key, @issue_id, :needs_decision) == {:error, {:no_hold, :needs_decision}}
       assert Hold.reproject(@repo_key, @issue_id, :unknown) == {:error, {:unknown_hold_kind, :unknown}}
       assert labels() == []
     end
 
     test "a failed label write is reported and leaves the store hold in place" do
-      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, %{reason: "waiting"})
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :needs_decision, %{reason: "waiting"})
       Application.put_env(:symphony_elixir, :memory_tracker_add_issue_label_result, {:error, :boom})
 
-      log = capture_log(fn -> assert :ok = Hold.reproject(@repo_key, @issue_id, :blocked) end)
+      log = capture_log(fn -> assert :ok = Hold.reproject(@repo_key, @issue_id, :needs_decision) end)
 
       assert log =~ "Failed to set the machine label"
-      assert Hold.held?(@repo_key, @issue_id, :blocked)
+      assert Hold.held?(@repo_key, @issue_id, :needs_decision)
       assert labels() == []
     end
   end
@@ -376,46 +301,42 @@ defmodule SymphonyElixir.HoldTest do
       on_exit(fn -> Application.put_env(:symphony_elixir, :pause_projector, false) end)
     end
 
-    test "a Blocked hold that writes no pause reason gets its label from the projector, and its clear takes it off" do
+    test "a Needs Decision hold gets its label from the projector, and its clear takes it off" do
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
       on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
-      access = %{reason: "needs the deploy key", waits_on: %{type: "access", keys: []}}
 
-      assert :ok = Hold.set(@repo_key, @issue_id, :blocked, access)
-      assert RunStore.get_ticket_state(@repo_key, @issue_id).pause == nil
-      assert_received {:memory_tracker_label_added, @issue_id, "Blocked"}
-      assert labels() == ["Blocked"]
-
-      # A re-projection asserts the label again against what Linear was last seen with.
-      assert :ok = Hold.reproject(@repo_key, @issue_id, :blocked)
-      assert_received {:memory_tracker_label_added, @issue_id, "Blocked"}
       assert :ok = Hold.set(@repo_key, @issue_id, :needs_decision)
       assert_received {:memory_tracker_label_added, @issue_id, "Needs Decision"}
-      assert labels() == ["Blocked", "Needs Decision"]
+      assert labels() == ["Needs Decision"]
 
-      assert :ok = Hold.clear(@repo_key, @issue_id, :blocked)
+      # A re-projection asserts the label again against what Linear was last seen with.
+      assert :ok = Hold.reproject(@repo_key, @issue_id, :needs_decision)
+      assert_received {:memory_tracker_label_added, @issue_id, "Needs Decision"}
+
       assert :ok = Hold.clear(@repo_key, @issue_id, :needs_decision)
       assert labels() == []
       assert pending_projection() == []
       refute_received {:memory_tracker_label_added, _issue_id, _name}
     end
 
-    test "a ticket that carries the label and the hold but no pause reason keeps the label" do
+    test "a Blocked hold a record kept from before its retirement shows no label: the pause alone says Blocked" do
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
       on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | labels: ["Blocked"]}])
       hold = %{kind: :blocked, reason: "needs the deploy key", waits_on: %{type: "access", keys: []}}
       :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id, %{labels: ["Blocked"], holds: [hold]}))
 
-      assert Projector.project_now({:ticket, @repo_key, @issue_id}) == :ok
-      assert RunStore.get_ticket_state(@repo_key, @issue_id).projected.labels == ["Blocked"]
+      assert Projector.project_now({:ticket, @repo_key, @issue_id}, labels: ["Blocked"], force: true) == :ok
+      assert labels() == []
+      assert_received {:memory_tracker_label_removed, @issue_id, "Blocked"}
+
+      {:ok, _pause} = Pauses.set({:ticket, @repo_key, @issue_id}, %{kind: :environment, waits_on: %{condition: "access"}, text: "needs the deploy key"})
       assert labels() == ["Blocked"]
-      refute_received {:memory_tracker_label_removed, _issue_id, _name}
     end
 
     test "a label write Linear refuses keeps the hold and marks the projection pending" do
-      assert :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "waiting on TP-1"}, tracker: FailingTracker)
-      assert Hold.held?(@repo_key, @issue_id, :blocked)
+      assert :ok = Hold.set(@repo_key, @issue_id, :needs_decision, %{reason: "waiting on TP-1"}, tracker: FailingTracker)
+      assert Hold.held?(@repo_key, @issue_id, :needs_decision)
       assert [%{type: :pause}] = pending_projection()
       assert labels() == []
     end
