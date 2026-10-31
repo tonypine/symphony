@@ -285,6 +285,7 @@ defmodule SymphonyElixir.QuestionsTest do
       assert Questions.withdraw(@ticket, "q-nope", "Gone") == {:error, :question_not_found}
       assert Questions.withdraw(@ticket, question.id, "Gone", by: %{kind: :robot, name: "R"}) == {:error, {:invalid_actor, %{kind: :robot, name: "R"}}}
       assert Questions.withdraw(@ticket, question.id, "Gone", at: 1) == {:error, {:invalid_option, :at}}
+      assert Questions.withdraw(@ticket, question.id, "Gone", cause: "bored") == {:error, {:invalid_option, {:cause, "bored"}}}
       assert Questions.withdraw(:symphony, question.id, "Gone") == {:error, {:invalid_subject, :symphony}}
       assert Questions.open(@ticket) == [question]
     end
@@ -433,6 +434,35 @@ defmodule SymphonyElixir.QuestionsTest do
       assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, {:terminal, "Done"}, inbox: @inbox)
       assert %{withdrawn: %{reason: "The ticket moved to Done before you answered."}} = Questions.find(@ticket, question.id)
       refute Hold.held?(@repo_key, @issue_id, :blocked)
+    end
+
+    test "a question that holds the ticket outlives its run ending; a Restart withdraws it with its cause (TP-1321)" do
+      # A protected-path request the run asked through the Inbox path: a request comment shows it.
+      request = ask_as!(@run, "Allow the workflow file", request: true, asked_in: "In Progress")
+      # A run's question a Needs Decision hold carries, without a request comment.
+      held = ask_as!(@run, "Pick a colour")
+      :ok = Hold.set(@repo_key, @issue_id, :needs_decision, %{reason: "Pick a colour", decision: %{title: "Pick a colour", question_id: held.id}})
+
+      refute Questions.lapsed?(request, run_end([]))
+      assert {:ok, []} = Questions.withdraw_lapsed(@ticket, run_end(moved_to: "In Progress"), inbox: @inbox)
+      assert {:ok, []} = Questions.withdraw_lapsed(@ticket, run_end(run_id: "run-2", moved_to: "Code Review"), inbox: @inbox)
+      assert Enum.map(Questions.open(@ticket), & &1.id) == [request.id, held.id]
+      assert Hold.held?(@repo_key, @issue_id, :needs_decision)
+
+      assert {:ok, [_, _]} = Questions.withdraw_lapsed(@ticket, :restart, inbox: @inbox)
+
+      assert [%{payload: %{cause: "restarted"}}, %{payload: %{cause: "restarted"}}] =
+               RunStore.list_ticket_events(@repo_key, @issue_id, types: ["question.withdrawn"])
+    end
+
+    test "each withdrawal records why: the ticket moved, or the run that asked ended (TP-1321)" do
+      moved = ask_as!(@run, "Pick a layout")
+      assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, :backlog, inbox: @inbox)
+      ended = ask_as!(@run, "Pick a colour")
+      assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, run_end([]), inbox: @inbox)
+
+      causes = for e <- RunStore.list_ticket_events(@repo_key, @issue_id, types: ["question.withdrawn"]), do: {e.payload.question_id, e.payload.cause}
+      assert causes == [{moved.id, "ticket_moved"}, {ended.id, "run_ended"}]
     end
 
     test "a hold that won't clear is logged, and a malformed ticket withdraws nothing" do
