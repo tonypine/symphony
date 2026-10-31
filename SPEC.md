@@ -2605,6 +2605,16 @@ Important nuance:
   conflict was found in `Merging` and the PR head is still the one that conflicted, and to the
   post-PR state otherwise. A PR that still conflicts, or whose mergeability GitHub has not computed
   yet, is parked as before, even when a CI failure is pending too.
+- Before the park, commits in the workspace that no remote has MUST be pushed to the workspace's
+  branch on `origin` (only when every push URL of the workspace's `origin` is the source repo's),
+  so a parked ticket's work is never only in its workspace; a push that fails is logged and the
+  park goes on. After the move the park MUST ask its question through the one decision path
+  ("Run it again", recommended; "Start it over from main"; "Leave it parked"), which pauses the
+  ticket on it; the park's move signal names the phase the ticket was parked from. Unblock, or the
+  answer "Run it again", MUST move the ticket back to that phase with its workspace and branch as
+  they are, then lift the pause (which empties the counted runs) and dispatch it at once; "Start it
+  over from main" is Restart. A ticket parked before parks asked has no question: when its newest
+  move signal is the park's, Unblock moves it back the same way.
 - The first turn SHOULD use the full rendered task prompt. Implementations MAY use a compact
   bootstrap prompt when the target agent transport cannot safely carry the full rendered prompt as a
   single startup message, provided the compact prompt preserves hard security rules and directs the

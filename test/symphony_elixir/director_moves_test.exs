@@ -3,7 +3,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
   alias SymphonyElixir.{AuditLog, CiWait}
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{DecisionMove, DecisionRequest, DirectorMoves, DispatchLoop, Hold}
+  alias SymphonyElixir.{DecisionMove, DecisionRequest, DirectorMoves, DispatchLoop, Hold, IdlePark}
   alias SymphonyElixir.Inbox.{FromRecord, Item}
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.{Pauses, PlanComments, Questions, RunStore, SelfHeal, SubIssueWait}
@@ -2044,6 +2044,106 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:error, {:conflict, message}} = DirectorMoves.answer_held_question("MOT-40", question.id, "1", opts)
       assert message == "MOT-40's question #{question.id} is answered, not open"
       assert {:error, :issue_not_found} = DirectorMoves.answer_held_question("MOT-404", question.id, "1", opts)
+    end
+  end
+
+  describe "a ticket an idle run parked in Backlog (TP-1326)" do
+    # What the agent runner leaves when it parks an idle run: its move signal, then its question, or,
+    # when the question can't be asked, a reason Unblock releases.
+    defp park(repo_key, from_state, question? \\ true) do
+      ticket = {:ticket, repo_key, "pr"}
+      :ok = TicketSignals.record(repo_key, "pr", "blocked", %{to: "Backlog", reason: "idle_park", from: from_state})
+
+      if question? do
+        {:ok, question} = Questions.ask(ticket, IdlePark.question_attrs("MOT-40", 2))
+        question
+      else
+        reason = %{kind: :environment, waits_on: %{condition: "idle_park"}, text: "parked", releasable: true}
+        {:ok, _pause} = Pauses.set(ticket, reason)
+        nil
+      end
+    end
+
+    defp parked?(repo_key), do: Pauses.paused?({:ticket, repo_key, "pr"})
+
+    test "the Inbox lists its question; Unblock moves it back to the phase it left, lifts the pause and dispatches it", %{opts: opts} do
+      put_issues([%{pr("Backlog") | repo_key: "repo-director"}])
+      :ok = RunStore.record_ticket_dispatch("repo-director", "pr", %{kind: :implementation, run_id: "run-1", state: "In Progress"})
+      question = park("repo-director", "In Progress")
+
+      assert %{kind: :action} = Item.from_question(TicketState.normalize(RunStore.get_ticket_state("repo-director", "pr")), question)
+
+      assert {:ok, %{move: "unblock", from_state: "Backlog", to_state: "In Progress", moved: true, undo_window_ms: nil}} =
+               DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+
+      assert_received {:memory_tracker_state_update, "pr", "In Progress"}
+      assert %{phase: "In Progress", dispatches: []} = RunStore.get_ticket_state("repo-director", "pr")
+      assert %{state: :answered, answer: %{option: 1, text: "Run it again"}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
+      assert {:ok, nil} = Pauses.get({:ticket, "repo-director", "pr"})
+
+      assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director: MOT-40 goes back to In Progress with its workspace and branch as they are."}
+    end
+
+    test ~s(answering "Run it again" resumes it in the phase it left; "Leave it parked" keeps it paused), %{opts: opts} do
+      put_issues([%{pr("Backlog") | repo_key: "repo-director"}])
+      question = park("repo-director", "Rework")
+
+      assert {:ok, %{move: "decide", moved: false}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Leave it parked", opts)
+      assert parked?("repo-director")
+
+      {:ok, _pause} = Pauses.clear_reasons({:ticket, "repo-director", "pr"}, fn _reason -> true end, by: Pauses.director())
+      question = park("repo-director", "Rework")
+
+      assert {:ok, %{move: "unblock", to_state: "Rework"}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Run it again", opts)
+      assert_received {:memory_tracker_state_update, "pr", "Rework"}
+      refute parked?("repo-director")
+    end
+
+    test ~s(the Inbox's Decide answers its question: "Run it again" resumes it, another question id is refused), %{opts: opts} do
+      put_issues([%{pr("Backlog") | repo_key: "repo-director"}])
+      question = park("repo-director", "In Progress")
+      picks = [%{question: question.question, answer: " Run it again "}]
+
+      assert {:error, {:conflict, "MOT-40 is not waiting on a decision"}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks, question_id: "q-other"}, opts)
+
+      assert {:ok, %{move: "unblock", to_state: "In Progress", moved: true}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks, question_id: " #{question.id} "}, opts)
+
+      assert_received {:memory_tracker_state_update, "pr", "In Progress"}
+      refute parked?("repo-director")
+      assert %{state: :answered, answer: %{option: 1}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
+    end
+
+    test "a ticket parked before parks asked a question goes back by its park signal", %{opts: opts} do
+      put_issues([%{pr("Backlog") | repo_key: "repo-director"}])
+      :ok = TicketSignals.record("repo-director", "pr", "blocked", %{to: "Backlog", reason: "idle_park"})
+
+      assert {:ok, %{move: "unblock", to_state: "In Progress", moved: true}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+      assert_received {:memory_tracker_state_update, "pr", "In Progress"}
+    end
+
+    test "a Backlog ticket no park put there, or one Linear refuses to move back, is not resumed", %{opts: opts} do
+      put_issues([%{pr("Backlog") | repo_key: "repo-director"}])
+      :ok = TicketSignals.record("repo-director", "pr", "blocked", %{to: "Backlog", reason: "idle_park"})
+      :ok = TicketSignals.record("repo-director", "pr", "decision returned", %{move: "backlog", to: "Backlog"})
+
+      assert {:error, {:conflict, "MOT-40 has nothing a person can unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+
+      park("repo-director", "In Progress")
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :boom})
+
+      capture_log(fn -> assert {:error, {:linear, :boom}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts) end)
+      assert parked?("repo-director")
+    end
+
+    test "Restart lifts a park's pause, even one whose question was never asked", %{opts: opts} do
+      github_activity(state: "OPEN")
+      put_issues([restart_issue(state: "Backlog")])
+      park("repo-restart", "In Progress", false)
+
+      assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "Start over"}, restart_opts(opts))
+      refute parked?("repo-restart")
     end
   end
 

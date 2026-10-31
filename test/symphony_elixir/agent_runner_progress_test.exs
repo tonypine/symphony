@@ -2,11 +2,15 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
+  alias SymphonyElixir.Inbox.Item
   alias SymphonyElixir.Linear.Client
+  alias SymphonyElixir.Pauses
   alias SymphonyElixir.PrWatch.Attempts
   alias SymphonyElixir.PrWatchSupport
+  alias SymphonyElixir.Questions
   alias SymphonyElixir.RunStore
   alias SymphonyElixir.TicketPullRequest
+  alias SymphonyElixir.TicketState
   alias SymphonyElixir.WorkspaceHead
 
   @pr_url "https://github.com/example/repo/pull/337"
@@ -156,7 +160,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       # Second cycle: a later Rework run pushes a new head to the PR and emits no signal of its own.
       # The earlier run's move record is bound to the earlier head, so it must not stand in for this
       # run's signal.
-      Application.delete_env(:symphony_elixir, :progress_agent_turns)
+      next_run()
       Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-new", checks: []}})
 
       assert_raise RuntimeError, ~r/rework_handoff_failed.*handoff_signal_missing/, fn ->
@@ -173,7 +177,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert RunStore.get_rework_base("default", "issue-progress") == "sha-old"
     refute_received {:memory_tracker_state_update, _issue_id, _state}
 
-    Application.delete_env(:symphony_elixir, :progress_agent_turns)
+    next_run()
     run_issue!("Rework", heads: ["sha-rework"], handoff: "sha-rework")
 
     assert turns() == 1
@@ -213,7 +217,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   test "a Rework run keeps going while its commits are not the PR head or the head is unreadable" do
     for pr_head_result <- [{:ok, %{commit_sha: "sha-old", checks: []}}, {:error, :gh_unavailable}] do
       Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_head_result)
-      Application.delete_env(:symphony_elixir, :progress_agent_turns)
+      next_run()
 
       run_issue!("Rework", heads: ["sha-old", "sha-rework", "sha-rework-2"], states: ["Rework", "Done"])
 
@@ -229,7 +233,61 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert turns() == 2
     assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
     assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue in Backlog" <> _note}
-    assert_signal("blocked", %{to: "Backlog", reason: "idle_park"})
+    assert_signal("blocked", %{to: "Backlog", reason: "idle_park", from: "In Progress"})
+  end
+
+  describe "a parked ticket (TP-1326)" do
+    test "asks its question in Backlog, held until a person answers it" do
+      run_issue!("Rework", heads: ["sha-same"], pr_url: nil, max_turns: 5)
+
+      assert [%{title: "TP-337 is parked: its last 2 turns changed nothing", options: [%{label: "Run it again"} | _]} = question] =
+               Questions.open({:ticket, "default", "issue-progress"})
+
+      assert {:ok, %{reasons: [%{kind: :question, waits_on: %{question_id: id}}]}} = Pauses.get({:ticket, "default", "issue-progress"})
+      assert id == question.id
+      assert_signal("blocked", %{to: "Backlog", reason: "idle_park", from: "Rework"})
+      record = TicketState.normalize(RunStore.get_ticket_state("default", "issue-progress"))
+      assert record.phase == "Backlog"
+      assert %{kind: :action, state: "Backlog"} = Item.from_question(record, question)
+    end
+
+    test "is paused on a reason Unblock releases when its question can't be asked" do
+      # An identifier the question's plain-words check refuses.
+      issue = %Issue{id: "issue-progress", identifier: "`TP-337`", state: "In Progress", repo_key: "default"}
+      fetcher = fn _ids -> {:ok, [issue]} end
+
+      log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 5, issue_state_fetcher: fetcher) end)
+
+      assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+
+      assert {:ok, %{reasons: [%{kind: :environment, waits_on: %{condition: "idle_park"}, releasable: true, text: text}]}} =
+               Pauses.get({:ticket, "default", "issue-progress"})
+
+      assert text == "2 turns in In Progress made no new commit and no state change, so Symphony parked it in Backlog"
+      assert Questions.open({:ticket, "default", "issue-progress"}) == []
+      assert log =~ "Failed to ask the park's question"
+    end
+
+    test "pushes its unpushed commits first, and parks whatever the push says" do
+      test_pid = self()
+
+      for {result, logged} <- [
+            {{:pushed, "auto/TP-337"}, "Pushed issue_id=issue-progress issue_identifier=TP-337's unpushed commits to origin auto/TP-337 before parking it"},
+            {{:error, :origin_mismatch}, "they stay in its workspace reason=:origin_mismatch"},
+            {:nothing, "Parking"}
+          ] do
+        next_run()
+        pusher = fn workspace, nil, _source_repo -> send(test_pid, {:pushed_from, workspace}) && result end
+
+        opts = [heads: ["sha-same"], pr_url: nil, max_turns: 5, runner_opts: [workspace_pusher: pusher]]
+        log = capture_log(fn -> run_issue!("In Progress", opts) end)
+
+        assert_received {:pushed_from, workspace}
+        assert workspace =~ "TP-337"
+        assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+        assert log =~ logged
+      end
+    end
   end
 
   describe "a run whose ticket waits on a decision" do
@@ -356,7 +414,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       for finished <- ["closed", "merged"] do
         :ok = TicketPullRequest.record_created("default", "issue-progress", @pr_url, "auto/TP-337")
         :ok = TicketPullRequest.mark_finished("default", @pr_url, finished)
-        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+        next_run()
 
         log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], max_turns: 5, pr_url: nil) end)
 
@@ -405,7 +463,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
           {:error, :gh_unavailable}
         ] do
       Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_head_result)
-      Application.delete_env(:symphony_elixir, :progress_agent_turns)
+      next_run()
 
       run_issue!("Rework", heads: ["sha-pushed"], max_turns: 4)
 
@@ -433,7 +491,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-pushed", checks: []}})
 
       for heads <- [["sha-pushed"], ["sha-old", "sha-pushed"]] do
-        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+        next_run()
 
         log = capture_log(fn -> run_issue!("In Progress", heads: heads, max_turns: 4) end)
 
@@ -451,7 +509,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
             {["sha-old", "sha-fix"], {:ok, %{commit_sha: nil, checks: []}}}
           ] do
         Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_head_result)
-        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+        next_run()
 
         run_issue!("In Progress", heads: heads, max_turns: 4)
 
@@ -548,7 +606,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       for {ci_status, attempts} <- [{run_not_finished, nil}, {%{commit_sha: "sha-fixed", checks: passed}, rerun}] do
         if attempts, do: PrWatchSupport.update_watch!("default", "issue-progress", &%{&1 | attempts: attempts})
         Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, ci_status})
-        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+        next_run()
 
         log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], handoff: "sha-fixed", auto_review: nil) end)
 
@@ -569,7 +627,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
             {["sha-dirty", "sha-fixed"], {:error, :gh_unavailable}}
           ] do
         Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_head_result)
-        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+        next_run()
 
         run_issue!("In Progress", heads: heads, max_turns: 6)
 
@@ -624,7 +682,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-same", checks: @green_checks}})
 
       for {auto_review, post_pr_state} <- [{%{enabled: true}, "Code Review"}, {nil, "Code Review"}] do
-        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+        next_run()
 
         log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], handoff: "sha-same", max_turns: 6, auto_review: auto_review) end)
 
@@ -679,7 +737,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
             {:ok, %{commit_sha: "sha-other", checks: @green_checks}}
           ] do
         Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_head_result)
-        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+        next_run()
 
         run_issue!("In Progress", heads: ["sha-same"], max_turns: 6)
 
@@ -707,7 +765,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
       for approved <- [true, false] do
         :ok = put_pending_ci_failure(approved: approved)
-        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+        next_run()
 
         assert_raise RuntimeError, ~r/green_fix_handoff_failed/, fn ->
           run_issue!("In Progress", heads: ["sha-same"], max_turns: 6)
@@ -809,7 +867,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
           ] do
         :ok = put_pending_conflict(approved: approved, head_sha: conflict_head)
         put_green_pr_head("MERGEABLE")
-        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+        next_run()
 
         log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], handoff: "sha-same", max_turns: 6, auto_review: auto_review) end)
 
@@ -828,7 +886,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
         :ok = put_pending_conflict(approved: true, head_sha: "sha-same")
         if ci_failure?, do: :ok = put_pending_ci_failure(approved: true)
         put_green_pr_head(mergeable)
-        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+        next_run()
 
         run_issue!("In Progress", heads: ["sha-same"], max_turns: 6)
 
@@ -856,7 +914,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       for {checks, ci} <- [{@pending_checks, "running"}, {@green_checks, "green"}] do
         :ok = put_pending_ci_failure(approved: false)
         Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: checks}})
-        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+        next_run()
 
         log = capture_log(fn -> run_issue!("Rework", heads: ["sha-same", "sha-fixed"], handoff: "sha-fixed", max_turns: 6) end)
 
@@ -898,7 +956,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       for {state, heads} <- [{"Rework", ["sha-same", "sha-fixed"]}, {"Rework", ["sha-fixed"]}, {"In Progress", ["sha-fixed"]}] do
         :ok = put_pending_ci_failure(approved: false)
         Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: @red_checks}})
-        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+        next_run()
 
         run_issue!(state, heads: heads, max_turns: 6)
 
@@ -950,13 +1008,13 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       run_issue!("Rework", heads: ["sha-old", "sha-rework"])
     end
 
-    Application.delete_env(:symphony_elixir, :progress_agent_turns)
+    next_run()
 
     assert_raise RuntimeError, ~r/idle_park_failed/, fn ->
       run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 5)
     end
 
-    Application.delete_env(:symphony_elixir, :progress_agent_turns)
+    next_run()
     :ok = put_pending_conflict()
     green = [%{name: "make-all", status: "COMPLETED", conclusion: "SUCCESS"}]
     Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: green}})
@@ -1166,6 +1224,13 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   end
 
   defp turns, do: Application.get_env(:symphony_elixir, :progress_agent_turns, 0)
+
+  # Another run on the same ticket: its turns count from zero, and the pause a park set is lifted, as
+  # a person's Unblock lifts it.
+  defp next_run do
+    Application.delete_env(:symphony_elixir, :progress_agent_turns)
+    {:ok, _pause} = Pauses.clear_reasons({:ticket, "default", "issue-progress"}, fn _reason -> true end, by: Pauses.director())
+  end
 
   # What Claude's turn reports when it can't reach the model API.
   defp outage_info do

@@ -25,6 +25,7 @@ defmodule SymphonyElixir.AgentRunner do
     GitHub.PullRequest,
     Handoff,
     Hold,
+    IdlePark,
     LeftoverProcesses,
     Linear.Issue,
     Linear.TransientRetry,
@@ -36,6 +37,7 @@ defmodule SymphonyElixir.AgentRunner do
     PrReviewPoller,
     PrWatch,
     QaVerification,
+    Questions,
     RunKind,
     RunStore,
     SetupBlock,
@@ -1650,7 +1652,26 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp park_idle_run(%Issue{} = issue, run_context) do
     forget_rework_base(issue, run_context.opts)
+    push_parked_work(issue, run_context)
     park_idle_issue(issue, run_context.opts)
+  end
+
+  # A parked ticket's work is on origin, never only in its workspace: commits the agent made and
+  # didn't push are pushed to its branch first (`WorkspaceHead.push_unpushed/3`). A push that fails
+  # is logged and the park goes on: the commits stay in the workspace, which the park keeps.
+  defp push_parked_work(%Issue{} = issue, %{workspace: workspace, worker_host: worker_host, opts: opts}) do
+    pusher = Keyword.get(opts, :workspace_pusher, &WorkspaceHead.push_unpushed/3)
+
+    case pusher.(workspace, worker_host, Keyword.fetch!(opts, :settings).workspace.repo) do
+      {:pushed, branch} ->
+        Logger.info("Pushed #{issue_context(issue)}'s unpushed commits to origin #{branch} before parking it")
+
+      :nothing ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Could not push #{issue_context(issue)}'s unpushed commits before parking it; they stay in its workspace reason=#{inspect(reason)}")
+    end
   end
 
   # A fix on an approved PR (the CI failure or conflict came from `Merging`) whose PR head is still
@@ -1747,12 +1768,29 @@ defmodule SymphonyElixir.AgentRunner do
     ctx = %{settings: Keyword.fetch!(opts, :settings), repo_key: run_repo_key(issue, opts)}
 
     with :ok <- with_linear_retry(fn -> TransitionGuard.perform(issue_id, :idle_park, ctx) end, label, opts),
+         :ok <- hold_parked_issue(issue, ctx.repo_key),
          :ok <- with_linear_retry(fn -> Tracker.create_comment(issue_id, idle_park_note()) end, label, opts) do
-      record_move_signal(issue, "blocked", %{to: @idle_park_state, reason: "idle_park"}, opts)
+      record_move_signal(issue, "blocked", %{to: @idle_park_state, reason: IdlePark.signal_reason(), from: issue.state}, opts)
       :ok
     else
       {:error, reason} -> {:error, {:idle_park_failed, reason}}
     end
+  end
+
+  # The park asks its question through the one path (`IdlePark.question_attrs/2`), which pauses the
+  # ticket on it. Asked after the move, so the Inbox lists it in Backlog. One the store refuses
+  # pauses the ticket on a reason the Director releases with Unblock instead, as a dispatch loop's
+  # does; the park stands either way.
+  defp hold_parked_issue(%Issue{id: issue_id} = issue, repo_key) do
+    ticket = {:ticket, repo_key, issue_id}
+
+    with {:error, reason} <- Questions.ask(ticket, IdlePark.question_attrs(issue.identifier || issue_id, @max_empty_turns)) do
+      Logger.warning("Failed to ask the park's question for #{issue_context(issue)}: #{inspect(reason)}")
+      text = "#{@max_empty_turns} turns in #{issue.state} made no new commit and no state change, so Symphony parked it in #{@idle_park_state}"
+      _ = Pauses.set(ticket, %{kind: :environment, waits_on: %{condition: IdlePark.signal_reason()}, text: String.slice(text, 0, 300), releasable: true})
+    end
+
+    :ok
   end
 
   # The CI checks that keep a run that pushed from being parked read the ticket's PR. Saying
@@ -1763,7 +1801,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp idle_park_note do
     """
-    Symphony parked this issue in #{@idle_park_state}: the agent's last #{@max_empty_turns} turns made no new commit and no state change, so another turn would repeat them. Move it back to Todo once it can make progress.
+    Symphony parked this issue in #{@idle_park_state}: the agent's last #{@max_empty_turns} turns made no new commit and no state change, so another turn would repeat them. Its work is on its branch. Answer its question in the Inbox, or Unblock it in the Director app, to run it again where it stopped.
     """
   end
 

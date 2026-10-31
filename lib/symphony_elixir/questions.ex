@@ -458,7 +458,8 @@ defmodule SymphonyElixir.Questions do
 
   @doc """
   The open question on `ticket` that the Director's Unblock answers: one Symphony asked when it
-  paused the ticket on a dispatch loop or a quiet handoff (`SymphonyElixir.DispatchLoop`), or a
+  paused the ticket on a dispatch loop or a quiet handoff (`SymphonyElixir.DispatchLoop`), an idle
+  run's park (`SymphonyElixir.IdlePark`), or a
   run's block report asked (`SymphonyElixir.TransitionGuard.block_report_question/1`), known by its
   Unblock option. The newest when there are several; nil when there is none.
   """
