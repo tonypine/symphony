@@ -2293,6 +2293,25 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:error, {:conflict, "there is no move on MOT-40 to undo"}} = DirectorMoves.undo("MOT-40", opts)
     end
 
+    test "the phase the ticket leaves is the record's, not the one Linear still shows", %{opts: opts, clock: clock} do
+      owned("repo-director", "Todo")
+      put_issues([%{pr("QA") | repo_key: "repo-director"}])
+
+      assert {:ok, %{from_state: "Todo", to_state: "Todo", moved: false}} = DirectorMoves.move(:move, "MOT-40", %{to: "Todo"}, opts)
+      refute_received {:memory_tracker_state_update, _id, _state}
+
+      assert {:ok, %{from_state: "Todo", to_state: "QA", moved: true}} = DirectorMoves.move(:move, "MOT-40", %{to: "QA"}, opts)
+      assert_received {:memory_tracker_state_update, "pr", "QA"}
+      assert %{phase: "QA", phase_owner: :symphony} = RunStore.get_ticket_state("repo-director", "pr")
+      assert [%{payload: %{from: "Todo", to: "QA"}}] = RunStore.list_ticket_events("repo-director", "pr", types: ["ticket.moved"])
+      assert [%{"move" => "move", "from_state" => "Todo", "to_state" => "QA"}] = audit_records()
+
+      :counters.add(clock, 1, 1_000)
+      assert {:ok, %{move: "undo", undone: "move", to_state: "Todo"}} = DirectorMoves.undo("MOT-40", opts)
+      assert_received {:memory_tracker_state_update, "pr", "Todo"}
+      assert %{phase: "Todo"} = RunStore.get_ticket_state("repo-director", "pr")
+    end
+
     test "refuses a phase the repo doesn't name and a ticket whose phase is Linear's", %{opts: opts} do
       owned("repo-director", "QA")
       assert {:error, {:invalid, "to is required"}} = DirectorMoves.move(:move, "MOT-40", %{to: " "}, opts)

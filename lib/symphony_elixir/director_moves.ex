@@ -878,13 +878,17 @@ defmodule SymphonyElixir.DirectorMoves do
     |> Enum.uniq_by(&String.downcase(String.trim(&1)))
   end
 
-  # The free move: the target is checked, then the owner, then the record and Linear move. A move to
-  # where the ticket is answers it without writing anything.
+  # The free move: the target is checked, then the owner, then the record and Linear move. The
+  # phase the ticket leaves is the record's, not the one Linear shows: the two part when Linear
+  # refused a move, and the record is the truth for a ticket Symphony owns. A move to where the
+  # record is answers it without writing anything.
   defp free_move(issue, to, note, opts) do
     settings = Config.settings!()
 
     with {:ok, to_state} <- repo_phase(issue, to, settings),
-         :ok <- require_owned(issue, opts) do
+         {:ok, phase} <- require_owned(issue, opts) do
+      issue = %{issue | state: phase || issue.state}
+
       if same_state?(issue.state, to_state),
         do: {:ok, unmoved(issue)},
         else: make_free_move(issue, to_state, note, settings, opts)
@@ -901,13 +905,16 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   # Only a phase Symphony owns moves through the Director: one Linear wrote follows Linear, so a
-  # move in Linear is the way to change it.
+  # move in Linear is the way to change it. An owned record answers with its phase.
   defp require_owned(%Issue{repo_key: nil} = issue, _opts), do: not_owned(issue)
 
   defp require_owned(issue, opts) do
     case Keyword.get(opts, :store, RunStore).get_ticket_state(issue.repo_key, issue.id) do
       %{} = record ->
-        if TicketState.normalize(record).phase_owner == :symphony, do: :ok, else: not_owned(issue)
+        case TicketState.normalize(record) do
+          %{phase_owner: :symphony, phase: phase} -> {:ok, phase}
+          _external -> not_owned(issue)
+        end
 
       _none ->
         not_owned(issue)
