@@ -636,6 +636,21 @@ defmodule SymphonyElixir.QuestionsTest do
       assert Questions.open(:junk) == []
     end
 
+    test "a question stored before a field existed reads it as its default, and so does each of its options" do
+      stored = %{id: "backfill-1", state: :open, title: "Move TP-1074", options: [%{label: "Move it", effect: "It moves."}, :junk], confirm: nil}
+
+      assert [question] = Questions.normalize([stored])
+      assert %{unblocks: nil, request: nil, asked_in: nil, reopened_at: nil, taken_back: []} = question
+      assert %{why: nil, if_unanswered: nil, recommendation_reason: nil, step: nil, answer: nil} = question
+      assert %{withdrawn: nil, legacy_event: nil} = question
+      assert [%{label: "Move it", effect: "It moves.", good: [], cost: [], risk: []} = option] = question.options
+      assert %{recommended?: false, unlocks: []} = option
+      assert Questions.normalize([%{question | unblocks: "TP-9"}]) == [%{question | unblocks: "TP-9"}]
+
+      # A rule reading a key the question was stored without reads its default.
+      refute Questions.lapsed?(question, {:run_ended, %{run_id: "r-1", started_at: nil, ended_at: @at, moved_to: "QA"}})
+    end
+
     test "the store refuses a question update for a malformed issue id" do
       unchanged = fn _questions, _pause -> {:ok, nil} end
       assert RunStore.update_ticket_question(@repo_key, nil, @at, unchanged) == {:error, :invalid_issue_id}

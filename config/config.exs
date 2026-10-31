@@ -17,8 +17,10 @@ config :phoenix, :json_library, Jason
 config :symphony_elixir, SymphonyElixirWeb.Endpoint,
   adapter: Bandit.PhoenixAdapter,
   url: [host: "localhost"],
+  # The API is JSON only: an error renders as JSON whatever the request accepts. An HTML error view
+  # needs Phoenix.HTML, which the release does not ship (TP-1323).
   render_errors: [
-    formats: [html: SymphonyElixirWeb.ErrorHTML, json: SymphonyElixirWeb.ErrorJSON],
+    formats: [json: SymphonyElixirWeb.ErrorJSON],
     layout: false
   ],
   pubsub_server: SymphonyElixir.PubSub,
