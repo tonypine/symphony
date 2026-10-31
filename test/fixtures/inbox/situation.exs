@@ -236,7 +236,16 @@ stop_reason = "Stopped by you at 12:00. Unblock runs it again where it stopped; 
   },
   pauses: %{
     "id-SHOP-4" => %{
-      reasons: [%{kind: :person, waits_on: %{action: "unblock"}, text: stop_reason, set_by: director, set_at: ~U[2026-10-20 12:00:00.000Z], releasable: true}],
+      reasons: [
+        %{
+          kind: :person,
+          waits_on: %{action: "unblock"},
+          text: stop_reason,
+          set_by: director,
+          set_at: ~U[2026-10-20 12:00:00.000Z],
+          releasable: true
+        }
+      ],
       set_by: director,
       since: ~U[2026-10-20 12:00:00.000Z]
     }
