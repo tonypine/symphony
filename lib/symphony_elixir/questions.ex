@@ -301,8 +301,10 @@ defmodule SymphonyElixir.Questions do
   """
   @spec withdraw_lapsed(ticket(), lapse(), keyword()) :: {:ok, [question()]}
   def withdraw_lapsed(ticket, lapse, opts \\ []) do
+    # The hold's question first: `held/1`'s contract narrows `ticket`, and a malformed one still withdraws nothing.
+    deciding = held_question(ticket, :needs_decision, opts)
     blocked = with %{id: id} <- held(ticket), do: id
-    holding = [blocked, held_question(ticket, :needs_decision, opts)]
+    holding = [deciding, blocked]
 
     withdrawn =
       for question <- open(ticket),
