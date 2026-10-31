@@ -44,6 +44,12 @@ and checks what TP-272 used to leave to a person on the live app:
    vN", naming vN+1 and the failed check; its menu line "vN+1 was rolled back: symphony check failed: …"
    opens N+1's notes with the rollback steps; and its next check shows N+1 rolled back with Retry vN+1,
    without installing it again.
+10. **An update that can't start** (TP-1324): Retry vN+1 from N, with a relaunch that makes N+1's binary not
+   executable before it runs it. N+1 never writes that it launched, so after 30 seconds the update helper
+   puts N back as `Symphony.app`, N+1 aside as `Symphony (rolled back).app`, and opens N. N runs again within
+   60 seconds of the hand-over, notifies "Symphony rolled back to vN", shows "vN+1 was rolled back: the app
+   didn't start within 30 seconds of the update; see …/update.log" and Update rolled back: vN+1 with Retry
+   vN+1, and the update log has a timestamped line for each step, the launch that failed included.
 
 For each scenario the test checks the menu lines, the Symphony pid, the stub agent's log (a run that is
 stopped instead of finishing fails the drain checks) and a `before_run` hook's log, which records the release
