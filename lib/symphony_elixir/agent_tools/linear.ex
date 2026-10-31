@@ -1621,7 +1621,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp withdraw_questions(ticket, reason, title) do
     for question <- Questions.open(ticket),
         is_nil(title) or Request.normalize_title(question.title) == Request.normalize_title(title),
-        match?({:ok, _question}, Questions.withdraw(ticket, question.id, reason, by: @asking_run)),
+        match?({:ok, _question}, Questions.withdraw(ticket, question.id, reason, by: @asking_run, cause: "superseded")),
         do: question.id
   end
 

@@ -617,7 +617,11 @@ what it belonged to ends: a Restart (every question), a move to `Backlog` (the q
 asked), a `run.ended` whose run asked it once the ticket is in another phase than the one the run
 started in, a merge settled, a move into a terminal state (every question). A question Symphony, a
 rule or a person asked (a merge confirmation, protected files) is about the ticket itself and
-outlives any run. A question a Blocked hold waits on ends with that hold, unless the ticket merged
+outlives any run, and so does a question that holds the ticket: one a request comment shows (a run's
+`linear_request_human_action`, such as a protected-path authorization) or one a Needs Decision or
+Blocked hold carries. The run ended because it asked, so its ending never withdraws it. Each
+`question.withdrawn` records its `cause`: `ticket_moved`, `restarted`, `hold_cleared`, `superseded`,
+or `run_ended` for a question that holds nothing. A question a Blocked hold waits on ends with that hold, unless the ticket merged
 or reached a terminal state. The hold carrying the question clears and its request gets the
 `## Action withdrawn` reply, as `linear_withdraw_human_action` makes them.
 Nothing asks a question this way yet.
