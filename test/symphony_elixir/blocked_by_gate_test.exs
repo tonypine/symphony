@@ -9,6 +9,7 @@ defmodule SymphonyElixir.BlockedByGateTest do
       tracker_terminal_states: ["Done", "Canceled", "Duplicate"]
     )
 
+    :ok = RunStore.clear()
     :ok
   end
 
@@ -18,6 +19,8 @@ defmodule SymphonyElixir.BlockedByGateTest do
         issue = todo_blocked_by(blocker("MT-2", unquote(blocker_state)))
 
         assert Issue.blocked?(issue, terminal_states())
+        # The poll pauses it on its open blocker; the gate reads the pause.
+        assert sweep(issue) == 1
         refute Orchestrator.should_dispatch_issue_for_test(issue, orchestrator_state())
       end
     end
@@ -27,6 +30,7 @@ defmodule SymphonyElixir.BlockedByGateTest do
         issue = todo_blocked_by(blocker("MT-2", unquote(blocker_state)))
 
         refute Issue.blocked?(issue, terminal_states())
+        assert sweep(issue) == 0
         assert Orchestrator.should_dispatch_issue_for_test(issue, orchestrator_state())
       end
     end
@@ -63,6 +67,7 @@ defmodule SymphonyElixir.BlockedByGateTest do
       }
 
       other = %Issue{id: "other", identifier: "MT-1", title: "Other", state: "Todo"}
+      assert sweep(verification) == 1
       state = Orchestrator.put_blocked_for_test(orchestrator_state(), [other, verification])
 
       refute Orchestrator.should_dispatch_issue_for_test(verification, state)
@@ -85,6 +90,7 @@ defmodule SymphonyElixir.BlockedByGateTest do
                Orchestrator.put_blocked_for_test(state, [unreadable]).blocked
 
       gap_done = %{verification | blocked_by: [closed_gap, %{gap | state: "Done"}]}
+      assert sweep(gap_done) == 1
       state = Orchestrator.put_blocked_for_test(state, [other, gap_done])
 
       assert state.blocked == []
@@ -260,6 +266,9 @@ defmodule SymphonyElixir.BlockedByGateTest do
   defp blocker(identifier, state), do: %{id: "id-" <> identifier, identifier: identifier, state: state}
 
   defp terminal_states, do: Config.settings!().tracker.terminal_states
+
+  # The poll's dependency sweep over `issue`, as the orchestrator runs it: how many reasons changed.
+  defp sweep(issue), do: Orchestrator.sweep_dependencies_for_test(Config.repo_key!(), [issue], terminal_states())
 
   defp snapshot_of(state) do
     {:reply, snapshot, _state} = Orchestrator.handle_call(:snapshot, {self(), make_ref()}, state)

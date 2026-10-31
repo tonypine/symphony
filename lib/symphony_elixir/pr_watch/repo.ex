@@ -1529,7 +1529,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     }
   end
 
-  # A Blocked hold the red backstop set reads as the fix ticket it waits on.
+  # A pause the red backstop set reads as the fix ticket it waits on.
   defp with_fix_ticket(%Action{rule: "R4"} = action, %{fix_ticket: identifier} = attempts, %Facts{hold: :blocked} = facts) when is_binary(identifier) do
     check = attempts.fix_failures |> List.last(%{}) |> Map.get(:check) || facts.failing_check || "failing"
     %{action | reason: "CI keeps failing: waiting on #{identifier}, a fix ticket for the `#{check}` check", args: %{fix_ticket: identifier, check: check}}
