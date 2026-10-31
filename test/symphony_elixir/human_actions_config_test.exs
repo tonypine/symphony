@@ -89,22 +89,19 @@ defmodule SymphonyElixir.HumanActionsConfigTest do
     refute HumanActions in SymphonyElixir.Application.child_specs_for_runtime(%{})
   end
 
-  test "reads every enabled repository route in the scope it polls" do
+  test "lists the questions of every enabled repository" do
     write_workflow_file!(Workflow.workflow_file_path(), linear_tracker(tracker_project_slug: "cycle"))
     test_pid = self()
 
     collect = fn repos, opts ->
-      send(test_pid, {:repos, repos, opts[:settings].human_actions.enabled})
-      {:ok, %{}, []}
+      send(test_pid, {:repos, repos, opts})
+      {:ok, %{}}
     end
 
     HumanActions.run_once(%{opts: [collect: collect], projects: %{}, timer: make_ref()})
 
-    assert_received {:repos, [repo], true}
-    assert {:ok, %{"project" => %{"slugId" => %{"eq" => "cycle"}}} = filter} = Client.repo_scope_filter(repo)
-    refute Map.has_key?(filter, "state")
-
-    write_workflow_file!(Workflow.workflow_file_path(), linear_tracker(tracker_api_token: nil))
-    assert {:error, :missing_linear_api_token} = Client.repo_scope_filter(repo)
+    # The records are the collector's own read: it is handed no Linear client.
+    assert_received {:repos, [%{name: name}], []}
+    assert Config.settings_for_repo!(name).human_actions.enabled
   end
 end
