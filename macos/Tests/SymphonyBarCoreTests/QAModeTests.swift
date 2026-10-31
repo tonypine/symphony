@@ -63,6 +63,56 @@ final class QAModeTests: XCTestCase {
         XCTAssertNil(stores.controlURLFallback)
     }
 
+    func testQAModeReadsALiveControlURLAndTokenOnlyTogether() {
+        let live = [QAMode.controlURLKey: " http://127.0.0.1:4000/ \n", QAMode.controlTokenKey: " qa-token\n"]
+        XCTAssertEqual(
+            qaStores(live).qaMode?.liveControl,
+            QAMode.LiveControl(url: URL(string: "http://127.0.0.1:4000")!, token: "qa-token")
+        )
+        XCTAssertNil(qaStores([QAMode.controlURLKey: "http://127.0.0.1:4000"]).liveControl)
+        XCTAssertNil(qaStores([QAMode.controlTokenKey: "qa-token"]).liveControl)
+        XCTAssertNil(qaStores([QAMode.controlURLKey: "http://127.0.0.1:4000", QAMode.controlTokenKey: " "]).liveControl)
+        // Only the QA host's own server: a remote URL would send the token off the Mac.
+        XCTAssertNil(qaStores([QAMode.controlURLKey: "https://symphony.example.com", QAMode.controlTokenKey: "qa-token"]).liveControl)
+        XCTAssertNil(qaStores([QAMode.controlURLKey: "file:///tmp", QAMode.controlTokenKey: "qa-token"]).liveControl)
+    }
+
+    func testALiveControlURLIsIgnoredOutsideQAMode() {
+        let stores = AppStores(
+            environment: [QAMode.controlURLKey: "http://127.0.0.1:4000", QAMode.controlTokenKey: "qa-token"],
+            home: home
+        )
+        XCTAssertNil(stores.liveControl)
+        XCTAssertEqual(stores.apiFallback, SymphonyState.defaultBaseURL)
+        XCTAssertNil(stores.apiToken)
+    }
+
+    func testQAModeTalksToTheLiveControlURLInsteadOfTheFixtures() {
+        let stores = qaStores([
+            QAMode.apiFixturesKey: "/tmp/director-app",
+            QAMode.controlURLKey: "http://127.0.0.1:4000",
+            QAMode.controlTokenKey: "qa-token",
+        ])
+        XCTAssertEqual(stores.liveControl?.url, URL(string: "http://127.0.0.1:4000"))
+        XCTAssertNil(stores.apiFixtures)
+        XCTAssertNil(stores.qaMode?.apiFixtures)
+        XCTAssertEqual(stores.apiFallback, URL(string: "http://127.0.0.1:4000"))
+        XCTAssertEqual(stores.apiToken, "qa-token")
+        // The webhook secret is the live Symphony's state root's to hand off, not a fixture's.
+        let stateRoot = root.appendingPathComponent("state", isDirectory: true)
+        XCTAssertEqual(stores.webhookSecretHandOff(stateRoot: stateRoot), WebhookSecret.handOffFile(stateRoot: stateRoot))
+        // The QA root still rules the rest.
+        XCTAssertEqual((stores.secrets as? FileSecretStore)?.file, stores.qaMode?.secretsFile)
+        XCTAssertEqual(stores.logDirectory, stores.qaMode?.logDirectory)
+
+        // The same build without the URL reads the fixtures.
+        let fixtures = qaStores([QAMode.apiFixturesKey: "/tmp/director-app", QAMode.controlTokenKey: "qa-token"])
+        XCTAssertNil(fixtures.liveControl)
+        XCTAssertEqual(fixtures.apiFixtures?.directory.path, "/tmp/director-app")
+        XCTAssertEqual(fixtures.apiFallback, APIFixtures.baseURL)
+        XCTAssertEqual(fixtures.apiToken, APIFixtures.token)
+    }
+
     func testQAModeReadsScriptedAndTheUpdateURL() {
         let plain = QAMode.detect(environment: [QAMode.environmentKey: "/tmp/qa"])
         XCTAssertEqual(plain?.scripted, false)
