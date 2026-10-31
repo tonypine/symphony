@@ -1,60 +1,29 @@
 defmodule SymphonyElixir.HumanActions.Collector do
   @moduledoc """
-  Reads the open human actions in Symphony's scope from Linear, grouped by project.
+  The open human actions in Symphony's scope, grouped by project, built from the tickets' records
+  (`SymphonyElixir.RunStore.list_all_ticket_states/0`) and never from Linear.
 
-  One query per repository route, in the scope that route polls, returns every non-terminal issue
-  that carries the `Needs Decision` hold's label. Each open `## Decision needed:` comment on one,
-  or older `## Action needed:` one, is a `:request` (see `SymphonyElixir.HumanActions.Request`); a
-  withdrawn or answered one is not listed.
+  Every open Question (`SymphonyElixir.Questions`) on the record of a ticket of an enabled
+  repository is a `:request` action, with its title and its ticket, worded as the request comment
+  the pause projector posts for it. A Question answered or withdrawn
+  in the Director is no longer open, so it drops from the next update without a Linear read, and
+  the update lists the same questions the Inbox does (`SymphonyElixir.Inbox.FromRecord`).
 
-  An issue's comments and history are read in full, past the first page the issue query returns,
-  up to ten more pages of 100 each.
+  A ticket outside a project is skipped: there is no project to post the update to.
 
-  Issues outside a project are skipped: there is no project to post the update to.
-
-  `collect_all/2` also returns, from the same read, the issues waiting on a person
-  (`SymphonyElixir.HumanActions.Waiting`), with or without a project.
+  The issue node helpers (`open_requests/2`, `newest_open_request/2`, `newest_request/2`,
+  `answered_requests/1` and `read_more_pages/2`) read a ticket's Linear comments for the callers
+  that still parse them.
   """
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Hold
-  alias SymphonyElixir.HumanActions.{Action, Request, Waiting}
-  alias SymphonyElixir.Linear.Client
-  alias SymphonyElixir.SubIssueWait
+  alias SymphonyElixir.HumanActions.{Action, Request}
+  alias SymphonyElixir.{RunStore, SubIssueWait, TicketState}
 
-  @issue_first 50
-  @comment_last 30
-  @history_first 50
   # An issue's comments and history past the first read come in pages of this size, up to this
   # many pages each.
   @more_page_size 100
   @more_pages_max 10
-
-  @query """
-  query SymphonyHumanActions($filter: IssueFilter!, $first: Int!, $after: String, $commentLast: Int!, $historyFirst: Int!) {
-    issues(filter: $filter, first: $first, after: $after) {
-      nodes {
-        id
-        identifier
-        title
-        url
-        state { name }
-        project { id name }
-        parent { identifier project { id name } }
-        labels { nodes { name } }
-        comments(last: $commentLast, orderBy: createdAt) {
-          nodes { id body createdAt parent { id } }
-          pageInfo { hasPreviousPage startCursor }
-        }
-        history(first: $historyFirst) {
-          nodes { createdAt fromState { name } toState { name } }
-          pageInfo { hasNextPage endCursor }
-        }
-      }
-      pageInfo { hasNextPage endCursor }
-    }
-  }
-  """
 
   @comments_query """
   query SymphonyHumanActionsComments($id: String!, $size: Int!, $cursor: String!) {
@@ -82,97 +51,79 @@ defmodule SymphonyElixir.HumanActions.Collector do
   @type project_actions :: %{project: %{id: String.t(), name: String.t() | nil}, actions: [Action.t()]}
 
   @doc """
-  The open actions in the scope of `repos`, by project id. Fails as a whole when any route's query
-  fails, so a project is never reported empty because its route could not be read.
+  The open actions of the tickets of `repos` (each by its `name`, the repo key its records carry),
+  by project id. Fails when the records cannot be read, so a project is never reported empty
+  because its records were not there.
 
-  Options: `:settings` (labels, states), `:linear_client` (`(query, variables, opts)` GraphQL
-  function) and `:scope_filter` (the route's issue filter, `SymphonyElixir.Linear.Client.repo_scope_filter/1`).
+  Options: `:records` (a function returning the records, default
+  `SymphonyElixir.RunStore.list_all_ticket_states/0`).
   """
-  @spec collect([term()], keyword()) :: {:ok, %{String.t() => project_actions()}} | {:error, term()}
+  @spec collect([%{name: String.t()}], keyword()) :: {:ok, %{String.t() => project_actions()}} | {:error, term()}
   def collect(repos, opts) do
-    with {:ok, actions, _waiting} <- collect_all(repos, opts), do: {:ok, actions}
+    repo_keys = MapSet.new(repos, & &1.name)
+
+    with records when is_list(records) <- Keyword.get(opts, :records, &RunStore.list_all_ticket_states/0).() do
+      actions =
+        records
+        |> Enum.map(&TicketState.normalize/1)
+        |> Enum.filter(&MapSet.member?(repo_keys, &1.repo_key))
+        |> Enum.flat_map(&record_actions/1)
+
+      {:ok, by_project(actions)}
+    end
+  end
+
+  defp record_actions(%{project: %{id: project_id} = project} = record) when is_binary(project_id) do
+    issue = %{id: record.issue_id, identifier: record.issue_identifier, title: record.title, url: record.url, state: record.phase}
+
+    for %{state: :open} = question <- record.questions do
+      %Action{
+        key: "question:#{question.id}",
+        kind: :request,
+        title: question.title,
+        why: question.why,
+        if_unanswered: question.if_unanswered,
+        unblocks: question.unblocks,
+        question: question.question,
+        options: Enum.map(question.options, &option_line/1),
+        done_when: done_when(question.options),
+        issue: issue,
+        project: %{id: project_id, name: project.name}
+      }
+    end
+  end
+
+  defp record_actions(_record), do: []
+
+  # An option as the request comment renders it, without its trade-offs.
+  defp option_line(option) do
+    marker = if Map.get(option, :recommended?), do: " (recommended)"
+    "**#{Request.label(option)}**#{marker}: #{Request.one_line(option.effect)}"
+  end
+
+  # A request never moves its ticket: the person's answer in the Director (or a reply) records the
+  # decision and clears the hold, so the line names no state move.
+  defp done_when([_ | _]), do: "you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request."
+  defp done_when(_options), do: "you reply to the request, or the agent withdraws the request."
+
+  defp by_project(actions) do
+    actions
+    |> Enum.uniq_by(& &1.key)
+    |> Enum.group_by(& &1.project.id)
+    |> Map.new(fn {project_id, [first | _] = project_actions} -> {project_id, %{project: first.project, actions: project_actions}} end)
   end
 
   @doc """
-  `collect/2`, plus the issues waiting on a person (`SymphonyElixir.HumanActions.Waiting`) read
-  from the same query.
-  """
-  @spec collect_all([term()], keyword()) ::
-          {:ok, %{String.t() => project_actions()}, [Waiting.entry()]} | {:error, term()}
-  def collect_all(repos, opts) do
-    settings = Keyword.fetch!(opts, :settings)
-
-    repos
-    |> Enum.reduce_while({:ok, []}, fn repo, {:ok, acc} ->
-      case repo_nodes(repo, settings, opts) do
-        {:ok, nodes} -> {:cont, {:ok, acc ++ nodes}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, nodes} ->
-        nodes = Enum.uniq_by(nodes, & &1["id"])
-        actions = Enum.flat_map(nodes, &issue_actions(&1, settings))
-        {:ok, by_project(actions), Waiting.entries(nodes, settings)}
-
-      error ->
-        error
-    end
-  end
-
-  defp repo_nodes(repo, settings, opts) do
-    scope_filter = Keyword.get(opts, :scope_filter, &Client.repo_scope_filter/1)
-    linear_client = Keyword.get(opts, :linear_client, &Client.graphql/3)
-
-    with {:ok, scope} <- scope_filter.(repo) do
-      read_pages(filter(scope, settings), nil, [], linear_client)
-    end
-  end
-
-  # Reads every page: an issue left past the first page would drop its actions from the update
-  # as if they had closed.
-  defp read_pages(filter, after_cursor, acc, linear_client) do
-    with {:ok, body} <- linear_client.(@query, variables(filter, after_cursor), []),
-         {:ok, nodes, next} <- issue_page(body),
-         {:ok, nodes} <- read_more(nodes, linear_client) do
-      case next do
-        {:next, cursor} -> read_pages(filter, cursor, [nodes | acc], linear_client)
-        :done -> {:ok, [nodes | acc] |> Enum.reverse() |> Enum.concat()}
-      end
-    end
-  end
-
-  defp variables(filter, after_cursor) do
-    %{
-      filter: filter,
-      first: @issue_first,
-      after: after_cursor,
-      commentLast: @comment_last,
-      historyFirst: @history_first
-    }
-  end
-
-  defp issue_page(%{"data" => %{"issues" => %{"nodes" => nodes} = issues}}) when is_list(nodes) do
-    case issues["pageInfo"] do
-      %{"hasNextPage" => true, "endCursor" => cursor} when is_binary(cursor) and cursor != "" -> {:ok, nodes, {:next, cursor}}
-      %{"hasNextPage" => true} -> {:error, :linear_missing_end_cursor}
-      _page_info -> {:ok, nodes, :done}
-    end
-  end
-
-  defp issue_page(body), do: {:error, {:human_actions_query_failed, body}}
-
-  @doc """
-  Reads the rest of each node's comments and history past the first page, as the issue query
-  here does: for a caller (`SymphonyElixir.Inbox`) whose own query reads them with the same fields.
+  Reads the rest of each issue node's comments and history past the first page, for a caller
+  (`SymphonyElixir.PlanBrief`) whose own query reads them with `id`, `body`, `createdAt` and
+  `parent` for a comment, and `createdAt`, `fromState` and `toState` for a history entry.
   """
   @spec read_more_pages([map()], (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()})) ::
           {:ok, [map()]} | {:error, term()}
   def read_more_pages(nodes, linear_client), do: read_more(nodes, linear_client)
 
   # A long-lived issue's review brief, requests and move into its state can sit past the comments
-  # and history the issue query reads: read the rest of them, so it keeps its waited time and
-  # headline.
+  # and history its first read returns: read the rest of them.
   defp read_more(nodes, linear_client) do
     nodes
     |> Enum.reduce_while({:ok, []}, fn node, {:ok, acc} ->
@@ -241,38 +192,6 @@ defmodule SymphonyElixir.HumanActions.Collector do
 
   defp merge_pages("comments", nodes, pages), do: pages |> Enum.reverse() |> Enum.concat() |> Enum.concat(nodes)
   defp merge_pages("history", nodes, pages), do: Enum.concat([nodes | pages])
-
-  defp filter(scope, settings) do
-    # A request leaves the ticket in its phase, so the hold's label is what finds it.
-    held = label_filter(Hold.label(:needs_decision))
-
-    %{"and" => [scope, held, %{"state" => %{"name" => %{"nin" => settings.tracker.terminal_states}}}]}
-  end
-
-  defp label_filter(name), do: %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => name}}}}
-
-  defp by_project(actions) do
-    actions
-    |> Enum.uniq_by(& &1.key)
-    |> Enum.group_by(& &1.project.id)
-    |> Map.new(fn {project_id, [first | _] = project_actions} -> {project_id, %{project: first.project, actions: project_actions}} end)
-  end
-
-  defp issue_actions(%{"project" => %{"id" => project_id} = project} = node, settings) when is_binary(project_id) do
-    issue = %{
-      id: node["id"],
-      identifier: node["identifier"],
-      title: node["title"],
-      url: node["url"],
-      state: get_in(node, ["state", "name"])
-    }
-
-    context = %{node: node, issue: issue, project: %{id: project_id, name: project["name"]}, settings: settings}
-
-    for {comment_id, request} <- open_requests(node, settings), do: request_action(context, comment_id, request)
-  end
-
-  defp issue_actions(_node, _settings), do: []
 
   @doc """
   The open `## Action needed:` comments of an issue as read from Linear (its `comments` with
@@ -355,30 +274,6 @@ defmodule SymphonyElixir.HumanActions.Collector do
         request != nil,
         do: {id, request}
   end
-
-  defp request_action(context, comment_id, request) do
-    action(context, %{
-      key: "request:#{comment_id}",
-      kind: :request,
-      title: request.title,
-      why: request.why,
-      if_unanswered: request.if_unanswered,
-      unblocks: request.unblocks,
-      question: request.question,
-      options: request.options,
-      steps: request.steps,
-      done_when: request_done_when(request)
-    })
-  end
-
-  # A request never moves its ticket: the person's reply (or the Inbox's Decide) records the
-  # decision and clears the hold, so the line names no state move.
-  defp request_done_when(%{options: [_ | _]}),
-    do: "you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request."
-
-  defp request_done_when(_request), do: "you reply to the request, or the agent withdraws the request."
-
-  defp action(context, attrs), do: struct!(Action, Map.merge(attrs, %{issue: context.issue, project: context.project}))
 
   defp comments(node), do: node |> get_in(["comments", "nodes"]) |> List.wrap()
 

@@ -3030,9 +3030,11 @@ human_actions:
 - `label` is retired: a request pauses the ticket in its phase on the **Needs Decision** hold,
   whose label Symphony sets itself, and `linear_request_human_action` adds no label of its own. A
   config that still sets `human_actions.label` fails to load as an unknown key.
-- `interval_ms` (default `300000`): how often Symphony reads the open actions. A read is one Linear
-  request per repository route, plus one per project the first time Symphony sees it, plus one per
-  update posted. They show as `human_actions` in the dashboard's Linear usage table.
+- `interval_ms` (default `300000`): how often Symphony lists the open actions. It lists the open
+  questions on Symphony's own ticket records, the same ones the Inbox lists, and reads nothing from
+  Linear for them: a question answered in the Director drops from the next update. Its Linear
+  requests are one per project the first time Symphony sees it (to read back its last update), plus
+  one per update posted. They show as `human_actions` in the dashboard's Linear usage table.
 - `min_update_interval_ms` (default `900000`): the least time between two updates to one project. A
   change inside that window is posted once the window has passed, with whatever is open by then.
 
