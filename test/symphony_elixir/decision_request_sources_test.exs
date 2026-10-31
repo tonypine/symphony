@@ -44,6 +44,9 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
 
   # Each module that asks a Question directly, and what it asks.
   @question_sources %{
+    # A ticket parked in Backlog after turns with no new commit or state change
+    # (`SymphonyElixir.IdlePark`): "<id> is parked: its last N turns changed nothing".
+    "lib/symphony_elixir/agent_runner.ex" => [:idle_park],
     # The dispatch-loop guard (`SymphonyElixir.DispatchLoop`) and the quiet handoff: "<id> ran N
     # times in M minutes without finishing" and "<id>'s last two runs ended without a handoff".
     "lib/symphony_elixir/orchestrator.ex" => [:dispatch_loop, :quiet_handoff],
@@ -89,6 +92,9 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
     orchestrator = Map.new(lib_files())["lib/symphony_elixir/orchestrator.ex"]
     assert orchestrator =~ "DispatchLoop.question_attrs(loop,"
     assert orchestrator =~ "DispatchLoop.question_attrs({:quiet_handoff,"
+
+    runner = Map.new(lib_files())["lib/symphony_elixir/agent_runner.ex"]
+    assert runner =~ "IdlePark.question_attrs("
 
     guard = Map.new(lib_files())["lib/symphony_elixir/transition_guard.ex"]
     assert guard =~ "Questions.ask(ticket, block_report_question("
