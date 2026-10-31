@@ -289,6 +289,34 @@ final class UpdateHealthTests: XCTestCase {
         XCTAssertEqual(UpdateRelaunch(pending: newer, rollback: record, runningBuild: 42), .notReplaced(newer))
     }
 
+    func testRelaunchAfterTheNewAppDidNotStartPinsIt() {
+        let details = ReleaseDetails(notes: "Notes", pageURL: URL(string: "https://example.com/v43"), changes: 2)
+        let pending = PendingUpdate(
+            fromBuild: 42, toBuild: 43, version: "0.0.1.43", startSymphony: true, resumeDispatch: true, details: details
+        )
+        let reason = UpdateLaunch.failureReason(logPath: "~/Library/Logs/symphony/update.log")
+
+        XCTAssertEqual(
+            reason,
+            "the app didn't start within 30 seconds of the update; see ~/Library/Logs/symphony/update.log"
+        )
+        XCTAssertEqual(
+            UpdateRelaunch(pending: pending, rollback: nil, runningBuild: 42, launchFailure: reason),
+            .launchFailed(
+                RollbackRecord(
+                    build: 43, version: "0.0.1.43", reason: reason, startSymphony: true, resumeDispatch: true,
+                    details: details
+                )
+            ),
+            "the helper put this build back: it records the rollback the new build couldn't"
+        )
+        XCTAssertEqual(
+            UpdateRelaunch(pending: pending, rollback: nil, runningBuild: 43, launchFailure: reason),
+            .checkHealth(pending),
+            "a stale failure doesn't roll back a build that runs"
+        )
+    }
+
     func testStaleRollbackRecordDoesNotSkipTheHealthCheckOfTheSameBuild() {
         // A version from before automatic rollback was put back, never read the record or the pin, and installed the
         // rolled-back build again: toBuild <= record.build, and nothing pins it any more. The decision reads no pin.
@@ -432,10 +460,10 @@ final class UpdateHealthTests: XCTestCase {
             UpdateMenu.rollbackFailedLine(
                 version: "0.0.1.43",
                 reason: reason,
-                problem: .swapFailed(logPath: "~/Library/Caches/com.tonypine.symphony.bar/rollback-helper.log")
+                problem: .swapFailed(logPath: "~/Library/Logs/symphony/update.log")
             ),
             "v0.0.1.43 failed its check (\(reason)) and couldn't be rolled back: the apps couldn't be swapped; see "
-                + "~/Library/Caches/com.tonypine.symphony.bar/rollback-helper.log. \(byHand)"
+                + "~/Library/Logs/symphony/update.log. \(byHand)"
         )
         XCTAssertEqual(
             UpdateMenu.rollbackFailedLine(version: "0.0.1.43", reason: reason, problem: .helper("permission denied")),

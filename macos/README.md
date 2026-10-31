@@ -842,8 +842,16 @@ reason "rolled back": the line reads **Update rolled back: vX**, and **Retry vX*
 5. **Swap and relaunch:** the app starts a small helper (`Contents/Resources/update-helper.sh`, run from a
    copy in the cache folder) and quits. Once the app has exited, the helper moves it to
    `Symphony (previous).app` next to it (replacing an older one), moves the new app into place, and opens
-   it. If a move fails, it puts the old app back and opens that instead. Its log is
-   `~/Library/Caches/com.tonypine.symphony.bar/update-helper.log`.
+   it. If a move fails, it puts the old app back and opens that instead. The helper then waits up to 30
+   seconds for the new app to say it started (every launch of the app writes `launched` in the cache
+   folder). When it doesn't, the helper stops whatever runs from the new app, moves it aside as
+   `Symphony (rolled back).app`, puts `Symphony (previous).app` back and opens it, so an update never leaves
+   nothing running. The restored app pins the release it couldn't start, as a
+   [rollback](#health-check-and-automatic-rollback) does: it says "vX was rolled back: the app didn't start
+   within 30 seconds of the update", and the release shows as **Update rolled back: vX** with **Retry vX**.
+   Every step of an update and a rollback, by the app (download, pause and drain, stop, hand-over, launch,
+   health check, rollback) and by the helper (wait, swap, launch, rollback), is one timestamped line in
+   `~/Library/Logs/symphony/update.log`, which is kept across updates (moved to `update.log.1` past 1 MB).
 6. **Bring Symphony back:** the relaunched app runs the [health check](#health-check-and-automatic-rollback):
    it checks `symphony.yml` with its new embedded binary, starts Symphony from it, and, once it answers, resumes dispatch if the update paused it. A pause you
    made before the update stays. If the helper had to put the old app back, an alert says so.
@@ -887,8 +895,8 @@ If any of these fails, the app rolls back by itself:
    before anything moves.
 2. It stops Symphony if it runs, starts the update helper in reverse and quits. The helper moves the new
    version aside as `Symphony (rolled back).app`, out of the previous version's place, moves
-   `Symphony (previous).app` back to `Symphony.app`, and opens it. Its log is
-   `~/Library/Caches/com.tonypine.symphony.bar/rollback-helper.log`.
+   `Symphony (previous).app` back to `Symphony.app`, and opens it. Its steps go to
+   `~/Library/Logs/symphony/update.log`.
 3. The restored app starts Symphony if it ran before the update and resumes dispatch if the update paused
    it. A notification says "Symphony rolled back to vY", naming the version that failed and the check it
    failed. The line under the update items says the same, for example "v0.0.1.43 was rolled back: symphony

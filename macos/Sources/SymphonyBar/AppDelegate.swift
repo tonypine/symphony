@@ -85,6 +85,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var exitingOnSignal = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // First, so the update helper that relaunched this app knows it started and doesn't put the previous one back.
+        updater.markLaunched()
         MainMenu.install(
             settings: menuItem(
                 StatusMenu.settingsTitle,
@@ -253,7 +255,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 pending: updater.pending.take(),
                 rollback: updater.rollbacks.take(),
                 runningBuild: updates.current.build,
-                runningBundle: updater.bundleFileNumber
+                runningBundle: updater.bundleFileNumber,
+                launchFailure: UpdateLaunch.takeFailure(in: updater.cacheDirectory)
+                    ? UpdateLaunch.failureReason(logPath: updater.logPath) : nil
             )
         )
 
@@ -294,17 +298,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case .none:
             return false
         case let .notReplaced(pending):
+            updater.log.append("started after the update to v\(pending.version), which couldn't replace the app")
             updater.removeDownloads()
-            let message = UpdateMenu.rolledBackMessage(pending, logPath: updater.helperLogPath)
+            let message = UpdateMenu.rolledBackMessage(pending, logPath: updater.logPath)
             DispatchQueue.main.async { SymphonyRunner.showAlert(title: UpdateMenu.failedTitle, body: message) }
             resumeAfterUpdate = pending.resumeDispatch
             return pending.startSymphony
         case let .checkHealth(pending):
+            updater.log.append("started after the update from build \(pending.fromBuild); checking its health")
             updater.removeDownloads()
             checkedUpdate = pending
             resumeAfterUpdate = pending.resumeDispatch
             return pending.startSymphony
         case let .rolledBack(record):
+            updater.log.append("put back after v\(record.version) was rolled back: \(record.reason)")
+            updater.rolledBack = record
+            notifyAfterLaunch(.rolledBack(record, restoredVersion: updates.current.version))
+            resumeAfterUpdate = record.resumeDispatch
+            return record.startSymphony
+        case let .launchFailed(record):
+            // The failed build never ran, so it couldn't pin itself: this build does, as a rollback would have.
+            updater.log.append("put back after v\(record.version) didn't start; it won't be installed by itself again")
+            updater.removeDownloads()
+            updater.pin(record)
             updater.rolledBack = record
             notifyAfterLaunch(.rolledBack(record, restoredVersion: updates.current.version))
             resumeAfterUpdate = record.resumeDispatch
@@ -312,7 +328,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case let .rollbackFailed(record):
             // Still the build that failed its check: say how to roll back by hand, and don't start Symphony for the
             // update. Start Symphony at launch still applies.
-            let problem = RollbackProblem.swapFailed(logPath: updater.rollbackLogPath)
+            updater.log.append("the rollback of v\(record.version) couldn't swap the apps; still on this build")
+            let problem = RollbackProblem.swapFailed(logPath: updater.logPath)
             updater.notice = UpdateMenu.rollbackFailedLine(
                 version: record.version,
                 reason: record.reason,
@@ -354,6 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 runner.stop { [weak self] in self?.performHealth([.start]) }
             case .healthy:
                 guard let checkedUpdate else { break }
+                updater.log.append("v\(checkedUpdate.version) passed its health check")
                 let update = LastUpdate(checkedUpdate, installedAt: Date())
                 updater.lastUpdates.save(update)
                 // A manual update you just confirmed needs no notification.
@@ -379,6 +397,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             details: update.details,
             bundle: updater.bundleFileNumber
         )
+        updater.log.append("v\(update.version) failed its health check: \(record.reason); rolling back")
         // A crash loop can follow the healthy part of the check: the build put back doesn't say it was updated to.
         updater.lastUpdates.clear()
         startWhenStopped = false
@@ -398,6 +417,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     private func rollbackFailed(_ record: RollbackRecord, _ problem: RollbackProblem) {
+        updater.log.append("couldn't roll v\(record.version) back: \(problem.detail)")
         updater.pin(record)
         updater.notice = UpdateMenu.rollbackFailedLine(version: record.version, reason: record.reason, problem: problem)
         notify(.rollbackFailed(version: record.version, reason: record.reason, problem: problem))
@@ -791,6 +811,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             return
         }
         guard runner.isRunning else {
+            updater.log.append("Symphony isn't running from the app; nothing to drain")
             handOff(update, symphonyStopped: false, resumeDispatch: false)
             return
         }
@@ -799,6 +820,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             return
         }
         let alreadyPaused = StatusMenu.canResume(machine.status)
+        updater.log.append(
+            (alreadyPaused ? "dispatch already paused" : "pausing dispatch")
+                + "; waiting for agent runs, then stopping Symphony"
+        )
         restarter.drainForUpdate(alreadyPaused: alreadyPaused, kind: kind, version: update.release.version) {
             [weak self] stopped, pausedByUpdate in
             guard let self else { return }
@@ -807,6 +832,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 if restarter.machine.postponed { autoUpdater.postponed() }
                 return
             }
+            updater.log.append("drain done: agent runs finished and Symphony stopped")
             handOff(update, symphonyStopped: true, resumeDispatch: pausedByUpdate)
         }
     }

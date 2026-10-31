@@ -222,6 +222,100 @@ expect_status 0
 expect "$current" 2
 expect_opened "$dir/qa $current"
 
+# An update whose new app starts: it writes STATE_DIR/launched, as every launch
+# of the app does, and the helper leaves it in place.
+setup launch-watched
+make_app "$current" 1
+make_app "$new" 2
+make_app "$previous" 0
+state="$dir/cache"
+rolled_back="$dir/Applications/Symphony (rolled back).app"
+touch "$state/launched" "$state/launch-failed"
+printf '#!/bin/sh\necho "$1" >> "%s"\ntouch "%s/launched"\n' "$opened" "$state" > "$dir/open"
+SYMPHONY_UPDATE_OPEN="$dir/open" SYMPHONY_UPDATE_WAIT_SECONDS=10 SYMPHONY_UPDATE_LAUNCH_SECONDS=5 \
+  sh "$helper" "$pid" "$current" "$new" "$previous" "$state" "$rolled_back" > "$dir/log" 2>&1
+status=$?
+expect_status 0
+expect "$current" 2
+expect "$previous" 1
+[ ! -e "$rolled_back" ] || fail "a new app that started was rolled back"
+[ ! -e "$state/launch-failed" ] || fail "an earlier launch-failed was left for the app"
+expect_opened "$current"
+grep -q '\[helper\] .*started after' "$dir/log" || fail "the log doesn't say the new app started: $(cat "$dir/log")"
+
+# An update whose new app doesn't start (its binary isn't executable, so the
+# launch fails, and a launched file from the old app's own launch is no
+# proof): the helper puts the previous app back, says why in launch-failed,
+# and relaunches the previous app, which starts.
+setup launch-fails
+make_app "$current" 1
+make_app "$new" 2
+make_app "$previous" 0
+state="$dir/cache"
+rolled_back="$dir/Applications/Symphony (rolled back).app"
+make_app "$rolled_back" -1
+touch "$state/launched"
+printf '#!/bin/sh\necho "$1" >> "%s"\n[ "$(cat "$1/Contents/version")" = 1 ] && touch "%s/launched"\nexit 0\n' \
+  "$opened" "$state" > "$dir/open"
+started=$(date +%s)
+SYMPHONY_UPDATE_OPEN="$dir/open" SYMPHONY_UPDATE_WAIT_SECONDS=10 SYMPHONY_UPDATE_LAUNCH_SECONDS=2 \
+  sh "$helper" "$pid" "$current" "$new" "$previous" "$state" "$rolled_back" > "$dir/log" 2>&1
+status=$?
+expect_status 1
+expect "$current" 1
+expect "$rolled_back" 2
+[ ! -e "$previous" ] || fail "the previous slot isn't empty after the rollback"
+[ "$(cat "$state/launch-failed" 2> /dev/null)" = 2 ] || fail "launch-failed doesn't name the bound: $(cat "$dir/log")"
+[ "$(cat "$opened")" = "$current
+$current" ] || fail "expected the new app, then the restored one, to be opened: $(cat "$opened")"
+[ $(($(date +%s) - started)) -lt 10 ] || fail "the rollback took longer than the bound allows"
+grep -q "didn't start within 2s; putting" "$dir/log" || fail "the log doesn't name the launch that failed: $(cat "$dir/log")"
+grep -q "started after" "$dir/log" || fail "the log doesn't say the restored app started: $(cat "$dir/log")"
+
+# A new app that hangs on launch is stopped before it is moved aside.
+setup launch-hangs
+make_app "$current" 1
+make_app "$new" 2
+make_app "$previous" 0
+mkdir -p "$new/Contents/MacOS"
+printf '#!/bin/sh\nsleep 60\n' > "$new/Contents/MacOS/SymphonyBar"
+chmod +x "$new/Contents/MacOS/SymphonyBar"
+state="$dir/cache"
+rolled_back="$dir/Applications/Symphony (rolled back).app"
+printf '#!/bin/sh\n"$1/Contents/MacOS/SymphonyBar" > /dev/null 2>&1 &\necho $! > "%s"\n' "$dir/hung" > "$dir/open"
+SYMPHONY_UPDATE_OPEN="$dir/open" SYMPHONY_UPDATE_WAIT_SECONDS=10 SYMPHONY_UPDATE_LAUNCH_SECONDS=1 \
+  sh "$helper" "$pid" "$current" "$new" "$previous" "$state" "$rolled_back" > "$dir/log" 2>&1
+status=$?
+expect_status 1
+expect "$current" 1
+expect "$rolled_back" 2
+hung="$(head -1 "$dir/hung")"
+kill -0 "$hung" 2> /dev/null && { fail "the hung new app (pid $hung) is still running"; kill -9 "$hung"; }
+grep -q "the restored .* didn't start within 1s either" "$dir/log" || fail "the log doesn't say the restored app didn't start: $(cat "$dir/log")"
+
+# A new app that doesn't start, with nothing to put back, is relaunched again.
+setup launch-fails-without-previous
+make_app "$current" 1
+make_app "$new" 2
+state="$dir/cache"
+rolled_back="$dir/Applications/Symphony (rolled back).app"
+SYMPHONY_UPDATE_OPEN="$dir/open" SYMPHONY_UPDATE_WAIT_SECONDS=10 SYMPHONY_UPDATE_LAUNCH_SECONDS=1 \
+  sh "$helper" "$pid" "$current" "$new" "$previous" "$state" "$rolled_back" > "$dir/log" 2>&1 &
+helper_pid=$!
+# Takes the previous app away while the helper waits for the new one to start.
+waited=0
+while [ ! -e "$opened" ] && [ "$waited" -lt 50 ]; do
+  sleep 0.1
+  waited=$((waited + 1))
+done
+rm -rf "$previous"
+wait "$helper_pid"
+status=$?
+expect_status 1
+expect "$current" 2
+[ ! -e "$rolled_back" ] || fail "the new app was moved aside with nothing to put back"
+[ "$(wc -l < "$opened" | tr -d ' ')" = 2 ] || fail "expected the new app to be opened twice: $(cat "$opened")"
+
 if [ "$failures" -gt 0 ]; then
   echo "$failures update helper check(s) failed"
   exit 1
