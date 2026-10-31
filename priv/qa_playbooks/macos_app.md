@@ -131,10 +131,18 @@ QA VM beside the app, over seeded data, and every launch reaches it unless you p
   Inbox row that goes on Decide and comes back on Undo, a repository that stops starting tickets
   once paused): the live server, launched with `environment: "live"` or no `environment`. A
   fixture answers every move with 200 and never changes, so it cannot prove one.
-- Name the environment in each step's `details`: `live server` or `fixture`. `qa_launch_app`
-  returns it as `environment`.
+- Name the environment at the start of each step's `details`: `fixture: <the fixture
+  directory's name>` (such as `fixture: update-paused`) or `live: seed` for the live server's
+  seeded data. `qa_launch_app` returns the one it launched as `environment`. A step that used both
+  (a look checked on a fixture, then a move made live) names both.
+- A step whose state no committed fixture has is a finding: say so in `findings`, so a fixture is
+  committed for the next pass. Never build one under `qa-evidence/` to prove a step.
 - A step that needs the round trip on a pass with no live server is `unprovable` here, with that
-  reason; never prove it from a fixture.
+  reason in its `details`: "needs the live server; this pass reads fixtures only". Never prove it
+  from a fixture. The report's header says why the pass had no live server; a `qa:live` label on
+  the ticket gives the next pass one.
+- The ticket's walkthrough names no environment and its author never chooses one: you do, per
+  step, by what the step proves.
 
 QA roots: a first launch, a reset, a clean state. In QA mode the app keeps its settings in a QA
 root, never the real ones, and every `qa_launch_app` of the pass shares root 1: what one launch

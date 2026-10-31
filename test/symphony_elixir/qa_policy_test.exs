@@ -213,7 +213,7 @@ defmodule SymphonyElixir.QaPolicyTest do
       director = "## User walkthrough\n\n1. In the Director, press Decide on the held ticket.\n"
       server_and_app = ["lib/symphony_elixir/questions.ex", "macos/Sources/Inbox.swift"]
 
-      assert {:run, [%{kind: "macos_app", live: true}], reason} =
+      assert {:run, [%{kind: "macos_app", live: true, live_reason: "the PR changes the server and the `## User walkthrough` names `Director`"}], reason} =
                QaPolicy.decision(issue(%{description: director}), settings, server_and_app)
 
       assert reason =~ "the app gets a live server: the PR changes the server and the `## User walkthrough` names `Director`"
@@ -226,16 +226,20 @@ defmodule SymphonyElixir.QaPolicyTest do
           ] do
         assert {:run, [macos_app], reason} = QaPolicy.decision(ticket, settings, paths)
         refute Map.has_key?(macos_app, :live)
+        assert macos_app.live_reason == why
         assert reason =~ "; the app reads fixtures only: " <> why
       end
 
       # The labels override the diff: `qa:fixture` wins over `qa:live`.
-      assert {:run, [%{live: true}], reason} = QaPolicy.decision(issue(%{labels: ["QA:Live"]}), settings, ["macos/Sources/Inbox.swift"])
+      assert {:run, [%{live: true, live_reason: "the issue has the `qa:live` label"}], reason} =
+               QaPolicy.decision(issue(%{labels: ["QA:Live"]}), settings, ["macos/Sources/Inbox.swift"])
+
       assert reason =~ "the issue has the `qa:live` label"
 
       both = issue(%{description: director, labels: ["qa:live", "qa:fixture"]})
       assert {:run, [macos_app], reason} = QaPolicy.decision(both, settings, server_and_app)
       refute Map.has_key?(macos_app, :live)
+      assert macos_app.live_reason == "the issue has the `qa:fixture` label"
       assert reason =~ "the issue has the `qa:fixture` label"
     end
 

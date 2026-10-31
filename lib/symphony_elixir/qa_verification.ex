@@ -534,6 +534,7 @@ defmodule SymphonyElixir.QaVerification do
 
       nil ->
         extra = %{tokens: tokens, playbooks: playbook_kinds(playbooks), checks: checks}
+        extra = Map.put(extra, :environments, environments(playbooks))
         blocked(issue, opts, settings, head, blocked_outcome(reason, extra))
     end
   end
@@ -988,7 +989,8 @@ defmodule SymphonyElixir.QaVerification do
       app_check: Map.get(result, :app_check),
       verdict_retries: Map.get(result, :verdict_retries),
       tokens: tokens,
-      playbooks: playbook_kinds(playbooks)
+      playbooks: playbook_kinds(playbooks),
+      environments: environments(playbooks)
     }
   end
 
@@ -1007,6 +1009,16 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   defp playbook_kinds(playbooks), do: Enum.map(playbooks, & &1.kind)
+
+  # What the app under test could read on this pass, and why (`QaPolicy` marks it): the report's
+  # header says so, so a `qa:live` or `qa:fixture` label shows where it took effect.
+  defp environments(playbooks) do
+    case Enum.find(playbooks, &is_binary(Map.get(&1, :live_reason))) do
+      %{live: true, live_reason: why} -> "fixtures and a live server (#{why})"
+      %{live_reason: why} -> "fixtures only (#{why})"
+      nil -> nil
+    end
+  end
 
   defp publish_report(issue, opts, head, outcome, target) do
     report = Report.render(Map.merge(outcome, %{sha: head, target_state: target}))

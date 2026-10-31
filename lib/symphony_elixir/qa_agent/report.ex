@@ -28,7 +28,8 @@ defmodule SymphonyElixir.QaAgent.Report do
   Renders the report for a QA outcome. `outcome` carries `:verdict` (`:pass`,
   `:fail`, `:blocked`, `:inconclusive` or `:skip`), `:sha`, `:target_state`, and optionally
   `:summary`, `:steps`, `:findings`, `:reason`, `:scope` (`:none` on a pass with nothing on screen
-  to judge, which states its reason), `:playbooks`, `:tokens`,
+  to judge, which states its reason), `:playbooks`, `:environments` (what the app under test could
+  read on a `macos_app` pass with a `live` server, and why: a header line), `:tokens`,
   `:runtime_seconds`, `:follow_ups`, `:verdict_retries`, `:escalated`, `:fix_attempt`/`:max_fix_attempts`
   and `:artifacts` (the files the pass kept, `t:SymphonyElixir.QaAgent.artifacts/0`: a step's
   evidence that is a `qa-evidence/` path the pass kept shows its artifact id beside it).
@@ -51,6 +52,7 @@ defmodule SymphonyElixir.QaAgent.Report do
       "",
       "**Verdict:** #{verdict_label(outcome)} → #{target_label(outcome)}",
       "#{head_label(outcome)}#{meta_suffix(outcome)}",
+      environments_line(Map.get(outcome, :environments)),
       summary_block(outcome),
       checks_block(Map.get(outcome, :checks, [])),
       steps_block(Map.get(outcome, :steps, []), Map.get(outcome, :artifacts)),
@@ -78,6 +80,9 @@ defmodule SymphonyElixir.QaAgent.Report do
 
   defp head_label(%{ref: ref} = outcome) when is_binary(ref), do: "**Commit:** `#{short_sha(outcome)}` (head of `#{ref}`)"
   defp head_label(outcome), do: "**PR head:** `#{short_sha(outcome)}`"
+
+  defp environments_line(environments) when is_binary(environments), do: "**App environments:** " <> environments
+  defp environments_line(_environments), do: nil
 
   defp short_sha(outcome), do: String.slice(outcome.sha || "", 0, 12)
 

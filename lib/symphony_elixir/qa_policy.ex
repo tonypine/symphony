@@ -23,7 +23,8 @@ defmodule SymphonyElixir.QaPolicy do
   ticket's `## User walkthrough` mentions one of its `walkthrough_mentions` (any walkthrough when it
   lists none). A `qa:live` label marks it live and a `qa:fixture` label never does, whatever the
   diff. The same rule selects the playbook for a server-only diff. A pass not marked live starts no
-  server, and the app reads its fixtures only.
+  server, and the app reads its fixtures only. Either way the playbook keeps the reason as
+  `live_reason`, which the QA report's header states.
   """
 
   require Logger
@@ -116,8 +117,8 @@ defmodule SymphonyElixir.QaPolicy do
     Enum.map_reduce(playbooks, "", fn
       %{kind: "macos_app", live_server: live_server} = playbook, note ->
         case Selection.live(issue, live_server, paths) do
-          {true, why} -> {Map.put(playbook, :live, true), note <> "; the app gets a live server: " <> why}
-          {false, why} -> {playbook, note <> "; the app reads fixtures only: " <> why}
+          {true, why} -> {Map.merge(playbook, %{live: true, live_reason: why}), note <> "; the app gets a live server: " <> why}
+          {false, why} -> {Map.put(playbook, :live_reason, why), note <> "; the app reads fixtures only: " <> why}
         end
 
       playbook, note ->

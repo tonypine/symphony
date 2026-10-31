@@ -143,6 +143,12 @@ branch name Linear suggests for the ticket; a PR on a branch with any other name
   `scripts/qa-vm/provision.sh admin@<vm>` gives a QA VM Go, Postgres and jq. The `Auto Review`
   state and the acceptance gate are retired; the gate's escalation rules now act in Code Review
   (see [docs/acceptance_gate.md](docs/acceptance_gate.md)).
+  A `macos_app` pass has two environments: committed state fixtures, the fast default for how the
+  app draws a state, and, when the change touches the project's server and the walkthrough walks
+  the app, that server running on the QA VM over seeded data, for what happens after a move. The QA
+  agent picks one per step and the report names it (`fixture: update-paused`, `live: seed`); a
+  `qa:live` or `qa:fixture` label overrides the choice. See
+  [Two environments](docs/configuration.md#two-environments-fixtures-and-a-live-server).
 - **Docker runner** — host Symphony with mounted repos, state, logs, and agent credentials.
 - **macOS menu bar app** — start, stop, pause, and resume Symphony from the menu bar, with its status in
   the icon, the Linear key in a file only you can read, optional launch at login, and updates from the menu. See
