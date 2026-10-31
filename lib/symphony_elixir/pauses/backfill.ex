@@ -1,8 +1,10 @@
 defmodule SymphonyElixir.Pauses.Backfill do
   @moduledoc """
   Fills the pause (`SymphonyElixir.Pauses`) and the questions (`SymphonyElixir.Questions`) of every
-  ticket record once, from what the record already holds: its holds and its stored decisions. It
-  reads the record only, never Linear, and leaves the holds as they are.
+  ticket record once, from what the record already holds: the holds a record kept from before they
+  were retired (`holds`, which `SymphonyElixir.TicketState.normalize/1` no longer reads, so they are
+  read from the stored record as it is) and its stored decisions. It reads the record only, never
+  Linear. The stored holds go once the record is written again, as normalization drops them.
 
   Each record converts as `backfill_record/1` maps it:
 
@@ -125,7 +127,12 @@ defmodule SymphonyElixir.Pauses.Backfill do
 
     with :ok <- ledger_done(store.get_marker(LedgerBackfill.marker())),
          {:ok, records} <- listed(store.list_all_ticket_states()) do
-      records = for record <- Enum.map(records, &TicketState.normalize/1), is_binary(record.repo_key) and is_binary(record.issue_id), do: record
+      records =
+        for stored <- records,
+            record = TicketState.normalize(stored),
+            is_binary(record.repo_key) and is_binary(record.issue_id),
+            do: Map.put(record, :holds, Map.get(stored, :holds))
+
       summary = Enum.reduce(records, empty(now, length(records)), &convert(&2, store, &1, now))
       {:ok, store |> symphony(summary, now) |> Map.update!(:skipped, &(&1 |> Enum.reverse() |> Enum.take(@listed_skips)))}
     end
@@ -137,8 +144,8 @@ defmodule SymphonyElixir.Pauses.Backfill do
   """
   @spec backfill_record(map()) :: plan()
   def backfill_record(record) do
+    holds = record |> Map.get(:holds) |> stored_holds() |> Enum.sort_by(&(&1.set_at || DateTime.from_unix!(0)), DateTime)
     record = TicketState.normalize(record)
-    holds = Enum.sort_by(record.holds, &(&1.set_at || DateTime.from_unix!(0)), DateTime)
     {items, skipped} = Enum.unzip(Enum.map(record.decisions, &decision(record, &1)) ++ Enum.map(holds, &hold(record, &1)))
     %{items: List.flatten(items), skipped: List.flatten(skipped)}
   end
@@ -315,9 +322,9 @@ defmodule SymphonyElixir.Pauses.Backfill do
 
   # A hold that projects a Question asked through the service (`SymphonyElixir.DecisionRequest.ask/4`)
   # has its question and its pause already.
-  defp hold(_record, %{kind: :needs_decision, decision: %{question_id: id}}) when is_binary(id), do: {[], []}
+  defp hold(_record, %{kind: :decision, decision: %{question_id: id}}) when is_binary(id), do: {[], []}
 
-  defp hold(record, %{kind: :needs_decision} = hold) do
+  defp hold(record, %{kind: :decision} = hold) do
     decision = hold.decision || %{}
 
     case text(decision, :title) || text(decision, :question) || one_line(hold.reason) do
@@ -343,7 +350,8 @@ defmodule SymphonyElixir.Pauses.Backfill do
     }
 
     at = datetime(value(decision, :asked_at)) || hold.set_at
-    opts = question_opts(record, {:needs_decision, title, question}, at)
+    # The kind as it was stored keys the question, so a record converted again finds the one written.
+    opts = question_opts(record, {hold.stored_kind, title, question}, at)
     {:question, request, if(confirm = text(decision, :confirm), do: Keyword.put(opts, :confirm, confirm), else: opts)}
   end
 
@@ -456,6 +464,36 @@ defmodule SymphonyElixir.Pauses.Backfill do
   end
 
   defp one_line(_value), do: nil
+
+  # The holds a record kept from before they were retired, as they were stored: a Blocked hold, or
+  # the decision hold (the only other kind there was), with its reason, what it waits on, its
+  # decision and when it was set. Anything else is dropped.
+  defp stored_holds(holds) when is_list(holds) do
+    for %{kind: kind} = hold <- holds, is_atom(kind) and not is_nil(kind) do
+      %{
+        kind: if(kind == :blocked, do: :blocked, else: :decision),
+        stored_kind: kind,
+        reason: one_line(Map.get(hold, :reason)),
+        waits_on: stored_waits_on(Map.get(hold, :waits_on)),
+        decision: if(is_map(Map.get(hold, :decision)), do: Map.new(hold.decision)),
+        set_at: datetime(Map.get(hold, :set_at))
+      }
+    end
+    |> Enum.uniq_by(& &1.kind)
+  end
+
+  defp stored_holds(_holds), do: []
+
+  defp stored_waits_on(%{type: type} = waits_on) when is_binary(type) and type != "" do
+    keys = for key <- List.wrap(Map.get(waits_on, :keys)), is_binary(key), key = String.trim(key), key != "", do: key
+
+    case Map.get(waits_on, :question_id) do
+      id when is_binary(id) and id != "" -> %{type: String.trim(type), keys: keys, question_id: id}
+      _none -> %{type: String.trim(type), keys: keys}
+    end
+  end
+
+  defp stored_waits_on(_waits_on), do: nil
 
   defp compact(map), do: map |> Enum.reject(fn {_key, value} -> is_nil(value) end) |> Map.new()
 end

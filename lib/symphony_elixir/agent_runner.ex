@@ -24,7 +24,6 @@ defmodule SymphonyElixir.AgentRunner do
     EpicReview,
     GitHub.PullRequest,
     Handoff,
-    Hold,
     IdlePark,
     LeftoverProcesses,
     Linear.Issue,
@@ -924,15 +923,15 @@ defmodule SymphonyElixir.AgentRunner do
     Keyword.get(opts, :dependency_audit_module) || DependencyAudit
   end
 
-  # The dependency changes need a person's approval: the ticket pauses in its phase on a Needs
-  # Decision hold (`DependencyGate.pause/4`), and the decision clears it so the ticket continues.
+  # The dependency changes need a person's approval: the ticket pauses in its phase on a question
+  # (`DependencyGate.pause/4`), and the answer lifts it so the ticket continues.
   defp hold_dependency_approval(%Issue{id: issue_id} = issue, items, turn_session, opts)
        when is_binary(issue_id) do
     pause = fn -> DependencyGate.pause(issue, {:hold, items}, run_repo_key(issue, opts), Keyword.take(opts, [:tracker])) end
 
     case with_linear_retry(pause, "holding #{issue_context(issue)} for dependency approval", opts) do
       :ok ->
-        record_move_signal(issue, "decision requested", %{hold: "needs_decision", reason: "dependency_source_requires_approval"}, opts)
+        record_move_signal(issue, "decision requested", %{question: true, reason: "dependency_source_requires_approval"}, opts)
 
         Notifications.emit_issue_event(
           :dependency_pending_approval,
@@ -1249,15 +1248,15 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   # A decision request (`linear_request_human_action`) or a reported block pauses the ticket in its
-  # phase (`SymphonyElixir.Pauses`, or a Needs Decision hold), and the pause, not another turn, says
+  # phase (`SymphonyElixir.Pauses`: a question pauses it too), and the pause, not another turn, says
   # when it continues: a turn would only repeat the wait, and enough of them would park it as idle. A
-  # request this run posted counts even before its hold is in the store, so a failed hold write never
+  # request this run posted counts even before its question is in the store, so a failed write never
   # parks the ticket under its question.
   defp waiting_on_hold?(%Issue{id: issue_id} = issue, opts) do
     repo_key = run_repo_key(issue, opts)
 
     CommentRegistry.human_action_requested?(Keyword.get(opts, :linear_comment_registry)) or
-      Pauses.paused?({:ticket, repo_key, issue_id}) or Hold.held?(repo_key, issue_id, :needs_decision)
+      Pauses.paused?({:ticket, repo_key, issue_id})
   end
 
   defp waiting_on_sub_issues?(%Issue{} = issue) do

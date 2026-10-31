@@ -47,7 +47,6 @@ defmodule SymphonyElixir.Inbox.FromRecordTest do
     record
     |> Map.merge(%{
       questions: Map.get(situation.questions, id, []),
-      holds: List.wrap(Map.get(situation.holds, id)),
       pause: pause(situation, id),
       projected: %{labels: [], section: nil, comments: Map.get(situation.projected, id, %{})}
     })

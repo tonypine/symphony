@@ -5,12 +5,10 @@ defmodule SymphonyElixir.DecisionMove do
   A question Symphony asks may offer an option whose answer is a move: QA's "Send it back to
   Rework" and "Merge without a QA result", a closed pull request's "Cancel". The option carries
   that move as data (`option/2`), so a pick never asks the person to also drag the ticket by hand,
-  which under `dispatch.source: record` is drift moved back anyway. Whichever way the person
-  answers — the Inbox's Decide (`SymphonyElixir.DirectorMoves`) or a reply under the request
-  (`SymphonyElixir.NeedsDecisionHold`) — the picked option's move (`picked/2`) is performed through
-  the guard (`perform/4`) before the hold clears, so no dispatch sees a cleared hold on a ticket
-  still in its old phase, and a restart between the two leaves the record moved, with the answered
-  request clearing the hold on the next read.
+  which under `dispatch.source: record` is drift moved back anyway. The Question keeps the move on
+  its option (`SymphonyElixir.Questions`). When the person answers with the Inbox's Decide
+  (`SymphonyElixir.DirectorMoves`), the picked option's move (`picked/2`) is performed through the
+  guard (`perform/4`).
 
   A move may carry a verdict recorded before it, bound to the head the question was asked on: a
   merge without a QA result records the `qa` verdict `skip` with the reason `skipped by decision`.
@@ -31,23 +29,19 @@ defmodule SymphonyElixir.DecisionMove do
   def option(%{} = option, %{to: to} = move) when is_binary(to), do: Map.put(option, :move, move)
 
   @doc """
-  The move of the one option `answers` pick among the hold's options (by number or label, as
+  The move of the one option `answers` pick among the question's options (by number or label, as
   `SymphonyElixir.MergeConfirmation.picked_option/2` reads a pick), or nil when the answers pick
   none, several, or an option that moves nothing.
   """
   @spec picked(map() | nil, [String.t()]) :: t() | nil
-  def picked(hold, answers) when is_list(answers) do
-    options = hold |> decision_options() |> List.wrap()
+  def picked(question, answers) when is_list(answers) do
+    options = question |> options() |> List.wrap()
 
     case MergeConfirmation.picked_option(Enum.map(options, &label/1), answers) do
       nil -> nil
       number -> options |> Enum.at(number - 1) |> move()
     end
   end
-
-  @doc "Whether any of `options` carries a move."
-  @spec moves?([map() | String.t()] | nil) :: boolean()
-  def moves?(options), do: options |> List.wrap() |> Enum.any?(&(move(&1) != nil))
 
   @doc """
   Records the move's verdict, then moves the ticket `issue_id` of `repo_key` to the move's state
@@ -77,8 +71,8 @@ defmodule SymphonyElixir.DecisionMove do
 
   defp spellings(to), do: if(to in @canceled_spellings, do: [to | @canceled_spellings -- [to]], else: [to])
 
-  defp decision_options(%{decision: %{options: options}}), do: options
-  defp decision_options(_hold), do: nil
+  defp options(%{options: options}), do: options
+  defp options(_question), do: nil
 
   defp label(%{label: label}) when is_binary(label), do: label
   defp label(_option), do: ""

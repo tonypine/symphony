@@ -37,6 +37,11 @@ defmodule SymphonyElixir.TicketSignalsTest do
     assert log =~ "Failed to mark a pending projection on issue_id=issue-projected"
   end
 
+  test "record_event/5 swallows an event the ledger refuses, logging it" do
+    log = ExUnit.CaptureLog.capture_log(fn -> assert :ok = TicketSignals.record_event(@repo_key, "issue-1", "no.such.type", %{}) end)
+    assert log =~ "Failed to record the no.such.type event on issue_id=issue-1"
+  end
+
   test "records a signal with no details" do
     assert :ok = TicketSignals.record(@repo_key, "issue-1", "merge settled", %{})
 
@@ -235,7 +240,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
 
   describe "the event each signal maps to" do
     # Every signal name in use, with the details its writers record, and the event it yields — or
-    # `:mirrored` when the `Hold` or `Decisions` event for the same change records it.
+    # `:mirrored` when the `Pauses` or `Questions` event for the same change records it.
     @signals [
       {"claim", %{from: "Todo", to: "In Progress"}, "phase.entered"},
       {"handoff", %{head: "abc123", pr_url: "https://github.com/acme/repo/pull/1", source: "pushed_pr_head"}, "attempt.pushed"},
@@ -521,30 +526,6 @@ defmodule SymphonyElixir.TicketSignalsTest do
 
       assert :ok = TicketSignals.record(repo_key, "issue-done", "decision returned", %{move: "cancel", from: "Rework", to: "Canceled"})
       assert %{withdrawn: %{reason: "The ticket was cancelled."}} = Questions.find(ticket, question.id)
-    end
-  end
-
-  describe "open_decision/4" do
-    test "finds the newest open request by its title, else its question" do
-      {:ok, older} = TicketEvents.record(@repo_key, "issue-1", "decision.requested", %{title: "Pick one", question: "A or B?"})
-      {:ok, newer} = TicketEvents.record(@repo_key, "issue-1", "decision.requested", %{title: "Pick one", question: "A, B or C?"})
-      {:ok, _closed} = TicketEvents.record(@repo_key, "issue-1", "decision.withdrawn", %{title: "Gone", request: "nope"})
-
-      assert TicketSignals.open_decision(@repo_key, "issue-1", "  pick ONE ", nil).id == newer.id
-      assert TicketSignals.open_decision(@repo_key, "issue-1", nil, "a or b?").id == older.id
-      assert TicketSignals.open_decision(@repo_key, "issue-1", "Other", nil) == nil
-      assert TicketSignals.open_decision(@repo_key, "issue-1", nil, " ") == nil
-      assert TicketSignals.open_decision(" ", "issue-1", "Pick one", nil) == nil
-    end
-  end
-
-  describe "open_decision/4 and Questions" do
-    test "finds an open Question's request as it finds a decision request, until the Question ends" do
-      {:ok, asked} = TicketEvents.record(@repo_key, "issue-1", "question.asked", %{question_id: "q-1", title: "Pick one", question: "A or B?"})
-      assert TicketSignals.open_decision(@repo_key, "issue-1", "pick one", nil).id == asked.id
-
-      {:ok, _answered} = TicketEvents.record(@repo_key, "issue-1", "question.answered", %{question_id: "q-1", answer: "A"})
-      assert TicketSignals.open_decision(@repo_key, "issue-1", "Pick one", nil) == nil
     end
   end
 

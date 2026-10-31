@@ -2251,7 +2251,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       Linear.request_human_action(context, attrs, human_action_opts(human_action_client(self(), scope, overrides)))
     end
 
-    test "posts the request, holds the issue in place, adds no label of its own, and asks Symphony to list it" do
+    test "posts the request, pauses the issue in place on its Question, adds no label of its own, and asks Symphony to list it" do
       :ok = SymphonyElixir.RunStore.clear()
       {:ok, registry} = Linear.CommentRegistry.start_link()
       context = %{issue: %Issue{id: "issue-24", identifier: "MOT-24", repo_key: "repo-a"}, comment_registry: registry}
@@ -2266,7 +2266,9 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       refute_received {:linear_called, "SymphonyAgentUpdateIssueState", _variables}
       refute_received {:linear_called, "SymphonyAgentAddLabel", _variables}
       refute_received {:linear_called, "SymphonyAgentCreateLabel", _variables}
-      assert_received {:machine_label_set, "issue-24", "Needs Decision"}
+      # The label is the pause projector's, off in this suite: the tool writes none.
+      refute_received {:machine_label_set, _issue_id, _name}
+      assert %{title: "Add the release signing secrets"} = SymphonyElixir.Questions.deciding({:ticket, "repo-a", "issue-24"})
       assert_received :refreshed
       assert body =~ "## Decision needed: Add the release signing secrets"
       assert body =~ "**If unanswered:** Every Release run on main keeps failing."
@@ -2303,7 +2305,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert Linear.CommentRegistry.human_action_requested?(registry)
     end
 
-    test "gives the slot back when Linear refuses any step, or the hold can't be set" do
+    test "gives the slot back when Linear refuses any step, or the question can't be asked" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
       context = %{issue: %Issue{id: "issue-24", repo_key: "repo-a"}, comment_registry: registry}
       scope = human_action_scope()
@@ -2313,7 +2315,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
             {context, %{"SymphonyAgentHumanActionScope" => {:error, :linear_down}}, {:error, :linear_down}},
             {context, %{"SymphonyAgentHumanActionScope" => {:ok, %{"data" => %{"issue" => nil}}}}, {:error, :issue_not_found}},
             {context, %{"SymphonyAgentAddComment" => refused.("commentCreate")}, {:error, {:linear_mutation_failed, "commentCreate", :_}}},
-            # A hold needs the repo it is recorded under.
+            # A question needs the repo it is recorded under.
             {%{issue_id: "issue-24", comment_registry: registry}, %{}, {:error, :missing_repo_key}}
           ] do
         result = request_human_action(context, scope, overrides)
@@ -2332,7 +2334,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       refute Linear.CommentRegistry.human_action_requested?(registry)
     end
 
-    test "an option's unlocks travel hidden in the request, the Why names each file in plain words, and the hold keeps them" do
+    test "an option's unlocks travel hidden in the request, the Why names each file in plain words, and the Question keeps them" do
       :ok = SymphonyElixir.RunStore.clear()
       {:ok, registry} = Linear.CommentRegistry.start_link()
       context = %{issue: %Issue{id: "issue-24", identifier: "MOT-24", repo_key: "repo-a"}, comment_registry: registry}
@@ -2364,7 +2366,8 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       refute body =~ "option=2"
       assert %{unlocks: [["WORKFLOW.md", ".agents/skills"], []]} = Request.parse(body)
 
-      assert %{decision: %{unlocks: [["WORKFLOW.md", ".agents/skills"], []]}} = SymphonyElixir.Hold.get("repo-a", "issue-24", :needs_decision)
+      assert %{options: [%{unlocks: ["WORKFLOW.md", ".agents/skills"]}, %{unlocks: []}]} =
+               SymphonyElixir.Questions.deciding({:ticket, "repo-a", "issue-24"})
     end
 
     test "an option that unlocks a path still says what it allows in plain words, never the file name" do
@@ -2607,7 +2610,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert_received {:linear_called, "SymphonyAgentHumanActionScope", %{id: "MOT-24"}}
       assert_received {:linear_called, "SymphonyAgentAddReply", %{issueId: "issue-24", parentId: "comment-1", body: reply}}
       refute_received {:tracker_moved, _issue_id, _state}
-      assert_received {:machine_label_cleared, "MOT-24", "Needs Decision"}
+      refute_received {:machine_label_cleared, _issue_id, _name}
       refute_received {:linear_called, "SymphonyAgentUpdateIssueState", _variables}
       assert_received :refreshed
       assert reply == "## Action withdrawn\n\nThe dialyzer run had started minutes earlier, not 11 hours ago."
@@ -2629,7 +2632,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                })
     end
 
-    test "withdraws only the request named by title, and keeps the hold for the others" do
+    test "withdraws only the request named by title, and keeps the others open" do
       context = %{issue: %Issue{id: "issue-24", repo_key: "repo-a"}}
 
       scope =
@@ -2645,11 +2648,11 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       refute_received {:linear_called, "SymphonyAgentAddReply", %{parentId: "comment-2"}}
       refute_received {:machine_label_cleared, _issue_id, _name}
 
-      # Without a title, every open request goes, and the hold with them; the issue stays put.
+      # Without a title, every open request goes; the issue stays put.
       assert {:ok, %{"requestCommentIds" => ["comment-1", "comment-2"], "replyCommentIds" => ["reply-to-comment-1", "reply-to-comment-2"], "remaining" => 0, "state" => "In Progress"}} =
                withdraw_human_action(context, scope)
 
-      assert_received {:machine_label_cleared, "issue-24", "Needs Decision"}
+      refute_received {:machine_label_cleared, _issue_id, _name}
       refute_received {:tracker_moved, _issue_id, _state}
     end
 
@@ -2687,10 +2690,6 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                withdraw_human_action(%{issue_id: "issue-24"}, scope, %{"SymphonyAgentAddReply" => refused.("commentCreate")})
 
       refute_received {:tracker_moved, _issue_id, _state}
-
-      # The hold the withdrawal clears needs the repo it is recorded under.
-      assert {:error, :missing_repo_key} = withdraw_human_action(%{issue_id: "issue-24"}, scope)
-
       refute_received :refreshed
     end
 
@@ -3196,7 +3195,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert response["held"] == true
       assert response["reason"] == "the run reported a block: waiting on TP-997, TP-998"
       assert response["clearing_condition"] == "when every blocker is terminal"
-      assert %{holds: []} = SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
+      refute Map.has_key?(SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1"), :holds)
 
       assert SymphonyElixir.Pauses.why({:ticket, "repo-a", "issue-1"}) == ["Waiting for TP-997 to finish", "Waiting for TP-998 to finish"]
     end
@@ -3216,7 +3215,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       assert [%{id: _question_id, title: "The run on TP-816 cannot continue on its own"}] = SymphonyElixir.Questions.open({:ticket, "repo-a", "issue-1"})
       assert SymphonyElixir.Pauses.why({:ticket, "repo-a", "issue-1"}) == ["Waiting for your answer: The run on TP-816 cannot continue on its own"]
-      assert %{holds: []} = SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
+      refute Map.has_key?(SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1"), :holds)
     end
 
     test "a block report whose blockers are all terminal waits on a person" do
@@ -3254,7 +3253,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert response["message"] =~ "Blocked"
       assert response["message"] =~ "a person lifts it with Unblock"
       assert SymphonyElixir.Pauses.paused?({:ticket, "repo-a", "issue-1"})
-      assert %{holds: []} = SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
+      refute Map.has_key?(SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1"), :holds)
     end
 
     test "a block report the store refuses to pause on is the tool's error" do
@@ -3426,7 +3425,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       %{issue: %Issue{id: "issue-24", identifier: "MOT-24", repo_key: "repo-a"}, comment_registry: registry}
     end
 
-    test "holds the ticket in its phase with the Needs Decision label, and moves nothing" do
+    test "pauses the ticket in its phase on its Question, whose label is the projector's, and moves nothing" do
       :ok = SymphonyElixir.RunStore.clear()
       context = designed_context()
       opts = designed_opts(human_action_client(self(), human_action_scope()))
@@ -3444,7 +3443,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       # A decision never moves a ticket: no tracker move, no direct state mutation.
       refute_received {:tracker_moved, _issue_id, _state}
       refute_received {:linear_called, "SymphonyAgentUpdateIssueState", _variables}
-      assert_received {:machine_label_set, "issue-24", "Needs Decision"}
+      refute_received {:machine_label_set, _issue_id, _name}
 
       assert_received {:linear_called, "SymphonyAgentAddComment", %{body: body}}
       assert body =~ "## Decision needed: Add the release signing secrets"
@@ -3452,11 +3451,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert body =~ "or answer it in the Symphony Inbox"
       refute body =~ "then move the issue out of"
 
-      # The hold carries the decision, so the Inbox reads the ask off it and the flow resumes there.
-      assert %{holds: [%{kind: :needs_decision, decision: %{title: "Add the release signing secrets", question: "Add the signing secrets, or ship unsigned builds?"}}]} =
-               SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-24")
-
-      # The request is asked as a Question, by the run: its event and its pause, no hold event.
+      # The request is asked as a Question, by the run: its event and its pause, and nothing else.
       assert [%{id: id, asked_by: %{kind: :run}, title: "Add the release signing secrets"}] = SymphonyElixir.Questions.open({:ticket, "repo-a", "issue-24"})
       assert body =~ "<!-- symphony:question #{id} -->"
 
@@ -3491,7 +3486,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
               }} = Linear.request_human_action(context, @human_action, designed_opts(client))
 
       refute_received {:linear_called, "SymphonyAgentAddComment", _variables}
-      refute SymphonyElixir.Hold.held?("repo-a", "issue-24", :needs_decision)
+      assert SymphonyElixir.Questions.open({:ticket, "repo-a", "issue-24"}) == []
       refute Linear.CommentRegistry.human_action_requested?(context.comment_registry)
     end
 
@@ -3523,7 +3518,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert_received {:linear_called, "SymphonyAgentAddComment", _variables}
     end
 
-    test "a request the ticket already has is the one the hold records, and nothing is posted again" do
+    test "a request the ticket already has on Linear is the one recorded: nothing is asked or posted again" do
       :ok = SymphonyElixir.RunStore.clear()
       context = designed_context()
 
@@ -3551,19 +3546,18 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       refute_received {:tracker_moved, _issue_id, _state}
       # The open request still waits on a person, so the run does not count it as idle.
       assert Linear.CommentRegistry.human_action_requested?(context.comment_registry)
-
-      assert %{holds: [%{kind: :needs_decision, decision: %{title: "Add the release signing secrets"}}]} =
-               SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-24")
+      assert SymphonyElixir.Questions.open({:ticket, "repo-a", "issue-24"}) == []
+      assert ticket_events("repo-a", "issue-24") == []
     end
 
-    test "a withdrawal clears the hold so the ticket continues, and another open request keeps it" do
+    test "a withdrawal lifts the Question's pause so the ticket continues, and another open request keeps it waiting" do
       :ok = SymphonyElixir.RunStore.clear()
       context = designed_context()
       opts = designed_opts(human_action_client(self(), human_action_scope()))
 
       assert {:ok, %{"requested" => true}} = Linear.request_human_action(context, @human_action, opts)
 
-      assert SymphonyElixir.Hold.held?("repo-a", "issue-24", :needs_decision)
+      assert SymphonyElixir.Pauses.paused?({:ticket, "repo-a", "issue-24"})
 
       # The second request is on the board too; withdrawing the first leaves the ticket waiting.
       scope =
@@ -3585,15 +3579,14 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                  designed_opts(human_action_client(self(), scope))
                )
 
-      assert SymphonyElixir.Hold.held?("repo-a", "issue-24", :needs_decision)
+      assert SymphonyElixir.Pauses.paused?({:ticket, "repo-a", "issue-24"})
       refute_received {:machine_label_cleared, _issue_id, _name}
 
-      # With nothing left open the hold clears and the ticket continues where it is.
+      # With nothing left open the pause lifts and the ticket continues where it is.
       assert {:ok, %{"withdrawn" => true, "remaining" => 0}} =
                Linear.withdraw_human_action(context, %{"reason" => "Not needed yet"}, designed_opts(human_action_client(self(), scope)))
 
-      refute SymphonyElixir.Hold.held?("repo-a", "issue-24", :needs_decision)
-      assert_received {:machine_label_cleared, "issue-24", "Needs Decision"}
+      refute SymphonyElixir.Pauses.paused?({:ticket, "repo-a", "issue-24"})
       # Nothing moved: the ticket never left its phase.
       refute_received {:tracker_moved, _issue_id, _state}
 
@@ -3620,7 +3613,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert [_question] = SymphonyElixir.Questions.open({:ticket, "repo-a", "issue-24"})
     end
 
-    test "a withdrawal of a question whose comment never reached Linear withdraws the Question and clears the hold" do
+    test "a withdrawal of a question whose comment never reached Linear withdraws the Question and lifts its pause" do
       :ok = SymphonyElixir.RunStore.clear()
       context = designed_context()
       opts = designed_opts(human_action_client(self(), human_action_scope()))
@@ -3635,7 +3628,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                Linear.withdraw_human_action(context, %{"reason" => "Not needed yet", "title" => "Add the release signing secrets"}, opts)
 
       assert SymphonyElixir.Questions.open({:ticket, "repo-a", "issue-24"}) == []
-      refute SymphonyElixir.Hold.held?("repo-a", "issue-24", :needs_decision)
+      refute SymphonyElixir.Pauses.paused?({:ticket, "repo-a", "issue-24"})
     end
 
     defp held_comment(id, title) do

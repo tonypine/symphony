@@ -3,13 +3,8 @@ defmodule SymphonyElixir.QuestionsTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{Hold, Pauses, Questions, TicketState}
+  alias SymphonyElixir.{Pauses, Questions, TicketState}
   alias SymphonyElixir.TicketEvents.Brief
-
-  defmodule UnclearableStore do
-    def get_ticket_state(repo_key, issue_id), do: SymphonyElixir.RunStore.get_ticket_state(repo_key, issue_id)
-    def clear_ticket_hold(_repo_key, _issue_id, _kind), do: {:error, :boom}
-  end
 
   @repo_key "repo-a"
   @issue_id "issue-1"
@@ -345,10 +340,8 @@ defmodule SymphonyElixir.QuestionsTest do
       refute Questions.lapsed?(rule_asked, run_end([]))
     end
 
-    test "a Restart withdraws a run-asked question with its reason: the pause and the hold clear, and its request is answered" do
-      question = ask_as!(%{kind: :run, name: "The run"}, "Pick a layout")
-      attrs = %{reason: "Pick a layout", decision: %{title: "Pick a layout", question: question.question, question_id: question.id}}
-      :ok = Hold.set(@repo_key, @issue_id, :needs_decision, attrs)
+    test "a Restart withdraws a run-asked question with its reason: the pause clears, and its request is answered" do
+      question = ask_as!(%{kind: :run, name: "The run"}, "Pick a layout", request: true)
       project_comment(question, "comment-1")
 
       assert {:ok, [%{id: id, state: :withdrawn}]} =
@@ -358,7 +351,7 @@ defmodule SymphonyElixir.QuestionsTest do
 
       assert %{state: :withdrawn, withdrawn: %{reason: "The run that asked was restarted."}} = Questions.find(@ticket, id)
       refute Pauses.paused?(@ticket)
-      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+      assert Questions.deciding(@ticket) == nil
       assert_received {:reply, @issue_id, "comment-1", "## Action withdrawn\n\nThe run that asked was restarted."}
 
       assert [%{summary: %{title: "Question withdrawn: The run that asked was restarted."}}] =
@@ -440,19 +433,15 @@ defmodule SymphonyElixir.QuestionsTest do
     test "a question that holds the ticket outlives its run ending; a Restart withdraws it with its cause (TP-1321)" do
       # A protected-path request the run asked through the Inbox path: a request comment shows it.
       request = ask_as!(@run, "Allow the workflow file", request: true, asked_in: "In Progress")
-      # A run's question a Needs Decision hold carries, without a request comment.
-      held = ask_as!(@run, "Pick a colour")
-      :ok = Hold.set(@repo_key, @issue_id, :needs_decision, %{reason: "Pick a colour", decision: %{title: "Pick a colour", question_id: held.id}})
-
       refute Questions.lapsed?(request, run_end([]))
       assert {:ok, []} = Questions.withdraw_lapsed(@ticket, run_end(moved_to: "In Progress"))
       assert {:ok, []} = Questions.withdraw_lapsed(@ticket, run_end(run_id: "run-2", moved_to: "Code Review"))
-      assert Enum.map(Questions.open(@ticket), & &1.id) == [request.id, held.id]
-      assert Hold.held?(@repo_key, @issue_id, :needs_decision)
+      assert Enum.map(Questions.open(@ticket), & &1.id) == [request.id]
+      assert Questions.deciding(@ticket).id == request.id
 
-      assert {:ok, [_, _]} = Questions.withdraw_lapsed(@ticket, :restart)
+      assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, :restart)
 
-      assert [%{payload: %{cause: "restarted"}}, %{payload: %{cause: "restarted"}}] =
+      assert [%{payload: %{cause: "restarted"}}] =
                RunStore.list_ticket_events(@repo_key, @issue_id, types: ["question.withdrawn"])
     end
 
@@ -466,18 +455,30 @@ defmodule SymphonyElixir.QuestionsTest do
       assert causes == [{moved.id, "ticket_moved"}, {ended.id, "run_ended"}]
     end
 
-    test "a hold that won't clear is logged, and a malformed ticket withdraws nothing" do
-      question = ask_as!(%{kind: :run, name: "The run"}, "Pick a layout")
-      :ok = Hold.set(@repo_key, @issue_id, :needs_decision, %{reason: "Pick a layout", decision: %{title: "Pick a layout", question_id: question.id}})
-
-      log =
-        capture_log(fn ->
-          assert {:ok, [_withdrawn]} =
-                   Questions.withdraw_lapsed(@ticket, :restart, store: UnclearableStore)
-        end)
-
-      assert log =~ "its needs_decision hold did not clear"
+    test "a malformed ticket withdraws nothing" do
       assert Questions.withdraw_lapsed(:junk, :restart) == {:ok, []}
+    end
+
+    test "deciding/1 is the newest open question a decision request asked; a question Unblock answers is never one" do
+      assert Questions.deciding(@ticket) == nil
+      {:ok, _block} = Questions.ask(@ticket, SymphonyElixir.TransitionGuard.block_report_question("TP-1"), asked_by: @run)
+      _plain = ask_as!(@run, "Pick a colour")
+      assert Questions.deciding(@ticket) == nil
+
+      older = ask_as!(@symphony, "Merge TP-12", request: true)
+      newer = ask_as!(@symphony, "Allow the settings file", request: true)
+      assert Questions.deciding(@ticket).id == newer.id
+
+      {:ok, _answered} = Questions.answer(@ticket, newer.id, "1")
+      assert Questions.deciding(@ticket).id == older.id
+    end
+
+    test "an option's move is kept on the question it was asked with" do
+      move = %{to: "Rework"}
+      options = [%{label: "Send it back", effect: "Moves it to Rework", recommended: true, move: move}, %{label: "Keep it", effect: "Nothing moves"}]
+      {:ok, question} = Questions.ask(@ticket, %{@request | options: options})
+      assert [%{label: "Send it back", move: ^move}, option] = question.options
+      refute Map.has_key?(option, :move)
     end
   end
 

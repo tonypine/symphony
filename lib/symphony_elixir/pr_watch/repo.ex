@@ -136,7 +136,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   @reread_gap_ms 1_000
   @max_rereads 5
   # The record's fields a decision reads: a change of one re-decides the ticket.
-  @decided_fields [:phase, :blockers, :holds, :pause]
+  @decided_fields [:phase, :blockers, :pause]
 
   @typedoc "What one tick did."
   @type summary :: %{
@@ -1595,13 +1595,14 @@ defmodule SymphonyElixir.PrWatch.Repo do
     end
   end
 
-  # What pauses the ticket, as the facts name it: a Needs Decision hold, else its pause on anything
-  # but an app update (`SymphonyElixir.Pauses`; `counted?` picks the reasons that count).
+  # What pauses the ticket, as the facts name it: a decision request's open question
+  # (`SymphonyElixir.Questions`, asked with `request: true`), else its pause on anything but an app
+  # update (`SymphonyElixir.Pauses`; `counted?` picks the reasons that count).
   defp hold(record, counted? \\ fn _reason -> true end)
 
-  defp hold(%{holds: holds} = record, counted?) do
+  defp hold(%{questions: questions} = record, counted?) do
     cond do
-      Enum.any?(holds, &(&1.kind == :needs_decision)) -> :needs_decision
+      Enum.any?(questions, &(&1.state == :open and &1.request == true)) -> :question
       record |> TicketState.pause_reasons() |> Enum.any?(&(&1.kind != :build and counted?.(&1))) -> :blocked
       true -> :none
     end

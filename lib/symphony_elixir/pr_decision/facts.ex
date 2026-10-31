@@ -58,7 +58,7 @@ defmodule SymphonyElixir.PrDecision.Facts do
           phase: phase(),
           origin: :code_review | :qa | :rework | :merging | nil,
           github: :ok | :rate_limited,
-          hold: :none | :needs_decision | :blocked,
+          hold: :none | :question | :blocked,
           run: :none | :active,
           auto_merge: :off | :armed,
           pr: :missing | :open | :draft | :closed | :merged,
@@ -136,7 +136,7 @@ defmodule SymphonyElixir.PrDecision.Facts do
   @domains [
     {:phase, @phases},
     {:github, [:ok, :rate_limited]},
-    {:hold, [:none, :needs_decision, :blocked]},
+    {:hold, [:none, :question, :blocked]},
     {:run, [:none, :active]},
     {:auto_merge, [:off, :armed]},
     {:pr, [:missing, :open, :draft, :closed, :merged]},

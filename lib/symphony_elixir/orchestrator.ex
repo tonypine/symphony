@@ -24,7 +24,6 @@ defmodule SymphonyElixir.Orchestrator do
     ForcedQueue,
     ForcedStatus,
     Handoff,
-    Hold,
     Initiatives,
     Notifications,
     Pauses,
@@ -384,7 +383,7 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # A ticket's record changed outside the poll cycle (`TicketObservation`, a move, a hold): with
+  # A ticket's record changed outside the poll cycle (`TicketObservation`, a move): with
   # dispatch from the record, its repo gets a cycle at once, as a move made there does, so a ticket
   # the change frees is considered within seconds. With dispatch from the poll cache the change waits
   # for the repo's poll.
@@ -4361,7 +4360,6 @@ defmodule SymphonyElixir.Orchestrator do
     cond do
       is_nil(repo_key) -> "it has no repo key and several repos are configured, so its pause can't be read"
       paused?(repo_key, issue) -> pause_reason(repo_key, issue)
-      Hold.held?(repo_key, issue.id, :needs_decision) -> "on a Needs Decision hold"
       waiting_on_sub_issues?(issue, terminal_states) -> "waiting on its sub-tickets"
       reason = update_hold_reason(repo_key, issue, state.update_hold_cache) -> reason
       replan_pending?(issue, state) -> "its plan waits to be replaced before it runs again"
@@ -5060,14 +5058,14 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # A pause holds the ticket in its phase and lifts when what it waits on does — a blocker or a fix
-  # ticket going terminal, a person's Unblock, an answer — and so does a `Needs Decision` hold when
-  # the person records the decision; the ticket then dispatches again from where it stopped. The
-  # store is the truth; the board label is only its projection. The store is keyed by repo, so an
-  # issue whose repo can't be told (`hold_repo_key/1`) is held rather than read as unheld.
-  defp hold?(%Issue{id: issue_id} = issue) do
+  # ticket going terminal, a person's Unblock, an answer to its question; the ticket then dispatches
+  # again from where it stopped. The store is the truth; the board label is only its projection.
+  # The store is keyed by repo, so an issue whose repo can't be told (`hold_repo_key/1`) is held
+  # rather than read as unheld.
+  defp hold?(%Issue{} = issue) do
     case hold_repo_key(issue) do
       nil -> true
-      repo_key -> paused?(repo_key, issue) or Hold.held?(repo_key, issue_id, :needs_decision)
+      repo_key -> paused?(repo_key, issue)
     end
   end
 

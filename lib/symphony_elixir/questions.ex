@@ -28,8 +28,10 @@ defmodule SymphonyElixir.Questions do
   is paused on a question exactly while it is open, whatever else writes the record at the same
   time.
 
-  Once a change to a question commits, the ticket's labels and Decisions section are projected from
-  the record (`SymphonyElixir.Pauses.Projector.project_now/2`).
+  Once a change to a question commits, it is announced as a change of the ticket's pause
+  (`SymphonyElixirWeb.ObservabilityPubSub.broadcast_ticket_record_changed/3`), so dispatch and the PR
+  watcher read it at once, and the ticket's labels and Decisions section are projected from the
+  record (`SymphonyElixir.Pauses.Projector.project_now/2`).
 
   `answers/2` reads the ticket's answers the way the PR watcher reads them: each answered question
   as a decision entry, then the decisions recorded before questions carried them.
@@ -44,8 +46,11 @@ defmodule SymphonyElixir.Questions do
   `withdraw_lapsed/3` withdraws the open questions nobody needs any more once what they belonged to
   ended (`lapsed?/2`'s rule table): a Restart, a move to Backlog, a run that asked ending after the
   ticket moved on, a merge settled, a terminal state. Each keeps its reason in plain words, and the
-  projections follow as `linear_withdraw_human_action` makes them: the hold that carried it clears
-  and the `## Action withdrawn` reply goes under its request.
+  projections follow as `linear_withdraw_human_action` makes them: the `## Action withdrawn` reply
+  goes under its request.
+
+  `deciding/1` is the question a decision request asked that the ticket waits on (the newest open
+  one asked with `request: true`): what the Director's Decide answers.
   """
 
   require Logger
@@ -53,7 +58,6 @@ defmodule SymphonyElixir.Questions do
   alias SymphonyElixir.{
     DecisionRequest,
     DispatchLoop,
-    Hold,
     Pauses,
     RunStore,
     TicketEvents,
@@ -65,6 +69,7 @@ defmodule SymphonyElixir.Questions do
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.TicketEvents.Event
+  alias SymphonyElixirWeb.ObservabilityPubSub
 
   @asker_kinds [:run, :rule, :symphony, :person]
   @states [:open, :answered, :withdrawn]
@@ -105,14 +110,16 @@ defmodule SymphonyElixir.Questions do
   @typedoc "Who answered or withdrew a question, by kind and name."
   @type actor :: %{kind: :run | :rule | :symphony | :person, name: String.t()}
 
+  @typedoc "An option, with the move picking it makes when it carries one (`SymphonyElixir.DecisionMove`)."
   @type option :: %{
-          label: String.t(),
-          effect: String.t(),
-          good: [String.t()],
-          cost: [String.t()],
-          risk: [String.t()],
-          recommended?: boolean(),
-          unlocks: [String.t()]
+          required(:label) => String.t(),
+          required(:effect) => String.t(),
+          required(:good) => [String.t()],
+          required(:cost) => [String.t()],
+          required(:risk) => [String.t()],
+          required(:recommended?) => boolean(),
+          required(:unlocks) => [String.t()],
+          optional(:move) => SymphonyElixir.DecisionMove.t()
         }
 
   @typedoc "An answer: the text as given, the option it picked (by number, nil for free text), who, when and for how long."
@@ -275,8 +282,8 @@ defmodule SymphonyElixir.Questions do
       person asked is about the ticket itself, such as a merge confirmation, and outlives any run;
       so does a question a request comment shows (`request: true`, the agent's
       `linear_request_human_action`: a protected-path authorization, a plan's choice): the run
-      ended because it asked, and the question holds the ticket until it is answered or the hold
-      ends for another reason (TP-1321);
+      ended because it asked, and the question holds the ticket until it is answered or ends for
+      another reason (TP-1321);
     * a merge settled and a terminal state end every question.
 
   A question no longer open lapses with nothing.
@@ -286,23 +293,22 @@ defmodule SymphonyElixir.Questions do
 
   @doc """
   Withdraws the open questions on `ticket` that lapsed with `lapse` (`lapsed?/2`), each with its
-  reason in plain words, and makes the projections follow: the Needs Decision hold that carried it
-  clears (`SymphonyElixir.Hold.clear/4`), and the `## Action withdrawn` reply goes under its request
-  comment: the pause projector posts it from the Question (`SymphonyElixir.Pauses.Projector`), or,
-  while it does not own the comments, this function does when the Inbox lists the request. A
-  question Unblock answers (`held/1`: a run's block report, a dispatch loop) is decided by Unblock
-  and Restart, so only a merge or a terminal state withdraws it here. It and a question a Needs
-  Decision hold carries hold the ticket, so a run ending never withdraws them. Each withdrawal records its `t:cause/0`. Best-effort: a hold or a reply that fails is logged, and the
-  Inbox's next read reconciles the hold. Returns the questions withdrawn.
+  reason in plain words, and makes the projections follow: the `## Action withdrawn` reply goes
+  under its request comment: the pause projector posts it from the Question
+  (`SymphonyElixir.Pauses.Projector`), or, while it does not own the comments, this function does
+  when the Inbox lists the request. A question Unblock answers (`held/1`: a run's block report, a
+  dispatch loop) is decided by Unblock and Restart, so only a merge or a terminal state withdraws it
+  here. It and the question a decision request asked (`deciding/1`) hold the ticket, so a run ending
+  never withdraws them. Each withdrawal records its `t:cause/0`. Best-effort: a reply that fails is
+  logged. Returns the questions withdrawn.
 
-  `opts[:store]` and `opts[:tracker]` override the run store and the tracker the holds are read and
-  written through, and `opts[:replies]` the tracker the reply is posted with (default
+  `opts[:replies]` overrides the tracker the reply is posted with (default
   `SymphonyElixir.Tracker`). The reply goes under the request comment the ticket's record names.
   """
   @spec withdraw_lapsed(ticket(), lapse(), keyword()) :: {:ok, [question()]}
   def withdraw_lapsed(ticket, lapse, opts \\ []) do
-    # The hold's question first: `held/1`'s contract narrows `ticket`, and a malformed one still withdraws nothing.
-    deciding = held_question(ticket, :needs_decision, opts)
+    # The decision's question first: `held/1`'s contract narrows `ticket`, and a malformed one still withdraws nothing.
+    deciding = with %{id: id} <- deciding(ticket), do: id
     blocked = with %{id: id} <- held(ticket), do: id
     holding = [deciding, blocked]
 
@@ -369,25 +375,7 @@ defmodule SymphonyElixir.Questions do
   defp lapse_cause({:run_ended, _run}), do: "run_ended"
   defp lapse_cause(_moved), do: "ticket_moved"
 
-  # The question the ticket's hold of `kind` carries, or nil.
-  defp held_question({:ticket, repo_key, issue_id}, kind, opts) do
-    case Hold.get(repo_key, issue_id, kind, Keyword.take(opts, [:store])) do
-      %{decision: %{question_id: id}} -> id
-      _none -> nil
-    end
-  end
-
-  defp held_question(_ticket, _kind, _opts), do: nil
-
   defp project_withdrawal({:ticket, repo_key, issue_id}, question, reason, opts) do
-    hold_opts = Keyword.take(opts, [:store, :tracker])
-
-    if get_in(Hold.get(repo_key, issue_id, :needs_decision, hold_opts) || %{}, [:decision, :question_id]) == question.id do
-      with {:error, error} <- Hold.clear(repo_key, issue_id, :needs_decision, hold_opts) do
-        Logger.warning("Withdrew question #{question.id} on issue_id=#{issue_id}; its needs_decision hold did not clear: #{inspect(error)}")
-      end
-    end
-
     # The pause projector posts the reply from the withdrawn Question when it owns the comments.
     if not Projector.owns?(), do: reply_withdrawn(issue_id, request_comment_id(repo_key, issue_id, question.id), reason, opts)
   end
@@ -470,6 +458,14 @@ defmodule SymphonyElixir.Questions do
     labels = [DispatchLoop.option_label(:unblock), TransitionGuard.unblock_option()]
     ticket |> open() |> Enum.filter(fn question -> Enum.any?(question.options, &(&1.label in labels)) end) |> List.last()
   end
+
+  @doc """
+  The open question on `ticket` a decision request asked (`SymphonyElixir.DecisionRequest.ask/4`,
+  `request: true`) that the Director's Decide answers: the newest when there are several, nil when
+  there is none. A question Unblock answers (`held/1`) is never one.
+  """
+  @spec deciding(ticket()) :: question() | nil
+  def deciding(ticket), do: ticket |> open() |> Enum.filter(&(&1.request == true)) |> List.last()
 
   @doc "The question `id` on `ticket`, whatever its state, or nil."
   @spec find(ticket(), String.t()) :: question() | nil
@@ -630,6 +626,8 @@ defmodule SymphonyElixir.Questions do
   defp update(repo_key, issue_id, at, fun) do
     with {:ok, question, events} <- RunStore.update_ticket_question(repo_key, issue_id, at, fun) do
       Enum.each(events, &TicketEvents.notify/1)
+      # A question changes the ticket's pause with it: dispatch and the PR watcher read it at once.
+      if events != [], do: ObservabilityPubSub.broadcast_ticket_record_changed(repo_key, issue_id, [:pause])
       if events != [], do: Projector.project_now({:ticket, repo_key, issue_id})
       {:ok, question}
     end
@@ -676,7 +674,7 @@ defmodule SymphonyElixir.Questions do
 
   # A backfilled question keeps the id, the answer and the legacy event the backfill gives it.
   defp backfilled(question, opts, true) do
-    # Whether a request comment shows it is read from the holds, as before questions carried it.
+    # A request comment shows it when its comment was projected, as before questions carried it.
     question = %{question | id: Keyword.get(opts, :id) || question.id, legacy_event: Keyword.get(opts, :legacy_event), request: nil}
 
     case Keyword.get(opts, :answer) do
@@ -699,6 +697,7 @@ defmodule SymphonyElixir.Questions do
       recommended?: Map.get(option, :recommended) == true,
       unlocks: Map.get(option, :unlocks) || []
     }
+    |> put_present(:move, Map.get(option, :move))
   end
 
   defp tradeoffs(tradeoffs, kind), do: for(%{kind: ^kind, text: text} <- tradeoffs, do: String.trim(text))

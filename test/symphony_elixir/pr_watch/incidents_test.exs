@@ -177,7 +177,7 @@ defmodule SymphonyElixir.PrWatch.IncidentsTest do
     cond do
       kind not in Action.waiting_kinds() -> :acted
       :blocked in ending.holds -> assert owner == :symphony, "TP-#{id} waits on a Blocked hold nobody clears: #{inspect(ending)}"
-      owner == :person -> assert :needs_decision in ending.holds, "TP-#{id} waits on a person without a decision: #{inspect(ending)}"
+      owner == :person -> assert :question in ending.holds, "TP-#{id} waits on a person without a question: #{inspect(ending)}"
       true -> assert owner in Action.owners(), "TP-#{id} waits on nobody: #{inspect(ending)}"
     end
   end

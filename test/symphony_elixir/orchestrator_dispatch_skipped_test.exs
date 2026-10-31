@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{CiWait, Pauses, RunStore, SelfHeal}
+  alias SymphonyElixir.{CiWait, Pauses, Questions, RunStore, SelfHeal}
   alias SymphonyElixir.PrWatch.{Competitors, Sweep}
   alias SymphonyElixir.QaDriver.DevServerLease
 
@@ -103,8 +103,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
         merging_ci_waits: %{"landing" => %{commit_sha: "abc1234"}}
       })
 
-    :ok = RunStore.set_ticket_hold("default", "skipped-decision", :needs_decision, %{reason: "Which reading is right?"})
-    on_exit(fn -> RunStore.clear_ticket_hold("default", "skipped-decision", :needs_decision) end)
+    _question = ask!("skipped-decision", "Which reading is right?")
     # Waiting for the running app to include a blocker's fix, as the update hold wrote it on the pause.
     update_reason = %{kind: :build, waits_on: %{pull_request: 5}, text: "Waiting for a Symphony update that includes MT-5's fix"}
     {:ok, _pause} = Pauses.set({:ticket, "default", "update"}, update_reason, set_by: %{kind: :rule, name: "App update hold"})
@@ -135,7 +134,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
              "backlog" => "\"Backlog\" is not an active state",
              "untitled" => "Linear returned it without an id, identifier or title",
              "blocked" => "Waiting for MT-7 to finish",
-             "skipped-decision" => "on a Needs Decision hold",
+             "skipped-decision" => "Waiting for your answer: Which reading is right?",
              "update" => "Waiting for a Symphony update that includes MT-5's fix",
              "landing" => "held in Merging until CI settles on abc1234",
              "running" => "already running",
@@ -306,8 +305,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     SymphonyElixir.PrWatchSupport.put_watch!("default", "held", phase: :qa)
     on_exit(fn -> RunStore.delete_ticket_state("default", "held") end)
 
-    :ok = RunStore.set_ticket_hold("default", "held", :needs_decision, %{reason: "Investigate the qa_environment by hand?"})
-    on_exit(fn -> RunStore.clear_ticket_hold("default", "held", :needs_decision) end)
+    question = ask!("held", "Investigate the qa_environment by hand?")
 
     revalidate = fn -> send(self(), {:result, Orchestrator.revalidate_issue_for_dispatch_for_test(polled, fetcher)}) end
     log = capture_log(revalidate)
@@ -315,7 +313,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     assert_received {:result, {:skip, %Issue{repo_key: "default"}}}
     refute log =~ "with no repo key"
 
-    :ok = RunStore.clear_ticket_hold("default", "held", :needs_decision)
+    {:ok, _answered} = Questions.answer({:ticket, "default", "held"}, question.id, "Yes")
     assert {:ok, %Issue{repo_key: "default"}} = Orchestrator.revalidate_issue_for_dispatch_for_test(polled, fetcher)
   end
 
@@ -721,5 +719,21 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
       codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
       retry_attempts: %{}
     }
+  end
+
+  # A decision request asked on the ticket, which pauses it until it is answered.
+  defp ask!(issue_id, title) do
+    request = %{
+      title: title,
+      question: title,
+      why: "Only a person can say.",
+      if_unanswered: "The ticket waits.",
+      recommendation_reason: "It is the safe reading.",
+      options: [%{label: "Yes", effect: "It goes on.", recommended: true}, %{label: "No", effect: "It stops."}]
+    }
+
+    {:ok, question} = Questions.ask({:ticket, "default", issue_id}, request, request: true)
+    on_exit(fn -> RunStore.delete_ticket_state("default", issue_id) end)
+    question
   end
 end

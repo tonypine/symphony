@@ -17,10 +17,10 @@ defmodule SymphonyElixir.TicketEvents do
   `question.withdrawn` naming its `question_id`, or by a `decision.recorded` naming the event.
 
   The machinery writes events next to the snapshot fields of `SymphonyElixir.TicketState`
-  (`SymphonyElixir.TicketSignals`, `SymphonyElixir.Hold`, `SymphonyElixir.Decisions`, and the
+  (`SymphonyElixir.TicketSignals`, `SymphonyElixir.Pauses`, `SymphonyElixir.Questions`, and the
   orchestrator's `run.started` and `run.ended` next to its dispatches) and next to the audit records
   of the Director's stop, force and Inbox moves (`person.action`), and nothing reads them yet: the
-  snapshot fields (`signals`, `verdicts`, `holds`, `decisions`, `dispatches`) stay the source of
+  snapshot fields (`signals`, `verdicts`, `decisions`, `dispatches`) stay the source of
   truth until readers move over.
   """
 

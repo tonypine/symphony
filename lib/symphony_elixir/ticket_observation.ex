@@ -8,7 +8,7 @@ defmodule SymphonyElixir.TicketObservation do
   `observe/3` reads the record (a new one when the ticket has none), applies
   `SymphonyElixir.TicketState.observe/4` and writes the observed fields back through
   `SymphonyElixir.RunStore.update_ticket_state/3` only when one changed, so an identical poll writes
-  nothing and a write never touches the record's holds, verdicts or other fields. A fact older than
+  nothing and a write never touches the record's pause, verdicts or other fields. A fact older than
   the record's `linear_updated_at` is dropped. The record keeps which read brought its last change
   (`observed_from`: the poll, a by-id read, the PR and CI watcher or a webhook delivery). Only
   `SymphonyElixir.Dispatch.Candidates` reads the observed fields, and an observation records no
@@ -63,7 +63,7 @@ defmodule SymphonyElixir.TicketObservation do
   only reconciles the record with Linear (`reconcile_all/3`). It observes the repo's tickets as any
   poll does (a change made in Linear is applied, drift moved back), then, in a task of its own, projects
   again what the record marks as failed (`pending_projection`: a move of Symphony's whose Linear write
-  failed, a hold's label) and reads by id the repo's records no read observed yet, once each. It never
+  failed, the pause's labels) and reads by id the repo's records no read observed yet, once each. It never
   decides a phase: it re-projects the record's own.
 
   What each observation did, and the drift it found, are counted in a public ETS table owned by this
@@ -75,7 +75,7 @@ defmodule SymphonyElixir.TicketObservation do
 
   require Logger
 
-  alias SymphonyElixir.{Config, DirectorMoves, Hold, Orchestrator, RunStore, TicketSignals, TicketState, Tracker}
+  alias SymphonyElixir.{Config, DirectorMoves, Orchestrator, RunStore, TicketSignals, TicketState, Tracker}
   alias SymphonyElixir.Linear.{Issue, Webhook}
   alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.PlanBrief
@@ -272,8 +272,7 @@ defmodule SymphonyElixir.TicketObservation do
 
   - each projection the record marks as failed (`TicketState.pending_projection`) is made again from
     the record as it is right before the write: a phase Symphony owns is written to Linear
-    (`Tracker.update_issue_state/2`), a hold's label set or cleared as the record holds the hold
-    (`Tracker.set_machine_label/2`, `Tracker.clear_machine_label/2`), the labels and Decisions
+    (`Tracker.update_issue_state/2`), the labels and Decisions
     section the pause projector renders applied again (`SymphonyElixir.Pauses.Projector.apply/2`),
     and that mark dropped (counted
     under `reapplied`); a newer mark written meanwhile stays. A projection the poll's issue already
@@ -417,8 +416,8 @@ defmodule SymphonyElixir.TicketObservation do
         tracker = Keyword.get(opts, :tracker, Tracker)
         records = Enum.map(records, &TicketState.normalize/1)
 
-        # A question's request comment is posted again by the Inbox's sweep, which reads the
-        # ticket's comments (`SymphonyElixir.NeedsDecisionHold`), so it is never posted twice.
+        # A question's request comment is the pause projector's to post, once (its `:pause` mark), so
+        # a mark of the comment alone writes nothing here.
         for record <- records,
             mark <- record.pending_projection,
             mark.type != :question_comment,
@@ -436,7 +435,7 @@ defmodule SymphonyElixir.TicketObservation do
 
   # Makes a failed projection again from the record's truth, unless the poll already shows it or it
   # no longer applies, and drops its mark once Linear holds it. The record is read again right before
-  # the write, so a move or a hold since the run listed the records is the one written; and only that
+  # the write, so a move or a pause since the run listed the records is the one written; and only that
   # read's mark is dropped, so a mark written while Linear is written stays for the next run. A move
   # that lands in Linear between this read and the write is drift, which the next observation moves back.
   defp reproject(repo_key, issue_id, projection, polled, tracker) do
@@ -487,29 +486,12 @@ defmodule SymphonyElixir.TicketObservation do
     end
   end
 
-  # The labels and section the pause projector renders, from the record as it is now. A Blocked
-  # hold's label a failed write marked before that hold was retired is the projector's now too.
+  # The labels and section the pause projector renders, from the record as it is now.
   defp projection_write(_record, :pause, _polled), do: :projector
-  defp projection_write(_record, {:hold_label, :blocked}, _polled), do: :projector
-
-  defp projection_write(record, {:hold_label, kind}, polled) do
-    held? = TicketState.hold?(record, kind)
-    name = Hold.label(kind)
-
-    case polled do
-      %Issue{labels: labels} when is_list(labels) ->
-        if Enum.any?(labels, &(String.downcase(&1) == String.downcase(name))) == held?, do: :none, else: {:label, name, held?}
-
-      _not_polled ->
-        {:label, name, held?}
-    end
-  end
 
   defp project_write(write, %{issue_id: issue_id} = record, tracker) do
     case write do
       {:state, phase} -> tracker.update_issue_state(issue_id, phase)
-      {:label, name, true} -> tracker.set_machine_label(issue_id, name)
-      {:label, name, false} -> tracker.clear_machine_label(issue_id, name)
       {:answer, question_id, comment_id} -> project_answer(record, question_id, comment_id, tracker)
       :projector -> Projector.apply(record, tracker: tracker)
     end

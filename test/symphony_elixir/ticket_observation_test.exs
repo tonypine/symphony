@@ -133,7 +133,7 @@ defmodule SymphonyElixir.TicketObservationTest do
   end
 
   test "a newer title reaches an existing record and leaves its other fields", %{repo_key: repo_key} do
-    held = repo_key |> TicketState.new("issue-observed") |> TicketState.set_hold(:needs_decision, %{reason: "asked"}, @now)
+    held = repo_key |> TicketState.new("issue-observed") |> TicketState.record_verdict("qa", "a", "pass", @now)
     :ok = RunStore.put_ticket_state(held)
     {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
 
@@ -143,7 +143,7 @@ defmodule SymphonyElixir.TicketObservationTest do
     record = RunStore.get_ticket_state(repo_key, "issue-observed")
     assert record.title == "Observe every poll, renamed"
     assert record.linear_updated_at == DateTime.add(@linear_at, 300)
-    assert [%{kind: :needs_decision, reason: "asked"}] = record.holds
+    assert [%{kind: "qa", outcome: "pass"}] = record.verdicts
   end
 
   test "an older issue is dropped, counted as stale, and the record untouched", %{repo_key: repo_key} do
@@ -688,7 +688,6 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert_received {:memory_tracker_state_update, "issue-observed", "Code Review"}
       assert %{phase: "Code Review", phase_owner: :symphony} = RunStore.get_ticket_state(repo_key, "issue-observed")
       assert event_types(repo_key) == ["drift.detected", "drift.reverted"]
-      assert RunStore.get_ticket_state(repo_key, "issue-observed").holds == []
     end
 
     test "a failed move back is recorded and tried again by the next observation, never sooner", %{repo_key: repo_key} do
@@ -1059,14 +1058,15 @@ defmodule SymphonyElixir.TicketObservationTest do
 
     test "each write projects the record as it is right before it, not as the run listed it", %{repo_key: repo_key} do
       marked!(repo_key, "Code Review", :phase)
-      :ok = RunStore.set_ticket_hold(repo_key, "issue-observed", :needs_decision, %{reason: "waits"})
-      :ok = TicketSignals.mark_projection(repo_key, "issue-observed", {:hold_label, :needs_decision}, :linear_down)
+      paused!(repo_key)
+      :ok = TicketSignals.mark_projection(repo_key, "issue-observed", :pause, :linear_down)
 
       # The label is written first (the newest mark); dispatch moves the ticket meanwhile.
       reply(:set_machine_label, fn -> TicketSignals.record_phase(repo_key, "issue-observed", "In Progress") end)
+      on_exit(fn -> reply(:set_machine_label, :ok) end)
 
       reconcile(repo_key, [])
-      assert_received {:tracker, {:set_machine_label, "issue-observed", "Needs Decision"}}
+      assert_received {:tracker, {:set_machine_label, "issue-observed", "Blocked"}}
       assert_received {:tracker, {:update_issue_state, "issue-observed", "In Progress"}}
       assert record(repo_key).pending_projection == []
       assert TicketObservation.summary().reconcile.reapplied == 2
@@ -1074,14 +1074,19 @@ defmodule SymphonyElixir.TicketObservationTest do
 
     test "a mark another run dropped, or a record deleted, before its write is not projected", %{repo_key: repo_key} do
       for meanwhile <- [&drop_phase_mark/1, &RunStore.delete_ticket_state(&1, "issue-observed")] do
+        # Each round starts from no record, so the projector has applied nothing yet.
+        RunStore.delete_ticket_state(repo_key, "issue-observed")
         marked!(repo_key, "Code Review", :phase)
-        :ok = TicketSignals.mark_projection(repo_key, "issue-observed", {:hold_label, :needs_decision}, :linear_down)
-        reply(:clear_machine_label, fn -> meanwhile.(repo_key) end)
+        paused!(repo_key)
+        :ok = TicketSignals.mark_projection(repo_key, "issue-observed", :pause, :linear_down)
+        reply(:set_machine_label, fn -> meanwhile.(repo_key) end)
 
         reconcile(repo_key, [])
-        assert_received {:tracker, {:clear_machine_label, "issue-observed", "Needs Decision"}}
+        assert_received {:tracker, {:set_machine_label, "issue-observed", "Blocked"}}
         refute_received {:tracker, {:update_issue_state, _issue_id, _state}}
       end
+
+      reply(:set_machine_label, :ok)
     end
 
     test "a mark Linear already shows, one whose phase is not Symphony's, and a removed ticket's are dropped with no write",
@@ -1099,7 +1104,7 @@ defmodule SymphonyElixir.TicketObservationTest do
         repo_key
         |> RunStore.get_ticket_state("issue-observed")
         |> TicketState.mark_removed(@now)
-        |> TicketState.mark_projection({:hold_label, :blocked}, :down, @now)
+        |> TicketState.mark_projection(:pause, :down, @now)
 
       :ok = RunStore.put_ticket_state(removed)
       reconcile(repo_key, [])
@@ -1109,33 +1114,16 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert TicketObservation.summary().reconcile.reapplied == 0
     end
 
-    test "a hold's label is set or cleared as the record holds the hold, unless the poll shows it already", %{repo_key: repo_key} do
-      marked!(repo_key, "Todo", {:hold_label, :needs_decision})
-      :ok = RunStore.set_ticket_hold(repo_key, "issue-observed", :needs_decision, %{reason: "waits"})
-      reconcile(repo_key, [linear_issue(%{labels: ["backend"], updated_at: @read_at})])
-      assert_received {:tracker, {:set_machine_label, "issue-observed", "Needs Decision"}}
-      assert record(repo_key).pending_projection == []
-
-      :ok = RunStore.clear_ticket_hold(repo_key, "issue-observed", :needs_decision)
-      marked!(repo_key, "Todo", {:hold_label, :needs_decision})
-      reconcile(repo_key, [])
-      assert_received {:tracker, {:clear_machine_label, "issue-observed", "Needs Decision"}}
-      assert record(repo_key).pending_projection == []
-
-      :ok = RunStore.set_ticket_hold(repo_key, "issue-observed", :needs_decision, %{reason: "waits"})
-      marked!(repo_key, "Todo", {:hold_label, :needs_decision})
-      reconcile(repo_key, [linear_issue(%{labels: ["backend", "needs decision"], updated_at: @read_at})])
-      refute_received {:tracker, {:set_machine_label, _issue_id, _label}}
-      assert record(repo_key).pending_projection == []
-      assert TicketObservation.summary().reconcile.reapplied == 2
-    end
-
-    test "a retired Blocked hold's label mark is the pause projector's", %{repo_key: repo_key} do
-      marked!(repo_key, "Todo", {:hold_label, :blocked})
-      :ok = RunStore.set_ticket_hold(repo_key, "issue-observed", :blocked, %{reason: "waits"})
+    test "a hold's label mark a record kept from before the holds were retired is the pause projector's", %{repo_key: repo_key} do
+      marked!(repo_key, "Todo", :phase)
+      paused!(repo_key)
+      old_mark = %{type: :hold_label, hold: :needs_decision, error: "down", at: @now}
+      kept = %{record(repo_key) | pending_projection: [old_mark]}
+      :ok = RunStore.put_ticket_state(kept)
 
       reconcile(repo_key, [])
-      refute_received {:tracker, {:set_machine_label, _issue_id, "Blocked"}}
+      assert_received {:tracker, {:set_machine_label, "issue-observed", "Blocked"}}
+      refute_received {:tracker, {:set_machine_label, _issue_id, "Needs Decision"}}
       assert record(repo_key).pending_projection == []
     end
 
@@ -1278,6 +1266,12 @@ defmodule SymphonyElixir.TicketObservationTest do
     {:ok, _outcome} = TicketObservation.observe(repo_key, linear_issue(%{updated_at: ~U[2026-01-01 00:00:00Z]}), now: @now)
     record = repo_key |> RunStore.get_ticket_state("issue-observed") |> TicketState.put_phase(phase, @phase_at)
     :ok = RunStore.put_ticket_state(TicketState.mark_projection(record, projection, :unavailable, @phase_at))
+  end
+
+  # The ticket paused on a blocker, which the pause projector shows as `Blocked`.
+  defp paused!(repo_key) do
+    {:ok, _pause} = SymphonyElixir.Pauses.set({:ticket, repo_key, "issue-observed"}, SymphonyElixir.Pauses.ticket_reason(:dependency, "TP-12"))
+    :ok
   end
 
   defp drop_phase_mark(repo_key) do

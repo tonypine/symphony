@@ -4,7 +4,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   import Plug.Conn
   import Plug.Test
 
-  alias SymphonyElixir.{DirectorMoves, Hold, RunStore, SubIssueWait, TicketState}
+  alias SymphonyElixir.{DecisionMove, DirectorMoves, Questions, RunStore, SubIssueWait, TicketState}
   alias SymphonyElixirWeb.ControlApiController
 
   setup do
@@ -74,7 +74,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   test "decide answers a held ticket in place, and a redirecting answer moves it through the guard", %{moves: moves} do
     held = %Issue{id: "held", identifier: "MOT-60", title: "Needs a call", state: "In Progress", repo_key: "repo-api"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [held])
-    :ok = Hold.set("repo-api", "held", :needs_decision, %{reason: "Add it?", clearing_condition: "when the decision is recorded", decision: %{title: "Add it"}})
+    ask("Add it", "Add it?")
 
     params = %{
       "issue_identifier" => "MOT-60",
@@ -88,11 +88,11 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert %{"move" => "decide", "moved" => false, "from_state" => "In Progress", "to_state" => "In Progress"} = Jason.decode!(conn.resp_body)
     assert_received {:memory_tracker_reply, "held", "comment-1", body}
     assert body =~ "Decision from the Director:"
-    refute Hold.held?("repo-api", "held", :needs_decision)
+    refute deciding()
     refute_received {:memory_tracker_state_update, _issue_id, _state}
 
     # The same answer as a redirect directs the move, which goes through the guard.
-    :ok = Hold.set("repo-api", "held", :needs_decision, %{reason: "Add it?"})
+    ask("Add it again", "Add it?")
 
     conn = post(:decide, Map.merge(params, %{"request_comment_id" => "comment-2", "move" => "rework", "picks" => [%{"question" => "Add it?", "answer" => "Send it back"}]}), moves)
 
@@ -136,7 +136,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert_received {:memory_tracker_reply, "plan", "comment-8", _reply}
   end
 
-  test "Continue to QA on a Code Review escalation moves the ticket into QA; an unconfigured target is a 422 that keeps the hold", %{moves: moves} do
+  test "Continue to QA on a Code Review escalation moves the ticket into QA; an unconfigured target is a 422 that keeps the question open", %{moves: moves} do
     held = %Issue{id: "held", identifier: "MOT-60", title: "Escalated", state: "Code Review", repo_key: "repo-api"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [held])
 
@@ -146,36 +146,48 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
       "picks" => [%{"question" => "How should MOT-60 continue?", "answer" => "1"}]
     }
 
-    :ok = Hold.set("repo-api", "held", :needs_decision, escalation_hold(""))
+    unconfigured = escalation(%{to: " "})
 
     assert error(post(:decide, params, moves)) ==
-             {422, "invalid_request", "MOT-60's decision moves it to a state not configured for repo repo-api; the hold stays"}
+             {422, "invalid_request", "MOT-60's decision moves it to a state not configured for repo repo-api; the question stays open"}
 
-    assert Hold.held?("repo-api", "held", :needs_decision)
+    assert %{id: ^unconfigured} = deciding()
     refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
 
-    :ok = Hold.set("repo-api", "held", :needs_decision, escalation_hold("QA"))
+    {:ok, _withdrawn} = Questions.withdraw({:ticket, "repo-api", "held"}, unconfigured, "Asked again with the state configured.")
+    escalation(nil)
     conn = post(:decide, params, moves)
 
     assert conn.status == 200
     assert %{"move" => "decide", "moved" => true, "from_state" => "Code Review", "to_state" => "QA"} = Jason.decode!(conn.resp_body)
     assert_received {:memory_tracker_state_update, "held", "QA"}
-    refute Hold.held?("repo-api", "held", :needs_decision)
+    refute deciding()
   end
 
-  defp escalation_hold(qa_state) do
-    %{
-      reason: "How should MOT-60 continue?",
-      clearing_condition: "when the decision is recorded",
-      decision: %{
-        title: "Code Review escalated MOT-60",
-        options: [
-          %{label: "Continue to #{qa_state}", effect: "the ticket moves to #{qa_state} and its QA run starts"},
-          %{label: "Send to Rework", effect: "the ticket moves to Rework with these reasons"}
-        ],
-        confirm: qa_state
-      }
+  defp deciding, do: Questions.deciding({:ticket, "repo-api", "held"})
+
+  # A decision request on MOT-60, asked as `SymphonyElixir.DecisionRequest.ask/4` asks it.
+  defp ask(title, question, options \\ nil, opts \\ []) do
+    request = %{
+      title: title,
+      question: question,
+      why: "Only you can decide.",
+      if_unanswered: "MOT-60 waits.",
+      recommendation_reason: "It is the safe pick.",
+      options: options || [%{label: "Add it", effect: "It is added.", recommended: true}, %{label: "Leave it", effect: "Nothing changes."}]
     }
+
+    {:ok, %{id: id}} = Questions.ask({:ticket, "repo-api", "held"}, request, [request: true] ++ opts)
+    id
+  end
+
+  # Code Review's escalation: its first option continues into QA, or, with `move`, into the state
+  # that move names.
+  defp escalation(move) do
+    continue = %{label: "Continue to QA", effect: "the ticket moves to QA and its QA run starts", recommended: true}
+    continue = if move, do: DecisionMove.option(continue, move), else: continue
+    options = [continue, %{label: "Send to Rework", effect: "the ticket moves to Rework with these reasons"}]
+    ask("Code Review escalated MOT-60", "How should MOT-60 continue?", options, if(move, do: [], else: [confirm: "QA"]))
   end
 
   test "a pause the store refuses to lift is a 502", %{moves: moves} do

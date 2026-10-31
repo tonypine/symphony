@@ -179,7 +179,7 @@ defmodule SymphonyElixir.PrDecisionTest do
     end
 
     test "G8: a hold pauses the ticket whatever its PR does (R4)" do
-      needs_decision = decide(phase: :code_review, hold: :needs_decision, ci: :red, rerun_done: true)
+      needs_decision = decide(phase: :code_review, hold: :question, ci: :red, rerun_done: true)
       assert %Action{rule: "R4", kind: :wait, owner: :person, clears_when: "a person answers and the hold clears"} = needs_decision
 
       blocked = decide(phase: :merging, hold: :blocked, mergeable: :dirty)
@@ -432,7 +432,7 @@ defmodule SymphonyElixir.PrDecisionTest do
     end
 
     test "a Merging PR behind main on a Needs Decision hold is updated; the hold's wait stands" do
-      held = [phase: :merging, mergeable: :behind, hold: :needs_decision]
+      held = [phase: :merging, mergeable: :behind, hold: :question]
       assert [%Action{rule: "U1", kind: :update_branch, reason: "PR #42 is behind main"}] = upkeep(held)
       assert %Action{rule: "R4", owner: :person} = decide(held)
     end

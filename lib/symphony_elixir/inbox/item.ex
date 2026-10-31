@@ -142,7 +142,7 @@ defmodule SymphonyElixir.Inbox.Item do
   def from_question(record, question) do
     record
     |> record_item(:action, question.title, latest([record.phase_at, question.asked_at]))
-    |> Map.put(:review, Map.merge(question_review(record, question), %{requested_at: question.asked_at, confirm: MergeConfirmation.confirm_target(%{decision: %{confirm: question.confirm}})}))
+    |> Map.put(:review, Map.merge(question_review(record, question), %{requested_at: question.asked_at, confirm: MergeConfirmation.confirm_target(question)}))
   end
 
   @doc """

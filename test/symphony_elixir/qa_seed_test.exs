@@ -4,7 +4,7 @@ defmodule SymphonyElixir.QaSeedTest do
   import Plug.Conn
   import Plug.Test
 
-  alias SymphonyElixir.{Config, DirectorMoves, Hold, Inbox, Orchestrator, Pauses, PlanBrief, QaSeed, Questions}
+  alias SymphonyElixir.{Config, DirectorMoves, Inbox, Orchestrator, Pauses, PlanBrief, QaSeed, Questions}
   alias SymphonyElixir.{RunStore, TicketPullRequest, Tracker, Workflow}
   alias SymphonyElixirWeb.ControlApiController
 
@@ -68,8 +68,8 @@ defmodule SymphonyElixir.QaSeedTest do
     # Unblock releases the access reason; Decide answers the open question.
     assert [%{kind: :environment, releasable: true}] = record(repo_key, "qa-seed-102").pause.reasons
     held = record(repo_key, "qa-seed-108")
-    assert [%{kind: :needs_decision, decision: %{question_id: question_id}}] = held.holds
-    assert [%{id: ^question_id, title: "How long a paused repository stays paused"}] = Enum.filter(held.questions, &(&1.state == :open))
+    assert [%{id: question_id, title: "How long a paused repository stays paused", request: true}] = Enum.filter(held.questions, &(&1.state == :open))
+    assert %{id: ^question_id} = Questions.deciding({:ticket, repo_key, "qa-seed-108"})
 
     runs = RunStore.list_runs(repo_key, :all)
     assert Enum.map(runs, & &1.issue_identifier) |> Enum.sort() == ["QA-103", "QA-105", "QA-107"]
@@ -101,7 +101,7 @@ defmodule SymphonyElixir.QaSeedTest do
     move = &control(&1, &2, orchestrator, moves)
 
     # The held question is a row in the Inbox, beside the access hold and the plan in review. Decide
-    # takes the row away and lifts the hold; Undo brings both back.
+    # takes the row away and answers the question; Undo brings both back.
     [%{id: question_id}] = Questions.open({:ticket, repo_key, "qa-seed-108"})
 
     assert [
@@ -112,7 +112,7 @@ defmodule SymphonyElixir.QaSeedTest do
 
     picks = [%{"question" => "How long a paused repository stays paused", "answer" => "Stay paused until resumed"}]
     assert %{"move" => "decide"} = move.(:decide, %{"issue_identifier" => "QA-108", "question_id" => question_id, "picks" => picks})
-    refute Hold.held?(repo_key, "qa-seed-108", :needs_decision)
+    refute Questions.deciding({:ticket, repo_key, "qa-seed-108"})
     assert [{"QA-102", :blocked, _hold}, {"QA-109", :plan, _plan}] = rows(inbox)
     assert [{"QA-102", :blocked, _hold}, {"QA-109", :plan, _plan}] = read_inbox.()
     assert %{"move" => "undo", "undone" => "decide"} = move.(:undo, %{"issue_identifier" => "QA-108"})

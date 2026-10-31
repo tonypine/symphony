@@ -5,7 +5,6 @@ defmodule SymphonyElixir.QaVerificationTest do
   alias SymphonyElixir.CiWait
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Handoff
-  alias SymphonyElixir.Hold
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.MergeConfirmation
   alias SymphonyElixir.Pauses
@@ -137,13 +136,6 @@ defmodule SymphonyElixir.QaVerificationTest do
     def decide(_issue, _settings, _opts), do: {:run, [Process.get(:qa_live_playbook)], "the change delivers or updates a user journey"}
   end
 
-  defmodule UnusedStore do
-    def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :disk_full}
-    def get_ticket_state(_repo_key, _issue_id), do: nil
-    def list_all_ticket_states, do: []
-    def record_ticket_self_heal(_repo_key, _issue_id, _attrs), do: :ok
-  end
-
   defmodule FailingTracker do
     def update_issue_state(_issue_id, _state), do: {:error, :rate_limited}
   end
@@ -249,6 +241,9 @@ defmodule SymphonyElixir.QaVerificationTest do
   end
 
   defp verdicts, do: Handoff.verdicts(@repo_key, @issue_id, "qa")
+
+  # The ticket's open decision request, as the Director's Decide answers it.
+  defp deciding(issue_id \\ @issue_id), do: SymphonyElixir.Questions.deciding({:ticket, @repo_key, issue_id})
 
   defp blocked_result(blocked_steps, reason) do
     steps = for name <- blocked_steps, do: %{name: name, status: "blocked", details: reason, evidence: []}
@@ -450,9 +445,8 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       assert [%{kind: "qa", head_sha: ^head, outcome: "pass"}] = verdicts()
 
-      assert %{decision: %{confirm: "Merging"}} = hold = Hold.get(@repo_key, @issue_id, :needs_decision)
-      assert Hold.held_any?(@repo_key, @issue_id)
-      assert MergeConfirmation.confirm_target(hold) == "Merging"
+      assert %{confirm: "Merging"} = question = deciding()
+      assert MergeConfirmation.confirm_target(question) == "Merging"
 
       assert [%{name: "qa", details: %{signal: "merge_confirmation", target: "Merging", reason: reason}}] =
                Handoff.signals(@repo_key, @issue_id)
@@ -492,7 +486,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert :ok = run(workspace, qa_policy: SkipPolicy, settings: settings!(%{"manual_review" => "on"}))
 
       refute_received {:memory_tracker_state_update, @issue_id, _state}
-      assert Hold.held?(@repo_key, @issue_id, :needs_decision)
+      assert deciding()
       assert [%{name: "qa", details: %{signal: "merge_confirmation"}} | _] = Handoff.signals(@repo_key, @issue_id)
 
       # A rework verdict never waits on a person, in either mode.
@@ -506,7 +500,7 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       assert :ok = run(other_workspace, settings: settings!(%{"manual_review" => "on"}))
       assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
-      refute Hold.held_any?(@repo_key, @issue_id)
+      refute deciding()
       assert [%{name: "qa", details: %{signal: "qa_fail"}} | _] = Handoff.signals(@repo_key, @issue_id)
       assert head != nil
     end
@@ -654,7 +648,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert request =~ "PR #816 closed"
       assert request =~ "the ticket stays in QA"
 
-      assert %{decision: %{title: "Reopen the pull request of TP-816", options: options}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert %{title: "Reopen the pull request of TP-816", options: options} = deciding()
       assert Enum.map(options, & &1.label) == ["Reopen", "Restart", "Cancel"]
     end
 
@@ -673,7 +667,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       refute_received {:memory_tracker_state_update, _, _}
       assert_received {:memory_tracker_comment, "issue-qa-no-pr", request}
       assert request =~ "has no open pull request"
-      assert %{reason: reason} = Hold.get(@repo_key, "issue-qa-no-pr", :needs_decision)
+      assert %{question: reason} = deciding("issue-qa-no-pr")
       assert reason =~ "has no open pull request"
       assert Handoff.verdicts(@repo_key, "issue-qa-no-pr", "qa") == []
     end
@@ -690,15 +684,19 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert_received {:memory_tracker_comment, @issue_id, request}
       assert request =~ "Restart or cancel TP-816"
       assert request =~ "(PR #816) that changes nothing"
-      assert %{decision: %{options: [%{label: "Restart"}, %{label: "Cancel"}]}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert %{options: [%{label: "Restart"}, %{label: "Cancel"}]} = deciding()
     end
 
-    test "a hold that cannot be set for a closed pull request is reported" do
+    test "a request that cannot be posted for a closed pull request is reported, its question left open" do
       {workspace, _head} = git_workspace!()
       TicketPullRequest.mark_finished(@repo_key, @pr_url, "closed")
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :disk_full})
 
-      assert {:error, {:qa_hold_failed, {:decision_hold_failed, :disk_full}}} = run(workspace, store: UnusedStore)
-      refute_received {:memory_tracker_comment, _, _}
+      capture_log(fn ->
+        assert {:error, {:qa_hold_failed, {:decision_request_failed, :disk_full}}} = run(workspace, [])
+      end)
+
+      assert %{title: "Reopen the pull request of TP-816"} = deciding()
     end
 
     test "an unknown verdict is refused without a move" do
@@ -954,7 +952,7 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       Process.put(:qa_agent_result, blocked_result(steps, "qa_launch_app cannot set the update feed"))
       assert :ok = run(workspace, [])
-      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+      refute deciding()
 
       Process.put(:qa_agent_result, blocked_result(steps, "The app cannot be pointed at a fake update feed"))
       log = capture_log(fn -> assert :ok = run(workspace, []) end)
@@ -965,18 +963,18 @@ defmodule SymphonyElixir.QaVerificationTest do
       refute blocked?(@issue_id)
       assert SymphonyElixir.TicketState.self_heal(RunStore.get_ticket_state(@repo_key, @issue_id)) == nil
 
-      assert %{decision: decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert %{} = decision = deciding()
       assert decision.title == "QA could not finish its check of TP-816"
       assert decision.question == "QA ran TP-816 (Land the QA state) 2 times on the same change without a pass or a fail. How should it continue?"
       assert decision.why =~ "The last run ended with: The app cannot be pointed at a fake update list."
       assert [again, %{label: "Send it back to Rework", move: %{to: "Rework"}}, %{label: "Merge without a QA result", effect: merge, move: merge_move}] = decision.options
-      assert %{label: "Run QA again", recommended: true} = again
+      assert %{label: "Run QA again", recommended?: true} = again
       refute Map.has_key?(again, :move)
       # The pick is Symphony's move, never the person's: no option asks them to move the ticket.
       assert merge == "Symphony moves TP-816 to Merging, and it merges on its review and CI alone"
       refute Enum.any?(decision.options, &(&1.effect =~ "you move"))
       assert merge_move == %{to: "Merging", verdict: %{kind: "qa", outcome: "skip", head_sha: head, reason: "skipped by decision"}}
-      assert decision.state == "QA"
+      assert decision.asked_in == "QA"
 
       assert_received {:memory_tracker_comment, @issue_id, _retrying_report}
       assert_received {:memory_tracker_comment, @issue_id, _report}
@@ -1000,14 +998,14 @@ defmodule SymphonyElixir.QaVerificationTest do
       for tool <- ["pg_ctl", "node"] do
         Process.put(:qa_agent_result, {:error, {:qa_host_missing_tool, [tool]}, %{}})
         assert :ok = run(workspace, [])
-        refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+        refute deciding()
       end
 
       # The fifth blocked run on the same head escalates however the failure changed.
       Process.put(:qa_agent_result, {:error, {:qa_host_missing_tool, ["swift"]}, %{}})
       assert :ok = run(workspace, [])
 
-      assert %{decision: decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert %{} = decision = deciding()
       assert decision.question =~ "over 5 blocked runs of the same change"
       assert Enum.count(verdicts(), &(&1.outcome == "blocked")) == 5
     end
@@ -1068,9 +1066,9 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert :ok = run(workspace, opts)
 
       refute_received {:fixer_create, _}
-      assert Hold.held?(@repo_key, @issue_id, :needs_decision)
+      assert deciding()
 
-      assert %{reason: stuck} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert %{question: stuck} = deciding()
       assert stuck =~ "The dev server block on"
     after
       stop_verification_port_pool()
@@ -1129,7 +1127,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       capture_log(fn -> assert :ok = run(workspace, worker_host: "worker-1") end)
 
       refute_received {:fixer_create, _attrs}
-      assert %{decision: %{why: why}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert %{why: why} = deciding()
       assert why =~ "QA cannot run on the remote worker"
     end
 
@@ -1144,11 +1142,12 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert {:error, {:qa_self_heal_failed, {:self_heal_fix_ticket_failed, :linear_down}}} = run(workspace, [])
       Process.delete(:fix_ticket_create)
 
-      # A block that goes to a person reports a decision hold it could not set the same way.
+      # A block that goes to a person reports a decision request it could not post the same way.
       Process.put(:qa_agent_result, {:error, :nope, %{}})
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :disk_full})
 
-      {result, _log} = with_log(fn -> run(workspace, store: UnusedStore) end)
-      assert {:error, {:qa_escalation_failed, {:decision_hold_failed, :disk_full}}} = result
+      {result, _log} = with_log(fn -> run(workspace, []) end)
+      assert {:error, {:qa_escalation_failed, {:decision_request_failed, :disk_full}}} = result
     end
   end
 
@@ -1241,13 +1240,13 @@ defmodule SymphonyElixir.QaVerificationTest do
       refute blocked?(@issue_id)
       assert [%{outcome: "blocked", head_sha: ^head}] = verdicts()
 
-      assert %{decision: decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert %{} = decision = deciding()
       assert decision.title == "QA could not finish its check of TP-816"
       assert decision.question =~ "QA could not prove any step of TP-816 (Land the QA state) here"
       assert decision.why =~ "The steps that need the project's own server"
 
-      assert [%{label: "Run QA again"} = again, %{label: "Send it back to Rework"}, %{label: "Merge without a QA result", recommended: true}] = decision.options
-      refute Map.has_key?(again, :recommended)
+      assert [%{label: "Run QA again"} = again, %{label: "Send it back to Rework"}, %{label: "Merge without a QA result", recommended?: true}] = decision.options
+      refute again.recommended?
 
       assert_received {:memory_tracker_comment, @issue_id, report}
       assert report =~ "**Verdict:** blocked → QA (blocked)"
@@ -1311,7 +1310,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       blocked = %{verdict: :blocked, summary: "", steps: [step("Run it", "blocked"), step("Open the Mac app", "unprovable", "no app playbook")], findings: [], reason: "the app is not in this pass"}
       assert :ok = run_hub(workspace, blocked, app_repo_settings())
       refute_received {:memory_tracker_state_update, @issue_id, _state}
-      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+      refute deciding()
 
       assert :ok = run_hub(workspace, %{blocked | steps: [step("Run it", "pass"), step("Open the Mac app", "unprovable", "no app playbook")]}, app_repo_settings())
       assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
@@ -1329,7 +1328,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       refute QaAgent.prompt(job, nil) =~ "unprovable"
 
       refute_received {:memory_tracker_state_update, @issue_id, _state}
-      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+      refute deciding()
       assert [%{outcome: "blocked", head_sha: ^head}] = verdicts()
 
       assert_received {:memory_tracker_comment, @issue_id, report}
@@ -1434,7 +1433,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert :ok = run(workspace, settings: settings!(%{"manual_review" => "on"}))
 
       refute_received {:memory_tracker_state_update, _, _}
-      assert %{decision: decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert %{} = decision = deciding()
       assert decision.why =~ "nothing on screen to judge: the change touches no screen"
     end
 
@@ -1475,7 +1474,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       log = capture_log(fn -> assert :ok = run(workspace, []) end)
 
       assert log =~ "QA inconclusive for TP-816 head=#{head} model=default playbooks=cli (attempt 1/2); rerunning: the wide pass did not run"
-      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+      refute deciding()
       assert_received {:memory_tracker_comment, @issue_id, rerunning}
       assert rerunning =~ "**Verdict:** inconclusive → QA (inconclusive, rerunning)"
       assert rerunning =~ "Reason: the wide pass did not run"
@@ -1494,7 +1493,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert SymphonyElixir.TicketState.self_heal(RunStore.get_ticket_state(@repo_key, @issue_id)) == nil
       refute_received {:memory_tracker_state_update, _, _}
 
-      assert %{decision: decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert %{} = decision = deciding()
       assert decision.why =~ "The last run ended with: the wide pass did not run: no qa_resize_window call resized"
       assert_received {:memory_tracker_comment, @issue_id, request}
       assert request =~ "QA could not finish its check of TP-816"
@@ -1510,7 +1509,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       capture_log(fn -> assert :ok = run(workspace, []) end)
 
       assert [%{outcome: "blocked", details: %{component: "ci", reason: "CI is red on this head"}}] = verdicts()
-      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+      refute deciding()
     end
   end
 
@@ -1542,7 +1541,7 @@ defmodule SymphonyElixir.QaVerificationTest do
         refute_received {:fixer_create, _attrs}, "#{name} filed a fix ticket"
         refute_received {:fixer_block, _identifier}, "#{name} held the ticket on a fix ticket"
         refute blocked?(@issue_id), "#{name} took a Blocked hold"
-        assert Hold.held?(@repo_key, @issue_id, :needs_decision), "#{name} did not ask a person"
+        assert deciding(), "#{name} did not ask a person"
       end
     end
 
@@ -1557,8 +1556,7 @@ defmodule SymphonyElixir.QaVerificationTest do
         assert :ok = QaVerification.run(untitled, workspace, opts)
       end)
 
-      assert %{decision: %{question: "QA ran TP-816 2 times on the same change without a pass or a fail. How should it continue?"}} =
-               Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert %{question: "QA ran TP-816 2 times on the same change without a pass or a fail. How should it continue?"} = deciding()
     end
 
     test "a block the QA tools raise themselves goes to the self-heal lane" do
@@ -1583,7 +1581,7 @@ defmodule SymphonyElixir.QaVerificationTest do
 
         assert_received {:fixer_create, %{component: ^component}}
         assert [_fix_ticket] = fix_waits(@issue_id)
-        refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+        refute deciding()
       end
     end
   end

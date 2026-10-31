@@ -954,37 +954,6 @@ defmodule SymphonyElixir.RunStore do
   def record_ticket_verdict(_repo_key, _issue_id, _kind, _head_sha, _outcome, _details), do: {:error, :invalid_issue_id}
 
   @doc """
-  Sets (or replaces) the hold of `kind` on the ticket's record, creating the record when none
-  exists. The hold is the store truth `SymphonyElixir.Hold` projects as a machine label; the
-  read-modify-write runs in one durable transaction.
-  """
-  @spec set_ticket_hold(String.t(), String.t(), :blocked | :needs_decision, map()) :: :ok | {:error, term()}
-  def set_ticket_hold(repo_key, issue_id, kind, attrs) when is_binary(issue_id) and is_map(attrs) do
-    with {:ok, repo_key} <- normalize_repo_key(repo_key),
-         :ok <- ensure_started() do
-      durable_transaction(fn -> write_ticket_hold(repo_key, issue_id, kind, attrs) end)
-      |> unwrap_nested_error()
-    end
-  end
-
-  def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :invalid_issue_id}
-
-  @doc """
-  Clears the hold of `kind` from the ticket's record; the ticket continues in place. A record the
-  store does not have yet has no hold to clear, so it is a no-op.
-  """
-  @spec clear_ticket_hold(String.t(), String.t(), :blocked | :needs_decision) :: :ok | {:error, term()}
-  def clear_ticket_hold(repo_key, issue_id, kind) when is_binary(issue_id) do
-    with {:ok, repo_key} <- normalize_repo_key(repo_key),
-         :ok <- ensure_started() do
-      durable_transaction(fn -> write_clear_ticket_hold(repo_key, issue_id, kind) end)
-      |> unwrap_nested_error()
-    end
-  end
-
-  def clear_ticket_hold(_repo_key, _issue_id, _kind), do: {:error, :invalid_issue_id}
-
-  @doc """
   Marks a projection of the ticket's record to Linear as failed (`TicketState.mark_projection/4`).
   A record the store does not have has nothing to project, so it is a no-op. The read-modify-write
   runs in one durable transaction, so a mark written meanwhile is never overwritten.
@@ -2205,34 +2174,6 @@ defmodule SymphonyElixir.RunStore do
     updated = TicketState.record_verdict(record, kind, head_sha, outcome, DateTime.utc_now(), details)
     :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
     :ok
-  end
-
-  defp write_ticket_hold(repo_key, issue_id, kind, attrs) do
-    key = scoped_key(repo_key, issue_id)
-
-    record =
-      case :mnesia.read(@ticket_state_table, key) do
-        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
-        [] -> TicketState.new(repo_key, issue_id)
-      end
-
-    updated = TicketState.set_hold(record, kind, attrs)
-    :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
-    :ok
-  end
-
-  defp write_clear_ticket_hold(repo_key, issue_id, kind) do
-    key = scoped_key(repo_key, issue_id)
-
-    case :mnesia.read(@ticket_state_table, key) do
-      [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] ->
-        updated = TicketState.clear_hold(record, kind)
-        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
-        :ok
-
-      [] ->
-        :ok
-    end
   end
 
   defp write_ticket_projection(repo_key, issue_id, change) do

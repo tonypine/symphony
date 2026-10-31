@@ -298,7 +298,7 @@ defmodule SymphonyElixir.ReleaseBuildTest do
       assert {:ok, %{state: :failed, question: %{title: title}}} = check(opts)
       assert_received {:commented, "issue-1251", body}
       assert body =~ "Rerun the build"
-      assert SymphonyElixir.Hold.get(@repo_key, "issue-1251", :needs_decision)
+      assert %{title: ^title} = SymphonyElixir.Questions.deciding({:ticket, @repo_key, "issue-1251"})
 
       decision = %{key: "comment-1", date: ~D[2026-10-30], title: title, question: "Rerun?", answer: "Wait for a fix", scope: "As answered"}
       :ok = RunStore.put_ticket_state(TicketState.put_decisions(TicketState.new(@repo_key, "issue-1251"), [decision], []))

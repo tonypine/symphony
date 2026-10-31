@@ -83,10 +83,10 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
       assert Projector.desired(record(nil, [%{question | state: :answered}])).labels == []
     end
 
-    test "until the Needs Decision hold is retired it shows its label; a retired Blocked hold shows none, and a question shows Needs Decision alone" do
+    test "the holds a record kept from before they were retired show no label; an open question shows Needs Decision alone" do
       access = %{kind: :blocked, reason: "needs the deploy key", waits_on: %{type: "access", keys: []}}
       assert Projector.desired(%{holds: [access]}).labels == []
-      assert Projector.desired(%{holds: [%{kind: :needs_decision}]}).labels == ["Needs Decision"]
+      assert Projector.desired(%{holds: [%{kind: :needs_decision, decision: %{title: "Old"}}]}).labels == []
 
       {:ok, question} = Questions.ask(@ticket, @request, at: @at)
       beside = %{kind: :blocked, reason: "loop", waits_on: %{type: "dispatch_loop", keys: [], question_id: question.id}}
@@ -360,7 +360,7 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
       assert stored().projected.comments == %{question.id => %{comment: "c-old", reply: nil}}
     end
 
-    test "a question asked before it said whether a request shows it is one while the Needs Decision hold carries it" do
+    test "a question asked before it said whether a request shows it is one an old record's Needs Decision hold carried, or one projected" do
       {:ok, question} = ask_unprojected(@request)
       legacy = Map.delete(question, :request)
       hold = %{kind: :needs_decision, reason: "decision", decision: %{title: @request.title, question_id: question.id}}
@@ -449,7 +449,7 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
   end
 
   describe "project_now/2" do
-    test "projects nothing for a ticket with no record, returns a store that can't be read, and writes nothing while the holds own the labels" do
+    test "projects nothing for a ticket with no record, returns a store that can't be read, and writes nothing while it is off" do
       assert Projector.project_now(@ticket) == :ok
       assert Projector.project_now(@ticket, store: FailingStore) == {:error, :boom}
 
@@ -462,6 +462,7 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
 
     test "names the labels it writes" do
       assert Projector.labels() == ["Blocked", "Needs Decision"]
+      assert Projector.question_label() == "Needs Decision"
       assert Projector.owns?()
     end
   end

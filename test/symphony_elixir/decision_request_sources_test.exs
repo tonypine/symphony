@@ -1,10 +1,10 @@
 defmodule SymphonyElixir.DecisionRequestSourcesTest do
   @moduledoc """
   Every question a person is asked goes through the one writer, `SymphonyElixir.DecisionRequest`:
-  each source below raises its requests with `DecisionRequest.ask/4` (or sets the hold again for a
-  request already posted with `DecisionRequest.project/4`), and no other code sets a Needs Decision
-  hold, renders a request comment or records `decision.requested`. The writer asks each one as a
-  Question first (`SymphonyElixir.Questions.ask/3`). A new source must call the writer and be named
+  each source below raises its requests with `DecisionRequest.ask/4`, and no other code renders a
+  request comment or records a `decision.*` event (legacy types: only the history backfill writes
+  `decision.recorded`, for decisions stored before). The writer asks each one as a Question
+  (`SymphonyElixir.Questions.ask/3`). A new source must call the writer and be named
   here, or this test fails.
 
   Symphony's own questions with nobody to answer them but a person's pick of what happens next ask
@@ -18,13 +18,11 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
     "lib/symphony_elixir/agent_runner.ex" => [:ask],
     # An agent's `linear_request_human_action`: a run's own question, a plan's open choices, a
     # rework that failed the same way twice.
-    "lib/symphony_elixir/agent_tools/linear.ex" => [:ask, :project],
+    "lib/symphony_elixir/agent_tools/linear.ex" => [:ask],
     # A closed, missing or empty pull request.
     "lib/symphony_elixir/closed_pull_request.ex" => [:ask],
     # A Code Review escalation.
     "lib/symphony_elixir/code_review.ex" => [:ask],
-    # The Director's Undo of a Decide: the request's hold set again, carrying its reopened Question.
-    "lib/symphony_elixir/director_moves.ex" => [:project],
     # A dependency change the package check keeps out.
     "lib/symphony_elixir/dependency_gate.ex" => [:ask],
     # The step into Merging with manual review on.
@@ -57,9 +55,8 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
   }
 
   @writer "lib/symphony_elixir/decision_request.ex"
-  # The store the writer writes through records the ledger event; the backfill rebuilds history from
-  # holds already set, and asks nothing.
-  @decision_event_writers ["lib/symphony_elixir/hold.ex", "lib/symphony_elixir/ticket_events/backfill.ex"]
+  # The history backfill rebuilds the decisions a record stored before as `decision.recorded`.
+  @recorded_writers ["lib/symphony_elixir/ticket_events/backfill.ex"]
 
   defp lib_files do
     root = Path.expand("../..", __DIR__)
@@ -75,11 +72,11 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
   end
 
   test "the sources named here are every module that calls the writer" do
-    callers = for {path, text} <- lib_files(), path != @writer, text =~ ~r/DecisionRequest\.(ask|project)\(/, into: MapSet.new(), do: path
+    callers = for {path, text} <- lib_files(), path != @writer, text =~ ~r/DecisionRequest\.ask\(/, into: MapSet.new(), do: path
     assert callers == MapSet.new(Map.keys(@sources))
   end
 
-  test "the writer asks every request as a Question before its hold and its comment" do
+  test "the writer asks every request as a Question before its comment" do
     writer = Map.new(lib_files())[@writer]
     assert writer =~ "Questions.ask({:ticket, repo_key, issue_id}, request,"
   end
@@ -100,17 +97,16 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
     assert guard =~ "Questions.ask(ticket, block_report_question("
   end
 
-  test "no code but the writer sets a Needs Decision hold or renders a request comment" do
+  test "no code but the writer renders a request comment" do
     for {path, text} <- lib_files(), path != @writer do
-      refute text =~ ~r/Hold\.set\([^\n]*needs_decision/, "#{path} sets a Needs Decision hold outside the writer"
       refute text =~ ~r/Request\.render_hold\(/, "#{path} renders a request comment outside the writer"
     end
   end
 
-  test "no code but the writer's store and the history backfill records decision.requested" do
-    for {path, text} <- lib_files(), path not in @decision_event_writers do
-      refute text =~ ~r/record_event\([^\n]*"decision\.requested"/, "#{path} records decision.requested outside the writer"
-      refute text =~ ~r/built\([^\n]*"decision\.requested"/, "#{path} records decision.requested outside the writer"
+  test "no code records a legacy decision event, but the history backfill its stored decisions" do
+    for {path, text} <- lib_files() do
+      refute text =~ ~r/(record_event|built)\([^\n]*"decision\.(requested|withdrawn)"/, "#{path} records a legacy decision event"
+      if path not in @recorded_writers, do: refute(text =~ ~r/(record_event|built)\([^\n]*"decision\.recorded"/, "#{path} records decision.recorded")
     end
   end
 end

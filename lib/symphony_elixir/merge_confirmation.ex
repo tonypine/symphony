@@ -7,21 +7,18 @@ defmodule SymphonyElixir.MergeConfirmation do
   choice about decision authority, not about verification: the machine verifies the same way either
   way. With it `on`, the verdicts that carry a ticket into `Merging` — a Code Review approval that
   skips QA, a QA pass, a QA skip — do not perform their move. Instead the ticket pauses where it is
-  with a **Needs Decision hold** whose decision payload carries the summary a person needs to decide:
-  the recommendation, the Code Review reasons, the QA result and the PR link.
+  on a question whose request carries the summary a person needs to decide: the recommendation, the
+  Code Review reasons, the QA result and the PR link.
 
   The pause is the ordinary decision request the rest of the machine already uses, raised through the
-  one writer (`SymphonyElixir.DecisionRequest`): the same `## Decision needed:` comment
-  (`SymphonyElixir.HumanActions.Request`), and the same hold (`SymphonyElixir.NeedsDecisionHold`)
-  the Inbox loop reconciles against it. The hold's decision
-  payload also carries a `:confirm` target — `"Merging"` — which is what makes confirming continue
-  into `Merging` exactly as when the setting is `off`: both the Inbox's Decide and a reply under the
-  request clear the hold and then perform that move through the guard
-  (`SymphonyElixir.DirectorMoves`, `SymphonyElixir.NeedsDecisionHold`). A redirect is a directed
-  move — the Inbox's Send to Rework, or a reply naming that option (`reply_target/2`) — and goes
-  through the guard the same way.
+  one writer (`SymphonyElixir.DecisionRequest`): the same Question (`SymphonyElixir.Questions`) and
+  `## Decision needed:` comment (`SymphonyElixir.HumanActions.Request`). The Question also carries a
+  `confirm` target — `"Merging"` — which is what makes confirming continue into `Merging` exactly as
+  when the setting is `off`: the Inbox's Decide answers the Question and then performs that move
+  through the guard (`SymphonyElixir.DirectorMoves`). A redirect is a directed move — the Inbox's
+  Send to Rework — and goes through the guard the same way.
 
-  Nothing else changes: rework verdicts never wait on a person, and CI Fix and holds behave the
+  Nothing else changes: rework verdicts never wait on a person, and CI Fix and pauses behave the
   same in both modes. The gating itself lives in the guard's edge table, not here:
   `SymphonyElixir.TransitionGuard.confirmation_required?/2` is true only for the verdict rows into
   `Merging`, and only when the setting is `on`.
@@ -29,7 +26,7 @@ defmodule SymphonyElixir.MergeConfirmation do
 
   require Logger
 
-  alias SymphonyElixir.{DecisionRequest, Handoff, NeedsDecisionHold, TicketPullRequest, TransitionGuard}
+  alias SymphonyElixir.{DecisionRequest, Handoff, TicketPullRequest, TransitionGuard}
   alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Linear.Issue
 
@@ -37,7 +34,6 @@ defmodule SymphonyElixir.MergeConfirmation do
   @rework_state "Rework"
   @confirm_target @merging_state
   @rework_label "Send to Rework"
-  @change_state "In Progress"
   @review_signal "code_review"
   @part_max 240
 
@@ -53,8 +49,8 @@ defmodule SymphonyElixir.MergeConfirmation do
         }
 
   @doc """
-  Pauses `issue` on the merge: posts the decision request carrying `summary` and sets the Needs
-  Decision hold whose confirmation continues into `Merging`. `opts[:tracker]` and `opts[:store]`
+  Pauses `issue` on the merge: asks the decision request carrying `summary`, whose confirmation
+  continues into `Merging`. `opts[:tracker]` and `opts[:store]`
   override the tracker and the run store (tests, a fake).
   """
   @spec pause(Issue.t(), keyword(), summary()) :: :ok | {:error, term()}
@@ -104,64 +100,25 @@ defmodule SymphonyElixir.MergeConfirmation do
   end
 
   @doc """
-  The Needs Decision hold attrs the pause records: the request's own payload plus the `:confirm`
-  target this hold's confirmation performs. Kept here rather than in `NeedsDecisionHold` because the
-  carried move is what makes this hold a merge confirmation and not an ordinary decision.
-  """
-  @spec attrs(map()) :: map()
-  def attrs(request) do
-    attrs = NeedsDecisionHold.attrs(request)
-    %{attrs | decision: Map.put(attrs.decision, :confirm, @confirm_target)}
-  end
-
-  @doc """
-  The move a hold's confirmation performs, or nil when it carries none (every ordinary decision).
-  `SymphonyElixir.DirectorMoves` and `SymphonyElixir.NeedsDecisionHold` read it to continue into
-  `Merging` when the merge is confirmed.
+  The move a question's confirmation performs (`SymphonyElixir.Questions`, its `confirm`), or nil
+  when it carries none (every ordinary decision). `SymphonyElixir.DirectorMoves` reads it to
+  continue into `Merging` when the merge is confirmed.
   """
   @spec confirm_target(map() | nil) :: String.t() | nil
-  def confirm_target(%{decision: %{} = decision}) do
-    case Map.get(decision, :confirm) do
-      target when is_binary(target) -> TransitionGuard.target(:director_move, %{target: target})
-      _none -> nil
-    end
-  end
-
-  def confirm_target(_hold), do: nil
+  def confirm_target(%{confirm: target}) when is_binary(target), do: TransitionGuard.target(:director_move, %{target: target})
+  def confirm_target(_question), do: nil
 
   @doc """
-  The move a reply under the request performs. A reply continues to the carried confirmation
-  (`confirm_target/1`) only when it picks that option, and goes to `Rework` only when it picks the
-  option that moves there (`picked/2`). Any other reply — free text, "neither", a question — is a
-  change request: the ticket goes to `In Progress`, where the run addresses it on the same PR. A
-  reply that picks an option moving nothing (CI's `Leave it`) moves nothing, and an ordinary
-  decision's hold carries no confirmation, so its reply moves nothing either.
-  """
-  @spec reply_target(map() | nil, [String.t()]) :: String.t() | nil
-  def reply_target(hold, replies) do
-    case confirm_target(hold) do
-      nil ->
-        nil
-
-      _carried ->
-        case picked(hold, replies) do
-          {:ok, target} -> target
-          :none -> @change_state
-        end
-    end
-  end
-
-  @doc """
-  The move the answers to a confirmation hold pick: `{:ok, target}` when they pick exactly one of
+  The move the answers to a confirmation question pick: `{:ok, target}` when they pick exactly one of
   its options — by number (`1`, `option 1`) or by label, alone, set off by punctuation, or followed only by confirming
   words such as `please` — where `target`
   is the carried confirmation, `Rework`, or nil for an option that moves nothing; `:none` when no
   answer picks an option, or the answers pick options that disagree.
   """
   @spec picked(map() | nil, [String.t()]) :: {:ok, String.t() | nil} | :none
-  def picked(hold, answers) do
-    carried = confirm_target(hold)
-    options = hold |> get_in([:decision, :options]) |> List.wrap() |> Enum.map(&option/1)
+  def picked(question, answers) do
+    carried = confirm_target(question)
+    options = (question || %{}) |> Map.get(:options) |> List.wrap() |> Enum.map(&option/1)
 
     answers
     |> Enum.flat_map(&picks(&1, options))
@@ -219,7 +176,7 @@ defmodule SymphonyElixir.MergeConfirmation do
       rest |> String.split(~r/\s+/u, trim: true) |> Enum.all?(&(&1 in @confirming_words))
   end
 
-  # An option as the hold records it: the tool's map, or the line Linear's comment reads back.
+  # An option as the question records it, or a line a request comment renders.
   defp option(%{} = option), do: {normalize(Map.get(option, :label) || Map.get(option, "label")), Map.get(option, :effect) || Map.get(option, "effect") || ""}
 
   defp option(line) when is_binary(line) do

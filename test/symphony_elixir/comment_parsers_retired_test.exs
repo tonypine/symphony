@@ -10,14 +10,18 @@ defmodule SymphonyElixir.CommentParsersRetiredTest do
 
   # Each retired entry point: where it was defined, and how a caller would name it.
   @retired [
-    {"lib/symphony_elixir/needs_decision_hold.ex", ~r/\bdef (sync|sweep|as_recorded)\(/, ~r/NeedsDecisionHold\.(sync|sweep|as_recorded)\b/},
-    {"lib/symphony_elixir/needs_decision_hold.ex", ~r/\bdefp (replies|moved_since_request\?)\(/, nil},
     {"lib/symphony_elixir/decisions.ex", ~r/\bdef (rulings|sync|sweep|answered)\(/, ~r/Decisions\.(rulings|sync|sweep|answered)\b/},
-    {"lib/symphony_elixir/hold.ex", ~r/\bdef (drift|report_drift|resync)\(/, ~r/Hold\.(drift|report_drift|resync)\b/},
     {"lib/symphony_elixir/inbox/item.ex", ~r/\bdef from_node\(/, ~r/Item\.from_node\b/}
   ]
 
-  @deleted_files ["lib/symphony_elixir/hold/drift.ex", "lib/symphony_elixir/setup/checks/hold_drift.ex"]
+  # The Needs Decision hold's modules are retired with it (TP-1256): its sweep, sync and drift
+  # repair cannot come back with them.
+  @deleted_files [
+    "lib/symphony_elixir/hold/drift.ex",
+    "lib/symphony_elixir/setup/checks/hold_drift.ex",
+    "lib/symphony_elixir/hold.ex",
+    "lib/symphony_elixir/needs_decision_hold.ex"
+  ]
 
   defp lib_files do
     for path <- Path.wildcard(Path.join(@root, "lib/**/*.ex")), do: {Path.relative_to(path, @root), File.read!(path)}
@@ -40,6 +44,7 @@ defmodule SymphonyElixir.CommentParsersRetiredTest do
 
     for {path, text} <- lib_files() do
       refute text =~ ~r/Hold\.Drift\b|Checks\.HoldDrift\b/, "#{path} names the hold-drift table or check again"
+      refute text =~ ~r/\bNeedsDecisionHold\b|SymphonyElixir\.Hold\b|[^e]Hold\.(get|set|clear|held)/, "#{path} names a retired hold module again"
     end
 
     refute Enum.any?(SymphonyElixir.Setup.checks(), &(&1.id() == "hold_drift"))

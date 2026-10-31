@@ -647,43 +647,14 @@ defmodule SymphonyElixir.RunStoreTest do
     assert {:error, :invalid_issue_id} = RunStore.record_ticket_verdict(@repo_key, nil, "qa", nil, "pass")
   end
 
-  test "sets and clears a ticket hold, creating the record when the issue has none" do
-    assert RunStore.get_ticket_state(@repo_key, "issue-1") == nil
-
-    assert :ok = RunStore.set_ticket_hold(@repo_key, "issue-1", :blocked, %{reason: "waiting on TP-1"})
-
-    assert %{holds: [%{kind: :blocked, reason: "waiting on TP-1", waits_on: nil}]} =
-             RunStore.get_ticket_state(@repo_key, "issue-1")
-
-    assert :ok = RunStore.set_ticket_hold(@repo_key, "issue-1", :blocked, %{reason: "waiting on TP-2"})
-    assert %{holds: [%{kind: :blocked, reason: "waiting on TP-2"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
-
-    restart_run_store()
-    assert %{holds: [%{kind: :blocked, reason: "waiting on TP-2"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
-
-    assert :ok = RunStore.clear_ticket_hold(@repo_key, "issue-1", :blocked)
-    assert %{holds: []} = RunStore.get_ticket_state(@repo_key, "issue-1")
-
-    # An issue with no record has no hold to clear, and clearing one does not create the record.
-    assert :ok = RunStore.clear_ticket_hold(@repo_key, "issue-missing", :blocked)
-    assert RunStore.get_ticket_state(@repo_key, "issue-missing") == nil
-  end
-
-  test "rejects ticket hold writes without a repo_key or issue_id" do
-    assert {:error, :invalid_issue_id} = RunStore.set_ticket_hold(@repo_key, nil, :blocked, %{})
-    assert {:error, :invalid_issue_id} = RunStore.clear_ticket_hold(@repo_key, nil, :blocked)
-    assert {:error, :invalid_repo_key} = RunStore.set_ticket_hold(nil, "issue-1", :blocked, %{})
-    assert {:error, :invalid_repo_key} = RunStore.clear_ticket_hold(nil, "issue-1", :blocked)
-  end
-
   test "marks a failed projection on a ticket's record and clears that mark only, across a restart" do
     :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-1"))
 
     assert :ok = RunStore.mark_ticket_projection(@repo_key, "issue-1", :phase, :linear_down)
-    assert :ok = RunStore.mark_ticket_projection(@repo_key, "issue-1", {:hold_label, :blocked}, :linear_down)
+    assert :ok = RunStore.mark_ticket_projection(@repo_key, "issue-1", :pause, :linear_down)
     restart_run_store()
 
-    assert %{pending_projection: [%{type: :hold_label} = label_mark, %{type: :phase} = projected]} =
+    assert %{pending_projection: [%{type: :pause} = label_mark, %{type: :phase} = projected]} =
              RunStore.get_ticket_state(@repo_key, "issue-1")
 
     # A newer mark of the projection, written after the reconciler read the older one, stays.
@@ -700,7 +671,7 @@ defmodule SymphonyElixir.RunStoreTest do
     assert {:error, :invalid_repo_key} = RunStore.clear_ticket_projection(nil, "issue-1", projected)
   end
 
-  test "records a ticket's dispatched runs and how they ended, and a lifted hold ends the count" do
+  test "records a ticket's dispatched runs and how they ended, and a verdict ends the count" do
     assert :ok = RunStore.record_ticket_dispatch(@repo_key, "issue-1", %{kind: :rework, run_id: "run-1", state: "Rework", head: "a"})
     assert :ok = RunStore.record_ticket_dispatch_outcome(@repo_key, "issue-1", "run-1", %{exit: "ended normally", head: "a"})
 
@@ -710,8 +681,7 @@ defmodule SymphonyElixir.RunStoreTest do
     restart_run_store()
     assert %{dispatches: [%{run_id: "run-1"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
 
-    assert :ok = RunStore.set_ticket_hold(@repo_key, "issue-1", :blocked, %{reason: "dispatch_loop"})
-    assert :ok = RunStore.clear_ticket_hold(@repo_key, "issue-1", :blocked)
+    assert :ok = RunStore.record_ticket_verdict(@repo_key, "issue-1", "qa", "a", "pass")
     assert %{dispatches: []} = RunStore.get_ticket_state(@repo_key, "issue-1")
 
     # An issue with no record lists no run, and recording an end does not create the record.

@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.MergeConfirmationTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Handoff, Hold, MergeConfirmation, Questions, RunStore, TicketPullRequest, TicketSignals}
+  alias SymphonyElixir.{Handoff, MergeConfirmation, Questions, RunStore, TicketPullRequest, TicketSignals}
   alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Workflow
@@ -17,12 +17,6 @@ defmodule SymphonyElixir.MergeConfirmationTest do
     end
 
     defp recipient, do: Application.fetch_env!(:symphony_elixir, :merge_confirmation_test_recipient)
-  end
-
-  defmodule FailingStore do
-    def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :boom}
-    def clear_ticket_hold(_repo_key, _issue_id, _kind), do: {:error, :boom}
-    def get_ticket_state(_repo_key, _issue_id), do: {:error, :boom}
   end
 
   setup do
@@ -47,9 +41,9 @@ defmodule SymphonyElixir.MergeConfirmationTest do
     Map.merge(%{recommendation: "QA passed on 12 files", review: "the reviewer approved", qa: "all checks green"}, extra)
   end
 
-  defp stored_hold, do: Hold.get(@repo_key, @issue_id, :needs_decision)
+  defp deciding, do: Questions.deciding({:ticket, @repo_key, @issue_id})
 
-  describe "request/2 and attrs/1" do
+  describe "request/2 and confirm_target/1" do
     test "the request names the merge, carries the summary and offers confirming or redirecting" do
       summary = MergeConfirmation.summary(issue(), opts(), parts(%{pr: "https://github.com/acme/web/pull/7"}))
       request = MergeConfirmation.request(issue(), summary)
@@ -98,32 +92,12 @@ defmodule SymphonyElixir.MergeConfirmationTest do
       refute bare.why =~ "PR"
     end
 
-    test "the attrs are the decision payload plus the move confirming performs" do
-      request = MergeConfirmation.request(issue(), parts())
-      attrs = MergeConfirmation.attrs(request)
+    test "confirm_target/1 resolves the move a question carries, and nil for one that carries none" do
+      assert MergeConfirmation.confirm_target(%{confirm: "Merging"}) == "Merging"
 
-      assert attrs.reason == "Merge TP-825 (T) into its base branch?"
-      assert attrs.clearing_condition == "when the decision is recorded"
-      assert attrs.decision.question == "Merge TP-825 (T) into its base branch?"
-      assert attrs.decision.confirm == "Merging"
-      assert [%{label: "Merge", recommended: true}, %{label: "Send to Rework", recommended: false}] = attrs.decision.options
-    end
-
-    test "confirm_target/1 resolves the carried move, and nil for a hold that carries none" do
-      hold = %{kind: :needs_decision, decision: %{confirm: "Merging"}}
-      assert MergeConfirmation.confirm_target(hold) == "Merging"
-
-      assert MergeConfirmation.confirm_target(%{kind: :needs_decision, decision: %{title: "Ordinary"}}) == nil
-      assert MergeConfirmation.confirm_target(%{kind: :needs_decision}) == nil
+      assert MergeConfirmation.confirm_target(%{title: "Ordinary", confirm: nil}) == nil
+      assert MergeConfirmation.confirm_target(%{title: "Ordinary"}) == nil
       assert MergeConfirmation.confirm_target(nil) == nil
-    end
-
-    test "the attrs unknown to a decision are kept through the store round trip" do
-      attrs = MergeConfirmation.attrs(MergeConfirmation.request(issue(), parts()))
-      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :needs_decision, attrs)
-
-      # The Inbox sweep compares only the title and question, so a rewritten request keeps the move.
-      assert MergeConfirmation.confirm_target(stored_hold()) == "Merging"
     end
   end
 
@@ -182,7 +156,7 @@ defmodule SymphonyElixir.MergeConfirmationTest do
   end
 
   describe "pause/3" do
-    test "posts the decision request and sets the hold that confirming continues from" do
+    test "posts the decision request and asks the question that confirming continues from" do
       log = capture_log(fn -> assert MergeConfirmation.pause(issue(), opts(), MergeConfirmation.summary(issue(), opts(), parts())) == :ok end)
 
       assert_received {:comment, @issue_id, body}
@@ -192,15 +166,14 @@ defmodule SymphonyElixir.MergeConfirmationTest do
       # The ticket is told it keeps its phase, as a hold's request does.
       assert body =~ "the ticket stays in QA until the decision is recorded"
 
-      assert %{reason: "Merge TP-825 (T) into its base branch?"} = stored_hold()
-      assert Hold.held?(@repo_key, @issue_id, :needs_decision)
-      assert MergeConfirmation.confirm_target(stored_hold()) == "Merging"
+      assert %{question: "Merge TP-825 (T) into its base branch?", request: true} = deciding()
+      assert MergeConfirmation.confirm_target(deciding()) == "Merging"
       assert log =~ "manual review is on, so the step into Merging waits"
       # The question is asked through the Question service: one open Question with what was asked.
       assert [%{id: id, title: "Merge TP-825", question: "Merge TP-825 (T) into its base branch?", confirm: "Merging", options: [_merge, _rework]}] =
                Questions.open({:ticket, @repo_key, @issue_id})
 
-      assert %{decision: %{question_id: ^id}} = stored_hold()
+      assert %{id: ^id} = deciding()
       assert [{"question.asked", %{title: "Merge TP-825", confirm: "Merging"}}, {"pause.set", %{reason: "question"}}] = ticket_events(@repo_key, @issue_id)
     end
 
@@ -223,43 +196,41 @@ defmodule SymphonyElixir.MergeConfirmationTest do
       end)
 
       assert [%{id: id}] = Questions.open({:ticket, @repo_key, @issue_id})
-      assert %{decision: %{question_id: ^id}} = stored_hold()
+      assert %{id: ^id} = deciding()
     end
 
-    test "a failed hold write is reported, and nothing is posted, so a retry posts the request once" do
-      assert {:error, {:merge_confirmation_hold_failed, :boom}} =
-               MergeConfirmation.pause(issue(), opts(store: FailingStore), parts())
+    test "a question that can't be asked is reported, and nothing is posted, so a retry posts the request once" do
+      capture_log(fn ->
+        assert {:error, {:merge_confirmation_hold_failed, :missing_repo_key}} =
+                 MergeConfirmation.pause(issue(%{repo_key: nil}), [tracker: CommentTracker], parts())
+      end)
 
       refute_received {:comment, @issue_id, _body}
     end
   end
 
-  describe "picked/2 and reply_target/2" do
+  describe "picked/2" do
     # The options as Linear's comment reads them back: rendered lines, not the tool's maps.
     defp ci_hold do
       %{
-        decision: %{
-          confirm: "Rework",
-          options: [
-            "**Send to Rework** (recommended): the ticket moves to Rework, where a run makes the fix",
-            "**Leave it**: the ticket stays in its phase with red CI",
-            "a hand-written line",
-            :unreadable,
-            %{"label" => nil, "effect" => nil}
-          ]
-        }
+        confirm: "Rework",
+        options: [
+          "**Send to Rework** (recommended): the ticket moves to Rework, where a run makes the fix",
+          "**Leave it**: the ticket stays in its phase with red CI",
+          "a hand-written line",
+          :unreadable,
+          %{"label" => nil, "effect" => nil}
+        ]
       }
     end
 
     defp merge_hold do
       %{
-        decision: %{
-          confirm: "Merging",
-          options: [
-            %{label: "Merge", effect: "the ticket moves to Merging"},
-            %{label: "Send to Rework", effect: "the ticket moves to Rework"}
-          ]
-        }
+        confirm: "Merging",
+        options: [
+          %{label: "Merge", effect: "the ticket moves to Merging"},
+          %{label: "Send to Rework", effect: "the ticket moves to Rework"}
+        ]
       }
     end
 
@@ -286,13 +257,10 @@ defmodule SymphonyElixir.MergeConfirmationTest do
       assert MergeConfirmation.picked(nil, ["1"]) == :none
     end
 
-    test "a reply that picks nothing is a change request; an ordinary decision moves nothing" do
-      assert MergeConfirmation.reply_target(ci_hold(), ["Neither option"]) == "In Progress"
-      assert MergeConfirmation.reply_target(ci_hold(), ["1"]) == "Rework"
-      assert MergeConfirmation.reply_target(ci_hold(), ["1 change needed on the same PR"]) == "In Progress"
-      assert MergeConfirmation.reply_target(merge_hold(), ["Merge conflicts remain, fix first"]) == "In Progress"
-      assert MergeConfirmation.reply_target(merge_hold(), ["Merge."]) == "Merging"
-      assert MergeConfirmation.reply_target(%{decision: %{}}, ["1"]) == nil
+    test "a confirmation question's own option continues into its move" do
+      assert MergeConfirmation.picked(merge_hold(), ["Merge."]) == {:ok, "Merging"}
+      assert MergeConfirmation.picked(merge_hold(), ["Send to Rework"]) == {:ok, "Rework"}
+      assert MergeConfirmation.picked(merge_hold(), ["Merge conflicts remain, fix first"]) == :none
     end
   end
 end

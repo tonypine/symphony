@@ -662,9 +662,12 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.chmod!(codex_binary, 0o755)
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      # The pause projector writes the Needs Decision label of the question the gate asks.
+      Application.put_env(:symphony_elixir, :pause_projector, true)
 
       on_exit(fn ->
         Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+        Application.put_env(:symphony_elixir, :pause_projector, false)
       end)
 
       write_workflow_file!(Workflow.workflow_file_path(),
@@ -748,9 +751,12 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.chmod!(codex_binary, 0o755)
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      # The pause projector writes the Needs Decision label of the question the gate asks.
+      Application.put_env(:symphony_elixir, :pause_projector, true)
 
       on_exit(fn ->
         Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+        Application.put_env(:symphony_elixir, :pause_projector, false)
       end)
 
       write_workflow_file!(Workflow.workflow_file_path(),
@@ -838,9 +844,12 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.chmod!(codex_binary, 0o755)
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      # The pause projector writes the Needs Decision label of the question the gate asks.
+      Application.put_env(:symphony_elixir, :pause_projector, true)
 
       on_exit(fn ->
         Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+        Application.put_env(:symphony_elixir, :pause_projector, false)
       end)
 
       write_workflow_file!(Workflow.workflow_file_path(),

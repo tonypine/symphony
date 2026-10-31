@@ -94,9 +94,9 @@ defmodule SymphonyElixirWeb.ObservabilityPubSub do
 
   @doc """
   Subscribes the caller to the changes of tickets' records (`SymphonyElixir.TicketObservation`,
-  `SymphonyElixir.TicketSignals.record_phase/3`, `SymphonyElixir.Hold`): each arrives as
-  `{:ticket_record, repo_key, issue_id, :changed, fields}`, `fields` naming the record's fields that
-  changed (`:phase`, `:holds`, `:blockers`, `:title`...). With no PubSub running it subscribes to
+  `SymphonyElixir.TicketSignals.record_phase/3`, `SymphonyElixir.Pauses`, `SymphonyElixir.Questions`):
+  each arrives as `{:ticket_record, repo_key, issue_id, :changed, fields}`, `fields` naming the
+  record's fields that changed (`:phase`, `:pause`, `:blockers`, `:title`...). With no PubSub running it subscribes to
   nothing.
   """
   @spec subscribe_ticket_records() :: :ok | {:error, term()}

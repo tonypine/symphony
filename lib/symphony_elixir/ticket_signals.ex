@@ -9,9 +9,8 @@ defmodule SymphonyElixir.TicketSignals do
 
   Each signal also records the event `event/2` maps it to (dual-write: the signals ledger stays the
   source of truth until readers move over). A signal written next to a pause or a decision request
-  maps to none: `SymphonyElixir.Pauses` records the `pause.*` events for the same change,
-  `SymphonyElixir.Hold` the `decision.requested` or `decision.withdrawn`, and
-  `SymphonyElixir.Decisions` the `decision.recorded`, so each fact is one event.
+  maps to none: `SymphonyElixir.Pauses` records the `pause.*` events for the same change, and
+  `SymphonyElixir.Questions` the `question.*` events, so each fact is one event.
 
   A signal that maps to `phase.entered` is a move, so it also asks the orchestrator for a cycle on
   the ticket's repo at once (`SymphonyElixir.Orchestrator.request_refresh/2`), and writes the phase it
@@ -214,29 +213,8 @@ defmodule SymphonyElixir.TicketSignals do
   end
 
   @doc """
-  The ticket's newest open request, a `decision.requested` or a Question's `question.asked` event
-  (one no answer or withdrawal names yet, `TicketEvents.query/3`'s `open_decisions`), whose
-  title, or else question, matches `title` or `question`, ignoring case and spacing; nil when there
-  is none or the events can't be read.
-  """
-  @spec open_decision(String.t(), String.t(), String.t() | nil, String.t() | nil) :: TicketEvents.Event.t() | nil
-  def open_decision(repo_key, issue_id, title, question) do
-    asked = [title, question] |> Enum.map(&normalize/1) |> Enum.reject(&is_nil/1)
-
-    case TicketEvents.query(repo_key, issue_id, open_decisions: true, limit: 200) do
-      events when is_list(events) and asked != [] ->
-        events
-        |> Enum.reverse()
-        |> Enum.find(fn event -> Enum.any?([event.payload[:title], event.payload[:question]], &(normalize(&1) in asked)) end)
-
-      _none ->
-        nil
-    end
-  end
-
-  @doc """
-  Whether two texts say the same thing, ignoring case and spacing as `open_decision/4` does; a blank
-  or missing text matches nothing.
+  Whether two texts say the same thing, ignoring case and spacing; a blank or missing text matches
+  nothing.
   """
   @spec same_text?(term(), term()) :: boolean()
   def same_text?(left, right), do: normalize(left) != nil and normalize(left) == normalize(right)

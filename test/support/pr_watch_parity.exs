@@ -40,7 +40,7 @@ defmodule SymphonyElixir.PrWatchParity do
   with `pr_review_mode: "polling"` first.
   """
 
-  alias SymphonyElixir.{Config, Hold, Pauses, RunStore, TicketPullRequest, TicketState}
+  alias SymphonyElixir.{Config, Pauses, Questions, RunStore, TicketPullRequest, TicketState}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.PrWatch.{Ingest, Repo, SilentWait}
@@ -364,11 +364,11 @@ defmodule SymphonyElixir.PrWatchParity do
     }
   end
 
-  # `:blocked` while the ticket is paused, `:needs_decision` while it holds that hold.
+  # `:blocked` while the ticket is paused, `:question` while a decision request's question is open.
   defp held(issue_id) do
-    Enum.filter([:blocked, :needs_decision], fn
+    Enum.filter([:blocked, :question], fn
       :blocked -> Pauses.paused?({:ticket, @repo_key, issue_id})
-      :needs_decision -> Hold.held?(@repo_key, issue_id, :needs_decision)
+      :question -> Questions.deciding({:ticket, @repo_key, issue_id}) != nil
     end)
   end
 

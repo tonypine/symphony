@@ -2,8 +2,8 @@ defmodule SymphonyElixir.HumanActions.Request do
   @moduledoc """
   The `## Decision needed:` comment that records a request for a human on an issue.
 
-  `linear_request_human_action` posts it. It leaves the issue in its phase and sets the
-  `Needs Decision` hold (`SymphonyElixir.NeedsDecisionHold`), and `render_hold/2` renders that
+  `linear_request_human_action` posts it. It leaves the issue in its phase, paused on the Question
+  it asks (`SymphonyElixir.Questions`), and `render_hold/2` renders that
   comment. A person only ever gets a decision: one question and two to four options, each with what
   it does, one of them recommended. Never a runbook of steps: a check an agent can't run belongs to
   CI or a QA playbook instead.

@@ -771,7 +771,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   defp disarm_comment(_why, ctx), do: AutoMerge.ci_fix_comment(pr_url(ctx))
 
   # A decision pauses the ticket in its phase on a Needs Decision hold; the option that moves it to
-  # `confirm` (Rework) does so once answered (`SymphonyElixir.NeedsDecisionHold`). With no `confirm`
+  # `confirm` (Rework) does so once answered (`SymphonyElixir.DirectorMoves`). With no `confirm`
   # the ticket continues in place once a person answers.
   defp ask(request, reason, ctx, confirm \\ @rework_state) do
     held = %{id: ctx.issue.id, state: ctx.issue.state, repo_key: ctx.repo_key}

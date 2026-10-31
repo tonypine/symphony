@@ -8,7 +8,7 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
 
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{ClosedPullRequest, Hold, TicketPullRequest, TicketState}
+  alias SymphonyElixir.{ClosedPullRequest, Questions, TicketPullRequest, TicketState}
   alias SymphonyElixir.PrDecision.{Action, Facts}
   alias SymphonyElixir.PrWatch.Repo
 
@@ -248,7 +248,7 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
       assert state(issue_id) == "Rework"
       assert %{rule: "R8", kind: :to_rework, reason: "PR #10 was closed without merging", outcome: :applied} = decision(issue_id)
       assert %{facts: %Facts{auto_merge: :off}} = watch(issue_id)
-      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+      refute deciding(issue_id)
       assert ["Symphony moved this ticket to Rework: PR #10 was closed without merging. A rework run opens a new pull request from main."] = comments(issue_id)
 
       # The next ticks dispatch the rework run on the same closed PR and never move it again; the
@@ -257,7 +257,7 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
       assert %{rule: "R8", kind: :dispatch, reason: "PR #10 was closed without merging: the next run opens a new PR from main"} = decision(issue_id)
       assert moves(issue_id) == ["Rework"]
       assert :run = ClosedPullRequest.guard(issue(issue_id), Config.settings!(), repo_key: @repo_key)
-      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+      refute deciding(issue_id)
       accounted!(issue_id)
     end
 
@@ -372,7 +372,7 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
       tick!(pid)
 
       assert %{rule: "R7", kind: :decision, owner: :person} = decision(issue_id)
-      assert Hold.held?(@repo_key, issue_id, :needs_decision)
+      assert deciding(issue_id)
       assert [request] = comments(issue_id)
       assert request =~ "## Decision needed: PR #30 of TP-30 merges into release, not main"
 
@@ -394,9 +394,8 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
       assert %{rule: "R7", kind: :decision} = decision(issue_id)
 
       # Decide writes the Question first; the Decisions section follows once Linear answers.
-      %{decision: %{question_id: id}} = Hold.get(@repo_key, issue_id, :needs_decision)
-      {:ok, _answered} = SymphonyElixir.Questions.answer({:ticket, @repo_key, issue_id}, id, "Accept the new base")
-      :ok = Hold.clear(@repo_key, issue_id, :needs_decision, answered: true)
+      %{id: id} = deciding(issue_id)
+      {:ok, _answered} = Questions.answer({:ticket, @repo_key, issue_id}, id, "Accept the new base")
       assert RunStore.get_ticket_state(@repo_key, issue_id).decisions == []
       tick!(pid)
 
@@ -410,15 +409,14 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
       tick!(pid)
       assert %{rule: "R7", kind: :decision} = decision(issue_id)
 
-      # Decide: the Question is answered, the decision recorded and the hold cleared.
-      %{decision: %{question_id: id}} = hold = Hold.get(@repo_key, issue_id, :needs_decision)
+      # Decide: the Question is answered and the decision recorded.
+      %{id: id} = deciding(issue_id)
       ticket = {:ticket, @repo_key, issue_id}
       {:ok, question} = SymphonyElixir.Questions.answer(ticket, id, "Accept the new base")
       answer!(issue_id, question.title, "Accept the new base")
 
-      # Undo: the Question is open again and the hold is set again; the decision stays.
-      {:ok, _reopened} = SymphonyElixir.Questions.reopen(ticket, id)
-      :ok = SymphonyElixir.DecisionRequest.project(@repo_key, issue_id, Map.take(hold, [:reason, :clearing_condition, :decision]), [])
+      # Undo: the Question is open again; the decision stays.
+      {:ok, _reopened} = Questions.reopen(ticket, id)
       assert [%{answer: "Accept the new base"}] = RunStore.get_ticket_state(@repo_key, issue_id).decisions
       tick!(pid)
 
@@ -464,13 +462,13 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
       tick!(pid)
 
       assert %{rule: "R6", kind: :decision, owner: :person, outcome: :applied} = decision(asked)
-      assert %{decision: %{title: "No pull request on TP-40"}} = Hold.get(@repo_key, asked, :needs_decision)
+      assert %{title: "No pull request on TP-40"} = deciding(asked)
       assert %{rule: "R5", kind: :wait, owner: :agent} = decision(waiting)
       assert RunStore.get_ticket_state(@repo_key, plan) == nil
       Enum.each([asked, waiting], &accounted!/1)
 
       # Asked once a stay: answered and still without a PR, it isn't asked again.
-      Hold.clear(@repo_key, asked, :needs_decision)
+      withdraw!(asked)
       tick!(pid)
       assert %{rule: "R6", outcome: :recorded} = decision(asked)
       assert length(comments(asked)) == 1
@@ -516,12 +514,23 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
     end
   end
 
-  # A person answered the request titled `title`: the answer is recorded and the hold clears.
+  # A person answered the request titled `title`: the answer is recorded and its question no longer
+  # waits.
   defp answer!(issue_id, title, answer) do
     record = RunStore.get_ticket_state(@repo_key, issue_id)
     entry = %{key: "comment-#{issue_id}", date: "2026-10-16", title: title, question: "", answer: answer, scope: ""}
     :ok = RunStore.put_ticket_state(TicketState.put_decisions(record, [entry]))
-    Hold.clear(@repo_key, issue_id, :needs_decision)
+    withdraw!(issue_id)
+  end
+
+  # The decision request's question the ticket waits on, or nil.
+  defp deciding(issue_id), do: Questions.deciding({:ticket, @repo_key, issue_id})
+
+  # Withdraws every open question on the ticket.
+  defp withdraw!(issue_id) do
+    ticket = {:ticket, @repo_key, issue_id}
+    for question <- Questions.open(ticket), do: {:ok, _withdrawn} = Questions.withdraw(ticket, question.id, "The test answers it.")
+    :ok
   end
 
   # The PR review poller's record of the ticket: one reviewer comment left on `head`.

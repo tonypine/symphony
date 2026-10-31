@@ -24,7 +24,7 @@ defmodule SymphonyElixirWeb.WatchPayload do
     blocked: "blocked by branch protection",
     unknown: "mergeability unknown"
   }
-  @hold_words %{needs_decision: "Needs Decision hold", blocked: "Blocked hold"}
+  @hold_words %{question: "Needs Decision hold", blocked: "Blocked hold"}
 
   @doc """
   The `watch` block of a ticket state record: the phase, the PR head the facts were read on and how

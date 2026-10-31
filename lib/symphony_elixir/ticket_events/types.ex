@@ -21,14 +21,13 @@ defmodule SymphonyElixir.TicketEvents.Types do
   (`{:fields, fields}`, used only when every field is present); `:writer` dedupes only on a key the
   writer passes.
 
-  A decision a person must make has one representation, whoever asked it: `decision.requested`,
-  then `decision.recorded` or `decision.withdrawn`. The Needs Decision hold is its projection, so
-  `hold.set` and `hold.cleared` take only the `blocked` kind and `person.action` has no `decide`.
-
-  `hold.set` and `hold.cleared` are legacy (`legacy_types/0`): the Blocked hold they recorded is
-  retired, and what pauses a ticket is recorded by the `pause.*` types. They stay in the catalog so
-  a ticket's history still reads them, and the ledger's backfill still maps old signals to them;
-  no live writer records them any more.
+  `hold.set`, `hold.cleared`, `decision.requested`, `decision.recorded` and `decision.withdrawn` are
+  legacy (`legacy_types/0`): the holds they recorded are retired, what pauses a ticket is recorded
+  by the `pause.*` types, and a decision a person must make is a Question, recorded by the
+  `question.*` types. They stay in the catalog so a ticket's history still reads them (the summary
+  renderer keeps their lines, `SymphonyElixir.TicketEvents.Summary`); no live writer and no backfill
+  records them any more. `hold.set` and `hold.cleared` take only the `blocked` kind, and
+  `person.action` has no `decide`.
   State is machinery-only: an agent claims `finding.resolved`, it never records a verdict.
 
   A person's cancel of a ticket Symphony owns is one `ticket.cancelled` (`SymphonyElixir.DirectorMoves`):
@@ -51,8 +50,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   the reason and its `cause`: `ticket_moved`, `restarted`, `hold_cleared`, `superseded`, or
   `run_ended` for a question that holds nothing), each naming the question by `question_id`, and `question.reopened` when the Director
   takes an answer back, after which the question is open again and its next answer is a new
-  `question.answered`. The `decision.*` types stay for the
-  writer that has not moved over yet.
+  `question.answered`.
   """
 
   alias SymphonyElixir.RunKind
@@ -107,7 +105,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
     idempotency: :writer
   }
 
-  @legacy_types ["hold.set", "hold.cleared"]
+  @legacy_types ["hold.set", "hold.cleared", "decision.requested", "decision.recorded", "decision.withdrawn"]
 
   @catalog %{
     "phase.entered" => %{

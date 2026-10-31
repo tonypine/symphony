@@ -2,7 +2,7 @@
 #
 # - `nodes`: the tickets as Linear holds them, the fields the Inbox's detail query reads, with the
 #   request comments the pause projector posted for their Questions;
-# - `questions`, `holds` and `pauses`: what each ticket's record holds beside what an observation
+# - `questions` and `pauses`: what each ticket's record holds beside what an observation
 #   of its node writes (`projected` names each Question's request comment);
 # - `snapshot`: the orchestrator's, with one quality-gate clarification.
 #
@@ -215,24 +215,6 @@ stop_reason = "Stopped by you at 12:00. Unblock runs it again where it stopped; 
     "id-SHOP-2" => %{"q-merge" => %{comment: "c-merge", reply: nil}},
     "id-SHOP-3" => %{"q-plan" => %{comment: "c-plan", reply: nil}},
     "id-SHOP-6" => %{"q-answered" => %{comment: "c-answered", reply: "answered"}}
-  },
-  holds: %{
-    "id-SHOP-2" => %{
-      kind: :needs_decision,
-      reason: "QA passed SHOP-2. Should it merge?",
-      clearing_condition: nil,
-      waits_on: nil,
-      decision: %{title: "Merge SHOP-2 (Retry the importer)", question_id: "q-merge", confirm: "Merging"},
-      set_at: ~U[2026-10-20 11:00:00.000Z]
-    },
-    "id-SHOP-4" => %{
-      kind: :blocked,
-      reason: stop_reason,
-      clearing_condition: "when a person unblocks or restarts it, or moves it on the board",
-      waits_on: %{type: "operator_stop", keys: []},
-      decision: nil,
-      set_at: ~U[2026-10-20 12:00:00.000Z]
-    }
   },
   pauses: %{
     "id-SHOP-4" => %{

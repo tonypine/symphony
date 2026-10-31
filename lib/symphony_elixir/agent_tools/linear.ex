@@ -18,13 +18,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.Config.Schema.Workspace.Attachments
   alias SymphonyElixir.DecisionRequest
   alias SymphonyElixir.Decisions
-  alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions
   alias SymphonyElixir.HumanActions.Collector, as: HumanActionsCollector
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.IssueSummary
   alias SymphonyElixir.Linear.{Client, Issue, TransientRetry}
-  alias SymphonyElixir.NeedsDecisionHold
   alias SymphonyElixir.PathSafety
   alias SymphonyElixir.PathUnlock
   alias SymphonyElixir.Pauses.Projector
@@ -1289,10 +1287,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @doc """
   Records that the current issue needs something only a human can do: posts an
   `## Decision needed:` comment (`SymphonyElixir.HumanActions.Request`), which Symphony lists in
-  the project's human-action update, and leaves the issue in its phase with the `Needs Decision`
-  hold set (`SymphonyElixir.NeedsDecisionHold`). It never adds a label itself. The request stays
-  open until a person answers it, or the agent withdraws it. A request with the same title still
-  open on the issue is not posted again, but the issue still gains the hold. A request whose title
+  the project's human-action update, and leaves the issue in its phase, paused on the Question it
+  asks (`SymphonyElixir.Questions`), whose `Needs Decision` label the pause projector writes. It
+  never adds a label itself. The request stays open until a person answers it, or the agent
+  withdraws it. A request with the same title still open on the issue is not posted again. A request whose title
   or question a person already answered (`SymphonyElixir.Decisions`) is not posted at all: the
   result carries the recorded answer, which the run applies. Every field is
   refused when it holds a secret pattern, and when it holds code the Director does not read
@@ -1506,10 +1504,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
     }
   end
 
-  # Nothing moves. A new request goes through the one writer (`DecisionRequest.ask/4`), which sets
-  # the hold and posts the comment through this tool's Linear client, so the ticket keeps its phase
-  # and the person answers it there. A request the ticket already has is the one recorded, so the
-  # hold is set again from it (`DecisionRequest.project/4`) and nothing is posted. A request raised
+  # Nothing moves. A new request goes through the one writer (`DecisionRequest.ask/4`), which asks
+  # the Question and posts the comment through this tool's Linear client, so the ticket keeps its
+  # phase and the person answers it there. A request the ticket already has on Linear is the one
+  # recorded, so nothing is asked or posted again. A request raised
   # from the CI Fix lane is the lane's `cannot_fix` verdict: the repair needs access or a secret,
   # which no run can supply, so the ticket waits for a person in place.
   defp hold_request(repo_key, issue, open, request, settings, opts) do
@@ -1522,11 +1520,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
        result
        |> Map.put("state", state)
        |> Map.put("held", true)
-       |> Map.put("hold", Hold.label(:needs_decision))}
+       |> Map.put("hold", Projector.question_label())}
     end
   end
 
-  # Best-effort, like every other ledger write: a hold is set either way.
+  # Best-effort, like every other ledger write: the question pauses the ticket either way.
   defp record_hold_verdict(repo_key, issue, state, settings) do
     case CiFix.hold_verdict(state, settings) do
       nil -> :ok
@@ -1534,21 +1532,18 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
-  defp ask_or_project(repo_key, issue, {comment_id, open_request}, _request, opts) do
-    with :ok <- DecisionRequest.project(repo_key, issue["id"], NeedsDecisionHold.attrs(open_request), opts) do
-      {:ok, %{"requested" => false, "reason" => "already_open", "commentId" => comment_id}}
-    end
-  end
+  defp ask_or_project(_repo_key, _issue, {comment_id, _open_request}, _request, _opts),
+    do: {:ok, %{"requested" => false, "reason" => "already_open", "commentId" => comment_id}}
 
   defp ask_or_project(repo_key, issue, nil, request, opts) do
     held = %{id: issue["id"], state: get_in(issue, ["state", "name"]), repo_key: repo_key}
 
     # The request already passed `validate_human_action/1`, so the writer's error is the post's or
-    # the hold's, returned as the tool returned it before.
-    ask_opts = [post: &post_request(issue, &1, opts), label_tracker: opts[:tracker], asked_by: @asking_run] ++ Keyword.take(opts, [:store])
+    # the question's, returned as the tool returned it before.
+    ask_opts = [post: &post_request(issue, &1, opts), asked_by: @asking_run]
 
-    # A question the hold already carries was asked before, its comment posted or waiting to be.
-    # While the pause projector posts the comment, a question not open before is a new request.
+    # A question open before was asked before, its comment posted or waiting to be. While the pause
+    # projector posts the comment, a question not open before is a new request.
     ticket = {:ticket, repo_key, issue["id"]}
     projected? = Projector.owns?() and is_binary(repo_key) and repo_key != "" and not Questions.same_open?(ticket, request)
 
@@ -1594,8 +1589,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
   so the next human-action update drops them. While the pause projector owns the replies
   (`SymphonyElixir.Pauses.Projector.owns?/0`), the reply under a withdrawn Question's request is its
   projection, posted when the withdrawal committed, and this tool replies only under the requests no
-  Question carries. Once no open request is left, the `Needs Decision`
-  hold is cleared so the ticket continues in place. An issue with no open request is left as it is.
+  Question carries. A withdrawn Question no longer pauses the ticket, so once no open request is
+  left the ticket continues in place. An issue with no open request is left as it is.
   The reason is refused when it holds a secret pattern.
   """
   @spec withdraw_human_action(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -1609,7 +1604,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
       post_withdrawal(issue_id, reason, title, settings, Keyword.put(opts, :projected, projected_titles(ticket, withdrawn)))
       |> with_questions(ticket, withdrawn)
-      |> settle_withdrawal(context, issue_id, opts)
+      |> settle_withdrawal(opts)
     end
   end
 
@@ -1639,23 +1634,14 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   defp with_questions(result, _ticket, _ids), do: result
 
-  # The withdrawal landed: the hold it releases goes first, so an issue that no longer waits on a
-  # person is cleared before the human-action list is refreshed. Anything else `post_withdrawal`
+  # The withdrawal landed: the human-action list is refreshed. Anything else `post_withdrawal`
   # returned passes through.
-  defp settle_withdrawal({:ok, %{"withdrawn" => true} = withdrawal} = result, context, issue_id, opts) do
-    with :ok <- release_decision_hold(context, issue_id, withdrawal, opts) do
-      Keyword.get(opts, :refresh_human_actions, &HumanActions.refresh/0).()
-      result
-    end
+  defp settle_withdrawal({:ok, %{"withdrawn" => true}} = result, opts) do
+    Keyword.get(opts, :refresh_human_actions, &HumanActions.refresh/0).()
+    result
   end
 
-  defp settle_withdrawal(other, _context, _issue_id, _opts), do: other
-
-  # A request moved nothing, so its `Needs Decision` hold is what the withdrawal clears: the store
-  # first, then the label, and the ticket continues in place. Another request still open means the
-  # ticket still waits, so the hold stays.
-  defp release_decision_hold(_context, _issue_id, %{"remaining" => remaining}, _opts) when remaining != 0, do: :ok
-  defp release_decision_hold(context, issue_id, _withdrawal, opts), do: Hold.clear(issue_repo_key(context), issue_id, :needs_decision, opts)
+  defp settle_withdrawal(other, _opts), do: other
 
   defp validate_withdrawal(attrs) do
     reason = Map.get(attrs, "reason")

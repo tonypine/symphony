@@ -83,6 +83,8 @@ defmodule SymphonyElixir.DependencyGateTest do
     }
 
     RunStore.delete_ticket_state("repo-dep-gate", "issue-dependency-gate-terminal")
+    RunStore.delete_ticket_state("default", "issue-dependency-gate-terminal")
+    on_exit(fn -> RunStore.delete_ticket_state("default", "issue-dependency-gate-terminal") end)
 
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue | state: "Done"}])
     gate = DependencyGate.build("/tmp/workspace", issue, nil, repo_key: "default")
@@ -94,10 +96,11 @@ defmodule SymphonyElixir.DependencyGateTest do
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
 
     assert :ok = DependencyGate.react_to_hold(gate, [])
-    assert_received {:memory_tracker_label_added, "issue-dependency-gate-terminal", "Needs Decision"}
+    # The question is asked under the gate's repo, as the request's writer is given it.
+    assert %{request: true} = SymphonyElixir.Questions.deciding({:ticket, "default", "issue-dependency-gate-terminal"})
     refute_received {:memory_tracker_state_update, "issue-dependency-gate-terminal", _state}
 
-    assert [%{name: "decision requested", details: %{hold: "needs_decision", reason: "dependency_source_requires_approval"}}] =
+    assert [%{name: "decision requested", details: %{question: true, reason: "dependency_source_requires_approval"}}] =
              RunStore.get_ticket_state("repo-dep-gate", "issue-dependency-gate-terminal").signals
   end
 

@@ -388,7 +388,7 @@ defmodule SymphonyElixir.PrDecision do
   defp rate_limited?(facts), do: facts.github == :rate_limited
   defp merged?(facts), do: fresh?(facts) and facts.pr == :merged
   defp armed?(facts), do: fresh?(facts) and facts.auto_merge == :armed
-  defp held?(facts), do: fresh?(facts) and facts.hold in [:needs_decision, :blocked]
+  defp held?(facts), do: fresh?(facts) and facts.hold in [:question, :blocked]
   defp pr_missing?(facts), do: free?(facts) and facts.pr == :missing
   defp pr_missing_idle?(facts), do: pr_missing?(facts) and facts.run == :none
   defp base_changed_idle?(facts), do: with_pr?(facts) and facts.base == :changed and facts.run == :none
@@ -476,7 +476,7 @@ defmodule SymphonyElixir.PrDecision do
   defp close_out(facts), do: Action.new!("R2", :close_out, reason: "#{subject(pr(facts))} was merged")
   defp disarm(facts), do: Action.new!("R3", :disarm, reason: "Auto-merge is armed on #{pr(facts)} but the ticket is in #{phase_name(facts.phase)}")
 
-  defp wait_for_hold(%{hold: :needs_decision}), do: wait("R4", "A Needs Decision hold pauses the ticket", :person, "a person answers and the hold clears")
+  defp wait_for_hold(%{hold: :question}), do: wait("R4", "A Needs Decision hold pauses the ticket", :person, "a person answers and the hold clears")
   defp wait_for_hold(%{hold: :blocked}), do: wait("R4", "A Blocked hold pauses the ticket", :symphony, "what it waits on is done and the hold clears")
 
   defp wait_for_first_pr(_facts), do: wait("R5", "No PR yet: the agent opens one", :agent, "the agent opens the PR")
