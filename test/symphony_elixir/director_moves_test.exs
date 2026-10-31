@@ -1,12 +1,13 @@
 defmodule SymphonyElixir.DirectorMovesTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{AuditLog, BlockedHold, CiWait}
+  alias SymphonyElixir.{AuditLog, CiWait}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.{DecisionMove, DecisionRequest, DirectorMoves, DispatchLoop, Hold, IdlePark}
   alias SymphonyElixir.Inbox.{FromRecord, Item}
   alias SymphonyElixir.Linear.Client
-  alias SymphonyElixir.{OperatorStop, Pauses, PlanComments, Questions, RunStore, SelfHeal, SubIssueWait}
+  alias SymphonyElixir.{Pauses, PlanComments, Questions, RunStore, SelfHeal, SubIssueWait}
+  alias SymphonyElixir.PrWatch.Competitors
   alias SymphonyElixir.{TicketSignals, TicketState}
 
   @waiting "Waiting on sub-tickets"
@@ -62,7 +63,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
     @impl true
     def handle_call({:stop_running, issue_id}, _from, test_pid) do
-      :ok = OperatorStop.mark("repo-cancel", issue_id, DateTime.utc_now())
+      :ok = Pauses.stop({:ticket, "repo-cancel", issue_id}, DateTime.utc_now())
       send(test_pid, {:stop_running, issue_id})
       {:reply, {:ok, %{stopped: true, issue_id: issue_id}}, test_pid}
     end
@@ -251,15 +252,16 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert ticket_events("repo-restart", "pr", "person.action") == [{"person.action", %{action: "restart", from: "Rework", to: "In Progress"}}]
     end
 
-    test "clears a dispatch-loop hold, so the ticket starts again with its count at zero", %{opts: opts} do
+    test "answers a dispatch loop's question, so the ticket starts again with its count at zero", %{opts: opts} do
       github_activity(state: "OPEN")
       put_issues([restart_issue()])
       :ok = RunStore.record_ticket_dispatch("repo-restart", "pr", %{kind: :rework, run_id: "run-1", state: "Rework"})
-      :ok = Hold.set("repo-restart", "pr", :blocked, %{reason: "dispatch_loop: 4 rework runs", waits_on: %{type: "dispatch_loop", keys: ["rework"]}})
+      {:ok, question} = Questions.ask({:ticket, "repo-restart", "pr"}, DispatchLoop.question_attrs(%{count: 4, window_ms: 600_000}, "MOT-40"))
 
       assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
 
-      refute Hold.held?("repo-restart", "pr", :blocked)
+      assert %{state: :answered, answer: %{text: "Start it over from main"}} = Questions.find({:ticket, "repo-restart", "pr"}, question.id)
+      refute Pauses.paused?({:ticket, "repo-restart", "pr"})
       assert RunStore.get_ticket_state("repo-restart", "pr").dispatches == []
     end
 
@@ -268,49 +270,27 @@ defmodule SymphonyElixir.DirectorMovesTest do
       stop("repo-restart")
 
       assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "Start over"}, restart_opts(opts))
-      refute Hold.held?("repo-restart", "pr", :blocked)
-      refute OperatorStop.held?("repo-restart", "pr")
+      refute Pauses.stopped?({:ticket, "repo-restart", "pr"})
 
       assert [{"pause.cleared", %{by: %{kind: :person, name: "Director"}}}] = ticket_events("repo-restart", "pr", "pause.cleared")
-
-      stop("repo-restart")
-
-      log =
-        capture_log(fn ->
-          assert {:ok, _result} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, opts |> restart_opts() |> Keyword.put(:store, UnwritableStore))
-        end)
-
-      assert log =~ "Restarted MOT-40 but couldn't clear its operator-stop hold: :boom"
     end
 
-    test "lifts a stop paused beside a dispatch-loop hold, and clears that hold too", %{opts: opts} do
+    test "lifts a stop and a loop's pause set when its question could not be asked", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-restart"}])
-      :ok = Hold.set("repo-restart", "pr", :blocked, %{reason: "dispatch_loop: 4 runs", waits_on: %{type: "dispatch_loop", keys: ["implementation"]}})
+      loop = %{kind: :environment, waits_on: %{condition: "dispatch_loop"}, text: "dispatch_loop: 4 runs", releasable: true}
+      {:ok, _pause} = Pauses.set({:ticket, "repo-restart", "pr"}, loop)
       stop("repo-restart")
-      assert %{waits_on: %{type: "dispatch_loop"}} = Hold.get("repo-restart", "pr", :blocked)
 
       assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "Start over"}, restart_opts(opts))
-      refute OperatorStop.held?("repo-restart", "pr")
-      refute Hold.held?("repo-restart", "pr", :blocked)
+      refute Pauses.paused?({:ticket, "repo-restart", "pr"})
     end
 
-    test "leaves any other Blocked hold, and stands when the store refuses to clear the loop's", %{opts: opts} do
+    test "leaves every other reason of the pause", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-restart"}])
-      :ok = Hold.set("repo-restart", "pr", :blocked, %{waits_on: %{type: "access"}})
+      {:ok, _pause} = CiWait.pause("repo-restart", "pr", "26758a2471558f89fc0411dcf1f81aa82c0e1dc4")
 
       assert {:ok, _result} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
-      assert Hold.held?("repo-restart", "pr", :blocked)
-
-      :ok = Hold.set("repo-restart", "pr", :blocked, %{waits_on: %{type: "dispatch_loop", keys: ["implementation"]}})
-
-      log =
-        capture_log(fn ->
-          assert {:ok, %{to_state: "In Progress"}} =
-                   DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, opts |> restart_opts() |> Keyword.put(:store, UnwritableStore))
-        end)
-
-      assert log =~ "Restarted MOT-40 but couldn't clear its dispatch-loop hold: :boom"
-      assert Hold.held?("repo-restart", "pr", :blocked)
+      assert Pauses.why({:ticket, "repo-restart", "pr"}) == ["Waiting for CI on 26758a247155 to finish"]
     end
 
     test "a ticket with no pull request restarts just the same", %{opts: opts} do
@@ -729,7 +709,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       ticket = {:ticket, "repo-cancel", "pr"}
       {:ok, asked} = Questions.ask(ticket, %{layout_request() | title: "Merge the pull request", question: "Merge it now?"}, confirm: "Merging")
-      :ok = Hold.set("repo-cancel", "pr", :blocked, %{reason: "waits", clearing_condition: "a person clears it", waits_on: %{type: "access", keys: []}})
+      {:ok, _pause} = CiWait.pause("repo-cancel", "pr", "26758a2471558f89fc0411dcf1f81aa82c0e1dc4")
 
       orchestrator = start_supervised!({FakeOrchestrator, self()})
 
@@ -742,7 +722,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert %{state: :withdrawn, withdrawn: %{reason: "The ticket was cancelled."}} = Questions.find(ticket, asked.id)
       assert Hold.held_kinds("repo-cancel", "pr") == []
-      refute OperatorStop.held?("repo-cancel", "pr")
+      assert {:ok, nil} = Pauses.get(ticket)
 
       assert [%{payload: %{run_stopped: true, pull_requests_closed: [@cancel_pr_url], note: "Not needed"}}] =
                RunStore.list_ticket_events("repo-cancel", "pr", types: ["ticket.cancelled"])
@@ -796,11 +776,11 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
     test "a store that refuses a clear is logged, and the cancel stands", %{opts: opts} do
       put_issues([cancel_issue("In Progress")])
-      :ok = Hold.set("repo-cancel", "pr", :blocked, %{reason: "waits", clearing_condition: "a person clears it", waits_on: %{type: "access", keys: []}})
+      :ok = RunStore.set_ticket_hold("repo-cancel", "pr", :needs_decision, %{reason: "waits"})
 
       log = capture_log(fn -> assert {:ok, %{to_state: "Canceled"}} = DirectorMoves.move(:cancel, "MOT-40", %{}, Keyword.put(opts, :store, UnwritableStore)) end)
 
-      assert log =~ "Cancelled MOT-40 but couldn't clear its blocked hold: :boom"
+      assert log =~ "Cancelled MOT-40 but couldn't clear its needs_decision hold: :boom"
     end
 
     test "undo within the window puts the record and Linear back to the phase before", %{opts: opts, clock: clock} do
@@ -820,15 +800,11 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   describe "unblock" do
-    test "clears an access hold in place and posts its comment", %{opts: opts} do
-      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+    @block_report %{kind: :environment, waits_on: %{condition: "block_report"}, text: "The run reported a block", releasable: true}
 
-      :ok =
-        Hold.set("repo-director", "pr", :blocked, %{
-          reason: "the run reported a block",
-          clearing_condition: "when the block is resolved; a person clears an access hold",
-          waits_on: %{type: "access", keys: []}
-        })
+    test "releases a reason the Director may release in place and posts its comment", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      {:ok, _pause} = Pauses.set({:ticket, "repo-director", "pr"}, @block_report)
 
       assert {:ok, result} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
 
@@ -843,23 +819,23 @@ defmodule SymphonyElixir.DirectorMovesTest do
                undo_window_ms: nil
              }
 
-      refute Hold.held?("repo-director", "pr", :blocked)
+      refute Pauses.paused?({:ticket, "repo-director", "pr"})
       refute_received {:memory_tracker_state_update, _id, _state}
       assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director: MOT-40 continues in place."}
       assert [%{name: "unblocked", details: %{by: "the Director"}}] = RunStore.get_ticket_state("repo-director", "pr").signals
       assert [%{"move" => "unblock", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
 
-      # The hold's clear, then the Director's unblock as a person action.
+      # The pause's release, then the Director's unblock as a person action.
       assert [
-               {"hold.set", %{kind: "blocked"}},
-               {"hold.cleared", %{kind: "blocked"}},
+               {"pause.set", %{reason: "environment"}},
+               {"pause.cleared", %{by: %{kind: :person, name: "Director"}}},
                {"person.action", %{action: "unblock", from: "In Progress", to: "In Progress"}}
              ] = ticket_events("repo-director", "pr")
 
       assert [%{actor: %{kind: :person, name: "the Director"}}] = RunStore.list_ticket_events("repo-director", "pr", types: ["person.action"])
     end
 
-    test "QA that cannot reach its machine pauses the ticket on it; Unblock clears the hold and the reason, and the ticket resumes (TP-1250)", %{opts: opts} do
+    test "QA that cannot reach its machine pauses the ticket on it; Unblock clears its reasons, and the ticket resumes (TP-1250)", %{opts: opts} do
       issue = %{pr("QA") | repo_key: "repo-director"}
       put_issues([issue])
       ticket = {:ticket, "repo-director", "pr"}
@@ -869,130 +845,99 @@ defmodule SymphonyElixir.DirectorMovesTest do
       {:ok, _pause} = CiWait.pause("repo-director", "pr", "26758a2471558f89fc0411dcf1f81aa82c0e1dc4")
       {:ok, _pause} = Pauses.set(ticket, Pauses.ticket_reason(:dependency, "MOT-9"))
 
-      assert Hold.held?("repo-director", "pr", :blocked)
       assert Pauses.why(ticket) == ["The QA machine is not reachable", "Waiting for CI on 26758a247155 to finish", "Waiting for MOT-9 to finish"]
 
       assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
 
-      refute Hold.held?("repo-director", "pr", :blocked)
       assert Pauses.why(ticket) == ["Waiting for MOT-9 to finish"]
       assert [%{payload: %{by: %{kind: :person, name: "Director"}}} | _] = RunStore.list_ticket_events("repo-director", "pr", types: ["pause.reason_cleared"])
     end
 
-    test "clears a dispatch-loop hold in place, and the ticket's count starts again", %{opts: opts} do
-      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
-      :ok = RunStore.record_ticket_dispatch("repo-director", "pr", %{kind: :implementation, run_id: "run-1", state: "In Progress"})
-
-      :ok =
-        Hold.set("repo-director", "pr", :blocked, %{
-          reason: "dispatch_loop: 4 implementation runs in 10 minutes",
-          waits_on: %{type: "dispatch_loop", keys: ["implementation"]}
-        })
-
-      assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
-
-      refute Hold.held?("repo-director", "pr", :blocked)
-      assert RunStore.get_ticket_state("repo-director", "pr").dispatches == []
-      assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director: MOT-40 continues in place."}
-    end
-
-    test "clears a landing hold in place after the PR watcher releases its competing PRs (TP-989)", %{opts: opts} do
+    test "releases a wait on competing PRs after the PR watcher releases them (TP-989)", %{opts: opts} do
       put_issues([%{pr("Merging") | repo_key: "repo-director"}])
-      :ok = Hold.set("repo-director", "pr", :blocked, BlockedHold.landing_attrs([%{issue_identifier: "MOT-1", files: ["SPEC.md"]}]))
+      landing = fn -> for reason <- Competitors.landing_reasons([%{issue_identifier: "MOT-1", files: ["SPEC.md"]}]), do: Pauses.set({:ticket, "repo-director", "pr"}, reason) end
+      landing.()
       test_pid = self()
       release = fn repo_key, issue_id, _opts -> send(test_pid, {:release, repo_key, issue_id}) && Process.get(:release_result, :ok) end
 
       assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.move(:unblock, "MOT-40", %{}, Keyword.put(opts, :release_competitors, release))
       assert_received {:release, "repo-director", "pr"}
-      refute Hold.held?("repo-director", "pr", :blocked)
+      refute Pauses.paused?({:ticket, "repo-director", "pr"})
 
-      # A release that fails is reported; the hold still clears.
-      :ok = Hold.set("repo-director", "pr", :blocked, BlockedHold.landing_attrs([%{issue_identifier: "MOT-1", files: ["SPEC.md"]}]))
+      # A release that fails is reported; the reasons still go.
+      landing.()
       Process.put(:release_result, {:error, :store_down})
 
       log = capture_log(fn -> assert {:ok, %{move: "unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, Keyword.put(opts, :release_competitors, release)) end)
       assert log =~ "couldn't release its competing pull requests"
-      refute Hold.held?("repo-director", "pr", :blocked)
+      refute Pauses.paused?({:ticket, "repo-director", "pr"})
     end
 
-    test "lifts an operator's stop: its pause reason, then its hold, and the ticket continues in place", %{opts: opts} do
+    test "lifts an operator's stop, and the ticket continues in place", %{opts: opts} do
       put_issues([%{pr("Todo") | repo_key: "repo-director"}])
       stop("repo-director")
 
       assert {:ok, %{move: "unblock", moved: false, commented: true}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
 
-      refute OperatorStop.held?("repo-director", "pr")
-      refute Hold.held?("repo-director", "pr", :blocked)
+      refute Pauses.stopped?({:ticket, "repo-director", "pr"})
       assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director: MOT-40 continues in place."}
       assert [{"pause.cleared", %{by: %{kind: :person, name: "Director"}}}] = ticket_events("repo-director", "pr", "pause.cleared")
     end
 
-    test "lifts a stop paused beside a hold that clears on its own, and leaves that hold", %{opts: opts} do
+    test "lifts a stop beside a dependency, which stays: it lifts on its own", %{opts: opts} do
       put_issues([%{pr("Todo") | repo_key: "repo-director"}])
-      :ok = Hold.set("repo-director", "pr", :blocked, %{reason: "waiting on MOT-1", waits_on: %{type: "dependency", keys: ["MOT-1"]}})
+      {:ok, _pause} = Pauses.set({:ticket, "repo-director", "pr"}, Pauses.ticket_reason(:dependency, "MOT-1"))
       stop("repo-director")
 
       assert {:ok, %{move: "unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
 
-      refute OperatorStop.held?("repo-director", "pr")
-      assert %{waits_on: %{type: "dependency"}} = Hold.get("repo-director", "pr", :blocked)
+      refute Pauses.stopped?({:ticket, "repo-director", "pr"})
+      assert Pauses.why({:ticket, "repo-director", "pr"}) == ["Waiting for MOT-1 to finish"]
     end
 
-    test "lifts a stop paused beside an access hold together with that hold", %{opts: opts} do
+    test "lifts a stop and another reason the Director may release together", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
-      :ok = Hold.set("repo-director", "pr", :blocked, %{reason: "Needs a token", waits_on: %{type: "access", keys: []}})
+      {:ok, _pause} = Pauses.set({:ticket, "repo-director", "pr"}, @block_report)
       stop("repo-director")
 
       assert {:ok, %{move: "unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
 
-      refute OperatorStop.held?("repo-director", "pr")
-      refute Hold.held?("repo-director", "pr", :blocked)
+      refute Pauses.paused?({:ticket, "repo-director", "pr"})
     end
 
-    test "a stop whose hold the store refuses to clear comes back as a store error", %{opts: opts} do
+    test "a release the store refuses comes back as a store error", %{opts: opts} do
       put_issues([%{pr("Todo") | repo_key: "repo-director"}])
       stop("repo-director")
+      release = fn _ticket, _held -> {:error, :boom} end
 
-      assert {:error, {:store, "couldn't clear the hold on MOT-40: :boom"}} =
-               DirectorMoves.move(:unblock, "MOT-40", %{}, Keyword.put(opts, :store, UnwritableStore))
-
-      assert Hold.held?("repo-director", "pr", :blocked)
+      assert {:error, {:store, "couldn't lift the pause on MOT-40: :boom"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, Keyword.put(opts, :release, release))
+      assert Pauses.stopped?({:ticket, "repo-director", "pr"})
     end
 
-    test "refuses a ticket with no hold, and one waiting on something other than access", %{opts: opts} do
+    test "refuses a ticket with no pause, and one waiting only on what lifts on its own", %{opts: opts} do
       put_issues([pr("In Progress")])
-      assert {:error, {:conflict, "MOT-40 is not waiting on an access hold"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+      assert {:error, {:conflict, "MOT-40 has nothing a person can unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
 
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
-      :ok = Hold.set("repo-director", "pr", :blocked, %{reason: "waiting on MOT-1", waits_on: %{type: "dependency", keys: ["MOT-1"]}})
+      {:ok, _pause} = Pauses.set({:ticket, "repo-director", "pr"}, Pauses.ticket_reason(:dependency, "MOT-1"))
 
-      assert {:error, {:conflict, "MOT-40 is not waiting on an access hold"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
-      assert Hold.held?("repo-director", "pr", :blocked)
+      assert {:error, {:conflict, "MOT-40 has nothing a person can unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+      assert Pauses.paused?({:ticket, "repo-director", "pr"})
       refute_received {:memory_tracker_comment, _id, _body}
       # A refused move is no action: no audit record, no event.
       assert audit_records() == []
       assert ticket_events("repo-director", "pr", "person.action") == []
     end
 
-    test "the hold is cleared even when Linear refuses the comment", %{opts: opts} do
+    test "the pause is lifted even when Linear refuses the comment", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
-      :ok = Hold.set("repo-director", "pr", :blocked, %{waits_on: %{type: "access"}})
+      {:ok, _pause} = Pauses.set({:ticket, "repo-director", "pr"}, @block_report)
       Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :comment_failed})
 
       log = capture_log(fn -> assert {:ok, %{commented: true}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts) end)
 
       assert log =~ "but Linear refused the comment"
-      refute Hold.held?("repo-director", "pr", :blocked)
-    end
-
-    test "a hold the store refuses to clear comes back as a store error", %{opts: opts} do
-      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
-      :ok = Hold.set("repo-director", "pr", :blocked, %{waits_on: %{type: "access"}})
-
-      assert {:error, {:store, "couldn't clear the hold on MOT-40: :boom"}} =
-               DirectorMoves.move(:unblock, "MOT-40", %{}, Keyword.put(opts, :store, UnwritableStore))
-
-      assert Hold.held?("repo-director", "pr", :blocked)
+      refute Pauses.paused?({:ticket, "repo-director", "pr"})
     end
   end
 
@@ -1365,10 +1310,10 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:ok, %{moved: false}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, opts)
       refute Hold.held?("repo-director", "pr", :needs_decision)
 
-      :ok = Hold.set("repo-director", "pr", :blocked, %{reason: "the run reported a block", waits_on: %{type: "access", keys: []}})
+      {:ok, _pause} = Pauses.set({:ticket, "repo-director", "pr"}, %{kind: :environment, waits_on: %{condition: "block_report"}, text: "The run reported a block", releasable: true})
 
       assert {:ok, %{move: "unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
-      refute Hold.held?("repo-director", "pr", :blocked)
+      refute Pauses.paused?({:ticket, "repo-director", "pr"})
     end
 
     test "a ticket whose repo routes its project by slug id is answered and sent to Rework under that repo", %{opts: opts} do
@@ -1993,14 +1938,12 @@ defmodule SymphonyElixir.DirectorMovesTest do
     assert [%{"move" => "backlog"}] = audit_records()
   end
 
-  describe "a question Symphony asked beside its hold" do
+  describe "a question Symphony paused the ticket on" do
     @director %{kind: :person, name: "Director"}
 
-    # The question and the hold the orchestrator sets for a dispatch loop or a quiet handoff.
+    # The question the orchestrator asks for a dispatch loop or a quiet handoff, which pauses the ticket.
     defp ask_and_hold(repo_key, stop) do
       {:ok, question} = Questions.ask({:ticket, repo_key, "pr"}, DispatchLoop.question_attrs(stop, "MOT-40"))
-      type = if match?({:quiet_handoff, _runs}, stop), do: "handoff_missing", else: "dispatch_loop"
-      :ok = Hold.set(repo_key, "pr", :blocked, %{reason: "#{type}: stuck", waits_on: %{type: type, keys: [], question_id: question.id}})
       question
     end
 
@@ -2014,7 +1957,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
 
-      refute Hold.held?("repo-director", "pr", :blocked)
       assert %{state: :answered, answer: %{option: 1, by: @director}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
       assert {:ok, nil} = Pauses.get({:ticket, "repo-director", "pr"})
       assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director: MOT-40 continues in place."}
@@ -2028,32 +1970,19 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
         assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "Start over"}, restart_opts(opts))
 
-        refute Hold.held?("repo-restart", "pr", :blocked)
         assert %{state: :answered, answer: %{option: 2}} = Questions.find({:ticket, "repo-restart", "pr"}, question.id)
+        refute Pauses.paused?({:ticket, "repo-restart", "pr"})
       end
     end
 
-    test "a Restart the store refuses to lift names the quiet handoff's hold", %{opts: opts} do
-      github_activity(state: "OPEN")
-      put_issues([restart_issue()])
-      ask_and_hold("repo-restart", {:quiet_handoff, 3})
-
-      log =
-        capture_log(fn ->
-          assert {:ok, _result} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, opts |> restart_opts() |> Keyword.put(:store, UnwritableStore))
-        end)
-
-      assert log =~ "Restarted MOT-40 but couldn't clear its quiet-handoff hold: :boom"
-    end
-
-    test "answering \"Run it again\" is Unblock: the hold goes and the ticket continues in place", %{opts: opts} do
+    test "answering \"Run it again\" is Unblock: the pause goes and the ticket continues in place", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       :ok = RunStore.record_ticket_dispatch("repo-director", "pr", %{kind: :implementation, run_id: "run-1", state: "In Progress"})
       question = ask_and_hold("repo-director", loop())
 
       assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Run it again", opts)
 
-      refute Hold.held?("repo-director", "pr", :blocked)
+      refute Pauses.paused?({:ticket, "repo-director", "pr"})
       assert RunStore.get_ticket_state("repo-director", "pr").dispatches == []
       assert %{state: :answered, answer: %{option: 1, text: "Run it again", by: @director}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
     end
@@ -2069,7 +1998,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert_received {:memory_tracker_comment, "pr", comment}
       assert comment =~ ~s(You answered "Start it over from main" to: MOT-40 ran 4 times in 10 minutes without finishing)
       assert_received {:memory_tracker_state_update, "pr", "In Progress"}
-      refute Hold.held?("repo-restart", "pr", :blocked)
+      refute Pauses.paused?({:ticket, "repo-restart", "pr"})
       assert %{state: :answered, answer: %{option: 2}} = Questions.find({:ticket, "repo-restart", "pr"}, question.id)
     end
 
@@ -2081,15 +2010,26 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
         assert {:ok, %{move: "decide", moved: false, commented: false}} = DirectorMoves.answer_held_question("MOT-40", question.id, answer, opts)
 
-        assert %{waits_on: %{question_id: id}} = Hold.get("repo-director", "pr", :blocked)
-        assert id == question.id
         assert %{state: :answered, answer: %{text: ^answer}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
+        assert ["You kept it paused: " <> _title] = Pauses.why({:ticket, "repo-director", "pr"})
         refute_received {:memory_tracker_comment, "pr", _body}
       end
 
-      # The hold still waits on a person: Unblock lifts it.
+      # The pause still waits on a person: Unblock lifts it.
       assert {:ok, %{move: "unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
-      refute Hold.held?("repo-director", "pr", :blocked)
+      refute Pauses.paused?({:ticket, "repo-director", "pr"})
+    end
+
+    test "a loop kept paused is lifted by Restart too", %{opts: opts} do
+      github_activity(state: "OPEN")
+      put_issues([restart_issue()])
+      question = ask_and_hold("repo-restart", loop())
+
+      assert {:ok, %{move: "decide"}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Keep it paused", restart_opts(opts))
+      assert Pauses.paused?({:ticket, "repo-restart", "pr"})
+
+      assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "Start over"}, restart_opts(opts))
+      refute Pauses.paused?({:ticket, "repo-restart", "pr"})
     end
 
     test "refuses a question the ticket doesn't have, one already answered and a blank answer", %{opts: opts} do
@@ -2108,23 +2048,25 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   describe "a ticket an idle run parked in Backlog (TP-1326)" do
-    # The question and the hold the agent runner sets when it parks an idle run.
+    # What the agent runner leaves when it parks an idle run: its move signal, then its question, or,
+    # when the question can't be asked, a reason Unblock releases.
     defp park(repo_key, from_state, question? \\ true) do
-      attrs = IdlePark.hold_attrs(from_state, 2)
+      ticket = {:ticket, repo_key, "pr"}
+      :ok = TicketSignals.record(repo_key, "pr", "blocked", %{to: "Backlog", reason: "idle_park", from: from_state})
 
-      {question, attrs} =
-        if question? do
-          {:ok, question} = Questions.ask({:ticket, repo_key, "pr"}, IdlePark.question_attrs("MOT-40", 2))
-          {question, put_in(attrs, [:waits_on, :question_id], question.id)}
-        else
-          {nil, attrs}
-        end
-
-      :ok = Hold.set(repo_key, "pr", :blocked, attrs)
-      question
+      if question? do
+        {:ok, question} = Questions.ask(ticket, IdlePark.question_attrs("MOT-40", 2))
+        question
+      else
+        reason = %{kind: :environment, waits_on: %{condition: "idle_park"}, text: "parked", releasable: true}
+        {:ok, _pause} = Pauses.set(ticket, reason)
+        nil
+      end
     end
 
-    test "the Inbox lists its question; Unblock moves it back to the phase it left, lifts the hold and dispatches it", %{opts: opts} do
+    defp parked?(repo_key), do: Pauses.paused?({:ticket, repo_key, "pr"})
+
+    test "the Inbox lists its question; Unblock moves it back to the phase it left, lifts the pause and dispatches it", %{opts: opts} do
       put_issues([%{pr("Backlog") | repo_key: "repo-director"}])
       :ok = RunStore.record_ticket_dispatch("repo-director", "pr", %{kind: :implementation, run_id: "run-1", state: "In Progress"})
       question = park("repo-director", "In Progress")
@@ -2136,26 +2078,25 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert_received {:memory_tracker_state_update, "pr", "In Progress"}
       assert %{phase: "In Progress", dispatches: []} = RunStore.get_ticket_state("repo-director", "pr")
-      refute Hold.held?("repo-director", "pr", :blocked)
       assert %{state: :answered, answer: %{option: 1, text: "Run it again"}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
       assert {:ok, nil} = Pauses.get({:ticket, "repo-director", "pr"})
 
       assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director: MOT-40 goes back to In Progress with its workspace and branch as they are."}
     end
 
-    test ~s(answering "Run it again" resumes it in the phase it left; "Leave it parked" keeps it held), %{opts: opts} do
+    test ~s(answering "Run it again" resumes it in the phase it left; "Leave it parked" keeps it paused), %{opts: opts} do
       put_issues([%{pr("Backlog") | repo_key: "repo-director"}])
       question = park("repo-director", "Rework")
 
       assert {:ok, %{move: "decide", moved: false}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Leave it parked", opts)
-      assert Hold.held?("repo-director", "pr", :blocked)
+      assert parked?("repo-director")
 
-      :ok = Hold.clear("repo-director", "pr", :blocked)
+      {:ok, _pause} = Pauses.clear_reasons({:ticket, "repo-director", "pr"}, fn _reason -> true end, by: Pauses.director())
       question = park("repo-director", "Rework")
 
       assert {:ok, %{move: "unblock", to_state: "Rework"}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Run it again", opts)
       assert_received {:memory_tracker_state_update, "pr", "Rework"}
-      refute Hold.held?("repo-director", "pr", :blocked)
+      refute parked?("repo-director")
     end
 
     test ~s(the Inbox's Decide answers its question: "Run it again" resumes it, another question id is refused), %{opts: opts} do
@@ -2170,7 +2111,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
                DirectorMoves.move(:decide, "MOT-40", %{picks: picks, question_id: " #{question.id} "}, opts)
 
       assert_received {:memory_tracker_state_update, "pr", "In Progress"}
-      refute Hold.held?("repo-director", "pr", :blocked)
+      refute parked?("repo-director")
       assert %{state: :answered, answer: %{option: 1}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
     end
 
@@ -2187,41 +2128,31 @@ defmodule SymphonyElixir.DirectorMovesTest do
       :ok = TicketSignals.record("repo-director", "pr", "blocked", %{to: "Backlog", reason: "idle_park"})
       :ok = TicketSignals.record("repo-director", "pr", "decision returned", %{move: "backlog", to: "Backlog"})
 
-      assert {:error, {:conflict, "MOT-40 is not waiting on an access hold"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+      assert {:error, {:conflict, "MOT-40 has nothing a person can unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
 
       park("repo-director", "In Progress")
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :boom})
 
       capture_log(fn -> assert {:error, {:linear, :boom}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts) end)
-      assert Hold.held?("repo-director", "pr", :blocked)
+      assert parked?("repo-director")
     end
 
-    test "Restart lifts a park's hold, even one whose question was never asked", %{opts: opts} do
+    test "Restart lifts a park's pause, even one whose question was never asked", %{opts: opts} do
       github_activity(state: "OPEN")
       put_issues([restart_issue(state: "Backlog")])
       park("repo-restart", "In Progress", false)
 
       assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "Start over"}, restart_opts(opts))
-      refute Hold.held?("repo-restart", "pr", :blocked)
-
-      park("repo-restart", "In Progress", false)
-
-      log =
-        capture_log(fn ->
-          assert {:ok, _result} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, opts |> restart_opts() |> Keyword.put(:store, UnwritableStore))
-        end)
-
-      assert log =~ "Restarted MOT-40 but couldn't clear its idle-park hold: :boom"
+      refute parked?("repo-restart")
     end
   end
 
   describe "a run's block report naming no blocker (TP-1234)" do
-    # The access hold and its question, as the Linear tool sets them for an agent's block report.
+    # The question the guard asks for an agent's block report, which pauses the ticket.
     defp report_block(repo_key) do
       ticket = {:ticket, repo_key, "pr"}
       ctx = %{settings: %Schema{}, from_state: "In Progress", open_blockers: [], ticket: ticket, issue_identifier: "MOT-40"}
-      {:hold, :blocked, attrs} = SymphonyElixir.TransitionGuard.resolve_request(%{"id" => "backlog", "name" => "Backlog"}, ctx)
-      :ok = Hold.set(repo_key, "pr", :blocked, attrs)
+      {:hold, :blocked, _attrs} = SymphonyElixir.TransitionGuard.resolve_request(%{"id" => "backlog", "name" => "Backlog"}, ctx)
       [question] = Questions.open({:ticket, repo_key, "pr"})
       question
     end
@@ -2235,7 +2166,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
 
-      refute Hold.held?("repo-director", "pr", :blocked)
       assert %{state: :answered, answer: %{option: 1, text: "Unblock and run again"}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
       assert {:ok, nil} = Pauses.get({:ticket, "repo-director", "pr"})
     end
@@ -2245,28 +2175,26 @@ defmodule SymphonyElixir.DirectorMovesTest do
       question = report_block("repo-director")
 
       assert {:ok, %{move: "decide", moved: false}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Keep it paused", opts)
-      assert Hold.held?("repo-director", "pr", :blocked)
+      assert ["You kept it paused: The run on MOT-40 cannot continue on its own"] = Pauses.why({:ticket, "repo-director", "pr"})
 
-      :ok = Hold.clear("repo-director", "pr", :blocked)
+      {:ok, nil} = Pauses.clear({:ticket, "repo-director", "pr"})
       question = report_block("repo-director")
 
       assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Unblock and run again", opts)
-      refute Hold.held?("repo-director", "pr", :blocked)
       assert %{state: :answered, answer: %{option: 1}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
       assert {:ok, nil} = Pauses.get({:ticket, "repo-director", "pr"})
       assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director: MOT-40 continues in place."}
     end
 
-    test "Restart leaves the block report's hold and its question, as it always left the access hold", %{opts: opts} do
+    test "Restart leaves the block report's question, as it always left the access hold", %{opts: opts} do
       github_activity(state: "OPEN")
       put_issues([restart_issue()])
       question = report_block("repo-restart")
 
       assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "Start over"}, restart_opts(opts))
 
-      assert %{waits_on: %{type: "access", question_id: id}} = Hold.get("repo-restart", "pr", :blocked)
-      assert id == question.id
       assert %{state: :open} = Questions.find({:ticket, "repo-restart", "pr"}, question.id)
+      assert Pauses.paused?({:ticket, "repo-restart", "pr"})
     end
   end
 
@@ -2383,10 +2311,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   # The Director's Stop as the orchestrator leaves it: the pause reason, then the hold beside it.
-  defp stop(repo_key) do
-    :ok = OperatorStop.mark(repo_key, "pr", ~U[2026-10-20 08:41:25Z])
-    :ok = OperatorStop.set_hold(repo_key, "pr", ~U[2026-10-20 08:41:25Z])
-  end
+  defp stop(repo_key), do: :ok = Pauses.stop({:ticket, repo_key, "pr"}, ~U[2026-10-20 08:41:25Z])
 
   defp plan(state), do: %Issue{id: "plan", identifier: "MOT-30", title: "Plan an MVP", state: state, labels: ["plan"]}
   defp pr(state), do: %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: state, labels: []}

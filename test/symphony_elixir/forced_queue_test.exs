@@ -153,7 +153,7 @@ defmodule SymphonyElixir.ForcedQueueTest do
     test "lists a forced ticket in /api/v1/state, audits it, keeps it across a restart and drops it once the label goes", ctx do
       # Linear's poll only returns active states, so the label is first seen on a Todo ticket. An
       # open blocker keeps it from being dispatched.
-      blocker = %{id: "blocker-1", identifier: "MT-B1", state: "In Progress"}
+      blocker = %{id: "blocker-1", identifier: "MT-91", state: "In Progress"}
       forced = %{issue("forced-1", "MT-F1", "Todo", ["Expedite"]) | blocked_by: [blocker]}
       tracked([forced, issue("plain-1", "MT-P1", "In Review", ["bug"])])
 

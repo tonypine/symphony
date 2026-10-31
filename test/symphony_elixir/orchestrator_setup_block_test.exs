@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.OrchestratorSetupBlockTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Hold, RunStore, SelfHeal, SetupBlock}
+  alias SymphonyElixir.{Hold, Pauses, RunStore, SelfHeal, SetupBlock}
   alias SymphonyElixirWeb.Presenter
 
   @symphony_repo_key "symphony-self"
@@ -12,7 +12,7 @@ defmodule SymphonyElixir.OrchestratorSetupBlockTest do
   defmodule FakeFixer do
     def create(attrs, _opts) do
       notify({:fake_fixer_create, attrs})
-      Application.get_env(:symphony_elixir, :fake_fixer_create_result, {:ok, %{identifier: "MT-FIX", url: "https://example.org/issues/MT-FIX"}})
+      Application.get_env(:symphony_elixir, :fake_fixer_create_result, {:ok, %{identifier: "MT-901", url: "https://example.org/issues/MT-901"}})
     end
 
     def attach(identifier, _body, _opts) do
@@ -45,8 +45,7 @@ defmodule SymphonyElixir.OrchestratorSetupBlockTest do
 
         assert_receive {:fake_fixer_create, %{scope: scope, component: "dev_server", title: "Self-heal: repair the dev_server block"}}, @min_wait_ms
         assert scope == Config.repo_key!()
-        assert_receive {:fake_fixer_block, "issue-setup-build", "MT-FIX"}, @min_wait_ms
-        assert_receive {:memory_tracker_label_added, "issue-setup-build", "Blocked"}, @min_wait_ms
+        assert_receive {:fake_fixer_block, "issue-setup-build", "MT-901"}, @min_wait_ms
 
         state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}))
         refute Map.has_key?(state.retry_attempts, issue.id)
@@ -54,16 +53,17 @@ defmodule SymphonyElixir.OrchestratorSetupBlockTest do
       end)
 
     words = "verification.dev_server build failed with exit 127: a command it runs is not on the sandbox PATH"
-    assert log =~ "Setup block for MT-SETUP-BUILD: dev_server — #{words}; self-heal holds it on MT-FIX"
+    assert log =~ "Setup block for MT-SETUP-BUILD: dev_server — #{words}; self-heal holds it on MT-901"
     refute log =~ "scheduling retry"
 
-    assert %{reason: reason, waits_on: %{type: "fix_ticket", keys: ["MT-FIX"]}} = Hold.get(Config.repo_key!(), issue.id, :blocked)
-    assert reason == "waiting on fix ticket MT-FIX for the dev_server block: #{words}"
+    assert log =~ "Self-heal holds MT-SETUP-BUILD on MT-901 for its dev_server block: #{words}"
+    reason = "Waiting for MT-901 to finish: it fixes what stopped this ticket"
+    assert Pauses.why({:ticket, Config.repo_key!(), issue.id}) == [reason]
 
     assert [%{run_id: "run-issue-setup-build", status: "blocked", error: "agent exited: setup block: " <> ^words}] =
              Enum.filter(RunStore.list_runs(), &(&1.issue_id == issue.id))
 
-    # A poll lists the ticket under `blocked` with the cause, and names the hold that skips it.
+    # A poll lists the ticket under `blocked` with its fix ticket, and skips it with its pause's line.
     :sys.replace_state(pid, fn state ->
       state = Orchestrator.put_blocked_for_test(state, [issue])
       Orchestrator.dispatch_chosen_issues_for_test([issue], state)
@@ -71,26 +71,27 @@ defmodule SymphonyElixir.OrchestratorSetupBlockTest do
 
     payload = Presenter.state_payload(name, 1_000)
 
-    assert [%{issue_identifier: "MT-SETUP-BUILD", kind: "hold", reason: ^reason, blocked_by: [%{issue_identifier: "MT-FIX", state: "fix ticket"}]}] =
+    assert [%{issue_identifier: "MT-SETUP-BUILD", kind: "hold", reason: ^reason, blocked_by: [%{issue_identifier: "MT-901", state: "fix ticket"}]}] =
              payload.blocked
 
-    assert [%{issue_identifier: "MT-SETUP-BUILD", reason: "on a Blocked hold"}] = payload.dispatch_skipped
+    assert [%{issue_identifier: "MT-SETUP-BUILD", reason: ^reason}] = payload.dispatch_skipped
   end
 
   test "a port collision on the dev server's bridge is held on a Symphony fix ticket" do
     issue = issue("issue-setup-port", "MT-SETUP-PORT")
     {pid, _name} = start_orchestrator(:PortOrchestrator)
 
-    capture_log(fn ->
-      down(pid, issue, {:setup_block, {:verification_failed, {:loopback_bridge_unavailable, :eaddrinuse}}})
+    log =
+      capture_log(fn ->
+        down(pid, issue, {:setup_block, {:verification_failed, {:loopback_bridge_unavailable, :eaddrinuse}}})
 
-      assert_receive {:fake_fixer_create, %{scope: @symphony_repo_key, component: "qa_environment"}}, @min_wait_ms
-      state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}))
-      refute Map.has_key?(state.retry_attempts, issue.id)
-    end)
+        assert_receive {:fake_fixer_create, %{scope: @symphony_repo_key, component: "qa_environment"}}, @min_wait_ms
+        state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}))
+        refute Map.has_key?(state.retry_attempts, issue.id)
+      end)
 
-    assert %{reason: reason, waits_on: %{keys: ["MT-FIX"]}} = Hold.get(Config.repo_key!(), issue.id, :blocked)
-    assert reason =~ "the port is already in use (eaddrinuse)"
+    assert Pauses.why({:ticket, Config.repo_key!(), issue.id}) == ["Waiting for MT-901 to finish: it fixes what stopped this ticket"]
+    assert log =~ "the port is already in use (eaddrinuse)"
   end
 
   test "the same block coming back after its fix landed asks a person instead of retrying" do
@@ -139,7 +140,7 @@ defmodule SymphonyElixir.OrchestratorSetupBlockTest do
       end)
 
     assert log =~ "self-heal answered {:error, {:self_heal_fix_ticket_failed, :linear_down}}, scheduling retry"
-    refute Hold.held?(Config.repo_key!(), issue.id, :blocked)
+    refute Pauses.paused?({:ticket, Config.repo_key!(), issue.id})
   end
 
   defp issue(id, identifier) do

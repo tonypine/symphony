@@ -8,8 +8,9 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{BlockedHold, CiFix, Hold, PrWatch, TicketPullRequest, TicketState}
-  alias SymphonyElixir.PrWatch.{Attempts, Repo}
+  alias SymphonyElixir.{CiFix, Hold, Pauses, PrWatch, TicketPullRequest, TicketState}
+  alias SymphonyElixir.Pauses.Dependencies
+  alias SymphonyElixir.PrWatch.{Attempts, Competitors, Repo}
   alias SymphonyElixirWeb.WatchPayload
 
   @repo_key "default"
@@ -150,7 +151,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     alias SymphonyElixir.PrWatch.SwitchTest.World
 
     def create(attrs, _opts) do
-      identifier = "TP-FIX#{length(World.calls(:fix_ticket)) + 1}"
+      identifier = "TP-90#{length(World.calls(:fix_ticket)) + 1}"
       World.call(:fix_ticket, {identifier, attrs})
       World.update(:fix_tickets, &Map.put(&1, identifier, "Todo"))
       {:ok, %{identifier: identifier, url: "https://linear.app/i/#{identifier}"}}
@@ -333,8 +334,30 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
   defp open_pulls!(pulls), do: World.update(:open_pulls, fn _ -> pulls end)
 
+  # The ticket waits on its competitors: the wait's line, and one landing reason per competitor, by
+  # its ticket else its pull request.
   defp assert_waits!(issue_id, reason, keys) do
-    assert %{reason: ^reason, waits_on: %{type: "landing", keys: ^keys}} = Hold.get(@repo_key, issue_id, :blocked)
+    record = TicketState.normalize(RunStore.get_ticket_state(@repo_key, issue_id))
+    assert %{reason: ^reason} = Competitors.waiting(record)
+    assert for(landing <- record.pause.reasons, Competitors.landing_reason?(landing), do: landing_key(landing)) == keys
+  end
+
+  defp landing_key(%{waits_on: %{identifier: identifier}}), do: identifier
+  defp landing_key(%{waits_on: %{condition: "pull_request:" <> number}}), do: "https://github.com/acme/app/pull/#{number}"
+
+  defp paused?(issue_id), do: Pauses.paused?({:ticket, @repo_key, issue_id})
+
+  # The fix tickets the ticket's pause waits on.
+  defp fix_waits(issue_id) do
+    case Pauses.get({:ticket, @repo_key, issue_id}) do
+      {:ok, %{reasons: reasons}} ->
+        for %{waits_on: %{identifier: identifier}} = reason <- reasons,
+            Pauses.ticket_source(reason) == :fix_ticket,
+            do: identifier
+
+      _none ->
+        []
+    end
   end
 
   # A Merging ticket whose conflict exhausted its 3 fix runs, back in Merging on a conflicting head.
@@ -349,7 +372,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
   defp clear_fix_ticket_hold!(issue_id) do
     issue = %{Map.fetch!(World.get(:issues), issue_id) | repo_key: @repo_key}
-    assert :clear = BlockedHold.sync(issue, Config.settings!().tracker.terminal_states, tracker: Tracker, build: %{sha: nil}, settings: Config.settings!())
+    assert {1, _cache} = Dependencies.sweep([issue], Config.settings!().tracker.terminal_states, repo_key: @repo_key, tracker: Tracker, build: %{sha: nil})
   end
 
   describe "the red head of a reviewed ticket (TP-920/TP-892, D15 (c))" do
@@ -384,29 +407,29 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
       # The backstop: one fix ticket for the failing check, linked as a blocker, and a Blocked hold.
       tick!(pid)
-      assert [{"TP-FIX1", %{component: "ci:specs", scope: @repo_key, title: "Self-heal: CI keeps failing the specs check", description: description}}] = World.calls(:fix_ticket)
+      assert [{"TP-901", %{component: "ci:specs", scope: @repo_key, title: "Self-heal: CI keeps failing the specs check", description: description}}] = World.calls(:fix_ticket)
       assert description =~ "The failure may be that pull request's own rather than this repo's CI"
       assert description =~ "https://github.com/acme/app/pull/1"
-      assert World.calls(:blocked_by) == [{issue_id, "TP-FIX1"}]
-      assert %{waits_on: %{type: "fix_ticket", keys: ["TP-FIX1"]}} = Hold.get(@repo_key, issue_id, :blocked)
+      assert World.calls(:blocked_by) == [{issue_id, "TP-901"}]
+      assert fix_waits(issue_id) == ["TP-901"]
       refute Hold.held?(@repo_key, issue_id, :needs_decision)
 
-      assert %{rule: "R20", kind: :file_fix_ticket, reason: "CI keeps failing: waiting on TP-FIX1, a fix ticket for the `specs` check", owner: :symphony} =
+      assert %{rule: "R20", kind: :file_fix_ticket, reason: "CI keeps failing: waiting on TP-901, a fix ticket for the `specs` check", owner: :symphony} =
                decision(issue_id)
 
-      assert decision(issue_id).waits_on == %{type: "fix_ticket", keys: ["TP-FIX1"]}
+      assert decision(issue_id).waits_on == %{type: "fix_ticket", keys: ["TP-901"]}
       assert state(issue_id) == "Code Review"
       assert moves(issue_id) == List.duplicate("CI Fix", 10)
 
       # Held, the ticket waits on its fix ticket, and nothing is filed or moved again.
       tick!(pid, 3)
-      assert %{rule: "R4", reason: "CI keeps failing: waiting on TP-FIX1, a fix ticket for the `specs` check"} = decision(issue_id)
-      assert decision(issue_id).waits_on == %{type: "fix_ticket", keys: ["TP-FIX1"]}
+      assert %{rule: "R4", reason: "CI keeps failing: waiting on TP-901, a fix ticket for the `specs` check"} = decision(issue_id)
+      assert decision(issue_id).waits_on == %{type: "fix_ticket", keys: ["TP-901"]}
       assert length(World.calls(:fix_ticket)) == 1
       assert moves(issue_id) == List.duplicate("CI Fix", 10)
 
       # The R20 wait as the state API shows it.
-      assert PrWatch.dispatch_reason(Map.fetch!(World.get(:issues), issue_id), Config.settings!()) =~ "waiting on TP-FIX1"
+      assert PrWatch.dispatch_reason(Map.fetch!(World.get(:issues), issue_id), Config.settings!()) =~ "waiting on TP-901"
     end
 
     test "a second ticket at the backstop on the same check reuses the open fix ticket, with its own evidence" do
@@ -418,14 +441,14 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       for issue_id <- [first, second], do: seed_attempts!(issue_id, %{red: 10, fix_failures: [%{check: "specs", error: "ERROR in #{issue_id}"}]})
       tick!(pid)
 
-      assert [{"TP-FIX1", _attrs}] = World.calls(:fix_ticket)
-      assert World.calls(:blocked_by) == [{first, "TP-FIX1"}, {second, "TP-FIX1"}]
+      assert [{"TP-901", _attrs}] = World.calls(:fix_ticket)
+      assert World.calls(:blocked_by) == [{first, "TP-901"}, {second, "TP-901"}]
 
       for issue_id <- [first, second] do
-        assert %{waits_on: %{type: "fix_ticket", keys: ["TP-FIX1"]}} = Hold.get(@repo_key, issue_id, :blocked)
+        assert fix_waits(issue_id) == ["TP-901"]
       end
 
-      assert [{"TP-FIX1", evidence}] = World.calls(:evidence)
+      assert [{"TP-901", evidence}] = World.calls(:evidence)
       assert evidence =~ "TP-2"
       assert evidence =~ "ERROR in #{second}"
       assert evidence =~ "https://github.com/acme/app/pull/2"
@@ -437,12 +460,12 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       tick!(pid)
       seed_attempts!(issue_id, %{red: 10})
       tick!(pid)
-      assert Hold.held?(@repo_key, issue_id, :blocked)
+      assert paused?(issue_id)
 
       # The fix ticket goes to Done: the hold clears by itself and the red count restarts.
-      World.update(:fix_tickets, &Map.put(&1, "TP-FIX1", "Done"))
+      World.update(:fix_tickets, &Map.put(&1, "TP-901", "Done"))
       clear_fix_ticket_hold!(issue_id)
-      refute Hold.held?(@repo_key, issue_id, :blocked)
+      refute paused?(issue_id)
 
       # The red count reads 0 of 10, and the head, still red (and rerun already), goes to CI Fix again.
       tick!(pid)
@@ -456,13 +479,13 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       seed_attempts!(issue_id, %{red: 10})
       tick!(pid, 3)
 
-      assert [{"TP-FIX1", _attrs}] = World.calls(:fix_ticket)
+      assert [{"TP-901", _attrs}] = World.calls(:fix_ticket)
       assert %{decision: %{title: "Self-heal is stuck on the ci specs block"}} = Hold.get(@repo_key, issue_id, :needs_decision)
       assert [_one] = Enum.filter(comments(issue_id), &String.starts_with?(&1, "## Decision needed: Self-heal is stuck"))
       assert %{rule: "R4", owner: :person} = decision(issue_id)
     end
 
-    test "a Merging ticket at the backstop has auto-merge turned off before the hold is set" do
+    test "a Merging ticket at the backstop has auto-merge turned off before it is paused on the fix ticket" do
       issue_id = ticket!("1", "Merging", red() ++ [auto_merge: :armed])
       pid = start!()
       tick!(pid)
@@ -470,10 +493,10 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       seed_attempts!(issue_id, %{red: 10})
       tick!(pid)
 
-      order = World.all_calls() |> Enum.map(&elem(&1, 0)) |> Enum.filter(&(&1 in [:disarm, :fix_ticket, :label]))
-      assert [:disarm, :fix_ticket, :label | _rest] = order
+      order = World.all_calls() |> Enum.map(&elem(&1, 0)) |> Enum.filter(&(&1 in [:disarm, :fix_ticket]))
+      assert [:disarm, :fix_ticket] = order
       assert pr("1").auto_merge == :off
-      assert Hold.held?(@repo_key, issue_id, :blocked)
+      assert paused?(issue_id)
       assert state(issue_id) == "Merging"
     end
 
@@ -493,7 +516,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       fix_run_returns!(red_id, "1", "QA", "head-1-2", red())
       tick!(pid)
       assert %{rule: "R20"} = decision(red_id)
-      assert [{"TP-FIX1", _attrs}] = World.calls(:fix_ticket)
+      assert [{"TP-901", _attrs}] = World.calls(:fix_ticket)
 
       # In CI Fix, the run sent for the conflict takes it: no second attempt.
       assert %{rule: "R14", reason: "The CI Fix run already sent for this head takes the fix"} = decision(conflict_id)
@@ -838,17 +861,17 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
       tick!(pid)
       assert %{same_failure_streak: 3, red_attempts: 3} = watch(issue_id).facts
-      assert %{rule: "R20", kind: :file_fix_ticket, reason: "CI keeps failing: waiting on TP-FIX1, a fix ticket for the `specs` check"} = decision(issue_id)
+      assert %{rule: "R20", kind: :file_fix_ticket, reason: "CI keeps failing: waiting on TP-901, a fix ticket for the `specs` check"} = decision(issue_id)
 
-      assert [{"TP-FIX1", %{component: "ci:specs", description: description}}] = World.calls(:fix_ticket)
+      assert [{"TP-901", %{component: "ci:specs", description: description}}] = World.calls(:fix_ticket)
       assert description =~ "after 3 of 10 CI Fix runs, the last 3 in a row with the same failure"
 
       for head <- Enum.take(heads, 3) do
         assert description =~ "specs at #{String.slice(head, 0, 7)}: ERROR: specs failed at stub_test.exs:21"
       end
 
-      assert World.calls(:blocked_by) == [{issue_id, "TP-FIX1"}]
-      assert %{waits_on: %{type: "fix_ticket", keys: ["TP-FIX1"]}} = Hold.get(@repo_key, issue_id, :blocked)
+      assert World.calls(:blocked_by) == [{issue_id, "TP-901"}]
+      assert fix_waits(issue_id) == ["TP-901"]
       refute Hold.held?(@repo_key, issue_id, :needs_decision)
       assert state(issue_id) == "Code Review"
 
@@ -857,7 +880,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert lane.signature == Attempts.signature(attempts(issue_id).failure)
 
       tick!(pid)
-      assert %{rule: "R4", reason: "CI keeps failing: waiting on TP-FIX1, a fix ticket for the `specs` check"} = decision(issue_id)
+      assert %{rule: "R4", reason: "CI keeps failing: waiting on TP-901, a fix ticket for the `specs` check"} = decision(issue_id)
     end
 
     test "a different failure in between resets the streak" do
@@ -963,7 +986,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert World.calls(:unlink) == []
     end
 
-    test "a Merging PR that conflicts while a QA PR sharing SPEC.md is ahead waits on it as a blocked-by link and a landing hold (TP-989)" do
+    test "a Merging PR that conflicts while a QA PR sharing SPEC.md is ahead waits on it as a blocked-by link and a pause (TP-989)" do
       leader = ticket!("1", "QA", ci: :pending, mergeable: :blocked)
       follower = ticket!("2", "Merging", dirty() ++ [auto_merge: :armed])
       World.update(:open_pulls, fn _ -> [open_pull(1, ["SPEC.md"]), open_pull(2, ["SPEC.md", "lib/b.ex"])] end)
@@ -978,7 +1001,6 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert World.calls(:link) == [{"TP-1", follower}]
       assert %{blocked_by: [%{identifier: "TP-1"}]} = World.get(:issues)[follower]
       assert World.calls(:disarm) == ["https://github.com/acme/app/pull/2"]
-      assert {follower, "Blocked"} in World.calls(:label)
       assert [%{issue_identifier: "TP-1", linked: true, step_behind: false, files: ["SPEC.md"]}] = watch(follower).links
 
       tick!(pid, 2)
@@ -991,7 +1013,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       World.update(:open_pulls, fn _ -> [open_pull(2, ["SPEC.md", "lib/b.ex"])] end)
       tick!(pid)
 
-      refute Hold.held?(@repo_key, follower, :blocked)
+      refute paused?(follower)
       assert World.calls(:unlink) == []
       assert %{blocked_by: [%{identifier: "TP-1"}]} = World.get(:issues)[follower]
       assert moves(follower) == ["CI Fix"]
@@ -1123,7 +1145,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       tick!(pid)
       assert World.calls(:unlink) == [{"TP-1", follower}]
       assert World.get(:issues)[follower].blocked_by == []
-      refute Hold.held?(@repo_key, follower, :blocked)
+      refute paused?(follower)
       assert moves(follower) == ["CI Fix"]
       assert watch(follower).links == []
     end
@@ -1164,7 +1186,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
       assert World.calls(:unlink) == []
       assert [%{identifier: "TP-1"}] = World.get(:issues)[follower].blocked_by
-      refute Hold.held?(@repo_key, follower, :blocked)
+      refute paused?(follower)
     end
 
     test "a restart keeps the hold and the record of Symphony's links" do
@@ -1172,7 +1194,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       stop_supervised!({Repo, @repo_key})
 
       assert [%{issue_identifier: "TP-1", linked: true}] = @repo_key |> RunStore.get_ticket_state(follower) |> TicketState.pr_watch() |> Map.fetch!(:links)
-      assert Hold.held?(@repo_key, follower, :blocked)
+      assert paused?(follower)
 
       pid = start!()
       tick!(pid)
@@ -1188,7 +1210,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       open_pulls!(:error)
       capture_log(fn -> tick!(pid) end)
 
-      assert Hold.held?(@repo_key, follower, :blocked)
+      assert paused?(follower)
       assert [%{linked: true}] = watch(follower).links
       assert World.calls(:unlink) == []
     end
@@ -1198,14 +1220,13 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       move!(follower, "Todo")
       tick!(pid)
 
-      refute Hold.held?(@repo_key, follower, :blocked)
+      refute paused?(follower)
       assert World.calls(:unlink) == [{"TP-1", follower}]
     end
 
     test "a person's Unblock removes Symphony's links and the ticket no longer waits on those PRs" do
       {pid, _leader, follower} = waiting!()
       assert :ok = Repo.release(pid, follower)
-      :ok = Hold.clear(@repo_key, follower, :blocked, tracker: Tracker)
       assert World.calls(:unlink) == [{"TP-1", follower}]
       assert [%{released: true, linked: false}] = watch(follower).links
 
@@ -1256,7 +1277,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       open_pulls!([open_pull(2, ["SPEC.md", "lib/b.ex"])])
       tick!(pid)
 
-      refute Hold.held?(@repo_key, stepping, :blocked)
+      refute paused?(stepping)
       assert World.calls(:unlink) == []
       assert %{rule: "R14", reason: "PR #2 conflicts with main: conflict fix run 1 of 3"} = decision(stepping)
       assert moves(stepping) == ["CI Fix", "CI Fix"]
@@ -1291,11 +1312,11 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       tick!(pid)
       advance!(60 * 60 * 1000)
       tick!(pid)
-      assert Hold.held?(@repo_key, stepping, :blocked)
+      assert paused?(stepping)
 
       open_pulls!([open_pull(2, ["SPEC.md"])])
       tick!(pid)
-      refute Hold.held?(@repo_key, stepping, :blocked)
+      refute paused?(stepping)
       assert World.calls(:unlink) == []
       assert %{rule: "R14", reason: "PR #2 conflicts with main: conflict fix run 1 of 3"} = decision(stepping)
     end
@@ -1304,11 +1325,11 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       open_pulls!([open_pull(2, ["SPEC.md"]), open_pull(50, ["SPEC.md"], head_sha: "p-1")])
       {pid, stepping} = exhausted!("2")
       tick!(pid)
-      assert Hold.held?(@repo_key, stepping, :blocked)
+      assert paused?(stepping)
 
       advance!(2 * 60 * 60 * 1000)
       tick!(pid)
-      refute Hold.held?(@repo_key, stepping, :blocked)
+      refute paused?(stepping)
     end
 
     test "a forced ticket with a conflict and a competitor ahead goes to CI Fix, with no link" do
@@ -1321,7 +1342,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert %{rule: "R14"} = decision(forced)
       assert moves(forced) == ["CI Fix"]
       assert World.calls(:link) == []
-      refute Hold.held?(@repo_key, forced, :blocked)
+      refute paused?(forced)
     end
   end
 
@@ -1372,9 +1393,9 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert %{rule: "R24", owner: :ci} = decision(issue_id)
     end
 
-    test "a Merging PR behind main on a Blocked hold, with no PR ahead sharing its files, is updated; the hold's wait stands" do
+    test "a paused Merging PR behind main, with no PR ahead sharing its files, is updated; the pause's wait stands" do
       issue_id = ticket!("1", "Merging", mergeable: :behind)
-      :ok = Hold.set(@repo_key, issue_id, :blocked, %{reason: "Waiting on TP-9 to land"}, tracker: Tracker)
+      {:ok, _pause} = Pauses.set({:ticket, @repo_key, issue_id}, Pauses.ticket_reason(:dependency, "TP-9"))
       pid = start!()
 
       tick!(pid)
@@ -1817,7 +1838,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
     test "CiPoller/PrReviewPoller parked_for_person → R4: a held ticket waits, whatever its PR" do
       issue_id = ticket!("1", "QA", dirty())
-      :ok = Hold.set(@repo_key, issue_id, :blocked, %{reason: "waiting"}, tracker: Tracker)
+      {:ok, _pause} = Pauses.set({:ticket, @repo_key, issue_id}, %{kind: :environment, waits_on: %{condition: "access"}, text: "waiting", releasable: true})
       pid = start!()
       tick!(pid)
       assert %{rule: "R4", owner: :symphony} = decision(issue_id)

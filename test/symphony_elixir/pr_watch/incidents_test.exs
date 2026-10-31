@@ -131,7 +131,7 @@ defmodule SymphonyElixir.PrWatch.IncidentsTest do
              fix_run("1", next, "Code Review", @pending) ++
              [{:github, [check_failed("1", next)], [{"1", red("test")}]}]
          end) ++
-           [{:fix_ticket_lands, "TP-FIX1"}, {:github, [check_failed("1", "head-1-4")], []}] ++
+           [{:fix_ticket_lands, "TP-901"}, {:github, [check_failed("1", "head-1-4")], []}] ++
            fix_run("1", "head-1-5", "Code Review", @pending) ++
            [
              {:github, [check_passed("1", "head-1-5")], [{"1", ci: :green}]},
@@ -239,10 +239,14 @@ defmodule SymphonyElixir.PrWatch.IncidentsTest do
     assert %{"1" => %{state: "Done"}, "2" => %{state: "Done"}} = tickets
     a_lands = index(actions, {:move, {Parity.issue_id("1"), "Done"}})
 
-    # B waits on A as a blocked-by link and a Blocked hold, with auto-merge off, until A lands.
+    # B waits on A as a blocked-by link and a pause on it (its `Blocked` label is the pause
+    # projector's), with auto-merge off, until A lands.
     assert calls(actions, :link) == [{"TP-1", Parity.issue_id("2")}]
     assert index(actions, {:link, {"TP-1", Parity.issue_id("2")}}) < a_lands
-    assert {:label, {Parity.issue_id("2"), "Blocked"}} in Enum.take(actions, a_lands)
+
+    assert [%{payload: %{waits_on: %{identifier: "TP-1"}, text: "Waiting for TP-1 to land: it changes the same files"}}] =
+             SymphonyElixir.RunStore.list_ticket_events("default", Parity.issue_id("2"), types: ["pause.set"])
+
     assert calls(actions, :disarm) == [Parity.pr_url("2")]
     assert Parity.blockers("2") == ["TP-1"]
 
@@ -256,8 +260,8 @@ defmodule SymphonyElixir.PrWatch.IncidentsTest do
 
     # One fix ticket for `test`, linked as C's blocker, and C held on it until it landed.
     assert [%{component: "ci:test"}] = calls(actions, :fix_ticket)
-    assert calls(actions, :blocked_by) == [{Parity.issue_id("1"), "TP-FIX1"}]
-    assert Parity.fix_tickets() == %{"TP-FIX1" => "Done"}
+    assert calls(actions, :blocked_by) == [{Parity.issue_id("1"), "TP-901"}]
+    assert Parity.fix_tickets() == %{"TP-901" => "Done"}
     refute {:label, {Parity.issue_id("1"), "Needs Decision"}} in actions
 
     # Three CI Fix runs, then one more after the counts restarted, which turned the head green.

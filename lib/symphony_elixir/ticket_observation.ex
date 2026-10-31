@@ -487,8 +487,10 @@ defmodule SymphonyElixir.TicketObservation do
     end
   end
 
-  # The labels and section the pause projector renders, from the record as it is now.
+  # The labels and section the pause projector renders, from the record as it is now. A Blocked
+  # hold's label a failed write marked before that hold was retired is the projector's now too.
   defp projection_write(_record, :pause, _polled), do: :projector
+  defp projection_write(_record, {:hold_label, :blocked}, _polled), do: :projector
 
   defp projection_write(record, {:hold_label, kind}, polled) do
     held? = TicketState.hold?(record, kind)

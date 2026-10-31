@@ -4,7 +4,7 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
   # key's hourly budget stays flat as watched issues and repositories grow.
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{CiPoller, OperatorStop, PrReviewPoller, TicketObservation, TicketPullRequest}
+  alias SymphonyElixir.{CiPoller, PrReviewPoller, TicketObservation, TicketPullRequest}
   alias SymphonyElixir.Linear.Usage
 
   @repo_key "default"
@@ -244,7 +244,7 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
   # The stopped ticket is read from its pause in the store.
   defp tick_state do
     running = %Issue{id: "issue-1", identifier: "TEAM-1", state: "Code Review"}
-    :ok = OperatorStop.mark(@repo_key, "issue-4", @now)
+    :ok = SymphonyElixir.Pauses.stop({:ticket, @repo_key, "issue-4"}, @now)
 
     %Orchestrator.State{
       repo_key: @repo_key,

@@ -13,8 +13,8 @@ defmodule SymphonyElixir.Inbox.Item do
     first;
   - `:clarify`: a ticket the quality gate holds for clarification or skipped, with its score, its
     round and what the gate found;
-  - `:blocked`: a ticket an access or dispatch-loop hold pauses in place (`SymphonyElixir.Hold`),
-    with the reason the hold recorded and what clears it; the Director lifts it with `Unblock`.
+  - `:blocked`: a ticket whose pause has a reason the Director may release (`SymphonyElixir.Pauses`),
+    with that reason and what clears it; the Director lifts it with `Unblock`.
 
   A plan carries its `## Review brief` comment parsed (`SymphonyElixir.Inbox.ReviewBrief`) as
   `review.brief`, nil when it has none. Its questions are never read from the brief: the brief
@@ -175,17 +175,15 @@ defmodule SymphonyElixir.Inbox.Item do
   @doc """
   The `:blocked` item of `pause`, the pause on `record` (a normalized `SymphonyElixir.TicketState`),
   from its first reason the Director may release, or nil when it has none: the reason's line and
-  since when, and what clears it as the record's Blocked hold says.
+  since when, and what clears it: a person's Unblock.
   """
   @spec from_pause(TicketState.t(), map() | nil) :: t() | nil
   def from_pause(record, %{reasons: reasons}) do
     case Enum.find(reasons, & &1.releasable) do
       %{} = reason ->
-        hold = TicketState.get_hold(record, :blocked)
-
         record
         |> record_item(:blocked, reason.text, reason.set_at)
-        |> Map.put(:review, %{reason: reason.text, clearing_condition: hold && hold.clearing_condition})
+        |> Map.put(:review, %{reason: reason.text, clearing_condition: "when a person unblocks it"})
 
       nil ->
         nil

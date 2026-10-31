@@ -9,23 +9,23 @@ defmodule SymphonyElixir.DispatchLoop do
   within `watchdog.dispatch_loop_window_ms`, 4 in 10 minutes by default, and
   `watchdog.dispatch_loop_long_runs` within `watchdog.dispatch_loop_long_window_ms`, 8 in an hour).
   When the runs already dispatched reach either limit, the next one is not started: the ticket is
-  put on a `Blocked` hold whose reason (`hold_attrs/2`) names the run kind, the count, the window
-  and how the last runs ended.
+  paused, and the log names the run kind, the count, the window and how the last runs ended
+  (`hold_attrs/2`).
 
   Progress ends the count. A run that started on another state or another PR head is older than the
-  last state move or push, so it is not counted; a verdict recorded and a hold cleared (a person
-  unblocked the ticket, answered its decision, or what it waited on landed) empty the record's runs
-  (`SymphonyElixir.TicketState`). A run stopped by a usage limit or an unreachable model API is
+  last state move or push, so it is not counted; a verdict recorded and a pause reason lifted (a
+  person unblocked the ticket, answered its question, or what it waited on landed) empty the record's
+  runs (`SymphonyElixir.TicketState`). A run stopped by a usage limit or an unreachable model API is
   dropped when it ends, since the orchestrator counts no attempt for it, and so is an epic review
   that found CI still running on its commit: CI takes longer than the window, and that wait has its
-  own bound (`SymphonyElixir.CiWait`). Clearing the loop hold
-  itself, with `Unblock` or `Restart`, empties them too, so the ticket starts again from zero.
+  own bound (`SymphonyElixir.CiWait`). Lifting the loop's pause itself, with `Unblock` or
+  `Restart`, empties them too, so the ticket starts again from zero.
 
-  Before the hold, the guard asks a question (`question_attrs/2`, through `SymphonyElixir.Questions`)
-  that pauses the ticket on a `:question` reason: "Run it again", "Start it over from main" or "Keep
-  it paused". The hold names the question (`waits_on.question_id`) and is cleared with it, and the
-  answer's option is Unblock, Restart or nothing (`answer_move/1`). A quiet handoff, a ticket whose
-  last runs ended without a handoff (`SymphonyElixir.Orchestrator`), asks the same question.
+  The guard pauses the ticket with a question (`question_attrs/2`, through
+  `SymphonyElixir.Questions`), on a `:question` reason: "Run it again", "Start it over from main" or
+  "Keep it paused". The answer's option is Unblock, Restart or nothing (`answer_move/1`). A quiet
+  handoff, a ticket whose last runs ended without a handoff (`SymphonyElixir.Orchestrator`), asks the
+  same question.
   """
 
   alias SymphonyElixir.TicketState
@@ -55,7 +55,7 @@ defmodule SymphonyElixir.DispatchLoop do
   @typedoc "What made Symphony stop starting runs: a loop, or `runs` quiet runs without a handoff."
   @type stop :: loop() | {:quiet_handoff, pos_integer()}
 
-  @doc "The `waits_on` type of a dispatch-loop hold."
+  @doc "The name of a dispatch loop's signal, and of the reason it pauses on when its question can't be asked."
   @spec hold_type() :: String.t()
   def hold_type, do: @hold_type
 
@@ -92,8 +92,8 @@ defmodule SymphonyElixir.DispatchLoop do
   end
 
   @doc """
-  The `Blocked` hold a loop sets: a reason naming the run kind, the count, the window and how the
-  last runs ended (their exit, whether they left a new PR head, and whether the handoff signal was
+  What a loop's pause says: a reason naming the run kind, the count, the window and how the last
+  runs ended (their exit, whether they left a new PR head, and whether the handoff signal was
   recorded while they ran, read from the ticket's `signals`), lifted by a person's `Unblock` or
   `Restart`.
   """

@@ -618,11 +618,12 @@ asked), a `run.ended` whose run asked it once the ticket is in another phase tha
 started in, a merge settled, a move into a terminal state (every question). A question Symphony, a
 rule or a person asked (a merge confirmation, protected files) is about the ticket itself and
 outlives any run, and so does a question that holds the ticket: one a request comment shows (a run's
-`linear_request_human_action`, such as a protected-path authorization) or one a Needs Decision or
-Blocked hold carries. The run ended because it asked, so its ending never withdraws it. Each
-`question.withdrawn` records its `cause`: `ticket_moved`, `restarted`, `hold_cleared`, `superseded`,
-or `run_ended` for a question that holds nothing. A question a Blocked hold waits on ends with that hold, unless the ticket merged
-or reached a terminal state. The hold carrying the question clears and its request gets the
+`linear_request_human_action`, such as a protected-path authorization), one a Needs Decision hold
+carries, or one the Director's Unblock answers (a run's block report, a dispatch loop). The run ended
+because it asked, so its ending never withdraws it. Each `question.withdrawn` records its `cause`:
+`ticket_moved`, `restarted`, `hold_cleared`, `superseded`, or `run_ended` for a question that holds
+nothing. A question Unblock answers is decided by Unblock or Restart, unless the ticket merged or
+reached a terminal state. The hold carrying the question clears and its request gets the
 `## Action withdrawn` reply, as `linear_withdraw_human_action` makes them.
 Nothing asks a question this way yet.
 
@@ -2609,11 +2610,11 @@ Important nuance:
   so a parked ticket's work is never only in its workspace; a push that fails is logged and the
   park goes on. After the move the park MUST ask its question through the one decision path
   ("Run it again", recommended; "Start it over from main"; "Leave it parked"), which pauses the
-  ticket on it, and set a `Blocked` hold naming the question and the phase the ticket was parked
-  from. Unblock, or the answer "Run it again", MUST move the ticket back to that phase with its
-  workspace and branch as they are, then clear the hold (which empties the counted runs) and
-  dispatch it at once; "Start it over from main" is Restart. A ticket parked before parks asked
-  carries no hold: when its newest move signal is the park's, Unblock moves it back the same way.
+  ticket on it; the park's move signal names the phase the ticket was parked from. Unblock, or the
+  answer "Run it again", MUST move the ticket back to that phase with its workspace and branch as
+  they are, then lift the pause (which empties the counted runs) and dispatch it at once; "Start it
+  over from main" is Restart. A ticket parked before parks asked has no question: when its newest
+  move signal is the park's, Unblock moves it back the same way.
 - The first turn SHOULD use the full rendered task prompt. Implementations MAY use a compact
   bootstrap prompt when the target agent transport cannot safely carry the full rendered prompt as a
   single startup message, provided the compact prompt preserves hard security rules and directs the

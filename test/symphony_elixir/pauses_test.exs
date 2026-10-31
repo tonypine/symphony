@@ -543,4 +543,101 @@ defmodule SymphonyElixir.PausesTest do
       assert Pauses.normalize(nil) == nil
     end
   end
+
+  describe "an operator's stop" do
+    @stopped_at ~U[2026-10-20 08:41:25Z]
+    @stop_text "Stopped by you at 2026-10-20 08:41:25 UTC. Unblock runs it again; Restart starts it over from main."
+
+    defmodule FailingStore do
+      def list_all_ticket_states, do: {:error, :boom}
+    end
+
+    test "stop/2 pauses the ticket on the Director's person reason, which the skip reason reads" do
+      refute Pauses.stopped?(@ticket)
+      assert Pauses.stop_skip_reason(@ticket) == nil
+
+      assert :ok = Pauses.stop(@ticket, @stopped_at)
+
+      assert {:ok, %{reasons: [reason], set_by: %{kind: :person, name: "Director"}, since: @stopped_at}} = Pauses.get(@ticket)
+      assert %{kind: :person, waits_on: %{action: "unblock"}, text: @stop_text, releasable: true, set_at: @stopped_at} = reason
+      assert Pauses.stop_reason?(reason)
+      assert Pauses.stopped?(@ticket)
+      assert Pauses.stop_skip_reason(@ticket) == @stop_text
+
+      # A second stop on the same pause changes nothing.
+      assert :ok = Pauses.stop(@ticket, DateTime.add(@stopped_at, 60))
+      assert Pauses.why(@ticket) == [@stop_text]
+    end
+
+    test "a stop joins the pause's other reasons, and its release leaves them" do
+      {:ok, _pause} = Pauses.set(@ticket, @dependency)
+      refute Pauses.stopped?(@ticket)
+
+      assert :ok = Pauses.stop(@ticket, @stopped_at)
+      assert Pauses.why(@ticket) == ["Waiting for TP-1194 to finish", @stop_text]
+
+      assert :ok = Pauses.release_stop(@ticket, by: Pauses.director())
+      assert Pauses.why(@ticket) == ["Waiting for TP-1194 to finish"]
+      refute Pauses.stopped?(@ticket)
+
+      # Releasing a stop the ticket no longer has changes nothing.
+      assert :ok = Pauses.release_stop(@ticket)
+    end
+
+    test "the release records who lifted it" do
+      :ok = Pauses.stop(@ticket, @stopped_at)
+      assert :ok = Pauses.release_stop(@ticket, by: Pauses.director())
+
+      assert [%{type: "pause.set"}, %{type: "pause.cleared", payload: %{by: %{kind: :person, name: "Director"}}}] =
+               @repo_key |> SymphonyElixir.TicketEvents.query(@issue_id) |> Enum.filter(&String.starts_with?(&1.type, "pause."))
+    end
+
+    test "a stop or a release the store refuses is an error" do
+      assert {:error, {:invalid_subject, _subject}} = Pauses.stop({:ticket, nil, @issue_id}, @stopped_at)
+      assert {:error, {:invalid_subject, _subject}} = Pauses.release_stop({:ticket, nil, @issue_id})
+      refute Pauses.stopped?({:ticket, nil, @issue_id})
+      refute Pauses.stop_reason?(@dependency)
+    end
+
+    test "stopped/1 lists each stopped ticket of every repo, with when it stopped and when its phase was written" do
+      phase_at = ~U[2026-10-20 08:00:00Z]
+      record = %{repo_key: @repo_key, issue_id: @issue_id, issue_identifier: "MT-1", phase: "Todo", phase_at: phase_at}
+      :ok = RunStore.put_ticket_state(record)
+      :ok = Pauses.stop(@ticket, @stopped_at)
+      {:ok, _pause} = Pauses.set({:ticket, @repo_key, "issue-waiting"}, @dependency)
+      :ok = Pauses.stop({:ticket, "repo-b", "issue-b"}, @stopped_at)
+
+      assert [
+               %{issue_id: "issue-b", repo_key: "repo-b", identifier: nil, stopped_at: @stopped_at, phase_at: nil},
+               %{issue_id: @issue_id, repo_key: @repo_key, identifier: "MT-1", stopped_at: @stopped_at, phase_at: ^phase_at}
+             ] = Enum.sort_by(Pauses.stopped(), & &1.repo_key, :desc)
+
+      assert Pauses.stopped(FailingStore) == []
+    end
+
+    test "confirm_stop/3 clears a ticket gone, out of the workflow, or moved on the board since" do
+      stop = %{issue_id: @issue_id, repo_key: @repo_key, identifier: "MT-1", stopped_at: @stopped_at, phase_at: nil}
+      issue = %SymphonyElixir.Linear.Issue{id: @issue_id, state: "Todo"}
+
+      assert Pauses.confirm_stop(stop, nil, false) == :clear
+      assert Pauses.confirm_stop(stop, %{issue | state: "Duplicate"}, false) == :clear
+
+      assert Pauses.confirm_stop(stop, issue, true) == :keep
+      assert Pauses.confirm_stop(%{stop | phase_at: DateTime.add(@stopped_at, -60)}, issue, true) == :keep
+      assert Pauses.confirm_stop(%{stop | phase_at: @stopped_at}, issue, true) == :keep
+      assert Pauses.confirm_stop(%{stop | stopped_at: nil, phase_at: @stopped_at}, issue, true) == :keep
+
+      assert Pauses.confirm_stop(%{stop | phase_at: DateTime.add(@stopped_at, 1)}, %{issue | state: "In Progress"}, true) == :clear
+    end
+  end
+
+  describe "ticket_source/1" do
+    test "tells a blocker's, a fix ticket's and a competing pull request's reason by its line" do
+      assert Pauses.ticket_source(Pauses.ticket_reason(:dependency, "TP-1")) == :dependency
+      assert Pauses.ticket_source(Pauses.ticket_reason(:fix_ticket, "TP-1")) == :fix_ticket
+      assert Pauses.ticket_source(Pauses.ticket_reason(:landing, "TP-1")) == :landing
+      assert Pauses.ticket_source(%{kind: :ticket, waits_on: %{identifier: "TP-1"}, text: "Waiting on something else"}) == nil
+      assert Pauses.ticket_source(@question) == nil
+    end
+  end
 end

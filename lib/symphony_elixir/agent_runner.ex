@@ -32,6 +32,7 @@ defmodule SymphonyElixir.AgentRunner do
     Linear.Usage,
     Notifications,
     PathUnlock,
+    Pauses,
     PromptBuilder,
     PrReviewPoller,
     PrWatch,
@@ -1248,12 +1249,15 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   # A decision request (`linear_request_human_action`) or a reported block pauses the ticket in its
-  # phase on a hold, and the hold, not another turn, says when it continues: a turn would only
-  # repeat the wait, and enough of them would park it as idle. A request this run posted counts even
-  # before its hold is in the store, so a failed hold write never parks the ticket under its question.
+  # phase (`SymphonyElixir.Pauses`, or a Needs Decision hold), and the pause, not another turn, says
+  # when it continues: a turn would only repeat the wait, and enough of them would park it as idle. A
+  # request this run posted counts even before its hold is in the store, so a failed hold write never
+  # parks the ticket under its question.
   defp waiting_on_hold?(%Issue{id: issue_id} = issue, opts) do
+    repo_key = run_repo_key(issue, opts)
+
     CommentRegistry.human_action_requested?(Keyword.get(opts, :linear_comment_registry)) or
-      Hold.held_any?(run_repo_key(issue, opts), issue_id)
+      Pauses.paused?({:ticket, repo_key, issue_id}) or Hold.held?(repo_key, issue_id, :needs_decision)
   end
 
   defp waiting_on_sub_issues?(%Issue{} = issue) do
@@ -1766,7 +1770,7 @@ defmodule SymphonyElixir.AgentRunner do
     with :ok <- with_linear_retry(fn -> TransitionGuard.perform(issue_id, :idle_park, ctx) end, label, opts),
          :ok <- hold_parked_issue(issue, ctx.repo_key),
          :ok <- with_linear_retry(fn -> Tracker.create_comment(issue_id, idle_park_note()) end, label, opts) do
-      record_move_signal(issue, "blocked", %{to: @idle_park_state, reason: IdlePark.hold_type(), from: issue.state}, opts)
+      record_move_signal(issue, "blocked", %{to: @idle_park_state, reason: IdlePark.signal_reason(), from: issue.state}, opts)
       :ok
     else
       {:error, reason} -> {:error, {:idle_park_failed, reason}}
@@ -1774,23 +1778,18 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   # The park asks its question through the one path (`IdlePark.question_attrs/2`), which pauses the
-  # ticket on it, then sets the Blocked hold that names it and the phase the ticket goes back to on
-  # Unblock. Asked after the move, so the Inbox lists it in Backlog. Best-effort, as the dispatch
-  # loop's is: a question the store refuses is logged, and the park stands with or without its hold.
+  # ticket on it. Asked after the move, so the Inbox lists it in Backlog. One the store refuses
+  # pauses the ticket on a reason the Director releases with Unblock instead, as a dispatch loop's
+  # does; the park stands either way.
   defp hold_parked_issue(%Issue{id: issue_id} = issue, repo_key) do
-    attrs = IdlePark.hold_attrs(issue.state, @max_empty_turns)
+    ticket = {:ticket, repo_key, issue_id}
 
-    attrs =
-      case Questions.ask({:ticket, repo_key, issue_id}, IdlePark.question_attrs(issue.identifier || issue_id, @max_empty_turns)) do
-        {:ok, %{id: question_id}} ->
-          put_in(attrs, [:waits_on, :question_id], question_id)
+    with {:error, reason} <- Questions.ask(ticket, IdlePark.question_attrs(issue.identifier || issue_id, @max_empty_turns)) do
+      Logger.warning("Failed to ask the park's question for #{issue_context(issue)}: #{inspect(reason)}")
+      text = "#{@max_empty_turns} turns in #{issue.state} made no new commit and no state change, so Symphony parked it in #{@idle_park_state}"
+      _ = Pauses.set(ticket, %{kind: :environment, waits_on: %{condition: IdlePark.signal_reason()}, text: String.slice(text, 0, 300), releasable: true})
+    end
 
-        {:error, reason} ->
-          Logger.warning("Failed to ask the park's question for #{issue_context(issue)}: #{inspect(reason)}")
-          attrs
-      end
-
-    _ = Hold.set(repo_key, issue_id, :blocked, attrs)
     :ok
   end
 

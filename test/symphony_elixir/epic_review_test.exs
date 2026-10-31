@@ -7,7 +7,6 @@ defmodule SymphonyElixir.EpicReviewTest do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.EpicReview
   alias SymphonyElixir.Handoff
-  alias SymphonyElixir.Hold
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Pauses
   alias SymphonyElixir.QaAgent
@@ -1365,15 +1364,12 @@ defmodule SymphonyElixir.EpicReviewTest do
       assert :ok = run(epic())
 
       assert [{@issue_id, "Epic Review"}] = state_updates()
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      refute SymphonyElixir.Pauses.paused?({:ticket, @repo_key, @issue_id})
       refute_received {:fixer_create, _}
 
       assert :ok = run(epic(%{state: "Epic Review"}))
 
-      assert %{reason: reason, waits_on: %{type: "fix_ticket", keys: [@fix_ticket]}} =
-               Hold.get(@repo_key, @issue_id, :blocked)
-
-      assert reason =~ "waiting on fix ticket TP-900"
+      assert SymphonyElixir.Pauses.why({:ticket, @repo_key, @issue_id}) == ["Waiting for TP-900 to finish: it fixes what stopped this ticket"]
       assert_received {:fixer_create, attrs}
       assert attrs.scope == @symphony_repo_key
       assert_received {:fixer_block, @fix_ticket}
@@ -1397,7 +1393,7 @@ defmodule SymphonyElixir.EpicReviewTest do
       # Not retried: the retry would burn the same block again, so it goes straight to the hold.
       assert log =~ "needs a person"
       refute log =~ "retrying"
-      assert Hold.held?(@repo_key, @issue_id, :blocked)
+      assert SymphonyElixir.Pauses.paused?({:ticket, @repo_key, @issue_id})
       assert_received {:memory_tracker_comment, @issue_id, report}
       assert report =~ "**Verdict:** blocked → TP-823 Epic Review (blocked)"
     end

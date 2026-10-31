@@ -754,13 +754,19 @@ defmodule SymphonyElixir.TicketState do
 
   @doc """
   Sets the ticket's pause (`SymphonyElixir.Pauses`, its only writer); nil, or a pause with no reason
-  left, clears it.
+  left, clears it. A reason that lifts is progress — a person unblocked it, answered its question,
+  or what it waited on landed — so the runs dispatched before it are no longer counted as a loop.
   """
   @spec put_pause(t(), map() | nil, DateTime.t()) :: t()
   def put_pause(record, pause, at \\ DateTime.utc_now()) do
+    record = normalize(record)
+    pause = Pauses.normalize(pause)
+    kept = for reason <- (pause && pause.reasons) || [], do: {reason.kind, reason.waits_on}
+    lifted? = Enum.any?(pause_reasons(record), &({&1.kind, &1.waits_on} not in kept))
+
     record
-    |> normalize()
-    |> Map.put(:pause, Pauses.normalize(pause))
+    |> Map.put(:pause, pause)
+    |> Map.update!(:dispatches, &if(lifted?, do: [], else: &1))
     |> Map.put(:updated_at, at)
   end
 

@@ -33,6 +33,18 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       end
     end
 
+    test "the retired Blocked hold's types are legacy: still in the catalog, so history reads them" do
+      assert Types.legacy_types() == ["hold.set", "hold.cleared"]
+
+      for type <- Types.legacy_types() do
+        assert Types.legacy?(type)
+        assert Map.has_key?(Types.catalog(), type)
+      end
+
+      refute Types.legacy?("pause.set")
+      refute Types.legacy?(nil)
+    end
+
     test "the agent run kinds are the run kind names" do
       assert "implementation" in Types.agent_run_kinds()
       assert "qa" in Types.agent_run_kinds()

@@ -4,6 +4,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.Inbox.Item
   alias SymphonyElixir.Linear.Client
+  alias SymphonyElixir.Pauses
   alias SymphonyElixir.PrWatch.Attempts
   alias SymphonyElixir.PrWatchSupport
   alias SymphonyElixir.Questions
@@ -242,14 +243,15 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       assert [%{title: "TP-337 is parked: its last 2 turns changed nothing", options: [%{label: "Run it again"} | _]} = question] =
                Questions.open({:ticket, "default", "issue-progress"})
 
-      assert %{waits_on: %{type: "idle_park", keys: ["Rework"], question_id: id}} = SymphonyElixir.Hold.get("default", "issue-progress", :blocked)
+      assert {:ok, %{reasons: [%{kind: :question, waits_on: %{question_id: id}}]}} = Pauses.get({:ticket, "default", "issue-progress"})
       assert id == question.id
+      assert_signal("blocked", %{to: "Backlog", reason: "idle_park", from: "Rework"})
       record = TicketState.normalize(RunStore.get_ticket_state("default", "issue-progress"))
       assert record.phase == "Backlog"
       assert %{kind: :action, state: "Backlog"} = Item.from_question(record, question)
     end
 
-    test "is held even when its question can't be asked" do
+    test "is paused on a reason Unblock releases when its question can't be asked" do
       # An identifier the question's plain-words check refuses.
       issue = %Issue{id: "issue-progress", identifier: "`TP-337`", state: "In Progress", repo_key: "default"}
       fetcher = fn _ids -> {:ok, [issue]} end
@@ -257,8 +259,12 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 5, issue_state_fetcher: fetcher) end)
 
       assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
-      assert %{waits_on: %{type: "idle_park"} = waits_on} = SymphonyElixir.Hold.get("default", "issue-progress", :blocked)
-      refute Map.has_key?(waits_on, :question_id)
+
+      assert {:ok, %{reasons: [%{kind: :environment, waits_on: %{condition: "idle_park"}, releasable: true, text: text}]}} =
+               Pauses.get({:ticket, "default", "issue-progress"})
+
+      assert text == "2 turns in In Progress made no new commit and no state change, so Symphony parked it in Backlog"
+      assert Questions.open({:ticket, "default", "issue-progress"}) == []
       assert log =~ "Failed to ask the park's question"
     end
 
@@ -1219,11 +1225,11 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
   defp turns, do: Application.get_env(:symphony_elixir, :progress_agent_turns, 0)
 
-  # Another run on the same ticket: its turns count from zero, and the hold a park set is lifted, as
+  # Another run on the same ticket: its turns count from zero, and the pause a park set is lifted, as
   # a person's Unblock lifts it.
   defp next_run do
     Application.delete_env(:symphony_elixir, :progress_agent_turns)
-    :ok = SymphonyElixir.Hold.clear("default", "issue-progress", :blocked)
+    {:ok, _pause} = Pauses.clear_reasons({:ticket, "default", "issue-progress"}, fn _reason -> true end, by: Pauses.director())
   end
 
   # What Claude's turn reports when it can't reach the model API.

@@ -65,9 +65,8 @@ defmodule SymphonyElixir.QaSeedTest do
     assert {:ok, %{reasons: [%{kind: :person, text: "Paused for the QA seed: resume to let tickets start again"}]}} = Pauses.get(:symphony)
     assert {:ok, %{reasons: [%{kind: :person, text: "Paused while the release notes are written"}]}} = Pauses.get({:repository, repo_key})
 
-    # Unblock lifts the access hold; Decide answers the open question.
-    assert [%{kind: :blocked} = blocked] = record(repo_key, "qa-seed-102").holds
-    assert Hold.unblockable?(blocked)
+    # Unblock releases the access reason; Decide answers the open question.
+    assert [%{kind: :environment, releasable: true}] = record(repo_key, "qa-seed-102").pause.reasons
     held = record(repo_key, "qa-seed-108")
     assert [%{kind: :needs_decision, decision: %{question_id: question_id}}] = held.holds
     assert [%{id: ^question_id, title: "How long a paused repository stays paused"}] = Enum.filter(held.questions, &(&1.state == :open))
@@ -120,9 +119,9 @@ defmodule SymphonyElixir.QaSeedTest do
     assert [%{id: ^question_id}] = Questions.open({:ticket, repo_key, "qa-seed-108"})
     assert [{"QA-102", :blocked, _hold}, {"QA-108", :action, %{question_id: ^question_id}}, {"QA-109", :plan, _plan}] = read_inbox.()
 
-    # Unblock lifts the access hold in place, and its row goes.
+    # Unblock lifts the access pause in place, and its row goes.
     assert %{"move" => "unblock", "moved" => false} = move.(:unblock, %{"issue_identifier" => "QA-102"})
-    refute Hold.held?(repo_key, "qa-seed-102", :blocked)
+    refute Pauses.paused?({:ticket, repo_key, "qa-seed-102"})
     assert [{"QA-108", :action, _request}, {"QA-109", :plan, _plan}] = read_inbox.()
 
     # Rework, restart and backlog move the phased tickets in the tracker, and the next read sees them.

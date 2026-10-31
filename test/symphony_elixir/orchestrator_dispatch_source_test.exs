@@ -3,7 +3,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
 
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Dispatch.Shadow
-  alias SymphonyElixir.{OperatorStop, QualityGate, SubIssueWait, TicketObservation}
+  alias SymphonyElixir.{QualityGate, SubIssueWait, TicketObservation}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   defmodule PassProvider do
@@ -119,13 +119,17 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       assert %{recent: [%{identifier: "ACME-2", side: :poll, field: :candidate, poll: "In Progress", record: nil}]} = Shadow.summary()
     end
 
-    test "Issue.blocked? sees the record's blockers", ctx do
+    test "a blocker a read wrote into the record pauses the ticket before its repo's next poll", ctx do
       set_source("record")
       {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [issue(ctx.repo_key, 1)], 0)
 
       blocker = %{id: "blocker-1", identifier: "ACME-9", state: "In Progress"}
       blocked = issue(ctx.repo_key, 1, blocked_by: [blocker], updated_at: DateTime.add(@linear_at, 60))
       {:ok, :updated} = TicketObservation.observe(ctx.repo_key, blocked, source: :webhook)
+
+      # The next cycle's task syncs the records of the repos it doesn't poll.
+      {%{dependencies_synced: 1}, state} = Orchestrator.run_repo_poll_task_for_test(state, ctx.repos, 50)
+      assert SymphonyElixir.Pauses.why({:ticket, ctx.repo_key, "#{ctx.repo_key}-1"}) == ["Waiting for ACME-9 to finish"]
 
       {%{dispatchable: [rebuilt]}, state} = capture_cycle(state, ctx.repos, 50)
       assert [%{identifier: "ACME-9"}] = rebuilt.blocked_by
@@ -310,7 +314,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
           forced: %{forced.id => %{}, gone.id => %{}}
       }
 
-      :ok = OperatorStop.mark(ctx.repo_key, stopped.id, DateTime.utc_now())
+      :ok = SymphonyElixir.Pauses.stop({:ticket, ctx.repo_key, stopped.id}, DateTime.utc_now())
 
       {result, _state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0)
       refute_received {:memory_tracker_fetch_issue_states_by_ids, _ids}
@@ -338,7 +342,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       observe!(ctx.repo_key, [stopped, moved], :poll)
       observe!(ctx.repo_key, [%{moved | state: "Backlog", updated_at: DateTime.add(@linear_at, 60)}], :webhook)
 
-      for issue <- [stopped, moved], do: :ok = OperatorStop.mark(ctx.repo_key, issue.id, DateTime.utc_now())
+      for issue <- [stopped, moved], do: :ok = SymphonyElixir.Pauses.stop({:ticket, ctx.repo_key, issue.id}, DateTime.utc_now())
 
       {result, state} = Orchestrator.run_repo_poll_task_for_test(orchestrator_state(), [], 0)
       refute_received {:memory_tracker_fetch_issue_states_by_ids, _ids}
@@ -346,10 +350,10 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       state = Orchestrator.apply_operator_stops_result_for_test(state, result.stopped_ids, result.stopped_result)
 
       # Still in Todo: the stop stays on its pause and keeps the ticket from dispatching.
-      assert OperatorStop.held?(ctx.repo_key, stopped.id)
+      assert SymphonyElixir.Pauses.stopped?({:ticket, ctx.repo_key, stopped.id})
       refute Orchestrator.should_dispatch_issue_for_test(%{stopped | repo_key: ctx.repo_key}, state)
       # Moved out of the candidates: the stop has done its job and goes.
-      refute OperatorStop.held?(ctx.repo_key, moved.id)
+      refute SymphonyElixir.Pauses.stopped?({:ticket, ctx.repo_key, moved.id})
     end
 
     test "records the store can't read keep every ticket as it was, as a failed Linear read does", ctx do
@@ -397,7 +401,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
         | forced: %{forced.id => %{}}
       }
 
-      :ok = OperatorStop.mark(ctx.repo_key, stopped.id, DateTime.utc_now())
+      :ok = SymphonyElixir.Pauses.stop({:ticket, ctx.repo_key, stopped.id}, DateTime.utc_now())
 
       # Neither is watched, so neither reaches the plan-comment reader: no by-id read.
       {result, _state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0)

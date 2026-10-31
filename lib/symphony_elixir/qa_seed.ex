@@ -13,9 +13,9 @@ defmodule SymphonyElixir.QaSeed do
     (`SymphonyElixir.TicketObservation.observe/3`), so the Inbox, read from the records, names it;
   - `pauses.symphony` and `pauses.repository`: the Director's Symphony-wide pause and the
     repository's pause, with their reasons (`SymphonyElixir.Pauses.set/3`);
-  - `holds`: a ticket on a Blocked hold for access (`reason`, `clearing_condition`), which only a
-    person's Unblock lifts (`SymphonyElixir.Hold.set/5`), with the environment reason its pause
-    waits on, as self-heal's access hold sets it (`SymphonyElixir.SelfHeal.environment_reason/1`);
+  - `holds`: a ticket paused for access (`reason`), which only a person's Unblock lifts: the
+    environment reason its pause waits on, as self-heal sets it for a block only a person can clear
+    (`SymphonyElixir.SelfHeal.environment_reason/1`);
   - `questions`: a decision request on a ticket, which opens its Question and sets its Needs Decision
     hold (`SymphonyElixir.DecisionRequest.ask/4`, in its words: `title`, `question`, `why`,
     `if_unanswered`, `recommendation_reason`, `options`);
@@ -34,7 +34,7 @@ defmodule SymphonyElixir.QaSeed do
 
   require Logger
 
-  alias SymphonyElixir.{DecisionRequest, Hold, Pauses, RunStore, SelfHeal, TicketObservation}
+  alias SymphonyElixir.{DecisionRequest, Pauses, RunStore, SelfHeal, TicketObservation}
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.{TicketPullRequest, TicketSignals, Tracker}
 
@@ -141,12 +141,10 @@ defmodule SymphonyElixir.QaSeed do
 
   defp hold(repo_key, tracker, %{"issue" => identifier} = entry) do
     with {:ok, issue} <- issue(tracker, identifier) do
-      attrs = %{reason: entry["reason"], clearing_condition: entry["clearing_condition"], waits_on: %{type: "access", keys: []}}
       reason = Map.put(SelfHeal.environment_reason("access"), :text, entry["reason"])
 
       # The pause is the one writer's already: nothing for the backfill from the holds to convert.
-      with :ok <- Hold.set(repo_key, issue.id, :blocked, attrs),
-           {:ok, _pause} <- Pauses.set({:ticket, repo_key, issue.id}, reason),
+      with {:ok, _pause} <- Pauses.set({:ticket, repo_key, issue.id}, reason),
            :ok <- RunStore.update_ticket_state(repo_key, issue.id, %{pause_backfilled_at: DateTime.utc_now()}) do
         :ok
       else

@@ -761,25 +761,23 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   defp record_fix_verdict(_context, _issue_id, _move), do: :ok
 
-  # The Backlog escape hatch is retired: the guard turned the request into a Blocked
-  # hold, so the ticket keeps its phase and gains the label with the reason recorded. A run that
-  # marked the issue blocked by open tickets gets a dependency hold, which lifts on its own once they
-  # are terminal; otherwise the access hold is lifted by a person's `Unblock` (or by the self-heal fix
-  # ticket). The agent did not move the issue.
-  defp apply_hold(context, issue_id, kind, attrs, opts) do
-    with :ok <- Hold.set(issue_repo_key(context), issue_id, kind, attrs, opts) do
-      {:ok,
-       %{
-         "held" => true,
-         "hold" => Hold.label(kind),
-         "reason" => Map.get(attrs, :reason),
-         "clearing_condition" => Map.get(attrs, :clearing_condition),
-         "message" =>
-           "The issue stays in its current state with the `#{Hold.label(kind)}` label. " <>
-             "Symphony lifts a hold when what it waits on clears, and a person lifts an access " <>
-             "hold with Unblock; do not move the issue yourself."
-       }}
-    end
+  # The Backlog escape hatch is retired: the guard paused the ticket instead of moving it
+  # (`SymphonyElixir.TransitionGuard`), so it keeps its phase and gains the `Blocked` label with the
+  # reason recorded. A run that marked the issue blocked by open tickets waits on them, and the pause
+  # lifts on its own once they are terminal; otherwise a person lifts it with `Unblock`. The agent did
+  # not move the issue.
+  defp apply_hold(_context, _issue_id, :blocked, attrs, _opts) do
+    {:ok,
+     %{
+       "held" => true,
+       "hold" => "Blocked",
+       "reason" => Map.get(attrs, :reason),
+       "clearing_condition" => Map.get(attrs, :clearing_condition),
+       "message" =>
+         "The issue stays in its current state with the `Blocked` label. " <>
+           "Symphony lifts the pause when what it waits on clears, and a person lifts it " <>
+           "with Unblock; do not move the issue yourself."
+     }}
   end
 
   @spec add_comment(context(), String.t()) :: {:ok, map()} | {:error, term()}

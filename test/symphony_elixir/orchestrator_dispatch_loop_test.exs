@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Artifacts, CiWait, ClaudeCode, Codex, DispatchLoop, Handoff, Hold, Paths}
+  alias SymphonyElixir.{Artifacts, CiWait, ClaudeCode, Codex, DispatchLoop, Handoff, Paths}
   alias SymphonyElixir.Inbox.Item
   alias SymphonyElixir.{Pauses, Questions, TicketEvents, TicketState}
 
@@ -55,6 +55,8 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
 
     assert [error_line] = log |> String.split("\n") |> Enum.filter(&(&1 =~ "dispatch_loop"))
     assert error_line =~ "[error] Holding issue_id=#{@issue_id} issue_identifier=#{@identifier} instead of dispatching it again"
+    assert error_line =~ "dispatch_loop: 4 implementation runs in 10 minutes without a state change, a new PR head or a decision"
+    assert error_line =~ "ended normally, no new PR head, no handoff signal"
 
     # Symphony asks one question, with three ways forward, and the ticket is paused on it.
     ticket = {:ticket, @repo_key, @issue_id}
@@ -66,19 +68,11 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     assert {:ok, %{reasons: [%{kind: :question, waits_on: %{question_id: ^question_id}}]}} = Pauses.get(ticket)
 
     record = RunStore.get_ticket_state(@repo_key, @issue_id)
-    hold = TicketState.get_hold(record, :blocked)
-
-    assert %{waits_on: %{type: "dispatch_loop", keys: ["implementation"], question_id: ^question_id}, clearing_condition: "when a person unblocks or restarts it"} =
-             hold
-
-    assert hold.reason =~ "dispatch_loop: 4 implementation runs in 10 minutes without a state change, a new PR head or a decision"
-    assert hold.reason =~ "ended normally, no new PR head, no handoff signal"
+    assert record.holds == []
     assert [%{name: "dispatch_loop", details: %{kind: "implementation", count: 4, window_ms: 600_000}} | _rest] = record.signals
-    assert_received {:memory_tracker_label_added, @issue_id, "Blocked"}
 
-    # The question comes first, then the hold: the `dispatch_loop` signal next to it is mirrored by the `hold.set`.
-    assert [{"question.asked", %{question_id: ^question_id}}, {"pause.set", _pause}, {"hold.set", %{kind: "blocked", waits_on: %{type: "dispatch_loop"}}}] =
-             ticket_events(@repo_key, @issue_id)
+    # The question and the pause it holds the ticket on: the `dispatch_loop` signal next to them is mirrored.
+    assert [{"question.asked", %{question_id: ^question_id}}, {"pause.set", _pause}] = ticket_events(@repo_key, @issue_id)
 
     # The Inbox, and `/api/v1/state`'s `waiting_on_you` built from it, lists the ticket by its question.
     item = Item.from_question(TicketState.normalize(record), question)
@@ -86,7 +80,7 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     assert ask == question.title
   end
 
-  test "a question the store refuses leaves the dispatch-loop hold as it was before questions" do
+  test "a question the store refuses leaves the ticket unpaused, so the next dispatch finds the loop and tries again" do
     :ok = RunStore.clear()
     put_observed_head!("sha-same")
 
@@ -108,8 +102,8 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
 
     assert log =~ "Failed to ask the question for issue_id=#{@issue_id} issue_identifier=#{@identifier}"
     assert Questions.open({:ticket, @repo_key, @issue_id}) == []
-    assert %{waits_on: waits_on} = Hold.get(@repo_key, @issue_id, :blocked)
-    assert waits_on == %{type: "dispatch_loop", keys: ["implementation"]}
+    # The reason that stands in for the question is refused by the same store.
+    refute Pauses.paused?({:ticket, @repo_key, @issue_id})
   end
 
   test "a ticket under the limit is dispatched, and the run is recorded with its kind, state and PR head" do
@@ -134,7 +128,7 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
       assert %{run_id: ^run_id, phase: "In Progress", actor: %{kind: :machine}, idempotency: "run.started:" <> ^run_id} = started
       assert started.payload == %{run_id: run_id, run_kind: "implementation", run_number: 2, state: "In Progress", head: "sha-now"}
 
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      refute Pauses.paused?({:ticket, @repo_key, @issue_id})
     end)
   end
 
@@ -149,12 +143,14 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
 
     :ok = RunStore.record_ticket_dispatch(@repo_key, @issue_id, %{kind: :implementation, run_id: "run-1", state: "In Progress"})
 
-    capture_log(fn ->
-      pid = start_retry(:LoopLowLimit)
-      wait_for_state(pid, &(not MapSet.member?(&1.claimed, @issue_id)))
-    end)
+    log =
+      capture_log(fn ->
+        pid = start_retry(:LoopLowLimit)
+        wait_for_state(pid, &(not MapSet.member?(&1.claimed, @issue_id)))
+      end)
 
-    assert %{reason: "dispatch_loop: 1 implementation run in 10 minutes" <> _rest} = Hold.get(@repo_key, @issue_id, :blocked)
+    assert log =~ "instead of dispatching it again: dispatch_loop: 1 implementation run in 10 minutes"
+    assert Pauses.paused?({:ticket, @repo_key, @issue_id})
   end
 
   describe "how a run ends" do
@@ -432,7 +428,7 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
 
       attempt = %{kind: :epic_review, state: "Epic Review", head: nil}
       assert DispatchLoop.check(record.dispatches, attempt, DispatchLoop.limits(Config.settings!().watchdog), DateTime.utc_now()) == :ok
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      refute Pauses.paused?({:ticket, @repo_key, @issue_id})
     end
 
     test "a wait that lasted an hour holds the ticket, naming the commit and the workflows still running" do
@@ -447,24 +443,19 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
       refute Map.has_key?(state.retry_attempts, @issue_id)
       refute MapSet.member?(state.claimed, @issue_id)
 
-      hold = Hold.get(@repo_key, @issue_id, :blocked)
-      assert %{waits_on: %{type: "ci_wait", keys: [@sha]}, clearing_condition: "when a person unblocks it"} = hold
-      assert hold.reason =~ "ci_wait: CI on 26758a247155 was still running after 61 minutes"
-      assert hold.reason =~ "Still running: release (https://github.com/acme/app/actions/runs/1), macos (2)"
-      assert Hold.unblockable?(hold)
-      assert_received {:memory_tracker_label_added, @issue_id, "Blocked"}
-      assert log =~ "[error] Holding #{@identifier} instead of waiting longer for CI: #{hold.reason}"
+      assert log =~ "[error] Holding #{@identifier} instead of waiting longer for CI: ci_wait: CI on 26758a247155 was still running after 61 minutes"
+      assert log =~ "Still running: release (https://github.com/acme/app/actions/runs/1), macos (2)"
 
-      # Beside the hold, one pause waits for CI on the commit (TP-1250).
-      assert SymphonyElixir.Pauses.why({:ticket, @repo_key, @issue_id}) == ["Waiting for CI on 26758a247155 to finish"]
+      # The ticket waits for CI on the commit, which the Director may release (TP-1250).
+      assert {:ok, %{reasons: [%{text: "Waiting for CI on 26758a247155 to finish", releasable: true}]}} = Pauses.get({:ticket, @repo_key, @issue_id})
 
-      # The hold's signal ends that wait: once unblocked, the next wait on the commit starts from zero.
+      # The wait's signal ends it: once unblocked, the next wait on the commit starts from zero.
       record = RunStore.get_ticket_state(@repo_key, @issue_id)
       assert [%{name: "ci_wait", details: %{sha: @sha}} | _rest] = record.signals
       assert CiWait.since(record.signals, @sha) == nil
     end
 
-    test "a hold the store fails to write leaves the wait running, so the next exit tries the hold again" do
+    test "a pause the store fails to write leaves the wait running, so the next exit tries it again" do
       started = DateTime.add(DateTime.utc_now(), -61 * 60, :second)
       signal = %{name: "ci_wait_started", details: %{sha: @sha}, at: started}
       :ok = RunStore.put_ticket_state(%{repo_key: @repo_key, issue_id: @issue_id, signals: [signal]})
@@ -478,16 +469,15 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
       assert log =~ "[error] Failed to hold #{@identifier} after waiting for CI too long; retrying after CI"
       refute log =~ "Holding #{@identifier}"
       assert %{delay_type: :ci_wait} = :sys.get_state(pid).retry_attempts[@issue_id]
-      refute_received {:memory_tracker_label_added, @issue_id, "Blocked"}
+      refute Pauses.paused?({:ticket, @repo_key, @issue_id})
 
       record = RunStore.get_ticket_state(@repo_key, @issue_id)
-      refute TicketState.get_hold(record, :blocked)
       assert CiWait.since(record.signals, @sha) == started
 
       {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_states, :read_write)
       send_down(pid, "run-2", "Epic Review", {:ci_pending, %{sha: @sha, runs: @runs}})
 
-      assert Hold.held?(@repo_key, @issue_id, :blocked)
+      assert Pauses.paused?({:ticket, @repo_key, @issue_id})
       refute MapSet.member?(:sys.get_state(pid).claimed, @issue_id)
     end
 
@@ -500,7 +490,7 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
       send_down(pid, "run-1", "Epic Review", {:ci_pending, %{sha: @sha, runs: @runs}})
 
       assert %{delay_type: :ci_wait} = :sys.get_state(pid).retry_attempts[@issue_id]
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      refute Pauses.paused?({:ticket, @repo_key, @issue_id})
       assert [%{name: "ci_wait_started", details: %{sha: @sha}} | _rest] = RunStore.get_ticket_state(@repo_key, @issue_id).signals
     end
   end

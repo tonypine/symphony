@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.PrWatchTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{BlockedHold, PrWatch, PrWatchSupport, TicketPullRequest}
-  alias SymphonyElixir.PrWatch.{Attempts, Repo}
+  alias SymphonyElixir.{Pauses, PrWatch, PrWatchSupport, TicketPullRequest}
+  alias SymphonyElixir.PrWatch.{Attempts, Competitors, Repo}
 
   @repo_key "default"
   @now ~U[2026-10-16 12:00:00Z]
@@ -184,7 +184,7 @@ defmodule SymphonyElixir.PrWatchTest do
     assert PrWatch.landing_waits(run_store: FailingStore) == []
   end
 
-  test "landing_waits/1 reads a landing hold: its reason, and its first competitor when the landing order names none (TP-989)" do
+  test "landing_waits/1 reads a wait on competitors: its line, and its first competitor when the landing order names none (TP-989)" do
     person = %{
       issue_id: nil,
       issue_identifier: nil,
@@ -210,17 +210,17 @@ defmodule SymphonyElixir.PrWatchTest do
     }
 
     wait = %{issue_id: "21", issue_identifier: "TP-21", pr_url: "https://github.com/acme/app/pull/21", state: "QA", shared_files: 1, files: ["SPEC.md"]}
-    hold = BlockedHold.landing_attrs([person])
+    wait_on_person = fn issue_id -> for reason <- Competitors.landing_reasons([person]), do: Pauses.set({:ticket, @repo_key, issue_id}, reason) end
 
     PrWatchSupport.put_watch!(@repo_key, "30", identifier: "TP-30", landing: landing, links: [released, person])
-    :ok = RunStore.set_ticket_hold(@repo_key, "30", :blocked, hold)
+    wait_on_person.("30")
     waiting = %{landing | waits_for: wait, waits_since: @now}
     PrWatchSupport.put_watch!(@repo_key, "31", identifier: "TP-31", landing: waiting, links: [person])
-    :ok = RunStore.set_ticket_hold(@repo_key, "31", :blocked, hold)
+    wait_on_person.("31")
     PrWatchSupport.put_watch!(@repo_key, "32", identifier: "TP-32", landing: %{landing | waits_for: wait}, decision: :dispatch)
-    :ok = RunStore.set_ticket_hold(@repo_key, "32", :blocked, %{reason: "access", waits_on: %{type: "access", keys: []}})
+    {:ok, _pause} = Pauses.set({:ticket, @repo_key, "32"}, %{kind: :environment, waits_on: %{condition: "access"}, releasable: true})
     PrWatchSupport.put_watch!(@repo_key, "33", identifier: "TP-33", landing: landing, links: [released])
-    :ok = RunStore.set_ticket_hold(@repo_key, "33", :blocked, hold)
+    wait_on_person.("33")
 
     reason = "Waiting on PR #50 (Docs) to land: they change the same files (SPEC.md)"
 

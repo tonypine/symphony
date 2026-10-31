@@ -1768,27 +1768,27 @@ defmodule SymphonyElixir.CoreTest do
     end
 
     test "the capped quiet run on the same head asks what now and is held with handoff_missing, which Unblock lifts", %{issue_id: issue_id, completed: completed} do
-      capture_log(fn ->
-        pid = start_quiet_retry(:QuietCapped, issue_id, completed, %{issue_id => {nil, 1}})
-        state = wait_for_orchestrator_state(pid, &(not MapSet.member?(&1.claimed, issue_id)))
+      log =
+        capture_log(fn ->
+          pid = start_quiet_retry(:QuietCapped, issue_id, completed, %{issue_id => {nil, 1}})
+          state = wait_for_orchestrator_state(pid, &(not MapSet.member?(&1.claimed, issue_id)))
 
-        refute Map.has_key?(state.running, issue_id)
-        refute Map.has_key?(state.retry_attempts, issue_id)
-        refute Map.has_key?(state.quiet_handoff_runs, issue_id)
-      end)
+          refute Map.has_key?(state.running, issue_id)
+          refute Map.has_key?(state.retry_attempts, issue_id)
+          refute Map.has_key?(state.quiet_handoff_runs, issue_id)
+        end)
 
       ticket = {:ticket, "designed-repo", issue_id}
       assert [%{title: "MT-884's last two runs ended without a handoff", id: question_id}] = SymphonyElixir.Questions.open(ticket)
       assert {:ok, %{reasons: [%{kind: :question, waits_on: %{question_id: ^question_id}}]}} = SymphonyElixir.Pauses.get(ticket)
 
       record = RunStore.get_ticket_state("designed-repo", issue_id)
-      hold = SymphonyElixir.TicketState.get_hold(record, :blocked)
-      assert %{reason: "handoff_missing: 2 runs" <> _rest, waits_on: %{type: "handoff_missing", question_id: ^question_id}} = hold
+      assert log =~ "handoff_missing: 2 runs"
+      assert record.holds == []
       assert [%{name: "handoff_missing", details: %{held: true, quiet_runs: 2}} | _rest] = record.signals
-      assert_received {:memory_tracker_label_added, ^issue_id, "Blocked"}
 
-      # The question makes the hold one a person releases: the Inbox lists it for Unblock.
-      assert SymphonyElixir.Hold.unblockable?(hold)
+      # The question is the one Unblock answers.
+      assert %{id: ^question_id} = SymphonyElixir.Questions.held(ticket)
     end
 
     test "a quiet run waiting on its decision request is not counted or capped, and waits for the decision", %{issue_id: issue_id, completed: completed} do

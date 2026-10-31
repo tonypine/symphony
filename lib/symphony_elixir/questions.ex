@@ -50,7 +50,18 @@ defmodule SymphonyElixir.Questions do
 
   require Logger
 
-  alias SymphonyElixir.{DecisionRequest, Hold, Pauses, RunStore, TicketEvents, TicketState, Tracker}
+  alias SymphonyElixir.{
+    DecisionRequest,
+    DispatchLoop,
+    Hold,
+    Pauses,
+    RunStore,
+    TicketEvents,
+    TicketState,
+    Tracker,
+    TransitionGuard
+  }
+
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.TicketEvents.Event
@@ -275,14 +286,13 @@ defmodule SymphonyElixir.Questions do
 
   @doc """
   Withdraws the open questions on `ticket` that lapsed with `lapse` (`lapsed?/2`), each with its
-  reason in plain words, and makes the projections follow: the Needs Decision or Blocked hold that
-  carried it clears (`SymphonyElixir.Hold.clear/4`), and the `## Action withdrawn` reply goes under
-  its request comment: the pause projector posts it from the Question
-  (`SymphonyElixir.Pauses.Projector`), or, while it does not own the comments, this function does
-  when the Inbox lists the request. A question a Blocked hold waits on (a run's block
-  report, a dispatch loop) ends with that hold, which Unblock and Restart decide, so only a merge
-  or a terminal state withdraws it here. A question a hold carries (Needs Decision or Blocked) holds
-  the ticket, so a run ending never withdraws it. Each withdrawal records its `t:cause/0`. Best-effort: a hold or a reply that fails is logged, and the
+  reason in plain words, and makes the projections follow: the Needs Decision hold that carried it
+  clears (`SymphonyElixir.Hold.clear/4`), and the `## Action withdrawn` reply goes under its request
+  comment: the pause projector posts it from the Question (`SymphonyElixir.Pauses.Projector`), or,
+  while it does not own the comments, this function does when the Inbox lists the request. A
+  question Unblock answers (`held/1`: a run's block report, a dispatch loop) is decided by Unblock
+  and Restart, so only a merge or a terminal state withdraws it here. It and a question a Needs
+  Decision hold carries hold the ticket, so a run ending never withdraws them. Each withdrawal records its `t:cause/0`. Best-effort: a hold or a reply that fails is logged, and the
   Inbox's next read reconciles the hold. Returns the questions withdrawn.
 
   `opts[:store]` and `opts[:tracker]` override the run store and the tracker the holds are read and
@@ -291,8 +301,10 @@ defmodule SymphonyElixir.Questions do
   """
   @spec withdraw_lapsed(ticket(), lapse(), keyword()) :: {:ok, [question()]}
   def withdraw_lapsed(ticket, lapse, opts \\ []) do
-    blocked = held_question(ticket, :blocked, opts)
-    holding = [blocked, held_question(ticket, :needs_decision, opts)]
+    # The hold's question first: `held/1`'s contract narrows `ticket`, and a malformed one still withdraws nothing.
+    deciding = held_question(ticket, :needs_decision, opts)
+    blocked = with %{id: id} <- held(ticket), do: id
+    holding = [deciding, blocked]
 
     withdrawn =
       for question <- open(ticket),
@@ -360,7 +372,6 @@ defmodule SymphonyElixir.Questions do
   # The question the ticket's hold of `kind` carries, or nil.
   defp held_question({:ticket, repo_key, issue_id}, kind, opts) do
     case Hold.get(repo_key, issue_id, kind, Keyword.take(opts, [:store])) do
-      %{waits_on: %{question_id: id}} -> id
       %{decision: %{question_id: id}} -> id
       _none -> nil
     end
@@ -371,10 +382,9 @@ defmodule SymphonyElixir.Questions do
   defp project_withdrawal({:ticket, repo_key, issue_id}, question, reason, opts) do
     hold_opts = Keyword.take(opts, [:store, :tracker])
 
-    for {kind, path} <- [needs_decision: [:decision, :question_id], blocked: [:waits_on, :question_id]],
-        get_in(Hold.get(repo_key, issue_id, kind, hold_opts) || %{}, path) == question.id do
-      with {:error, error} <- Hold.clear(repo_key, issue_id, kind, hold_opts) do
-        Logger.warning("Withdrew question #{question.id} on issue_id=#{issue_id}; its #{kind} hold did not clear: #{inspect(error)}")
+    if get_in(Hold.get(repo_key, issue_id, :needs_decision, hold_opts) || %{}, [:decision, :question_id]) == question.id do
+      with {:error, error} <- Hold.clear(repo_key, issue_id, :needs_decision, hold_opts) do
+        Logger.warning("Withdrew question #{question.id} on issue_id=#{issue_id}; its needs_decision hold did not clear: #{inspect(error)}")
       end
     end
 
@@ -447,6 +457,19 @@ defmodule SymphonyElixir.Questions do
   @doc "The questions on `ticket` a person answered, in the order they were asked."
   @spec answered(ticket()) :: [question()]
   def answered(ticket), do: ticket |> questions() |> Enum.filter(&(&1.state == :answered))
+
+  @doc """
+  The open question on `ticket` that the Director's Unblock answers: one Symphony asked when it
+  paused the ticket on a dispatch loop or a quiet handoff (`SymphonyElixir.DispatchLoop`), an idle
+  run's park (`SymphonyElixir.IdlePark`), or a
+  run's block report asked (`SymphonyElixir.TransitionGuard.block_report_question/1`), known by its
+  Unblock option. The newest when there are several; nil when there is none.
+  """
+  @spec held(ticket()) :: question() | nil
+  def held(ticket) do
+    labels = [DispatchLoop.option_label(:unblock), TransitionGuard.unblock_option()]
+    ticket |> open() |> Enum.filter(fn question -> Enum.any?(question.options, &(&1.label in labels)) end) |> List.last()
+  end
 
   @doc "The question `id` on `ticket`, whatever its state, or nil."
   @spec find(ticket(), String.t()) :: question() | nil

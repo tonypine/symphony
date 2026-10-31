@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.CiWaitTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.{CiWait, Hold}
+  alias SymphonyElixir.CiWait
 
   @now ~U[2026-10-15 01:45:00Z]
   @sha "26758a2471558f89fc0411dcf1f81aa82c0e1dc4"
@@ -24,7 +24,7 @@ defmodule SymphonyElixir.CiWaitTest do
       assert CiWait.since(signals, @sha) == nil
     end
 
-    test "is nil once a CI-wait hold was set after the wait started" do
+    test "is nil once a wait past the limit paused the ticket after the wait started" do
       signals = [signal("ci_wait", 5, %{sha: @sha}), signal("ci_wait_started", 70, %{sha: @sha})]
       assert CiWait.since(signals, @sha) == nil
     end
@@ -38,29 +38,24 @@ defmodule SymphonyElixir.CiWaitTest do
     end
   end
 
-  describe "hold_attrs/3" do
-    test "names the commit, the wait and the workflows still running, lifted by Unblock" do
+  describe "describe/3" do
+    test "names the commit, the wait and the workflows still running" do
       runs = [%{workflow_name: "release", url: "https://github.com/acme/app/actions/runs/1"}, %{workflow_name: "macos", id: 2}, %{workflow_name: nil}]
-      attrs = CiWait.hold_attrs(%{sha: @sha, runs: runs}, DateTime.add(@now, -61 * 60, :second), @now)
 
-      assert attrs.reason ==
+      assert CiWait.describe(%{sha: @sha, runs: runs}, DateTime.add(@now, -61 * 60, :second), @now) ==
                "ci_wait: CI on 26758a247155 was still running after 61 minutes (waiting since 00:44 UTC), " <>
                  "so Symphony stopped starting the epic review. " <>
                  "Still running: release (https://github.com/acme/app/actions/runs/1), macos (2), a workflow"
 
-      assert attrs.clearing_condition == "when a person unblocks it"
-      assert attrs.waits_on == %{type: CiWait.hold_type(), keys: [@sha]}
-      assert Hold.unblockable?(attrs)
+      assert CiWait.signal() == "ci_wait"
     end
 
     test "says one minute in the singular" do
-      attrs = CiWait.hold_attrs(%{sha: @sha, runs: []}, DateTime.add(@now, -60, :second), @now)
-      assert attrs.reason =~ "still running after 1 minute (waiting since 01:44 UTC)"
+      assert CiWait.describe(%{sha: @sha, runs: []}, DateTime.add(@now, -60, :second), @now) =~ "still running after 1 minute (waiting since 01:44 UTC)"
     end
 
     test "names the run that waits when it is not the epic review" do
-      attrs = CiWait.hold_attrs(%{sha: @sha, runs: [], run: "the QA pass"}, DateTime.add(@now, -61 * 60, :second), @now)
-      assert attrs.reason =~ "so Symphony stopped starting the QA pass. "
+      assert CiWait.describe(%{sha: @sha, runs: [], run: "the QA pass"}, DateTime.add(@now, -61 * 60, :second), @now) =~ "so Symphony stopped starting the QA pass. "
     end
   end
 end
@@ -74,7 +69,7 @@ defmodule SymphonyElixir.CiWaitPauseTest do
   @ticket {:ticket, "default", "issue-1"}
   @director %{kind: :person, name: "Director"}
 
-  describe "the pause beside a CI-wait hold" do
+  describe "the pause of a wait for CI past the limit" do
     test "waits for CI on the commit, once however often it is set, and the Director may release it" do
       assert CiWait.reason(@sha) == %{
                kind: :environment,

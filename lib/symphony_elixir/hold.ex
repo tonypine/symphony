@@ -18,9 +18,13 @@ defmodule SymphonyElixir.Hold do
   writes none of its own: each set, clear and re-projection applies the projector, which renders
   them from the ticket's pause, questions and holds.
 
+  The Blocked hold is retired: what pauses a ticket is its pause (`SymphonyElixir.Pauses`), and the
+  `Blocked` label is the pause projector's. Only the Needs Decision hold is left here, and a write of
+  any other kind is refused.
+
   Each hold write that lands in the store is also recorded in the ticket's event stream
-  (`SymphonyElixir.TicketEvents`), best-effort. A Blocked hold is `hold.set` and `hold.cleared`. A
-  Needs Decision hold is the projection of its decision, never a hold event. One that carries the
+  (`SymphonyElixir.TicketEvents`), best-effort. A Needs Decision hold is the projection of its
+  decision, never a hold event. One that carries the
   Question it projects (`decision.question_id`, as `SymphonyElixir.DecisionRequest.ask/4` sets it)
   records nothing: the Question's own `question.*` events are the request and its end. One without
   (a request read back from Linear) records `decision.requested` when set (unless that request is
@@ -30,11 +34,9 @@ defmodule SymphonyElixir.Hold do
   A hold of a kind the ticket didn't have, and a clear of one it had, are announced as a change of
   the record's `holds` (`SymphonyElixirWeb.ObservabilityPubSub.broadcast_ticket_record_changed/3`).
 
-  A Blocked hold set beside a question Symphony asked names it (`waits_on.question_id`, as the
-  dispatch-loop guard and the quiet handoff set it, `SymphonyElixir.DispatchLoop`), and a Needs
-  Decision hold names the Question it projects (`decision.question_id`): the hold is set after the
-  question and cleared with it, so `clear/4` ends that question first when it is still open
-  (`SymphonyElixir.Questions`).
+  A Needs Decision hold names the Question it projects (`decision.question_id`): the hold is set
+  after the question and cleared with it, so `clear/4` ends that question first when it is still
+  open (`SymphonyElixir.Questions`).
   """
 
   require Logger
@@ -43,17 +45,12 @@ defmodule SymphonyElixir.Hold do
   alias SymphonyElixir.{Questions, RunStore, TicketSignals, TicketState, Tracker}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
-  @kind_labels %{blocked: "Blocked", needs_decision: "Needs Decision"}
-  @kinds [:blocked, :needs_decision]
-  @dispatch_loop_type "dispatch_loop"
-  @ci_wait_type "ci_wait"
-  @operator_stop_type "operator_stop"
-  @idle_park_type "idle_park"
-  @unblockable_types ["access", @dispatch_loop_type, @ci_wait_type, @operator_stop_type, @idle_park_type]
+  @kind_labels %{needs_decision: "Needs Decision"}
+  @kinds [:needs_decision]
   @symphony %{kind: :symphony, name: "Symphony"}
 
-  @typedoc "The holds the design defines."
-  @type kind :: :blocked | :needs_decision
+  @typedoc "The holds left: the Needs Decision hold, until it is retired too."
+  @type kind :: :needs_decision
 
   @doc "The known hold kinds, in display order."
   @spec kinds() :: [kind()]
@@ -113,29 +110,6 @@ defmodule SymphonyElixir.Hold do
         {:error, reason}
     end
   end
-
-  @doc """
-  Whether a hold waits on a person's `Unblock` (see `SymphonyElixir.DirectorMoves`): one waiting on
-  an access grant a person hands over — what an agent's block report records — one the
-  dispatch-loop guard set (`SymphonyElixir.DispatchLoop`), one an epic review's wait for CI set
-  once it reached its limit (`SymphonyElixir.CiWait`), one an operator's stop set beside the
-  ticket's pause (`SymphonyElixir.OperatorStop`), one an idle run's park set
-  (`SymphonyElixir.IdlePark`), or one set beside a question Symphony asked
-  (`waits_on.question_id`, a quiet handoff's): that question is open while the hold stands, since
-  the hold is cleared with it. A dependency or fix-ticket hold clears on its own when what it waits
-  on goes terminal; these never clear without a person (a stop's also clears when the ticket leaves
-  the workflow or moves on the board). Unblock also lifts a stop whose pause reason stands beside
-  another kind of hold (`SymphonyElixir.OperatorStop.held?/2`).
-  """
-  @spec unblockable?(TicketState.hold() | term()) :: boolean()
-  def unblockable?(%{waits_on: %{type: type}}) when type in @unblockable_types, do: true
-  def unblockable?(%{waits_on: %{question_id: question_id}}) when is_binary(question_id), do: true
-  def unblockable?(_hold), do: false
-
-  @doc "Whether a hold is the one the dispatch-loop guard set (`SymphonyElixir.DispatchLoop`)."
-  @spec dispatch_loop?(TicketState.hold() | term()) :: boolean()
-  def dispatch_loop?(%{waits_on: %{type: @dispatch_loop_type}}), do: true
-  def dispatch_loop?(_hold), do: false
 
   @doc """
   Sets the hold of `kind` on `issue_id`: the store record first, then its event, then the machine
@@ -241,17 +215,6 @@ defmodule SymphonyElixir.Hold do
     end
   end
 
-  # A Blocked hold set again with the reason and wait it already has is the same fact, so it records
-  # no second `hold.set`.
-  defp record_set(repo_key, issue_id, :blocked, attrs) do
-    hold = %{} |> TicketState.normalize() |> TicketState.set_hold(:blocked, attrs) |> TicketState.get_hold(:blocked)
-    payload = Map.reject(%{kind: "blocked", reason: hold.reason, waits_on: hold.waits_on}, fn {_key, value} -> is_nil(value) end)
-
-    if open_blocked(repo_key, issue_id) == payload,
-      do: :ok,
-      else: TicketSignals.record_event(repo_key, issue_id, "hold.set", payload)
-  end
-
   # A Needs Decision hold that carries its Question records nothing: `question.asked` is the request.
   defp record_set(_repo_key, _issue_id, :needs_decision, %{decision: %{question_id: id}}) when is_binary(id), do: :ok
 
@@ -283,7 +246,6 @@ defmodule SymphonyElixir.Hold do
   end
 
   defp record_clear(_repo_key, _issue_id, nil, _answered?), do: :ok
-  defp record_clear(repo_key, issue_id, %{kind: :blocked}, _answered?), do: TicketSignals.record_event(repo_key, issue_id, "hold.cleared", %{kind: "blocked"})
   defp record_clear(_repo_key, _issue_id, %{kind: :needs_decision}, true = _answered?), do: :ok
   # The Question's own `question.answered` or `question.withdrawn` ends the request it projects.
   defp record_clear(_repo_key, _issue_id, %{kind: :needs_decision, decision: %{question_id: id}}, _answered?) when is_binary(id), do: :ok
@@ -299,8 +261,8 @@ defmodule SymphonyElixir.Hold do
     TicketSignals.record_event(repo_key, issue_id, "decision.withdrawn", %{title: title, question: question, request: request && request.id})
   end
 
-  # The question a hold was set beside, or the one it projects, ends with it; one already answered or
-  # withdrawn ends nothing. An answered clear with no answer given leaves it to the answer's writer.
+  # The question a hold projects ends with it; one already answered or withdrawn ends nothing. An
+  # answered clear with no answer given leaves it to the answer's writer.
   defp end_question(repo_key, issue_id, hold, question, answered?) do
     case {held_question(hold), question, answered?} do
       {nil, _question, _answered?} -> :ok
@@ -310,14 +272,15 @@ defmodule SymphonyElixir.Hold do
     end
   end
 
-  defp held_question(%{waits_on: %{question_id: id}}) when is_binary(id), do: id
   defp held_question(%{kind: :needs_decision, decision: %{question_id: id}}) when is_binary(id), do: id
   defp held_question(_hold), do: nil
 
+  # A question already answered, withdrawn or gone has ended; any other failure is the store's.
   defp ended({:ok, _question}), do: :ok
-  defp ended({:error, {:question_not_open, _state}}), do: :ok
-  defp ended({:error, :question_not_found}), do: :ok
-  defp ended({:error, reason}), do: {:error, reason}
+  defp ended({:error, reason}), do: if(question_ended?(reason), do: :ok, else: {:error, reason})
+
+  defp question_ended?({:question_not_open, _state}), do: true
+  defp question_ended?(reason), do: reason == :question_not_found
 
   # A hold that appeared or went is a change of the record's holds, which the PR watcher re-decides
   # the ticket on; a hold set again over itself changes nothing it reads.
@@ -331,16 +294,6 @@ defmodule SymphonyElixir.Hold do
       record -> TicketState.get_hold(record, kind)
     end
   end
-
-  # The payload of the ticket's newest Blocked hold event when it is a `hold.set` (the hold it
-  # records is still on), else nil.
-  defp open_blocked(repo_key, issue_id) do
-    events = RunStore.list_ticket_events(repo_key, issue_id, types: ["hold.set", "hold.cleared"])
-    if is_list(events), do: open_payload(List.last(events))
-  end
-
-  defp open_payload(%{type: "hold.set", payload: payload}), do: payload
-  defp open_payload(_cleared_or_none), do: nil
 
   defp same_question?(%{payload: payload}, question), do: TicketSignals.same_text?(payload[:question], question)
   defp same_question?(nil, _question), do: false

@@ -17,11 +17,11 @@ defmodule SymphonyElixir.DirectorMoves do
   - `:restart`: the full reset, and only a person makes it (design doc D7). It closes the ticket's
     pull requests, removes its workspaces — so the next dispatch branches fresh from the configured
     base branch — and supersedes the workpad, then moves the ticket to `In Progress`
-    (`SymphonyElixir.Restart`). A dispatch-loop or quiet-handoff hold is cleared with it, since the
-    attempt it held is the one thrown away, with the question Symphony asked beside it answered
-    "Start it over from main" (`SymphonyElixir.DispatchLoop`), and so is an operator's stop, its
-    pause reason with its hold (`SymphonyElixir.OperatorStop`). Every other open question nobody needs
-    any more is withdrawn with the reason (`SymphonyElixir.Questions.withdraw_lapsed/3`);
+    (`SymphonyElixir.Restart`). The question a dispatch loop or a quiet handoff paused the ticket on
+    is answered "Start it over from main" (`SymphonyElixir.DispatchLoop`), since the attempt it held
+    is the one thrown away, and an operator's stop is released (`SymphonyElixir.Pauses.stop/2`).
+    Every other open question nobody needs any more is withdrawn with the reason
+    (`SymphonyElixir.Questions.withdraw_lapsed/3`);
   - `:decisions`: a plan in `Plan Review` gets the Director's answers to its questions, in place:
     each pick naming its Question (`question_id`, or the `request_comment_id` whose Inbox row names
     it) answers that Question first (`SymphonyElixir.Questions.answer/4`); each pick naming its
@@ -49,17 +49,18 @@ defmodule SymphonyElixir.DirectorMoves do
     record cancelled this way is terminal: a later Linear state is no drift on it
     (`SymphonyElixir.TicketObservation`). Undo puts the record and Linear back to the phase before;
     the pull request it closed, the run it stopped and the questions it withdrew stay as they are;
-  - `:unblock`: a ticket waiting on an **access** hold — an agent's block report, whose question is
-    answered "Unblock and run again" (`SymphonyElixir.TransitionGuard.block_report_question/1`) — on a
-    dispatch-loop or quiet-handoff hold (`SymphonyElixir.DispatchLoop`: the question Symphony asked
-    beside it is answered "Run it again", then the hold is cleared) or on an operator's stop
-    (`SymphonyElixir.OperatorStop`: its pause reason, then its hold) has the hold cleared by hand
-    and continues in place, with no state move. So does one waiting on its competing pull requests (a landing
-    hold, `SymphonyElixir.PrWatch.Competitors`): the blocked-by links Symphony added go, and it no
-    longer waits on those pull requests. A ticket an idle run parked in Backlog
-    (`SymphonyElixir.IdlePark`) goes back to the phase it was parked from, with its workspace and
-    branch as they are, before its hold clears (its question answered "Run it again"), and is
-    dispatched at once. A dependency or fix-ticket hold clears on its own, so it is refused;
+  - `:unblock`: a ticket whose pause has a reason the Director may release (an operator's stop, a
+    wait for CI, a broken environment, a block nobody named) or a question Unblock answers
+    (`SymphonyElixir.Questions.held/1`: an agent's block report, answered "Unblock and run again",
+    `SymphonyElixir.TransitionGuard.block_report_question/1`; a dispatch loop or a quiet handoff,
+    answered "Run it again", `SymphonyElixir.DispatchLoop`) has the question answered and those
+    reasons released, and continues in place, with no state move. So does one waiting on its
+    competing pull requests (`SymphonyElixir.PrWatch.Competitors`): the blocked-by links Symphony
+    added go, and it no longer waits on those pull requests. A ticket an idle run parked in Backlog
+    (`SymphonyElixir.IdlePark`) goes back to the phase it was parked from first, with its workspace
+    and branch as they are, then its question is answered "Run it again", and it is dispatched at
+    once. A wait on a blocker or a fix ticket lifts on its own and stays; a ticket with nothing to
+    release is refused;
   - `:decide`: a ticket waiting on a `Needs Decision` hold has the Director's answer written to its
     Question first (`SymphonyElixir.Questions.answer/4`: `question_id`, the Inbox row's, else the
     Question the row of `request_comment_id` names, else the hold's), before any Linear request: the
@@ -72,11 +73,13 @@ defmodule SymphonyElixir.DirectorMoves do
     `SymphonyElixir.TransitionGuard`. Without one, a pick of an option that carries its own move
     (`SymphonyElixir.DecisionMove`, QA's "Merge without a QA result") makes that move. The move is
     made before the hold clears, so no dispatch sees the ticket released in its old phase. A ticket
-    with no such hold whose Blocked hold names the Question `question_id` (one Symphony asked beside
-    it) is answered with the first pick, as `answer_held_question/4` says; any other is refused.
+    with no such hold whose pause waits on the Question `question_id` that Unblock answers
+    (`SymphonyElixir.Questions.held/1`: a dispatch loop's, a quiet handoff's, a park's, a block
+    report's) is answered with the first pick, as `answer_held_question/4` says; any other is
+    refused.
 
-  `answer_held_question/4` answers the question Symphony asked beside a dispatch-loop or
-  quiet-handoff hold, and does what the picked option asks: Unblock, Restart, or nothing.
+  `answer_held_question/4` answers the question a dispatch loop, a quiet handoff or a block report
+  paused the ticket on, and does what the picked option asks: Unblock, Restart, or nothing.
 
   The comments are the Director's: none starts like one of Symphony's own, so the plan comment
   poll counts them as a person's comment too.
@@ -107,18 +110,16 @@ defmodule SymphonyElixir.DirectorMoves do
 
   alias SymphonyElixir.{
     AuditLog,
-    BlockedHold,
     BreakdownReview,
-    CiWait,
     Config,
     DecisionMove,
     DecisionRequest,
     Decisions,
     DispatchLoop,
+    Handoff,
     Hold,
     IdlePark,
     MergeConfirmation,
-    OperatorStop,
     Orchestrator,
     PathUnlock,
     Pauses,
@@ -128,7 +129,6 @@ defmodule SymphonyElixir.DirectorMoves do
     Questions,
     Restart,
     RunStore,
-    SelfHeal,
     SubIssueWait,
     TicketPullRequest,
     TicketSignals,
@@ -141,6 +141,7 @@ defmodule SymphonyElixir.DirectorMoves do
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Pauses.Projector
+  alias SymphonyElixir.PrWatch.Competitors
   alias SymphonyElixir.Routing.Resolver
 
   @undo_window_ms 10_000
@@ -216,8 +217,10 @@ defmodule SymphonyElixir.DirectorMoves do
   Options: `:server` (the Agent, default this module), `:clock` (monotonic milliseconds, for the undo
   window), `:orchestrator` (asked to poll again after the move, and to stop a cancelled ticket's run,
   default `SymphonyElixir.Orchestrator`), `:store` (the run store read and written, default
-  `SymphonyElixir.RunStore`) and `:github` (the pull request module a restart or a cancel closes
-  with, default `SymphonyElixir.GitHub.PullRequest`).
+  `SymphonyElixir.RunStore`), `:github` (the pull request module a restart or a cancel closes
+  with, default `SymphonyElixir.GitHub.PullRequest`), and Unblock's `:release_competitors` (the PR
+  watcher's release of a wait on competing pull requests) and `:release` (the release of the
+  ticket's question and the reasons the Director may release).
   """
   @spec move(move(), String.t(), input(), keyword()) :: result()
   def move(move, identifier, input, opts \\ []) when move in @moves and is_binary(identifier) and is_map(input) do
@@ -252,7 +255,7 @@ defmodule SymphonyElixir.DirectorMoves do
   defp recorded?(record, identifier), do: is_binary(record.issue_id) and identifier in [record.issue_id, record.issue_identifier]
 
   # Unblock is not a Linear move: it lifts a hold in place, so no state is resolved.
-  defp do_move(:unblock, issue, _input, opts), do: unblock(issue, opts)
+  defp do_move(:unblock, issue, _input, opts), do: unblock(issue, opts, false)
 
   # Decide is a decision, not a state: it answers the request and clears the hold, and only moves
   # when the decision directs one.
@@ -273,28 +276,40 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   @doc """
-  Answers the question `question_id` asked beside the Blocked hold of the ticket `identifier` (a
-  dispatch loop's or a quiet handoff's, `SymphonyElixir.DispatchLoop.question_attrs/2`, or a run's
+  Answers the question `question_id` the ticket `identifier` is paused on (a dispatch loop's or a quiet handoff's, `SymphonyElixir.DispatchLoop.question_attrs/2`, or a run's
   block report's, `SymphonyElixir.TransitionGuard.block_report_question/1`) with `answer`, as the
   Director, then does what the answer's option asks (`SymphonyElixir.DispatchLoop.answer_move/1`):
   "Run it again" and "Unblock and run again" are `:unblock`, "Start it over from main" is
   `:restart`, its comment naming the question, and "Keep it paused" or an answer in the Director's
-  own words leaves the ticket where it is, held. Takes the options of `move/4`.
+  own words leaves the ticket where it is, held: the answered question no longer pauses it, so a
+  reason the Director releases with Unblock does ("You kept it paused: …"; a loop's goes with a
+  Restart too, as its question would have). Takes the options of `move/4`.
   """
   @spec answer_held_question(String.t(), String.t(), String.t(), keyword()) :: result()
   def answer_held_question(identifier, question_id, answer, opts) when is_binary(identifier) and is_binary(question_id) do
-    with {:ok, issue} <- fetch_issue(identifier), do: answer_held(issue, question_id, answer, opts)
+    with {:ok, issue} <- fetch_issue(identifier), do: answer_and_act(issue, question_id, answer, opts)
   end
 
-  defp answer_held(issue, question_id, answer, opts) when is_binary(answer) do
+  defp answer_and_act(issue, question_id, answer, opts) when is_binary(answer) do
     with {:ok, question} <- answer_question(issue, question_id, answer) do
       case held_answer_move(question) do
-        :unblock -> unblock(issue, opts)
+        :unblock -> unblock(issue, opts, true)
         :restart -> do_move(:restart, issue, %{reason: "You answered \"#{DispatchLoop.option_label(:restart)}\" to: #{question.title}"}, opts)
-        :keep -> finish(:decide, issue, nil, nil, opts)
+        :keep -> keep_paused(issue, question, opts)
       end
     end
   end
+
+  defp keep_paused(issue, question, opts) do
+    condition = if loop_question?(question), do: DispatchLoop.hold_type(), else: "block_report"
+    reason = %{kind: :environment, waits_on: %{condition: condition}, text: String.slice("You kept it paused: #{question.title}", 0, 300), releasable: true}
+
+    issue |> ticket() |> Pauses.set(reason, set_by: Pauses.director()) |> log_failed("Kept #{issue.identifier} paused but couldn't write its pause")
+    finish(:decide, issue, nil, nil, opts)
+  end
+
+  # A dispatch loop's or a quiet handoff's question, which Restart answers: one with its option.
+  defp loop_question?(%{options: options}), do: Enum.any?(options, &(&1.label == DispatchLoop.option_label(:restart)))
 
   defp held_answer_move(question) do
     if picked_label(question) == TransitionGuard.unblock_option(),
@@ -309,7 +324,7 @@ defmodule SymphonyElixir.DirectorMoves do
   defp picked_label(_question), do: nil
 
   defp answer_question(issue, question_id, answer) do
-    case Questions.answer({:ticket, issue.repo_key, issue.id}, question_id, answer, by: OperatorStop.director()) do
+    case Questions.answer({:ticket, issue.repo_key, issue.id}, question_id, answer, by: Pauses.director()) do
       {:ok, question} -> {:ok, question}
       {:error, :question_not_found} -> conflict("#{issue.identifier} has no question #{question_id}")
       {:error, {:question_not_open, state}} -> conflict("#{issue.identifier}'s question #{question_id} is #{state}, not open")
@@ -360,7 +375,7 @@ defmodule SymphonyElixir.DirectorMoves do
   # Question keeps it as taken back, so the PR watcher's read drops its entry
   # (`SymphonyElixir.Questions.answers/2`). The Inbox lists the Question open again.
   defp reopen(issue, %{question_id: id, hold: hold}, opts) do
-    with {:ok, _question} <- reopened(Questions.reopen({:ticket, issue.repo_key, issue.id}, id, by: OperatorStop.director()), issue) do
+    with {:ok, _question} <- reopened(Questions.reopen({:ticket, issue.repo_key, issue.id}, id, by: Pauses.director()), issue) do
       attrs = Map.take(hold, [:reason, :clearing_condition, :decision])
 
       case DecisionRequest.project(issue.repo_key, issue.id, attrs, store_opts(opts)) do
@@ -543,7 +558,7 @@ defmodule SymphonyElixir.DirectorMoves do
   defp apply_move(:restart, issue, to_state, input, opts) do
     case Restart.perform(issue, restart_opts(opts)) do
       :ok ->
-        clear_restarted_hold(issue, opts)
+        clear_restarted_hold(issue)
         withdraw_lapsed(issue, :restart, opts)
         comment_then_move(:restart, issue, restart_comment(issue.identifier, String.trim(input[:reason])), to_state, opts)
 
@@ -727,62 +742,38 @@ defmodule SymphonyElixir.DirectorMoves do
     :ok
   end
 
-  # The attempt a dispatch loop or a quiet handoff held is the one Restart throws away, so its hold
-  # goes with it, its question answered "Start it over from main", and the ticket starts again with
-  # its count at zero; an operator's stop (its pause reason and its hold) is lifted by the Restart
-  # that starts the ticket over. A clear the store refuses is reported; the restart stands, and
-  # Unblock still lifts it.
-  defp clear_restarted_hold(issue, opts) do
-    hold = blocked_hold(issue, opts)
+  # The attempt a dispatch loop or a quiet handoff held is the one Restart throws away, so the
+  # question it paused the ticket on is answered "Start it over from main" (a reason set when that
+  # question could not be asked goes too), and the ticket starts again with its count at zero; an
+  # operator's stop is released by the Restart that starts the ticket over. A block report's question
+  # has no such option and stays, as it always has. A write the store refuses is reported; the
+  # restart stands, and Unblock still lifts it.
+  defp clear_restarted_hold(issue) do
+    ticket = ticket(issue)
 
-    with {:error, reason} <- clear_restarted(issue, hold, opts) do
-      Logger.warning("Restarted #{issue.identifier} but couldn't clear its #{restarted_hold_name(hold)} hold: #{inspect(reason)}")
-    end
+    ticket |> Pauses.release_stop(by: Pauses.director()) |> log_failed("Restarted #{issue.identifier} but couldn't clear its stop")
+    ticket |> answer_held(Questions.held(ticket), DispatchLoop.option_label(:restart)) |> log_failed("Restarted #{issue.identifier} but couldn't answer its question")
+    ticket |> Pauses.clear_reasons(&loop_reason?/1, by: Pauses.director()) |> log_failed("Restarted #{issue.identifier} but couldn't clear its pause")
   end
 
-  defp clear_restarted(issue, hold, opts) do
-    with :ok <- if(stopped?(issue, hold), do: clear_stop(issue, opts), else: :ok) do
-      if Hold.dispatch_loop?(hold) or IdlePark.hold?(hold) or asked?(hold), do: clear_blocked(issue, :restart, opts), else: :ok
-    end
+  # The reason a dispatch loop, a quiet handoff or a park paused the ticket on when its question could
+  # not be asked (`SymphonyElixir.Orchestrator`, `SymphonyElixir.AgentRunner`).
+  defp loop_reason?(%{kind: :environment, waits_on: %{condition: condition}}), do: condition in [DispatchLoop.hold_type(), Handoff.missing_signal(), IdlePark.signal_reason()]
+  defp loop_reason?(_reason), do: false
+
+  # The held question answered with its option labelled `label`; one without it, or none, is left.
+  # The question was read open just before, so a refused answer is the store's failure.
+  defp answer_held(ticket, %{id: id, options: options}, label) do
+    if Enum.any?(options, &(&1.label == label)),
+      do: with({:ok, _question} <- Questions.answer(ticket, id, label, by: Pauses.director()), do: :ok),
+      else: :ok
   end
 
-  defp restarted_hold_name(hold) do
-    cond do
-      Hold.dispatch_loop?(hold) -> "dispatch-loop"
-      IdlePark.hold?(hold) -> "idle-park"
-      asked?(hold) -> "quiet-handoff"
-      true -> "operator-stop"
-    end
-  end
+  defp answer_held(_ticket, nil, _label), do: :ok
 
-  # A Blocked hold set beside a question Symphony asked (`SymphonyElixir.DispatchLoop`). A block
-  # report's access hold names its question too, but a restart leaves it, as it always has.
-  defp asked?(%{waits_on: %{type: "access"}}), do: false
-  defp asked?(hold), do: is_binary(get_in(hold || %{}, [:waits_on, :question_id]))
+  defp ticket(issue), do: {:ticket, issue.repo_key, issue.id}
 
-  # The Blocked hold cleared by `move`, the question set beside it answered with the option `move` is.
-  defp clear_blocked(issue, move, opts) do
-    question = {:answer, option_label(issue, move, opts), OperatorStop.director()}
-    Hold.clear(issue.repo_key, issue.id, :blocked, [question: question] ++ store_opts(opts))
-  end
-
-  # Unblock answers a block report's question with its own option, "Unblock and run again"
-  # (`TransitionGuard.block_report_question/1`); any other with the dispatch loop's.
-  defp option_label(issue, :unblock, opts) do
-    with %{waits_on: %{question_id: id}} <- blocked_hold(issue, opts),
-         %{options: options} <- Questions.find({:ticket, issue.repo_key, issue.id}, id),
-         true <- Enum.any?(options, &(&1.label == TransitionGuard.unblock_option())) do
-      TransitionGuard.unblock_option()
-    else
-      _other -> DispatchLoop.option_label(:unblock)
-    end
-  end
-
-  defp option_label(_issue, move, _opts), do: DispatchLoop.option_label(move)
-
-  defp stopped?(issue, hold), do: OperatorStop.hold?(hold) or OperatorStop.held?(issue.repo_key, issue.id)
-
-  defp clear_stop(issue, opts), do: OperatorStop.clear_hold(issue.repo_key, issue.id, [by: OperatorStop.director()] ++ store_opts(opts))
+  defp clear_stop(issue), do: Pauses.release_stop(ticket(issue), by: Pauses.director())
 
   # The record takes the canceled state first and Linear follows (`DecisionMove.perform/4`); a team
   # with neither spelling leaves the record where it was and refuses the move. A move Linear refuses
@@ -828,7 +819,7 @@ defmodule SymphonyElixir.DirectorMoves do
   defp stop_cancelled_run(issue, opts) do
     case Orchestrator.stop_running(Keyword.get(opts, :orchestrator, Orchestrator), issue.id) do
       {:ok, %{stopped: true}} ->
-        _ = clear_stop(issue, opts)
+        _ = clear_stop(issue)
         true
 
       _nothing_stopped ->
@@ -871,47 +862,68 @@ defmodule SymphonyElixir.DirectorMoves do
     withdraw_lapsed(issue, {:terminal, to_state}, opts)
 
     for kind <- Hold.held_kinds(issue.repo_key, issue.id, store_opts(opts)) do
-      log_cancel_clear(Hold.clear(issue.repo_key, issue.id, kind, store_opts(opts)), issue, "#{kind} hold")
+      issue.repo_key |> Hold.clear(issue.id, kind, store_opts(opts)) |> log_failed("Cancelled #{issue.identifier} but couldn't clear its #{kind} hold")
     end
 
-    log_cancel_clear(Pauses.clear_reasons({:ticket, issue.repo_key, issue.id}, fn _reason -> true end, by: OperatorStop.director()), issue, "pause")
+    issue |> ticket() |> Pauses.clear_reasons(fn _reason -> true end, by: Pauses.director()) |> log_failed("Cancelled #{issue.identifier} but couldn't clear its pause")
   end
 
-  defp log_cancel_clear({:error, reason}, issue, what), do: Logger.warning("Cancelled #{issue.identifier} but couldn't clear its #{what}: #{inspect(reason)}")
-  defp log_cancel_clear(_cleared, _issue, _what), do: :ok
+  # A best-effort write that failed is reported with what it was for; the move stands.
+  defp log_failed({:error, reason}, what), do: Logger.warning("#{what}: #{inspect(reason)}")
+  defp log_failed(_written, _what), do: :ok
 
-  # Unblock lifts an access or dispatch-loop hold in place: the store hold is cleared through `Hold`
-  # (the store first, then the `Blocked` label), so the ticket keeps its phase and the next poll
-  # dispatches it again — for a loop, with its count started again. A landing hold first has the PR
-  # watcher release its competitors, so the next read doesn't wait on them again. An operator's stop
-  # is lifted with it: its pause reason first, then its hold, which may be missing when another
-  # Blocked hold was there already (that one stays when it clears on its own). A hold waiting on
-  # anything else clears on its own, so it is refused.
-  defp unblock(%Issue{} = issue, opts) do
-    hold = blocked_hold(issue, opts)
-    stopped? = stopped?(issue, hold)
-
-    case IdlePark.parked_from(issue.state, hold, ticket_signals(issue, opts)) do
-      {:ok, from_state} -> resume_parked(issue, from_state, hold, stopped?, opts)
-      :none -> unblock_in_place(issue, hold, stopped?, opts)
+  # Unblock lifts the ticket in place: the question it is paused on is answered with its Unblock
+  # option, then every reason the Director may release is cleared (`SymphonyElixir.Pauses`, which
+  # projects the `Blocked` label), so the ticket keeps its phase and the next poll dispatches it
+  # again — for a loop, with its count started again. A wait on competing pull requests first has the
+  # PR watcher release its competitors, so the next read doesn't wait on them again. A wait on a
+  # blocker or a fix ticket lifts on its own and stays. A ticket with nothing to release is refused,
+  # unless the Director has just answered its question (`answered?`). A ticket an idle run parked
+  # goes back to its phase first (`resume_parked/4`).
+  defp unblock(%Issue{} = issue, opts, answered?) do
+    case IdlePark.parked_from(issue.state, ticket_signals(issue, opts)) do
+      {:ok, from_state} -> resume_parked(issue, from_state, opts)
+      :none -> unblock_in_place(issue, opts, answered?)
     end
   end
 
-  defp unblock_in_place(issue, hold, stopped?, opts) do
-    cond do
-      Hold.unblockable?(hold) ->
-        clear_access_hold(issue, stopped?, opts)
+  defp unblock_in_place(issue, opts, answered?) do
+    ticket = ticket(issue)
+    reasons = pause_reasons(ticket)
+    held = Questions.held(ticket)
+    landing? = Enum.any?(reasons, &Competitors.landing_reason?/1)
 
-      BlockedHold.landing?(hold) ->
-        release_competitors(issue, opts)
-        clear_access_hold(issue, stopped?, opts)
-
-      stopped? ->
-        lift(issue, fn -> clear_stop(issue, opts) end, opts)
-
-      true ->
-        access_conflict(issue)
+    if answered? or landing? or held != nil or Enum.any?(reasons, & &1.releasable) do
+      if landing?, do: release_competitors(issue, opts)
+      release = Keyword.get(opts, :release, &release/2)
+      lift(issue, fn -> release.(ticket, held) end, opts)
+    else
+      access_conflict(issue)
     end
+  end
+
+  # A block report's question is answered with its own option, "Unblock and run again"
+  # (`TransitionGuard.block_report_question/1`); a dispatch loop's or a quiet handoff's with "Run it
+  # again".
+  defp unblock_label(%{options: options}) do
+    labels = Enum.map(options, & &1.label)
+    Enum.find([TransitionGuard.unblock_option(), DispatchLoop.option_label(:unblock)], &(&1 in labels))
+  end
+
+  defp unblock_label(nil), do: nil
+
+  defp pause_reasons(ticket) do
+    case Pauses.get(ticket) do
+      {:ok, %{reasons: reasons}} -> reasons
+      _none -> []
+    end
+  end
+
+  # The held question first: its answer is what the Director picked, then the reasons they release.
+  defp release(ticket, held) do
+    with :ok <- answer_held(ticket, held, unblock_label(held)),
+         {:ok, _pause} <- Pauses.clear_reasons(ticket, & &1.releasable, by: Pauses.director()),
+         do: :ok
   end
 
   # A release that fails is reported: the hold still clears, and the watcher unlinks what it can on
@@ -926,18 +938,18 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   # A ticket an idle run parked (`SymphonyElixir.IdlePark`) goes back to the phase it was parked
-  # from, its workspace and branch as they are, before its hold clears, so no dispatch sees it
-  # released in Backlog. Clearing the hold empties the record's counted runs and answers its
-  # question "Run it again"; the refresh `finish/6` asks for dispatches it at once.
-  defp resume_parked(issue, from_state, hold, stopped?, opts) do
+  # from, its workspace and branch as they are, before its pause lifts, so no dispatch sees it
+  # released in Backlog. Lifting it answers its question "Run it again", which empties the record's
+  # counted runs; the refresh `finish/6` asks for dispatches it at once.
+  defp resume_parked(issue, from_state, opts) do
+    ticket = ticket(issue)
+    held = Questions.held(ticket)
+    release = Keyword.get(opts, :release, &release/2)
+
     with :ok <- update_state(issue, from_state, :unblock) do
-      comment = resume_comment(issue.identifier, from_state)
-      lift(issue, parked_clear(issue, hold, stopped?, opts), comment, from_state, opts)
+      lift(issue, fn -> release.(ticket, held) end, resume_comment(issue.identifier, from_state), from_state, opts)
     end
   end
-
-  defp parked_clear(_issue, nil, _stopped?, _opts), do: fn -> :ok end
-  defp parked_clear(issue, _hold, stopped?, opts), do: fn -> clear_stop_and_hold(issue, stopped?, opts) end
 
   defp resume_comment(identifier, from_state),
     do: "Unblocked by the Director: #{identifier} goes back to #{from_state} with its workspace and branch as they are."
@@ -949,20 +961,7 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  defp access_conflict(issue), do: {:error, {:conflict, "#{issue.identifier} is not waiting on an access hold"}}
-
-  defp clear_access_hold(issue, stopped?, opts), do: lift(issue, fn -> clear_stop_and_hold(issue, stopped?, opts) end, opts)
-
-  # Once the hold is gone, so are the environment reasons a CI wait or self-heal's access hold set
-  # beside it (`SymphonyElixir.CiWait`, `SymphonyElixir.SelfHeal`), released by the Director. Those
-  # clears are best-effort, as the writers' own are.
-  defp clear_stop_and_hold(issue, stopped?, opts) do
-    with :ok <- if(stopped?, do: clear_stop(issue, opts), else: :ok),
-         :ok <- clear_blocked(issue, :unblock, opts) do
-      CiWait.clear_pause(issue.repo_key, issue.id, OperatorStop.director())
-      SelfHeal.healthy(issue.repo_key, issue.id, OperatorStop.director())
-    end
-  end
+  defp access_conflict(issue), do: {:error, {:conflict, "#{issue.identifier} has nothing a person can unblock"}}
 
   defp lift(issue, clear, opts), do: lift(issue, clear, unblock_comment(issue.identifier), nil, opts)
 
@@ -973,7 +972,7 @@ defmodule SymphonyElixir.DirectorMoves do
         post_unblock_comment(issue, comment, to_state, opts)
 
       {:error, reason} ->
-        {:error, {:store, "couldn't clear the hold on #{issue.identifier}: #{inspect(reason)}"}}
+        {:error, {:store, "couldn't lift the pause on #{issue.identifier}: #{inspect(reason)}"}}
     end
   end
 
@@ -1011,14 +1010,14 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  # The Inbox answers a question Symphony asked beside a Blocked hold (a dispatch loop's, a quiet
+  # The Inbox answers a question Unblock answers (`Questions.held/1`: a dispatch loop's, a quiet
   # handoff's, a park's, a block report's) with Decide, as it answers any question: its first pick
   # is the answer, and the option it picked does what `answer_held_question/4` says.
   defp decide_held_question(issue, %{question_id: question_id, picks: [%{answer: answer} | _picks]}, opts) when is_binary(question_id) do
     question_id = String.trim(question_id)
 
-    case blocked_hold(issue, opts) do
-      %{waits_on: %{question_id: ^question_id}} -> answer_held(issue, question_id, String.trim(answer), opts)
+    case Questions.held(ticket(issue)) do
+      %{id: ^question_id} -> answer_and_act(issue, question_id, String.trim(answer), opts)
       _other -> conflict("#{issue.identifier} is not waiting on a decision")
     end
   end
@@ -1105,7 +1104,7 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   defp answer_decision(issue, id, text, given?) do
-    case Questions.answer({:ticket, issue.repo_key, issue.id}, id, text, by: OperatorStop.director()) do
+    case Questions.answer({:ticket, issue.repo_key, issue.id}, id, text, by: Pauses.director()) do
       {:ok, question} -> {:ok, question}
       {:error, :question_not_found} when given? -> conflict("#{issue.identifier} has no question #{id}")
       {:error, :question_not_found} -> {:ok, nil}
@@ -1335,9 +1334,6 @@ defmodule SymphonyElixir.DirectorMoves do
       {:error, reason} -> {:error, {:linear, reason}}
     end
   end
-
-  # The Blocked hold in the store — the truth, whatever the board shows.
-  defp blocked_hold(%Issue{repo_key: repo_key, id: issue_id}, opts), do: Hold.get(repo_key, issue_id, :blocked, store_opts(opts))
 
   defp store_opts(opts), do: Keyword.take(opts, [:store])
 

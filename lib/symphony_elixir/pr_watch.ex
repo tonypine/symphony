@@ -16,7 +16,7 @@ defmodule SymphonyElixir.PrWatch do
 
   use Supervisor
 
-  alias SymphonyElixir.{BlockedHold, Config, LandingOrder, RunStore, TicketState}
+  alias SymphonyElixir.{Config, LandingOrder, RunStore, TicketState}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrWatch.{Attempts, Competitors, Repo, SilentWait}
 
@@ -244,9 +244,9 @@ defmodule SymphonyElixir.PrWatch do
 
   @doc """
   Every watched PR that waits for another to land first (`SymphonyElixir.LandingOrder`), or waits on
-  its competitors on a landing hold (`SymphonyElixir.PrWatch.Competitors`), with the PR it waits for
-  (the first competitor, for a hold), how many files they share, and the reason: the hold's, else
-  the one the watcher recorded.
+  its competitors (`SymphonyElixir.PrWatch.Competitors`), with the PR it waits for (the first
+  competitor, for that wait), how many files they share, and the reason: that wait's, else the one
+  the watcher recorded.
   """
   @spec landing_waits(keyword()) :: [map()]
   def landing_waits(opts \\ []) do
@@ -256,8 +256,8 @@ defmodule SymphonyElixir.PrWatch do
     |> Enum.sort_by(&(&1.issue_identifier || &1.issue_id || ""))
   end
 
-  defp landing_wait(%{landing: landing, hold: hold} = record) do
-    case landing.waits_for || held_wait(hold, record.links) do
+  defp landing_wait(%{landing: landing, waiting: waiting} = record) do
+    case landing.waits_for || held_wait(waiting, record.links) do
       %{} = wait ->
         [
           %{
@@ -268,8 +268,8 @@ defmodule SymphonyElixir.PrWatch do
             waits_for: Map.take(wait, [:issue_id, :issue_identifier, :pr_url, :state]),
             shared_files: wait.shared_files,
             files: wait.files,
-            reason: landing_reason(hold, record.decision, wait),
-            since: landing.waits_since || if(BlockedHold.landing?(hold), do: hold.set_at)
+            reason: landing_reason(waiting, record.decision, wait),
+            since: landing.waits_since || (waiting && waiting.set_at)
           }
         ]
 
@@ -278,9 +278,9 @@ defmodule SymphonyElixir.PrWatch do
     end
   end
 
-  # A landing hold waits on the competitors it recorded, the first of them named.
-  defp held_wait(hold, links) do
-    with true <- BlockedHold.landing?(hold),
+  # A wait on competitors waits on the ones it recorded, the first of them named.
+  defp held_wait(waiting, links) do
+    with %{} <- waiting,
          [link | _] <- for(%{released: false} = link <- links, do: link) do
       %{issue_id: link.issue_id, issue_identifier: link.issue_identifier || "PR ##{link.pr_number}", pr_url: link.pr_url, state: nil, shared_files: length(link.files), files: link.files}
     else
@@ -288,18 +288,18 @@ defmodule SymphonyElixir.PrWatch do
     end
   end
 
-  # The hold's words when the ticket waits on a landing hold; the decision's own words when it is the
+  # The wait's words when the ticket waits on its competitors; the decision's own words when it is the
   # landing wait; else how the landing order reads.
-  defp landing_reason(hold, decision, wait) do
+  defp landing_reason(waiting, decision, wait) do
     cond do
-      BlockedHold.landing?(hold) and is_binary(hold.reason) -> hold.reason
+      waiting != nil -> waiting.reason
       match?(%{kind: kind, reason: reason} when kind in [:wait_for_competitors, :wait] and is_binary(reason), decision) -> decision.reason
       true -> LandingOrder.reason(wait)
     end
   end
 
   @doc """
-  The competitors the issue's landing hold waits on, for the state API (`watch.waits_on`): each
+  The competitors the issue waits on to land, for the state API (`watch.waits_on`): each
   one's ticket (else its PR), its PR, how many files they share and which. Empty without a wait.
   """
   @spec competitor_waits(TicketState.pr_watch() | nil) :: [map()]
@@ -312,7 +312,7 @@ defmodule SymphonyElixir.PrWatch do
   def competitor_waits(_watch), do: []
 
   @doc """
-  A person's `Unblock` of the issue's landing hold: the PR watcher of `repo_key` removes the links
+  A person's `Unblock` of the issue's wait on its competitors: the PR watcher of `repo_key` removes the links
   Symphony added and stops waiting on those PRs (`SymphonyElixir.PrWatch.Competitors.release/3`),
   in its own process when it runs. `opts` go to the release when it doesn't.
   """
@@ -371,7 +371,7 @@ defmodule SymphonyElixir.PrWatch do
         pr_url: watch.pr_url,
         landing: landing,
         decision: watch.decision,
-        hold: TicketState.get_hold(record, :blocked),
+        waiting: Competitors.waiting(record),
         links: watch.links
       }
     end

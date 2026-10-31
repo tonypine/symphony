@@ -8,10 +8,10 @@ defmodule SymphonyElixir.TicketSignals do
   `SymphonyElixir.RunStore` and its shape in `SymphonyElixir.TicketState`.
 
   Each signal also records the event `event/2` maps it to (dual-write: the signals ledger stays the
-  source of truth until readers move over). A signal written next to a hold or a decision request
-  maps to none: `SymphonyElixir.Hold` records the `hold.set`, `hold.cleared`, `decision.requested`
-  or `decision.withdrawn` for the same change, and `SymphonyElixir.Decisions` the
-  `decision.recorded`, so each fact is one event.
+  source of truth until readers move over). A signal written next to a pause or a decision request
+  maps to none: `SymphonyElixir.Pauses` records the `pause.*` events for the same change,
+  `SymphonyElixir.Hold` the `decision.requested` or `decision.withdrawn`, and
+  `SymphonyElixir.Decisions` the `decision.recorded`, so each fact is one event.
 
   A signal that maps to `phase.entered` is a move, so it also asks the orchestrator for a cycle on
   the ticket's repo at once (`SymphonyElixir.Orchestrator.request_refresh/2`), and writes the phase it
@@ -177,7 +177,7 @@ defmodule SymphonyElixir.TicketSignals do
 
   @doc """
   The event a signal `name` with `details` maps to: its type, payload and `TicketEvents.record/5`
-  options, or `:mirrored` when a hold or decision event records the same change. Every payload a
+  options, or `:mirrored` when a pause or decision event records the same change. Every payload a
   signal maps to carries `signal`, the name it mirrors, except a `note`, whose text names it.
 
     * A phase move (`claim`, `ci fix return`, `review verdict`, `merge settled`, `restart`,
