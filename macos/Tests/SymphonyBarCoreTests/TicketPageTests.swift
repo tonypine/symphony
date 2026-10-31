@@ -16,8 +16,9 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(page.title, "Checkout total rounding")
         XCTAssertEqual(page.repoKey, "web-shop")
         XCTAssertEqual(page.url, URL(string: "https://linear.app/acme/issue/SHOP-305"))
-        XCTAssertEqual(page.phase, .working(stuck: true))
-        XCTAssertEqual(page.badges, [TicketPage.Badge(status: .problem, word: "Needs attention"), TicketPage.Badge(status: .forced, word: "Forced")])
+        // No activity for 14 min: the page no longer calls it stuck, only Symphony says why a ticket doesn't move.
+        XCTAssertEqual(page.phase, .working)
+        XCTAssertEqual(page.badges, [TicketPage.Badge(status: .working, word: "Working"), TicketPage.Badge(status: .forced, word: "Forced")])
         XCTAssertTrue(page.isForced)
         XCTAssertTrue(page.isRunning)
         XCTAssertTrue(page.isTracked)
@@ -45,7 +46,7 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(failed.detail, "mix test timed out after 20 min: CheckoutTotalTest hangs on the rounding test")
         XCTAssertEqual(failed.accessibilityLabel, "13:03, implementation run 1, failed, 22 minutes")
         XCTAssertEqual(page.timeline[1].result, .current)
-        XCTAssertEqual(page.timeline[1].resultWord, "no activity for 14 min")
+        XCTAssertEqual(page.timeline[1].resultWord, "running")
 
         XCTAssertEqual(page.facts, [
             TicketPage.Fact(label: "State", value: "In Progress"),
@@ -430,6 +431,116 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(TicketPage.Brief(identifier: "TP-1", items: [clarify])?.paragraphs, ["Answer the gate"])
     }
 
+    // MARK: - Paused: Symphony's one answer to why it doesn't move (TP-1242)
+
+    func testAPausedTicketShowsEachReasonInOrderWithReleaseOnlyWhereReleasable() throws {
+        let page = try pausedPage("SHOP-420")
+
+        XCTAssertEqual(page.phase, .paused)
+        let paused = try XCTUnwrap(page.paused)
+        XCTAssertEqual(paused.reasons.map(\.text), ["Waiting for your answer", "Waiting for SHOP-418 to finish"])
+        XCTAssertEqual(paused.reasons.map(\.since), ["10:02", "10:05"])
+        XCTAssertEqual(paused.reasons.map(\.releasable), [false, false])
+        XCTAssertEqual(paused.since, "10:02")
+        XCTAssertEqual(page.phaseSentence, "Paused for 2 reasons")
+        XCTAssertEqual(page.badges, [TicketPage.Badge(status: .you, word: "Waiting on you")])
+        XCTAssertEqual(page.openQuestions, ["Keep the old coupon field?"])
+    }
+
+    func testAnAnsweredQuestionLeavesTheDependencyRow() throws {
+        // Symphony clears the question's reason once it is answered; the dependency stays.
+        var issue = try JSONSerialization.jsonObject(with: pausedData("SHOP-420")) as! [String: Any]
+        var pause = issue["pause"] as! [String: Any]
+        pause["reasons"] = Array((pause["reasons"] as! [Any]).dropFirst())
+        issue["pause"] = pause
+        issue["open_questions"] = []
+        let page = TicketPage(
+            identifier: "SHOP-420",
+            sources: TicketPage.Sources(state: try pausedData("state"), issue: try JSONSerialization.data(withJSONObject: issue)),
+            timeZone: utc
+        )
+
+        XCTAssertEqual(page.paused?.reasons.map(\.text), ["Waiting for SHOP-418 to finish"])
+        XCTAssertEqual(page.phaseSentence, "Paused: waiting for SHOP-418 to finish")
+        XCTAssertEqual(page.badges, [TicketPage.Badge(status: .idle, word: "Paused")])
+        XCTAssertEqual(page.openQuestions, [])
+    }
+
+    func testAStoppedTicketSaysStoppedByYouWithRelease() throws {
+        let page = try pausedPage("SHOP-421")
+
+        let reason = try XCTUnwrap(page.paused?.reasons.first)
+        XCTAssertEqual(page.phaseSentence, "Paused: stopped by you at 11:04. Unblock runs it again; Restart starts it over from main.")
+        XCTAssertTrue(reason.releasable)
+        XCTAssertEqual(reason.releaseAccessibilityLabel, "Release: stopped by you at 11:04. Unblock runs it again; Restart starts it over from main.")
+        XCTAssertEqual(page.paused?.sinceText, "since 11:04")
+        // Release is the unblock move.
+        XCTAssertEqual(ControlAction.unblock("SHOP-421").path, "api/v1/control/unblock")
+    }
+
+    func testThreeReasonsKeepTheServersOrderAndOnlyTheReleasableOneOffersRelease() throws {
+        let page = try pausedPage("SHOP-422")
+
+        XCTAssertEqual(page.paused?.reasons.map(\.kind), ["ticket", "build", "question"])
+        XCTAssertEqual(page.paused?.reasons.map(\.releasable), [true, false, false])
+        XCTAssertEqual(page.phaseSentence, "Paused for 3 reasons")
+    }
+
+    func testTheStateEntryCarriesThePauseWhenTheTicketsEndpointDidntAnswer() throws {
+        let page = TicketPage(identifier: "SHOP-421", sources: TicketPage.Sources(state: try pausedData("state")), timeZone: utc)
+
+        XCTAssertEqual(page.phase, .paused)
+        XCTAssertEqual(page.paused?.reasons.map(\.kind), ["person"])
+    }
+
+    func testAMovingTicketWithTheBlockHasNoPausedLine() throws {
+        let page = try pausedPage("SHOP-410")
+
+        XCTAssertNil(page.paused)
+        XCTAssertEqual(page.phase, .inReview(qa: "QA pass running"))
+    }
+
+    func testWithTheBlockTheInboxAndBlockedListsNoLongerMakeTheTicketWait() throws {
+        // A ticket the old lists call waiting on you and blocked, which Symphony says moves.
+        let state = #"{"generated_at":"2026-10-18T11:20:00Z","waiting_on_you":[{"issue_identifier":"X-1"}],"#
+            + #""blocked":[{"issue_identifier":"X-1","reason":"held"}],"#
+            + #""slot_waiting":[{"issue_identifier":"X-1","reason":"max_total","pause":null,"open_questions":[]}]}"#
+        let page = TicketPage(identifier: "X-1", sources: TicketPage.Sources(state: Data(state.utf8)), timeZone: utc)
+
+        XCTAssertNil(page.paused)
+        XCTAssertEqual(page.phase, .waiting(on: "a slot (max_total)"))
+    }
+
+    func testAnOlderSymphonyWithoutTheBlockKeepsTodaysDerivation() throws {
+        // The same lists from a Symphony that predates the block: no paused line, today's phase.
+        let state = #"{"generated_at":"2026-10-18T11:20:00Z","waiting_on_you":[{"issue_identifier":"X-1"}],"#
+            + #""blocked":[{"issue_identifier":"X-1","reason":"held","blocked_by":[{"issue_identifier":"X-2"}]}]}"#
+        let issue = #"{"issue_identifier":"X-1","pause":{"since":"2026-10-18T10:00:00Z","reasons":[{"text":"ignored"}]}}"#
+        let page = TicketPage(identifier: "X-1", sources: TicketPage.Sources(state: Data(state.utf8), issue: Data(issue.utf8)), timeZone: utc)
+
+        XCTAssertNil(page.paused)
+        XCTAssertEqual(page.openQuestions, [])
+        XCTAssertEqual(page.phase, .waiting(on: "you"))
+
+        let blocked = #"{"generated_at":"2026-10-18T11:20:00Z","blocked":[{"issue_identifier":"X-1","blocked_by":[{"issue_identifier":"X-2"}]}]}"#
+        let blockedPage = TicketPage(identifier: "X-1", sources: TicketPage.Sources(state: Data(blocked.utf8)), timeZone: utc)
+        XCTAssertEqual(blockedPage.phase, .waiting(on: "a blocker: X-2"))
+    }
+
+    func testAPauseWithoutAReasonToShowIsNoPausedLine() throws {
+        let issue = #"{"issue_identifier":"X-1","open_questions":[],"pause":{"since":"bad","reasons":[{"kind":"ticket","text":"  "}]}}"#
+        let page = TicketPage(identifier: "X-1", sources: TicketPage.Sources(issue: Data(issue.utf8)), timeZone: utc)
+
+        XCTAssertNil(page.paused)
+        XCTAssertEqual(page.phase, .unknown)
+    }
+
+    func testAReasonReadsLowercaseAfterTheColonUnlessItOpensWithAName() {
+        XCTAssertEqual(TicketPage.Paused.lowercasedLead("Waiting for your answer"), "waiting for your answer")
+        XCTAssertEqual(TicketPage.Paused.lowercasedLead("TP-1194 must finish"), "TP-1194 must finish")
+        XCTAssertEqual(TicketPage.Paused.lowercasedLead("A"), "A")
+    }
+
     // MARK: - Helpers
 
     /// The `inbox-decision` fixture's items: the plan TP-923, TP-892's decision, TP-895's pull request, TP-896's
@@ -468,6 +579,19 @@ final class TicketPageTests: XCTestCase {
     }
 
     private func date(_ text: String) -> Date { TicketPage.date(text)! }
+
+    private func pausedData(_ name: String) throws -> Data {
+        try Data(contentsOf: fixture().deletingLastPathComponent().appendingPathComponent("paused-ticket/api/v1/\(name).json"))
+    }
+
+    /// A ticket of the `paused-ticket` fixture, as the window builds it from the state and the ticket's endpoint.
+    private func pausedPage(_ identifier: String) throws -> TicketPage {
+        TicketPage(
+            identifier: identifier,
+            sources: TicketPage.Sources(state: try pausedData("state"), issue: try pausedData(identifier)),
+            timeZone: utc
+        )
+    }
 
     func testAPausedRepositorysTicketSaysSoInOneLine() {
         func page(_ issue: [String: Any]) -> TicketPage {

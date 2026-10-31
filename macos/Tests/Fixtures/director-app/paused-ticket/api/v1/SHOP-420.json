@@ -1,0 +1,61 @@
+{
+  "issue_id": "i-420",
+  "issue_identifier": "SHOP-420",
+  "last_error": null,
+  "open_questions": [
+    {
+      "asked_at": "2026-10-18T10:02:00Z",
+      "asked_by": "Implementation run 1",
+      "confirm": null,
+      "id": "q-420",
+      "title": "Keep the old coupon field?"
+    }
+  ],
+  "pause": {
+    "reasons": [
+      {
+        "kind": "question",
+        "releasable": false,
+        "set_at": "2026-10-18T10:02:00Z",
+        "set_by": {
+          "kind": "run",
+          "name": "Implementation run 1"
+        },
+        "text": "Waiting for your answer",
+        "waits_on": {
+          "question_id": "q-420"
+        }
+      },
+      {
+        "kind": "ticket",
+        "releasable": false,
+        "set_at": "2026-10-18T10:05:00Z",
+        "set_by": {
+          "kind": "symphony",
+          "name": "Symphony"
+        },
+        "text": "Waiting for SHOP-418 to finish",
+        "waits_on": {
+          "identifier": "SHOP-418"
+        }
+      }
+    ],
+    "releasable": false,
+    "set_by": {
+      "kind": "run",
+      "name": "Implementation run 1"
+    },
+    "since": "2026-10-18T10:02:00Z"
+  },
+  "repo_key": "web-shop",
+  "repository_paused": false,
+  "retry": null,
+  "running": null,
+  "status": "dispatch_skipped",
+  "verdicts": [],
+  "watching": null,
+  "workspace": {
+    "host": null,
+    "path": null
+  }
+}

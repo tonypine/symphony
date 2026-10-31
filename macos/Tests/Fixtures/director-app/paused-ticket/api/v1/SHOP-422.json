@@ -1,0 +1,74 @@
+{
+  "issue_id": "i-422",
+  "issue_identifier": "SHOP-422",
+  "last_error": null,
+  "open_questions": [
+    {
+      "asked_at": "2026-10-18T09:50:00Z",
+      "asked_by": "QA run 1",
+      "confirm": null,
+      "id": "q-422",
+      "title": "Ship the gift card copy as written?"
+    }
+  ],
+  "pause": {
+    "reasons": [
+      {
+        "kind": "ticket",
+        "releasable": true,
+        "set_at": "2026-10-18T09:40:00Z",
+        "set_by": {
+          "kind": "symphony",
+          "name": "Symphony"
+        },
+        "text": "Waiting for SHOP-430 to finish: it fixes what stopped this ticket",
+        "waits_on": {
+          "identifier": "SHOP-430"
+        }
+      },
+      {
+        "kind": "build",
+        "releasable": false,
+        "set_at": "2026-10-18T09:45:00Z",
+        "set_by": {
+          "kind": "symphony",
+          "name": "Symphony"
+        },
+        "text": "Waiting for Symphony version 0.0.1.731, which has the fix",
+        "waits_on": {
+          "version": "0.0.1.731"
+        }
+      },
+      {
+        "kind": "question",
+        "releasable": false,
+        "set_at": "2026-10-18T09:50:00Z",
+        "set_by": {
+          "kind": "run",
+          "name": "QA run 1"
+        },
+        "text": "Waiting for your answer",
+        "waits_on": {
+          "question_id": "q-422"
+        }
+      }
+    ],
+    "releasable": true,
+    "set_by": {
+      "kind": "symphony",
+      "name": "Symphony"
+    },
+    "since": "2026-10-18T09:40:00Z"
+  },
+  "repo_key": "web-shop",
+  "repository_paused": false,
+  "retry": null,
+  "running": null,
+  "status": "dispatch_skipped",
+  "verdicts": [],
+  "watching": null,
+  "workspace": {
+    "host": null,
+    "path": null
+  }
+}

@@ -239,6 +239,10 @@ struct TicketPageActions {
     var openTicket: (String) -> Void = { _ in }
     /// True while a Check Now is on its way.
     var checking = false
+    /// A pause reason's Release: the unblock move.
+    var release: () -> Void = {}
+    /// True while the unblock is on its way.
+    var releasing = false
 
     /// A pull request link of the ticket's repo: its page (D15) when it is one, else the link.
     func open(pullRequest url: URL, repoKey: String?) {
@@ -284,7 +288,9 @@ struct TicketPageContent: View {
                     checkNow: { model.checkNow(page.identifier) },
                     openInInbox: { model.openInInbox(page.identifier) },
                     openTicket: model.openTicket,
-                    checking: model.checkingNow.contains(page.identifier)
+                    checking: model.checkingNow.contains(page.identifier),
+                    release: { model.send(.unblock(page.identifier)) },
+                    releasing: model.controlInFlight == .unblock(page.identifier)
                 ),
                 images: model.artifactImages,
                 note: model.ticketNote,
@@ -539,9 +545,13 @@ private struct TicketHeader: View {
                 .font(DesignTokens.TypeStyle.sentence.font)
                 .textSelection(.enabled)
                 .accessibilityAddTraits(.isHeader)
-            Text(page.phaseSentence)
-                .font(DesignTokens.TypeStyle.body.font)
-                .foregroundStyle(.secondary)
+            if let paused = page.paused, page.phase == .paused {
+                PausedLine(paused: paused, release: actions.release, releasing: actions.releasing)
+            } else {
+                Text(page.phaseSentence)
+                    .font(DesignTokens.TypeStyle.body.font)
+                    .foregroundStyle(.secondary)
+            }
             if let note = page.repositoryPausedNote {
                 Label(note, systemImage: "pause.circle")
                     .font(DesignTokens.TypeStyle.body.font)
@@ -570,6 +580,57 @@ private struct TicketHeader: View {
                 .font(DesignTokens.TypeStyle.label.font)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+        }
+    }
+}
+
+/// Why the ticket is paused: "Paused: waiting for your answer", or one row per reason under "Paused for 2 reasons",
+/// each with since when and Release where the Director may release it. Rows wrap rather than truncate.
+struct PausedLine: View {
+    let paused: TicketPage.Paused
+    let release: () -> Void
+    var releasing = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+            if paused.reasons.count == 1, let reason = paused.reasons.first {
+                row(paused.sentence, since: reason.since.map { "since \($0)" } ?? paused.sinceText, reason: reason)
+            } else {
+                Label {
+                    Text(([paused.sentence] + [paused.sinceText].compactMap { $0 }).joined(separator: " · "))
+                } icon: {
+                    Image(systemName: DesignTokens.Status.idle.symbol).accessibilityHidden(true)
+                }
+                .font(DesignTokens.TypeStyle.body.font)
+                .foregroundStyle(.secondary)
+                ForEach(paused.reasons) { reason in
+                    row(reason.text, since: reason.since.map { "since \($0)" }, reason: reason)
+                        .padding(.leading, DesignTokens.Space.s5)
+                }
+            }
+        }
+    }
+
+    private func row(_ text: String, since: String?, reason: TicketPage.Paused.Reason) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+            Text(text)
+                .font(DesignTokens.TypeStyle.body.font)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            if let since {
+                Text(since)
+                    .font(DesignTokens.TypeStyle.label.font)
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+            }
+            if reason.releasable {
+                Button(TicketPage.releaseTitle, action: release)
+                    .controlSize(.small)
+                    .disabled(releasing)
+                    .fixedSize()
+                    .help("Release this pause: Symphony sets the ticket moving again")
+                    .accessibilityLabel(reason.releaseAccessibilityLabel)
+            }
         }
     }
 }
