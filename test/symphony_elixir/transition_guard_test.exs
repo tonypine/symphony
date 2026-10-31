@@ -613,7 +613,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
                TransitionGuard.resolve_request(state, %{settings: designed_settings(), from_state: "In Progress"})
 
       assert attrs.reason =~ "reported a block"
-      assert attrs.clearing_condition =~ "access hold"
+      assert attrs.clearing_condition == "when a person unblocks it"
       assert attrs.waits_on == %{type: "access", keys: []}
     end
 
@@ -707,16 +707,25 @@ defmodule SymphonyElixir.TransitionGuardTest do
       assert length(Questions.open(@ticket)) == 1
     end
 
-    test "a ticket the question can't be asked on keeps the access hold as before; without a ticket nothing is written" do
+    test "a question that can't be asked pauses the ticket on a reason the Director releases; a pause the store refuses is the error" do
       log =
         capture_log(fn ->
-          unreadable = %{ticket: {:ticket, nil, "issue-12"}, issue_identifier: nil}
-          assert {:hold, :blocked, %{waits_on: %{type: "access", keys: []} = waits_on}} = report([], unreadable)
+          # A name too long for the question's title: the question is refused, the pause is not.
+          unaskable = %{issue_identifier: String.duplicate("MT-12 ", 40)}
+          assert {:hold, :blocked, %{waits_on: %{type: "access", keys: []} = waits_on}} = report([], unaskable)
           refute Map.has_key?(waits_on, :question_id)
         end)
 
       assert log =~ "Failed to ask the block report's question"
+      assert {:ok, %{reasons: [%{kind: :environment, text: "The run reported a block", releasable: true, set_by: %{kind: :run}}]}} = Pauses.get(@ticket)
 
+      capture_log(fn ->
+        assert {:error, {:invalid_subject, _subject}} = report([], %{ticket: {:ticket, nil, "issue-12"}, issue_identifier: nil})
+        assert {:error, {:invalid_subject, _subject}} = report(["TP-997"], %{ticket: {:ticket, nil, "issue-12"}})
+      end)
+    end
+
+    test "without a ticket the guard writes nothing" do
       assert {:hold, :blocked, %{waits_on: waits_on}} =
                TransitionGuard.resolve_request(state("Backlog"), %{
                  settings: designed_settings(),

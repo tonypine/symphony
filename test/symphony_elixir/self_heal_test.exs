@@ -4,7 +4,8 @@ defmodule SymphonyElixir.SelfHealTest do
   import ExUnit.CaptureLog
   import SymphonyElixir.TestSupport, only: [ticket_events: 2]
 
-  alias SymphonyElixir.{BlockedHold, NeedsDecisionHold, Pauses, Questions, SelfHeal, TicketState}
+  alias SymphonyElixir.{NeedsDecisionHold, Pauses, Questions, RunStore, SelfHeal, TicketState}
+  alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.Collector
   alias SymphonyElixir.Linear.Issue
@@ -109,6 +110,9 @@ defmodule SymphonyElixir.SelfHealTest do
   end
 
   setup do
+    # The ticket's pause is written through the real run store.
+    :ok = RunStore.clear()
+    on_exit(fn -> RunStore.clear() end)
     previous = Application.get_env(:symphony_elixir, :linear_client_module)
     Application.put_env(:symphony_elixir, :linear_client_module, LinearClient)
 
@@ -121,6 +125,14 @@ defmodule SymphonyElixir.SelfHealTest do
     end)
 
     :ok
+  end
+
+  # The fix tickets the ticket's pause waits on.
+  defp fix_tickets do
+    case Pauses.get({:ticket, @repo_key, @issue_id}) do
+      {:ok, %{reasons: reasons}} -> for %{waits_on: %{identifier: identifier}} = reason <- reasons, Pauses.ticket_source(reason) == :fix_ticket, do: identifier
+      _none -> []
+    end
   end
 
   defp issue(attrs \\ %{}) do
@@ -311,13 +323,10 @@ defmodule SymphonyElixir.SelfHealTest do
       assert %{scope: @symphony_repo_key, component: "qa_environment", title: "Self-heal: repair the qa_environment block"} = Process.get(:fixer_create)
       assert Process.get(:fixer_block) == {@issue_id, @fix_ticket}
 
-      assert {:blocked, %{waits_on: %{type: "fix_ticket", keys: [@fix_ticket]}}} = Process.get(:hold_attrs)
-      assert {@issue_id, "Blocked"} = Process.get(:machine_label)
+      assert @fix_ticket in fix_tickets()
     end
 
-    test "pauses the ticket on the fix ticket beside its hold, once however often it heals" do
-      :ok = SymphonyElixir.RunStore.clear()
-      on_exit(fn -> SymphonyElixir.RunStore.clear() end)
+    test "pauses the ticket on the fix ticket, once however often it heals" do
       ticket = {:ticket, @repo_key, @issue_id}
 
       assert :filed = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable)))
@@ -325,31 +334,28 @@ defmodule SymphonyElixir.SelfHealTest do
 
       assert {:ok, %{reasons: [reason]}} = Pauses.get(ticket)
       assert %{kind: :ticket, waits_on: %{identifier: @fix_ticket}, text: "Waiting for TP-900 to finish: it fixes what stopped this ticket"} = reason
-      assert reason.set_by == BlockedHold.reason_setter(:fix_ticket)
+      assert reason.set_by == Dependencies.setter(:fix_ticket)
       assert [{"pause.set", %{waits_on: %{identifier: @fix_ticket}}}] = ticket_events(@repo_key, @issue_id) |> Enum.filter(&match?({"pause." <> _, _}, &1))
     end
 
-    test "a setup block's dev server build files in the project's repo, and the hold gives the cause in words" do
+    test "a setup block's dev server build files in the project's repo, and the log gives the cause in words" do
       outcome = SymphonyElixir.SetupBlock.outcome({:verification_failed, {:dev_server_build_failed, 127}})
-      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome))
+      log = capture_log(fn -> assert :filed = SelfHeal.heal(issue(), heal_opts(outcome)) end)
 
       assert %{scope: @repo_key, component: "dev_server", description: description} = Process.get(:fixer_create)
       assert description =~ "before the agent's first turn"
 
-      assert {:blocked, %{reason: reason}} = Process.get(:hold_attrs)
-
-      assert reason ==
-               "waiting on fix ticket TP-900 for the dev_server block: " <>
-                 "verification.dev_server build failed with exit 127: a command it runs is not on the sandbox PATH"
+      assert log =~
+               "Self-heal holds TP-816 on TP-900 for its dev_server block: " <>
+                 "verification.dev_server build failed with exit 127: a command it runs is not on the sandbox PATH; the ticket is Blocked"
     end
 
     test "a setup block's port collision is Symphony's, a structural cause" do
       outcome = SymphonyElixir.SetupBlock.outcome({:verification_failed, {:loopback_bridge_unavailable, :eaddrinuse}})
-      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome))
+      log = capture_log(fn -> assert :filed = SelfHeal.heal(issue(), heal_opts(outcome)) end)
 
       assert %{scope: @symphony_repo_key, component: "qa_environment"} = Process.get(:fixer_create)
-      assert {:blocked, %{reason: reason}} = Process.get(:hold_attrs)
-      assert reason =~ "the port is already in use (eaddrinuse)"
+      assert log =~ "the port is already in use (eaddrinuse)"
     end
 
     test "files a QA host's missing tool in Symphony's repo, where its provisioning script lives" do
@@ -425,28 +431,25 @@ defmodule SymphonyElixir.SelfHealTest do
       assert evidence =~ "specs: ERROR: boom"
     end
 
-    test "a block a person must clear keeps the access hold and files nothing" do
-      assert :held = SelfHeal.heal(issue(), heal_opts(outcome(:secret_missing, %{needs_person: true})))
+    test "a block a person must clear pauses the ticket and files nothing" do
+      log = capture_log(fn -> assert :held = SelfHeal.heal(issue(), heal_opts(outcome(:secret_missing, %{needs_person: true}))) end)
 
       assert Process.get(:fixer_create) == nil
-
-      assert {:blocked, %{waits_on: %{type: "access", keys: []}, reason: reason}} = Process.get(:hold_attrs)
-      assert reason == "QA blocked after 0 attempt(s): :secret_missing"
+      assert log =~ "QA for TP-816 is blocked and needs a person: QA blocked after 0 attempt(s): :secret_missing"
+      assert Pauses.paused?({:ticket, @repo_key, @issue_id})
+      assert fix_tickets() == []
     end
 
-    test "a block a person must clear pauses the ticket on the broken component beside its access hold, once" do
-      :ok = SymphonyElixir.RunStore.clear()
-      on_exit(fn -> SymphonyElixir.RunStore.clear() end)
+    test "a block a person must clear pauses the ticket on the broken component, once" do
       ticket = {:ticket, @repo_key, @issue_id}
       outcome = outcome({:qa_worker, "qa_worker_unreachable"}, %{needs_person: true})
 
       assert :held = SelfHeal.heal(issue(), heal_opts(outcome))
       assert :held = SelfHeal.heal(issue(), heal_opts(outcome))
 
-      assert {:blocked, %{waits_on: %{type: "access", keys: []}}} = Process.get(:hold_attrs)
       assert {:ok, %{reasons: [reason]}} = Pauses.get(ticket)
       assert %{kind: :environment, waits_on: %{condition: "self_heal:worker_host"}, text: "The QA machine is not reachable", releasable: true} = reason
-      assert reason.set_by == BlockedHold.reason_setter(:fix_ticket)
+      assert reason.set_by == Dependencies.setter(:fix_ticket)
       assert SelfHeal.environment_reason?(reason)
     end
 
@@ -460,7 +463,7 @@ defmodule SymphonyElixir.SelfHealTest do
       assert {@fix_ticket, evidence} = Process.get(:fixer_attach)
       assert evidence =~ ":environment_unreachable"
       assert Process.get(:fixer_block) == {@issue_id, @fix_ticket}
-      assert {:blocked, %{waits_on: %{type: "fix_ticket", keys: [@fix_ticket]}}} = Process.get(:hold_attrs)
+      assert @fix_ticket in fix_tickets()
     end
 
     test "a fix ticket of the same component that is terminal or unreadable is not reused; a new one is filed" do
@@ -481,7 +484,7 @@ defmodule SymphonyElixir.SelfHealTest do
         assert %{component: "qa_environment", scope: @symphony_repo_key} = Process.get(:fixer_create)
         assert Process.get(:fixer_attach) == nil
         assert Process.get(:fixer_block) == {@issue_id, "TP-1001"}
-        assert {:blocked, %{waits_on: %{type: "fix_ticket", keys: ["TP-1001"]}}} = Process.get(:hold_attrs)
+        assert "TP-1001" in fix_tickets()
         assert %{fix_ticket: "TP-1001"} = Process.get(:recorded_self_heal)
         if fix_state == {:error, :not_found}, do: assert(log =~ "cannot reuse fix ticket TP-919")
       end
@@ -498,7 +501,7 @@ defmodule SymphonyElixir.SelfHealTest do
       assert %{component: "qa_environment", description: description} = Process.get(:fixer_create)
       assert description =~ "the QA build has no update signing key"
       assert Process.get(:fixer_attach) == nil
-      assert {:blocked, %{waits_on: %{keys: [@fix_ticket]}}} = Process.get(:hold_attrs)
+      assert @fix_ticket in fix_tickets()
     end
 
     test "a blocked QA outcome naming an open covering ticket holds the ticket on it and files nothing" do
@@ -514,8 +517,7 @@ defmodule SymphonyElixir.SelfHealTest do
       assert {"TP-716", evidence} = Process.get(:fixer_attach)
       assert evidence =~ "a fake gh and a git checkout are missing"
 
-      assert {:blocked, %{waits_on: %{type: "fix_ticket", keys: ["TP-716"]}, reason: reason}} = Process.get(:hold_attrs)
-      assert reason =~ "waiting on fix ticket TP-716 for the qa_environment block"
+      assert "TP-716" in fix_tickets()
       assert %{fix_ticket: "TP-716", component: "qa_environment"} = Process.get(:recorded_self_heal)
 
       # A covering ticket without a known state counts as open, as a blocker does.
@@ -538,18 +540,18 @@ defmodule SymphonyElixir.SelfHealTest do
           end)
 
         assert %{component: "qa_environment"} = Process.get(:fixer_create)
-        assert {:blocked, %{waits_on: %{keys: [@fix_ticket]}}} = Process.get(:hold_attrs)
+        assert @fix_ticket in fix_tickets()
         if covered_by != "TP-716", do: assert(log =~ "cannot wait on #{covered_by}")
       end
     end
 
-    test "reports a fix ticket that could not be filed, or a hold that could not be set" do
+    test "reports a fix ticket that could not be filed, or a pause that could not be set" do
       Process.put(:create_result, {:error, :linear_down})
       assert {:error, {:self_heal_fix_ticket_failed, :linear_down}} = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable)))
 
       Process.delete(:create_result)
-      Process.put(:hold_result, {:error, :disk_full})
-      assert {:error, {:self_heal_hold_failed, :disk_full}} = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable)))
+      opts = outcome(:environment_unreachable) |> heal_opts() |> Keyword.delete(:repo_key)
+      assert {:error, {:self_heal_hold_failed, {:invalid_subject, _subject}}} = SelfHeal.heal(issue(%{repo_key: nil}), opts)
     end
 
     test "an unknown scope is reported instead of filing somewhere arbitrary" do
@@ -722,14 +724,13 @@ defmodule SymphonyElixir.SelfHealTest do
       outcome = %{verdict: :blocked, reason: "needs TP-1000", steps: [%{name: "Watch the update banner", status: "blocked"}], findings: [], covered_by: "TP-1000"}
 
       for signature <- [SelfHeal.signature(outcome), "an older failure"] do
-        Process.delete(:hold_attrs)
         Process.put(:ticket_state, recorded(@repo_key, @issue_id, %{component: "qa_environment", scope: @symphony_repo_key, signature: signature}))
 
         assert :filed = SelfHeal.heal(issue(), heal_opts(outcome, attempts: 9, terminal_states: ["Done", "Canceled"]))
 
         assert Process.get(:fixer_create) == nil
         assert Process.get(:fixer_block) == {@issue_id, "TP-1000"}
-        assert {:blocked, %{waits_on: %{type: "fix_ticket", keys: ["TP-1000"]}}} = Process.get(:hold_attrs)
+        assert "TP-1000" in fix_tickets()
         assert %{fix_ticket: "TP-1000"} = Process.get(:recorded_self_heal)
       end
 
@@ -765,11 +766,10 @@ defmodule SymphonyElixir.SelfHealTest do
       assert {:error, {:self_heal_escalation_failed, :disk_full}} = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable)))
     end
 
-    test "reports an access hold that could not be set" do
-      Process.put(:hold_result, {:error, :disk_full})
+    test "reports a pause on a block a person must clear that could not be set" do
+      opts = outcome(:secret_missing, %{needs_person: true}) |> heal_opts() |> Keyword.delete(:repo_key)
 
-      assert {:error, {:self_heal_hold_failed, :disk_full}} =
-               SelfHeal.heal(issue(), heal_opts(outcome(:secret_missing, %{needs_person: true})))
+      assert {:error, {:self_heal_hold_failed, {:invalid_subject, _subject}}} = SelfHeal.heal(issue(%{repo_key: nil}), opts)
     end
 
     test "a non-issue is refused" do
@@ -834,11 +834,11 @@ defmodule SymphonyElixir.SelfHealTest do
       assert Process.get(:fixer_create) != nil
     end
 
-    test "a bookkeeping write that fails is reported and the hold still lands" do
+    test "a bookkeeping write that fails is reported and the pause still lands" do
       Process.put(:record_result, {:error, :disk_full})
 
       assert :filed = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable)))
-      assert Process.get(:hold_attrs) != nil
+      assert fix_tickets() == [@fix_ticket]
     end
 
     test "a link or an evidence comment that fails does not stop the hold" do
@@ -910,7 +910,7 @@ defmodule SymphonyElixir.SelfHealTest do
       opts = heal_opts(outcome(:environment_unreachable)) |> Keyword.delete(:repo_key)
 
       assert :filed = SelfHeal.heal(issue(), opts)
-      assert Process.get(:hold_attrs) != nil
+      assert fix_tickets() == [@fix_ticket]
     end
   end
 end
