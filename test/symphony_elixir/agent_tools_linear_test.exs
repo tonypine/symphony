@@ -3170,7 +3170,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       %{"type" => type, "issue" => %{"identifier" => identifier, "state" => state && %{"name" => state}}}
     end
 
-    test "a run that marked its issue blocked by open tickets gets a dependency hold on them" do
+    test "a run that marked its issue blocked by open tickets is paused on them" do
       :ok = SymphonyElixir.RunStore.clear()
 
       context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
@@ -3196,15 +3196,12 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert response["held"] == true
       assert response["reason"] == "the run reported a block: waiting on TP-997, TP-998"
       assert response["clearing_condition"] == "when every blocker is terminal"
-      assert_received {:machine_label_set, "issue-1", "Blocked"}
-
-      assert %{holds: [%{kind: :blocked, waits_on: %{type: "dependency", keys: ["TP-997", "TP-998"]}}]} =
-               SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
+      assert %{holds: []} = SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
 
       assert SymphonyElixir.Pauses.why({:ticket, "repo-a", "issue-1"}) == ["Waiting for TP-997 to finish", "Waiting for TP-998 to finish"]
     end
 
-    test "a block report naming no blocker asks its question on the ticket, which the access hold names" do
+    test "a block report naming no blocker asks its question on the ticket, which pauses it" do
       :ok = SymphonyElixir.RunStore.clear()
 
       context = %{issue_id: "issue-1", issue: %Issue{id: "issue-1", identifier: "TP-816", repo_key: "repo-a"}}
@@ -3217,13 +3214,12 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                  tracker: HoldTracker
                )
 
-      assert [%{id: question_id, title: "The run on TP-816 cannot continue on its own"}] = SymphonyElixir.Questions.open({:ticket, "repo-a", "issue-1"})
-
-      assert %{holds: [%{kind: :blocked, waits_on: %{type: "access", question_id: ^question_id}}]} =
-               SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
+      assert [%{id: _question_id, title: "The run on TP-816 cannot continue on its own"}] = SymphonyElixir.Questions.open({:ticket, "repo-a", "issue-1"})
+      assert SymphonyElixir.Pauses.why({:ticket, "repo-a", "issue-1"}) == ["Waiting for your answer: The run on TP-816 cannot continue on its own"]
+      assert %{holds: []} = SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
     end
 
-    test "a block report whose blockers are all terminal keeps the access hold" do
+    test "a block report whose blockers are all terminal waits on a person" do
       :ok = SymphonyElixir.RunStore.clear()
 
       context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
@@ -3236,11 +3232,10 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                  tracker: HoldTracker
                )
 
-      assert %{holds: [%{kind: :blocked, waits_on: %{type: "access", keys: []}}]} =
-               SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
+      assert %{reasons: [%{kind: :question}]} = SymphonyElixir.Pauses.get({:ticket, "repo-a", "issue-1"}) |> elem(1)
     end
 
-    test "turns an agent's Backlog request into a Blocked hold, without a move" do
+    test "turns an agent's Backlog request into a pause, without a move" do
       :ok = SymphonyElixir.RunStore.clear()
 
       context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
@@ -3257,11 +3252,21 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert response["hold"] == "Blocked"
       assert response["reason"] =~ "reported a block"
       assert response["message"] =~ "Blocked"
-      assert response["message"] =~ "a person lifts an access hold with Unblock"
-      assert_received {:machine_label_set, "issue-1", "Blocked"}
+      assert response["message"] =~ "a person lifts it with Unblock"
+      assert SymphonyElixir.Pauses.paused?({:ticket, "repo-a", "issue-1"})
+      assert %{holds: []} = SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
+    end
 
-      assert %{holds: [%{kind: :blocked, waits_on: %{type: "access"}}]} =
-               SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
+    test "a block report the store refuses to pause on is the tool's error" do
+      context = %{issue_id: "issue-1", issue: %{repo_key: nil}}
+
+      assert {:error, {:invalid_subject, _subject}} =
+               Linear.update_state(context, "Backlog",
+                 linear_client: team_client("In Progress", [relation("blocks", "TP-997", "Todo")]),
+                 settings: designed_settings(),
+                 store: SymphonyElixir.RunStore,
+                 tracker: HoldTracker
+               )
     end
 
     # A plan parent: the plan run hands over by naming `Plan Review`, and the guard performs the move
