@@ -233,7 +233,7 @@ defmodule SymphonyElixir.InboxTest do
       assert Inbox.items(%{}, inbox) == []
 
       # Stop: the ticket waits as Stopped by you; Unblock lifts it.
-      :ok = SymphonyElixir.OperatorStop.mark(repo_key, stopped.issue_id, ~U[2026-10-01 09:00:00Z])
+      :ok = SymphonyElixir.Pauses.stop({:ticket, repo_key, stopped.issue_id}, ~U[2026-10-01 09:00:00Z])
       assert [%{identifier: "SHOP-96", kind: :blocked, ask: "Stopped by you" <> _}] = Inbox.items(%{}, inbox)
       {:ok, nil} = SymphonyElixir.Pauses.clear_reasons({:ticket, repo_key, stopped.issue_id}, fn _reason -> true end)
       assert Inbox.items(%{}, inbox) == []

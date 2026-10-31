@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.DispatchLoopTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.{DecisionRequest, DispatchLoop, Hold, TicketState}
+  alias SymphonyElixir.{DecisionRequest, DispatchLoop, TicketState}
 
   @limits %{runs: 4, window_ms: 600_000, long_runs: 8, long_window_ms: 3_600_000}
   @now ~U[2026-10-13 18:00:00Z]
@@ -93,8 +93,7 @@ defmodule SymphonyElixir.DispatchLoopTest do
 
       assert attrs.clearing_condition == "when a person unblocks or restarts it"
       assert attrs.waits_on == %{type: "dispatch_loop", keys: ["implementation"]}
-      assert Hold.unblockable?(attrs)
-      assert Hold.dispatch_loop?(attrs)
+      assert DispatchLoop.hold_type() == "dispatch_loop"
     end
 
     test "words the window in seconds or one minute, and a run with no start time" do

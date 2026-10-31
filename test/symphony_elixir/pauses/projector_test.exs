@@ -83,9 +83,9 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
       assert Projector.desired(record(nil, [%{question | state: :answered}])).labels == []
     end
 
-    test "until the holds are retired, a hold shows its label, but a Blocked hold beside a question shows Needs Decision alone" do
+    test "until the Needs Decision hold is retired it shows its label; a retired Blocked hold shows none, and a question shows Needs Decision alone" do
       access = %{kind: :blocked, reason: "needs the deploy key", waits_on: %{type: "access", keys: []}}
-      assert Projector.desired(%{holds: [access]}).labels == ["Blocked"]
+      assert Projector.desired(%{holds: [access]}).labels == []
       assert Projector.desired(%{holds: [%{kind: :needs_decision}]}).labels == ["Needs Decision"]
 
       {:ok, question} = Questions.ask(@ticket, @request, at: @at)

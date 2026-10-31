@@ -425,16 +425,16 @@ defmodule SymphonyElixir.QuestionsTest do
       assert %{withdrawn: %{reason: "The ticket was cancelled."}} = Questions.find(@ticket, confirmation.id)
     end
 
-    test "a question a Blocked hold waits on ends with its hold, but a terminal state withdraws it and clears the hold" do
-      question = ask_as!(@run, "The run cannot continue")
-      :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "the run reported a block", waits_on: %{type: "access", keys: [], question_id: question.id}})
+    test "a question Unblock answers is decided by Unblock or Restart, but a terminal state withdraws it" do
+      {:ok, question} = Questions.ask(@ticket, SymphonyElixir.TransitionGuard.block_report_question("TP-1"), asked_by: @run)
+      assert Questions.held(@ticket).id == question.id
 
       assert {:ok, []} = Questions.withdraw_lapsed(@ticket, :restart)
-      assert Hold.held?(@repo_key, @issue_id, :blocked)
+      assert %{state: :open} = Questions.find(@ticket, question.id)
 
       assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, {:terminal, "Done"})
       assert %{withdrawn: %{reason: "The ticket moved to Done before you answered."}} = Questions.find(@ticket, question.id)
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      assert Questions.held(@ticket) == nil
     end
 
     test "a question that holds the ticket outlives its run ending; a Restart withdraws it with its cause (TP-1321)" do

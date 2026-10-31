@@ -1,7 +1,7 @@
 defmodule SymphonyElixirWeb.PresenterTicketStatusTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{OperatorStop, Pauses, Questions, TransitionGuard}
+  alias SymphonyElixir.{Pauses, Questions, TransitionGuard}
   alias SymphonyElixirWeb.Presenter
 
   @asked ~U[2026-10-30 09:00:00Z]
@@ -66,7 +66,7 @@ defmodule SymphonyElixirWeb.PresenterTicketStatusTest do
   end
 
   test "a stop is the reason the Director may release, and the pause says they may" do
-    :ok = OperatorStop.mark("default", "stopped", @blocked)
+    :ok = Pauses.stop({:ticket, "default", "stopped"}, @blocked)
     {:ok, _pause} = Pauses.add_reason({:ticket, "default", "stopped"}, Pauses.ticket_reason(:dependency, "MT-2"))
     pid = orchestrator(%{dispatch_skipped: [skipped("stopped", "MT-3")]})
 
