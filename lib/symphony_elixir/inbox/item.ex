@@ -27,12 +27,19 @@ defmodule SymphonyElixir.Inbox.Item do
   request or a plan review keeps its own, richer item. A dependency or fix-ticket hold clears on its
   own and is not listed at all — only an access or dispatch-loop hold waits on a person
   (`Hold.unblockable?/1`).
+
+  `from_question/2`, `from_plan_brief/2` and `from_pause/2` build the same items from the ticket's
+  record (`SymphonyElixir.TicketState`) instead of its Linear node: an open Question
+  (`SymphonyElixir.Questions`), the plan's brief captured as it entered `Plan Review`
+  (`SymphonyElixir.PlanBrief`) and a pause with a reason the Director may release
+  (`SymphonyElixir.Pauses`). `SymphonyElixir.Inbox.FromRecord` lists them.
   """
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{DecisionRequest, Hold}
+  alias SymphonyElixir.{DecisionRequest, Hold, PlanBrief, TicketState}
   alias SymphonyElixir.HumanActions.{Collector, Waiting}
   alias SymphonyElixir.Inbox.ReviewBrief
+  alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.MergeConfirmation
   alias SymphonyElixir.PlanReview
 
@@ -218,6 +225,136 @@ defmodule SymphonyElixir.Inbox.Item do
       %{identifier: child["identifier"], title: child["title"], url: child["url"], state: get_in(child, ["state", "name"])}
     end)
   end
+
+  @doc """
+  The `:action` item of `question`, an open Question on `record` (a normalized
+  `SymphonyElixir.TicketState`): what it asks, as `from_node/4` reads its request comment. It has
+  waited since the later of the move into the record's phase and when it was asked; `comment_id` is
+  the request comment the pause projector wrote or found for it, nil while none.
+  """
+  @spec from_question(TicketState.t(), map()) :: t()
+  def from_question(record, question) do
+    record
+    |> record_item(:action, question.title, latest([record.phase_at, question.asked_at]))
+    |> Map.put(:review, Map.merge(question_review(record, question), %{requested_at: question.asked_at, confirm: MergeConfirmation.confirm_target(%{decision: %{confirm: question.confirm}})}))
+  end
+
+  @doc """
+  The `:plan` item of `record` (a normalized `SymphonyElixir.TicketState`), or nil when it is no plan
+  (label `plan` or `breakdown`) in `settings`' `Plan Review` with a captured brief
+  (`SymphonyElixir.PlanBrief`). Its choices are the record's open Questions with options, oldest
+  first, then the captured choices whose Question the record does not hold; its unapplied answers
+  are the record's answers given since the plan entered its phase.
+  """
+  @spec from_plan_brief(TicketState.t(), Schema.t()) :: t() | nil
+  def from_plan_brief(record, settings) do
+    with true <- PlanReview.in_state?(record.phase, settings),
+         true <- Enum.any?(record.labels, &Issue.breakdown_label?/1),
+         %{} = plan <- PlanBrief.from_record(record) do
+      open = Enum.filter(record.questions, &(&1.state == :open))
+
+      record
+      |> record_item(:plan, brief_headline(plan.brief) || "Approve the plan", latest([record.phase_at | Enum.map(open, & &1.asked_at)]))
+      |> Map.put(:review, %{
+        brief: plan.brief,
+        sub_tickets: plan.sub_tickets,
+        decisions: plan_choices(record, open, plan.choices),
+        unapplied_answers: Enum.count(record.questions, &answered_since?(&1, record.phase_at))
+      })
+    else
+      _not_a_plan -> nil
+    end
+  end
+
+  @doc """
+  The `:blocked` item of `pause`, the pause on `record` (a normalized `SymphonyElixir.TicketState`),
+  from its first reason the Director may release, or nil when it has none: the reason's line and
+  since when, and what clears it as the record's Blocked hold says.
+  """
+  @spec from_pause(TicketState.t(), map() | nil) :: t() | nil
+  def from_pause(record, %{reasons: reasons}) do
+    case Enum.find(reasons, & &1.releasable) do
+      %{} = reason ->
+        hold = TicketState.get_hold(record, :blocked)
+
+        record
+        |> record_item(:blocked, reason.text, reason.set_at)
+        |> Map.put(:review, %{reason: reason.text, clearing_condition: hold && hold.clearing_condition})
+
+      nil ->
+        nil
+    end
+  end
+
+  def from_pause(_record, _pause), do: nil
+
+  defp record_item(record, kind, ask, waiting_since) do
+    %{
+      issue_id: record.issue_id,
+      identifier: record.issue_identifier,
+      title: record.title,
+      repo_key: record.repo_key,
+      kind: kind,
+      state: record.phase,
+      ask: ask,
+      waiting_since: waiting_since,
+      url: record.url,
+      review: %{}
+    }
+  end
+
+  # A Question as `request_review/3` shows a request.
+  defp question_review(record, question) do
+    %{
+      comment_id: projected_comment(record, question.id),
+      question_id: question.id,
+      title: question.title,
+      question: question.question,
+      why: question.why,
+      if_unanswered: question.if_unanswered,
+      unblocks: question.unblocks,
+      steps: [],
+      options: Enum.map(question.options, &question_option/1),
+      recommendation_reason: question.recommendation_reason
+    }
+  end
+
+  defp question_option(option) do
+    tradeoffs = for {kind, key} <- [{"good", :good}, {"cost", :cost}, {"risk", :risk}], text <- Map.get(option, key, []), do: %{kind: kind, text: text}
+    %{label: option.label, effect: blank_to_nil(option.effect), recommended: option.recommended?, tradeoffs: tradeoffs}
+  end
+
+  defp projected_comment(%{projected: %{comments: %{} = comments}}, question_id), do: get_in(comments, [question_id, :comment])
+  defp projected_comment(_record, _question_id), do: nil
+
+  # A captured choice the record holds the Question of is shown as that Question while it is open,
+  # and not at all once it ended; one whose Question the record does not hold is shown as captured.
+  defp plan_choices(record, open, choices) do
+    held = MapSet.new(record.questions, & &1.id)
+
+    open
+    |> Enum.filter(&(&1.options != []))
+    |> Enum.sort_by(&DateTime.to_unix(&1.asked_at, :microsecond))
+    |> Enum.map(&question_review(record, &1))
+    |> Enum.concat(Enum.reject(choices, &MapSet.member?(held, Map.get(&1, :question_id))))
+  end
+
+  defp answered_since?(%{state: :answered, answer: %{at: %DateTime{} = at}}, %DateTime{} = since), do: later?(at, since)
+  defp answered_since?(_question, _since), do: false
+
+  defp brief_headline(%{format: "parsed", headline: headline, what_to_review: items}) do
+    [headline | Enum.map(items, & &1.text)]
+    |> Enum.find(&(is_binary(&1) and String.trim(&1) != ""))
+    |> case do
+      nil -> nil
+      text -> Waiting.brief_headline("**What to review:** " <> text)
+    end
+  end
+
+  defp brief_headline(%{markdown: markdown}), do: Waiting.brief_headline(markdown)
+  defp brief_headline(_brief), do: nil
+
+  defp latest(times), do: times |> Enum.filter(&match?(%DateTime{}, &1)) |> Enum.max(DateTime, fn -> nil end)
 
   @doc "The Inbox item of a quality-gate hold (`kind: :clarification`) or skip, from the orchestrator snapshot."
   @spec from_quality_gate(map()) :: t()
