@@ -3,7 +3,7 @@
 
 Builds releases N and N+1 of Symphony.app from this checkout, installs N in a
 temporary folder, runs it in scripted QA mode against a fake Linear (the memory
-tracker) and a stub agent, and checks nine scenarios:
+tracker) and a stub agent, and checks ten scenarios:
 
 1. Update N -> N+1 while a run is active: the old Symphony drains and stops, the
    new app starts its Symphony on its own, dispatch resumes, every Symphony BEAM
@@ -32,6 +32,10 @@ tracker) and a stub agent, and checks nine scenarios:
    exist: N+1 fails its health check and is rolled back; N says so in a
    notification naming N+1 and the failed check, and in a menu line that opens
    N+1's notes, and doesn't install N+1 again.
+10. Retry vN+1 when N+1 can't start at all (the relaunch finds its binary not
+   executable): the update helper puts N back and N runs again within 60s of
+   the hand-over, says N+1 was rolled back, lists it as skipped, and the
+   update log names each step, the launch that failed included.
 
 It never touches the installed app: the app, its settings, secrets, logs,
 update downloads, Symphony's state and logs, HOME and the epmd port are all its
@@ -613,8 +617,7 @@ class Instance:
         lines.append(f"Symphony state: {json.dumps(self.symphony_state())[:600]}")
         lines.append(f"update checks the feed answered: {self.feed.latest_requests}")
         logs = [
-            self.qa / "updates" / "update-helper.log",
-            self.qa / "updates" / "rollback-helper.log",
+            self.qa / "logs" / "update.log",
             self.qa / "logs" / "menubar-child.log",
             self.stub_log,
             self.runs_log,
@@ -1210,6 +1213,100 @@ def scenario_automatic_rollback(instance):
     log("scenario 9 passed")
 
 
+# The bound the update helper gives a relaunched app to start (UpdateLaunch.timeout), and the acceptance bound for
+# having the previous app running again after an update whose app can't start.
+LAUNCH_SECONDS = 30
+RESTORED_WITHIN = 60
+
+
+def scenario_unlaunchable_update(instance):
+    log("scenario 10: N+1 can't start at all; the helper puts N back and N runs within 60s, N+1 skipped")
+    instance.quit()
+    v, v1 = version(BUILD_N), version(BUILD_N1)
+    rolled_back = instance.applications / "Symphony (rolled back).app"
+    shutil.rmtree(rolled_back, ignore_errors=True)
+    # The relaunch the helper runs instead of its own: the first time, it makes the new app unlaunchable, as a binary
+    # that lost its executable bit would be, and tries to run it; the restored app it runs as the helper would.
+    relaunch = instance.work / "bin" / "unlaunchable-relaunch"
+    broken = instance.work / "bin" / "unlaunchable-relaunch.done"
+    relaunch.write_text(
+        "#!/bin/sh\n"
+        f"if [ ! -e '{broken}' ]; then\n"
+        f"  touch '{broken}'\n"
+        "  chmod a-x \"$1/Contents/MacOS/SymphonyBar\"\n"
+        "fi\n"
+        f"\"$1/Contents/MacOS/SymphonyBar\" >> '{instance.work / 'logs' / 'relaunched.log'}' 2>&1 &\n"
+    )
+    relaunch.chmod(0o755)
+    instance.env["SYMPHONY_UPDATE_OPEN"] = str(relaunch)
+    update_log = instance.qa / "logs" / "update.log"
+    log_before = len(instance._read(update_log).splitlines()) if update_log.exists() else 0
+    first = instance.launch()
+    if first["build"] != BUILD_N:
+        raise Failure(f"the app is build {first['build']}, not {BUILD_N}")
+
+    # Scenario 9 pinned N+1; Retry installs it by hand.
+    instance.press(f"Retry v{v1}", timeout=60)
+    instance.wait_for_handoff(first["pid"])
+    handed_over = time.monotonic()
+    title = f"Symphony rolled back to v{v}"
+    restored = wait_for(
+        f"build {BUILD_N} to be put back and running, saying '{title}'",
+        lambda: (s := instance.status()) and s["pid"] != first["pid"] and s["build"] == BUILD_N
+        and any(a["title"] == title for a in s["alerts"]) and s,
+        RESTORED_WITHIN,
+    )
+    took = time.monotonic() - handed_over
+    log(f"build {BUILD_N} was put back as pid {restored['pid']} {took:.0f}s after the hand-over")
+    if not alive(restored["pid"]):
+        raise Failure(f"the restored app {restored['pid']} isn't running")
+    if instance.app_build(instance.app) != BUILD_N or instance.app_build(rolled_back) != BUILD_N1:
+        raise Failure("the app folder doesn't hold N as Symphony.app and N+1 as Symphony (rolled back).app")
+    if os.access(rolled_back / "Contents" / "MacOS" / "SymphonyBar", os.X_OK):
+        raise Failure("N+1's binary is still executable: the scenario didn't make it unlaunchable")
+
+    reason_start = f"the app didn't start within {LAUNCH_SECONDS} seconds of the update; see "
+    line = wait_for(
+        f"an enabled 'v{v1} was rolled back: …' line (menu: {list(instance.menu())})",
+        lambda: next((t for t, enabled in instance.menu().items()
+                      if t.startswith(f"v{v1} was rolled back: {reason_start}") and enabled), None),
+        30,
+    )
+    if not line.endswith("/logs/update.log"):
+        raise Failure(f"the rollback's reason doesn't name the update log: {line!r}")
+    # Skipped: the restored app pinned N+1, offers Retry and doesn't install it again.
+    changes = change_count(instance.release_notes)
+    pinned = f"Update rolled back: v{v1}" + (f" ({changes})" if changes else "")
+    wait_for(f"'{pinned}' (menu: {list(instance.menu())})", lambda: pinned in instance.menu(), 60)
+    if f"Retry v{v1}" not in instance.menu():
+        raise Failure(f"the restored app's menu has no 'Retry v{v1}': {instance.menu()}")
+
+    steps = instance._read(update_log).splitlines()[log_before:]
+    expected = (
+        f"[build {BUILD_N}] downloading v{v1}",
+        f"[build {BUILD_N}] v{v1} downloaded and verified",
+        f"[build {BUILD_N}] handing v{v1} over to the update helper",
+        "[helper] updated; the replaced app is at",
+        f"didn't start within {LAUNCH_SECONDS}s; putting",
+        "[helper] rolled back: the new app is at",
+        f"[build {BUILD_N}] put back after v{v1} didn't start",
+    )
+    position = 0
+    for step in expected:
+        found = next((i for i, text in enumerate(steps[position:], position) if step in text), None)
+        if found is None:
+            raise Failure(f"the update log has no line with {step!r} after line {position}:\n" + "\n".join(steps))
+        position = found + 1
+    if not all(re.match(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ \[", text) for text in steps):
+        raise Failure("an update log line has no timestamp:\n" + "\n".join(steps))
+    log(f"the update log names every step ({len(steps)} lines)")
+
+    status = instance.status()
+    if status["pid"] != restored["pid"] or status["build"] != BUILD_N:
+        raise Failure(f"the restored app didn't stay: now pid {status['pid']}, build {status['build']}")
+    log("scenario 10 passed")
+
+
 SCENARIOS = (
     scenario_update,
     scenario_restart,
@@ -1220,6 +1317,7 @@ SCENARIOS = (
     scenario_update_on_release_cancel,
     scenario_automatic_update,
     scenario_automatic_rollback,
+    scenario_unlaunchable_update,
 )
 
 

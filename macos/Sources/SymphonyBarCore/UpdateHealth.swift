@@ -329,19 +329,42 @@ public enum UpdateRelaunch: Equatable {
     case rolledBack(RollbackRecord)
     /// The rollback's swap failed, so this is still the build that failed its health check.
     case rollbackFailed(RollbackRecord)
+    /// The update's app didn't start, so the helper put this build back. The failed build never ran to pin itself, so
+    /// this one pins it.
+    case launchFailed(RollbackRecord)
 
     /// A failed build takes the pending update before it records its rollback, and the build it puts back is older,
     /// so any pending update, a build newer than the record, or the failed build in another app bundle means the
     /// record is stale: a version from before automatic rollback was put back, never read it, and has since started
     /// this update (to any build, the rolled-back one included), been replaced by a newer one, or been replaced by
     /// hand with the failed build. `runningBundle` is the running app's `RollbackRecord.bundleFileNumber`.
-    public init(pending: PendingUpdate?, rollback: RollbackRecord?, runningBuild: Int, runningBundle: Int? = nil) {
+    /// `launchFailure` is why the helper put this build back after the update's app didn't start, nil when it didn't.
+    public init(
+        pending: PendingUpdate?,
+        rollback: RollbackRecord?,
+        runningBuild: Int,
+        runningBundle: Int? = nil,
+        launchFailure: String? = nil
+    ) {
         if let rollback, pending == nil, runningBuild < rollback.build
             || (runningBuild == rollback.build && rollback.isSameBundle(runningBundle))
         {
             self = rollback.succeeded(runningBuild: runningBuild) ? .rolledBack(rollback) : .rollbackFailed(rollback)
+        } else if let pending, pending.succeeded(runningBuild: runningBuild) {
+            self = .checkHealth(pending)
+        } else if let pending, let launchFailure {
+            self = .launchFailed(
+                RollbackRecord(
+                    build: pending.toBuild,
+                    version: pending.version,
+                    reason: launchFailure,
+                    startSymphony: pending.startSymphony,
+                    resumeDispatch: pending.resumeDispatch,
+                    details: pending.details
+                )
+            )
         } else if let pending {
-            self = pending.succeeded(runningBuild: runningBuild) ? .checkHealth(pending) : .notReplaced(pending)
+            self = .notReplaced(pending)
         } else {
             self = .none
         }
@@ -357,7 +380,7 @@ public enum RollbackProblem: Equatable {
     /// The helper ran but couldn't swap the apps; its log is at the path.
     case swapFailed(logPath: String)
 
-    var detail: String {
+    public var detail: String {
         switch self {
         case .noPreviousApp:
             return "there is no Symphony (previous).app"

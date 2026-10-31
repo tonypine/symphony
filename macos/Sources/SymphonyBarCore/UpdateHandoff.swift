@@ -153,9 +153,6 @@ public enum UpdateEligibility {
 /// The script that swaps the app once it has quit: `Contents/Resources/update-helper.sh`.
 public enum UpdateHelper {
     public static let resourceName = "update-helper.sh"
-    public static let logName = "update-helper.log"
-    /// The helper's log when it rolls an update back.
-    public static let rollbackLogName = "rollback-helper.log"
     /// The helper's PATH outside QA mode: the system tools it runs.
     public static let path = "/usr/bin:/bin:/usr/sbin:/sbin"
     /// The Info.plist key that holds the minisign public key releases are checked against.
@@ -166,10 +163,23 @@ public enum UpdateHelper {
         app.deletingLastPathComponent().appendingPathComponent("Symphony (previous).app", isDirectory: true)
     }
 
-    /// `sh <script> <pid> <current app> <new app> <previous app>`.
-    public static func arguments(script: URL, pid: Int32, currentApp: URL, newApp: URL) -> [String] {
-        [script.path, String(pid), currentApp.path, newApp.path, previousAppURL(for: currentApp).path]
+    /// `sh <script> <pid> <current app> <new app> <previous app> <state folder> <rolled back app>`: the helper waits
+    /// for the relaunched app to write `UpdateLaunch.launchedName` in `stateDirectory`, and puts the previous app back
+    /// when it doesn't.
+    public static func arguments(script: URL, pid: Int32, currentApp: URL, newApp: URL, stateDirectory: URL) -> [String] {
+        [
+            script.path, String(pid), currentApp.path, newApp.path, previousAppURL(for: currentApp).path,
+            stateDirectory.path, rolledBackAppURL(for: currentApp).path,
+        ]
     }
+
+    /// The helper's environment: `base`, and how long the relaunched app has to start unless `base` says.
+    public static func environment(_ base: [String: String]) -> [String: String] {
+        base.merging([launchSecondsKey: String(UpdateLaunch.timeout)]) { set, _ in set }
+    }
+
+    /// The environment key the helper reads `UpdateLaunch.timeout` from.
+    public static let launchSecondsKey = "SYMPHONY_UPDATE_LAUNCH_SECONDS"
 
     /// Where a rollback moves the build that failed its health check: next to the app, as
     /// `Symphony (rolled back).app`, out of the previous app's place.

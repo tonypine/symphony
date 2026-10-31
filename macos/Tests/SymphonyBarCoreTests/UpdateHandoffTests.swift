@@ -86,9 +86,9 @@ final class UpdateHandoffTests: XCTestCase {
         XCTAssertTrue(pending.succeeded(runningBuild: 43))
         XCTAssertFalse(pending.succeeded(runningBuild: 42))
         XCTAssertEqual(
-            UpdateMenu.rolledBackMessage(pending, logPath: "~/Library/Caches/com.tonypine.symphony.bar/update-helper.log"),
+            UpdateMenu.rolledBackMessage(pending, logPath: "~/Library/Logs/symphony/update.log"),
             "The update to v0.0.1.43 couldn't replace the app, so this version was put back. "
-                + "See ~/Library/Caches/com.tonypine.symphony.bar/update-helper.log."
+                + "See ~/Library/Logs/symphony/update.log."
         )
     }
 
@@ -119,11 +119,28 @@ final class UpdateHandoffTests: XCTestCase {
         let app = URL(fileURLWithPath: "/Users/me/Applications/Symphony.app")
         let new = URL(fileURLWithPath: "/Users/me/Library/Caches/com.tonypine.symphony.bar/updates/0.0.1.43/app/Symphony.app")
         let script = URL(fileURLWithPath: "/Users/me/Library/Caches/com.tonypine.symphony.bar/update-helper.sh")
+        let cache = URL(fileURLWithPath: "/Users/me/Library/Caches/com.tonypine.symphony.bar")
 
         XCTAssertEqual(UpdateHelper.previousAppURL(for: app).path, "/Users/me/Applications/Symphony (previous).app")
         XCTAssertEqual(
-            UpdateHelper.arguments(script: script, pid: 123, currentApp: app, newApp: new),
-            [script.path, "123", app.path, new.path, "/Users/me/Applications/Symphony (previous).app"]
+            UpdateHelper.arguments(script: script, pid: 123, currentApp: app, newApp: new, stateDirectory: cache),
+            [
+                script.path, "123", app.path, new.path, "/Users/me/Applications/Symphony (previous).app", cache.path,
+                "/Users/me/Applications/Symphony (rolled back).app",
+            ],
+            "the helper watches the relaunch, and moves a new app that doesn't start where a rollback would"
+        )
+    }
+
+    func testHelperEnvironmentGivesTheRelaunchTheAppsBound() {
+        XCTAssertEqual(
+            UpdateHelper.environment(["PATH": UpdateHelper.path]),
+            ["PATH": UpdateHelper.path, "SYMPHONY_UPDATE_LAUNCH_SECONDS": "30"]
+        )
+        XCTAssertEqual(
+            UpdateHelper.environment(["SYMPHONY_UPDATE_LAUNCH_SECONDS": "5"]),
+            ["SYMPHONY_UPDATE_LAUNCH_SECONDS": "5"],
+            "a QA run's own bound is kept"
         )
     }
 
@@ -139,7 +156,6 @@ final class UpdateHandoffTests: XCTestCase {
                 "/Users/me/Applications/Symphony (rolled back).app",
             ]
         )
-        XCTAssertNotEqual(UpdateHelper.rollbackLogName, UpdateHelper.logName, "a rollback keeps the update's log")
     }
 
     func testMenuText() {

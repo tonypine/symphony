@@ -37,6 +37,8 @@ final class UpdateController {
     /// The update that passed its health check, for the menu line that says what changed.
     let lastUpdates = LastUpdateStore(defaults: AppStores.current.defaults)
     let cacheDirectory: URL
+    /// Every step of an update and a rollback, by this app and by the helper.
+    let log: UpdateLog
     private let current: AppBuild
     private let publicKey: MinisignPublicKey?
     private let installer: UpdateInstaller
@@ -47,6 +49,7 @@ final class UpdateController {
         let identifier = Bundle.main.bundleIdentifier ?? "com.tonypine.symphony.bar"
         cacheDirectory = AppStores.current.updateCacheDirectory
             ?? UpdateInstaller.defaultCacheDirectory(bundleIdentifier: identifier)
+        log = UpdateLog(directory: AppStores.current.logDirectory, source: "build \(current.build)")
         publicKey = (Bundle.main.object(forInfoDictionaryKey: UpdateHelper.publicKeyInfoKey) as? String)
             .flatMap { try? MinisignPublicKey($0) }
         installer = UpdateInstaller(
@@ -69,15 +72,12 @@ final class UpdateController {
         preparing.map(UpdateMenu.preparingLine) ?? error ?? notice
     }
 
-    /// The helper's log, with `~` for the home folder.
-    var helperLogPath: String {
-        (cacheDirectory.appendingPathComponent(UpdateHelper.logName).path as NSString).abbreviatingWithTildeInPath
-    }
+    /// The update log, with `~` for the home folder.
+    var logPath: String { log.path }
 
-    /// The helper's log for a rollback, with `~` for the home folder.
-    var rollbackLogPath: String {
-        (cacheDirectory.appendingPathComponent(UpdateHelper.rollbackLogName).path as NSString)
-            .abbreviatingWithTildeInPath
+    /// Tells the helper that relaunched this app that it runs.
+    func markLaunched() {
+        UpdateLaunch.markLaunched(in: cacheDirectory, build: current.build)
     }
 
     /// Why Update is off, nil when it is available.
@@ -104,6 +104,7 @@ final class UpdateController {
         notice = nil
         rolledBack = nil
         onChange?()
+        log.append("downloading v\(release.version) (\(kind.isAutomatic ? "automatic" : "manual") update)")
         download = Task {
             defer { download = nil }
             do {
@@ -114,6 +115,7 @@ final class UpdateController {
                 }
                 preparing = nil
                 prepared = update
+                log.append("v\(release.version) downloaded and verified")
                 onChange?()
                 ready(update)
             } catch {
@@ -122,14 +124,15 @@ final class UpdateController {
                     return
                 }
                 preparing = nil
-                fail(error.localizedDescription)
+                fail(error.localizedDescription, version: release.version)
             }
         }
     }
 
     /// Cancel Update while the release downloads and is verified: the download stops, and what it got is removed.
     func cancelPreparing() {
-        guard preparing != nil else { return }
+        guard let release = preparing else { return }
+        log.append("Cancel Update: the download of v\(release.version) was stopped")
         preparing = nil
         download?.cancel()
         kind = .manual
@@ -138,14 +141,17 @@ final class UpdateController {
 
     /// The drain didn't stop Symphony, so the update is called off; the restart machine said why.
     func cancel() {
+        log.append("the update to v\(prepared?.release.version ?? "?") was called off: Symphony wasn't stopped")
         prepared = nil
         kind = .manual
         installer.removeStaging()
         onChange?()
     }
 
-    /// Calls the update off, saying why in the menu, and in an alert unless the update is automatic.
-    func fail(_ reason: String) {
+    /// Calls the update off, saying why in the menu, and in an alert unless the update is automatic. `version` is the
+    /// release's, when it is no longer the one under way.
+    func fail(_ reason: String, version: String? = nil) {
+        log.append("the update to v\(version ?? release?.version ?? "?") failed: \(reason)")
         prepared = nil
         installer.removeStaging()
         error = kind.failureLine(reason)
@@ -168,14 +174,14 @@ final class UpdateController {
         }
         // Run a copy, so moving the app doesn't move the script from under the helper.
         let script = cacheDirectory.appendingPathComponent(UpdateHelper.resourceName)
-        let log = cacheDirectory.appendingPathComponent(UpdateHelper.logName)
         do {
             try? files.removeItem(at: script)
-            try? files.removeItem(at: log)
             try files.copyItem(at: bundled, to: script)
         } catch {
             throw UpdateError.helper(error.localizedDescription)
         }
+        UpdateLaunch.clearFailure(in: cacheDirectory)
+        log.rotateIfLarge()
 
         pending.save(
             kind.pendingUpdate(
@@ -191,15 +197,19 @@ final class UpdateController {
                 script: script,
                 pid: ProcessInfo.processInfo.processIdentifier,
                 currentApp: app,
-                newApp: update.appURL
+                newApp: update.appURL,
+                stateDirectory: cacheDirectory
             ),
             workingDirectory: cacheDirectory.path,
-            environment: AppStores.current.updateHelperEnvironment
+            environment: UpdateHelper.environment(AppStores.current.updateHelperEnvironment)
         )
+        // Before the helper starts, so the log's folder exists for its output.
+        log.append("handing v\(update.release.version) over to the update helper; quitting")
         do {
-            try ChildProcess.spawnDetached(launch, logURL: log)
+            try ChildProcess.spawnDetached(launch, logURL: log.url)
         } catch {
             pending.clear()
+            log.append("couldn't start the update helper: \(error.localizedDescription)")
             throw UpdateError.helper(error.localizedDescription)
         }
     }
@@ -231,11 +241,9 @@ final class UpdateController {
             return .helper("\(UpdateHelper.resourceName) is missing from the app")
         }
         let script = cacheDirectory.appendingPathComponent(UpdateHelper.resourceName)
-        let log = cacheDirectory.appendingPathComponent(UpdateHelper.rollbackLogName)
         do {
             try files.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
             try? files.removeItem(at: script)
-            try? files.removeItem(at: log)
             try files.copyItem(at: bundled, to: script)
         } catch {
             return .helper(error.localizedDescription)
@@ -252,10 +260,13 @@ final class UpdateController {
             workingDirectory: cacheDirectory.path,
             environment: AppStores.current.updateHelperEnvironment
         )
+        log.rotateIfLarge()
+        log.append("handing the rollback of v\(record.version) over to the update helper; quitting")
         do {
-            try ChildProcess.spawnDetached(launch, logURL: log)
+            try ChildProcess.spawnDetached(launch, logURL: log.url)
         } catch {
             rollbacks.clear()
+            log.append("couldn't start the update helper for the rollback: \(error.localizedDescription)")
             return .helper(error.localizedDescription)
         }
         return nil
