@@ -158,8 +158,9 @@ defmodule SymphonyElixir.Pauses.DependenciesTest do
       todo = TicketState.new(@repo_key, @issue_id, %{phase: "Todo", blockers: blockers})
       running = TicketState.new(@repo_key, "issue-2", %{phase: "In Progress", blockers: blockers})
       skipped = TicketState.new("repo-polled", "issue-3", %{phase: "Todo", blockers: blockers})
+      unphased = %{TicketState.new(@repo_key, "issue-4", %{blockers: blockers}) | phase: nil}
 
-      assert Dependencies.sync_records([todo, running, skipped, %{issue_id: nil}], @terminal, skip: "repo-polled") == 1
+      assert Dependencies.sync_records([todo, running, skipped, unphased, %{issue_id: nil}], @terminal, skip: "repo-polled") == 1
       assert Pauses.why(@ticket) == ["Waiting for TP-1 to finish"]
       refute Pauses.paused?({:ticket, @repo_key, "issue-2"})
       refute Pauses.paused?({:ticket, "repo-polled", "issue-3"})

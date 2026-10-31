@@ -275,10 +275,12 @@ defmodule SymphonyElixir.Hold do
   defp held_question(%{kind: :needs_decision, decision: %{question_id: id}}) when is_binary(id), do: id
   defp held_question(_hold), do: nil
 
+  # A question already answered, withdrawn or gone has ended; any other failure is the store's.
   defp ended({:ok, _question}), do: :ok
-  defp ended({:error, {:question_not_open, _state}}), do: :ok
-  defp ended({:error, :question_not_found}), do: :ok
-  defp ended({:error, reason}), do: {:error, reason}
+  defp ended({:error, reason}), do: if(question_ended?(reason), do: :ok, else: {:error, reason})
+
+  defp question_ended?({:question_not_open, _state}), do: true
+  defp question_ended?(reason), do: reason == :question_not_found
 
   # A hold that appeared or went is a change of the record's holds, which the PR watcher re-decides
   # the ticket on; a hold set again over itself changes nothing it reads.

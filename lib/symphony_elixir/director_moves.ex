@@ -762,17 +762,14 @@ defmodule SymphonyElixir.DirectorMoves do
   defp loop_reason?(_reason), do: false
 
   # The held question answered with its option labelled `label`; one without it, or none, is left.
+  # The question was read open just before, so a refused answer is the store's failure.
   defp answer_held(ticket, %{id: id, options: options}, label) do
     if Enum.any?(options, &(&1.label == label)),
-      do: ended(Questions.answer(ticket, id, label, by: Pauses.director())),
+      do: with({:ok, _question} <- Questions.answer(ticket, id, label, by: Pauses.director()), do: :ok),
       else: :ok
   end
 
   defp answer_held(_ticket, nil, _label), do: :ok
-
-  defp ended({:ok, _question}), do: :ok
-  defp ended({:error, {:question_not_open, _state}}), do: :ok
-  defp ended({:error, reason}), do: {:error, reason}
 
   defp ticket(issue), do: {:ticket, issue.repo_key, issue.id}
 
