@@ -123,7 +123,7 @@ final class APIFixturesTests: XCTestCase {
     }
 
     func testTheInboxFixturesServeTheirInboxStateAndRepos() async {
-        for name in ["inbox", "inbox-empty", "inbox-decision"] {
+        for name in ["inbox", "inbox-empty", "inbox-decision", "inbox-paused"] {
             let directory = Self.shippedRunning.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true)
             let shipped = APIFixtures(directory: directory, requestLog: root.appendingPathComponent("api-requests.jsonl"))
             let inbox = shipped.answer(request(InboxPayload.path))

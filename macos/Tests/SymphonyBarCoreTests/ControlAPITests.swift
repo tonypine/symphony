@@ -179,6 +179,25 @@ final class ControlAPITests: XCTestCase {
         XCTAssertNil(ControlAction.note(repoKey: "web-shop", identifier: "SHOP-410", text: "x").moveIdentifier)
     }
 
+    /// Decide names the Question when the Inbox row carries its id (TP-1240), else the request comment, as a Symphony
+    /// that predates the id takes it; never both.
+    func testDecideNamesTheQuestionWhenTheRowHasOneElseTheRequestComment() throws {
+        let picks = [ControlAction.DecisionPick(question: "Keep it?", answer: "Keep it open")]
+        for (request, field, id) in [
+            (ControlAction.AnsweredRequest(questionID: "q-892", commentID: "c-892"), "question_id", "q-892"),
+            (ControlAction.AnsweredRequest(questionID: nil, commentID: "c-892"), "request_comment_id", "c-892"),
+        ] {
+            let answered = try XCTUnwrap(request)
+            let decide = ControlAPI.request(.decide("TP-892", request: answered, picks: picks, move: "rework"), base: base, token: "secret")
+            XCTAssertEqual(decide.url?.absoluteString, "http://127.0.0.1:4010/api/v1/control/decide")
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(decide.httpBody)) as? [String: Any])
+            XCTAssertEqual(Set(body.keys), ["issue_identifier", field, "picks", "move"])
+            XCTAssertEqual(body[field] as? String, id)
+            XCTAssertEqual(body["picks"] as? [[String: String]], [["question": "Keep it?", "answer": "Keep it open"]])
+        }
+        XCTAssertNil(ControlAction.AnsweredRequest(questionID: nil, commentID: nil))
+    }
+
     func testNoteResponses() {
         let note = ControlAction.note(repoKey: "web-shop", identifier: "SHOP-410", text: "Keep the header.")
         // Symphony answers the recorded event: the note was written.

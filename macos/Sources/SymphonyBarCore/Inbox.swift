@@ -19,6 +19,25 @@ public struct InboxPayload: Equatable {
         return InboxPayload(items: items.compactMap(InboxItem.init))
     }
 
+    /// The Inbox with each blocked row reading its ticket's pause (TP-1242) from `state`, Symphony's
+    /// `/api/v1/state`: the reasons from the ticket's entry in any of its lists, and the row's line from them. A
+    /// Symphony that predates the pause, or a ticket no list carries, leaves the row as the hold tells it.
+    public func withPauses(fromState state: Data?) -> InboxPayload {
+        guard let state, let lists = try? Self.decoder.decode(TicketPage.TicketStatus.Lists.self, from: state) else { return self }
+        var payload = self
+        for index in payload.items.indices where payload.items[index].kind == .blocked {
+            let reasons = (lists.status(of: payload.items[index].identifier)?.pause?.reasons ?? []).compactMap { reason in
+                reason.text.map { InboxReview.Blocked.PauseReason(kind: reason.kind, text: $0, releasable: reason.releasable ?? false) }
+            }
+            guard !reasons.isEmpty else { continue }
+            var blocked = payload.items[index].review.blocked ?? InboxReview.Blocked()
+            blocked.pauseReasons = reasons
+            payload.items[index].review.blocked = blocked
+            payload.items[index].ask = blocked.headline ?? payload.items[index].ask
+        }
+        return payload
+    }
+
     static let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
@@ -298,9 +317,16 @@ public struct InboxReview: Equatable {
         /// The id of the request comment a decision answers: its reply goes under it. Nil for a request Symphony
         /// can't answer from the Inbox.
         public var commentID: String?
+        /// The id of the Question the request asks (TP-1240): the answer names it. Nil from a Symphony that predates
+        /// it, whose answer names the request comment instead.
+        public var questionID: String? = nil
         /// The state confirming the request moves the ticket to: `Merging` for a merge confirmation, nil for an
         /// ordinary decision, which moves nothing.
         public var confirm: String?
+
+        /// What an answer names: the Question when the row carries its id, else the request comment; nil when the
+        /// Inbox can't answer the request.
+        public var answered: ControlAction.AnsweredRequest? { .init(questionID: questionID, commentID: commentID) }
 
         public struct Option: Equatable {
             public var label: String
@@ -402,14 +428,66 @@ public struct InboxReview: Equatable {
     }
 
     /// A ticket an access hold pauses in place (state-machine §Holds): the reason the hold recorded, and what
-    /// clears it. Only an access hold is listed — a dependency or fix-ticket hold clears on its own.
+    /// clears it. Only an access hold is listed — a dependency or fix-ticket hold clears on its own. Once Symphony
+    /// says why the ticket is paused (TP-1242), its pause's reasons stand in for the hold's words.
     public struct Blocked: Equatable {
+        public static let stoppedByYou = "Stopped by you"
+
+        /// One reason of the ticket's pause, as Symphony's `pause` block says it.
+        public struct PauseReason: Equatable {
+            /// `person`, `ticket`, `environment`, `question` or `build`.
+            public var kind: String?
+            /// "Waiting for TP-1194 to finish", Symphony's own words.
+            public var text: String
+            /// Whether the Director may release it.
+            public var releasable: Bool
+
+            public init(kind: String?, text: String, releasable: Bool) {
+                self.kind = kind
+                self.text = text
+                self.releasable = releasable
+            }
+
+            /// The reason's line: the Director's own stop reads "Stopped by you", any other reason its words.
+            public var line: String { kind == "person" ? Blocked.stoppedByYou : text }
+        }
+
         public var reason: String?
         public var clearingCondition: String?
+        /// The ticket's pause reasons in the order they were set; empty from a Symphony that predates them, or while
+        /// its state lists don't carry the ticket, and the hold's reason stands.
+        public var pauseReasons: [PauseReason] = []
 
-        /// What the review says under the reason: what clears the hold.
+        /// True when the Director's stop pauses it: Unblock runs it again, and Restart starts it over.
+        public var stoppedByYou: Bool { pauseReasons.contains { $0.kind == "person" } }
+
+        /// True when no stop of the Director's pauses it and a reason they may release does: a ticket it waits on or
+        /// an environment hold. Release lifts it.
+        public var releasable: Bool {
+            !stoppedByYou && pauseReasons.contains { $0.releasable && ["ticket", "environment"].contains($0.kind ?? "") }
+        }
+
+        /// The review's lines: one per pause reason, else the hold's reason.
+        public var reasonLines: [String] {
+            pauseReasons.isEmpty ? [reason].compactMap { $0 } : pauseReasons.map(\.line)
+        }
+
+        /// The row's line: the one reason's, or "Paused for 2 reasons"; nil without pause reasons, where the hold's
+        /// reason stays.
+        public var headline: String? {
+            guard let first = pauseReasons.first else { return nil }
+            return pauseReasons.count == 1 ? first.line : "Paused for \(pauseReasons.count) reasons"
+        }
+
+        /// What the review says under the reasons: what each move does, or what clears the hold.
         public var nextLine: String {
-            clearingCondition.map { "Clears \($0)." } ?? "Symphony lifts the hold when what it waits on clears."
+            if stoppedByYou { return "Unblock runs it again where it stopped; Restart starts it over from main." }
+            if releasable {
+                return pauseReasons.allSatisfy(\.releasable)
+                    ? "Release it and it continues from where it stopped."
+                    : "Release ends the waits you may release; it continues once the others clear on their own."
+            }
+            return clearingCondition.map { "Clears \($0)." } ?? "Symphony lifts the hold when what it waits on clears."
         }
     }
 
@@ -508,6 +586,7 @@ public struct InboxReview: Equatable {
             let options: [OptionPayload]?
             let recommendationReason: String?
             let commentId: String?
+            let questionId: String?
         }
 
         // A plan or PR.
@@ -528,6 +607,8 @@ public struct InboxReview: Equatable {
         let recommendationReason: String?
         /// The request comment a decision answers.
         let commentId: String?
+        /// The Question the request asks.
+        let questionId: String?
         /// The state confirming the request moves the ticket to.
         let confirm: String?
         // A clarify item.
@@ -569,6 +650,7 @@ public struct InboxReview: Equatable {
                 options: Self.options(payload.options),
                 recommendationReason: payload.recommendationReason,
                 commentID: payload.commentId,
+                questionID: payload.questionId,
                 confirm: payload.confirm
             ),
             questions: (payload.decisions ?? []).map { request in
@@ -582,6 +664,7 @@ public struct InboxReview: Equatable {
                     options: Self.options(request.options),
                     recommendationReason: request.recommendationReason,
                     commentID: request.commentId,
+                    questionID: request.questionId,
                     confirm: nil
                 )
             },

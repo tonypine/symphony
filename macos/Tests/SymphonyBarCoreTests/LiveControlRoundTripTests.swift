@@ -29,7 +29,7 @@ final class LiveControlRoundTripTests: XCTestCase {
         )
         let action = ControlAction.decide(
             "TP-7",
-            requestCommentID: "comment-1",
+            request: .comment("comment-1"),
             picks: [ControlAction.DecisionPick(question: "Which layout?", answer: "Two columns")],
             move: nil
         )

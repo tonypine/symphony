@@ -49,6 +49,81 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(InboxReview.Blocked(reason: "Needs a key").nextLine, "Symphony lifts the hold when what it waits on clears.")
     }
 
+    /// A row from a Symphony that names the Question (TP-1240) carries its id, and the answer names it; a blocked row
+    /// reads its ticket's pause (TP-1242) from the state payload: "Stopped by you", a reason's own words, or how many.
+    func testRowsNameTheirQuestionAndBlockedRowsReadThePauseFromTheState() throws {
+        let raw = try payload("inbox-paused")
+        let inbox = raw.withPauses(fromState: try Data(contentsOf: fixture("inbox-paused").appendingPathComponent("state.json")))
+        XCTAssertEqual(inbox.items.map(\.identifier), ["TP-923", "TP-892", "TP-895", "TP-896", "TP-897", "TP-898", "TP-899"])
+
+        let action = try XCTUnwrap(inbox.items[1].review.action)
+        XCTAssertEqual(action.questionID, "q-892")
+        XCTAssertEqual(action.commentID, "c-892-request")
+        XCTAssertEqual(action.answered, .question("q-892"))
+
+        let stopped = inbox.items[4]
+        let stop = try XCTUnwrap(stopped.review.blocked)
+        XCTAssertEqual(stopped.ask, "Stopped by you")
+        XCTAssertEqual(stop.pauseReasons.map(\.kind), ["person"])
+        XCTAssertTrue(stop.stoppedByYou)
+        XCTAssertFalse(stop.releasable)
+        XCTAssertEqual(stop.reasonLines, ["Stopped by you"])
+        XCTAssertEqual(stop.nextLine, "Unblock runs it again where it stopped; Restart starts it over from main.")
+        // The hold's words are kept beside the pause, for a Symphony that stops sending it.
+        XCTAssertEqual(stop.reason, "Stopped by you at 14:13. Unblock runs it again where it stopped; Restart starts it over from main.")
+
+        let landing = inbox.items[5]
+        let waits = try XCTUnwrap(landing.review.blocked)
+        XCTAssertEqual(landing.ask, "Waiting for TP-891 to land first")
+        XCTAssertTrue(waits.releasable)
+        XCTAssertEqual(waits.reasonLines, ["Waiting for TP-891 to land first"])
+        XCTAssertEqual(waits.nextLine, "Release it and it continues from where it stopped.")
+
+        let two = inbox.items[6]
+        let both = try XCTUnwrap(two.review.blocked)
+        XCTAssertEqual(two.ask, "Paused for 2 reasons")
+        XCTAssertEqual(both.reasonLines, ["Waiting for the upload host to accept releases again", "Waiting for TP-893 to finish"])
+        XCTAssertEqual(both.pauseReasons.map(\.releasable), [true, false])
+        XCTAssertTrue(both.releasable)
+        XCTAssertEqual(both.nextLine, "Release ends the waits you may release; it continues once the others clear on their own.")
+
+        // The other rows are as Symphony sent them.
+        XCTAssertEqual(Array(inbox.items.prefix(4)), Array(raw.items.prefix(4)))
+    }
+
+    /// Against a Symphony that predates the question id and the pause the Inbox reads as it did: the answer names the
+    /// request comment, and the blocked row keeps the hold's words.
+    func testAnOlderSymphonysInboxReadsAsBefore() throws {
+        let inbox = try payload("inbox-decision")
+        let state = try Data(contentsOf: fixture("inbox-decision").appendingPathComponent("state.json"))
+        XCTAssertEqual(inbox.withPauses(fromState: state), inbox)
+        XCTAssertEqual(inbox.withPauses(fromState: nil), inbox)
+        XCTAssertEqual(inbox.withPauses(fromState: Data("not json".utf8)), inbox)
+        XCTAssertEqual(inbox.items[1].review.action?.questionID, nil)
+        XCTAssertEqual(inbox.items[1].review.action?.answered, .comment("c-892-request"))
+
+        let blocked = try XCTUnwrap(inbox.items[4].review.blocked)
+        XCTAssertEqual(inbox.items[4].ask, "The run reported a block")
+        XCTAssertTrue(blocked.pauseReasons.isEmpty)
+        XCTAssertNil(blocked.headline)
+        XCTAssertFalse(blocked.stoppedByYou)
+        XCTAssertFalse(blocked.releasable)
+        XCTAssertEqual(blocked.reasonLines, ["The GitHub token can't comment on #448, so TP-897 can't post TP-892's QA screenshots there."])
+        XCTAssertEqual(blocked.nextLine, "Clears when a person gives the GitHub token write access to pull requests.")
+
+        // A ticket the state lists as moving (no pause), or a pause without words, leaves the row as the hold tells it.
+        let newer = try payload("inbox-paused")
+        XCTAssertEqual(newer.withPauses(fromState: state), newer)
+        let moving = Data(#"{"dispatch_skipped": [{"issue_identifier": "TP-897", "open_questions": [], "pause": null}, {"issue_identifier": "TP-898", "open_questions": [], "pause": {"reasons": [{"kind": "ticket"}]}}]}"#.utf8)
+        XCTAssertEqual(newer.withPauses(fromState: moving), newer)
+        // A blocked row without the hold's review still reads the pause.
+        var bare = newer
+        bare.items[4].review.blocked = nil
+        let read = bare.withPauses(fromState: try Data(contentsOf: fixture("inbox-paused").appendingPathComponent("state.json")))
+        XCTAssertEqual(read.items[4].review.blocked?.reasonLines, ["Stopped by you"])
+        XCTAssertNil(read.items[4].review.blocked?.reason)
+    }
+
     func testTheDecisionFixtureResolvesEveryMentionAndWhereTheTicketSits() throws {
         let inbox = try payload("inbox-decision")
         XCTAssertEqual(inbox.items.map(\.identifier), ["TP-923", "TP-892", "TP-895", "TP-896", "TP-897"])
@@ -145,7 +220,7 @@ final class InboxTests: XCTestCase {
     }
 
     func testTheBadgeTheMenuTheTileAndTheInboxAgreeOnTheCount() throws {
-        for name in ["inbox", "inbox-empty", "inbox-decision"] {
+        for name in ["inbox", "inbox-empty", "inbox-decision", "inbox-paused"] {
             let inbox = try payload(name)
             let stateData = try Data(contentsOf: fixture(name).appendingPathComponent("state.json"))
             let state = try XCTUnwrap(OverviewState.decode(stateData))

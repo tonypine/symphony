@@ -581,7 +581,7 @@ final class SymphonyWindowModel: ObservableObject {
         readingInbox = true
         Task {
             let result = await client.get(InboxPayload.path)
-            if case let .loaded(data) = result, let payload = InboxPayload.decode(data) {
+            if case let .loaded(data) = result, let payload = InboxPayload.decode(data)?.withPauses(fromState: client.stateJSON) {
                 showDepartures(from: inbox?.items ?? [], to: payload.items)
                 inbox = payload
                 inboxResult = nil
