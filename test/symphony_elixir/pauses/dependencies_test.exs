@@ -152,6 +152,26 @@ defmodule SymphonyElixir.Pauses.DependenciesTest do
     end
   end
 
+  describe "sync_records/3" do
+    test "pauses a Todo record on the open blockers it observed, and lifts the ones it no longer has" do
+      blockers = [%{id: "b1", identifier: "TP-1", state: "In Progress"}, %{id: "b2", identifier: "TP-2", state: "Done"}, %{id: "b3", identifier: nil, state: "Todo"}]
+      todo = TicketState.new(@repo_key, @issue_id, %{phase: "Todo", blockers: blockers})
+      running = TicketState.new(@repo_key, "issue-2", %{phase: "In Progress", blockers: blockers})
+      skipped = TicketState.new("repo-polled", "issue-3", %{phase: "Todo", blockers: blockers})
+
+      assert Dependencies.sync_records([todo, running, skipped, %{issue_id: nil}], @terminal, skip: "repo-polled") == 1
+      assert Pauses.why(@ticket) == ["Waiting for TP-1 to finish"]
+      refute Pauses.paused?({:ticket, @repo_key, "issue-2"})
+      refute Pauses.paused?({:ticket, "repo-polled", "issue-3"})
+
+      # The same records change nothing; a record whose blocker went is lifted.
+      paused = TicketState.normalize(RunStore.get_ticket_state(@repo_key, @issue_id))
+      assert Dependencies.sync_records([%{paused | phase: "Todo", blockers: blockers}], @terminal) == 0
+      assert Dependencies.sync_records([%{paused | phase: "Todo", blockers: []}], @terminal) == 1
+      refute Pauses.paused?(@ticket)
+    end
+  end
+
   describe "a run's block report outside Todo" do
     setup do
       {:ok, _pause} = Pauses.set(@ticket, Pauses.ticket_reason(:dependency, "TP-997"), set_by: @run)

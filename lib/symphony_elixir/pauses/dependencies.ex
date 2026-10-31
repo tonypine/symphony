@@ -5,7 +5,10 @@ defmodule SymphonyElixir.Pauses.Dependencies do
 
   `sweep/3` runs in the poll task over a repo's polled tickets. Each one is read as its record
   observes it (`SymphonyElixir.TicketState.observe/4`, the observation the poll writes): its phase,
-  its labels and its open blockers.
+  its labels and its open blockers. Under `dispatch.source: record`, where dispatch reads every
+  repo's records each cycle, `sync_records/3` also brings each `Todo` record's pause in line with the
+  open blockers it observed, from the store alone, so a blocker a read wrote into a record holds the
+  ticket before its repo's next poll.
 
     * A `Todo` ticket has one reason per open blocker ("Waiting for TP-12 to finish", set by the rule
       "Blocked-by links"), and a blocker's reason clears once it is no longer open: the ticket
@@ -110,6 +113,32 @@ defmodule SymphonyElixir.Pauses.Dependencies do
     Enum.each(lifted, &lift_fix_ticket(ticket, &1, opts))
 
     {length(missing) + length(stale) + length(lifted), cache}
+  end
+
+  @doc """
+  Brings the pause of each `Todo` record of `records` (`SymphonyElixir.TicketState` records) in line
+  with the open blockers it observed, as `sweep/3` does for a `Todo` ticket, from the records alone:
+  no tracker read and no other phase. `opts[:skip]` names a repo whose records are left out (the one
+  this cycle polled, which `sweep/3` swept from the poll's own read). Returns how many reasons it set
+  or cleared.
+  """
+  @spec sync_records([map()], Enumerable.t(String.t()), keyword()) :: non_neg_integer()
+  def sync_records(records, terminal_states, opts \\ []) when is_list(records) do
+    skip = Keyword.get(opts, :skip)
+    terminal = MapSet.new(terminal_states, &normalize/1)
+
+    records
+    |> Enum.map(&TicketState.normalize/1)
+    |> Enum.filter(&(is_binary(&1.repo_key) and is_binary(&1.issue_id) and &1.repo_key != skip and normalize(&1.phase) == @todo_state))
+    |> Enum.reduce(0, fn record, count ->
+      open = for blocker <- record.blockers, Pauses.identifier?(blocker.identifier), not MapSet.member?(terminal, normalize(blocker.state)), do: blocker.identifier
+      held = held(TicketState.pause_reasons(record), :dependency)
+      ticket = {:ticket, record.repo_key, record.issue_id}
+
+      Enum.each(open -- held, &Pauses.set(ticket, Pauses.ticket_reason(:dependency, &1), set_by: setter(:dependency)))
+      Enum.each(held -- open, &clear(ticket, &1))
+      count + length(open -- held) + length(held -- open)
+    end)
   end
 
   # The identifiers of the `:ticket` reasons of `source`.

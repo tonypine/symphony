@@ -1940,7 +1940,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     # The ticket page agrees, and no Linear request was made for the Inbox.
     assert ticket_page.()["open_questions"] == []
     refute Enum.any?(Usage.snapshot().callers, &(&1.caller == "inbox"))
-    :ok = SymphonyElixir.OperatorStop.mark("default", "issue-MT-NEXT", DateTime.utc_now())
+    :ok = SymphonyElixir.Pauses.stop({:ticket, "default", "issue-MT-NEXT"}, DateTime.utc_now())
     assert read.() == [{"MT-NEXT", "blocked"}]
   end
 

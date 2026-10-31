@@ -1444,7 +1444,8 @@ defmodule SymphonyElixir.Orchestrator do
     read_at = DateTime.utc_now()
     repo_result = fetch_due_repo_if_needed(input.due_repo)
     TicketPullRequest.Lookup.start(input.due_repo, repo_result)
-    read = tick_reader(input.by_id, Map.get(input, :list_records, &RunStore.list_all_ticket_states/0))
+    list_records = Map.get(input, :list_records, &RunStore.list_all_ticket_states/0)
+    read = tick_reader(input.by_id, list_records)
     {running_ids, running_result} = read.(ids.running)
     {watching_ids, watching_result} = ids.watching |> read.() |> plan_comments_for(input.by_id)
     {forced_ids, forced_result} = read.(ids.forced)
@@ -1463,9 +1464,25 @@ defmodule SymphonyElixir.Orchestrator do
       stopped_ids: stopped_ids,
       stopped_result: stopped_result,
       repo_result: repo_result,
-      update_hold_cache: resolve_update_holds(repo_result, input.update_hold_cache)
+      update_hold_cache: resolve_update_holds(repo_result, input.update_hold_cache),
+      dependencies_synced: sync_recorded_dependencies(input.by_id, list_records, repo_result)
     }
   end
+
+  # Under `dispatch.source: record` dispatch reads every repo's records each cycle, not only the one
+  # this cycle polled: each Todo record of another repo is paused on the open blockers it observed
+  # (`Pauses.Dependencies.sync_records/3`), so the pause holds it before its repo's next poll. The
+  # polled repo's tickets are swept from the poll's own read (`resolve_update_holds/2`).
+  defp sync_recorded_dependencies({:record, _held}, list_records, repo_result) do
+    polled = with {repo_name, _result} <- repo_result, do: repo_name
+
+    case list_records.() do
+      records when is_list(records) -> Dependencies.sync_records(records, Config.settings!().tracker.terminal_states, skip: polled)
+      _unreadable -> 0
+    end
+  end
+
+  defp sync_recorded_dependencies(_by_id, _list_records, _repo_result), do: 0
 
   # Where the tick reads its running, watched, forced and operator-stopped tickets: from Linear by id
   # under `dispatch.source: poll`, from the ticket records under `record`. The record path takes the
