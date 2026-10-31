@@ -365,10 +365,11 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # A reason lifted from a ticket's pause (`SymphonyElixir.Pauses`: the update hold released, a
-  # blocker landed, a stop lifted) may free it to dispatch, and so may a new decision of the PR
-  # watcher that a run starts (`SymphonyElixir.PrWatch.Repo`: the reviewer, QA). Both live in the
-  # store, so a dispatch cycle reads them with no Linear read, on either dispatch source.
+  # A change of a ticket's pause (`SymphonyElixir.Pauses`: the update hold released, a blocker
+  # landed, a stop lifted, or a reason set) may free it to dispatch or hold it back, and a new
+  # decision of the PR watcher may start a run (`SymphonyElixir.PrWatch.Repo`: the reviewer, QA).
+  # Both live in the store, so a dispatch cycle reads them with no Linear read, on either dispatch
+  # source.
   defp handle_info_message({:ticket_record, _repo_key, _issue_id, :changed, [field]}, state) when field in [:pause, :pr_watch] do
     {:noreply, request_cycle(state)}
   end

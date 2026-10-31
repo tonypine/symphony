@@ -117,13 +117,16 @@ defmodule SymphonyElixir.OrchestratorBootTest do
     assert_receive {:tick, _token}
   end
 
-  test "a ticket's pause announces a lifted reason, never a reason set or a clear that changes nothing" do
+  test "a ticket's pause announces each change, never a write that changes nothing" do
     ticket = {:ticket, "web", "held"}
     reason = %{kind: :build, waits_on: %{pull_request: 132}}
 
     {:ok, _pause} = Pauses.set(ticket, reason, set_by: @hold_setter)
-    {:ok, _pause} = Pauses.set(ticket, Pauses.ticket_reason(:dependency, "ACME-9"))
+    assert_received {:ticket_record, "web", "held", :changed, [:pause]}
+    {:ok, _pause} = Pauses.set(ticket, reason, set_by: @hold_setter)
     refute_received {:ticket_record, _repo_key, _issue_id, :changed, _fields}
+    {:ok, _pause} = Pauses.set(ticket, Pauses.ticket_reason(:dependency, "ACME-9"))
+    assert_received {:ticket_record, "web", "held", :changed, [:pause]}
 
     {:ok, _pause} = Pauses.clear_reason(ticket, reason, by: @hold_setter)
     assert_received {:ticket_record, "web", "held", :changed, [:pause]}

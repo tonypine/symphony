@@ -82,7 +82,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   repository's newest release on each timed tick (`SymphonyElixir.PrWatch.Release.poll/1`).
 
   With `dispatch.source: record`, a change of a ticket's record that a decision reads (its phase,
-  blockers or holds, announced by `SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records/0`)
+  blockers, holds or pause, announced by `SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records/0`)
   makes the watcher re-decide that ticket at once, so a move Symphony or the Director made, or an
   answer that cleared a hold, is decided on without waiting for the next tick. The re-decision is a
   tick of that ticket rebuilt from its record, on the last read of its PR the watcher holds: no
@@ -136,7 +136,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   @reread_gap_ms 1_000
   @max_rereads 5
   # The record's fields a decision reads: a change of one re-decides the ticket.
-  @decided_fields [:phase, :blockers, :holds]
+  @decided_fields [:phase, :blockers, :holds, :pause]
 
   @typedoc "What one tick did."
   @type summary :: %{

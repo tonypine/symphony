@@ -573,15 +573,11 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       repo_key |> with_pr(issue("3", "Rework"), 3)
     ])
 
-    :ok = RunStore.put_ticket_state(repo_key |> TicketState.new("1", %{ci_fix_origin: "QA"}) |> TicketState.set_hold(:blocked, %{reason: "tooling"}))
+    :ok = RunStore.put_ticket_state(TicketState.new(repo_key, "1", %{ci_fix_origin: "QA"}))
+    {:ok, _pause} = SymphonyElixir.Pauses.set({:ticket, repo_key, "1"}, SymphonyElixir.SelfHeal.environment_reason("dev_server"))
 
-    :ok =
-      RunStore.put_ticket_state(
-        repo_key
-        |> TicketState.new("2", %{ci_fix_origin: "Todo"})
-        |> TicketState.set_hold(:blocked, %{})
-        |> TicketState.set_hold(:needs_decision, %{})
-      )
+    :ok = RunStore.put_ticket_state(repo_key |> TicketState.new("2", %{ci_fix_origin: "Todo"}) |> TicketState.set_hold(:needs_decision, %{}))
+    {:ok, _pause} = SymphonyElixir.Pauses.set({:ticket, repo_key, "2"}, SymphonyElixir.SelfHeal.environment_reason("dev_server"))
 
     :ok = RunStore.put_run(%{repo_key: repo_key, run_id: "run-3", issue_id: "3", status: "running"})
     :ok = RunStore.put_run(%{repo_key: "other-repo", run_id: "run-other", issue_id: "1", status: "running"})
@@ -1213,7 +1209,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       completed = %{event: "check_suite", action: "completed", head_sha: "sha-1", conclusion: "success", completed_at: @now}
       delivery = {:ci, Map.merge(completed, %{pr_urls: [pr_url(1)], merged: false, base_ref: "main"})}
       Repo.ingest(pid, delivery, "https://github.com/acme/app")
-      :ok = Hold.set(repo_key, "1", :blocked, %{reason: "waiting on TP-9"})
+      {:ok, _pause} = SymphonyElixir.Pauses.set({:ticket, repo_key, "1"}, SymphonyElixir.Pauses.ticket_reason(:dependency, "TP-9"))
       redecided!(pid)
 
       assert %{facts: %Facts{hold: :blocked}} = watch(repo_key, "1")
@@ -1281,8 +1277,8 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
 
       capture_log(fn ->
         :ok = :sys.suspend(pid)
-        :ok = Hold.set(repo_key, "1", :blocked, %{reason: "waiting on TP-9"})
-        :ok = Hold.clear(repo_key, "1", :blocked)
+        {:ok, _pause} = SymphonyElixir.Pauses.set({:ticket, repo_key, "1"}, SymphonyElixir.Pauses.ticket_reason(:dependency, "TP-9"))
+        {:ok, nil} = SymphonyElixir.Pauses.clear({:ticket, repo_key, "1"})
         :ok = SymphonyElixir.TicketSignals.record_phase(repo_key, "1", "QA")
         :ok = :sys.resume(pid)
         redecided!(pid)
