@@ -1,7 +1,8 @@
 defmodule SymphonyElixir.QaVerificationTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.BlockedHold
+  alias SymphonyElixir.Pauses
+  alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.CiFix
   alias SymphonyElixir.CiWait
   alias SymphonyElixir.Config.Schema
@@ -102,7 +103,7 @@ defmodule SymphonyElixir.QaVerificationTest do
   defmodule FakeFixer do
     def create(attrs, _opts) do
       send(self(), {:fixer_create, attrs})
-      {:ok, %{identifier: Process.get(:fix_ticket, "TP-900"), url: "https://linear.app/acme/issue/TP-900"}}
+      Process.get(:fix_ticket_create, {:ok, %{identifier: Process.get(:fix_ticket, "TP-900"), url: "https://linear.app/acme/issue/TP-900"}})
     end
 
     def attach(identifier, body, _opts) do
@@ -160,7 +161,7 @@ defmodule SymphonyElixir.QaVerificationTest do
     def decide(_issue, _settings, _opts), do: {:run, [], "the change delivers or updates a user journey"}
   end
 
-  # The tracker the BlockedHold sweep reads the fix ticket's state from.
+  # The tracker the dependency sweep reads the fix ticket's state from.
   defmodule FixTicketTracker do
     def fetch_issue_by_identifier(_identifier), do: Process.get(:fix_ticket_issue, {:error, :not_found})
     def set_machine_label(_issue_id, _label), do: :ok
@@ -255,10 +256,26 @@ defmodule SymphonyElixir.QaVerificationTest do
     {:ok, %{result: %{verdict: :blocked, summary: "Blocked.", steps: steps, findings: [], reason: reason}, tokens: %{}}}
   end
 
-  # The fix ticket lands: it goes terminal, so the Blocked hold on it lifts.
+  # The fix ticket lands: it goes terminal, so the pause on it lifts.
   defp lift_fix_ticket_hold do
     Process.put(:fix_ticket_issue, {:ok, %Issue{id: "fix-ticket-id", identifier: @fix_ticket, state: "Done"}})
-    assert :clear = BlockedHold.sync(issue(), ["Done", "Canceled"], settings: settings!(), tracker: FixTicketTracker)
+    assert {1, _cache} = Dependencies.sweep([issue()], ["Done", "Canceled"], repo_key: @repo_key, tracker: FixTicketTracker, build: %{sha: nil})
+  end
+
+  # Paused on anything but a question: a fix ticket, the environment.
+  defp blocked?(issue_id) do
+    case Pauses.get({:ticket, @repo_key, issue_id}) do
+      {:ok, %{reasons: reasons}} -> Enum.any?(reasons, &(&1.kind != :question))
+      _none -> false
+    end
+  end
+
+  # The fix tickets the ticket's pause waits on.
+  defp fix_waits(issue_id) do
+    case Pauses.get({:ticket, @repo_key, issue_id}) do
+      {:ok, %{reasons: reasons}} -> for %{waits_on: %{identifier: identifier}} = reason <- reasons, Pauses.ticket_source(reason) == :fix_ticket, do: identifier
+      _none -> []
+    end
   end
 
   describe "qa_run?/2" do
@@ -730,19 +747,15 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert :ok = run(workspace, [])
 
       refute_received {:memory_tracker_state_update, _, _}
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      refute blocked?(@issue_id)
       refute_received {:fixer_create, _}
 
       # The second attempt has used its attempts up: the self-heal lane files the fix ticket for the
-      # broken component and pauses the ticket on a Blocked hold waiting for it.
-      assert :ok = run(workspace, [])
+      # broken component and pauses the ticket on it.
+      log = capture_log(fn -> assert :ok = run(workspace, []) end)
 
-      assert Hold.held?(@repo_key, @issue_id, :blocked)
-
-      assert %{reason: reason, waits_on: %{type: "fix_ticket", keys: [@fix_ticket]}} =
-               Hold.get(@repo_key, @issue_id, :blocked)
-
-      assert reason =~ "waiting on fix ticket TP-900 for the qa_environment block"
+      assert fix_waits(@issue_id) == [@fix_ticket]
+      assert log =~ "Self-heal holds TP-816 on TP-900 for its qa_environment block"
 
       assert_received {:fixer_create, attrs}
       assert attrs.scope == @symphony_repo_key
@@ -821,7 +834,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert verdicts() == []
       refute_received {:memory_tracker_comment, _issue_id, _body}
       refute_received {:memory_tracker_state_update, _issue_id, _state}
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      refute blocked?(@issue_id)
       refute_received {:fixer_create, _}
     end
 
@@ -843,7 +856,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert {:error, {:usage_limited, ^info}} = run(workspace, [])
 
       assert verdicts() == []
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      refute blocked?(@issue_id)
       refute_received {:fixer_create, _}
     end
 
@@ -865,7 +878,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert_received {:fixer_attach, "TP-716", evidence}
       assert evidence =~ "the QA host has no fake gh"
 
-      assert %{waits_on: %{type: "fix_ticket", keys: ["TP-716"]}} = Hold.get(@repo_key, @issue_id, :blocked)
+      assert fix_waits(@issue_id) == ["TP-716"]
     end
 
     test "a block on the project's own missing server files its fix ticket in the project's repo" do
@@ -925,8 +938,7 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       refute_received {:fixer_create, _}
 
-      assert %{waits_on: %{type: "fix_ticket", keys: [@fix_ticket]}} =
-               Hold.get(@repo_key, @other_issue_id, :blocked)
+      assert fix_waits(@other_issue_id) == [@fix_ticket]
 
       assert_received {:fixer_attach, @fix_ticket, evidence}
       assert evidence =~ ":qa_host_tunnel_failed"
@@ -946,7 +958,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert log =~ "QA for TP-816 could not reach a verdict after 2 run(s); asking a person: The app cannot be pointed at a fake update feed"
       refute_received {:fixer_create, _attrs}
       refute_received {:fixer_block, _identifier}
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      refute blocked?(@issue_id)
       assert SymphonyElixir.TicketState.self_heal(RunStore.get_ticket_state(@repo_key, @issue_id)) == nil
 
       assert %{decision: decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
@@ -1019,7 +1031,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       # The dev server's build command fails, so the run is blocked by its environment: the first
       # attempt retries, the second files the fix ticket and holds the ticket on it.
       assert :ok = run(workspace, opts)
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      refute blocked?(@issue_id)
 
       assert :ok = run(workspace, opts)
       assert_received {:fixer_create, attrs}
@@ -1029,8 +1041,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert attrs.scope == @repo_key
       assert attrs.description =~ "dev_server_build_failed"
 
-      assert %{waits_on: %{type: "fix_ticket", keys: [@fix_ticket]}} =
-               Hold.get(@repo_key, @issue_id, :blocked)
+      assert fix_waits(@issue_id) == [@fix_ticket]
 
       assert Enum.map(verdicts(), & &1.outcome) == ["blocked", "blocked"]
 
@@ -1039,9 +1050,9 @@ defmodule SymphonyElixir.QaVerificationTest do
       # stays, so the same break coming back is compared against it.
       Process.put(:fix_ticket_issue, {:ok, %Issue{id: "fix-ticket-id", identifier: @fix_ticket, state: "Done"}})
 
-      assert :clear = BlockedHold.sync(issue(), ["Done", "Canceled"], settings: settings, tracker: FixTicketTracker)
+      assert {1, _cache} = Dependencies.sweep([issue()], ["Done", "Canceled"], repo_key: @repo_key, tracker: FixTicketTracker, build: %{sha: nil})
 
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      refute blocked?(@issue_id)
 
       assert %{component: "dev_server", fix_ticket: nil, signature: signature} =
                RunStore.get_ticket_state(@repo_key, @issue_id) |> SymphonyElixir.TicketState.self_heal()
@@ -1073,11 +1084,10 @@ defmodule SymphonyElixir.QaVerificationTest do
          }}
       )
 
-      assert :ok = run(workspace, [])
+      log = capture_log(fn -> assert :ok = run(workspace, []) end)
 
-      assert Hold.held?(@repo_key, @issue_id, :blocked)
-      assert %{reason: reason} = Hold.get(@repo_key, @issue_id, :blocked)
-      assert reason =~ "the Android emulator is not set up"
+      assert blocked?(@issue_id)
+      assert log =~ "the Android emulator is not set up"
 
       assert_received {:memory_tracker_comment, @issue_id, report}
       assert report =~ "**Verdict:** blocked → QA (blocked)"
@@ -1110,7 +1120,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       # Running QA on a worker is not a QA tool's block, so it files no fix ticket.
       assert :ok = run(workspace, worker_host: "worker-1")
       refute_received {:qa_agent_run, _, _}
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      refute blocked?(@issue_id)
 
       capture_log(fn -> assert :ok = run(workspace, worker_host: "worker-1") end)
 
@@ -1119,15 +1129,16 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert why =~ "QA cannot run on the remote worker"
     end
 
-    test "a hold that cannot be set is reported" do
+    test "a fix ticket that cannot be filed is reported" do
       {workspace, _head} = git_workspace!()
       Process.put(:qa_agent_result, {:error, {:qa_host_tunnel_failed, "ssh exited with status 255"}, %{}})
 
-      # Both attempts are used on the same call, so the third records "blocked" and takes the hold.
-      assert :ok = run(workspace, [])
+      # The first attempt retries; the second, its attempts used up, goes to the self-heal lane.
       assert :ok = run(workspace, [])
 
-      assert {:error, {:qa_self_heal_failed, {:self_heal_hold_failed, :disk_full}}} = run(workspace, store: UnusedStore)
+      Process.put(:fix_ticket_create, {:error, :linear_down})
+      assert {:error, {:qa_self_heal_failed, {:self_heal_fix_ticket_failed, :linear_down}}} = run(workspace, [])
+      Process.delete(:fix_ticket_create)
 
       # A block that goes to a person reports a decision hold it could not set the same way.
       Process.put(:qa_agent_result, {:error, :nope, %{}})
@@ -1174,7 +1185,7 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       refute_received {:fixer_create, _attrs}
       refute_received {:fixer_block, _identifier}
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      refute blocked?(@issue_id)
       assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
       assert [%{outcome: "pass", head_sha: ^head}] = verdicts()
 
@@ -1223,7 +1234,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert :ok = run_hub(workspace, needs_dev_server([]))
 
       refute_received {:fixer_create, _attrs}
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      refute blocked?(@issue_id)
       assert [%{outcome: "blocked", head_sha: ^head}] = verdicts()
 
       assert %{decision: decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
@@ -1475,7 +1486,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       refute_received {:fixer_create, _attrs}
       refute_received {:fixer_block, _identifier}
       refute_received {:fixer_attach, _identifier, _body}
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      refute blocked?(@issue_id)
       assert SymphonyElixir.TicketState.self_heal(RunStore.get_ticket_state(@repo_key, @issue_id)) == nil
       refute_received {:memory_tracker_state_update, _, _}
 
@@ -1526,7 +1537,7 @@ defmodule SymphonyElixir.QaVerificationTest do
 
         refute_received {:fixer_create, _attrs}, "#{name} filed a fix ticket"
         refute_received {:fixer_block, _identifier}, "#{name} held the ticket on a fix ticket"
-        refute Hold.held?(@repo_key, @issue_id, :blocked), "#{name} took a Blocked hold"
+        refute blocked?(@issue_id), "#{name} took a Blocked hold"
         assert Hold.held?(@repo_key, @issue_id, :needs_decision), "#{name} did not ask a person"
       end
     end
@@ -1567,7 +1578,7 @@ defmodule SymphonyElixir.QaVerificationTest do
         end)
 
         assert_received {:fixer_create, %{component: ^component}}
-        assert %{waits_on: %{type: "fix_ticket"}} = Hold.get(@repo_key, @issue_id, :blocked)
+        assert [_fix_ticket] = fix_waits(@issue_id)
         refute Hold.held?(@repo_key, @issue_id, :needs_decision)
       end
     end
@@ -1594,7 +1605,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert log =~ "QA blocked on CI for TP-816 head=#{head} model=default; handing the head to the PR watcher: CI is red on this head: coverage (2/4) failed"
       refute_received {:memory_tracker_state_update, _, _}
       refute_received {:fixer_create, _}
-      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      refute blocked?(@issue_id)
 
       assert [%{outcome: "blocked", head_sha: ^head, details: details}] = verdicts()
       assert %{component: "ci", reason: "CI is red on this head: coverage (2/4) failed", needs_person: false} = details
