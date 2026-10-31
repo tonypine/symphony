@@ -10,20 +10,15 @@ defmodule SymphonyElixir.Setup.Fixes do
       `position` the check worked out from the team's board (`SymphonyElixir.Setup.Checks.Statuses`).
       The request names the state and its type; it needn't repeat the place, as the app's doesn't,
       but a place it names (`after`, `position`) must be the proposed one;
-    * `resync_hold` re-syncs the hold label of each ticket the request names from the store
-      (`SymphonyElixir.Hold.resync/4`): one of the tickets the check listed, or all of them.
-
   Then the checks run again with the team cache emptied (`SymphonyElixir.Setup.refresh/1`), and the
   new payload is returned. When Linear refuses (permissions, a name already taken), the error says
   so in plain words with what to do, the checks are not re-run, and the problem stays where it was.
   A create (a label or a state) is one Linear write,
-  so it lands whole or not at all; a re-sync of several tickets puts right the ones Linear accepts
-  and names the rest.
+  so it lands whole or not at all.
   """
 
-  alias SymphonyElixir.{Hold, Setup, Tracker}
-  alias SymphonyElixir.Hold.Drift
-  alias SymphonyElixir.Setup.Checks.{HoldDrift, Statuses}
+  alias SymphonyElixir.{Setup, Tracker}
+  alias SymphonyElixir.Setup.Checks.Statuses
 
   @typedoc "Why a fix didn't run, or ran without the checks after it."
   @type error :: :not_proposed | :not_running | {:refused, String.t()}
@@ -71,14 +66,6 @@ defmodule SymphonyElixir.Setup.Fixes do
     if same?(fix, descriptor, ~w(kind action team name type) ++ Enum.filter(~w(after position), &Map.has_key?(descriptor, &1))), do: fix
   end
 
-  # A re-sync runs for the tickets the request picks, of those the check listed.
-  defp covers(%{"kind" => "linear", "action" => "resync_hold", "repo" => repo, "tickets" => tickets}, descriptor) do
-    case descriptor do
-      %{"kind" => "linear", "action" => "resync_hold", "repo" => ^repo, "tickets" => [_ | _] = wanted} -> if Enum.all?(wanted, &(&1 in tickets)), do: descriptor
-      _other -> nil
-    end
-  end
-
   defp covers(_fix, _descriptor), do: nil
 
   defp same?(fix, descriptor, keys), do: Map.take(fix, keys) == Map.take(descriptor, keys)
@@ -98,23 +85,6 @@ defmodule SymphonyElixir.Setup.Fixes do
       {:error, reason} -> {:error, {:refused, refusal(~s(create the state "#{name}" in team #{team}), reason)}}
     end
   end
-
-  defp apply_fix(%{"action" => "resync_hold", "repo" => repo, "tickets" => tickets}, tracker) do
-    entries = Drift.entries()
-
-    failures =
-      for name <- tickets,
-          %{} = entry <- [Enum.find(entries, &(&1.repo_key == repo and HoldDrift.ticket_name(&1) == name))],
-          {:error, reason} <- [resync(entry, tracker)],
-          do: refusal("re-sync the hold label of #{name}", reason)
-
-    case failures do
-      [] -> :ok
-      failures -> {:error, {:refused, Enum.join(failures, " ")}}
-    end
-  end
-
-  defp resync(%{drift: {_direction, kind}} = entry, tracker), do: Hold.resync(entry.repo_key, entry.issue_id, kind, tracker: tracker)
 
   defp refusal(what, reason), do: "Linear refused to #{what}: #{describe(reason)}"
 

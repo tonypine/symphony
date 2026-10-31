@@ -795,24 +795,15 @@ defmodule SymphonyElixir.ReviewAgentTest do
       end
     end
 
-    test "TP-892's 05:48 ruling, given in a plain comment, reaches the Code Review prompt" do
+    test "TP-892's 05:48 ruling, recorded on the ticket, reaches the Code Review prompt" do
       test_root = unique_tmp("symphony-elixir-review-agent-ruling-prompt")
 
       try do
-        ruling = "Decision: don't make that change. The legacy prompt partials stay for TP-891, which removes them."
+        # A ruling recorded before comments stopped being read: it stays on the record.
+        text = "don't make that change. The legacy prompt partials stay for TP-891, which removes them."
+        ruling = SymphonyElixir.Decisions.entry("ruling-comment-0548", ~D[2026-10-13], "don't make that change.", "Ruling given in a comment.", text)
 
-        node = %{
-          "id" => issue().id,
-          "description" => "Reviewer findings need quoted evidence.",
-          "comments" => %{
-            "nodes" => [
-              %{"id" => "workpad", "body" => "## Symphony Workpad\n\nRemoving the legacy prompt partials.", "createdAt" => "2026-10-13T05:30:00Z", "parent" => nil},
-              %{"id" => "comment-0548", "body" => ruling, "createdAt" => "2026-10-13T05:48:00Z", "parent" => nil}
-            ]
-          }
-        }
-
-        assert :ok = SymphonyElixir.Decisions.sync(node, tracker: RulingTracker)
+        assert :ok = SymphonyElixir.Decisions.record(issue().id, [ruling], tracker: RulingTracker)
         assert_received {:description_written, _issue_id, description}
         assert [%{id: "D1"}] = SymphonyElixir.Decisions.recorded(description)
 

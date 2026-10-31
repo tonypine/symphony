@@ -4,12 +4,12 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
   import Phoenix.ConnTest, only: [build_conn: 0, get: 2, post: 3, json_response: 2]
   import Plug.Conn, only: [put_req_header: 3]
 
-  alias SymphonyElixir.{BlockedHold, RetiredStates, Setup, StateProvisioning, SubIssueWait}
   alias SymphonyElixir.GitHub.{RelaySupervisor, WebhookSetup}
   alias SymphonyElixir.GitHub.WebhookSetup.Cache, as: WebhookSetupCache
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.PrWatch.Health
   alias SymphonyElixir.Repo.FetchLog
+  alias SymphonyElixir.{RetiredStates, Setup, StateProvisioning, SubIssueWait}
   alias SymphonyElixir.Routing.{PollLog, Resolver}
   alias SymphonyElixir.Secret
 
@@ -425,15 +425,8 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
 
     defp problem(payload, id), do: Enum.find(payload["problems"], &(&1["id"] == id))
 
-    # A poll of the ticket, as the orchestrator's Blocked hold sweep runs it.
-    defp poll!(issue) do
-      capture_log(fn -> BlockedHold.sync(issue, ["Done"], settings: Config.settings!(), repo_key: "default", now: @t0) end)
-    end
-
-    defp ticket_labels, do: hd(Application.get_env(:symphony_elixir, :memory_tracker_issues)).labels
-
-    # The user walkthrough: create the missing label, re-sync a drifted ticket, refuse what the check didn't propose.
-    test "a missing label is created by its fix, a drifted ticket is re-synced, and an unproposed fix is refused" do
+    # The user walkthrough: create the missing label, refuse what the check didn't propose.
+    test "a missing label is created by its fix, and an unproposed fix is refused" do
       # 1. Team TP has no `Needs Decision`: a label error with a create_label fix.
       refresh()
       missing = problem(build_conn() |> get("/api/v1/setup") |> json_response(200), "labels:missing:TP:Needs Decision")
@@ -444,38 +437,13 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
       assert payload["problems"] == []
       assert %{name: "Needs Decision", team_id: "TP"} = List.last(Application.get_env(:symphony_elixir, :memory_tracker_labels_list))
 
-      # 3. A Blocked label with no hold, which the polls fail to clear, for two checks: a drift
-      # warning naming the ticket.
-      issue = %Issue{id: "issue-1", identifier: "TP-7", url: "https://linear.app/t/issue/TP-7", state: "Todo", labels: ["Blocked"]}
-      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
-      forbidden = {:error, :forbidden}
-      Application.put_env(:symphony_elixir, :memory_tracker_remove_issue_label_result, [forbidden, forbidden])
-
-      for _check <- 1..2 do
-        poll!(issue)
-        refresh()
-      end
-
-      payload = build_conn() |> get("/api/v1/setup") |> json_response(200)
-      drift = problem(payload, "hold_drift:default")
-
-      assert %{
-               "severity" => "warning",
-               "tickets" => [%{"identifier" => "TP-7", "url" => "https://linear.app/t/issue/TP-7"}],
-               "details" => [%{"label" => "TP-7", "value" => "Blocked label with no hold, since 2026-10-17 09:00 UTC"}],
-               "fix" => %{"kind" => "linear", "action" => "resync_hold", "repo" => "default", "tickets" => ["TP-7"]} = resync
-             } = drift
-
-      # The contract the app's Setup decodes for both Linear fixes.
-      contract = %{"problems" => [missing | payload["problems"]]}
+      # The contract the app's Setup decodes for a Linear fix.
+      contract = %{"problems" => [missing]}
       if System.get_env("SYMPHONY_WRITE_FIXTURES") == "1", do: File.write!(@labels_fixture, Jason.encode_to_iodata!(contract, pretty: true))
       assert contract == @labels_fixture |> File.read!() |> Jason.decode!()
 
-      # Its fix removes the label, and the warning clears.
-      assert post_fix(Jason.encode!(%{fix: resync})) |> json_response(200) |> Map.fetch!("problems") == []
-      assert ticket_labels() == []
-
-      # 4. A descriptor the check didn't propose is refused.
+      # 3. A descriptor the check didn't propose is refused.
+      resync = %{"kind" => "linear", "action" => "resync_hold", "repo" => "default", "tickets" => ["TP-7"]}
       assert %{"error" => %{"code" => "fix_not_proposed"}} = post_fix(Jason.encode!(resync)) |> json_response(422)
       assert %{"error" => %{"code" => "fix_not_proposed"}} = post_fix(Jason.encode!(fix)) |> json_response(422)
     end

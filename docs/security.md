@@ -140,7 +140,7 @@ way to let Symphony land such a change.
 #### Allowing a change to a protected path
 
 A person allows a change to one of the workspace's protected paths with one pick of a plain-words
-option in a decision request, from the Inbox or by a reply under the request. The paths travel in
+option in a decision request, in the Director's Inbox. The paths travel in
 a field of the option the person never reads; the request names each file by a plain description
 instead ("the workflow settings file, which runs commands on your Mac", "the agents'
 instructions").
@@ -157,12 +157,15 @@ instructions").
 
 Picking an option that carries `unlocks` records the paths with the decision, in a hidden line of
 the ticket's Decisions section, and grants each of them for that ticket only. A person can also
-type the grant, in a comment that opens with `Decision:` (or `Ruling:`) or the answer to the
-ticket's decision request, saying `Unlock <path> for <ticket>`:
+type the grant as their own words in the Director's answer to the ticket's decision request,
+saying `Unlock <path> for <ticket>`:
 
 ```text
-Decision: Unlock config/settings_ui_exempt.yml for TP-760 to drop the human_actions.label exemption.
+Unlock config/settings_ui_exempt.yml for TP-760 to drop the human_actions.label exemption.
 ```
+
+Answers come from the Director only. A comment in Linear, whether a reply under the request or a
+plain comment opening with `Decision:` or `Ruling:`, answers nothing and grants nothing.
 
 #### Unlocking a protected path for one run
 

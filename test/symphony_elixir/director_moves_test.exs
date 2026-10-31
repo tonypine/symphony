@@ -4,7 +4,8 @@ defmodule SymphonyElixir.DirectorMovesTest do
   alias SymphonyElixir.{AuditLog, BlockedHold, CiWait}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.{DecisionMove, DecisionRequest, DirectorMoves, DispatchLoop, Hold}
-  alias SymphonyElixir.Inbox.Item
+  alias SymphonyElixir.Inbox.{FromRecord, Item}
+  alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.{OperatorStop, Pauses, PlanComments, Questions, RunStore, SelfHeal, SubIssueWait}
   alias SymphonyElixir.{TicketSignals, TicketState}
 
@@ -1100,6 +1101,33 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert %{state: :answered} = Questions.find(ticket, id)
     end
 
+    # TP-1255's walkthrough: a person's "Decision:" comment in Linear answers nothing; the Director's
+    # Decide answers the question and the Inbox drops it.
+    test "a Decision: comment in Linear changes nothing, and the Director's answer closes the question", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      id = ask_signing()
+      ticket = {:ticket, "repo-director", "pr"}
+      settings = fn _repo_key -> Config.settings!() end
+      inbox = fn -> FromRecord.items([RunStore.get_ticket_state("repo-director", "pr")], %{}, settings_fun: settings) end
+
+      request = %{"id" => "comment-1", "body" => "## Decision needed: Add the release signing secrets\n\n<!-- symphony:question #{id} -->", "createdAt" => "2026-10-31T03:00:00Z"}
+      under = %{"id" => "reply-1", "body" => "Decision: option 2", "createdAt" => "2026-10-31T03:01:00Z", "parent" => %{"id" => "comment-1"}}
+      plain = %{"id" => "comment-2", "body" => "Decision: option 2", "createdAt" => "2026-10-31T03:02:00Z"}
+      node = %{"id" => "pr", "identifier" => "MOT-40", "comments" => %{"nodes" => [request, under, plain]}}
+      polled = Client.normalize_issue_for_test(node)
+
+      assert polled.rulings == []
+      assert %{state: :open} = Questions.find(ticket, id)
+      assert Hold.held?("repo-director", "pr", :needs_decision)
+      assert SymphonyElixir.Decisions.stored(%{id: "pr", description: nil}, repo_key: "repo-director") == []
+      assert [%{kind: :action, review: %{question_id: ^id}}] = inbox.()
+
+      assert {:ok, _result} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), question_id: id}, opts)
+      assert %{state: :answered, answer: %{text: "Add the secrets"}} = Questions.find(ticket, id)
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+      assert inbox.() == []
+    end
+
     test "a request comment's row names the Question it answers, whatever the hold carries", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       id = ask_signing()
@@ -1982,9 +2010,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       question = ask_and_hold("repo-director", {:quiet_handoff, 2})
 
-      node = %{"id" => "pr", "identifier" => "MOT-40", "title" => "Add checkout", "url" => nil, "state" => %{"name" => "In Progress"}}
-      lookups = %{hold: &Hold.get(&1, &2, :blocked)}
-      assert %{kind: :blocked} = Item.from_node(node, "repo-director", %Schema{}, lookups)
+      assert %{kind: :action} = Item.from_question(TicketState.normalize(RunStore.get_ticket_state("repo-director", "pr")), question)
 
       assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
 
@@ -2097,8 +2123,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       question = report_block("repo-director")
       assert question.title == "The run on MOT-40 cannot continue on its own"
 
-      node = %{"id" => "pr", "identifier" => "MOT-40", "title" => "Add checkout", "url" => nil, "state" => %{"name" => "In Progress"}}
-      assert %{kind: :blocked} = Item.from_node(node, "repo-director", %Schema{}, %{hold: &Hold.get(&1, &2, :blocked)})
+      assert %{kind: :action} = Item.from_question(TicketState.normalize(RunStore.get_ticket_state("repo-director", "pr")), question)
 
       assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
 

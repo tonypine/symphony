@@ -2,7 +2,6 @@ defmodule SymphonyElixir.HoldTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.{DispatchLoop, Hold, Pauses, Questions, RunStore, TicketState, Workflow}
-  alias SymphonyElixir.Hold.Drift
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Pauses.Projector
 
@@ -371,81 +370,6 @@ defmodule SymphonyElixir.HoldTest do
     end
   end
 
-  describe "drift/2" do
-    test "is ok when the store and the board agree" do
-      held = TicketState.set_hold(TicketState.new(@repo_key, @issue_id), :blocked, %{reason: "waiting"})
-
-      assert Hold.drift(held, ["Blocked", "bug"]) == :ok
-      assert Hold.drift(TicketState.new(@repo_key, @issue_id), ["bug"]) == :ok
-      assert Hold.drift(TicketState.new(@repo_key, @issue_id), nil) == :ok
-      # A label that is not a string is not a hold label.
-      assert Hold.drift(TicketState.new(@repo_key, @issue_id), [nil, 5]) == :ok
-    end
-
-    test "reports a board label with no store hold as a hand-added label" do
-      assert Hold.drift(TicketState.new(@repo_key, @issue_id), ["blocked"]) == {:stray_label, :blocked}
-    end
-
-    test "reports a store hold the board is missing" do
-      held = TicketState.set_hold(TicketState.new(@repo_key, @issue_id), :needs_decision, %{reason: "pick"})
-
-      assert Hold.drift(held, []) == {:missing_label, :needs_decision}
-      assert Hold.drift(held, nil) == {:missing_label, :needs_decision}
-    end
-  end
-
-  describe "report_drift/4" do
-    test "reports a stray label and a missing label, and is quiet when they agree" do
-      log =
-        capture_log(fn ->
-          assert Hold.report_drift(@repo_key, @issue_id, ["Blocked"]) == {:stray_label, :blocked}
-        end)
-
-      assert log =~ "with no store hold"
-
-      :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "waiting"})
-
-      log = capture_log(fn -> assert Hold.report_drift(@repo_key, @issue_id, []) == {:missing_label, :blocked} end)
-      assert log =~ "is missing its machine label"
-
-      assert Hold.report_drift(@repo_key, @issue_id, ["Blocked"]) == :ok
-    end
-
-    test "records the drift per ticket and logs it once per change, not on every poll" do
-      at = ~U[2026-10-19 21:00:00Z]
-      opts = [identifier: "TP-817", url: "https://linear.app/t/issue/TP-817", now: at]
-
-      log =
-        capture_log(fn ->
-          for _poll <- 1..3, do: assert(Hold.report_drift(@repo_key, @issue_id, ["Blocked"], opts) == {:stray_label, :blocked})
-        end)
-
-      assert length(String.split(log, "with no store hold")) == 2
-
-      assert [%{identifier: "TP-817", url: "https://linear.app/t/issue/TP-817", drift: {:stray_label, :blocked}, since: ^at}] =
-               Drift.entries()
-
-      # It turns the other way: a change, logged once more.
-      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, %{reason: "waiting"})
-      log = capture_log(fn -> Hold.report_drift(@repo_key, @issue_id, [], opts) end)
-      assert log =~ "is missing its machine label"
-
-      # It clears, and is forgotten: the next drift is new again.
-      assert Hold.report_drift(@repo_key, @issue_id, ["Blocked"], opts) == :ok
-      assert Drift.entries() == []
-      :ok = RunStore.clear_ticket_hold(@repo_key, @issue_id, :blocked)
-      assert capture_log(fn -> Hold.report_drift(@repo_key, @issue_id, ["Blocked"], opts) end) =~ "with no store hold"
-    end
-
-    test "drift read with no repo key is logged every time and not recorded" do
-      log = capture_log(fn -> for _poll <- 1..2, do: Hold.report_drift(nil, @issue_id, ["Blocked"]) end)
-
-      assert length(String.split(log, "with no store hold")) == 3
-      assert Drift.entries() == []
-      assert Hold.report_drift(nil, @issue_id, []) == :ok
-    end
-  end
-
   describe "while the pause projector owns the labels (TP-1243)" do
     setup do
       Application.put_env(:symphony_elixir, :pause_projector, true)
@@ -494,50 +418,6 @@ defmodule SymphonyElixir.HoldTest do
       assert Hold.held?(@repo_key, @issue_id, :blocked)
       assert [%{type: :pause}] = pending_projection()
       assert labels() == []
-    end
-
-    test "resync applies the projector from the pause, against the labels Linear was last seen with" do
-      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id, %{labels: ["Blocked"], projected: %{labels: ["Blocked"]}}))
-      capture_log(fn -> Hold.report_drift(@repo_key, @issue_id, ["Blocked"]) end)
-      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | labels: ["Blocked"]}])
-
-      assert Hold.resync(@repo_key, @issue_id, :blocked) == :ok
-      assert labels() == []
-      assert Drift.entries() == []
-
-      {:ok, _pause} = Pauses.set({:ticket, @repo_key, @issue_id}, Pauses.ticket_reason(:dependency, "TP-12"))
-      # A person removed the label by hand, and the poll saw it go.
-      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue()])
-      :ok = RunStore.update_ticket_state(@repo_key, @issue_id, %{labels: []})
-      assert Hold.resync(@repo_key, @issue_id, :blocked) == :ok
-      assert labels() == ["Blocked"]
-    end
-  end
-
-  describe "resync/4" do
-    test "clears a label with no store hold, sets one a store hold is missing, and forgets the drift" do
-      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | labels: ["Blocked"]}])
-      capture_log(fn -> Hold.report_drift(@repo_key, @issue_id, ["Blocked"]) end)
-
-      assert Hold.resync(@repo_key, @issue_id, :blocked) == :ok
-      assert labels() == []
-      assert Drift.entries() == []
-
-      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :needs_decision, %{reason: "pick"})
-      assert Hold.resync(@repo_key, @issue_id, :needs_decision) == :ok
-      assert labels() == ["Needs Decision"]
-    end
-
-    test "returns the label write the tracker refuses, and keeps the drift" do
-      capture_log(fn -> Hold.report_drift(@repo_key, @issue_id, ["Blocked"]) end)
-
-      assert Hold.resync(@repo_key, @issue_id, :blocked, tracker: FailingTracker) == {:error, :boom}
-      assert [%{drift: {:stray_label, :blocked}}] = Drift.entries()
-    end
-
-    test "refuses an unknown kind and a ticket with no repo key" do
-      assert Hold.resync(@repo_key, @issue_id, :other) == {:error, {:unknown_hold_kind, :other}}
-      assert capture_log(fn -> assert Hold.resync(nil, @issue_id, :blocked) == {:error, :missing_repo_key} end) =~ "no repo key"
     end
   end
 

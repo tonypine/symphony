@@ -11,15 +11,12 @@ defmodule SymphonyElixir.Hold do
   (the store), never the board.
 
   The store is written first and the label second: a label write that fails leaves the hold in
-  force and is reported, rather than losing the pause. `drift/2` compares the store against the
-  board — a hold label with no store record (a hand-added label) or a store hold missing its
-  label — so the projection can be reported and repaired. A label write that fails is marked on the
+  force and is reported, rather than losing the pause. A label write that fails is marked on the
   record (`pending_projection`), and the reconciler writes the label again from the store.
 
   While the pause projector owns the labels (`SymphonyElixir.Pauses.Projector.owns?/0`), a hold
   writes none of its own: each set, clear and re-projection applies the projector, which renders
-  them from the ticket's pause, questions and holds, and `resync/4` applies it again against the
-  labels Linear was last seen with.
+  them from the ticket's pause, questions and holds.
 
   Each hold write that lands in the store is also recorded in the ticket's event stream
   (`SymphonyElixir.TicketEvents`), best-effort. A Blocked hold is `hold.set` and `hold.cleared`. A
@@ -42,7 +39,6 @@ defmodule SymphonyElixir.Hold do
 
   require Logger
 
-  alias SymphonyElixir.Hold.Drift
   alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.{Questions, RunStore, TicketSignals, TicketState, Tracker}
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -207,90 +203,6 @@ defmodule SymphonyElixir.Hold do
     else
       {:error, {:unknown_hold_kind, kind}}
     end
-  end
-
-  @doc """
-  Compares the ticket's store holds (`record`) with the machine labels it carries on the board
-  (`labels`). Returns `:ok`, `{:stray_label, kind}` for a label with no store hold (a hand-added
-  label), or `{:missing_label, kind}` for a store hold whose label the board is missing.
-  """
-  @spec drift(TicketState.t() | term(), [String.t()] | nil) ::
-          :ok | {:stray_label, kind()} | {:missing_label, kind()}
-  def drift(record, labels) do
-    labels = Enum.map(labels || [], &normalize/1)
-
-    Enum.find_value(@kinds, :ok, fn kind ->
-      on_board? = normalize(label(kind)) in labels
-
-      cond do
-        on_board? and not TicketState.hold?(record, kind) -> {:stray_label, kind}
-        not on_board? and TicketState.hold?(record, kind) -> {:missing_label, kind}
-        true -> nil
-      end
-    end)
-  end
-
-  @doc """
-  Reads the ticket's store record and its board labels and reports any drift, so a hand-added hold
-  label (or a store hold the board is missing) is visible. Returns the drift it saw.
-
-  The drift is recorded per ticket (`SymphonyElixir.Hold.Drift`) for the Setup check, and its
-  warning is logged once per change rather than on every poll. `opts[:identifier]` and `opts[:url]`
-  name the ticket there; `opts[:now]` is the time of the poll.
-  """
-  @spec report_drift(String.t() | nil, String.t() | nil, [String.t()] | nil, keyword()) ::
-          :ok | {:stray_label, kind()} | {:missing_label, kind()}
-  def report_drift(repo_key, issue_id, labels, opts \\ []) do
-    drift = drift(record(repo_key, issue_id, opts), labels)
-    if record_drift(repo_key, issue_id, drift, opts) == :changed, do: log_drift(issue_id, drift)
-    drift
-  end
-
-  @doc """
-  Re-syncs the ticket's `kind` label from the store, as the Setup fix for a drifted ticket asks: the
-  label is set when the store holds the hold and cleared when it doesn't. Unlike `set/5` and
-  `clear/4`, a label write the tracker refuses is returned, and the ticket's drift is forgotten only
-  once the write went through. While the pause projector owns the labels, it applies them again
-  from the ticket's pause and questions, compared with the labels Linear was last seen with.
-  """
-  @spec resync(String.t() | nil, String.t() | nil, kind(), keyword()) :: :ok | {:error, term()}
-  def resync(repo_key, issue_id, kind, opts \\ []) do
-    tracker = Keyword.get(opts, :tracker, Tracker)
-
-    with name when is_binary(name) <- label(kind) || {:error, {:unknown_hold_kind, kind}},
-         :ok <- require_repo_key(repo_key, issue_id),
-         :ok <- resync_labels(tracker, repo_key, issue_id, name, kind, opts) do
-      Drift.forget(repo_key, issue_id)
-    end
-  end
-
-  defp resync_labels(tracker, repo_key, issue_id, name, kind, opts) do
-    if Projector.owns?(),
-      do: Projector.project_now({:ticket, repo_key, issue_id}, tracker: tracker, store: Keyword.get(opts, :store, RunStore), force: true),
-      else: resync_label(tracker, issue_id, name, held?(repo_key, issue_id, kind, opts))
-  end
-
-  defp resync_label(tracker, issue_id, name, true = _held?), do: tracker.set_machine_label(issue_id, name)
-  defp resync_label(tracker, issue_id, name, false = _held?), do: tracker.clear_machine_label(issue_id, name)
-
-  # A ticket read with no repo key is reported where it is read; its drift has no repo to show under.
-  defp record_drift(repo_key, issue_id, drift, opts) when is_binary(repo_key) and repo_key != "" and is_binary(issue_id) do
-    ticket = %{identifier: opts[:identifier], url: opts[:url]}
-    Drift.record(repo_key, issue_id, drift, ticket, Keyword.get_lazy(opts, :now, &DateTime.utc_now/0))
-  end
-
-  defp record_drift(_repo_key, _issue_id, :ok, _opts), do: :unchanged
-  defp record_drift(_repo_key, _issue_id, _drift, _opts), do: :changed
-
-  defp log_drift(issue_id, {:stray_label, kind}) do
-    Logger.warning(
-      "Machine label #{inspect(label(kind))} is on issue_id=#{issue_id} with no store hold; " <>
-        "a hand-added label — the store is the truth"
-    )
-  end
-
-  defp log_drift(issue_id, {:missing_label, kind}) do
-    Logger.warning("Store hold #{inspect(kind)} on issue_id=#{issue_id} is missing its machine label")
   end
 
   # A label write that fails is marked on the record, so the reconciler projects the hold again
@@ -472,6 +384,5 @@ defmodule SymphonyElixir.Hold do
     {:error, :missing_repo_key}
   end
 
-  defp normalize(value) when is_binary(value), do: value |> String.trim() |> String.downcase()
-  defp normalize(_value), do: ""
+  defp normalize(value), do: value |> String.trim() |> String.downcase()
 end

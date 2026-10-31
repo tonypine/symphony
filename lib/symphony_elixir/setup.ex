@@ -36,7 +36,6 @@ defmodule SymphonyElixir.Setup do
     Checks.Teams,
     Checks.Labels,
     Checks.DeprecatedLabels,
-    Checks.HoldDrift,
     Checks.Statuses,
     Checks.StatusUse,
     Checks.QaHost

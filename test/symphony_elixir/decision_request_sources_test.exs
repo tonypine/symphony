@@ -29,8 +29,6 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
     "lib/symphony_elixir/dependency_gate.ex" => [:ask],
     # The step into Merging with manual review on.
     "lib/symphony_elixir/merge_confirmation.ex" => [:ask],
-    # The Inbox's reconciliation of a request already on the ticket.
-    "lib/symphony_elixir/needs_decision_hold.ex" => [:project],
     # The PR and CI watcher's questions: a protected file, a missing pull request, another base
     # branch, a check that never reported or keeps being cancelled.
     "lib/symphony_elixir/pr_decision/apply.ex" => [:ask],

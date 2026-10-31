@@ -2,7 +2,6 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.{Artifacts, CiWait, ClaudeCode, Codex, DispatchLoop, Handoff, Hold, Paths}
-  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Inbox.Item
   alias SymphonyElixir.{Pauses, Questions, TicketEvents, TicketState}
 
@@ -81,11 +80,10 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     assert [{"question.asked", %{question_id: ^question_id}}, {"pause.set", _pause}, {"hold.set", %{kind: "blocked", waits_on: %{type: "dispatch_loop"}}}] =
              ticket_events(@repo_key, @issue_id)
 
-    # The Inbox, and `/api/v1/state`'s `waiting_on_you` built from it, lists the ticket with the reason.
-    node = %{"id" => @issue_id, "identifier" => @identifier, "title" => "Loops", "url" => nil, "state" => %{"name" => "In Progress"}}
-    lookups = %{hold: &Hold.get(&1, &2, :blocked)}
-    assert %{kind: :blocked, ask: reason} = Item.from_node(node, @repo_key, %Schema{}, lookups)
-    assert reason == hold.reason
+    # The Inbox, and `/api/v1/state`'s `waiting_on_you` built from it, lists the ticket by its question.
+    item = Item.from_question(TicketState.normalize(record), question)
+    assert %{kind: :action, ask: ask, review: %{question_id: ^question_id}} = item
+    assert ask == question.title
   end
 
   test "a question the store refuses leaves the dispatch-loop hold as it was before questions" do

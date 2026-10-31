@@ -5,8 +5,7 @@ defmodule SymphonyElixir.InboxTest do
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Inbox
   alias SymphonyElixir.Inbox.Item
-  alias SymphonyElixir.Linear.{Issue, Usage}
-  alias SymphonyElixir.MergeConfirmation
+  alias SymphonyElixir.Linear.Usage
   alias SymphonyElixir.{RunStore, TicketState}
 
   defp issue_node(identifier, attrs \\ %{}) do
@@ -84,9 +83,7 @@ defmodule SymphonyElixir.InboxTest do
     )
   end
 
-  defp lookups(hold \\ nil), do: %{hold: fn _repo_key, _issue_id -> hold end}
-
-  describe "Item.from_node/4" do
+  describe "Item.plan_from_node/2" do
     test "a plan with its brief and its sub-tickets in landing order" do
       plan =
         issue_node("SHOP-330", %{
@@ -100,21 +97,9 @@ defmodule SymphonyElixir.InboxTest do
         })
 
       assert %{
-               issue_id: "id-SHOP-330",
-               identifier: "SHOP-330",
-               repo_key: "shop",
-               kind: :plan,
-               state: "Plan Review",
-               ask: "The retry fix for the importer.",
-               waiting_since: ~U[2026-10-01 10:00:00Z],
-               url: "https://linear.app/acme/issue/SHOP-330",
-               review: %{
-                 brief: %{format: "parsed", headline: "The retry fix for the importer.", moves: [%{move: "approve"}]},
-                 sub_tickets: [%{identifier: "SHOP-331", title: "First", url: "u1", state: "Backlog"}, %{identifier: "SHOP-332"}]
-               }
-             } = Item.from_node(plan, "shop", %Schema{}, lookups())
-
-      refute Map.has_key?(Item.from_node(plan, "shop", %Schema{}, lookups()), :state_machine)
+               brief: %{format: "parsed", headline: "The retry fix for the importer.", moves: [%{move: "approve"}]},
+               sub_tickets: [%{identifier: "SHOP-331", title: "First", url: "u1", state: "Backlog"}, %{identifier: "SHOP-332"}]
+             } = Item.plan_from_node(plan, %Schema{})
     end
 
     test "a plan's open choices are its requests, oldest first, each with what the Inbox shows of a request" do
@@ -147,8 +132,7 @@ defmodule SymphonyElixir.InboxTest do
           }
         })
 
-      assert %{kind: :plan, review: %{brief: %{format: "parsed"}, decisions: [undated, first, card]} = review} =
-               Item.from_node(plan, "shop", %Schema{}, lookups())
+      assert %{brief: %{format: "parsed"}, decisions: [undated, first, card]} = review = Item.plan_from_node(plan, %Schema{})
 
       # A request read without its posting time sorts first.
       assert %{comment_id: "q0"} = undated
@@ -166,184 +150,19 @@ defmodule SymphonyElixir.InboxTest do
       assert %{comment_id: "q2", question: "How long does a gift card last?"} = card
     end
 
-    test "a plan counts the answers given since it last came back to review, which no revision applied yet" do
-      reply = fn id, parent, at -> %{"id" => id, "body" => "Decision from the Director:\n\n1. Q\n   **Decision:** B", "createdAt" => at, "parent" => %{"id" => parent}} end
-
-      plan =
-        issue_node("SHOP-330", %{
-          "history" => %{"nodes" => [moved("Plan Review", "2026-10-01T08:00:00Z"), moved("Plan Review", "2026-10-01T10:00:00Z")]},
-          "comments" => %{
-            "nodes" => [
-              reply.("a2", "q2", "2026-10-01T10:16:00Z"),
-              reply.("a4", "q4", nil),
-              comment("q4", request_body(), "2026-10-01T09:59:30Z"),
-              reply.("a1", "q1", "2026-10-01T10:15:00Z"),
-              %{"id" => "w3", "body" => Request.render_withdrawal("Not needed"), "createdAt" => "2026-10-01T10:14:00Z", "parent" => %{"id" => "q3"}},
-              comment("q3", request_body(), "2026-10-01T09:59:00Z"),
-              comment("q2", request_body(), "2026-10-01T09:58:00Z"),
-              comment("q1", request_body(), "2026-10-01T09:57:00Z"),
-              reply.("a0", "q0", "2026-10-01T09:00:00Z"),
-              comment("q0", request_body(), "2026-10-01T07:57:00Z")
-            ]
-          }
-        })
-
-      # The first round's answer was applied by the revision that brought the plan back at 10:00; an
-      # answer read without its time can't be told apart, so it isn't counted.
-      assert %{kind: :plan, review: %{unapplied_answers: 2}} = Item.from_node(plan, "shop", %Schema{}, lookups())
-
-      # A plan whose history shows no move into review counts none.
-      undated = %{plan | "history" => %{"nodes" => [%{"createdAt" => nil, "toState" => %{"name" => "Plan Review"}}]}}
-      assert %{review: %{unapplied_answers: 0}} = Item.from_node(undated, "shop", %Schema{}, lookups())
+    test "a plan without a brief has nothing but its approval to show" do
+      assert Item.plan_from_node(issue_node("SHOP-331"), %Schema{}) == %{brief: nil, sub_tickets: [], decisions: []}
     end
 
-    test "a plan without a brief asks for its approval" do
-      assert %{kind: :plan, ask: "Approve the plan", review: %{brief: nil, sub_tickets: [], decisions: [], unapplied_answers: 0}} =
-               Item.from_node(issue_node("SHOP-331"), "shop", %Schema{}, lookups())
-    end
-
-    test "a pull request or a final verification sits in no state a person reviews in, so it waits on nobody" do
+    test "a ticket with no plan label, or one outside Plan Review, is no plan" do
       for node <- [
             issue_node("SHOP-8", %{"labels" => %{"nodes" => []}}),
             issue_node("SHOP-340", %{"title" => "Final verification: Gift cards", "labels" => %{"nodes" => []}}),
-            issue_node("SHOP-341", %{"state" => %{"name" => "In Review"}})
+            issue_node("SHOP-341", %{"state" => %{"name" => "In Review"}}),
+            issue_node("SHOP-9", %{"state" => %{"name" => "Todo"}})
           ] do
-        assert Item.from_node(node, "shop", %Schema{}, lookups()) == nil
+        assert Item.plan_from_node(node, %Schema{}) == nil
       end
-    end
-
-    test "an action with why, what waits if unanswered, options with trade-offs and what it unblocks" do
-      action =
-        issue_node("SHOP-90", %{
-          "state" => %{"name" => "Code Review"},
-          "history" => %{"nodes" => [moved("Code Review", "2026-10-01T08:00:00Z")]},
-          "comments" => %{"nodes" => [comment("request", request_body(), "2026-10-01T08:00:01Z")]}
-        })
-
-      assert %{
-               kind: :action,
-               ask: "Add the signing secret",
-               review:
-                 %{
-                   comment_id: "request",
-                   title: "Add the signing secret",
-                   question: "Add the secret?",
-                   why: "Releases fail to sign.",
-                   unblocks: "the Release workflow",
-                   if_unanswered: "Every release stays unsigned.",
-                   steps: [],
-                   options: [
-                     %{label: "Add it", effect: "Releases sign again.", recommended: true, tradeoffs: [%{kind: "good", text: "Gatekeeper stops warning."}]},
-                     %{label: "Drop signing", effect: "Unsigned builds.", recommended: false, tradeoffs: []}
-                   ],
-                   recommendation_reason: "Signing is a one-time setup.",
-                   requested_at: ~U[2026-10-01 08:00:01Z]
-                 } = review
-             } = Item.from_node(action, "shop", %Schema{}, lookups())
-
-      refute Map.has_key?(review, :est_minutes)
-    end
-
-    test "a held ticket waits in its phase, listed with the request's ask and age" do
-      # The hold pauses the ticket where it stands: the request on it lists it, and the decision is
-      # answerable from the Inbox with its comment id.
-      held =
-        issue_node("SHOP-91", %{
-          "state" => %{"name" => "In Progress"},
-          "labels" => %{"nodes" => [%{"name" => "Needs Decision"}]},
-          "history" => %{"nodes" => []},
-          "comments" => %{"nodes" => [comment("request", request_body(), "2026-10-01T08:00:01Z")]}
-        })
-
-      assert %{
-               kind: :action,
-               state: "In Progress",
-               ask: "Add the signing secret",
-               waiting_since: ~U[2026-10-01 08:00:01Z],
-               review: %{comment_id: "request", question: "Add the secret?", requested_at: ~U[2026-10-01 08:00:01Z], confirm: nil}
-             } = Item.from_node(held, "shop", %Schema{}, lookups())
-    end
-
-    test "a merge confirmation's request names the move its confirmation performs" do
-      held =
-        issue_node("SHOP-92", %{
-          "state" => %{"name" => "QA"},
-          "labels" => %{"nodes" => [%{"name" => "Needs Decision"}]},
-          "history" => %{"nodes" => []},
-          "comments" => %{"nodes" => [comment("request", request_body(), "2026-10-01T08:00:01Z")]}
-        })
-
-      summary = %{recommendation: "merge", review: nil, qa: "pass", pr: nil}
-      hold = MergeConfirmation.attrs(MergeConfirmation.request(%Issue{identifier: "SHOP-92"}, summary))
-
-      assert %{kind: :action, review: %{confirm: "Merging"}} = Item.from_node(held, "shop", %Schema{}, lookups(hold))
-    end
-
-    test "nothing for an issue that left Plan Review" do
-      assert Item.from_node(issue_node("SHOP-9", %{"state" => %{"name" => "Todo"}}), "shop", %Schema{}, lookups()) == nil
-    end
-
-    test "a ticket an access hold pauses in place, with the reason the hold recorded" do
-      held = issue_node("SHOP-60", %{"state" => %{"name" => "In Progress"}, "labels" => %{"nodes" => []}})
-
-      hold = %{
-        kind: :blocked,
-        reason: "The run reported a block",
-        clearing_condition: "when the block is resolved; a person clears an access hold",
-        waits_on: %{type: "access", keys: []},
-        decision: nil,
-        set_at: ~U[2026-10-01 06:00:00Z]
-      }
-
-      assert %{
-               issue_id: "id-SHOP-60",
-               identifier: "SHOP-60",
-               repo_key: "shop",
-               kind: :blocked,
-               state: "In Progress",
-               ask: "The run reported a block",
-               waiting_since: ~U[2026-10-01 06:00:00Z],
-               url: "https://linear.app/acme/issue/SHOP-60",
-               review: %{
-                 reason: "The run reported a block",
-                 clearing_condition: "when the block is resolved; a person clears an access hold"
-               }
-             } = Item.from_node(held, "shop", %Schema{}, lookups(hold))
-
-      # A hold that clears on its own waits on nobody, and neither does a ticket with no hold at all
-      # or a run whose lookups name no hold source.
-      assert Item.from_node(held, "shop", %Schema{}, lookups(%{hold | waits_on: %{type: "dependency", keys: ["SHOP-1"]}})) == nil
-      assert Item.from_node(held, "shop", %Schema{}, lookups()) == nil
-      assert Item.from_node(held, "shop", %Schema{}, %{}) == nil
-
-      # A hold never displaces a plan review the ticket already waits on.
-      assert %{kind: :plan} = Item.from_node(issue_node("SHOP-60"), "shop", %Schema{}, lookups(hold))
-
-      # A hold that recorded no reason still says what acting on it does.
-      assert %{ask: "Unblock the ticket and it continues", review: %{reason: nil}} =
-               Item.from_node(held, "shop", %Schema{}, lookups(%{hold | reason: nil, clearing_condition: nil}))
-    end
-
-    test "a ticket the dispatch-loop guard holds, with the loop in the reason" do
-      held = issue_node("SHOP-61", %{"state" => %{"name" => "Rework"}, "labels" => %{"nodes" => [%{"name" => "Blocked"}]}})
-      run = %{kind: "rework", run_id: "run-1", state: "Rework", head: "abc", at: ~U[2026-10-01 05:58:00Z], outcome: %{exit: "ended normally", head: "abc", at: nil}}
-      attrs = SymphonyElixir.DispatchLoop.hold_attrs(%{kind: "rework", count: 4, window_ms: 600_000, runs: [run]}, [])
-      hold = Map.merge(attrs, %{kind: :blocked, decision: nil, set_at: ~U[2026-10-01 06:00:00Z]})
-
-      assert %{kind: :blocked, ask: ask, review: %{reason: ask, clearing_condition: "when a person unblocks or restarts it"}} =
-               Item.from_node(held, "shop", %Schema{}, lookups(hold))
-
-      assert ask =~ "dispatch_loop: 4 rework runs in 10 minutes without a state change, a new PR head or a decision"
-      assert ask =~ "started 05:58 UTC, ended normally, no new PR head, no handoff signal"
-    end
-
-    test "a ticket the Director stopped waits as Stopped by you, which Unblock or Restart lifts" do
-      held = issue_node("SHOP-62", %{"state" => %{"name" => "Todo"}, "labels" => %{"nodes" => [%{"name" => "Blocked"}]}})
-      attrs = SymphonyElixir.OperatorStop.hold_attrs(~U[2026-10-01 06:00:00Z])
-      hold = Map.merge(attrs, %{kind: :blocked, decision: nil, set_at: ~U[2026-10-01 06:00:00Z]})
-
-      assert %{kind: :blocked, ask: "Stopped by you at 2026-10-01 06:00:00 UTC. " <> _, waiting_since: ~U[2026-10-01 06:00:00Z]} =
-               Item.from_node(held, "shop", %Schema{}, lookups(hold))
     end
 
     test "reads an option and a quality-gate entry" do

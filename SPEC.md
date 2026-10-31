@@ -3066,11 +3066,11 @@ Rules:
   ticket with no pause keeps the gate's own words.
   `Needs Decision` is set by an
   agent's `linear_request_human_action`, a Code Review escalation, a stuck self-heal, a manual
-  review confirmation, or a ticket whose pull request is closed or whose diff is empty, and clears when the decision is recorded (a reply under the request, the
-  Inbox's Decide, or a withdrawal); the ticket continues where it stopped unless the decision
+  review confirmation, or a ticket whose pull request is closed or whose diff is empty, and clears when the decision is recorded (the
+  Inbox's Decide, or a withdrawal; a Linear comment answers nothing); the ticket continues where it stopped unless the decision
   directs a move.
-- **Decisions are scope.** A person's answer to a decision request (a reply under the request, or
-  the Inbox's Decide) MUST be recorded in the ticket's store record first, then projected into the
+- **Decisions are scope.** A person's answer to a decision request (the Director's Decide in the
+  Inbox; no Linear comment is read as an answer) MUST be recorded in the ticket's store record first, then projected into the
   machine-owned Decisions section of the issue description, between `<!-- symphony:decisions:start -->` and `<!-- symphony:decisions:end -->`
   and before the summary block, on the read that sees it: one entry per answered request, keyed by
   the request comment so a repeat writes nothing, numbered `D1`, `D2`… with the date, the question,
@@ -3088,20 +3088,16 @@ Rules:
   no Linear read, the reviewer and QA prompts with the rule that a finding contradicting a
   recorded decision is not a finding; a reviewer finding that names a recorded decision
   (`"decision": "D1"`) MUST be kept as a note, and a change request left with no other finding is an
-  approval. A ruling a person
-  gives in a plain comment that opens with `Decision:` or `Ruling:` (any case, bold or not), not as
-  a reply under a decision request, MUST be recorded on the same read, keyed by its comment
-  (`ruling-<id>`), titled by its first sentence and scoped by its text the same way; a ruling whose
-  answer the section already records MUST NOT be written again. The agents' comment tools MUST
-  refuse a body that opens that way, so only a person writes a ruling.
+  approval. A plain comment that opens with `Decision:` or `Ruling:` MUST NOT be read as a
+  decision; a ruling recorded before (keyed `ruling-<id>`) stays on the record. The agents' comment
+  tools MUST still refuse a body that opens that way.
 - **Unlocking a protected path for one run.** A decision request's option MAY carry `unlocks`, the
   agent-protected paths picking it grants; `linear_request_human_action` MUST refuse a path outside
   the protected list, naming the list, and MUST keep refusing file names in labels, the question
   and the Why, which names each file by its plain description. The request comment carries the
-  paths in a hidden line per option, never in the option's text. A pick of that option, by a reply
-  under the request or in the Inbox, MUST record the paths with the decision (a hidden line of its
+  paths in a hidden line per option, never in the option's text. A pick of that option in the Inbox MUST record the paths with the decision (a hidden line of its
   Decisions entry) and grant each one for that ticket; an answer that picks no option, or more than
-  one, grants nothing. A recorded decision (or a ruling the poll read) that says
+  one, grants nothing. A recorded decision that says
   `Unlock <path> for <ticket>` MUST unlock that path only when the path is one of the workspace's
   agent-protected paths and the ticket is the one the decision is on. The ticket's next
   implementation run MUST claim the grant in the ticket's store record before its session starts,
@@ -5399,9 +5395,7 @@ Minimum endpoints:
       the type `type` in the team `team`, at `position` on its board, just after the state `after`
       (`null` when it goes first of its type; a `null` position leaves the place to Linear). It
       runs where the check put it: the request may leave `after` and `position` out, and one it
-      names must be the proposed one;
-      `{"kind": "linear", "action": "resync_hold", "repo", "tickets"}` re-syncs each ticket's hold
-      label from the store.
+      names must be the proposed one.
     - `{"kind": "open", "target": "settings" | "symphony_yml" | "linear" | "drain_report" | "repos",
       "url"}`: no fix is safe; the app shows the button that goes where the operator fixes it.
     Symphony never fixes a problem by itself.
@@ -5447,11 +5441,7 @@ Minimum endpoints:
     spaces apart, or a short edit distance) or one that is both a team and a workspace label (a
     `warning` naming both, `open` `linear`); the deprecated `human-action` label in an
     `escalate.labels` list (a `warning` with a `config_edit` `remove` of it) or on polled open
-    tickets (a `warning` naming them); and a ticket whose hold label drifted from the store (a
-    `Blocked` or `Needs Decision` label with no hold, or a hold with no label) through two checks
-    without a poll putting it right (one `warning` per repo naming the tickets, a `details` line
-    each saying which way and since when, and a `resync_hold` fix). The poll logs each drift once
-    per change, not on every poll. The workflow states, in each routed team, from one states read
+    tickets (a `warning` naming them). The workflow states, in each routed team, from one states read
     per team: a state of the ticket machine the team lacks (`Todo`, `In Progress`, `Code Review`,
     `QA`, `Merging`, `Rework`, `Plan Review`, `Epic Review`, `Waiting on sub-tickets`, `CI Fix`,
     `Done`, `Canceled` or `Cancelled`, the phase and waiting states by their `issues.states.*`
@@ -5506,7 +5496,7 @@ Minimum endpoints:
 - `POST /api/v1/setup/fixes`
   - Runs a `linear` fix (the descriptor as a problem lists it, or under `fix`): it does exactly
     what the descriptor says, runs the checks again with the team cache emptied and answers like
-    a refresh. `resync_hold` may name one of the problem's tickets or all of them. `422`
+    a refresh. `422`
     `fix_not_proposed` for a descriptor no problem of the latest check lists. When Linear refuses
     (permissions, a name already taken) it answers `422` `fix_refused` with the reason and what to
     do in plain words, next to the problems as they were; nothing is half created. Same-origin like

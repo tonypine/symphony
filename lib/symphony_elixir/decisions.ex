@@ -27,22 +27,18 @@ defmodule SymphonyElixir.Decisions do
 
   The ticket's store record (`SymphonyElixir.TicketState`'s `decisions`, kept by
   `SymphonyElixir.RunStore`) is the source of truth, and the section is its projection: every write
-  goes to the store first, then the section is projected into the description. A section that lost
-  an entry, or the whole section, is drift: the next read that sees it rewrites it from the store.
+  goes to the store first, then the section is projected into the description.
   A ticket whose store record holds no decision yet while its description has a section is
   backfilled from the section, once.
 
-  A decision is recorded when a person answers it: `sync/2` writes the answered requests of a ticket
-  the Inbox read (a reply under the request), and the Director's Decide writes its picks
-  (`SymphonyElixir.DirectorMoves`). A person can also rule in a plain comment that opens with
-  `Decision:` or `Ruling:` (`ruling?/1`): the orchestrator's poll writes it (`sweep/2`) for every
-  ticket it polls, and `sync/2` for the ones the Inbox reads, keyed `ruling-<comment id>`. A ruling
-  whose answer the section already records is skipped, so the same ruling commented again adds
-  nothing. Symphony never writes such a comment itself: its own comments open with their headings,
-  and the agents' comment tools refuse a body that reads as a ruling
-  (`SymphonyElixir.AgentTools.Linear`). `stored/2` reads a ticket's decisions from the store, and
-  `prompt_section/1` renders them for the implementation, reviewer and QA prompts, with no Linear
-  read.
+  A decision is recorded when the Director answers it: the Director's Decide writes its picks
+  (`SymphonyElixir.DirectorMoves`) through `record/3`. Nothing reads a Linear comment for a
+  decision: a reply under a request, or a plain comment opening with `Decision:` or `Ruling:`,
+  answers nothing. A ruling recorded before (keyed `ruling-<comment id>`) stays on the record, and a
+  later entry with the same answer is skipped. The agents' comment tools still refuse a body that
+  reads as a ruling (`ruling?/1`, `SymphonyElixir.AgentTools.Linear`), so no agent writes one.
+  `stored/2` reads a ticket's decisions from the store, and `prompt_section/1` renders them for the
+  implementation, reviewer and QA prompts, with no Linear read.
 
   Each decision a write adds to the store is also the Director's `decision.recorded` event
   (`SymphonyElixir.TicketEvents`), naming the open `decision.requested` it answers; the ones taken
@@ -50,14 +46,12 @@ defmodule SymphonyElixir.Decisions do
 
   While the pause projector owns the section (`SymphonyElixir.Pauses.Projector.owns?/0`), `record/3`
   only writes the store, and the projector renders the section from the record
-  (`render_from_questions/1`), as it renders the labels from the pause and the questions. `sweep/2`
-  still repairs a section that lost an entry.
+  (`render_from_questions/1`), as it renders the labels from the pause and the questions.
   """
 
   require Logger
 
   alias SymphonyElixir.{Config, IssueSummary, PathUnlock, PromptSafety, RunStore, TicketSignals, TicketState, Tracker}
-  alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Pauses.Projector
 
   @start_marker "<!-- symphony:decisions:start -->"
@@ -76,11 +70,9 @@ defmodule SymphonyElixir.Decisions do
   # A negation up to two words before a phrase: `do not defer`, `no need to defer`.
   @negation_pattern ~r/\b(not|never|no|cannot|\w+n['’]t)\s+(\w+\s+){0,2}$/iu
   @answer_max_length 600
-  @title_max_length 80
   # A plain comment a person opens with `Decision:` or `Ruling:`, bold or not.
   @ruling_pattern ~r/\A\s*(?:\*\*|__)?(?:decision|ruling)\s*(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*(\S.*)\z/isu
   @ruling_prefix "ruling-"
-  @ruling_question "Ruling given in a comment."
   @prompt_limit 10_000
   @director {:person, "the Director"}
 
@@ -391,95 +383,12 @@ defmodule SymphonyElixir.Decisions do
   end
 
   @doc """
-  The decisions a ticket node records in its comments: each `## Decision needed:` request with a
-  reply from a person under it, answered by its first reply. A withdrawn request is no decision.
-  A reply that picks an option unlocking protected paths records them
-  (`SymphonyElixir.PathUnlock.picked_paths/2`).
-  `node` is a Linear issue node with `comments { nodes { id body createdAt parent { id } } }`.
-  """
-  @spec answered(map()) :: [entry()]
-  def answered(node) when is_map(node) do
-    comments = node |> get_in(["comments", "nodes"]) |> List.wrap() |> Enum.filter(&is_map/1)
-    replies = Enum.group_by(comments, &get_in(&1, ["parent", "id"]))
-
-    for %{"id" => id, "body" => body} = comment <- comments,
-        is_binary(id),
-        request = Request.parse(body, nil),
-        request != nil,
-        under = Enum.sort_by(Map.get(replies, id, []), &(&1["createdAt"] || "")),
-        not Enum.any?(under, &Request.withdrawal?(&1["body"])),
-        %{"body" => answer} = reply <- Enum.take(Enum.filter(under, &is_binary(&1["body"])), 1),
-        do: entry(id, reply_date(reply, comment), request.title, request.question, answer_text(answer, request), PathUnlock.picked_paths(request, [answer]))
-  end
-
-  def answered(_node), do: []
-
-  @doc """
   Whether `body` is a person's ruling: a comment that opens with `Decision:` or `Ruling:` (any
   case, bold or not) and says something after it.
   """
   @spec ruling?(String.t() | term()) :: boolean()
   def ruling?(body) when is_binary(body), do: Regex.match?(@ruling_pattern, body)
   def ruling?(_body), do: false
-
-  @doc """
-  The rulings a ticket node's comments give (`ruling?/1`), each an entry keyed by its comment's id
-  (`ruling-<id>`), dated by the comment, titled by its first sentence and scoped by its text
-  (`scope/1`). A reply under a `## Decision needed:` request is that request's answer
-  (`answered/1`), never a ruling of its own.
-  """
-  @spec rulings(map()) :: [entry()]
-  def rulings(node) when is_map(node) do
-    comments = node |> get_in(["comments", "nodes"]) |> List.wrap() |> Enum.filter(&is_map/1)
-    requests = for %{"id" => id, "body" => body} <- comments, Request.parse(body, nil) != nil, into: MapSet.new(), do: id
-
-    for %{"id" => id, "body" => body} = comment <- comments,
-        is_binary(id),
-        not MapSet.member?(requests, get_in(comment, ["parent", "id"])),
-        [_body, text] <- [Regex.run(@ruling_pattern, body || "")] do
-      entry(@ruling_prefix <> id, reply_date(comment, comment), ruling_title(text), @ruling_question, text)
-    end
-  end
-
-  def rulings(_node), do: []
-
-  # The ruling's first sentence, cut on a word to fit on the entry's line.
-  defp ruling_title(text) do
-    sentence = text |> one_line() |> String.split(~r/(?<=[.!?])\s/u, parts: 2) |> hd()
-
-    if String.length(sentence) <= @title_max_length,
-      do: sentence,
-      else: (sentence |> String.slice(0, @title_max_length + 1) |> String.replace(~r/\s+\S*$/u, "")) <> "…"
-  end
-
-  # The reply, plus the option it picks when it names one but not what it does.
-  defp answer_text(reply, request) do
-    reply = one_line(reply)
-
-    case Enum.find(request.options, &picked?(&1, reply)) do
-      nil -> reply
-      option -> if String.contains?(reply, option_effect(option)), do: reply, else: "#{reply} (option: #{one_line(option)})"
-    end
-  end
-
-  defp picked?(option, reply), do: String.contains?(String.downcase(reply), String.downcase(option_label(option)))
-
-  # A rendered option reads `**Label** (recommended): effect`.
-  defp option_label(option), do: option |> String.split(":", parts: 2) |> hd() |> String.replace(["**", "(recommended)"], "") |> String.trim()
-  defp option_effect(option), do: option |> String.split(":", parts: 2) |> List.last() |> String.trim()
-
-  defp reply_date(reply, comment) do
-    Enum.find_value([reply["createdAt"], comment["createdAt"]], Date.utc_today(), fn
-      at when is_binary(at) ->
-        case DateTime.from_iso8601(at) do
-          {:ok, datetime, _offset} -> DateTime.to_date(datetime)
-          _invalid -> nil
-        end
-
-      _missing ->
-        nil
-    end)
-  end
 
   @doc """
   The decisions recorded on `issue` (a map with its `:id`, `:description` and `:repo_key`), read
@@ -503,45 +412,6 @@ defmodule SymphonyElixir.Decisions do
   defp issue_repo_key(opts, issue), do: Keyword.put(opts, :repo_key, Keyword.get(opts, :repo_key) || Map.get(issue, :repo_key))
 
   defp label(decisions), do: decisions |> Enum.with_index(1) |> Enum.map(fn {decision, index} -> Map.put(decision, :id, "D#{index}") end)
-
-  @doc """
-  Records the decisions answered on a ticket node (`answered/1`) and the rulings its comments give
-  (`rulings/1`): the ones its store record lacks go into it, and the section is projected from the
-  record. The node's own description is checked first, so a ticket whose section already shows
-  every recorded decision costs no Linear call; a section that misses one, or holds one more than
-  once, is rewritten from the store. `opts[:repo_key]` names the ticket's repo. A failure is logged
-  and returned, never raised: the next poll tries again.
-  """
-  @spec sync(map(), keyword()) :: :ok | {:error, term()}
-  def sync(%{"id" => issue_id} = node, opts) when is_binary(issue_id) do
-    record(issue_id, answered(node) ++ rulings(node), Keyword.put(opts, :description, node["description"]))
-  end
-
-  def sync(_node, _opts), do: :ok
-
-  @doc """
-  Records the rulings the poll read on each issue (`SymphonyElixir.Linear.Issue`'s `rulings`, from
-  `rulings/1`) in its store record, and projects the record into each description whose section
-  misses a decision, so a ruling on any ticket Symphony polls is written on the poll that sees it,
-  held or not, and a section a person removed comes back. An issue whose section shows every
-  recorded decision costs no Linear call. `opts[:repo_key]` names the polled repo. Returns how many
-  descriptions were written; a failure is logged, and the next poll tries again.
-  """
-  @spec sweep([map()] | term(), keyword()) :: non_neg_integer()
-  def sweep(issues, opts \\ []) do
-    if is_list(issues), do: Enum.count(issues, &sweep_issue(&1, opts)), else: 0
-  end
-
-  defp sweep_issue(%{id: issue_id} = issue, opts) when is_binary(issue_id) do
-    opts =
-      opts
-      |> issue_repo_key(issue)
-      |> Keyword.put(:description, Map.get(issue, :description))
-
-    logged(issue_id, project_decisions(issue_id, Map.get(issue, :rulings) || [], opts)) == {:ok, :written}
-  end
-
-  defp sweep_issue(_issue, _opts), do: false
 
   @doc """
   Records `entries` on the issue: the ones its store record lacks go into it, then the record is

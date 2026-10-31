@@ -2,7 +2,7 @@ defmodule SymphonyElixir.HumanActions.Waiting do
   @moduledoc """
   The tickets waiting on the operator, as the state API's `waiting_on_you` lists them.
 
-  Built from Linear issue nodes (`SymphonyElixir.Inbox.Item.from_node/4`): one entry per issue with an
+  Built from Linear issue nodes: one entry per issue with an
   open `linear_request_human_action` request (`SymphonyElixir.HumanActions.Request`), or per plan
   parent (label `plan` or `breakdown`) in `Plan Review` (`SymphonyElixir.PlanReview`). Its `kind`
   says what waits:

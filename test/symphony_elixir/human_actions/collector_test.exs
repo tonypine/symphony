@@ -145,8 +145,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     end
   end
 
-  # The issue node helpers the parsing callers still use (`SymphonyElixir.NeedsDecisionHold`,
-  # `SymphonyElixir.Inbox.Item.from_node/4`).
+  # The issue node helpers the plan's brief capture still uses (`SymphonyElixir.Inbox.Item.plan_from_node/2`).
   describe "open_requests/2 on an issue node" do
     defp node(identifier, attrs) do
       Map.merge(

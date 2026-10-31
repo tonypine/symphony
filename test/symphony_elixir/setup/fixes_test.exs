@@ -1,10 +1,8 @@
 defmodule SymphonyElixir.Setup.FixesTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.Hold
-  alias SymphonyElixir.Hold.Drift
   alias SymphonyElixir.Setup
-  alias SymphonyElixir.Setup.Checks.{HoldDrift, Labels, Statuses}
+  alias SymphonyElixir.Setup.Checks.{Labels, Statuses}
   alias SymphonyElixir.Setup.Fixes
   alias SymphonyElixir.StateProvisioning
 
@@ -23,7 +21,7 @@ defmodule SymphonyElixir.Setup.FixesTest do
     Application.put_env(:symphony_elixir, :memory_tracker_labels_list, Enum.map(labels, &%{id: &1, name: &1, team_id: "TP", team_key: "TP"}))
 
     server = Module.concat(__MODULE__, "Setup#{System.unique_integer([:positive])}")
-    start_supervised!({Setup, name: server, checks: [Labels, HoldDrift], linear_api_key?: true})
+    start_supervised!({Setup, name: server, checks: [Labels], linear_api_key?: true})
     Setup.refresh(server)
     {:ok, server: server}
   end
@@ -182,64 +180,6 @@ defmodule SymphonyElixir.Setup.FixesTest do
       assert {:error, {:refused, message}} = Fixes.run(fix, server: server)
       assert message =~ ~s(Linear refused to create the state "Epic Review" in team TP: a state with that name may already exist)
       assert [%{id: "statuses:missing:TP:Epic Review"}] = Setup.payload(server).problems
-    end
-  end
-
-  describe "resync_hold" do
-    setup %{server: server} do
-      issues = for {id, identifier} <- [{"i1", "TP-1"}, {"i2", "TP-2"}], do: %Issue{id: id, identifier: identifier, labels: ["Blocked"]}
-      Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
-
-      labels = Application.get_env(:symphony_elixir, :memory_tracker_labels_list)
-      needs_decision = %{id: "nd", name: "Needs Decision", team_id: "TP", team_key: "TP"}
-      Application.put_env(:symphony_elixir, :memory_tracker_labels_list, [needs_decision | labels])
-
-      # Two polls, each followed by a check, see both tickets drift.
-      for _round <- 1..2 do
-        capture_log(fn -> for issue <- issues, do: Hold.report_drift("app", issue.id, ["Blocked"], identifier: issue.identifier) end)
-        Setup.refresh(server)
-      end
-
-      assert [%{fix: %{action: "resync_hold", tickets: ["TP-1", "TP-2"]}}] = Setup.payload(server).problems
-      :ok
-    end
-
-    defp resync(tickets), do: %{"kind" => "linear", "action" => "resync_hold", "repo" => "app", "tickets" => tickets}
-
-    defp labels(id), do: Enum.find(Application.get_env(:symphony_elixir, :memory_tracker_issues), &(&1.id == id)).labels
-
-    test "one ticket re-syncs alone, and only the other is left to propose", %{server: server} do
-      assert {:ok, %{problems: [problem]}} = Fixes.run(resync(["TP-1"]), server: server)
-      assert labels("i1") == []
-      assert labels("i2") == ["Blocked"]
-      assert problem.tickets == [%{identifier: "TP-2", url: nil}]
-
-      assert Fixes.run(resync(["TP-1"]), server: server) == {:error, :not_proposed}
-      assert Fixes.run(resync([]), server: server) == {:error, :not_proposed}
-      assert Fixes.run(%{resync(["TP-2"]) | "repo" => "other"}, server: server) == {:error, :not_proposed}
-    end
-
-    test "every listed ticket at once", %{server: server} do
-      assert {:ok, %{problems: []}} = Fixes.run(resync(["TP-1", "TP-2"]), server: server)
-      assert labels("i1") == []
-      assert labels("i2") == []
-    end
-
-    test "a ticket whose drift cleared before the fix ran is left alone", %{server: server} do
-      Drift.forget("app", "i2")
-
-      assert {:ok, _payload} = Fixes.run(resync(["TP-1", "TP-2"]), server: server)
-      assert labels("i2") == ["Blocked"]
-    end
-
-    test "a label write Linear refuses names the ticket and keeps the warning", %{server: server} do
-      Application.put_env(:symphony_elixir, :memory_tracker_remove_issue_label_result, [:ok, {:error, :forbidden}])
-
-      assert {:error, {:refused, message}} = Fixes.run(resync(["TP-1", "TP-2"]), server: server)
-      assert message == "Linear refused to re-sync the hold label of TP-2: :forbidden. Fix it in Linear, then check again."
-      assert labels("i1") == []
-      assert labels("i2") == ["Blocked"]
-      assert [%{id: "hold_drift:app"}] = Setup.payload(server).problems
     end
   end
 end

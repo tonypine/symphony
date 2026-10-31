@@ -8,7 +8,6 @@ defmodule SymphonyElixir.CodeReviewTest do
   alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.MergeConfirmation
-  alias SymphonyElixir.NeedsDecisionHold
   alias SymphonyElixir.Pauses
   alias SymphonyElixir.Questions
   alias SymphonyElixir.RunStore
@@ -1078,7 +1077,7 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert Hold.held?(@repo_key, @issue_id, :needs_decision)
     end
 
-    test "with Linear down the escalation is a question on the record, and its comment is posted once Linear is back" do
+    test "with Linear down the escalation is a question on the record, its comment kept for the projector" do
       :ok = RunStore.clear()
       Process.put(:fake_review_result, {:ok, %{verdict: :block, comments: [], reason: "touches protected files"}})
       Process.put(:fake_tracker_comment_result, {:error, :linear_down})
@@ -1093,14 +1092,9 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert [%{id: id, title: "Code Review escalated TP-815", confirm: "QA"}] = Questions.open({:ticket, @repo_key, @issue_id})
       assert {:ok, %{reasons: [%{kind: :question, text: "Waiting for your answer: Code Review escalated TP-815"}]}} = Pauses.get({:ticket, @repo_key, @issue_id})
 
-      # Linear is back: the Inbox's sweep reads the ticket with no request on it and posts the comment.
-      Process.delete(:fake_tracker_comment_result)
-      node = %{"id" => @issue_id, "state" => %{"name" => "Code Review"}, "labels" => %{"nodes" => [%{"name" => "Needs Decision"}]}, "comments" => %{"nodes" => []}}
-      assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings(), tracker: FakeTracker) == :none
-      assert_received {:commented, @issue_id, ^refused}
+      # The refused comment names its Question, so the pause projector posts it once Linear is back.
       assert refused =~ "<!-- symphony:question #{id} -->"
       assert Hold.held?(@repo_key, @issue_id, :needs_decision)
-      assert [%{id: ^id}] = Questions.open({:ticket, @repo_key, @issue_id})
     end
 
     test "a dependency manifest's major bump informs the review, read from git in the workspace" do

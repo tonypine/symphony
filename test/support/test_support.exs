@@ -1,6 +1,5 @@
 defmodule SymphonyElixir.TestSupport do
   alias SymphonyElixir.Config.Cache
-  alias SymphonyElixir.Hold.Drift
 
   @workflow_prompt "You are an agent for this repository."
   @supervised_child_wait_ms 5_000
@@ -336,9 +335,6 @@ defmodule SymphonyElixir.TestSupport do
   end
 
   def clear_run_store! do
-    # The drift the polls saw is read against the store, so it goes with it.
-    :ok = Drift.clear()
-
     case SymphonyElixir.RunStore.clear() do
       :ok ->
         :ok
