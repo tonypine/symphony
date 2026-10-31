@@ -20,6 +20,7 @@ defmodule SymphonyElixirWeb.Presenter do
     RunStore,
     Sessions,
     Setup,
+    StateMachine,
     StrayProcesses,
     TicketObservation,
     TicketState,
@@ -67,6 +68,7 @@ defmodule SymphonyElixirWeb.Presenter do
           build: Map.take(BuildInfo.current(), [:version, :sha]),
           uptime_seconds: uptime_seconds(),
           repos: repo_keys(snapshot),
+          phases: StateMachine.phases(Config.settings!()),
           counts: %{
             running: length(snapshot.running),
             watching: length(Map.get(snapshot, :watching, [])),

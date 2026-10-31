@@ -8,7 +8,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.{Pauses, PlanComments, Questions, RunStore, SelfHeal, SubIssueWait}
   alias SymphonyElixir.PrWatch.Competitors
-  alias SymphonyElixir.{TicketSignals, TicketState}
+  alias SymphonyElixir.{StateMachine, TicketSignals, TicketState, TicketStateReconciler}
 
   @waiting "Waiting on sub-tickets"
 
@@ -2312,22 +2312,39 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert %{phase: "Todo"} = RunStore.get_ticket_state("repo-director", "pr")
     end
 
-    test "refuses a phase the repo doesn't name and a ticket whose phase is Linear's", %{opts: opts} do
+    test "a ticket created in Linear in Todo (phase owner external) moves to Backlog and stays there", %{opts: opts} do
+      RunStore.delete_ticket_state("repo-director", "pr")
+      put_issues([%{pr("Todo") | repo_key: "repo-director"}])
+      {:stamped, record} = TicketStateReconciler.reconcile(TicketState.new("repo-director", "pr"), "Todo")
+      :ok = RunStore.put_ticket_state(record)
+      assert %{phase: "Todo", phase_owner: :external} = RunStore.get_ticket_state("repo-director", "pr")
+
+      assert {:ok, %{from_state: "Todo", to_state: "Backlog", moved: true}} = DirectorMoves.move(:move, "MOT-40", %{to: "Backlog"}, opts)
+      assert_received {:memory_tracker_state_update, "pr", "Backlog"}
+      assert %{phase: "Backlog", phase_owner: :symphony} = record = RunStore.get_ticket_state("repo-director", "pr")
+
+      # Linear still reading Todo is drift on a phase Symphony now owns: the record keeps Backlog.
+      assert {:kept, %{phase: "Backlog"}, %{linear_phase: "Todo"}} =
+               TicketStateReconciler.reconcile(record, "Todo", DateTime.utc_now(), "record")
+    end
+
+    test "refuses a phase the repo doesn't name, a ticket with no record and one in no configured repository", %{opts: opts} do
       owned("repo-director", "QA")
       assert {:error, {:invalid, "to is required"}} = DirectorMoves.move(:move, "MOT-40", %{to: " "}, opts)
 
       assert {:error, {:conflict, "Shipping is not a phase of MOT-40's workflow; it names Backlog, Todo, In Progress" <> _rest}} =
                DirectorMoves.move(:move, "MOT-40", %{to: "Shipping"}, opts)
 
-      :ok = RunStore.update_ticket_state("repo-director", "pr", %{phase_owner: :external})
-      external = "MOT-40 is not Symphony's: its phase is the one Linear shows (owner external), so move it in Linear"
-      assert {:error, {:conflict, ^external}} = DirectorMoves.move(:move, "MOT-40", %{to: "Todo"}, opts)
-
       RunStore.delete_ticket_state("repo-director", "pr")
-      assert {:error, {:conflict, ^external}} = DirectorMoves.move(:move, "MOT-40", %{to: "Todo"}, opts)
+
+      assert {:error, {:conflict, "Symphony has no record of MOT-40 yet, so it can't move it"}} =
+               DirectorMoves.move(:move, "MOT-40", %{to: "Todo"}, opts)
 
       put_issues([pr("QA")])
-      assert {:error, {:conflict, ^external}} = DirectorMoves.move(:move, "MOT-40", %{to: "Todo"}, opts)
+
+      assert {:error, {:conflict, "MOT-40 is in no repository Symphony is configured for, so Symphony doesn't track it"}} =
+               DirectorMoves.move(:move, "MOT-40", %{to: "Todo"}, opts)
+
       refute_received {:memory_tracker_state_update, _id, _state}
     end
 
@@ -2348,9 +2365,11 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert [_event] = RunStore.list_ticket_events("repo-director", "pr", types: ["ticket.moved"])
     end
 
-    test "phases/1 lists every phase the workflow names, once each" do
-      phases = DirectorMoves.phases(Config.settings!())
+    test "phases/1 lists every phase the workflow names, once each, in board order" do
+      settings = Config.settings!()
+      phases = DirectorMoves.phases(settings)
 
+      assert phases == Enum.map(StateMachine.phases(settings), & &1.name)
       assert Enum.take(phases, 3) == ["Backlog", "Todo", "In Progress"]
       assert Enum.all?(["Code Review", "QA", "Plan Review", "Epic Review", "CI Fix", @waiting, "Done", "Canceled"], &(&1 in phases))
       assert phases == Enum.uniq_by(phases, &String.downcase/1)

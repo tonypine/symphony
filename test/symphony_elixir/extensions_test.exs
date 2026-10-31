@@ -618,6 +618,7 @@ defmodule SymphonyElixir.ExtensionsTest do
       "build" => %{"version" => "0.0.1.168", "sha" => "d3d301b0123456789abcdef0123456789abcdef0"},
       "uptime_seconds" => state_payload["uptime_seconds"],
       "repos" => ["default"],
+      "phases" => Enum.map(SymphonyElixir.StateMachine.phases(Config.settings!()), &%{"name" => &1.name, "dispatches" => &1.dispatches}),
       "all_repositories_paused" => false,
       "repositories" => [],
       "counts" => %{
