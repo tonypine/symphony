@@ -148,7 +148,7 @@ defmodule SymphonyElixir.PrWatch.CompetitorsTest do
       assert Competitors.waiting(TicketState.normalize(%{repo_key: @repo_key, issue_id: @issue.id})) == nil
 
       {:ok, _links} = Competitors.wait(@issue, [link(1), link(3)], false, opts(now: @now))
-      :ok = RunStore.put_ticket_pr_watch(@repo_key, @issue.id, "TP-2", %{facts: SymphonyElixir.PrDecision.Facts.new(), links: [link(1), link(3, released: true)]})
+      :ok = RunStore.put_ticket_pr_watch(@repo_key, @issue.id, "TP-2", %{facts: Facts.new(), links: [link(1), link(3, released: true)]})
       record = TicketState.normalize(RunStore.get_ticket_state(@repo_key, @issue.id))
 
       assert %{reason: "Waiting on TP-1 to land: they change the same files (SPEC.md)", set_at: %DateTime{}} = Competitors.waiting(record)

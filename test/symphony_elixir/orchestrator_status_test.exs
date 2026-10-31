@@ -6915,7 +6915,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert body =~ "Configured threshold: 5"
     assert body =~ "on a Blocked hold"
 
-
     completed_state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
     # The ticket waits on a reason the Director releases with Unblock.
     assert {:ok, %{reasons: [%{kind: :environment, waits_on: %{condition: "circuit_breaker"}, releasable: true}]}} =

@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.Pauses.DependenciesTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Pauses, RunStore, TicketPullRequest, TicketState, UpdateHold, Workflow}
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.{Pauses, RunStore, TicketPullRequest, TicketState, UpdateHold, Workflow}
   alias SymphonyElixir.Pauses.Dependencies
 
   @repo_key "repo-a"
@@ -154,7 +154,7 @@ defmodule SymphonyElixir.Pauses.DependenciesTest do
 
   describe "sync_records/3" do
     test "pauses a Todo record on the open blockers it observed, and lifts the ones it no longer has" do
-      blockers = [%{id: "b1", identifier: "TP-1", state: "In Progress"}, %{id: "b2", identifier: "TP-2", state: "Done"}, %{id: "b3", identifier: nil, state: "Todo"}]
+      blockers = [blocker("TP-1", "In Progress"), blocker("TP-2", "Done"), %{id: "b3", identifier: nil, state: "Todo"}]
       todo = TicketState.new(@repo_key, @issue_id, %{phase: "Todo", blockers: blockers})
       running = TicketState.new(@repo_key, "issue-2", %{phase: "In Progress", blockers: blockers})
       skipped = TicketState.new("repo-polled", "issue-3", %{phase: "Todo", blockers: blockers})
@@ -184,7 +184,8 @@ defmodule SymphonyElixir.Pauses.DependenciesTest do
       # Outside Todo nothing is set; a record the store can't read is left alone.
       assert Dependencies.sync_issue(@repo_key, %{read | state: "In Progress"}, @terminal) == 0
 
-      log = capture_log(fn -> assert Dependencies.sync_issue(@repo_key, read, @terminal, store: UnreadableStore) == 0 end)
+      unreadable = fn -> assert Dependencies.sync_issue(@repo_key, read, @terminal, store: UnreadableStore) == 0 end
+      log = capture_log(unreadable)
       assert log =~ "Failed to read the record"
       refute Pauses.paused?(@ticket)
     end
@@ -206,7 +207,8 @@ defmodule SymphonyElixir.Pauses.DependenciesTest do
     end
 
     test "a ticket out of Todo gains no reason for a blocker the run did not report" do
-      assert {0, _cache} = sweep(issue(%{state: "In Progress", blocked_by: [blocker("TP-997", "Todo"), blocker("TP-998", "Todo")]}), build(), UpdateHold.empty_cache())
+      running = issue(%{state: "In Progress", blocked_by: [blocker("TP-997", "Todo"), blocker("TP-998", "Todo")]})
+      assert {0, _cache} = sweep(running, build(), UpdateHold.empty_cache())
       assert Pauses.why(@ticket) == ["Waiting for TP-997 to finish"]
     end
 
@@ -269,7 +271,13 @@ defmodule SymphonyElixir.Pauses.DependenciesTest do
       {:ok, _pause} = Pauses.set(@ticket, Pauses.ticket_reason(:fix_ticket, "TP-900"), set_by: Dependencies.setter(:fix_ticket))
 
       :ok =
-        RunStore.record_ticket_self_heal(@repo_key, @issue_id, %{component: "dev_server", scope: @repo_key, signature: "s", fix_ticket: "TP-900", attempts: 2})
+        RunStore.record_ticket_self_heal(@repo_key, @issue_id, %{
+          component: "dev_server",
+          scope: @repo_key,
+          signature: "s",
+          fix_ticket: "TP-900",
+          attempts: 2
+        })
 
       :ok
     end
@@ -323,7 +331,8 @@ defmodule SymphonyElixir.Pauses.DependenciesTest do
 
     test "a skip label, or a fix merged in another repository, lifts it as soon as it is terminal" do
       merged_fix()
-      assert {1, _cache} = sweep(issue(%{state: "QA", labels: [UpdateHold.skip_label()]}), build(), UpdateHold.empty_cache())
+      skipping = issue(%{state: "QA", labels: [UpdateHold.skip_label()]})
+      assert {1, _cache} = sweep(skipping, build(), UpdateHold.empty_cache())
       refute Pauses.paused?(@ticket)
 
       {:ok, _pause} = Pauses.set(@ticket, Pauses.ticket_reason(:fix_ticket, "TP-900"), set_by: Dependencies.setter(:fix_ticket))

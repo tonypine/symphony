@@ -337,7 +337,8 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       first = %Issue{id: "c1", identifier: "MT-71", title: "First", state: "Todo", blocked_by: []}
       blocker = %{id: "c1", identifier: "MT-71", state: "Todo"}
       second = %Issue{id: "c2", identifier: "MT-72", title: "Second", state: "Todo", blocked_by: [blocker]}
-      verification = %Issue{id: "c3", identifier: "MT-73", title: "Final verification: X", state: "Todo", blocked_by: [blocker, %{blocker | id: "c2", identifier: "MT-72"}]}
+      blockers = [blocker, %{blocker | id: "c2", identifier: "MT-72"}]
+      verification = %Issue{id: "c3", identifier: "MT-73", title: "Final verification: X", state: "Todo", blocked_by: blockers}
       sweep([first, second, verification])
 
       assert Orchestrator.should_dispatch_issue_for_test(first, state)

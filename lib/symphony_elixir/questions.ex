@@ -50,7 +50,8 @@ defmodule SymphonyElixir.Questions do
 
   require Logger
 
-  alias SymphonyElixir.{DecisionRequest, DispatchLoop, Hold, Pauses, RunStore, TicketEvents, TicketState, Tracker, TransitionGuard}
+  alias SymphonyElixir.{DecisionRequest, DispatchLoop, Hold, Pauses, RunStore}
+  alias SymphonyElixir.{TicketEvents, TicketState, Tracker, TransitionGuard}
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.TicketEvents.Event

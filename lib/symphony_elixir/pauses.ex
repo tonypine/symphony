@@ -458,7 +458,15 @@ defmodule SymphonyElixir.Pauses do
         []
 
       reason ->
-        [%{issue_id: record.issue_id, repo_key: record.repo_key, identifier: record.issue_identifier, stopped_at: reason.set_at, phase_at: record.phase_at}]
+        [
+          %{
+            issue_id: record.issue_id,
+            repo_key: record.repo_key,
+            identifier: record.issue_identifier,
+            stopped_at: reason.set_at,
+            phase_at: record.phase_at
+          }
+        ]
     end
   end
 

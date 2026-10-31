@@ -92,7 +92,8 @@ defmodule SymphonyElixir.Pauses.Dependencies do
 
       stored ->
         record = stored || TicketState.new(repo_key, issue_id)
-        {observed, _outcome} = TicketState.observe(record, %{issue | blocked_by: Issue.open_blockers(issue, terminal)}, now, :poll)
+        read = %{issue | blocked_by: Issue.open_blockers(issue, terminal)}
+        {observed, _outcome} = TicketState.observe(record, read, now, :poll)
         {:ok, observed}
     end
   end

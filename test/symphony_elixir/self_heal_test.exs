@@ -4,11 +4,11 @@ defmodule SymphonyElixir.SelfHealTest do
   import ExUnit.CaptureLog
   import SymphonyElixir.TestSupport, only: [ticket_events: 2]
 
-  alias SymphonyElixir.{NeedsDecisionHold, Pauses, Questions, RunStore, SelfHeal, TicketState}
-  alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.Collector
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.{NeedsDecisionHold, Pauses, Questions, RunStore, SelfHeal, TicketState}
+  alias SymphonyElixir.Pauses.Dependencies
 
   @repo_key "repo-self-heal"
   @issue_id "issue-self-heal"
@@ -130,8 +130,11 @@ defmodule SymphonyElixir.SelfHealTest do
   # The fix tickets the ticket's pause waits on.
   defp fix_tickets do
     case Pauses.get({:ticket, @repo_key, @issue_id}) do
-      {:ok, %{reasons: reasons}} -> for %{waits_on: %{identifier: identifier}} = reason <- reasons, Pauses.ticket_source(reason) == :fix_ticket, do: identifier
-      _none -> []
+      {:ok, %{reasons: reasons}} ->
+        for %{waits_on: %{identifier: identifier}} = reason <- reasons, Pauses.ticket_source(reason) == :fix_ticket, do: identifier
+
+      _none ->
+        []
     end
   end
 

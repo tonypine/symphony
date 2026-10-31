@@ -55,9 +55,9 @@ defmodule SymphonyElixir.SelfHeal do
 
   alias SymphonyElixir.{Config, DecisionRequest, Pauses, RunStore, TicketState, Verification}
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.QaAgent.Selection
 
   @default_component "qa_environment"

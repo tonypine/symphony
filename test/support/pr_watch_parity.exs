@@ -41,8 +41,8 @@ defmodule SymphonyElixir.PrWatchParity do
   """
 
   alias SymphonyElixir.{Config, Hold, Pauses, RunStore, TicketPullRequest, TicketState}
-  alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.PrWatch.{Ingest, Repo, SilentWait}
 
   @repo_key "default"

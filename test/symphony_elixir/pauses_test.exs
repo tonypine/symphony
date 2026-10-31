@@ -601,7 +601,8 @@ defmodule SymphonyElixir.PausesTest do
 
     test "stopped/1 lists each stopped ticket of every repo, with when it stopped and when its phase was written" do
       phase_at = ~U[2026-10-20 08:00:00Z]
-      :ok = RunStore.put_ticket_state(%{repo_key: @repo_key, issue_id: @issue_id, issue_identifier: "MT-1", phase: "Todo", phase_at: phase_at})
+      record = %{repo_key: @repo_key, issue_id: @issue_id, issue_identifier: "MT-1", phase: "Todo", phase_at: phase_at}
+      :ok = RunStore.put_ticket_state(record)
       :ok = Pauses.stop(@ticket, @stopped_at)
       {:ok, _pause} = Pauses.set({:ticket, @repo_key, "issue-waiting"}, @dependency)
       :ok = Pauses.stop({:ticket, "repo-b", "issue-b"}, @stopped_at)

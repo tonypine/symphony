@@ -1,8 +1,6 @@
 defmodule SymphonyElixir.QaVerificationTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.Pauses
-  alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.CiFix
   alias SymphonyElixir.CiWait
   alias SymphonyElixir.Config.Schema
@@ -11,6 +9,7 @@ defmodule SymphonyElixir.QaVerificationTest do
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.MergeConfirmation
   alias SymphonyElixir.Pauses
+  alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaVerification
   alias SymphonyElixir.RunStore
@@ -273,8 +272,11 @@ defmodule SymphonyElixir.QaVerificationTest do
   # The fix tickets the ticket's pause waits on.
   defp fix_waits(issue_id) do
     case Pauses.get({:ticket, @repo_key, issue_id}) do
-      {:ok, %{reasons: reasons}} -> for %{waits_on: %{identifier: identifier}} = reason <- reasons, Pauses.ticket_source(reason) == :fix_ticket, do: identifier
-      _none -> []
+      {:ok, %{reasons: reasons}} ->
+        for %{waits_on: %{identifier: identifier}} = reason <- reasons, Pauses.ticket_source(reason) == :fix_ticket, do: identifier
+
+      _none ->
+        []
     end
   end
 

@@ -1477,7 +1477,7 @@ defmodule SymphonyElixir.Orchestrator do
     polled = with {repo_name, _result} <- repo_result, do: repo_name
 
     case list_records.() do
-      records when is_list(records) -> Dependencies.sync_records(records, Config.settings!().tracker.terminal_states, skip: polled)
+      records when is_list(records) -> Dependencies.sync_records(records, terminal_state_set(), skip: polled)
       _unreadable -> 0
     end
   end
@@ -4485,7 +4485,9 @@ defmodule SymphonyElixir.Orchestrator do
       end
 
     fix_ticket_held =
-      for %Issue{} = issue <- issues, not Issue.blocked?(issue, terminal_states), (waits = fix_ticket_waits(issue)) != [] do
+      for %Issue{} = issue <- issues,
+          not Issue.blocked?(issue, terminal_states),
+          (waits = fix_ticket_waits(issue)) != [] do
         %{
           issue_id: issue.id,
           identifier: issue.identifier,
@@ -5042,7 +5044,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp active_retry_issue?(_issue, _terminal_states), do: false
 
   # A paused issue waits for its pause to lift (a `Todo` one on its open blockers, see
-  # `SymphonyElixir.Pauses.Dependencies`). A `breakdown` parent waits while its sub-issues are worked, in the waiting state or, when that
+  # `SymphonyElixir.Pauses.Dependencies`). A `breakdown` parent waits while its sub-issues are
+  # worked, in the waiting state or, when that
   # is off, in its active state; it is dispatched again for close-out once every sub-issue is terminal.
   # One whose open sub-issues are all still in Backlog was never approved: outside the waiting state
   # it runs to finish or revise its plan. In `Rework` its plan was rejected, so it is broken down
@@ -5777,7 +5780,8 @@ defmodule SymphonyElixir.Orchestrator do
   # The read right before dispatch may find a blocker the last poll didn't: the ticket is paused on
   # it (`Pauses.Dependencies.sync_issue/4`) before the gate reads its pause.
   defp sync_read_dependencies(%Issue{} = issue, terminal_states) do
-    with repo_key when is_binary(repo_key) <- hold_repo_key(issue), do: Dependencies.sync_issue(repo_key, issue, terminal_states)
+    with repo_key when is_binary(repo_key) <- hold_repo_key(issue),
+         do: Dependencies.sync_issue(repo_key, issue, terminal_states)
   end
 
   # From the record, the issue starts only when its record still says what the candidate said: the
