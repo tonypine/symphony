@@ -7,11 +7,6 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   alias SymphonyElixir.{DirectorMoves, Hold, RunStore, SubIssueWait, TicketState}
   alias SymphonyElixirWeb.ControlApiController
 
-  defmodule UnwritableStore do
-    def get_ticket_state(repo_key, issue_id), do: SymphonyElixir.RunStore.get_ticket_state(repo_key, issue_id)
-    def clear_ticket_hold(_repo_key, _issue_id, _kind), do: {:error, :boom}
-  end
-
   setup do
     write_workflow_file!(Workflow.workflow_file_path())
     SubIssueWait.reset_for_test("Waiting on sub-tickets")
@@ -61,19 +56,19 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert_received {:memory_tracker_comment, "plan", "Decisions on the plan, from the Director:\n\n1. Who?\n   **Pick:** The buyer"}
   end
 
-  test "unblock clears an access hold in place, and refuses one that isn't an access hold", %{moves: moves} do
+  test "unblock releases a pause in place, and refuses a ticket with nothing to release", %{moves: moves} do
     held = %Issue{id: "held", identifier: "MOT-60", title: "Blocked work", state: "In Progress", repo_key: "repo-api"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [held])
-    :ok = Hold.set("repo-api", "held", :blocked, %{waits_on: %{type: "access"}})
+    :ok = SymphonyElixir.Pauses.stop({:ticket, "repo-api", "held"}, DateTime.utc_now())
 
     conn = post(:unblock, %{"issue_identifier" => "MOT-60"}, moves)
 
     assert conn.status == 200
     assert %{"move" => "unblock", "moved" => false, "from_state" => "In Progress", "to_state" => "In Progress"} = Jason.decode!(conn.resp_body)
-    refute Hold.held?("repo-api", "held", :blocked)
+    refute SymphonyElixir.Pauses.paused?({:ticket, "repo-api", "held"})
 
     assert error(post(:unblock, %{"issue_identifier" => "MOT-60"}, moves)) ==
-             {409, "move_not_allowed", "MOT-60 is not waiting on an access hold"}
+             {409, "move_not_allowed", "MOT-60 has nothing a person can unblock"}
   end
 
   test "decide answers a held ticket in place, and a redirecting answer moves it through the guard", %{moves: moves} do
@@ -183,13 +178,14 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     }
   end
 
-  test "a hold the store refuses to clear is a 502", %{moves: moves} do
+  test "a pause the store refuses to lift is a 502", %{moves: moves} do
     held = %Issue{id: "held", identifier: "MOT-60", title: "Blocked work", state: "In Progress", repo_key: "repo-api"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [held])
-    :ok = Hold.set("repo-api", "held", :blocked, %{waits_on: %{type: "access"}})
+    :ok = SymphonyElixir.Pauses.stop({:ticket, "repo-api", "held"}, DateTime.utc_now())
+    release = fn _ticket, _held -> {:error, :boom} end
 
-    assert error(post(:unblock, %{"issue_identifier" => "MOT-60"}, [store: UnwritableStore] ++ moves)) ==
-             {502, "store_error", "couldn't clear the hold on MOT-60: :boom"}
+    assert error(post(:unblock, %{"issue_identifier" => "MOT-60"}, [release: release] ++ moves)) ==
+             {502, "store_error", "couldn't lift the pause on MOT-60: :boom"}
   end
 
   test "undo takes the last move back", %{moves: moves} do

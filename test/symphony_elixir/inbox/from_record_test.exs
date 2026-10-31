@@ -218,14 +218,14 @@ defmodule SymphonyElixir.Inbox.FromRecordTest do
       assert FromRecord.items([], %{}) == []
     end
 
-    test "is nil without a pause or without a reason the Director may release, and names no clearing condition without a hold" do
+    test "is nil without a pause or without a reason the Director may release; Unblock clears the one it names" do
       record = TicketState.new(@repo_key, "id-SHOP-9", %{})
       question = %{person_reason("Waiting on your answer", nil) | kind: :question, waits_on: %{question_id: "q"}, releasable: false}
 
       assert Item.from_pause(record, nil) == nil
       assert Item.from_pause(record, %{reasons: [question]}) == nil
 
-      assert %{kind: :blocked, ask: "Paused by you", review: %{reason: "Paused by you", clearing_condition: nil}} =
+      assert %{kind: :blocked, ask: "Paused by you", review: %{reason: "Paused by you", clearing_condition: "when a person unblocks it"}} =
                Item.from_pause(record, %{reasons: [question, person_reason("Paused by you", nil)]})
     end
   end
