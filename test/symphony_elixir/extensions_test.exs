@@ -1918,7 +1918,7 @@ defmodule SymphonyElixir.ExtensionsTest do
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
   end
 
-  test "the inbox api shows a Send Decisions answer and a Stop on the very next read" do
+  test "the inbox api shows a Send Decisions answer and a Stop on the very next read; the ticket page agrees" do
     ticket = {:ticket, "default", "issue-MT-NEXT"}
     :ok = SymphonyElixir.RunStore.put_ticket_state(inbox_record("MT-NEXT", %{}))
     on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("default", "issue-MT-NEXT") end)
@@ -1930,10 +1930,16 @@ defmodule SymphonyElixir.ExtensionsTest do
     inbox = [records: store, github_repos: %{}]
     start_test_endpoint(orchestrator: orchestrator_name, inbox: inbox, snapshot_timeout_ms: 50)
     read = fn -> Enum.map(json_response(get(build_conn(), "/api/v1/inbox"), 200)["items"], &{&1["identifier"], &1["kind"]}) end
+    ticket_page = fn -> json_response(get(build_conn(), "/api/v1/MT-NEXT"), 200) end
 
+    Usage.reset()
     assert read.() == [{"MT-NEXT", "action"}]
+    assert [%{"id" => _id}] = ticket_page.()["open_questions"]
     {:ok, _answered} = SymphonyElixir.Questions.answer(ticket, question.id, "Drop signing")
     assert read.() == []
+    # The ticket page agrees, and no Linear request was made for the Inbox.
+    assert ticket_page.()["open_questions"] == []
+    refute Enum.any?(Usage.snapshot().callers, &(&1.caller == "inbox"))
     :ok = SymphonyElixir.OperatorStop.mark("default", "issue-MT-NEXT", DateTime.utc_now())
     assert read.() == [{"MT-NEXT", "blocked"}]
   end
