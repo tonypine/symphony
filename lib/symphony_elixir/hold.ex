@@ -48,7 +48,8 @@ defmodule SymphonyElixir.Hold do
   @dispatch_loop_type "dispatch_loop"
   @ci_wait_type "ci_wait"
   @operator_stop_type "operator_stop"
-  @unblockable_types ["access", @dispatch_loop_type, @ci_wait_type, @operator_stop_type]
+  @idle_park_type "idle_park"
+  @unblockable_types ["access", @dispatch_loop_type, @ci_wait_type, @operator_stop_type, @idle_park_type]
   @symphony %{kind: :symphony, name: "Symphony"}
 
   @typedoc "The holds the design defines."
@@ -117,8 +118,9 @@ defmodule SymphonyElixir.Hold do
   Whether a hold waits on a person's `Unblock` (see `SymphonyElixir.DirectorMoves`): one waiting on
   an access grant a person hands over — what an agent's block report records — one the
   dispatch-loop guard set (`SymphonyElixir.DispatchLoop`), one an epic review's wait for CI set
-  once it reached its limit (`SymphonyElixir.CiWait`), or one an operator's stop set beside the
-  ticket's pause (`SymphonyElixir.OperatorStop`), or one set beside a question Symphony asked
+  once it reached its limit (`SymphonyElixir.CiWait`), one an operator's stop set beside the
+  ticket's pause (`SymphonyElixir.OperatorStop`), one an idle run's park set
+  (`SymphonyElixir.IdlePark`), or one set beside a question Symphony asked
   (`waits_on.question_id`, a quiet handoff's): that question is open while the hold stands, since
   the hold is cleared with it. A dependency or fix-ticket hold clears on its own when what it waits
   on goes terminal; these never clear without a person (a stop's also clears when the ticket leaves
