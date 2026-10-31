@@ -47,7 +47,7 @@ defmodule SymphonyElixirWeb.Presenter do
     seconds_running: 0
   }
 
-  @spec state_payload(GenServer.name(), timeout(), GenServer.server(), GenServer.name(), GenServer.server(), keyword()) :: map()
+  @spec state_payload(GenServer.name(), timeout(), GenServer.server(), Inbox.inbox(), GenServer.server(), keyword()) :: map()
   def state_payload(orchestrator, snapshot_timeout_ms, stray_processes \\ StrayProcesses, inbox \\ Inbox, setup \\ Setup, github_updates \\ []) do
     now = DateTime.utc_now()
     generated_at = now |> DateTime.truncate(:second) |> DateTime.to_iso8601()
@@ -82,7 +82,7 @@ defmodule SymphonyElixirWeb.Presenter do
           sessions: sessions_payload(snapshot.running),
           watching: snapshot |> Map.get(:watching, []) |> Enum.map(&(&1 |> watching_entry_payload() |> status.())),
           waiting_on_you: Enum.map(waiting_on_you, &waiting_on_you_payload(&1, now)),
-          inbox_read: Inbox.read?(inbox),
+          inbox_read: true,
           conflicts: snapshot |> Map.get(:conflicts, []) |> Enum.map(&conflict_entry_payload/1),
           retrying: Enum.map(snapshot.retrying, &(&1 |> retry_entry_payload() |> status.())),
           drain_report: drain_report_payload(RetiredStates.drain_report()),
@@ -225,9 +225,9 @@ defmodule SymphonyElixirWeb.Presenter do
 
   @doc """
   Everything that waits on the Director (`SymphonyElixir.Inbox.items/2`), oldest first, with
-  counts by kind. Read from what Symphony cached on its last poll: it makes no Linear request.
+  counts by kind. Built from the tickets' records on this read: it makes no Linear request.
   """
-  @spec inbox_payload(GenServer.name(), timeout(), GenServer.name()) :: map()
+  @spec inbox_payload(GenServer.name(), timeout(), Inbox.inbox()) :: map()
   def inbox_payload(orchestrator, snapshot_timeout_ms, inbox \\ Inbox) do
     now = DateTime.utc_now()
     generated_at = now |> DateTime.truncate(:second) |> DateTime.to_iso8601()

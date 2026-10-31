@@ -113,7 +113,6 @@ defmodule SymphonyElixir.DirectorMoves do
     Decisions,
     DispatchLoop,
     Hold,
-    Inbox,
     MergeConfirmation,
     OperatorStop,
     Orchestrator,
@@ -657,15 +656,15 @@ defmodule SymphonyElixir.DirectorMoves do
 
   # A plan's pick names the request it answers (`request_comment_id`) or its Question
   # (`question_id`), and the Inbox row of either names the other.
-  defp decision_pick(issue, pick, opts) do
+  defp decision_pick(issue, pick, _opts) do
     question_id = blank_to_nil(Map.get(pick, :question_id))
     comment_id = blank_to_nil(Map.get(pick, :request_comment_id))
 
     %{
       question: String.trim(pick.question),
       answer: String.trim(pick.answer),
-      question_id: question_id || row_question_id(issue, comment_id, opts),
-      request_comment_id: comment_id || (question_id && row_comment_id(issue, question_id, opts))
+      question_id: question_id || row_question_id(issue, comment_id),
+      request_comment_id: comment_id || (question_id && row_comment_id(issue, question_id))
     }
   end
 
@@ -1045,10 +1044,10 @@ defmodule SymphonyElixir.DirectorMoves do
   # The Question the hold's request asks, answered with the Director's picks: the one the Inbox row
   # names (`question_id`), else the one the row of the request comment names, else the hold's. A
   # hold with none (asked before questions) answers no Question.
-  defp answer_held(issue, input, hold, picks, opts) do
+  defp answer_held(issue, input, hold, picks, _opts) do
     given = blank_to_nil(input[:question_id])
 
-    case given || row_question_id(issue, input[:request_comment_id], opts) || get_in(hold, [:decision, :question_id]) do
+    case given || row_question_id(issue, input[:request_comment_id]) || get_in(hold, [:decision, :question_id]) do
       nil -> {:ok, nil}
       id -> answer_decision(issue, id, Enum.map_join(picks, " / ", & &1.answer), given != nil)
     end
@@ -1066,26 +1065,30 @@ defmodule SymphonyElixir.DirectorMoves do
 
   # The request comment the reply goes under: the one the Director answered, else the one the Inbox
   # row of the Question lists. nil when neither is known: the reply is then a comment on the ticket.
-  defp request_comment_id(issue, input, question, opts) do
-    blank_to_nil(input[:request_comment_id]) || (question && row_comment_id(issue, question.id, opts))
+  defp request_comment_id(issue, input, question, _opts) do
+    blank_to_nil(input[:request_comment_id]) || (question && row_comment_id(issue, question.id))
   end
 
   defp reply(issue, nil, comment), do: with({:error, {:linear, reason}} <- post_comment(issue, comment), do: {:error, reason})
   defp reply(issue, comment_id, comment), do: reply_to_request(issue, comment_id, comment)
 
-  # The Inbox rows of the ticket's requests (`SymphonyElixir.Inbox.Item`), each with the comment it
-  # replies under and the Question its hidden line names, read from the Inbox's cache: no Linear read.
-  defp row_question_id(_issue, nil, _opts), do: nil
-  defp row_question_id(issue, comment_id, opts), do: issue |> rows(opts) |> Enum.find_value(&(&1.comment_id == comment_id && &1.question_id))
+  # The ticket's request comments, each with the Question it asks, as its record keeps them (the pause
+  # projector wrote or found each one): what the Inbox row of the Question names. No Linear read.
+  defp row_question_id(_issue, nil), do: nil
+  defp row_question_id(issue, comment_id), do: issue |> rows() |> Enum.find_value(&(&1.comment_id == comment_id && &1.question_id))
 
-  defp row_comment_id(issue, question_id, opts), do: issue |> rows(opts) |> Enum.find_value(&(&1.question_id == question_id && &1.comment_id))
+  defp row_comment_id(issue, question_id), do: issue |> rows() |> Enum.find_value(&(&1.question_id == question_id && &1.comment_id))
 
-  defp rows(issue, opts) do
-    for %{issue_id: issue_id, review: review} <- Inbox.cached(Keyword.get(opts, :inbox, Inbox)),
-        issue_id == issue.id,
-        request <- [review | List.wrap(Map.get(review, :decisions))],
-        is_binary(Map.get(request, :comment_id)),
-        do: %{comment_id: request.comment_id, question_id: Map.get(request, :question_id)}
+  defp rows(issue) do
+    case RunStore.get_ticket_state(issue.repo_key, issue.id) do
+      %{projected: %{comments: %{} = comments}} ->
+        for {question_id, %{comment: comment_id}} <- comments,
+            is_binary(comment_id),
+            do: %{comment_id: comment_id, question_id: question_id}
+
+      _none ->
+        []
+    end
   end
 
   # What Undo needs to take an answer back: the Question and the hold it cleared.

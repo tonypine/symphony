@@ -1,7 +1,6 @@
 defmodule SymphonyElixir.LinearQueryComplexityTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.Inbox.References
   alias SymphonyElixir.PullRequestPage
 
   # Linear turns a query down above 10,000 complexity points.
@@ -99,14 +98,6 @@ defmodule SymphonyElixir.LinearQueryComplexityTest do
     # issues: 1 + 10 × (nodes 1 + id 0.1 + state 1.1 + children (1 + 5 × 1.1) + pageInfo 1.1)
     assert %{points: points, connection_depth: 2} = Estimate.points(query, %{first: 10})
     assert_in_delta points, 1 + 10 * (1 + 0.1 + 1.1 + 6.5 + 1.1), 0.001
-  end
-
-  test "the Inbox's one query for every mention and the items' context stays under Linear's limit at its page sizes" do
-    {query, limits} = References.query()
-
-    assert %{points: points, connection_depth: depth} = Estimate.points(query, limits)
-    assert points < @linear_limit, "SymphonyInboxReferences estimates #{points} points"
-    assert depth <= 3
   end
 
   test "the pull request page's one query for its ticket stays under Linear's limit at its page sizes" do

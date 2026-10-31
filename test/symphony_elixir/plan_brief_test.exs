@@ -216,6 +216,22 @@ defmodule SymphonyElixir.PlanBriefTest do
       assert %{plan_brief: nil, plan_brief_error: nil} = normalized(repo_key)
     end
 
+    test "a memory tracker's issues file is read in Linear's place, as on a QA server" do
+      Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+      issues_file = Path.join(Path.dirname(Workflow.symphony_file_path()), "issues.json")
+      plan = %{"id" => @issue_id, "identifier" => "QA-9", "title" => "A plan", "state" => "Plan Review", "labels" => ["plan"]}
+      File.write!(issues_file, Jason.encode!([plan]))
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_memory_issues_file: "issues.json")
+      repo_key = Config.repo_key!()
+
+      for id <- [@issue_id, "plan-unknown"], do: :ok = RunStore.put_ticket_state(TicketState.new(repo_key, id, %{phase: "Plan Review"}))
+
+      assert {:ok, %{brief: nil, sub_tickets: []}} = PlanBrief.capture({repo_key, @issue_id}, now: @read_at)
+      assert %{plan_brief: %{read_at: @read_at}, plan_brief_error: nil} = normalized(repo_key)
+
+      ExUnit.CaptureLog.capture_log(fn -> assert {:error, :issue_not_found} = PlanBrief.capture({repo_key, "plan-unknown"}) end)
+    end
+
     test "a ticket with no record can't take the brief" do
       log =
         ExUnit.CaptureLog.capture_log(fn ->

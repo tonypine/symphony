@@ -395,19 +395,18 @@ defmodule SymphonyElixir.DirectorMovesTest do
       {:ok, question} = Questions.ask(ticket, layout_request(), asked_by: %{kind: :run, name: "The run"})
       :ok = Hold.set("repo-restart", "pr", :needs_decision, %{reason: "Pick a layout", decision: %{title: "Pick a layout", question_id: question.id}})
 
-      row = %{kind: :action, repo_key: "repo-restart", issue_id: "pr", identifier: "MOT-40", state: "Rework", waiting_since: nil, review: %{comment_id: "comment-7", question_id: question.id}}
-      :persistent_term.put({SymphonyElixir.Inbox, :items, :director_moves_restart_inbox}, [row])
-      on_exit(fn -> :persistent_term.erase({SymphonyElixir.Inbox, :items, :director_moves_restart_inbox}) end)
-      assert [_row] = SymphonyElixir.Inbox.items(%{}, :director_moves_restart_inbox)
+      project_comment("repo-restart", "pr", question.id, "comment-7")
+      inbox = [settings_fun: fn _repo_key -> %SymphonyElixir.Config.Schema{} end, github_repos: %{}]
+      assert [%{review: %{comment_id: "comment-7"}}] = Enum.filter(SymphonyElixir.Inbox.items(%{}, inbox), &(&1.repo_key == "repo-restart"))
 
-      opts = Keyword.put(restart_opts(opts), :inbox, :director_moves_restart_inbox)
+      opts = restart_opts(opts)
       assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "Start over"}, opts)
 
       assert %{state: :withdrawn, withdrawn: %{reason: "The run that asked was restarted."}} = Questions.find(ticket, question.id)
       assert {:ok, nil} = Pauses.get(ticket)
       refute Hold.held?("repo-restart", "pr", :needs_decision)
       assert_received {:memory_tracker_reply, "pr", "comment-7", "## Action withdrawn\n\nThe run that asked was restarted."}
-      assert SymphonyElixir.Inbox.items(%{}, :director_moves_restart_inbox) == []
+      assert Enum.filter(SymphonyElixir.Inbox.items(%{}, inbox), &(&1.repo_key == "repo-restart")) == []
     end
 
     test "the restart comment says what the reset did" do
@@ -1002,10 +1001,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
         repos: [[key: "repo-director", workflow: Workflow.workflow_file_path(), team: "MOT"]]
       )
 
-      on_exit(fn ->
-        Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_result)
-        :persistent_term.erase({SymphonyElixir.Inbox, :items, :director_moves_inbox})
-      end)
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_result) end)
 
       :ok
     end
@@ -1096,9 +1092,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       id = ask_signing()
       ticket = {:ticket, "repo-director", "pr"}
-      opts = Keyword.put(opts, :inbox, :director_moves_inbox)
-      row = %{issue_id: "pr", kind: :action, review: %{comment_id: "comment-7", question_id: id}}
-      :persistent_term.put({SymphonyElixir.Inbox, :items, :director_moves_inbox}, [%{issue_id: "other", review: %{}}, row])
+      project_comment("repo-director", "pr", id, "comment-7")
 
       # By the Question alone: the reply goes under the request its row lists.
       assert {:ok, %{commented: true}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), question_id: id}, opts)
@@ -1112,8 +1106,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       ticket = {:ticket, "repo-director", "pr"}
       # The hold moved on to a request that carries no Question; the row of the answered one names it.
       :ok = Hold.set("repo-director", "pr", :needs_decision, %{reason: "q", decision: %{title: "Add the release signing secrets", question: "q"}})
-      opts = Keyword.put(opts, :inbox, :director_moves_inbox)
-      :persistent_term.put({SymphonyElixir.Inbox, :items, :director_moves_inbox}, [%{issue_id: "pr", review: %{comment_id: "comment-1", question_id: id}}])
+      project_comment("repo-director", "pr", id, "comment-1")
 
       assert {:ok, _result} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, opts)
       assert %{state: :answered, answer: %{text: "Add the secrets"}} = Questions.find(ticket, id)
@@ -1205,8 +1198,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert :ok = DecisionRequest.ask(issue, signing_request(), [])
       ticket = {:ticket, "repo-director", "plan"}
       [%{id: id}] = Questions.open(ticket)
-      opts = Keyword.put(opts, :inbox, :director_moves_inbox)
-      :persistent_term.put({SymphonyElixir.Inbox, :items, :director_moves_inbox}, [%{issue_id: "plan", review: %{decisions: [%{comment_id: "comment-9", question_id: id}]}}])
+      project_comment("repo-director", "plan", id, "comment-9")
 
       picks = [%{question: "Q", answer: "Ship unsigned", question_id: id}, %{question: "Loose", answer: "B"}]
       assert {:ok, %{to_state: "Rework"}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: picks}, opts)
@@ -2273,4 +2265,10 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
   defp restore_app_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
   defp restore_app_env(key, value), do: Application.put_env(:symphony_elixir, key, value)
+
+  # The request comment the pause projector wrote for the Question, as the ticket's record keeps it.
+  defp project_comment(repo_key, issue_id, question_id, comment_id) do
+    projected = %{labels: [], section: nil, comments: %{question_id => %{comment: comment_id, reply: nil}}}
+    :ok = RunStore.update_ticket_state(repo_key, issue_id, %{projected: projected})
+  end
 end
