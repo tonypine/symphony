@@ -392,10 +392,16 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
       setup = build_conn() |> get("/api/v1/setup?repo=#{repo.name}")
       assert ids.(setup) == ["deprecated_key:auto_review.enabled"]
       assert %{"github_updates" => %{"mode" => "off"}} = json_response(setup, 200)
+    end
 
-      # A config that doesn't load has no repo to check yet either.
-      File.write!(Workflow.symphony_file_path(), "repositories: [\n")
-      Cache.clear()
+    test "?repo= waits while no symphony.yml loads at all" do
+      # A file no reader ever cached (TP-1325): breaking the cached one races a reader still loading
+      # it, which keeps its last good value, so the config would read and only name other repos.
+      path = Path.join(Path.dirname(Workflow.symphony_file_path()), "unloaded-symphony.yml")
+      File.write!(path, "repositories: [\n")
+      Workflow.set_symphony_file_path(path)
+
+      assert {:error, _reason} = Config.system()
       assert %{"error" => %{"code" => "repo_not_loaded"}} = build_conn() |> post("/api/v1/setup/refresh?repo=app", %{}) |> json_response(404)
     end
 
