@@ -1866,8 +1866,8 @@ proofs name tests. `launch_env` may not set the two control variables.
 
 Symphony's own repository runs its server this way. Its `WORKFLOW.md` sets the `live` block on
 `auto_review.playbooks.macos_app`, with `requires: [mise]`, `build_cmd: scripts/qa-server-build.sh`,
-`start_cmd: scripts/qa-server-start.sh`, `paths` covering `lib/`, `config/` and `priv/`, and
-`walkthrough_mentions: [Director]`; the build command, the app bundle and the port stay in the
+`start_cmd: scripts/qa-server-start.sh`, `paths` covering `lib/`, `config/`, `priv/`, `mix.exs`
+and `mix.lock`, and `walkthrough_mentions: [Director, Inbox]`; the build command, the app bundle and the port stay in the
 operator's `symphony.yml`. A Mac-only change gets a fixtures-only pass, as before, and a server
 change whose walkthrough walks the Director gets the live server. `scripts/qa-server-build.sh` builds the
 escript on the QA VM (Erlang and Elixir through mise), keeping the Hex, deps and build caches under
