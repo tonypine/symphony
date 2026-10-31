@@ -60,6 +60,28 @@ defmodule SymphonyElixir.Questions do
   @scopes [:run, :ticket, :always]
   @symphony %{kind: :symphony, name: "Symphony"}
   @director %{kind: :person, name: "Director"}
+  # What a field of a stored question reads as when the question was stored before it existed.
+  @question_defaults %{
+    asked_by: %{kind: :symphony, name: "Symphony", run_id: nil},
+    step: nil,
+    title: nil,
+    question: nil,
+    why: nil,
+    if_unanswered: nil,
+    options: [],
+    recommendation_reason: nil,
+    confirm: nil,
+    unblocks: nil,
+    request: nil,
+    asked_in: nil,
+    answer: nil,
+    asked_at: nil,
+    withdrawn: nil,
+    legacy_event: nil,
+    reopened_at: nil,
+    taken_back: []
+  }
+  @option_defaults %{label: "", effect: "", good: [], cost: [], risk: [], recommended?: false, unlocks: []}
   # An answer that names an option by its number: "2" or "option 2".
   @option_number ~r/\A\s*(?:option\s*)?(\d+)\s*\z/i
 
@@ -97,10 +119,10 @@ defmodule SymphonyElixir.Questions do
           step: String.t() | nil,
           title: String.t(),
           question: String.t(),
-          why: String.t(),
-          if_unanswered: String.t(),
+          why: String.t() | nil,
+          if_unanswered: String.t() | nil,
           options: [option()],
-          recommendation_reason: String.t(),
+          recommendation_reason: String.t() | nil,
           confirm: String.t() | nil,
           unblocks: String.t() | nil,
           request: boolean() | nil,
@@ -441,14 +463,27 @@ defmodule SymphonyElixir.Questions do
   @spec same_open?(ticket(), map()) :: boolean()
   def same_open?(ticket, request) when is_map(request), do: open_asking(ticket, request) != nil
 
-  @doc "The questions as stored or given: each a map with a string `id` and a known `state`, once by id; anything else is dropped."
+  @doc """
+  The questions as stored or given: each a map with a string `id` and a known `state`, once by id;
+  anything else is dropped. Every field a question stored before it existed lacks reads as its
+  default (`unblocks`, `request`, `asked_in` and `reopened_at` nil, `taken_back` empty; on each
+  option, no trade-offs, not recommended and nothing unlocked), so a reader of the record never
+  meets a missing key: a question the backfill wrote from an old decision comment carries only
+  what that comment had.
+  """
   @spec normalize(term()) :: [question()]
   def normalize(questions) when is_list(questions) do
     for(%{id: id, state: state} = question <- questions, is_binary(id) and state in @states, do: question)
     |> Enum.uniq_by(& &1.id)
+    |> Enum.map(&with_defaults/1)
   end
 
   def normalize(_questions), do: []
+
+  defp with_defaults(question) do
+    question = Map.merge(@question_defaults, question)
+    %{question | options: question.options |> List.wrap() |> Enum.filter(&is_map/1) |> Enum.map(&Map.merge(@option_defaults, &1)), taken_back: List.wrap(question.taken_back)}
+  end
 
   # The changes, from the questions and the pause the store read under its lock: pure, as the store
   # may run them more than once.

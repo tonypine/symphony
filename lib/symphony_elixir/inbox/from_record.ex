@@ -12,6 +12,9 @@ defmodule SymphonyElixir.Inbox.FromRecord do
   - otherwise one `:blocked` item when its pause has a reason the Director may release
     (`Item.from_pause/2`).
 
+  A record whose rows raise lists nothing and is logged with its ticket; the other records still
+  list.
+
   The quality gate's holds and skips in the snapshot add a `:clarify` item each
   (`Item.from_quality_gate/1`) for a ticket nothing else lists. An item of a running ticket goes, so does one whose ticket the orchestrator saw leave the state it was listed
   in (a `:blocked` one stays: the pause is what waits), each takes the state the orchestrator saw,
@@ -19,6 +22,8 @@ defmodule SymphonyElixir.Inbox.FromRecord do
 
   `SymphonyElixir.Inbox.items/2` serves it.
   """
+
+  require Logger
 
   alias SymphonyElixir.{Config, PlanReview, TicketState}
   alias SymphonyElixir.Config.Schema
@@ -44,11 +49,18 @@ defmodule SymphonyElixir.Inbox.FromRecord do
     |> Enum.sort_by(&{is_nil(&1.waiting_since), sort_key(&1.waiting_since), &1.identifier || ""})
   end
 
+  # One ticket's record that cannot be read as rows lists nothing, and the others still list: the
+  # failure is logged with the ticket, so one bad record never takes the whole Inbox down.
   defp record_items(record, settings_fun) do
     case Item.from_plan_brief(record, settings_fun.(record.repo_key)) do
       %{} = plan -> [plan]
       nil -> questions_or_pause(record)
     end
+  rescue
+    error ->
+      Logger.error("Inbox skipped a ticket whose record it could not read issue_id=#{record.issue_id} issue_identifier=#{record.issue_identifier}: #{Exception.format(:error, error, __STACKTRACE__)}")
+
+      []
   end
 
   defp questions_or_pause(record) do
