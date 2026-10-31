@@ -168,6 +168,15 @@ defmodule SymphonyElixir.HoldTest do
       assert %{state: :open} = Questions.find(ticket, question.id)
       assert ticket_events(@repo_key, @issue_id, ["decision.withdrawn"]) == []
     end
+
+    test "a clear whose Question is already ended, or gone, still clears", %{ticket: ticket, question: question, attrs: attrs} do
+      {:ok, _answered} = Questions.answer(ticket, question.id, "1")
+      assert :ok = Hold.clear(@repo_key, @issue_id, :needs_decision)
+
+      :ok = Hold.set(@repo_key, @issue_id, :needs_decision, put_in(attrs, [:decision, :question_id], "q-gone"))
+      assert :ok = Hold.clear(@repo_key, @issue_id, :needs_decision)
+      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+    end
   end
 
   describe "the events a hold write records" do
