@@ -20,9 +20,9 @@ defmodule SymphonyElixir.PrWatchParity do
       until the next GitHub step, except a move to `Merging`, which ticks the watcher at once in
       either mode (`SymphonyElixir.TransitionGuard` asks for it).
     * `{:fix_ticket_lands, identifier}`: the fix ticket the self-heal lane filed goes to Done, the
-      orchestrator's hold sweep (`SymphonyElixir.BlockedHold.sync/3`) clears the holds waiting on
-      it, and the watcher's next timed tick reads the tickets, in either mode: a hold that clears
-      is no GitHub event.
+      orchestrator's dependency sweep (`SymphonyElixir.Pauses.Dependencies.sweep/3`) lifts the
+      pauses waiting on it, and the watcher's next timed tick reads the tickets, in either mode: a
+      pause that lifts is no GitHub event.
     * `{:move, id, state}`: something else moved the ticket. Nothing reads it until the next
       GitHub step, in either mode.
 
@@ -40,7 +40,8 @@ defmodule SymphonyElixir.PrWatchParity do
   with `pr_review_mode: "polling"` first.
   """
 
-  alias SymphonyElixir.{BlockedHold, Config, Hold, RunStore, TicketPullRequest, TicketState}
+  alias SymphonyElixir.{Config, Hold, Pauses, RunStore, TicketPullRequest, TicketState}
+  alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrWatch.{Ingest, Repo, SilentWait}
 
@@ -358,9 +359,17 @@ defmodule SymphonyElixir.PrWatchParity do
     %{
       state: state(id),
       decision: decision && Map.take(decision, [:rule, :kind, :owner, :reason]),
-      holds: Enum.filter([:blocked, :needs_decision], &Hold.held?(@repo_key, issue_id(id), &1)),
+      holds: held(issue_id(id)),
       silent: SilentWait.listed?(watch && Map.get(watch, :silent))
     }
+  end
+
+  # `:blocked` while the ticket is paused, `:needs_decision` while it holds that hold.
+  defp held(issue_id) do
+    Enum.filter([:blocked, :needs_decision], fn
+      :blocked -> Pauses.paused?({:ticket, @repo_key, issue_id})
+      :needs_decision -> Hold.held?(@repo_key, issue_id, :needs_decision)
+    end)
   end
 
   defp watched_state?(state), do: state not in Config.settings!().tracker.terminal_states
@@ -398,9 +407,7 @@ defmodule SymphonyElixir.PrWatchParity do
     World.update(:fix_tickets, &Map.replace!(&1, identifier, "Done"))
     settings = Config.settings!()
 
-    for issue <- Map.values(World.get(:issues)) do
-      BlockedHold.sync(issue, settings.tracker.terminal_states, repo_key: @repo_key, tracker: Tracker, build: %{sha: nil}, settings: settings)
-    end
+    _ = Dependencies.sweep(Map.values(World.get(:issues)), settings.tracker.terminal_states, repo_key: @repo_key, tracker: Tracker, build: %{sha: nil})
 
     advance!(@interval_ms) && tick!(pid) && nil
   end
