@@ -114,6 +114,9 @@ defmodule SymphonyElixir.TicketEvents.Summary do
 
   defp summary("ticket.cancelled", payload, _event), do: {"Cancelled" <> suffix(" from ", text(payload, :from)), [text(payload, :note)]}
 
+  defp summary("ticket.moved", payload, _event),
+    do: {"Moved to #{text(payload, :to)}" <> suffix(" from ", text(payload, :from)), [text(payload, :note)]}
+
   defp summary("drift.reverted", payload, _event) do
     {"Moved back to #{record_phase(payload)}: it was moved to #{linear_phase(payload)} in Linear by hand", []}
   end

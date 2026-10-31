@@ -46,6 +46,28 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert %{"move" => "approve_plan", "to_state" => "Waiting on sub-tickets"} = Jason.decode!(conn.resp_body)
   end
 
+  test "move puts a ticket Symphony owns in the phase named, answers a move to where it is, and refuses one it doesn't own", %{moves: moves} do
+    owned = %Issue{id: "owned", identifier: "MOT-70", title: "Parked work", state: "Backlog", repo_key: "repo-api"}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [owned])
+    RunStore.delete_ticket_state("repo-api", "owned")
+    :ok = SymphonyElixir.TicketSignals.record_phase("repo-api", "owned", "Backlog")
+
+    conn = post(:move, %{"issue_identifier" => "MOT-70", "to" => "In Progress", "note" => "Its work is committed"}, moves)
+
+    assert conn.status == 200
+    assert %{"move" => "move", "from_state" => "Backlog", "to_state" => "In Progress", "moved" => true} = Jason.decode!(conn.resp_body)
+    assert_received {:memory_tracker_state_update, "owned", "In Progress"}
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{owned | state: "In Progress"}])
+    assert %{"moved" => false} = Jason.decode!(post(:move, %{"issue_identifier" => "MOT-70", "to" => "In Progress"}, moves).resp_body)
+    assert {409, "move_not_allowed", "Shipping is not a phase of MOT-70's workflow" <> _rest} = error(post(:move, %{"issue_identifier" => "MOT-70", "to" => "Shipping"}, moves))
+
+    :ok = RunStore.update_ticket_state("repo-api", "owned", %{phase_owner: :external})
+
+    assert error(post(:move, %{"issue_identifier" => "MOT-70", "to" => "Todo"}, moves)) ==
+             {409, "move_not_allowed", "MOT-70 is not Symphony's: its phase is the one Linear shows (owner external), so move it in Linear"}
+  end
+
   test "decisions answers each of a plan's questions under the request its pick names", %{moves: moves} do
     picks = [%{"question" => "Where?", "answer" => "In the checkout", "request_comment_id" => "q1"}, %{"question" => "Who?", "answer" => "The buyer"}]
 
@@ -280,6 +302,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
       :changes,
       :backlog,
       :cancel,
+      :move,
       :unblock,
       :decide,
       :undo
@@ -292,6 +315,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert error(post(:rework, %{"issue_identifier" => "MOT-40"}, moves)) == {422, "invalid_request", "reason is required"}
     assert error(post(:restart, %{"issue_identifier" => "MOT-40"}, moves)) == {422, "invalid_request", "reason is required"}
     assert error(post(:changes, %{"issue_identifier" => "MOT-30"}, moves)) == {422, "invalid_request", "reason is required"}
+    assert error(post(:move, %{"issue_identifier" => "MOT-40"}, moves)) == {422, "invalid_request", "to is required"}
 
     for picks <- [nil, "B", [%{"question" => "Where?"}], ["B"]] do
       assert {422, "invalid_request", _message} = error(post(:decisions, %{"issue_identifier" => "MOT-30", "picks" => picks}, moves))

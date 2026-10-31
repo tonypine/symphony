@@ -13,7 +13,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
   with.
 
   The Director's moves from the Mac app's Inbox (`approve_plan`, `rework`, `restart`, `decisions`,
-  `changes`, `backlog`, `cancel`, `unblock`, `decide` and `undo`) are made by
+  `changes`, `backlog`, `cancel`, `move`, `unblock`, `decide` and `undo`) are made by
   `SymphonyElixir.DirectorMoves`:
   each takes `issue_identifier`, answers 409 when the ticket's state doesn't allow the move, 502
   `move_incomplete` when Linear took one of the move's two writes and refused the other, 502
@@ -21,7 +21,10 @@ defmodule SymphonyElixirWeb.ControlApiController do
   moved between. `decide` answers a decision request: it takes the `picks`, the `question_id` they
   answer (the Inbox row's) or the `request_comment_id` of its request (still accepted, resolved to
   its question), and the optional `move` the decision directs. `decisions` takes a plan's `picks`,
-  each with the `question_id` or the `request_comment_id` of the question it answers.
+  each with the `question_id` or the `request_comment_id` of the question it answers. `move` takes
+  `to`, any phase the repo's workflow names, and an optional `note`: it answers 409 when the ticket's
+  phase is not Symphony's or `to` is not a phase of the repo, and 200 with `moved: false` when the
+  ticket is already there.
 
   `note` writes the Director's note on a ticket: it takes `repo_key`, `issue_identifier` and
   `text`, resolves the ticket as the events feed does (`SymphonyElixirWeb.TicketEventsController`),
@@ -128,6 +131,9 @@ defmodule SymphonyElixirWeb.ControlApiController do
 
   @spec cancel(Conn.t(), map()) :: Conn.t()
   def cancel(conn, params), do: director_move(conn, :cancel, params, %{note: string_param(params["note"])})
+
+  @spec move(Conn.t(), map()) :: Conn.t()
+  def move(conn, params), do: director_move(conn, :move, params, %{to: string_param(params["to"]), note: string_param(params["note"])})
 
   @spec unblock(Conn.t(), map()) :: Conn.t()
   def unblock(conn, params), do: director_move(conn, :unblock, params, %{})

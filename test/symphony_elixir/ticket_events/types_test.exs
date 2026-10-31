@@ -7,7 +7,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
     phase.entered hold.set hold.cleared run.started run.ended attempt.pushed verdict.recorded
     decision.requested decision.withdrawn decision.recorded person.action
     step.started step.completed step.skipped evidence finding.recorded finding.resolved checklist.answered
-    ticket.cancelled drift.detected drift.reverted drift.revert_failed
+    ticket.cancelled ticket.moved drift.detected drift.reverted drift.revert_failed
     pause.set pause.reason_added pause.reason_cleared pause.cleared
     question.asked question.answered question.withdrawn question.reopened note
   )
@@ -122,6 +122,14 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert Types.validate("ticket.cancelled", payload, :person, nil) == {:ok, payload}
       assert {:error, {:invalid_payload, [:to]}} = Types.validate("ticket.cancelled", %{from: "Backlog"}, :person, nil)
       assert {:error, {:not_allowed, _reason}} = Types.validate("ticket.cancelled", payload, :machine, nil)
+    end
+
+    test "a free move is the person's: the phases, the note and the stop" do
+      payload = %{from: "Backlog", to: "In Progress", note: "Its work is committed", run_stopped: false}
+
+      assert Types.validate("ticket.moved", payload, :person, nil) == {:ok, payload}
+      assert {:error, {:invalid_payload, [:to]}} = Types.validate("ticket.moved", %{from: "Backlog"}, :person, nil)
+      assert {:error, {:not_allowed, _reason}} = Types.validate("ticket.moved", payload, :machine, nil)
     end
 
     test "a pause is the machine's: a reason event names its kind, its line and what it waits on" do
