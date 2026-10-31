@@ -132,6 +132,11 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
   end
 
+  # A `macos_app` pass whose live-server choice `QaPolicy` already made: the playbook the test puts.
+  defmodule LivePolicy do
+    def decide(_issue, _settings, _opts), do: {:run, [Process.get(:qa_live_playbook)], "the change delivers or updates a user journey"}
+  end
+
   defmodule UnusedStore do
     def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :disk_full}
     def get_ticket_state(_repo_key, _issue_id), do: nil
@@ -1338,6 +1343,39 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       assert :ok = run_hub(workspace, %{verdict: :pass, summary: "Fine.", steps: [step("Run it", "pass")], findings: []})
       assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+    end
+  end
+
+  describe "the app's environments in the report's header" do
+    test "names the live server and the label that forced it, or fixtures only and the label that kept it off" do
+      for {playbook, line} <- [
+            {%{live: true, live_reason: "the issue has the `qa:live` label"}, "**App environments:** fixtures and a live server (the issue has the `qa:live` label)"},
+            {%{live_reason: "the issue has the `qa:fixture` label"}, "**App environments:** fixtures only (the issue has the `qa:fixture` label)"}
+          ] do
+        RunStore.delete_ticket_state(@repo_key, @issue_id)
+        {workspace, _head} = git_workspace!()
+        Process.put(:qa_live_playbook, Map.merge(%{kind: "macos_app", paths: ["macos/**"], prompt: "Use the app."}, playbook))
+
+        assert :ok = run(workspace, qa_policy: LivePolicy)
+
+        assert_received {:memory_tracker_comment, @issue_id, report}
+        assert report =~ line
+      end
+    end
+
+    test "a pass with no live server says nothing about environments, and a blocked live pass still does" do
+      {workspace, _head} = git_workspace!()
+      assert :ok = run(workspace, [])
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      refute report =~ "App environments"
+
+      RunStore.delete_ticket_state(@repo_key, @issue_id)
+      Process.put(:qa_live_playbook, %{kind: "macos_app", paths: ["macos/**"], prompt: "Use the app.", live: true, live_reason: "the issue has the `qa:live` label"})
+      Process.put(:qa_agent_result, {:error, {:qa_host_tunnel_failed, "ssh exited with status 255"}, %{}})
+
+      capture_log(fn -> assert :ok = run(workspace, qa_policy: LivePolicy) end)
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "**App environments:** fixtures and a live server (the issue has the `qa:live` label)"
     end
   end
 

@@ -149,7 +149,8 @@ defmodule SymphonyElixir.QaAgent.Selection do
           optional(:requires) => [String.t()],
           optional(:scope) => :none,
           optional(:live_server) => PlaybookSettings.live_server(),
-          optional(:live) => true
+          optional(:live) => true,
+          optional(:live_reason) => String.t()
         }
   @type decision :: {:run, [playbook()]} | {:skip, String.t()}
 

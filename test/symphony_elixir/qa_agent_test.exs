@@ -1894,7 +1894,7 @@ defmodule SymphonyElixir.QaAgentTest do
       assert_received {:qa_turn, _session, prompt, _issue, _opts}
       flat = String.replace(prompt, ~r/\s+/, " ")
       assert flat =~ "Live server: Symphony started the project's own server for this PR head on the QA host, beside the app under test, at http://127.0.0.1:8095"
-      assert flat =~ "in each step's evidence name the one that proves it: `live server` or `fixture`"
+      assert flat =~ "start each step's `details` with the one that proves it: `live: seed` or `fixture: <the fixture's name>`"
       assert_received {:qa_host_dev_server, :stopped}
 
       # The same playbook not marked live starts no server: the app reads its fixtures.

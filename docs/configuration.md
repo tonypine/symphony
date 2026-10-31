@@ -1853,10 +1853,23 @@ app's state polls, live channel and moves reach it instead of `api_fixtures`
 ([QA mode](../macos/README.md#qa-mode)). `qa_launch_app`'s `environment` argument picks per launch: `live` (the
 default then) or `fixture`, which launches the app without them. `live` on a pass without a live
 server fails with `qa_live_server_missing`. The QA prompt says both environments are open, and the
-agent names the one each step used in that step's evidence. `launch_env` may not set the two
-control variables.
+agent picks one per step: a step about how a state looks runs on a committed fixture, a step about
+what happens after a move runs on the live server. Each step's `details` starts with the one it
+used, `fixture: <the fixture directory's name>` (such as `fixture: update-paused`) or `live: seed`.
+A step whose state no committed fixture has is a finding, so a fixture is committed for the next
+pass, and a step that needs the round trip on a pass with no live server is `unprovable here`,
+with that reason. The QA report's header has an **App environments** line: "fixtures and a live
+server" or "fixtures only", each with its reason (the `qa:live` or `qa:fixture` label, or what the
+diff and the walkthrough gave), so a wrong choice can be corrected with a label. Neither the
+ticket's author nor its implementer names an environment: the walkthrough stays prose and the
+proofs name tests. `launch_env` may not set the two control variables.
 
-Symphony's own repository runs its server this way. `scripts/qa-server-build.sh` builds the
+Symphony's own repository runs its server this way. Its `WORKFLOW.md` sets the `live` block on
+`auto_review.playbooks.macos_app`, with `requires: [mise]`, `build_cmd: scripts/qa-server-build.sh`,
+`start_cmd: scripts/qa-server-start.sh`, `paths` covering `lib/`, `config/`, `priv/`, `mix.exs`
+and `mix.lock`, and `walkthrough_mentions: [Director, Inbox]`; the build command, the app bundle and the port stay in the
+operator's `symphony.yml`. A Mac-only change gets a fixtures-only pass, as before, and a server
+change whose walkthrough walks the Director gets the live server. `scripts/qa-server-build.sh` builds the
 escript on the QA VM (Erlang and Elixir through mise), keeping the Hex, deps and build caches under
 the QA user's home (`$SYMPHONY_QA_SERVER_CACHE`, default `~/Library/Caches/symphony-qa-server`), so
 a second pass fetches and compiles only what changed. `scripts/qa-server-start.sh` starts it on

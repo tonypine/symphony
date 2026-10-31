@@ -1,9 +1,11 @@
 defmodule SymphonyElixir.QaPolicyTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Config.RepoWorkflowSchema
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaPolicy
+  alias SymphonyElixir.Workflow
 
   @workspace "/tmp/qa-policy-workspace"
   @sha "feedface00112233445566778899aabbccddeeff"
@@ -213,7 +215,7 @@ defmodule SymphonyElixir.QaPolicyTest do
       director = "## User walkthrough\n\n1. In the Director, press Decide on the held ticket.\n"
       server_and_app = ["lib/symphony_elixir/questions.ex", "macos/Sources/Inbox.swift"]
 
-      assert {:run, [%{kind: "macos_app", live: true}], reason} =
+      assert {:run, [%{kind: "macos_app", live: true, live_reason: "the PR changes the server and the `## User walkthrough` names `Director`"}], reason} =
                QaPolicy.decision(issue(%{description: director}), settings, server_and_app)
 
       assert reason =~ "the app gets a live server: the PR changes the server and the `## User walkthrough` names `Director`"
@@ -226,16 +228,20 @@ defmodule SymphonyElixir.QaPolicyTest do
           ] do
         assert {:run, [macos_app], reason} = QaPolicy.decision(ticket, settings, paths)
         refute Map.has_key?(macos_app, :live)
+        assert macos_app.live_reason == why
         assert reason =~ "; the app reads fixtures only: " <> why
       end
 
       # The labels override the diff: `qa:fixture` wins over `qa:live`.
-      assert {:run, [%{live: true}], reason} = QaPolicy.decision(issue(%{labels: ["QA:Live"]}), settings, ["macos/Sources/Inbox.swift"])
+      assert {:run, [%{live: true, live_reason: "the issue has the `qa:live` label"}], reason} =
+               QaPolicy.decision(issue(%{labels: ["QA:Live"]}), settings, ["macos/Sources/Inbox.swift"])
+
       assert reason =~ "the issue has the `qa:live` label"
 
       both = issue(%{description: director, labels: ["qa:live", "qa:fixture"]})
       assert {:run, [macos_app], reason} = QaPolicy.decision(both, settings, server_and_app)
       refute Map.has_key?(macos_app, :live)
+      assert macos_app.live_reason == "the issue has the `qa:fixture` label"
       assert reason =~ "the issue has the `qa:fixture` label"
     end
 
@@ -260,6 +266,36 @@ defmodule SymphonyElixir.QaPolicyTest do
 
       fixture = issue(%{description: director.description, labels: ["qa:fixture"]})
       assert {:run, ["cli"], _reason} = kinds(QaPolicy.decision(fixture, settings, server_only))
+    end
+
+    test "Symphony's own WORKFLOW.md gives the Director a live server only for a server change whose walkthrough walks it" do
+      assert {:ok, %{config: config}} = Workflow.load(Path.expand("../../WORKFLOW.md", __DIR__))
+      assert {:ok, _workflow} = RepoWorkflowSchema.parse(config)
+      own = get_in(config, ["auto_review", "playbooks", "macos_app"])
+      assert own["requires"] == ["mise"]
+
+      # The operator's symphony.yml names the build and the app; the repository adds the rest.
+      macos_app = Map.merge(%{"build" => "make -C macos qa-app", "app" => "macos/build/Symphony.app"}, own)
+      settings = settings!(%{"auto_review" => %{"playbooks" => %{"cli" => %{"enabled" => false}, "macos_app" => macos_app}}})
+      macos = fn {:run, playbooks, _reason} -> Enum.find(playbooks, &(&1.kind == "macos_app")) end
+      director = issue(%{description: "## User walkthrough\n\n1. In the Director's Inbox, press Decide, then Undo.\n"})
+
+      # A Mac-only diff: fixtures only, no server, as before.
+      mac_only = macos.(QaPolicy.decision(director, settings, ["macos/Sources/SymphonyBar/InboxView.swift"]))
+      refute Map.has_key?(mac_only, :live)
+      assert mac_only.live_reason == "the PR changes none of the server's paths"
+
+      # A `lib/` diff with Director steps: the live server.
+      assert %{live: true} = macos.(QaPolicy.decision(director, settings, ["lib/symphony_elixir/questions.ex", "macos/Sources/SymphonyBar/InboxView.swift"]))
+
+      # The labels override the diff.
+      assert %{live: true, live_reason: "the issue has the `qa:live` label"} =
+               macos.(QaPolicy.decision(issue(%{labels: ["qa:live"]}), settings, ["macos/Sources/SymphonyBar/InboxView.swift"]))
+
+      fixture = issue(%{description: director.description, labels: ["qa:fixture"]})
+      held = macos.(QaPolicy.decision(fixture, settings, ["lib/symphony_elixir/questions.ex", "macos/Sources/SymphonyBar/InboxView.swift"]))
+      refute Map.has_key?(held, :live)
+      assert held.live_reason == "the issue has the `qa:fixture` label"
     end
 
     test "a live server with no walkthrough words is live for any walkthrough, and one with nothing on screen is noted too" do
