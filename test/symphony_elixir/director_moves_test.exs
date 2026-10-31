@@ -2324,7 +2324,8 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert %{phase: "Backlog", phase_owner: :symphony} = record = RunStore.get_ticket_state("repo-director", "pr")
 
       # Linear still reading Todo is drift on a phase Symphony now owns: the record keeps Backlog.
-      assert {:kept, %{phase: "Backlog"}, %{linear_phase: "Todo"}} = TicketStateReconciler.reconcile(record, "Todo", DateTime.utc_now(), "record")
+      assert {:kept, %{phase: "Backlog"}, %{linear_phase: "Todo"}} =
+               TicketStateReconciler.reconcile(record, "Todo", DateTime.utc_now(), "record")
     end
 
     test "refuses a phase the repo doesn't name, a ticket with no record and one in no configured repository", %{opts: opts} do
