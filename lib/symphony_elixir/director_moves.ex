@@ -78,6 +78,19 @@ defmodule SymphonyElixir.DirectorMoves do
     report's) is answered with the first pick, as `answer_held_question/4` says; any other is
     refused.
 
+  - `:move`: the free move. A ticket Symphony owns (its record's phase is Symphony's, not one read
+    from Linear) goes to `:to`, any phase the repo's workflow names (`phases/1`), keeping its
+    workspace, branch and pull request: nothing is reset. The record's phase is written first, then
+    Linear (`SymphonyElixir.TransitionGuard`), and a move Linear refuses stands on the record for
+    the reconciler to project, as a Cancel's does. A dispatch loop's, a quiet handoff's or a park's
+    pause lifts with it (a person moving the ticket answers "it looks stuck": its question is
+    answered "Run it again"); every other pause reason stays. A move into `Backlog` or a closed phase
+    stops a running turn as Stop does, without the stop's pause. The refresh `finish/6` asks for
+    starts a phase that dispatches at once. The ticket's events get one `ticket.moved` with the
+    note. A move to the phase the ticket is in answers `moved: false` and writes nothing; one to a
+    phase the repo doesn't name, or of a ticket whose phase is Linear's, is refused. Undo puts the
+    record and Linear back to the phase before.
+
   `answer_held_question/4` answers the question a dispatch loop, a quiet handoff or a block report
   paused the ticket on, and does what the picked option asks: Unblock, Restart, or nothing.
 
@@ -127,6 +140,7 @@ defmodule SymphonyElixir.DirectorMoves do
     Questions,
     Restart,
     RunStore,
+    StateProvisioning,
     SubIssueWait,
     TicketPullRequest,
     TicketSignals,
@@ -135,6 +149,7 @@ defmodule SymphonyElixir.DirectorMoves do
     TransitionGuard
   }
 
+  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.Issue
@@ -166,6 +181,7 @@ defmodule SymphonyElixir.DirectorMoves do
           | :cancel
           | :unblock
           | :decide
+          | :move
   @type pick :: %{
           required(:question) => String.t(),
           required(:answer) => String.t(),
@@ -178,7 +194,8 @@ defmodule SymphonyElixir.DirectorMoves do
           optional(:picks) => [pick()],
           optional(:question_id) => String.t() | nil,
           optional(:request_comment_id) => String.t() | nil,
-          optional(:move) => String.t() | nil
+          optional(:move) => String.t() | nil,
+          optional(:to) => String.t() | nil
         }
   @type error ::
           {:invalid, String.t()}
@@ -190,7 +207,7 @@ defmodule SymphonyElixir.DirectorMoves do
           | {:partial, String.t()}
   @type result :: {:ok, map()} | {:error, error()}
 
-  @moves [:approve_plan, :rework, :restart, :decisions, :changes, :backlog, :cancel, :unblock, :decide]
+  @moves [:approve_plan, :rework, :restart, :decisions, :changes, :backlog, :cancel, :unblock, :decide, :move]
   @decide_targets %{"rework" => @rework_state, "done" => @done_state, "merging" => @merging_state, "todo" => @todo_state}
 
   @spec start_link(keyword()) :: Agent.on_start()
@@ -208,7 +225,7 @@ defmodule SymphonyElixir.DirectorMoves do
 
   @doc """
   Makes `move` on the ticket `identifier` (its identifier or id). `input` carries the rework
-  `:reason` (required), the backlog or cancel `:note` (optional), the decisions' `:picks` (required) or the
+  `:reason` (required), the backlog, cancel or move `:note` (optional), the move's `:to` (required), the decisions' `:picks` (required) or the
   decision's `:picks` (required) with the `:request_comment_id` they answer (required) and the
   optional `:move` the decision directs.
 
@@ -262,6 +279,9 @@ defmodule SymphonyElixir.DirectorMoves do
   # Cancel moves through the team's canceled state under either spelling, so its target is the one
   # Linear took.
   defp do_move(:cancel, issue, input, opts), do: cancel(issue, blank_to_nil(input[:note]), opts)
+
+  # The free move names its own target, any phase of the repo.
+  defp do_move(:move, issue, input, opts), do: free_move(issue, String.trim(input.to), blank_to_nil(input[:note]), opts)
 
   defp do_move(move, issue, input, opts) do
     settings = Config.settings!()
@@ -434,6 +454,10 @@ defmodule SymphonyElixir.DirectorMoves do
 
   defp validate_input(:restart, input) do
     if present?(input[:reason]), do: :ok, else: {:error, {:invalid, "reason is required"}}
+  end
+
+  defp validate_input(:move, input) do
+    if present?(input[:to]), do: :ok, else: {:error, {:invalid, "to is required"}}
   end
 
   defp validate_input(:decisions, %{picks: [_ | _] = picks}) do
@@ -759,7 +783,7 @@ defmodule SymphonyElixir.DirectorMoves do
   defp cancel(issue, note, opts) do
     with :ok <- require_open(issue, Config.settings!()),
          {:ok, to_state} <- cancel_in_linear(issue) do
-      stopped? = stop_cancelled_run(issue, opts)
+      stopped? = stop_run(issue, opts)
       closed = close_cancelled_pull_requests(issue, note, opts)
       clear_cancelled(issue, to_state, opts)
 
@@ -793,7 +817,7 @@ defmodule SymphonyElixir.DirectorMoves do
   # The run is stopped as `/control/stop` stops it, then the stop's pause and hold are lifted: the
   # ticket is cancelled, not stopped. The hold the stop writes in a task finds no pause when it lands,
   # so the orchestrator clears it again. True when a run was stopped.
-  defp stop_cancelled_run(issue, opts) do
+  defp stop_run(issue, opts) do
     case Orchestrator.stop_running(Keyword.get(opts, :orchestrator, Orchestrator), issue.id) do
       {:ok, %{stopped: true}} ->
         _ = clear_stop(issue)
@@ -839,6 +863,118 @@ defmodule SymphonyElixir.DirectorMoves do
     withdraw_lapsed(issue, {:terminal, to_state}, opts)
     issue |> ticket() |> Pauses.clear_reasons(fn _reason -> true end, by: Pauses.director()) |> log_failed("Cancelled #{issue.identifier} but couldn't clear its pause")
   end
+
+  @doc """
+  The phases a free move (`:move`) may put a ticket in, as the workflow `settings` name them:
+  `Backlog`, the active states, the machine's phase states (Code Review, QA, Plan Review, Epic
+  Review, CI Fix), the waiting state and the closed states, each once.
+  """
+  @spec phases(Schema.t()) :: [String.t()]
+  def phases(%Schema{tracker: tracker} = settings) do
+    machine = for {_key, name} <- StateProvisioning.machine_states(settings), do: name
+
+    ([@backlog_state | tracker.active_states] ++ machine ++ List.wrap(tracker.waiting_on_sub_issues_state) ++ tracker.terminal_states)
+    |> Enum.filter(&present?/1)
+    |> Enum.uniq_by(&String.downcase(String.trim(&1)))
+  end
+
+  # The free move: the target is checked, then the owner, then the record and Linear move. The
+  # phase the ticket leaves is the record's, not the one Linear shows: the two part when Linear
+  # refused a move, and the record is the truth for a ticket Symphony owns. A move to where the
+  # record is answers it without writing anything.
+  defp free_move(issue, to, note, opts) do
+    settings = Config.settings!()
+
+    with {:ok, to_state} <- repo_phase(issue, to, settings),
+         {:ok, phase} <- require_owned(issue, opts) do
+      issue = %{issue | state: phase || issue.state}
+
+      if same_state?(issue.state, to_state),
+        do: {:ok, unmoved(issue)},
+        else: make_free_move(issue, to_state, note, settings, opts)
+    end
+  end
+
+  defp repo_phase(issue, to, settings) do
+    phases = phases(settings)
+
+    case Enum.find(phases, &same_state?(&1, to)) do
+      nil -> conflict("#{to} is not a phase of #{issue.identifier}'s workflow; it names #{Enum.join(phases, ", ")}")
+      phase -> {:ok, phase}
+    end
+  end
+
+  # Only a phase Symphony owns moves through the Director: one Linear wrote follows Linear, so a
+  # move in Linear is the way to change it. An owned record answers with its phase.
+  defp require_owned(%Issue{repo_key: nil} = issue, _opts), do: not_owned(issue)
+
+  defp require_owned(issue, opts) do
+    case Keyword.get(opts, :store, RunStore).get_ticket_state(issue.repo_key, issue.id) do
+      %{} = record ->
+        case TicketState.normalize(record) do
+          %{phase_owner: :symphony, phase: phase} -> {:ok, phase}
+          _external -> not_owned(issue)
+        end
+
+      _none ->
+        not_owned(issue)
+    end
+  end
+
+  defp not_owned(issue), do: conflict("#{issue.identifier} is not Symphony's: its phase is the one Linear shows (owner external), so move it in Linear")
+
+  defp unmoved(issue) do
+    %{
+      move: "move",
+      issue_id: issue.id,
+      issue_identifier: issue.identifier,
+      from_state: issue.state,
+      to_state: issue.state,
+      moved: false,
+      commented: false,
+      undo_window_ms: nil
+    }
+  end
+
+  defp make_free_move(issue, to_state, note, settings, opts) do
+    with :ok <- free_move_in_linear(issue, to_state) do
+      release_loop(issue)
+      stopped? = stops_run?(to_state, settings) and stop_run(issue, opts)
+
+      TicketSignals.record_event(issue.repo_key, issue.id, "ticket.moved", %{from: issue.state, to: to_state, note: note, run_stopped: stopped?}, actor: @director)
+
+      finish(:move, issue, to_state, nil, opts)
+    end
+  end
+
+  # The record takes the phase first (`TransitionGuard.perform/4`); a refused Linear write stands on
+  # it, marked for the reconciler. A state the team doesn't have leaves the record where it was.
+  defp free_move_in_linear(issue, to_state) do
+    case update_state(issue, to_state, :move) do
+      :ok ->
+        :ok
+
+      {:error, {:linear, :state_not_found}} ->
+        conflict("#{issue.identifier}'s team has no #{to_state} state, so it can't move there")
+
+      {:error, {:linear, reason}} ->
+        Logger.warning("Moved #{issue.identifier} to #{to_state} on its record; Linear refused the move, projected again by the reconciler: #{inspect(reason)}")
+        :ok
+    end
+  end
+
+  # A person moving the ticket is the answer to a dispatch loop's, a quiet handoff's or a park's
+  # "it looks stuck": the question is answered "Run it again", which empties the counted runs, and
+  # the reason set when it couldn't be asked goes. A block report's question and every other reason
+  # stay. Best-effort: the move stands, and Unblock still lifts what is left.
+  defp release_loop(issue) do
+    ticket = ticket(issue)
+
+    ticket |> answer_held(Questions.held(ticket), DispatchLoop.option_label(:unblock)) |> log_failed("Moved #{issue.identifier} but couldn't answer its question")
+    ticket |> Pauses.clear_reasons(&loop_reason?/1, by: Pauses.director()) |> log_failed("Moved #{issue.identifier} but couldn't clear its pause")
+  end
+
+  defp stops_run?(to_state, settings), do: same_state?(to_state, @backlog_state) or Enum.any?(settings.tracker.terminal_states, &same_state?(&1, to_state))
 
   # A best-effort write that failed is reported with what it was for; the move stands.
   defp log_failed({:error, reason}, what), do: Logger.warning("#{what}: #{inspect(reason)}")
@@ -1403,9 +1539,9 @@ defmodule SymphonyElixir.DirectorMoves do
 
   # Each move the audit records is also the Director's action on the ticket's events, best effort.
   # A Decide records none: its answer is the `decision.recorded` that `SymphonyElixir.Decisions`
-  # writes, and a Cancel's is its `ticket.cancelled`. The control API authenticates one shared
+  # writes, a Cancel's is its `ticket.cancelled` and a free move's its `ticket.moved`. The control API authenticates one shared
   # token, so the actor is the Director.
-  defp record_person_action(move, _issue, _from_state, _to_state) when move in ["decide", "cancel"], do: :ok
+  defp record_person_action(move, _issue, _from_state, _to_state) when move in ["decide", "cancel", "move"], do: :ok
 
   defp record_person_action(move, %Issue{repo_key: repo_key, id: issue_id}, from_state, to_state) when is_binary(repo_key) do
     payload = if move in ["unblock", "restart"], do: %{action: move}, else: %{action: "move", move: move}

@@ -32,7 +32,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
 
   A person's cancel of a ticket Symphony owns is one `ticket.cancelled` (`SymphonyElixir.DirectorMoves`):
   the phase it left and the canceled state, the Director's note, whether a run was stopped and the
-  pull requests closed with it.
+  pull requests closed with it. A person's free move of one into any phase is one `ticket.moved`:
+  the phase it left and the one it entered, the Director's note and whether a run was stopped.
 
   Drift is machinery-only too: `drift.detected` when Linear shows a state other than the phase
   Symphony owns, then `drift.reverted` or `drift.revert_failed` for the move back, each with the
@@ -270,6 +271,13 @@ defmodule SymphonyElixir.TicketEvents.Types do
       run_kinds: [],
       required: [from: :string, to: :string],
       optional: [note: {:string, 4_000}, run_stopped: :boolean, pull_requests_closed: {:list, :string}] ++ @signal,
+      idempotency: :writer
+    },
+    "ticket.moved" => %{
+      writers: [:person],
+      run_kinds: [],
+      required: [from: :string, to: :string],
+      optional: [note: {:string, 4_000}, run_stopped: :boolean] ++ @signal,
       idempotency: :writer
     },
     "drift.detected" => %{writers: [:machine], run_kinds: [], required: @drift, optional: @signal, idempotency: :writer},
