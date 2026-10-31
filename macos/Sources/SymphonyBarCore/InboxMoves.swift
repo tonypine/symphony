@@ -16,6 +16,8 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
     /// Answers a decision request: the ticket continues in its phase, or the answer directs a move.
     case decide
     case unblock
+    /// Releases a pause the Director may lift (a ticket it waits on, an environment hold): it sends the unblock move.
+    case release
 
     public var id: String { rawValue }
 
@@ -31,6 +33,7 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
         case .restart: "Restart…"
         case .decide: "Send Decision…"
         case .unblock: "Unblock…"
+        case .release: "Release…"
         }
     }
 
@@ -46,6 +49,7 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
         case .restart: "Restart"
         case .decide: "Send Decision"
         case .unblock: "Unblock"
+        case .release: "Release"
         }
     }
 }
@@ -83,7 +87,8 @@ public struct InboxToolbar: Equatable {
     /// them. A PR waiting on its merge confirmation Approve and Merge…
     /// and Send to Rework…, which answer the request, with Open PR the default while a check is red (D2b), and
     /// ⋯ Restart…; a PR with no request to answer only its links and ⋯ Restart…; a blocked ticket
-    /// Unblock… and ⋯ Restart…, which also lifts a dispatch-loop hold. Actions and clarify items keep their links.
+    /// Unblock… and ⋯ Restart…, which also lifts a dispatch-loop hold, or Release… in place of Unblock… when its
+    /// pause has a reason the Director may release and no stop of theirs. Actions and clarify items keep their links.
     /// Restart (the human-only full reset) sits under ⋯ on all three, so it takes a deliberate trip through the menu
     /// and its consequence sheet. An action carrying an
     /// answerable decision offers Send Decision…, with ⋯ Send to Rework… answering it as a redirect; another action,
@@ -103,7 +108,7 @@ public struct InboxToolbar: Equatable {
         case .pr:
             // Symphony has no move of its own for a PR: it reaches the Inbox on its merge confirmation, a decision
             // request, and both moves answer that request through `decide`.
-            guard item.review.action?.commentID != nil, item.review.action?.confirmingOption != nil else {
+            guard item.review.action?.answered != nil, item.review.action?.confirmingOption != nil else {
                 return InboxToolbar(buttons: links, overflow: restart)
             }
             let moves = [move(.approveAndMerge), move(.sendToRework)]
@@ -112,7 +117,8 @@ public struct InboxToolbar: Equatable {
             }
             return InboxToolbar(buttons: moves + links, overflow: restart)
         case .blocked:
-            return InboxToolbar(buttons: [move(.unblock)] + links, overflow: restart)
+            let lift = item.review.blocked?.releasable == true ? InboxMove.release : .unblock
+            return InboxToolbar(buttons: [move(lift)] + links, overflow: restart)
         case .action:
             let action = item.review.action
             // A request's options are shown and picked in its card, so its Copy Steps link (which would list the
@@ -121,7 +127,7 @@ public struct InboxToolbar: Equatable {
                 if case .link(.copySteps) = button.command, action?.options.isEmpty == false { return false }
                 return true
             }
-            guard let action, action.commentID != nil, action.decision != nil else {
+            guard let action, action.answered != nil, action.decision != nil else {
                 return InboxToolbar(buttons: actionLinks, overflow: [])
             }
             // The write-in picked with nothing in it has no answer to send.
@@ -171,7 +177,7 @@ extension InboxReview.Action {
 
 extension InboxItem {
     /// True when the item carries a request the Inbox answers: its options are picked, and Send Decision sends one.
-    public var answerable: Bool { review.action?.commentID != nil && review.action?.decision != nil }
+    public var answerable: Bool { review.action?.answered != nil && review.action?.decision != nil }
 
     /// The option a number key picks in the item's request; nil for another key, or a request the Inbox doesn't
     /// answer.
@@ -305,8 +311,9 @@ public struct ConsequenceSheet: Equatable, Identifiable {
     public var isDecision: Bool
     /// The request a decision answers, as one decision; nil for the moves that don't answer one.
     public var request: InboxReview.Decision?
-    /// The id of the request comment the answer replies under, nil for the moves that don't answer one.
-    public var requestCommentID: String?
+    /// The request the answer names (its Question, else its request comment), nil for the moves that don't answer
+    /// one.
+    public var answeredRequest: ControlAction.AnsweredRequest?
     /// The state the move is expected to put the ticket in, nil when it stays (decisions on a plan in Plan Review).
     /// The banner follows Symphony's answer instead, which knows the workflow's states.
     public var targetState: String?
@@ -334,13 +341,13 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         itemID = item.id
         identifier = item.identifier
         let id = item.identifier
-        // An action or a PR carrying a request is answered through `decide`, whatever the button: the reply under
-        // the request comment is what closes it, and a plain move would leave the hold behind. Without the request
-        // comment there is nothing to reply under, so no button answers one.
-        let answersRequest = [.action, .pr].contains(item.kind) && item.review.action?.commentID != nil
+        // An action or a PR carrying a request is answered through `decide`, whatever the button: the answer to its
+        // Question is what closes it, and a plain move would leave the hold behind. Without the Question's id or the
+        // request comment there is nothing to answer, so no button answers one.
+        let answersRequest = [.action, .pr].contains(item.kind) && item.review.action?.answered != nil
         isDecision = [.decide, .sendToRework, .approveAndMerge].contains(move) && answersRequest
         request = isDecision ? item.review.action?.decision : nil
-        requestCommentID = isDecision ? item.review.action?.commentID : nil
+        answeredRequest = isDecision ? item.review.action?.answered : nil
         self.picks = []
         isWriteIn = false
         quote = nil
@@ -434,6 +441,13 @@ public struct ConsequenceSheet: Equatable, Identifiable {
             targetState = nil
             happens = "Clears the hold on \(id) and notes it on the ticket; \(id) continues from where it stopped."
             stays = "The ticket keeps its state. Nothing else changes in Linear."
+        case .release:
+            title = "Release \(id)?"
+            targetState = nil
+            let waits = item.review.blocked?.pauseReasons.filter(\.releasable).map(\.text) ?? []
+            happens = "Releases the pause on \(id)" + (waits.isEmpty ? "" : " (\(waits.joined(separator: "; ")))")
+                + " and notes it on the ticket; \(id) continues from where it stopped."
+            stays = "The ticket keeps its state. Nothing else changes in Linear."
         }
     }
 
@@ -470,21 +484,21 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         case .askForChanges: return .changes(identifier, reason: answer)
         case .rejectPlan: return .rework(identifier, reason: answer)
         case .approveAndMerge:
-            guard let requestCommentID, !picks.isEmpty else { return nil }
-            return .decide(identifier, requestCommentID: requestCommentID, picks: picks, move: nil)
+            guard let answeredRequest, !picks.isEmpty else { return nil }
+            return .decide(identifier, request: answeredRequest, picks: picks, move: nil)
         case .sendToRework:
-            guard isDecision, let requestCommentID else { return .rework(identifier, reason: answer) }
+            guard isDecision, let answeredRequest else { return .rework(identifier, reason: answer) }
             return .decide(
                 identifier,
-                requestCommentID: requestCommentID,
+                request: answeredRequest,
                 picks: [.init(question: request?.question ?? identifier, answer: answer)],
                 move: "rework"
             )
         case .restart: return .restart(identifier, reason: answer)
         case .decide:
-            guard let requestCommentID else { return nil }
-            return .decide(identifier, requestCommentID: requestCommentID, picks: picks, move: nil)
-        case .unblock: return .unblock(identifier)
+            guard let answeredRequest else { return nil }
+            return .decide(identifier, request: answeredRequest, picks: picks, move: nil)
+        case .unblock, .release: return .unblock(identifier)
         }
     }
 
@@ -536,6 +550,9 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         }
         if move == .unblock {
             return InboxBanner(itemID: itemID, identifier: identifier, text: "Hold cleared", undo: false)
+        }
+        if move == .release {
+            return InboxBanner(itemID: itemID, identifier: identifier, text: "Released", undo: false)
         }
         return InboxBanner(itemID: itemID, identifier: identifier, text: "Sent \(sent)", undo: false)
     }

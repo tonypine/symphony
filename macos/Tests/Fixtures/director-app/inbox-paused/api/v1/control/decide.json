@@ -1,0 +1,10 @@
+{
+  "commented": true,
+  "from_state": "Rework",
+  "issue_id": "i-892",
+  "issue_identifier": "TP-892",
+  "move": "decide",
+  "moved": false,
+  "to_state": "Rework",
+  "undo_window_ms": null
+}

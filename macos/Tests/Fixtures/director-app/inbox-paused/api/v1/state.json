@@ -1,0 +1,379 @@
+{
+  "auto_merge": [],
+  "awaiting_clarification": [],
+  "blocked": [],
+  "budget": {
+    "daily_limit": 5000000,
+    "daily_paused": false,
+    "daily_remaining": 5000000,
+    "daily_used": 0,
+    "per_issue_limit": 2000000
+  },
+  "build": {
+    "sha": "9f54098c3a1e5b7d2f4c6a8e0b1d3f5a7c9e1b3d",
+    "version": "0.0.1.412"
+  },
+  "codex_totals": {
+    "cache_creation_input_tokens": 6568666,
+    "cached_input_tokens": 149857148,
+    "input_tokens": 156430436,
+    "output_tokens": 629302,
+    "seconds_running": 23413,
+    "total_tokens": 156465114,
+    "uncached_input_tokens": 4622
+  },
+  "concurrency": {
+    "finishing_max": 2,
+    "forced_max": 1,
+    "max_total": 10
+  },
+  "conflicts": [],
+  "counts": {
+    "claimed": 0,
+    "conflicts": 0,
+    "forced": 0,
+    "retrying": 0,
+    "running": 0,
+    "shipped_today": 0,
+    "waiting_on_you": 7,
+    "watching": 0
+  },
+  "dispatch_skipped": [
+    {
+      "issue_id": "i-897",
+      "issue_identifier": "TP-897",
+      "open_questions": [],
+      "pause": {
+        "reasons": [
+          {
+            "kind": "person",
+            "releasable": true,
+            "set_at": "2026-10-07T14:13:00Z",
+            "set_by": {
+              "kind": "person",
+              "name": "the Director"
+            },
+            "text": "Stopped by you at 14:13. Unblock runs it again; Restart starts it over from main.",
+            "waits_on": {
+              "action": "unblock"
+            }
+          }
+        ],
+        "releasable": true,
+        "set_by": {
+          "kind": "person",
+          "name": "the Director"
+        },
+        "since": "2026-10-07T14:13:00Z"
+      },
+      "reason": "held: Stopped by you at 14:13. Unblock runs it again; Restart starts it over from main.",
+      "repo_key": "symphony",
+      "repository_paused": false,
+      "state": "In Progress",
+      "title": "Post QA screenshots to the pull request",
+      "url": "https://linear.app/tonypine/issue/TP-897"
+    },
+    {
+      "issue_id": "i-898",
+      "issue_identifier": "TP-898",
+      "open_questions": [],
+      "pause": {
+        "reasons": [
+          {
+            "kind": "ticket",
+            "releasable": true,
+            "set_at": "2026-10-07T14:14:00Z",
+            "set_by": {
+              "kind": "symphony",
+              "name": "Symphony"
+            },
+            "text": "Waiting for TP-891 to land first",
+            "waits_on": {
+              "identifier": "TP-891"
+            }
+          }
+        ],
+        "releasable": true,
+        "set_by": {
+          "kind": "symphony",
+          "name": "Symphony"
+        },
+        "since": "2026-10-07T14:14:00Z"
+      },
+      "reason": "held: Waiting for TP-891 to land first",
+      "repo_key": "symphony",
+      "repository_paused": false,
+      "state": "Merging",
+      "title": "Show the new review steps in the app",
+      "url": "https://linear.app/tonypine/issue/TP-898"
+    },
+    {
+      "issue_id": "i-899",
+      "issue_identifier": "TP-899",
+      "open_questions": [],
+      "pause": {
+        "reasons": [
+          {
+            "kind": "environment",
+            "releasable": true,
+            "set_at": "2026-10-07T14:15:00Z",
+            "set_by": {
+              "kind": "symphony",
+              "name": "Symphony"
+            },
+            "text": "Waiting for the upload host to accept releases again",
+            "waits_on": {
+              "type": "access"
+            }
+          },
+          {
+            "kind": "ticket",
+            "releasable": false,
+            "set_at": "2026-10-07T14:16:00Z",
+            "set_by": {
+              "kind": "symphony",
+              "name": "Symphony"
+            },
+            "text": "Waiting for TP-893 to finish",
+            "waits_on": {
+              "identifier": "TP-893"
+            }
+          }
+        ],
+        "releasable": true,
+        "set_by": {
+          "kind": "symphony",
+          "name": "Symphony"
+        },
+        "since": "2026-10-07T14:15:00Z"
+      },
+      "reason": "held: Waiting for the upload host to accept releases again; Waiting for TP-893 to finish",
+      "repo_key": "symphony",
+      "repository_paused": false,
+      "state": "In Progress",
+      "title": "Retry the release upload",
+      "url": "https://linear.app/tonypine/issue/TP-899"
+    }
+  ],
+  "dispatch_state": {
+    "active?": true,
+    "blockers": []
+  },
+  "epic_lanes": {
+    "lanes": [
+      {
+        "id": "e1",
+        "identifier": "SHOP-300",
+        "status": "running",
+        "sub_issue": {
+          "identifier": "SHOP-302",
+          "issue_id": "i-302",
+          "state": "In Progress",
+          "via": "blocked_by"
+        },
+        "title": "Gift cards"
+      },
+      {
+        "id": "e2",
+        "identifier": "API-120",
+        "status": "waiting",
+        "sub_issue": null,
+        "title": "Rate limits"
+      }
+    ],
+    "max_total": 10,
+    "queued_epics": [
+      {
+        "id": "e3",
+        "identifier": "WEB-88",
+        "title": "Dark mode"
+      }
+    ],
+    "shared": {
+      "slots": 8,
+      "used": 2
+    }
+  },
+  "finishing": {
+    "running": [],
+    "slots": 2,
+    "used": 0
+  },
+  "forced": [],
+  "generated_at": "2026-10-07T14:20:00Z",
+  "linear_usage": {
+    "callers": [
+      {
+        "caller": "poll",
+        "requests": 720
+      },
+      {
+        "caller": "reconcile",
+        "requests": 402
+      },
+      {
+        "caller": "agent_tool",
+        "requests": 151
+      },
+      {
+        "caller": "qa",
+        "requests": 11
+      }
+    ],
+    "queries": [
+      {
+        "query": "CandidateIssues",
+        "requests": 720
+      }
+    ],
+    "total": 1284,
+    "window_ms": 3600000
+  },
+  "orchestrator": {
+    "message_queue_len": 0,
+    "snapshot_age_ms": 420,
+    "snapshot_build_ms": 12,
+    "snapshot_parts_ms": {}
+  },
+  "pause": {
+    "paused": false,
+    "paused_at": null,
+    "reason": null
+  },
+  "pollers": {
+    "ci": {
+      "consecutive_failures": 0,
+      "current_backoff_ms": null,
+      "poll_interval_ms": 60000,
+      "status": "running",
+      "webhooks": {
+        "enabled": true,
+        "events_received": 214,
+        "last_event_at": "2026-10-07T13:58:40Z",
+        "rejected": 2,
+        "relay": "smee.io",
+        "results_via_poll": 7,
+        "results_via_webhook": 96
+      }
+    },
+    "pr_review": {
+      "consecutive_failures": 0,
+      "current_backoff_ms": null,
+      "poll_interval_ms": 60000,
+      "status": "running",
+      "webhooks": null
+    }
+  },
+  "qa": {
+    "queued": [],
+    "running": []
+  },
+  "rate_limits": null,
+  "repos": [
+    "symphony"
+  ],
+  "retrying": [],
+  "run_history": [],
+  "running": [],
+  "shipped_today": [],
+  "skipped": [],
+  "slot_waiting": [],
+  "stray_processes": [],
+  "uptime_seconds": 11580,
+  "usage_limits": [],
+  "waiting_on_you": [
+    {
+      "checks_green": false,
+      "headline": "The plan to redesign the Inbox decision screen.",
+      "issue_id": "i-923",
+      "issue_identifier": "TP-923",
+      "kind": "plan",
+      "repo_key": "symphony",
+      "state": "Plan Review",
+      "title": "Improve decision handling in the app",
+      "url": "https://linear.app/tonypine/issue/TP-923",
+      "waiting_seconds": 8100,
+      "waiting_since": "2026-10-07T12:05:00Z"
+    },
+    {
+      "checks_green": false,
+      "decision": true,
+      "headline": "Update the old workflow's instructions now, or leave them to TP-891?",
+      "issue_id": "i-892",
+      "issue_identifier": "TP-892",
+      "kind": "action",
+      "repo_key": "symphony",
+      "state": "Rework",
+      "title": "Retire two old review steps",
+      "url": "https://linear.app/tonypine/issue/TP-892",
+      "waiting_seconds": 3600,
+      "waiting_since": "2026-10-07T13:20:00Z"
+    },
+    {
+      "checks_green": true,
+      "headline": "Count how many times Code Review sends a pull request back.",
+      "issue_id": "i-895",
+      "issue_identifier": "TP-895",
+      "kind": "pr",
+      "repo_key": "symphony",
+      "state": "QA",
+      "title": "Count review rounds per pull request",
+      "url": "https://linear.app/tonypine/issue/TP-895",
+      "waiting_seconds": 2400,
+      "waiting_since": "2026-10-07T13:40:00Z"
+    },
+    {
+      "checks_green": false,
+      "headline": "Answer the quality gate's questions",
+      "issue_id": "i-896",
+      "issue_identifier": "TP-896",
+      "kind": "clarify",
+      "repo_key": "symphony",
+      "state": "Todo",
+      "title": "Make the Inbox faster",
+      "url": "https://linear.app/tonypine/issue/TP-896",
+      "waiting_seconds": 900,
+      "waiting_since": "2026-10-07T14:05:00Z"
+    },
+    {
+      "checks_green": false,
+      "headline": "Stopped by you at 14:13. Unblock runs it again where it stopped; Restart starts it over from main.",
+      "issue_id": "i-897",
+      "issue_identifier": "TP-897",
+      "kind": "blocked",
+      "repo_key": "symphony",
+      "state": "In Progress",
+      "title": "Post QA screenshots to the pull request",
+      "url": "https://linear.app/tonypine/issue/TP-897",
+      "waiting_seconds": 420,
+      "waiting_since": "2026-10-07T14:13:00Z"
+    },
+    {
+      "checks_green": false,
+      "headline": "Waits on its competing pull requests",
+      "issue_id": "i-898",
+      "issue_identifier": "TP-898",
+      "kind": "blocked",
+      "repo_key": "symphony",
+      "state": "In Progress",
+      "title": "Show the new review steps in the app",
+      "url": "https://linear.app/tonypine/issue/TP-898",
+      "waiting_seconds": 360,
+      "waiting_since": "2026-10-07T14:14:00Z"
+    },
+    {
+      "checks_green": false,
+      "headline": "The upload host refused the release twice",
+      "issue_id": "i-899",
+      "issue_identifier": "TP-899",
+      "kind": "blocked",
+      "repo_key": "symphony",
+      "state": "In Progress",
+      "title": "Retry the release upload",
+      "url": "https://linear.app/tonypine/issue/TP-899",
+      "waiting_seconds": 300,
+      "waiting_since": "2026-10-07T14:15:00Z"
+    }
+  ],
+  "watching": []
+}

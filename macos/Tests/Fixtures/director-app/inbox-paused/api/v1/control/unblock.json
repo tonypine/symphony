@@ -1,0 +1,10 @@
+{
+  "commented": true,
+  "from_state": "In Progress",
+  "issue_id": "i-897",
+  "issue_identifier": "TP-897",
+  "move": "unblock",
+  "moved": false,
+  "to_state": "In Progress",
+  "undo_window_ms": null
+}

@@ -161,7 +161,10 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertNil(InboxToolbar(buttons: [.init(command: .move(.sendDecisions), enabled: false)], overflow: []).defaultCommand)
         XCTAssertEqual(
             InboxMove.allCases.map(\.verb),
-            ["Approve Plan", "Send Decisions", "Ask for Changes", "Reject Plan", "Approve and Merge", "Send to Rework", "Restart", "Send Decision", "Unblock"]
+            [
+                "Approve Plan", "Send Decisions", "Ask for Changes", "Reject Plan", "Approve and Merge", "Send to Rework", "Restart", "Send Decision",
+                "Unblock", "Release",
+            ]
         )
         XCTAssertEqual(InboxMove.approvePlan.id, "approvePlan")
         XCTAssertEqual(InboxMove.decide.id, "decide")
@@ -206,7 +209,7 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(sheet.picks.map(\.answer), ["Keep it open"])
         XCTAssertEqual(
             sheet.action(),
-            .decide("X-1", requestCommentID: "c-1", picks: [.init(question: "Close TP-612 as a duplicate?", answer: "Keep it open")], move: nil)
+            .decide("X-1", request: .comment("c-1"), picks: [.init(question: "Close TP-612 as a duplicate?", answer: "Keep it open")], move: nil)
         )
         XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome).text, "Sent your decision")
         XCTAssertEqual(sheet.expectedOutcome, MoveOutcome(moved: false, toState: nil))
@@ -236,7 +239,7 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertNil(redirect.action(reason: " "))
         XCTAssertEqual(
             redirect.action(reason: " Send it back \n"),
-            .decide("X-1", requestCommentID: "c-1", picks: [.init(question: "Close TP-612 as a duplicate?", answer: "Send it back")], move: "rework")
+            .decide("X-1", request: .comment("c-1"), picks: [.init(question: "Close TP-612 as a duplicate?", answer: "Send it back")], move: "rework")
         )
         XCTAssertEqual(redirect.banner(after: redirect.expectedOutcome).text, "Moved to Rework")
         XCTAssertFalse(redirect.holdsForUndo)
@@ -269,7 +272,7 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(sheet.stays, "TP-892 stays in Rework until its next run picks up your answer.")
         XCTAssertEqual(
             sheet.action(),
-            .decide("TP-892", requestCommentID: "c-892-request", picks: [.init(question: request.question, answer: "Update them in TP-892 now")], move: nil)
+            .decide("TP-892", request: .comment("c-892-request"), picks: [.init(question: request.question, answer: "Update them in TP-892 now")], move: nil)
         )
 
         // A request with no state, and nothing picked or recommended, falls back to plain words.
@@ -349,7 +352,7 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertTrue(sheet.canSend(reason: ""))
         XCTAssertEqual(
             sheet.action(),
-            .decide("TP-892", requestCommentID: "c-892-request", picks: [.init(question: try XCTUnwrap(action.question), answer: ownWords)], move: nil)
+            .decide("TP-892", request: .comment("c-892-request"), picks: [.init(question: try XCTUnwrap(action.question), answer: ownWords)], move: nil)
         )
         XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome).text, "Sent your decision")
 
@@ -571,11 +574,11 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertFalse(sheet.isDestructive)
         XCTAssertFalse(sheet.needsReason)
         XCTAssertEqual(sheet.targetState, "Merging")
-        XCTAssertEqual(sheet.requestCommentID, "c-206-merge")
+        XCTAssertEqual(sheet.answeredRequest, .comment("c-206-merge"))
         // It picks the option that moves the ticket to the state the hold carries, so Symphony continues it there.
         let pick = ControlAction.DecisionPick(question: "Merge BIL-206 (Prorate plan changes mid-cycle) into its base branch?", answer: "Merge")
         XCTAssertEqual(sheet.picks, [pick])
-        XCTAssertEqual(sheet.action(), .decide("BIL-206", requestCommentID: "c-206-merge", picks: [pick], move: nil))
+        XCTAssertEqual(sheet.action(), .decide("BIL-206", request: .comment("c-206-merge"), picks: [pick], move: nil))
         XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome), InboxBanner(itemID: "i-206", identifier: "BIL-206", text: "Moved to Merging", undo: true))
 
         // The confirmation's option is found by what it does, not by where it sits or whether it is recommended.
@@ -612,7 +615,7 @@ final class InboxMovesTests: XCTestCase {
             sheet.action(reason: " Totals are off \n"),
             .decide(
                 "BIL-206",
-                requestCommentID: "c-206-merge",
+                request: .comment("c-206-merge"),
                 picks: [.init(question: "Merge BIL-206 (Prorate plan changes mid-cycle) into its base branch?", answer: "Totals are off")],
                 move: "rework"
             )
@@ -724,12 +727,12 @@ final class InboxMovesTests: XCTestCase {
             (.backlog("BIL-206", note: "Later"), "backlog", ["issue_identifier": "BIL-206", "note": "Later"]),
             (.backlog("BIL-206", note: nil), "backlog", ["issue_identifier": "BIL-206"]),
             (
-                .decide("NOTE-90", requestCommentID: "c-1", picks: picks, move: nil),
+                .decide("NOTE-90", request: .comment("c-1"), picks: picks, move: nil),
                 "decide",
                 ["issue_identifier": "NOTE-90", "request_comment_id": "c-1", "picks": [["question": "Where?", "answer": "B"]]]
             ),
             (
-                .decide("NOTE-90", requestCommentID: "c-1", picks: picks, move: "rework"),
+                .decide("NOTE-90", request: .comment("c-1"), picks: picks, move: "rework"),
                 "decide",
                 ["issue_identifier": "NOTE-90", "request_comment_id": "c-1", "picks": [["question": "Where?", "answer": "B"]], "move": "rework"]
             ),
@@ -750,12 +753,12 @@ final class InboxMovesTests: XCTestCase {
     func testARefusedMoveSaysWhy() {
         let body = Data(#"{"error":{"code":"move_not_allowed","message":"BIL-206 is not waiting on a decision"}}"#.utf8)
         XCTAssertEqual(
-            ControlAPI.result(.decide("BIL-206", requestCommentID: "c-206-merge", picks: [], move: nil), statusCode: 409, data: body),
+            ControlAPI.result(.decide("BIL-206", request: .comment("c-206-merge"), picks: [], move: nil), statusCode: 409, data: body),
             .failed("Couldn't send the decision on BIL-206: BIL-206 is not waiting on a decision (HTTP 409)")
         )
         let prefixes = [
             ControlAction.approvePlan("X"), .rework("X", reason: "r"), .restart("X", reason: "r"), .decisions("X", picks: []),
-            .backlog("X", note: nil), .decide("X", requestCommentID: "c-1", picks: [], move: nil), .unblock("X"), .undo("X"),
+            .backlog("X", note: nil), .decide("X", request: .comment("c-1"), picks: [], move: nil), .unblock("X"), .undo("X"),
         ].map { ControlAPI.result($0, statusCode: 500, data: Data()) }
         XCTAssertEqual(prefixes, [
             .failed("Couldn't approve the plan of X: HTTP 500"),
@@ -847,7 +850,122 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(InboxNotifier.notice(plan)?.offersApproveAndMerge, false)
     }
 
+    // MARK: - Question ids and pauses (TP-1253)
+
+    /// The operator answers in their own words: Decide names the Question the row carries, and Symphony's answer
+    /// takes the row off the Inbox, so the app moves to the next item.
+    func testDecideAnswersTheQuestionTheRowNamesInTheDirectorsOwnWords() throws {
+        let (fixtures, root) = pausedFixtures()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let item = try pausedItem("TP-892")
+        let action = try XCTUnwrap(item.review.action)
+        XCTAssertEqual(action.answered, .question("q-892"))
+        XCTAssertTrue(item.answerable)
+        let picks = DecisionPicks(picks: [0: action.writeInIndex], writeIn: " Leave it to TP-891. ")
+        XCTAssertEqual(InboxToolbar.toolbar(for: item, picks: picks).defaultCommand, .move(.decide))
+
+        let sheet = ConsequenceSheet(move: .decide, item: item, picks: picks)
+        XCTAssertEqual(sheet.answeredRequest, .question("q-892"))
+        let question = try XCTUnwrap(action.question)
+        let decide = try XCTUnwrap(sheet.action())
+        XCTAssertEqual(decide, .decide("TP-892", request: .question("q-892"), picks: [.init(question: question, answer: "Leave it to TP-891.")], move: nil))
+        XCTAssertTrue(sheet.selectsNext(after: sheet.expectedOutcome))
+
+        let (data, response) = fixtures.answer(ControlAPI.request(decide, base: APIFixtures.baseURL, token: APIFixtures.token))
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(ControlAPI.result(decide, statusCode: 200, data: data), .moved(MoveOutcome(moved: false, toState: "Rework")))
+        let entry = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixtures.requestLog)) as? [String: Any])
+        XCTAssertEqual(entry["path"] as? String, "/api/v1/control/decide")
+        XCTAssertEqual(entry["body"] as? NSDictionary, [
+            "issue_identifier": "TP-892", "question_id": "q-892", "picks": [["question": question, "answer": "Leave it to TP-891."]],
+        ] as NSDictionary)
+
+        // A row from a Symphony that predates the id answers by its request comment, as before; the redirect too.
+        var older = item
+        older.review.action?.questionID = nil
+        XCTAssertEqual(ConsequenceSheet(move: .decide, item: older, picks: picks).action(), .decide(
+            "TP-892", request: .comment("c-892-request"), picks: [.init(question: question, answer: "Leave it to TP-891.")], move: nil
+        ))
+        XCTAssertEqual(ConsequenceSheet(move: .sendToRework, item: item).action(reason: "Redo it"), .decide(
+            "TP-892", request: .question("q-892"), picks: [.init(question: question, answer: "Redo it")], move: "rework"
+        ))
+        // With neither id there is nothing to answer.
+        older.review.action?.commentID = nil
+        XCTAssertFalse(older.answerable)
+        XCTAssertNil(ConsequenceSheet(move: .decide, item: older, picks: picks).action())
+    }
+
+    /// The operator opens a stopped ticket's row: it says "Stopped by you" with Unblock and ⋯ Restart, and Unblock
+    /// sets it moving again in place.
+    func testAStoppedTicketsRowOffersUnblockAndRestartAndUnblockSetsItMoving() throws {
+        let (fixtures, root) = pausedFixtures()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let item = try pausedItem("TP-897")
+        XCTAssertEqual(item.ask, "Stopped by you")
+        let toolbar = InboxToolbar.toolbar(for: item)
+        XCTAssertEqual(toolbar.buttons.map(\.command), [.move(.unblock), .link(.openInLinear(try XCTUnwrap(item.url)))])
+        XCTAssertEqual(toolbar.defaultCommand, .move(.unblock))
+        XCTAssertEqual(toolbar.overflow, [.move(.restart)])
+        XCTAssertEqual(ConsequenceSheet(move: .restart, item: item).action(reason: "Start over"), .restart("TP-897", reason: "Start over"))
+
+        let sheet = ConsequenceSheet(move: .unblock, item: item)
+        let unblock = try XCTUnwrap(sheet.action())
+        XCTAssertEqual(unblock, .unblock("TP-897"))
+        let (data, response) = fixtures.answer(ControlAPI.request(unblock, base: APIFixtures.baseURL, token: APIFixtures.token))
+        XCTAssertEqual(response.statusCode, 200)
+        let outcome = try XCTUnwrap(ControlAPI.result(unblock, statusCode: 200, data: data).moveOutcome)
+        XCTAssertEqual(sheet.banner(after: outcome).text, "Hold cleared")
+        let entry = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixtures.requestLog)) as? [String: Any])
+        XCTAssertEqual(entry["path"] as? String, "/api/v1/control/unblock")
+        XCTAssertEqual(entry["body"] as? [String: String], ["issue_identifier": "TP-897"])
+    }
+
+    /// A pause the Director may release (a ticket it waits on, an environment hold) offers Release… in place of
+    /// Unblock…, which sends the unblock move; Restart stays under ⋯.
+    func testAReleasablePauseOffersReleaseWhichSendsTheUnblockMove() throws {
+        for (identifier, waits) in [("TP-898", "Waiting for TP-891 to land first"), ("TP-899", "Waiting for the upload host to accept releases again")] {
+            let item = try pausedItem(identifier)
+            let toolbar = InboxToolbar.toolbar(for: item)
+            XCTAssertEqual(toolbar.defaultCommand, .move(.release), identifier)
+            XCTAssertEqual(toolbar.overflow, [.move(.restart)], identifier)
+            let sheet = ConsequenceSheet(move: .release, item: item)
+            XCTAssertEqual(sheet.title, "Release \(identifier)?")
+            XCTAssertEqual(sheet.verb, "Release")
+            XCTAssertEqual(InboxMove.release.buttonTitle, "Release…")
+            // Only what the Director may release is named: TP-899's other reason waits on a ticket of its own.
+            XCTAssertEqual(sheet.happens, "Releases the pause on \(identifier) (\(waits)) and notes it on the ticket; \(identifier) continues from where it stopped.")
+            XCTAssertEqual(sheet.stays, "The ticket keeps its state. Nothing else changes in Linear.")
+            XCTAssertFalse(sheet.isDestructive)
+            XCTAssertFalse(sheet.needsReason)
+            XCTAssertFalse(sheet.holdsForUndo)
+            XCTAssertNil(sheet.targetState)
+            XCTAssertEqual(sheet.action(), .unblock(identifier))
+            XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome), InboxBanner(itemID: item.id, identifier: identifier, text: "Released", undo: false))
+        }
+        // A Symphony that sent no reasons leaves the row's sheet without them.
+        XCTAssertEqual(
+            ConsequenceSheet(move: .release, item: item(.blocked)).happens,
+            "Releases the pause on X-1 and notes it on the ticket; X-1 continues from where it stopped."
+        )
+    }
+
     // MARK: - Helpers
+
+    private func pausedFixtures() -> (APIFixtures, URL) {
+        let root = uniqueTemporaryDirectory("inbox-paused")
+        let directory = fixture().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("inbox-paused", isDirectory: true)
+        return (APIFixtures(directory: directory, requestLog: root.appendingPathComponent("api-requests.jsonl")), root)
+    }
+
+    /// An item of the `inbox-paused` fixture, its pause read from the fixture's state as the window reads it.
+    private func pausedItem(_ identifier: String) throws -> InboxItem {
+        let directory = fixture().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("inbox-paused/api/v1")
+        let inbox = try XCTUnwrap(InboxPayload.decode(Data(contentsOf: directory.appendingPathComponent("inbox.json"))))
+        let paused = inbox.withPauses(fromState: try Data(contentsOf: directory.appendingPathComponent("state.json")))
+        return try XCTUnwrap(paused.items.first { $0.identifier == identifier })
+    }
 
     private func item(_ kind: InboxItem.Kind) -> InboxItem {
         InboxItem(id: "id-X-1", identifier: "X-1", kind: kind, ask: "Ask", url: linear)

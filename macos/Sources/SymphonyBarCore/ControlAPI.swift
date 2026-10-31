@@ -26,9 +26,9 @@ public enum ControlAction: Equatable {
     /// in place, keeping its sub-tickets. `rework` is the rejection that cancels them.
     case changes(String, reason: String)
     case backlog(String, note: String?)
-    /// Answers a decision request: the picks, the id of the request comment they answer, and the state the
-    /// decision directs (`rework`, `done`) when it directs one.
-    case decide(String, requestCommentID: String, picks: [DecisionPick], move: String?)
+    /// Answers a decision request: the picks, the request they answer, and the state the decision directs (`rework`,
+    /// `done`) when it directs one.
+    case decide(String, request: AnsweredRequest, picks: [DecisionPick], move: String?)
     /// Clears an access hold on the ticket; it continues where it is (state-machine §Holds).
     case unblock(String)
     /// Takes back the last move on the ticket, within 10 s of it.
@@ -41,6 +41,32 @@ public enum ControlAction: Equatable {
     case pauseRepository(key: String, reason: String)
     /// Resumes dispatch for the repository `key`.
     case resumeRepository(key: String)
+
+    /// The request a decision answers: its Question, by the id the Inbox row carries (TP-1240), or, from a Symphony
+    /// whose row names none, the request comment its answer replies under. Symphony accepts either.
+    public enum AnsweredRequest: Equatable {
+        case question(String)
+        case comment(String)
+
+        /// The id named by the row: the Question's when it has one, else the request comment's; nil with neither.
+        public init?(questionID: String?, commentID: String?) {
+            if let questionID {
+                self = .question(questionID)
+            } else if let commentID {
+                self = .comment(commentID)
+            } else {
+                return nil
+            }
+        }
+
+        /// The field of the decide request that names it.
+        var body: (key: String, value: String) {
+            switch self {
+            case let .question(id): ("question_id", id)
+            case let .comment(id): ("request_comment_id", id)
+            }
+        }
+    }
 
     /// A decision's question and the option the Director picked, or their own words, as `decisions` posts them; a
     /// plan's pick also names the request comment it answers, so the answer goes under it.
@@ -145,10 +171,10 @@ public enum ControlAction: Equatable {
             return ["issue_identifier": identifier, "picks": picks.map(\.body)]
         case let .backlog(identifier, note):
             return note.map { ["issue_identifier": identifier, "note": $0] } ?? ["issue_identifier": identifier]
-        case let .decide(identifier, requestCommentID, picks, move):
+        case let .decide(identifier, request, picks, move):
             var body: [String: Any] = [
                 "issue_identifier": identifier,
-                "request_comment_id": requestCommentID,
+                request.body.key: request.body.value,
                 "picks": picks.map { ["question": $0.question, "answer": $0.answer] },
             ]
             if let move { body["move"] = move }
