@@ -17,7 +17,8 @@ defmodule SymphonyElixir.TicketSignals do
   the ticket's repo at once (`SymphonyElixir.Orchestrator.request_refresh/2`), and writes the phase it
   entered on the ticket's record before its event (`record_phase/3`), the one place a move writes the
   record's phase. `SymphonyElixir.TransitionGuard` and `SymphonyElixir.DirectorMoves` call it before
-  Linear is asked, so the record holds a move before Linear's board shows it.
+  Linear is asked, so the record holds a move before Linear's board shows it. A phase written into
+  `Plan Review` starts the capture of the plan's brief on the record (`SymphonyElixir.PlanBrief`).
 
   An event that ends what a question belonged to withdraws the questions nobody needs any more once
   it is written (`SymphonyElixir.Questions.withdraw_lapsed/3`): a `merge settled` move, a move into
@@ -27,7 +28,7 @@ defmodule SymphonyElixir.TicketSignals do
 
   require Logger
 
-  alias SymphonyElixir.{Config, Orchestrator, Questions, RunStore, TicketEvents, TicketState}
+  alias SymphonyElixir.{Config, Orchestrator, PlanBrief, Questions, RunStore, TicketEvents, TicketState}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @phase_signals ["claim", "ci fix return", "review verdict", "merge settled", "restart", "deprioritized"]
@@ -79,8 +80,9 @@ defmodule SymphonyElixir.TicketSignals do
   is: `linear_updated_at` stays, so a later read of Linear still wins on the facts it owns. A phase
   written is announced as a change of the record's `phase`
   (`SymphonyElixirWeb.ObservabilityPubSub.broadcast_ticket_record_changed/3`), so the PR watcher
-  re-decides the ticket at once. A record already in `phase` only takes the ownership, keeping when
-  its phase was written, and is announced as nothing new. Best-effort like every
+  re-decides the ticket at once, and a phase written into `Plan Review` starts the capture of the
+  plan's brief (`SymphonyElixir.PlanBrief.entered/4`). A record already in `phase` only takes the
+  ownership, keeping when its phase was written, and is announced as nothing new. Best-effort like every
   recording here: a store failure is logged and swallowed. No-ops without a repo key, an issue id or
   a phase.
   """
@@ -420,9 +422,15 @@ defmodule SymphonyElixir.TicketSignals do
       end
 
     case moved do
-      :ok -> ObservabilityPubSub.broadcast_ticket_record_changed(repo_key, issue_id, [:phase])
-      unchanged when unchanged in [:unchanged, :owned] -> :ok
-      error -> log_error(error, "write the record's phase #{phase} on issue_id=#{issue_id}")
+      :ok ->
+        :ok = ObservabilityPubSub.broadcast_ticket_record_changed(repo_key, issue_id, [:phase])
+        PlanBrief.entered(repo_key, issue_id, phase)
+
+      unchanged when unchanged in [:unchanged, :owned] ->
+        :ok
+
+      error ->
+        log_error(error, "write the record's phase #{phase} on issue_id=#{issue_id}")
     end
   end
 

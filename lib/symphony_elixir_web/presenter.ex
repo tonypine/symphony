@@ -12,6 +12,7 @@ defmodule SymphonyElixirWeb.Presenter do
     Initiatives,
     Orchestrator,
     Pauses,
+    PlanBrief,
     PrWatch,
     Quality,
     RetiredStates,
@@ -337,14 +338,15 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
-  # What the ticket's record adds to its payload: its verdicts, the watcher's block, and why it does
-  # not move (`ticket_status/2`).
+  # What the ticket's record adds to its payload: its verdicts, the watcher's block, a plan's brief
+  # (`SymphonyElixir.PlanBrief`) and why it does not move (`ticket_status/2`).
   defp record_payload(payload, record) do
     repository_paused = is_binary(payload.repo_key) and Pauses.paused?({:repository, payload.repo_key})
 
     payload
     |> Map.put(:verdicts, verdicts_payload(record))
     |> Map.put(:watch, WatchPayload.watch(record))
+    |> Map.put(:plan_brief, plan_brief_payload(record))
     |> Map.merge(ticket_status(record, repository_paused))
   end
 
@@ -414,6 +416,14 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp open_questions_payload(_record), do: []
+
+  # The plan's brief the record holds, with when it was read, nil when it holds none.
+  defp plan_brief_payload(record) do
+    case PlanBrief.from_record(record) do
+      nil -> nil
+      brief -> %{brief | read_at: iso8601(brief.read_at)}
+    end
+  end
 
   defp ticket_state_record(repo_key, issue_id, issue_identifier) when is_binary(repo_key) and is_binary(issue_id) do
     case RunStore.get_ticket_state(repo_key, issue_id) do

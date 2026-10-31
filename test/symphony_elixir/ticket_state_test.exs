@@ -50,6 +50,8 @@ defmodule SymphonyElixir.TicketStateTest do
                questions: [],
                pause_backfilled_at: nil,
                projected: nil,
+               plan_brief: nil,
+               plan_brief_error: nil,
                updated_at: nil
              }
     end
@@ -188,6 +190,8 @@ defmodule SymphonyElixir.TicketStateTest do
                questions: [],
                pause_backfilled_at: nil,
                projected: nil,
+               plan_brief: nil,
+               plan_brief_error: nil,
                updated_at: nil
              }
     end

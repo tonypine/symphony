@@ -3,9 +3,10 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
 
   import Phoenix.ConnTest, only: [build_conn: 0, get: 2, post: 3, json_response: 2]
 
+  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Webhook, as: LinearWebhook
   alias SymphonyElixir.Linear.Webhook.Deliveries
-  alias SymphonyElixir.TicketObservation
+  alias SymphonyElixir.{TicketObservation, TicketState}
 
   @endpoint SymphonyElixirWeb.Endpoint
   @secret "lin_wh_test_secret"
@@ -139,6 +140,33 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       assert json_response(post_signed(comment), 200)
 
       assert %{recent: [%{type: "Comment", observation: nil}, %{action: "remove", observation: :removed} | _]} = Deliveries.summary()
+    end
+
+    test "a review brief edited on a ticket in Plan Review reads the plan's brief onto its record, with no poll" do
+      test_pid = self()
+      repo_key = Config.repo_key!()
+      {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "linear"}})
+      linear = fn _query, %{id: id}, _opts -> send(test_pid, {:plan_read, id}) && {:error, :offline} end
+      :ok = RunStore.put_ticket_state(TicketState.new(repo_key, "issue-hook", %{phase: "Plan Review"}))
+      Application.put_env(:symphony_elixir, :plan_brief_capture, true)
+      Application.put_env(:symphony_elixir, :plan_brief_opts, linear_client: linear, settings: settings)
+
+      on_exit(fn ->
+        Application.put_env(:symphony_elixir, :plan_brief_capture, false)
+        Application.delete_env(:symphony_elixir, :plan_brief_opts)
+      end)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        brief = "## Review brief\n\n**What to review:** The plan."
+        edited = delivery_body(%{"type" => "Comment", "action" => "update", "data" => %{"id" => "c1", "body" => brief, "issueId" => "issue-hook"}})
+        assert json_response(post_signed(edited), 200) == %{"status" => "accepted"}
+        assert_receive {:plan_read, "issue-hook"}, 5_000
+        eventually(fn -> match?(%{plan_brief_error: ":offline"}, RunStore.get_ticket_state(repo_key, "issue-hook")) end)
+
+        other = delivery_body(%{"type" => "Comment", "action" => "create", "data" => %{"id" => "c2", "body" => "Looks good", "issueId" => "issue-hook"}})
+        assert json_response(post_signed(other), 200) == %{"status" => "accepted"}
+        refute_received {:plan_read, _id}
+      end)
     end
 
     test "an updated delivery polls the ticket's repo at once; unchanged, stale and unrouted ones ask for nothing" do

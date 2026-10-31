@@ -1035,6 +1035,7 @@ defmodule SymphonyElixir.ExtensionsTest do
              "tracked" => %{},
              "verdicts" => [],
              "watch" => nil,
+             "plan_brief" => nil,
              "pause" => nil
            }
 
@@ -1071,6 +1072,7 @@ defmodule SymphonyElixir.ExtensionsTest do
              "tracked" => %{},
              "verdicts" => [],
              "watch" => nil,
+             "plan_brief" => nil,
              "pause" => nil
            }
 

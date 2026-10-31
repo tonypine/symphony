@@ -6,7 +6,9 @@ defmodule SymphonyElixirWeb.LinearWebhookController do
   observation is bounded in time and never changes the answer: an accepted delivery is answered 200
   whatever it did, so Linear never retries one the record could not take. Nothing dispatches from
   the record yet: a delivery that changes a record only asks for a poll of its repo at once, and
-  the poll reads Linear.
+  the poll reads Linear. A `Comment` delivery that creates or edits a review brief on a ticket in
+  `Plan Review` starts the capture of the plan's brief on its record
+  (`SymphonyElixir.PlanBrief.observe_delivery/2`), in a task of its own.
 
   The `Linear-Signature` HMAC is the only authentication, so the route sits outside the
   same-origin and bearer-token pipelines. A rejected delivery is logged by its reason only, never
@@ -20,6 +22,7 @@ defmodule SymphonyElixirWeb.LinearWebhookController do
   alias Plug.Conn
   alias SymphonyElixir.Linear.Webhook
   alias SymphonyElixir.Linear.Webhook.Deliveries
+  alias SymphonyElixir.PlanBrief
   alias SymphonyElixir.TicketObservation
   alias SymphonyElixirWeb.Plugs.RawBodyReader
 
@@ -41,7 +44,9 @@ defmodule SymphonyElixirWeb.LinearWebhookController do
 
     case Webhook.verify(body, conn.req_headers, secret: Webhook.secret(webhooks)) do
       :ok ->
-        observation = conn.body_params |> Webhook.parse() |> TicketObservation.observe_delivery(observation_opts())
+        parsed = Webhook.parse(conn.body_params)
+        observation = TicketObservation.observe_delivery(parsed, observation_opts())
+        PlanBrief.observe_delivery(parsed)
         Deliveries.accepted(conn.body_params, DateTime.utc_now(), observation)
         conn |> put_status(200) |> json(%{status: "accepted"})
 
