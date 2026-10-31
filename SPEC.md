@@ -3314,9 +3314,8 @@ An issue is dispatch-eligible only if all are true:
     or `blocked`), `decision` (true for a request with options, so a client names it a decision as
     the Inbox does), its one-line ask as `headline` and how long it has waited, and
     `counts.waiting_on_you` is their number. It MUST drop an issue the orchestrator sees running or
-    watches outside `Plan Review`, unless a hold pauses it. `inbox_read` is false until Symphony's
-    first successful Linear read for the Inbox, so a client can tell an empty list from one not
-    read yet.
+    watches outside `Plan Review`, unless a hold pauses it. `inbox_read` is always true: the list
+    is built from Symphony's records on each read.
 - Plan review rule:
   - The plan run leaves its sub-issues in `Backlog` and hands the parent over to `Plan Review`
     (`linear_update_state` allows `Plan Review` for a plan parent only).
@@ -5529,19 +5528,17 @@ Minimum endpoints:
 - `GET /api/v1/inbox`
   - Returns everything that waits on the operator, oldest first (an item whose wait is unknown
     last), for the Mac app's Inbox. Read-only, served like `/api/v1/state`, and it MUST make no
-    tracker request: the implementation reads the tracker on its own poll and serves what it cached.
-  - The Elixir implementation (`SymphonyElixir.Inbox`) reads Linear every `polling.interval_ms`:
-    one query per repository route lists the issues in its scope in `Plan Review` or held
-    (`Blocked` or `Needs Decision`) in the run store, by id and whatever labels the board shows,
-    with their `updatedAt` and the last edit of their newest comment; only an issue whose
-    pair changed since the last read is read again in full (comments, state history, labels,
-    attachments, sub-issues). A failed read keeps the last list. Its Linear requests count as
-    `inbox`.
-  - One item per issue, with `kind` `action` (an open `linear_request_human_action` request,
-    whatever else it is), else `plan` (label `plan` or `breakdown`, in `Plan Review`), else
-    `blocked` (an access hold a person lifts); and one item per quality-gate hold or skip
-    (`awaiting_clarification`, `skipped`), with `kind` `clarify`. An issue the orchestrator sees
-    running, or watches outside `Plan Review`, is dropped unless a hold pauses it.
+    tracker request: the implementation builds it on each read from its own records of the tickets.
+  - The Elixir implementation (`SymphonyElixir.Inbox`) reads the run store's ticket records on each
+    request (`SymphonyElixir.Inbox.FromRecord`): a plan in `Plan Review` with the brief captured when
+    it entered review, each open question, and each pause reason a person may release. Nothing is
+    polled or cached, so an answer, an Unblock or a Stop shows on the next read. GitHub is read for
+    the pull requests an item names only when the item changed since it last read them.
+  - Each record gives, in this order of precedence: one `plan` item (label `plan` or `breakdown`, in
+    `Plan Review`, with its captured brief), else one `action` item per open question, else one
+    `blocked` item for a pause reason a person may release; and one item per quality-gate hold or
+    skip (`awaiting_clarification`, `skipped`), with `kind` `clarify`. An issue the orchestrator sees
+    running, or watches outside `Plan Review`, is dropped unless a pause holds it.
   - Each item has `issue_id`, `identifier`, `title`, `repo_key`, `kind`, `state`, `ask` (one line:
     the review brief's `**What to review:**` line, the request's title, or what the quality gate
     asks), `waiting_since` (the later of the latest move into its state and its newest open
@@ -5560,7 +5557,7 @@ Minimum endpoints:
     - `clarify`: `held` (true while the gate waits for answers, false once it skipped the issue),
       `score`, `pass_threshold`, `round`, `max_rounds`, `found` (what the gate found) and
       `questions`.
-  - Each item also has `references` and `context`, resolved on the same poll
+  - Each item also has `references` and `context`, resolved on the same read from the records
     (`SymphonyElixir.Inbox.References`):
     - `references` maps each ticket identifier (`TP-891`) and pull request (`PR #448`, or a bare
       `#448`, read as a pull request of the item's repo) the item's text mentions, written exactly as
@@ -5572,15 +5569,17 @@ Minimum endpoints:
       `## This PR` section, else of its body, `review_state` `open`/`changes_requested`/`approved`/
       `merged`/`closed`, `review_rounds`: Symphony's Code Review rounds on it, `files`, `additions`,
       `deletions`, `checks` `passed`/`failed`/`pending`/null, `ticket`), or `missing` with the best
-      guess at its `url` when it can't be read. A failed read never fails the item.
+      guess at its `url` when Symphony holds no record of it or GitHub can't read it. A failed read
+      never fails the item.
     - `context` is where the item's ticket sits: `parent` (`identifier`, `title`, `done`, `total`,
       `children`: each sub-ticket's Linear state type in landing order, canceled ones left out),
       `pull_request` (`number`, `url`, `checks`, `sent_back`: how many times Code Review sent it
-      back), `blocked_by`, `blocks` and `related` (`identifier`, `title`, `state`), and
-      `earlier_decisions` (`at`, `title`, `answer`: the requests on the ticket a person answered,
-      newest first, at most 3).
-    - One Linear query per poll reads every item's ticket and every ticket mentioned; GitHub is read
-      once per pull request, and a read is reused for two minutes.
+      back), `blocked_by`, `blocks` and `related` (`identifier`, `title`, `state`; the records hold
+      no `related` links, so it is empty), and `earlier_decisions` (`at`, `title`, `answer`: the
+      questions on the ticket a person answered, newest first, at most 3).
+    - No Linear request: the tickets come from the records. GitHub is read for an item's pull
+      requests only when the item changed since its last read, kept by its question; a failed read is
+      tried again after two minutes.
   - `counts` has `total` and the number of items of each kind.
   - When the orchestrator snapshot times out or is unavailable, return `200` with an `error` object
     in place of the list, as `/api/v1/state` does.

@@ -298,7 +298,7 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
   # The application's own Linear readers poll on their timers and read the workflow this test
   # points at the fake endpoint, so a tick during the test would add its reads to the counts.
   defp suspend_background_readers do
-    for name <- [SymphonyElixir.Inbox, SymphonyElixir.Initiatives, SymphonyElixir.HumanActions],
+    for name <- [SymphonyElixir.Initiatives, SymphonyElixir.HumanActions],
         pid = Process.whereis(name),
         is_pid(pid) do
       :ok = :sys.suspend(pid)

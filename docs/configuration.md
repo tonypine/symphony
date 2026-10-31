@@ -162,8 +162,9 @@ issues:
   names a project by any of them polls its issues, as Linear does. A project's optional `"teams"`
   lists its team keys; without it, the project is in the teams of its issues. Symphony writes into
   the file as into Linear: a state move (with an entry in the issue's `"history"`), a label, a
-  comment and a reply (`"comments"`), each moving the issue's `"updatedAt"`. With an issues file the
-  Inbox reads the file instead of Linear, so a decision request a run posts is an Inbox row there.
+  comment and a reply (`"comments"`), each moving the issue's `"updatedAt"`. With an issues file a
+  plan's brief is read from the file instead of Linear when the plan enters `Plan Review`, so the
+  Inbox, built from the tickets' records, lists it there.
 - `poll_interval_ms`: issue candidate polling cadence. Each scheduler tick costs roughly one Linear
   request per running, watched, and due-repo lookup (about 3 per tick with work in flight), so the
   default `30000` spends about 360 of a personal key's 2,500 requests/hour before agent tool calls.
@@ -3079,11 +3080,11 @@ the fix is to delete the line.
 
 **Waiting on you.** The list `/api/v1/state` returns as `waiting_on_you`, which the dashboard and
 the menu bar app show, is the Mac app's Inbox (`GET /api/v1/inbox`) in short. Symphony builds it on
-its own poll, not on this read: every `polling.interval_ms` it lists the tickets in
-`issues.states.plan_review` in each route's scope plus the ones Symphony's store holds `Blocked`
-or `Needs Decision` (a hold pauses a ticket in its phase, wherever it sits; the label is only its
-projection, so a ticket whose label went missing is still read), reads a ticket's
-comments again only when the ticket changed, and adds the quality gate's holds and skips. Each entry has
+each read from its own records of the tickets, with no Linear request: a plan in
+`issues.states.plan_review` with the brief Symphony read when it entered review, each open
+question, each pause a person may release, and the quality gate's holds and skips. An answer, an
+Unblock or a Stop shows on the very next read, and the list is served while Linear is
+unreachable. `polling.interval_ms` no longer paces it. Each entry has
 `issue_identifier`, `repo_key`, `title`, `url`, `state`, `kind` (`action` for an open request,
 `plan` for a `plan` or `breakdown` parent in `Plan Review`; `clarify` for a quality gate hold or
 skip; `blocked` for a ticket an access hold pauses in place, with the reason the hold
@@ -3095,9 +3096,9 @@ kind), `headline` (its one-line ask: the text after `**What to review:**` in the
 or watches outside `Plan Review`, is dropped — unless a hold pauses it, which is what waits on the
 Director. A plan that leaves `Plan Review` (approved, or sent to `Rework`) drops out on the next
 read. It doesn't depend on `human_actions.enabled`.
-`inbox_read` is false while Symphony has not yet read Linear for the list (the first read starts a
-second after startup), and true from its first successful read on, or when the tracker isn't Linear.
-The Mac app waits for it before it remembers what already waits, so nothing that was there notifies.
+`inbox_read` is always true, since the list is read from the records on each request; it stays in
+the payload for the Mac app, which waits for it before it remembers what already waits, so nothing
+that was there notifies.
 
 **Where actions come from.** On each read, in the scope each repository route polls, Symphony
 lists:

@@ -115,7 +115,6 @@ defmodule SymphonyElixir.Application do
              SymphonyElixir.StrayProcesses,
              ci_child_spec(system_config),
              human_actions_child_spec(system_config),
-             inbox_child_spec(system_config),
              initiatives_child_spec(system_config),
              SymphonyElixir.Setup,
              SymphonyElixir.HttpServer,
@@ -217,17 +216,6 @@ defmodule SymphonyElixir.Application do
   defp ci_child_spec(%SystemSchema{repos: repos}) do
     if Enum.any?(repos, &ci_enabled_for_repo?/1) do
       SymphonyElixir.CiPoller
-    end
-  end
-
-  # A memory tracker's issues file is a fake Linear (a QA server's seed): the Inbox reads it instead.
-  defp inbox_child_spec(%SystemSchema{repos: repos}) do
-    settings = Enum.map(repos, &Config.settings_for_repo!(&1.name))
-
-    cond do
-      Enum.any?(settings, &SymphonyElixir.Inbox.enabled?/1) -> SymphonyElixir.Inbox
-      Enum.any?(settings, &SymphonyElixir.Inbox.enabled?(&1, :memory)) -> {SymphonyElixir.Inbox, source: :memory}
-      true -> nil
     end
   end
 

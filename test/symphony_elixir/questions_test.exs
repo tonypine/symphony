@@ -299,15 +299,16 @@ defmodule SymphonyElixir.QuestionsTest do
       end
     end
 
-    @inbox :questions_test_inbox
+    # The request comment the pause projector wrote for `question`, as the record keeps it.
+    defp project_comment(question, comment_id) do
+      :ok = RunStore.update_ticket_state(@repo_key, @issue_id, %{projected: %{labels: [], section: nil, comments: %{question.id => %{comment: comment_id, reply: nil}}}})
+    end
+
     @run_started ~U[2026-10-30 03:30:00Z]
     @run_ended ~U[2026-10-30 04:30:00Z]
 
     setup do
-      on_exit(fn ->
-        :persistent_term.erase({SymphonyElixir.Inbox, :items, @inbox})
-        Application.delete_env(:symphony_elixir, :questions_test_reply)
-      end)
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :questions_test_reply) end)
     end
 
     defp ask_as!(asked_by, title, opts \\ []) do
@@ -348,10 +349,10 @@ defmodule SymphonyElixir.QuestionsTest do
       question = ask_as!(%{kind: :run, name: "The run"}, "Pick a layout")
       attrs = %{reason: "Pick a layout", decision: %{title: "Pick a layout", question: question.question, question_id: question.id}}
       :ok = Hold.set(@repo_key, @issue_id, :needs_decision, attrs)
-      :persistent_term.put({SymphonyElixir.Inbox, :items, @inbox}, [%{issue_id: @issue_id, review: %{comment_id: "comment-1", question_id: question.id}}])
+      project_comment(question, "comment-1")
 
       assert {:ok, [%{id: id, state: :withdrawn}]} =
-               Questions.withdraw_lapsed(@ticket, :restart, inbox: @inbox, replies: Replies)
+               Questions.withdraw_lapsed(@ticket, :restart, replies: Replies)
 
       assert id == question.id
 
@@ -369,7 +370,7 @@ defmodule SymphonyElixir.QuestionsTest do
       refute brief =~ "Open: it waits"
 
       # Nothing left to withdraw.
-      assert Questions.withdraw_lapsed(@ticket, :restart, inbox: @inbox, replies: Replies) == {:ok, []}
+      assert Questions.withdraw_lapsed(@ticket, :restart, replies: Replies) == {:ok, []}
     end
 
     test "a question a request comment shows keeps what its comment names; the backfill's says nothing (TP-1252)" do
@@ -385,9 +386,9 @@ defmodule SymphonyElixir.QuestionsTest do
       Application.put_env(:symphony_elixir, :pause_projector, true)
       on_exit(fn -> Application.put_env(:symphony_elixir, :pause_projector, false) end)
       question = ask_as!(@symphony, "Merge TP-12", confirm: "Merging")
-      :persistent_term.put({SymphonyElixir.Inbox, :items, @inbox}, [%{issue_id: @issue_id, review: %{comment_id: "c-9", question_id: question.id}}])
+      project_comment(question, "c-9")
 
-      assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, :merged, inbox: @inbox, replies: Replies)
+      assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, :merged, replies: Replies)
       refute_received {:reply, _issue_id, _comment_id, _body}
       assert %{state: :withdrawn} = Questions.find(@ticket, question.id)
     end
@@ -395,11 +396,11 @@ defmodule SymphonyElixir.QuestionsTest do
     test "a merge settled withdraws a merge confirmation that was never answered; a refused reply is only logged" do
       Application.put_env(:symphony_elixir, :questions_test_reply, {:error, :linear_down})
       question = ask_as!(@symphony, "Merge TP-12", confirm: "Merging")
-      :persistent_term.put({SymphonyElixir.Inbox, :items, @inbox}, [%{issue_id: "other"}, %{issue_id: @issue_id, review: %{decisions: [%{comment_id: "c-9", question_id: question.id}]}}])
+      project_comment(question, "c-9")
 
       log =
         capture_log(fn ->
-          assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, :merged, inbox: @inbox, replies: Replies)
+          assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, :merged, replies: Replies)
         end)
 
       assert log =~ "Linear refused its withdrawal reply"
@@ -412,15 +413,15 @@ defmodule SymphonyElixir.QuestionsTest do
       rule_asked = ask_as!(%{kind: :rule, name: "Protected files"}, "Allow the settings file")
       run_asked = ask_as!(@run, "Pick a colour")
 
-      assert {:ok, []} = Questions.withdraw_lapsed(@ticket, run_end(moved_to: nil), inbox: @inbox)
-      assert {:ok, [%{id: id}]} = Questions.withdraw_lapsed(@ticket, run_end([]), inbox: @inbox)
+      assert {:ok, []} = Questions.withdraw_lapsed(@ticket, run_end(moved_to: nil))
+      assert {:ok, [%{id: id}]} = Questions.withdraw_lapsed(@ticket, run_end([]))
       assert id == run_asked.id
       assert %{withdrawn: %{reason: "The run that asked ended and the ticket moved on to Rework."}} = Questions.find(@ticket, id)
       assert Enum.map(Questions.open(@ticket), & &1.id) == [confirmation.id, rule_asked.id]
 
       # A move to Backlog leaves them too; a cancelled ticket withdraws them.
-      assert {:ok, []} = Questions.withdraw_lapsed(@ticket, :backlog, inbox: @inbox)
-      assert {:ok, [_, _]} = Questions.withdraw_lapsed(@ticket, {:terminal, "Canceled"}, inbox: @inbox)
+      assert {:ok, []} = Questions.withdraw_lapsed(@ticket, :backlog)
+      assert {:ok, [_, _]} = Questions.withdraw_lapsed(@ticket, {:terminal, "Canceled"})
       assert %{withdrawn: %{reason: "The ticket was cancelled."}} = Questions.find(@ticket, confirmation.id)
     end
 
@@ -428,10 +429,10 @@ defmodule SymphonyElixir.QuestionsTest do
       question = ask_as!(@run, "The run cannot continue")
       :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "the run reported a block", waits_on: %{type: "access", keys: [], question_id: question.id}})
 
-      assert {:ok, []} = Questions.withdraw_lapsed(@ticket, :restart, inbox: @inbox)
+      assert {:ok, []} = Questions.withdraw_lapsed(@ticket, :restart)
       assert Hold.held?(@repo_key, @issue_id, :blocked)
 
-      assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, {:terminal, "Done"}, inbox: @inbox)
+      assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, {:terminal, "Done"})
       assert %{withdrawn: %{reason: "The ticket moved to Done before you answered."}} = Questions.find(@ticket, question.id)
       refute Hold.held?(@repo_key, @issue_id, :blocked)
     end
@@ -444,12 +445,12 @@ defmodule SymphonyElixir.QuestionsTest do
       :ok = Hold.set(@repo_key, @issue_id, :needs_decision, %{reason: "Pick a colour", decision: %{title: "Pick a colour", question_id: held.id}})
 
       refute Questions.lapsed?(request, run_end([]))
-      assert {:ok, []} = Questions.withdraw_lapsed(@ticket, run_end(moved_to: "In Progress"), inbox: @inbox)
-      assert {:ok, []} = Questions.withdraw_lapsed(@ticket, run_end(run_id: "run-2", moved_to: "Code Review"), inbox: @inbox)
+      assert {:ok, []} = Questions.withdraw_lapsed(@ticket, run_end(moved_to: "In Progress"))
+      assert {:ok, []} = Questions.withdraw_lapsed(@ticket, run_end(run_id: "run-2", moved_to: "Code Review"))
       assert Enum.map(Questions.open(@ticket), & &1.id) == [request.id, held.id]
       assert Hold.held?(@repo_key, @issue_id, :needs_decision)
 
-      assert {:ok, [_, _]} = Questions.withdraw_lapsed(@ticket, :restart, inbox: @inbox)
+      assert {:ok, [_, _]} = Questions.withdraw_lapsed(@ticket, :restart)
 
       assert [%{payload: %{cause: "restarted"}}, %{payload: %{cause: "restarted"}}] =
                RunStore.list_ticket_events(@repo_key, @issue_id, types: ["question.withdrawn"])
@@ -457,9 +458,9 @@ defmodule SymphonyElixir.QuestionsTest do
 
     test "each withdrawal records why: the ticket moved, or the run that asked ended (TP-1321)" do
       moved = ask_as!(@run, "Pick a layout")
-      assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, :backlog, inbox: @inbox)
+      assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, :backlog)
       ended = ask_as!(@run, "Pick a colour")
-      assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, run_end([]), inbox: @inbox)
+      assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, run_end([]))
 
       causes = for e <- RunStore.list_ticket_events(@repo_key, @issue_id, types: ["question.withdrawn"]), do: {e.payload.question_id, e.payload.cause}
       assert causes == [{moved.id, "ticket_moved"}, {ended.id, "run_ended"}]
@@ -472,7 +473,7 @@ defmodule SymphonyElixir.QuestionsTest do
       log =
         capture_log(fn ->
           assert {:ok, [_withdrawn]} =
-                   Questions.withdraw_lapsed(@ticket, :restart, store: UnclearableStore, inbox: @inbox)
+                   Questions.withdraw_lapsed(@ticket, :restart, store: UnclearableStore)
         end)
 
       assert log =~ "its needs_decision hold did not clear"

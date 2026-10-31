@@ -3,10 +3,9 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.Config.SystemSchema
-  alias SymphonyElixir.HumanActions.Request
+  alias SymphonyElixir.Config.{Schema, SystemSchema}
   alias SymphonyElixir.Inbox.References
-  alias SymphonyElixir.IssueSummary
+  alias SymphonyElixir.{IssueSummary, PrDecision, TicketState}
 
   @now 1_000_000
 
@@ -49,34 +48,16 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
     )
   end
 
+  # A ticket's record, as the run store holds it.
   defp ticket(identifier, attrs \\ %{}) do
-    Map.merge(
-      %{
-        "id" => "id-" <> identifier,
-        "identifier" => identifier,
-        "title" => "Title of " <> identifier,
-        "description" => "Part of TP-923. More text.",
-        "url" => "https://linear.app/acme/issue/" <> identifier,
-        "state" => %{"name" => "Todo", "type" => "unstarted"},
-        "parent" => nil,
-        "attachments" => %{"nodes" => []},
-        "inverseRelations" => %{"nodes" => []}
-      },
-      attrs
+    TicketState.new(
+      Map.get(attrs, :repo_key, "symphony"),
+      "id-" <> identifier,
+      Map.merge(%{issue_identifier: identifier, title: "Title of " <> identifier, description: "Part of TP-923. More text.", url: "https://linear.app/acme/issue/" <> identifier, phase: "Todo"}, attrs)
     )
   end
 
-  # A Linear stand-in answering the references query with `own` and `mentioned` nodes and reporting
-  # each query's variables to the test process.
-  defp linear(own, mentioned) do
-    test_pid = self()
-
-    fn query, variables, _opts ->
-      assert query =~ "SymphonyInboxReferences"
-      send(test_pid, {:linear, variables})
-      {:ok, %{"data" => %{"own" => %{"nodes" => own}, "mentioned" => %{"nodes" => mentioned}}}}
-    end
-  end
+  defp watched(url), do: %{facts: %PrDecision.Facts{}, pr_url: url}
 
   defp github(answers) do
     test_pid = self()
@@ -87,49 +68,41 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
     end
   end
 
-  defp opts(linear, github, extra \\ []) do
+  defp opts(github, extra \\ []) do
     Keyword.merge(
       [
-        linear_client: linear,
+        name: {:test, make_ref()},
         pull_request: github,
         github_repos: %{"symphony" => "tonypine/symphony"},
         verdicts: fn _repo_key, _issue_id -> [] end,
+        settings_fun: fn _repo_key -> %Schema{} end,
         now_ms: @now
       ],
       extra
     )
   end
 
-  defp resolve(items, linear, github, extra \\ []), do: References.resolve(items, %{}, opts(linear, github, extra))
-  defp resolve_with(items, nodes, linear, github, extra \\ []), do: References.resolve(items, nodes, opts(linear, github, extra))
+  defp resolve(items, records, github, extra \\ []), do: References.resolve(items, records, opts(github, extra))
 
   describe "resolve/3" do
-    test "resolves every ticket and pull request an item mentions, in one Linear query" do
-      own_892 = %{"id" => "id-TP-892", "identifier" => "TP-892"}
+    test "resolves every ticket and pull request an item mentions from the records and GitHub, with no Linear read" do
+      summary = IssueSummary.start_marker() <> "\n\n**Status:** PR open, waiting on **Code Review**\n\n" <> IssueSummary.end_marker()
 
       tp891 =
         ticket("TP-891", %{
-          "description" => IssueSummary.start_marker() <> "\n\n**Status:** PR open, waiting on **Code Review**\n\n" <> IssueSummary.end_marker(),
-          "state" => %{"name" => "In Progress", "type" => "started"},
-          "parent" => %{"identifier" => "TP-923", "title" => "Improve decisions"},
-          "attachments" => %{
-            "nodes" => [
-              %{"url" => "https://github.com/tonypine/symphony/pull/440"},
-              %{"url" => "https://www.figma.com/file/abc"},
-              %{"url" => "https://github.com/tonypine/symphony/pull/450"}
-            ]
-          },
-          "inverseRelations" => %{
-            "nodes" => [
-              %{"type" => "blocks", "issue" => %{"identifier" => "TP-880", "state" => %{"type" => "started"}}},
-              %{"type" => "blocks", "issue" => %{"identifier" => "TP-870", "state" => %{"type" => "completed"}}},
-              %{"type" => "related", "issue" => %{"identifier" => "TP-860", "state" => %{"type" => "started"}}}
-            ]
-          }
+          description: summary,
+          phase: "In Progress",
+          parent: %{identifier: "TP-923", title: "Improve decisions", done: 0, total: 1, children: ["started"]},
+          pr_watch: watched("https://github.com/tonypine/symphony/pull/450"),
+          blockers: [
+            %{id: "id-TP-880", identifier: "TP-880", state: "In Progress"},
+            %{id: "id-TP-870", identifier: "TP-870", state: "Done"},
+            %{id: nil, identifier: nil, state: nil}
+          ]
         })
 
-      tp892 = ticket("TP-892", %{"state" => %{"name" => "Rework", "type" => "started"}})
-      other_team = ticket("SHOP-1")
+      tp892 = ticket("TP-892", %{phase: "Rework"})
+      other_repo = ticket("SHOP-1", %{repo_key: "shop"})
 
       item = item("TP-892", action("TP-891 and SHOP-1 wait. Code Review sent PR #448 back; #449 is gone. TP-999 and SHA-256 too."))
 
@@ -149,34 +122,17 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
           ]
       end
 
-      log =
-        capture_log(fn ->
-          linear = linear([own_892], [tp891, tp892, other_team])
-          send(self(), {:result, resolve([item], linear, github, verdicts: verdicts)})
-        end)
+      records = [tp891, tp892, other_repo]
+      log = capture_log(fn -> send(self(), {:result, resolve([item], records, github, verdicts: verdicts)}) end)
 
-      assert_received {:result, {[resolved], cache}}
+      assert_received {:result, [resolved]}
       assert log =~ "could not read https://github.com/tonypine/symphony/pull/449"
 
-      assert_received {:linear, variables}
-      refute_received {:linear, _second_query}
-      assert variables.own == %{"id" => %{"in" => ["id-TP-892"]}}
-      assert variables.withMentioned
-
-      assert variables.mentioned["or"] == [
-               %{"team" => %{"key" => %{"eq" => "TP"}}, "number" => %{"eq" => 891}},
-               %{"team" => %{"key" => %{"eq" => "SHOP"}}, "number" => %{"eq" => 1}},
-               %{"team" => %{"key" => %{"eq" => "TP"}}, "number" => %{"eq" => 999}},
-               %{"team" => %{"key" => %{"eq" => "SHA"}}, "number" => %{"eq" => 256}},
-               %{"team" => %{"key" => %{"eq" => "TP"}}, "number" => %{"eq" => 892}}
-             ]
-
-      # The mentioned pull requests first, then the ones attached to the tickets read.
+      # The mentioned pull requests, then the ones of the tickets it names.
       assert_received {:github, "https://github.com/tonypine/symphony/pull/448"}
       assert_received {:github, "https://github.com/tonypine/symphony/pull/449"}
       assert_received {:github, "https://github.com/tonypine/symphony/pull/450"}
       refute_received {:github, _url}
-      assert Map.keys(cache) |> Enum.sort() == Enum.map([448, 449, 450], &"https://github.com/tonypine/symphony/pull/#{&1}")
 
       assert %{
                "TP-891" => %{
@@ -192,7 +148,7 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
                  waiting_on: nil,
                  facts: %{issue_id: "id-TP-891", state: "In Progress", state_type: "started", open_blockers: ["TP-880"]}
                },
-               "SHOP-1" => %{kind: "ticket", repo_key: nil, summary: "Part of TP-923.", parent: nil, pull_request: nil},
+               "SHOP-1" => %{kind: "ticket", repo_key: "shop", summary: "Part of TP-923.", parent: nil, pull_request: nil},
                "PR #448" => %{
                  kind: "pull_request",
                  number: 448,
@@ -216,48 +172,56 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
       assert map_size(resolved.references) == 6
     end
 
-    test "a failed Linear read leaves every ticket mention missing and the context empty, and the rest of the item as it was" do
+    test "reads a ticket's phase as terminal, backlog or started, by its repo's terminal states" do
+      records = [
+        ticket("TP-1", %{phase: "Done", blockers: [%{id: nil, identifier: "TP-9", state: nil}]}),
+        ticket("TP-2", %{phase: " Backlog "}),
+        ticket("TP-3", %{phase: "Triage"}),
+        ticket("TP-4", %{phase: nil})
+      ]
+
+      [resolved] = resolve([item("TP-10", action("TP-1 TP-2 TP-3 TP-4"))], records, github(%{}))
+
+      assert %{state_type: "completed", open_blockers: ["TP-9"]} = resolved.references["TP-1"].facts
+      assert %{state_type: "backlog"} = resolved.references["TP-2"].facts
+      assert %{state_type: "triage"} = resolved.references["TP-3"].facts
+      assert %{state_type: "started"} = resolved.references["TP-4"].facts
+    end
+
+    test "a ticket Symphony holds no record of leaves its mentions missing and its context empty, and the rest of the item as it was" do
       item = item("TP-892", action("TP-891 waits on #448."), %{url: nil})
+      [resolved] = resolve([item], [], github(%{}))
 
-      for failure <- [{:error, :timeout}, {:ok, %{"data" => nil, "errors" => [%{"message" => "boom"}]}}] do
-        failing = fn _query, _variables, _opts -> failure end
-        log = capture_log(fn -> send(self(), {:result, resolve([item], failing, github(%{}))}) end)
-        assert log =~ "could not read the tickets the Inbox mentions from Linear"
-        assert_received {:result, {[resolved], _cache}}
+      assert resolved.references["TP-891"] == %{kind: "missing", url: nil}
+      assert %{kind: "pull_request", number: 448, ticket: "TP-892", review_rounds: 0, review_state: "open"} = resolved.references["#448"]
 
-        assert resolved.references["TP-891"] == %{kind: "missing", url: nil}
-        assert %{kind: "pull_request", number: 448, ticket: "TP-892", review_rounds: 0, review_state: "open"} = resolved.references["#448"]
+      assert resolved.context == %{
+               parent: nil,
+               pull_request: nil,
+               blocked_by: [],
+               blocks: [],
+               related: [],
+               earlier_decisions: []
+             }
 
-        assert resolved.context == %{
-                 parent: nil,
-                 pull_request: nil,
-                 blocked_by: [],
-                 blocks: [],
-                 related: [],
-                 earlier_decisions: []
-               }
-
-        assert Map.drop(resolved, [:references, :context]) == item
-      end
+      assert Map.drop(resolved, [:references, :context]) == item
     end
 
     test "a bare pull request number of a repo with no GitHub repository is missing, with no URL and no GitHub read" do
       item = item("TP-892", action("See #448 and PR #9."), %{repo_key: "elsewhere"})
-      {[resolved], cache} = References.resolve([item], %{}, opts(linear([], []), github(%{})))
+      [resolved] = resolve([item], [], github(%{}))
 
       assert resolved.references == %{"#448" => %{kind: "missing", url: nil}, "PR #9" => %{kind: "missing", url: nil}}
-      assert cache == %{}
       refute_received {:github, _url}
-      assert_received {:linear, %{withMentioned: false, mentionedFirst: 1, mentioned: %{"or" => []}}}
     end
 
     test "reads a pull request on GitHub Enterprise, and none of a repo whose GitHub repository can't be read" do
       item = item("TP-1", action("#5"), %{repo_key: "enterprise"})
       repos = %{"enterprise" => "github.acme.com/acme/app", "odd" => "odd"}
-      {[resolved], _cache} = References.resolve([item], %{}, opts(linear([], []), github(%{}), github_repos: repos))
+      [resolved] = resolve([item], [], github(%{}), github_repos: repos)
       assert resolved.references["#5"].url == "https://github.acme.com/acme/app/pull/5"
 
-      {[resolved], _cache} = resolve([%{item | repo_key: "odd"}], linear([], []), github(%{}), github_repos: repos)
+      [resolved] = resolve([%{item | repo_key: "odd"}], [], github(%{}), github_repos: repos)
       assert resolved.references["#5"] == %{kind: "missing", url: nil}
     end
 
@@ -275,8 +239,7 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
         })
 
       verdicts = fn _repo_key, _issue_id -> [%{head_sha: "a", outcome: "approve"}] end
-      tp892 = ticket("TP-892")
-      {[resolved], _cache} = References.resolve([item], %{}, opts(linear([], [tp892]), github, verdicts: verdicts))
+      [resolved] = resolve([item], [ticket("TP-892")], github, verdicts: verdicts)
 
       assert %{ticket: nil, review_rounds: 0, review_state: "merged", summary: nil} = resolved.references["#1"]
       assert %{ticket: nil, review_state: "closed", summary: "Just a body."} = resolved.references["#2"]
@@ -290,59 +253,50 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
 
       for {outcome, state} <- [{"approve", "approved"}, {"request_changes", "changes_requested"}, {"block", "open"}] do
         verdicts = fn "symphony", "id-TP-892" -> [%{head_sha: "a", outcome: outcome}] end
-        own = [%{"id" => "id-TP-892", "identifier" => "TP-892"}]
-        {[resolved], _cache} = resolve([item], linear(own, []), github(%{}), verdicts: verdicts)
+        [resolved] = resolve([item], [ticket("TP-892")], github(%{}), verdicts: verdicts)
         assert resolved.references["#448"].review_state == state
       end
     end
 
-    test "builds the item's context: parent progress, its pull request, connected tickets and earlier decisions" do
-      children =
-        for {type, index} <- Enum.with_index(~w(completed completed started canceled completed unstarted completed backlog)) do
-          %{"createdAt" => "2026-10-0#{9 - index}T00:00:00Z", "state" => %{"type" => type}}
-        end
+    test "reads the pull request of the ticket a mentioned pull request belongs to" do
+      tp892 = ticket("TP-892", %{pr_watch: watched("https://github.com/tonypine/symphony/pull/500")})
+      [_resolved] = resolve([item("TP-1", action("#448"))], [tp892], github(%{}))
 
-      own = %{
-        "id" => "id-TP-892",
-        "identifier" => "TP-892",
-        "parent" => %{"identifier" => "TP-923", "title" => "Improve decisions", "children" => %{"nodes" => children}},
-        "attachments" => %{"nodes" => [%{"url" => "https://github.com/tonypine/symphony/pull/448"}]},
-        "relations" => %{
-          "nodes" => [
-            %{"type" => "blocks", "relatedIssue" => %{"identifier" => "TP-893", "title" => "Next", "state" => %{"name" => "Todo"}}},
-            %{"type" => "related", "relatedIssue" => %{"identifier" => "TP-891", "title" => "Old text", "state" => %{"name" => "In Progress"}}},
-            %{"type" => "duplicate", "relatedIssue" => %{"identifier" => "TP-1", "title" => "Dup", "state" => %{"name" => "Done"}}}
-          ]
-        },
-        "inverseRelations" => %{
-          "nodes" => [
-            %{"type" => "blocks", "issue" => %{"identifier" => "TP-880", "title" => "Before", "state" => %{"name" => "Done"}}},
-            %{"type" => "related", "issue" => %{"identifier" => "TP-891", "title" => "Old text", "state" => %{"name" => "In Progress"}}}
-          ]
-        }
-      }
+      assert_received {:github, "https://github.com/tonypine/symphony/pull/448"}
+      assert_received {:github, "https://github.com/tonypine/symphony/pull/500"}
+    end
 
-      options = [%{label: "A", effect: "a", recommended: true}, %{label: "B", effect: "b"}]
-      decision = fn title -> Request.render_hold(%{title: title, question: "Q?", why: "W.", options: options}, "Rework") end
+    test "builds the item's context from its record: parent progress, its pull request, connected tickets and earlier decisions" do
+      parent = %{identifier: "TP-923", title: "Improve decisions", done: 4, total: 7, children: ~w(backlog completed unstarted completed started completed completed)}
+      answered = fn id, title, text, at -> %{id: id, title: title, state: :answered, answer: %{text: text, at: at}} end
 
-      node = %{
-        "id" => "id-TP-892",
-        "comments" => %{
-          "nodes" => [
-            %{"id" => "r1", "body" => decision.("First"), "createdAt" => "2026-10-10T00:00:00Z"},
-            %{"id" => "a1", "body" => "Pick A", "createdAt" => "2026-10-10T01:00:00Z", "parent" => %{"id" => "r1"}},
-            %{"id" => "r2", "body" => decision.("Second"), "createdAt" => "2026-10-11T00:00:00Z"},
-            %{"id" => "a2", "body" => "Decision from the Director:\n\n1. Q?\n   **Decision:** B", "createdAt" => "2026-10-11T02:00:00.123Z", "parent" => %{"id" => "r2"}},
-            %{"id" => "r3", "body" => decision.("Withdrawn"), "createdAt" => "2026-10-12T00:00:00Z"},
-            %{"id" => "w3", "body" => "## Action withdrawn\n\nNot needed.", "createdAt" => "2026-10-12T01:00:00Z", "parent" => %{"id" => "r3"}},
-            %{"id" => "r4", "body" => decision.("Third"), "createdAt" => "2026-10-12T03:00:00Z"},
-            %{"id" => "a4", "body" => "A,\nplease", "createdAt" => "2026-10-13T05:48:00Z", "parent" => %{"id" => "r4"}},
-            %{"id" => "r5", "body" => decision.("Fourth"), "createdAt" => "2026-10-09T00:00:00Z"},
-            %{"id" => "a5", "body" => "B", "createdAt" => "2026-10-09T01:00:00Z", "parent" => %{"id" => "r5"}},
-            %{"id" => "r6", "body" => decision.("Open"), "createdAt" => "2026-10-13T06:00:00Z"}
+      own =
+        ticket("TP-892", %{
+          parent: parent,
+          pr_watch: watched("https://github.com/tonypine/symphony/pull/448"),
+          blockers: [
+            %{id: "id-TP-880", identifier: "TP-880", state: "Done"},
+            %{id: "id-TP-881", identifier: "TP-881", state: "Todo"},
+            %{id: nil, identifier: nil, state: nil}
+          ],
+          questions: [
+            answered.("q1", "First", "Pick A", ~U[2026-10-10 01:00:00Z]),
+            answered.("q2", "Second", "B", ~U[2026-10-11 02:00:00.123Z]),
+            %{id: "q3", title: "Withdrawn", state: :withdrawn, answer: nil},
+            answered.("q4", "Third", "A,\nplease", ~U[2026-10-13 05:48:00Z]),
+            answered.("q5", "Fourth", "B", ~U[2026-10-09 01:00:00Z]),
+            %{id: "q6", title: "Open", state: :open, answer: nil}
           ]
-        }
-      }
+        })
+
+      records = [
+        own,
+        ticket("TP-880", %{title: "Before", phase: "Done"}),
+        ticket("TP-893", %{title: "Next", blockers: [%{id: "id-TP-892", identifier: nil, state: "Rework"}]}),
+        ticket("TP-894", %{title: "Later", blockers: [%{id: nil, identifier: "TP-892", state: "Rework"}]}),
+        ticket("TP-895", %{blockers: [%{id: "id-TP-1", identifier: "TP-1", state: "Todo"}]}),
+        %{repo_key: "symphony", issue_id: "id-no-identifier", blockers: [%{id: "id-TP-892", identifier: "TP-892", state: nil}]}
+      ]
 
       verdicts = fn "symphony", "id-TP-892" ->
         [%{head_sha: "c", outcome: "request_changes"}, %{head_sha: "b", outcome: "request_changes"}, %{head_sha: "a", outcome: "approve"}]
@@ -350,21 +304,14 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
 
       github = github(%{"https://github.com/tonypine/symphony/pull/448" => {:ok, pull_request("https://github.com/tonypine/symphony/pull/448", %{checks: "pending"})}})
 
-      item = item("TP-892", action("Nothing mentioned."))
-      {[resolved], _cache} = resolve_with([item], %{"id-TP-892" => node}, linear([own], []), github, verdicts: verdicts)
+      [resolved] = resolve([item("TP-892", action("Nothing mentioned."))], records, github, verdicts: verdicts)
 
       assert resolved.context == %{
-               parent: %{
-                 identifier: "TP-923",
-                 title: "Improve decisions",
-                 done: 4,
-                 total: 7,
-                 children: ~w(backlog completed unstarted completed started completed completed)
-               },
+               parent: parent,
                pull_request: %{number: 448, url: "https://github.com/tonypine/symphony/pull/448", checks: "pending", sent_back: 2},
-               blocked_by: [%{identifier: "TP-880", title: "Before", state: "Done"}],
-               blocks: [%{identifier: "TP-893", title: "Next", state: "Todo"}],
-               related: [%{identifier: "TP-891", title: "Old text", state: "In Progress"}],
+               blocked_by: [%{identifier: "TP-880", title: "Before", state: "Done"}, %{identifier: "TP-881", title: nil, state: "Todo"}],
+               blocks: [%{identifier: "TP-893", title: "Next", state: "Todo"}, %{identifier: "TP-894", title: "Later", state: "Todo"}],
+               related: [],
                earlier_decisions: [
                  %{at: "2026-10-13T05:48:00Z", title: "Third", answer: "A, please"},
                  %{at: "2026-10-11T02:00:00Z", title: "Second", answer: "B"},
@@ -375,84 +322,64 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
       assert resolved.references == %{}
     end
 
-    test "a parent with no sub-tickets read and a ticket with no parent or pull request" do
-      own = %{"id" => "id-TP-1", "identifier" => "TP-1", "parent" => %{"identifier" => "TP-2", "title" => "Plan"}}
-      {[resolved], _cache} = References.resolve([item("TP-1", action("x"))], %{}, opts(linear([own], []), github(%{})))
-      assert %{parent: %{identifier: "TP-2", done: 0, total: 0, children: []}, pull_request: nil} = resolved.context
-
-      own = %{"id" => "id-TP-1", "identifier" => "TP-1", "parent" => nil}
-      {[resolved], _cache} = resolve([item("TP-1", action("x"))], linear([own, %{"id" => nil}], []), github(%{}))
+    test "a pull request the watcher records under a URL that names no pull request is none" do
+      own = ticket("TP-1", %{pr_watch: watched("https://github.com/tonypine/symphony/issues/3")})
+      [resolved] = resolve([item("TP-1", action("x"))], [own], github(%{}))
       assert %{parent: nil, pull_request: nil} = resolved.context
-    end
-
-    test "an answer without a reply time sorts last" do
-      node = %{
-        "comments" => %{
-          "nodes" => [
-            %{"id" => "r1", "body" => "## Decision needed: Old\n\n**Question:** Q?", "createdAt" => "2026-10-10T00:00:00Z"},
-            %{"id" => "a1", "body" => "Yes", "parent" => %{"id" => "r1"}},
-            %{"id" => "r2", "body" => "## Decision needed: New\n\n**Question:** Q?", "createdAt" => "2026-10-11T00:00:00Z"},
-            %{"id" => "a2", "body" => "No", "createdAt" => "2026-10-11T01:00:00Z", "parent" => %{"id" => "r2"}}
-          ]
-        }
-      }
-
-      {[resolved], _cache} = resolve_with([item("TP-1", action("x"))], %{"id-TP-1" => node}, linear([], []), github(%{}))
-      assert resolved.context.earlier_decisions == [%{at: "2026-10-11T01:00:00Z", title: "New", answer: "No"}, %{at: nil, title: "Old", answer: "Yes"}]
-    end
-
-    test "does not reuse a failed pull request read" do
-      item = item("TP-1", action("#448"))
-      url = "https://github.com/tonypine/symphony/pull/448"
-      failing = github(%{url => {:error, :timeout}})
-      {[_resolved], cache} = References.resolve([item], %{}, opts(linear([], []), failing))
-      assert_received {:github, ^url}
-      assert %{^url => {_at, {:error, :timeout}}} = cache
-
-      {[resolved], new_cache} = resolve([item], linear([], []), github(%{}), cache: cache, now_ms: @now + 1)
-      assert_received {:github, ^url}
-      assert resolved.references["#448"].kind == "pull_request"
-      assert %{^url => {_at, {:ok, _pr}}} = new_cache
-    end
-
-    test "reuses a pull request read younger than two minutes, and reads at most 30 per poll" do
-      item = item("TP-1", action("#448"))
-      {[_resolved], cache} = References.resolve([item], %{}, opts(linear([], []), github(%{})))
-      assert_received {:github, _url}
-
-      {[resolved], ^cache} = resolve([item], linear([], []), github(%{}), cache: cache, now_ms: @now + 119_999)
       refute_received {:github, _url}
-      assert resolved.references["#448"].kind == "pull_request"
-
-      {[_resolved], new_cache} = resolve([item], linear([], []), github(%{}), cache: cache, now_ms: @now + 120_000)
-      assert_received {:github, _url}
-      later = @now + 120_000
-      assert %{"https://github.com/tonypine/symphony/pull/448" => {^later, {:ok, _pr}}} = new_cache
-
-      many = item("TP-1", action(Enum.map_join(1..31, " ", &"##{&1}")))
-      {[resolved], cache} = References.resolve([many], %{}, opts(linear([], []), github(%{})))
-      assert map_size(cache) == 30
-      assert resolved.references["#31"] == %{kind: "missing", url: "https://github.com/tonypine/symphony/pull/31"}
     end
 
-    test "places another team's ticket in no repo, an Inbox ticket in its own, and nothing for no items" do
-      tp5 = ticket("TP-5")
-      mine = item("TP-5", action("x"), %{repo_key: "app"})
-      clarify = item("unknown", %{found: "TP-5 again", questions: []}, %{kind: :clarify, identifier: nil, url: nil, issue_id: "id-clarify"})
-      {[_mine, resolved], _cache} = References.resolve([mine, clarify], %{}, opts(linear([], [tp5]), github(%{})))
-      assert resolved.references["TP-5"].repo_key == "app"
+    test "reads a row's pull requests once, again when the row changes, and a failed one again after two minutes" do
+      opts = opts(github(%{"https://github.com/tonypine/symphony/pull/449" => {:error, :timeout}}))
+      row = item("TP-1", action("#448 #449"))
 
-      other = item("SHOP-1", action("TP-5"))
-      {[resolved], _cache} = References.resolve([other], %{}, opts(linear([], [tp5]), github(%{})))
-      assert resolved.references["TP-5"].repo_key == nil
+      log = capture_log(fn -> References.resolve([row], [], opts) end)
+      assert log =~ "could not read https://github.com/tonypine/symphony/pull/449"
+      assert_received {:github, "https://github.com/tonypine/symphony/pull/448"}
+      assert_received {:github, "https://github.com/tonypine/symphony/pull/449"}
 
-      assert References.resolve([], %{}, []) == {[], %{}}
+      # The same row: nothing is read, the failed read included, until two minutes passed.
+      assert [%{references: %{"#448" => %{kind: "pull_request"}, "#449" => %{kind: "missing"}}}] = References.resolve([row], [], Keyword.put(opts, :now_ms, @now + 119_999))
+      refute_received {:github, _url}
 
-      # An item with no identifier, or one that isn't a ticket's, and a URL that isn't Linear's.
+      capture_log(fn -> References.resolve([row], [], Keyword.put(opts, :now_ms, @now + 120_000)) end)
+      assert_received {:github, "https://github.com/tonypine/symphony/pull/448"}
+      assert_received {:github, "https://github.com/tonypine/symphony/pull/449"}
+
+      # A row whose reads all succeeded is kept however old they are; a changed row is read again.
+      ok_opts = opts(github(%{}))
+      References.resolve([row], [], ok_opts)
+      assert_received {:github, _first}
+      assert_received {:github, _second}
+      References.resolve([row], [], Keyword.put(ok_opts, :now_ms, @now + 3_600_000))
+      refute_received {:github, _url}
+      References.resolve([%{row | ask: "Decide again"}], [], ok_opts)
+      assert_received {:github, "https://github.com/tonypine/symphony/pull/448"}
+    end
+
+    test "keeps a row's reads by its Question, and reads at most 30 pull requests for a row" do
+      opts = opts(github(%{}))
+      asked = item("TP-1", Map.put(action("#448"), :question_id, "q-1"))
+      References.resolve([asked], [], opts)
+      assert_received {:github, _url}
+
+      # The same Question on a row that moved on: its reads are those of the Question.
+      References.resolve([asked], [], opts)
+      refute_received {:github, _url}
+      assert %{{:question, "q-1"} => _reads} = :persistent_term.get({References, :rows, Keyword.fetch!(opts, :name)})
+
+      many = item("TP-2", action(Enum.map_join(1..31, " ", &"##{&1}")))
+      [resolved] = References.resolve([many], [], opts)
+      assert resolved.references["#31"] == %{kind: "missing", url: "https://github.com/tonypine/symphony/pull/31"}
+      assert map_size(:persistent_term.get({References, :rows, Keyword.fetch!(opts, :name)})) == 1
+      assert References.resolve([], [], opts) == []
+    end
+
+    test "an item with no identifier, or one that isn't a ticket's, and a URL that isn't Linear's" do
       for identifier <- [nil, "weird"] do
         odd = item("x", action("TP-5 and TP-6"), %{identifier: identifier, url: "https://example.com/x"})
-        {[resolved], _cache} = resolve([odd], linear([], [tp5]), github(%{}))
-        assert %{"TP-5" => %{kind: "ticket", repo_key: nil}, "TP-6" => %{kind: "missing", url: nil}} = resolved.references
+        [resolved] = resolve([odd], [ticket("TP-5", %{repo_key: "app"})], github(%{}))
+        assert %{"TP-5" => %{kind: "ticket", repo_key: "app"}, "TP-6" => %{kind: "missing", url: nil}} = resolved.references
       end
     end
   end

@@ -453,8 +453,9 @@ ticket the quality gate holds or skipped. Each entry shows its kind, its one-lin
 review:**` line of its `## Review brief`) and how long it has waited; the Inbox also shows the brief
 in its parts, the PR's checks and size, the request's steps or what the quality gate found. The
 menu bar icon shows a dot while the list is not empty, and the app notifies each new entry once.
-Symphony reads the list on its poll and serves it from that read, re-reading a ticket's comments only
-when the ticket changed, so a new ticket shows after the next poll.
+Symphony builds the list on each read from its own records of the tickets, with no Linear request,
+so an answer, an Unblock or a Stop shows on the very next read, and the list is there while Linear
+is down.
 
 **Initiatives.** The Mac app's Initiatives (`/api/v1/initiatives`) follow each plan ticket (`plan`
 or `breakdown`) to done: the active ones, those in review and those done in the last 7 days, each

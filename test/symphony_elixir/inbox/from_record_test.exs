@@ -12,14 +12,6 @@ defmodule SymphonyElixir.Inbox.FromRecordTest do
   @fixture "test/fixtures/inbox/situation.exs"
   @director %{kind: :person, name: "Director"}
 
-  # The Linear writes the old path's hold sweep makes, kept off Linear.
-  defmodule QuietTracker do
-    def set_machine_label(_issue_id, _name), do: :ok
-    def clear_machine_label(_issue_id, _name), do: :ok
-    def fetch_issue_description(_issue_id), do: {:ok, "What it does."}
-    def update_issue_description(_issue_id, _description), do: :ok
-  end
-
   setup do
     :ok = RunStore.clear()
     on_exit(fn -> RunStore.clear() end)
@@ -83,53 +75,14 @@ defmodule SymphonyElixir.Inbox.FromRecordTest do
     end
   end
 
-  # A Linear stand-in serving the fixture nodes to the poller's list and detail queries, and
-  # nothing to any other.
-  defp linear(situation) do
-    nodes = Map.new(situation.nodes, &{&1["id"], &1})
-    light = for node <- situation.nodes, do: %{"id" => node["id"], "updatedAt" => "2026-10-20T12:00:00Z", "comments" => %{"nodes" => []}}
-
-    fn query, variables, _opts ->
-      cond do
-        query =~ "SymphonyInboxList" -> {:ok, %{"data" => %{"issues" => %{"nodes" => light, "pageInfo" => %{"hasNextPage" => false}}}}}
-        query =~ "SymphonyInboxIssues" -> {:ok, %{"data" => %{"issues" => %{"nodes" => Enum.map(variables.filter["id"]["in"], &nodes[&1])}}}}
-        true -> {:ok, %{"data" => %{}}}
-      end
-    end
+  # What the Inbox serves over the same records: the rows with the `references` and `context` it adds.
+  defp served(records, snapshot) do
+    snapshot
+    |> Inbox.items(records: fn -> records end, settings_fun: fn @repo_key -> settings() end, github_repos: %{}, name: {:test, make_ref()})
+    |> Enum.map(&Map.drop(&1, [:references, :context]))
   end
 
-  # The old path: the poller reads the fixture nodes from Linear, then the Inbox lists them.
-  defp from_linear(situation) do
-    name = {:test, make_ref()}
-
-    Inbox.run_once(%{
-      opts: [
-        name: name,
-        repos: fn -> {:ok, [%{name: @repo_key}]} end,
-        settings_fun: fn _repo -> settings() end,
-        scope_filter: fn _repo -> {:ok, %{"team" => %{"key" => %{"eq" => "SHOP"}}}} end,
-        held_issue_ids: fn @repo_key -> {:ok, Map.keys(situation.holds)} end,
-        hold: fn @repo_key, id -> Map.get(situation.holds, id) end,
-        linear_client: linear(situation),
-        snapshot: fn -> situation.snapshot end,
-        github_repos: %{},
-        tracker: QuietTracker
-      ],
-      nodes: %{},
-      timer: make_ref()
-    })
-
-    Inbox.items(situation.snapshot, name)
-  end
-
-  # The fields both paths build: the `references` and `context` the References resolver reads from
-  # Linear are left out, and so is each request's `question_id`.
-  defp comparable(items), do: Enum.map(items, &(&1 |> Map.drop([:references, :context]) |> Map.update!(:review, fn review -> without_question_ids(review) end)))
-
-  defp without_question_ids(%{decisions: decisions} = review), do: %{review | decisions: Enum.map(decisions, &Map.delete(&1, :question_id))}
-  defp without_question_ids(review), do: Map.delete(review, :question_id)
-
-  describe "the parity with today's Inbox" do
+  describe "the Inbox" do
     test "the fixture's request comments are what the pause projector renders from its Questions" do
       situation = situation()
 
@@ -139,13 +92,13 @@ defmodule SymphonyElixir.Inbox.FromRecordTest do
       end
     end
 
-    test "the rows built from the records equal the rows built from Linear, in order, field by field apart from question_id" do
+    test "the Inbox serves the rows built from the records, in order, field by field" do
       situation = situation()
+      records = records(situation)
 
-      old = from_linear(situation)
-      new = items(records(situation), situation.snapshot)
+      new = items(records, situation.snapshot)
 
-      assert Enum.map(old, &{&1.kind, &1.identifier}) == [
+      assert Enum.map(new, &{&1.kind, &1.identifier}) == [
                {:clarify, "SHOP-5"},
                {:plan, "SHOP-3"},
                {:action, "SHOP-1"},
@@ -153,7 +106,7 @@ defmodule SymphonyElixir.Inbox.FromRecordTest do
                {:blocked, "SHOP-4"}
              ]
 
-      assert comparable(new) == comparable(old)
+      assert served(records, situation.snapshot) == new
 
       # The record names each request's Question.
       assert [nil, nil, "q-signing", "q-merge", nil] == Enum.map(new, &get_in(&1, [:review, :question_id]))

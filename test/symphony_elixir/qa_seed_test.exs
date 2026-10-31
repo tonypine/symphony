@@ -4,7 +4,7 @@ defmodule SymphonyElixir.QaSeedTest do
   import Plug.Conn
   import Plug.Test
 
-  alias SymphonyElixir.{Config, DirectorMoves, Hold, Inbox, Orchestrator, Pauses, QaSeed, Questions}
+  alias SymphonyElixir.{Config, DirectorMoves, Hold, Inbox, Orchestrator, Pauses, PlanBrief, QaSeed, Questions}
   alias SymphonyElixir.{RunStore, TicketPullRequest, Tracker, Workflow}
   alias SymphonyElixirWeb.ControlApiController
 
@@ -89,12 +89,13 @@ defmodule SymphonyElixir.QaSeedTest do
     assert QaSeed.load(dir, now: @now) == :ok
 
     # As in the application: the orchestrator starts after the seed, with its pauses, and the Inbox
-    # reads the tracker's issues file.
+    # reads the records the seed and each move write.
     {:ok, orchestrator} = Orchestrator.start_link(name: Module.concat(__MODULE__, :SeededOrchestrator))
     on_exit(fn -> stop_process(orchestrator) end)
-    inbox = {:qa_seed_inbox, make_ref()}
-    inbox_state = %{opts: [name: inbox, source: :memory, snapshot: fn -> %{} end], nodes: %{}, timer: make_ref()}
-    read_inbox = fn -> inbox_state |> Inbox.run_once() |> then(fn _state -> rows(inbox) end) end
+    inbox = [name: {:qa_seed_inbox, make_ref()}, github_repos: %{}]
+    # The plan's move into Plan Review captures its brief, read from the issues file.
+    assert {:ok, _brief} = PlanBrief.capture({repo_key, "qa-seed-109"})
+    read_inbox = fn -> rows(inbox) end
     moves_server = :"qa_seed_moves_#{System.unique_integer([:positive])}"
     start_supervised!({DirectorMoves, name: moves_server})
     moves = [server: moves_server, github: SeedGitHub, workspace: SeedWorkspace, inbox: inbox]
@@ -106,7 +107,7 @@ defmodule SymphonyElixir.QaSeedTest do
 
     assert [
              {"QA-102", :blocked, %{reason: "The agent can't reach the package registry: it needs a token only you can add."}},
-             {"QA-108", :action, %{question_id: ^question_id, comment_id: "memory-comment-" <> _id}},
+             {"QA-108", :action, %{question_id: ^question_id}},
              {"QA-109", :plan, _plan}
            ] = read_inbox.()
 
@@ -198,6 +199,11 @@ defmodule SymphonyElixir.QaSeedTest do
 
     assert {:error, {:pause, {:repository, " "}, {:invalid_subject, {:repository, " "}}}} =
              QaSeed.load(seed_copy(repo_key, &Map.merge(&1, %{"repository" => " ", "pauses" => %{"repository" => "x"}})))
+
+    assert {:error, {{:observe, "QA-101"}, :invalid_repo_key}} = QaSeed.load(seed_copy(repo_key, &Map.merge(&1, %{"repository" => " ", "pauses" => %{}})))
+
+    long_hold = &Map.put(&1, "holds", [%{"issue" => "QA-102", "reason" => String.duplicate("x", 400), "clearing_condition" => "never"}])
+    assert {:error, {{:hold, "QA-102"}, _reason}} = QaSeed.load(seed_copy(repo_key, long_hold))
   end
 
   test "as the application's child it loads the seed and starts nothing, or stops the start", %{repo_key: repo_key, dir: dir} do

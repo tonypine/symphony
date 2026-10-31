@@ -13,12 +13,11 @@ defmodule SymphonyElixir.Inbox.FromRecord do
     (`Item.from_pause/2`).
 
   The quality gate's holds and skips in the snapshot add a `:clarify` item each
-  (`Item.from_quality_gate/1`) for a ticket nothing else lists. As `Inbox.items/2` does, an item of a
-  running ticket goes, so does one whose ticket the orchestrator saw leave the state it was listed
+  (`Item.from_quality_gate/1`) for a ticket nothing else lists. An item of a running ticket goes, so does one whose ticket the orchestrator saw leave the state it was listed
   in (a `:blocked` one stays: the pause is what waits), each takes the state the orchestrator saw,
   and the list is sorted oldest first, an item with no known wait last.
 
-  Nothing serves it yet: the Inbox still reads Linear.
+  `SymphonyElixir.Inbox.items/2` serves it.
   """
 
   alias SymphonyElixir.{Config, PlanReview, TicketState}

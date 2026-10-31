@@ -50,7 +50,7 @@ defmodule SymphonyElixir.Questions do
 
   require Logger
 
-  alias SymphonyElixir.{DecisionRequest, Hold, Inbox, Pauses, RunStore, TicketEvents, TicketState, Tracker}
+  alias SymphonyElixir.{DecisionRequest, Hold, Pauses, RunStore, TicketEvents, TicketState, Tracker}
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.TicketEvents.Event
@@ -264,8 +264,8 @@ defmodule SymphonyElixir.Questions do
   Inbox's next read reconciles the hold. Returns the questions withdrawn.
 
   `opts[:store]` and `opts[:tracker]` override the run store and the tracker the holds are read and
-  written through, `opts[:replies]` the tracker the reply is posted with (default
-  `SymphonyElixir.Tracker`), and `opts[:inbox]` the Inbox whose rows name the request comments.
+  written through, and `opts[:replies]` the tracker the reply is posted with (default
+  `SymphonyElixir.Tracker`). The reply goes under the request comment the ticket's record names.
   """
   @spec withdraw_lapsed(ticket(), lapse(), keyword()) :: {:ok, [question()]}
   def withdraw_lapsed(ticket, lapse, opts \\ []) do
@@ -357,7 +357,7 @@ defmodule SymphonyElixir.Questions do
     end
 
     # The pause projector posts the reply from the withdrawn Question when it owns the comments.
-    if not Projector.owns?(), do: reply_withdrawn(issue_id, request_comment_id(issue_id, question.id, opts), reason, opts)
+    if not Projector.owns?(), do: reply_withdrawn(issue_id, request_comment_id(repo_key, issue_id, question.id), reason, opts)
   end
 
   defp reply_withdrawn(_issue_id, nil, _reason, _opts), do: :ok
@@ -368,15 +368,13 @@ defmodule SymphonyElixir.Questions do
     end
   end
 
-  # The request comment the Inbox row of the question lists, read from the Inbox's cache: no Linear read.
-  defp request_comment_id(issue_id, question_id, opts) do
-    Enum.find_value(Inbox.cached(Keyword.get(opts, :inbox, Inbox)), fn
-      %{issue_id: ^issue_id, review: %{} = review} ->
-        Enum.find_value([review | List.wrap(Map.get(review, :decisions))], &(Map.get(&1, :question_id) == question_id && Map.get(&1, :comment_id)))
-
-      _other ->
-        nil
-    end)
+  # The request comment the pause projector wrote or found for the question, as the ticket's record
+  # keeps it: no Linear read.
+  defp request_comment_id(repo_key, issue_id, question_id) do
+    case RunStore.get_ticket_state(repo_key, issue_id) do
+      %{projected: %{comments: %{^question_id => %{comment: comment_id}}}} -> comment_id
+      _none -> nil
+    end
   end
 
   @doc """

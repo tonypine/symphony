@@ -8,11 +8,14 @@ defmodule SymphonyElixir.QaSeed do
   holds about them. `load/2` writes `seed.json` through the same calls Symphony's own moves use:
 
   - `repository`: the configured repository key the seed's tickets belong to;
-  - each tracker issue's state becomes its record's phase (`SymphonyElixir.TicketSignals.record_phase/3`);
+  - each tracker issue's state becomes its record's phase (`SymphonyElixir.TicketSignals.record_phase/3`),
+    and the issue is observed into its record as the poll observes it
+    (`SymphonyElixir.TicketObservation.observe/3`), so the Inbox, read from the records, names it;
   - `pauses.symphony` and `pauses.repository`: the Director's Symphony-wide pause and the
     repository's pause, with their reasons (`SymphonyElixir.Pauses.set/3`);
   - `holds`: a ticket on a Blocked hold for access (`reason`, `clearing_condition`), which only a
-    person's Unblock lifts (`SymphonyElixir.Hold.set/5`);
+    person's Unblock lifts (`SymphonyElixir.Hold.set/5`), with the environment reason its pause
+    waits on, as self-heal's access hold sets it (`SymphonyElixir.SelfHeal.environment_reason/1`);
   - `questions`: a decision request on a ticket, which opens its Question and sets its Needs Decision
     hold (`SymphonyElixir.DecisionRequest.ask/4`, in its words: `title`, `question`, `why`,
     `if_unanswered`, `recommendation_reason`, `options`);
@@ -31,8 +34,9 @@ defmodule SymphonyElixir.QaSeed do
 
   require Logger
 
-  alias SymphonyElixir.{DecisionRequest, Hold, Pauses, RunStore, TicketPullRequest, TicketSignals, Tracker}
+  alias SymphonyElixir.{DecisionRequest, Hold, Pauses, RunStore, SelfHeal, TicketObservation}
   alias SymphonyElixir.PrDecision.Facts
+  alias SymphonyElixir.{TicketPullRequest, TicketSignals, Tracker}
 
   @director %{kind: :person, name: "Director"}
   @ci %{"green" => :green, "red" => :red, "pending" => :pending}
@@ -71,6 +75,7 @@ defmodule SymphonyElixir.QaSeed do
          {:ok, repo_key} <- repository(seed),
          :ok <- each(issues, &phase(repo_key, &1)),
          :ok <- pauses(repo_key, Map.get(seed, "pauses", %{})),
+         :ok <- each(issues, &observe(repo_key, tracker, now, &1)),
          :ok <- each(Map.get(seed, "holds", []), &hold(repo_key, tracker, &1)),
          :ok <- each(Map.get(seed, "questions", []), &question(repo_key, tracker, &1)),
          :ok <- each(Map.get(seed, "runs", []), &run(dir, repo_key, tracker, now, &1)),
@@ -108,6 +113,17 @@ defmodule SymphonyElixir.QaSeed do
   # A project or a team of the tracker's file, not an issue.
   defp phase(_repo_key, _entry), do: :ok
 
+  defp observe(repo_key, tracker, now, %{"identifier" => identifier, "state" => _state}) do
+    with {:ok, issue} <- issue(tracker, identifier) do
+      case TicketObservation.observe(repo_key, issue, now: now) do
+        {:ok, _outcome} -> :ok
+        {:error, reason} -> {:error, {{:observe, identifier}, reason}}
+      end
+    end
+  end
+
+  defp observe(_repo_key, _tracker, _now, _entry), do: :ok
+
   defp pauses(repo_key, pauses) do
     with :ok <- pause(:symphony, Pauses.dispatch_reason(Map.get(pauses, "symphony")), Map.has_key?(pauses, "symphony")) do
       pause({:repository, repo_key}, Pauses.repository_reason(Map.get(pauses, "repository")), Map.has_key?(pauses, "repository"))
@@ -126,7 +142,16 @@ defmodule SymphonyElixir.QaSeed do
   defp hold(repo_key, tracker, %{"issue" => identifier} = entry) do
     with {:ok, issue} <- issue(tracker, identifier) do
       attrs = %{reason: entry["reason"], clearing_condition: entry["clearing_condition"], waits_on: %{type: "access", keys: []}}
-      tagged(Hold.set(repo_key, issue.id, :blocked, attrs), {:hold, identifier})
+      reason = Map.put(SelfHeal.environment_reason("access"), :text, entry["reason"])
+
+      # The pause is the one writer's already: nothing for the backfill from the holds to convert.
+      with :ok <- Hold.set(repo_key, issue.id, :blocked, attrs),
+           {:ok, _pause} <- Pauses.set({:ticket, repo_key, issue.id}, reason),
+           :ok <- RunStore.update_ticket_state(repo_key, issue.id, %{pause_backfilled_at: DateTime.utc_now()}) do
+        :ok
+      else
+        {:error, reason} -> {:error, {{:hold, identifier}, reason}}
+      end
     end
   end
 

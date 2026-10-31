@@ -4,7 +4,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   import Plug.Conn
   import Plug.Test
 
-  alias SymphonyElixir.{DirectorMoves, Hold, SubIssueWait}
+  alias SymphonyElixir.{DirectorMoves, Hold, RunStore, SubIssueWait, TicketState}
   alias SymphonyElixirWeb.ControlApiController
 
   defmodule UnwritableStore do
@@ -125,10 +125,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
 
     :ok = SymphonyElixir.DecisionRequest.ask(%{id: "held", state: "In Progress", repo_key: "default"}, request, [])
     [%{id: id}] = SymphonyElixir.Questions.open({:ticket, "default", "held"})
-    inbox = :"control_api_inbox_#{System.unique_integer([:positive])}"
-    :persistent_term.put({SymphonyElixir.Inbox, :items, inbox}, [%{issue_id: "held", review: %{comment_id: "comment-5", question_id: id}}])
-    on_exit(fn -> :persistent_term.erase({SymphonyElixir.Inbox, :items, inbox}) end)
-    moves = Keyword.put(moves, :inbox, inbox)
+    project_comment("held", id, "comment-5")
 
     conn = post(:decide, %{"issue_identifier" => "MOT-60", "question_id" => id, "picks" => [%{"question" => "Add it?", "answer" => "Leave it"}]}, moves)
 
@@ -136,8 +133,8 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert_received {:memory_tracker_reply, "held", "comment-5", _body}
     assert %{state: :answered, answer: %{option: 2}} = SymphonyElixir.Questions.find({:ticket, "default", "held"}, id)
 
-    # A plan's pick naming its Question goes under the request the plan's row lists for it.
-    :persistent_term.put({SymphonyElixir.Inbox, :items, inbox}, [%{issue_id: "plan", review: %{decisions: [%{comment_id: "comment-8", question_id: "q-plan"}]}}])
+    # A plan's pick naming its Question goes under the request the plan's record names for it.
+    project_comment("plan", "q-plan", "comment-8")
     picks = [%{"question" => "Where?", "answer" => "In the checkout", "question_id" => "q-plan"}]
 
     assert post(:decisions, %{"issue_identifier" => "MOT-30", "picks" => picks}, moves).status == 200
@@ -327,5 +324,12 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   defp error(conn) do
     %{"error" => %{"code" => code, "message" => message}} = Jason.decode!(conn.resp_body)
     {conn.status, code, message}
+  end
+
+  # The request comment the pause projector wrote for the Question, as the ticket's record keeps it.
+  defp project_comment(issue_id, question_id, comment_id) do
+    record = RunStore.get_ticket_state("default", issue_id) || TicketState.new("default", issue_id)
+    comments = %{question_id => %{comment: comment_id, reply: nil}}
+    :ok = RunStore.put_ticket_state(%{record | projected: %{labels: [], section: nil, comments: comments}})
   end
 end

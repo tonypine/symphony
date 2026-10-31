@@ -31,6 +31,7 @@ defmodule SymphonyElixir.PlanBrief do
   alias SymphonyElixir.HumanActions.Collector
   alias SymphonyElixir.Inbox.{Item, ReviewBrief}
   alias SymphonyElixir.Linear.{Client, Usage, Webhook}
+  alias SymphonyElixir.Tracker.Memory
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @timeout_ms 15_000
@@ -88,7 +89,8 @@ defmodule SymphonyElixir.PlanBrief do
 
   @doc """
   Reads the plan of `ticket` from Linear and stores it on the record (see the moduledoc). Returns the
-  brief stored, `:skipped` when the repo's tracker is not Linear (nothing is written), or the
+  brief stored, `:skipped` when the repo's tracker is neither Linear nor a memory tracker with an
+  issues file, which is read in Linear's place (nothing is written), or the
   reason the capture failed, which the record keeps in `plan_brief_error`.
 
   `opts`: `:linear_client` (`(query, variables, opts) -> {:ok, body} | {:error, reason}`, default
@@ -104,6 +106,14 @@ defmodule SymphonyElixir.PlanBrief do
       {:ok, %{tracker: %{kind: "linear"}} = settings} ->
         result =
           with {:ok, node} <- read(issue_id, opts),
+               do: plan(node, repo_key, settings, now)
+
+        store(repo_key, issue_id, result)
+
+      # A memory tracker's issues file is a fake Linear (a QA server's seed): its issue is read there.
+      {:ok, %{tracker: %{kind: "memory", memory_issues_file: path}} = settings} when is_binary(path) ->
+        result =
+          with {:ok, node} <- memory_node(repo_key, issue_id),
                do: plan(node, repo_key, settings, now)
 
         store(repo_key, issue_id, result)
@@ -245,6 +255,13 @@ defmodule SymphonyElixir.PlanBrief do
       {:ok, %{"data" => %{"issue" => nil}}} -> {:error, :issue_not_found}
       {:ok, body} -> {:error, {:unexpected_response, body}}
       {:error, _reason} = error -> error
+    end
+  end
+
+  defp memory_node(repo_key, issue_id) do
+    case Enum.find(Memory.issue_nodes(%{name: repo_key}), &(&1["id"] == issue_id)) do
+      %{} = node -> {:ok, node}
+      nil -> {:error, :issue_not_found}
     end
   end
 
