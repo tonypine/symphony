@@ -273,7 +273,9 @@ defmodule SymphonyElixir.QaVerificationTest do
   defp fix_waits(issue_id) do
     case Pauses.get({:ticket, @repo_key, issue_id}) do
       {:ok, %{reasons: reasons}} ->
-        for %{waits_on: %{identifier: identifier}} = reason <- reasons, Pauses.ticket_source(reason) == :fix_ticket, do: identifier
+        for %{waits_on: %{identifier: identifier}} = reason <- reasons,
+            Pauses.ticket_source(reason) == :fix_ticket,
+            do: identifier
 
       _none ->
         []
