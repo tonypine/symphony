@@ -65,7 +65,7 @@ defmodule SymphonyElixir.HumanActionsTest do
       settings_fun: fn -> %Schema{} end,
       repos: fn -> {:ok, [:repo]} end,
       name: {:test, make_ref()},
-      collect: fn _repos, _opts -> {:ok, collected(Agent.get(Keyword.fetch!(opts, :actions), & &1)), []} end,
+      collect: fn _repos, _opts -> {:ok, collected(Agent.get(Keyword.fetch!(opts, :actions), & &1))} end,
       linear_client: linear(test_pid, Keyword.get(opts, :previous, no_updates())),
       now_ms: fn -> Agent.get(clock, & &1) end,
       notify: fn event, attrs -> send(test_pid, {:notified, event, attrs}) end
@@ -190,7 +190,7 @@ defmodule SymphonyElixir.HumanActionsTest do
     refute_received {:posted, _input}
 
     # A project read with no actions and no earlier update from Symphony stays quiet too.
-    collect = fn _repos, _opts -> {:ok, %{"project-1" => %{project: @project, actions: []}}, []} end
+    collect = fn _repos, _opts -> {:ok, %{"project-1" => %{project: @project, actions: []}}} end
     state(actions: start_actions([]), collect: collect) |> HumanActions.run_once()
     assert_received {:recovered, "project-1"}
     refute_received {:posted, _input}
@@ -300,22 +300,72 @@ defmodule SymphonyElixir.HumanActionsTest do
     assert :ok = HumanActions.refresh(:"not_running_#{System.unique_integer([:positive])}")
   end
 
-  test "keeps the tickets waiting on a person from its last read" do
-    name = {:test, make_ref()}
-    waiting = [%{issue_id: "issue-1", identifier: "TP-1", kind: :pr}]
-    assert HumanActions.waiting_on_you(name) == []
+  test "lists the open questions on the records, and drops one answered in the Director without a Linear read" do
+    question = fn id, title ->
+      %{
+        id: id,
+        asked_by: %{kind: :run, name: "Implementation run", run_id: "run-1"},
+        title: title,
+        question: "#{title}?",
+        why: "Releases fail.",
+        if_unanswered: "Releases stay unsigned.",
+        unblocks: nil,
+        options: [%{label: "Add it", effect: "Releases sign again.", good: [], cost: [], risk: [], recommended?: true, unlocks: []}],
+        recommendation_reason: "One-time setup.",
+        state: :open,
+        asked_at: ~U[2026-10-20 10:00:00Z]
+      }
+    end
 
-    state = state(actions: start_actions([]), name: name, collect: fn _repos, _opts -> {:ok, %{}, waiting} end)
+    record = %{
+      repo_key: "shop",
+      issue_id: "id-SHOP-1",
+      issue_identifier: "SHOP-1",
+      title: "Sign the release builds",
+      url: "https://linear.app/acme/issue/SHOP-1",
+      phase: "In Progress",
+      project: %{id: @project.id, name: @project.name},
+      questions: [question.("q-signing", "Add the signing secret"), question.("q-notary", "Add the notary key")]
+    }
+
+    {:ok, records} = Agent.start_link(fn -> [record] end)
+    clock = start_clock(0)
+
+    state =
+      [actions: start_actions([]), clock: clock, repos: fn -> {:ok, [%{name: "shop"}]} end, records: fn -> Agent.get(records, & &1) end]
+      |> state()
+      |> then(&%{&1 | opts: Keyword.delete(&1.opts, :collect)})
+
+    state = HumanActions.run_once(state)
+    assert_received {:recovered, "project-1"}
+    assert_received {:posted, %{"body" => body}}
+    assert body =~ "**2 actions need you.**"
+    assert body =~ "### 1. Add the notary key"
+    assert body =~ "**Decide:** Add the signing secret?"
+    assert body =~ "1. **Add it** (recommended): Releases sign again."
+    drain_callers()
+
+    # The Director answers one: the next update lists only the other, and reads nothing from Linear.
+    answer = %{text: "Add it", option: 1, by: %{kind: :person, name: "Director"}, at: ~U[2026-10-20 11:00:00Z], scope: :ticket}
+    Agent.update(records, fn [record] -> [%{record | questions: [Map.merge(hd(record.questions), %{state: :answered, answer: answer}) | tl(record.questions)]}] end)
+    Agent.update(clock, &(&1 + 20 * @minute))
+
     HumanActions.run_once(state)
-    assert HumanActions.waiting_on_you(name) == waiting
+    refute_received {:recovered, _project_id}
+    # The post is its one Linear request.
+    assert_received {:caller, _caller}
+    refute_received {:caller, _caller}
+    assert_received {:posted, %{"body" => "**1 action needs you.**" <> rest}}
+    assert rest =~ "Add the notary key"
+    refute rest =~ "Add the signing secret"
+  end
 
-    # The same list again, then a failed read, keep it.
-    HumanActions.run_once(state)
-    capture_log(fn -> HumanActions.run_once(%{state | opts: Keyword.put(state.opts, :collect, fn _repos, _opts -> {:error, :linear_down} end)}) end)
-    assert HumanActions.waiting_on_you(name) == waiting
-
-    HumanActions.run_once(%{state | opts: Keyword.put(state.opts, :collect, fn _repos, _opts -> {:ok, %{}, []} end)})
-    assert HumanActions.waiting_on_you(name) == []
+  defp drain_callers do
+    receive do
+      {:caller, _caller} -> drain_callers()
+    after
+      0 -> :ok
+    end
   end
 
   test "is on for a Linear tracker with human_actions.enabled" do
