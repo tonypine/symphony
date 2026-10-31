@@ -2,33 +2,34 @@ defmodule SymphonyElixir.PrWatch.Competitors do
   @moduledoc """
   A conflicting pull request that waits on the open pull requests changing the same files (rules
   R14a and R15, the action `wait_for_competitors`) waits as a visible dependency, not in Symphony's
-  memory: a `Blocked` hold of the landing kind on its ticket (`SymphonyElixir.BlockedHold`), and a
-  Linear blocked-by link from each competitor's ticket.
+  memory: its ticket's pause (`SymphonyElixir.Pauses`, the one writer) has one landing reason per
+  competitor it waits on (`landing_reasons/1`), and each competitor's ticket gets a Linear
+  blocked-by link.
 
     * `competing/3` is the fact `competing`: every open pull request of the repository that shares
       a file with the ticket's, with its ticket when Symphony watches it. It leaves out a pull
       request out of the race (on a hold, or idle two hours by `SymphonyElixir.LandingOrder`'s
       rule), one whose link would close a cycle (`closes_cycle?/3`), and one a person released the
       ticket from (`Unblock`). A forced ticket never waits, so it has none.
-    * `wait/4` applies the wait: the hold, then a link from each competitor's ticket that Linear
-      doesn't have yet. A competitor with no ticket (a person's pull request) gets no link; the
-      hold names it by number and title. The links Symphony added are recorded on the ticket's
+    * `wait/4` applies the wait: the reasons, then a link from each competitor's ticket that Linear
+      doesn't have yet. A competitor with no ticket (a person's pull request) gets no link; its
+      reason names it by number and title. The links Symphony added are recorded on the ticket's
       watch record (`links`), so it only ever removes its own.
     * `settle/5` judges the wait on each read of the watcher. A competitor that landed (its ticket
       terminal, its pull request merged) stays linked, as history. One that left the race (its pull
       request closed, on a hold, idle two hours, or no longer sharing a file) is unlinked when
-      Symphony added the link. The hold clears once no competitor is left; a wait that stepped
+      Symphony added the link. The wait ends once no competitor is left; a wait that stepped
       behind its competitors (R15) then restarts the conflict count.
     * `release/3` is a person's `Unblock`: Symphony's links are removed and the ticket no longer
       waits on those pull requests while they stay open. `leave/3` ends the wait of a ticket the
       watcher stops watching.
 
-  Beside the hold, the ticket's pause (`SymphonyElixir.Pauses`, the one writer) has one reason per
-  competitor it waits on (`SymphonyElixir.BlockedHold.landing_reasons/1`): "Waiting for TP-1 to land:
-  it changes the same files". `wait/4` sets them; `settle/5` lines them up with the competitors
-  still racing, so a competitor that lands or leaves loses its reason and the last goes with the
-  hold; `release/3` and `leave/3` clear every one, and no other reason. Each write is best-effort and
-  made after the hold's: the next read makes it again.
+  A landing reason reads "Waiting for TP-1 to land: it changes the same files" for a competitor with
+  a ticket, and "Waiting for PR #12 (Title) to land: it changes the same files" for one without;
+  the Director may release either (`Unblock`). `wait/4` sets them; `settle/5` lines them up with the
+  competitors still racing, so a competitor that lands or leaves loses its reason; `release/3` and
+  `leave/3` clear every one, and no other reason. The wait as the watcher reads it (`waiting/1`) is
+  the pause's landing reasons, worded as one line naming every competitor (`landing_text/1`).
 
   The fields of a link record: the competitor's `issue_id`, `issue_identifier`, `pr_number`,
   `pr_url`, `title` and shared `files`; its `head_sha` and `progress_at` (since when it hasn't
@@ -38,11 +39,13 @@ defmodule SymphonyElixir.PrWatch.Competitors do
 
   require Logger
 
-  alias SymphonyElixir.{BlockedHold, Hold, LandingOrder, Pauses, RunStore, TicketState, Tracker}
+  alias SymphonyElixir.{LandingOrder, Pauses, RunStore, TicketState}
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Pauses.Dependencies
 
   @listed_files 10
-  @director %{kind: :person, name: "Director"}
+  @max_title 120
+  @pull_request_condition ~r/\Apull_request:\d+\z/
 
   @typedoc "A competitor a wait recorded (see the moduledoc)."
   @type link :: %{
@@ -85,8 +88,96 @@ defmodule SymphonyElixir.PrWatch.Competitors do
           optional(:files) => [String.t()] | nil
         }
 
-  @typedoc "What `settle/5` left: the landing hold (nil once cleared), the links to keep, and whether the conflict count restarts."
-  @type settled :: %{hold: map() | nil, links: [link()], restart_conflicts: boolean()}
+  @typedoc """
+  A ticket's wait on its competitors as the watcher reads it (`waiting/1`): one line naming every
+  competitor, and since when it waits.
+  """
+  @type wait :: %{reason: String.t(), set_at: DateTime.t() | nil}
+
+  @typedoc "What `settle/5` left: the wait (nil once it ended), the links to keep, and whether the conflict count restarts."
+  @type settled :: %{wait: wait() | nil, links: [link()], restart_conflicts: boolean()}
+
+  @doc """
+  The pause reasons of a wait on `competitors`, one each, all releasable by the Director's
+  `Unblock`: a competitor with a ticket is a `:ticket` reason, `Waiting for TP-1 to land: it changes
+  the same files`; a person's pull request with no ticket an `:environment` reason, `Waiting for PR
+  #12 (Title) to land: it changes the same files`.
+  """
+  @spec landing_reasons([map()]) :: [Pauses.reason_input()]
+  def landing_reasons(competitors) do
+    competitors
+    |> Enum.flat_map(&landing_reason/1)
+    |> Enum.uniq_by(&{&1.kind, &1.waits_on})
+  end
+
+  @doc "Whether a pause reason is one a wait on competitors sets (`landing_reasons/1`), whoever wrote it."
+  @spec landing_reason?(Pauses.reason() | term()) :: boolean()
+  def landing_reason?(%{kind: :ticket} = reason), do: Pauses.ticket_source(reason) == :landing
+
+  def landing_reason?(%{kind: :environment, waits_on: %{condition: condition}}) when is_binary(condition),
+    do: condition =~ @pull_request_condition
+
+  def landing_reason?(_reason), do: false
+
+  @doc """
+  The wait on `competitors` in one line: `Waiting on TP-1 and PR #12 (Title) to land: they change the
+  same files (a.ex, b.md)`.
+  """
+  @spec landing_text([map(), ...]) :: String.t()
+  def landing_text([_ | _] = competitors) do
+    files = competitors |> Enum.flat_map(&Map.get(&1, :files, [])) |> Enum.uniq() |> Enum.take(@listed_files) |> Enum.join(", ")
+    "Waiting on #{Enum.map_join(competitors, " and ", &competitor_name/1)} to land: they change the same files (#{files})"
+  end
+
+  @doc """
+  The ticket's wait on its competitors, from its record (a normalised `SymphonyElixir.TicketState`):
+  nil when its pause has no landing reason, else the competitors its watch record waits on in one
+  line (`landing_text/1`; the reasons' own lines when it names none), since the first reason was set.
+  """
+  @spec waiting(TicketState.t() | nil) :: wait() | nil
+  def waiting(%{pause: %{reasons: reasons}} = record) do
+    case Enum.filter(reasons, &landing_reason?/1) do
+      [] ->
+        nil
+
+      [first | _rest] = landing ->
+        links = for %{released: false} = link <- (record.pr_watch && record.pr_watch.links) || [], do: link
+        reason = if links == [], do: Enum.map_join(landing, "; ", & &1.text), else: landing_text(links)
+        %{reason: reason, set_at: first.set_at}
+    end
+  end
+
+  def waiting(_record), do: nil
+
+  defp landing_reason(competitor) do
+    identifier = Map.get(competitor, :issue_identifier)
+    number = Map.get(competitor, :pr_number)
+
+    cond do
+      Pauses.identifier?(identifier) ->
+        [Map.put(Pauses.ticket_reason(:landing, identifier), :releasable, true)]
+
+      is_integer(number) ->
+        [%{kind: :environment, waits_on: %{condition: "pull_request:#{number}"}, text: pull_request_text(competitor), releasable: true}]
+
+      true ->
+        []
+    end
+  end
+
+  defp pull_request_text(%{pr_number: number} = competitor) do
+    name =
+      case Map.get(competitor, :title) do
+        title when is_binary(title) and title != "" -> "PR ##{number} (#{String.slice(title, 0, @max_title)})"
+        _none -> "PR ##{number}"
+      end
+
+    "Waiting for #{name} to land: it changes the same files"
+  end
+
+  defp competitor_name(%{issue_identifier: identifier}) when is_binary(identifier), do: identifier
+  defp competitor_name(%{pr_number: number, title: title}) when is_binary(title), do: "PR ##{number} (#{title})"
+  defp competitor_name(%{pr_number: number}), do: "PR ##{number}"
 
   @doc "The fact `competing` for `own` (see the moduledoc), ordered by pull request number."
   @spec competing(own(), [map()], race()) :: [map()]
@@ -150,14 +241,13 @@ defmodule SymphonyElixir.PrWatch.Competitors do
   Applies a wait on `competitors` (see the moduledoc). `opts`: `:repo_key`, `:now`, `:links` (the
   ones recorded so far), and `:tracker`, `:store` and `:linker` (the Linear blocked-by links,
   `SymphonyElixir.Linear.Adapter` by default). A link Linear refuses is logged and the wait holds
-  without it; a hold the store refuses is the error.
+  without it; a reason the store refuses is the error.
   """
   @spec wait(Issue.t(), [map(), ...], boolean(), keyword()) :: {:ok, [link()]} | {:error, term()}
   def wait(%Issue{} = issue, [_ | _] = competitors, step_behind, opts) do
     repo_key = Keyword.fetch!(opts, :repo_key)
 
-    with :ok <- Hold.set(repo_key, issue.id, :blocked, BlockedHold.landing_attrs(competitors), hold_opts(opts)) do
-      sync_pause(repo_key, issue.id, competitors)
+    with :ok <- sync_pause(repo_key, issue.id, competitors) do
       recorded = Keyword.get(opts, :links, [])
       existing = existing_blockers(issue)
       links = Enum.map(competitors, &link(&1, issue, {existing, recorded}, step_behind, opts))
@@ -200,32 +290,33 @@ defmodule SymphonyElixir.PrWatch.Competitors do
   end
 
   @doc """
-  Judges the ticket's wait on one read (see the moduledoc). `hold` is the ticket's `Blocked` hold
-  (nil without one); a hold of another kind ends the wait, so every competitor left is unlinked.
+  Judges the ticket's wait on one read (see the moduledoc). `wait` is the ticket's wait on its
+  competitors (`waiting/1`, nil without one); with none, every competitor left is unlinked.
   `opts`: `:repo_key`, `:terminal_states`, `:tracker`, `:store` and `:linker`. A link Linear
   refuses to remove keeps its competitor waited on, and the next read tries again.
   """
-  @spec settle(Issue.t(), map() | nil, [link()], race(), keyword()) :: settled()
-  def settle(%Issue{} = issue, hold, links, race, opts) do
+  @spec settle(Issue.t(), wait() | nil, [link()], race(), keyword()) :: settled()
+  def settle(%Issue{} = issue, wait, links, race, opts) do
     {released, waiting} = Enum.split_with(links, & &1.released)
     released = Enum.filter(released, &Map.has_key?(race.pulls, &1.pr_number))
-    waiting? = BlockedHold.landing?(hold)
+    waiting? = wait != nil
     judged = Enum.map(waiting, &judge(&1, waiting?, issue, race, opts))
     left = for {:left, link} <- judged, do: link
     {unlinked, stuck} = Enum.split_with(left, &unlink(&1, issue, opts))
     remaining = for({:racing, link} <- judged, do: link) ++ stuck
     log_unlinked(issue, unlinked)
 
-    case BlockedHold.landing_desired(hold, remaining) do
-      :clear ->
-        clear(issue, hold, released, links, Enum.any?(waiting, & &1.step_behind), opts)
+    cond do
+      not waiting? ->
+        sync_pause(Keyword.fetch!(opts, :repo_key), issue.id, [])
+        %{wait: nil, links: released ++ remaining, restart_conflicts: false}
 
-      {:set, attrs} ->
-        renew(issue, hold, attrs, {released, remaining}, opts)
+      remaining == [] ->
+        clear(issue, wait, released, links, Enum.any?(waiting, & &1.step_behind), opts)
 
-      :none ->
-        sync_pause(Keyword.fetch!(opts, :repo_key), issue.id, if(waiting?, do: remaining, else: []))
-        %{hold: if(waiting?, do: hold), links: released ++ remaining, restart_conflicts: false}
+      true ->
+        sync_pause(Keyword.fetch!(opts, :repo_key), issue.id, remaining)
+        %{wait: %{wait | reason: landing_text(remaining)}, links: released ++ remaining, restart_conflicts: false}
     end
   end
 
@@ -278,52 +369,43 @@ defmodule SymphonyElixir.PrWatch.Competitors do
 
   defp unlink(_link, _issue, _opts), do: true
 
-  # A hold the store won't clear keeps every competitor recorded, so the next read judges them again.
-  defp clear(issue, hold, released, links, step_behind?, opts) do
-    case Hold.clear(Keyword.fetch!(opts, :repo_key), issue.id, :blocked, hold_opts(opts)) do
+  # Reasons the store won't clear keep every competitor recorded, so the next read judges them again.
+  defp clear(issue, wait, released, links, step_behind?, opts) do
+    case sync_pause(Keyword.fetch!(opts, :repo_key), issue.id, []) do
       :ok ->
-        sync_pause(Keyword.fetch!(opts, :repo_key), issue.id, [])
-        Logger.info("PR watch cleared the landing hold of issue_id=#{issue.id} issue_identifier=#{issue.identifier}: no competing pull request is left")
-        %{hold: nil, links: released, restart_conflicts: step_behind?}
+        Logger.info("PR watch ended the landing wait of issue_id=#{issue.id} issue_identifier=#{issue.identifier}: no competing pull request is left")
+        %{wait: nil, links: released, restart_conflicts: step_behind?}
 
       {:error, reason} ->
-        Logger.warning("PR watch could not clear the landing hold of issue_id=#{issue.id} issue_identifier=#{issue.identifier}: #{inspect(reason)}")
-        %{hold: hold, links: links, restart_conflicts: false}
-    end
-  end
-
-  defp renew(issue, hold, attrs, {released, remaining}, opts) do
-    repo_key = Keyword.fetch!(opts, :repo_key)
-
-    case Hold.set(repo_key, issue.id, :blocked, attrs, hold_opts(opts)) do
-      :ok ->
-        sync_pause(repo_key, issue.id, remaining)
-        %{hold: Map.merge(hold, attrs), links: released ++ remaining, restart_conflicts: false}
-
-      {:error, _reason} ->
-        %{hold: hold, links: released ++ remaining, restart_conflicts: false}
+        Logger.warning("PR watch could not end the landing wait of issue_id=#{issue.id} issue_identifier=#{issue.identifier}: #{inspect(reason)}")
+        %{wait: wait, links: links, restart_conflicts: false}
     end
   end
 
   # The pause follows the wait: a reason for each competitor waited on that it lacks is set, and a
-  # landing reason (`BlockedHold.landing_reason?/1`, live or backfilled) for one no longer waited on is
-  # cleared. Any other reason is left as it is.
+  # landing reason (`landing_reason?/1`, live or backfilled) for one no longer waited on is cleared.
+  # Any other reason is left as it is. The first write the store refuses is the error; the next read
+  # makes it again.
   defp sync_pause(repo_key, issue_id, competitors, by \\ nil) do
     ticket = {:ticket, repo_key, issue_id}
-    wanted = BlockedHold.landing_reasons(competitors)
+    wanted = landing_reasons(competitors)
     wanted_keys = Enum.map(wanted, &key/1)
     held_keys = ticket |> landing_reasons_held() |> Enum.map(&key/1)
 
-    stale? = &(BlockedHold.landing_reason?(&1) and key(&1) not in wanted_keys)
+    stale? = &(landing_reason?(&1) and key(&1) not in wanted_keys)
 
-    for reason <- wanted, key(reason) not in held_keys, do: Pauses.set(ticket, reason, set_by: BlockedHold.reason_setter(:landing))
-    _ = Pauses.clear_reasons(ticket, stale?, if(by, do: [by: by], else: []))
-    :ok
+    set = for reason <- wanted, key(reason) not in held_keys, do: Pauses.set(ticket, reason, set_by: Dependencies.setter(:landing))
+    cleared = Pauses.clear_reasons(ticket, stale?, if(by, do: [by: by], else: []))
+
+    case Enum.find(set ++ [cleared], &match?({:error, _reason}, &1)) do
+      nil -> :ok
+      error -> error
+    end
   end
 
   defp landing_reasons_held(ticket) do
     case Pauses.get(ticket) do
-      {:ok, %{reasons: reasons}} -> Enum.filter(reasons, &BlockedHold.landing_reason?/1)
+      {:ok, %{reasons: reasons}} -> Enum.filter(reasons, &landing_reason?/1)
       _none -> []
     end
   end
@@ -340,14 +422,14 @@ defmodule SymphonyElixir.PrWatch.Competitors do
   end
 
   @doc """
-  A person's `Unblock` of a landing hold (see the moduledoc): removes the links Symphony added and
+  A person's `Unblock` of a landing wait (see the moduledoc): removes the links Symphony added and
   marks every competitor released, on the ticket's watch record, and clears every landing reason of
   its pause, by the Director. `opts`: `:store` (or `:run_store`) and `:linker`.
   """
   @spec release(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def release(repo_key, issue_id, opts \\ []) do
     store = store(opts)
-    sync_pause(repo_key, issue_id, [], @director)
+    _ = sync_pause(repo_key, issue_id, [], Pauses.director())
 
     with %{} = record <- store.get_ticket_state(repo_key, issue_id),
          %{links: [_ | _] = links} = watch <- TicketState.pr_watch(record) do
@@ -362,18 +444,13 @@ defmodule SymphonyElixir.PrWatch.Competitors do
   end
 
   @doc """
-  Ends the wait of a ticket the watcher no longer watches: its landing hold clears and the links
+  Ends the wait of a ticket the watcher no longer watches: its landing reasons clear and the links
   Symphony added are removed. `record` is its normalised state record.
   """
   @spec leave(String.t(), TicketState.t(), keyword()) :: :ok
   def leave(repo_key, record, opts) do
     issue = %Issue{id: record.issue_id, identifier: record.issue_identifier}
-
-    if BlockedHold.landing?(TicketState.get_hold(record, :blocked)) do
-      _ = Hold.clear(repo_key, record.issue_id, :blocked, hold_opts(opts))
-    end
-
-    sync_pause(repo_key, record.issue_id, [])
+    _ = sync_pause(repo_key, record.issue_id, [])
 
     links = (record.pr_watch && record.pr_watch.links) || []
     log_unlinked(issue, for(%{released: false} = link <- links, unlink(link, issue, opts), do: link))
@@ -418,7 +495,6 @@ defmodule SymphonyElixir.PrWatch.Competitors do
   defp normalize(value) when is_binary(value), do: value |> String.trim() |> String.downcase()
   defp normalize(_value), do: ""
 
-  defp hold_opts(opts), do: [tracker: Keyword.get(opts, :tracker, Tracker), store: store(opts)]
   defp store(opts), do: Keyword.get(opts, :store) || Keyword.get(opts, :run_store, RunStore)
   defp linker(opts), do: Keyword.get(opts, :linker, SymphonyElixir.Linear.Adapter)
 end

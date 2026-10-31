@@ -19,12 +19,11 @@ defmodule SymphonyElixir.SelfHeal do
       ticket (`SymphonyElixir.SelfHeal.Fixer`) — deduplicated: an open fix ticket for the same
       component and the same failure is reused, not filed again, keeping its priority, and the new
       failure is attached to it as evidence; a terminal one, or one for another failure, is not;
-    * links the affected ticket to the fix ticket as blocked-by and gives it a `Blocked` hold
-      waiting on that ticket, with a pause reason beside it that waits on it too
-      (`SymphonyElixir.Pauses`); both lift on their own when the fix goes terminal
-      (`SymphonyElixir.BlockedHold`), or, for a fix merged into the repo the running Symphony was
-      built from, once the running build includes it — no decision request and no check for a
-      person;
+    * links the affected ticket to the fix ticket as blocked-by and pauses it on a reason that
+      waits on that ticket (`SymphonyElixir.Pauses`), which lifts on its own when the fix goes
+      terminal (`SymphonyElixir.Pauses.Dependencies`), or, for a fix merged into the repo the
+      running Symphony was built from, once the running build includes it — no decision request and
+      no check for a person;
     * when a repair has landed and the block recurs, compares the new failure against the last one
       (`compare/2`): a narrowed or otherwise changed failure is progress and earns another attempt,
       and the same failure with no new information escalates to a `Needs Decision` hold, with its
@@ -34,11 +33,10 @@ defmodule SymphonyElixir.SelfHeal do
       than the last one's is a new break, filed in its own repo rather than compared.
 
   A block only a person can clear (`needs_person`: a missing secret, an account, a device this host
-  lacks) never reaches the filing path: it keeps the access hold it always had, which a person
-  lifts. Beside it, the ticket's pause gets an `:environment` reason naming the broken component in
-  plain words (`environment_reason/1`: "The QA machine is not reachable"), which the Director may
-  release. It clears with the hold on `Unblock`, and when a QA pass or an epic review reaches a pass
-  or fail verdict, which shows the environment healthy (`healthy/3`).
+  lacks) never reaches the filing path: the ticket's pause gets an `:environment` reason naming the
+  broken component in plain words (`environment_reason/1`: "The QA machine is not reachable"),
+  which the Director may release. It clears on `Unblock`, and when a QA pass or an epic review
+  reaches a pass or fail verdict, which shows the environment healthy (`healthy/3`).
 
   The QA state sends only the blocks a fix can repair (`SymphonyElixir.QaVerification`): the ones
   the QA tools raise themselves (a refused or unreachable QA host, a tool it lacks, its host-port
@@ -55,8 +53,9 @@ defmodule SymphonyElixir.SelfHeal do
 
   require Logger
 
-  alias SymphonyElixir.{BlockedHold, Config, DecisionRequest, Hold, Pauses, RunStore, TicketState, Verification}
+  alias SymphonyElixir.{Config, DecisionRequest, Pauses, RunStore, TicketState, Verification}
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Selection
@@ -73,13 +72,10 @@ defmodule SymphonyElixir.SelfHeal do
   # coverage — and lands in Symphony (see §Guards "Fix-ticket scope").
   @repo_components [@dev_server]
 
-  @access_type "access"
   @condition_prefix "self_heal:"
   # A backfilled access hold's condition is its reason (`SymphonyElixir.Pauses.Backfill`), which this
-  # module words `QA blocked after <n> attempt(s): ...`.
+  # module worded `QA blocked after <n> attempt(s): ...`.
   @backfilled_access ~r/\AQA blocked after \d+ attempt/
-  @fix_ticket_type "fix_ticket"
-  @blocked_hold :blocked
 
   @typedoc "A blocked run's outcome, as `SymphonyElixir.QaVerification` or `SymphonyElixir.SetupBlock` builds it."
   @type outcome :: map()
@@ -207,7 +203,7 @@ defmodule SymphonyElixir.SelfHeal do
     attempts = Keyword.get(opts, :attempts, 0)
 
     if needs_person?(outcome) do
-      access_hold(issue, repo_key, attempts, outcome, opts)
+      access_pause(issue, repo_key, attempts, outcome)
     else
       reconcile(issue, repo_key, attempts, outcome, opts)
     end
@@ -216,7 +212,7 @@ defmodule SymphonyElixir.SelfHeal do
   def heal(_issue, _opts), do: {:error, :invalid_issue}
 
   @doc """
-  The pause reason of an access hold on `component`'s block: an `:environment` reason the Director
+  The pause reason of a block on `component` only a person can clear: an `:environment` reason the Director
   may release, whose line names the component in plain words.
   """
   @spec environment_reason(String.t()) :: Pauses.reason_input()
@@ -322,7 +318,7 @@ defmodule SymphonyElixir.SelfHeal do
   # A repair landed and the block came back different: that is new information, so the flow earns
   # another attempt. The new failure is recorded — so the next identical one escalates — and
   # attached to the fix ticket the repair came from when the record still names one (the lift that
-  # cleared that repair's hold dropped the pointer, keeping the signature that proves the change).
+  # cleared that repair's reason dropped the pointer, keeping the signature that proves the change).
   # The attempts are bounded per head: once it has used them up, a changed failure escalates too.
   defp revisit(%{attempts: attempts} = ctx, _change) when attempts >= @max_head_attempts do
     escalate(ctx, :out_of_attempts)
@@ -367,31 +363,19 @@ defmodule SymphonyElixir.SelfHeal do
   end
 
   # The block needs a person to hand something over (a secret, an account, a device this host
-  # lacks), so no fix ticket is filed: the access hold pauses the ticket until a person clears it.
-  defp access_hold(issue, repo_key, attempts, outcome, opts) do
-    attrs = %{
-      reason: "QA blocked after #{attempts} attempt(s): #{reason(outcome)}",
-      clearing_condition: "when the access a person grants arrives; a person clears this hold",
-      waits_on: %{type: @access_type, keys: []}
-    }
+  # lacks), so no fix ticket is filed: the ticket's pause waits on the broken component
+  # (`SymphonyElixir.Pauses`, the one writer) until a person releases it.
+  defp access_pause(issue, repo_key, attempts, outcome) do
+    reason = environment_reason(component(outcome))
 
-    case Hold.set(repo_key, issue.id, @blocked_hold, attrs, hold_opts(opts)) do
-      :ok ->
-        pause_on_environment(repo_key, issue, outcome)
-        Logger.warning("QA for #{label(issue)} is blocked and needs a person: #{attrs.reason}")
+    case Pauses.set({:ticket, repo_key, issue.id}, reason, set_by: Dependencies.setter(:fix_ticket)) do
+      {:ok, _pause} ->
+        Logger.warning("QA for #{label(issue)} is blocked and needs a person: QA blocked after #{attempts} attempt(s): #{reason(outcome)}")
         :held
 
       {:error, reason} ->
         {:error, {:self_heal_hold_failed, reason}}
     end
-  end
-
-  # Beside the access hold, the ticket's pause waits on the broken component (`SymphonyElixir.Pauses`,
-  # the one writer). Best-effort, as the hold's ledger writes are.
-  defp pause_on_environment(repo_key, issue, outcome) do
-    reason = environment_reason(component(outcome))
-    _ = Pauses.set({:ticket, repo_key, issue.id}, reason, set_by: BlockedHold.reason_setter(:fix_ticket))
-    :ok
   end
 
   defp fix_ticket(ctx) do
@@ -490,7 +474,7 @@ defmodule SymphonyElixir.SelfHeal do
     end
   end
 
-  # Best-effort: a missing blocked-by link never stops the hold, which is what actually pauses the
+  # Best-effort: a missing blocked-by link never stops the pause, which is what actually holds the
   # ticket and clears when the fix lands.
   defp link(ctx, ticket) do
     case fixer(ctx.opts).block(ctx.issue, ticket, ctx.opts) do
@@ -516,30 +500,19 @@ defmodule SymphonyElixir.SelfHeal do
 
   defp attach(_previous, _issue, _signature, _outcome, _opts), do: :ok
 
+  # The ticket's pause waits on the fix ticket (`SymphonyElixir.Pauses`, the one writer), and
+  # `SymphonyElixir.Pauses.Dependencies` lifts it once the fix is terminal.
   defp fix_ticket_hold(ctx, identifier) do
-    attrs = %{
-      reason: "waiting on fix ticket #{identifier} for the #{ctx.component} block: #{summary(ctx)}",
-      clearing_condition: "when the fix ticket #{identifier} is terminal",
-      waits_on: %{type: @fix_ticket_type, keys: [identifier]}
-    }
+    reason = Pauses.ticket_reason(:fix_ticket, identifier)
 
-    case Hold.set(ctx.repo_key, ctx.issue.id, @blocked_hold, attrs, hold_opts(ctx.opts)) do
-      :ok ->
-        pause_on_fix_ticket(ctx, identifier)
-        Logger.warning("Self-heal holds #{label(ctx.issue)} on #{identifier} for its #{ctx.component} block; the ticket is Blocked")
+    case Pauses.set({:ticket, ctx.repo_key, ctx.issue.id}, reason, set_by: Dependencies.setter(:fix_ticket)) do
+      {:ok, _pause} ->
+        Logger.warning("Self-heal holds #{label(ctx.issue)} on #{identifier} for its #{ctx.component} block: #{summary(ctx)}; the ticket is Blocked")
         :ok
 
       {:error, reason} ->
         {:error, reason}
     end
-  end
-
-  # Beside the hold, the ticket's pause waits on the fix ticket (`SymphonyElixir.Pauses`, the one
-  # writer). Best-effort, as the hold's ledger writes are: the Blocked hold's next sync sets a reason
-  # its hold waits on and the pause lacks (`SymphonyElixir.BlockedHold`).
-  defp pause_on_fix_ticket(ctx, identifier) do
-    _ = Pauses.set({:ticket, ctx.repo_key, ctx.issue.id}, Pauses.ticket_reason(:fix_ticket, identifier), set_by: BlockedHold.reason_setter(:fix_ticket))
-    :ok
   end
 
   # The block in words when the outcome gives them (`SymphonyElixir.SetupBlock`), else its signature.
@@ -769,8 +742,6 @@ defmodule SymphonyElixir.SelfHeal do
       :error -> Config.repo_key_or_nil()
     end
   end
-
-  defp hold_opts(opts), do: Keyword.take(opts, [:store, :tracker])
 
   defp store(opts), do: Keyword.get(opts, :store, RunStore)
 

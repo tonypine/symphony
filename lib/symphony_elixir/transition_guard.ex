@@ -46,6 +46,8 @@ defmodule SymphonyElixir.TransitionGuard do
   @run %{kind: :run, name: "The run"}
   @unblock_option "Unblock and run again"
   @keep_option "Keep it paused"
+  # The block report's reason when its question can't be asked: the Director releases it with Unblock.
+  @block_report_reason %{kind: :environment, waits_on: %{condition: "block_report"}, text: "The run reported a block", releasable: true}
 
   @typedoc "A named transition the machine can perform."
   @type signal :: atom()
@@ -343,18 +345,20 @@ defmodule SymphonyElixir.TransitionGuard do
   `Plan Review` is the plan handoff's: only a plan parent (`ctx`'s `:plan_parent?`) may name it.
 
   An agent asking to park its issue in `Backlog` while it is `In Progress` or `Rework` is not a
-  move: the guard returns `{:hold, :blocked, attrs}`, which pauses the ticket in its phase with a
-  recorded reason instead of moving it (the Backlog escape hatch is retired). When the issue has
-  open blocked-by blockers (`ctx`'s `:open_blockers`), the hold waits on them as a `dependency`
-  hold, which `SymphonyElixir.BlockedHold` lifts on its own once they are all terminal; without one
-  it is an `access` hold, which a person lifts with `Unblock`.
+  move: the guard pauses the ticket in its phase with a recorded reason instead of moving it (the
+  Backlog escape hatch is retired), and returns `{:hold, :blocked, attrs}`, the block it reported:
+  its `reason`, what clears it and what it waits on. When the issue has open blocked-by blockers
+  (`ctx`'s `:open_blockers`), the block waits on them (`dependency`), and
+  `SymphonyElixir.Pauses.Dependencies` lifts it on its own once they are all terminal; without one
+  it waits on a person's `Unblock` (`access`).
 
   With `ctx`'s `:ticket` (the issue as `SymphonyElixir.Pauses` names it), the block report pauses
-  the ticket through the one writer before the hold is set: one `:ticket` reason per open blocker
-  ("Waiting for TP-12 to finish"), set by the run; with no blocker, the question
-  `block_report_question/1` asks (`SymphonyElixir.Questions`), which the access hold then names
-  (`waits_on.question_id`), so the hold and the question are cleared together and the Director's
-  Unblock answers it "#{@unblock_option}". A question that can't be asked leaves the hold as it was.
+  the ticket through the one writer: one `:ticket` reason per open blocker ("Waiting for TP-12 to
+  finish"), set by the run; with no blocker, the question `block_report_question/1` asks
+  (`SymphonyElixir.Questions`), named in `waits_on.question_id`, which the Director's Unblock
+  answers "#{@unblock_option}". A question that can't be asked pauses the ticket on an
+  `:environment` reason the Director may release instead ("The run reported a block"). A pause the
+  store refuses is the error; without `:ticket` the guard writes nothing.
 
   `ctx` carries `:settings`, `:from_state` (the issue's current state), `:plan_parent?` (the
   issue carries the `plan` label, so it is an epic parent), `:open_blockers` (the identifiers of
@@ -362,14 +366,11 @@ defmodule SymphonyElixir.TransitionGuard do
   `:issue_identifier`, which names the ticket in the question.
   """
   @spec resolve_request(map(), context()) ::
-          {:ok, map()} | {:hold, :blocked | :needs_decision, map()} | {:error, term()}
+          {:ok, map()} | {:hold, :blocked, map()} | {:error, term()}
   def resolve_request(%{"name" => state_name} = state, ctx) do
     settings = Map.fetch!(ctx, :settings)
 
     case hold_request(state_name, ctx) do
-      {:hold, kind, attrs} ->
-        {:hold, kind, attrs}
-
       :not_a_hold ->
         with :ok <- refuse_retired_state(state_name),
              :ok <- refuse_plan_review_entry(state_name, ctx, settings),
@@ -381,23 +382,27 @@ defmodule SymphonyElixir.TransitionGuard do
              :ok <- refuse_waiting_state(state, settings) do
           {:ok, state}
         end
+
+      held_or_refused ->
+        held_or_refused
     end
   end
 
   # The Backlog escape hatch is retired: an agent asking to park an issue it is working in Backlog
-  # has hit a block, so the guard turns the request into a Blocked hold instead of a state move —
-  # the ticket keeps its phase. Every other request is not a hold.
+  # has hit a block, so the guard pauses the ticket instead of moving it — the ticket keeps its
+  # phase. Every other request is not a hold.
   defp hold_request(state_name, ctx) do
     if state_name_matches?(state_name, @backlog_state) and running_phase?(Map.get(ctx, :from_state)) do
-      {:hold, :blocked, ctx |> Map.get(:open_blockers, []) |> block_report_attrs() |> pause_block_report(ctx)}
+      with {:ok, attrs} <- ctx |> Map.get(:open_blockers, []) |> block_report_attrs() |> pause_block_report(ctx),
+           do: {:hold, :blocked, attrs}
     else
       :not_a_hold
     end
   end
 
-  # A run that marked its issue blocked by other tickets waits on them: the hold lifts on its own
+  # A run that marked its issue blocked by other tickets waits on them: the pause lifts on its own
   # once they are all terminal, in whatever phase the issue is. With no open blocker, what the run
-  # waits on is unknown to the machine, so the hold waits on a person's Unblock.
+  # waits on is unknown to the machine, so the pause waits on a person's Unblock.
   defp block_report_attrs([_ | _] = keys) do
     %{
       reason: "the run reported a block: waiting on " <> Enum.join(keys, ", "),
@@ -409,7 +414,7 @@ defmodule SymphonyElixir.TransitionGuard do
   defp block_report_attrs(_keys) do
     %{
       reason: "the run reported a block",
-      clearing_condition: "when the block is resolved; a person clears an access hold",
+      clearing_condition: "when a person unblocks it",
       waits_on: %{type: "access", keys: []}
     }
   end
@@ -442,25 +447,35 @@ defmodule SymphonyElixir.TransitionGuard do
   @spec unblock_option() :: String.t()
   def unblock_option, do: @unblock_option
 
-  # The block report's pause, written before its hold: a reason per blocker it waits on, or, with
-  # none, the question the hold then names. Without the ticket the guard writes nothing.
+  # The block report's pause: a reason per blocker it waits on, or, with none, the question the
+  # attributes then name, else a reason the Director may release. Without the ticket the guard writes
+  # nothing.
   defp pause_block_report(%{waits_on: %{type: "dependency", keys: keys}} = attrs, %{ticket: ticket}) do
-    for key <- keys, Pauses.identifier?(key), do: Pauses.set(ticket, Pauses.ticket_reason(:dependency, key), set_by: @run)
-    attrs
+    keys
+    |> Enum.filter(&Pauses.identifier?/1)
+    |> Enum.map(&Pauses.set(ticket, Pauses.ticket_reason(:dependency, &1), set_by: @run))
+    |> paused(attrs)
   end
 
   defp pause_block_report(attrs, %{ticket: ticket} = ctx) do
     case Questions.ask(ticket, block_report_question(Map.get(ctx, :issue_identifier) || "this ticket"), asked_by: @run) do
       {:ok, %{id: question_id}} ->
-        put_in(attrs, [:waits_on, :question_id], question_id)
+        {:ok, put_in(attrs, [:waits_on, :question_id], question_id)}
 
       {:error, reason} ->
         Logger.warning("Failed to ask the block report's question for issue_identifier=#{Map.get(ctx, :issue_identifier)}: #{inspect(reason)}")
-        attrs
+        paused([Pauses.set(ticket, @block_report_reason, set_by: @run)], attrs)
     end
   end
 
-  defp pause_block_report(attrs, _ctx), do: attrs
+  defp pause_block_report(attrs, _ctx), do: {:ok, attrs}
+
+  defp paused(writes, attrs) do
+    case Enum.find(writes, &match?({:error, _reason}, &1)) do
+      nil -> {:ok, attrs}
+      error -> error
+    end
+  end
 
   defp running_phase?(from) when is_binary(from),
     do: state_name_matches?(from, "In Progress") or state_name_matches?(from, "Rework")

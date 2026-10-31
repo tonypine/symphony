@@ -52,12 +52,21 @@ defmodule SymphonyElixir.Pauses do
   Once a change to a ticket's pause commits, its labels are projected from it
   (`SymphonyElixir.Pauses.Projector.project_now/2`).
 
+  An operator's Stop pauses its ticket on the Director's reason (`stop_reason/1`, written by
+  `stop/2`): a `:person` reason waiting on Unblock, so the dispatcher, which reads the pause, does not
+  start the ticket again while Symphony's copy still reads the state it had. The reason is in the
+  run store, so a stopped ticket is still stopped after Symphony restarts. Each poll reads the
+  stopped tickets (`stopped/0`) by id and judges each one again (`confirm_stop/3`): one that is gone,
+  terminal or no longer in an active state, or whose phase was written after the stop (a person's
+  move on the board), has the reason released (`release_stop/2`). Unblock and Restart release it too.
+
   `backfilled: true` marks a reason the backfill from the holds sets (`SymphonyElixir.Pauses.Backfill`):
   its event carries `source: "backfill"` and an idempotency key starting `backfill:`, which the
   ledger's own backfill (`SymphonyElixir.TicketEvents.Backfill`) never takes for a live write, and
   which a second write of the same reason never records again.
   """
 
+  alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.{RunStore, TicketEvents, TicketState}
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -66,6 +75,10 @@ defmodule SymphonyElixir.Pauses do
   @setter_kinds [:person, :run, :rule, :symphony]
   @person_actions ~w(unblock restart)
   @symphony %{kind: :symphony, name: "Symphony"}
+  @director %{kind: :person, name: "Director"}
+  # An operator's stop: the Director's reason on a ticket, released by Unblock (as the backfill of the
+  # stops' holds wrote it too, `SymphonyElixir.Pauses.Backfill`).
+  @stop_waits_on %{action: "unblock"}
   # The longest line a reason may have: the ledger (`SymphonyElixir.TicketEvents.Types`) refuses more.
   @max_text 300
   # The only names a reason's default line shows: a ticket's identifier and a release's version.
@@ -127,6 +140,18 @@ defmodule SymphonyElixir.Pauses do
   @typedoc "Why a `:ticket` reason waits on its ticket (`ticket_reason/2`)."
   @type ticket_source :: :dependency | :fix_ticket | :landing
 
+  @typedoc """
+  A stopped ticket as the store holds it: its id, repo and identifier, when it was stopped, and
+  when its record's phase was last written (nil when never).
+  """
+  @type stop :: %{
+          issue_id: String.t(),
+          repo_key: String.t() | nil,
+          identifier: String.t() | nil,
+          stopped_at: DateTime.t() | nil,
+          phase_at: DateTime.t() | nil
+        }
+
   @doc """
   The `:ticket` reason that waits on `identifier` for `source`, with its line: `Waiting for TP-12 to
   finish` for a blocker, `Waiting for TP-12 to finish: it fixes what stopped this ticket` for a fix
@@ -136,6 +161,18 @@ defmodule SymphonyElixir.Pauses do
   def ticket_reason(source, identifier) when source in [:dependency, :fix_ticket, :landing] and is_binary(identifier) do
     %{kind: :ticket, waits_on: %{identifier: identifier}, text: ticket_text(source, identifier)}
   end
+
+  @doc """
+  Why a `:ticket` reason waits on its ticket, read from its line (`ticket_reason/2`): `:fix_ticket`,
+  `:landing`, or `:dependency` for a blocker's line (also the default line of a `:ticket` reason);
+  nil for any other reason.
+  """
+  @spec ticket_source(reason() | term()) :: ticket_source() | nil
+  def ticket_source(%{kind: :ticket, waits_on: %{identifier: identifier}, text: text}) when is_binary(identifier) do
+    Enum.find([:dependency, :fix_ticket, :landing], &(ticket_text(&1, identifier) == text))
+  end
+
+  def ticket_source(_reason), do: nil
 
   @doc "Whether `value` is a ticket's identifier as a `:ticket` reason takes it (`TP-12`)."
   @spec identifier?(term()) :: boolean()
@@ -344,6 +381,90 @@ defmodule SymphonyElixir.Pauses do
   @doc "Whether the Director may release `subject`'s pause: any of its reasons is releasable."
   @spec releasable?(subject()) :: boolean()
   def releasable?(subject), do: subject |> reasons() |> Enum.any?(& &1.releasable)
+
+  @doc "Who stops a ticket and releases its stop from the Director: the person setting the reason."
+  @spec director() :: set_by()
+  def director, do: @director
+
+  @doc "The pause reason an operator's stop at `stopped_at` sets: the Director's, released by Unblock."
+  @spec stop_reason(DateTime.t()) :: reason_input()
+  def stop_reason(%DateTime{} = stopped_at) do
+    %{
+      kind: :person,
+      waits_on: @stop_waits_on,
+      text: "Stopped by you at #{format_time(stopped_at)}. Unblock runs it again; Restart starts it over from main."
+    }
+  end
+
+  @doc "Whether a ticket's pause reason is an operator's stop (`stop_reason/1`)."
+  @spec stop_reason?(reason() | term()) :: boolean()
+  def stop_reason?(%{kind: :person, waits_on: @stop_waits_on}), do: true
+  def stop_reason?(_reason), do: false
+
+  @doc "Pauses `ticket` on an operator's stop, set by the Director at `stopped_at`."
+  @spec stop(subject(), DateTime.t()) :: :ok | {:error, term()}
+  def stop(ticket, %DateTime{} = stopped_at) do
+    with {:ok, _pause} <- set(ticket, stop_reason(stopped_at), set_by: @director, at: stopped_at), do: :ok
+  end
+
+  @doc """
+  Releases `ticket`'s stop: its stop reason is cleared (by `opts[:by]`, Symphony by default); every
+  other reason stays.
+  """
+  @spec release_stop(subject(), [opt()]) :: :ok | {:error, term()}
+  def release_stop(ticket, opts \\ []) do
+    with {:ok, _pause} <- clear_reason(ticket, %{kind: :person, waits_on: @stop_waits_on}, Keyword.take(opts, [:by])), do: :ok
+  end
+
+  @doc "Why the dispatcher skips `ticket` for a stop: its stop reason's line, or nil when it is not stopped."
+  @spec stop_skip_reason(subject()) :: String.t() | nil
+  def stop_skip_reason(ticket) do
+    case ticket |> reasons() |> Enum.find(&stop_reason?/1) do
+      %{text: text} -> text
+      nil -> nil
+    end
+  end
+
+  @doc "Whether `ticket`'s pause has an operator's stop."
+  @spec stopped?(subject()) :: boolean()
+  def stopped?(ticket), do: stop_skip_reason(ticket) != nil
+
+  @doc "The stopped tickets in the store, of every repo: those whose pause has an operator's stop."
+  @spec stopped(module()) :: [stop()]
+  def stopped(store \\ RunStore) do
+    case store.list_all_ticket_states() do
+      records when is_list(records) -> records |> Enum.map(&TicketState.normalize/1) |> Enum.flat_map(&stop_of/1)
+      _error -> []
+    end
+  end
+
+  @doc """
+  What a poll's read calls for: keep the stop, or clear it. `issue` is the ticket as the poll read
+  it by id (nil when Linear no longer returns it) and `candidate?` whether its state is active and
+  not terminal; a phase written after the stop is a move on the board.
+  """
+  @spec confirm_stop(stop(), Issue.t() | nil, boolean()) :: :keep | :clear
+  def confirm_stop(_stop, nil, _candidate?), do: :clear
+  def confirm_stop(_stop, %Issue{}, false = _candidate?), do: :clear
+
+  def confirm_stop(%{phase_at: %DateTime{} = phase_at, stopped_at: %DateTime{} = stopped_at}, %Issue{}, true) do
+    if DateTime.compare(phase_at, stopped_at) == :gt, do: :clear, else: :keep
+  end
+
+  def confirm_stop(_stop, %Issue{}, true), do: :keep
+
+  # A record's pause is written under its repo and id, so a record with a stop reason has both.
+  defp stop_of(record) do
+    case record |> TicketState.pause_reasons() |> Enum.find(&stop_reason?/1) do
+      nil ->
+        []
+
+      reason ->
+        [%{issue_id: record.issue_id, repo_key: record.repo_key, identifier: record.issue_identifier, stopped_at: reason.set_at, phase_at: record.phase_at}]
+    end
+  end
+
+  defp format_time(%DateTime{} = at), do: at |> DateTime.shift_zone!("Etc/UTC") |> Calendar.strftime("%Y-%m-%d %H:%M:%S UTC")
 
   @doc """
   A pause as stored or given, with its reasons validated (each kind and `waits_on` once, at its

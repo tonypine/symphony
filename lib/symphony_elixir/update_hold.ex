@@ -12,8 +12,9 @@ defmodule SymphonyElixir.UpdateHold do
   The `skip-update-hold` label opts out, on the held ticket or on the blocker (a docs-only or
   `WORKFLOW.md` change needs no app update).
 
-  The self-heal lane's fix-ticket hold waits the same way for a fix ticket merged in that repository
-  (`awaiting_update/4`, called by `SymphonyElixir.BlockedHold` for a ticket in any phase).
+  The self-heal lane's wait on a fix ticket, and a run's block report on its blockers, wait the same
+  way for a ticket merged in that repository (`awaiting_update/4`, called by
+  `SymphonyElixir.Pauses.Dependencies` for a ticket in any phase).
 
   `resolve/5` does the lookups (Linear for the blockers, Symphony's record of each blocker's pull
   request, GitHub for the merge commit and whether the build includes it) and keeps their answers
@@ -238,8 +239,8 @@ defmodule SymphonyElixir.UpdateHold do
   end
 
   @doc """
-  Whether the running build still lacks the fix `ticket` merged: the ticket a self-heal hold waits
-  on (`SymphonyElixir.BlockedHold`), already terminal. Returns the ticket and its merge commit while
+  Whether the running build still lacks the fix `ticket` merged: a fix ticket or a blocker a ticket's
+  pause waits on (`SymphonyElixir.Pauses.Dependencies`), already terminal. Returns the ticket and its merge commit while
   its merged pull request is in the build's repository and the running build is known not to
   include that commit, else nil (merged elsewhere, not merged, opted out with the skip label, no
   build sha, or a lookup that failed), with the cache the lookups extended. Takes the same lookup

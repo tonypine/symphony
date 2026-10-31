@@ -31,6 +31,7 @@ defmodule SymphonyElixir.AgentRunner do
     Linear.Usage,
     Notifications,
     PathUnlock,
+    Pauses,
     PromptBuilder,
     PrReviewPoller,
     PrWatch,
@@ -1246,12 +1247,15 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   # A decision request (`linear_request_human_action`) or a reported block pauses the ticket in its
-  # phase on a hold, and the hold, not another turn, says when it continues: a turn would only
-  # repeat the wait, and enough of them would park it as idle. A request this run posted counts even
-  # before its hold is in the store, so a failed hold write never parks the ticket under its question.
+  # phase (`SymphonyElixir.Pauses`, or a Needs Decision hold), and the pause, not another turn, says
+  # when it continues: a turn would only repeat the wait, and enough of them would park it as idle. A
+  # request this run posted counts even before its hold is in the store, so a failed hold write never
+  # parks the ticket under its question.
   defp waiting_on_hold?(%Issue{id: issue_id} = issue, opts) do
+    repo_key = run_repo_key(issue, opts)
+
     CommentRegistry.human_action_requested?(Keyword.get(opts, :linear_comment_registry)) or
-      Hold.held_any?(run_repo_key(issue, opts), issue_id)
+      Pauses.paused?({:ticket, repo_key, issue_id}) or Hold.held?(repo_key, issue_id, :needs_decision)
   end
 
   defp waiting_on_sub_issues?(%Issue{} = issue) do

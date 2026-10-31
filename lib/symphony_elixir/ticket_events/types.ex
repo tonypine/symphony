@@ -24,6 +24,11 @@ defmodule SymphonyElixir.TicketEvents.Types do
   A decision a person must make has one representation, whoever asked it: `decision.requested`,
   then `decision.recorded` or `decision.withdrawn`. The Needs Decision hold is its projection, so
   `hold.set` and `hold.cleared` take only the `blocked` kind and `person.action` has no `decide`.
+
+  `hold.set` and `hold.cleared` are legacy (`legacy_types/0`): the Blocked hold they recorded is
+  retired, and what pauses a ticket is recorded by the `pause.*` types. They stay in the catalog so
+  a ticket's history still reads them, and the ledger's backfill still maps old signals to them;
+  no live writer records them any more.
   State is machinery-only: an agent claims `finding.resolved`, it never records a verdict.
 
   A person's cancel of a ticket Symphony owns is one `ticket.cancelled` (`SymphonyElixir.DirectorMoves`):
@@ -101,6 +106,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
     optional: [step_id: {:nullable, {:string, 200}}],
     idempotency: :writer
   }
+
+  @legacy_types ["hold.set", "hold.cleared"]
 
   @catalog %{
     "phase.entered" => %{
@@ -300,6 +307,14 @@ defmodule SymphonyElixir.TicketEvents.Types do
       idempotency: :writer
     }
   }
+
+  @doc "The legacy types: kept so history reads them, never recorded by a live writer (see the moduledoc)."
+  @spec legacy_types() :: [String.t()]
+  def legacy_types, do: @legacy_types
+
+  @doc "Whether `type` is a legacy type (`legacy_types/0`)."
+  @spec legacy?(term()) :: boolean()
+  def legacy?(type), do: type in @legacy_types
 
   @doc "Every event type with its writers, agent run kinds, payload schema and idempotency rule."
   @spec catalog() :: %{String.t() => entry()}

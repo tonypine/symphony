@@ -32,9 +32,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
   cycle of blocked-by links, or one a person released the ticket from. The checks a base branch
   requires, and whether it has workflow files, are kept 10 minutes.
 
-  A ticket waiting on its competitors (a `Blocked` hold of the landing kind) has its wait judged
-  before deciding (`SymphonyElixir.PrWatch.Competitors.settle/5`), so a hold that clears lets the
-  same tick decide on the conflict. A ticket that leaves the watched set ends its wait.
+  A ticket waiting on its competitors (landing reasons on its pause) has its wait judged before
+  deciding (`SymphonyElixir.PrWatch.Competitors.settle/5`), so a wait that ends lets the same tick
+  decide on the conflict. A ticket that leaves the watched set ends its wait.
 
   Before deciding, the read is completed with what Symphony knows: the attempts
   (`SymphonyElixir.PrWatch.Attempts`), a rerun whose checks haven't reported yet (the head reads as
@@ -98,7 +98,6 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   alias SymphonyElixir.{
     AutoMerge,
-    BlockedHold,
     CiFix,
     CiState,
     Config,
@@ -187,7 +186,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   def reject(server, reason, repo_url), do: GenServer.cast(server, {:reject, reason, repo_url})
 
   @doc """
-  A person's `Unblock` of the issue's landing hold: the watcher removes the links it added and stops
+  A person's `Unblock` of the issue's wait on its competitors: the watcher removes the links it added and stops
   waiting on those PRs (`SymphonyElixir.PrWatch.Competitors.release/3`), between its ticks.
   """
   @spec release(GenServer.server(), String.t()) :: :ok | {:error, term()}
@@ -605,8 +604,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
           record: record,
           review: Map.get(reviews, issue.id),
           links: previous_links(record),
-          blocked_hold: record && TicketState.get_hold(record, :blocked),
-          landing_hold: nil,
+          waiting: Competitors.waiting(record),
+          landing_wait: nil,
           restart_conflicts: false,
           ticket: %{
             phase: phase,
@@ -718,7 +717,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   defp competes?(entry, reads) do
-    match?({:ok, %{mergeable: :dirty}}, Map.get(reads, entry.issue.id)) or entry.links != [] or BlockedHold.landing?(entry.blocked_hold)
+    match?({:ok, %{mergeable: :dirty}}, Map.get(reads, entry.issue.id)) or entry.links != [] or entry.waiting != nil
   end
 
   # Upkeep updates a BEHIND PR only with nothing ahead of it, and the PR ahead it last waited on may
@@ -818,20 +817,20 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # A ticket waiting on its competitors has its wait judged on the open PRs just read; with none read,
   # the wait stays as it was.
   defp settle(entry, {:ok, _pulls}, {landing, _ahead}, race, state, settings) do
-    if entry.links != [] or BlockedHold.landing?(entry.blocked_hold) do
+    if entry.links != [] or entry.waiting != nil do
       opts = [repo_key: state.repo_key, terminal_states: settings.tracker.terminal_states, store: store(state)] ++ Keyword.take(state.opts, [:tracker, :linker])
-      settled = Competitors.settle(entry.issue, entry.blocked_hold, entry.links, Map.put(race, :files, landing && Map.get(landing, :files)), opts)
-      cleared? = BlockedHold.landing?(entry.blocked_hold) and is_nil(settled.hold)
-      hold = if cleared? and entry.ticket.hold == :blocked, do: :none, else: entry.ticket.hold
+      settled = Competitors.settle(entry.issue, entry.waiting, entry.links, Map.put(race, :files, landing && Map.get(landing, :files)), opts)
+      cleared? = entry.waiting != nil and is_nil(settled.wait)
+      hold = if cleared? and entry.ticket.hold == :blocked, do: hold(entry.record, &(not Competitors.landing_reason?(&1))), else: entry.ticket.hold
 
-      %{entry | links: settled.links, landing_hold: settled.hold, restart_conflicts: settled.restart_conflicts, ticket: %{entry.ticket | hold: hold}}
+      %{entry | links: settled.links, landing_wait: settled.wait, restart_conflicts: settled.restart_conflicts, ticket: %{entry.ticket | hold: hold}}
     else
       entry
     end
   end
 
   defp settle(entry, _pulls, _landing, _race, _state, _settings) do
-    %{entry | landing_hold: if(BlockedHold.landing?(entry.blocked_hold), do: entry.blocked_hold)}
+    %{entry | landing_wait: entry.waiting}
   end
 
   # The ticket's `ahead` and `competing`, without a PR whose wait closes a cycle or that a person
@@ -1177,7 +1176,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
         %{
           facts: facts,
           stay: result.moved_to || entry.phase,
-          decision: result.action |> with_landing_hold(entry, facts) |> decision_record(result.outcome, attempts, facts, head, now),
+          decision: result.action |> with_landing_wait(entry, facts) |> decision_record(result.outcome, attempts, facts, head, now),
           upkept: upkept,
           upkeep_failure: upkeep_failure,
           applied: result.applied,
@@ -1241,13 +1240,13 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp restart_conflicts(attempts, %{restart_conflicts: true}), do: Attempts.restart_conflict(attempts)
   defp restart_conflicts(attempts, _entry), do: attempts
 
-  # A Blocked hold of the landing kind reads as the competitors it waits on.
-  defp with_landing_hold(%Action{rule: "R4"} = action, %{landing_hold: %{reason: reason}} = entry, %Facts{hold: :blocked}) when is_binary(reason) do
+  # A wait on competitors reads as the competitors it waits on.
+  defp with_landing_wait(%Action{rule: "R4"} = action, %{landing_wait: %{reason: reason}} = entry, %Facts{hold: :blocked}) when is_binary(reason) do
     prs = for %{released: false} = link <- entry.links, do: Map.take(link, [:issue_id, :issue_identifier, :pr_number, :pr_url, :title, :files])
     %{action | reason: reason, args: %{prs: prs}, clears_when: "every competing pull request lands or leaves the race"}
   end
 
-  defp with_landing_hold(action, _entry, _facts), do: action
+  defp with_landing_wait(action, _entry, _facts), do: action
 
   defp new_stay?(nil, _entry), do: true
   defp new_stay?(previous, entry), do: stay(previous) != entry.phase
@@ -1596,15 +1595,19 @@ defmodule SymphonyElixir.PrWatch.Repo do
     end
   end
 
-  defp hold(%{holds: holds}) do
+  # What pauses the ticket, as the facts name it: a Needs Decision hold, else its pause on anything
+  # but an app update (`SymphonyElixir.Pauses`; `counted?` picks the reasons that count).
+  defp hold(record, counted? \\ fn _reason -> true end)
+
+  defp hold(%{holds: holds} = record, counted?) do
     cond do
       Enum.any?(holds, &(&1.kind == :needs_decision)) -> :needs_decision
-      Enum.any?(holds, &(&1.kind == :blocked)) -> :blocked
+      record |> TicketState.pause_reasons() |> Enum.any?(&(&1.kind != :build and counted?.(&1))) -> :blocked
       true -> :none
     end
   end
 
-  defp hold(nil), do: :none
+  defp hold(nil, _counted?), do: :none
 
   # The watched Linear states and the phase each is.
   defp phases(settings) do

@@ -10,21 +10,19 @@ defmodule SymphonyElixir.CiWait do
   are not dispatch-loop runs (`SymphonyElixir.DispatchLoop`): nothing went wrong, CI is still
   running. The wait is bounded here instead, per commit, in the ticket's store record: the first
   wait on a commit records a `ci_wait_started` signal, and once the wait has lasted `limit_ms/0`
-  (an hour) the ticket is put on a `Blocked` hold whose reason (`hold_attrs/3`) names the commit,
-  the time waited and the workflows still running. A person lifts it with `Unblock`;
-  the hold's own `ci_wait` signal makes the next wait on that commit start again from zero. A wait
-  on another commit starts from zero too, and so does the wait for the epic review's rerun of a red
-  commit (`SymphonyElixir.EpicReview.CiRerun` records a fresh start when it reruns).
-
-  Beside the hold, the ticket's pause (`SymphonyElixir.Pauses`, the one writer) gets an
-  `:environment` reason (`reason/1`, set by `pause/4`): "Waiting for CI on <commit> to finish",
-  which the Director may release. It clears (`clear_pause/3`) when the epic review finds no workflow
-  run on its commit still going, and with the hold on `Unblock`.
+  (an hour) the ticket is paused (`SymphonyElixir.Pauses`, the one writer) on an `:environment`
+  reason (`reason/1`, set by `pause/3`): "Waiting for CI on <commit> to finish", which the Director
+  may release with `Unblock`. The log line (`describe/3`) names the commit, the time waited and the
+  workflows still running. The wait's own `ci_wait` signal (`signal/0`) makes the next wait on that
+  commit start again from zero. A wait on another commit starts from zero too, and so does the wait
+  for the epic review's rerun of a red commit (`SymphonyElixir.EpicReview.CiRerun` records a fresh
+  start when it reruns). The reason clears (`clear_pause/3`) when the epic review finds no workflow
+  run on its commit still going, and on `Unblock`.
   """
 
   alias SymphonyElixir.{Pauses, TicketState}
 
-  @hold_type "ci_wait"
+  @signal "ci_wait"
   @start_signal "ci_wait_started"
   @limit_ms 60 * 60_000
   @setter %{kind: :rule, name: "CI wait"}
@@ -39,26 +37,26 @@ defmodule SymphonyElixir.CiWait do
   """
   @type info :: %{required(:sha) => String.t(), required(:runs) => [map()], optional(:run) => String.t()}
 
-  @doc "The `waits_on` type of a CI-wait hold, and the name of the signal recorded when it is set."
-  @spec hold_type() :: String.t()
-  def hold_type, do: @hold_type
+  @doc "The name of the signal recorded when a wait past the limit pauses the ticket."
+  @spec signal() :: String.t()
+  def signal, do: @signal
 
   @doc "The signal recorded when a wait on a commit starts."
   @spec start_signal() :: String.t()
   def start_signal, do: @start_signal
 
-  @doc "How long the review waits for CI on one commit before the ticket is held."
+  @doc "How long the review waits for CI on one commit before the ticket is paused."
   @spec limit_ms() :: pos_integer()
   def limit_ms, do: @limit_ms
 
   @doc """
   When the wait for CI on `sha` started, read from the ticket's `signals` (newest first), or nil
-  when no wait on `sha` is underway: none was recorded, the newest was on another commit, or a CI-wait
-  hold was set after it.
+  when no wait on `sha` is underway: none was recorded, the newest was on another commit, or a wait
+  past the limit paused the ticket after it.
   """
   @spec since([TicketState.signal()], String.t()) :: DateTime.t() | nil
   def since(signals, sha) when is_list(signals) do
-    case Enum.find(signals, &(&1.name in [@start_signal, @hold_type])) do
+    case Enum.find(signals, &(&1.name in [@start_signal, @signal])) do
       %{name: @start_signal, details: %{sha: ^sha}, at: %DateTime{} = at} -> at
       _other -> nil
     end
@@ -69,19 +67,14 @@ defmodule SymphonyElixir.CiWait do
   def over?(%DateTime{} = since, %DateTime{} = now), do: DateTime.diff(now, since, :millisecond) >= @limit_ms
 
   @doc """
-  The `Blocked` hold a wait past the limit sets: a reason naming the commit, when the wait started,
-  how long it lasted and the workflows still running, lifted by a person's `Unblock`.
+  What a wait past the limit says in the log: the commit, when the wait started, how long it lasted
+  and the workflows still running.
   """
-  @spec hold_attrs(info(), DateTime.t(), DateTime.t()) :: map()
-  def hold_attrs(%{sha: sha, runs: runs} = info, %DateTime{} = since, %DateTime{} = now) do
-    %{
-      reason:
-        "#{@hold_type}: CI on #{String.slice(sha, 0, 12)} was still running after #{minutes(since, now)} " <>
-          "(waiting since #{Calendar.strftime(since, "%H:%M UTC")}), so Symphony stopped starting #{Map.get(info, :run, "the epic review")}. " <>
-          "Still running: #{Enum.map_join(runs, ", ", &run_label/1)}",
-      clearing_condition: "when a person unblocks it",
-      waits_on: %{type: @hold_type, keys: [sha]}
-    }
+  @spec describe(info(), DateTime.t(), DateTime.t()) :: String.t()
+  def describe(%{sha: sha, runs: runs} = info, %DateTime{} = since, %DateTime{} = now) do
+    "#{@signal}: CI on #{String.slice(sha, 0, 12)} was still running after #{minutes(since, now)} " <>
+      "(waiting since #{Calendar.strftime(since, "%H:%M UTC")}), so Symphony stopped starting #{Map.get(info, :run, "the epic review")}. " <>
+      "Still running: #{Enum.map_join(runs, ", ", &run_label/1)}"
   end
 
   defp minutes(since, now) do
@@ -115,7 +108,7 @@ defmodule SymphonyElixir.CiWait do
   def reason?(%{kind: :environment, waits_on: %{condition: condition}}) when is_binary(condition), do: condition =~ @condition
   def reason?(_reason), do: false
 
-  @doc "Pauses the ticket on the wait for CI on `sha`, beside its hold, set by the CI-wait rule."
+  @doc "Pauses the ticket on the wait for CI on `sha`, set by the CI-wait rule."
   @spec pause(String.t(), String.t(), String.t()) :: Pauses.result()
   def pause(repo_key, issue_id, sha), do: Pauses.set({:ticket, repo_key, issue_id}, reason(sha), set_by: @setter)
 
