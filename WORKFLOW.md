@@ -49,6 +49,19 @@ verification:
     start_cmd: scripts/qa-dashboard-server.sh
     health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state"
     health_timeout_ms: 600000
+# The Director's QA pass gets Symphony's own server beside the app on the QA host when the PR
+# changes the server and a walkthrough step walks the Director (`qa:live` forces it, `qa:fixture`
+# keeps it off); otherwise the app reads its committed fixtures. The build command, the app and
+# the port stay in the operator's symphony.yml (docs/configuration.md, "Two environments").
+auto_review:
+  playbooks:
+    macos_app:
+      requires: [mise]
+      live:
+        build_cmd: scripts/qa-server-build.sh
+        start_cmd: scripts/qa-server-start.sh
+        paths: ["lib/**", "config/**", "priv/**", "mix.exs", "mix.lock"]
+        walkthrough_mentions: [Director, Inbox]
 playbook:
   lockfile: mix.lock
 prompts:

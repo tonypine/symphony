@@ -932,8 +932,8 @@ defmodule SymphonyElixir.QaAgent do
     ends. Every app you launch gets its URL and control token, so the app's moves reach it. Your
     shell cannot reach it. Two environments are open to you: the live server, for a step whose
     point is the round trip through the server (a move, then what the app shows after it), and
-    the app's state fixtures, for how the app draws a state. Pick per step, and in each step's
-    evidence name the one that proves it: `live server` or `fixture`.
+    the app's state fixtures, for how the app draws a state. Pick per step, and start each step's
+    `details` with the one that proves it: `live: seed` or `fixture: <the fixture's name>`.
     """
   end
 
