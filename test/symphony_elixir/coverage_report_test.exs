@@ -144,6 +144,10 @@ defmodule SymphonyElixir.CoverageReportTest do
     assert ["::error title=Coverage SymphonyElixir.Foo 50.00%25::uncovered lines 4, 9 of SymphonyElixir.Foo: every module must be at 100%25 on main"] = drain(:print)
   end
 
+  test "fails when there is no coverage data at all" do
+    assert {:error, "no coverage data: run the tests with --cover --export-coverage first"} = CoverageReport.run(opts([]), deps(%{coverage: fn -> %{} end}))
+  end
+
   test "fails when the baseline can't be written or git can't diff the pull request" do
     write = fn _path, _contents -> {:error, :eacces} end
     assert {:error, "could not write the coverage baseline to out.json: :eacces"} = CoverageReport.run(opts(write_baseline: "out.json"), deps(%{write_file: write}))

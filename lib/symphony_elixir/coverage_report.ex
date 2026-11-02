@@ -50,7 +50,13 @@ defmodule SymphonyElixir.CoverageReport do
   """
   @spec run(keyword(), deps()) :: :ok | {:error, String.t()}
   def run(opts, deps) do
-    results = results(deps.coverage.(), deps.modules.(), Keyword.get(opts, :ignore_modules, []))
+    case results(deps.coverage.(), deps.modules.(), Keyword.get(opts, :ignore_modules, [])) do
+      [] -> {:error, "no coverage data: run the tests with --cover --export-coverage first"}
+      results -> report(results, opts, deps)
+    end
+  end
+
+  defp report(results, opts, deps) do
     short = Enum.reject(results, &(&1.uncovered == []))
 
     Enum.each(short, &deps.info.(describe(&1)))
