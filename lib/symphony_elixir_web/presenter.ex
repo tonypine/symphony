@@ -23,6 +23,7 @@ defmodule SymphonyElixirWeb.Presenter do
     Setup,
     StateMachine,
     StrayProcesses,
+    TicketMerge,
     TicketObservation,
     TicketState,
     URLUtils,
@@ -130,6 +131,7 @@ defmodule SymphonyElixirWeb.Presenter do
           dispatch_shadow: dispatch_shadow_payload(),
           reconcile: reconcile_payload(),
           pause_backfill: pause_backfill_payload(PauseBackfill.summary()),
+          records_merged: records_merged_payload(TicketMerge.report()),
           orchestrator: Orchestrator.diagnostics(orchestrator)
         }
 
@@ -796,6 +798,12 @@ defmodule SymphonyElixirWeb.Presenter do
   # it created and what it skipped; nil before it ran.
   defp pause_backfill_payload(%{at: at} = summary), do: %{summary | at: iso8601(at)}
   defp pause_backfill_payload(nil), do: nil
+
+  # The one-time merge of a ticket's duplicate records (`TicketMerge`, `records.merged`): when it ran,
+  # the tickets checked and merged, each merge's ticket and the repositories folded into it; or this
+  # start's failure while it has not run.
+  defp records_merged_payload(%{at: at} = report), do: %{report | at: iso8601(at)}
+  defp records_merged_payload(_none), do: nil
 
   # The reconciler under `dispatch.source: record` (`TicketObservation.reconcile_all/3`): when it last
   # ran, its interval, the changes made in Linear it applied, the failed projections it made again and

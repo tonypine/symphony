@@ -48,6 +48,7 @@ defmodule SymphonyElixir.Orchestrator do
     StatusDashboard,
     SubIssueWait,
     TicketEvents,
+    TicketMerge,
     TicketObservation,
     TicketPullRequest,
     TicketSignals,
@@ -278,6 +279,8 @@ defmodule SymphonyElixir.Orchestrator do
     # The ledger's one-time history backfill runs in a task: startup never waits for it. The pause
     # backfill runs in the same task right after it: it reads the events the ledger's backfill writes.
     TicketEvents.Backfill.start(run: &SymphonyElixir.Pauses.Backfill.run_after_ledger/1)
+    # Once: a ticket left with records under two repositories is merged into its one record.
+    TicketMerge.start()
     tick_token = make_ref()
     send(self(), {:tick, tick_token})
     schedule_snapshot_publish(config.observability.snapshot_publish_ms)

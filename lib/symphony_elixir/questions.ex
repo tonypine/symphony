@@ -201,12 +201,13 @@ defmodule SymphonyElixir.Questions do
   @typedoc """
   Why a question was withdrawn, as its `question.withdrawn` event records it: the ticket moved on
   (Backlog, a merge, a terminal state), it was restarted, the hold it was asked with cleared, the
-  one who asked withdrew it as not needed, or the run that asked ended (only a question that holds
-  nothing, `withdraw_lapsed/3`).
+  one who asked withdrew it as not needed, the run that asked ended (only a question that holds
+  nothing, `withdraw_lapsed/3`), or the ticket's move to another project answered it
+  (`superseded_by_move`, the merge of its records, `SymphonyElixir.TicketMerge`).
   """
   @type cause :: String.t()
 
-  @causes ~w(ticket_moved restarted hold_cleared superseded run_ended)
+  @causes ~w(ticket_moved restarted hold_cleared superseded superseded_by_move run_ended)
 
   @typedoc """
   What ended what a question belonged to (`lapsed?/2`): a Restart, a move to Backlog, a merge
