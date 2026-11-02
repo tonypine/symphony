@@ -137,6 +137,15 @@ defmodule SymphonyElixir.TicketEvents.Types do
       optional: [run_number: :non_neg_integer, state: :string, head: :string] ++ @signal,
       idempotency: {:fields, [:run_id]}
     },
+    # The run a person started at once (`SymphonyElixir.Orchestrator.start_issue/3`), by the
+    # Director with their note, next to the machine's own `run.started`.
+    "run.started_by_person" => %{
+      writers: [:person],
+      run_kinds: [],
+      required: [by: :string],
+      optional: [note: {:string, 500}, run_id: :string] ++ @signal,
+      idempotency: {:fields, [:run_id]}
+    },
     "run.ended" => %{
       writers: [:machine],
       run_kinds: [],

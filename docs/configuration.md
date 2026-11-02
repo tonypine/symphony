@@ -2487,6 +2487,21 @@ the active states clears both; otherwise the ticket waits for a person: **Unbloc
 place, **Restart** starts it over from main, and moving it to another state on the board clears the
 stop too.
 
+**Start** (`POST /api/v1/control/start` with `issue_identifier` and an optional `note`) starts a
+ticket's run at once, ahead of the dispatch queue and outside its order: the run for the ticket's
+current phase is dispatched in the same call, not queued — implementation for Todo (claimed to
+In Progress first) or In Progress, the reviewer for Code Review, QA for QA, the CI fixer for CI
+Fix, the rework run for Rework. It ignores queue order, the per-repo and global concurrency limits
+(it may run one over the limit; the next cycle simply has one slot fewer) and the forced queue.
+It does not override what a person or Symphony chose to stop: it is refused while Symphony is
+paused, while the ticket's repository is paused, while the ticket has an open Question, or while
+a run is already working on it — the answer names which — and a ticket in Backlog is refused with
+"move it first". Each ticket of the state payload and each ticket payload carries
+`start: {allowed, reason}` computed from the same refusals, so the Director's Start now button is
+never clickable into a refusal; its tooltip shows the reason. The answer returns once the run has
+started (`run_id`; its session id arrives with the run) or with the refusal, and the ticket's
+timeline gets one `run.started_by_person` event with the note.
+
 **Cancel** (`POST /api/v1/control/cancel` with `issue_identifier` and an optional `note`) drops an
 open ticket for good. Under `dispatch.source: record` a hand move to Canceled on a phase Symphony
 owns is drift and is moved back, so this is the way to cancel one. The record's phase becomes the

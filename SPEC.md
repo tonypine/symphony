@@ -1421,6 +1421,15 @@ Fields:
   - Default: `1`.
   - Forced runs that may run at once outside `max_total`, the epic lanes, `finishing_max` and
     `max_by_issue_state` (Section 8.3). Values below `1` fail configuration validation.
+- Implementations MAY offer an operator control that starts a ticket's run at once (this one has
+  `POST /api/v1/control/start` with `issue_identifier` and an optional `note`). Such a control
+  dispatches the run for the ticket's current phase in the same call, not queued: it ignores
+  queue order, the concurrency limits and the forced queue. It MUST NOT override what a person
+  or Symphony chose to stop: it refuses while dispatch is paused, while the ticket's repository
+  is paused, while the ticket has an open question, or while a run is already working on it, and
+  the answer names which; a ticket in the backlog is refused with "move it first". A ticket in
+  the todo state is claimed (in progress) first. The run a person starts this way records one
+  `run.started_by_person` event on the ticket, by the person with their note.
 - `concurrency.forced_stale_after_hours` (positive integer)
   - Default: `72`.
   - How long an issue may stay forced before it counts as stale. A stale issue is reported as
