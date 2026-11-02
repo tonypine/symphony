@@ -219,6 +219,9 @@ GitHub or Linear in QA:
   `macos/Tests/Fixtures/director-app/update-build-rerun` has the same ticket after GitHub cancelled
   the build for lack of a machine: "…queued on GitHub for 4 min; cancelled for lack of a machine,
   rerun 1 of 2".
+  `macos/Tests/Fixtures/director-app/update-build-latest` has no ticket held and the newest
+  merge's build queued (TP-1340): the menu still reads "The v0.0.1.785 build: queued on GitHub for
+  12 min".
 - **Update-check interval:** pass `update_check_interval_seconds` (a positive integer, such as
   `30`) and the app checks for a release that often in the background, in every update mode,
   through `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL`. A failed check retries at that interval, except a
