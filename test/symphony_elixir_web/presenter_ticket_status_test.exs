@@ -42,6 +42,7 @@ defmodule SymphonyElixirWeb.PresenterTicketStatusTest do
 
   test "a ticket paused on a question and a dependency reads both reasons in the order they were set; the answer leaves the dependency" do
     ticket = {:ticket, "default", "paused"}
+    :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: "paused", issue_identifier: "MT-1", phase: "In Progress"})
     {:ok, question} = Questions.ask(ticket, TransitionGuard.block_report_question("MT-1"), asked_by: %{kind: :run, name: "Claude", run_id: "run-1"}, at: @asked)
     {:ok, _pause} = Pauses.add_reason(ticket, Pauses.ticket_reason(:dependency, "MT-2"), at: @blocked)
     pid = orchestrator(%{dispatch_skipped: [skipped("paused", "MT-1")]})
@@ -59,10 +60,17 @@ defmodule SymphonyElixirWeb.PresenterTicketStatusTest do
     assert title == question.title
     refute payload.repository_paused
 
+    # The ticket payload tells the app whether Start now may start it, with the reason in the
+    # tooltip's words when it may not; the answer leaves with the Question.
+    assert %{allowed: false, reason: "a Question is waiting for an answer"} = payload.start
+
     {:ok, _answered} = Questions.answer(ticket, question.id, "1")
 
-    assert {:ok, %{pause: %{reasons: [%{kind: :ticket, text: "Waiting for MT-2 to finish"}], releasable: false}, open_questions: []}} =
-             Presenter.issue_payload("MT-1", pid, 1_000)
+    assert {:ok, answered} = Presenter.issue_payload("MT-1", pid, 1_000)
+    assert %{releasable: false} = answered.pause
+    assert [%{kind: :ticket, text: "Waiting for MT-2 to finish"}] = answered.pause.reasons
+    assert answered.open_questions == []
+    assert answered.start == %{allowed: true, reason: nil}
   end
 
   test "a stop is the reason the Director may release, and the pause says they may" do
@@ -85,6 +93,16 @@ defmodule SymphonyElixirWeb.PresenterTicketStatusTest do
 
   test "each ticket entry of the state payload carries its pause, its open questions and its repository's pause" do
     on_exit(fn -> Pauses.clear({:repository, "hub"}) end)
+
+    for {repo, id, identifier, phase} <- [
+          {"default", "running", "MT-R", "In Progress"},
+          {"hub", "watching", "MT-W", "Code Review"},
+          {"hub", "waiting", "HUB-1", "Todo"},
+          {"default", "skipped", "MT-S", "Todo"}
+        ] do
+      :ok = RunStore.put_ticket_state(%{repo_key: repo, issue_id: id, issue_identifier: identifier, phase: phase})
+    end
+
     {:ok, hub_pause} = Pauses.set({:repository, "hub"}, Pauses.repository_reason(@focus), set_by: %{kind: :person, name: "Director"})
     {:ok, _pause} = Pauses.set({:ticket, "default", "skipped"}, Pauses.ticket_reason(:dependency, "MT-2"), at: @blocked)
     {:ok, question} = Questions.ask({:ticket, "default", "running"}, TransitionGuard.block_report_question("MT-R"), at: @asked)
@@ -128,5 +146,12 @@ defmodule SymphonyElixirWeb.PresenterTicketStatusTest do
     assert [%{pause: %{reasons: [%{text: "Waiting for MT-2 to finish"}]}, repository_paused: true}] = payload.slot_waiting
     assert [%{pause: %{since: "2026-10-30T10:00:00Z", reasons: [%{kind: :ticket}]}} = skipped_entry] = payload.dispatch_skipped
     assert %{open_questions: [], repository_paused: false} = skipped_entry
+
+    # Every state-payload entry carries the same `start` the endpoint refuses with: a ticket a
+    # Question holds, a paused repository, and a waiting ticket free to start.
+    assert %{start: %{allowed: false, reason: "a Question is waiting for an answer"}} = running_entry
+    assert [%{start: %{allowed: false, reason: repository_reason}}] = payload.watching
+    assert repository_reason =~ "the repository is paused by you"
+    assert %{start: %{allowed: true, reason: nil}} = skipped_entry
   end
 end
