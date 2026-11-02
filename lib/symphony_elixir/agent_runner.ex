@@ -1756,20 +1756,45 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp park_idle_issue(%Issue{id: issue_id} = issue, opts) do
+  defp park_idle_issue(%Issue{} = issue, opts) do
     Logger.warning(
       "Parking #{issue_context(issue)} in #{@idle_park_state} after #{@max_empty_turns} turns with no new commit or state change" <>
         idle_park_pr_note(issue, opts)
     )
 
-    label = "parking #{issue_context(issue)} in #{@idle_park_state}"
+    repo_key = run_repo_key(issue, opts)
+    run_park(fn -> park_issue(issue, repo_key, opts) end)
+  end
 
-    ctx = %{settings: Keyword.fetch!(opts, :settings), repo_key: run_repo_key(issue, opts)}
+  # The park is one unit the run's stop never cuts: its first write puts the record in Backlog, and
+  # the orchestrator, which reads a running ticket from its record, stops a run whose ticket left the
+  # active states. So the park runs in a task of its own, not linked to the run, which the run awaits:
+  # a run stopped mid-park leaves the task to finish the park.
+  defp run_park(park) do
+    metadata = Logger.metadata()
+
+    SymphonyElixir.TaskSupervisor
+    |> Task.Supervisor.async_nolink(fn ->
+      Logger.metadata(metadata)
+      park.()
+    end)
+    |> Task.await(:infinity)
+  end
+
+  # The record is written before Linear is asked, so no park moves Linear without its events: the
+  # move's `phase.entered` (the `blocked` signal, which puts the record in Backlog), then the
+  # question that pauses the ticket on it, then the Linear move (`TransitionGuard.perform/4`, which
+  # finds the record already in Backlog and only projects it), then the note. A Linear move that
+  # fails leaves the record parked and marked for the reconciler to project again.
+  defp park_issue(%Issue{id: issue_id} = issue, repo_key, opts) do
+    label = "parking #{issue_context(issue)} in #{@idle_park_state}"
+    ctx = %{settings: Keyword.fetch!(opts, :settings), repo_key: repo_key}
+
+    :ok = TicketSignals.record(repo_key, issue_id, "blocked", %{to: @idle_park_state, reason: IdlePark.signal_reason(), from: issue.state})
+    :ok = hold_parked_issue(issue, repo_key)
 
     with :ok <- with_linear_retry(fn -> TransitionGuard.perform(issue_id, :idle_park, ctx) end, label, opts),
-         :ok <- hold_parked_issue(issue, ctx.repo_key),
          :ok <- with_linear_retry(fn -> Tracker.create_comment(issue_id, idle_park_note()) end, label, opts) do
-      record_move_signal(issue, "blocked", %{to: @idle_park_state, reason: IdlePark.signal_reason(), from: issue.state}, opts)
       :ok
     else
       {:error, reason} -> {:error, {:idle_park_failed, reason}}
@@ -1777,9 +1802,9 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   # The park asks its question through the one path (`IdlePark.question_attrs/2`), which pauses the
-  # ticket on it. Asked after the move, so the Inbox lists it in Backlog. One the store refuses
-  # pauses the ticket on a reason the Director releases with Unblock instead, as a dispatch loop's
-  # does; the park stands either way.
+  # ticket on it. Asked once the record is in Backlog, so the Inbox lists it there. One the store
+  # refuses pauses the ticket on a reason the Director releases with Unblock instead, as a dispatch
+  # loop's does; the park stands either way.
   defp hold_parked_issue(%Issue{id: issue_id} = issue, repo_key) do
     ticket = {:ticket, repo_key, issue_id}
 

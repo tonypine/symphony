@@ -2609,9 +2609,14 @@ Important nuance:
 - Before the park, commits in the workspace that no remote has MUST be pushed to the workspace's
   branch on `origin` (only when every push URL of the workspace's `origin` is the source repo's),
   so a parked ticket's work is never only in its workspace; a push that fails is logged and the
-  park goes on. After the move the park MUST ask its question through the one decision path
-  ("Run it again", recommended; "Start it over from main"; "Leave it parked"), which pauses the
-  ticket on it; the park's move signal names the phase the ticket was parked from. Unblock, or the
+  park goes on. The park MUST write the ticket's record before Linear: the move into `Backlog`
+  (its `phase.entered`), then its question through the one decision path ("Run it again",
+  recommended; "Start it over from main"; "Leave it parked"), which pauses the ticket on it, then
+  the Linear move and the comment. The park's move signal names the phase the ticket was parked
+  from. The park MUST finish even when the run is stopped partway through: the orchestrator stops
+  a run once the ticket's record leaves the active states, which the park's first write does. A run
+  the orchestrator stops that way MUST still record its `run.ended`. A move with no repo key, so no
+  record to write, MUST be logged at error with the key it tried. Unblock, or the
   answer "Run it again", MUST move the ticket back to that phase with its workspace and branch as
   they are, then lift the pause (which empties the counted runs) and dispatch it at once; "Start it
   over from main" is Restart. A ticket parked before parks asked has no question: when its newest
