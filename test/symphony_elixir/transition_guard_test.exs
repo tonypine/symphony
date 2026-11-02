@@ -359,6 +359,15 @@ defmodule SymphonyElixir.TransitionGuardTest do
       assert_received {:moved, "issue-1", "Todo"}
     end
 
+    test "logs a move with no repo key at error, with the key it tried, and moves Linear as before" do
+      ctx = %{target: "Backlog", issue_identifier: "TP-1"}
+      log = capture_log(fn -> assert :ok = TransitionGuard.perform("issue-9", :director_move, ctx, tracker: FakeTracker) end)
+
+      assert_received {:moved, "issue-9", "Backlog"}
+      assert log =~ "[error]"
+      assert log =~ "Moving a ticket with no record key; its record takes nothing issue_id=issue-9 issue_identifier=TP-1 to=Backlog repo_key=nil"
+    end
+
     test "asks the PR poller to poll once the issue moved into Merging" do
       test_pid = self()
       opts = [tracker: FakeTracker, on_merging: fn -> send(test_pid, :polled) end]

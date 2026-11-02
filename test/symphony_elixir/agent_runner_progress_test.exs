@@ -290,6 +290,111 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     end
   end
 
+  describe "a park from each run kind that can idle out (TP-1336)" do
+    @red_park_checks [%{name: "coverage (3/4)", status: "COMPLETED", conclusion: "FAILURE"}]
+
+    test "leaves the record in Backlog with its phase.entered, its question and its pause, from every run kind" do
+      for {kind, state, setup, run_opts} <- [
+            {:implementation, "In Progress", fn -> :ok end, pr_url: nil},
+            {:rework, "Rework", fn -> :ok end, pr_url: nil},
+            {:ci_fix, "CI Fix", &red_ci_failure/0, repos: designed_repos()},
+            {:merge_conflict, "In Progress", &unresolved_conflict/0, []}
+          ] do
+        next_run()
+        withdraw_open_questions()
+        since = DateTime.utc_now()
+        :ok = setup.()
+
+        capture_log(fn -> run_issue!(state, [heads: ["sha-same"], max_turns: 5] ++ run_opts) end)
+
+        assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+        assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue in Backlog" <> _note}
+        assert_parked_on_record(state, kind, since)
+      end
+    end
+
+    test "a parked CI Fix run's question is in the Inbox, and Unblock resumes it in CI Fix" do
+      :ok = red_ci_failure()
+      capture_log(fn -> run_issue!("CI Fix", heads: ["sha-same"], max_turns: 5, repos: designed_repos()) end)
+
+      [question] = Questions.open({:ticket, "default", "issue-progress"})
+      record = TicketState.normalize(RunStore.get_ticket_state("default", "issue-progress"))
+      assert %{kind: :action, state: "Backlog"} = Item.from_question(record, question)
+
+      server = :"park_unblock_#{System.unique_integer([:positive])}"
+      start_supervised!({SymphonyElixir.DirectorMoves, name: server})
+      parked = %Issue{id: "issue-progress", identifier: "TP-337", title: "Leave Rework", state: "Backlog", repo_key: "default", labels: []}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [parked])
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_issues) end)
+
+      assert {:ok, %{move: "unblock", from_state: "Backlog", to_state: "CI Fix", moved: true}} =
+               SymphonyElixir.DirectorMoves.move(:unblock, "TP-337", %{}, server: server)
+
+      assert_received {:memory_tracker_state_update, "issue-progress", "CI Fix"}
+      assert {:ok, nil} = Pauses.get({:ticket, "default", "issue-progress"})
+      assert %{state: :answered} = Questions.find({:ticket, "default", "issue-progress"}, question.id)
+    end
+
+    test "a run the orchestrator stops mid-park leaves the park to finish: the Linear move, the note and the record" do
+      # The park's first write puts the record in Backlog, and the orchestrator stops a running ticket
+      # its record shows outside the active states. A slow Linear move gives the stop time to land.
+      :ok = red_ci_failure()
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_sleep_ms, 300)
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_update_issue_state_sleep_ms) end)
+      :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records()
+      test_pid = self()
+
+      {runner, ref} =
+        spawn_monitor(fn ->
+          capture_log(fn -> run_issue!("CI Fix", heads: ["sha-same"], max_turns: 5, repos: designed_repos()) end)
+          send(test_pid, :runner_finished)
+        end)
+
+      assert_receive {:ticket_record, "default", "issue-progress", :changed, [:phase]}, 5_000
+      Process.exit(runner, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^runner, :killed}
+
+      assert_receive {:memory_tracker_state_update, "issue-progress", "Backlog"}, 5_000
+      assert_receive {:memory_tracker_comment, "issue-progress", "Symphony parked this issue in Backlog" <> _note}, 5_000
+      refute_received :runner_finished
+      assert_parked_on_record("CI Fix", :ci_fix, ~U[2000-01-01 00:00:00Z])
+    end
+
+    # The question an earlier park asked, which a person's Unblock would have answered.
+    defp withdraw_open_questions do
+      ticket = {:ticket, "default", "issue-progress"}
+      for %{id: id} <- Questions.open(ticket), do: {:ok, _withdrawn} = Questions.withdraw(ticket, id, "The next park asks again.")
+    end
+
+    defp red_ci_failure do
+      :ok = put_pending_ci_failure(approved: false)
+      red_head = %{commit_sha: "sha-same", checks: @red_park_checks}
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, red_head})
+    end
+
+    defp unresolved_conflict do
+      :ok = put_pending_conflict(approved: true, head_sha: "sha-same")
+      conflicting_head = %{commit_sha: "sha-same", mergeable: "CONFLICTING", checks: []}
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, conflicting_head})
+    end
+
+    defp assert_parked_on_record(from_state, kind, since) do
+      ticket = {:ticket, "default", "issue-progress"}
+      record = TicketState.normalize(RunStore.get_ticket_state("default", "issue-progress"))
+      assert record.phase == "Backlog", "#{kind}: the record is in #{inspect(record.phase)}"
+
+      assert [%{title: "TP-337 is parked: its last 2 turns changed nothing"} = question] = Questions.open(ticket)
+      assert {:ok, %{reasons: [%{kind: :question, waits_on: %{question_id: id}}]}} = Pauses.get(ticket)
+      assert id == question.id
+
+      events = "default" |> SymphonyElixir.TicketEvents.query("issue-progress") |> Enum.filter(&(DateTime.compare(&1.at, since) != :lt))
+      assert [%{payload: %{to: "Backlog", from: ^from_state}}] = Enum.filter(events, &(&1.type == "phase.entered"))
+      assert [_asked] = Enum.filter(events, &(&1.type == "question.asked"))
+      assert [_set] = Enum.filter(events, &(&1.type == "pause.set"))
+      assert_signal("blocked", %{to: "Backlog", reason: "idle_park", from: from_state})
+    end
+  end
+
   describe "a run whose ticket waits on a decision" do
     test "ends after the turn that asked a decision request, without parking it or handing it off" do
       request = %{
@@ -1186,14 +1291,15 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       review_agent: if(reviewer?, do: %{enabled: true, kind: "codex", command: "reviewer app-server"})
     )
 
-    issue = %Issue{
-      id: "issue-progress",
-      identifier: "TP-337",
-      title: "Leave Rework",
-      description: "Fix the PR",
-      state: state,
-      repo_key: "default"
-    }
+    issue =
+      Keyword.get(opts, :issue, %Issue{
+        id: "issue-progress",
+        identifier: "TP-337",
+        title: "Leave Rework",
+        description: "Fix the PR",
+        state: state,
+        repo_key: "default"
+      })
 
     if pr_url, do: :ok = TicketPullRequest.record_created("default", "issue-progress", pr_url, "auto/TP-337")
 

@@ -2545,6 +2545,7 @@ defmodule SymphonyElixir.Orchestrator do
         Logger.info("Issue moved to non-active state: #{issue_context(issue)} state=#{issue.state}; stopping active agent")
 
         running_entry = Map.get(state.running, issue.id)
+        :ok = record_stopped_run_ended(state, running_entry, issue.state)
 
         state
         |> terminate_running_issue(issue.id, false, track_completed_run: true)
@@ -5724,6 +5725,7 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  defp run_exit({:stopped, state_name}, _repo_key, _issue_id, _head), do: "stopped: its ticket moved to #{state_name}"
   defp run_exit({:usage_limited, _info}, _repo_key, _issue_id, _head), do: "usage limit"
   defp run_exit({:model_api_unreachable, _info}, _repo_key, _issue_id, _head), do: "model API unreachable"
   defp run_exit({:ci_pending, _info}, _repo_key, _issue_id, _head), do: "waiting for CI"
@@ -5741,6 +5743,21 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp run_duration_ms(%DateTime{} = started_at), do: max(DateTime.diff(DateTime.utc_now(), started_at, :millisecond), 0)
   defp run_duration_ms(_started_at), do: nil
+
+  # A run stopped because its ticket left the active states ends here: the stop drops the task's
+  # DOWN, which would otherwise record the run's end, so its `run.ended` is recorded now, under the
+  # repo key the stop itself uses. A review run records none, as on its DOWN.
+  defp record_stopped_run_ended(%State{} = state, %{run_id: run_id, issue: %Issue{id: issue_id}} = running_entry, state_name)
+       when is_binary(run_id) and is_binary(issue_id) do
+    if pr_run_entry?(running_entry) do
+      :ok
+    else
+      repo_key = running_repo_key(state, running_entry)
+      record_run_ended(repo_key, issue_id, run_id, running_entry, {:stopped, state_name})
+    end
+  end
+
+  defp record_stopped_run_ended(_state, _running_entry, _state_name), do: :ok
 
   # How the run ended, for the dispatch-loop guard's hold reason: its exit and the PR head it left. A
   # run stopped by a usage limit or an unreachable model API counts no attempt, and an epic review
