@@ -267,7 +267,8 @@ defmodule SymphonyElixir.TransitionGuard do
 
   The record is written first: with `ctx.repo_key`, the ticket's record takes the target as its
   phase (`SymphonyElixir.TicketSignals.record_phase/3`) before Linear is asked, so Symphony's record
-  never lags Symphony's own move. Linear is its projection: a write Linear refuses leaves the record
+  never lags Symphony's own move. A move with no repo key has no record to write: it is logged at
+  error with the key it tried, and Linear moves as before. Linear is its projection: a write Linear refuses leaves the record
   moved, is logged with the ticket's identifier (`ctx.issue_identifier`, else the record's) and the
   target, is marked on the record for the reconciler to project again
   (`SymphonyElixir.TicketSignals.mark_projection/4`), and comes back as the error it was. A target the ticket's team doesn't have
@@ -289,9 +290,23 @@ defmodule SymphonyElixir.TransitionGuard do
 
       true ->
         repo_key = Map.get(ctx, :repo_key)
+        :ok = warn_keyless(repo_key, issue_id, target, ctx)
         before = TicketSignals.recorded_phase(repo_key, issue_id)
         :ok = TicketSignals.record_phase(repo_key, issue_id, target)
         update_state(issue_id, target, ctx, before, opts)
+    end
+  end
+
+  # A move with no repo key has no record to write: Linear moves while Symphony's record, its events
+  # and its Inbox see nothing. That is an error, logged with the key it tried.
+  defp warn_keyless(repo_key, issue_id, target, ctx) do
+    if is_binary(repo_key) and repo_key != "" do
+      :ok
+    else
+      Logger.error(
+        "Moving a ticket with no record key; its record takes nothing issue_id=#{issue_id} " <>
+          "issue_identifier=#{Map.get(ctx, :issue_identifier)} to=#{target} repo_key=#{inspect(repo_key)}"
+      )
     end
   end
 

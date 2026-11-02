@@ -874,6 +874,52 @@ defmodule SymphonyElixir.CoreTest do
            } = Map.get(updated_state.watching, issue_id)
   end
 
+  test "a run stopped because its ticket left the active states records its run.ended (TP-1336)" do
+    issue_id = "issue-stopped-run-ended"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Todo", "In Progress"],
+      tracker_terminal_states: ["Closed", "Cancelled"]
+    )
+
+    agent_pid = spawn(fn -> receive do: (:stop -> :ok) end)
+    on_exit(fn -> Process.exit(agent_pid, :kill) end)
+
+    entry = fn id, kind ->
+      %{
+        pid: agent_pid,
+        ref: nil,
+        identifier: "MT-560",
+        run_id: "run-#{id}",
+        run_kind: kind,
+        issue: %Issue{id: id, state: "CI Fix", identifier: "MT-560"},
+        started_at: DateTime.add(DateTime.utc_now(), -60, :second)
+      }
+    end
+
+    started = %{run_id: "run-#{issue_id}", run_kind: "ci_fix", run_number: 1, state: "CI Fix"}
+    :ok = SymphonyElixir.TicketSignals.record_event("default", issue_id, "run.started", started, run_id: "run-#{issue_id}")
+
+    state = %Orchestrator.State{
+      repo_key: "default",
+      running: %{issue_id => entry.(issue_id, :ci_fix), "issue-stopped-review" => entry.("issue-stopped-review", :pr)},
+      claimed: MapSet.new([issue_id, "issue-stopped-review"]),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    parked = fn id -> %Issue{id: id, identifier: "MT-560", state: "Backlog", title: "Parked", labels: []} end
+    updated_state = Orchestrator.reconcile_issue_states_for_test([parked.(issue_id), parked.("issue-stopped-review")], state)
+
+    assert updated_state.running == %{}
+
+    assert [%{payload: %{run_id: "run-issue-stopped-run-ended", run_kind: "ci_fix", exit: "stopped: its ticket moved to Backlog"}}] =
+             SymphonyElixir.TicketEvents.query("default", issue_id) |> Enum.filter(&(&1.type == "run.ended"))
+
+    # A review run records no run.ended, as on its DOWN.
+    assert SymphonyElixir.TicketEvents.query("default", "issue-stopped-review") |> Enum.filter(&(&1.type == "run.ended")) == []
+  end
+
   test "seed_watching_for_test populates watching from completed_run_metadata" do
     issue_id = "issue-seed-watch"
     issue_identifier = "MT-558"
