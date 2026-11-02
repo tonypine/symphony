@@ -299,6 +299,19 @@ GitHub or Linear in QA:
   checked one as "Backlog, the phase it is in". Walk it at 1440×900 and 2560×1440, light and
   dark. At 1440×900 the menu is on screen without scrolling, and nothing on the action bar is
   clipped.
+- **Start Now (TP-1330):** pass `macos/Tests/Fixtures/director-app/start-now` as `api_fixtures`.
+  Every slot is busy (three runs, `max_total` 3) and SHOP-320 waits in Todo on a slot. Open
+  SHOP-320 from Tickets: the action bar has **Start Now** before Stop Run…, enabled, its tooltip
+  "Start SHOP-320's run now, ahead of the queue; the other tickets keep their order". Press it:
+  `qa_api_requests` lists one `POST /api/v1/control/start` whose body has `issue_identifier`
+  `SHOP-320`, and no banner shows. Open SHOP-305 (running): Start Now is dimmed, its tooltip "A
+  run is already working on the ticket". On Tickets, right-click SHOP-320's row: its menu has
+  **Start Now**; on SHOP-305's row the entry is dimmed with that reason under it. Then pass
+  `macos/Tests/Fixtures/director-app/start-now-paused`: Symphony is paused ("Deploy freeze"), and
+  SHOP-320's Start Now is dimmed with the tooltip "Dispatch is paused by the operator: Deploy
+  freeze". The fixture's state stays the same; the live server proves that the page shows In
+  Progress and its running line within seconds of the press while the other tickets keep their
+  order. Walk it at 1440×900 and 2560×1440, light and dark: nothing on the action bar is clipped.
 - **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
   state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one
   warning, `symphony.yml sets auto_review.enabled, which is deprecated` (**Remove…**). Before
