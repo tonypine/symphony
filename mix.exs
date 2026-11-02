@@ -148,6 +148,8 @@ defmodule SymphonyElixir.MixProject do
       setup: ["deps.get"],
       build: ["escript.build"],
       "audit.run_store": ["cmd elixir scripts/audit_run_store_repo_key.exs"],
+      # `test.coverage` fails on a table of percentages; `coverage.missing` then names the uncovered lines.
+      "test.coverage": ["test.coverage", "coverage.missing"],
       lint: ["specs.check", "audit.run_store", "settings.ui_coverage", "credo --strict"],
       # Compiling prunes OTP apps the project doesn't depend on from the code path, and Dialyxir looks
       # `plt_add_apps` up there, so `:tools` (`:cover`, for `mix cover.changed`) goes back first.

@@ -397,6 +397,32 @@ defmodule SymphonyElixir.QaDriver do
   @spec tools() :: [String.t()]
   def tools, do: @tools
 
+  @typedoc "What the driver gives the app it launches in QA mode, by the names it uses."
+  @type app_contract :: %{
+          qa_root_env: String.t(),
+          api_fixtures_env: String.t(),
+          appearance_env: String.t(),
+          appearances: [String.t()],
+          api_requests_log: String.t()
+        }
+
+  @doc """
+  The QA-mode contract the driver keeps with the app: the variable naming the QA root (where
+  `qa_api_requests` reads `api_requests_log`), the one naming the read-only copy of the
+  `api_fixtures` directory, and the appearance variable with its values.
+  `SymphonyElixir.QaModeContract` renders it into agent prompts.
+  """
+  @spec app_contract() :: app_contract()
+  def app_contract do
+    %{
+      qa_root_env: @qa_root_env,
+      api_fixtures_env: @api_fixtures_env,
+      appearance_env: @appearance_env,
+      appearances: @appearances,
+      api_requests_log: @api_requests_log
+    }
+  end
+
   @doc """
   Starts a driver for one QA pass.
 

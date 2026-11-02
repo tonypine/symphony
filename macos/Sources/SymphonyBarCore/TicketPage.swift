@@ -242,6 +242,9 @@ public struct TicketPage: Equatable {
     public var phaseName: String?
     /// Move to… (TP-1328): every phase of the state payload, the ticket's own checked; nil when there is none to offer.
     public var moveMenu: TicketMoveMenu?
+    /// Start now (TP-1330): whether Symphony would start the ticket's run at once, and why not; nil from a Symphony
+    /// that predates it, which gets no button.
+    public var start: TicketStart?
     /// Whether the note field takes a note: Symphony serves the ticket's events feed, which a note is written to, and
     /// the ticket's repo is known. An older Symphony doesn't.
     public var acceptsNotes: Bool
@@ -379,6 +382,7 @@ public struct TicketPage: Equatable {
         acceptsNotes = sources.events != nil && repoKey?.isEmpty == false
         feedAbsence = sources.feedAbsence
         repositoryPaused = issue?.repositoryPaused ?? false
+        start = TicketStart.of(identifier, issue: sources.issue, state: sources.state)
         // Symphony's one answer to why it doesn't move: the ticket's own payload, else its entry in the state. A
         // Symphony that predates it sends no `open_questions`, and the page derives the phase from the lists.
         let status = sources.issue.flatMap { try? Self.decoder.decode(TicketStatus.Carrier.self, from: $0) }?.status
