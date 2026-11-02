@@ -162,10 +162,12 @@ defmodule SymphonyElixir.StartIssueTest do
       assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, SymphonyElixir.TaskSupervisor)
       start_supervised!({Task.Supervisor, name: SymphonyElixir.TaskSupervisor, max_children: 0})
 
-      start = fn -> Orchestrator.handle_call({:start_issue, started, nil}, {self(), make_ref()}, orchestrator_state(1)) end
+      call = {:start_issue, started, nil}
+      start = fn -> Orchestrator.handle_call(call, {self(), make_ref()}, orchestrator_state(1)) end
       {{:reply, reply, next_state}, _log} = with_log(start)
 
-      assert {:error, {:start_failed, "the agent did not start; it is scheduled to retry as a normal candidate"}} = reply
+      assert {:error, {:start_failed, message}} = reply
+      assert message == "the agent did not start; it is scheduled to retry as a normal candidate"
       assert next_state.running == %{}
       assert %{timer_ref: timer_ref} = next_state.retry_attempts["spawn-1"]
       assert is_reference(timer_ref)
