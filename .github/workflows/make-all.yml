@@ -234,8 +234,12 @@ jobs:
     needs: coverage
 
     steps:
+      # A pull request's run checks out its merge commit; the first parent is the base branch, so
+      # `HEAD^1..HEAD` is what the pull request changes.
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 2
 
       - name: Set up mise tools
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
@@ -264,8 +268,32 @@ jobs:
           path: cover
           merge-multiple: true
 
+      # Main's last green report: which modules it had at 100%. A pull request restores the newest.
+      - name: Restore main's coverage baseline
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: coverage-baseline.json
+          key: coverage-baseline-${{ github.sha }}
+          restore-keys: |
+            coverage-baseline-
+
+      # Names the uncovered lines of every module below 100%, as log lines and annotations. On a
+      # pull request, a module it doesn't touch and main had at 100% is a warning, not a failure.
       - name: Enforce coverage threshold
-        run: time mix test.coverage
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            time mix coverage.report --annotate --base HEAD^1 --baseline coverage-baseline.json
+          else
+            time mix coverage.report --annotate --write-baseline coverage-baseline.json
+          fi
+
+      - name: Save main's coverage baseline
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: coverage-baseline.json
+          key: coverage-baseline-${{ github.sha }}
 
   dialyzer:
     name: dialyzer
