@@ -6,6 +6,13 @@ defmodule SymphonyElixirWeb.ControlApiController do
   `SymphonyElixir.ControlClient`. A stop that ends a run writes a `run_stopped`
   audit record and a `person.action` event (`stop`) on the ticket.
 
+  `start` (`SymphonyElixir.Orchestrator.start_issue/3`) starts a ticket's run at once, ahead of
+  the dispatch queue and outside its order: it takes `issue_identifier` and an optional `note`,
+  answers 200 with the run it started (`run_id`; its session id arrives with the run) or 409 with
+  the reason it was refused (Symphony paused, the repository paused, an open Question, a run
+  already working on it, Backlog's "move it first") — the same reason each ticket payload's
+  `start` field shows.
+
   `repos/:repo_key/pause` (with an optional `reason`) and `repos/:repo_key/resume` pause and resume
   dispatch for one configured repository (`SymphonyElixir.Orchestrator.pause_repository/3`): each
   answers 200 with the repository and its pause (null once resumed), writes a `repository_paused`
@@ -46,6 +53,8 @@ defmodule SymphonyElixirWeb.ControlApiController do
   # The control API authenticates one shared token, so a person's action is the Director's.
   @director {:person, "the Director"}
   @note_preview_chars 500
+  # The `run.started_by_person` event's `note` line is bounded; a longer note is refused here.
+  @start_note_max_chars 500
 
   @spec pause(Conn.t(), map()) :: Conn.t()
   def pause(conn, params) do
@@ -108,6 +117,19 @@ defmodule SymphonyElixirWeb.ControlApiController do
       identifier ->
         result = Orchestrator.force_issue(orchestrator(conn), identifier, params["clear"] in [true, "true"])
         respond_force(conn, identifier, result)
+    end
+  end
+
+  # Start now: the run for the ticket's current phase starts in this call, not queued. The
+  # `note` rides its `run.started_by_person` event, whose `note` line is bounded; the refusals
+  # answer 409 with the reason the ticket payload's `start` field also shows.
+  @spec start(Conn.t(), map()) :: Conn.t()
+  def start(conn, params) do
+    with {:ok, identifier} <- required_param(params["issue_identifier"], "issue_identifier"),
+         {:ok, note} <- start_note(params["note"]) do
+      respond_start(conn, identifier, Orchestrator.start_issue(orchestrator(conn), identifier, note))
+    else
+      {:error, {:invalid_request, message}} -> error_response(conn, 422, "invalid_request", message)
     end
   end
 
@@ -317,6 +339,54 @@ defmodule SymphonyElixirWeb.ControlApiController do
     do: error_response(conn, 502, "linear_error", "Linear request failed: #{inspect(reason)}")
 
   defp respond_force(conn, _identifier, result), do: respond(conn, result)
+
+  # A present, trimmed parameter, else the request error naming it.
+  defp required_param(value, name) do
+    case string_param(value) do
+      nil -> {:error, {:invalid_request, "#{name} is required"}}
+      param -> {:ok, param}
+    end
+  end
+
+  # Start now's optional note, bounded by the `run.started_by_person` event's `note` line.
+  defp start_note(note) do
+    case string_param(note) do
+      nil ->
+        {:ok, nil}
+
+      text ->
+        if String.length(text) > @start_note_max_chars,
+          do: {:error, {:invalid_request, "note holds at most #{@start_note_max_chars} characters; this one has #{String.length(text)}"}},
+          else: {:ok, text}
+    end
+  end
+
+  # The start's own answers: 409 with the reason it was refused, 502 when the run could not be
+  # started, and the force's mappings for a ticket Linear can't give or won't move.
+  defp respond_start(conn, _identifier, {:ok, payload}), do: json(conn, payload)
+
+  defp respond_start(conn, _identifier, {:error, {:start_refused, reason}}),
+    do: error_response(conn, 409, "start_not_allowed", reason)
+
+  defp respond_start(conn, _identifier, {:error, {:start_failed, message}}),
+    do: error_response(conn, 502, "start_failed", message)
+
+  defp respond_start(conn, _identifier, {:error, :invalid_issue_id}),
+    do: error_response(conn, 422, "invalid_request", "invalid_issue_id")
+
+  defp respond_start(conn, identifier, {:error, :issue_not_found}),
+    do: error_response(conn, 404, "issue_not_found", "#{identifier} was not found in Linear")
+
+  defp respond_start(conn, identifier, {:error, {:linear, reason}}),
+    do: respond_force(conn, identifier, {:error, {:linear, reason}})
+
+  defp respond_start(conn, _identifier, :unavailable),
+    do: error_response(conn, 503, "orchestrator_unavailable", "Orchestrator is unavailable")
+
+  defp respond_start(conn, _identifier, {:error, reason}) do
+    Logger.error("control_api start unexpected orchestrator error: #{inspect(reason)}")
+    error_response(conn, 500, "orchestrator_error", "Unexpected orchestrator error")
+  end
 
   defp respond(conn, {:ok, payload}) when is_map(payload), do: json(conn, payload)
 

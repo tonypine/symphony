@@ -232,8 +232,11 @@ defmodule SymphonyElixir.InboxTest do
       {:ok, _answered} = SymphonyElixir.Questions.answer({:ticket, repo_key, asked.issue_id}, question.id, "Drop signing")
       assert Inbox.items(%{}, inbox) == []
 
-      # Stop: the ticket waits as Stopped by you; Unblock lifts it.
-      :ok = SymphonyElixir.Pauses.stop({:ticket, repo_key, stopped.issue_id}, ~U[2026-10-01 09:00:00Z])
+      # Stop: the ticket waits as Stopped by you; Unblock lifts it. The app's orchestrator runs
+      # beside this async test, and each poll releases a stop it judged by a read of Linear made
+      # after it, for a ticket the tracker doesn't return (as this one). A stop set after any read
+      # this test can overlap is never judged by one, so only the Unblock below lifts it.
+      :ok = SymphonyElixir.Pauses.stop({:ticket, repo_key, stopped.issue_id}, ~U[2999-01-01 09:00:00Z])
       assert [%{identifier: "SHOP-96", kind: :blocked, ask: "Stopped by you" <> _}] = Inbox.items(%{}, inbox)
       {:ok, nil} = SymphonyElixir.Pauses.clear_reasons({:ticket, repo_key, stopped.issue_id}, fn _reason -> true end)
       assert Inbox.items(%{}, inbox) == []

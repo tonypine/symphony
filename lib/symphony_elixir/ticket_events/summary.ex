@@ -55,6 +55,12 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     {"#{run_name(payload)} started", prefixed("in", text(payload, :state)) ++ prefixed("at", short_sha(text(payload, :head)))}
   end
 
+  # The run a person started at once (`Orchestrator.start_issue/3`), by the Director with their
+  # note (`prefixed("by", ...)` would double the by-line the title already carries).
+  defp summary("run.started_by_person", payload, _event) do
+    {"#{run_name(payload)} started by #{text(payload, :by) || "you"}", [text(payload, :note)]}
+  end
+
   defp summary("run.ended", payload, _event) do
     title = "#{run_name(payload)} ended" <> suffix(": ", text(payload, :exit))
     transcript = if text(payload, :transcript), do: "transcript"
