@@ -390,11 +390,6 @@ defmodule SymphonyElixir.QaAgent do
     """
   end
 
-  # A change with nothing to judge on screen (TP-1119): the agent may answer `pass` with
-  # `scope: none` once it built, launched and checked the app, and owes no wide pass. When
-  # `SymphonyElixir.QaPolicy` already found nothing on screen it marks the `macos_app` playbook
-  # `scope: :none`, and the agent is told up front that build and launch are the whole check. The
-  # epic review judges the merged result and keeps its own wide-pass rule.
   # What the driver gives the app in QA mode, by the driver's own names (TP-1346).
   defp qa_mode_section(job) do
     case QaModeContract.section(job.playbooks) do
@@ -403,6 +398,11 @@ defmodule SymphonyElixir.QaAgent do
     end
   end
 
+  # A change with nothing to judge on screen (TP-1119): the agent may answer `pass` with
+  # `scope: none` once it built, launched and checked the app, and owes no wide pass. When
+  # `SymphonyElixir.QaPolicy` already found nothing on screen it marks the `macos_app` playbook
+  # `scope: :none`, and the agent is told up front that build and launch are the whole check. The
+  # epic review judges the merged result and keeps its own wide-pass rule.
   defp scope_section(%{epic_review: true}), do: ""
 
   defp scope_section(job) do
