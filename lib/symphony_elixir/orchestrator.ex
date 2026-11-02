@@ -24,6 +24,7 @@ defmodule SymphonyElixir.Orchestrator do
     ForcedQueue,
     ForcedStatus,
     Handoff,
+    IdlePark,
     Initiatives,
     Notifications,
     Pauses,
@@ -284,6 +285,9 @@ defmodule SymphonyElixir.Orchestrator do
     TicketEvents.Backfill.start(run: &SymphonyElixir.Pauses.Backfill.run_after_ledger/1)
     # Once: a ticket left with records under two repositories is merged into its one record.
     TicketMerge.start()
+    # Once per boot: a ticket an idle run parked before parks asked a question gets the question,
+    # the releasable reason and the push a park gives today, in a task of its own.
+    IdlePark.Backfill.start(configured_repo_keys(repo_key))
     tick_token = make_ref()
     send(self(), {:tick, tick_token})
     schedule_snapshot_publish(config.observability.snapshot_publish_ms)
