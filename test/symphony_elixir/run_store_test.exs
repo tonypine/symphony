@@ -95,6 +95,60 @@ defmodule SymphonyElixir.RunStoreTest do
     end
   end
 
+  # TP-1347: v0.0.1.784's store holds the ticket-state table with the repository index only. The
+  # release that added the by-ticket index (TP-1337) could not boot on it. The fixture is built from
+  # the old definition here, so this stays the upgrade check.
+  test "boots on a store whose ticket-state table lacks the by-ticket index, adds it and reads every row by ticket" do
+    original_run_store_dir = Application.fetch_env!(:symphony_elixir, :run_store_dir)
+    old_dir = Path.join(System.tmp_dir!(), "symphony-784-run-store-#{System.unique_integer([:positive])}")
+    trap_exit? = Process.flag(:trap_exit, true)
+    record = TicketState.new(@repo_key, "issue-784", %{issue_identifier: "ACME-784", phase: "QA"})
+
+    try do
+      :ok = Application.stop(:symphony_elixir)
+      stop_run_store_for_test()
+      stop_mnesia_for_test()
+      create_784_run_store_dir!(old_dir, record)
+
+      # A small fixture loads before Mnesia is asked for the index; production's store did not. The
+      # wait records the index set it found, so the order (load, then index) is checked here.
+      test_pid = self()
+
+      wait = fn tables, timeout ->
+        send(test_pid, {:index_at_wait, :mnesia.table_info(:symphony_run_store_ticket_states, :index)})
+        :mnesia.wait_for_tables(tables, timeout)
+      end
+
+      log =
+        capture_log(fn ->
+          with_table_wait(wait, fn -> assert {:ok, _pid} = RunStore.start_link(dir: old_dir) end)
+        end)
+
+      assert_received {:index_at_wait, [3]}
+      assert log =~ "RunStore table definition differs table=:symphony_run_store_ticket_states"
+      assert log =~ "indexes=[:repo_key] expected=[:repo_key, :issue_id]"
+      assert Enum.sort(:mnesia.table_info(:symphony_run_store_ticket_states, :index)) == [3, 4]
+
+      assert {:atomic, [{_table, _key, @repo_key, "issue-784", ^record}]} =
+               :mnesia.transaction(fn -> :mnesia.index_read(:symphony_run_store_ticket_states, "issue-784", :issue_id) end)
+
+      assert %{issue_identifier: "ACME-784", phase: "QA"} = RunStore.get_ticket_state(@repo_key, "issue-784")
+
+      # A second boot finds both indexes and logs no difference.
+      stop_run_store_for_test()
+      stop_mnesia_for_test()
+
+      refute capture_log(fn -> assert {:ok, _pid} = RunStore.start_link(dir: old_dir) end) =~ "table definition differs"
+    after
+      stop_run_store_for_test()
+      stop_mnesia_for_test()
+      File.rm_rf(old_dir)
+      Application.put_env(:symphony_elixir, :run_store_dir, original_run_store_dir)
+      ensure_symphony_started!()
+      Process.flag(:trap_exit, trap_exit?)
+    end
+  end
+
   test "persists run records, retry queue entries, and codex totals" do
     started_at = DateTime.utc_now()
     due_at = DateTime.add(started_at, 60_000, :millisecond)
@@ -1540,6 +1594,31 @@ defmodule SymphonyElixir.RunStoreTest do
                attributes: [:run_id, :record],
                disc_copies: [node()]
              )
+
+    stop_mnesia_for_test()
+  end
+
+  # The ticket-state table as v0.0.1.784 created it: the repository index only, one row written.
+  defp create_784_run_store_dir!(dir, record) do
+    expanded_dir = Path.expand(dir)
+    File.rm_rf!(expanded_dir)
+    File.mkdir_p!(expanded_dir)
+    Application.put_env(:mnesia, :dir, String.to_charlist(expanded_dir))
+    :ok = :mnesia.create_schema([node()])
+    :ok = :mnesia.start()
+
+    assert {:atomic, :ok} =
+             :mnesia.create_table(
+               :symphony_run_store_ticket_states,
+               attributes: [:key, :repo_key, :issue_id, :record],
+               index: [:repo_key],
+               disc_copies: [node()]
+             )
+
+    assert {:atomic, :ok} =
+             :mnesia.transaction(fn ->
+               :mnesia.write({:symphony_run_store_ticket_states, {@repo_key, "issue-784"}, @repo_key, "issue-784", record})
+             end)
 
     stop_mnesia_for_test()
   end
