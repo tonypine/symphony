@@ -731,6 +731,27 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     assert PullRequest.run_started?("23", gh_runner: runner) == {:error, :invalid_run_jobs_payload}
   end
 
+  test "branch_workflow_run reads the newest push run of a workflow on a branch, with its commit" do
+    fields = "databaseId,number,attempt,status,conclusion,url,createdAt,headSha"
+
+    runner = fn
+      ["run", "list", "-R", "acme/symphony", "--branch", "main", "--workflow", "release", "--event", "push", "--limit", "1", "--json", ^fields], _opts ->
+        {Jason.encode!([%{"databaseId" => 41, "number" => 785, "attempt" => 2, "status" => "queued", "headSha" => "C90734A1"}]), 0}
+
+      ["run", "list", "-R", "acme/empty", "--branch", "main" | _rest], _opts ->
+        {"[]", 0}
+
+      ["run", "list", "-R", "acme/odd", "--branch", "main" | _rest], _opts ->
+        {"{}", 0}
+    end
+
+    assert {:ok, %{id: "41", number: 785, attempt: 2, status: "QUEUED", head_sha: "C90734A1"}} =
+             PullRequest.branch_workflow_run("acme/symphony", "main", "release", gh_runner: runner)
+
+    assert {:ok, nil} = PullRequest.branch_workflow_run("acme/empty", "main", "release", gh_runner: runner)
+    assert {:error, :invalid_workflow_runs_payload} = PullRequest.branch_workflow_run("acme/odd", "main", "release", gh_runner: runner)
+  end
+
   test "list_commit_runs reads the workflow runs on one commit, of the repo given or the checkout's" do
     runner = fn
       ["run", "list", "--commit", "abc123", "--limit", "100", "--json", "databaseId,workflowName,status,conclusion,url,createdAt"], opts ->

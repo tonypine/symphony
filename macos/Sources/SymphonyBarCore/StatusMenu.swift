@@ -87,11 +87,11 @@ public enum StatusMenu {
         return "Symphony v\(version) (embedded)"
     }
 
-    /// What tickets held for an update wait on: the release build's line while it isn't published (an update has nothing
-    /// to install yet), else "Update to unblock 2 tickets"; nil when no ticket waits for an update.
+    /// What the next update waits on: the release build's line while it isn't published (an update has nothing to install
+    /// yet), with or without a held ticket (with none, Symphony sends the newest merge's build), else "Update to unblock
+    /// 2 tickets"; nil when no build is pending and no ticket waits for an update.
     public static func updateLine(_ snapshot: StateSnapshot) -> String? {
-        guard snapshot.updateUnblocks > 0 else { return nil }
-        return snapshot.updateBuildLine ?? updateUnblocksLine(snapshot.updateUnblocks)
+        snapshot.updateBuildLine ?? updateUnblocksLine(snapshot.updateUnblocks)
     }
 
     /// "Update to unblock 2 tickets" while tickets wait only for the running Symphony to include a merged fix,

@@ -18,7 +18,7 @@ defmodule SymphonyElixir.PrWatch.Ingest do
   | `pull_request` `closed` | the PR | `pr: :merged` or `pr: :closed`; a merge also moves its base, as a push |
   | `push` to a branch | every open PR on that base | `mergeable: :unknown`, each read 1 second apart; a read that finds it behind updates it (upkeep U1) |
   | `release` `published` | none | the app repository's newest release (`SymphonyElixir.PrWatch.Release`) |
-  | `workflow_run` completed on a commit a held ticket waits on | none | its release build is checked at once (`SymphonyElixir.ReleaseBuild.delivered/2`) |
+  | `workflow_run` completed on a watched commit, or a `release` run on `main` of Symphony's own repository | none | its release build is checked at once, held ticket or not (`SymphonyElixir.ReleaseBuild.delivered/2`) |
   | `ping` | none | none: every watched PR is read now, catching up on what the relay missed |
 
   Each delivery also counts for its repository's health (`SymphonyElixir.PrWatch.Health`), and a
@@ -50,9 +50,9 @@ defmodule SymphonyElixir.PrWatch.Ingest do
     end
   end
 
-  # A finished workflow run on a commit a held ticket waits on checks that commit's release build at
-  # once (`SymphonyElixir.ReleaseBuild`), whether or not a watcher runs.
-  defp release_build({:ci, %{event: "workflow_run", head_sha: sha}}, opts) when is_binary(sha), do: ReleaseBuild.delivered(sha, opts)
+  # A finished workflow run on a watched commit, or a release run on main, checks that commit's
+  # release build at once (`SymphonyElixir.ReleaseBuild`), whether or not a watcher runs.
+  defp release_build({:ci, %{event: "workflow_run", head_sha: sha} = event}, opts) when is_binary(sha), do: ReleaseBuild.delivered(event, opts)
   defp release_build(_delivery, _opts), do: :ignored
 
   @doc "Counts a delivery that failed its signature check against the repository its payload names."
