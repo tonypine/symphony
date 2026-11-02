@@ -1717,16 +1717,24 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
+  # An index is added to an existing table only once its disc copy has loaded: Mnesia answers an
+  # earlier add with `{:no_exists, table}`, which kept a store from the previous release from booting
+  # (TP-1347).
   defp ensure_tables do
-    with :ok <- Enum.reduce_while(@tables, :ok, &ensure_table/2) do
-      wait_for_tables()
+    with :ok <- Enum.reduce_while(@tables, :ok, &ensure_table/2),
+         :ok <- wait_for_tables() do
+      Enum.reduce_while(@tables, :ok, fn {table, _attributes, opts}, :ok ->
+        table
+        |> ensure_table_indexes(Keyword.get(opts, :index, []))
+        |> continue_or_halt()
+      end)
     end
   end
 
   defp ensure_table({table, attributes, opts}, :ok) do
     if table in :mnesia.system_info(:tables) do
       table
-      |> ensure_existing_table(attributes, Keyword.get(opts, :index, []))
+      |> ensure_table_attributes(attributes)
       |> continue_or_halt()
     else
       create_opts =
@@ -1743,12 +1751,6 @@ defmodule SymphonyElixir.RunStore do
         {:aborted, {:already_exists, ^table}} -> {:cont, :ok}
         {:aborted, reason} -> {:halt, {:error, reason}}
       end
-    end
-  end
-
-  defp ensure_existing_table(table, attributes, indexes) do
-    with :ok <- ensure_table_attributes(table, attributes) do
-      ensure_table_indexes(table, indexes)
     end
   end
 
@@ -1773,11 +1775,22 @@ defmodule SymphonyElixir.RunStore do
 
     indexes
     |> Enum.reject(&index_present?(&1, current_indexes, attributes))
+    |> log_missing_indexes(table, current_indexes, indexes, attributes)
     |> Enum.reduce_while(:ok, fn index, :ok ->
       table
       |> ensure_table_index(index, attributes)
       |> continue_or_halt()
     end)
+  end
+
+  defp log_missing_indexes([], _table, _current_indexes, _indexes, _attributes), do: []
+
+  defp log_missing_indexes(missing, table, current_indexes, indexes, attributes) do
+    current = Enum.map(current_indexes, &Enum.at(attributes, &1 - 2))
+
+    Logger.warning("RunStore table definition differs table=#{inspect(table)} indexes=#{inspect(current)} expected=#{inspect(indexes)}; adding #{inspect(missing)}")
+
+    missing
   end
 
   defp ensure_table_index(table, index, attributes) do
