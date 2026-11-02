@@ -129,6 +129,10 @@ defmodule SymphonyElixir.QaAndroid.Driver do
   @spec tools() :: [String.t()]
   def tools, do: @tools
 
+  @doc "The emulator folder `qa_android_put_file` puts fixture files in, the only one it writes."
+  @spec downloads_dir() :: String.t()
+  def downloads_dir, do: @downloads
+
   @doc "The `blocked` reason for a step that needs an Android device in a pass without the android_app playbook."
   @spec no_playbook_reason() :: String.t()
   def no_playbook_reason, do: @no_playbook_reason

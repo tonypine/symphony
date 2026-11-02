@@ -11,12 +11,15 @@ defmodule SymphonyElixir.PromptBuilder do
     LandingOrder,
     MergeConfirmation,
     PromptSafety,
+    QaModeContract,
+    QaPolicy,
     RunStore,
     TicketSignals,
     TicketState,
     Workflow
   }
 
+  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PathUnlock
@@ -103,6 +106,7 @@ defmodule SymphonyElixir.PromptBuilder do
     {repo_key, workflow_source} = repo_context_for_prompt(issue, opts)
     agent_context = agent_context_for_prompt(opts, workflow_source)
     prompt_mode = prompt_mode(opts)
+    qa_mode = qa_mode_section(prompt_mode, opts, workflow_source)
 
     template =
       opts
@@ -123,7 +127,7 @@ defmodule SymphonyElixir.PromptBuilder do
       "ci_failure" => to_solid_value(ci_failure),
       "pr_conflict" => to_solid_value(pr_conflict)
     })
-    |> prepend_managed_context(prompt_mode, agent_context, repo_key)
+    |> prepend_managed_context(prompt_mode, agent_context, repo_key, qa_mode)
     |> append_extra_prompt(Keyword.get(opts, :extra_prompt) || Keyword.get(opts, :prompt_context))
     |> append_reviewer_comments(reviewer_comments)
     |> append_ci_failure(ci_failure)
@@ -417,17 +421,22 @@ defmodule SymphonyElixir.PromptBuilder do
       agent_kind_from_settings(Keyword.get(opts, :settings))
   end
 
-  defp agent_kind_from_workflow_source({:repo, repo_key}) do
-    case Config.settings_for_repo(repo_key) do
-      {:ok, settings} -> agent_kind_from_settings(settings)
-      {:error, _reason} -> nil
-    end
-  end
+  defp agent_kind_from_workflow_source(workflow_source), do: agent_kind_from_settings(settings_for(workflow_source))
 
-  defp agent_kind_from_workflow_source(:current) do
-    case Config.settings() do
-      {:ok, settings} -> agent_kind_from_settings(settings)
-      {:error, _reason} -> nil
+  defp settings_for({:repo, repo_key}), do: ok_settings(Config.settings_for_repo(repo_key))
+  defp settings_for(:current), do: ok_settings(Config.settings())
+
+  defp ok_settings({:ok, settings}), do: settings
+  defp ok_settings({:error, _reason}), do: nil
+
+  # The QA-mode contract of an app repository's playbooks (TP-1346), for an issue run only: a PR
+  # run's workflow is the repository's PR workflow, with no QA pass.
+  defp qa_mode_section(:pr, _opts, _workflow_source), do: nil
+
+  defp qa_mode_section(_prompt_mode, opts, workflow_source) do
+    case Keyword.get(opts, :settings) || settings_for(workflow_source) do
+      %Schema{} = settings -> settings |> QaPolicy.enabled_playbooks() |> QaModeContract.section()
+      _other -> nil
     end
   end
 
@@ -443,12 +452,14 @@ defmodule SymphonyElixir.PromptBuilder do
 
   defp append_extra_prompt(prompt, _extra_prompt), do: prompt
 
-  defp prepend_managed_context(prompt, :pr, agent_context, repo_key) do
+  defp prepend_managed_context(prompt, :pr, agent_context, repo_key, _qa_mode) do
     managed_pr_context(agent_context, repo_key) <> "\n\n" <> prompt
   end
 
-  defp prepend_managed_context(prompt, _prompt_mode, agent_context, repo_key) do
-    managed_issue_context(agent_context, repo_key) <> "\n\n" <> prompt
+  defp prepend_managed_context(prompt, _prompt_mode, agent_context, repo_key, qa_mode) do
+    [managed_issue_context(agent_context, repo_key), qa_mode, prompt]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n\n")
   end
 
   defp managed_issue_context(agent_context, repo_key) do

@@ -85,7 +85,7 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.Config.Schema.Agent.Mcp.Server, as: McpServer
   alias SymphonyElixir.Decisions
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.{PathSafety, PromptSafety, QaDriver, ReviewAgent}
+  alias SymphonyElixir.{PathSafety, PromptSafety, QaDriver, QaModeContract, ReviewAgent}
   alias SymphonyElixir.QaAgent.Design
   alias SymphonyElixir.QaAgent.PlaybookSettings
   alias SymphonyElixir.QaAgent.Verdict
@@ -301,7 +301,7 @@ defmodule SymphonyElixir.QaAgent do
     Description (walkthrough and acceptance criteria):
     #{PromptSafety.linear_issue_body(Decisions.strip(issue.description) || "")}
     #{decisions_rule(issue, job)}#{parent_section(parent)}#{design_section(job, parent)}#{epic_section(job)}#{dev_server_section(job)}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
-    #{qa_jobs_section()}#{scope_section(job)}
+    #{qa_jobs_section()}#{scope_section(job)}#{qa_mode_section(job)}
     Playbooks to follow:
 
     #{Enum.map_join(job.playbooks, "\n\n", & &1.prompt)}
@@ -388,6 +388,14 @@ defmodule SymphonyElixir.QaAgent do
     not available, your final message must be only this JSON object, with no prose before or after
     it.
     """
+  end
+
+  # What the driver gives the app in QA mode, by the driver's own names (TP-1346).
+  defp qa_mode_section(job) do
+    case QaModeContract.section(job.playbooks) do
+      nil -> ""
+      section -> "\n" <> section <> "\n"
+    end
   end
 
   # A change with nothing to judge on screen (TP-1119): the agent may answer `pass` with
