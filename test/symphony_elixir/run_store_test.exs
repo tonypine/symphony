@@ -524,8 +524,6 @@ defmodule SymphonyElixir.RunStoreTest do
     assert [%{name: "blocked"}] = RunStore.get_ticket_state(@repo_key, "issue-2").signals
     assert [%{kind: "qa", head_sha: "abc123", outcome: "pass"}] = RunStore.get_ticket_state(@repo_key, "issue-1").verdicts
 
-    assert :ok = RunStore.put_ticket_state(TicketState.new(@other_repo_key, "issue-1", %{phase: "Done"}))
-
     restart_run_store()
 
     assert %{phase: "Merging"} = RunStore.get_ticket_state(@repo_key, "issue-1")
@@ -534,12 +532,21 @@ defmodule SymphonyElixir.RunStoreTest do
     assert [%{kind: "qa", head_sha: "abc123", outcome: "pass", details: %{model: "claude-opus"}}] =
              RunStore.get_ticket_state(@repo_key, "issue-1").verdicts
 
-    assert %{phase: "Done"} = RunStore.get_ticket_state(@other_repo_key, "issue-1")
+    # The ticket written under another repository is the same ticket: its one record, found by
+    # either repository; the pair rows beside it stay for the previous release's reader.
+    assert :ok = RunStore.put_ticket_state(TicketState.new(@other_repo_key, "issue-1", %{phase: "Done"}))
+    restart_run_store()
+
+    assert %{phase: "Done", repo_key: @other_repo_key} = RunStore.get_ticket_state(@other_repo_key, "issue-1")
+    assert %{phase: "Done", repo_key: @other_repo_key} = RunStore.get_ticket_state(@repo_key, "issue-1")
 
     assert Enum.sort(Enum.map(RunStore.list_ticket_states(@repo_key), & &1.issue_id)) == ["issue-1", "issue-2"]
     assert Enum.sort(Enum.map(RunStore.list_all_ticket_states(), & &1.issue_id)) == ["issue-1", "issue-1", "issue-2"]
 
+    # Deleting one repository's pair row keeps the ticket's record, which is the other's.
     assert :ok = RunStore.delete_ticket_state(@repo_key, "issue-1")
+    assert %{phase: "Done"} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert :ok = RunStore.delete_ticket_state(@other_repo_key, "issue-1")
     assert RunStore.get_ticket_state(@repo_key, "issue-1") == nil
 
     restart_run_store()
@@ -626,8 +633,11 @@ defmodule SymphonyElixir.RunStoreTest do
     restart_run_store()
     assert %{ci_states: [%{head_sha: "abc", status: "green"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
 
+    # Under another repository it is the ticket's one record that takes the new head.
     assert {:ok, :changed} = RunStore.record_ci_state(@other_repo_key, "issue-1", nil, "red", at)
-    assert %{ci_states: [%{head_sha: nil, status: "red"}]} = RunStore.get_ticket_state(@other_repo_key, "issue-1")
+
+    assert %{repo_key: @other_repo_key, ci_states: [%{head_sha: nil, status: "red"}, %{head_sha: "abc", status: "green"}]} =
+             RunStore.get_ticket_state(@other_repo_key, "issue-1")
 
     assert {:error, :invalid_ci_state} = RunStore.record_ci_state(@repo_key, nil, "abc", "running", at)
     assert {:error, :invalid_ci_state} = RunStore.record_ci_state(@repo_key, "issue-1", "abc", nil, at)

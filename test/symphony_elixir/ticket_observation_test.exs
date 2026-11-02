@@ -369,6 +369,16 @@ defmodule SymphonyElixir.TicketObservationTest do
       RunStore.get_ticket_state(repo_key, "issue-observed")
     end
 
+    # The two records of one ticket a release before the by-ticket index could leave, one per repo:
+    # neither is in the index, so each repo reads its own.
+    defp held_in_both!(repo_keys) do
+      Enum.map(repo_keys, fn repo_key ->
+        record = poll!(repo_key)
+        {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.delete({:symphony_run_store_ticket_index, "issue-observed"}) end)
+        record
+      end)
+    end
+
     test "an Issue delivery updates the record the poll keeps, from the webhook", %{repo_key: repo_key} do
       poll!(repo_key)
       edited = delivery(%{priority: 1, updated_at: DateTime.add(@linear_at, 60)})
@@ -446,7 +456,8 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert TicketObservation.observe_delivery(edited, opts) == :updated
 
       assert %{priority: 1, observed_from: :webhook} = RunStore.get_ticket_state(@project_repo, "issue-observed")
-      assert RunStore.get_ticket_state(@default_repo, "issue-observed") == nil
+      # One record per ticket: the team default reads the project repo's.
+      assert %{repo_key: @project_repo} = RunStore.get_ticket_state(@default_repo, "issue-observed")
 
       repolled = linear_issue(%{project: @project, blocked_by: [], priority: 1, updated_at: DateTime.add(@linear_at, 60)})
       opts = [now: DateTime.add(@now, 120), terminal_states: [], compare: true]
@@ -480,7 +491,8 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert record.project == %{id: "project-harness", name: "Building the harness", slug_id: "f469eb38bbc5"}
       assert [%{identifier: "ACME-5"}] = record.blockers
       assert [%{identifier: "ACME-8"}] = record.sub_issues
-      assert RunStore.get_ticket_state(@default_repo, "issue-observed") == nil
+      # One record per ticket: the team default reads the project repo's.
+      assert %{repo_key: @project_repo} = RunStore.get_ticket_state(@default_repo, "issue-observed")
 
       edited = delivery(%{project: @project_with_url, priority: 1, updated_at: DateTime.add(@linear_at, 60)})
       assert TicketObservation.observe_delivery(edited, [repos: @new_ticket_routes, now: DateTime.add(@now, 60)] ++ new_ticket_opts()) == :updated
@@ -506,7 +518,7 @@ defmodule SymphonyElixir.TicketObservationTest do
     end
 
     test "a ticket held in several repos is unrouted, both records are left and no poll is asked for" do
-      held = Enum.map([@default_repo, @project_repo], &poll!/1)
+      held = held_in_both!([@default_repo, @project_repo])
 
       edited = delivery(%{priority: 1, updated_at: DateTime.add(@linear_at, 60)})
       assert TicketObservation.observe_delivery(edited, now: DateTime.add(@now, 60), repos: @slug_routes, orchestrator: self()) == :unrouted
@@ -599,7 +611,8 @@ defmodule SymphonyElixir.TicketObservationTest do
       record = RunStore.get_ticket_state(@project_repo, "issue-observed")
       assert %{priority: 1, observed_from: :by_id, repo_key: @project_repo} = record
       assert record.observed_at == DateTime.add(@now, 60)
-      assert RunStore.get_ticket_state(@default_repo, "issue-observed") == nil
+      # One record per ticket: the team default reads the project repo's.
+      assert %{repo_key: @project_repo} = RunStore.get_ticket_state(@default_repo, "issue-observed")
 
       stale = by_id(%{priority: 4, updated_at: @linear_at})
 
@@ -625,7 +638,7 @@ defmodule SymphonyElixir.TicketObservationTest do
     end
 
     test "a ticket held in several repos is skipped, as the poll counts it a conflict, and both records are left" do
-      held = Enum.map([@default_repo, @project_repo], &poll!/1)
+      held = held_in_both!([@default_repo, @project_repo])
 
       edited = by_id(%{priority: 1, updated_at: DateTime.add(@linear_at, 60)})
       assert %{unrouted: 1, updated: 0} = TicketObservation.observe_held([edited], now: DateTime.add(@now, 60), repos: @slug_routes)
