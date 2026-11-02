@@ -75,6 +75,16 @@ merge-base with `origin/main` (`--base <ref>` for another branch), uncommitted a
 included. Modules in `mix.exs`'s `test_coverage` `ignore_modules` are skipped, as in CI. When the
 tests that cover a module don't name it, pass them: `mix cover.changed <test files>`.
 
+CI's `coverage report` job merges the four test partitions' coverage with `mix coverage.report`.
+It prints every module below 100% with its file and uncovered line numbers, and annotates the
+check with them. On a pull request, a module below 100% fails the gate when the pull request
+touches it (changes its file, or changes or deletes a test file that names it) or when main's last
+green report didn't have it at 100%. A module the pull request doesn't touch and main had at 100%
+is a warning instead: the merge or a flaky test lost its lines, and it gets its own ticket. On main
+every module below 100% fails, and a green report saves the baseline pull requests compare against.
+To read the lines of an exported run locally: `mix test --cover --export-coverage <name> <files>`,
+then `MIX_ENV=test mix coverage.report`.
+
 Use the fast local gate while iterating:
 
 ```bash
