@@ -907,6 +907,15 @@ defmodule SymphonyElixir.QaAgentTest do
   end
 
   describe "prompt/2 and settings" do
+    test "a pass with the macos_app playbook carries the QA-mode contract, and one without carries none" do
+      macos = Selection.playbooks(%{playbooks: %{"macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
+      prompt = QaAgent.prompt(job(%{playbooks: macos}), nil)
+
+      assert prompt =~ "QA mode, what Symphony's driver gives the app:"
+      assert prompt =~ "`qa_api_requests` reads `api-requests.jsonl` from the QA root."
+      refute QaAgent.prompt(job(), nil) =~ "QA mode, what Symphony's driver gives the app:"
+    end
+
     test "a missing QA tool is never needs_person, and an open ticket covering it is named in covered_by" do
       prompt = QaAgent.prompt(job(), nil) |> String.replace(~r/\s+/, " ")
 
