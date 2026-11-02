@@ -540,8 +540,10 @@ defmodule SymphonyElixir.RunStoreTest do
     assert %{phase: "Done", repo_key: @other_repo_key} = RunStore.get_ticket_state(@other_repo_key, "issue-1")
     assert %{phase: "Done", repo_key: @other_repo_key} = RunStore.get_ticket_state(@repo_key, "issue-1")
 
-    assert Enum.sort(Enum.map(RunStore.list_ticket_states(@repo_key), & &1.issue_id)) == ["issue-1", "issue-2"]
-    assert Enum.sort(Enum.map(RunStore.list_all_ticket_states(), & &1.issue_id)) == ["issue-1", "issue-1", "issue-2"]
+    # The listings read the ticket once, through the index, under the repository its record names.
+    assert Enum.map(RunStore.list_ticket_states(@repo_key), & &1.issue_id) == ["issue-2"]
+    assert [%{issue_id: "issue-1", phase: "Done"}] = RunStore.list_ticket_states(@other_repo_key)
+    assert Enum.sort(Enum.map(RunStore.list_all_ticket_states(), & &1.issue_id)) == ["issue-1", "issue-2"]
 
     # Deleting one repository's pair row keeps the ticket's record, which is the other's.
     assert :ok = RunStore.delete_ticket_state(@repo_key, "issue-1")

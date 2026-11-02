@@ -988,6 +988,7 @@ defmodule SymphonyElixir.ExtensionsTest do
         "recent" => []
       },
       "pause_backfill" => nil,
+      "records_merged" => nil,
       "orchestrator" => %{
         "message_queue_len" => 0,
         "snapshot_age_ms" => nil,

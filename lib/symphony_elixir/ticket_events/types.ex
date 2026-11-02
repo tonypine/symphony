@@ -48,7 +48,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
 
   A question to a person is machinery-only too (`SymphonyElixir.Questions`): `question.asked`, then
   `question.answered` (the answer as given, and the option it picked) or `question.withdrawn` (with
-  the reason and its `cause`: `ticket_moved`, `restarted`, `hold_cleared`, `superseded`, or
+  the reason and its `cause`: `ticket_moved`, `restarted`, `hold_cleared`, `superseded`, `superseded_by_move`, or
   `run_ended` for a question that holds nothing), each naming the question by `question_id`, and `question.reopened` when the Director
   takes an answer back, after which the question is open again and its next answer is a new
   `question.answered`.
@@ -227,7 +227,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:machine],
       run_kinds: [],
       required: [question_id: :string, reason: :string],
-      optional: [title: :string, by: :map, cause: {:enum, ~w(ticket_moved restarted hold_cleared superseded run_ended)}] ++ @signal,
+      optional: [title: :string, by: :map, cause: {:enum, ~w(ticket_moved restarted hold_cleared superseded superseded_by_move run_ended)}] ++ @signal,
       idempotency: {:fields, [:question_id]}
     },
     "question.reopened" => %{
