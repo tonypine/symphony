@@ -119,8 +119,14 @@ defmodule SymphonyElixir.Pauses.ReviewFocusTest do
     ]
 
     # Written as a record stored before the holds were retired: the store's own write would drop them.
+    # Both rows: the pair key and the by-ticket index the listings read.
     raw = Map.put(RunStore.get_ticket_state(@repo_key, @issue_id), :holds, holds)
-    {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_ticket_states, {@repo_key, @issue_id}, @repo_key, @issue_id, raw}) end)
+
+    {:atomic, :ok} =
+      :mnesia.transaction(fn ->
+        :mnesia.write({:symphony_run_store_ticket_states, {@repo_key, @issue_id}, @repo_key, @issue_id, raw})
+        :mnesia.write({:symphony_run_store_ticket_index, @issue_id, @repo_key, raw})
+      end)
 
     # Read, the record drops its holds; a question a Needs Decision hold carried reads as asked with a request.
     carrying = Map.put(raw, :holds, [%{kind: :needs_decision, decision: %{title: @request.title, question_id: "q-carried"}}])

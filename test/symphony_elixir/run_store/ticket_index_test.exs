@@ -92,6 +92,17 @@ defmodule SymphonyElixir.RunStore.TicketIndexTest do
     assert count(log, "issue_id=#{issue_id} record_repo_key=#{@other_repo_key} repo_key=#{@repo_key}") == 1
   end
 
+  test "a ticket that moved lists once, through the index, in every listing", %{issue_id: issue_id} do
+    :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, issue_id, %{phase: "QA"}))
+    capture_log(fn -> assert :ok = RunStore.record_ticket_signal(@other_repo_key, issue_id, "observed", %{}) end)
+    assert %{phase: "QA"} = pair_record(@repo_key, issue_id)
+
+    assert [%{repo_key: @other_repo_key}] = Enum.filter(RunStore.list_all_ticket_states(), &(&1.issue_id == issue_id))
+    assert [%{repo_key: @other_repo_key, signals: [%{name: "observed"}]}] = RunStore.list_ticket_states(@other_repo_key)
+    assert RunStore.list_ticket_states(@repo_key) == []
+    assert RunStore.ticket_record_repositories() == %{issue_id => [@repo_key, @other_repo_key]}
+  end
+
   test "a ticket the store already holds under two repositories is left to the pair key", %{issue_id: issue_id} do
     write_pair_row(@repo_key, issue_id, TicketState.new(@repo_key, issue_id, %{phase: "Done"}))
     write_pair_row(@other_repo_key, issue_id, TicketState.new(@other_repo_key, issue_id, %{phase: "QA"}))
