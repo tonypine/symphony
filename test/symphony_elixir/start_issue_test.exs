@@ -153,6 +153,25 @@ defmodule SymphonyElixir.StartIssueTest do
       assert {:error, {:start_refused, "the ticket has no repository; it cannot be started"}} = reply
       assert next_state.running == %{}
     end
+
+    test "a spawn that fails answers that a retry is scheduled and keeps that retry in the state" do
+      started = issue("spawn-1", "MT-P1", "In Progress")
+      tracked([started])
+
+      # A task supervisor that takes no child: the spawn fails as Task.Supervisor's own refusal.
+      assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, SymphonyElixir.TaskSupervisor)
+      start_supervised!({Task.Supervisor, name: SymphonyElixir.TaskSupervisor, max_children: 0})
+
+      start = fn -> Orchestrator.handle_call({:start_issue, started, nil}, {self(), make_ref()}, orchestrator_state(1)) end
+      {{:reply, reply, next_state}, _log} = with_log(start)
+
+      assert {:error, {:start_failed, "the agent did not start; it is scheduled to retry as a normal candidate"}} = reply
+      assert next_state.running == %{}
+      assert %{timer_ref: timer_ref} = next_state.retry_attempts["spawn-1"]
+      assert is_reference(timer_ref)
+      Process.cancel_timer(timer_ref)
+      assert [] = ticket_events(@repo, "spawn-1", "run.started_by_person")
+    end
   end
 
   describe "Orchestrator.start_issue/3" do

@@ -8711,15 +8711,16 @@ defmodule SymphonyElixir.Orchestrator do
             session_id: nil
           }}, next_state}
 
-      {:error, reason} ->
-        {:reply, {:error, {:start_failed, reason}}, state}
+      {:error, reason, next_state} ->
+        {:reply, {:error, {:start_failed, reason}}, next_state}
     end
   end
 
   # The Start now dispatch itself, outside the dispatch pass: no slot check, no queue order, no
   # forced queue. A worker host is used when one has a slot, else the run starts locally, since a
   # start never waits for capacity. Its failures are the caller's answer, never a silently
-  # scheduled retry — only the agent spawn's own failure schedules one, and the answer says so.
+  # scheduled retry — only the agent spawn's own failure schedules one, the answer says so, and
+  # the state it returns keeps that retry.
   defp start_run(%State{} = state, %Issue{} = issue, repo_key, note) do
     worker_host = start_worker_host(state)
     run_id = new_run_id(issue.id)
@@ -8744,12 +8745,14 @@ defmodule SymphonyElixir.Orchestrator do
           notify_dashboard()
           {:ok, run_id, next_state}
         else
-          {:error, "the agent did not start; it is scheduled to retry as a normal candidate"}
+          # The spawn's failure scheduled the retry in `next_state` (its entry and timer), so the
+          # answer keeps that state: replying with the old one would drop the retry it promises.
+          {:error, "the agent did not start; it is scheduled to retry as a normal candidate", next_state}
         end
 
       {:error, reason} ->
         Logger.warning("Start now could not allocate a verification port for #{issue_context(issue)}: #{inspect(reason)}")
-        {:error, "the agent could not start: its verification port could not be allocated"}
+        {:error, "the agent could not start: its verification port could not be allocated", state}
     end
   end
 
