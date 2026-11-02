@@ -307,7 +307,8 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
 
     assert RunStore.get_ticket_state(repo_key, "5") == nil
     assert RunStore.get_ticket_state(repo_key, "4") == nil
-    assert RunStore.get_ticket_state(repo_key, "6") == nil
+    # Ticket 6 is the other repo's: its one record, which this repo reads too, is that repo's.
+    refute match?(%{repo_key: ^repo_key}, RunStore.get_ticket_state(repo_key, "6"))
   end
 
   test "one read per watched PR per tick, plus one open-PR list per repo per tick", %{repo_key: repo_key} do

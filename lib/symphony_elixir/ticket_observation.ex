@@ -885,7 +885,7 @@ defmodule SymphonyElixir.TicketObservation do
     repos
     |> repo_keys()
     |> Enum.reduce_while({:ok, []}, fn repo_key, {:ok, held} ->
-      case read(repo_key, issue_id) do
+      case read_held(repo_key, issue_id) do
         {:ok, nil} -> {:cont, {:ok, held}}
         {:ok, _record} -> {:cont, {:ok, [repo_key | held]}}
         {:error, reason} -> {:halt, {:error, repo_key, reason}}
@@ -908,7 +908,7 @@ defmodule SymphonyElixir.TicketObservation do
   end
 
   defp mark_removed(repo_key, issue_id, now) do
-    with {:ok, stored} when not is_nil(stored) <- read(repo_key, issue_id),
+    with {:ok, stored} when not is_nil(stored) <- read_held(repo_key, issue_id),
          removed = TicketState.mark_removed(stored, now),
          :ok <- RunStore.update_ticket_state(repo_key, issue_id, Map.take(removed, [:removed_at, :updated_at])) do
       :ok = ObservabilityPubSub.broadcast_ticket_record_changed(repo_key, issue_id, [:removed_at])
@@ -958,6 +958,15 @@ defmodule SymphonyElixir.TicketObservation do
     case RunStore.get_ticket_state(repo_key, issue_id) do
       {:error, reason} -> {:error, reason}
       stored -> {:ok, stored}
+    end
+  end
+
+  # The record `repo_key` holds: the ticket's one record when its repository is `repo_key` (a record
+  # another repository holds is that one's: `SymphonyElixir.RunStore` reads by ticket first).
+  defp read_held(repo_key, issue_id) do
+    case read(repo_key, issue_id) do
+      {:ok, %{repo_key: held_by}} when held_by != repo_key -> {:ok, nil}
+      result -> result
     end
   end
 

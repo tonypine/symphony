@@ -16,6 +16,11 @@ defmodule SymphonyElixir.RunStore do
   @pr_review_table :symphony_run_store_pr_reviews
   @ci_check_table :symphony_run_store_ci_checks
   @ticket_state_table :symphony_run_store_ticket_states
+  # The by-ticket index beside the pair key: issue id -> the record, with its repository as a field
+  # (`ticket_index_marker/0`). The pair key stays written and read, so the previous release reads
+  # this store unchanged.
+  @ticket_index_table :symphony_run_store_ticket_index
+  @ticket_index_marker "ticket_index_v1"
   @ticket_events_table :symphony_run_store_ticket_events
   @artifacts_table :symphony_run_store_artifacts
   @ticket_pull_request_table :symphony_run_store_ticket_pull_requests
@@ -35,7 +40,8 @@ defmodule SymphonyElixir.RunStore do
     {@totals_table, [:key, :record], []},
     {@pr_review_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key]]},
     {@ci_check_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key]]},
-    {@ticket_state_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key]]},
+    {@ticket_state_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key, :issue_id]]},
+    {@ticket_index_table, [:issue_id, :repo_key, :record], []},
     {@ticket_pull_request_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key]]},
     {@verification_allocation_table, [:key, :repo_key, :run_id, :record], [index: [:repo_key]]},
     {@pause_table, [:key, :record], []},
@@ -654,7 +660,7 @@ defmodule SymphonyElixir.RunStore do
         |> TicketState.normalize()
 
       durable_transaction(fn ->
-        :mnesia.write({@ticket_state_table, scoped_key(repo_key, issue_id), repo_key, issue_id, normalized})
+        write_ticket_record(repo_key, issue_id, normalized)
         :ok
       end)
     end
@@ -695,10 +701,7 @@ defmodule SymphonyElixir.RunStore do
   def delete_ticket_state(repo_key, issue_id) when is_binary(issue_id) do
     with {:ok, repo_key} <- normalize_repo_key(repo_key),
          :ok <- ensure_started() do
-      durable_transaction(fn ->
-        :mnesia.delete({@ticket_state_table, scoped_key(repo_key, issue_id)})
-        :ok
-      end)
+      durable_transaction(fn -> delete_ticket_record(repo_key, issue_id) end)
     end
   end
 
@@ -1506,6 +1509,21 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
+  @doc """
+  The marker (`get_marker/1`) of the by-ticket index's version: set once a start of this release
+  created the index beside the pair key, so every record write since writes both and every read
+  tries the index first. The merge of a ticket's duplicate records reads it.
+  """
+  @spec ticket_index_marker() :: String.t()
+  def ticket_index_marker, do: @ticket_index_marker
+
+  defp mark_ticket_index do
+    durable_transaction(fn ->
+      if is_nil(read_marker(@ticket_index_marker)), do: :mnesia.write({@totals_table, {:marker, @ticket_index_marker}, DateTime.utc_now()})
+      :ok
+    end)
+  end
+
   defp read_marker(name) do
     case :mnesia.read(@totals_table, {:marker, name}) do
       [{@totals_table, _key, %DateTime{} = at}] -> at
@@ -1532,6 +1550,7 @@ defmodule SymphonyElixir.RunStore do
     case setup_mnesia(dir) do
       :ok ->
         build_run_index()
+        :ok = mark_ticket_index()
         {:ok, %State{dir: dir}}
 
       {:error, reason} ->
@@ -1965,30 +1984,109 @@ defmodule SymphonyElixir.RunStore do
     end)
   end
 
-  defp read_ticket_state(repo_key, issue_id) do
-    case :mnesia.read(@ticket_state_table, scoped_key(repo_key, issue_id)) do
-      [{@ticket_state_table, _key, ^repo_key, ^issue_id, record}] -> record
-      [] -> nil
+  defp read_ticket_state(repo_key, issue_id), do: read_ticket_record(repo_key, issue_id)
+
+  # The ticket's record, read through the by-ticket index first and the pair key after: a record
+  # found only through the pair key is written to the index on this read, so the index fills as the
+  # store is used. A record whose repository is not `repo_key`'s (the ticket moved) is returned as it
+  # is, and the difference logged: the caller never opens a second record. A ticket that already
+  # holds a pair row under another repository too, and no index row, is left to the pair key: which
+  # of its records is the ticket's is the merge's call (`ticket_index_marker/0`), not a read's.
+  defp read_ticket_record(repo_key, issue_id, lock \\ :read) do
+    case :mnesia.read(@ticket_index_table, issue_id, lock) do
+      [{@ticket_index_table, ^issue_id, ^repo_key, record}] ->
+        record
+
+      [{@ticket_index_table, ^issue_id, record_repo_key, record}] ->
+        log_repository_mismatch(issue_id, record_repo_key, repo_key)
+        record
+
+      [] ->
+        read_pair_ticket_record(repo_key, issue_id, lock)
+    end
+  end
+
+  defp read_pair_ticket_record(repo_key, issue_id, lock) do
+    key = scoped_key(repo_key, issue_id)
+
+    case :mnesia.read(@ticket_state_table, key, lock) do
+      [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] ->
+        if indexable?(repo_key, issue_id), do: :mnesia.write({@ticket_index_table, issue_id, repo_key, record})
+        record
+
+      [] ->
+        nil
+    end
+  end
+
+  defp read_or_new_ticket_record(repo_key, issue_id, lock \\ :read) do
+    case read_ticket_record(repo_key, issue_id, lock) do
+      nil -> TicketState.new(repo_key, issue_id)
+      record -> TicketState.normalize(record)
+    end
+  end
+
+  # Writes the record under its pair key and the by-ticket index in the caller's transaction. Its
+  # repository is the route it was written through.
+  defp write_ticket_record(repo_key, issue_id, record) do
+    record = Map.put(record, :repo_key, repo_key)
+    :mnesia.write({@ticket_state_table, scoped_key(repo_key, issue_id), repo_key, issue_id, record})
+
+    if :mnesia.read(@ticket_index_table, issue_id, :write) != [] or indexable?(repo_key, issue_id) do
+      :mnesia.write({@ticket_index_table, issue_id, repo_key, record})
+    end
+
+    :ok
+  end
+
+  # No pair row of the ticket under another repository: the index can't pick a stranded record.
+  defp indexable?(repo_key, issue_id) do
+    @ticket_state_table
+    |> :mnesia.index_read(issue_id, :issue_id)
+    |> Enum.all?(&match?({@ticket_state_table, _key, ^repo_key, ^issue_id, _record}, &1))
+  end
+
+  defp delete_ticket_record(repo_key, issue_id) do
+    :mnesia.delete({@ticket_state_table, scoped_key(repo_key, issue_id)})
+
+    case :mnesia.read(@ticket_index_table, issue_id, :write) do
+      [{@ticket_index_table, ^issue_id, ^repo_key, _record}] -> :mnesia.delete({@ticket_index_table, issue_id})
+      _other -> :ok
+    end
+  end
+
+  # Once per caller's repository for each change of the record's, not once per read.
+  defp log_repository_mismatch(issue_id, record_repo_key, repo_key) do
+    key = {__MODULE__, :ticket_repository_mismatch, issue_id}
+
+    logged =
+      case :persistent_term.get(key, nil) do
+        {^record_repo_key, callers} -> callers
+        _other -> MapSet.new()
+      end
+
+    unless MapSet.member?(logged, repo_key) do
+      :persistent_term.put(key, {record_repo_key, MapSet.put(logged, repo_key)})
+
+      Logger.warning("Ticket record read under another repository issue_id=#{issue_id} record_repo_key=#{record_repo_key} repo_key=#{repo_key}; using the ticket's one record")
     end
   end
 
   defp update_ticket_state_record(repo_key, issue_id, attrs) do
     durable_transaction(fn ->
-      key = scoped_key(repo_key, issue_id)
+      case read_ticket_record(repo_key, issue_id) do
+        nil ->
+          {:error, :ticket_state_not_found}
 
-      case :mnesia.read(@ticket_state_table, key) do
-        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] ->
+        record ->
           updated =
             record
             |> Map.merge(normalize_update(attrs, [:key, :repo_key, :issue_id]))
             |> Map.put(:repo_key, repo_key)
             |> TicketState.normalize()
 
-          :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+          write_ticket_record(repo_key, issue_id, updated)
           :ok
-
-        [] ->
-          {:error, :ticket_state_not_found}
       end
     end)
   end
@@ -2003,13 +2101,7 @@ defmodule SymphonyElixir.RunStore do
   end
 
   defp write_ticket_events(repo_key, issue_id, events) do
-    key = scoped_key(repo_key, issue_id)
-
-    record =
-      case :mnesia.read(@ticket_state_table, key, :write) do
-        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> TicketState.normalize(record)
-        [] -> TicketState.new(repo_key, issue_id)
-      end
+    record = read_or_new_ticket_record(repo_key, issue_id, :write)
 
     stored = read_ticket_events(repo_key, issue_id)
     last_seq = stored |> Enum.map(& &1.seq) |> Enum.max(fn -> 0 end) |> max(record.event_seq)
@@ -2022,13 +2114,13 @@ defmodule SymphonyElixir.RunStore do
 
           nil ->
             event = %{event | repo_key: repo_key, issue_id: issue_id, seq: last_seq + 1, phase: event.phase || record.phase}
-            :mnesia.write({@ticket_events_table, key, repo_key, issue_id, event.run_id, event.type, event.seq, Event.to_record(event)})
+            :mnesia.write({@ticket_events_table, scoped_key(repo_key, issue_id), repo_key, issue_id, event.run_id, event.type, event.seq, Event.to_record(event)})
             {[event | appended], [event | stored], event.seq}
         end
       end)
 
     if last_seq != record.event_seq do
-      :mnesia.write({@ticket_state_table, key, repo_key, issue_id, %{record | event_seq: last_seq}})
+      write_ticket_record(repo_key, issue_id, %{record | event_seq: last_seq})
     end
 
     {:ok, Enum.reverse(appended)}
@@ -2116,183 +2208,123 @@ defmodule SymphonyElixir.RunStore do
   end
 
   defp write_ticket_signal(repo_key, issue_id, name, details) do
-    key = scoped_key(repo_key, issue_id)
-
-    record =
-      case :mnesia.read(@ticket_state_table, key) do
-        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
-        [] -> TicketState.new(repo_key, issue_id)
-      end
+    record = read_ticket_record(repo_key, issue_id) || TicketState.new(repo_key, issue_id)
 
     updated = TicketState.record_signal(record, name, details)
-    :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+    write_ticket_record(repo_key, issue_id, updated)
     :ok
   end
 
   defp write_ticket_pr_watch(repo_key, issue_id, issue_identifier, pr_watch) do
-    key = scoped_key(repo_key, issue_id)
-
-    record =
-      case :mnesia.read(@ticket_state_table, key) do
-        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> TicketState.normalize(record)
-        [] -> TicketState.new(repo_key, issue_id)
-      end
+    record = read_or_new_ticket_record(repo_key, issue_id)
 
     record = if is_nil(record.issue_identifier), do: %{record | issue_identifier: issue_identifier}, else: record
-    :mnesia.write({@ticket_state_table, key, repo_key, issue_id, TicketState.put_pr_watch(record, pr_watch)})
+    write_ticket_record(repo_key, issue_id, TicketState.put_pr_watch(record, pr_watch))
     :ok
   end
 
   defp write_path_unlock_claim(repo_key, issue_id, ids, run_id) do
-    key = scoped_key(repo_key, issue_id)
-
-    record =
-      case :mnesia.read(@ticket_state_table, key) do
-        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
-        [] -> TicketState.new(repo_key, issue_id)
-      end
+    record = read_ticket_record(repo_key, issue_id) || TicketState.new(repo_key, issue_id)
 
     case TicketState.claim_path_unlocks(record, ids, run_id) do
       {_record, []} ->
         {:ok, []}
 
       {updated, claimed} ->
-        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+        write_ticket_record(repo_key, issue_id, updated)
         {:ok, claimed}
     end
   end
 
   defp write_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome, details) do
-    key = scoped_key(repo_key, issue_id)
-
-    record =
-      case :mnesia.read(@ticket_state_table, key) do
-        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
-        [] -> TicketState.new(repo_key, issue_id)
-      end
+    record = read_ticket_record(repo_key, issue_id) || TicketState.new(repo_key, issue_id)
 
     updated = TicketState.record_verdict(record, kind, head_sha, outcome, DateTime.utc_now(), details)
-    :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+    write_ticket_record(repo_key, issue_id, updated)
     :ok
   end
 
   defp write_ticket_projection(repo_key, issue_id, change) do
-    key = scoped_key(repo_key, issue_id)
-
-    case :mnesia.read(@ticket_state_table, key, :write) do
-      [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] ->
-        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, change.(record)})
+    case read_ticket_record(repo_key, issue_id, :write) do
+      nil ->
         :ok
 
-      [] ->
+      record ->
+        write_ticket_record(repo_key, issue_id, change.(record))
         :ok
     end
   end
 
   defp write_ticket_self_heal(repo_key, issue_id, attrs) do
-    key = scoped_key(repo_key, issue_id)
-
-    record =
-      case :mnesia.read(@ticket_state_table, key) do
-        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
-        [] -> TicketState.new(repo_key, issue_id)
-      end
+    record = read_ticket_record(repo_key, issue_id) || TicketState.new(repo_key, issue_id)
 
     updated = TicketState.put_self_heal(record, attrs)
-    :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+    write_ticket_record(repo_key, issue_id, updated)
     :ok
   end
 
   defp write_ticket_decisions(repo_key, issue_id, entries, backfill) do
-    key = scoped_key(repo_key, issue_id)
-
-    record =
-      case :mnesia.read(@ticket_state_table, key) do
-        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> TicketState.normalize(record)
-        [] -> TicketState.new(repo_key, issue_id)
-      end
+    record = read_or_new_ticket_record(repo_key, issue_id)
 
     case TicketState.put_decisions(record, entries, backfill) do
       ^record ->
         {:ok, record.decisions}
 
       updated ->
-        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+        write_ticket_record(repo_key, issue_id, updated)
         {:ok, updated.decisions}
     end
   end
 
   defp write_ticket_dispatch(repo_key, issue_id, attrs) do
-    key = scoped_key(repo_key, issue_id)
-
-    record =
-      case :mnesia.read(@ticket_state_table, key) do
-        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
-        [] -> TicketState.new(repo_key, issue_id)
-      end
+    record = read_ticket_record(repo_key, issue_id) || TicketState.new(repo_key, issue_id)
 
     updated = TicketState.record_dispatch(record, attrs)
-    :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+    write_ticket_record(repo_key, issue_id, updated)
     :ok
   end
 
   defp write_ticket_dispatch_outcome(repo_key, issue_id, run_id, attrs) do
-    key = scoped_key(repo_key, issue_id)
-
-    case :mnesia.read(@ticket_state_table, key) do
-      [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] ->
-        updated = TicketState.record_dispatch_outcome(record, run_id, attrs)
-        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+    case read_ticket_record(repo_key, issue_id) do
+      nil ->
         :ok
 
-      [] ->
+      record ->
+        updated = TicketState.record_dispatch_outcome(record, run_id, attrs)
+        write_ticket_record(repo_key, issue_id, updated)
         :ok
     end
   end
 
   defp write_clear_ticket_fix_ticket(repo_key, issue_id) do
-    key = scoped_key(repo_key, issue_id)
-
-    case :mnesia.read(@ticket_state_table, key) do
-      [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] ->
-        updated = TicketState.clear_fix_ticket(record)
-        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+    case read_ticket_record(repo_key, issue_id) do
+      nil ->
         :ok
 
-      [] ->
+      record ->
+        updated = TicketState.clear_fix_ticket(record)
+        write_ticket_record(repo_key, issue_id, updated)
         :ok
     end
   end
 
   defp write_ci_fix_origin(repo_key, issue_id, origin) do
-    key = scoped_key(repo_key, issue_id)
-
-    record =
-      case :mnesia.read(@ticket_state_table, key) do
-        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
-        [] -> TicketState.new(repo_key, issue_id)
-      end
+    record = read_ticket_record(repo_key, issue_id) || TicketState.new(repo_key, issue_id)
 
     updated = TicketState.put_ci_fix_origin(record, origin)
-    :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+    write_ticket_record(repo_key, issue_id, updated)
     :ok
   end
 
   defp write_ci_state(repo_key, issue_id, head_sha, status, at) do
-    key = scoped_key(repo_key, issue_id)
-
-    record =
-      case :mnesia.read(@ticket_state_table, key) do
-        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
-        [] -> TicketState.new(repo_key, issue_id)
-      end
+    record = read_ticket_record(repo_key, issue_id) || TicketState.new(repo_key, issue_id)
 
     case TicketState.put_ci_state(record, head_sha, status, at) do
       {_record, :stale} ->
         {:ok, :stale}
 
       {updated, outcome} ->
-        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+        write_ticket_record(repo_key, issue_id, updated)
         {:ok, outcome}
     end
   end
@@ -2382,11 +2414,11 @@ defmodule SymphonyElixir.RunStore do
   end
 
   defp write_ticket_pause(repo_key, issue_id, at, fun) do
-    {key, record} = locked_ticket_record(repo_key, issue_id)
+    record = read_or_new_ticket_record(repo_key, issue_id, :write)
 
     case fun.(record.pause) do
       {:write, pause, events, result} ->
-        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, TicketState.put_pause(record, pause, at)})
+        write_ticket_record(repo_key, issue_id, TicketState.put_pause(record, pause, at))
         {:ok, stored} = write_ticket_events(repo_key, issue_id, events)
         {:ok, result, stored}
 
@@ -2399,12 +2431,12 @@ defmodule SymphonyElixir.RunStore do
   end
 
   defp write_ticket_question(repo_key, issue_id, at, fun) do
-    {key, record} = locked_ticket_record(repo_key, issue_id)
+    record = read_or_new_ticket_record(repo_key, issue_id, :write)
 
     case fun.(record.questions, record.pause) do
       {:write, question, pause, events, result} ->
         record = record |> TicketState.put_question(question) |> TicketState.put_pause(pause, at)
-        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, record})
+        write_ticket_record(repo_key, issue_id, record)
         {:ok, stored} = write_ticket_events(repo_key, issue_id, events)
         {:ok, result, stored}
 
@@ -2413,16 +2445,6 @@ defmodule SymphonyElixir.RunStore do
 
       {:error, _reason} = error ->
         error
-    end
-  end
-
-  # The ticket's record under its write lock, a new one when it has none, with its table key.
-  defp locked_ticket_record(repo_key, issue_id) do
-    key = scoped_key(repo_key, issue_id)
-
-    case :mnesia.read(@ticket_state_table, key, :write) do
-      [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> {key, TicketState.normalize(record)}
-      [] -> {key, TicketState.new(repo_key, issue_id)}
     end
   end
 
