@@ -1817,6 +1817,19 @@ which is often public: put only documented QA values there (a QA owner token suc
 Search Hub's `HUB_OWNER_TOKEN`), never a secret. The Director's **Settings → macOS app QA** edits
 `dev_server`, `dev_server_port` and `launch_env` in `symphony.yml`.
 
+##### The QA-mode contract in agent prompts
+
+A repository whose workflow enables the `macos_app` or `android_app` playbook gets one short
+section in the managed context of its implementation, rework and CI-fix runs, and in its QA
+prompt: "QA mode, what Symphony's driver gives the app". It names `SYMPHONY_BAR_QA_ROOT` (the QA
+root, where `qa_api_requests` reads `api-requests.jsonl` and every file the driver reads must go),
+`SYMPHONY_BAR_QA_API_FIXTURES` (the read-only copy of the committed `api_fixtures` directory),
+`SYMPHONY_BAR_QA_APPEARANCE`, and, with `dev_server: true`, the dev server's port and the
+`launch_env` variables that carry its URL; for `android_app`, the emulator folder
+`qa_android_put_file` writes. The names come from the drivers' own constants
+(`SymphonyElixir.QaModeContract`), so the text follows the code; `symphony workflow preview
+--repo <key>` shows it.
+
 ##### Two environments: fixtures and a live server
 
 A `macos_app` pass has two environments for the app under test. The **fixtures** are always
