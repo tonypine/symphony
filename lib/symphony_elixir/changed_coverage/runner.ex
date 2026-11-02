@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.ChangedCoverage.Runner do
   @moduledoc """
-  The git, `mix test` and `:cover` calls behind `mix cover.changed` (`SymphonyElixir.ChangedCoverage`).
+  The git, `mix test` and `:cover` calls behind `mix cover.changed` (`SymphonyElixir.ChangedCoverage`)
+  and `mix coverage.report` (`SymphonyElixir.CoverageReport`).
 
   Listed in `mix.exs`'s `test_coverage` `ignore_modules`: `coverage/1` restarts the `:cover`
   server, which inside a `mix test --cover` run would throw away the suite's own coverage.
@@ -58,6 +59,31 @@ defmodule SymphonyElixir.ChangedCoverage.Runner do
     after
       :cover.stop()
       File.rm(coverdata())
+    end
+  end
+
+  @doc """
+  Imports every `.coverdata` file in `paths` (default `cover/*.coverdata`: CI's test partitions) into a fresh `:cover` server
+  and returns `:cover.analyse(module, :coverage, :line)` of each module they cover, merged across
+  the files.
+  """
+  @spec imported_coverage([Path.t()]) :: %{module() => list()}
+  def imported_coverage(paths \\ Path.wildcard("cover/*.coverdata")) do
+    Mix.ensure_application!(:tools)
+    _ = :cover.stop()
+    {:ok, pid} = :cover.start()
+    {:ok, quiet} = StringIO.open("")
+    Process.group_leader(pid, quiet)
+
+    try do
+      Enum.each(paths, fn path -> :ok = :cover.import(String.to_charlist(path)) end)
+
+      for module <- :cover.imported_modules(),
+          {:ok, lines} <- [:cover.analyse(module, :coverage, :line)],
+          into: %{},
+          do: {module, lines}
+    after
+      :cover.stop()
     end
   end
 

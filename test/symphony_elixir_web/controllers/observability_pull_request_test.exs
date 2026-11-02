@@ -4,7 +4,6 @@ defmodule SymphonyElixirWeb.ObservabilityPullRequestTest do
   import ExUnit.CaptureLog
   import Phoenix.ConnTest
 
-  alias SymphonyElixir.Config.Cache
   alias SymphonyElixir.PullRequestPage
 
   @endpoint SymphonyElixirWeb.Endpoint
@@ -140,8 +139,14 @@ defmodule SymphonyElixirWeb.ObservabilityPullRequestTest do
     # The test workflow's repo has no GitHub repository.
     assert %{"error" => %{"code" => "unknown_repo"}} = json_response(get(build_conn(), "/api/v1/pull_requests/symphony/448"), 404)
 
-    File.write!(Workflow.symphony_file_path(), "repositories: []\n")
-    Cache.clear()
+    # A config that doesn't load, in a file no reader ever cached (TP-1348): breaking the cached file
+    # races a reader still loading it, which puts the last good config back after `Cache.clear()`.
+    # The 404 then comes from the repos it names, and the merged coverage report misses the error
+    # branch.
+    path = Path.join(Path.dirname(Workflow.symphony_file_path()), "unloaded-symphony.yml")
+    File.write!(path, "repositories: []\n")
+    Workflow.set_symphony_file_path(path)
+    assert {:error, _reason} = Config.repos()
     assert %{"error" => %{"code" => "unknown_repo"}} = json_response(get(build_conn(), "/api/v1/pull_requests/symphony/448"), 404)
 
     stop_supervised!(SymphonyElixirWeb.Endpoint)
