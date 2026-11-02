@@ -16,6 +16,8 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     {"hold.set", %{kind: "blocked", reason: "Waiting on TP-12"}, [], %{title: "Blocked hold set", detail: "Waiting on TP-12"}},
     {"hold.cleared", %{kind: "blocked", by: "TP-12 done"}, [], %{title: "Blocked hold cleared", detail: "by TP-12 done"}},
     {"run.started", %{run_id: "run-3", run_kind: "rework", run_number: 3, state: "Rework", head: "e051234abcdef"}, [], %{title: "Rework run 3 started", detail: "in Rework · at e051234"}},
+    {"run.started_by_person", %{run_id: "run-3", run_kind: "implementation", run_number: 1, by: "the Director", note: "customer demo"}, [],
+     %{title: "Implementation run 1 started by the Director", detail: "customer demo"}},
     {"run.ended", @run_ended, [@transcript], %{title: "Rework run 3 ended: handoff", detail: "21 min · 13.4M tokens · transcript"}},
     {"attempt.pushed", %{head: "e051234abcdef", attempt: 5, intent: "Render the summary on record"}, [], %{title: "Attempt 5 pushed e051234", detail: "Render the summary on record"}},
     {"verdict.recorded", %{kind: "code_review", outcome: "approve", head: "e051234abcdef"}, [], %{title: "Code Review verdict: approve", detail: "on e051234"}},

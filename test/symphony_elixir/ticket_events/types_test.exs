@@ -4,7 +4,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
   alias SymphonyElixir.TicketEvents.Types
 
   @types ~w(
-    phase.entered hold.set hold.cleared run.started run.ended attempt.pushed verdict.recorded
+    phase.entered hold.set hold.cleared run.started run.started_by_person run.ended attempt.pushed verdict.recorded
     decision.requested decision.withdrawn decision.recorded person.action
     step.started step.completed step.skipped evidence finding.recorded finding.resolved checklist.answered
     ticket.cancelled ticket.moved drift.detected drift.reverted drift.revert_failed
@@ -61,6 +61,19 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
     test "names every missing required field" do
       assert Types.validate("verdict.recorded", %{}, :machine, nil) == {:error, {:invalid_payload, [:kind, :outcome]}}
       assert Types.validate("run.started", %{run_id: "  "}, :machine, nil) == {:error, {:invalid_payload, [:run_id, :run_kind]}}
+    end
+
+    test "a run a person started is the Director's, with their note bounded" do
+      assert {:ok, %{by: "the Director", note: "unblock this one", run_id: "run-1"}} =
+               Types.validate("run.started_by_person", %{by: "the Director", note: "unblock this one", run_id: "run-1"}, :person, nil)
+
+      assert Types.validate("run.started_by_person", %{note: "no by"}, :person, nil) == {:error, {:invalid_payload, [:by]}}
+
+      assert {:error, {:invalid_payload, [:note]}} =
+               Types.validate("run.started_by_person", %{by: "the Director", note: String.duplicate("a", 501)}, :person, nil)
+
+      assert {:error, {:not_allowed, reason}} = Types.validate("run.started_by_person", %{by: "the Director"}, :machine, nil)
+      assert reason =~ "person"
     end
 
     test "a note of 4,001 characters from an agent is rejected naming text" do
@@ -244,6 +257,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
     test "takes the writer's key, else derives one from the type's rule" do
       assert Types.idempotency_key("verdict.recorded", %{}, "verdict:qa:abc") == "verdict:qa:abc"
       assert Types.idempotency_key("run.started", %{run_id: "run-1"}, " ") == "run.started:run-1"
+      assert Types.idempotency_key("run.started_by_person", %{by: "the Director", run_id: "run-1"}, nil) == "run.started_by_person:run-1"
       assert Types.idempotency_key("run.ended", %{run_id: "run-1"}, nil) == "run.ended:run-1"
       assert Types.idempotency_key("decision.recorded", %{key: "c1"}, nil) == "decision.recorded:c1"
       assert Types.idempotency_key("decision.recorded", %{answer: "yes"}, nil) == nil

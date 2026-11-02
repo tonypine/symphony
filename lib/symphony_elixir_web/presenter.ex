@@ -20,6 +20,7 @@ defmodule SymphonyElixirWeb.Presenter do
     RunStore,
     Sessions,
     Setup,
+    StartNow,
     StateMachine,
     StrayProcesses,
     TicketObservation,
@@ -61,7 +62,8 @@ defmodule SymphonyElixirWeb.Presenter do
         waiting_on_you = Inbox.items(snapshot, inbox)
         repositories = Map.get(snapshot, :repositories, [])
         records = ticket_state_records()
-        status = &with_ticket_status(&1, records, repositories)
+        status = &with_ticket_status(&1, records, repositories, false)
+        running_status = &with_ticket_status(&1, records, repositories, true)
 
         %{
           generated_at: generated_at,
@@ -80,7 +82,7 @@ defmodule SymphonyElixirWeb.Presenter do
             waiting_on_you: length(waiting_on_you),
             review_inconclusive: review_inconclusive_counts(run_history)
           },
-          running: Enum.map(snapshot.running, &(&1 |> running_entry_payload() |> status.())),
+          running: Enum.map(snapshot.running, &(&1 |> running_entry_payload() |> running_status.())),
           sessions: sessions_payload(snapshot.running),
           watching: snapshot |> Map.get(:watching, []) |> Enum.map(&(&1 |> watching_entry_payload() |> status.())),
           waiting_on_you: Enum.map(waiting_on_you, &waiting_on_you_payload(&1, now)),
@@ -310,7 +312,7 @@ defmodule SymphonyElixirWeb.Presenter do
         else
           payload = issue_payload_body(issue_identifier, running, retry, watching, waiting)
           record = ticket_state_record(payload.repo_key, payload.issue_id, issue_identifier)
-          {:ok, record_payload(payload, record)}
+          {:ok, record_payload(payload, record, not is_nil(running))}
         end
 
       _ ->
@@ -336,40 +338,83 @@ defmodule SymphonyElixirWeb.Presenter do
       record ->
         payload = issue_payload_body(issue_identifier, nil, nil, nil, nil)
 
-        {:ok, record_payload(%{payload | repo_key: record.repo_key, issue_id: record.issue_id}, record)}
+        {:ok, record_payload(%{payload | repo_key: record.repo_key, issue_id: record.issue_id}, record, false)}
     end
   end
 
   # What the ticket's record adds to its payload: its verdicts, the watcher's block, a plan's brief
   # (`SymphonyElixir.PlanBrief`) and why it does not move (`ticket_status/2`).
-  defp record_payload(payload, record) do
-    repository_paused = is_binary(payload.repo_key) and Pauses.paused?({:repository, payload.repo_key})
+  defp record_payload(payload, record, running?) do
+    repository_pause = if is_binary(payload.repo_key), do: repository_pause_reason(payload.repo_key), else: nil
 
     payload
     |> Map.put(:verdicts, verdicts_payload(record))
     |> Map.put(:watch, WatchPayload.watch(record))
     |> Map.put(:plan_brief, plan_brief_payload(record))
-    |> Map.merge(ticket_status(record, repository_paused))
+    |> Map.merge(ticket_status(record, repository_pause, running?))
   end
 
   # The one answer to "why is this ticket not moving", as the ticket payload and each ticket entry
   # of the state payload carry it: its pause (`pause_payload/1`, nil when it moves), the questions
-  # still waiting for an answer, and whether its repository is paused.
-  defp ticket_status(record, repository_paused) do
+  # still waiting for an answer, whether its repository is paused, and whether Start now may start
+  # its run at once (`StartNow.payload/1`, the reason in the words the tooltip shows when it may not).
+  defp ticket_status(record, repository_pause, running?) do
     %{
       pause: pause_payload(record),
       open_questions: open_questions_payload(record),
-      repository_paused: repository_paused
+      repository_paused: is_binary(repository_pause),
+      start:
+        StartNow.payload(%{
+          phase: record_phase(record),
+          symphony_pause: symphony_pause_reason(),
+          repository_pause: repository_pause,
+          open_question?: open_question?(record),
+          running?: running?
+        })
     }
   end
 
   # A state payload entry with its ticket's status, read from the records the payload read once and
-  # from the repositories' pauses in the snapshot.
-  defp with_ticket_status(entry, records, repositories) do
+  # from the repositories' pauses in the snapshot. A ticket the snapshot lists among the running
+  # ones has a run already working on it, so its Start now is not allowed.
+  defp with_ticket_status(entry, records, repositories, running?) do
     repo_key = entry.repo_key
     record = Map.get(records, if(is_nil(repo_key), do: entry.issue_id, else: {repo_key, entry.issue_id}))
-    repository_paused = Enum.any?(repositories, &(&1.repo_key == repo_key and not is_nil(&1.pause)))
-    Map.merge(entry, ticket_status(record, repository_paused))
+
+    repository_pause =
+      Enum.find_value(repositories, fn repository ->
+        repository.repo_key == repo_key and not is_nil(repository.pause) and Pauses.repository_skip_reason(repository.pause)
+      end)
+
+    Map.merge(entry, ticket_status(record, repository_pause, running?))
+  end
+
+  # The ticket's phase as its record holds it; a record the payload doesn't have holds none.
+  defp record_phase(record) when is_map(record), do: Map.get(record, :phase)
+
+  defp record_phase(_record), do: nil
+
+  # Whether a Question is still waiting for an answer on the ticket, as its record holds them.
+  defp open_question?(record) when is_map(record),
+    do: record |> Map.get(:questions) |> List.wrap() |> Enum.any?(&(&1.state == :open))
+
+  defp open_question?(_record), do: false
+
+  # The line Symphony's pause skips dispatch with, as the state payload's `pause` reads it; nil
+  # when no reason stops dispatch.
+  defp symphony_pause_reason do
+    case Pauses.get(:symphony) do
+      {:ok, %{} = pause} -> Pauses.dispatch_skip_reason(pause)
+      _unreadable -> nil
+    end
+  end
+
+  # The line a paused repository's candidates are skipped with; nil when it is not paused.
+  defp repository_pause_reason(repo_key) do
+    case Pauses.get({:repository, repo_key}) do
+      {:ok, %{} = pause} -> Pauses.repository_skip_reason(pause)
+      _unreadable -> nil
+    end
   end
 
   @doc """

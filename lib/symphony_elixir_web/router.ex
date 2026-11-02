@@ -54,6 +54,7 @@ defmodule SymphonyElixirWeb.Router do
     post("/stop", ControlApiController, :stop)
     post("/dispatch_pr", ControlApiController, :dispatch_pr)
     post("/force", ControlApiController, :force)
+    post("/start", ControlApiController, :start)
     post("/approve_plan", ControlApiController, :approve_plan)
     post("/rework", ControlApiController, :rework)
     post("/restart", ControlApiController, :restart)

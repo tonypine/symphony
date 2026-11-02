@@ -43,6 +43,7 @@ defmodule SymphonyElixir.Orchestrator do
     SelfHeal,
     SetupBlock,
     ShippedToday,
+    StartNow,
     StateMachine,
     StateProvisioning,
     StatusDashboard,
@@ -104,6 +105,8 @@ defmodule SymphonyElixir.Orchestrator do
   @code_review_state "Code Review"
   # The QA state, the fallback when a repo's settings are unavailable.
   @qa_state "QA"
+  # The state a Todo ticket is claimed into before its run starts (`start_issue/3`).
+  @start_in_progress_state "In Progress"
   # The ledger signal recorded when a QA ticket's head is not green.
   @qa_head_not_green_signal "qa_head_not_green"
   # The ledger signal recorded when a Code Review ticket has no reviewer to run;
@@ -4706,6 +4709,52 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # Start now (`start_issue/3`) answers with the same reason the state payload's `start` field
+  # shows (`SymphonyElixir.StartNow`): checked in the caller, before the claim, so a refusal
+  # starts nothing, and again in the orchestrator for a click that races a change. A run already
+  # working on the ticket only the orchestrator knows, so the caller's check leaves it to the
+  # orchestrator's.
+  defp refute_start(%Issue{} = issue) do
+    case StartNow.check(start_facts(issue, false)) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:start_refused, reason}}
+    end
+  end
+
+  # The facts `SymphonyElixir.StartNow.check/1` judges a start on: the ticket's phase, the lines of
+  # the pauses that stop it, whether a Question is open on it and whether a run works on it.
+  defp start_facts(%Issue{} = issue, running?) do
+    %{
+      phase: issue.state,
+      symphony_pause: Pauses.dispatch_skip_reason(symphony_pause()),
+      repository_pause: repository_pause_reason(issue),
+      open_question?: start_open_question?(issue),
+      running?: running?
+    }
+  end
+
+  # An open Question holds the ticket as a `:question` pause reason: the ask and the pause never
+  # disagree (`SymphonyElixir.Questions`).
+  defp start_open_question?(%Issue{} = issue) do
+    case hold_repo_key(issue) do
+      repo_key when is_binary(repo_key) -> {:ticket, repo_key, issue.id} |> pause_reasons() |> Enum.any?(&(&1.kind == :question))
+      _no_repo -> false
+    end
+  end
+
+  # A ticket in Todo is claimed first, as a run's workpad bootstrap claims it, so the run starts on
+  # a ticket already in progress.
+  defp claim_for_start(%Issue{state: state} = issue) do
+    if normalize_issue_state(state) == "todo" do
+      case TransitionGuard.perform(issue.id, :claim, %{repo_key: Map.get(issue, :repo_key)}) do
+        :ok -> {:ok, %{issue | state: @start_in_progress_state}}
+        {:error, reason} -> {:error, {:start_claim, reason}}
+      end
+    else
+      {:ok, issue}
+    end
+  end
+
   # What `symphony force` reports: whether the ticket is forced now, its place in the queue (nil
   # until it joins), and the tickets holding the `forced_max` slots.
   defp force_result(%Issue{} = issue, forced, settings) do
@@ -8255,6 +8304,34 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  @doc """
+  Starts the ticket's run for its current phase at once (`POST /api/v1/control/start`), ahead of
+  the dispatch queue and outside its order: dispatched in this call, not queued, ignoring queue
+  order, the per-repo and global concurrency limits (it may run one over the limit; the next cycle
+  simply has one slot fewer) and the forced queue. A ticket in `Todo` is claimed (`In Progress`)
+  first. Refused, starting nothing, while Symphony is paused, while the ticket's repository is
+  paused, while the ticket has an open Question, or while a run is already working on it — the
+  error names which (`SymphonyElixir.StartNow`), and a ticket in Backlog is refused with "move it
+  first". The Linear calls run in the caller, not in the orchestrator.
+  """
+  @spec start_issue(String.t(), String.t() | nil) :: {:ok, map()} | :unavailable | {:error, term()}
+  def start_issue(identifier, note), do: start_issue(__MODULE__, identifier, note)
+
+  @spec start_issue(GenServer.server(), String.t(), String.t() | nil) :: {:ok, map()} | :unavailable | {:error, term()}
+  def start_issue(server, identifier, note) when is_binary(identifier) and (is_binary(note) or is_nil(note)) do
+    if server_available?(server) do
+      with {:ok, %Issue{} = issue} <- fetch_issue_to_force(identifier),
+           :ok <- refute_start(issue),
+           {:ok, issue} <- claim_for_start(issue) do
+        GenServer.call(server, {:start_issue, issue, note})
+      end
+    else
+      :unavailable
+    end
+  end
+
+  def start_issue(_server, _identifier, _note), do: {:error, :invalid_issue_id}
+
   @spec snapshot() :: map() | :timeout | :unavailable
   def snapshot, do: snapshot(__MODULE__, 15_000)
 
@@ -8529,6 +8606,24 @@ defmodule SymphonyElixir.Orchestrator do
     {:reply, {:ok, result}, state}
   end
 
+  # Start now (`start_issue/3`): the run for the ticket's current phase is dispatched in this call,
+  # not queued. The orchestrator checks the same refusals the caller checked — a run already
+  # working on the ticket only it knows — so a click that races a change still refuses.
+  defp handle_call_message({:start_issue, %Issue{} = issue, note}, _from, state) do
+    checked = StartNow.check(start_facts(issue, Map.has_key?(state.running, issue.id)))
+
+    case {checked, dispatch_repo_key(state, issue)} do
+      {{:error, reason}, _repo_key} ->
+        {:reply, {:error, {:start_refused, reason}}, state}
+
+      {:ok, nil} ->
+        {:reply, {:error, {:start_refused, "the ticket has no repository; it cannot be started"}}, state}
+
+      {:ok, repo_key} ->
+        start_reply(state, issue, repo_key, note)
+    end
+  end
+
   defp handle_call_message({:stop_running, issue_id_or_identifier}, _from, state) do
     case find_running_issue(state.running, issue_id_or_identifier) do
       {issue_id, running_entry} ->
@@ -8581,6 +8676,86 @@ defmodule SymphonyElixir.Orchestrator do
     {snapshot, _parts_ms} = build_snapshot(state, DateTime.utc_now(), System.monotonic_time(:millisecond))
 
     {:reply, snapshot, state}
+  end
+
+  # The start's answer once its refusals are past: the run it started, or the failure that leaves
+  # the ticket a normal candidate for the next dispatch pass.
+  defp start_reply(state, issue, repo_key, note) do
+    case start_run(state, issue, repo_key, note) do
+      {:ok, run_id, next_state} ->
+        {:reply,
+         {:ok,
+          %{
+            started: true,
+            issue_id: issue.id,
+            issue_identifier: issue.identifier,
+            repo_key: repo_key,
+            run_id: run_id,
+            session_id: nil
+          }}, next_state}
+
+      {:error, reason} ->
+        {:reply, {:error, {:start_failed, reason}}, state}
+    end
+  end
+
+  # The Start now dispatch itself, outside the dispatch pass: no slot check, no queue order, no
+  # forced queue. A worker host is used when one has a slot, else the run starts locally, since a
+  # start never waits for capacity. Its failures are the caller's answer, never a silently
+  # scheduled retry — only the agent spawn's own failure schedules one, and the answer says so.
+  defp start_run(%State{} = state, %Issue{} = issue, repo_key, note) do
+    worker_host = start_worker_host(state)
+    run_id = new_run_id(issue.id)
+    settings = Config.settings_for_repo!(repo_key)
+
+    case Verification.allocate_for_dispatch(issue, run_id, worker_host, repo_key: repo_key, settings: settings) do
+      {:ok, verification} ->
+        next_state =
+          spawn_allocated_agent_on_worker_host(state, issue, %{
+            attempt: nil,
+            recipient: self(),
+            worker_host: worker_host,
+            run_id: run_id,
+            verification: verification,
+            repo_key: repo_key,
+            runner_opts: [],
+            running_attrs: %{}
+          })
+
+        if Map.has_key?(next_state.running, issue.id) do
+          record_run_started_by_person(repo_key, issue, run_id, note)
+          notify_dashboard()
+          {:ok, run_id, next_state}
+        else
+          {:error, "the agent did not start; it is scheduled to retry as a normal candidate"}
+        end
+
+      {:error, reason} ->
+        Logger.warning("Start now could not allocate a verification port for #{issue_context(issue)}: #{inspect(reason)}")
+        {:error, "the agent could not start: its verification port could not be allocated"}
+    end
+  end
+
+  # A worker host with a free slot, else local: a start ignores the worker capacity as it does the
+  # concurrency limits.
+  defp start_worker_host(%State{} = state) do
+    case select_worker_host(state, nil) do
+      :no_worker_capacity -> nil
+      worker_host -> worker_host
+    end
+  end
+
+  # The run a person started at once, one ledger event next to the machine's own `run.started`:
+  # `run.started_by_person`, by the Director with their note. Best effort, as the run's events are.
+  defp record_run_started_by_person(repo_key, %Issue{id: issue_id, state: issue_state}, run_id, note) do
+    payload = %{by: "the Director", run_id: run_id, note: note}
+    payload = if is_binary(note), do: payload, else: Map.delete(payload, :note)
+
+    TicketSignals.record_event(repo_key, issue_id, "run.started_by_person", payload,
+      phase: issue_state,
+      run_id: run_id,
+      actor: {:person, "the Director"}
+    )
   end
 
   defp log_slow_snapshot_build(build_ms, parts_ms) do
