@@ -1395,6 +1395,55 @@ defmodule SymphonyElixir.RunStore do
   def update_ticket_question(_repo_key, _issue_id, _at, _fun), do: {:error, :invalid_issue_id}
 
   @doc """
+  Runs `fun` on the questions and the pause of `subject`, a repository (`{:repository, repo_key}`)
+  or Symphony itself (`:symphony`), in one durable transaction that holds the subject's write locks,
+  as `update_ticket_question/4` does for a ticket: `{:write, question, pause, events, result}` puts
+  `question` among the subject's questions (by its id), writes `pause` (nil removes it), appends
+  `events` to the subject's own event stream (`list_subject_events/2`) and returns
+  `{:ok, result, stored}`; `{:ok, result}` writes nothing and returns `{:ok, result, []}`;
+  `{:error, reason}` writes nothing and is returned. The questions are kept in the pause table under
+  `{:questions, subject}`, next to the subject's pause; no ticket record is made. `fun` may run
+  more than once, so it must have no side effects.
+  """
+  @spec update_subject_question(term(), ([map()], map() | nil -> ticket_question_update())) ::
+          {:ok, term(), [Event.t()]} | {:error, term()}
+  def update_subject_question(subject, fun) when is_function(fun, 2) do
+    with :ok <- valid_pause_subject(subject),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_subject_question(subject, fun) end)
+    end
+  end
+
+  @doc "The questions of `subject` (see `update_subject_question/2`) as stored, in the order they were asked."
+  @spec get_subject_questions(term()) :: [map()] | {:error, term()}
+  def get_subject_questions(subject) do
+    with :ok <- valid_pause_subject(subject),
+         :ok <- ensure_started() do
+      transaction(fn -> read_subject_questions(subject) end)
+    end
+  end
+
+  @doc "Every subject that holds questions (see `update_subject_question/2`), with its questions as stored."
+  @spec list_subject_questions() :: [{term(), [map()]}] | {:error, term()}
+  def list_subject_questions do
+    with :ok <- ensure_started() do
+      transaction(fn -> :mnesia.foldl(&subject_questions_row/2, [], @pause_table) |> Enum.sort_by(&subject_sort_key(elem(&1, 0))) end)
+    end
+  end
+
+  @doc """
+  The events of `subject`'s own stream (see `update_subject_question/2`), oldest first by `at`, then
+  `seq`. `opts`: `types:` and `run_id:`, as `list_ticket_events/3` takes them.
+  """
+  @spec list_subject_events(term(), keyword()) :: [Event.t()] | {:error, term()}
+  def list_subject_events(subject, opts) when is_list(opts) do
+    with :ok <- valid_pause_subject(subject),
+         :ok <- ensure_started() do
+      transaction(fn -> subject |> read_subject_events() |> filter_ticket_events(opts) end)
+    end
+  end
+
+  @doc """
   Runs `fun` on the pause of `subject` (see `get_subject_pause/1`) in one durable transaction that
   holds its row's write lock, as `update_ticket_pause/4` does for a ticket: `{:write, pause, result}`
   writes `pause` (nil removes it) and returns `{:ok, result}`; `{:ok, result}` and
@@ -2411,6 +2460,72 @@ defmodule SymphonyElixir.RunStore do
       unchanged ->
         unchanged
     end
+  end
+
+  defp subject_questions_row({@pause_table, {:questions, subject}, questions}, acc) when is_list(questions), do: [{subject, questions} | acc]
+  defp subject_questions_row(_row, acc), do: acc
+
+  defp subject_sort_key(:symphony), do: {0, ""}
+  defp subject_sort_key({:repository, repo_key}), do: {1, repo_key}
+
+  defp read_subject_questions(subject, lock \\ :read) do
+    case :mnesia.read(@pause_table, {:questions, subject}, lock) do
+      [{@pause_table, {:questions, ^subject}, questions}] when is_list(questions) -> questions
+      _none -> []
+    end
+  end
+
+  defp write_subject_question(subject, fun) do
+    questions = read_subject_questions(subject, :write)
+
+    case fun.(questions, read_subject_pause(subject, :write)) do
+      {:write, question, pause, events, result} ->
+        :mnesia.write({@pause_table, {:questions, subject}, put_subject_question(questions, question)})
+        write_subject_pause_row(subject, pause)
+        {:ok, result, write_subject_events(subject, events)}
+
+      {:ok, result} ->
+        {:ok, result, []}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp put_subject_question(questions, %{id: id} = question) do
+    if Enum.any?(questions, &(&1.id == id)), do: Enum.map(questions, &if(&1.id == id, do: question, else: &1)), else: questions ++ [question]
+  end
+
+  defp write_subject_pause_row(subject, nil), do: :mnesia.delete({@pause_table, {:subject, subject}})
+  defp write_subject_pause_row(subject, pause), do: :mnesia.write({@pause_table, {:subject, subject}, pause})
+
+  # A subject's events, under its own key: the next `seq` of its stream, and an idempotency key the
+  # stream already holds returns the event it holds.
+  defp write_subject_events(subject, events) do
+    stored = read_subject_events(subject)
+    last_seq = stored |> Enum.map(& &1.seq) |> Enum.max(fn -> 0 end)
+
+    {appended, _stored, _last_seq} =
+      Enum.reduce(events, {[], stored, last_seq}, fn event, {appended, stored, last_seq} ->
+        case find_idempotent(stored, event.idempotency) do
+          %Event{} = existing ->
+            {[existing | appended], stored, last_seq}
+
+          nil ->
+            event = %{event | seq: last_seq + 1}
+            :mnesia.write({@ticket_events_table, {:subject, subject}, event.repo_key, event.issue_id, event.run_id, event.type, event.seq, Event.to_record(event)})
+            {[event | appended], [event | stored], event.seq}
+        end
+      end)
+
+    Enum.reverse(appended)
+  end
+
+  defp read_subject_events(subject) do
+    @ticket_events_table
+    |> :mnesia.read({:subject, subject})
+    |> Enum.map(fn {@ticket_events_table, _key, _repo_key, _issue_id, _run_id, _type, _seq, record} -> Event.normalize(record) end)
+    |> Enum.sort_by(&{datetime_sort_key(&1.at), &1.seq})
   end
 
   defp write_ticket_pause(repo_key, issue_id, at, fun) do

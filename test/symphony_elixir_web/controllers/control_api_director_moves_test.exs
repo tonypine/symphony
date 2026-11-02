@@ -346,6 +346,67 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
              {502, "move_incomplete", "posted the comment on MOT-30, but Linear refused the move to Rework (:boom); send it again to make the move without posting the comment twice"}
   end
 
+  # Told of a release build's answer, as `SymphonyElixir.ReleaseBuild.delivered/2` is.
+  defmodule ToldReleaseBuild do
+    def delivered(sha, opts) do
+      send(Keyword.fetch!(opts, :test), {:told, sha})
+      :started
+    end
+  end
+
+  test "decide with no ticket answers a question on Symphony itself by its id, and has whoever asked act on it (TP-1341)", %{moves: moves} do
+    :ok = RunStore.clear()
+
+    request = %{
+      title: "The Symphony release build failed",
+      question: "The build failed. Should Symphony rerun it, or wait for a fix?",
+      why: "The build itself failed.",
+      if_unanswered: "The app stays on its current version.",
+      recommendation_reason: "A rerun costs nothing.",
+      options: [%{label: "Rerun the build", effect: "Symphony reruns it.", recommended: true}, %{label: "Wait for a fix", effect: "Nothing is rerun."}]
+    }
+
+    {:ok, %{id: id}} = Questions.ask(:symphony, request, step: "release_build:abc")
+    {:ok, %{id: repository_id}} = Questions.ask({:repository, "repo-api"}, request)
+    moves = moves ++ [release_build: ToldReleaseBuild, release_build_opts: [test: self()]]
+    picks = [%{"question" => request.title, "answer" => "Rerun the build"}]
+
+    assert error(post(:decide, %{"question_id" => id}, moves)) == {422, "invalid_request", "picks must list each decision's question and answer"}
+    assert error(post(:decide, %{"question_id" => "q-nope", "picks" => picks}, moves)) == {404, "question_not_found", "No open question q-nope on Symphony or a repository"}
+
+    conn = post(:decide, %{"question_id" => id, "picks" => picks}, moves)
+    assert conn.status == 200
+    assert %{"move" => "decide", "subject" => "symphony", "repo_key" => nil, "question_id" => ^id, "option" => 1, "answered" => true} = Jason.decode!(conn.resp_body)
+    assert_received {:told, "abc"}
+    assert [%{state: :answered, answer: %{option: 1}}] = Questions.answered(:symphony)
+
+    # A question that asked nothing of anyone else is answered, and nothing more happens.
+    conn = post(:decide, %{"question_id" => repository_id, "picks" => [%{"question" => request.title, "answer" => "Wait for a fix"}]}, moves)
+    assert %{"subject" => "repository", "repo_key" => "repo-api", "option" => 2} = Jason.decode!(conn.resp_body)
+    refute_received {:told, _sha}
+
+    # No ticket and no question id is a ticket's Decide, which needs a ticket.
+    assert {422, "invalid_request", _message} = error(post(:decide, %{"picks" => picks}, moves))
+  end
+
+  # The Question service once someone else answered the question first.
+  defmodule AnsweredFirst do
+    def answer(_subject, _id, _answer, _opts), do: {:error, {:question_not_open, :answered}}
+  end
+
+  test "decide_subject needs a question id, and a question answered first by someone else is a conflict" do
+    :ok = RunStore.clear()
+    picks = [%{question: "Q", answer: "A"}]
+    assert DirectorMoves.decide_subject(%{picks: picks, request_comment_id: "c-1"}) == {:error, {:invalid, "question_id is required"}}
+
+    options = [%{label: "A", effect: "E.", recommended: true}, %{label: "B", effect: "F."}]
+    request = %{title: "T", question: "Q?", why: "W.", if_unanswered: "U.", recommendation_reason: "R.", options: options}
+    {:ok, %{id: id}} = Questions.ask(:symphony, request)
+
+    assert DirectorMoves.decide_subject(%{picks: picks, question_id: id}, questions: AnsweredFirst) ==
+             {:error, {:conflict, "Could not answer the question #{id}: {:question_not_open, :answered}"}}
+  end
+
   defp post(action, params, moves) do
     conn(:post, "/api/v1/control/#{action}", Jason.encode!(params))
     |> put_req_header("content-type", "application/json")

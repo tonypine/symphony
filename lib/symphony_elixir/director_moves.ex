@@ -139,6 +139,7 @@ defmodule SymphonyElixir.DirectorMoves do
     PlanReview,
     PrWatch,
     Questions,
+    ReleaseBuild,
     Restart,
     RunStore,
     StateMachine,
@@ -293,6 +294,59 @@ defmodule SymphonyElixir.DirectorMoves do
       finish(move, issue, to_state, comment, opts)
     end
   end
+
+  @doc """
+  The Director's Decide on a Question with no ticket: one asked on Symphony itself or on a
+  repository (`SymphonyElixir.Questions.open_on_subjects/0`), named by `input`'s `:question_id`.
+  The first pick's answer answers it as the Director (`SymphonyElixir.Questions.answer/4`), which
+  records `question.answered` on the subject's own stream and lifts its pause reason; then whoever
+  asked acts on the answer at once: a release build's question (`step` `release_build:<sha>`) has
+  `SymphonyElixir.ReleaseBuild.delivered/2` check that build again, which reruns it when the answer
+  says so. No ticket moves and nothing is posted to Linear.
+
+  `opts`: `:release_build` (the module told of a release build's answer, default
+  `SymphonyElixir.ReleaseBuild`), `:release_build_opts` (the options it is told with, default
+  none) and `:questions` (the Question service the answer is written with, default
+  `SymphonyElixir.Questions`). `{:error, :question_not_found}` when no subject has the open Question.
+  """
+  @spec decide_subject(input(), keyword()) :: {:ok, map()} | {:error, error() | :question_not_found}
+  def decide_subject(input, opts \\ []) when is_map(input) do
+    with :ok <- validate_input(:decide, input),
+         id when is_binary(id) <- blank_to_nil(input[:question_id]) || {:error, {:invalid, "question_id is required"}},
+         {:ok, subject, question} <- open_on_subject(id),
+         [%{answer: answer} | _picks] = input.picks,
+         {:ok, answered} <- answer_subject(subject, question, String.trim(answer), opts) do
+      act_on_answer(answered, opts)
+      Logger.info("Director move decide subject=#{inspect(subject)} question_id=#{id} option=#{inspect(answered.answer.option)}")
+      {:ok, %{move: "decide", subject: subject_name(subject), repo_key: subject_repo_key(subject), question_id: id, option: answered.answer.option, answered: true}}
+    end
+  end
+
+  defp open_on_subject(id) do
+    case Questions.find_open_on_subjects(String.trim(id)) do
+      {subject, question} -> {:ok, subject, question}
+      nil -> {:error, :question_not_found}
+    end
+  end
+
+  # Answered by someone else since it was read, or refused by the store: a conflict to read again.
+  defp answer_subject(subject, question, answer, opts) do
+    case Keyword.get(opts, :questions, Questions).answer(subject, question.id, answer, by: Pauses.director()) do
+      {:ok, answered} -> {:ok, answered}
+      {:error, reason} -> conflict("Could not answer the question #{question.id}: #{inspect(reason)}")
+    end
+  end
+
+  defp act_on_answer(%{step: "release_build:" <> sha}, opts),
+    do: Keyword.get(opts, :release_build, ReleaseBuild).delivered(sha, Keyword.get(opts, :release_build_opts, []))
+
+  defp act_on_answer(_question, _opts), do: :ok
+
+  defp subject_name(:symphony), do: "symphony"
+  defp subject_name({:repository, _repo_key}), do: "repository"
+
+  defp subject_repo_key({:repository, repo_key}), do: repo_key
+  defp subject_repo_key(:symphony), do: nil
 
   @doc """
   Answers the question `question_id` the ticket `identifier` is paused on (a dispatch loop's or a quiet handoff's, `SymphonyElixir.DispatchLoop.question_attrs/2`, or a run's

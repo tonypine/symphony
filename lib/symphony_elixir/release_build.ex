@@ -19,8 +19,12 @@ defmodule SymphonyElixir.ReleaseBuild do
       Symphony's pause with the failure (`waits_on: %{condition: "release_build:<repo key>:<sha>"}`).
       The reason clears once the build is rerun, a person chose to wait, or no held ticket waits on
       the commit any more.
-    * with no held ticket to ask, a build cancelled again or failed is logged once with its commit
-      and run, and the Director's update line says it stopped (`latest_build/1`).
+    * with no held ticket to ask, a build cancelled again or failed is logged with its commit and
+      run and asked on Symphony itself (TP-1341, `SymphonyElixir.Questions` with subject
+      `:symphony`, step `step_name/1`): rerun the build, or wait for a fix. The Inbox lists it with
+      no ticket; the Director's Decide answers it and has the build checked again at once
+      (`delivered/2`), which reruns it on "Rerun the build". The question is withdrawn once the
+      build starts again on GitHub, is published, or a newer merge is the one watched.
 
   Three triggers run the same check (`check/5`): the poll task, after `UpdateHold.resolve/5`, for
   every commit a held ticket waits on and for the newest `release` run on `main`, at most once a
@@ -35,7 +39,17 @@ defmodule SymphonyElixir.ReleaseBuild do
 
   require Logger
 
-  alias SymphonyElixir.{BuildInfo, DecisionRequest, MergeConfirmation, Pauses, RunStore, TicketState, UpdateHold}
+  alias SymphonyElixir.{
+    BuildInfo,
+    DecisionRequest,
+    MergeConfirmation,
+    Pauses,
+    Questions,
+    RunStore,
+    TicketState,
+    UpdateHold
+  }
+
   alias SymphonyElixir.GitHub.{PullRequest, Repo}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrDecision.Apply
@@ -63,14 +77,26 @@ defmodule SymphonyElixir.ReleaseBuild do
   @typedoc "A held ticket a question may be asked on."
   @type ticket :: %{id: String.t(), identifier: String.t() | nil, state: String.t() | nil}
 
-  @typedoc "A question asked about one attempt of the run: what kind, its title, on which ticket, and how many same-titled answers the ticket held before."
-  @type question :: %{
-          kind: :cancelled | :failed,
-          title: String.t(),
-          attempt: pos_integer(),
-          issue_id: String.t(),
-          prior: non_neg_integer()
-        }
+  @typedoc """
+  A question asked about one attempt of the run: what kind, its title, and either on which ticket
+  and how many same-titled answers the ticket held before, or, with no held ticket, the Question
+  asked on Symphony itself (`subject: :symphony` and its `question_id`).
+  """
+  @type question ::
+          %{
+            kind: :cancelled | :failed,
+            title: String.t(),
+            attempt: pos_integer(),
+            issue_id: String.t(),
+            prior: non_neg_integer()
+          }
+          | %{
+              kind: :cancelled | :failed,
+              title: String.t(),
+              attempt: pos_integer(),
+              subject: :symphony,
+              question_id: String.t()
+            }
 
   @type t :: %{
           sha: String.t(),
@@ -136,6 +162,7 @@ defmodule SymphonyElixir.ReleaseBuild do
          {:ok, %{head_sha: sha} = run} when is_binary(sha) <- newest_main_run(repo, opts) do
       sha = String.downcase(sha)
       :ok = put_latest(%{sha: sha, number: run.number, read_at: now}, opts)
+      :ok = withdraw_older(sha, opts)
       if sha not in held and not match?(%{state: :built}, get(sha, opts)), do: check(sha, repo, repo_key, [], opts)
       :ok
     else
@@ -213,7 +240,8 @@ defmodule SymphonyElixir.ReleaseBuild do
           _none -> true
         end
 
-      if newer?, do: put_latest(%{sha: sha, number: record.number, read_at: Map.get(latest_pointer(opts) || %{}, :read_at)}, opts)
+      if newer?, do: :ok = put_latest(%{sha: sha, number: record.number, read_at: Map.get(latest_pointer(opts) || %{}, :read_at)}, opts)
+      if newer?, do: :ok = withdraw_older(sha, opts)
       {:ok, record}
     end
   end
@@ -279,7 +307,7 @@ defmodule SymphonyElixir.ReleaseBuild do
     case github(opts).commit_workflow_runs(repo, sha, @workflow, gh_opts(opts)) do
       {:ok, runs} ->
         run = List.first(runs)
-        record = record |> take_answer(run, opts) |> step(run)
+        record = record |> take_answer(run, opts) |> step(run) |> settle_question()
         stored = put(record, opts)
         sync_pause(stored, opts)
         {:ok, stored}
@@ -327,6 +355,7 @@ defmodule SymphonyElixir.ReleaseBuild do
     do: "#{@lack_of_machine} #{record.reruns + 1} times; Symphony stopped rerunning it"
 
   defp words(%{state: :cancelled}, _now), do: "#{@lack_of_machine}, rerunning it"
+  defp words(%{state: :asked, question: %{subject: :symphony}} = record, _now), do: "#{@lack_of_machine} #{record.reruns + 1} times; you were asked whether to rerun it"
   defp words(%{state: :asked} = record, _now), do: "#{@lack_of_machine} #{record.reruns + 1} times; you were asked whether to keep retrying"
   defp words(%{state: :waiting}, _now), do: "#{@lack_of_machine}; you chose to wait"
   defp words(%{state: :failed, answer: %{kind: :failed}}, _now), do: "failed on GitHub; waiting for a fix"
@@ -459,15 +488,56 @@ defmodule SymphonyElixir.ReleaseBuild do
     end
   end
 
-  # No held ticket to ask: said once in the log, with the commit and the run, and in the update line.
+  # No held ticket to ask: the question is asked on Symphony itself (TP-1341), through the Question
+  # service, which lists it in the Inbox with no ticket; said in the log with the commit and the run.
   defp ask(record, run, kind) do
-    state = if(kind == :failed, do: :failed, else: :cancelled)
+    request = symphony_request(kind, record)
+    asked_by = %{kind: :rule, name: @setter.name}
 
-    if record.state != state do
-      Logger.warning("The release build of #{record.sha} #{if kind == :failed, do: "failed", else: "was #{@lack_of_machine} again"} and no held ticket waits on it: run_id=#{run.id} url=#{run.url}")
+    Logger.warning("The release build of #{record.sha} #{if kind == :failed, do: "failed", else: "was #{@lack_of_machine} again"} and no held ticket waits on it: run_id=#{run.id} url=#{run.url}")
+
+    case questions(record).ask(:symphony, request, asked_by: asked_by, step: step_name(record.sha)) do
+      {:ok, %{id: id}} ->
+        question = %{kind: kind, title: request.title, attempt: run.attempt, subject: :symphony, question_id: id}
+        %{record | state: state_after_ask(kind), question: question}
+
+      {:error, reason} ->
+        Logger.warning("Could not ask Symphony about the release build of #{record.sha}: #{inspect(reason)}")
+        %{record | state: if(kind == :failed, do: :failed, else: :cancelled)}
+    end
+  end
+
+  @doc """
+  The `step` a release build's Question on Symphony is asked at: `release_build:<sha>`, which tells
+  the Director's Decide whose answer it is (`SymphonyElixir.DirectorMoves.decide_subject/2`).
+  """
+  @spec step_name(String.t()) :: String.t()
+  def step_name(sha) when is_binary(sha), do: "release_build:" <> sha
+
+  # A Question on Symphony nobody needs any more: the build started again (a person reran it on
+  # GitHub) or was published. It is withdrawn, so its Inbox row goes.
+  defp settle_question(%{question: %{subject: subject, question_id: id}, state: state} = record) when state in [:queued, :running, :built] do
+    withdraw(record, subject, id, "The build started again on GitHub, so nobody needs to answer.")
+    %{record | question: nil}
+  end
+
+  defp settle_question(record), do: record
+
+  defp withdraw(record, subject, id, reason) do
+    case questions(record).withdraw(subject, id, reason, cause: "superseded", by: %{kind: :rule, name: @setter.name}) do
+      {:ok, _question} -> :ok
+      {:error, {:question_not_open, _state}} -> :ok
+      {:error, error} -> Logger.warning("Could not withdraw the question #{id} about the release build of #{record.sha}: #{inspect(error)}")
+    end
+  end
+
+  # Once a newer merge is the one watched, the questions about older builds are moot.
+  defp withdraw_older(sha, opts) do
+    for %{id: id, step: "release_build:" <> asked_sha} <- questions(opts).open(:symphony), asked_sha != sha do
+      withdraw(%{sha: asked_sha, opts: opts}, :symphony, id, "A newer merge's build is the one the app waits for now.")
     end
 
-    %{record | state: state}
+    :ok
   end
 
   defp state_after_ask(:cancelled), do: :asked
@@ -479,6 +549,17 @@ defmodule SymphonyElixir.ReleaseBuild do
 
   # The answer to the open question, read from the asked ticket's recorded decisions: the first
   # same-titled one after those it held when asked.
+  defp take_answer(%{question: %{subject: subject, question_id: id} = question} = record, run, opts) do
+    record = Map.merge(record, %{opts: opts, now: now(opts)})
+
+    case questions(record).find(subject, id) do
+      %{state: :answered, answer: %{option: option}} -> apply_answer(record, question, option, run)
+      # Withdrawn by anyone else: nobody wants it rerun, so it is not asked again for this attempt.
+      %{state: :withdrawn} -> %{record | question: nil, answer: %{kind: question.kind, attempt: question.attempt}}
+      _open_or_gone -> record
+    end
+  end
+
   defp take_answer(record, run, opts) do
     record = Map.merge(record, %{opts: opts, now: now(opts)})
 
@@ -644,6 +725,48 @@ defmodule SymphonyElixir.ReleaseBuild do
     }
   end
 
+  # The question asked on Symphony itself when no held ticket waits on the build (TP-1341): the
+  # same two ways forward for a build cancelled a third time and a failed one.
+  defp symphony_request(kind, record) do
+    build = "Symphony #{build_name(record)}"
+
+    {title, what, why} =
+      case kind do
+        :cancelled ->
+          {"The #{build} keeps being cancelled", "GitHub cancelled the #{build} #{@max_reruns + 1} times in a row without starting it.",
+           "GitHub cancels a build it can't find a machine for, as happens when its macOS machines are busy. " <>
+             "Symphony reran the build #{@max_reruns} times, and GitHub cancelled it again each time."}
+
+        :failed ->
+          {"The #{build} failed", "GitHub's #{build} failed: #{failure_words(record.conclusion)}.",
+           "The build itself failed, which is not a shortage of machines. The run's page on GitHub shows which step failed."}
+      end
+
+    %{
+      title: title,
+      question: "#{what} No ticket waits on it, but the app can't update to the fixes merged since its last build until it is published. Should Symphony rerun it, or wait for a fix?",
+      why: why <> " Until a build of the newest merge is published, the app keeps running an older version of Symphony.",
+      if_unanswered: "The app stays on its current version, and Symphony doesn't rerun the build.",
+      options: [
+        %{
+          label: @rerun_build,
+          effect: rerun_effect(kind),
+          recommended: true,
+          tradeoffs: [%{kind: "good", text: "clears a failure or a shortage of machines that has passed"}]
+        },
+        %{
+          label: @wait_for_fix,
+          effect: "Symphony stops rerunning this build; the app updates once a newer build is published",
+          tradeoffs: [%{kind: "cost", text: "the app stays on its current version until the next merge's build is published"}]
+        }
+      ],
+      recommendation_reason: "A rerun costs nothing, and a second failure asks again."
+    }
+  end
+
+  defp rerun_effect(:cancelled), do: "Symphony reruns the build now, and once more if GitHub cancels it again; then it asks again"
+  defp rerun_effect(:failed), do: "Symphony reruns the build once; if it fails again, Symphony asks again"
+
   defp put(record, opts) do
     stored = Map.drop(record, [:opts, :now])
 
@@ -662,6 +785,8 @@ defmodule SymphonyElixir.ReleaseBuild do
   defp github(opts) when is_list(opts), do: Keyword.get(opts, :github, PullRequest)
 
   defp pauses(opts), do: Keyword.get(opts, :pauses, Pauses)
+  defp questions(%{opts: opts}), do: questions(opts)
+  defp questions(opts) when is_list(opts), do: Keyword.get(opts, :questions, Questions)
   defp store(opts), do: Keyword.get(opts, :run_store, RunStore)
   defp now(opts), do: Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
 end

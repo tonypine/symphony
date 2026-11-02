@@ -7,7 +7,19 @@ defmodule SymphonyElixir.ReleaseBuildTest do
 
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{BuildInfo, DecisionRequest, Pauses, ReleaseBuild, TicketState, UpdateHold}
+  alias SymphonyElixir.{
+    BuildInfo,
+    DecisionRequest,
+    DirectorMoves,
+    Inbox,
+    Pauses,
+    Questions,
+    ReleaseBuild,
+    TicketEvents,
+    TicketState,
+    UpdateHold
+  }
+
   alias SymphonyElixir.PrWatch.Ingest
 
   @repo "acme/symphony"
@@ -270,8 +282,17 @@ defmodule SymphonyElixir.ReleaseBuildTest do
       runs(github, [run(3, "completed", "failure")])
       assert {:ok, %{state: :failed, question: nil}} = check(failing)
 
-      assert {:ok, %{state: :failed, question: nil}} = ReleaseBuild.check(@sha, @repo, @repo_key, [], opts)
+      refusing = Keyword.put(opts, :questions, __MODULE__.RefusingQuestions)
+      log = ExUnit.CaptureLog.capture_log(fn -> assert {:ok, %{state: :failed, question: nil}} = ReleaseBuild.check(@sha, @repo, @repo_key, [], refusing) end)
+      assert log =~ "Could not ask Symphony about the release build of #{@sha}: :store_down"
       refute_received {:asked, _ticket, _request}
+      assert ReleaseBuild.line(@sha, nil, opts) == "Waiting for the v#{version()} build: failed on GitHub"
+
+      # Cancelled a third time and the question refused: the line says Symphony stopped rerunning it.
+      :ok = RunStore.put_github_updates({:release_build, @sha}, %{ReleaseBuild.get(@sha) | reruns: 2, rerun_attempt: 2, state: :queued})
+      runs(github, [run(3, "completed", "cancelled")])
+      ExUnit.CaptureLog.capture_log(fn -> assert {:ok, %{state: :cancelled, question: nil}} = ReleaseBuild.check(@sha, @repo, @repo_key, [], refusing) end)
+      assert ReleaseBuild.line(@sha, nil, opts) == "Waiting for the v#{version()} build: cancelled for lack of a machine 3 times; Symphony stopped rerunning it"
     end
 
     test "a person's answer is read from the ticket's recorded decisions by default", %{github: github, opts: opts} do
@@ -291,6 +312,15 @@ defmodule SymphonyElixir.ReleaseBuildTest do
 
     def set_machine_label(_issue_id, _name), do: :ok
     def remove_machine_label(_issue_id, _name), do: :ok
+  end
+
+  # The Question service as a store that refuses every write.
+  defmodule RefusingQuestions do
+    def ask(_subject, _request, _opts), do: {:error, :store_down}
+    def find(_subject, _id), do: nil
+    def open(_subject), do: [%{id: "q-old", step: "release_build:0000000000000000000000000000000000000000"}]
+    def withdraw(_subject, "q-old", _reason, _opts), do: {:error, {:question_not_open, :answered}}
+    def withdraw(_subject, _id, _reason, _opts), do: {:error, :store_down}
   end
 
   defmodule FailingStore do
@@ -547,26 +577,148 @@ defmodule SymphonyElixir.ReleaseBuildTest do
       assert ReleaseBuild.get("3333333333333333333333333333333333333333") == nil
     end
 
-    test "with no ticket to ask, a build cancelled again or failed is logged once and stops no dispatch", %{github: github, opts: opts} do
-      record = %{sha: @sha, repo: @repo, repo_key: @repo_key, tickets: [], state: :queued, run_id: "41086214847"}
+    defp store_cancelled_twice do
+      record = %{sha: @sha, repo: @repo, repo_key: @repo_key, tickets: [], state: :queued, run_id: "41086214847", url: nil}
       record = Map.merge(record, %{number: 750, attempt: 3, conclusion: nil})
       :ok = RunStore.put_github_updates({:release_build, @sha}, Map.merge(record, %{since: @created, since_attempt: 3, reruns: 2, rerun_attempt: 2, question: nil, answer: nil}))
       :ok = RunStore.put_github_updates({:release_build, :latest}, %{sha: @sha, number: 750, read_at: @now})
+    end
+
+    defp inbox, do: Inbox.items(%{}, name: {:test, make_ref()}, records: fn -> [] end, github_repos: %{})
+
+    test "with no ticket held, a third cancellation asks on Symphony itself: one Inbox row, and Rerun the build reruns it at once (TP-1341)",
+         %{github: github, opts: opts} do
+      supervisor = start_supervised!(Task.Supervisor)
+      store_cancelled_twice()
       runs(github, [run(3, "completed", "cancelled")])
 
-      log = ExUnit.CaptureLog.capture_log(fn -> assert {:ok, %{state: :cancelled, question: nil}} = ReleaseBuild.check(@sha, @repo, @repo_key, [], opts) end)
+      {result, log} = ExUnit.CaptureLog.with_log(fn -> ReleaseBuild.check(@sha, @repo, @repo_key, [], opts) end)
+      assert {:ok, %{state: :asked, question: %{subject: :symphony, question_id: id}}} = result
       assert log =~ "The release build of #{@sha} was cancelled for lack of a machine again and no held ticket waits on it: run_id=41086214847"
       refute_received {:asked, _ticket, _request}
-      assert ReleaseBuild.latest_build(now: @now).line == "The v#{version()} build: cancelled for lack of a machine 3 times; Symphony stopped rerunning it"
 
-      log = ExUnit.CaptureLog.capture_log(fn -> assert {:ok, %{state: :cancelled}} = ReleaseBuild.check(@sha, @repo, @repo_key, [], opts) end)
-      refute log =~ "no held ticket"
-
-      runs(github, [run(4, "completed", "failure")])
-      log = ExUnit.CaptureLog.capture_log(fn -> assert {:ok, %{state: :failed}} = ReleaseBuild.check(@sha, @repo, @repo_key, [], opts) end)
-      assert log =~ "The release build of #{@sha} failed and no held ticket waits on it"
+      assert [%{subject: :symphony, title: "Symphony", identifier: nil, kind: :action, ask: title, review: review}] = inbox()
+      assert title == "The Symphony v#{version()} build keeps being cancelled"
+      assert %{question_id: id, options: [%{label: "Rerun the build", recommended: true}, %{label: "Wait for a fix"}]} = review
+      assert review.question =~ "No ticket waits on it"
+      assert ReleaseBuild.latest_build(now: @now).line == "The v#{version()} build: cancelled for lack of a machine 3 times; you were asked whether to rerun it"
       assert symphony_conditions() == []
-      assert ReleaseBuild.latest_build(now: @now).line == "The v#{version()} build: failed on GitHub"
+      assert {:ok, pause} = Pauses.get(:symphony)
+      assert Pauses.dispatch_reasons(pause) == []
+
+      # Checked again unanswered: still one question, asked once.
+      assert {:ok, %{state: :asked}} = ReleaseBuild.check(@sha, @repo, @repo_key, [], opts)
+      assert [%{id: ^id}] = Questions.open(:symphony)
+
+      decide = %{question_id: id, picks: [%{question: title, answer: "Rerun the build"}]}
+      release_build_opts = [supervisor: supervisor] ++ opts
+
+      assert {:ok, %{move: "decide", subject: "symphony", question_id: ^id, option: 1}} =
+               DirectorMoves.decide_subject(decide, release_build_opts: release_build_opts)
+
+      await_checks(supervisor)
+
+      assert_received {:rerun, "41086214847"}
+      assert %{state: :queued, reruns: 1, question: nil} = ReleaseBuild.get(@sha)
+      assert inbox() == []
+      assert Pauses.get(:symphony) == {:ok, nil}
+      assert ["question.asked", "question.answered"] = :symphony |> TicketEvents.query_subject() |> Enum.map(& &1.type)
+
+      assert DirectorMoves.decide_subject(decide) == {:error, :question_not_found}
+    end
+
+    test "with no ticket held, a failed build asks on Symphony; Wait for a fix keeps it unbuilt and asks nothing more", %{github: github, opts: opts} do
+      runs(github, [run(1, "completed", "failure")])
+
+      {result, _log} = ExUnit.CaptureLog.with_log(fn -> ReleaseBuild.check(@sha, @repo, @repo_key, [], opts) end)
+      assert {:ok, %{state: :failed, question: %{subject: :symphony, question_id: id}}} = result
+      assert [%{title: title, question: question}] = Questions.open(:symphony)
+      assert title == "The Symphony v#{version()} build failed"
+      assert question =~ "a step failed"
+      assert symphony_conditions() == []
+
+      {:ok, _answered} = Questions.answer(:symphony, id, "Wait for a fix")
+      assert {:ok, %{state: :failed, answer: %{kind: :failed, attempt: 1}}} = ReleaseBuild.check(@sha, @repo, @repo_key, [], opts)
+      refute_received {:rerun, _id}
+      assert Questions.open(:symphony) == []
+      assert ReleaseBuild.line(@sha, nil, opts) =~ "failed on GitHub; waiting for a fix"
+    end
+
+    test "Rerun the build on a failed build no ticket waits on reruns it once", %{github: github, opts: opts} do
+      runs(github, [run(1, "completed", "failure")])
+      {result, _log} = ExUnit.CaptureLog.with_log(fn -> ReleaseBuild.check(@sha, @repo, @repo_key, [], opts) end)
+      assert {:ok, %{question: %{question_id: id}}} = result
+
+      # Unanswered, the check keeps the question.
+      assert {:ok, %{question: %{question_id: ^id}}} = ReleaseBuild.check(@sha, @repo, @repo_key, [], opts)
+
+      {:ok, _answered} = Questions.answer(:symphony, id, "1")
+      assert {:ok, %{state: :queued, question: nil}} = ReleaseBuild.check(@sha, @repo, @repo_key, [], opts)
+      assert_received {:rerun, "41086214847"}
+    end
+
+    test "the question on Symphony is withdrawn once the build starts again on GitHub, or once withdrawn elsewhere", %{github: github, opts: opts} do
+      store_cancelled_twice()
+      runs(github, [run(3, "completed", "cancelled")])
+      {result, _log} = ExUnit.CaptureLog.with_log(fn -> ReleaseBuild.check(@sha, @repo, @repo_key, [], opts) end)
+      assert {:ok, %{question: %{question_id: id}}} = result
+
+      # A person reran it on GitHub.
+      runs(github, [run(4, "queued")])
+      assert {:ok, %{state: :queued, question: nil}} = ReleaseBuild.check(@sha, @repo, @repo_key, [], opts)
+      assert [%{state: :withdrawn, withdrawn: %{reason: "The build started again on GitHub, so nobody needs to answer."}}] = Questions.find(:symphony, id) |> List.wrap()
+      assert inbox() == []
+
+      # A question withdrawn by anyone else is dropped from the build's record.
+      runs(github, [run(4, "completed", "failure")])
+      {result, _log} = ExUnit.CaptureLog.with_log(fn -> ReleaseBuild.check(@sha, @repo, @repo_key, [], opts) end)
+      assert {:ok, %{question: %{question_id: failed_id}}} = result
+      {:ok, _withdrawn} = Questions.withdraw(:symphony, failed_id, "Not needed")
+      assert {:ok, %{state: :failed, question: nil, answer: %{kind: :failed, attempt: 4}}} = ReleaseBuild.check(@sha, @repo, @repo_key, [], opts)
+      assert Questions.open(:symphony) == []
+    end
+
+    test "a newer merge watched withdraws the questions about older builds", %{github: github, opts: opts} do
+      store_cancelled_twice()
+      runs(github, [run(3, "completed", "cancelled")])
+      {result, _log} = ExUnit.CaptureLog.with_log(fn -> ReleaseBuild.check(@sha, @repo, @repo_key, [], opts) end)
+      assert {:ok, %{question: %{question_id: id}}} = result
+
+      newer = "1111111111111111111111111111111111111111"
+      set(github, :main, [%{main_run(1, "queued") | "headSha" => newer, "number" => 751}])
+      assert :ok = ReleaseBuild.watch([], @build, %{}, @repo_key, Keyword.put(opts, :now, DateTime.add(@now, 61, :second)))
+
+      assert %{state: :withdrawn, withdrawn: %{reason: "A newer merge's build is the one the app waits for now."}} = Questions.find(:symphony, id)
+      assert inbox() == []
+    end
+
+    test "a newer merge's delivery withdraws them too, and a withdrawal the store refuses is logged", %{github: github, opts: opts} do
+      supervisor = start_supervised!(Task.Supervisor)
+      store_cancelled_twice()
+      runs(github, [run(3, "completed", "cancelled")])
+      {result, _log} = ExUnit.CaptureLog.with_log(fn -> ReleaseBuild.check(@sha, @repo, @repo_key, [], opts) end)
+      assert {:ok, %{question: %{question_id: id}}} = result
+
+      newer = "2222222222222222222222222222222222222222"
+      runs(github, [%{run(1, "queued") | "number" => 751}])
+      delivery_opts = [supervisor: supervisor, build: @build] ++ opts
+      assert ReleaseBuild.delivered(release_delivery(%{head_sha: newer}), delivery_opts) == :started
+      await_checks(supervisor)
+      assert %{state: :withdrawn} = Questions.find(:symphony, id)
+
+      # The Question service refusing the withdrawal: logged, the build's record goes on.
+      refusing = Keyword.put(opts, :questions, __MODULE__.RefusingQuestions)
+      record = Map.put(ReleaseBuild.get(newer), :question, %{kind: :cancelled, title: "t", attempt: 1, subject: :symphony, question_id: "q-1"})
+      :ok = RunStore.put_github_updates({:release_build, newer}, record)
+      log = ExUnit.CaptureLog.capture_log(fn -> assert {:ok, %{question: nil}} = ReleaseBuild.check(newer, @repo, @repo_key, [], refusing) end)
+      assert log =~ "Could not withdraw the question q-1 about the release build of #{newer}: :store_down"
+
+      # A question no longer open when a newer merge is watched is left as it is.
+      set(github, :main, [%{main_run(1, "queued") | "headSha" => newer, "number" => 751}])
+      later = Keyword.put(refusing, :now, DateTime.add(@now, 3_600, :second))
+      log = ExUnit.CaptureLog.capture_log(fn -> assert :ok = ReleaseBuild.watch_main(@repo, @repo_key, [], later) end)
+      assert_received :main_read
+      refute log =~ "Could not withdraw"
     end
 
     test "a failed build several unnamed held tickets wait on names them together", %{github: github, opts: opts} do

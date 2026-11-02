@@ -40,7 +40,7 @@ defmodule SymphonyElixir.Inbox.Item do
 
   @type kind :: :action | :plan | :clarify | :blocked
   @type t :: %{
-          required(:issue_id) => String.t(),
+          required(:issue_id) => String.t() | nil,
           required(:identifier) => String.t() | nil,
           required(:title) => String.t() | nil,
           required(:repo_key) => String.t() | nil,
@@ -49,7 +49,8 @@ defmodule SymphonyElixir.Inbox.Item do
           required(:ask) => String.t(),
           required(:waiting_since) => DateTime.t() | nil,
           required(:url) => String.t() | nil,
-          required(:review) => map()
+          required(:review) => map(),
+          optional(:subject) => :symphony | :repository
         }
 
   @option_pattern ~r/^\*\*(.+?)\*\*(\s*\(recommended\))?\s*[:—-]?\s*(.*)$/i
@@ -143,6 +144,37 @@ defmodule SymphonyElixir.Inbox.Item do
     record
     |> record_item(:action, question.title, latest([record.phase_at, question.asked_at]))
     |> Map.put(:review, Map.merge(question_review(record, question), %{requested_at: question.asked_at, confirm: MergeConfirmation.confirm_target(question)}))
+  end
+
+  @doc """
+  The `:action` item of `question`, an open Question on a subject that is not a ticket
+  (`SymphonyElixir.Questions.open_on_subjects/0`): Symphony itself, or a repository. It has no ticket:
+  `issue_id` and `identifier` are nil, `subject` says what it is asked on (`:symphony` or
+  `:repository`) and `title` names it ("Symphony", or the repository's key, which `repo_key` also
+  holds). Its review is the Question's, as `from_question/2` gives it, with no request comment: the
+  Director's Decide answers it by its `question_id` alone.
+  """
+  @spec from_subject_question(:symphony | {:repository, String.t()}, map()) :: t()
+  def from_subject_question(subject, question) do
+    {kind, title, repo_key} =
+      case subject do
+        :symphony -> {:symphony, "Symphony", nil}
+        {:repository, repo_key} -> {:repository, repo_key, repo_key}
+      end
+
+    %{
+      issue_id: nil,
+      identifier: nil,
+      title: title,
+      repo_key: repo_key,
+      kind: :action,
+      state: nil,
+      ask: question.title,
+      waiting_since: latest([question.asked_at, question.reopened_at]),
+      url: nil,
+      review: Map.merge(question_review(nil, question), %{requested_at: question.asked_at, confirm: nil}),
+      subject: kind
+    }
   end
 
   @doc """

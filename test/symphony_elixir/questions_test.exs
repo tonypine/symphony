@@ -132,7 +132,8 @@ defmodule SymphonyElixir.QuestionsTest do
 
     test "a malformed ticket, asker or time is refused" do
       assert Questions.ask({:ticket, " ", @issue_id}, @request) == {:error, {:invalid_subject, {:ticket, " ", @issue_id}}}
-      assert Questions.ask(:symphony, @request) == {:error, {:invalid_subject, :symphony}}
+      assert Questions.ask({:repository, " "}, @request) == {:error, {:invalid_subject, {:repository, " "}}}
+      assert Questions.ask(:everything, @request) == {:error, {:invalid_subject, :everything}}
       assert Questions.ask(@ticket, @request, asked_by: %{@run | run_id: 7}) == {:error, {:invalid_option, :asked_by}}
       assert Questions.ask(@ticket, @request, asked_by: %{kind: :robot, name: "R"}) == {:error, {:invalid_option, :asked_by}}
       assert Questions.ask(@ticket, @request, at: "now") == {:error, {:invalid_option, :at}}
@@ -281,7 +282,8 @@ defmodule SymphonyElixir.QuestionsTest do
       assert Questions.withdraw(@ticket, question.id, "Gone", by: %{kind: :robot, name: "R"}) == {:error, {:invalid_actor, %{kind: :robot, name: "R"}}}
       assert Questions.withdraw(@ticket, question.id, "Gone", at: 1) == {:error, {:invalid_option, :at}}
       assert Questions.withdraw(@ticket, question.id, "Gone", cause: "bored") == {:error, {:invalid_option, {:cause, "bored"}}}
-      assert Questions.withdraw(:symphony, question.id, "Gone") == {:error, {:invalid_subject, :symphony}}
+      assert Questions.withdraw(:symphony, question.id, "Gone") == {:error, :question_not_found}
+      assert Questions.withdraw(:everything, question.id, "Gone") == {:error, {:invalid_subject, :everything}}
       assert Questions.open(@ticket) == [question]
     end
   end
@@ -512,7 +514,8 @@ defmodule SymphonyElixir.QuestionsTest do
       assert Questions.reopen(@ticket, "q-nope") == {:error, :question_not_found}
       assert Questions.reopen(@ticket, question.id, by: %{kind: :robot, name: "R"}) == {:error, {:invalid_actor, %{kind: :robot, name: "R"}}}
       assert Questions.reopen(@ticket, question.id, at: 1) == {:error, {:invalid_option, :at}}
-      assert Questions.reopen(:symphony, question.id) == {:error, {:invalid_subject, :symphony}}
+      assert Questions.reopen(:symphony, question.id) == {:error, :question_not_found}
+      assert Questions.reopen(:everything, question.id) == {:error, {:invalid_subject, :everything}}
     end
   end
 

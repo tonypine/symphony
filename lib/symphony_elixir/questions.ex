@@ -51,6 +51,18 @@ defmodule SymphonyElixir.Questions do
 
   `deciding/1` is the question a decision request asked that the ticket waits on (the newest open
   one asked with `request: true`): what the Director's Decide answers.
+
+  A question may also be asked on Symphony itself (`:symphony`) or on a repository
+  (`{:repository, repo_key}`), a decision with no ticket to carry it (TP-1341): a release build of
+  `main` cancelled a third time with no ticket waiting on it (`SymphonyElixir.ReleaseBuild`). It is
+  the same entity, asked, answered, withdrawn and reopened the same way, with the same events and
+  the same pause binding: it pauses its subject (`SymphonyElixir.Pauses`; a `:question` reason on
+  Symphony's pause stops no dispatch, one on a repository's holds that repository) while it is
+  open. It is kept next to its subject's pause and its events go to the subject's own stream
+  (`RunStore.update_subject_question/2`, `SymphonyElixir.TicketEvents.query_subject/2`); no Linear
+  comment or label shows it, and its change is announced as a change of Symphony's state.
+  `open_on_subjects/0` lists them for the Inbox, and the Director's Decide answers one by its id
+  alone (`SymphonyElixir.DirectorMoves.decide_subject/2`).
   """
 
   require Logger
@@ -103,6 +115,12 @@ defmodule SymphonyElixir.Questions do
 
   @typedoc "A ticket, as `SymphonyElixir.Pauses` names it."
   @type ticket :: {:ticket, String.t(), String.t()}
+
+  @typedoc """
+  What a question is asked on, as `SymphonyElixir.Pauses` names it: a ticket, a repository
+  (`{:repository, repo_key}`) or Symphony itself (`:symphony`).
+  """
+  @type subject :: ticket() | {:repository, String.t()} | :symphony
 
   @typedoc "Who asked a question: a run (with its id), a rule, Symphony or a person, by name."
   @type asker :: %{kind: :run | :rule | :symphony | :person, name: String.t(), run_id: String.t() | nil}
@@ -213,15 +231,15 @@ defmodule SymphonyElixir.Questions do
   with the standard's message. Records `question.asked` and pauses the ticket on the question.
   An open question with the same title and text is returned instead, and nothing is recorded.
   """
-  @spec ask(ticket(), map(), [ask_opt()]) :: {:ok, question()} | {:error, term()}
-  def ask(ticket, request, opts \\ []) do
+  @spec ask(subject(), map(), [ask_opt()]) :: {:ok, question()} | {:error, term()}
+  def ask(subject, request, opts \\ []) do
     backfilled? = Keyword.get(opts, :backfilled) == true
 
-    with {:ok, {repo_key, issue_id}} <- ticket(ticket),
+    with {:ok, subject} <- subject(subject),
          :ok <- check(request, backfilled?),
          {:ok, asked_by} <- asker(Keyword.get(opts, :asked_by, @symphony)),
          {:ok, at} <- at(opts) do
-      update(repo_key, issue_id, at, &asked(ticket, &1, &2, new_question(request, asked_by, opts, at), backfilled?))
+      update(subject, at, &asked(subject, &1, &2, new_question(request, asked_by, opts, at), backfilled?))
     end
   end
 
@@ -230,15 +248,15 @@ defmodule SymphonyElixir.Questions do
   option's label (in any case and spacing) picks the second option; any other text is a free-text
   answer, kept as given. Records `question.answered` and clears the question's pause reason.
   """
-  @spec answer(ticket(), String.t(), String.t(), [end_opt()]) :: {:ok, question()} | {:error, term()}
-  def answer(ticket, id, answer, opts \\ []) do
-    with {:ok, {repo_key, issue_id}} <- ticket(ticket),
+  @spec answer(subject(), String.t(), String.t(), [end_opt()]) :: {:ok, question()} | {:error, term()}
+  def answer(subject, id, answer, opts \\ []) do
+    with {:ok, subject} <- subject(subject),
          {:ok, text} <- text(answer, :blank_answer),
          {:ok, by} <- actor(Keyword.get(opts, :by, @director)),
          {:ok, scope} <- scope(Keyword.get(opts, :scope, :ticket)),
          {:ok, at} <- at(opts) do
       given = %{text: text, option: nil, by: by, at: at, scope: scope}
-      update(repo_key, issue_id, at, &answered(ticket, &1, &2, id, given))
+      update(subject, at, &answered(subject, &1, &2, id, given))
     end
   end
 
@@ -247,14 +265,14 @@ defmodule SymphonyElixir.Questions do
   `question.withdrawn` with the reason, which history keeps, and `opts[:cause]` (`t:cause/0`) when
   given, and clears the question's pause reason.
   """
-  @spec withdraw(ticket(), String.t(), String.t(), [end_opt()]) :: {:ok, question()} | {:error, term()}
-  def withdraw(ticket, id, reason, opts \\ []) do
-    with {:ok, {repo_key, issue_id}} <- ticket(ticket),
+  @spec withdraw(subject(), String.t(), String.t(), [end_opt()]) :: {:ok, question()} | {:error, term()}
+  def withdraw(subject, id, reason, opts \\ []) do
+    with {:ok, subject} <- subject(subject),
          {:ok, reason} <- text(reason, :blank_reason),
          {:ok, cause} <- cause(Keyword.get(opts, :cause)),
          {:ok, by} <- actor(Keyword.get(opts, :by, @symphony)),
          {:ok, at} <- at(opts) do
-      update(repo_key, issue_id, at, &withdrawn(ticket, &1, &2, id, {reason, cause}, by, at))
+      update(subject, at, &withdrawn(subject, &1, &2, id, {reason, cause}, by, at))
     end
   end
 
@@ -263,12 +281,12 @@ defmodule SymphonyElixir.Questions do
   Director's Undo), the question is open again with `reopened_at` stamped, and the ticket pauses on
   it again. Records `question.reopened`. A question not answered is refused.
   """
-  @spec reopen(ticket(), String.t(), [end_opt()]) :: {:ok, question()} | {:error, term()}
-  def reopen(ticket, id, opts \\ []) do
-    with {:ok, {repo_key, issue_id}} <- ticket(ticket),
+  @spec reopen(subject(), String.t(), [end_opt()]) :: {:ok, question()} | {:error, term()}
+  def reopen(subject, id, opts \\ []) do
+    with {:ok, subject} <- subject(subject),
          {:ok, by} <- actor(Keyword.get(opts, :by, @director)),
          {:ok, at} <- at(opts) do
-      update(repo_key, issue_id, at, &reopened(ticket, &1, &2, id, by, at))
+      update(subject, at, &reopened(subject, &1, &2, id, by, at))
     end
   end
 
@@ -438,13 +456,27 @@ defmodule SymphonyElixir.Questions do
     title_key(entry.title) == title_key(Map.get(decision, :title)) and recorded != "" and String.starts_with?(title_key(entry.answer), recorded)
   end
 
-  @doc "The questions on `ticket` still waiting for an answer, in the order they were asked."
-  @spec open(ticket()) :: [question()]
-  def open(ticket), do: ticket |> questions() |> Enum.filter(&(&1.state == :open))
+  @doc "The questions on `subject` still waiting for an answer, in the order they were asked."
+  @spec open(subject()) :: [question()]
+  def open(subject), do: subject |> questions() |> Enum.filter(&(&1.state == :open))
 
-  @doc "The questions on `ticket` a person answered, in the order they were asked."
-  @spec answered(ticket()) :: [question()]
-  def answered(ticket), do: ticket |> questions() |> Enum.filter(&(&1.state == :answered))
+  @doc "The questions on `subject` a person answered, in the order they were asked."
+  @spec answered(subject()) :: [question()]
+  def answered(subject), do: subject |> questions() |> Enum.filter(&(&1.state == :answered))
+
+  @doc """
+  The open questions on a subject that is not a ticket (Symphony itself, then each repository by
+  its key), each with its subject, in the order they were asked: the Inbox's rows with no ticket.
+  """
+  @spec open_on_subjects() :: [{:symphony | {:repository, String.t()}, question()}]
+  def open_on_subjects do
+    subjects = with {:error, _reason} <- RunStore.list_subject_questions(), do: []
+    for {subject, questions} <- subjects, %{state: :open} = question <- normalize(questions), do: {subject, question}
+  end
+
+  @doc "The subject that is not a ticket whose open question is `id`, with that question; nil when none is."
+  @spec find_open_on_subjects(String.t()) :: {:symphony | {:repository, String.t()}, question()} | nil
+  def find_open_on_subjects(id) when is_binary(id), do: Enum.find(open_on_subjects(), fn {_subject, question} -> question.id == id end)
 
   @doc """
   The open question on `ticket` that the Director's Unblock answers: one Symphony asked when it
@@ -467,9 +499,9 @@ defmodule SymphonyElixir.Questions do
   @spec deciding(ticket()) :: question() | nil
   def deciding(ticket), do: ticket |> open() |> Enum.filter(&(&1.request == true)) |> List.last()
 
-  @doc "The question `id` on `ticket`, whatever its state, or nil."
-  @spec find(ticket(), String.t()) :: question() | nil
-  def find(ticket, id), do: ticket |> questions() |> Enum.find(&(&1.id == id))
+  @doc "The question `id` on `subject`, whatever its state, or nil."
+  @spec find(subject(), String.t()) :: question() | nil
+  def find(subject, id), do: subject |> questions() |> Enum.find(&(&1.id == id))
 
   @doc "The open question on `ticket` with `request`'s title and question, as `ask/3` would return it, or nil."
   @spec open_asking(ticket(), map()) :: question() | nil
@@ -585,11 +617,14 @@ defmodule SymphonyElixir.Questions do
 
   # The question with its event, and the pause as its change leaves it with that change's events,
   # for the store to write in one transaction.
-  defp write({:ticket, repo_key, issue_id}, question, {type, payload, event_opts}, pause_change) do
-    with {:ok, event} <- TicketEvents.build(repo_key, issue_id, type, payload, event_opts),
+  defp write(subject, question, {type, payload, event_opts}, pause_change) do
+    with {:ok, event} <- build_event(subject, type, payload, event_opts),
          {:ok, pause, pause_events} <- pause_change,
          do: {:write, question, pause, [event | pause_events], question}
   end
+
+  defp build_event({:ticket, repo_key, issue_id}, type, payload, opts), do: TicketEvents.build(repo_key, issue_id, type, payload, opts)
+  defp build_event(subject, type, payload, opts), do: TicketEvents.build_subject(subject, type, payload, opts)
 
   defp unpaused(ticket, pause, id, by, at), do: Pauses.clear_reason_change(ticket, pause, waits_on(id), by: by, at: at)
 
@@ -623,7 +658,7 @@ defmodule SymphonyElixir.Questions do
 
   defp title_key(title), do: String.downcase(line(title) || "")
 
-  defp update(repo_key, issue_id, at, fun) do
+  defp update({:ticket, repo_key, issue_id}, at, fun) do
     with {:ok, question, events} <- RunStore.update_ticket_question(repo_key, issue_id, at, fun) do
       Enum.each(events, &TicketEvents.notify/1)
       # A question changes the ticket's pause with it: dispatch and the PR watcher read it at once.
@@ -633,18 +668,35 @@ defmodule SymphonyElixir.Questions do
     end
   end
 
+  # A subject that is not a ticket has no Linear projection and no ticket page: its change is
+  # announced as a change of Symphony's state, which the Inbox and the state payload read.
+  defp update(subject, _at, fun) do
+    with {:ok, question, events} <- RunStore.update_subject_question(subject, fun) do
+      if events != [], do: ObservabilityPubSub.broadcast_update()
+      {:ok, question}
+    end
+  end
+
   defp reason(question), do: Map.put(waits_on(question.id), :text, "Waiting for your answer: #{question.title}")
 
   defp waits_on(id), do: %{kind: :question, waits_on: %{question_id: id}}
 
-  defp questions(ticket) do
-    with {:ok, {repo_key, issue_id}} <- ticket(ticket),
-         record when is_map(record) <- RunStore.get_ticket_state(repo_key, issue_id) do
-      TicketState.normalize(record).questions
-    else
+  defp questions(subject) do
+    case subject(subject) do
+      {:ok, {:ticket, repo_key, issue_id}} -> ticket_questions(repo_key, issue_id)
+      {:ok, subject} -> subject_questions(subject)
+      {:error, _invalid} -> []
+    end
+  end
+
+  defp ticket_questions(repo_key, issue_id) do
+    case RunStore.get_ticket_state(repo_key, issue_id) do
+      record when is_map(record) -> TicketState.normalize(record).questions
       _none -> []
     end
   end
+
+  defp subject_questions(subject), do: normalize(with({:error, _reason} <- RunStore.get_subject_questions(subject), do: []))
 
   defp new_question(request, asked_by, opts, at) do
     %{
@@ -760,11 +812,16 @@ defmodule SymphonyElixir.Questions do
     end
   end
 
-  defp ticket({:ticket, repo_key, issue_id} = ticket) when is_binary(repo_key) and is_binary(issue_id) do
-    if line(repo_key) && line(issue_id), do: {:ok, {repo_key, issue_id}}, else: {:error, {:invalid_subject, ticket}}
+  defp subject({:ticket, repo_key, issue_id} = ticket) when is_binary(repo_key) and is_binary(issue_id) do
+    if line(repo_key) && line(issue_id), do: {:ok, ticket}, else: {:error, {:invalid_subject, ticket}}
   end
 
-  defp ticket(ticket), do: {:error, {:invalid_subject, ticket}}
+  defp subject({:repository, repo_key} = repository) when is_binary(repo_key) do
+    if line(repo_key), do: {:ok, repository}, else: {:error, {:invalid_subject, repository}}
+  end
+
+  defp subject(:symphony), do: {:ok, :symphony}
+  defp subject(subject), do: {:error, {:invalid_subject, subject}}
 
   defp text(value, error) when is_binary(value) do
     if String.trim(value) == "", do: {:error, error}, else: {:ok, value}
