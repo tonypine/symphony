@@ -624,7 +624,7 @@ outlives any run, and so does a question that holds the ticket: one a request co
 `linear_request_human_action`, such as a protected-path authorization), or one the Director's
 Unblock answers (a run's block report, a dispatch loop). The run ended
 because it asked, so its ending never withdraws it. Each `question.withdrawn` records its `cause`:
-`ticket_moved`, `restarted`, `hold_cleared`, `superseded`, or `run_ended` for a question that holds
+`ticket_moved`, `restarted`, `hold_cleared`, `superseded`, `superseded_by_move` (the merge of a moved ticket's records), or `run_ended` for a question that holds
 nothing. A question Unblock answers is decided by Unblock or Restart, unless the ticket merged or
 reached a terminal state. Its request gets the `## Action withdrawn` reply, as
 `linear_withdraw_human_action` makes it.
@@ -698,6 +698,21 @@ all dispatch becomes a pause on Symphony once (marker `pause_backfill_symphony_v
 move of the old row, above, sets the marker first, so this step finds it set). The last run's
 summary (records read and converted, pauses and questions created, what it skipped and why) is in
 `GET /api/v1/state` under `pause_backfill`.
+
+Once, at start-up, in a task of the boot pass, a ticket the store holds under more than one
+repository (a ticket that moved to another Linear project before the by-ticket index existed) is
+merged into its one by-ticket record (`records_merged_v1` marker): the repository is the ticket's
+current route (the one the index names, else the one whose record observed it last); the events of
+every record, each once, in time order, renumbered under it, with their artifacts; the questions
+and pause reasons of every record, each once (two open questions with the same title and text
+collapse to one); the newest phase, PR facts, verdicts and run history. An open question only a
+record of another repository held was asked before the move, which answered it: it is withdrawn
+with the cause `superseded_by_move`, its `question.withdrawn` event recorded. No record row is
+deleted; the listings and reads reach the ticket through the index only, so the rows it left
+behind are not seen. The report (`records.merged`: when it ran, the tickets checked and merged, and
+each merge's ticket and the repositories folded into it) is kept with the marker and shown in
+`GET /api/v1/state` under `records_merged`; a failed read or write leaves the marker unset, the
+failure shown there, and the next start runs it again.
 
 The stream is read through `GET /api/v1/repos/<repo_key>/tickets/<issue_identifier>/events`
 (Section 13.8.2). Each event a write adds (not a backfilled one, an idempotent no-op or a refused

@@ -45,10 +45,16 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
     record
   end
 
-  # Puts `holds` on the stored record as they were stored, after a write that normalized it.
+  # Puts `holds` on the stored record as they were stored, after a write that normalized it: on its
+  # pair row and its by-ticket index row, which the listings read.
   defp put_holds(issue_id, holds) do
     stored = Map.put(RunStore.get_ticket_state(@repo_key, issue_id), :holds, holds)
-    {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_ticket_states, {@repo_key, issue_id}, @repo_key, issue_id, stored}) end)
+
+    {:atomic, :ok} =
+      :mnesia.transaction(fn ->
+        :mnesia.write({:symphony_run_store_ticket_states, {@repo_key, issue_id}, @repo_key, issue_id, stored})
+        :mnesia.write({:symphony_run_store_ticket_index, issue_id, @repo_key, stored})
+      end)
   end
 
   defp raw_record(issue_id, attrs) do
