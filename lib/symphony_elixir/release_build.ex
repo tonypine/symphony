@@ -9,6 +9,9 @@ defmodule SymphonyElixir.ReleaseBuild do
   Symphony watches the run as the PR watcher's R19 watches a PR's checks
   (`docs/pr-ci-decisions.md`):
 
+    * a run GitHub cancelled before any job started while a newer `release` run on `main` exists was
+      replaced by that run (the workflow's concurrency group cancels an older pending run when a
+      newer push queues): it is `:superseded`, never rerun, never asked about;
     * a run GitHub cancelled before any job started (no machine to run it) is rerun by Symphony, at
       most twice, with no attempt spent; cancelled again, it asks a person on the first held
       ticket through the one decision path (`SymphonyElixir.DecisionRequest`): keep retrying, or
@@ -55,10 +58,11 @@ defmodule SymphonyElixir.ReleaseBuild do
 
   @typedoc """
   What the build's run is at: `:not_started` (no run yet), `:queued`, `:running`, `:built`,
-  `:cancelled` (cancelled for lack of a machine, its rerun not sent yet), `:asked` (cancelled again
-  after its reruns, a person asked), `:waiting` (a person chose to wait) or `:failed`.
+  `:cancelled` (cancelled for lack of a machine, its rerun not sent yet), `:superseded` (cancelled
+  before it started because a newer `release` run on `main` queued behind it; never rerun), `:asked`
+  (cancelled again after its reruns, a person asked), `:waiting` (a person chose to wait) or `:failed`.
   """
-  @type state :: :not_started | :queued | :running | :built | :cancelled | :asked | :waiting | :failed
+  @type state :: :not_started | :queued | :running | :built | :cancelled | :superseded | :asked | :waiting | :failed
 
   @typedoc "A held ticket a question may be asked on."
   @type ticket :: %{id: String.t(), identifier: String.t() | nil, state: String.t() | nil}
@@ -93,7 +97,7 @@ defmodule SymphonyElixir.ReleaseBuild do
 
   @doc """
   Checks the build of every merge commit a ticket among `issues` waits on (the `UpdateHold` reasons
-  on their pauses, their commits from `cache`), except one already published, then the newest
+  on their pauses, their commits from `cache`), except one already published or replaced, then the newest
   `release` run on `main` (`watch_main/4`), and clears the Symphony pause reason of each commit of
   `repo_key` no ticket waits on any more. A running build with no repository watches nothing.
   `opts`: those of `check/5`.
@@ -109,8 +113,8 @@ defmodule SymphonyElixir.ReleaseBuild do
       end
 
     repo = Repo.gh_repo_from_url(build_repo)
-    # A published build is the app update's to finish: its run is not read again.
-    for {sha, tickets} <- waits, not match?(%{state: :built}, get(sha, opts)) do
+
+    for {sha, tickets} <- waits, not settled?(get(sha, opts)) do
       check(sha, repo, repo_key, Enum.sort_by(tickets, & &1.identifier), opts)
     end
 
@@ -119,6 +123,10 @@ defmodule SymphonyElixir.ReleaseBuild do
   end
 
   def watch(_issues, _build, _cache, _repo_key, _opts), do: :ok
+
+  # A published build is the app update's to finish, and a replaced one is the newer run's: neither
+  # run is read again.
+  defp settled?(record), do: match?(%{state: state} when state in [:built, :superseded], record)
 
   defp ticket(%Issue{} = issue), do: %{id: issue.id, identifier: issue.identifier, state: issue.state}
 
@@ -136,7 +144,7 @@ defmodule SymphonyElixir.ReleaseBuild do
          {:ok, %{head_sha: sha} = run} when is_binary(sha) <- newest_main_run(repo, opts) do
       sha = String.downcase(sha)
       :ok = put_latest(%{sha: sha, number: run.number, read_at: now}, opts)
-      if sha not in held and not match?(%{state: :built}, get(sha, opts)), do: check(sha, repo, repo_key, [], opts)
+      if sha not in held and not settled?(get(sha, opts)), do: check(sha, repo, repo_key, [], opts)
       :ok
     else
       {:error, reason} ->
@@ -164,7 +172,7 @@ defmodule SymphonyElixir.ReleaseBuild do
   @doc """
   Checks the build of a commit at once when a `workflow_run` delivery (`event`, a
   `SymphonyElixir.GitHub.Webhook` CI event, or a commit's sha) said a run on it finished: a commit
-  already watched whose run isn't built yet, or the commit of a `release` run on `main` of the
+  already watched whose run isn't built or replaced yet, or the commit of a `release` run on `main` of the
   running build's repository (`opts[:build]`, default `SymphonyElixir.BuildInfo.current/0`), held
   ticket or not, which becomes the newest watched merge when it is newer. The check runs under
   `opts[:supervisor]` (default Symphony's task supervisor); `:ignored` for any other delivery.
@@ -176,7 +184,7 @@ defmodule SymphonyElixir.ReleaseBuild do
     sha = String.downcase(sha)
 
     case {get(sha, opts), main_release_repo(event, opts)} do
-      {%{state: state, repo: repo} = record, _repo} when state != :built and is_binary(repo) ->
+      {%{state: state, repo: repo} = record, _repo} when state not in [:built, :superseded] and is_binary(repo) ->
         start(opts, fn -> check(sha, repo, record.repo_key, record.tickets, opts) end)
 
       {_record, repo} when is_binary(repo) ->
@@ -327,6 +335,7 @@ defmodule SymphonyElixir.ReleaseBuild do
     do: "#{@lack_of_machine} #{record.reruns + 1} times; Symphony stopped rerunning it"
 
   defp words(%{state: :cancelled}, _now), do: "#{@lack_of_machine}, rerunning it"
+  defp words(%{state: :superseded}, _now), do: "replaced by a newer build"
   defp words(%{state: :asked} = record, _now), do: "#{@lack_of_machine} #{record.reruns + 1} times; you were asked whether to keep retrying"
   defp words(%{state: :waiting}, _now), do: "#{@lack_of_machine}; you chose to wait"
   defp words(%{state: :failed, answer: %{kind: :failed}}, _now), do: "failed on GitHub; waiting for a fix"
@@ -411,11 +420,37 @@ defmodule SymphonyElixir.ReleaseBuild do
   end
 
   defp starved(record, run) do
+    case superseded?(record, run) do
+      false -> starved_alone(record, run)
+      true -> %{record | state: :superseded}
+      :unknown -> record
+    end
+  end
+
+  defp starved_alone(record, run) do
     cond do
       answered?(record, :cancelled, run.attempt) -> %{record | state: :waiting}
       record.reruns < @max_reruns -> rerun(record, run, &%{&1 | reruns: &1.reruns + 1})
       asked?(record, :cancelled, run.attempt) -> %{record | state: :asked}
       true -> ask(record, run, :cancelled)
+    end
+  end
+
+  # A newer `release` run on `main`: with the workflow's concurrency group, GitHub cancels an older
+  # run still pending when a newer push queues, before any job of it starts. That run was replaced,
+  # not starved of a machine: rerunning it would cancel the newer one in turn and could publish an
+  # older build after a newer one.
+  defp superseded?(record, run) do
+    case github(record).branch_workflow_run(record.repo, @branch, @workflow, gh_opts(record.opts)) do
+      {:ok, %{number: newest}} when is_integer(newest) and is_integer(run.number) ->
+        newest > run.number
+
+      {:ok, _none_or_unnumbered} ->
+        false
+
+      {:error, reason} ->
+        Logger.debug("Could not read the newest release build on #{@branch} of #{record.repo}: #{inspect(reason)}")
+        :unknown
     end
   end
 

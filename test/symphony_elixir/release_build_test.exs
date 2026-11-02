@@ -470,8 +470,9 @@ defmodule SymphonyElixir.ReleaseBuildTest do
       assert version == version()
       assert line == "The v#{version()} build: queued on GitHub for less than a minute; cancelled for lack of a machine, rerun 1 of 2"
 
-      # Read at most once a minute.
+      # Read at most once a minute: the poll's read, and the newer-run check before the rerun.
       assert :ok = ReleaseBuild.watch([], @build, %{}, @repo_key, opts)
+      assert_received :main_read
       assert_received :main_read
       refute_received :main_read
       later = Keyword.put(opts, :now, DateTime.add(@now, 61, :second))
@@ -545,6 +546,43 @@ defmodule SymphonyElixir.ReleaseBuildTest do
       assert ReleaseBuild.delivered(release_delivery(%{head_sha: "3333333333333333333333333333333333333333"}), opts) == :started
       await_checks(supervisor)
       assert ReleaseBuild.get("3333333333333333333333333333333333333333") == nil
+    end
+
+    test "an older release run cancelled before it started while a newer run exists is replaced, never rerun", %{github: github, opts: opts} do
+      supervisor = start_supervised!(Task.Supervisor)
+      opts = [supervisor: supervisor, build: @build] ++ opts
+      # GitHub cancels run 750, still pending, once run 751 of a newer push queues behind a running release.
+      runs(github, [run(1, "completed", "cancelled")])
+      set(github, :main, [%{main_run(1, "queued") | "number" => 751, "headSha" => "ABCDEF0123456789ABCDEF0123456789ABCDEF01"}])
+
+      assert ReleaseBuild.delivered(release_delivery(), opts) == :started
+      await_checks(supervisor)
+      refute_received {:rerun, _id}
+      refute_received {:asked, _ticket, _request}
+      assert %{state: :superseded, reruns: 0, question: nil} = ReleaseBuild.get(@sha)
+      assert ReleaseBuild.line(@sha, nil, opts) == "Waiting for the v#{version()} build: replaced by a newer build"
+
+      # A held ticket waiting on the replaced commit doesn't rerun it either, and it is not read again.
+      assert {:ok, %{state: :superseded}} = check(opts)
+      refute_received {:rerun, _id}
+      assert ReleaseBuild.delivered(@sha, opts) == :ignored
+      runs(github, :down)
+      assert :ok = ReleaseBuild.watch([], @build, %{}, @repo_key, opts)
+      assert %{state: :superseded} = ReleaseBuild.get(@sha)
+
+      # The newest run of main, or one GitHub can't number, is starved, not replaced: it is rerun.
+      runs(github, [run(1, "completed", "cancelled")])
+
+      for {sha, newest} <- [{String.duplicate("4", 40), 750}, {String.duplicate("5", 40), nil}] do
+        set(github, :main, [%{main_run(1, "queued") | "number" => newest}])
+        assert {:ok, %{state: :queued, reruns: 1}} = ReleaseBuild.check(sha, @repo, @repo_key, [], opts)
+        assert_received {:rerun, "41086214847"}
+      end
+
+      # When GitHub can't say whether a newer run exists, nothing is rerun and the check tries again later.
+      set(github, :main, :down)
+      assert {:ok, %{state: :not_started, reruns: 0}} = ReleaseBuild.check(String.duplicate("6", 40), @repo, @repo_key, [], opts)
+      refute_received {:rerun, _id}
     end
 
     test "with no ticket to ask, a build cancelled again or failed is logged once and stops no dispatch", %{github: github, opts: opts} do

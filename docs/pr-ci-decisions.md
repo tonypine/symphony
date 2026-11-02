@@ -260,6 +260,11 @@ commit at once. The same rules apply; with no held ticket to ask, a third cancel
 logged with the commit and the run, pauses nothing, and the Director's update line says it stopped
 ("The v0.0.1.785 build: cancelled for lack of a machine 3 times; Symphony stopped rerunning it").
 
+A run cancelled before any job started while a newer `release` run on `main` exists was replaced, not
+starved: the workflow's concurrency group cancels an older pending run once a newer push queues behind
+a running release. Symphony never reruns it, never counts it toward the stop line and never asks about
+it; rerunning it would cancel the newer run in turn and could publish an older build after a newer one.
+
 ## What the watcher does
 
 Every read first applies the upkeep the facts call for, then decides and applies the flow action
