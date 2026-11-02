@@ -176,6 +176,8 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var moveError: String?
     /// The banner a Move to… showed, which the ticket page and Tickets show while it stays.
     @Published var moveBannerID: UUID?
+    /// The ticket whose Start now (TP-1330) is on its way to Symphony; its button shows progress meanwhile.
+    @Published var startInFlight: String?
     /// Stops made from the app, shown on the timeline until their audit record arrives.
     @Published var localStops: [TicketPage.LocalStop] = []
     /// Tickets' scope bar choice, search and selected row (D6).

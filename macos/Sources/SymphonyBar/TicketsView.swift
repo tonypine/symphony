@@ -192,7 +192,9 @@ struct TicketsContent: View {
             stopForcing: model.stopForcing,
             canForce: model.dispatchControl.canForce,
             phases: TicketMoveMenu.phases(inState: client.stateJSON),
-            move: model.openMove
+            move: model.openMove,
+            starts: TicketStart.byIdentifier(inState: client.stateJSON),
+            start: model.startNow
         )
     }
 }
@@ -207,6 +209,10 @@ struct TicketsActions {
     var phases: [MachinePhase] = []
     /// A Move to… pick: its sheet.
     var move: (MoveSheet) -> Void = { _ in }
+    /// Each ticket's Start now as the state payload says, by identifier, for a row's Start Now.
+    var starts: [String: TicketStart] = [:]
+    /// Start now: the ticket's run starts at once.
+    var start: (String) -> Void = { _ in }
 
     /// A row's Move to… menu, nil when there is none to offer.
     func moveMenu(_ row: TicketList.Row) -> TicketMoveMenu? {
@@ -357,6 +363,9 @@ struct TicketsTable: View {
             if let identifier = identifiers.first, let row = rows.first(where: { $0.identifier == identifier }) {
                 Button(TicketList.openTitle) { actions.open(identifier) }
                 TicketForceButton(row: row, actions: actions)
+                if let start = actions.starts[identifier] {
+                    StartNowMenuItem(identifier: identifier, start: start) { actions.start(identifier) }
+                }
                 if let menu = actions.moveMenu(row) {
                     Menu(TicketMoveMenu.title) { MoveToMenuItems(menu: menu, move: actions.move) }
                 }
