@@ -90,6 +90,21 @@ Holds pause a ticket in its current phase. They are attributes persisted at the 
 - **Verdict binding** — verdicts (Code Review, QA) record against the head SHA. CI Fix preserves; Rework invalidates.
 - **Signals** — the transition vocabulary, e.g.: `claim` (Todo → In Progress), `handoff`, `blocked` / `unblocked`, `review verdict`, `QA verdict`, `fix verdict` (mechanical vs substantive), `plan verdict` (approve / changes), `epic verdict` (pass / gaps), `decision requested` / `decision returned`, `merge settled`, `restart`, `deprioritized`. Emitted mechanically where possible (tool hooks for push/PR events, GitHub webhooks for CI); requested by agents where judgment is involved. The audit ledger is the timeline both the machinery and agents read.
 
+## Workspace
+
+A ticket's workspace follows its known state, not the end of a run.
+
+- **Made** by the first run that needs it: the run creates the folder (or the `auto/<identifier>` worktree) under the repo's workspace root, from the base branch.
+- **Kept** while the ticket is in any phase. A run that ends with its ticket still in a phase leaves it, whether it handed off, was stopped by a move, timed out or failed. A move between the phases (Code Review, QA, Rework, CI Fix, Merging, back and forth) leaves it, and so do a person's push in Merging sending the ticket back to Code Review (R11), a drift revert and a Director move. The next run of the ticket reuses it.
+- **Rebuilt** only when it is gone: a run that finds no workspace makes one again as above.
+- **Removed** in four cases only, each by the machine:
+  - a terminal state (Done, Canceled): the orchestrator queues the removal when it reads the state, and the startup sweep removes what a terminal ticket left;
+  - Restart, a person's move in the Director, which closes the PR and starts over from main;
+  - the operator's Stop of a run;
+  - the age GC of idle workspaces, which reclaims a workspace older than `max_age_days` but never one whose ticket has a run going, a retry due, or an open PR it is waiting on in a phase.
+
+The startup sweep of orphan folders (a folder no ticket, run or retry claims) follows `orphan_action`, which only logs by default.
+
 ## Guards and exceptions
 
 - **Handoff.** In Progress → Code Review happens on the session's explicit handoff signal (with the PR), not when a run merely goes quiet.

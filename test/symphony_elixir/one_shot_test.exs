@@ -128,7 +128,7 @@ defmodule SymphonyElixir.OneShotTest do
            ] = RunStore.list_runs("default", :all)
   end
 
-  test "timeout kills the agent task, cleans up workspace, and records timeout" do
+  test "timeout kills the agent task, keeps the workspace for the next run, and records timeout" do
     issue = memory_issue("issue-timeout", "ACME-TIMEOUT")
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
     workspace = Path.join([Config.settings!().workspace.root, "default", "ACME-TIMEOUT"])
@@ -154,7 +154,7 @@ defmodule SymphonyElixir.OneShotTest do
                no_retry: true
              )
 
-    refute File.exists?(workspace)
+    assert File.dir?(workspace)
     assert [%{status: "timeout", issue_id: "issue-timeout", workspace_path: ^workspace}] = RunStore.list_runs("default", :all)
   end
 

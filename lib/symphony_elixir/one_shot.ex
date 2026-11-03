@@ -15,8 +15,7 @@ defmodule SymphonyElixir.OneShot do
     TicketPullRequest,
     Tracker,
     URLUtils,
-    Verification,
-    Workspace
+    Verification
   }
 
   alias SymphonyElixir.Config.SystemSchema
@@ -233,8 +232,9 @@ defmodule SymphonyElixir.OneShot do
     after
       timeout ->
         deps.shutdown_task.(task, @task_shutdown_timeout_ms)
+        # The ticket is still in its phase, so its workspace stays for the next run (only a
+        # terminal state, Restart, a Stop or the age GC removes it).
         entry = drain_worker_messages(entry, issue)
-        cleanup_workspace(entry)
         complete_entry(deps.run_store, entry, "timeout", "one-shot timeout exceeded")
         {:timeout, :timeout_exceeded}
     end
@@ -456,15 +456,6 @@ defmodule SymphonyElixir.OneShot do
 
     %{entry | transcript_buffer: transcript_buffer, transcript_buffer_size: length(transcript_buffer)}
   end
-
-  defp cleanup_workspace(%{workspace_path: workspace, worker_host: worker_host}) when is_binary(workspace) do
-    case Workspace.remove(workspace, worker_host) do
-      {:ok, _removed} -> :ok
-      {:error, reason, output} -> Logger.warning("One-shot timeout workspace cleanup failed: #{inspect(reason)} output=#{inspect(output)}")
-    end
-  end
-
-  defp cleanup_workspace(_entry), do: :ok
 
   defp empty_tokens do
     %{
