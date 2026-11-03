@@ -6802,7 +6802,13 @@ infrastructure.
   top-level comment on an approved plan gets one reply and moves nothing, and a reply inside a
   thread or a comment from before the service started gets none
 - plan parent in `In Progress` with an approved non-terminal sub-issue moves to the waiting state;
-  a plan parent in the waiting state whose sub-issues are all terminal moves to `Epic Review`
+  a plan parent in the waiting state whose sub-issues are all terminal, or that has none left (each
+  re-parented to another epic or deleted), moves to `Epic Review`; a non-plan ticket the merge put
+  there with none left moves to `Done`
+- a child's webhook delivery that moves it to another parent, or files, removes or changes the
+  state of it, reads its old and new parent again by id, so their sub-issue lists are current within
+  seconds; the reconcile reads by id the parents in `Plan Review`, the waiting state and
+  `Epic Review` its poll did not return
 - plan parent moved from `Plan Review` to the waiting state has its `Backlog` sub-issues moved
   to `Todo` within one poll; sub-issues in other states, or moved back to `Backlog` after the
   approval, are left alone, and a re-poll moves nothing

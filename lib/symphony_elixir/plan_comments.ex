@@ -64,12 +64,13 @@ defmodule SymphonyElixir.PlanComments do
   What a new comment on `issue` asks of Symphony: `:revise` for a `breakdown` parent in
   `Plan Review` (`SymphonyElixir.PlanReview`) whose plan was not approved, `:answer` for one whose
   plan was (in the waiting state, or back in `Plan Review` with sub-issues under way), nil
-  otherwise. One whose sub-issues are all terminal is left to its epic review.
+  otherwise. One ready for its close (its sub-issues all terminal, or none left while it waits) is
+  left to its epic review.
   """
   @spec action(Issue.t() | term(), Enumerable.t(String.t()), term()) :: action() | nil
   def action(%Issue{state: state} = issue, terminal_states, settings) when is_binary(state) do
     cond do
-      not Issue.breakdown?(issue) or Issue.close_out_ready?(issue, terminal_states) -> nil
+      not Issue.breakdown?(issue) or SubIssueWait.close_out_ready?(issue, terminal_states, settings) -> nil
       SubIssueWait.in_state?(issue, settings) -> :answer
       not PlanReview.in_state?(state, settings) -> nil
       Issue.waiting_on_sub_issues?(issue, terminal_states) -> :answer

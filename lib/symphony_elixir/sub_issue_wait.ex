@@ -107,13 +107,27 @@ defmodule SymphonyElixir.SubIssueWait do
   def in_state?(_issue, _settings), do: false
 
   @doc """
+  True when a `breakdown` parent is ready for its epic's close, the epic review: its sub-issues are
+  all terminal (`Issue.close_out_ready?/2`), or it sits in the waiting state with none left, as when
+  every child was re-parented to another epic or deleted. A parent with no sub-issues anywhere else
+  (`Todo`, `In Progress`) has no plan yet: it gets a plan run, not the close.
+  """
+  @spec close_out_ready?(Issue.t() | term(), Enumerable.t(String.t()), Schema.t() | term()) :: boolean()
+  def close_out_ready?(%Issue{} = issue, terminal_states, settings) do
+    Issue.close_out_ready?(issue, terminal_states) or
+      (Issue.breakdown?(issue) and issue.sub_issues == [] and in_state?(issue, settings))
+  end
+
+  def close_out_ready?(_issue, _terminal_states, _settings), do: false
+
+  @doc """
   True when an issue in the waiting state must not run: anything but a `breakdown`
-  parent whose sub-issues are all terminal. The run it is released for is the epic's
+  parent ready for its close (`close_out_ready?/3`). The run it is released for is the epic's
   close, the epic review (`SymphonyElixir.RunKind` classifies it `:epic_review`).
   """
   @spec held?(Issue.t() | term(), Enumerable.t(String.t()), Schema.t() | term()) :: boolean()
   def held?(issue, terminal_states, settings) do
-    in_state?(issue, settings) and not Issue.close_out_ready?(issue, terminal_states)
+    in_state?(issue, settings) and not close_out_ready?(issue, terminal_states, settings)
   end
 
   @doc """
@@ -170,12 +184,13 @@ defmodule SymphonyElixir.SubIssueWait do
 
   @doc """
   True when Symphony closes `issue` itself: it sits in the waiting state, is not a `breakdown` parent
-  (its epic review closes it), has sub-issues, every one of them in `terminal_states` or `Backlog`,
-  and its pull request's merge put it there (`wait_on_merge/3`). One a person moved there waits for
-  them.
+  (its epic review closes it), every one of its sub-issues is in `terminal_states` or `Backlog` (or
+  it has none left: each was re-parented away or deleted), and its pull request's merge put it there
+  (`wait_on_merge/3`). One a person moved there waits for them. Sub-issues a read did not carry
+  (`:unknown`) never close it.
   """
   @spec close?(Issue.t() | term(), Enumerable.t(String.t()), Schema.t() | term()) :: boolean()
-  def close?(%Issue{sub_issues: [_ | _]} = issue, terminal_states, settings) do
+  def close?(%Issue{sub_issues: sub_issues} = issue, terminal_states, settings) when is_list(sub_issues) do
     in_state?(issue, settings) and not Issue.breakdown?(issue) and
       started_sub_issues(issue, terminal_states) == [] and RunStore.merged_wait?(issue.id) == true
   end
@@ -222,6 +237,8 @@ defmodule SymphonyElixir.SubIssueWait do
       "#{@done_state} once every sub-ticket is finished. Canceling one counts as finishing it, and one " <>
       "in #{@backlog_state} does not hold it."
   end
+
+  defp close_comment(%Issue{sub_issues: []}), do: "No sub-ticket is left under this ticket, so it is #{@done_state}."
 
   defp close_comment(%Issue{sub_issues: sub_issues}) do
     outcomes = Enum.map_join(sub_issues, "\n", &"- #{sub_issue_label(&1)}: #{Map.get(&1, :state) || "unknown"}")

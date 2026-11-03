@@ -187,6 +187,32 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       refute_received {:"$gen_cast", _request}
     end
 
+    # TP-1364: Linear tells the child it moved, never the parent it left.
+    test "a child re-parented away reads its old parent again, so the parent's record lists no child" do
+      repo_key = Config.repo_key!()
+      Application.put_env(:symphony_elixir, :linear_webhook_observation_opts, orchestrator: self())
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_issues) end)
+      {:ok, :updated} = TicketObservation.observe(repo_key, polled_issue([]))
+
+      child = %{id: "issue-hook", identifier: "ACME-9", state: "In Progress"}
+      parent = polled_issue(id: "parent-hook", identifier: "ACME-8", state: "Waiting on sub-tickets", sub_issues: [child])
+      {:ok, :updated} = TicketObservation.observe(repo_key, parent)
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{parent | sub_issues: [], updated_at: ~U[2026-10-29 09:01:00.000Z]}])
+      :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records()
+
+      moved =
+        delivery_body(%{
+          "type" => "Issue",
+          "action" => "update",
+          "data" => issue_delivery_data(%{"parentId" => "other-epic", "updatedAt" => "2026-10-29T09:01:00.000Z"}),
+          "updatedFrom" => %{"parentId" => "parent-hook"}
+        })
+
+      assert json_response(post_signed(moved), 200) == %{"status" => "accepted"}
+      assert_receive {:ticket_record, ^repo_key, "parent-hook", :changed, [:sub_issues]}, 2_000
+      assert %{sub_issues: [], observed_from: :webhook} = RunStore.get_ticket_state("parent-hook")
+    end
+
     test "a removal polls the ticket's repo at once; a removal with no record and a comment ask for nothing" do
       repo_key = Config.repo_key!()
       Application.put_env(:symphony_elixir, :linear_webhook_observation_opts, orchestrator: self())
@@ -322,25 +348,24 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
   defp post_signed(body), do: post_webhook(body, [{"content-type", "application/json"}, {"linear-signature", sign(body)}])
 
   # An Issue delivery for ACME-9 on the test repo's team, with `data` changed by `fields`.
-  defp issue_delivery(action, fields) do
-    data =
-      Map.merge(
-        %{
-          "id" => "issue-hook",
-          "identifier" => "ACME-9",
-          "title" => "Hooked",
-          "priority" => 2,
-          "state" => %{"id" => "state-1", "name" => "In Progress", "type" => "started"},
-          "team" => %{"id" => "team-1", "key" => "Test", "name" => "Test"},
-          "labels" => [%{"id" => "label-1", "name" => "Backend"}],
-          "assignee" => %{"id" => "user-1", "name" => "Ada"},
-          "url" => "https://linear.app/acme/issue/ACME-9",
-          "updatedAt" => @updated_at
-        },
-        fields
-      )
+  defp issue_delivery(action, fields), do: delivery_body(%{"type" => "Issue", "action" => action, "data" => issue_delivery_data(fields)})
 
-    delivery_body(%{"type" => "Issue", "action" => action, "data" => data})
+  defp issue_delivery_data(fields) do
+    Map.merge(
+      %{
+        "id" => "issue-hook",
+        "identifier" => "ACME-9",
+        "title" => "Hooked",
+        "priority" => 2,
+        "state" => %{"id" => "state-1", "name" => "In Progress", "type" => "started"},
+        "team" => %{"id" => "team-1", "key" => "Test", "name" => "Test"},
+        "labels" => [%{"id" => "label-1", "name" => "Backend"}],
+        "assignee" => %{"id" => "user-1", "name" => "Ada"},
+        "url" => "https://linear.app/acme/issue/ACME-9",
+        "updatedAt" => @updated_at
+      },
+      fields
+    )
   end
 
   # The same ticket as the regular poll reads it from Linear.
