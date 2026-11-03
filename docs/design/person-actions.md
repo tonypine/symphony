@@ -1,0 +1,91 @@
+# What a person does on a ticket, and how they do it through Symphony
+
+Under `dispatch.source: record`, a person who edits a fact Symphony owns by hand in Linear has made
+drift, and Symphony undoes it. So every action a person used to take on a ticket in Linear needs a
+Director move. This table lists those actions. Each one was found from what the code reads of
+Linear for a ticket: the observation (`SymphonyElixir.TicketObservation`, `TicketState.observe/4`),
+the webhook (`SymphonyElixir.Linear.Webhook`), the start-up reconciler
+(`SymphonyElixir.TicketStateReconciler`), the drift rule (`TicketObservation.owned_phase/3`,
+`revert/5`), the dispatch read (`SymphonyElixir.Dispatch.Candidates`) and the poll
+(`SymphonyElixir.Linear.Client`). Further actions came from the instructions that tell a person to do
+something in Linear. The Director moves are `SymphonyElixir.DirectorMoves` and the control endpoints
+are `POST /api/v1/control/<move>` (`SymphonyElixirWeb.Router`).
+
+**Owner** says who owns the fact today. *Symphony* means a hand edit is drift and gets reverted or
+re-projected. *Linear* means Symphony follows what Linear says.
+
+| Action in Linear | Read by | Owner | Through Symphony | Gap |
+| --- | --- | --- | --- | --- |
+| Move to a phase (any state) | the observation; `TicketStateReconciler.reconcile/4` | Symphony once Symphony or the Director wrote the phase (`phase_owner: :symphony`); Linear for a phase an observation wrote (`:external`) | Move to… (`/move`) | — |
+| Promote Backlog → Todo | the poll's active states; `Dispatch.Candidates` | Linear until Symphony moves it | Move to… (`/move`) to Todo, but only for a ticket Symphony has a record of (`DirectorMoves.require_tracked/2`) | Records are made only by the active-state poll or a webhook delivery: [TP-1359](https://linear.app/tonypine/issue/TP-1359) |
+| Promote a split-off ticket from Backlog to Todo, and link it as a blocker | `linear_create_subissue` (`Codex.DynamicTool`) files in Backlog: "a human promotes it" | Linear | none: a person promotes it by hand (TP-1334) | [TP-1353](https://linear.app/tonypine/issue/TP-1353) |
+| Approve a plan (Plan Review → Waiting on sub-tickets) | `SymphonyElixir.BreakdownReview` | Symphony | Approve Plan (`/approve_plan`) | — |
+| Reject a plan (→ Rework) | `BreakdownReview` | Symphony | Reject Plan (`/rework`) | — |
+| Comment on a plan under review | `SymphonyElixir.PlanComments` | Linear (a person's comment) | Ask for Changes (`/changes`) | — |
+| Reply under a `## Decision needed:` request | `Pauses.Projector` (the reply is the answer) | Symphony (the Question) | Decide (`/decide`); a plan's answers with Send Decisions (`/decisions`) | — |
+| Comment a ruling (`Decision:` / `Ruling:`) | `Linear.IssueNormalizer` rulings; `SymphonyElixir.Decisions` | Linear | none: a note (`/note`) is not a decision | [TP-1357](https://linear.app/tonypine/issue/TP-1357) |
+| Comment for the next run | the prompt's recent comments (`SymphonyElixir.PromptBuilder`) | Linear | Note (`/note`): it reaches the ticket history the prompt carries | — |
+| Cancel | the observation (phase) | Symphony | Cancel (`/cancel`) | — |
+| Park in Backlog | the observation (phase) | Symphony | Backlog (`/backlog`) | — |
+| Reopen a Done or Canceled ticket | the observation (phase); a cancelled record follows Linear again | Symphony | Move to… (`/move`) | — |
+| Start over (close the PR, fresh branch) | — | Symphony | Restart (`/restart`) | — |
+| Move a ticket out of a retired state | `SymphonyElixir.RetiredStates` | Linear | Move to… (`/move`) | the text still says "by hand": [TP-1358](https://linear.app/tonypine/issue/TP-1358) |
+| Approve a merge (manual review) | `SymphonyElixir.MergeConfirmation` | Symphony (the Question) | Decide (`/decide`) | — |
+| Add or remove `Blocked`, `Needs Decision`, the CI labels | `Pauses.Projector.labels/0`; `SymphonyElixir.MachineLabels` | Symphony (projected; a hand edit is put back) | Unblock (`/unblock`), Decide (`/decide`) | — |
+| Add or remove the force label (`expedite`) | `Issue.forced?/2` | Linear | Force (`/force`, `clear` removes it); `symphony force` | — |
+| Add or remove `plan` / `breakdown` | `Issue.breakdown?/1` | Linear | none | [TP-1356](https://linear.app/tonypine/issue/TP-1356) |
+| Add or remove `qa:skip` | `QaAgent.Selection` | Linear | none | [TP-1356](https://linear.app/tonypine/issue/TP-1356) |
+| Add or remove `skip-update-hold` | `SymphonyElixir.UpdateHold`; `Pauses.Dependencies` | Linear | none | [TP-1356](https://linear.app/tonypine/issue/TP-1356) |
+| Add or remove `qa:live` / `qa:fixture` | `SymphonyElixir.QaPolicy` | Linear | none | [TP-1356](https://linear.app/tonypine/issue/TP-1356) |
+| Add or remove an `escalate.labels` label | `EscalationRules.label_detail/2` | Linear | none | [TP-1356](https://linear.app/tonypine/issue/TP-1356) |
+| Add `protected-paths-approved` | the Setup labels check only (`SymphonyElixir.StateProvisioning`) | — | the Inbox pick that unlocks the paths (`SymphonyElixir.PathUnlock`, via Decide) | — |
+| Set priority | the observation; `Dispatch.Candidates` (the `tickets.priorities` filter and the order) | Linear | none | [TP-1355](https://linear.app/tonypine/issue/TP-1355) |
+| Set or clear a blocker (blocked-by link) | the observation (open blockers); `Issue.blocked?/2`; `Pauses.Dependencies` | Linear | none; Unblock removes only the links Symphony added for competing PRs (`PrWatch.Competitors`) | a person can't add or remove one: [TP-1354](https://linear.app/tonypine/issue/TP-1354); a blocker holds the ticket only in Todo: [TP-1352](https://linear.app/tonypine/issue/TP-1352) |
+| Create a ticket, or a sub-ticket of another (parent) | the poll; the webhook (`observe_delivery/2`); the observation (parent, sub-issues) | Linear | none | design question: [TP-1359](https://linear.app/tonypine/issue/TP-1359) |
+| Edit the title or description | the observation; the prompt; `Decisions` (its section is Symphony's, projected) | Linear (the Decisions section: Symphony) | none | design question: [TP-1359](https://linear.app/tonypine/issue/TP-1359) |
+| Change team, project or a route label | `Routing.PollScope`; `Linear.Client.repo_scope_filter/1` | Linear | none | design question: [TP-1359](https://linear.app/tonypine/issue/TP-1359) |
+| Assign or unassign | `Dispatch.Candidates` (the assignee filter) | Linear | none | design question: [TP-1359](https://linear.app/tonypine/issue/TP-1359) |
+| Delete or archive | the webhook (`{:issue_removed, …}`) marks the record removed | Linear | Cancel (`/cancel`) | — |
+
+The gap tickets are chained in this order: TP-1352, TP-1353, TP-1354, TP-1355, TP-1356, TP-1357,
+TP-1358, TP-1359.
+
+## Texts that send a person to Linear
+
+Each text below tells a person to act on a ticket in Linear, or by hand. [TP-1358](https://linear.app/tonypine/issue/TP-1358)
+rewrites them to name the Director move.
+
+`lib/`:
+
+- `lib/symphony_elixir/director_moves.ex:1492`, `:1495`, `:1499`: Undo's refusals say "move it in
+  Linear instead" and "move them in Linear instead". A hand move like that is drift, and it is undone.
+- `lib/symphony_elixir/retired_states.ex:110`, `:113`, `:116`, `:119`, `:122`: "move it by hand to …".
+- `lib/symphony_elixir/setup/checks/status_use.ex:90`: "Move each one by hand".
+- `lib/symphony_elixir/sub_issue_wait.ex:233`: "stay there until a person promotes them".
+- `lib/symphony_elixir/start_now.ex:53`: "the ticket is in Backlog; move it first" (it doesn't name
+  Move to…).
+- `lib/symphony_elixir/codex/dynamic_tool.ex:164` (`linear_create_subissue`: "a human promotes
+  it"), `:2131` ("a person promoted it"), `:2174` ("for a human to remove" a blocked-by link),
+  `:1974` ("ask a person to add the issue to a project").
+
+`priv/playbook/`:
+
+- `status_map.liquid:7`: Backlog "except when a person triages it to `Todo`".
+- `out_of_scope_backlog.liquid:9`: "a human promotes it to `Todo`".
+- `parent_tickets.liquid:26`, `:32`, `:126`, `:169`: approve or reject a plan "by moving the parent".
+- `review_brief.liquid:69`, `:76`, `:91`: "move the parent to `Waiting on sub-tickets`", "move the
+  parent to `Rework`", "move the ticket to `Canceled`".
+
+`.symphony/instructions/`:
+
+- `051-step-0-route.md:6`: "wait for human to move it to `Todo`".
+- `121-priority-vs-expedite.md:5`, `:6`: "they add the `expedite` label"; "`Backlog` -> `Todo` …
+  stay with a person".
+
+Some texts name Linear but are not about a ticket, so they stay. These are the Setup checks and
+fixes that ask a person to fix their Linear workspace: `setup/fixes.ex:94`, `:97`, `:106`;
+`setup/checks/labels.ex:113`, `:139`; `setup/checks/statuses.ex:139`;
+`setup/checks/deprecated_labels.ex:90`; `state_provisioning.ex:182`; and
+`control_api_controller.ex:331` (create the missing force label). One more stays because it reports
+what happened rather than telling a person what to do: `ticket_events/summary.ex:118`, `:127`
+("moved … in Linear by hand").
