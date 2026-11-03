@@ -2105,14 +2105,14 @@ defmodule SymphonyElixir.DirectorMovesTest do
       put_issues([%{pr("Backlog") | repo_key: "repo-director"}])
       # TP-1248's record as the build before TP-1326 left it: parked, no question, no pause.
       :ok = TicketSignals.record("repo-director", "pr", "blocked", %{to: "Backlog", reason: "idle_park"})
-      :ok = RunStore.update_ticket_state("repo-director", "pr", %{issue_identifier: "MOT-40"})
+      :ok = RunStore.update_ticket_state("pr", %{issue_identifier: "MOT-40"})
       ticket = {:ticket, "repo-director", "pr"}
 
       assert %{backfilled: ["MOT-40"]} = IdlePark.Backfill.run(["repo-director"], workspace: fn _repo, _name -> nil end)
       assert %{backfilled: []} = IdlePark.Backfill.run(["repo-director"], workspace: fn _repo, _name -> nil end)
 
       assert [question] = Questions.open(ticket)
-      assert %{kind: :action} = Item.from_question(TicketState.normalize(RunStore.get_ticket_state("repo-director", "pr")), question)
+      assert %{kind: :action} = Item.from_question(TicketState.normalize(RunStore.get_ticket_state("pr")), question)
       assert parked?("repo-director")
 
       assert {:ok, %{move: "unblock", to_state: "In Progress", moved: true}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)

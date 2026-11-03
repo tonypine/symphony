@@ -2,7 +2,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{Orchestrator, Questions, TicketEvents, TicketSignals, TicketState}
+  alias SymphonyElixir.{Orchestrator, Questions, TicketSignals, TicketState}
 
   @repo_key "repo-a"
 
