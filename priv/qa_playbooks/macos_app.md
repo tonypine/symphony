@@ -330,6 +330,18 @@ GitHub or Linear in QA:
   Remove as "Remove SHOP-305 as a blocker", the field as "Blocker of SHOP-320" and the line as
   "Blocker not saved: …". Walk it at 1440×900 and 2560×1440, light and dark: nothing on the card
   is clipped.
+- **Priority (TP-1355):** pass `macos/Tests/Fixtures/director-app/ticket-priority` as
+  `api_fixtures` and open SHOP-320 from Tickets. Its page has a **Priority** card under Ticket
+  showing **Low** in a menu of Urgent, High, Medium, Low and No priority (Low checked and
+  disabled). Pick **Urgent**: `qa_api_requests` lists one `POST /api/v1/control/priority` whose
+  body has `issue_identifier` `SHOP-320` and `priority` `urgent`. The fixture's card reads Low
+  again after the pick; the live server proves that the page shows Urgent and the ticket is
+  dispatched in its turn, and that setting Low takes it out of the picks. Then pass
+  `ticket-priority-refused` and pick Urgent: the line under the menu reads "Couldn't set SHOP-320
+  to Urgent: Symphony doesn't track SHOP-320, so it can't set its priority. (HTTP 409)" and the
+  menu keeps Low. VoiceOver reads the menu as "Priority of SHOP-320: Low" and the line as
+  "Priority not saved: …". Walk it at 1440×900 and 2560×1440, light and dark: nothing on the card
+  is clipped.
 - **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
   state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one
   warning, `symphony.yml sets auto_review.enabled, which is deprecated` (**Remove…**). Before

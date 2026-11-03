@@ -640,7 +640,8 @@ let ledgerNow = ISO8601DateFormatter().date(from: "2026-10-18T11:20:00Z")!
 /// shows it: the laptop viewport (1440) and the desktop one (2560).
 @MainActor
 func ledgerPage(
-    window: CGFloat, feed: Bool = true, note: TicketNoteComposer? = nil, repositoryPaused: Bool = false, blockers: TicketBlockersEditor? = nil
+    window: CGFloat, feed: Bool = true, note: TicketNoteComposer? = nil, repositoryPaused: Bool = false, blockers: TicketBlockersEditor? = nil,
+    priority: TicketPriorityEditor? = nil
 ) -> some View {
     let events = feed ? (try? Data(contentsOf: ledgerAPI.appendingPathComponent("repos/web-shop/tickets/SHOP-410/events.json"))).flatMap(TicketEventsPayload.decode) : nil
     var page = TicketPage(
@@ -656,7 +657,7 @@ func ledgerPage(
     page.repositoryPaused = repositoryPaused
     let width = window - DesignTokens.Layout.sidebarWidth
     return VStack(spacing: 0) {
-        TicketPageBody(page: page, actions: TicketPageActions(), width: width, blockers: blockers)
+        TicketPageBody(page: page, actions: TicketPageActions(), width: width, blockers: blockers, priority: priority)
         TicketNoteBar(page: page, composer: note ?? TicketNoteComposer(), submit: {})
     }
     .frame(width: width)
@@ -830,6 +831,15 @@ func blockersEditor(refused: Bool) -> TicketBlockersEditor {
     )
 }
 
+/// The Priority card (TP-1355) on SHOP-410's page: Low, and the refusal of a pick when `refused`.
+@MainActor
+func priorityEditor(refused: Bool) -> TicketPriorityEditor {
+    TicketPriorityEditor(
+        identifier: "SHOP-410", priority: .low, load: .loaded,
+        refusal: refused ? "Couldn't set SHOP-410 to Urgent: Linear didn't set SHOP-410 to Urgent, so nothing changed. Try again in a moment. (HTTP 502)" : nil
+    )
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -853,6 +863,10 @@ MainActor.assumeIsolated {
         render(ledgerPage(window: 1440, blockers: blockersEditor(refused: false)), scheme, to: "ticket-blockers-1440-\(suffix).png")
         render(ledgerPage(window: 2560, blockers: blockersEditor(refused: false)), scheme, to: "ticket-blockers-2560-\(suffix).png")
         render(ledgerPage(window: 1440, blockers: blockersEditor(refused: true)), scheme, to: "ticket-blockers-refused-\(suffix).png")
+        // The Priority card (TP-1355): the laptop and desktop viewports, and a pick Linear refused.
+        render(ledgerPage(window: 1440, priority: priorityEditor(refused: false)), scheme, to: "ticket-priority-1440-\(suffix).png")
+        render(ledgerPage(window: 2560, priority: priorityEditor(refused: false)), scheme, to: "ticket-priority-2560-\(suffix).png")
+        render(ledgerPage(window: 1440, priority: priorityEditor(refused: true)), scheme, to: "ticket-priority-refused-\(suffix).png")
         render(review(width: 640, picks: picks), scheme, to: "inbox-write-in-\(suffix).png")
         // Chips inside the question, story and options, wrapping with the text (TP-952).
         render(review(width: 1200), scheme, to: "decision-chips-wide-\(suffix).png")

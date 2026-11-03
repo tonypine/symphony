@@ -143,6 +143,14 @@ final class TicketPageTests: XCTestCase {
             linked.timeline.map(\.title),
             ["Blocker SHOP-2 added by you", "Blocker SHOP-2 removed by you", "Blocker added by you", "Blocker removed by you"]
         )
+
+        // TP-1355: the Director's priority change reads as such, with the priority it set.
+        let priorities = ndjson([
+            ["event_type": "director_move", "move": "set_priority", "priority": "Urgent", "from_priority": "Low", "issue_identifier": "SHOP-1", "timestamp": "2026-10-07T11:00:00Z"],
+            ["event_type": "director_move", "move": "set_priority", "issue_identifier": "SHOP-1", "timestamp": "2026-10-07T11:10:00Z"],
+        ])
+        let prioritized = TicketPage(identifier: "SHOP-1", sources: TicketPage.Sources(audit: [priorities]), now: date("2026-10-07T13:00:00Z"), timeZone: utc)
+        XCTAssertEqual(prioritized.timeline.map(\.title), ["Priority set to Urgent by you", "Priority set by you"])
         XCTAssertEqual(page.phaseSentence, "Symphony isn't working on SHOP-1 right now")
         XCTAssertEqual(page.badges, [])
     }

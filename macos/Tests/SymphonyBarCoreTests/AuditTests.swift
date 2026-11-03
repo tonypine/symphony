@@ -65,7 +65,7 @@ final class AuditTests: XCTestCase {
         let undated = try record(#"{"event_type": "x", "timestamp": "2026-10-06T23:30:00.123Z"}"#)
         XCTAssertEqual(undated.date, "2026-10-06")
         XCTAssertEqual(undated.id, undated.line)
-        for move in ["decisions", "decide", "backlog", "restart", "unblock", "undo", "add_blocker", "remove_blocker"] {
+        for move in ["decisions", "decide", "backlog", "restart", "unblock", "undo", "add_blocker", "remove_blocker", "set_priority"] {
             XCTAssertFalse(AuditRecord.moveTitle(move).contains("_"), move)
         }
         XCTAssertEqual(AuditRecord.kindTitle("auto_merge_disabled"), "Auto-merge off")

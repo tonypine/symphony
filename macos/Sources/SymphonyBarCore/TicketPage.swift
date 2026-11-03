@@ -659,6 +659,7 @@ public struct TicketPage: Equatable {
         case "undo": return "Move undone by you"
         case "add_blocker": return move.blocker.map { "Blocker \($0) added by you" } ?? "Blocker added by you"
         case "remove_blocker": return move.blocker.map { "Blocker \($0) removed by you" } ?? "Blocker removed by you"
+        case "set_priority": return move.priority.map { "Priority set to \($0) by you" } ?? "Priority set by you"
         default: return "Moved to \(move.toState ?? "another state") by you"
         }
     }
@@ -732,6 +733,8 @@ public struct TicketPage: Equatable {
         let recordHash: String?
         /// The blocker an `add_blocker` or `remove_blocker` move named.
         var blocker: String? = nil
+        /// The priority a `set_priority` move set, by its title ("Urgent").
+        var priority: String? = nil
     }
 
     /// Why the ticket does not move (TP-1242): its pause, nil while it moves, and its open questions. The ticket

@@ -28,6 +28,10 @@ defmodule SymphonyElixir.Tracker.Memory do
   A blocked-by link (`add_blocked_by/2`, `remove_blocked_by/2`) is kept as the blocker's id in the
   issue's `"blockedBy"` list, read back as the issue's `blocked_by` with the blocker's identifier and
   current state; with `:memory_tracker_issues` set, it edits the issue's `blocked_by` there.
+
+  A priority (`update_issue_priority/2`, Linear's number) is the issue's `"priority"` in the
+  issues file, read back as the issue's `priority`; with `:memory_tracker_issues` set, it edits the
+  issue's `priority` there.
   """
 
   @behaviour SymphonyElixir.Tracker
@@ -247,6 +251,26 @@ defmodule SymphonyElixir.Tracker.Memory do
 
   @spec remove_blocked_by(String.t(), String.t()) :: :ok | {:error, term()}
   def remove_blocked_by(blocker, blocked_issue_id), do: update_blocked_by(:remove, blocker, blocked_issue_id)
+
+  @spec update_issue_priority(String.t(), 0..4) :: :ok | {:error, term()}
+  def update_issue_priority(issue_id, priority) do
+    with :ok <- next_result(:memory_tracker_update_issue_priority_result) do
+      put_priority(issue_id, priority)
+      send_event({:memory_tracker_priority_updated, issue_id, priority})
+      :ok
+    end
+  end
+
+  defp put_priority(issue_id, priority) do
+    case Application.fetch_env(:symphony_elixir, :memory_tracker_issues) do
+      {:ok, issues} ->
+        issues = Enum.map(issues, &if(match?(%Issue{id: ^issue_id}, &1), do: %{&1 | priority: priority}, else: &1))
+        Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
+
+      :error ->
+        update_file_issue(issue_id, &Map.put(&1, "priority", priority))
+    end
+  end
 
   @spec fetch_breakdown_history(String.t()) :: {:ok, SymphonyElixir.Tracker.breakdown_history()} | {:error, term()}
   def fetch_breakdown_history(issue_id) do
@@ -615,12 +639,16 @@ defmodule SymphonyElixir.Tracker.Memory do
         labels: Enum.filter(List.wrap(Map.get(entry, "labels")), &is_binary/1),
         team: json_map(entry["team"], key: "key", name: "name"),
         project: json_map(entry["project"], id: "id", name: "name", slug_id: "slug_id"),
-        blocked_by: file_blockers(entry, entries)
+        blocked_by: file_blockers(entry, entries),
+        priority: file_priority(entry["priority"])
       }
     ]
   end
 
   defp issue_from_json(_entry, _entries), do: []
+
+  defp file_priority(priority) when priority in 0..4, do: priority
+  defp file_priority(_priority), do: nil
 
   # The issues an entry's `"blockedBy"` names, each with its identifier and its current state.
   defp file_blockers(entry, entries) do

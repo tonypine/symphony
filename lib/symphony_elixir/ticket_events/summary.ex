@@ -201,6 +201,7 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp person_action("unblock", _to), do: "The Director unblocked the ticket"
   defp person_action("restart", _to), do: "The Director restarted the ticket"
   defp person_action("add_blocker", blocker), do: "The Director added " <> (blocker || "a ticket") <> " as a blocker"
+  defp person_action("set_priority", to), do: "The Director set the priority to " <> (to || "another priority")
   defp person_action("remove_blocker", blocker), do: "The Director removed " <> (blocker || "a ticket") <> " as a blocker"
   defp person_action(action, _to), do: "The Director acted" <> suffix(": ", action)
 
