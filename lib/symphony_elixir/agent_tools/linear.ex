@@ -44,8 +44,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @private_file_upload_max_bytes 50 * 1024 * 1024
   @default_attachment_allowed_hosts ["github.com"]
   # Moving an issue to `Merging` is how a human approves a merge, so agents may not do it.
-  # Sub-issues land in Backlog so an agent cannot start other agents; a human promotes them.
+  # A plan run's sub-issues land in Backlog and wait for the plan's approval, which promotes them.
   @backlog_state "Backlog"
+  # Any other run's sub-issue lands in Todo, in front of the ticket that split it off.
+  @todo_state "Todo"
   # Where a withdrawn request's issue goes back to when its history doesn't say.
   @subissue_update_fields [{"title", :title}, {"description", :description}, {"blocked_by", :blocked_by}, {"cancel_reason", :cancel_reason}]
   # A project update notifies everyone following the project, so a run may post only one.
@@ -365,7 +367,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   query SymphonyAgentSubissueScope($id: String!, $first: Int!) {
     issue(id: $id) {
       id
+      identifier
       priority
+      labels { nodes { name } }
       team {
         id
         states {
@@ -963,8 +967,18 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp report_upload(_sink, _path, _urls), do: :ok
 
   @doc """
-  Creates a Backlog child of the current issue in the same team and project, assigned to the same
-  assignee. Only `title`, `description`, `priority`, and `blocked_by` come from the caller;
+  Creates a child of the current issue in the same team and project, assigned to the same
+  assignee. Where it lands depends on the current issue:
+
+    * a `plan` (or `breakdown`) parent's sub-issue lands in `Backlog`, where it waits for the plan's
+      approval, which promotes it (`SymphonyElixir.BreakdownReview`);
+    * any other issue's sub-issue lands in `Todo`, and the current issue is marked blocked by it, so
+      the split-off work lands first and the current issue continues once it is terminal, with no
+      person promoting or linking anything. A link Linear refuses is reported as
+      `{:split_link_failed, identifier, current, reason}` after the child exists, so the run can
+      retry it with `add_blocked_by/3`.
+
+  Only `title`, `description`, `priority`, and `blocked_by` come from the caller;
   everything that scopes the new issue is read from the current issue. Without a `priority`, the
   child inherits the current issue's, so `tickets.priorities` dispatches it like its parent. A
   title this run already filed under the current issue is refused with the earlier sub-issue's
@@ -976,20 +990,20 @@ defmodule SymphonyElixir.AgentTools.Linear do
   """
   @spec create_subissue(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def create_subissue(context, attrs, opts \\ []) when is_map(attrs) do
-    create_child(context, attrs, @backlog_state, opts)
+    create_child(context, attrs, :by_current_issue, opts)
   end
 
   @doc """
   Creates a child of the current issue in the state named `state_name`, scoped exactly like
-  `create_subissue/3`'s Backlog child (same team, project, assignee and parent, and the parent's
+  `create_subissue/3`'s child (same team, project, assignee and parent, and the parent's
   priority unless `attrs` names one) and with the same validation, secret scan and per-run title
   deduplication.
 
   This is the machine-side filing path, for a flow that files a child an agent must not: an epic
   review files each gap it found as a follow-up in `Todo` (`SymphonyElixir.EpicReview`), because a
   `Backlog` child does not hold its parent and the epic would sit unnoticed until a person promoted
-  it. Agents keep `linear_create_subissue` and its Backlog contract; no tool is registered for this
-  function.
+  it. Unlike `create_subissue/3`'s `Todo` child, it marks no issue blocked by the new one. No tool is
+  registered for this function.
   """
   @spec create_subissue_in_state(context(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def create_subissue_in_state(context, state_name, attrs, opts \\ [])
@@ -997,7 +1011,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
     create_child(context, attrs, state_name, opts)
   end
 
-  defp create_child(context, attrs, state_name, opts) do
+  defp create_child(context, attrs, placement, opts) do
     registry = Map.get(context, :comment_registry)
 
     with {:ok, issue_id} <- current_issue_id(context),
@@ -1011,7 +1025,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
              opts
            ),
          :ok <- CommentRegistry.check_subissue_title(registry, issue_id, title) do
-      create_child_issue(issue_id, {title, description, priority, blocked_by}, state_name, registry, opts)
+      create_child_issue(issue_id, {title, description, priority, blocked_by}, placement, registry, opts)
     end
   end
 
@@ -2012,10 +2026,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
     identifiers |> Enum.map(&(&1 |> String.trim() |> String.upcase())) |> Enum.uniq()
   end
 
-  defp create_child_issue(issue_id, {title, description, priority, blocked_by}, state_name, registry, opts) do
+  defp create_child_issue(issue_id, {title, description, priority, blocked_by}, placement, registry, opts) do
     with {:ok, body} <- graphql(@subissue_scope_query, %{id: issue_id, first: @related_issue_first}, opts),
          {:ok, parent} <- fetch_path(body, ["data", "issue"], :issue_not_found),
          {:ok, states} <- fetch_path(parent, ["team", "states", "nodes"], []),
+         state_name = child_state_name(placement, parent),
          {:ok, state_id} <- child_state_id(states, state_name),
          {:ok, blockers} <- resolve_blockers(blocked_by, parent, registry),
          input = subissue_input(parent, state_id, title, description, priority || parent["priority"]),
@@ -2023,9 +2038,33 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, response} <- check_mutation_success(response, "issueCreate"),
          {:ok, identifier, new_id} <- created_subissue(response) do
       CommentRegistry.record_subissue(registry, issue_id, title, identifier, new_id)
-      link_blockers(response, {identifier, new_id}, blockers, opts)
+
+      with {:ok, response} <- link_blockers(response, {identifier, new_id}, blockers, opts) do
+        block_current_issue(response, placement, state_name, {identifier, new_id}, parent, opts)
+      end
     end
   end
+
+  # `create_subissue/3`'s child: a plan parent's waits in Backlog for the plan's approval; any other
+  # issue's goes straight to Todo, in front of the issue that split it off.
+  defp child_state_name(:by_current_issue, parent) do
+    if plan_parent?(parent), do: @backlog_state, else: @todo_state
+  end
+
+  defp child_state_name(state_name, _parent) when is_binary(state_name), do: state_name
+
+  # A split-off `Todo` child holds the issue that filed it: the issue is marked blocked by the child,
+  # so Symphony's dependency gate holds it until the child is terminal and then lets it continue.
+  defp block_current_issue(response, :by_current_issue, @todo_state, {identifier, new_id}, parent, opts) do
+    current = parent["identifier"] || parent["id"]
+
+    case link_blockers_to(parent["id"], [{identifier, new_id}], opts) do
+      :ok -> {:ok, put_in(response, ["data", "issueCreate", "issue", "blocks"], [current])}
+      {:error, {:add_blocked_by_failed, _blocker, why}} -> {:error, {:split_link_failed, identifier, current, why}}
+    end
+  end
+
+  defp block_current_issue(response, _placement, _state_name, _created, _parent, _opts), do: {:ok, response}
 
   defp created_subissue(response) do
     case get_in(response, ["data", "issueCreate", "issue"]) do
@@ -2071,9 +2110,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   # The new child's initial state, by name (case-insensitively), the way the team names it. `Backlog`
-  # also matches the team's backlog-type state, so an agent's sub-issue lands in the column the
-  # tracker shows as Backlog even when the team renamed it. Any other `state_name` — an epic review's
-  # `Todo` follow-up (`SymphonyElixir.EpicReview`) — is matched by name alone.
+  # also matches the team's backlog-type state, so a plan run's sub-issue lands in the column the
+  # tracker shows as Backlog even when the team renamed it. Any other `state_name` — another run's
+  # split-off `Todo` sub-issue, an epic review's `Todo` follow-up (`SymphonyElixir.EpicReview`) — is
+  # matched by name alone.
   defp child_state_id(states, state_name) do
     state =
       Enum.find(states, &state_name_matches?(&1, state_name)) ||
@@ -2102,7 +2142,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   # The one state write outside the guard is sub-issue creation's initial state: the guard resolves
   # a move of an existing issue (from-state to target), and an `issueCreate` has no from-state to
   # move from. So sub-issue creation's initial state is outside TransitionGuard's scope: `create_subissue/3`'s
-  # Backlog child and `create_subissue_in_state/4`'s named one (an epic review's `Todo` follow-up)
+  # Backlog or Todo child and `create_subissue_in_state/4`'s named one (an epic review's `Todo` follow-up)
   # both come through here, and this is the only stateId the Linear tool hands Linear without
   # `TransitionGuard.resolve_request/2`; the state-scanning test in `agent_tools_linear_test.exs`
   # keeps that list to the two known sites.
