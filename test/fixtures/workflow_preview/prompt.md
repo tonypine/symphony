@@ -183,7 +183,7 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
 
 ## Status map
 
-- `Backlog` -> out of scope for this workflow; do not modify, except when a person triages it to `Todo`.
+- `Backlog` -> out of scope for this workflow; do not modify, except when a person moves it to `Todo` (Move to… in the Director).
 - `Todo` -> queued; immediately transition to `In Progress` before active work.
   - Special case: if a PR is already attached, treat as feedback/rework loop (run the full PR feedback sweep, address or explicitly push back, revalidate, then hand off to `Code Review`).
 - `In Progress` -> implementation actively underway: net-new work on this ticket, or PR review comments addressed on the same PR and branch.
@@ -208,7 +208,7 @@ What a red head, a conflict or a closed PR does in each state is decided by one 
 1. Fetch the issue by explicit ticket ID.
 2. Read the current state.
 3. Route to the matching flow:
-   - `Backlog` -> do not modify issue content/state; stop and wait for human to move it to `Todo`.
+   - `Backlog` -> do not modify issue content/state; stop and wait for a person to move it to `Todo` (Move to… in the Director).
    - `Todo` -> immediately move to `In Progress`, then ensure bootstrap workpad comment exists (create if missing), then start execution flow.
      - If PR is already attached, start by reviewing all open PR comments and deciding required changes vs explicit pushback responses.
    - `In Progress` -> continue execution flow from current scratchpad comment.
@@ -249,7 +249,7 @@ What a red head, a conflict or a closed PR does in each state is decided by one 
     - Ensure `Acceptance Criteria` and `Validation` are current and still make sense for the task.
 4.  Start work by writing/updating a hierarchical plan in the workpad comment.
     - If the ticket asks you to split the work into sub-tickets, create each one with `linear_create_subissue` (see `Splitting work and out-of-scope improvements` below) and record their identifiers in the workpad `Notes`. They land as children of this issue: in `Backlog` for a plan ticket, otherwise in `Todo` with this issue blocked by them.
-    - If the work is clearly too large for one PR and the ticket has no `plan` label, say so in the workpad `Confusions` so a human can add the label; do not split it unasked.
+    - If the work is clearly too large for one PR and the ticket has no `plan` label, say so in the workpad `Confusions` so a person can set the label from the ticket page in the Director; do not split it unasked.
 5.  Ensure the workpad includes a compact environment stamp at the top as a code fence line:
     - Format: `<host>:<abs-workdir>@<short-sha>`
     - Example: `devbox-01:/home/dev-user/code/symphony-workspaces/MT-32@7bdde33bc`
@@ -387,8 +387,8 @@ steps.
   withdrawal clears the hold the same way; the ticket never moved.
 - Symphony writes each answer into the `Decisions` section of the issue
   description (`D1`, `D2`…: the question, the answer and what it means for scope).
-  A person's plain comment that opens with `Decision:` or `Ruling:` is a ruling, and
-  Symphony records it there too; never open a comment of your own that way.
+  A ruling a person records on the ticket page in the Director (Record a decision), or
+  their plain comment that opens with `Decision:` or `Ruling:`, is recorded there too; never open a comment of your own that way.
   A recorded decision is part of the ticket's scope: follow it, never re-open it, and
   never edit the section. The tool does not raise a question a person already
   answered; it returns the recorded answer, which you apply. A review finding that
@@ -487,7 +487,8 @@ issue description plus comments give no unambiguous acceptance criteria.
 
 ## Parent tickets (tickets with sub-tickets)
 
-The `plan` label is a human's signal that a ticket is a plan ticket: too large for
+The `plan` label is a person's signal that a ticket is a plan ticket (they set it from
+the ticket page in the Director): too large for
 one PR, it does plan work and must be groomed into sub-tickets before any work
 starts. `breakdown` is the label's older name and is still accepted; read it as
 `plan` everywhere below. The label stays on the parent while its sub-tickets are
@@ -506,17 +507,19 @@ Rules for every plan ticket run:
   request is the plan handoff, Symphony validates it and moves the parent, and
   `Plan Review` is where the reviewer finds it. Only a plan parent may name it. The
   review brief is what the person reads.
-- A person approves the plan by moving the parent from `Plan Review` to
-  `Waiting on sub-tickets`, or with the same move from the Inbox's approve action.
+- A person approves the plan with Approve Plan in the Director, which moves the parent
+  from `Plan Review` to `Waiting on sub-tickets`.
   Symphony then moves every sub-ticket still in `Backlog` to `Todo` in one batch;
   blocked-by links keep the order. Never move the parent to
   `Waiting on sub-tickets` yourself: `linear_update_state` refuses it because that
   move is the approval.
-- A person rejects the plan by moving the parent to `Rework`. Symphony cancels the
+- A person rejects the plan with Reject Plan in the Director, which moves the parent to
+  `Rework`. Symphony cancels the
   rejected plan's sub-tickets still in `Backlog`, lists them in one comment starting
   `Cancelled for re-plan:`, and starts a re-plan run. Each batch Symphony promotes
   or cancels is listed in one comment on the parent.
-- A person comments on the plan under review to ask for a change: Symphony moves the
+- A person asks for a change to the plan under review with Ask for Changes in the
+  Director (or a comment on the plan): Symphony moves the
   parent to `Rework` itself, and the run revises the plan in place and hands it back
   to `Plan Review`. That is a revision, not a rejection: the plan's sub-tickets stay,
   and Symphony posts no `Cancelled for re-plan:` comment.
@@ -530,7 +533,8 @@ Rules for every plan ticket run:
 - The epic needs no verification sub-ticket and no close-out run: never file one.
   `The epic close` says how the epic closes itself.
 - Never promote a sub-ticket, and never edit or cancel one outside `Backlog`:
-  `linear_update_subissue` refuses it, because a person already promoted it.
+  `linear_update_subissue` refuses it, because the plan's approval or a person's
+  Move to… already promoted it.
 - Keep the workpad as the single progress record, as for any ticket.
 
 Which plan run this is:
@@ -589,7 +593,7 @@ When the parent is in `Rework` because a person rejected the plan (Symphony's
   `Backlog`, and listed them in a comment on the parent. A `Backlog` sub-ticket a
   person added outside the plan run (a follow-up idea) stays; leave it alone and
   fold it into the new plan. Do not create a replacement for a sub-ticket outside
-  `Backlog` and `Canceled` (a human already promoted it), and do not create one
+  `Backlog` and `Canceled` (the plan's approval or a person's Move to… already promoted it), and do not create one
   twice: a sub-ticket in `Backlog` that was created after the parent moved to
   `Rework` belongs to this re-plan.
 - Then follow steps 2-5 for the new plan. Edit the existing review brief in place
@@ -599,14 +603,15 @@ When the parent is in `Rework` because a person rejected the plan (Symphony's
 
 ### Plan revision run (a person commented on the plan under review)
 
-When a person comments on a plan ticket in `Plan Review` whose plan is not
-approved yet, Symphony moves it to `Rework` and starts this run. It changes the
+When a person asks for changes (Ask for Changes in the Director, or a comment) on a
+plan ticket in `Plan Review` whose plan is not approved yet, Symphony moves it to `Rework` and starts this run. It changes the
 plan in place; it is not a re-plan, and the plan's sub-tickets stay as they are.
 
 What triggers it:
 
 - State: only `Plan Review`. A comment on a parent in any other state starts no
-  revision; to have that plan revised, a person moves the parent to `Rework`.
+  revision; to have that plan revised, a person moves the parent to `Rework` with
+  Move to… in the Director.
 - Openers: a comment starting with `Supervisor review:` or `Supervisor note:` never
   triggers a run, in any state, like Symphony's own comments (the workpad, the
   review brief, QA reports, `Action needed` requests, the promote and cancel lists,
@@ -650,7 +655,7 @@ What triggers it:
 A comment on an approved plan (the parent in `Waiting on sub-tickets`, or back in
 `Plan Review` with sub-tickets promoted) changes nothing. Under a new top-level
 comment Symphony replies once that, if it asks for a plan change, moving the parent
-to `Rework` re-plans it while keeping the sub-tickets already promoted.
+to `Rework` (Move to… in the Director) re-plans it while keeping the sub-tickets already promoted.
 
 ### The epic close (`Epic Review`; no run of yours)
 
@@ -689,7 +694,7 @@ In this repository, a plan run's sub-ticket that adds a `symphony.yml` setting e
 
 In this repository, a walkthrough step that judges the macOS app by sight in dark mode, or judges the look of the status-bar menu, is a `Proved by: QA` step: no test can judge it. QA walks it with TP-1045's tools: `qa_launch_app`'s `appearance` argument launches the app in light and in dark, and `qa_open_status_menu` with a `qa_screenshot` of the menu shows how it looks, as the `macos_app` playbook requires. A walkthrough asks for both appearances and a screenshot of the status-bar menu; the accessibility tree alone does not prove how either looks. A step that installs one signed build over another needs a signing key the QA build lacks: the install is proved by `macos-e2e`'s update scenarios, never by QA. What the app shows once an update installed, or once a failed one was rolled back, is a `Proved by: QA` step: QA judges it by sight with the signed release pair (`qa_build_release_pair`, `qa_launch_app`'s `release_pair`, `qa_relaunched_app`), which needs the QA host's test signing identity (`scripts/qa/install-test-signing-identity.sh`).
 
-In this repository, a QA pass of the Director has two environments: the committed state fixtures, for how the app draws a state, and Symphony's own server running on the QA VM over a seed, for what happens after a move. Symphony starts the server when the change gives a reason, and the QA agent picks the environment for each step and names it in its report. Neither the walkthrough nor the proofs name one: an author writes plain steps, and an implementer records `Proved by:` tests as for any ticket and nothing about environments. The `qa:live` and `qa:fixture` labels are a person's override of Symphony's choice; never add them yourself.
+In this repository, a QA pass of the Director has two environments: the committed state fixtures, for how the app draws a state, and Symphony's own server running on the QA VM over a seed, for what happens after a move. Symphony starts the server when the change gives a reason, and the QA agent picks the environment for each step and names it in its report. Neither the walkthrough nor the proofs name one: an author writes plain steps, and an implementer records `Proved by:` tests as for any ticket and nothing about environments. The `qa:live` and `qa:fixture` labels are a person's override of Symphony's choice, set from the ticket page in the Director; never add them yourself.
 
 ## Step 2: Execution phase (Todo -> In Progress -> Code Review)
 
@@ -863,14 +868,14 @@ Write `None.` under `Decisions needed` when nothing is open. Fill in
 `How to approve / change / reject` with the moves for the ticket's kind:
 
 - **Plan review** (a plan parent in `Plan Review`):
-  - Approve: move the parent to `Waiting on sub-tickets`; Symphony promotes its
-    `Backlog` sub-tickets to `Todo`.
+  - Approve: Approve Plan in the Director, which moves the parent to
+    `Waiting on sub-tickets`; Symphony promotes its `Backlog` sub-tickets to `Todo`.
   - Change: answer the plan's questions (Send Decisions in the Inbox, or a reply under
     each request), or ask for changes (Ask for Changes in the Inbox, or a comment on
     any part of the plan); Symphony moves the parent to `Rework` and a revision run
     edits the plan in place, keeps its sub-tickets and updates this brief. Nothing is
     approved until you approve it.
-  - Reject: Reject Plan in the Inbox, or move the parent to `Rework`; Symphony cancels
+  - Reject: Reject Plan in the Director, which moves the parent to `Rework`; Symphony cancels
     its `Backlog` sub-tickets and plans again.
 - **PR review** (a PR in `Code Review`): no person's move is needed. The reviewer
   agent's verdict moves it on: approve to `QA` (or `Merging` when QA is skipped),
@@ -885,7 +890,7 @@ Write `None.` under `Decisions needed` when nothing is open. Fill in
   - Approve: reply under the `## Decision needed:` comment with the option you pick;
     the hold clears and the ticket continues where it stopped.
   - Change: reply under the request with what to do instead of the options.
-  - Reject: move the ticket to `Canceled` to drop the work.
+  - Reject: Cancel the ticket in the Director to drop the work.
 
 
 ## Completion bar before the handoff
@@ -980,8 +985,8 @@ remaining issues in the workpad `Notes` for a human to file.
 
 - A ticket's priority means how important it is, not its place in the queue. Symphony uses it only to order tickets waiting for a normal slot.
 - Never raise a ticket's priority (this ticket, a sub-ticket or a blocker) to get it picked sooner. Set a new sub-ticket's `priority` by importance only.
-- Jumping the queue is a person's call: they add the `expedite` label or run `symphony force <ticket>`. Do not add or remove that label yourself. A forced ticket skips the slot limits (`max_total`, per-state caps, epic lanes, `finishing_max`, the daily token budget) but still waits for the operator's Pause, the Linear rate-limit and usage-limit pauses, its blocked-by links and the per-issue token cap.
-- Forcing never moves a ticket or skips a review. `Backlog` -> `Todo`, approving a plan, deciding a `Needs Decision` hold and `Restart` stay with a person, and the `Code Review` and `QA` verdicts still apply: follow the status map as usual.
+- Jumping the queue is a person's call: they press Force in the Director or run `symphony force <ticket>`, which add the `expedite` label. Do not add or remove that label yourself. A forced ticket skips the slot limits (`max_total`, per-state caps, epic lanes, `finishing_max`, the daily token budget) but still waits for the operator's Pause, the Linear rate-limit and usage-limit pauses, its blocked-by links and the per-issue token cap.
+- Forcing never moves a ticket or skips a review. `Backlog` -> `Todo`, approving a plan, deciding a `Needs Decision` hold and `Restart` stay a person's moves in the Director (Move to…, Approve Plan, Decide, Restart), and the `Code Review` and `QA` verdicts still apply: follow the status map as usual.
 
 ## Dependency-change guardrail
 

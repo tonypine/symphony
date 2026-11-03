@@ -2016,7 +2016,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "code" => "document_attach_failed",
         "message" =>
           "Created the document, but could not attach it to the issue, so later runs cannot find or edit it. " <>
-            "This run can still edit it; record its id and URL in the workpad for a human to attach.",
+            "This run can still edit it; record its id and URL in the workpad, where later runs find it.",
         "document" => document,
         "reason" => inspect(reason)
       }
@@ -2107,7 +2107,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "blocked_by_relation_failed",
-        "message" => "Created #{identifier}, but could not mark it blocked by #{blocker}, so it and any later `blocked_by` links are missing. Record them in the workpad for a human to add.",
+        "message" =>
+          "Created #{identifier}, but could not mark it blocked by #{blocker}, so it and any later `blocked_by` links are missing. Add them with linear_add_blocked_by, or record them in the workpad: a person adds a blocker from the ticket page in the Director.",
         "identifier" => identifier,
         "blocker" => blocker,
         "reason" => inspect(reason)
@@ -2150,7 +2151,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "subissue_not_in_backlog",
-        "message" => "#{identifier} is in #{state || "an unknown state"}, not Backlog: a person promoted it, so it is left as it is. Nothing was changed.",
+        "message" => "#{identifier} is in #{state || "an unknown state"}, not Backlog: the plan's approval or a person's Move to… promoted it, so it is left as it is. Nothing was changed.",
         "state" => state
       }
     }
@@ -2193,7 +2194,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "remove_blocked_by_failed",
-        "message" => "Could not remove a blocked-by link the new list leaves out. Record it in the workpad for a human to remove.",
+        "message" => "Could not remove a blocked-by link the new list leaves out. Record it in the workpad: a person removes a blocker from the ticket page in the Director.",
         "reason" => inspect(reason)
       }
     }
@@ -2221,7 +2222,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "add_blocked_by_failed",
-        "message" => "Could not mark the current issue blocked by #{blocker}; it and any later `blocked_by` links are missing. Retry, or record them in the workpad for a human to add.",
+        "message" =>
+          "Could not mark the current issue blocked by #{blocker}; it and any later `blocked_by` links are missing. Retry, or record them in the workpad: a person adds a blocker from the ticket page in the Director.",
         "blocker" => blocker,
         "reason" => inspect(reason)
       }
@@ -2466,7 +2468,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "issue_not_in_merging_state",
-        "message" => "github_merge_pull_request only merges after a human moves the issue to `Merging`. The issue is in #{inspect(state_name)}; do not move it yourself to get past this."
+        "message" =>
+          "github_merge_pull_request only merges once the issue is in `Merging`. The issue is in #{inspect(state_name)}; do not move it yourself to get past this. " <>
+            "A person approves the merge in the Director: Decide on the merge Question (manual review), or Move to… Merging."
       }
     }
   end
@@ -2475,7 +2479,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "merging_requires_human_approval",
-        "message" => "linear_update_state cannot move the issue to #{inspect(state_name)}. Moving an issue to `Merging` is how a human approves the merge, so a human has to do it in Linear."
+        "message" =>
+          "linear_update_state cannot move the issue to #{inspect(state_name)}. Moving an issue to `Merging` approves its merge, which only a person does, " <>
+            "in the Director: Decide on the merge Question (manual review), or Move to… Merging."
       }
     }
   end

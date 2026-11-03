@@ -50,7 +50,7 @@ defmodule SymphonyElixir.StartNow do
     tracker = settings.tracker
 
     cond do
-      normalized == "backlog" -> {:error, "the ticket is in Backlog; move it first"}
+      normalized == "backlog" -> {:error, "the ticket is in Backlog; move it to Todo with Move to… first"}
       MapSet.member?(Orchestrator.terminal_state_set(settings), normalized) -> {:error, "the ticket is #{phase}; only an open ticket can be started"}
       same_phase?(normalized, tracker.plan_review_state) -> {:error, "the ticket's plan waits on a person"}
       same_phase?(normalized, tracker.waiting_on_sub_issues_state) -> {:error, "the ticket waits on its sub-tickets"}

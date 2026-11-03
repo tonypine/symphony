@@ -37,7 +37,7 @@ defmodule SymphonyElixir.RetiredStatesTest do
     assert_received {:fetched, ["Auto Review", "In Review", "Human Review"]}
     assert log =~ "[error]"
     assert log =~ "TP-873 is still in the retired Auto Review state, waiting on nothing: no path dispatches or moves on from this state"
-    assert log =~ "move it by hand to Code Review (its PR is open) or In Progress"
+    assert log =~ "move it with Move to… in the Director to Code Review (its PR is open) or In Progress"
 
     assert %{stragglers: [%{identifier: "TP-873", wait: :retired}], landed: [], checked_at_ms: 5} =
              RetiredStates.drain_report()
@@ -55,9 +55,9 @@ defmodule SymphonyElixir.RetiredStatesTest do
     Process.put(:retired_states_result, {:ok, issues})
     log = capture_log(fn -> RetiredStates.report(tracker: FakeTracker) end)
 
-    assert log =~ "TP-1 is still in the retired Human Review state, waiting on a parked plan waiting on its review: move it by hand to Plan Review"
+    assert log =~ "TP-1 is still in the retired Human Review state, waiting on a parked plan waiting on its review: move it with Move to… in the Director to Plan Review"
     assert log =~ "TP-2 is still in the retired Human Review state, waiting on an open decision for a person"
-    assert log =~ "TP-3 is still in the retired In Review state, waiting on an open decision for a person: move it by hand into its phase with a Needs Decision hold"
+    assert log =~ "TP-3 is still in the retired In Review state, waiting on an open decision for a person: move it with Move to… in the Director into its phase; a Needs Decision hold keeps it there"
     assert log =~ "TP-4 is still in the retired In Review state, waiting on blocked QA"
     assert log =~ "TP-5 is still in the retired In Review state, waiting on a supervisor check of its PR"
     assert log =~ "[error]"

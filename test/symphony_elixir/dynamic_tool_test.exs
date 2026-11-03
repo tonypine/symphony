@@ -331,7 +331,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert %{"error" => %{"code" => "merging_requires_human_approval", "message" => message}} =
                Jason.decode!(response["output"])
 
-      assert message =~ "a human has to do it"
+      assert message =~ "only a person does, in the Director: Decide on the merge Question (manual review), or Move to… Merging."
+      refute message =~ "in Linear"
       refute_received {:linear_client_called, _query, %{stateId: _state_id}}
     end
   end
@@ -699,7 +700,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         response = DynamicTool.execute("linear_update_subissue", args, opts)
 
         assert %{"error" => %{"code" => "subissue_not_in_backlog", "state" => "In Progress", "message" => message}} = Jason.decode!(response["output"])
-        assert message =~ "TP-4 is in In Progress, not Backlog"
+        assert message =~ "TP-4 is in In Progress, not Backlog: the plan's approval or a person's Move to… promoted it"
       end
 
       response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-6", "title" => "x"}, opts)
@@ -746,7 +747,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       failing = update_subissue_opts(fail: "SymphonyAgentDeleteIssueRelation")
       response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "blocked_by" => ["TP-2"]}, failing)
-      assert %{"error" => %{"code" => "remove_blocked_by_failed"}} = Jason.decode!(response["output"])
+      assert %{"error" => %{"code" => "remove_blocked_by_failed", "message" => message}} = Jason.decode!(response["output"])
+      assert message =~ "a person removes a blocker from the ticket page in the Director"
 
       failing = update_subissue_opts(fail: "SymphonyAgentUpdateSubissue")
       response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "title" => "x"}, failing)
@@ -1163,6 +1165,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
                Jason.decode!(response["output"])
 
       assert message =~ "Created TP-3, but could not mark it blocked by TP-2"
+      assert message =~ "a person adds a blocker from the ticket page in the Director"
+      refute message =~ "for a human"
 
       response = DynamicTool.execute("linear_create_subissue", %{args | "title" => "Slice 3"}, Keyword.put(opts, :linear_client, client.(%{"success" => true}, nil)))
       assert %{"error" => %{"code" => "subissue_not_returned"}} = Jason.decode!(response["output"])
@@ -1251,6 +1255,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         response = DynamicTool.execute("linear_add_blocked_by", args, issue: issue, linear_client: client)
         assert %{"error" => %{"code" => ^code, "message" => message}} = Jason.decode!(response["output"])
         assert message =~ "linear_add_blocked_by" or message =~ "Could not mark the current issue blocked by TP-2"
+        if code == "add_blocked_by_failed", do: assert(message =~ "a person adds a blocker from the ticket page in the Director")
       end
     end
   end
@@ -1673,7 +1678,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       args = %{"title" => "Brief", "content" => "x"}
 
       response = DynamicTool.execute("linear_create_document", args, Keyword.put(opts, :linear_client, client.(document, {:error, :linear_down})))
-      assert %{"error" => %{"code" => "document_attach_failed", "document" => ^document}} = Jason.decode!(response["output"])
+      assert %{"error" => %{"code" => "document_attach_failed", "document" => ^document, "message" => message}} = Jason.decode!(response["output"])
+      assert message =~ "record its id and URL in the workpad, where later runs find it"
 
       response = DynamicTool.execute("linear_create_document", args, Keyword.put(opts, :linear_client, client.(nil, nil)))
       assert %{"error" => %{"code" => "document_not_returned"}} = Jason.decode!(response["output"])
@@ -2714,6 +2720,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       unapproved = DynamicTool.execute("github_merge_pull_request", %{}, merge_tool_opts(workspace, "In Review", []))
       assert %{"error" => %{"code" => "issue_not_in_merging_state", "message" => message}} = Jason.decode!(unapproved["output"])
       assert message =~ ~s("In Review")
+      assert message =~ "A person approves the merge in the Director: Decide on the merge Question (manual review), or Move to… Merging."
 
       failing = DynamicTool.execute("github_merge_pull_request", %{}, merge_tool_opts(workspace, "Merging", [failing_check]))
       assert %{"error" => %{"code" => "checks_not_passing", "reason" => reason}} = Jason.decode!(failing["output"])

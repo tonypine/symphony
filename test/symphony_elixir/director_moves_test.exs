@@ -1874,7 +1874,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       put_issues([pr("Backlog")])
       :counters.put(clock, 1, 10_001)
 
-      assert {:error, {:conflict, "the move on MOT-40 is more than 10 s old; move it in Linear instead"}} = DirectorMoves.undo("MOT-40", opts)
+      assert {:error, {:conflict, "the move on MOT-40 is more than 10 s old; use Move to… on the ticket page instead"}} = DirectorMoves.undo("MOT-40", opts)
       refute_received {:memory_tracker_state_update, "pr", "In Progress"}
     end
 
@@ -1883,7 +1883,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts)
       put_issues([pr("Todo")])
 
-      assert {:error, {:conflict, "MOT-40 moved on to Todo since; move it in Linear instead"}} = DirectorMoves.undo("MOT-40", opts)
+      assert {:error, {:conflict, "MOT-40 moved on to Todo since; use Move to… on the ticket page instead"}} = DirectorMoves.undo("MOT-40", opts)
     end
 
     test "refuses an approved plan once Symphony promoted its sub-tickets", %{opts: opts} do
@@ -1893,7 +1893,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       put_issues([%{plan(@waiting) | sub_issues: [%{hd(backlog) | state: "Todo"}]}])
 
-      assert {:error, {:conflict, "Symphony already promoted the sub-tickets of MOT-30; move them in Linear instead"}} =
+      assert {:error, {:conflict, "Symphony already promoted the sub-tickets of MOT-30; use Move to… on each sub-ticket's page instead"}} =
                DirectorMoves.undo("MOT-30", opts)
 
       put_issues([%{plan(@waiting) | sub_issues: backlog}])

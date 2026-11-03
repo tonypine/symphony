@@ -1577,14 +1577,14 @@ defmodule SymphonyElixir.DirectorMoves do
       last ->
         cond do
           now_ms(opts) - last.at_ms > @undo_window_ms ->
-            conflict("the move on #{issue.identifier} is more than #{div(@undo_window_ms, 1000)} s old; move it in Linear instead")
+            conflict("the move on #{issue.identifier} is more than #{div(@undo_window_ms, 1000)} s old; use Move to… on the ticket page instead")
 
           not same_state?(issue.state, last.to_state) ->
-            conflict("#{issue.identifier} moved on to #{issue.state} since; move it in Linear instead")
+            conflict("#{issue.identifier} moved on to #{issue.state} since; use Move to… on the ticket page instead")
 
           # An approved plan whose sub-tickets Symphony promoted would come back to review approved.
           BreakdownReview.backlog_sub_issue_ids(issue) != last.backlog ->
-            conflict("Symphony already promoted the sub-tickets of #{issue.identifier}; move them in Linear instead")
+            conflict("Symphony already promoted the sub-tickets of #{issue.identifier}; use Move to… on each sub-ticket's page instead")
 
           true ->
             {:ok, last}

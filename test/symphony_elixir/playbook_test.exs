@@ -174,7 +174,7 @@ defmodule SymphonyElixir.PlaybookTest do
     {:ok, rendered, []} = Solid.render(template, %{}, file_system: {FileSystem, nil})
     prompt = rendered |> IO.iodata_to_binary() |> String.replace(~r/\s+/, " ")
 
-    assert prompt =~ "The `plan` label is a human's signal that a ticket is a plan ticket"
+    assert prompt =~ "The `plan` label is a person's signal that a ticket is a plan ticket"
     assert prompt =~ "`breakdown` is the label's older name and is still accepted"
     assert prompt =~ "Follow this section instead of the normal implementation steps when the ticket has the `plan` label."
     assert prompt =~ "`Waiting on sub-tickets` -> a plan parent whose plan a person approved"
@@ -276,8 +276,8 @@ defmodule SymphonyElixir.PlaybookTest do
 
     refute body =~ "**Human Review**"
     refute body =~ "**Final verification**"
-    assert flat =~ "Approve: move the parent to `Waiting on sub-tickets`"
-    assert flat =~ "Reject: Reject Plan in the Inbox, or move the parent to `Rework`; Symphony cancels its `Backlog` sub-tickets"
+    assert flat =~ "Approve: Approve Plan in the Director, which moves the parent to `Waiting on sub-tickets`"
+    assert flat =~ "Reject: Reject Plan in the Director, which moves the parent to `Rework`; Symphony cancels its `Backlog` sub-tickets"
     assert flat =~ "or ask for changes (Ask for Changes in the Inbox, or a comment on any part of the plan)"
     assert flat =~ "keeps its sub-tickets and updates this brief. Nothing is approved until you approve it."
     assert flat =~ "Approve: nothing to do, or confirm the merge decision when manual review is on."
