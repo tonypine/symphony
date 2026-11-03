@@ -47,8 +47,8 @@ defmodule SymphonyElixir.IdlePark do
       title: title,
       question: "#{title}. Should Symphony run it again where it stopped, start it over from main, or leave it parked?",
       why:
-        "The last #{turns} turns on #{name} made no new commit and moved it nowhere, so another turn would repeat them. " <>
-          "Symphony parked it in #{@park_state} and keeps its work: its commits are on its branch.",
+        "The last #{turns} turns on #{name} made no new commit, changed no file and moved it nowhere, so another turn would repeat them. " <>
+          "Symphony parked it in #{@park_state} and keeps its work; the park's comment on the ticket says what it committed and pushed.",
       if_unanswered: "#{name} stays parked in #{@park_state} and Symphony starts no run on it.",
       recommendation_reason: "A new run continues from the parked work, with nothing lost.",
       options: [
