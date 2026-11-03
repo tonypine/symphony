@@ -1,0 +1,9 @@
+{
+  "action": "add",
+  "issue_identifier": "SHOP-320",
+  "blocker": "API-133",
+  "blockers": [
+    {"issue_identifier": "SHOP-305", "title": "Checkout total rounding", "state": "In Progress"},
+    {"issue_identifier": "API-133", "title": "Bulk export endpoint", "state": "Todo"}
+  ]
+}

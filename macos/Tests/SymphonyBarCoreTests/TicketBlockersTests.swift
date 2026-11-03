@@ -183,4 +183,64 @@ final class TicketBlockersTests: XCTestCase {
         XCTAssertEqual(remove.failurePrefix, "Couldn't remove SHOP-2 as a blocker of SHOP-1")
         XCTAssertEqual(ControlAPI.result(add, statusCode: 200, data: Data(#"{"action":"add","blockers":[]}"#.utf8)), .done)
     }
+    // MARK: The committed QA fixtures
+
+    private static func director(_ name: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/director-app/\(name)", isDirectory: true)
+    }
+
+    /// Answers the card's send and read from fixture `name`, as the app does in QA mode.
+    private func fixtureCalls(_ name: String) -> (
+        fixtures: APIFixtures, send: (ControlAction) async -> ControlResult, read: (String) async -> Data?
+    ) {
+        let fixtures = APIFixtures(directory: Self.director(name), requestLog: uniqueTemporaryDirectory(name).appendingPathComponent("api-requests.jsonl"))
+        let send: (ControlAction) async -> ControlResult = { action in
+            var request = URLRequest(url: APIFixtures.baseURL.appendingPathComponent(action.path))
+            request.httpMethod = "POST"
+            request.httpBody = try? JSONSerialization.data(withJSONObject: action.body)
+            let (data, response) = fixtures.answer(request)
+            return ControlAPI.result(action, statusCode: response.statusCode, data: data)
+        }
+        let read: (String) async -> Data? = { path in
+            let (data, response) = fixtures.answer(URLRequest(url: APIFixtures.baseURL.appendingPathComponent(path)))
+            return response.statusCode == 200 ? data : nil
+        }
+        return (fixtures, send, read)
+    }
+
+    func testTheTicketBlockersFixtureShowsABlockerAndTicketsToPick() async {
+        let calls = fixtureCalls("ticket-blockers")
+        let editor = TicketBlockersEditor()
+        editor.show("SHOP-320")
+        editor.apply(await calls.read(TicketBlockersEditor.path("SHOP-320")), for: "SHOP-320")
+
+        XCTAssertEqual(editor.load, .loaded)
+        XCTAssertEqual(editor.blockers, [.init(identifier: "SHOP-305", title: "Checkout total rounding", state: "In Progress")])
+        XCTAssertEqual(editor.suggestions.map(\.identifier), ["API-131", "API-133", "API-127", "SHOP-301", "SHOP-290", "DOCS-40"])
+
+        editor.entry = "API-133"
+        let made = await editor.add(send: calls.send, read: calls.read)
+        XCTAssertTrue(made)
+        XCTAssertNil(editor.refusal)
+        XCTAssertEqual(editor.entry, "")
+        let removed = await editor.remove("SHOP-305", send: calls.send, read: calls.read)
+        XCTAssertTrue(removed)
+    }
+
+    func testTheRefusedFixtureAnswersTheAddWithSymphonysReason() async {
+        let calls = fixtureCalls("ticket-blockers-refused")
+        let editor = TicketBlockersEditor()
+        editor.show("SHOP-320")
+        editor.apply(await calls.read(TicketBlockersEditor.path("SHOP-320")), for: "SHOP-320")
+        editor.entry = "SHOP-320"
+
+        let made = await editor.add(send: calls.send, read: calls.read)
+
+        XCTAssertFalse(made)
+        XCTAssertEqual(editor.refusal, "Couldn't add SHOP-320 as a blocker of SHOP-320: SHOP-320 can't block itself. (HTTP 409)")
+        XCTAssertEqual(editor.entry, "SHOP-320")
+    }
 }
