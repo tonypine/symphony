@@ -16,7 +16,9 @@ defmodule SymphonyElixir.DirectorRulings do
   (`{:error, {:invalid, message}}`) when its text is blank or longer than a decision's answer holds,
   and (`{:error, {:conflict, message}}`, the reason the app shows) when Symphony doesn't track the
   ticket or the ticket already has a decision with the same text. A write the tracker or the store
-  refuses is `{:error, {:linear, message}}`, the message saying why in the app's words.
+  refuses is `{:error, {:linear, message}}`, the message saying why in the app's words. A Decisions
+  section that lost its end marker refuses nothing: the record holds the ruling, which is what runs,
+  reviews and the Decisions card read, and nobody is asked to repair the section (TP-1369).
 
   Once recorded, at once and without waiting for the next read of Linear: the record's change is
   announced (`SymphonyElixirWeb.ObservabilityPubSub.broadcast_ticket_record_changed/3`), the
@@ -126,21 +128,18 @@ defmodule SymphonyElixir.DirectorRulings do
   defp write(ticket, entry, opts) do
     case Decisions.record(ticket.issue_id, [entry], [repo_key: ticket.repo_key] ++ Keyword.take(opts, [:tracker, :store])) do
       :ok -> :ok
+      # The record took the ruling before the section was read, and runs read it from the record.
+      {:error, :decisions_block_unterminated} -> :ok
       {:error, reason} -> {:error, {:linear, write_failure(ticket, reason)}}
     end
   end
 
   # The reason a write failed, in the words the app shows; the raw reason is in the log.
   defp write_failure(ticket, reason) do
-    cond do
-      missing_key?(reason) ->
-        "Symphony has no Linear API key, so it couldn't record the decision on #{ticket.issue_identifier}."
-
-      reason == :decisions_block_unterminated ->
-        "The Decisions section of #{ticket.issue_identifier}'s description has lost its end marker, so Symphony couldn't add to it. Fix the description in Linear, then try again."
-
-      true ->
-        "Symphony couldn't record the decision on #{ticket.issue_identifier}, so nothing changed. Try again in a moment."
+    if missing_key?(reason) do
+      "Symphony has no Linear API key, so it couldn't record the decision on #{ticket.issue_identifier}."
+    else
+      "Symphony couldn't record the decision on #{ticket.issue_identifier}, so nothing changed. Try again in a moment."
     end
   end
 

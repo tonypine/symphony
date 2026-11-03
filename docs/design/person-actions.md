@@ -108,6 +108,11 @@ rg -n -i -e 'in linear|by hand' \
     the document's id and URL in the workpad, where later runs find it.
   - `issue_has_no_project` ("ask a person to add the issue to a project"): stays. A ticket's project is
     Linear's (TP-1359), so a person sets it in Linear and it is not drift.
+- `director_rulings.ex` (`write_failure/2`, found by TP-1362's epic review), Record a decision's
+  refusal "Fix the description in Linear, then try again" when the Decisions section lost its end
+  marker: fixed by [TP-1369](https://linear.app/tonypine/issue/TP-1369). The section is Symphony's,
+  and the record already holds the ruling, so the ruling is recorded and nobody is asked to repair
+  the section.
 - `quality_gate.ex`, "Reply in Linear with 1-2 sentences per question": fixed by
   [TP-1360](https://linear.app/tonypine/issue/TP-1360), "Answer in the Symphony Inbox, or reply here":
   the gate asks its questions as an Inbox Question.
@@ -160,7 +165,7 @@ fixed, Approve Plan and Reject Plan in the Director.
 Not about a ticket (the Linear workspace, the repo, config or the QA host):
 `setup/fixes.ex:94`, `:97`, `:106`, `:109`; `setup/checks/labels.ex:113`, `:139`;
 `setup/checks/statuses.ex:139`; `setup/checks/deprecated_labels.ex:90`; `setup/checks/routing.ex:36`;
-`state_provisioning.ex:182`;
+`state_provisioning.ex:182`; `director_labels.ex:226` (a workspace label Linear lacks);
 `control_api_controller.ex:319`, `:325`, `:331`, `:378`; `codex/dynamic_tool.ex:1868` (a project
 update); `github/webhook_setup.ex:1003` and `mix/tasks/settings.ui_coverage.ex:45`, `:46` (config
 files); `release_build.ex:641`, `pr_decision/apply.ex:974`, `self_heal.ex:572`, `:579`, `:586`,
@@ -170,7 +175,8 @@ files); `release_build.ex:641`, `pr_decision/apply.ex:974`, `self_heal.ex:572`, 
 filing a new ticket stays in Linear, decided by TP-1359).
 
 Report what happened, or tell the agent rather than a person: `ticket_events/summary.ex:118`, `:127`
-("moved … in Linear by hand"); `ticket_state_reconciler.ex:181` (a log line);
+("moved … in Linear by hand"); `director_blockers.ex:183`, `director_priority.ex:132`,
+`director_labels.ex:225` (no Linear API key); `ticket_state_reconciler.ex:181` (a log line);
 `codex/dynamic_tool.ex:1905` (the agent's blocker comment); `prompt_builder.ex:969`,
 `093-step-4-rework.md:10`, `:11`, `status_map.liquid:11` (the agent must not move it by hand;
 Restart is already a Director move); `escape_hatches.liquid:11`, `:16`; `review_brief.liquid:78`,
@@ -180,8 +186,8 @@ Restart is already a Director move); `escape_hatches.liquid:11`, `:16`; `review_
 Module and function docs whose text the filter can't tell from code (a `@moduledoc` or `@doc`
 body), describing behaviour to a developer: `agent_tools/github.ex:183`, `agent_tools/linear.ex:990`,
 `audit_log.ex:6`, `breakdown_review.ex:6`, `:17`, `:20`, `decision_move.ex:7`, `decisions.ex:113`,
-`:385`, `director_moves.ex:12`, `:32`, `:87`, `:99`, `dispatch/shadow.ex:21`, `epic_lanes.ex:189`,
-`github/comment_marker.ex:7`, `human_actions/action.ex:9`, `human_actions/request.ex:35`, `:37`,
+`:385`, `director_labels.ex:4`, `director_moves.ex:12`, `:32`, `:91`, `:103`, `dispatch/shadow.ex:21`,
+`epic_lanes.ex:189`, `github/comment_marker.ex:7`, `human_actions/action.ex:9`, `human_actions/request.ex:35`, `:37`,
 `linear/client.ex:3`, `linear/issue.ex:107`, `path_unlock.ex:33`, `pauses/projector.ex:14`, `:23`,
 `:33`, `:38`, `plan_brief.ex:93`, `plan_comments.ex:6`, `:14`, `:17`, `plan_review.ex:7`,
 `pr_watch/repo.ex:11`, `qa_agent.ex:322`, `questions.ex:11`, `:159`, `repo/fetcher.ex:14`,
