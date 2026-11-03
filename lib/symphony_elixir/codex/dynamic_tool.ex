@@ -161,7 +161,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_create_subissue",
       "description" =>
-        "Create a child issue of the current Linear issue, in its team and project and assigned to its assignee. The new issue lands in Backlog; a human promotes it. Without `priority` it inherits the current issue's. Pass `blocked_by` with the identifiers of earlier sibling sub-issues it depends on to add Linear blocked-by links. A title this run already filed under the current issue is refused.",
+        "Create a child issue of the current Linear issue, in its team and project and assigned to its assignee. On a plan ticket the new issue lands in Backlog, where the plan's approval promotes it; on any other ticket it lands in Todo and the current issue is marked blocked by it, so the new issue lands first and the current one continues once it is done. Without `priority` it inherits the current issue's. Pass `blocked_by` with the identifiers of earlier sibling sub-issues it depends on to add Linear blocked-by links. A title this run already filed under the current issue is refused.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -186,7 +186,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_update_subissue",
       "description" =>
-        "Change a Backlog sub-issue of the current Linear issue to bring a plan in line with review comments: replace its `title` and/or `description`, set `blocked_by` to the complete list of sibling sub-issues that block it, or cancel it with `cancel_reason` (posted on it first). A sub-issue outside Backlog was promoted by a person and is refused.",
+        "Change a Backlog sub-issue of the current Linear issue to bring a plan in line with review comments: replace its `title` and/or `description`, set `blocked_by` to the complete list of sibling sub-issues that block it, or cancel it with `cancel_reason` (posted on it first). A sub-issue outside Backlog (promoted by the plan's approval, or filed in Todo by a run of a ticket that is not a plan) is refused.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -1663,7 +1663,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "code" => "scope_argument_rejected",
         "message" =>
-          "linear_create_subissue always creates a Backlog child of the current issue in its team and project, assigned to its assignee; team, project, parent, assignee, and state arguments are not accepted."
+          "linear_create_subissue always creates a child of the current issue in its team and project, assigned to its assignee, in Backlog for a plan ticket and in Todo otherwise; team, project, parent, assignee, and state arguments are not accepted."
       }
     }
   end
@@ -1847,6 +1847,28 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "code" => "subissue_registry_unavailable",
         "message" => "Symphony has no per-run tool state for this session, so it cannot check for a duplicate sub-issue and refused to create the issue."
+      }
+    }
+  end
+
+  defp tool_error_payload({:child_state_not_found, state_name, available_states}) do
+    %{
+      "error" => %{
+        "code" => "child_state_not_found",
+        "message" => "The current issue's team has no #{state_name} state, so no sub-issue was created. Available states: #{Enum.join(available_states, ", ")}.",
+        "available_states" => available_states
+      }
+    }
+  end
+
+  defp tool_error_payload({:split_link_failed, identifier, current, reason}) do
+    %{
+      "error" => %{
+        "code" => "split_link_failed",
+        "message" => "Created #{identifier} in Todo, but could not mark #{current} blocked by it, so #{current} would not wait for it. Call linear_add_blocked_by with #{identifier} to add the link.",
+        "identifier" => identifier,
+        "blocked" => current,
+        "reason" => inspect(reason)
       }
     }
   end

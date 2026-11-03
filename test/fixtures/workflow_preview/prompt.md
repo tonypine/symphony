@@ -248,7 +248,7 @@ What a red head, a conflict or a closed PR does in each state is decided by one 
     - Expand/fix the plan so it is comprehensive for current scope.
     - Ensure `Acceptance Criteria` and `Validation` are current and still make sense for the task.
 4.  Start work by writing/updating a hierarchical plan in the workpad comment.
-    - If the ticket asks you to split the work into sub-tickets, create each one with `linear_create_subissue` (see `Splitting work and out-of-scope improvements` below) and record their identifiers in the workpad `Notes`. They land in `Backlog` as children of this issue.
+    - If the ticket asks you to split the work into sub-tickets, create each one with `linear_create_subissue` (see `Splitting work and out-of-scope improvements` below) and record their identifiers in the workpad `Notes`. They land as children of this issue: in `Backlog` for a plan ticket, otherwise in `Todo` with this issue blocked by them.
     - If the work is clearly too large for one PR and the ticket has no `plan` label, say so in the workpad `Confusions` so a human can add the label; do not split it unasked.
 5.  Ensure the workpad includes a compact environment stamp at the top as a code fence line:
     - Format: `<host>:<abs-workdir>@<short-sha>`
@@ -919,8 +919,19 @@ before it, because the push is what moves the ticket on.
 ## Splitting work and out-of-scope improvements
 
 Use `linear_create_subissue` to file new work. It always creates a child of the
-current issue in the same team and project, assigned to the same assignee, in
-`Backlog`; a human promotes it to `Todo`. It takes only `title`, `description`,
+current issue in the same team and project, assigned to the same assignee. Where
+it lands depends on the current issue:
+
+- A plan ticket's sub-issue lands in `Backlog`, where it waits for the plan's
+  approval, which promotes it to `Todo`.
+- Any other ticket's sub-issue lands in `Todo`, and the current issue is marked
+  blocked by it: the new ticket lands first, and the current issue waits for it
+  and then continues in its phase on its own. The turn in flight finishes; the
+  next run waits. If Linear refuses that link, the tool says so after the new
+  issue exists: mark the current issue blocked by it with
+  `linear_add_blocked_by`.
+
+It takes only `title`, `description`,
 an optional `priority` (0 none, 1 urgent, 2 high, 3 medium, 4 low) and an
 optional `blocked_by` list of sibling sub-issue identifiers. It refuses a title
 this run already filed under the current issue and names the earlier sub-issue;

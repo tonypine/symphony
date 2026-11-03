@@ -4369,9 +4369,14 @@ Scoped Linear tool extension contract:
   Each `blocked_by` identifier MUST name a sub-issue of the current issue (an existing child, or
   one the run created earlier); otherwise the call MUST fail with an explicit error before the
   issue is created. Accepted identifiers become `blocks` relations on the new issue, created right
-  after it. Without a `priority`, the new issue MUST inherit the current issue's priority. The new
-  issue MUST land in the team's `Backlog` state (falling back to a `backlog`-type state), never an
-  active state, so an agent cannot start other agents; a human promotes it. Title and description
+  after it. Without a `priority`, the new issue MUST inherit the current issue's priority. When the
+  current issue is a plan parent (the `plan` or `breakdown` label), the new issue MUST land in the
+  team's `Backlog` state (falling back to a `backlog`-type state), where the plan's approval promotes
+  it. Otherwise it MUST land in the team's `Todo` state, and the current issue MUST be marked blocked
+  by it (a `blocks` relation from the new issue, created after the `blocked_by` ones), so the
+  split-off work lands first and the current issue continues once it is terminal, with no person
+  promoting or linking anything; a link Linear refuses MUST fail with an explicit error naming the
+  created issue, so the run can add it with `linear_add_blocked_by`. Title and description
   MUST pass the same secret scan as comments before any Linear call. Creation MUST NOT be capped per run; a title matching
   (ignoring case and spacing) one the run already filed under the same parent MUST be refused with an
   explicit error naming the earlier sub-issue's identifier, and creation MUST be refused when the
