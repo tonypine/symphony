@@ -62,6 +62,7 @@ extension SymphonyWindowModel {
             ticketNote.show(identifier)
             ticketBlockers.show(identifier)
             ticketPriority.show(identifier)
+            ticketLabels.show(identifier)
             ticketSources = TicketPage.Sources()
             ticketSlowReadAt = nil
             readTicket(force: true)
@@ -114,11 +115,13 @@ extension SymphonyWindowModel {
             }
             let blockers = await readBlockers(identifier)
             let priority = await readTicketPath(TicketPriorityEditor.path(identifier))
+            let labels = await readTicketPath(TicketLabelsEditor.path(identifier))
             readingTicket = false
             // A page left while its reads were out doesn't take them.
             guard shownTicket == identifier else { return }
             ticketBlockers.apply(blockers, for: identifier)
             ticketPriority.apply(priority, for: identifier)
+            ticketLabels.apply(labels, for: identifier)
             // A Check Now answer and the feed's events that came in meanwhile stay.
             sources.check = ticketSources.check
             sources.events = ticketSources.events
@@ -308,6 +311,15 @@ extension SymphonyWindowModel {
         }
     }
 
+    /// A toggle on the Labels card: Symphony adds or removes the label in Linear, then the card and the page read again.
+    func setLabel(_ label: String, on: Bool) {
+        Task {
+            if await ticketLabels.set(label, on: on, send: onControl, read: { [weak self] in await self?.readTicketPath($0) }) {
+                client.refresh()
+            }
+        }
+    }
+
     private func readTicketPath(_ path: String) async -> Data? {
         if case let .loaded(data) = await client.get(path) { return data }
         return nil
@@ -429,6 +441,8 @@ struct TicketPageContent: View {
                 removeBlocker: model.removeBlocker,
                 priority: model.ticketPriority,
                 setPriority: model.setPriority,
+                labels: model.ticketLabels,
+                setLabel: model.setLabel,
                 note: model.ticketNote,
                 submitNote: model.submitNote,
                 banner: model.moveBanner.flatMap { $0.identifier == page.identifier ? $0 : nil },
@@ -455,6 +469,9 @@ struct TicketPageView: View {
     /// The Priority card, with its menu.
     var priority: TicketPriorityEditor?
     var setPriority: (TicketPriority) -> Void = { _ in }
+    /// The Labels card, with its toggles.
+    var labels: TicketLabelsEditor?
+    var setLabel: (String, Bool) -> Void = { _, _ in }
     /// The note field pinned under the page, so it stays reachable however long the timeline is.
     var note: TicketNoteComposer?
     var submitNote: () -> Void = {}
@@ -473,7 +490,7 @@ struct TicketPageView: View {
             TicketPageBody(
                 page: page, brief: brief, actions: actions, width: width, folded: $folded, images: images,
                 openScreenshot: { fullScreenshot = $0 }, blockers: blockers, addBlocker: addBlocker, removeBlocker: removeBlocker,
-                priority: priority, setPriority: setPriority
+                priority: priority, setPriority: setPriority, labels: labels, setLabel: setLabel
             )
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
@@ -508,6 +525,8 @@ struct TicketPageBody: View {
     var removeBlocker: (String) -> Void = { _ in }
     var priority: TicketPriorityEditor?
     var setPriority: (TicketPriority) -> Void = { _ in }
+    var labels: TicketLabelsEditor?
+    var setLabel: (String, Bool) -> Void = { _, _ in }
 
     static let sideColumnWidth: CGFloat = 300
     static let mainColumnMinWidth: CGFloat = 460
@@ -545,6 +564,11 @@ struct TicketPageBody: View {
                     if let priority {
                         Card(title: TicketPriorityEditor.title) {
                             TicketPriorityCard(identifier: page.identifier, editor: priority, set: setPriority)
+                        }
+                    }
+                    if let labels {
+                        Card(title: TicketLabelsEditor.title) {
+                            TicketLabelsCard(identifier: page.identifier, editor: labels, set: setLabel)
                         }
                     }
                     if let blockers {

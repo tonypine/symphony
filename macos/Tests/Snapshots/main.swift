@@ -641,7 +641,7 @@ let ledgerNow = ISO8601DateFormatter().date(from: "2026-10-18T11:20:00Z")!
 @MainActor
 func ledgerPage(
     window: CGFloat, feed: Bool = true, note: TicketNoteComposer? = nil, repositoryPaused: Bool = false, blockers: TicketBlockersEditor? = nil,
-    priority: TicketPriorityEditor? = nil
+    priority: TicketPriorityEditor? = nil, labels: TicketLabelsEditor? = nil
 ) -> some View {
     let events = feed ? (try? Data(contentsOf: ledgerAPI.appendingPathComponent("repos/web-shop/tickets/SHOP-410/events.json"))).flatMap(TicketEventsPayload.decode) : nil
     var page = TicketPage(
@@ -657,7 +657,7 @@ func ledgerPage(
     page.repositoryPaused = repositoryPaused
     let width = window - DesignTokens.Layout.sidebarWidth
     return VStack(spacing: 0) {
-        TicketPageBody(page: page, actions: TicketPageActions(), width: width, blockers: blockers, priority: priority)
+        TicketPageBody(page: page, actions: TicketPageActions(), width: width, blockers: blockers, priority: priority, labels: labels)
         TicketNoteBar(page: page, composer: note ?? TicketNoteComposer(), submit: {})
     }
     .frame(width: width)
@@ -840,6 +840,26 @@ func priorityEditor(refused: Bool) -> TicketPriorityEditor {
     )
 }
 
+/// The Labels card (TP-1356) on SHOP-410's page: Feature on, and the refusal of a toggle when `refused`.
+@MainActor
+func labelsEditor(refused: Bool) -> TicketLabelsEditor {
+    let rows = [
+        ("plan", "Plan", "Groom into sub-tickets before any work starts"),
+        ("type:bug", "Bug", "The bug steps, and back to Backlog without its sections"),
+        ("type:feature", "Feature", "The feature steps, and back to Backlog without its sections"),
+        ("qa:skip", "Skip QA", "Once approved, it goes on without a QA pass"),
+        ("skip-update-hold", "Skip the app update wait", "Doesn't wait for an app update with its blocker's fix"),
+        ("qa:live", "QA on the live server", "QA runs Symphony's own server, whatever Symphony picks"),
+        ("qa:fixture", "QA on fixtures", "QA reads the committed fixtures only, whatever Symphony picks"),
+        ("needs-human", "needs-human", "Code Review asks you before approving"),
+    ]
+    return TicketLabelsEditor(
+        identifier: "SHOP-410", toggles: rows.map { TicketLabelToggle(label: $0.0, title: $0.1, effect: $0.2, on: $0.0 == "type:feature") },
+        load: .loaded,
+        refusal: refused ? "Couldn't turn on Skip QA on SHOP-410: Linear has no qa:skip label, so Symphony couldn't turn on Skip QA on SHOP-410. Create the label in Linear, then try again. (HTTP 502)" : nil
+    )
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -867,6 +887,10 @@ MainActor.assumeIsolated {
         render(ledgerPage(window: 1440, priority: priorityEditor(refused: false)), scheme, to: "ticket-priority-1440-\(suffix).png")
         render(ledgerPage(window: 2560, priority: priorityEditor(refused: false)), scheme, to: "ticket-priority-2560-\(suffix).png")
         render(ledgerPage(window: 1440, priority: priorityEditor(refused: true)), scheme, to: "ticket-priority-refused-\(suffix).png")
+        // The Labels card (TP-1356): the laptop and desktop viewports, and a toggle Linear refused.
+        render(ledgerPage(window: 1440, labels: labelsEditor(refused: false)), scheme, to: "ticket-labels-1440-\(suffix).png")
+        render(ledgerPage(window: 2560, labels: labelsEditor(refused: false)), scheme, to: "ticket-labels-2560-\(suffix).png")
+        render(ledgerPage(window: 1440, labels: labelsEditor(refused: true)), scheme, to: "ticket-labels-refused-\(suffix).png")
         render(review(width: 640, picks: picks), scheme, to: "inbox-write-in-\(suffix).png")
         // Chips inside the question, story and options, wrapping with the text (TP-952).
         render(review(width: 1200), scheme, to: "decision-chips-wide-\(suffix).png")

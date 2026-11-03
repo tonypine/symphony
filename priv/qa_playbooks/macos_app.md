@@ -342,6 +342,19 @@ GitHub or Linear in QA:
   menu keeps Low. VoiceOver reads the menu as "Priority of SHOP-320: Low" and the line as
   "Priority not saved: …". Walk it at 1440×900 and 2560×1440, light and dark: nothing on the card
   is clipped.
+- **Labels (TP-1356):** pass `macos/Tests/Fixtures/director-app/ticket-labels` as `api_fixtures`
+  and open SHOP-320 from Tickets. Its page has a **Labels** card listing Plan, Bug, Feature, Skip
+  QA, Skip the app update wait, QA on the live server, QA on fixtures and needs-human, each a
+  checkbox with its one-line effect under its name; only Feature is on. Turn on **Plan**:
+  `qa_api_requests` lists one `POST /api/v1/control/label` whose body has `issue_identifier`
+  `SHOP-320`, `label` `plan` and `action` `add`, and the card shows Plan on. The live server
+  proves that the ticket's next run plans it, that Skip QA on a ticket in Code Review sends it on
+  without a QA pass once approved, and that turning a toggle off removes the label. Then pass
+  `ticket-labels-refused` and turn on Skip QA: the line under the card reads "Couldn't turn on
+  Skip QA on SHOP-320: Symphony doesn't track SHOP-320, so it can't change its labels. (HTTP
+  409)" and Skip QA stays off. VoiceOver reads each checkbox as "Skip QA on SHOP-320: Once
+  approved, it goes on without a QA pass" and the line as "Label not saved: …". Walk it at
+  1440×900 and 2560×1440, light and dark: nothing on the card is clipped.
 - **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
   state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one
   warning, `symphony.yml sets auto_review.enabled, which is deprecated` (**Remove…**). Before

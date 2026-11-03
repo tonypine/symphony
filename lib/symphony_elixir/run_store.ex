@@ -115,7 +115,8 @@ defmodule SymphonyElixir.RunStore do
       _ ->
         case start_link([]) do
           {:ok, _pid} -> :ok
-          {:error, {:already_started, _pid}} -> :ok
+          # Another caller started it a moment ago: its `init/1` may still be running.
+          {:error, {:already_started, pid}} -> await_ready(pid)
           {:error, reason} -> {:error, reason}
         end
     end

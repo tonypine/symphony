@@ -1,0 +1,53 @@
+{
+  "issue_identifier": "SHOP-320",
+  "labels": [
+    {
+      "label": "plan",
+      "title": "Plan",
+      "effect": "Groom into sub-tickets before any work starts",
+      "on": false
+    },
+    {
+      "label": "type:bug",
+      "title": "Bug",
+      "effect": "The bug steps, and back to Backlog without its sections",
+      "on": false
+    },
+    {
+      "label": "type:feature",
+      "title": "Feature",
+      "effect": "The feature steps, and back to Backlog without its sections",
+      "on": true
+    },
+    {
+      "label": "qa:skip",
+      "title": "Skip QA",
+      "effect": "Once approved, it goes on without a QA pass",
+      "on": false
+    },
+    {
+      "label": "skip-update-hold",
+      "title": "Skip the app update wait",
+      "effect": "Doesn't wait for an app update with its blocker's fix",
+      "on": false
+    },
+    {
+      "label": "qa:live",
+      "title": "QA on the live server",
+      "effect": "QA runs Symphony's own server, whatever Symphony picks",
+      "on": false
+    },
+    {
+      "label": "qa:fixture",
+      "title": "QA on fixtures",
+      "effect": "QA reads the committed fixtures only, whatever Symphony picks",
+      "on": false
+    },
+    {
+      "label": "needs-human",
+      "title": "needs-human",
+      "effect": "Code Review asks you before approving",
+      "on": false
+    }
+  ]
+}

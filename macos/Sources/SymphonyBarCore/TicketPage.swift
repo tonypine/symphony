@@ -660,6 +660,8 @@ public struct TicketPage: Equatable {
         case "add_blocker": return move.blocker.map { "Blocker \($0) added by you" } ?? "Blocker added by you"
         case "remove_blocker": return move.blocker.map { "Blocker \($0) removed by you" } ?? "Blocker removed by you"
         case "set_priority": return move.priority.map { "Priority set to \($0) by you" } ?? "Priority set by you"
+        case "add_label": return "\(move.labelTitle ?? move.label ?? "A label") turned on by you"
+        case "remove_label": return "\(move.labelTitle ?? move.label ?? "A label") turned off by you"
         default: return "Moved to \(move.toState ?? "another state") by you"
         }
     }
@@ -735,6 +737,9 @@ public struct TicketPage: Equatable {
         var blocker: String? = nil
         /// The priority a `set_priority` move set, by its title ("Urgent").
         var priority: String? = nil
+        /// The label an `add_label` or `remove_label` move changed, and its toggle's title ("Skip QA").
+        var label: String? = nil
+        var labelTitle: String? = nil
     }
 
     /// Why the ticket does not move (TP-1242): its pause, nil while it moves, and its open questions. The ticket

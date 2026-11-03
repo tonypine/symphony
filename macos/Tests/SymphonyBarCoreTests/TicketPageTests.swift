@@ -151,6 +151,15 @@ final class TicketPageTests: XCTestCase {
         ])
         let prioritized = TicketPage(identifier: "SHOP-1", sources: TicketPage.Sources(audit: [priorities]), now: date("2026-10-07T13:00:00Z"), timeZone: utc)
         XCTAssertEqual(prioritized.timeline.map(\.title), ["Priority set to Urgent by you", "Priority set by you"])
+
+        // TP-1356: the Director's label toggles read as such, with the toggle's name.
+        let labels = ndjson([
+            ["event_type": "director_move", "move": "add_label", "label": "qa:skip", "label_title": "Skip QA", "issue_identifier": "SHOP-1", "timestamp": "2026-10-07T11:00:00Z"],
+            ["event_type": "director_move", "move": "remove_label", "label": "plan", "issue_identifier": "SHOP-1", "timestamp": "2026-10-07T11:10:00Z"],
+            ["event_type": "director_move", "move": "add_label", "issue_identifier": "SHOP-1", "timestamp": "2026-10-07T11:20:00Z"],
+        ])
+        let labelled = TicketPage(identifier: "SHOP-1", sources: TicketPage.Sources(audit: [labels]), now: date("2026-10-07T13:00:00Z"), timeZone: utc)
+        XCTAssertEqual(labelled.timeline.map(\.title), ["Skip QA turned on by you", "plan turned off by you", "A label turned on by you"])
         XCTAssertEqual(page.phaseSentence, "Symphony isn't working on SHOP-1 right now")
         XCTAssertEqual(page.badges, [])
     }
