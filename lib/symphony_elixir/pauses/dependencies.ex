@@ -92,7 +92,7 @@ defmodule SymphonyElixir.Pauses.Dependencies do
   # The ticket's record as the poll's observation writes it: its stored record with this read's
   # phase, labels and open blockers.
   defp observed(repo_key, %Issue{id: issue_id} = issue, terminal, now, opts) do
-    case store(opts).get_ticket_state(repo_key, issue_id) do
+    case store(opts).get_ticket_state(issue_id) do
       {:error, reason} ->
         Logger.warning("Failed to read the record of issue_id=#{issue_id} to sync its dependencies: #{inspect(reason)}")
         :error

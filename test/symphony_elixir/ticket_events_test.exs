@@ -20,10 +20,10 @@ defmodule SymphonyElixir.TicketEventsTest do
       assert {:ok, first} = TicketEvents.record(@repo_key, @issue_id, "verdict.recorded", payload, idempotency: "verdict:qa:abc")
       assert {:ok, ^first} = TicketEvents.record(@repo_key, @issue_id, "verdict.recorded", payload, idempotency: "verdict:qa:abc")
 
-      assert [^first] = TicketEvents.query(@repo_key, @issue_id)
+      assert [^first] = TicketEvents.query(@issue_id)
       assert first.seq == 1
       assert first.idempotency == "verdict:qa:abc"
-      assert RunStore.get_ticket_state(@repo_key, @issue_id).event_seq == 1
+      assert RunStore.get_ticket_state(@issue_id).event_seq == 1
     end
 
     test "the same key on another ticket is another event" do
@@ -37,7 +37,7 @@ defmodule SymphonyElixir.TicketEventsTest do
       assert {:ok, started} = TicketEvents.record(@repo_key, @issue_id, "run.started", payload)
       assert {:ok, ^started} = TicketEvents.record(@repo_key, @issue_id, "run.started", payload)
       assert started.idempotency == "run.started:run-1"
-      assert length(TicketEvents.query(@repo_key, @issue_id)) == 1
+      assert length(TicketEvents.query(@issue_id)) == 1
     end
 
     test "builds the event from its options" do
@@ -71,7 +71,7 @@ defmodule SymphonyElixir.TicketEventsTest do
              } = event
 
       assert String.length(event.id) == 26
-      assert [^event] = RunStore.list_ticket_events(@repo_key, @issue_id, [])
+      assert [^event] = RunStore.list_ticket_events(@issue_id, [])
     end
 
     test "defaults to the machine, now, and the phase the ticket's record holds" do
@@ -83,7 +83,7 @@ defmodule SymphonyElixir.TicketEventsTest do
       assert event.phase == "Code Review"
       assert event.run_id == "run-2"
       assert DateTime.diff(DateTime.utc_now(), event.at) < 60
-      assert %{phase: "Code Review", event_seq: 1} = RunStore.get_ticket_state(@repo_key, @issue_id)
+      assert %{phase: "Code Review", event_seq: 1} = RunStore.get_ticket_state(@issue_id)
     end
 
     test "a recorded QA finding carries the summary Symphony renders, and reads back with it" do
@@ -103,14 +103,14 @@ defmodule SymphonyElixir.TicketEventsTest do
       }
 
       assert event.summary == summary
-      assert [%Event{summary: ^summary}] = TicketEvents.query(@repo_key, @issue_id)
+      assert [%Event{summary: ^summary}] = TicketEvents.query(@issue_id)
     end
 
     test "a legacy event of a type the renderer does not know reads back with its type as the title" do
       legacy = %Event{id: "01LEGACY", repo_key: @repo_key, issue_id: @issue_id, at: @at, type: "legacy.signal"}
       assert {:ok, _event} = RunStore.append_ticket_event(legacy)
 
-      assert [%Event{type: "legacy.signal", summary: nil} = event] = TicketEvents.query(@repo_key, @issue_id)
+      assert [%Event{type: "legacy.signal", summary: nil} = event] = TicketEvents.query(@issue_id)
       assert Summary.render(event) == %{title: "legacy.signal", detail: nil}
     end
 
@@ -139,7 +139,7 @@ defmodule SymphonyElixir.TicketEventsTest do
       assert {:error, :invalid_repo_key} = TicketEvents.record(" ", @issue_id, "note", %{text: "x"})
       assert {:error, :invalid_ticket_event} = TicketEvents.record(@repo_key, nil, "note", %{text: "x"})
 
-      assert TicketEvents.query(@repo_key, @issue_id) == []
+      assert TicketEvents.query(@issue_id) == []
     end
   end
 
@@ -192,7 +192,7 @@ defmodule SymphonyElixir.TicketEventsTest do
       log =
         capture_log(fn ->
           assert {:ok, event} = TicketEvents.record(@repo_key, @issue_id, "note", %{text: "x"})
-          assert [^event] = TicketEvents.query(@repo_key, @issue_id)
+          assert [^event] = TicketEvents.query(@issue_id)
         end)
 
       assert log =~ "failed to broadcast ticket event: :forced_failure"
@@ -205,17 +205,17 @@ defmodule SymphonyElixir.TicketEventsTest do
       assert {:ok, request} = TicketEvents.record(@repo_key, @issue_id, "decision.requested", %{question: "Ship it?", title: "Ship"})
       assert {:ok, _note} = TicketEvents.record(@repo_key, @issue_id, "note", %{text: "waiting"})
 
-      assert [^request] = TicketEvents.query(@repo_key, @issue_id, open_decisions: true)
+      assert [^request] = TicketEvents.query(@issue_id, open_decisions: true)
 
       assert {:ok, _ruling} =
                TicketEvents.record(@repo_key, @issue_id, "decision.recorded", %{answer: "No", key: "ruling-c9"}, actor: {:person, "Tony"})
 
-      assert [^request] = TicketEvents.query(@repo_key, @issue_id, open_decisions: true)
+      assert [^request] = TicketEvents.query(@issue_id, open_decisions: true)
 
       assert {:ok, _answer} =
                TicketEvents.record(@repo_key, @issue_id, "decision.recorded", %{answer: "Yes", key: "c1", request: request.id}, actor: {:person, "Tony"})
 
-      assert TicketEvents.query(@repo_key, @issue_id, open_decisions: true) == []
+      assert TicketEvents.query(@issue_id, open_decisions: true) == []
     end
 
     test "a Question's request is open until its answer or withdrawal, or a decision recorded, names it" do
@@ -226,7 +226,7 @@ defmodule SymphonyElixir.TicketEventsTest do
       assert {:ok, open} = asked.("q-4")
       assert {:ok, legacy} = TicketEvents.record(@repo_key, @issue_id, "decision.requested", %{question: "Legacy?"})
 
-      assert [^answered, ^withdrawn, ^recorded, ^open, ^legacy] = TicketEvents.query(@repo_key, @issue_id, open_decisions: true)
+      assert [^answered, ^withdrawn, ^recorded, ^open, ^legacy] = TicketEvents.query(@issue_id, open_decisions: true)
 
       assert {:ok, _answer} = TicketEvents.record(@repo_key, @issue_id, "question.answered", %{question_id: "q-1", answer: "Yes"})
       assert {:ok, _withdrawal} = TicketEvents.record(@repo_key, @issue_id, "question.withdrawn", %{question_id: "q-2", reason: "Not needed"})
@@ -234,20 +234,20 @@ defmodule SymphonyElixir.TicketEventsTest do
       assert {:ok, _decision} =
                TicketEvents.record(@repo_key, @issue_id, "decision.recorded", %{answer: "Yes", key: "c3", request: recorded.id}, actor: {:person, "Tony"})
 
-      assert [^open, ^legacy] = TicketEvents.query(@repo_key, @issue_id, open_decisions: true)
+      assert [^open, ^legacy] = TicketEvents.query(@issue_id, open_decisions: true)
 
       # The Director takes the first answer back: that question is open again until it is answered again.
       assert {:ok, _reopen} = TicketEvents.record(@repo_key, @issue_id, "question.reopened", %{question_id: "q-1"}, idempotency: "reopen-1")
-      assert [^answered, ^open, ^legacy] = TicketEvents.query(@repo_key, @issue_id, open_decisions: true)
+      assert [^answered, ^open, ^legacy] = TicketEvents.query(@issue_id, open_decisions: true)
       assert {:ok, _again} = TicketEvents.record(@repo_key, @issue_id, "question.answered", %{question_id: "q-1", answer: "No"}, idempotency: "again-1")
-      assert [^open, ^legacy] = TicketEvents.query(@repo_key, @issue_id, open_decisions: true)
+      assert [^open, ^legacy] = TicketEvents.query(@issue_id, open_decisions: true)
     end
 
     test "a withdrawal closes a decision request too" do
       assert {:ok, request} = TicketEvents.record(@repo_key, @issue_id, "decision.requested", %{question: "Q?"}, actor: {:agent, nil, "implementation"})
       assert {:ok, _} = TicketEvents.record(@repo_key, @issue_id, "decision.withdrawn", %{title: "Q", request: request.id})
 
-      assert TicketEvents.query(@repo_key, @issue_id, open_decisions: true) == []
+      assert TicketEvents.query(@issue_id, open_decisions: true) == []
     end
 
     test "a finding is open until an unsuperseded resolution names it" do
@@ -256,19 +256,19 @@ defmodule SymphonyElixir.TicketEventsTest do
 
       assert {:ok, finding} = TicketEvents.record(@repo_key, @issue_id, "finding.recorded", finding, actor: qa)
       assert {:ok, request} = TicketEvents.record(@repo_key, @issue_id, "decision.requested", %{question: "Q?"})
-      assert [^finding] = TicketEvents.query(@repo_key, @issue_id, open_findings: true)
+      assert [^finding] = TicketEvents.query(@issue_id, open_findings: true)
 
       assert {:ok, resolution} =
                TicketEvents.record(@repo_key, @issue_id, "finding.resolved", %{finding_id: finding.id, how: "Widened it"}, actor: {:agent, "run-rw", "rework"})
 
-      assert TicketEvents.query(@repo_key, @issue_id, open_findings: true) == []
+      assert TicketEvents.query(@issue_id, open_findings: true) == []
 
       assert {:ok, _reopen} =
                TicketEvents.record(@repo_key, @issue_id, "verdict.recorded", %{kind: "qa", outcome: "fail"}, supersedes: resolution.id)
 
-      assert [^finding] = TicketEvents.query(@repo_key, @issue_id, open_findings: true)
-      assert [^finding, ^request] = TicketEvents.query(@repo_key, @issue_id, open_findings: true, open_decisions: true)
-      assert [^finding] = TicketEvents.query(@repo_key, @issue_id, open_findings: true, open_decisions: true, limit: 0)
+      assert [^finding] = TicketEvents.query(@issue_id, open_findings: true)
+      assert [^finding, ^request] = TicketEvents.query(@issue_id, open_findings: true, open_decisions: true)
+      assert [^finding] = TicketEvents.query(@issue_id, open_findings: true, open_decisions: true, limit: 0)
     end
 
     test "filters by types, run and since (exclusive), oldest first" do
@@ -278,11 +278,11 @@ defmodule SymphonyElixir.TicketEventsTest do
       assert {:ok, first} = record_at.("note", %{text: "first"}, @at, [])
       assert {:ok, third} = record_at.("phase.entered", %{to: "QA"}, DateTime.add(@at, 3), run_id: "run-1")
 
-      assert [^first, ^second, ^third] = TicketEvents.query(@repo_key, @issue_id)
-      assert [^first, ^second] = TicketEvents.query(@repo_key, @issue_id, types: ["note"])
-      assert [^third] = TicketEvents.query(@repo_key, @issue_id, types: "phase.entered")
-      assert [^second, ^third] = TicketEvents.query(@repo_key, @issue_id, run_id: "run-1")
-      assert [^third] = TicketEvents.query(@repo_key, @issue_id, since: second.at)
+      assert [^first, ^second, ^third] = TicketEvents.query(@issue_id)
+      assert [^first, ^second] = TicketEvents.query(@issue_id, types: ["note"])
+      assert [^third] = TicketEvents.query(@issue_id, types: "phase.entered")
+      assert [^second, ^third] = TicketEvents.query(@issue_id, run_id: "run-1")
+      assert [^third] = TicketEvents.query(@issue_id, since: second.at)
     end
 
     test "pages by limit, never ending a page inside a group that shares one at" do
@@ -296,10 +296,10 @@ defmodule SymphonyElixir.TicketEventsTest do
 
       [e1, e2, e3, e4, e5] = events
 
-      assert [^e1, ^e2, ^e3, ^e4] = TicketEvents.query(@repo_key, @issue_id, limit: 2)
-      assert [^e5] = TicketEvents.query(@repo_key, @issue_id, limit: 2, since: e4.at)
-      assert [^e1] = TicketEvents.query(@repo_key, @issue_id, limit: -3)
-      assert ^events = TicketEvents.query(@repo_key, @issue_id, limit: :all)
+      assert [^e1, ^e2, ^e3, ^e4] = TicketEvents.query(@issue_id, limit: 2)
+      assert [^e5] = TicketEvents.query(@issue_id, limit: 2, since: e4.at)
+      assert [^e1] = TicketEvents.query(@issue_id, limit: -3)
+      assert ^events = TicketEvents.query(@issue_id, limit: :all)
     end
 
     test "returns at most 50 by default and 200 at most" do
@@ -307,12 +307,12 @@ defmodule SymphonyElixir.TicketEventsTest do
         assert {:ok, _} = TicketEvents.record(@repo_key, @issue_id, "note", %{text: "n#{n}"}, at: DateTime.add(@at, n))
       end
 
-      assert length(TicketEvents.query(@repo_key, @issue_id)) == 50
-      assert length(TicketEvents.query(@repo_key, @issue_id, limit: 500)) == 200
+      assert length(TicketEvents.query(@issue_id)) == 50
+      assert length(TicketEvents.query(@issue_id, limit: 500)) == 200
     end
 
     test "passes a store error through" do
-      assert TicketEvents.query(@repo_key, nil) == {:error, :invalid_issue_id}
+      assert TicketEvents.query(nil) == {:error, :invalid_issue_id}
     end
   end
 

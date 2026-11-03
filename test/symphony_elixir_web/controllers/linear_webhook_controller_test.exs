@@ -77,7 +77,7 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       conn = post_signed(issue_delivery("update", %{"priority" => 1, "updatedAt" => "2026-10-29T09:01:00.000Z"}))
 
       assert json_response(conn, 200) == %{"status" => "accepted"}
-      assert %{priority: 1, phase: "In Progress", observed_from: :webhook, labels: ["backend"]} = RunStore.get_ticket_state(repo_key, "issue-hook")
+      assert %{priority: 1, phase: "In Progress", observed_from: :webhook, labels: ["backend"]} = RunStore.get_ticket_state("issue-hook")
 
       assert %{
                recent: [%{type: "Issue", action: "update", identifier: "ACME-9", observation: :updated}],
@@ -112,7 +112,7 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       older = issue_delivery("update", %{"priority" => 4, "updatedAt" => "2026-10-29T08:59:00.000Z"})
       assert json_response(post_signed(older), 200) == %{"status" => "accepted"}
 
-      assert RunStore.get_ticket_state(repo_key, "issue-hook").priority == 1
+      assert RunStore.get_ticket_state("issue-hook").priority == 1
       assert %{recent: [%{observation: :stale}], observations: %{stale: 1}} = Deliveries.summary()
     end
 
@@ -122,7 +122,7 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
 
       assert json_response(post_signed(created), 200) == %{"status" => "accepted"}
       assert json_response(post_signed(other_team), 200) == %{"status" => "accepted"}
-      assert RunStore.get_ticket_state(Config.repo_key!(), "issue-hook") == nil
+      assert RunStore.get_ticket_state("issue-hook") == nil
 
       summary = Deliveries.summary()
       assert [%{action: "create", observation: :unrouted} | _] = summary.recent
@@ -134,7 +134,7 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
 
       remove = delivery_body(%{"type" => "Issue", "action" => "remove", "data" => %{"id" => "issue-hook", "identifier" => "ACME-9"}})
       assert json_response(post_signed(remove), 200)
-      assert %DateTime{} = RunStore.get_ticket_state(Config.repo_key!(), "issue-hook").removed_at
+      assert %DateTime{} = RunStore.get_ticket_state("issue-hook").removed_at
 
       comment = delivery_body(%{"type" => "Comment", "action" => "create", "data" => %{"id" => "c1", "body" => "hi", "issueId" => "issue-hook"}})
       assert json_response(post_signed(comment), 200)
@@ -161,7 +161,7 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
         edited = delivery_body(%{"type" => "Comment", "action" => "update", "data" => %{"id" => "c1", "body" => brief, "issueId" => "issue-hook"}})
         assert json_response(post_signed(edited), 200) == %{"status" => "accepted"}
         assert_receive {:plan_read, "issue-hook"}, 5_000
-        eventually(fn -> match?(%{plan_brief_error: ":offline"}, RunStore.get_ticket_state(repo_key, "issue-hook")) end)
+        eventually(fn -> match?(%{plan_brief_error: ":offline"}, RunStore.get_ticket_state("issue-hook")) end)
 
         other = delivery_body(%{"type" => "Comment", "action" => "create", "data" => %{"id" => "c2", "body" => "Looks good", "issueId" => "issue-hook"}})
         assert json_response(post_signed(other), 200) == %{"status" => "accepted"}
@@ -212,7 +212,7 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       log = capture_log(fn -> assert json_response(post_signed(issue_delivery("update", %{})), 200) == %{"status" => "accepted"} end)
 
       assert log =~ "Linear webhook observation failed for issue_id=issue-hook"
-      assert RunStore.get_ticket_state(Config.repo_key!(), "issue-hook") == nil
+      assert RunStore.get_ticket_state("issue-hook") == nil
       assert %{recent: [%{observation: :error}], observations: %{error: 1}} = Deliveries.summary()
     end
 

@@ -37,9 +37,9 @@ defmodule SymphonyElixir.TicketEvents.BriefTest do
       notes = for n <- 1..40, do: event(500 + n, "note", %{text: "Note #{n}: #{long}"}, actor: {:person, "Sam"})
 
       assert {:ok, _events} = RunStore.append_ticket_events(findings ++ decisions ++ notes)
-      :ok = RunStore.update_ticket_state(@repo_key, @issue_id, %{phase: "Rework"})
+      :ok = RunStore.update_ticket_state(@issue_id, %{phase: "Rework"})
 
-      assert {:ok, brief} = Brief.render(@repo_key, @issue_id)
+      assert {:ok, brief} = Brief.render(@issue_id)
 
       assert %{decisions: 50, open_findings: 300, notes: 40, runs: 1} = brief
       assert brief.tokens == div(byte_size(brief.text), 4)
@@ -55,12 +55,12 @@ defmodule SymphonyElixir.TicketEvents.BriefTest do
       events = [event(0, "note", %{text: "first"}), finding(1, "clipped", "cut off")]
       assert {:ok, _events} = RunStore.append_ticket_events(events)
 
-      assert Brief.render(@repo_key, @issue_id) == Brief.render(@repo_key, @issue_id)
+      assert Brief.render(@issue_id) == Brief.render(@issue_id)
       assert Brief.build(nil, events) == Brief.build(nil, Enum.reverse(events))
     end
 
     test "returns the store's error" do
-      assert Brief.render(@repo_key, nil) == {:error, :invalid_issue_id}
+      assert Brief.render(nil) == {:error, :invalid_issue_id}
     end
   end
 

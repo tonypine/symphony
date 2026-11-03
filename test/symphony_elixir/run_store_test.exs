@@ -95,10 +95,11 @@ defmodule SymphonyElixir.RunStoreTest do
     end
   end
 
-  # TP-1347: v0.0.1.784's store holds the ticket-state table with the repository index only. The
-  # release that added the by-ticket index (TP-1337) could not boot on it. The fixture is built from
-  # the old definition here, so this stays the upgrade check.
-  test "boots on a store whose ticket-state table lacks the by-ticket index, adds it and reads every row by ticket" do
+  # TP-1339: a store must have run the merge release (0.0.1.792) before this one deletes the
+  # (repository, ticket) key. v0.0.1.784's store, as it is on disk, is refused with the version to
+  # install first; the same store once the merge release marked it boots, moves its record onto the
+  # ticket's id and deletes the old table.
+  test "a store from before the merge release is refused at boot with the version to install first; once merged it boots by ticket" do
     original_run_store_dir = Application.fetch_env!(:symphony_elixir, :run_store_dir)
     old_dir = Path.join(System.tmp_dir!(), "symphony-784-run-store-#{System.unique_integer([:positive])}")
     trap_exit? = Process.flag(:trap_exit, true)
@@ -108,37 +109,24 @@ defmodule SymphonyElixir.RunStoreTest do
       :ok = Application.stop(:symphony_elixir)
       stop_run_store_for_test()
       stop_mnesia_for_test()
-      create_784_run_store_dir!(old_dir, record)
+      create_784_run_store_dir!(old_dir, record, [])
 
-      # A small fixture loads before Mnesia is asked for the index; production's store did not. The
-      # wait records the index set it found, so the order (load, then index) is checked here.
-      test_pid = self()
+      log = capture_log(fn -> assert {:error, {:store_not_merged, _message}} = RunStore.start_link(dir: old_dir) end)
+      assert log =~ "Install Symphony 0.0.1.792 first"
+      assert {:atomic, [_row]} = :mnesia.transaction(fn -> :mnesia.read(:symphony_run_store_ticket_states, {@repo_key, "issue-784"}) end)
 
-      wait = fn tables, timeout ->
-        send(test_pid, {:index_at_wait, :mnesia.table_info(:symphony_run_store_ticket_states, :index)})
-        :mnesia.wait_for_tables(tables, timeout)
-      end
+      stop_mnesia_for_test()
+      create_784_run_store_dir!(old_dir, record, ["ticket_index_v1", "records_merged_v1"])
+      assert {:ok, _pid} = RunStore.start_link(dir: old_dir)
 
-      log =
-        capture_log(fn ->
-          with_table_wait(wait, fn -> assert {:ok, _pid} = RunStore.start_link(dir: old_dir) end)
-        end)
+      refute :symphony_run_store_ticket_states in :mnesia.system_info(:tables)
+      assert %{issue_identifier: "ACME-784", phase: "QA", repo_key: @repo_key} = RunStore.get_ticket_state("issue-784")
 
-      assert_received {:index_at_wait, [3]}
-      assert log =~ "RunStore table definition differs table=:symphony_run_store_ticket_states"
-      assert log =~ "indexes=[:repo_key] expected=[:repo_key, :issue_id]"
-      assert Enum.sort(:mnesia.table_info(:symphony_run_store_ticket_states, :index)) == [3, 4]
-
-      assert {:atomic, [{_table, _key, @repo_key, "issue-784", ^record}]} =
-               :mnesia.transaction(fn -> :mnesia.index_read(:symphony_run_store_ticket_states, "issue-784", :issue_id) end)
-
-      assert %{issue_identifier: "ACME-784", phase: "QA"} = RunStore.get_ticket_state(@repo_key, "issue-784")
-
-      # A second boot finds both indexes and logs no difference.
+      # A second boot finds nothing to move.
       stop_run_store_for_test()
       stop_mnesia_for_test()
-
-      refute capture_log(fn -> assert {:ok, _pid} = RunStore.start_link(dir: old_dir) end) =~ "table definition differs"
+      assert {:ok, _pid} = RunStore.start_link(dir: old_dir)
+      assert %{phase: "QA"} = RunStore.get_ticket_state("issue-784")
     after
       stop_run_store_for_test()
       stop_mnesia_for_test()
@@ -496,25 +484,25 @@ defmodule SymphonyElixir.RunStoreTest do
     set = event.("pause.set", %{reason: "question", text: "Waiting for your answer"}, at)
 
     assert RunStore.update_ticket_pause(@repo_key, "issue-1", at, fn nil -> {:ok, :kept} end) == {:ok, :kept, []}
-    assert RunStore.get_ticket_state(@repo_key, "issue-1") == nil
+    assert RunStore.get_ticket_state("issue-1") == nil
 
     assert {:ok, :paused, [%Event{type: "pause.set", seq: 1, phase: nil}]} =
              RunStore.update_ticket_pause(@repo_key, "issue-1", at, fn nil -> {:write, pause, [set], :paused} end)
 
     assert %{pause: %{reasons: [%{kind: :question, text: "Waiting for your answer"}]}, event_seq: 1, updated_at: ^at} =
-             RunStore.get_ticket_state(@repo_key, "issue-1")
+             RunStore.get_ticket_state("issue-1")
 
-    :ok = RunStore.update_ticket_state(@repo_key, "issue-1", %{phase: "In Progress"})
+    :ok = RunStore.update_ticket_state("issue-1", %{phase: "In Progress"})
     refuse = fn %{reasons: [_question]} -> {:error, :refused} end
     assert RunStore.update_ticket_pause(@repo_key, "issue-1", later, refuse) == {:error, :refused}
-    assert %{phase: "In Progress", pause: %{}, updated_at: ^at} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert %{phase: "In Progress", pause: %{}, updated_at: ^at} = RunStore.get_ticket_state("issue-1")
 
     cleared = event.("pause.cleared", %{cleared: []}, later)
 
     assert {:ok, :cleared, [%Event{type: "pause.cleared", seq: 2, phase: "In Progress"}]} =
              RunStore.update_ticket_pause(@repo_key, "issue-1", later, fn %{} -> {:write, nil, [cleared], :cleared} end)
 
-    assert %{phase: "In Progress", pause: nil, event_seq: 2, updated_at: ^later} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert %{phase: "In Progress", pause: nil, event_seq: 2, updated_at: ^later} = RunStore.get_ticket_state("issue-1")
     assert ticket_events(@repo_key, "issue-1") |> Enum.map(&elem(&1, 0)) == ["pause.set", "pause.cleared"]
 
     assert RunStore.update_ticket_pause(@repo_key, nil, at, fn _pause -> {:ok, nil} end) == {:error, :invalid_issue_id}
@@ -560,50 +548,45 @@ defmodule SymphonyElixir.RunStoreTest do
     at = ~U[2026-10-04 00:23:15Z]
     record = TicketState.new(@repo_key, "issue-1", %{issue_identifier: "ACME-1", phase: "In Progress"})
 
-    assert RunStore.get_ticket_state(@repo_key, "issue-1") == nil
+    assert RunStore.get_ticket_state("issue-1") == nil
     assert :ok = RunStore.put_ticket_state(record)
 
-    assert %{phase: "In Progress", issue_identifier: "ACME-1"} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert %{phase: "In Progress", issue_identifier: "ACME-1"} = RunStore.get_ticket_state("issue-1")
 
-    assert :ok = RunStore.update_ticket_state(@repo_key, "issue-1", %{phase: "Merging", updated_at: at})
-    assert %{phase: "Merging", updated_at: ^at} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert :ok = RunStore.update_ticket_state("issue-1", %{phase: "Merging", updated_at: at})
+    assert %{phase: "Merging", updated_at: ^at} = RunStore.get_ticket_state("issue-1")
 
-    assert {:error, :ticket_state_not_found} = RunStore.update_ticket_state(@repo_key, "issue-missing", %{phase: "Todo"})
+    assert {:error, :ticket_state_not_found} = RunStore.update_ticket_state("issue-missing", %{phase: "Todo"})
 
     assert :ok = RunStore.record_ticket_signal(@repo_key, "issue-1", "handoff", %{to: "Code Review"})
     assert :ok = RunStore.record_ticket_signal(@repo_key, "issue-2", "blocked", %{reason: "tooling"})
     assert :ok = RunStore.record_ticket_verdict(@repo_key, "issue-1", "qa", "abc123", "pass", %{model: "claude-opus"})
 
-    assert [%{name: "handoff", details: %{to: "Code Review"}}] = RunStore.get_ticket_state(@repo_key, "issue-1").signals
-    assert [%{name: "blocked"}] = RunStore.get_ticket_state(@repo_key, "issue-2").signals
-    assert [%{kind: "qa", head_sha: "abc123", outcome: "pass"}] = RunStore.get_ticket_state(@repo_key, "issue-1").verdicts
+    assert [%{name: "handoff", details: %{to: "Code Review"}}] = RunStore.get_ticket_state("issue-1").signals
+    assert [%{name: "blocked"}] = RunStore.get_ticket_state("issue-2").signals
+    assert [%{kind: "qa", head_sha: "abc123", outcome: "pass"}] = RunStore.get_ticket_state("issue-1").verdicts
 
     restart_run_store()
 
-    assert %{phase: "Merging"} = RunStore.get_ticket_state(@repo_key, "issue-1")
-    assert [%{name: "handoff"}] = RunStore.get_ticket_state(@repo_key, "issue-1").signals
+    assert %{phase: "Merging"} = RunStore.get_ticket_state("issue-1")
+    assert [%{name: "handoff"}] = RunStore.get_ticket_state("issue-1").signals
 
     assert [%{kind: "qa", head_sha: "abc123", outcome: "pass", details: %{model: "claude-opus"}}] =
-             RunStore.get_ticket_state(@repo_key, "issue-1").verdicts
+             RunStore.get_ticket_state("issue-1").verdicts
 
-    # The ticket written under another repository is the same ticket: its one record, found by
-    # either repository; the pair rows beside it stay for the previous release's reader.
+    # The ticket written under another repository is the same ticket: its one record, by its id.
     assert :ok = RunStore.put_ticket_state(TicketState.new(@other_repo_key, "issue-1", %{phase: "Done"}))
     restart_run_store()
 
-    assert %{phase: "Done", repo_key: @other_repo_key} = RunStore.get_ticket_state(@other_repo_key, "issue-1")
-    assert %{phase: "Done", repo_key: @other_repo_key} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert %{phase: "Done", repo_key: @other_repo_key} = RunStore.get_ticket_state("issue-1")
 
     # The listings read the ticket once, through the index, under the repository its record names.
     assert Enum.map(RunStore.list_ticket_states(@repo_key), & &1.issue_id) == ["issue-2"]
     assert [%{issue_id: "issue-1", phase: "Done"}] = RunStore.list_ticket_states(@other_repo_key)
     assert Enum.sort(Enum.map(RunStore.list_all_ticket_states(), & &1.issue_id)) == ["issue-1", "issue-2"]
 
-    # Deleting one repository's pair row keeps the ticket's record, which is the other's.
-    assert :ok = RunStore.delete_ticket_state(@repo_key, "issue-1")
-    assert %{phase: "Done"} = RunStore.get_ticket_state(@repo_key, "issue-1")
-    assert :ok = RunStore.delete_ticket_state(@other_repo_key, "issue-1")
-    assert RunStore.get_ticket_state(@repo_key, "issue-1") == nil
+    assert :ok = RunStore.delete_ticket_state("issue-1")
+    assert RunStore.get_ticket_state("issue-1") == nil
 
     restart_run_store()
   end
@@ -616,19 +599,19 @@ defmodule SymphonyElixir.RunStoreTest do
     assert :ok = RunStore.put_ticket_pr_watch(@repo_key, "issue-1", "ACME-1", watch)
 
     assert %{issue_identifier: "ACME-1", pr_watch: %{facts: ^facts, head_sha: "abc", source: :poll}} =
-             RunStore.get_ticket_state(@repo_key, "issue-1")
+             RunStore.get_ticket_state("issue-1")
 
     # An existing record keeps what else it holds and its identifier.
     assert :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-2", %{issue_identifier: "ACME-2", phase: "QA"}))
     assert :ok = RunStore.put_ticket_pr_watch(@repo_key, "issue-2", "OTHER", watch)
-    assert %{issue_identifier: "ACME-2", phase: "QA", pr_watch: %{facts: ^facts}} = RunStore.get_ticket_state(@repo_key, "issue-2")
+    assert %{issue_identifier: "ACME-2", phase: "QA", pr_watch: %{facts: ^facts}} = RunStore.get_ticket_state("issue-2")
 
     restart_run_store()
 
-    assert %{pr_watch: %{facts: ^facts, pr_url: "https://github.com/acme/app/pull/1"}} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert %{pr_watch: %{facts: ^facts, pr_url: "https://github.com/acme/app/pull/1"}} = RunStore.get_ticket_state("issue-1")
 
     assert :ok = RunStore.put_ticket_pr_watch(@repo_key, "issue-1", "ACME-1", nil)
-    assert %{issue_identifier: "ACME-1", pr_watch: nil} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert %{issue_identifier: "ACME-1", pr_watch: nil} = RunStore.get_ticket_state("issue-1")
 
     assert {:error, :invalid_issue_id} = RunStore.put_ticket_pr_watch(@repo_key, nil, nil, watch)
     assert {:error, :invalid_repo_key} = RunStore.put_ticket_pr_watch(nil, "issue-1", nil, watch)
@@ -679,21 +662,21 @@ defmodule SymphonyElixir.RunStoreTest do
     later = DateTime.add(at, 60, :second)
 
     assert {:ok, :changed} = RunStore.record_ci_state(@repo_key, "issue-1", "abc", "running", at)
-    assert %{ci_states: [%{head_sha: "abc", status: "running"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert %{ci_states: [%{head_sha: "abc", status: "running"}]} = RunStore.get_ticket_state("issue-1")
 
     assert {:ok, :unchanged} = RunStore.record_ci_state(@repo_key, "issue-1", "abc", "running", later)
     assert {:ok, :changed} = RunStore.record_ci_state(@repo_key, "issue-1", "abc", "green", later)
     assert {:ok, :stale} = RunStore.record_ci_state(@repo_key, "issue-1", "abc", "red", at)
-    assert %{ci_states: [%{head_sha: "abc", status: "green"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert %{ci_states: [%{head_sha: "abc", status: "green"}]} = RunStore.get_ticket_state("issue-1")
 
     restart_run_store()
-    assert %{ci_states: [%{head_sha: "abc", status: "green"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert %{ci_states: [%{head_sha: "abc", status: "green"}]} = RunStore.get_ticket_state("issue-1")
 
-    # Under another repository it is the ticket's one record that takes the new head.
-    assert {:ok, :changed} = RunStore.record_ci_state(@other_repo_key, "issue-1", nil, "red", at)
+    # Under another repository it is the ticket's one record that takes the new head, and keeps its repository.
+    capture_log(fn -> assert {:ok, :changed} = RunStore.record_ci_state(@other_repo_key, "issue-1", nil, "red", at) end)
 
-    assert %{repo_key: @other_repo_key, ci_states: [%{head_sha: nil, status: "red"}, %{head_sha: "abc", status: "green"}]} =
-             RunStore.get_ticket_state(@other_repo_key, "issue-1")
+    assert %{repo_key: @repo_key, ci_states: [%{head_sha: nil, status: "red"}, %{head_sha: "abc", status: "green"}]} =
+             RunStore.get_ticket_state("issue-1")
 
     assert {:error, :invalid_ci_state} = RunStore.record_ci_state(@repo_key, nil, "abc", "running", at)
     assert {:error, :invalid_ci_state} = RunStore.record_ci_state(@repo_key, "issue-1", "abc", nil, at)
@@ -704,11 +687,10 @@ defmodule SymphonyElixir.RunStoreTest do
   test "rejects ticket state writes without a repo_key or issue_id" do
     assert {:error, :missing_repo_key} = RunStore.put_ticket_state(%{issue_id: "issue-1"})
     assert {:error, :invalid_ticket_state_record} = RunStore.put_ticket_state(%{})
-    assert {:error, :missing_repo_key} = RunStore.update_ticket_state("issue-1", %{phase: "Todo"})
-    assert {:error, :invalid_ticket_state_record} = RunStore.update_ticket_state(@repo_key, nil, %{phase: "Todo"})
-    assert {:error, :missing_repo_key} = RunStore.delete_ticket_state("issue-1")
-    assert {:error, :invalid_issue_id} = RunStore.delete_ticket_state(@repo_key, nil)
-    assert {:error, :invalid_issue_id} = RunStore.get_ticket_state(@repo_key, nil)
+    assert {:error, :ticket_state_not_found} = RunStore.update_ticket_state("issue-1", %{phase: "Todo"})
+    assert {:error, :invalid_ticket_state_record} = RunStore.update_ticket_state(nil, %{phase: "Todo"})
+    assert {:error, :invalid_issue_id} = RunStore.delete_ticket_state(nil)
+    assert {:error, :invalid_issue_id} = RunStore.get_ticket_state(nil)
     assert {:error, :invalid_issue_id} = RunStore.record_ticket_signal(@repo_key, nil, "handoff", %{})
     assert {:error, :invalid_issue_id} = RunStore.record_ticket_verdict(@repo_key, nil, "qa", nil, "pass")
   end
@@ -721,17 +703,17 @@ defmodule SymphonyElixir.RunStoreTest do
     restart_run_store()
 
     assert %{pending_projection: [%{type: :pause} = label_mark, %{type: :phase} = projected]} =
-             RunStore.get_ticket_state(@repo_key, "issue-1")
+             RunStore.get_ticket_state("issue-1")
 
     # A newer mark of the projection, written after the reconciler read the older one, stays.
     assert :ok = RunStore.mark_ticket_projection(@repo_key, "issue-1", :phase, :still_down)
     assert :ok = RunStore.clear_ticket_projection(@repo_key, "issue-1", projected)
-    assert [%{type: :phase, error: ":still_down"}, ^label_mark] = RunStore.get_ticket_state(@repo_key, "issue-1").pending_projection
+    assert [%{type: :phase, error: ":still_down"}, ^label_mark] = RunStore.get_ticket_state("issue-1").pending_projection
 
     # An issue with no record has nothing to project: neither write creates the record.
     assert :ok = RunStore.mark_ticket_projection(@repo_key, "issue-missing", :phase, :linear_down)
     assert :ok = RunStore.clear_ticket_projection(@repo_key, "issue-missing", projected)
-    assert RunStore.get_ticket_state(@repo_key, "issue-missing") == nil
+    assert RunStore.get_ticket_state("issue-missing") == nil
 
     assert {:error, :invalid_repo_key} = RunStore.mark_ticket_projection(nil, "issue-1", :phase, :linear_down)
     assert {:error, :invalid_repo_key} = RunStore.clear_ticket_projection(nil, "issue-1", projected)
@@ -742,17 +724,17 @@ defmodule SymphonyElixir.RunStoreTest do
     assert :ok = RunStore.record_ticket_dispatch_outcome(@repo_key, "issue-1", "run-1", %{exit: "ended normally", head: "a"})
 
     assert %{dispatches: [%{kind: "rework", run_id: "run-1", state: "Rework", head: "a", outcome: %{exit: "ended normally", head: "a"}}]} =
-             RunStore.get_ticket_state(@repo_key, "issue-1")
+             RunStore.get_ticket_state("issue-1")
 
     restart_run_store()
-    assert %{dispatches: [%{run_id: "run-1"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert %{dispatches: [%{run_id: "run-1"}]} = RunStore.get_ticket_state("issue-1")
 
     assert :ok = RunStore.record_ticket_verdict(@repo_key, "issue-1", "qa", "a", "pass")
-    assert %{dispatches: []} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert %{dispatches: []} = RunStore.get_ticket_state("issue-1")
 
     # An issue with no record lists no run, and recording an end does not create the record.
     assert :ok = RunStore.record_ticket_dispatch_outcome(@repo_key, "issue-missing", "run-1", %{exit: "ended normally"})
-    assert RunStore.get_ticket_state(@repo_key, "issue-missing") == nil
+    assert RunStore.get_ticket_state("issue-missing") == nil
 
     assert {:error, :invalid_issue_id} = RunStore.record_ticket_dispatch(@repo_key, nil, %{})
     assert {:error, :invalid_issue_id} = RunStore.record_ticket_dispatch_outcome(@repo_key, nil, "run-1", %{})
@@ -762,7 +744,7 @@ defmodule SymphonyElixir.RunStoreTest do
 
   test "claims a path-unlock grant for one run only, across a restart" do
     assert {:ok, ["grant-1"]} = RunStore.claim_path_unlocks(@repo_key, "issue-1", ["grant-1"], "run-1")
-    assert %{path_unlocks: [%{id: "grant-1", run_id: "run-1"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert %{path_unlocks: [%{id: "grant-1", run_id: "run-1"}]} = RunStore.get_ticket_state("issue-1")
 
     restart_run_store()
     assert {:ok, []} = RunStore.claim_path_unlocks(@repo_key, "issue-1", ["grant-1"], "run-2")
@@ -779,7 +761,7 @@ defmodule SymphonyElixir.RunStoreTest do
     decision = %{key: "comment-1", date: ~D[2026-10-13], title: "Keep it", question: "Keep it?", answer: "Yes", scope: "As answered"}
 
     assert {:ok, []} = RunStore.record_ticket_decisions(@repo_key, "issue-1", [], [])
-    assert RunStore.get_ticket_state(@repo_key, "issue-1") == nil
+    assert RunStore.get_ticket_state("issue-1") == nil
 
     old = %{decision | key: "old"}
     assert {:ok, [%{key: "comment-1"}]} = RunStore.record_ticket_decisions(@repo_key, "issue-1", [decision], [])
@@ -789,7 +771,7 @@ defmodule SymphonyElixir.RunStoreTest do
              RunStore.record_ticket_decisions(@repo_key, "issue-1", [decision, %{decision | key: "comment-2"}], [old])
 
     assert %{decisions: [%{key: "comment-1", date: ~D[2026-10-13]}, %{key: "comment-2"}]} =
-             RunStore.get_ticket_state(@repo_key, "issue-1")
+             RunStore.get_ticket_state("issue-1")
 
     # A record that holds no decision takes the backfill first.
     assert {:ok, [%{key: "old"}, %{key: "comment-1"}]} = RunStore.record_ticket_decisions(@repo_key, "issue-2", [decision], [old])
@@ -1598,8 +1580,9 @@ defmodule SymphonyElixir.RunStoreTest do
     stop_mnesia_for_test()
   end
 
-  # The ticket-state table as v0.0.1.784 created it: the repository index only, one row written.
-  defp create_784_run_store_dir!(dir, record) do
+  # The ticket-state table as v0.0.1.784 created it (the repository index only, one row written),
+  # with the one-time markers `markers` set.
+  defp create_784_run_store_dir!(dir, record, markers) do
     expanded_dir = Path.expand(dir)
     File.rm_rf!(expanded_dir)
     File.mkdir_p!(expanded_dir)
@@ -1616,8 +1599,13 @@ defmodule SymphonyElixir.RunStoreTest do
              )
 
     assert {:atomic, :ok} =
+             :mnesia.create_table(:symphony_run_store_totals, attributes: [:key, :record], disc_copies: [node()])
+
+    assert {:atomic, :ok} =
              :mnesia.transaction(fn ->
                :mnesia.write({:symphony_run_store_ticket_states, {@repo_key, "issue-784"}, @repo_key, "issue-784", record})
+               for name <- markers, do: :mnesia.write({:symphony_run_store_totals, {:marker, name}, ~U[2026-11-02 23:43:54Z]})
+               :ok
              end)
 
     stop_mnesia_for_test()

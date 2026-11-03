@@ -41,7 +41,7 @@ defmodule SymphonyElixir.DependencyGateTest do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
     issue = %{id: "issue-dependency-gate-words", identifier: "ACME-GATE-WORDS", state: "In Progress"}
     :ok = RunStore.clear()
-    on_exit(fn -> RunStore.delete_ticket_state("repo-dep-words", issue.id) end)
+    on_exit(fn -> RunStore.delete_ticket_state(issue.id) end)
 
     assert :ok = DependencyGate.pause(issue, {:hold, [%{package: "left_pad", reason: "new package"}]}, "repo-dep-words", tracker: Memory)
     assert_received {:memory_tracker_comment, "issue-dependency-gate-words", body}
@@ -62,7 +62,7 @@ defmodule SymphonyElixir.DependencyGateTest do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
     issue = %{id: "issue-dependency-gate-error", identifier: "ACME-GATE-ERROR", state: "In Progress"}
     :ok = RunStore.clear()
-    on_exit(fn -> RunStore.delete_ticket_state("repo-dep-error", issue.id) end)
+    on_exit(fn -> RunStore.delete_ticket_state(issue.id) end)
 
     assert :ok = DependencyGate.pause(issue, {:error, {:enoent, "/tmp/mix.lock"}}, "repo-dep-error", tracker: Memory)
     assert_received {:memory_tracker_comment, "issue-dependency-gate-error", body}
@@ -82,9 +82,9 @@ defmodule SymphonyElixir.DependencyGateTest do
       repo_key: "repo-dep-gate"
     }
 
-    RunStore.delete_ticket_state("repo-dep-gate", "issue-dependency-gate-terminal")
-    RunStore.delete_ticket_state("default", "issue-dependency-gate-terminal")
-    on_exit(fn -> RunStore.delete_ticket_state("default", "issue-dependency-gate-terminal") end)
+    RunStore.delete_ticket_state("issue-dependency-gate-terminal")
+    RunStore.delete_ticket_state("issue-dependency-gate-terminal")
+    on_exit(fn -> RunStore.delete_ticket_state("issue-dependency-gate-terminal") end)
 
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue | state: "Done"}])
     gate = DependencyGate.build("/tmp/workspace", issue, nil, repo_key: "default")
@@ -101,7 +101,7 @@ defmodule SymphonyElixir.DependencyGateTest do
     refute_received {:memory_tracker_state_update, "issue-dependency-gate-terminal", _state}
 
     assert [%{name: "decision requested", details: %{question: true, reason: "dependency_source_requires_approval"}}] =
-             RunStore.get_ticket_state("repo-dep-gate", "issue-dependency-gate-terminal").signals
+             RunStore.get_ticket_state("issue-dependency-gate-terminal").signals
   end
 
   test "issue_terminal? reads the refreshed state and treats lookup failures as active" do

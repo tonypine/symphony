@@ -87,7 +87,7 @@ defmodule SymphonyElixir.Handoff do
   end
 
   defp ticket_state(repo_key, issue_id) when is_binary(repo_key) and is_binary(issue_id) do
-    case RunStore.get_ticket_state(repo_key, issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
       %{} = record -> record
       _none_or_error -> nil
     end

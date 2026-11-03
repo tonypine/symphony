@@ -128,21 +128,17 @@ defmodule SymphonyElixir.PrWatch do
   end
 
   @doc """
-  The watcher's record of the issue's PR (`TicketState.pr_watch`), or nil when it doesn't watch
-  it. `opts`: `:repo_key` (else every configured repo is searched) and `:run_store`.
+  The watcher's record of the issue's PR (`TicketState.pr_watch`), read from the ticket's one
+  record, or nil when it doesn't watch it. `opts`: `:run_store`.
   """
   @spec watch(String.t() | nil, keyword()) :: TicketState.pr_watch() | nil
   def watch(issue_id, opts \\ []), do: if(is_binary(issue_id), do: find_watch(issue_id, opts))
 
   defp find_watch(issue_id, opts) do
-    store = store(opts)
-
-    Enum.find_value(repo_keys(opts), fn repo_key ->
-      case store.get_ticket_state(repo_key, issue_id) do
-        %{} = record -> TicketState.pr_watch(record)
-        _none -> nil
-      end
-    end)
+    case store(opts).get_ticket_state(issue_id) do
+      %{} = record -> TicketState.pr_watch(record)
+      _none -> nil
+    end
   end
 
   @doc """

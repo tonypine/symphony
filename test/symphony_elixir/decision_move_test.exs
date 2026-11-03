@@ -41,7 +41,7 @@ defmodule SymphonyElixir.DecisionMoveTest do
     assert {:ok, "Merging"} = DecisionMove.perform(@repo_key, @issue_id, move)
     assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
 
-    record = RunStore.get_ticket_state(@repo_key, @issue_id)
+    record = RunStore.get_ticket_state(@issue_id)
     assert record.phase == "Merging"
     assert [%{kind: "qa", outcome: "skip", head_sha: "abc123", details: %{reason: "skipped by decision"}}] = record.verdicts
   end

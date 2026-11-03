@@ -154,7 +154,7 @@ defmodule SymphonyElixir.PathUnlockTest do
 
       assert [%{path: @path}] = PathUnlock.claim(issue, "repo-a", run_id: "run-1")
       assert PathUnlock.claim(issue, "repo-a", run_id: "run-2") == []
-      assert %{path_unlocks: [%{id: "ruling-c1:" <> @path, run_id: "run-1"}]} = RunStore.get_ticket_state("repo-a", issue.id)
+      assert %{path_unlocks: [%{id: "ruling-c1:" <> @path, run_id: "run-1"}]} = RunStore.get_ticket_state(issue.id)
 
       # A new decision unlocks the path for one more run.
       issue = %{issue | description: description([entry("ruling-c1", @grant), entry("ruling-c9", "Again: " <> @grant)])}

@@ -25,12 +25,12 @@ defmodule SymphonyElixir.Pauses.DependenciesTest do
 
   # Reads go through the real store, but the stale fix-ticket pointer can't be dropped.
   defmodule UnforgettableStore do
-    def get_ticket_state(repo_key, issue_id), do: RunStore.get_ticket_state(repo_key, issue_id)
+    def get_ticket_state(issue_id), do: RunStore.get_ticket_state(issue_id)
     def clear_ticket_fix_ticket(_repo_key, _issue_id), do: {:error, :boom}
   end
 
   defmodule UnreadableStore do
-    def get_ticket_state(_repo_key, _issue_id), do: {:error, :boom}
+    def get_ticket_state(_issue_id), do: {:error, :boom}
   end
 
   setup do
@@ -243,7 +243,7 @@ defmodule SymphonyElixir.Pauses.DependenciesTest do
       assert Pauses.paused?({:ticket, @repo_key, "issue-2"})
 
       # The same records change nothing; a record whose blocker went is lifted.
-      paused = TicketState.normalize(RunStore.get_ticket_state(@repo_key, @issue_id))
+      paused = TicketState.normalize(RunStore.get_ticket_state(@issue_id))
       assert Dependencies.sync_records([%{paused | phase: "Todo", blockers: blockers}], @terminal) == 0
       assert Dependencies.sync_records([%{paused | phase: "Todo", blockers: []}], @terminal) == 1
       refute Pauses.paused?(@ticket)
@@ -372,7 +372,7 @@ defmodule SymphonyElixir.Pauses.DependenciesTest do
       # Only the stale fix-ticket pointer goes: the component, the signature and the retry count
       # stay, so a break that comes back after the repair is compared against this failure.
       assert %{component: "dev_server", signature: "s", fix_ticket: nil, attempts: 2} =
-               RunStore.get_ticket_state(@repo_key, @issue_id) |> TicketState.self_heal()
+               RunStore.get_ticket_state(@issue_id) |> TicketState.self_heal()
     end
 
     test "stays while the fix ticket is open, or can't be read" do

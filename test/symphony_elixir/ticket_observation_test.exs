@@ -3,7 +3,8 @@ defmodule SymphonyElixir.TicketObservationTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{AgentTools, TicketObservation, TicketSignals, TicketState, TransitionGuard}
+  alias SymphonyElixir.{AgentTools, Questions, TicketObservation, TicketSignals, TicketState, TransitionGuard}
+  alias SymphonyElixir.Inbox.FromRecord
 
   @linear_at ~U[2026-10-29 09:00:00Z]
   @now ~U[2026-10-29 09:05:00Z]
@@ -66,10 +67,58 @@ defmodule SymphonyElixir.TicketObservationTest do
     )
   end
 
+  # TP-1339: a ticket is one record whatever project it is in. The poll of the repo whose project
+  # it moved to re-routes that record, with its questions, pause and events; no second record opens.
+  test "a ticket moved to another project keeps its one record, questions and events, and the Inbox shows it once under the new repo",
+       %{repo_key: repo_key} do
+    moved_to = "observation-moved-repo"
+    assert {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now, terminal_states: [])
+
+    request = %{title: "Move it to the hub", question: "Should ACME-7 move to the hub project?", why: "", if_unanswered: "", recommendation_reason: "", options: []}
+    {:ok, question} = Questions.ask({:ticket, repo_key, "issue-observed"}, request, backfilled: true, id: "q-move", at: @now)
+    events = RunStore.list_ticket_events("issue-observed", [])
+    assert [_asked, _paused] = events
+
+    hub = %{id: "project-2", name: "Hub", slug_id: "hub-3c4d"}
+    later = DateTime.add(@now, 60)
+
+    log =
+      capture_log([level: :info], fn ->
+        assert {:ok, :updated} =
+                 TicketObservation.observe(moved_to, linear_issue(%{project: hub, updated_at: DateTime.add(@linear_at, 60)}), now: later, terminal_states: [])
+      end)
+
+    assert log =~ "Ticket record re-routed issue_id=issue-observed from_repo_key=#{repo_key} repo_key=#{moved_to}"
+
+    record = RunStore.get_ticket_state("issue-observed")
+    assert %{repo_key: ^moved_to, project: %{name: "Hub"}, questions: [%{id: "q-move", state: :open}]} = record
+    assert record.pause.subject == {:ticket, moved_to, "issue-observed"}
+    assert RunStore.list_ticket_events("issue-observed", []) == events
+    assert Questions.find({:ticket, moved_to, "issue-observed"}, "q-move") == question
+    assert RunStore.list_ticket_states(repo_key) |> Enum.filter(&(&1.issue_id == "issue-observed")) == []
+
+    settings = fn _repo_key -> Config.settings!() end
+    rows = RunStore.list_all_ticket_states() |> FromRecord.items(%{}, settings_fun: settings) |> Enum.filter(&(&1.issue_id == "issue-observed"))
+    assert [%{repo_key: ^moved_to, review: %{question_id: "q-move"}}] = rows
+
+    # A read that is not the route's poll (a by-id read under the old repo) leaves the record where it is.
+    assert {:ok, _outcome} =
+             TicketObservation.observe(repo_key, linear_issue(%{project: hub, updated_at: DateTime.add(@linear_at, 120)}), now: DateTime.add(later, 60), source: :by_id, terminal_states: [])
+
+    assert %{repo_key: ^moved_to} = RunStore.get_ticket_state("issue-observed")
+  end
+
+  test "a record the store can't read is an error, and nothing is written", %{repo_key: repo_key} do
+    observe = fn -> TicketObservation.observe(repo_key, linear_issue(), now: @now) end
+
+    assert {:error, {:no_exists, _table}} = ticket_records_unreadable(observe)
+    assert RunStore.get_ticket_state("issue-observed") == nil
+  end
+
   test "a ticket without a record gets one holding what Linear says, with no ledger event", %{repo_key: repo_key} do
     assert {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
 
-    record = RunStore.get_ticket_state(repo_key, "issue-observed")
+    record = RunStore.get_ticket_state("issue-observed")
 
     assert %{
              issue_identifier: "ACME-7",
@@ -95,10 +144,10 @@ defmodule SymphonyElixir.TicketObservationTest do
 
   test "the same issue again writes nothing", %{repo_key: repo_key} do
     {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
-    stored = RunStore.get_ticket_state(repo_key, "issue-observed")
+    stored = RunStore.get_ticket_state("issue-observed")
 
     assert {:ok, :unchanged} = TicketObservation.observe(repo_key, linear_issue(), now: DateTime.add(@now, 60))
-    assert RunStore.get_ticket_state(repo_key, "issue-observed") == stored
+    assert RunStore.get_ticket_state("issue-observed") == stored
   end
 
   test "an edited description is written once", %{repo_key: repo_key} do
@@ -106,7 +155,7 @@ defmodule SymphonyElixir.TicketObservationTest do
 
     edited = linear_issue(%{description: "## Why\n\nEdited.", updated_at: DateTime.add(@linear_at, 60)})
     assert {:ok, :updated} = TicketObservation.observe(repo_key, edited, now: DateTime.add(@now, 60))
-    assert RunStore.get_ticket_state(repo_key, "issue-observed").description == "## Why\n\nEdited."
+    assert RunStore.get_ticket_state("issue-observed").description == "## Why\n\nEdited."
     assert {:ok, :unchanged} = TicketObservation.observe(repo_key, edited, now: DateTime.add(@now, 120))
   end
 
@@ -115,20 +164,20 @@ defmodule SymphonyElixir.TicketObservationTest do
 
     started = linear_issue(%{sub_issues: [%{id: "issue-c", identifier: "ACME-8", state: "In Progress"}]})
     assert {:ok, :updated} = TicketObservation.observe(repo_key, started, now: DateTime.add(@now, 60))
-    assert RunStore.get_ticket_state(repo_key, "issue-observed").sub_issues == [%{id: "issue-c", identifier: "ACME-8", state: "In Progress"}]
+    assert RunStore.get_ticket_state("issue-observed").sub_issues == [%{id: "issue-c", identifier: "ACME-8", state: "In Progress"}]
 
     reviewed = %{started | blocked_by: [%{id: "issue-a", identifier: "ACME-5", state: "Code Review"}]}
     assert {:ok, :updated} = TicketObservation.observe(repo_key, reviewed, now: DateTime.add(@now, 120))
-    assert RunStore.get_ticket_state(repo_key, "issue-observed").blockers == [%{id: "issue-a", identifier: "ACME-5", state: "Code Review"}]
+    assert RunStore.get_ticket_state("issue-observed").blockers == [%{id: "issue-a", identifier: "ACME-5", state: "Code Review"}]
   end
 
   test "a record that kept its blockers by identifier alone is written once with their ids and states", %{repo_key: repo_key} do
     {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
-    :ok = RunStore.update_ticket_state(repo_key, "issue-observed", %{blockers: ["ACME-5"]})
-    assert RunStore.get_ticket_state(repo_key, "issue-observed").blockers == [%{id: nil, identifier: "ACME-5", state: nil}]
+    :ok = RunStore.update_ticket_state("issue-observed", %{blockers: ["ACME-5"]})
+    assert RunStore.get_ticket_state("issue-observed").blockers == [%{id: nil, identifier: "ACME-5", state: nil}]
 
     assert {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: DateTime.add(@now, 60))
-    assert RunStore.get_ticket_state(repo_key, "issue-observed").blockers == [%{id: "issue-a", identifier: "ACME-5", state: "In Progress"}]
+    assert RunStore.get_ticket_state("issue-observed").blockers == [%{id: "issue-a", identifier: "ACME-5", state: "In Progress"}]
     assert {:ok, :unchanged} = TicketObservation.observe(repo_key, linear_issue(), now: DateTime.add(@now, 120))
   end
 
@@ -140,7 +189,7 @@ defmodule SymphonyElixir.TicketObservationTest do
     renamed = linear_issue(%{title: "Observe every poll, renamed", updated_at: DateTime.add(@linear_at, 300)})
     assert {:ok, :updated} = TicketObservation.observe(repo_key, renamed, now: DateTime.add(@now, 300))
 
-    record = RunStore.get_ticket_state(repo_key, "issue-observed")
+    record = RunStore.get_ticket_state("issue-observed")
     assert record.title == "Observe every poll, renamed"
     assert record.linear_updated_at == DateTime.add(@linear_at, 300)
     assert [%{kind: "qa", outcome: "pass"}] = record.verdicts
@@ -148,34 +197,34 @@ defmodule SymphonyElixir.TicketObservationTest do
 
   test "an older issue is dropped, counted as stale, and the record untouched", %{repo_key: repo_key} do
     {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
-    stored = RunStore.get_ticket_state(repo_key, "issue-observed")
+    stored = RunStore.get_ticket_state("issue-observed")
 
     older = linear_issue(%{title: "Before the rename", state: "Backlog", updated_at: DateTime.add(@linear_at, -60)})
     assert {:ok, :stale} = TicketObservation.observe(repo_key, older, now: DateTime.add(@now, 60))
 
-    assert RunStore.get_ticket_state(repo_key, "issue-observed") == stored
+    assert RunStore.get_ticket_state("issue-observed") == stored
     assert counts() == %{updated: 1, unchanged: 0, stale: 1, unrouted: 0, errors: 0}
   end
 
   test "blockers keep the open ones: the given terminal states, else the repo's", %{repo_key: repo_key} do
     {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now, terminal_states: ["In Progress"])
-    assert RunStore.get_ticket_state(repo_key, "issue-observed").blockers == [%{id: "issue-b", identifier: "ACME-6", state: "Done"}]
+    assert RunStore.get_ticket_state("issue-observed").blockers == [%{id: "issue-b", identifier: "ACME-6", state: "Done"}]
 
     {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(%{updated_at: DateTime.add(@linear_at, 1)}), now: @now)
-    assert RunStore.get_ticket_state(repo_key, "issue-observed").blockers == [%{id: "issue-a", identifier: "ACME-5", state: "In Progress"}]
+    assert RunStore.get_ticket_state("issue-observed").blockers == [%{id: "issue-a", identifier: "ACME-5", state: "In Progress"}]
   end
 
   test "an unknown blocker list keeps the known blockers", %{repo_key: repo_key} do
     {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
 
     assert {:ok, :unchanged} = TicketObservation.observe(repo_key, linear_issue(%{blocked_by: :unknown}), now: DateTime.add(@now, 60))
-    assert RunStore.get_ticket_state(repo_key, "issue-observed").blockers == [%{id: "issue-a", identifier: "ACME-5", state: "In Progress"}]
+    assert RunStore.get_ticket_state("issue-observed").blockers == [%{id: "issue-a", identifier: "ACME-5", state: "In Progress"}]
   end
 
   test "a repo Symphony has no settings for keeps every blocker" do
     assert {:ok, :updated} = TicketObservation.observe("observation-other-repo", linear_issue())
 
-    record = RunStore.get_ticket_state("observation-other-repo", "issue-observed")
+    record = RunStore.get_ticket_state("issue-observed")
     assert Enum.map(record.blockers, & &1.identifier) == ["ACME-5", "ACME-6"]
     assert %DateTime{} = record.observed_at
   end
@@ -198,11 +247,11 @@ defmodule SymphonyElixir.TicketObservationTest do
 
     assert log =~ "Ticket observation failed for issue_id= issue_identifier=ACME-9 repo_key=#{repo_key}: :invalid_issue"
     assert log =~ "issue_id= issue_identifier= repo_key=#{repo_key}"
-    assert RunStore.get_ticket_state(repo_key, "issue-observed-2").issue_identifier == "ACME-8"
+    assert RunStore.get_ticket_state("issue-observed-2").issue_identifier == "ACME-8"
     assert counts() == %{updated: 2, unchanged: 0, stale: 0, unrouted: 0, errors: 2}
   end
 
-  test "observe_routed writes each issue under the repo it routes to and skips the ones no repo takes", %{repo_key: repo_key} do
+  test "observe_routed writes each issue under the repo it routes to and skips the ones no repo takes", %{repo_key: _repo_key} do
     routed = linear_issue(%{team: %{key: "Test", name: "Test"}})
     keyed = linear_issue(%{id: "issue-observed-keyed", identifier: "OTHER-1", repo_key: "observation-routed-repo"})
     unrouted = linear_issue(%{id: "issue-observed-unrouted", team: %{key: "NOPE", name: "Nope"}})
@@ -210,9 +259,9 @@ defmodule SymphonyElixir.TicketObservationTest do
     assert TicketObservation.observe_routed([routed, keyed, unrouted, :junk], now: @now) ==
              %{updated: 2, unchanged: 0, stale: 0, errors: 0}
 
-    assert RunStore.get_ticket_state(repo_key, "issue-observed").issue_identifier == "ACME-7"
-    assert RunStore.get_ticket_state("observation-routed-repo", "issue-observed-keyed").issue_identifier == "OTHER-1"
-    assert RunStore.get_ticket_state(repo_key, "issue-observed-unrouted") == nil
+    assert RunStore.get_ticket_state("issue-observed").issue_identifier == "ACME-7"
+    assert RunStore.get_ticket_state("issue-observed-keyed").issue_identifier == "OTHER-1"
+    assert RunStore.get_ticket_state("issue-observed-unrouted") == nil
 
     # With no repos, only an issue that carries its repo key is observed.
     assert TicketObservation.observe_routed([routed, keyed], now: @now, repos: []) ==
@@ -250,7 +299,7 @@ defmodule SymphonyElixir.TicketObservationTest do
 
     owned!(repo_key, "Code Review")
     assert {:ok, :updated} = on_record(repo_key, hand_move("Done"), @now)
-    assert %{phase: "Code Review"} = RunStore.get_ticket_state(repo_key, "issue-observed")
+    assert %{phase: "Code Review"} = RunStore.get_ticket_state("issue-observed")
     assert TicketObservation.summary().drift == %{detected: 0, reverted: 0, revert_failed: 0, recent: []}
 
     assert %{updated: 0} = TicketObservation.reconcile_all(repo_key, [], now: @now, task_supervisor: @moves)
@@ -295,10 +344,10 @@ defmodule SymphonyElixir.TicketObservationTest do
   describe "the comparison with the webhook" do
     test "a read keeps its source on the record: the poll by default", %{repo_key: repo_key} do
       {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
-      assert RunStore.get_ticket_state(repo_key, "issue-observed").observed_from == :poll
+      assert RunStore.get_ticket_state("issue-observed").observed_from == :poll
 
       {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(%{priority: 1}), now: @now, source: :by_id)
-      assert RunStore.get_ticket_state(repo_key, "issue-observed").observed_from == :by_id
+      assert RunStore.get_ticket_state("issue-observed").observed_from == :by_id
     end
 
     test "a later read that finds nothing to change counts webhook first, once for each webhook change", %{repo_key: repo_key} do
@@ -366,17 +415,7 @@ defmodule SymphonyElixir.TicketObservationTest do
     # The record the regular poll keeps, which a delivery updates.
     defp poll!(repo_key, attrs \\ %{}) do
       {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(Map.put(attrs, :blocked_by, [])), now: @now, terminal_states: [])
-      RunStore.get_ticket_state(repo_key, "issue-observed")
-    end
-
-    # The two records of one ticket a release before the by-ticket index could leave, one per repo:
-    # neither is in the index, so each repo reads its own.
-    defp held_in_both!(repo_keys) do
-      Enum.map(repo_keys, fn repo_key ->
-        record = poll!(repo_key)
-        {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.delete({:symphony_run_store_ticket_index, "issue-observed"}) end)
-        record
-      end)
+      RunStore.get_ticket_state("issue-observed")
     end
 
     test "an Issue delivery updates the record the poll keeps, from the webhook", %{repo_key: repo_key} do
@@ -386,7 +425,7 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert TicketObservation.observe_delivery(edited, now: DateTime.add(@now, 60), orchestrator: self()) == :updated
       assert_receive {:"$gen_cast", {:request_refresh, ^repo_key, :now}}
 
-      record = RunStore.get_ticket_state(repo_key, "issue-observed")
+      record = RunStore.get_ticket_state("issue-observed")
       assert %{issue_identifier: "ACME-7", priority: 1, observed_from: :webhook} = record
       assert record.observed_at == DateTime.add(@now, 60)
       assert TicketObservation.observe_delivery(edited, now: DateTime.add(@now, 60), orchestrator: self()) == :unchanged
@@ -399,7 +438,7 @@ defmodule SymphonyElixir.TicketObservationTest do
 
       assert TicketObservation.observe_delivery(renamed, now: DateTime.add(@now, 60)) == :updated
 
-      record = RunStore.get_ticket_state(repo_key, "issue-observed")
+      record = RunStore.get_ticket_state("issue-observed")
       assert record.project == %{id: "project-1", name: "Symphony Engine", slug_id: "symphony-1a2b"}
       assert {record.description, record.team} == {polled.description, %{key: "Test", name: "Test"}}
     end
@@ -408,14 +447,14 @@ defmodule SymphonyElixir.TicketObservationTest do
       stored = poll!(repo_key)
 
       assert TicketObservation.observe_delivery(delivery(%{priority: 4, updated_at: DateTime.add(@linear_at, -60)}), now: @now) == :stale
-      assert RunStore.get_ticket_state(repo_key, "issue-observed") == stored
+      assert RunStore.get_ticket_state("issue-observed") == stored
       assert counts().stale == 1
     end
 
     test "a ticket no repo has a record of and no repo's poll scope takes is unrouted and writes nothing", %{repo_key: repo_key} do
       assert TicketObservation.observe_delivery(delivery(), now: @now) == :unrouted
       assert TicketObservation.observe_delivery(delivery(%{team: %{key: "NOPE", name: "Nope"}}), now: @now) == :unrouted
-      assert RunStore.get_ticket_state(repo_key, "issue-observed") == nil
+      assert RunStore.get_ticket_state("issue-observed") == nil
 
       poll!(repo_key)
       assert TicketObservation.observe_delivery(delivery(), now: @now, repos: []) == :unrouted
@@ -455,9 +494,9 @@ defmodule SymphonyElixir.TicketObservationTest do
       opts = [now: DateTime.add(@now, 60), repos: @slug_routes, terminal_states: []]
       assert TicketObservation.observe_delivery(edited, opts) == :updated
 
-      assert %{priority: 1, observed_from: :webhook} = RunStore.get_ticket_state(@project_repo, "issue-observed")
+      assert %{priority: 1, observed_from: :webhook} = RunStore.get_ticket_state("issue-observed")
       # One record per ticket: the team default reads the project repo's.
-      assert %{repo_key: @project_repo} = RunStore.get_ticket_state(@default_repo, "issue-observed")
+      assert %{repo_key: @project_repo} = RunStore.get_ticket_state("issue-observed")
 
       repolled = linear_issue(%{project: @project, blocked_by: [], priority: 1, updated_at: DateTime.add(@linear_at, 60)})
       opts = [now: DateTime.add(@now, 120), terminal_states: [], compare: true]
@@ -468,7 +507,7 @@ defmodule SymphonyElixir.TicketObservationTest do
     test "a new ticket's delivery two repos' poll scopes take is unrouted, writes nothing and reads nothing" do
       created = delivery(%{project: @project_with_url})
       assert TicketObservation.observe_delivery(created, [repos: @slug_routes] ++ new_ticket_opts()) == :unrouted
-      assert Enum.map([@default_repo, @project_repo], &RunStore.get_ticket_state(&1, "issue-observed")) == [nil, nil]
+      assert RunStore.get_ticket_state("issue-observed") == nil
       refute_received {:tracker, _call}
       refute_received {:"$gen_cast", _request}
     end
@@ -486,18 +525,18 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert_received {:ticket_record, @project_repo, "issue-observed", :changed, fields}
       assert :phase in fields and :blockers in fields
 
-      record = RunStore.get_ticket_state(@project_repo, "issue-observed")
+      record = RunStore.get_ticket_state("issue-observed")
       assert %{issue_identifier: "ACME-7", phase: "Todo", title: "Read by id", observed_from: :webhook} = record
       assert record.project == %{id: "project-harness", name: "Building the harness", slug_id: "f469eb38bbc5"}
       assert [%{identifier: "ACME-5"}] = record.blockers
       assert [%{identifier: "ACME-8"}] = record.sub_issues
       # One record per ticket: the team default reads the project repo's.
-      assert %{repo_key: @project_repo} = RunStore.get_ticket_state(@default_repo, "issue-observed")
+      assert %{repo_key: @project_repo} = RunStore.get_ticket_state("issue-observed")
 
       edited = delivery(%{project: @project_with_url, priority: 1, updated_at: DateTime.add(@linear_at, 60)})
       assert TicketObservation.observe_delivery(edited, [repos: @new_ticket_routes, now: DateTime.add(@now, 60)] ++ new_ticket_opts()) == :updated
       refute_received {:tracker, _call}
-      assert %{priority: 1, title: "Observe every poll"} = RunStore.get_ticket_state(@project_repo, "issue-observed")
+      assert %{priority: 1, title: "Observe every poll"} = RunStore.get_ticket_state("issue-observed")
     end
 
     test "a new ticket the by-id read doesn't return is unrouted; a failed read is an error, and both write nothing" do
@@ -512,17 +551,8 @@ defmodule SymphonyElixir.TicketObservationTest do
         end)
 
       assert log =~ "Ticket observation failed for issue_id=issue-observed issue_identifier=ACME-7 repo_key=#{@project_repo}: {:by_id_read, :unavailable}"
-      assert RunStore.get_ticket_state(@project_repo, "issue-observed") == nil
+      assert RunStore.get_ticket_state("issue-observed") == nil
       assert %{unrouted: 1, errors: 1} = counts()
-      refute_received {:"$gen_cast", _request}
-    end
-
-    test "a ticket held in several repos is unrouted, both records are left and no poll is asked for" do
-      held = held_in_both!([@default_repo, @project_repo])
-
-      edited = delivery(%{priority: 1, updated_at: DateTime.add(@linear_at, 60)})
-      assert TicketObservation.observe_delivery(edited, now: DateTime.add(@now, 60), repos: @slug_routes, orchestrator: self()) == :unrouted
-      assert Enum.map([@default_repo, @project_repo], &RunStore.get_ticket_state(&1, "issue-observed")) == held
       refute_received {:"$gen_cast", _request}
     end
 
@@ -539,10 +569,12 @@ defmodule SymphonyElixir.TicketObservationTest do
     test "a store refusal is logged and is an error" do
       log =
         capture_log(fn ->
-          assert TicketObservation.observe_delivery(delivery(), now: @now, repos: [:junk, %{name: "  "}]) == :error
+          repos = [:junk, %{name: @default_repo}]
+          observe = fn -> TicketObservation.observe_delivery(delivery(), now: @now, repos: repos) end
+          assert ticket_records_unreadable(observe) == :error
         end)
 
-      assert log =~ "Ticket observation failed for issue_id=issue-observed issue_identifier=ACME-7 repo_key=  : :invalid_repo_key"
+      assert log =~ "Ticket observation failed for issue_id=issue-observed issue_identifier=ACME-7 repo_key=#{@default_repo}: {:no_exists"
       assert counts().errors == 1
     end
 
@@ -552,7 +584,7 @@ defmodule SymphonyElixir.TicketObservationTest do
 
       assert TicketObservation.observe_delivery({:issue_removed, "issue-observed", "ACME-7"}, now: removed_at) == :removed
 
-      record = RunStore.get_ticket_state(repo_key, "issue-observed")
+      record = RunStore.get_ticket_state("issue-observed")
       assert {record.removed_at, record.updated_at} == {removed_at, removed_at}
       assert Map.drop(record, [:removed_at, :updated_at]) == Map.drop(stored, [:removed_at, :updated_at])
     end
@@ -565,10 +597,12 @@ defmodule SymphonyElixir.TicketObservationTest do
       log =
         capture_log(fn ->
           removal = {:issue_removed, "issue-never-seen", nil}
-          assert TicketObservation.observe_delivery(removal, now: @now, repos: [:junk, %{name: "  "}]) == :error
+          repos = [:junk, %{name: @default_repo}]
+          observe = fn -> TicketObservation.observe_delivery(removal, now: @now, repos: repos) end
+          assert ticket_records_unreadable(observe) == :error
         end)
 
-      assert log =~ "Ticket removal failed for issue_id=issue-never-seen repo_key=  : :invalid_repo_key"
+      assert log =~ "Ticket removal failed for issue_id=issue-never-seen repo_key=#{@default_repo}: {:no_exists"
     end
 
     test "comments and other deliveries are not observed" do
@@ -608,11 +642,11 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert TicketObservation.observe_held([edited], opts) ==
                %{updated: 1, unchanged: 0, stale: 0, unrouted: 0, errors: 0}
 
-      record = RunStore.get_ticket_state(@project_repo, "issue-observed")
+      record = RunStore.get_ticket_state("issue-observed")
       assert %{priority: 1, observed_from: :by_id, repo_key: @project_repo} = record
       assert record.observed_at == DateTime.add(@now, 60)
       # One record per ticket: the team default reads the project repo's.
-      assert %{repo_key: @project_repo} = RunStore.get_ticket_state(@default_repo, "issue-observed")
+      assert %{repo_key: @project_repo} = RunStore.get_ticket_state("issue-observed")
 
       stale = by_id(%{priority: 4, updated_at: @linear_at})
 
@@ -626,33 +660,28 @@ defmodule SymphonyElixir.TicketObservationTest do
 
       edited = linear_issue(%{priority: 1, updated_at: DateTime.add(@linear_at, 60)})
       assert %{updated: 1} = TicketObservation.observe_held([edited], now: DateTime.add(@now, 60), source: :by_id)
-      assert %{priority: 1, observed_from: :by_id} = RunStore.get_ticket_state(repo_key, "issue-observed")
+      assert %{priority: 1, observed_from: :by_id} = RunStore.get_ticket_state("issue-observed")
     end
 
     test "a ticket no repo has a record of is skipped and counted, whatever its fields match" do
       assert TicketObservation.observe_held([by_id(%{}), by_id(%{project: nil})], now: @now, repos: @slug_routes) ==
                %{updated: 0, unchanged: 0, stale: 0, unrouted: 2, errors: 0}
 
-      assert Enum.map([@default_repo, @project_repo], &RunStore.get_ticket_state(&1, "issue-observed")) == [nil, nil]
+      assert RunStore.get_ticket_state("issue-observed") == nil
       assert counts().unrouted == 2
-    end
-
-    test "a ticket held in several repos is skipped, as the poll counts it a conflict, and both records are left" do
-      held = held_in_both!([@default_repo, @project_repo])
-
-      edited = by_id(%{priority: 1, updated_at: DateTime.add(@linear_at, 60)})
-      assert %{unrouted: 1, updated: 0} = TicketObservation.observe_held([edited], now: DateTime.add(@now, 60), repos: @slug_routes)
-      assert Enum.map([@default_repo, @project_repo], &RunStore.get_ticket_state(&1, "issue-observed")) == held
     end
 
     test "a store refusal is logged and counted under errors, and so is anything but an issue" do
       log =
         capture_log(fn ->
-          assert TicketObservation.observe_held([by_id(%{}), :junk], now: @now, repos: [:junk, %{name: "  "}]) ==
+          repos = [:junk, %{name: @default_repo}]
+          observe = fn -> TicketObservation.observe_held([by_id(%{}), :junk], now: @now, repos: repos) end
+
+          assert ticket_records_unreadable(observe) ==
                    %{updated: 0, unchanged: 0, stale: 0, unrouted: 0, errors: 2}
         end)
 
-      assert log =~ "Ticket observation failed for issue_id=issue-observed issue_identifier=ACME-7 repo_key=  : :invalid_repo_key"
+      assert log =~ "Ticket observation failed for issue_id=issue-observed issue_identifier=ACME-7 repo_key=#{@default_repo}: {:no_exists"
       assert counts().errors == 2
     end
   end
@@ -672,7 +701,7 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert_received {:memory_tracker_state_update, "issue-observed", "Code Review"}
 
       assert %{phase: "Code Review", phase_owner: :symphony, phase_at: @phase_at, title: "Renamed", linear_updated_at: @moved_at} =
-               RunStore.get_ticket_state(repo_key, "issue-observed")
+               RunStore.get_ticket_state("issue-observed")
 
       phases = %{record_phase: "Code Review", linear_phase: "Done"}
       assert ticket_events(repo_key, "issue-observed") == [{"drift.detected", phases}, {"drift.reverted", phases}]
@@ -699,7 +728,7 @@ defmodule SymphonyElixir.TicketObservationTest do
       settle()
 
       assert_received {:memory_tracker_state_update, "issue-observed", "Code Review"}
-      assert %{phase: "Code Review", phase_owner: :symphony} = RunStore.get_ticket_state(repo_key, "issue-observed")
+      assert %{phase: "Code Review", phase_owner: :symphony} = RunStore.get_ticket_state("issue-observed")
       assert event_types(repo_key) == ["drift.detected", "drift.reverted"]
     end
 
@@ -714,7 +743,7 @@ defmodule SymphonyElixir.TicketObservationTest do
 
       assert log =~ "Ticket drift: moving back to Code Review failed issue_id=issue-observed issue_identifier=ACME-7: :linear_down"
       refute_received {:memory_tracker_state_update, _issue_id, _state}
-      assert %{phase: "Code Review"} = RunStore.get_ticket_state(repo_key, "issue-observed")
+      assert %{phase: "Code Review"} = RunStore.get_ticket_state("issue-observed")
 
       phases = %{record_phase: "Code Review", linear_phase: "Done"}
       assert ticket_events(repo_key, "issue-observed") == [{"drift.detected", phases}, {"drift.revert_failed", Map.put(phases, :error, ":linear_down")}]
@@ -741,7 +770,7 @@ defmodule SymphonyElixir.TicketObservationTest do
       moved_at = DateTime.add(DateTime.utc_now(), 60)
       assert {:ok, :updated} = on_record(repo_key, hand_move("Rework", %{updated_at: moved_at}), moved_at)
 
-      assert %{phase: "Rework", phase_owner: :symphony} = RunStore.get_ticket_state(repo_key, "issue-observed")
+      assert %{phase: "Rework", phase_owner: :symphony} = RunStore.get_ticket_state("issue-observed")
       assert ticket_events(repo_key, "issue-observed", ["drift.detected", "drift.reverted", "drift.revert_failed"]) == []
       refute_received {:memory_tracker_state_update, _issue_id, _state}
       assert drift().detected == 0
@@ -753,11 +782,11 @@ defmodule SymphonyElixir.TicketObservationTest do
 
       before_cancel = hand_move("Backlog", %{updated_at: DateTime.add(@phase_at, -1)})
       assert {:ok, _written} = on_record(repo_key, before_cancel, @now)
-      assert %{phase: "Canceled", phase_owner: :symphony} = RunStore.get_ticket_state(repo_key, "issue-observed")
+      assert %{phase: "Canceled", phase_owner: :symphony} = RunStore.get_ticket_state("issue-observed")
 
       assert {:ok, :updated} = on_record(repo_key, hand_move("Todo"), DateTime.add(@now, 1))
 
-      assert %{phase: "Todo", phase_owner: :external} = RunStore.get_ticket_state(repo_key, "issue-observed")
+      assert %{phase: "Todo", phase_owner: :external} = RunStore.get_ticket_state("issue-observed")
       assert ticket_events(repo_key, "issue-observed") == []
       refute_received {:memory_tracker_state_update, _issue_id, _state}
       assert drift().detected == 0
@@ -772,7 +801,7 @@ defmodule SymphonyElixir.TicketObservationTest do
       # the cancel while it still shows the state before it.
       assert {:ok, _written} = on_record(repo_key, hand_move("In Progress"), @now)
 
-      assert %{phase: "Canceled", phase_owner: :symphony} = RunStore.get_ticket_state(repo_key, "issue-observed")
+      assert %{phase: "Canceled", phase_owner: :symphony} = RunStore.get_ticket_state("issue-observed")
       assert_received {:memory_tracker_state_update, "issue-observed", "Canceled"}
       assert event_types(repo_key) == ["drift.detected", "drift.reverted"]
     end
@@ -782,7 +811,7 @@ defmodule SymphonyElixir.TicketObservationTest do
 
       assert {:ok, :updated} = on_record(repo_key, hand_move("Backlog"), @now)
 
-      assert %{phase: "Backlog", phase_owner: :external, phase_at: @now} = RunStore.get_ticket_state(repo_key, "issue-observed")
+      assert %{phase: "Backlog", phase_owner: :external, phase_at: @now} = RunStore.get_ticket_state("issue-observed")
       assert ticket_events(repo_key, "issue-observed") == []
       refute_received {:memory_tracker_state_update, _issue_id, _state}
       assert drift().detected == 0
@@ -792,7 +821,7 @@ defmodule SymphonyElixir.TicketObservationTest do
       owned!(repo_key, "Code Review")
 
       assert {:ok, :updated} = TicketObservation.observe(repo_key, hand_move("Done"), now: @now, dispatch_source: "poll")
-      assert %{phase: "Done", phase_owner: :external} = RunStore.get_ticket_state(repo_key, "issue-observed")
+      assert %{phase: "Done", phase_owner: :external} = RunStore.get_ticket_state("issue-observed")
 
       assert {:ok, :unchanged} = TicketObservation.observe(repo_key, hand_move("Done"), now: @now)
       assert ticket_events(repo_key, "issue-observed") == []
@@ -805,7 +834,7 @@ defmodule SymphonyElixir.TicketObservationTest do
 
       before_move = hand_move("In Progress", %{title: "Renamed", updated_at: DateTime.add(@phase_at, -1)})
       assert {:ok, :updated} = on_record(repo_key, before_move, @now)
-      assert %{phase: "Code Review", phase_owner: :symphony, title: "Renamed"} = RunStore.get_ticket_state(repo_key, "issue-observed")
+      assert %{phase: "Code Review", phase_owner: :symphony, title: "Renamed"} = RunStore.get_ticket_state("issue-observed")
 
       stale = hand_move("Done", %{updated_at: @linear_at})
       assert {:ok, :stale} = on_record(repo_key, stale, @now)
@@ -877,7 +906,7 @@ defmodule SymphonyElixir.TicketObservationTest do
         end)
 
       assert log =~ "Ticket drift: the move back did not start issue_id=issue-observed issue_identifier=ACME-7"
-      assert %{phase: "Code Review"} = RunStore.get_ticket_state(repo_key, "issue-observed")
+      assert %{phase: "Code Review"} = RunStore.get_ticket_state("issue-observed")
       assert ticket_events(repo_key, "issue-observed") == []
       refute_received {:memory_tracker_state_update, _issue_id, _state}
 
@@ -914,7 +943,7 @@ defmodule SymphonyElixir.TicketObservationTest do
   # A record Symphony moved into `phase` at `@phase_at`, after the poll observed the ticket at `@linear_at`.
   defp owned!(repo_key, phase) do
     {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(%{state: "In Progress"}), now: @now)
-    record = repo_key |> RunStore.get_ticket_state("issue-observed") |> TicketState.put_phase(phase, @phase_at)
+    record = RunStore.get_ticket_state("issue-observed") |> TicketState.put_phase(phase, @phase_at)
     :ok = RunStore.put_ticket_state(record)
   end
 
@@ -1086,9 +1115,9 @@ defmodule SymphonyElixir.TicketObservationTest do
     end
 
     test "a mark another run dropped, or a record deleted, before its write is not projected", %{repo_key: repo_key} do
-      for meanwhile <- [&drop_phase_mark/1, &RunStore.delete_ticket_state(&1, "issue-observed")] do
+      for meanwhile <- [&drop_phase_mark/1, fn _repo_key -> RunStore.delete_ticket_state("issue-observed") end] do
         # Each round starts from no record, so the projector has applied nothing yet.
-        RunStore.delete_ticket_state(repo_key, "issue-observed")
+        RunStore.delete_ticket_state("issue-observed")
         marked!(repo_key, "Code Review", :phase)
         paused!(repo_key)
         :ok = TicketSignals.mark_projection(repo_key, "issue-observed", :pause, :linear_down)
@@ -1108,14 +1137,14 @@ defmodule SymphonyElixir.TicketObservationTest do
       reconcile(repo_key, [linear_issue(%{state: "Code Review", updated_at: @read_at})])
       assert record(repo_key).pending_projection == []
 
-      external = repo_key |> RunStore.get_ticket_state("issue-observed") |> Map.put(:phase_owner, :external) |> TicketState.mark_projection(:phase, :down, @now)
+      external = RunStore.get_ticket_state("issue-observed") |> Map.put(:phase_owner, :external) |> TicketState.mark_projection(:phase, :down, @now)
       :ok = RunStore.put_ticket_state(external)
       reconcile(repo_key, [])
       assert record(repo_key).pending_projection == []
 
       removed =
-        repo_key
-        |> RunStore.get_ticket_state("issue-observed")
+        "issue-observed"
+        |> RunStore.get_ticket_state()
         |> TicketState.mark_removed(@now)
         |> TicketState.mark_projection(:pause, :down, @now)
 
@@ -1142,7 +1171,7 @@ defmodule SymphonyElixir.TicketObservationTest do
 
     test "a new ticket in Linear gets its record, counted as applied", %{repo_key: repo_key} do
       assert %{updated: 1} = reconcile(repo_key, [linear_issue(%{id: "issue-new", identifier: "ACME-9"})])
-      assert %{issue_identifier: "ACME-9", phase: "Todo"} = RunStore.get_ticket_state(repo_key, "issue-new")
+      assert %{issue_identifier: "ACME-9", phase: "Todo"} = RunStore.get_ticket_state("issue-new")
       assert %{applied: 1, last_run_at: @now} = TicketObservation.summary().reconcile
     end
 
@@ -1155,7 +1184,7 @@ defmodule SymphonyElixir.TicketObservationTest do
 
       reconcile(repo_key, [linear_issue(%{id: "never-polled", identifier: "ACME-12"})])
       assert_received {:tracker, {:fetch_issue_states_by_ids, ["never-1"]}}
-      assert %{issue_identifier: "ACME-11", phase: "Done", observed_from: :by_id} = RunStore.get_ticket_state(repo_key, "never-1")
+      assert %{issue_identifier: "ACME-11", phase: "Done", observed_from: :by_id} = RunStore.get_ticket_state("never-1")
       assert TicketObservation.summary().reconcile.unobserved_filled == 1
 
       # Nothing left unobserved: no read.
@@ -1174,14 +1203,14 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert length(first) == 50
 
       assert %{not_found_at: @now, linear_updated_at: nil, removed_at: nil} =
-               RunStore.get_ticket_state(repo_key, hd(first))
+               RunStore.get_ticket_state(hd(first))
 
       filled = linear_issue(%{id: hd(ids -- first), identifier: "ACME-51"})
       reply(:fetch_issue_states_by_ids, {:ok, [filled]})
       reconcile(repo_key, [])
       assert_received {:tracker, {:fetch_issue_states_by_ids, [last]}}
       assert last == hd(ids -- first)
-      assert %{issue_identifier: "ACME-51", not_found_at: nil} = RunStore.get_ticket_state(repo_key, last)
+      assert %{issue_identifier: "ACME-51", not_found_at: nil} = RunStore.get_ticket_state(last)
 
       # Every record observed or found missing: the run makes no read beyond the poll's.
       reconcile(repo_key, [])
@@ -1194,7 +1223,7 @@ defmodule SymphonyElixir.TicketObservationTest do
 
       # The record is deleted while Linear is read.
       reply(:fetch_issue_states_by_ids, fn ->
-        :ok = RunStore.delete_ticket_state(repo_key, "never-1")
+        :ok = RunStore.delete_ticket_state("never-1")
         {:ok, []}
       end)
 
@@ -1272,12 +1301,12 @@ defmodule SymphonyElixir.TicketObservationTest do
 
   defp reconcile_unsupervised(repo_key, opts), do: TicketObservation.reconcile_all(repo_key, [linear_issue()], opts)
 
-  defp record(repo_key), do: RunStore.get_ticket_state(repo_key, "issue-observed")
+  defp record(_repo_key), do: RunStore.get_ticket_state("issue-observed")
 
   # A record whose phase Symphony wrote, with a failed projection marked.
   defp marked!(repo_key, phase, projection) do
     {:ok, _outcome} = TicketObservation.observe(repo_key, linear_issue(%{updated_at: ~U[2026-01-01 00:00:00Z]}), now: @now)
-    record = repo_key |> RunStore.get_ticket_state("issue-observed") |> TicketState.put_phase(phase, @phase_at)
+    record = RunStore.get_ticket_state("issue-observed") |> TicketState.put_phase(phase, @phase_at)
     :ok = RunStore.put_ticket_state(TicketState.mark_projection(record, projection, :unavailable, @phase_at))
   end
 

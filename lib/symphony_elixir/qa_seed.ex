@@ -145,7 +145,7 @@ defmodule SymphonyElixir.QaSeed do
 
       # The pause is the one writer's already: nothing for the backfill from the holds to convert.
       with {:ok, _pause} <- Pauses.set({:ticket, repo_key, issue.id}, reason),
-           :ok <- RunStore.update_ticket_state(repo_key, issue.id, %{pause_backfilled_at: DateTime.utc_now()}) do
+           :ok <- RunStore.update_ticket_state(issue.id, %{pause_backfilled_at: DateTime.utc_now()}) do
         :ok
       else
         {:error, reason} -> {:error, {{:hold, identifier}, reason}}

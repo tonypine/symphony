@@ -245,7 +245,7 @@ defmodule SymphonyElixir.PrWatch.IncidentsTest do
     assert index(actions, {:link, {"TP-1", Parity.issue_id("2")}}) < a_lands
 
     assert [%{payload: %{waits_on: %{identifier: "TP-1"}, text: "Waiting for TP-1 to land: it changes the same files"}}] =
-             SymphonyElixir.RunStore.list_ticket_events("default", Parity.issue_id("2"), types: ["pause.set"])
+             SymphonyElixir.RunStore.list_ticket_events(Parity.issue_id("2"), types: ["pause.set"])
 
     assert calls(actions, :disarm) == [Parity.pr_url("2")]
     assert Parity.blockers("2") == ["TP-1"]

@@ -486,7 +486,7 @@ defmodule SymphonyElixir.Decisions do
     store = Keyword.get(opts, :store, RunStore)
     backfill = backfill(description)
 
-    with {:ok, stored} <- read_decisions(store, repo_key, issue_id) do
+    with {:ok, stored} <- read_decisions(store, issue_id) do
       known = if stored == [], do: backfill, else: stored
 
       case missing(entries, Enum.map(known, & &1.key), known) do
@@ -500,8 +500,8 @@ defmodule SymphonyElixir.Decisions do
     store.record_ticket_decisions(repo_key, issue_id, new, backfill)
   end
 
-  defp read_decisions(store, repo_key, issue_id) do
-    case store.get_ticket_state(repo_key, issue_id) do
+  defp read_decisions(store, issue_id) do
+    case store.get_ticket_state(issue_id) do
       {:error, _reason} = error -> error
       record -> {:ok, TicketState.decisions(record)}
     end

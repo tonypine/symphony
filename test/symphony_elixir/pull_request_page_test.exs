@@ -156,7 +156,7 @@ defmodule SymphonyElixir.PullRequestPageTest do
 
       log =
         capture_log(fn ->
-          {:ok, page} = PullRequestPage.fetch("symphony", 448, opts(linear_client: failing, pr_reviews: reviews, ticket_state: fn "symphony", "id-TP-892" -> record end))
+          {:ok, page} = PullRequestPage.fetch("symphony", 448, opts(linear_client: failing, pr_reviews: reviews, ticket_state: fn "id-TP-892" -> record end))
           assert page.ticket == nil
           assert [%{kind: "code_review", verdict: "approve"}] = page.review_history
           assert page.review_state == "approved"
@@ -186,7 +186,7 @@ defmodule SymphonyElixir.PullRequestPageTest do
       ]
 
       record = ticket_record(verdicts, signals)
-      {:ok, page} = PullRequestPage.fetch("symphony", 448, opts(ticket_state: fn _repo_key, "id-TP-892" -> record end))
+      {:ok, page} = PullRequestPage.fetch("symphony", 448, opts(ticket_state: fn "id-TP-892" -> record end))
 
       assert page.review_history == [
                %{at: nil, kind: "code_review", verdict: "inconclusive", reason: nil},
@@ -202,7 +202,7 @@ defmodule SymphonyElixir.PullRequestPageTest do
     end
 
     test "a ticket without a record or verdicts has no history and no review health" do
-      {:ok, page} = PullRequestPage.fetch("symphony", 448, opts(ticket_state: fn _repo_key, _issue_id -> {:error, :not_found} end))
+      {:ok, page} = PullRequestPage.fetch("symphony", 448, opts(ticket_state: fn _issue_id -> {:error, :not_found} end))
       assert page.review_history == []
       assert page.health.code_review == nil
       assert page.health.qa == nil
@@ -242,7 +242,7 @@ defmodule SymphonyElixir.PullRequestPageTest do
       log =
         capture_log(fn ->
           failing = fn _url -> {:error, :timeout} end
-          unavailable = opts(pull_request: failing, pr_reviews: reviews, ticket_state: fn _key, _id -> record end)
+          unavailable = opts(pull_request: failing, pr_reviews: reviews, ticket_state: fn _id -> record end)
           {:ok, page} = PullRequestPage.fetch("symphony", 448, unavailable)
 
           assert %{github: "unavailable", url: @url, title: nil, state: nil, summary: nil} = page
@@ -305,7 +305,7 @@ defmodule SymphonyElixir.PullRequestPageTest do
         github_repos: %{"symphony" => "tonypine/symphony", "app" => "acme/app"},
         pull_request: fn _url -> {:ok, pr()} end,
         linear_client: linear,
-        ticket_state: fn _repo_key, _issue_id -> nil end,
+        ticket_state: fn _issue_id -> nil end,
         pr_reviews: fn _repo_key -> [] end,
         ttl_ms: 0
       ],

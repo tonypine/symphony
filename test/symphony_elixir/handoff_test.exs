@@ -9,8 +9,8 @@ defmodule SymphonyElixir.HandoffTest do
   @issue_id "issue-handoff"
 
   setup do
-    RunStore.delete_ticket_state(@repo_key, @issue_id)
-    on_exit(fn -> RunStore.delete_ticket_state(@repo_key, @issue_id) end)
+    RunStore.delete_ticket_state(@issue_id)
+    on_exit(fn -> RunStore.delete_ticket_state(@issue_id) end)
     :ok
   end
 

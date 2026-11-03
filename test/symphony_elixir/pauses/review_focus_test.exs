@@ -120,11 +120,11 @@ defmodule SymphonyElixir.Pauses.ReviewFocusTest do
 
     # Written as a record stored before the holds were retired: the store's own write would drop them.
     # Both rows: the pair key and the by-ticket index the listings read.
-    raw = Map.put(RunStore.get_ticket_state(@repo_key, @issue_id), :holds, holds)
+    raw = Map.put(RunStore.get_ticket_state(@issue_id), :holds, holds)
 
     {:atomic, :ok} =
       :mnesia.transaction(fn ->
-        :mnesia.write({:symphony_run_store_ticket_states, {@repo_key, @issue_id}, @repo_key, @issue_id, raw})
+        :mnesia.write({:symphony_run_store_ticket_index, @issue_id, @repo_key, raw})
         :mnesia.write({:symphony_run_store_ticket_index, @issue_id, @repo_key, raw})
       end)
 
@@ -135,11 +135,11 @@ defmodule SymphonyElixir.Pauses.ReviewFocusTest do
 
     assert {:ok, %{records_converted: 1, questions_created: 2}} = Backfill.run(now: @at)
 
-    questions = TicketState.normalize(RunStore.get_ticket_state(@repo_key, @issue_id)).questions
+    questions = TicketState.normalize(RunStore.get_ticket_state(@issue_id)).questions
     assert %{state: :open} = Enum.find(questions, &(&1.title == "Rotate the CI token"))
     assert %{state: :answered, answer: %{text: "Keep it on"}} = Enum.find(questions, &(&1.title == "Keep the flag"))
 
-    assert {:ok, %{text: brief}} = Brief.render(@repo_key, @issue_id)
+    assert {:ok, %{text: brief}} = Brief.render(@issue_id)
     assert brief =~ "Phase and pauses:"
     assert brief =~ "Keep the flag"
     assert brief =~ "Keep it on"
@@ -185,7 +185,7 @@ defmodule SymphonyElixir.Pauses.ReviewFocusTest do
 
   defp reasons, do: TicketState.pause_reasons(stored())
 
-  defp stored, do: TicketState.normalize(RunStore.get_ticket_state(@repo_key, @issue_id))
+  defp stored, do: TicketState.normalize(RunStore.get_ticket_state(@issue_id))
 
   defp labels do
     :symphony_elixir

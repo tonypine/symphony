@@ -1335,9 +1335,9 @@ defmodule SymphonyElixir.ExtensionsTest do
     for ticket <- [record, gone, retry], do: assert(:ok = RunStore.put_ticket_state(ticket))
 
     on_exit(fn ->
-      RunStore.delete_ticket_state("default", "issue-http")
-      RunStore.delete_ticket_state("default", "issue-gone")
-      RunStore.delete_ticket_state("other", "retry-elsewhere")
+      RunStore.delete_ticket_state("issue-http")
+      RunStore.delete_ticket_state("issue-gone")
+      RunStore.delete_ticket_state("retry-elsewhere")
     end)
 
     snapshot = Map.update!(static_snapshot(), :retrying, fn entries -> Enum.map(entries, &Map.delete(&1, :repo_key)) end)
@@ -1379,7 +1379,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     gone = TicketState.new("default", "issue-gone", %{issue_identifier: "MT-GONE"})
     assert :ok = RunStore.put_ticket_state(gone)
-    on_exit(fn -> RunStore.delete_ticket_state("default", "issue-gone") end)
+    on_exit(fn -> RunStore.delete_ticket_state("issue-gone") end)
 
     snapshot =
       static_snapshot()
@@ -1930,7 +1930,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   test "the inbox api shows a Send Decisions answer and a Stop on the very next read; the ticket page agrees" do
     ticket = {:ticket, "default", "issue-MT-NEXT"}
     :ok = SymphonyElixir.RunStore.put_ticket_state(inbox_record("MT-NEXT", %{}))
-    on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("default", "issue-MT-NEXT") end)
+    on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("issue-MT-NEXT") end)
     {:ok, question} = SymphonyElixir.Questions.ask(ticket, @signing)
 
     orchestrator_name = Module.concat(__MODULE__, :InboxNextReadOrchestrator)

@@ -62,14 +62,14 @@ defmodule SymphonyElixir.TicketEvents.Brief do
   @kind_names %{"qa" => "QA", "ci_fix" => "CI Fix", "pre_push_review" => "Pre-push Review"}
 
   @doc """
-  The summary of `repo_key`'s ticket `issue_id`: its record and every event it holds, read from
-  `SymphonyElixir.RunStore` (never one capped page of `SymphonyElixir.TicketEvents.query/3`), built
+  The summary of the ticket `issue_id`: its record and every event it holds, read from
+  `SymphonyElixir.RunStore` (never one capped page of `SymphonyElixir.TicketEvents.query/2`), built
   by `build/2`.
   """
-  @spec render(String.t(), String.t()) :: {:ok, t()} | {:error, term()}
-  def render(repo_key, issue_id) do
-    with state when not is_tuple(state) <- RunStore.get_ticket_state(repo_key, issue_id),
-         events when is_list(events) <- RunStore.list_ticket_events(repo_key, issue_id, []) do
+  @spec render(String.t()) :: {:ok, t()} | {:error, term()}
+  def render(issue_id) do
+    with state when not is_tuple(state) <- RunStore.get_ticket_state(issue_id),
+         events when is_list(events) <- RunStore.list_ticket_events(issue_id, []) do
       {:ok, build(state, events)}
     end
   end

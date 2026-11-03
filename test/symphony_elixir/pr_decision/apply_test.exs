@@ -138,7 +138,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     Action.new!(rule, kind, Keyword.merge([reason: "the reason"], attrs))
   end
 
-  defp origin, do: CiFix.origin(@repo_key, @issue_id)
+  defp origin, do: CiFix.origin(@issue_id)
 
   describe "rows another ticket applies, waits and repeats" do
     test "are recorded without an action" do
@@ -457,14 +457,14 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert %{outcome: :applied, moved_to: nil} = Apply.apply(action("R29", :merge_now), ctx(:merging))
       assert_received {:squash_merge, @pr_url, _merge, _opts}
       assert_received {:move, @issue_id, "Done"}
-      assert %{phase: "Done", phase_owner: :symphony} = RunStore.get_ticket_state(@repo_key, @issue_id)
+      assert %{phase: "Done", phase_owner: :symphony} = RunStore.get_ticket_state(@issue_id)
       assert %{state: "merged"} = TicketPullRequest.get(@repo_key, @issue_id)
 
       # Linear's GitHub automation moves the ticket to Done on the merge: the record already holds it.
       done = %{merging | state: "Done", updated_at: DateTime.add(DateTime.utc_now(), 60)}
       assert {:ok, _written} = TicketObservation.observe(@repo_key, done, dispatch_source: "record")
       refute_received {:move, @issue_id, _state}
-      assert %{phase: "Done", phase_owner: :symphony} = RunStore.get_ticket_state(@repo_key, @issue_id)
+      assert %{phase: "Done", phase_owner: :symphony} = RunStore.get_ticket_state(@issue_id)
 
       assert ticket_events(@repo_key, @issue_id, ["drift.detected", "drift.reverted", "drift.revert_failed"]) == []
     end
@@ -660,7 +660,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
 
       assert %{options: options, confirm: "Rework"} = deciding()
       assert Enum.map(options, & &1.label) == ["Proceed without it for this PR", "Rerun the checks", "Fix the workflow in Rework"]
-      signals = TicketState.recent_signals(RunStore.get_ticket_state(@repo_key, @issue_id))
+      signals = TicketState.recent_signals(RunStore.get_ticket_state(@issue_id))
       assert [%{name: "decision requested", details: %{reason: "required_check_missing"}} | _] = signals
       refute_received {:disable_auto_merge, _url, _node, _opts}
 
@@ -687,7 +687,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert %{options: options} = decision = deciding()
       refute decision.confirm
       assert Enum.map(options, & &1.label) == ["Keep retrying", "Wait"]
-      signals = TicketState.recent_signals(RunStore.get_ticket_state(@repo_key, @issue_id))
+      signals = TicketState.recent_signals(RunStore.get_ticket_state(@issue_id))
       assert [%{name: "decision requested", details: %{reason: "check_cancelled"}} | _] = signals
       refute_received {:rerun_failed, _run_id, _opts}
 
@@ -858,7 +858,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     assert_received {:comment, @issue_id, "## Decision needed: Protected files changed on TP-7" <> _rest}
     assert %{question: question} = deciding()
     assert question =~ "changes the list of settings that need no control in the Mac app. Agents may change these only with a person's permission."
-    signals = TicketState.recent_signals(RunStore.get_ticket_state(@repo_key, @issue_id))
+    signals = TicketState.recent_signals(RunStore.get_ticket_state(@issue_id))
     assert [%{name: "decision requested", details: %{reason: "protected_paths"}} | _] = signals
     assert [%{id: id, title: "Protected files changed on TP-7"}] = Questions.open({:ticket, @repo_key, @issue_id})
     assert %{id: ^id} = deciding()
@@ -867,7 +867,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     # ticket's timeline shows it asked once.
     assert %{outcome: :applied} = Apply.apply(action, ctx(:merging, read: read))
     refute_received {:comment, @issue_id, "## Decision needed:" <> _rest}
-    assert [%{summary: %{title: "Asked you: Protected files changed on TP-7"}}] = RunStore.list_ticket_events(@repo_key, @issue_id, types: ["question.asked"])
+    assert [%{summary: %{title: "Asked you: Protected files changed on TP-7"}}] = RunStore.list_ticket_events(@issue_id, types: ["question.asked"])
     assert ticket_events(@repo_key, @issue_id, ["decision.requested", "hold.set"]) == []
 
     # A request Linear refuses is reported.
@@ -903,7 +903,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       refute_received {:comment, @issue_id, _other}
       assert %{state: "closed"} = TicketPullRequest.get(@repo_key, @issue_id)
       refute deciding()
-      signals = TicketState.recent_signals(RunStore.get_ticket_state(@repo_key, @issue_id))
+      signals = TicketState.recent_signals(RunStore.get_ticket_state(@issue_id))
       assert [%{name: "review verdict", details: %{outcome: "pr_closed", to: "Rework"}} | _] = signals
 
       # A closed PR can't merge: auto-merge GitHub won't turn off doesn't hold the move back.
@@ -966,7 +966,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       refute Enum.any?(options, &(&1.effect =~ "you move"))
       refute_received {:move, _id, _state}
 
-      signals = TicketState.recent_signals(RunStore.get_ticket_state(@repo_key, @issue_id))
+      signals = TicketState.recent_signals(RunStore.get_ticket_state(@issue_id))
       assert [%{name: "decision requested", details: %{reason: "pr_missing"}} | _] = signals
 
       # A ticket read without its title is named by its identifier alone.
