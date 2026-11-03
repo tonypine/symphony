@@ -137,7 +137,7 @@ The active consequence: QA coverage absorbs the host and device checks the revie
 | `In Review` (informal mix: post-QA approvals, escalations, plan handoffs, checks) | No resting queue: routine approvals flow automatically; escalations and confirmations become Needs Decision holds; checks go to CI or QA |
 | Gate `escalate` → In Review / Human Review | Escalations → Needs Decision hold (structured decision); risk rules inform the one review, or ask a person when set to |
 | `Rework` = full reset (close PR, fresh branch) | **Rework** = continue and improve the existing work; full reset becomes **Restart** (human-only) |
-| Blocked → `Backlog` escape hatch; blockers held invisibly in Todo | **Blocked** hold: a label that pauses the ticket in its phase with the reason recorded; clears and resumes automatically |
+| Blocked → `Backlog` escape hatch; blockers held invisibly in Todo | **Blocked** hold: a label that pauses the ticket in its phase with the reason recorded; clears and resumes automatically. An open blocked-by link holds a ticket in every active phase, not only in Todo |
 | `Human Review` (a state named like a review) | **Needs Decision** hold for decisions; **Plan Review** state for epic plans |
 | Breakdown plans promoted by a supervisor session | **Plan Review** state: the person approves (promotes sub-tickets) or sends to **Rework** to re-plan |
 | Quiet "done" heuristic (infer completion from inactivity) | Explicit **handoff** signal; silence never advances a ticket |

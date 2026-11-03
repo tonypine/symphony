@@ -6,19 +6,24 @@ defmodule SymphonyElixir.Pauses.Dependencies do
   `sweep/3` runs in the poll task over a repo's polled tickets. Each one is read as its record
   observes it (`SymphonyElixir.TicketState.observe/4`, the observation the poll writes): its phase,
   its labels and its open blockers. Under `dispatch.source: record`, where dispatch reads every
-  repo's records each cycle, `sync_records/3` also brings each `Todo` record's pause in line with the
+  repo's records each cycle, `sync_records/3` also brings each active record's pause in line with the
   open blockers it observed, from the store alone, so a blocker a read wrote into a record holds the
   ticket before its repo's next poll; and `sync_issue/4` does the same for one ticket from a read of
   it (the read of a candidate right before dispatch).
 
-    * A `Todo` ticket has one reason per open blocker ("Waiting for TP-12 to finish", set by the rule
-      "Blocked-by links"), and a blocker's reason clears once it is no longer open: the ticket
-      dispatches with no state move and no person involved. The wait for the running app to include
-      a blocker that fixed Symphony itself is `SymphonyElixir.UpdateHold`'s, on the same pause.
+    * A ticket in any active phase (`SymphonyElixir.StateMachine.active_states/1`: `Todo`,
+      `In Progress`, `Rework`, `CI Fix` and the other phases dispatch picks work up from) has one
+      reason per open blocker ("Waiting for TP-12 to finish", set by the rule "Blocked-by links"),
+      and a blocker's reason clears once it is no longer open: the ticket dispatches again in its
+      phase with no state move and no person involved. A blocker linked while a run is under way
+      leaves the run alone; it holds the next dispatch. In `Todo` the wait for the running app to
+      include a blocker that fixed Symphony itself is `SymphonyElixir.UpdateHold`'s, on the same
+      pause.
     * A run's block report pauses its ticket outside `Todo` on the blockers it named
-      (`SymphonyElixir.TransitionGuard`). Each such reason clears once its blocker is no longer open,
-      unless the blocker fixed Symphony itself and the running app lacks its merge
-      (`SymphonyElixir.UpdateHold.awaiting_update/4`): it then stays until the app includes it.
+      (`SymphonyElixir.TransitionGuard`). Outside `Todo`, a blocker's reason, from a link or a block
+      report, clears once its blocker is no longer open, unless the blocker fixed Symphony itself
+      and the running app lacks its merge (`SymphonyElixir.UpdateHold.awaiting_update/4`): it then
+      stays until the app includes it.
     * A fix ticket the self-heal lane filed (`SymphonyElixir.SelfHeal`) is read by its identifier;
       its reason ("Waiting for TP-12 to finish: it fixes what stopped this ticket") clears once it is
       terminal, waiting as above for a fix to Symphony itself. The fix-ticket pointer of the
@@ -33,7 +38,7 @@ defmodule SymphonyElixir.Pauses.Dependencies do
 
   require Logger
 
-  alias SymphonyElixir.{BuildInfo, Pauses, RunStore, TicketState, Tracker, UpdateHold}
+  alias SymphonyElixir.{BuildInfo, Config, Pauses, RunStore, StateMachine, TicketState, Tracker, UpdateHold}
   alias SymphonyElixir.Linear.Issue
 
   @todo_state "todo"
@@ -56,8 +61,9 @@ defmodule SymphonyElixir.Pauses.Dependencies do
   cache its build lookups extended. `opts`: `:repo_key` (required: a polled issue names no repo),
   `:now`, `:store` (default `SymphonyElixir.RunStore`), `:tracker` (the fix tickets' and blockers'
   reads, default `SymphonyElixir.Tracker`), `:build` (default `SymphonyElixir.BuildInfo.current/0`),
-  `:update_hold_cache` and `SymphonyElixir.UpdateHold`'s lookup options. A ticket whose record can't
-  be read is skipped.
+  `:update_hold_cache`, `:active_states` (the phases a blocker holds a ticket in, default
+  `SymphonyElixir.StateMachine.active_states/1` of the settings) and `SymphonyElixir.UpdateHold`'s
+  lookup options. A ticket whose record can't be read is skipped.
   """
   @spec sweep([Issue.t()], Enumerable.t(String.t()), keyword()) :: {non_neg_integer(), UpdateHold.cache()}
   def sweep(issues, terminal_states, opts) when is_list(issues) do
@@ -65,12 +71,13 @@ defmodule SymphonyElixir.Pauses.Dependencies do
     now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
     cache = Keyword.get_lazy(opts, :update_hold_cache, &UpdateHold.empty_cache/0)
     terminal = Enum.to_list(terminal_states)
+    holding = holding_phases(terminal, opts)
 
     Enum.reduce(issues, {0, cache}, fn
       %Issue{id: issue_id} = issue, {count, cache} when is_binary(issue_id) ->
         case observed(repo_key, issue, terminal, now, opts) do
           {:ok, record} ->
-            {changes, cache} = sync(record, issue, terminal, cache, opts)
+            {changes, cache} = sync(record, issue, {terminal, holding}, cache, opts)
             {count + changes, cache}
 
           :error ->
@@ -98,7 +105,7 @@ defmodule SymphonyElixir.Pauses.Dependencies do
     end
   end
 
-  defp sync(record, issue, terminal, cache, opts) do
+  defp sync(record, issue, {terminal, holding}, cache, opts) do
     ticket = {:ticket, record.repo_key, record.issue_id}
     reasons = TicketState.pause_reasons(record)
     open = for %{identifier: identifier} <- record.blockers, Pauses.identifier?(identifier), do: identifier
@@ -106,7 +113,7 @@ defmodule SymphonyElixir.Pauses.Dependencies do
     skip? = skip_labelled?(record)
     todo? = normalize(record.phase) == @todo_state
 
-    missing = if todo?, do: open -- held, else: []
+    missing = if holding?(record, holding), do: open -- held, else: []
     {stale, cache} = stale_blockers(held -- open, issue, {todo? or skip?, cache}, opts)
     {lifted, cache} = landed_fix_tickets(held(reasons, :fix_ticket), {skip?, terminal, cache}, opts)
 
@@ -118,46 +125,58 @@ defmodule SymphonyElixir.Pauses.Dependencies do
   end
 
   @doc """
-  Brings the pause of each `Todo` record of `records` (`SymphonyElixir.TicketState` records) in line
-  with the open blockers it observed, as `sweep/3` does for a `Todo` ticket, from the records alone:
-  no tracker read and no other phase. `opts[:skip]` names a repo whose records are left out (the one
-  this cycle polled, which `sweep/3` swept from the poll's own read). Returns how many reasons it set
-  or cleared.
+  Brings the pause of each record of `records` (`SymphonyElixir.TicketState` records) in an active
+  phase in line with the open blockers it observed, as `sweep/3` does, from the records alone: no
+  tracker read. A reason whose blocker is no longer open clears at once in `Todo`; outside it, where
+  the wait for an app update needs a read, `sweep/3` clears it. `opts[:skip]` names a repo whose
+  records are left out (the one this cycle polled, which `sweep/3` swept from the poll's own read),
+  and `opts[:active_states]` the phases a blocker holds a ticket in (as for `sweep/3`). Returns how
+  many reasons it set or cleared.
   """
   @spec sync_records([map()], Enumerable.t(String.t()), keyword()) :: non_neg_integer()
   def sync_records(records, terminal_states, opts \\ []) when is_list(records) do
     skip = Keyword.get(opts, :skip)
+    holding = holding_phases(terminal_states, opts)
     terminal = MapSet.new(terminal_states, &normalize/1)
 
     records
     |> Enum.map(&TicketState.normalize/1)
-    |> Enum.filter(&(is_binary(&1.repo_key) and is_binary(&1.issue_id) and &1.repo_key != skip and normalize(&1.phase) == @todo_state))
+    |> Enum.filter(&(is_binary(&1.repo_key) and is_binary(&1.issue_id) and &1.repo_key != skip and holding?(&1, holding)))
     |> Enum.reduce(0, fn record, count ->
       open = for blocker <- record.blockers, Pauses.identifier?(blocker.identifier), not MapSet.member?(terminal, normalize(blocker.state)), do: blocker.identifier
       held = held(TicketState.pause_reasons(record), :dependency)
+      stale = if normalize(record.phase) == @todo_state, do: held -- open, else: []
       ticket = {:ticket, record.repo_key, record.issue_id}
 
       Enum.each(open -- held, &Pauses.set(ticket, Pauses.ticket_reason(:dependency, &1), set_by: setter(:dependency)))
-      Enum.each(held -- open, &clear(ticket, &1))
-      count + length(open -- held) + length(held -- open)
+      Enum.each(stale, &clear(ticket, &1))
+      count + length(open -- held) + length(stale)
     end)
   end
 
   @doc """
   Brings the pause of `issue`, read from Linear under `repo_key`, in line with its open blockers as
-  `sync_records/3` does for a `Todo` record, from that read: the dispatch gate reads the pause right
-  after. Returns how many reasons it set or cleared; a record the store (`opts[:store]`, default
-  `SymphonyElixir.RunStore`) can't read is left as it is.
+  `sync_records/3` does for a record, from that read: the dispatch gate reads the pause right after.
+  Returns how many reasons it set or cleared; a record the store (`opts[:store]`, default
+  `SymphonyElixir.RunStore`) can't read is left as it is. `opts[:active_states]` as for `sweep/3`.
   """
   @spec sync_issue(String.t(), Issue.t(), Enumerable.t(String.t()), keyword()) :: non_neg_integer()
   def sync_issue(repo_key, %Issue{} = issue, terminal_states, opts \\ []) do
     terminal = Enum.to_list(terminal_states)
 
     case observed(repo_key, issue, terminal, DateTime.utc_now(), opts) do
-      {:ok, record} -> sync_records([record], terminal)
+      {:ok, record} -> sync_records([record], terminal, Keyword.take(opts, [:active_states]))
       :error -> 0
     end
   end
+
+  # The phases a blocker holds a ticket in: the active ones, never a terminal one.
+  defp holding_phases(terminal_states, opts) do
+    active = Keyword.get_lazy(opts, :active_states, fn -> StateMachine.active_states(Config.settings!()) end)
+    MapSet.difference(MapSet.new(active, &normalize/1), MapSet.new(terminal_states, &normalize/1))
+  end
+
+  defp holding?(record, holding), do: MapSet.member?(holding, normalize(record.phase))
 
   # The identifiers of the `:ticket` reasons of `source`.
   defp held(reasons, source), do: for(%{waits_on: %{identifier: identifier}} = reason <- reasons, Pauses.ticket_source(reason) == source, do: identifier)

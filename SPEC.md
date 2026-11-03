@@ -3086,7 +3086,7 @@ Rules:
 - **Holds overlay, never relocate.** `Blocked` and `Needs Decision` are holds persisted in the
   ticket-state store and projected as machine-owned labels, which only the machine writes. A held
   ticket MUST NOT dispatch and MUST NOT move because of the hold. `Blocked` is set by an open
-  blocked-by dependency on a `Todo` ticket, an agent's request to park in `Backlog` from
+  blocked-by dependency on a ticket in any active phase, an agent's request to park in `Backlog` from
   `In Progress` or `Rework` (its block report), a self-heal fix ticket (including the PR and CI
   watcher's fix ticket for a check that keeps failing), or the watcher's wait on competing PRs (its
   `landing` kind), and clears by itself when
@@ -3280,13 +3280,20 @@ An issue is dispatch-eligible only if all are true:
   a retry waiting for a slot (see 5.4).
 - Global concurrency slots are available.
 - Per-state concurrency slots are available.
-- Blocker rule for `Todo` state passes:
-  - If the issue state is `Todo`, do not dispatch when any blocker is non-terminal.
+- Blocker rule passes, in every active phase:
+  - In any active state (`Todo`, `In Progress`, `Rework`, `CI Fix`, `Code Review`, `QA`, `Merging`
+    and the other states dispatch picks work up from), do not dispatch when any blocker is
+    non-terminal. The ticket's pause carries one dependency reason per open blocker ("Waiting for
+    TP-12 to finish"), as a `Todo` ticket's does, and lifts on its own once every blocker is
+    terminal; the ticket then dispatches again in its phase, with no state move. Outside `Todo`, a
+    blocker whose fix merged into Symphony itself also waits until the running app includes its
+    merge commit.
   - A blocker counts as resolved only once its state is in `terminal_states`. `Merging`,
     `Code Review`, `QA` and `Rework` still block, since the blocker's change is not on the
     default branch yet. A blocker without a known state counts as open.
-  - A run whose issue ends a turn back in `Todo` with an open blocker stops; the issue is
-    dispatched again on the first poll after every blocker is terminal.
+  - A blocker linked while a run is under way never stops the worker: the turn in flight finishes,
+    the run starts no further turn, and the next dispatch is held. The issue is dispatched again on
+    the first poll after every blocker is terminal.
   - The status snapshot lists each held candidate with its open blockers (`blocked` in
     `/api/v1/state`, for example "MT-12 waiting on MT-15 (In Progress)"), and the dashboard shows
     them under "Waiting on blockers".
@@ -3525,7 +3532,7 @@ Epic lanes:
   approved and not finished (any state other than `Backlog`, `Triage` or a terminal state).
 - An active epic yields while nothing on its path can run: every open issue on the path is in
   `Plan Review`, `Backlog` or `Triage`, has no known state, is a plan parent waiting on its
-  sub-issues (outside `Rework`), or is a `Todo` with open blockers. A yielded epic takes no lane.
+  sub-issues (outside `Rework`), or has open blockers in any active phase. A yielded epic takes no lane.
 - The other active epics are ordered by the parent's priority, then the parent's creation time. The
   first `min(epic_lanes, max_concurrent_agents)` of them each reserve one slot (a lane); the rest
   wait for a lane. `epic_lanes` defaults to `max_concurrent_agents`.

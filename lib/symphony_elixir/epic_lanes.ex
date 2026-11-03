@@ -16,8 +16,8 @@ defmodule SymphonyElixir.EpicLanes do
   A lane stays reserved while its path waits on Symphony, for example on a part that is landing, so
   the next part starts there as soon as it is unblocked. An epic whose path only waits on people
   yields its lane to the next queued epic or the shared pool: every open ticket on the path is in
-  review, not yet approved, a `breakdown` parent waiting on its own sub-tickets, or a `Todo` held by
-  open blockers. Lanes are planned again on every poll, so the epic takes a lane back once a ticket
+  review, not yet approved, a `breakdown` parent waiting on its own sub-tickets, or a ticket held by
+  open blockers in any active phase. Lanes are planned again on every poll, so the epic takes a lane back once a ticket
   on its path can run.
 
   The slots left over form the shared pool, dispatched by priority then age as before; it also takes

@@ -1204,7 +1204,7 @@ defmodule SymphonyElixir.AgentRunner do
         {:done, refreshed_issue}
 
       Issue.blocked?(refreshed_issue, Config.settings!().tracker.terminal_states) ->
-        Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; back in Todo and waiting for its blockers")
+        Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; it waits for its blockers")
         {:done, refreshed_issue}
 
       active_issue_state?(refreshed_issue.state) ->

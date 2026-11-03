@@ -1479,15 +1479,18 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # Under `dispatch.source: record` dispatch reads every repo's records each cycle, not only the one
-  # this cycle polled: each Todo record of another repo is paused on the open blockers it observed
+  # this cycle polled: each active record of another repo is paused on the open blockers it observed
   # (`Pauses.Dependencies.sync_records/3`), so the pause holds it before its repo's next poll. The
   # polled repo's tickets are swept from the poll's own read (`resolve_update_holds/2`).
   defp sync_recorded_dependencies({:record, _held}, list_records, repo_result) do
     polled = with {repo_name, _result} <- repo_result, do: repo_name
 
     case list_records.() do
-      records when is_list(records) -> Dependencies.sync_records(records, terminal_state_set(), skip: polled)
-      _unreadable -> 0
+      records when is_list(records) ->
+        Dependencies.sync_records(records, terminal_state_set(), skip: polled, active_states: active_state_set())
+
+      _unreadable ->
+        0
     end
   end
 
@@ -1616,14 +1619,17 @@ defmodule SymphonyElixir.Orchestrator do
   defp resolve_update_holds(_repo_result, cache), do: cache
 
   # Runs in the poll task: brings each polled ticket's pause in line with what it waits on
-  # (`SymphonyElixir.Pauses.Dependencies`) — a ticket in Todo with an open blocker pauses on it, and
-  # one whose blockers all went terminal is released and dispatches, with no state move and no person
-  # involved. A fix ticket merged into Symphony itself also waits for the running app, through the
-  # same cache as `UpdateHold`.
+  # (`SymphonyElixir.Pauses.Dependencies`) — a ticket in any active phase with an open blocker pauses
+  # on it, and one whose blockers all went terminal is released and dispatches in its phase, with no
+  # state move and no person involved. A fix ticket merged into Symphony itself also waits for the
+  # running app, through the same cache as `UpdateHold`.
   defp sweep_dependencies(repo_name, issues, terminal_states, cache) do
     case Config.settings_for_repo(repo_name) do
-      {:ok, _settings} -> Dependencies.sweep(issues, terminal_states, repo_key: repo_name, update_hold_cache: cache)
-      {:error, _reason} -> {0, cache}
+      {:ok, settings} ->
+        Dependencies.sweep(issues, terminal_states, repo_key: repo_name, update_hold_cache: cache, active_states: active_state_set(settings))
+
+      {:error, _reason} ->
+        {0, cache}
     end
   end
 
@@ -4341,9 +4347,9 @@ defmodule SymphonyElixir.Orchestrator do
 
   # The reason the first closed dispatch gate (every one but the usage limit) gives, or nil when
   # all are open. `/api/v1/state` lists it under `dispatch_skipped`, so no candidate is passed over
-  # in silence. A `Todo` issue waits until every blocker is terminal (`Issue.blocked?/2`), a ticket
-  # with a hold waits for it to lift, and a `breakdown` parent waits on its sub-issues (see
-  # `issue_held?/2`). The review flow parks a Code Review ticket whose repo has no reviewer
+  # in silence. An issue in any active phase waits until every blocker is terminal
+  # (`Issue.blocked?/2`), a ticket with a hold waits for it to lift, and a `breakdown` parent waits
+  # on its sub-issues (see `issue_held?/2`). The review flow parks a Code Review ticket whose repo has no reviewer
   # enabled, and a Code Review or QA ticket whose head is not green yet: the reviewer and
   # the QA agent only run on a green head. A `Merging` issue waits for CI after its landing run, or
   # is landed by GitHub auto-merge. Symphony's own pause starts no pass at all; a repository's pause
@@ -4476,8 +4482,8 @@ defmodule SymphonyElixir.Orchestrator do
     %{state | epic_lanes: EpicLanes.plan(issues, max_total, Config.settings!().agent.epic_lanes, terminal_state_set())}
   end
 
-  # Candidates held in `Todo` by open blockers, held by self-heal on a fix ticket, or waiting for a
-  # blocker's fix the running app does not include yet (the `UpdateHold` reasons on their pauses),
+  # Candidates held in any active phase by open blockers, held by self-heal on a fix ticket, or
+  # waiting for a blocker's fix the running app does not include yet (the `UpdateHold` reasons on their pauses),
   # recomputed on every poll tick for the snapshot.
   defp put_blocked(%State{} = state, issues) do
     terminal_states = Config.settings!().tracker.terminal_states
@@ -5098,7 +5104,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp active_retry_issue?(_issue, _terminal_states), do: false
 
-  # A paused issue waits for its pause to lift (a `Todo` one on its open blockers, see
+  # A paused issue waits for its pause to lift (one in any active phase on its open blockers, see
   # `SymphonyElixir.Pauses.Dependencies`). A `breakdown` parent waits while its sub-issues are
   # worked, in the waiting state or, when that
   # is off, in its active state; it is dispatched again for close-out once every sub-issue is terminal.
@@ -5852,7 +5858,7 @@ defmodule SymphonyElixir.Orchestrator do
   # it (`Pauses.Dependencies.sync_issue/4`) before the gate reads its pause.
   defp sync_read_dependencies(%Issue{} = issue, terminal_states) do
     with repo_key when is_binary(repo_key) <- hold_repo_key(issue),
-         do: Dependencies.sync_issue(repo_key, issue, terminal_states)
+         do: Dependencies.sync_issue(repo_key, issue, terminal_states, active_states: active_state_set())
   end
 
   # From the record, the issue starts only when its record still says what the candidate said: the
