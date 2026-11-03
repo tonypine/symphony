@@ -180,7 +180,7 @@ defmodule SymphonyElixir.PlanCommentsTest do
 
   test "reply/1 is guidance for a change request, points at Rework and names the parent" do
     assert PlanComments.reply("MT-1") =~ ~r/^If this asks for a change to the plan: /
-    assert PlanComments.reply("MT-1") =~ "Move MT-1 to Rework"
+    assert PlanComments.reply("MT-1") =~ "Move MT-1 to Rework with Move to… in the Director"
     assert PlanComments.reply(nil) =~ "Move the parent to Rework"
     refute PlanComments.reply("MT-1") =~ "changed nothing"
   end

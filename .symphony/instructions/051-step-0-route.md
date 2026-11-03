@@ -3,7 +3,7 @@
 1. Fetch the issue by explicit ticket ID.
 2. Read the current state.
 3. Route to the matching flow:
-   - `Backlog` -> do not modify issue content/state; stop and wait for human to move it to `Todo`.
+   - `Backlog` -> do not modify issue content/state; stop and wait for a person to move it to `Todo` (Move to… in the Director).
    - `Todo` -> immediately move to `In Progress`, then ensure bootstrap workpad comment exists (create if missing), then start execution flow.
      - If PR is already attached, start by reviewing all open PR comments and deciding required changes vs explicit pushback responses.
    - `In Progress` -> continue execution flow from current scratchpad comment.

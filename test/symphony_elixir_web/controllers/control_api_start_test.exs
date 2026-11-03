@@ -42,7 +42,7 @@ defmodule SymphonyElixirWeb.ControlApiStartTest do
   test "maps each refusal and failure to its answer" do
     conn = post_start(%{"issue_identifier" => "BACKLOG-1"}, [])
     assert conn.status == 409
-    assert json_body(conn)["error"] == %{"code" => "start_not_allowed", "message" => "the ticket is in Backlog; move it first"}
+    assert json_body(conn)["error"] == %{"code" => "start_not_allowed", "message" => "the ticket is in Backlog; move it to Todo with Move to… first"}
 
     assert post_start(%{"issue_identifier" => "START-1"}, [{:error, {:start_failed, "the agent did not start"}}]).status == 502
     assert post_start(%{"issue_identifier" => "TP-404"}, []).status == 404

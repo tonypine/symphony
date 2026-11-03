@@ -4,7 +4,8 @@ description: Plan tickets (label plan, or breakdown, its older name) are groomed
 vars: []
 {% endcomment %}## Parent tickets (tickets with sub-tickets)
 
-The `plan` label is a human's signal that a ticket is a plan ticket: too large for
+The `plan` label is a person's signal that a ticket is a plan ticket (they set it from
+the ticket page in the Director): too large for
 one PR, it does plan work and must be groomed into sub-tickets before any work
 starts. `breakdown` is the label's older name and is still accepted; read it as
 `plan` everywhere below. The label stays on the parent while its sub-tickets are
@@ -23,17 +24,19 @@ Rules for every plan ticket run:
   request is the plan handoff, Symphony validates it and moves the parent, and
   `Plan Review` is where the reviewer finds it. Only a plan parent may name it. The
   review brief is what the person reads.
-- A person approves the plan by moving the parent from `Plan Review` to
-  `Waiting on sub-tickets`, or with the same move from the Inbox's approve action.
+- A person approves the plan with Approve Plan in the Director, which moves the parent
+  from `Plan Review` to `Waiting on sub-tickets`.
   Symphony then moves every sub-ticket still in `Backlog` to `Todo` in one batch;
   blocked-by links keep the order. Never move the parent to
   `Waiting on sub-tickets` yourself: `linear_update_state` refuses it because that
   move is the approval.
-- A person rejects the plan by moving the parent to `Rework`. Symphony cancels the
+- A person rejects the plan with Reject Plan in the Director, which moves the parent to
+  `Rework`. Symphony cancels the
   rejected plan's sub-tickets still in `Backlog`, lists them in one comment starting
   `Cancelled for re-plan:`, and starts a re-plan run. Each batch Symphony promotes
   or cancels is listed in one comment on the parent.
-- A person comments on the plan under review to ask for a change: Symphony moves the
+- A person asks for a change to the plan under review with Ask for Changes in the
+  Director (or a comment on the plan): Symphony moves the
   parent to `Rework` itself, and the run revises the plan in place and hands it back
   to `Plan Review`. That is a revision, not a rejection: the plan's sub-tickets stay,
   and Symphony posts no `Cancelled for re-plan:` comment.
@@ -47,7 +50,8 @@ Rules for every plan ticket run:
 - The epic needs no verification sub-ticket and no close-out run: never file one.
   `The epic close` says how the epic closes itself.
 - Never promote a sub-ticket, and never edit or cancel one outside `Backlog`:
-  `linear_update_subissue` refuses it, because a person already promoted it.
+  `linear_update_subissue` refuses it, because the plan's approval or a person's
+  Move to… already promoted it.
 - Keep the workpad as the single progress record, as for any ticket.
 
 Which plan run this is:
@@ -106,7 +110,7 @@ When the parent is in `Rework` because a person rejected the plan (Symphony's
   `Backlog`, and listed them in a comment on the parent. A `Backlog` sub-ticket a
   person added outside the plan run (a follow-up idea) stays; leave it alone and
   fold it into the new plan. Do not create a replacement for a sub-ticket outside
-  `Backlog` and `Canceled` (a human already promoted it), and do not create one
+  `Backlog` and `Canceled` (the plan's approval or a person's Move to… already promoted it), and do not create one
   twice: a sub-ticket in `Backlog` that was created after the parent moved to
   `Rework` belongs to this re-plan.
 - Then follow steps 2-5 for the new plan. Edit the existing review brief in place
@@ -116,14 +120,15 @@ When the parent is in `Rework` because a person rejected the plan (Symphony's
 
 ### Plan revision run (a person commented on the plan under review)
 
-When a person comments on a plan ticket in `Plan Review` whose plan is not
-approved yet, Symphony moves it to `Rework` and starts this run. It changes the
+When a person asks for changes (Ask for Changes in the Director, or a comment) on a
+plan ticket in `Plan Review` whose plan is not approved yet, Symphony moves it to `Rework` and starts this run. It changes the
 plan in place; it is not a re-plan, and the plan's sub-tickets stay as they are.
 
 What triggers it:
 
 - State: only `Plan Review`. A comment on a parent in any other state starts no
-  revision; to have that plan revised, a person moves the parent to `Rework`.
+  revision; to have that plan revised, a person moves the parent to `Rework` with
+  Move to… in the Director.
 - Openers: a comment starting with `Supervisor review:` or `Supervisor note:` never
   triggers a run, in any state, like Symphony's own comments (the workpad, the
   review brief, QA reports, `Action needed` requests, the promote and cancel lists,
@@ -167,7 +172,7 @@ What triggers it:
 A comment on an approved plan (the parent in `Waiting on sub-tickets`, or back in
 `Plan Review` with sub-tickets promoted) changes nothing. Under a new top-level
 comment Symphony replies once that, if it asks for a plan change, moving the parent
-to `Rework` re-plans it while keeping the sub-tickets already promoted.
+to `Rework` (Move to… in the Director) re-plans it while keeping the sub-tickets already promoted.
 
 ### The epic close (`Epic Review`; no run of yours)
 

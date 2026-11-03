@@ -118,7 +118,7 @@ defmodule SymphonyElixir.StartIssueTest do
       {:reply, reply, next_state} =
         Orchestrator.handle_call({:start_issue, backlog, nil}, {self(), make_ref()}, orchestrator_state(1))
 
-      assert {:error, {:start_refused, "the ticket is in Backlog; move it first"}} = reply
+      assert {:error, {:start_refused, "the ticket is in Backlog; move it to Todo with Move to… first"}} = reply
       assert next_state.running == %{}
       assert [] = ticket_events(@repo, "backlog-1", "run.started_by_person")
     end
@@ -205,7 +205,7 @@ defmodule SymphonyElixir.StartIssueTest do
     test "refuses a Backlog or closed ticket in the caller, starting nothing", %{server: server} do
       tracked([issue("backlog-1", "MT-B1", "Backlog"), issue("done-1", "MT-D1", "Done")])
 
-      assert {:error, {:start_refused, "the ticket is in Backlog; move it first"}} = Orchestrator.start_issue(server, "MT-B1", nil)
+      assert {:error, {:start_refused, "the ticket is in Backlog; move it to Todo with Move to… first"}} = Orchestrator.start_issue(server, "MT-B1", nil)
       assert {:error, {:start_refused, "the ticket is Done; only an open ticket can be started"}} = Orchestrator.start_issue(server, "MT-D1", nil)
       assert [] = ticket_events(@repo, "backlog-1", "run.started_by_person")
       assert [] = ticket_events(@repo, "done-1", "run.started_by_person")

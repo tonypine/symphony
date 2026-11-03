@@ -44,19 +44,19 @@
     },
     {
       "category": "statuses",
-      "consequence": "In Review is retired: no run starts there and nothing moves a ticket on from it, so each waits for good. Move each one by hand; the drain report says where.",
+      "consequence": "In Review is retired: no run starts there and nothing moves a ticket on from it, so each waits for good. Move each one with Move to… in the Director; the drain report says where.",
       "details": [
         {
           "label": "TP-1",
-          "value": "move it by hand to Code Review (its PR is open) or In Progress"
+          "value": "move it with Move to… in the Director to Code Review (its PR is open) or In Progress"
         },
         {
           "label": "TP-2",
-          "value": "move it by hand to Code Review (its PR is open) or In Progress"
+          "value": "move it with Move to… in the Director to Code Review (its PR is open) or In Progress"
         },
         {
           "label": "TP-3",
-          "value": "move it by hand to Code Review (its PR is open) or In Progress"
+          "value": "move it with Move to… in the Director to Code Review (its PR is open) or In Progress"
         }
       ],
       "fix": {

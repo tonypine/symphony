@@ -87,7 +87,7 @@ defmodule SymphonyElixir.Setup.Checks.StatusUse do
       title: retired_title(state, Enum.map(stragglers, &name/1)),
       consequence:
         "#{state} is retired: no run starts there and nothing moves a ticket on from it, so each waits for good. " <>
-          "Move each one by hand; the drain report says where.",
+          "Move each one with Move to… in the Director; the drain report says where.",
       tickets: Enum.map(stragglers, &%{identifier: name(&1), url: &1.url}),
       details: Enum.map(stragglers, &{name(&1), &1.move}),
       fix: Problem.open(:drain_report)

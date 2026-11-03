@@ -4,7 +4,7 @@ description: Canonical Symphony issue state machine and what each state means fo
 vars: []
 {% endcomment %}## Status map
 
-- `Backlog` -> out of scope for this workflow; do not modify, except when a person triages it to `Todo`.
+- `Backlog` -> out of scope for this workflow; do not modify, except when a person moves it to `Todo` (Move to… in the Director).
 - `Todo` -> queued; immediately transition to `In Progress` before active work.
   - Special case: if a PR is already attached, treat as feedback/rework loop (run the full PR feedback sweep, address or explicitly push back, revalidate, then hand off to `Code Review`).
 - `In Progress` -> implementation actively underway: net-new work on this ticket, or PR review comments addressed on the same PR and branch.

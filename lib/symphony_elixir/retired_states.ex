@@ -107,19 +107,19 @@ defmodule SymphonyElixir.RetiredStates do
 
     cond do
       state == @auto_review_state ->
-        {:retired, "nothing: no path dispatches or moves on from this state", "move it by hand to Code Review (its PR is open) or In Progress"}
+        {:retired, "nothing: no path dispatches or moves on from this state", "move it with Move to… in the Director to Code Review (its PR is open) or In Progress"}
 
       Enum.any?(labels, &(&1 in ["plan", "breakdown"])) ->
-        {:parked_plan, "a parked plan waiting on its review", "move it by hand to Plan Review"}
+        {:parked_plan, "a parked plan waiting on its review", "move it with Move to… in the Director to Plan Review"}
 
       state == @human_review_state or Enum.any?(labels, &(&1 in ["needs decision", "needs-human", "human-action"])) ->
-        {:open_decision, "an open decision for a person", "move it by hand into its phase with a Needs Decision hold"}
+        {:open_decision, "an open decision for a person", "move it with Move to… in the Director into its phase; a Needs Decision hold keeps it there"}
 
       "blocked" in labels ->
-        {:blocked_qa, "blocked QA", "move it by hand to QA; its Blocked hold keeps it there until the fix lands"}
+        {:blocked_qa, "blocked QA", "move it with Move to… in the Director to QA; its Blocked hold keeps it there until the fix lands"}
 
       true ->
-        {:supervisor_check, "a supervisor check of its PR", "move it by hand to Code Review (its PR is open) or In Progress"}
+        {:supervisor_check, "a supervisor check of its PR", "move it with Move to… in the Director to Code Review (its PR is open) or In Progress"}
     end
   end
 

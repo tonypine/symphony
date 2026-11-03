@@ -84,7 +84,7 @@ defmodule SymphonyElixir.Setup.Checks.StatusUseTest do
     assert in_review.consequence =~ "In Review is retired"
     assert Enum.map(in_review.tickets, & &1.identifier) == ["TP-1", "TP-2", "TP-3"]
     assert %{identifier: "TP-1", url: "https://linear.app/t/issue/TP-1"} in in_review.tickets
-    assert %{label: "TP-1", value: "move it by hand to Code Review (its PR is open) or In Progress"} in in_review.details
+    assert %{label: "TP-1", value: "move it with Move to… in the Director to Code Review (its PR is open) or In Progress"} in in_review.details
     assert in_review.fix == %{kind: "open", target: "drain_report", url: nil}
 
     assert auto_review.title == "TP-4 is still in the retired Auto Review state"

@@ -66,14 +66,14 @@ Write `None.` under `Decisions needed` when nothing is open. Fill in
 `How to approve / change / reject` with the moves for the ticket's kind:
 
 - **Plan review** (a plan parent in `Plan Review`):
-  - Approve: move the parent to `Waiting on sub-tickets`; Symphony promotes its
-    `Backlog` sub-tickets to `Todo`.
+  - Approve: Approve Plan in the Director, which moves the parent to
+    `Waiting on sub-tickets`; Symphony promotes its `Backlog` sub-tickets to `Todo`.
   - Change: answer the plan's questions (Send Decisions in the Inbox, or a reply under
     each request), or ask for changes (Ask for Changes in the Inbox, or a comment on
     any part of the plan); Symphony moves the parent to `Rework` and a revision run
     edits the plan in place, keeps its sub-tickets and updates this brief. Nothing is
     approved until you approve it.
-  - Reject: Reject Plan in the Inbox, or move the parent to `Rework`; Symphony cancels
+  - Reject: Reject Plan in the Director, which moves the parent to `Rework`; Symphony cancels
     its `Backlog` sub-tickets and plans again.
 - **PR review** (a PR in `Code Review`): no person's move is needed. The reviewer
   agent's verdict moves it on: approve to `QA` (or `Merging` when QA is skipped),
@@ -88,4 +88,4 @@ Write `None.` under `Decisions needed` when nothing is open. Fill in
   - Approve: reply under the `## Decision needed:` comment with the option you pick;
     the hold clears and the ticket continues where it stopped.
   - Change: reply under the request with what to do instead of the options.
-  - Reject: move the ticket to `Canceled` to drop the work.
+  - Reject: Cancel the ticket in the Director to drop the work.

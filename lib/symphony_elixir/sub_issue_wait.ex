@@ -247,7 +247,7 @@ defmodule SymphonyElixir.SubIssueWait do
 
   defp backlog_note(sub_issues) do
     if Enum.any?(sub_issues, &backlog_sub_issue?/1),
-      do: "\n\nSub-tickets in #{@backlog_state} stay there until a person promotes them.",
+      do: "\n\nSub-tickets in #{@backlog_state} stay there until a person moves them to Todo with Move to… in the Director.",
       else: ""
   end
 

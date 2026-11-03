@@ -16,7 +16,7 @@ defmodule SymphonyElixir.StartNowTest do
     end
 
     test "a ticket in Backlog is refused with move it first" do
-      assert {:error, "the ticket is in Backlog; move it first"} = StartNow.check(%{@facts | phase: "Backlog"})
+      assert {:error, "the ticket is in Backlog; move it to Todo with Move to… first"} = StartNow.check(%{@facts | phase: "Backlog"})
     end
 
     test "a closed ticket is refused, naming its state" do

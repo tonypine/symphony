@@ -244,7 +244,7 @@ defmodule SymphonyElixir.SubIssueWaitTest do
 
       assert body ==
                "Every sub-ticket is finished, so this ticket is Done:\n\n- MT-2: Done\n- MT-3: Backlog\n\n" <>
-                 "Sub-tickets in Backlog stay there until a person promotes them."
+                 "Sub-tickets in Backlog stay there until a person moves them to Todo with Move to… in the Director."
 
       capture_log([level: :info], fn -> assert :ok = SubIssueWait.close(%{waiting | sub_issues: []}, SymphonyElixir.Tracker.Memory) end)
       assert_received {:memory_tracker_state_update, "p", "Done"}

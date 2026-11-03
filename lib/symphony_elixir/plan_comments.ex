@@ -130,7 +130,7 @@ defmodule SymphonyElixir.PlanComments do
   def reply(identifier) do
     parent = identifier || "the parent"
 
-    "#{@reply_opener}. Move #{parent} to Rework instead: " <>
+    "#{@reply_opener}. Move #{parent} to Rework with Move to… in the Director instead: " <>
       "Symphony re-plans it, cancels only the sub-tickets still in Backlog and keeps the ones already promoted."
   end
 

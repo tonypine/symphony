@@ -30,7 +30,7 @@ re-projected. *Linear* means Symphony follows what Linear says.
 | Park in Backlog | the observation (phase) | Symphony | Backlog (`/backlog`) | — |
 | Reopen a Done or Canceled ticket | the observation (phase); a cancelled record follows Linear again | Symphony | Move to… (`/move`) | — |
 | Start over (close the PR, fresh branch) | — | Symphony | Restart (`/restart`) | — |
-| Move a ticket out of a retired state | `SymphonyElixir.RetiredStates` | Linear | Move to… (`/move`) | the text still says "by hand": [TP-1358](https://linear.app/tonypine/issue/TP-1358) |
+| Move a ticket out of a retired state | `SymphonyElixir.RetiredStates` | Linear | Move to… (`/move`); the drain report names it since [TP-1358](https://linear.app/tonypine/issue/TP-1358) | — |
 | Approve a merge: answer the manual-review Question, or move to `Merging` by hand | `SymphonyElixir.MergeConfirmation`; the observation (a hand move to `Merging` of a phase Symphony owns is drift, moved back) | Symphony (the Question; the phase) | Decide (`/decide`, target `merging`); Move to… (`/move`) Merging | — |
 | Add or remove `Blocked`, `Needs Decision`, the CI labels | `Pauses.Projector.labels/0`; `SymphonyElixir.MachineLabels` | Symphony (projected; a hand edit is put back) | Unblock (`/unblock`), Decide (`/decide`) | — |
 | Add or remove the force label (`expedite`) | `Issue.forced?/2` | Linear | Force (`/force`, `clear` removes it); `symphony force` | — |
@@ -62,12 +62,15 @@ promoting a Backlog ticket Symphony has no record of yet; [TP-1367](https://line
 
 ## Texts that send a person to Linear
 
-Each text below tells a person to act on a ticket in Linear, or by hand. [TP-1358](https://linear.app/tonypine/issue/TP-1358)
-rewrites them to name the Director move.
+Each text below told a person to act on a ticket in Linear, or by hand.
+[TP-1358](https://linear.app/tonypine/issue/TP-1358) fixed each one: it now names the Director move,
+or says Symphony does the step itself. The few left as they were are a fact that stays Linear's
+(decided by TP-1359) or a statement that tells nobody to act; each says why. A move a later gap
+ticket adds (a blocker, a label, a ruling) is named as the ticket page control that ticket builds.
 
 How this list was made: every hit of this command, run from the repo root, is either listed below or
-named under "Hits that stay"; the texts Code Review named are listed too. A text found later is a row
-for TP-1358, not a change to this doc.
+named under "Hits that stay"; the texts Code Review named are listed too. A text found later is a new
+gap ticket, not a change to this doc.
 
 ```sh
 rg -n -i -e 'in linear|by hand' \
@@ -78,53 +81,78 @@ rg -n -i -e 'in linear|by hand' \
 
 `lib/`:
 
-- `lib/symphony_elixir/director_moves.ex:1492`, `:1495`, `:1499`: Undo's refusals say "move it in
-  Linear instead" and "move them in Linear instead". A hand move like that is drift, and it is undone.
-- `lib/symphony_elixir/retired_states.ex:110`, `:113`, `:116`, `:119`, `:122`: "move it by hand to …".
-- `lib/symphony_elixir/setup/checks/status_use.ex:90`: "Move each one by hand".
-- `lib/symphony_elixir/sub_issue_wait.ex:233`: "stay there until a person promotes them".
-- `lib/symphony_elixir/start_now.ex:53`: "the ticket is in Backlog; move it first" (it doesn't name
-  Move to…).
-- `lib/symphony_elixir/codex/dynamic_tool.ex:2154` ("a person promoted it"), `:2197` ("for a human
-  to remove" a blocked-by link), `:2111`, `:2185` and `:2225` ("for a human to add" or "to make" a
-  blocked-by link; the replacement is TP-1354's move), `:2020` ("for a human to attach" a document),
-  `:1997` ("ask a person to add the issue to a project"), and `:2470` and `:2479` (a human approves
-  a merge by moving the issue to `Merging` in Linear; the replacement is Decide on the merge
-  Question under manual review, or Move to… Merging).
-- `lib/symphony_elixir/quality_gate.ex:367`: "Reply in Linear with 1-2 sentences per question". The
-  answer itself has no Director path: [TP-1360](https://linear.app/tonypine/issue/TP-1360).
+- `director_moves.ex` (`undoable/2`), Undo's refusals: fixed. "move it in Linear instead" now reads
+  "use Move to… on the ticket page instead", and "move them in Linear instead" reads "use Move to… on
+  each sub-ticket's page instead".
+- `retired_states.ex` (`wait/1`), each "move it by hand to …": fixed, "move it with Move to… in the
+  Director to …".
+- `setup/checks/status_use.ex`, "Move each one by hand": fixed, "Move each one with Move to… in the
+  Director".
+- `sub_issue_wait.ex` (`backlog_note/1`), "stay there until a person promotes them": fixed, "until a
+  person moves them to Todo with Move to… in the Director".
+- `start_now.ex`, "the ticket is in Backlog; move it first": fixed, "move it to Todo with Move to…
+  first".
+- `plan_comments.ex` (`reply/1`, found while fixing), "Move MT-1 to Rework instead": fixed, "Move MT-1
+  to Rework with Move to… in the Director instead".
+- `codex/dynamic_tool.ex`:
+  - `issue_not_in_merging_state` and `merging_requires_human_approval`: fixed. A person approves the
+    merge in the Director: Decide on the merge Question (manual review), or Move to… Merging.
+  - `blocked_by_relation_failed` and `add_blocked_by_failed` ("for a human to add"): fixed. The
+    agent adds the link with `linear_add_blocked_by`, or records it in the workpad for a person, who
+    adds a blocker from the ticket page in the Director (TP-1354's move).
+  - `remove_blocked_by_failed` ("for a human to remove"): fixed, a person removes a blocker from the
+    ticket page in the Director (TP-1354's move).
+  - `subissue_not_in_backlog` ("a person promoted it"): fixed, "the plan's approval or a person's Move
+    to… promoted it".
+  - `document_attach_failed` ("for a human to attach"): fixed. No person attaches it: the run records
+    the document's id and URL in the workpad, where later runs find it.
+  - `issue_has_no_project` ("ask a person to add the issue to a project"): stays. A ticket's project is
+    Linear's (TP-1359), so a person sets it in Linear and it is not drift.
+- `quality_gate.ex`, "Reply in Linear with 1-2 sentences per question": stays for
+  [TP-1360](https://linear.app/tonypine/issue/TP-1360), which asks the questions as an Inbox Question.
 
 `priv/playbook/`:
 
-- `status_map.liquid:7`: Backlog "except when a person triages it to `Todo`".
-- `parent_tickets.liquid:7`: "The `plan` label is a human's signal" (added in Linear; the move is
-  TP-1356's).
-- `parent_tickets.liquid:26`, `:32`, `:126`, `:169`: approve or reject a plan "by moving the parent".
-- `parent_tickets.liquid:36`, `:119`: "A person comments on the plan under review to ask for a
-  change" (a Linear comment; the replacement is Ask for Changes).
-- `parent_tickets.liquid:50`, `:109`: "a person already promoted it" (by hand in Linear; the move is
-  [TP-1353](https://linear.app/tonypine/issue/TP-1353)'s).
-- `parent_tickets.liquid:156`: "so the person approving the plan can set it" (edit the parent's
-  description in Linear, which stays Linear's: TP-1359).
-- `ticket_types.liquid:16`, `:39`, `:76`: the operator adds the `plan`, `type:bug` or `type:feature`
-  label in Linear (the move is TP-1356's).
-- `ticket_types.liquid:53`, `:91`: "asks the operator to fill them in and move the ticket back to
-  `Todo`" (edit the description, which stays Linear's: TP-1359; the move is Move to… Todo).
-- `escape_hatches.liquid:37`: "A person's plain comment that opens with `Decision:` or `Ruling:` is a
-  ruling" (a Linear comment; no Director move:
-  [TP-1357](https://linear.app/tonypine/issue/TP-1357)).
-- `review_brief.liquid:69`, `:76`, `:91`: "move the parent to `Waiting on sub-tickets`", "move the
-  parent to `Rework`", "move the ticket to `Canceled`".
+- `status_map.liquid`, Backlog "except when a person triages it to `Todo`": fixed, "moves it to
+  `Todo` (Move to… in the Director)".
+- `parent_tickets.liquid`:
+  - "The `plan` label is a human's signal": fixed, a person sets it from the ticket page in the
+    Director (TP-1356's move).
+  - Approve or reject a plan "by moving the parent": fixed, Approve Plan and Reject Plan in the
+    Director; a person who wants a plan outside `Plan Review` revised moves the parent to `Rework` with
+    Move to….
+  - "A person comments on the plan under review to ask for a change": fixed, Ask for Changes in the
+    Director (or a comment on the plan, which still works).
+  - "a person already promoted it" (twice): fixed, "the plan's approval or a person's Move to…
+    already promoted it".
+  - The reply to a comment on an approved plan, "moving the parent to `Rework`": fixed, names Move to….
+  - "so the person approving the plan can set it": stays. It edits the parent's description, which is
+    Linear's (TP-1359).
+- `ticket_types.liquid`:
+  - "This ticket has the `plan` / `type:bug` / `type:feature` label": stays. It says what the ticket
+    is and tells nobody to act.
+  - "asks the operator to fill them in and move the ticket back to `Todo`" (twice): fixed, the move
+    back is Move to… in the Director. Filling in the description stays in Linear (TP-1359).
+- `escape_hatches.liquid`, a ruling as a plain `Decision:` / `Ruling:` comment: fixed, names Record a
+  decision on the ticket page in the Director first
+  ([TP-1357](https://linear.app/tonypine/issue/TP-1357)'s move); the comment still works.
+- `review_brief.liquid`: fixed. A plan's Approve is Approve Plan, its Reject is Reject Plan, and a
+  decision's Reject is Cancel, each in the Director.
 
 `.symphony/instructions/`:
 
-- `051-step-0-route.md:6`: "wait for human to move it to `Todo`".
-- `052-step-1-start.md:18`: "say so in the workpad `Confusions` so a human can add the label" (the
-  `plan` label, which has no Director move yet: [TP-1356](https://linear.app/tonypine/issue/TP-1356)).
-- `091-step-2-execution.md:5`: "The `qa:live` and `qa:fixture` labels are a person's override of
-  Symphony's choice" (added in Linear today; the move is TP-1356's).
-- `121-priority-vs-expedite.md:5`, `:6`: "they add the `expedite` label"; "`Backlog` -> `Todo` …
-  stay with a person".
+- `051-step-0-route.md`, "wait for human to move it to `Todo`": fixed, "wait for a person to move it
+  to `Todo` (Move to… in the Director)".
+- `052-step-1-start.md`, "so a human can add the label": fixed, "so a person can set the label from
+  the ticket page in the Director" (TP-1356's move).
+- `091-step-2-execution.md`, the `qa:live` and `qa:fixture` override: fixed, "set from the ticket page
+  in the Director" (TP-1356's move).
+- `121-priority-vs-expedite.md`, "they add the `expedite` label": fixed, "they press Force in the
+  Director or run `symphony force <ticket>`"; "`Backlog` -> `Todo` … stay with a person": fixed, "stay
+  a person's moves in the Director (Move to…, Approve Plan, Decide, Restart)".
+
+`docs/configuration.md` (the `waiting_on_sub_issues` state), "approves the plan by moving the parent":
+fixed, Approve Plan and Reject Plan in the Director.
 
 ### Hits that stay
 

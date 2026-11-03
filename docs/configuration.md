@@ -193,11 +193,11 @@ issues:
   revisited: `mix symphony.done_with_open_subtickets --config /path/to/symphony.yml` lists every
   parent in a terminal state with sub-tickets still open, without changing anything. When it cannot
   read a repository, it names that repository above the list and exits non-zero. The plan
-  run ends with the parent in `states.plan_review` and its sub-tickets in `Backlog`. A human
-  approves the plan by moving the parent
+  run ends with the parent in `states.plan_review` and its sub-tickets in `Backlog`. A person
+  approves the plan with Approve Plan in the Director, which moves the parent
   from `states.plan_review` to this state, and on the next poll Symphony moves every sub-ticket still in
-  `Backlog` to `Todo` (blocked-by links keep the order); moving the parent to `Rework` instead
-  cancels the sub-tickets the rejected plan run created and re-plans. Each batch is listed
+  `Backlog` to `Todo` (blocked-by links keep the order); Reject Plan, which moves the parent to
+  `Rework` instead, cancels the sub-tickets the rejected plan run created and re-plans. Each batch is listed
   in one comment on the parent. Agents cannot move an issue here
   (`linear_update_state` refuses it). On every poll Symphony also moves a plan ticket it
   finds `In Progress` with open sub-tickets of an approved plan here (some sub-ticket left
