@@ -237,7 +237,7 @@ defmodule SymphonyElixir.Pauses.DependenciesTest do
       refute Pauses.paused?({:ticket, @repo_key, "issue-5"})
 
       # Outside Todo a reason whose blocker went is left to the sweep, which may wait for an app update.
-      held = TicketState.normalize(RunStore.get_ticket_state(@repo_key, "issue-2"))
+      held = TicketState.normalize(RunStore.get_ticket_state("issue-2"))
       gone = %{held | phase: "In Progress", blockers: []}
       assert Dependencies.sync_records([gone], @terminal, active_states: @active_states) == 0
       assert Pauses.paused?({:ticket, @repo_key, "issue-2"})
