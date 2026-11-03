@@ -5301,7 +5301,7 @@ defmodule SymphonyElixir.Orchestrator do
   # holds in its phase as a blocked one does. A run whose session started finishes its turn.
   defp stop_blocked_start(%State{} = state, issue_id) do
     with running_entry when is_map(running_entry) <- Map.get(state.running, issue_id),
-         true <- Settle.starting?(running_entry),
+         true <- Settle.starting?(running_entry) and not pr_run_entry?(running_entry),
          %{} = record <- RunStore.get_ticket_state(issue_id),
          %Issue{} = recorded <- Candidates.issue_from_record(record),
          terminal_states = terminal_state_set(),
