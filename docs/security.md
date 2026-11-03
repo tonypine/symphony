@@ -167,10 +167,12 @@ Unlock config/settings_ui_exempt.yml for TP-760 to drop the human_actions.label 
 Answers come from the Director only. A comment in Linear, whether a reply under the request or a
 plain comment opening with `Decision:` or `Ruling:`, answers nothing and grants nothing.
 
-#### Unlocking a protected path for one run
+#### Unlocking a protected path for the ticket
 
-Symphony records a grant in the ticket's Decisions section, and the ticket's next implementation
-run (In Progress, Rework, CI Fix) claims it before its session starts:
+Symphony reads a grant from the ticket's state: the answered Question in its record, whose answer
+names the option the Director picked, and the ticket's Decisions section. A Question answered by
+its id, by its request comment or in the Inbox grants the same paths. Each implementation run of
+the ticket (In Progress, Rework, CI Fix) claims its grants before its session starts:
 
 - The run's sandbox leaves the path out of its write-deny list: Claude's `denyWrite` and `Edit`
   rules, Codex's filesystem permissions and SRT's `denyWrite`. For a skill directory, the files its
@@ -178,12 +180,9 @@ run (In Progress, Rework, CI Fix) claims it before its session starts:
 - Its prompt names the path, the decision and its words, so the agent knows it may edit the path.
 - Its `github_sync_base` and `github_push_branch` accept the branch's change to the path.
 
-Only that run gets it. The claim is kept in the ticket's record in Symphony's store, so a restart
-doesn't hand it out again; every later run of the ticket, and every other ticket, keeps the
-protection. Once the run has pushed, the tools let later runs keep the pushed file as it is, as
-they do for a person's push, but refuse a further change to it. To unlock the path for another
-run, record a new decision with different words (Symphony skips a ruling whose words it already
-recorded).
+The grant is the ticket's, not one run's: every later run of the ticket, its reworks and CI fixes
+on the same pull request, keeps the path unlocked, and the claim kept in the ticket's record in
+Symphony's store names the run that first used it. Every other ticket keeps the protection.
 
 Only the paths in the list above count: `.git`, the home-folder files and any other path stay
 protected whatever a decision says. A decision copied onto another ticket unlocks nothing there,

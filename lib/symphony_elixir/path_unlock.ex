@@ -22,13 +22,19 @@ defmodule SymphonyElixir.PathUnlock do
   Either way the path must be on the protected list. Each path has a plain description
   (`describe/1`) that a request shows the Director instead of the path.
 
-  The next implementation run of the ticket claims the grant (`claim/3`) before its session starts:
-  the claim is recorded in the ticket's store record (`SymphonyElixir.RunStore.claim_path_unlocks/4`),
-  so a grant unlocks its path for that run only, and every later run, and every other ticket, keeps
-  the protection. The run's sandbox leaves the path out of its write-deny list, its prompt names
-  the path and the decision (`prompt_section/1`), and its `github_sync_base` and
-  `github_push_branch` accept the branch's change to it. To unlock the path again a person gives a
-  new decision.
+  The decision is read from the ticket's state, whichever way the Director answered: the Decisions
+  section (`SymphonyElixir.Decisions`), and the ticket's answered Questions in its store record
+  (`SymphonyElixir.Questions`), whose answer names the option it picked. So a Question answered by
+  its id, by its request comment or in the Inbox grants the same paths, even before the section is
+  projected into the description the run reads.
+
+  A grant is bound to the ticket, not to one run: each implementation run of the ticket claims its
+  grants (`claim/3`) before its session starts, the claim recording in the ticket's store record the
+  run that first used each one (`SymphonyElixir.RunStore.claim_path_unlocks/4`), and every later
+  run of the ticket (its reworks and CI fixes on the same pull request) keeps the path unlocked.
+  Every other ticket keeps the protection. The run's sandbox leaves the path out of its write-deny
+  list, its prompt names the path and the decision (`prompt_section/1`), and its `github_sync_base`
+  and `github_push_branch` accept the branch's change to it.
 
   Agents post as the operator's Linear user, so their comment and sub-issue tools refuse text that
   reads as a grant or carries an option's hidden unlocks (`grant_text?/1`), and a reply under a
@@ -37,7 +43,7 @@ defmodule SymphonyElixir.PathUnlock do
 
   require Logger
 
-  alias SymphonyElixir.{AgentSandboxConfig, Decisions, PromptSafety, RunStore}
+  alias SymphonyElixir.{AgentSandboxConfig, Decisions, PromptSafety, RunStore, TicketState}
   alias SymphonyElixir.HumanActions.Request
 
   @grant_pattern ~r/\bunlock\s+(\S+)\s+for\s+([a-z][a-z0-9]*-\d+)\b/iu
@@ -92,13 +98,59 @@ defmodule SymphonyElixir.PathUnlock do
           not MapSet.member?(recorded_keys, key),
           do: Map.put(ruling, :id, "ruling")
 
-    for decision <- recorded ++ rulings,
-        path <- granted_paths(decision.answer, identifier) ++ protected(Map.get(decision, :unlocks)),
-        uniq: true,
-        do: %{id: "#{decision.key}:#{path}", decision: decision.id, path: path, answer: decision.answer}
+    decided =
+      for decision <- recorded ++ rulings,
+          path <- granted_paths(decision.answer, identifier) ++ protected(Map.get(decision, :unlocks)),
+          uniq: true,
+          do: %{id: "#{decision.key}:#{path}", decision: decision.id, path: path, answer: decision.answer}
+
+    granted = MapSet.new(decided, & &1.path)
+    decided ++ Enum.reject(question_grants(issue), &MapSet.member?(granted, &1.path))
   end
 
   def grants(_issue), do: []
+
+  # The grants the ticket's answered Questions give, read from its store record: an answer whose
+  # picked option carries `unlocks` grants those protected paths, however the Director answered
+  # it (by the question's id, by its request comment, in the Inbox). Each is labelled with the
+  # stored decision that records the answer (keyed by the question or its request comment), else
+  # `question`.
+  defp question_grants(%{id: issue_id}) when is_binary(issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
+      %{} = record ->
+        record = TicketState.normalize(record)
+        labels = decision_labels(record)
+
+        for %{state: :answered, answer: %{option: number, text: text}} = question <- record.questions,
+            is_integer(number),
+            %{unlocks: unlocks} <- [Enum.at(question.options, number - 1)],
+            path <- protected(unlocks),
+            uniq: true,
+            do: %{id: "#{question.id}:#{path}", decision: question_label(labels, record, question.id), path: path, answer: text}
+
+      _none ->
+        []
+    end
+  end
+
+  defp question_grants(_issue), do: []
+
+  defp decision_labels(record) do
+    record
+    |> TicketState.decisions()
+    |> Enum.uniq_by(& &1.key)
+    |> Enum.with_index(1)
+    |> Map.new(fn {decision, index} -> {decision.key, "D#{index}"} end)
+  end
+
+  defp question_label(labels, record, question_id) do
+    Map.get(labels, question_id) || Map.get(labels, request_comment_id(record, question_id)) || "question"
+  end
+
+  defp request_comment_id(%{projected: %{comments: %{} = comments}}, question_id),
+    do: comments |> Map.get(question_id, %{}) |> Map.get(:comment)
+
+  defp request_comment_id(_record, _question_id), do: nil
 
   @doc "The protected paths `text` unlocks for the ticket `identifier`."
   @spec granted_paths(String.t() | term(), String.t()) :: [String.t()]
@@ -202,8 +254,9 @@ defmodule SymphonyElixir.PathUnlock do
   end
 
   @doc """
-  Claims the grants `issue` has that no run used yet for the run `opts[:run_id]`, and returns them.
-  A store that can't record the claim unlocks nothing. `opts[:repo_key]` names the store's repo and
+  Records that the run `opts[:run_id]` uses the grants `issue` has, and returns them all: a grant is
+  bound to the ticket, so every run of it keeps the path unlocked, and the store records the run
+  that first used each one. A store that can't record the claim unlocks nothing.
   `opts[:run_store]` overrides the store.
   """
   @spec claim(map(), String.t() | nil, keyword()) :: [grant()]
@@ -216,10 +269,9 @@ defmodule SymphonyElixir.PathUnlock do
         store = Keyword.get(opts, :run_store, RunStore)
 
         case store.claim_path_unlocks(repo_key, issue.id, Enum.map(grants, & &1.id), Keyword.get(opts, :run_id)) do
-          {:ok, ids} ->
-            claimed = Enum.filter(grants, &(&1.id in ids))
-            Enum.each(claimed, &Logger.info("Unlocked a protected path for one run issue_identifier=#{issue.identifier} path=#{&1.path} decision=#{&1.decision}"))
-            claimed
+          {:ok, _first_used} ->
+            Enum.each(grants, &Logger.info("Unlocked a protected path for the run issue_identifier=#{issue.identifier} path=#{&1.path} decision=#{&1.decision}"))
+            grants
 
           {:error, reason} ->
             Logger.warning("Failed to claim path unlocks; the run keeps every protection issue_identifier=#{issue.identifier} reason=#{inspect(reason)}")
@@ -247,7 +299,7 @@ defmodule SymphonyElixir.PathUnlock do
       [
         "Protected paths unlocked for this run:",
         "",
-        "A person's decision on this ticket unlocks these agent-protected paths for this run only. You may edit them for what the decision asks, and `github_sync_base` and `github_push_branch` accept this branch's change to them. The next run protects them again, so commit and push the change in this run.",
+        "A person's decision on this ticket unlocks these agent-protected paths for this ticket's runs. You may edit them for what the decision asks, and `github_sync_base` and `github_push_branch` accept this branch's change to them. Commit and push the change.",
         ""
       ] ++ paths ++ ["", "What the decision says:", PromptSafety.linear_block(answers, "linear_issue_decisions", @prompt_limit)],
       "\n"
@@ -255,5 +307,6 @@ defmodule SymphonyElixir.PathUnlock do
   end
 
   defp decision_name("ruling"), do: "a ruling in a comment"
+  defp decision_name("question"), do: "a person's answer to a question on this ticket"
   defp decision_name(id), do: "decision #{id}"
 end
