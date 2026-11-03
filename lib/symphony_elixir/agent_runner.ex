@@ -781,7 +781,7 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # A person's decision may unlock a protected path for this run only (`SymphonyElixir.PathUnlock`):
+  # A person's decision may unlock a protected path for the ticket's runs (`SymphonyElixir.PathUnlock`):
   # the run claims the grant before its session starts, and its sandbox, tools and prompt get it.
   defp put_path_unlocks(opts, issue) do
     unlocks = PathUnlock.claim(issue, run_repo_key(issue, opts), Keyword.take(opts, [:run_id, :run_store]))

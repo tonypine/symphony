@@ -3157,21 +3157,22 @@ Rules:
   approval. A plain comment that opens with `Decision:` or `Ruling:` MUST NOT be read as a
   decision; a ruling recorded before (keyed `ruling-<id>`) stays on the record. The agents' comment
   tools MUST still refuse a body that opens that way.
-- **Unlocking a protected path for one run.** A decision request's option MAY carry `unlocks`, the
+- **Unlocking a protected path for the ticket.** A decision request's option MAY carry `unlocks`, the
   agent-protected paths picking it grants; `linear_request_human_action` MUST refuse a path outside
   the protected list, naming the list, and MUST keep refusing file names in labels, the question
   and the Why, which names each file by its plain description. The request comment carries the
   paths in a hidden line per option, never in the option's text. A pick of that option in the Inbox MUST record the paths with the decision (a hidden line of its
   Decisions entry) and grant each one for that ticket; an answer that picks no option, or more than
-  one, grants nothing. A recorded decision that says
+  one, grants nothing. The grant MUST be read from the ticket's answered Question (the option its
+  answer picked) as well as from the Decisions section, so a Question answered by its id, by its
+  request comment or in the Inbox grants the same paths. A recorded decision that says
   `Unlock <path> for <ticket>` MUST unlock that path only when the path is one of the workspace's
-  agent-protected paths and the ticket is the one the decision is on. The ticket's next
-  implementation run MUST claim the grant in the ticket's store record before its session starts,
-  and only an unclaimed grant unlocks: the run's sandbox write-deny lists (Claude `denyWrite` and
+  agent-protected paths and the ticket is the one the decision is on. Each
+  implementation run of the ticket MUST claim its grants in the ticket's store record before its
+  session starts, and every run of the ticket keeps them: the run's sandbox write-deny lists (Claude `denyWrite` and
   `Edit` rules, Codex filesystem permissions, SRT `denyWrite`) MUST leave the path out, its prompt
   MUST name the path and the decision, and its `github_sync_base` and `github_push_branch` MUST
-  accept the branch's change to it. Every later run and every other ticket MUST keep the
-  protection. A store that cannot record the claim MUST unlock nothing. The agents' comment and
+  accept the branch's change to it. Every other ticket MUST keep the protection. A store that cannot record the claim MUST unlock nothing. The agents' comment and
   sub-issue tools MUST refuse text that reads as such a grant or carries an option's hidden paths,
   and a reply under a request whose options unlock a path.
 - **Escalation rules.** Code Review checks the repo's escalation rules (`EscalationRules`, the

@@ -93,7 +93,7 @@ defmodule SymphonyElixir.TicketState do
 
   @typedoc """
   A person's grant to unlock a protected path that a run used (`SymphonyElixir.PathUnlock`): the
-  grant's id, the run that used it and when. A used grant never unlocks the path again.
+  grant's id, the run that first used it and when. The grant stays the ticket's: later runs use it too.
   """
   @type path_unlock :: %{id: String.t(), run_id: String.t() | nil, at: DateTime.t() | nil}
 
@@ -663,7 +663,7 @@ defmodule SymphonyElixir.TicketState do
 
   @doc """
   Marks the grants in `ids` that no run used yet as used by `run_id`, and returns them with the
-  record. A grant already used is left out, so each one unlocks its path for one run only.
+  record: the run that first used each grant. A grant stays the ticket's (`SymphonyElixir.PathUnlock`).
   """
   @spec claim_path_unlocks(t(), [String.t()], String.t() | nil, DateTime.t()) :: {t(), [String.t()]}
   def claim_path_unlocks(record, ids, run_id, at \\ DateTime.utc_now()) when is_list(ids) do
