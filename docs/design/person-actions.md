@@ -17,7 +17,7 @@ re-projected. *Linear* means Symphony follows what Linear says.
 | Action in Linear | Read by | Owner | Through Symphony | Gap |
 | --- | --- | --- | --- | --- |
 | Move to a phase (any state) | the observation; `TicketStateReconciler.reconcile/4` | Symphony once Symphony or the Director wrote the phase (`phase_owner: :symphony`); Linear for a phase an observation wrote (`:external`) | Move to… (`/move`) | — |
-| Promote Backlog → Todo | the poll's active states; `Dispatch.Candidates` | Linear until Symphony moves it | Move to… (`/move`) to Todo, but only for a ticket Symphony has a record of (`DirectorMoves.require_tracked/2`) | Records are made only by the active-state poll or a webhook delivery, so a Backlog ticket whose delivery was missed is refused: [TP-1367](https://linear.app/tonypine/issue/TP-1367) (Move to… reads a ticket with no record from Linear and records it first) |
+| Promote Backlog → Todo | the poll's active states; `Dispatch.Candidates` | Linear until Symphony moves it | Move to… (`/move`) to Todo; for a ticket of a configured repository Symphony has no record of yet (a Backlog ticket whose webhook delivery was missed), Move to… reads it from Linear and records it first (`DirectorMoves.require_tracked/2`), since [TP-1367](https://linear.app/tonypine/issue/TP-1367) | — |
 | Promote a split-off ticket from Backlog to Todo, and link it as a blocker | `linear_create_subissue` (`AgentTools.Linear.create_subissue/3`) | Symphony | none needed since [TP-1353](https://linear.app/tonypine/issue/TP-1353): a run of a ticket that is not a plan files its sub-ticket in Todo and marks the ticket blocked by it, so the sub-ticket lands first and the ticket continues on its own; a plan run's sub-tickets stay in Backlog until the plan's approval promotes them | — |
 | Approve a plan (Plan Review → Waiting on sub-tickets) | `SymphonyElixir.BreakdownReview` | Symphony | Approve Plan (`/approve_plan`) | — |
 | Reject a plan (→ Rework) | `BreakdownReview` | Symphony | Reject Plan (`/rework`) | — |
@@ -50,7 +50,7 @@ re-projected. *Linear* means Symphony follows what Linear says.
 | Delete or archive | the webhook (`{:issue_removed, …}`) marks the record removed | Linear | Cancel (`/cancel`) | — |
 
 The gap tickets are chained in this order: TP-1352, TP-1353, TP-1354, TP-1355, TP-1356, TP-1357,
-TP-1358, TP-1359, TP-1360. TP-1367 (the Backlog record gap) lands before TP-1359.
+TP-1358, TP-1359, TP-1360. TP-1367 (the Backlog record gap) landed before TP-1359.
 
 ### Facts a person writes in Linear
 
@@ -58,7 +58,7 @@ TP-1358, TP-1359, TP-1360. TP-1367 (the Backlog record gap) lands before TP-1359
 its team, project and route labels and its assignee stay Linear's: a person writes them in Linear,
 Symphony follows them on every read (`TicketObservation`), and a hand edit of them is not drift. They
 are authoring and routing, not moves, so the Director has no control for them. The one gap was
-promoting a Backlog ticket Symphony has no record of yet; [TP-1367](https://linear.app/tonypine/issue/TP-1367) closes it.
+promoting a Backlog ticket Symphony has no record of yet; [TP-1367](https://linear.app/tonypine/issue/TP-1367) closed it.
 
 ## Texts that send a person to Linear
 
