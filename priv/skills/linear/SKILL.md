@@ -48,9 +48,12 @@ arguments from prompts.
   intentionally safe to expose through a world-readable Linear CDN URL.
 - `linear_create_subissue` with `{"title": "...", "description": "...", "priority": 3, "blocked_by": ["TP-12"]}`:
   creates a child of the current issue in its team and project, assigned to its
-  assignee. A ticket a run splits off lands in `Todo`, chained in front of the
-  ticket it splits (the current issue is blocked by it); a plan ticket's
-  sub-issues land in `Backlog` for the plan review. `priority` is optional (0 none, 1 urgent, 2 high,
+  assignee. On a plan ticket the sub-issue lands in `Backlog`, where the plan's
+  approval promotes it to `Todo`. On any other ticket it lands in `Todo`, and the
+  current issue is marked blocked by it: the new ticket lands first, and the
+  current issue waits for it. If Linear refuses that link, the tool returns
+  `split_link_failed` after the new issue exists: mark the current issue blocked
+  by it with `linear_add_blocked_by`. `priority` is optional (0 none, 1 urgent, 2 high,
   3 medium, 4 low). `blocked_by` is optional: identifiers of the current issue's
   sub-issues (existing ones or ones this run created) that block the new one;
   any other identifier is refused before the issue is created. Title and
@@ -61,8 +64,7 @@ arguments from prompts.
   sub-issue of the current issue when a plan run revises its plan.
   `blocked_by` is the complete list of sibling sub-issues that block it (sibling
   links left out are removed). `cancel_reason` alone posts the reason on the
-  sub-issue and cancels it. A sub-issue outside `Backlog` was promoted by a person
-  and is refused. Text fields are secret-scanned.
+  sub-issue and cancels it. A sub-issue outside `Backlog` is refused. Text fields are secret-scanned.
 - `linear_add_blocked_by` with `{"blocked_by": ["TP-12"]}`: marks the current
   issue blocked by existing issues. Symphony holds an issue in `Todo` until every
   blocker is `Done` or `Canceled`, then runs it again. Unknown identifiers and the
