@@ -257,8 +257,10 @@ Every merge to `main` of Symphony's own repository is watched too, held ticket o
 running app carries every fix merged since its build. The poll reads the newest `release` push run on
 `main` at most once a minute, and a `workflow_run` delivery of that workflow on `main` checks its
 commit at once. The same rules apply; with no held ticket to ask, a third cancellation or a failure is
-logged with the commit and the run, pauses nothing, and the Director's update line says it stopped
-("The v0.0.1.785 build: cancelled for lack of a machine 3 times; Symphony stopped rerunning it").
+logged with the commit and the run and asked on Symphony itself (TP-1341): one Inbox row with no
+ticket, "Rerun the build" or "Wait for a fix", which stops no dispatch. Picking "Rerun the build"
+checks the build at once and reruns it; the question is withdrawn once the build starts again on
+GitHub, is published, or a newer merge is the one watched.
 
 A run cancelled before any job started while a newer `release` run on `main` exists was replaced, not
 starved: the workflow's concurrency group cancels an older pending run once a newer push queues behind
