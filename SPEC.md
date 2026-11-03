@@ -1108,7 +1108,9 @@ Fields:
   - Optional workspace lifecycle guardrails.
   - `enabled` defaults to `true`.
   - `max_age_days` defaults to `14`; local workspaces older than this MAY be reclaimed even when
-    their associated issue is not terminal, except for currently running workspaces.
+    their associated issue is not terminal, except a workspace whose ticket has a run going, a
+    retry due, or an open PR the PR and CI watcher is waiting on in a phase (its review, QA or
+    landing run is still to come).
   - `interval_ms` defaults to `3600000` and controls how often the running service scans for
     stale workspaces.
   - `min_free_bytes` is unset by default. When set to a positive integer, new dispatch SHOULD pause
