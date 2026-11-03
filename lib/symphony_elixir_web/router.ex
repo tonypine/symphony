@@ -70,6 +70,7 @@ defmodule SymphonyElixirWeb.Router do
     post("/blocker", ControlApiController, :blocker)
     post("/priority", ControlApiController, :priority)
     post("/label", ControlApiController, :label)
+    post("/decision", ControlApiController, :decision)
   end
 
   scope "/", SymphonyElixirWeb do
@@ -93,6 +94,7 @@ defmodule SymphonyElixirWeb.Router do
     get("/api/v1/tickets/:issue_identifier/blockers", TicketBlockersController, :index)
     get("/api/v1/tickets/:issue_identifier/priority", TicketPriorityController, :show)
     get("/api/v1/tickets/:issue_identifier/labels", TicketLabelsController, :index)
+    get("/api/v1/tickets/:issue_identifier/decisions", TicketDecisionsController, :index)
     get("/api/v1/artifacts/:id", ArtifactsController, :show)
     get("/api/v1/artifacts/:id/meta", ArtifactsController, :meta)
     get("/api/v1/stream", StreamController, :index)
@@ -120,6 +122,7 @@ defmodule SymphonyElixirWeb.Router do
     match(:*, "/api/v1/tickets/:issue_identifier/blockers", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/tickets/:issue_identifier/priority", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/tickets/:issue_identifier/labels", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/tickets/:issue_identifier/decisions", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/artifacts/:id", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/artifacts/:id/meta", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/stream", ObservabilityApiController, :method_not_allowed)

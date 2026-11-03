@@ -26,7 +26,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
   by the `pause.*` types, and a decision a person must make is a Question, recorded by the
   `question.*` types. They stay in the catalog so a ticket's history still reads them (the summary
   renderer keeps their lines, `SymphonyElixir.TicketEvents.Summary`); no live writer and no backfill
-  records them any more. `hold.set` and `hold.cleared` take only the `blocked` kind, and
+  records them any more, but for one: a ruling the Director records on a ticket's page, which no
+  Question asked for, is a `decision.recorded` with no `request` (`SymphonyElixir.DirectorRulings`). `hold.set` and `hold.cleared` take only the `blocked` kind, and
   `person.action` has no `decide`.
   State is machinery-only: an agent claims `finding.resolved`, it never records a verdict.
 

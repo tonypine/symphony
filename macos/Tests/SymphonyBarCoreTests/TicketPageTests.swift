@@ -160,6 +160,13 @@ final class TicketPageTests: XCTestCase {
         ])
         let labelled = TicketPage(identifier: "SHOP-1", sources: TicketPage.Sources(audit: [labels]), now: date("2026-10-07T13:00:00Z"), timeZone: utc)
         XCTAssertEqual(labelled.timeline.map(\.title), ["Skip QA turned on by you", "plan turned off by you", "A label turned on by you"])
+
+        // TP-1357: the Director's ruling from the ticket page reads as such.
+        let ruled = ndjson([
+            ["event_type": "director_move", "move": "record_decision", "comment": "Keep the old endpoint", "issue_identifier": "SHOP-1", "timestamp": "2026-10-07T11:30:00Z"],
+        ])
+        let ruledPage = TicketPage(identifier: "SHOP-1", sources: TicketPage.Sources(audit: [ruled]), now: date("2026-10-07T13:00:00Z"), timeZone: utc)
+        XCTAssertEqual(ruledPage.timeline.map(\.title), ["Decision recorded by you"])
         XCTAssertEqual(page.phaseSentence, "Symphony isn't working on SHOP-1 right now")
         XCTAssertEqual(page.badges, [])
     }

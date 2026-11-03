@@ -3,7 +3,7 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
   Every question a person is asked goes through the one writer, `SymphonyElixir.DecisionRequest`:
   each source below raises its requests with `DecisionRequest.ask/4`, and no other code renders a
   request comment or records a `decision.*` event (legacy types: only the history backfill writes
-  `decision.recorded`, for decisions stored before). The writer asks each one as a Question
+  `decision.recorded`, for decisions stored before, and the Director's ruling from the ticket page). The writer asks each one as a Question
   (`SymphonyElixir.Questions.ask/3`). A new source must call the writer and be named
   here, or this test fails.
 
@@ -60,7 +60,8 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
 
   @writer "lib/symphony_elixir/decision_request.ex"
   # The history backfill rebuilds the decisions a record stored before as `decision.recorded`.
-  @recorded_writers ["lib/symphony_elixir/ticket_events/backfill.ex"]
+  # The history backfill, and the Director's ruling from the ticket page (TP-1357), which no Question asked.
+  @recorded_writers ["lib/symphony_elixir/ticket_events/backfill.ex", "lib/symphony_elixir/director_rulings.ex"]
 
   defp lib_files do
     root = Path.expand("../..", __DIR__)

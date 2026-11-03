@@ -32,7 +32,9 @@ defmodule SymphonyElixir.Decisions do
   backfilled from the section, once.
 
   A decision is recorded when the Director answers it: the Director's Decide writes its picks
-  (`SymphonyElixir.DirectorMoves`) through `record/3`. Nothing reads a Linear comment for a
+  (`SymphonyElixir.DirectorMoves`) through `record/3`, and Record a decision on a ticket's page
+  writes the Director's ruling, which no Question asked for, the same way
+  (`SymphonyElixir.DirectorRulings`, keyed `ruling-director-<id>`). Nothing reads a Linear comment for a
   decision: a reply under a request, or a plain comment opening with `Decision:` or `Ruling:`,
   answers nothing. A ruling recorded before (keyed `ruling-<comment id>`) stays on the record, and a
   later entry with the same answer is skipped. The agents' comment tools still refuse a body that
