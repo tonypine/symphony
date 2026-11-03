@@ -231,7 +231,10 @@ defmodule SymphonyElixirWeb.Presenter do
 
   @doc """
   Everything that waits on the Director (`SymphonyElixir.Inbox.items/2`), oldest first, with
-  counts by kind. Built from the tickets' records on this read: it makes no Linear request.
+  counts by kind. Built from the tickets' records on this read: it makes no Linear request. Each
+  item's `subject` says what it is asked on: `ticket`, or, for a Question with no ticket, `symphony`
+  or `repository` (its `issue_id` and `identifier` null, its `title` naming Symphony or the
+  repository).
   """
   @spec inbox_payload(GenServer.name(), timeout(), Inbox.inbox()) :: map()
   def inbox_payload(orchestrator, snapshot_timeout_ms, inbox \\ Inbox) do
@@ -259,6 +262,7 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp inbox_item_payload(item, now) do
     %{
+      subject: inbox_subject(item),
       issue_id: item.issue_id,
       identifier: item.identifier,
       title: item.title,
@@ -274,6 +278,9 @@ defmodule SymphonyElixirWeb.Presenter do
       context: Map.get(item, :context)
     }
   end
+
+  # What a row is asked on: a ticket, or, with no ticket, Symphony itself or a repository.
+  defp inbox_subject(item), do: item |> Map.get(:subject, :ticket) |> Atom.to_string()
 
   defp inbox_review_payload(%{requested_at: requested_at} = review), do: %{review | requested_at: iso8601(requested_at)}
   defp inbox_review_payload(review), do: review
@@ -1066,6 +1073,7 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp waiting_on_you_payload(item, now) do
     %{
+      subject: inbox_subject(item),
       issue_id: item.issue_id,
       issue_identifier: item.identifier,
       repo_key: item.repo_key,

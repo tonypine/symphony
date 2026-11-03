@@ -16,6 +16,9 @@ defmodule SymphonyElixir.TicketEvents do
   (`SymphonyElixir.Questions`) is `question.asked`, ended by `question.answered` or
   `question.withdrawn` naming its `question_id`, or by a `decision.recorded` naming the event.
 
+  A question asked on Symphony itself or on a repository records the same `question.*` events on
+  that subject's own stream (`build_subject/4`, `query_subject/2`), which no ticket's record holds.
+
   The machinery writes events next to the snapshot fields of `SymphonyElixir.TicketState`
   (`SymphonyElixir.TicketSignals`, `SymphonyElixir.Pauses`, `SymphonyElixir.Questions`, and the
   orchestrator's `run.started` and `run.ended` next to its dispatches) and next to the audit records
@@ -90,7 +93,7 @@ defmodule SymphonyElixir.TicketEvents do
   The event `record/5` would write, validated and with its summary, without writing it: for a
   writer that appends a ticket's events in one transaction (`RunStore.append_ticket_events/1`).
   """
-  @spec build(String.t(), String.t(), String.t(), map(), [record_opt()]) :: {:ok, Event.t()} | {:error, Types.error() | term()}
+  @spec build(String.t() | nil, String.t(), String.t(), map(), [record_opt()]) :: {:ok, Event.t()} | {:error, Types.error() | term()}
   def build(repo_key, issue_id, type, payload, opts) do
     with {:ok, actor} <- actor(opts),
          {:ok, payload} <- Types.validate(type, payload, actor.kind, Map.get(actor, :run_kind)),
@@ -131,18 +134,37 @@ defmodule SymphonyElixir.TicketEvents do
   `since:` the last event's `at` never skips an event.
   """
   @spec query(String.t(), [query_opt()]) :: [Event.t()] | {:error, term()}
-  def query(issue_id, opts \\ []) do
-    case RunStore.list_ticket_events(issue_id, []) do
-      events when is_list(events) ->
-        events
-        |> open(opts)
-        |> Enum.filter(&matches?(&1, opts))
-        |> page(limit(opts))
+  def query(issue_id, opts \\ []), do: issue_id |> RunStore.list_ticket_events([]) |> read(opts)
 
-      {:error, reason} ->
-        {:error, reason}
-    end
+  @doc """
+  The event stream of a subject that is not a ticket: Symphony itself (`:symphony`) or a repository
+  (`{:repository, repo_key}`), whose questions (`SymphonyElixir.Questions`) record the same
+  `question.*` events a ticket's do. Its events carry `stream/1`'s `repo_key` and `issue_id`, and
+  `SymphonyElixir.RunStore` keeps them apart from every ticket's.
+  """
+  @spec build_subject(SymphonyElixir.Pauses.subject(), String.t(), map(), [record_opt()]) :: {:ok, Event.t()} | {:error, Types.error() | term()}
+  def build_subject(subject, type, payload, opts) do
+    {repo_key, issue_id} = stream(subject)
+    build(repo_key, issue_id, type, payload, opts)
   end
+
+  @doc """
+  The `repo_key` and `issue_id` the events of a subject's own stream carry: none and `symphony` for
+  Symphony, the repository's key and `repository` for a repository. No Linear issue has either id.
+  """
+  @spec stream(:symphony | {:repository, String.t()}) :: {String.t() | nil, String.t()}
+  def stream(:symphony), do: {nil, "symphony"}
+  def stream({:repository, repo_key}) when is_binary(repo_key), do: {repo_key, "repository"}
+
+  @doc """
+  The events of `subject`'s own stream (`build_subject/4`), as `query/3` reads a ticket's, with the
+  same options.
+  """
+  @spec query_subject(:symphony | {:repository, String.t()}, [query_opt()]) :: [Event.t()] | {:error, term()}
+  def query_subject(subject, opts \\ []), do: subject |> RunStore.list_subject_events([]) |> read(opts)
+
+  defp read(events, opts) when is_list(events), do: events |> open(opts) |> Enum.filter(&matches?(&1, opts)) |> page(limit(opts))
+  defp read({:error, reason}, _opts), do: {:error, reason}
 
   @doc """
   Sends the live channel's notice of `event`, as `record/5` does once it writes one: for a writer

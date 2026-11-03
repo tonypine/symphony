@@ -222,8 +222,19 @@ defmodule SymphonyElixir.PausesTest do
       assert ticket_events(@repo_key, @issue_id) == []
     end
 
-    test "refuses a subject that is not a ticket, and a reason, setter or time it doesn't know" do
-      for subject <- [{:repository, "repo-a"}, :symphony, {:ticket, @repo_key, " "}] do
+    test "a subject that is not a ticket gets the same pause and records no event, as set/3 records none (TP-1341)" do
+      for subject <- [{:repository, "repo-a"}, :symphony] do
+        assert {:ok, %{subject: ^subject, reasons: [%{kind: :question}]} = paused, []} =
+                 Pauses.set_change(subject, nil, @question, at: @at)
+
+        assert {:ok, ^paused, []} = Pauses.set_change(subject, paused, @question, at: @at)
+        assert {:ok, nil, []} = Pauses.clear_reason_change(subject, paused, @question, at: @later)
+        assert Pauses.get(subject) == {:ok, nil}
+      end
+    end
+
+    test "refuses a subject it doesn't know, and a reason, setter or time it doesn't know" do
+      for subject <- [{:repository, " "}, :everything, {:ticket, @repo_key, " "}] do
         assert Pauses.set_change(subject, nil, @question, []) == {:error, {:invalid_subject, subject}}
         assert Pauses.clear_reason_change(subject, nil, @question, []) == {:error, {:invalid_subject, subject}}
       end
@@ -404,6 +415,15 @@ defmodule SymphonyElixir.PausesTest do
       {:ok, pause} = Pauses.set({:repository, "plain"}, Pauses.repository_reason(nil), at: @at)
       assert Pauses.repository_skip_reason(pause) == "the repository is paused by you since 2026-10-30 04:00 UTC"
       assert Pauses.repository_skip_reason(%{pause | since: nil}) == "the repository is paused by you"
+    end
+
+    test "a question on the repository skips its candidates with the question's line, after the Director's (TP-1341)" do
+      question = Map.put(@question, :text, "Waiting for your answer: The clone keeps failing")
+      {:ok, pause} = Pauses.set({:repository, "hub"}, question, at: @at)
+      assert Pauses.repository_skip_reason(pause) == "the repository is paused: Waiting for your answer: The clone keeps failing"
+
+      {:ok, pause} = Pauses.add_reason({:repository, "hub"}, Pauses.repository_reason(nil), set_by: @person, at: @at)
+      assert Pauses.repository_skip_reason(pause) == "the repository is paused by you since 2026-10-30 04:00 UTC; the repository is paused: Waiting for your answer: The clone keeps failing"
     end
   end
 

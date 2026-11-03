@@ -205,13 +205,24 @@ defmodule SymphonyElixir.Pauses do
 
   @doc """
   The line a paused repository's candidates are skipped with: `the repository is paused by you since
-  2026-10-30 12:44 UTC`, then the Director's reasons when they gave any.
+  2026-10-30 12:44 UTC`, then the Director's reasons when they gave any; a reason that is not the
+  Director's (a question asked on the repository, `SymphonyElixir.Questions`) adds
+  `the repository is paused: ` and its line.
   """
   @spec repository_skip_reason(pause()) :: String.t()
   def repository_skip_reason(%{reasons: reasons} = pause) do
     since = if at = Map.get(pause, :since), do: " since #{Calendar.strftime(at, "%Y-%m-%d %H:%M UTC")}", else: ""
+    {director, others} = Enum.split_with(reasons, &(&1.kind == :person))
 
-    case for(%{kind: :person, text: text} <- reasons, text != @repository_text, do: text) do
+    [director_skip_text(director, since), others != [] && "the repository is paused: #{Enum.map_join(others, "; ", & &1.text)}"]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.join("; ")
+  end
+
+  defp director_skip_text([], _since), do: nil
+
+  defp director_skip_text(reasons, since) do
+    case for(%{text: text} <- reasons, text != @repository_text, do: text) do
       [] -> "the repository is paused by you#{since}"
       texts -> "the repository is paused by you#{since}: #{Enum.join(texts, "; ")}"
     end
@@ -327,26 +338,27 @@ defmodule SymphonyElixir.Pauses do
   end
 
   @doc """
-  The change `set/3` makes to `pause`, the pause of ticket `ticket` as its writer read it under the
-  record's lock (`RunStore.update_ticket_question/4`): that writer stores the pause and its events in
-  its own transaction. Pure: it writes nothing.
+  The change `set/3` makes to `pause`, the pause of `subject` as its writer read it under the
+  record's lock (`RunStore.update_ticket_question/4`, `RunStore.update_subject_question/2`): that
+  writer stores the pause and its events in its own transaction. A subject that is not a ticket
+  records no event, as `set/3` records none for it. Pure: it writes nothing.
   """
   @spec set_change(subject(), pause() | nil, reason_input(), [opt()]) :: ticket_change()
-  def set_change(ticket, pause, reason, opts) do
-    with {:ok, ticket} <- ticket(ticket),
+  def set_change(subject, pause, reason, opts) do
+    with {:ok, subject} <- subject(subject),
          {:ok, reason} <- new_reason(reason, opts, :set_by),
-         do: changed(add(ticket, normalize(pause), reason, source(opts)))
+         do: changed(add(subject, normalize(pause), reason, source(opts)))
   end
 
   @doc """
-  The change `clear_reason/3` makes to `pause`, the pause of ticket `ticket` as its writer read it
-  under the record's lock, as `set_change/4` gives it. Pure: it writes nothing.
+  The change `clear_reason/3` makes to `pause`, the pause of `subject` as its writer read it under
+  its lock, as `set_change/4` gives it. Pure: it writes nothing.
   """
   @spec clear_reason_change(subject(), pause() | nil, reason_input(), [opt()]) :: ticket_change()
-  def clear_reason_change(ticket, pause, reason, opts) do
-    with {:ok, ticket} <- ticket(ticket),
+  def clear_reason_change(subject, pause, reason, opts) do
+    with {:ok, subject} <- subject(subject),
          {:ok, target} <- new_reason(reason, opts, :by),
-         do: changed(drop(ticket, normalize(pause), target))
+         do: changed(drop(subject, normalize(pause), target))
   end
 
   @doc "Clears `subject`'s pause whatever its reasons, recording `pause.cleared`. A subject not paused is unchanged."
@@ -549,6 +561,7 @@ defmodule SymphonyElixir.Pauses do
   # A ticket's change as a writer of its record stores it: the pause with its events, none when
   # nothing changes; a refusal passes through.
   defp changed({:write, pause, events, _pause}), do: {:ok, pause, events}
+  defp changed({:write, pause, _pause}), do: {:ok, pause, []}
   defp changed(unchanged), do: with({:ok, pause} <- unchanged, do: {:ok, pause, []})
 
   # The pause is read, changed and written in one store transaction that holds its lock, with the
@@ -698,9 +711,6 @@ defmodule SymphonyElixir.Pauses do
 
   defp subject(:symphony), do: {:ok, :symphony}
   defp subject(subject), do: {:error, {:invalid_subject, subject}}
-
-  defp ticket({:ticket, _repo_key, _issue_id} = ticket), do: subject(ticket)
-  defp ticket(subject), do: {:error, {:invalid_subject, subject}}
 
   # A reason's line as the control API gives it, cut to a reason's longest line; nil when blank.
   defp cut_line(value), do: with(line when is_binary(line) <- line(value), do: String.slice(line, 0, @max_text))

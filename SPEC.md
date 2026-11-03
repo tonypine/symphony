@@ -631,6 +631,14 @@ reached a terminal state. Its request gets the `## Action withdrawn` reply, as
 `linear_withdraw_human_action` makes it.
 Nothing asks a question this way yet.
 
+A question may also be asked on Symphony itself or on a repository, for a decision no ticket carries
+(a release build of `main` cancelled a third time, or failed, with no held ticket waiting on it). It
+is the same question with the same four events, recorded on that subject's own event stream (kept
+apart from every ticket's), and the same pause binding: while open it puts a `question` reason on
+Symphony's pause (which stops no dispatch) or the repository's (which holds that repository's
+dispatch). No Linear comment or label shows it; the Inbox lists it with no ticket, and the
+operator's `decide` answers it by its `question_id` alone.
+
 A `run.ended` names the run's transcript: a copy kept in the artifact store (Section 4.1.12) as
 kind `transcript`, its id both in the event's `artifacts` and in `payload.transcript`. The
 transcript is the path the run reported, when it reported one; otherwise, for a Claude Code run on
@@ -3321,8 +3329,9 @@ An issue is dispatch-eligible only if all are true:
     of Symphony's own repository is watched the same way, held issue or not: the newest `release`
     push run on `main`, read at most once a minute by the poll and at once on its `workflow_run`
     delivery, is rerun when GitHub cancelled it for lack of a machine (twice at most); with no held
-    issue to ask, a third cancellation or a failure is logged with the commit and the run and pauses
-    nothing. `app_update.latest_build` reports that newest merge's build (`sha`, `version`, `state`,
+    issue to ask, a third cancellation or a failure is logged with the commit and the run and asked
+    as a question on Symphony itself ("Rerun the build" or "Wait for a fix"), which stops no
+    dispatch and is withdrawn once the build starts again, is published or a newer merge is watched. `app_update.latest_build` reports that newest merge's build (`sha`, `version`, `state`,
     `since`, `reruns`, `url`, `line`; null until one is watched), and with no issue held
     `app_update.build_line` is its line ("The v0.0.1.785 build: queued on GitHub for 12 min", null
     once published). `app_update.latest_release` reports the newest
@@ -5629,6 +5638,11 @@ Minimum endpoints:
     - `clarify`: `held` (true while the gate waits for answers, false once it skipped the issue),
       `score`, `pass_threshold`, `round`, `max_rounds`, `found` (what the gate found) and
       `questions`.
+  - Each item has `subject`: `ticket`, or, for an open question asked on Symphony itself or on a
+    repository, `symphony` or `repository`. Such an item is an `action` with `issue_id`,
+    `identifier`, `state` and `url` null, `title` `Symphony` or the repository's key (also in
+    `repo_key`), and its `review.question_id` is what `decide` answers. A question on a repository
+    the configuration no longer names is left out.
   - Each item also has `references` and `context`, resolved on the same read from the records
     (`SymphonyElixir.Inbox.References`):
     - `references` maps each ticket identifier (`TP-891`) and pull request (`PR #448`, or a bare
@@ -6053,6 +6067,13 @@ Minimum endpoints:
     Decisions entry of the answer taken back stays, but the PR watcher no longer reads it as an
     answer. `decisions` answers each pick's Question first too: a reply Linear refuses is marked
     pending the same way, and the hold still clears.
+  - A `decide` with no `issue_identifier` and a `question_id` answers the open question asked on
+    Symphony itself or on a repository with that id: the first pick's answer is written to it
+    (`question.answered` on the subject's own stream), its pause reason clears and the Inbox row
+    goes; whoever asked acts on the answer at once (a release build's question has the build checked
+    again, which reruns it on `Rerun the build`). It answers `{move, subject, repo_key,
+    question_id, option, answered}`, `404` (`question_not_found`) when no such question is open,
+    and `422` without `picks`.
   - A missing `issue_identifier`, `reason` or `picks`, or a `decide` with neither `question_id` nor
     `request_comment_id`, answers `422`, an
     unknown ticket `404`, and a

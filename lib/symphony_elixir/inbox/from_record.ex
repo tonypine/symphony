@@ -15,6 +15,10 @@ defmodule SymphonyElixir.Inbox.FromRecord do
   A record whose rows raise lists nothing and is logged with its ticket; the other records still
   list.
 
+  Each open Question on Symphony itself or on a repository (`opts[:subject_questions]`,
+  `SymphonyElixir.Questions.open_on_subjects/0`) adds an `:action` item with no ticket
+  (`Item.from_subject_question/2`).
+
   The quality gate's holds and skips in the snapshot add a `:clarify` item each
   (`Item.from_quality_gate/1`) for a ticket nothing else lists. An item of a running ticket goes, so does one whose ticket the orchestrator saw leave the state it was listed
   in (one it watches in that very state stays) (a `:blocked` one stays: the pause is what waits), each takes the state the orchestrator saw,
@@ -29,8 +33,14 @@ defmodule SymphonyElixir.Inbox.FromRecord do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Inbox.Item
 
-  @typedoc "`:settings_fun`: a repo key's settings (default `Config.settings_for_repo!/1`)."
-  @type opt :: {:settings_fun, (String.t() -> Schema.t())}
+  @typedoc """
+  `:settings_fun`: a repo key's settings (default `Config.settings_for_repo!/1`);
+  `:subject_questions`: the open Questions on subjects that are not tickets, each with its subject
+  (default none).
+  """
+  @type opt ::
+          {:settings_fun, (String.t() -> Schema.t())}
+          | {:subject_questions, [{:symphony | {:repository, String.t()}, map()}]}
 
   @doc "The items of `records` and `snapshot` (see the moduledoc)."
   @spec items([map()], map(), [opt()]) :: [Item.t()]
@@ -46,6 +56,7 @@ defmodule SymphonyElixir.Inbox.FromRecord do
     |> Enum.reject(&(MapSet.member?(running_ids, &1.issue_id) or left_review?(&1, watched_states, settings_fun)))
     |> Enum.map(&%{&1 | state: Map.get(watched_states, &1.issue_id, &1.state)})
     |> with_clarify(snapshot)
+    |> Enum.concat(opts |> Keyword.get(:subject_questions, []) |> Enum.map(fn {subject, question} -> Item.from_subject_question(subject, question) end))
     |> Enum.sort_by(&{is_nil(&1.waiting_since), sort_key(&1.waiting_since), &1.identifier || ""})
   end
 

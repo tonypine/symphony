@@ -64,13 +64,23 @@ defmodule SymphonyElixir.WorkflowStore do
   def force_reload(server \\ __MODULE__) do
     case resolve_server(server) do
       pid when is_pid(pid) ->
-        GenServer.call(pid, :force_reload)
+        # The store can shut down between the lookup and the call; reading the file is
+        # the same answer the store would have given.
+        try do
+          GenServer.call(pid, :force_reload)
+        catch
+          :exit, _reason -> load_directly()
+        end
 
       _ ->
-        case Workflow.load() do
-          {:ok, _workflow} -> :ok
-          {:error, reason} -> {:error, reason}
-        end
+        load_directly()
+    end
+  end
+
+  defp load_directly do
+    case Workflow.load() do
+      {:ok, _workflow} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 

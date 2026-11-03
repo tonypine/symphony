@@ -160,15 +160,27 @@ defmodule SymphonyElixirWeb.ControlApiController do
   @spec unblock(Conn.t(), map()) :: Conn.t()
   def unblock(conn, params), do: director_move(conn, :unblock, params, %{})
 
+  # A Decide with no ticket answers a Question on Symphony itself or a repository by its id alone
+  # (`DirectorMoves.decide_subject/2`).
   @spec decide(Conn.t(), map()) :: Conn.t()
   def decide(conn, params) do
-    director_move(conn, :decide, params, %{
+    input = %{
       picks: picks(params["picks"]),
       question_id: string_param(params["question_id"]),
       request_comment_id: string_param(params["request_comment_id"]),
       move: string_param(params["move"])
-    })
+    }
+
+    case {string_param(params["issue_identifier"]), input.question_id} do
+      {nil, question_id} when is_binary(question_id) -> respond_subject_decide(conn, question_id, DirectorMoves.decide_subject(input, Map.get(conn.assigns, :director_moves, [])))
+      _ticket -> director_move(conn, :decide, params, input)
+    end
   end
+
+  defp respond_subject_decide(conn, question_id, {:error, :question_not_found}),
+    do: error_response(conn, 404, "question_not_found", "No open question #{question_id} on Symphony or a repository")
+
+  defp respond_subject_decide(conn, question_id, result), do: respond_move(conn, question_id, result)
 
   @spec undo(Conn.t(), map()) :: Conn.t()
   def undo(conn, params) do

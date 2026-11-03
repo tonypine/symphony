@@ -149,6 +149,17 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert :ok = restart_workflow_store()
   end
 
+  test "force_reload reads the workflow file when the store shuts down during the call" do
+    dying =
+      spawn(fn ->
+        receive do
+          {:"$gen_call", _from, :force_reload} -> exit(:shutdown)
+        end
+      end)
+
+    assert :ok = WorkflowStore.force_reload(dying)
+  end
+
   test "workflow store init stops on missing workflow file" do
     missing_path = Path.join(Path.dirname(Workflow.workflow_file_path()), "MISSING_WORKFLOW.md")
     Workflow.set_workflow_file_path(missing_path)
