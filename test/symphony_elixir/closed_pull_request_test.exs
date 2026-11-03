@@ -22,7 +22,7 @@ defmodule SymphonyElixir.ClosedPullRequestTest do
     issue_id = "issue-closed-pr-#{System.unique_integer([:positive])}"
 
     on_exit(fn ->
-      RunStore.delete_ticket_state(@repo_key, issue_id)
+      RunStore.delete_ticket_state(issue_id)
       Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
     end)
 
@@ -70,7 +70,7 @@ defmodule SymphonyElixir.ClosedPullRequestTest do
       close_pull_request(issue_id)
 
       for state <- ["Code Review", "QA", "CI Fix", " merging "] do
-        RunStore.delete_ticket_state(@repo_key, issue_id)
+        RunStore.delete_ticket_state(issue_id)
         assert :held = ClosedPullRequest.guard(issue(issue_id, state), settings!(), [])
         assert Questions.deciding({:ticket, @repo_key, issue_id})
       end

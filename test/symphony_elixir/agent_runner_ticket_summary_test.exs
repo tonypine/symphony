@@ -80,7 +80,7 @@ defmodule SymphonyElixir.AgentRunnerTicketSummaryTest do
 
     log = capture_log(fn -> assert :ok = run(ctx) end)
     assert_received {:memory_tracker_state_update, "issue-sum", "Cancelled"}
-    assert %{phase: "Cancelled"} = RunStore.get_ticket_state(ctx.repo_key, ctx.issue.id)
+    assert %{phase: "Cancelled"} = RunStore.get_ticket_state(ctx.issue.id)
     refute log =~ "Linear refused the move"
   end
 
@@ -100,7 +100,7 @@ defmodule SymphonyElixir.AgentRunnerTicketSummaryTest do
     refute_received {:turn, _prompt}
     assert [%{id: id, title: "TP-77's ticket summary is over its size limit"}] = Questions.open({:ticket, ctx.repo_key, ctx.issue.id})
     assert %{id: ^id} = Questions.deciding({:ticket, ctx.repo_key, ctx.issue.id})
-    assert [%{type: :question_comment, question: ^id}] = TicketState.normalize(RunStore.get_ticket_state(ctx.repo_key, ctx.issue.id)).pending_projection
+    assert [%{type: :question_comment, question: ^id}] = TicketState.normalize(RunStore.get_ticket_state(ctx.issue.id)).pending_projection
   end
 
   test "with the summary off the limit is never checked", ctx do

@@ -1045,7 +1045,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
     test "sits after the ticket state, wrapped as untrusted input, in place of the recent signals", %{issue: issue, record: record, at: at} do
       {:ok, _note} = TicketEvents.record("r", "i", "note", %{text: "Keep the <b>button</b> where it is."}, actor: {:person, "Sam"}, at: at)
       {:ok, _hold} = TicketEvents.record("r", "i", "hold.set", %{kind: "blocked", reason: "tooling"}, at: DateTime.add(at, 60))
-      :ok = RunStore.update_ticket_state("r", "i", %{phase: "QA"})
+      :ok = RunStore.update_ticket_state("i", %{phase: "QA"})
 
       opts = [ticket_state: record]
       prompts = [PromptBuilder.build_prompt(issue, opts), PromptBuilder.build_compact_prompt(issue, opts)]
@@ -1089,7 +1089,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
       ledger!("prompt_brief_max_tokens: 10")
       text = String.duplicate("long finding text ", 50)
       {:ok, _note} = TicketEvents.record("r", "i", "note", %{text: text}, at: at)
-      tokens = Brief.render("r", "i") |> elem(1) |> Map.fetch!(:tokens)
+      tokens = Brief.render("i") |> elem(1) |> Map.fetch!(:tokens)
 
       build = fn -> send(self(), {:prompt, PromptBuilder.build_prompt(issue, ticket_state: record)}) end
       log = capture_log([level: :info], build)
@@ -1134,7 +1134,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
 
     test "a summary over the limit asks the Director how to go on, in plain words", %{issue: issue} do
       assert {:ask, request} = PromptBuilder.ticket_ledger_gate(issue, [])
-      {:ok, brief} = Brief.render("r", "i")
+      {:ok, brief} = Brief.render("i")
 
       assert request == PromptBuilder.summary_request(issue, brief, 10)
       assert :ok = DecisionRequest.check(request)

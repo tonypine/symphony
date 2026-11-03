@@ -85,7 +85,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       assert_receive {:polled, _repo}
 
       # The poll cache keeps ACME-2, whose record is gone; ACME-3 reaches only the record.
-      :ok = RunStore.delete_ticket_state(ctx.repo_key, "#{ctx.repo_key}-2")
+      :ok = RunStore.delete_ticket_state("#{ctx.repo_key}-2")
       {:ok, :updated} = TicketObservation.observe(ctx.repo_key, issue(ctx.repo_key, 3), source: :watcher)
 
       {%{dispatchable: dispatchable}, state} = capture_cycle(state, ctx.repos, 50)
@@ -114,7 +114,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       assert %{cycles_compared: 4, cycles_with_differences: 0, window_differences: 0, recent: []} = Shadow.summary()
 
       # A difference reads as it does with the poll in use: the side that has the ticket, by name.
-      :ok = RunStore.delete_ticket_state(ctx.repo_key, "#{ctx.repo_key}-2")
+      :ok = RunStore.delete_ticket_state("#{ctx.repo_key}-2")
       capture_cycle(state, ctx.repos, 160)
       assert %{recent: [%{identifier: "ACME-2", side: :poll, field: :candidate, poll: "In Progress", record: nil}]} = Shadow.summary()
     end
@@ -305,7 +305,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       # A webhook raised the running ticket's priority, and said the forced-away one was removed.
       later = DateTime.add(@linear_at, 60)
       observe!(ctx.repo_key, [%{running | priority: 2, updated_at: later}], :webhook)
-      :ok = RunStore.update_ticket_state(ctx.repo_key, gone.id, %{removed_at: later})
+      :ok = RunStore.update_ticket_state(gone.id, %{removed_at: later})
 
       state = %{
         orchestrator_state()
@@ -475,13 +475,13 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       {:ok, :updated} = TicketObservation.observe(ctx.repo_key, issue(ctx.repo_key, 1), source: :poll)
       assert {:skip, %Issue{}} = Orchestrator.revalidate_issue_from_record_for_test(candidate, ctx.repo_key)
 
-      # Unassigned now, no record at all, or a repo the store refuses.
+      # Unassigned now, no record at all, or a store that refuses the read.
       observe!(ctx.repo_key, [issue(ctx.repo_key, 2, assignee_id: nil)], :poll)
       set_source("record", tracker_assignee: "user-2")
       revalidate = &Orchestrator.revalidate_issue_from_record_for_test/2
       assert {:skip, :missing} = revalidate.(issue(ctx.repo_key, 2), ctx.repo_key)
       assert {:skip, :missing} = revalidate.(issue(ctx.repo_key, 3), ctx.repo_key)
-      assert {:error, _reason} = revalidate.(issue(" ", 4), " ")
+      assert {:error, _reason} = ticket_records_unreadable(fn -> revalidate.(issue(ctx.repo_key, 4), ctx.repo_key) end)
     end
 
     test "a retry's own read is written into its record, so the check before its start is not older than that read" do
@@ -518,7 +518,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       assert_receive {:memory_tracker_fetch_issue_states_by_ids, [^read_id]}
       eventually(fn -> Map.has_key?(:sys.get_state(pid).slot_waiting, read_id) end)
 
-      record = RunStore.get_ticket_state(repo_key, read_id)
+      record = RunStore.get_ticket_state(read_id)
       assert {record.observed_from, record.linear_updated_at} == {:by_id, read.updated_at}
       assert {:ok, %Issue{state: "In Progress"}} = Orchestrator.revalidate_issue_from_record_for_test(read, repo_key, true)
 
@@ -546,7 +546,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       set_source("poll")
       {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [issue(ctx.repo_key, 1), issue(ctx.repo_key, 2)], 0)
 
-      :ok = RunStore.delete_ticket_state(ctx.repo_key, "#{ctx.repo_key}-2")
+      :ok = RunStore.delete_ticket_state("#{ctx.repo_key}-2")
       {:ok, :updated} = TicketObservation.observe(ctx.repo_key, issue(ctx.repo_key, 3), source: :watcher)
 
       {%{dispatchable: dispatchable}, state} = capture_cycle(state, ctx.repos, 50)

@@ -754,7 +754,7 @@ defmodule SymphonyElixir.PromptBuilder do
   defp ticket_ledger(state, opts) do
     case Keyword.fetch(opts, :ticket_ledger) do
       {:ok, brief} -> {:ok, brief}
-      :error -> Brief.render(state.repo_key, state.issue_id)
+      :error -> Brief.render(state.issue_id)
     end
   end
 
@@ -795,8 +795,8 @@ defmodule SymphonyElixir.PromptBuilder do
 
     with true <- Config.prompt_brief_enabled?(),
          true <- is_binary(repo_key) and is_binary(issue_id),
-         record when not is_tuple(record) <- RunStore.get_ticket_state(repo_key, issue_id),
-         events when is_list(events) <- RunStore.list_ticket_events(repo_key, issue_id, []) do
+         record when not is_tuple(record) <- RunStore.get_ticket_state(issue_id),
+         events when is_list(events) <- RunStore.list_ticket_events(issue_id, []) do
       ledger_gate(issue, Brief.build(record, events), summary_requests(issue, events), events)
     else
       _off_or_unreadable -> :start

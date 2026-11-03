@@ -45,7 +45,7 @@ defmodule SymphonyElixir.PrWatchSupport do
   keeping the rest; a ticket with no record gets one with `attrs`.
   """
   def put_fix!(repo_key, issue_id, kind, fix, attrs \\ []) when kind in [:ci_failure, :pr_conflict] do
-    case repo_key |> RunStore.get_ticket_state(issue_id) |> TicketState.pr_watch() do
+    case RunStore.get_ticket_state(issue_id) |> TicketState.pr_watch() do
       nil ->
         put_watch!(repo_key, issue_id, Keyword.put(attrs, kind, fix))
 
@@ -56,7 +56,7 @@ defmodule SymphonyElixir.PrWatchSupport do
 
   @doc "Changes the record of `issue_id` with `fun`, which gets and returns the watch map."
   def update_watch!(repo_key, issue_id, fun) do
-    watch = repo_key |> RunStore.get_ticket_state(issue_id) |> TicketState.pr_watch()
+    watch = RunStore.get_ticket_state(issue_id) |> TicketState.pr_watch()
     :ok = RunStore.put_ticket_pr_watch(repo_key, issue_id, nil, fun.(watch))
   end
 

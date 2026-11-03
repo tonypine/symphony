@@ -117,7 +117,7 @@ defmodule SymphonyElixir.ForceIssueTest do
       force_action = {"person.action", %{action: "force"}}
       assert ticket_events(repo_key, "id-1", "person.action") == [force_action, force_action]
       assert ticket_events(repo_key, "id-2", "person.action") == [force_action]
-      assert [%{actor: %{kind: :person, name: "the Director"}} | _rest] = RunStore.list_ticket_events(repo_key, "id-1", types: ["person.action"])
+      assert [%{actor: %{kind: :person, name: "the Director"}} | _rest] = RunStore.list_ticket_events("id-1", types: ["person.action"])
     end
 
     test "says a Backlog ticket is not promoted and keeps it out of the queue", %{pid: pid} do

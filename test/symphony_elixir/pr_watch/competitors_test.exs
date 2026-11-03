@@ -22,7 +22,7 @@ defmodule SymphonyElixir.PrWatch.CompetitorsTest do
   end
 
   defmodule DownStore do
-    def get_ticket_state(_repo_key, _issue_id), do: {:error, :store_down}
+    def get_ticket_state(_issue_id), do: {:error, :store_down}
   end
 
   defp link(number, attrs \\ []) do
@@ -55,7 +55,7 @@ defmodule SymphonyElixir.PrWatch.CompetitorsTest do
   # The ticket waits on `links`: its pause has their landing reasons.
   defp wait!(links) do
     for reason <- Competitors.landing_reasons(links), do: {:ok, _pause} = Pauses.set(@ticket, reason)
-    Competitors.waiting(TicketState.normalize(RunStore.get_ticket_state(@repo_key, @issue.id)))
+    Competitors.waiting(TicketState.normalize(RunStore.get_ticket_state(@issue.id)))
   end
 
   describe "settle/5" do
@@ -149,7 +149,7 @@ defmodule SymphonyElixir.PrWatch.CompetitorsTest do
 
       {:ok, _links} = Competitors.wait(@issue, [link(1), link(3)], false, opts(now: @now))
       :ok = RunStore.put_ticket_pr_watch(@repo_key, @issue.id, "TP-2", %{facts: Facts.new(), links: [link(1), link(3, released: true)]})
-      record = TicketState.normalize(RunStore.get_ticket_state(@repo_key, @issue.id))
+      record = TicketState.normalize(RunStore.get_ticket_state(@issue.id))
 
       assert %{reason: "Waiting on TP-1 to land: they change the same files (SPEC.md)", set_at: %DateTime{}} = Competitors.waiting(record)
     end
@@ -182,7 +182,7 @@ defmodule SymphonyElixir.PrWatch.CompetitorsTest do
       assert_received {:unlink, "TP-1", "issue-2"}
       refute_received {:unlink, "TP-3", _issue_id}
 
-      assert [%{released: true, linked: false}, %{released: true}] = @repo_key |> RunStore.get_ticket_state(@issue.id) |> TicketState.pr_watch() |> Map.fetch!(:links)
+      assert [%{released: true, linked: false}, %{released: true}] = RunStore.get_ticket_state(@issue.id) |> TicketState.pr_watch() |> Map.fetch!(:links)
     end
 
     test "a ticket with nothing recorded has nothing to release; a store that can't be read is the error" do
@@ -213,7 +213,7 @@ defmodule SymphonyElixir.PrWatch.CompetitorsTest do
 
     test "a competitor that lands loses its reason; the last one clears the pause" do
       {:ok, _links} = Competitors.wait(@issue, [link(1), link(3)], false, opts(now: @now))
-      wait = Competitors.waiting(TicketState.normalize(RunStore.get_ticket_state(@repo_key, @issue.id)))
+      wait = Competitors.waiting(TicketState.normalize(RunStore.get_ticket_state(@issue.id)))
       issue = %{@issue | blocked_by: [%{id: "issue-1", identifier: "TP-1", state: "Done"}]}
 
       settled = Competitors.settle(issue, wait, [link(1), link(3)], race([pull(3)]), opts())
@@ -226,7 +226,7 @@ defmodule SymphonyElixir.PrWatch.CompetitorsTest do
 
     test "a wait still standing has a reason its pause lost set again, and nothing more" do
       {:ok, _links} = Competitors.wait(@issue, [link(1)], false, opts(now: @now))
-      wait = Competitors.waiting(TicketState.normalize(RunStore.get_ticket_state(@repo_key, @issue.id)))
+      wait = Competitors.waiting(TicketState.normalize(RunStore.get_ticket_state(@issue.id)))
       {:ok, nil} = Pauses.clear(@ticket)
 
       assert %{wait: %{}} = Competitors.settle(@issue, wait, [link(1)], race([pull(1)]), opts())
@@ -252,12 +252,12 @@ defmodule SymphonyElixir.PrWatch.CompetitorsTest do
       assert Pauses.why(@ticket) == ["Waiting for TP-9 to finish"]
 
       assert %{payload: %{by: %{kind: :person, name: "Director"}}} =
-               @repo_key |> RunStore.list_ticket_events(@issue.id, types: ["pause.reason_cleared"]) |> List.last()
+               RunStore.list_ticket_events(@issue.id, types: ["pause.reason_cleared"]) |> List.last()
     end
 
     test "a ticket the watcher leaves loses its landing reasons" do
       {:ok, _links} = Competitors.wait(@issue, [link(1)], false, opts(now: @now))
-      record = TicketState.normalize(RunStore.get_ticket_state(@repo_key, @issue.id))
+      record = TicketState.normalize(RunStore.get_ticket_state(@issue.id))
 
       capture_log(fn -> assert :ok = Competitors.leave(@repo_key, record, opts()) end)
       assert {:ok, nil} = Pauses.get(@ticket)

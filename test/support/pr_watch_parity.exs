@@ -336,7 +336,7 @@ defmodule SymphonyElixir.PrWatchParity do
   def move!(id, state), do: World.update(:issues, &Map.update!(&1, issue_id(id), fn issue -> %{issue | state: state} end))
 
   @doc "The watcher's record of ticket `id`."
-  def watch(id), do: @repo_key |> RunStore.get_ticket_state(issue_id(id)) |> TicketState.pr_watch()
+  def watch(id), do: RunStore.get_ticket_state(issue_id(id)) |> TicketState.pr_watch()
 
   @doc "The state of ticket `id` in Linear."
   def state(id), do: World.get(:issues) |> Map.fetch!(issue_id(id)) |> Map.fetch!(:state)

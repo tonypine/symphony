@@ -120,7 +120,7 @@ defmodule SymphonyElixir.OrchestratorOperatorStopTest do
     assert length(Pauses.stopped()) == 4
 
     # A person moves MT-MOVED on the board: the record's phase is written after the stop.
-    :ok = RunStore.update_ticket_state("default", "moved", %{phase: "In Progress", phase_at: DateTime.add(DateTime.utc_now(), 1)})
+    :ok = RunStore.update_ticket_state("moved", %{phase: "In Progress", phase_at: DateTime.add(DateTime.utc_now(), 1)})
     tracked([%{moved | state: "In Progress"}, %{backlog | state: "Backlog"}, kept])
     state = poll(state, DateTime.add(DateTime.utc_now(), 2))
 

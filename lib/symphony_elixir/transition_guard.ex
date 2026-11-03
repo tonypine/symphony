@@ -337,7 +337,7 @@ defmodule SymphonyElixir.TransitionGuard do
   defp identifier(issue_id, ctx) do
     with nil <- Map.get(ctx, :issue_identifier),
          repo_key when is_binary(repo_key) <- Map.get(ctx, :repo_key),
-         %{issue_identifier: identifier} <- RunStore.get_ticket_state(repo_key, issue_id) do
+         %{issue_identifier: identifier} <- RunStore.get_ticket_state(issue_id) do
       identifier
     else
       identifier when is_binary(identifier) -> identifier

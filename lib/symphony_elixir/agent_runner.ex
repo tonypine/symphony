@@ -1141,7 +1141,7 @@ defmodule SymphonyElixir.AgentRunner do
     if Keyword.has_key?(opts, :ticket_state) do
       opts
     else
-      Keyword.put(opts, :ticket_state, pending_ticket_state(issue, opts))
+      Keyword.put(opts, :ticket_state, pending_ticket_state(issue))
     end
   end
 
@@ -1154,14 +1154,8 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp pending_ticket_state(%Issue{id: issue_id} = issue, opts) when is_binary(issue_id) do
-    case Keyword.get(opts, :repo_key) || issue_repo_key(issue) do
-      repo_key when is_binary(repo_key) and repo_key != "" -> RunStore.get_ticket_state(repo_key, issue_id)
-      _repo_key -> nil
-    end
-  end
-
-  defp pending_ticket_state(_issue, _opts), do: nil
+  defp pending_ticket_state(%Issue{id: issue_id}) when is_binary(issue_id), do: RunStore.get_ticket_state(issue_id)
+  defp pending_ticket_state(_issue), do: nil
 
   defp pending_lookup_opts(%Issue{} = issue, opts) do
     case Keyword.get(opts, :repo_key) || issue_repo_key(issue) do
@@ -1545,7 +1539,7 @@ defmodule SymphonyElixir.AgentRunner do
   # invalidates one — so a phase that already holds a verdict on this head carries the ticket on
   # without a second review or QA run.
   defp return_from_ci_fix(%Issue{id: issue_id} = issue, reason, run_context) do
-    case CiFix.origin(run_repo_key(issue, run_context.opts), issue_id, run_context.opts) do
+    case CiFix.origin(issue_id, run_context.opts) do
       origin when is_binary(origin) ->
         do_return_from_ci_fix(issue, origin, reason, run_context)
 

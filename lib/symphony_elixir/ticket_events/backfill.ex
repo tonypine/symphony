@@ -147,7 +147,7 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
 
   defp backfill_ticket(store, record, audit, now) do
     result =
-      with {:ok, existing} <- read(store.list_ticket_events(record.repo_key, record.issue_id, [])) do
+      with {:ok, existing} <- read(store.list_ticket_events(record.issue_id, [])) do
         if Enum.any?(existing, &(&1.idempotency == @note_key)), do: :done, else: append(store, record, existing, audit, now)
       end
 

@@ -49,7 +49,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   test "move puts any ticket Symphony tracks in the phase named, answers a move to where it is, and refuses one it doesn't track", %{moves: moves} do
     owned = %Issue{id: "owned", identifier: "MOT-70", title: "Parked work", state: "Backlog", repo_key: "repo-api"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [owned])
-    RunStore.delete_ticket_state("repo-api", "owned")
+    RunStore.delete_ticket_state("owned")
     :ok = SymphonyElixir.TicketSignals.record_phase("repo-api", "owned", "Backlog")
 
     conn = post(:move, %{"issue_identifier" => "MOT-70", "to" => "In Progress", "note" => "Its work is committed"}, moves)
@@ -62,9 +62,9 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert %{"moved" => false} = Jason.decode!(post(:move, %{"issue_identifier" => "MOT-70", "to" => "In Progress"}, moves).resp_body)
     assert {409, "move_not_allowed", "Shipping is not a phase of MOT-70's workflow" <> _rest} = error(post(:move, %{"issue_identifier" => "MOT-70", "to" => "Shipping"}, moves))
 
-    :ok = RunStore.update_ticket_state("repo-api", "owned", %{phase_owner: :external})
+    :ok = RunStore.update_ticket_state("owned", %{phase_owner: :external})
     assert %{"to_state" => "Backlog", "moved" => true} = Jason.decode!(post(:move, %{"issue_identifier" => "MOT-70", "to" => "Backlog"}, moves).resp_body)
-    assert %{phase: "Backlog", phase_owner: :symphony} = RunStore.get_ticket_state("repo-api", "owned")
+    assert %{phase: "Backlog", phase_owner: :symphony} = RunStore.get_ticket_state("owned")
 
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{owned | repo_key: nil}])
 
@@ -364,7 +364,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
 
   # The request comment the pause projector wrote for the Question, as the ticket's record keeps it.
   defp project_comment(issue_id, question_id, comment_id) do
-    record = RunStore.get_ticket_state("default", issue_id) || TicketState.new("default", issue_id)
+    record = RunStore.get_ticket_state(issue_id) || TicketState.new("default", issue_id)
     comments = %{question_id => %{comment: comment_id, reply: nil}}
     :ok = RunStore.put_ticket_state(%{record | projected: %{labels: [], section: nil, comments: comments}})
   end

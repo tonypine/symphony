@@ -617,7 +617,7 @@ defmodule SymphonyElixir.CiPollerTest do
       end
 
       # A webhook said ACME-2404 was removed: its record stays, and it is never listed.
-      assert :ok = RunStore.put_ticket_state(TicketState.mark_removed(RunStore.get_ticket_state(@repo_key, removed.id), now))
+      assert :ok = RunStore.put_ticket_state(TicketState.mark_removed(RunStore.get_ticket_state(removed.id), now))
 
       # Linear would answer with a ticket the records don't have: the poll must not ask it.
       Application.put_env(:symphony_elixir, :ci_test_issues, [%{in_review_issue() | id: "issue-linear-only"}])

@@ -681,7 +681,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   end
 
   defp fix_ticket(ctx) do
-    case store(ctx).get_ticket_state(ctx.repo_key, ctx.issue.id) do
+    case store(ctx).get_ticket_state(ctx.issue.id) do
       %{} = record -> record |> TicketState.self_heal() |> then(&(&1 && &1.fix_ticket))
       _none -> nil
     end

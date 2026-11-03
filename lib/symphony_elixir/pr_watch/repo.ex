@@ -388,7 +388,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     tries = Map.get(state.reread_tries, issue_id, 0) + 1
 
     with true <- tries < @max_rereads,
-         %{} = record <- store(state).get_ticket_state(state.repo_key, issue_id),
+         %{} = record <- store(state).get_ticket_state(issue_id),
          %{facts: %{mergeable: :unknown}} <- TicketState.pr_watch(record) do
       %{state | rereads: Enum.uniq(state.rereads ++ [issue_id]), reread_tries: Map.put(state.reread_tries, issue_id, tries)}
     else

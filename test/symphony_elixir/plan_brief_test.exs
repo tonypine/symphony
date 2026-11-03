@@ -66,7 +66,7 @@ defmodule SymphonyElixir.PlanBriefTest do
 
   defp record, do: normalized(@repo_key)
 
-  defp normalized(repo_key), do: TicketState.normalize(RunStore.get_ticket_state(repo_key, @issue_id))
+  defp normalized(_repo_key), do: TicketState.normalize(RunStore.get_ticket_state(@issue_id))
 
   defp request_body(question_id) do
     Request.render_hold(

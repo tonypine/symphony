@@ -285,5 +285,5 @@ defmodule SymphonyElixir.DecisionRequestTest do
     end
   end
 
-  defp pending_projection, do: TicketState.normalize(RunStore.get_ticket_state(@repo_key, @issue_id)).pending_projection
+  defp pending_projection, do: TicketState.normalize(RunStore.get_ticket_state(@issue_id)).pending_projection
 end

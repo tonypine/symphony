@@ -21,8 +21,8 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
     def get_marker(name), do: fail(:get_marker) || RunStore.get_marker(name)
     def put_marker(name, at), do: fail(:put_marker) || RunStore.put_marker(name, at)
     def list_all_ticket_states, do: fail(:list_all_ticket_states) || RunStore.list_all_ticket_states()
-    def list_ticket_events(repo_key, issue_id, opts), do: fail(:list_ticket_events) || RunStore.list_ticket_events(repo_key, issue_id, opts)
-    def update_ticket_state(repo_key, issue_id, attrs), do: fail(:update_ticket_state) || RunStore.update_ticket_state(repo_key, issue_id, attrs)
+    def list_ticket_events(issue_id, opts), do: fail(:list_ticket_events) || RunStore.list_ticket_events(issue_id, opts)
+    def update_ticket_state(issue_id, attrs), do: fail(:update_ticket_state) || RunStore.update_ticket_state(issue_id, attrs)
     def get_paused, do: fail(:get_paused) || RunStore.get_paused()
 
     defp fail(name), do: if(name in Process.get(:fail, []), do: {:error, {:failed, name}})
@@ -41,18 +41,18 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
   # which the record's normalization no longer reads.
   defp put_record(issue_id, attrs) do
     record = raw_record(issue_id, Map.merge(%{issue_identifier: "TP-#{String.replace(issue_id, ~r/\D/, "")}"}, attrs))
-    {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_ticket_states, {@repo_key, issue_id}, @repo_key, issue_id, record}) end)
+    {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_ticket_index, issue_id, @repo_key, record}) end)
     record
   end
 
   # Puts `holds` on the stored record as they were stored, after a write that normalized it: on its
   # pair row and its by-ticket index row, which the listings read.
   defp put_holds(issue_id, holds) do
-    stored = Map.put(RunStore.get_ticket_state(@repo_key, issue_id), :holds, holds)
+    stored = Map.put(RunStore.get_ticket_state(issue_id), :holds, holds)
 
     {:atomic, :ok} =
       :mnesia.transaction(fn ->
-        :mnesia.write({:symphony_run_store_ticket_states, {@repo_key, issue_id}, @repo_key, issue_id, stored})
+        :mnesia.write({:symphony_run_store_ticket_index, issue_id, @repo_key, stored})
         :mnesia.write({:symphony_run_store_ticket_index, issue_id, @repo_key, stored})
       end)
   end
@@ -63,10 +63,10 @@ defmodule SymphonyElixir.Pauses.BackfillTest do
     if holds, do: Map.put(record, :holds, holds), else: record
   end
 
-  defp record(issue_id), do: TicketState.normalize(RunStore.get_ticket_state(@repo_key, issue_id))
+  defp record(issue_id), do: TicketState.normalize(RunStore.get_ticket_state(issue_id))
   defp ticket(issue_id), do: {:ticket, @repo_key, issue_id}
   defp reasons(issue_id), do: Enum.map(TicketState.pause_reasons(record(issue_id)), &{&1.kind, &1.waits_on, &1.text})
-  defp events(issue_id), do: RunStore.list_ticket_events(@repo_key, issue_id, [])
+  defp events(issue_id), do: RunStore.list_ticket_events(issue_id, [])
   defp run!(opts \\ []), do: {:ok, _summary} = Backfill.run(Keyword.merge([now: @now, store: Store], opts))
 
   # One record per hold type the table covers.
