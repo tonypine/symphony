@@ -44,7 +44,7 @@ defmodule SymphonyElixir.QuestionsTest do
     question
   end
 
-  defp reasons, do: Enum.map(TicketState.pause_reasons(RunStore.get_ticket_state(@repo_key, @issue_id)), &{&1.kind, &1.waits_on})
+  defp reasons, do: Enum.map(TicketState.pause_reasons(RunStore.get_ticket_state(@issue_id)), &{&1.kind, &1.waits_on})
 
   describe "ask/3" do
     test "asking a question puts it on the ticket and pauses the ticket on it, naming the question" do
@@ -73,7 +73,7 @@ defmodule SymphonyElixir.QuestionsTest do
 
       assert Questions.find(@ticket, question.id) == question
       assert Questions.open(@ticket) == [question]
-      assert TicketState.open_questions(RunStore.get_ticket_state(@repo_key, @issue_id)) == [question]
+      assert TicketState.open_questions(RunStore.get_ticket_state(@issue_id)) == [question]
       assert reasons() == [{:question, %{question_id: question.id}}]
       assert Pauses.why(@ticket) == ["Waiting for your answer: Ship TP-12 before the release"]
       assert {:ok, %{set_by: %{kind: :run, name: "Implementation run 1"}}} = Pauses.get(@ticket)
@@ -83,7 +83,7 @@ defmodule SymphonyElixir.QuestionsTest do
       assert %{question_id: id, title: "Ship TP-12 before the release", confirm: "Merging", step: "Plan the split", asked_by: @run, options: [_, _, _]} = asked
       assert id == question.id
 
-      assert [%{summary: %{title: "Asked you: Ship TP-12 before the release"}}] = RunStore.list_ticket_events(@repo_key, @issue_id, types: ["question.asked"])
+      assert [%{summary: %{title: "Asked you: Ship TP-12 before the release"}}] = RunStore.list_ticket_events(@issue_id, types: ["question.asked"])
     end
 
     test "Symphony asks by default, and a paused ticket gains the question as a further reason" do
@@ -153,7 +153,7 @@ defmodule SymphonyElixir.QuestionsTest do
       assert reasons() == []
 
       assert [%{type: "question.asked", idempotency: "backfill:question.asked:backfill-1", payload: payload}] =
-               RunStore.list_ticket_events(@repo_key, @issue_id, [])
+               RunStore.list_ticket_events(@issue_id, [])
 
       assert %{source: "backfill", title: "Old title"} = payload
       refute Map.has_key?(payload, :why)
@@ -166,7 +166,7 @@ defmodule SymphonyElixir.QuestionsTest do
       assert reasons() == [{:question, %{question_id: "backfill-2"}}]
 
       assert [%{type: "question.asked", payload: %{source: "backfill"}}, %{type: "pause.set", payload: %{source: "backfill"}}] =
-               RunStore.list_ticket_events(@repo_key, @issue_id, [])
+               RunStore.list_ticket_events(@issue_id, [])
 
       assert {:error, {:invalid_question, _message}} = Questions.ask(@ticket, request, at: @at)
       assert {:error, {:invalid_question, :junk}} = Questions.ask(@ticket, :junk, backfilled: true)
@@ -198,7 +198,7 @@ defmodule SymphonyElixir.QuestionsTest do
       assert payload == %{question_id: payload.question_id, title: "Ship TP-12 now", answer: "  Ship it, but tomorrow morning ", scope: "always", by: @tony}
 
       assert [%{summary: %{title: "You answered: Ship it, but tomorrow morning"}} | _rest] =
-               RunStore.list_ticket_events(@repo_key, @issue_id, types: ["question.answered"])
+               RunStore.list_ticket_events(@issue_id, types: ["question.answered"])
     end
 
     test "answering clears the question's pause reason and only that one, and records the answer once" do
@@ -267,7 +267,7 @@ defmodule SymphonyElixir.QuestionsTest do
                ticket_events(@repo_key, @issue_id, "question.withdrawn")
 
       assert id == question.id
-      assert [%{summary: %{title: "Question withdrawn: TP-12 was cancelled"}}] = RunStore.list_ticket_events(@repo_key, @issue_id, types: ["question.withdrawn"])
+      assert [%{summary: %{title: "Question withdrawn: TP-12 was cancelled"}}] = RunStore.list_ticket_events(@issue_id, types: ["question.withdrawn"])
 
       assert Questions.withdraw(@ticket, question.id, "Again") == {:error, {:question_not_open, :withdrawn}}
       assert Questions.answer(@ticket, question.id, "1") == {:error, {:question_not_open, :withdrawn}}
@@ -296,7 +296,7 @@ defmodule SymphonyElixir.QuestionsTest do
 
     # The request comment the pause projector wrote for `question`, as the record keeps it.
     defp project_comment(question, comment_id) do
-      :ok = RunStore.update_ticket_state(@repo_key, @issue_id, %{projected: %{labels: [], section: nil, comments: %{question.id => %{comment: comment_id, reply: nil}}}})
+      :ok = RunStore.update_ticket_state(@issue_id, %{projected: %{labels: [], section: nil, comments: %{question.id => %{comment: comment_id, reply: nil}}}})
     end
 
     @run_started ~U[2026-10-30 03:30:00Z]
@@ -355,10 +355,10 @@ defmodule SymphonyElixir.QuestionsTest do
       assert_received {:reply, @issue_id, "comment-1", "## Action withdrawn\n\nThe run that asked was restarted."}
 
       assert [%{summary: %{title: "Question withdrawn: The run that asked was restarted."}}] =
-               RunStore.list_ticket_events(@repo_key, @issue_id, types: ["question.withdrawn"])
+               RunStore.list_ticket_events(@issue_id, types: ["question.withdrawn"])
 
       # The prompt brief lists it as withdrawn, never as open.
-      assert {:ok, %{text: brief}} = Brief.render(@repo_key, @issue_id)
+      assert {:ok, %{text: brief}} = Brief.render(@issue_id)
       assert brief =~ "Withdrawn"
       refute brief =~ "Open: it waits"
 
@@ -442,7 +442,7 @@ defmodule SymphonyElixir.QuestionsTest do
       assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, :restart)
 
       assert [%{payload: %{cause: "restarted"}}] =
-               RunStore.list_ticket_events(@repo_key, @issue_id, types: ["question.withdrawn"])
+               RunStore.list_ticket_events(@issue_id, types: ["question.withdrawn"])
     end
 
     test "each withdrawal records why: the ticket moved, or the run that asked ended (TP-1321)" do
@@ -451,7 +451,7 @@ defmodule SymphonyElixir.QuestionsTest do
       ended = ask_as!(@run, "Pick a colour")
       assert {:ok, [_withdrawn]} = Questions.withdraw_lapsed(@ticket, run_end([]))
 
-      causes = for e <- RunStore.list_ticket_events(@repo_key, @issue_id, types: ["question.withdrawn"]), do: {e.payload.question_id, e.payload.cause}
+      causes = for e <- RunStore.list_ticket_events(@issue_id, types: ["question.withdrawn"]), do: {e.payload.question_id, e.payload.cause}
       assert causes == [{moved.id, "ticket_moved"}, {ended.id, "run_ended"}]
     end
 
@@ -496,7 +496,7 @@ defmodule SymphonyElixir.QuestionsTest do
       assert id == question.id
 
       assert [{"question.reopened", %{question_id: ^id, title: "Ship TP-12 before the release", by: @director}}] = ticket_events(@repo_key, @issue_id, "question.reopened")
-      assert [%{summary: %{title: "You took back your answer: Ship TP-12 before the release"}}] = RunStore.list_ticket_events(@repo_key, @issue_id, types: ["question.reopened"])
+      assert [%{summary: %{title: "You took back your answer: Ship TP-12 before the release"}}] = RunStore.list_ticket_events(@issue_id, types: ["question.reopened"])
 
       # Answered again, the answer is a second `question.answered`, and reopened again, a second reopen.
       assert {:ok, %{state: :answered, answer: %{option: 2}}} = Questions.answer(@ticket, id, "2", at: ~U[2026-10-30 05:00:09Z])
@@ -599,7 +599,7 @@ defmodule SymphonyElixir.QuestionsTest do
       open = Questions.open(@ticket)
       assert length(open) <= 1
       assert reasons() == [{:ticket, %{identifier: "TP-1194"}} | Enum.map(open, &{:question, %{question_id: &1.id}})]
-      record = RunStore.get_ticket_state(@repo_key, @issue_id)
+      record = RunStore.get_ticket_state(@issue_id)
       assert [%{state: :answered}, %{state: :withdrawn} | _asked_anew] = record.questions
     end
 
@@ -617,13 +617,13 @@ defmodule SymphonyElixir.QuestionsTest do
 
     test "the store writes a question with its pause and their events together, or nothing" do
       question = ask!()
-      record = RunStore.get_ticket_state(@repo_key, @issue_id)
+      record = RunStore.get_ticket_state(@issue_id)
       events = ticket_events(@repo_key, @issue_id)
 
       refuse = fn [^question], %{reasons: [%{kind: :question}]} -> {:error, :refused} end
       assert RunStore.update_ticket_question(@repo_key, @issue_id, @later, refuse) == {:error, :refused}
 
-      assert RunStore.get_ticket_state(@repo_key, @issue_id) == record
+      assert RunStore.get_ticket_state(@issue_id) == record
       assert ticket_events(@repo_key, @issue_id) == events
     end
   end

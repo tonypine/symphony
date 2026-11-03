@@ -95,7 +95,7 @@ defmodule SymphonyElixirWeb.ReconcileStateTest do
     repo_key = Config.repo_key!()
     issue = %Issue{id: "issue-1", identifier: "ACME-1", title: "Owned", state: "In Progress", updated_at: ~U[2026-10-29 09:00:00Z]}
     {:ok, :updated} = TicketObservation.observe(repo_key, issue, now: @now)
-    owned = repo_key |> RunStore.get_ticket_state("issue-1") |> TicketState.put_phase("Code Review", @phase_at)
+    owned = RunStore.get_ticket_state("issue-1") |> TicketState.put_phase("Code Review", @phase_at)
     :ok = RunStore.put_ticket_state(owned)
 
     :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_events()

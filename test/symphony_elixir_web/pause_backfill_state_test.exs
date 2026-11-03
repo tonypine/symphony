@@ -55,7 +55,7 @@ defmodule SymphonyElixirWeb.PauseBackfillStateTest do
     repo_key = Config.repo_key!()
     {holds, attrs} = Map.pop(attrs, :holds)
     record = repo_key |> TicketState.new(issue_id, Map.put(attrs, :issue_identifier, identifier)) |> Map.put(:holds, holds)
-    {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_ticket_states, {repo_key, issue_id}, repo_key, issue_id, record}) end)
+    {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_ticket_index, issue_id, repo_key, record}) end)
   end
 
   test "before the backfill ran the state has no summary" do

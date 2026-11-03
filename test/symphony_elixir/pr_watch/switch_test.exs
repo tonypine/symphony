@@ -252,7 +252,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     :ok
   end
 
-  defp watch(issue_id), do: @repo_key |> RunStore.get_ticket_state(issue_id) |> TicketState.pr_watch()
+  defp watch(issue_id), do: RunStore.get_ticket_state(issue_id) |> TicketState.pr_watch()
 
   # The workspace of the ticket's run, where the watcher reads the protected paths its PR changes.
   defp workspace!(issue_id) do
@@ -337,7 +337,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
   # The ticket waits on its competitors: the wait's line, and one landing reason per competitor, by
   # its ticket else its pull request.
   defp assert_waits!(issue_id, reason, keys) do
-    record = TicketState.normalize(RunStore.get_ticket_state(@repo_key, issue_id))
+    record = TicketState.normalize(RunStore.get_ticket_state(issue_id))
     assert %{reason: ^reason} = Competitors.waiting(record)
     assert for(landing <- record.pause.reasons, Competitors.landing_reason?(landing), do: landing_key(landing)) == keys
   end
@@ -393,7 +393,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
         assert %{rule: "R21", kind: :ci_fix, reason: reason} = decision(issue_id)
         assert reason == "The `specs` check failed on PR #1: CI Fix run #{run} of 10"
         assert state(issue_id) == "CI Fix"
-        assert CiFix.origin(@repo_key, issue_id) == "Code Review"
+        assert CiFix.origin(issue_id) == "Code Review"
 
         # The run fixed nothing: it pushed a new head, still red, and handed the ticket back.
         fix_run_returns!(issue_id, "1", "Code Review", "head-1-#{run + 1}", red())
@@ -876,7 +876,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert state(issue_id) == "Code Review"
 
       # The lane keeps the same signature the streak compared.
-      lane = TicketState.self_heal(RunStore.get_ticket_state(@repo_key, issue_id))
+      lane = TicketState.self_heal(RunStore.get_ticket_state(issue_id))
       assert lane.signature == Attempts.signature(attempts(issue_id).failure)
 
       tick!(pid)
@@ -914,7 +914,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert %{rule: "R21"} = decision(issue_id)
       assert World.calls(:disarm) == ["https://github.com/acme/app/pull/1"]
       assert state(issue_id) == "CI Fix"
-      assert CiFix.origin(@repo_key, issue_id) == "Merging"
+      assert CiFix.origin(issue_id) == "Merging"
       assert %{ci_failure: %{approved: true}} = watch(issue_id).fix
       assert Enum.any?(comments(issue_id), &(&1 =~ "because CI failed and a fix run may push new code"))
 
@@ -1018,7 +1018,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert %{blocked_by: [%{identifier: "TP-1"}]} = World.get(:issues)[follower]
       assert moves(follower) == ["CI Fix"]
       assert %{rule: "R14"} = decision(follower)
-      assert CiFix.origin(@repo_key, follower) == "Merging"
+      assert CiFix.origin(follower) == "Merging"
       assert watch(follower).links == []
 
       tick!(pid, 2)
@@ -1193,7 +1193,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       {_pid, _leader, follower} = waiting!()
       stop_supervised!({Repo, @repo_key})
 
-      assert [%{issue_identifier: "TP-1", linked: true}] = @repo_key |> RunStore.get_ticket_state(follower) |> TicketState.pr_watch() |> Map.fetch!(:links)
+      assert [%{issue_identifier: "TP-1", linked: true}] = RunStore.get_ticket_state(follower) |> TicketState.pr_watch() |> Map.fetch!(:links)
       assert paused?(follower)
 
       pid = start!()
@@ -1601,7 +1601,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       tick!(pid, 2)
 
       assert moves(issue_id) == ["CI Fix"]
-      assert CiFix.origin(@repo_key, issue_id) == "Rework"
+      assert CiFix.origin(issue_id) == "Rework"
     end
 
     test "a ticket that left Merging with auto-merge on has it turned off (R3), once" do
@@ -1729,7 +1729,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
         tick!(pid, 2)
 
         assert watch(issue_id).protected_files == %{head_sha: "head-#{id}-1", paths: ["WORKFLOW.md"]}
-        assert %{facts: %{protected_files: ["WORKFLOW.md"]}} = @repo_key |> RunStore.get_ticket_state(issue_id) |> WatchPayload.watch()
+        assert %{facts: %{protected_files: ["WORKFLOW.md"]}} = RunStore.get_ticket_state(issue_id) |> WatchPayload.watch()
         # In Merging R18 asks too, and reads once the protected-list entries its Allow option unlocks.
         assert diffs(workspace) == if(state == "Merging", do: 2, else: 1)
         stop_supervised!({Repo, @repo_key})
@@ -2003,7 +2003,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       pid = start!()
       tick!(pid)
       assert moves(issue_id) == ["QA"]
-      assert CiFix.origin(@repo_key, issue_id) == nil
+      assert CiFix.origin(issue_id) == nil
     end
 
     test "a ticket in CI Fix that entered it for its red head spends no second attempt on the run already sent" do

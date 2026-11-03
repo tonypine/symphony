@@ -187,7 +187,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     start_supervised!({Repo, Keyword.merge(defaults, opts)})
   end
 
-  defp watch(repo_key, issue_id), do: repo_key |> RunStore.get_ticket_state(issue_id) |> TicketState.pr_watch()
+  defp watch(_repo_key, issue_id), do: RunStore.get_ticket_state(issue_id) |> TicketState.pr_watch()
 
   # The registry drops a stopped watcher's name only once it handles the exit, so until then Check
   # Now still lists the watcher and calls a process that is gone.
@@ -270,13 +270,13 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       issue("6", "Code Review", repo_key: "other-repo")
     ])
 
-    assert RunStore.get_ticket_state(repo_key, "1") == nil
+    assert RunStore.get_ticket_state("1") == nil
     pid = start_repo!(repo_key)
 
     assert {:ok, %{watched: 3, errors: 0, rate_limited: nil, next_tick_ms: 30_000}} = Repo.poll(pid)
 
     assert_received {:linear_read, ["In Progress", "Code Review", "QA", "Rework", "CI Fix", "Merging"]}
-    assert %{issue_identifier: "TP-1"} = RunStore.get_ticket_state(repo_key, "1")
+    assert %{issue_identifier: "TP-1"} = RunStore.get_ticket_state("1")
 
     assert %{facts: %Facts{phase: :code_review, pr: :open, pr_number: 1, ci: :green}} = watch(repo_key, "1")
     assert %{facts: %Facts{mergeable: :clean}} = watch(repo_key, "1")
@@ -305,10 +305,10 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     assert %{facts: %Facts{phase: :in_progress, pr: :missing}, pr_url: nil, landing: nil} = watch(repo_key, "2")
     assert %{decision: %{rule: "R5", kind: :wait, owner: :agent}} = watch(repo_key, "2")
 
-    assert RunStore.get_ticket_state(repo_key, "5") == nil
-    assert RunStore.get_ticket_state(repo_key, "4") == nil
+    assert RunStore.get_ticket_state("5") == nil
+    assert RunStore.get_ticket_state("4") == nil
     # Ticket 6 is the other repo's: its one record, which this repo reads too, is that repo's.
-    refute match?(%{repo_key: ^repo_key}, RunStore.get_ticket_state(repo_key, "6"))
+    refute match?(%{repo_key: ^repo_key}, RunStore.get_ticket_state("6"))
   end
 
   test "one read per watched PR per tick, plus one open-PR list per repo per tick", %{repo_key: repo_key} do
@@ -531,8 +531,8 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
 
     assert {:ok, %{watched: 1}} = Repo.poll(pid)
 
-    assert %{phase: "Code Review", issue_identifier: "TP-1", linear_updated_at: ~U[2026-10-16 11:00:00Z]} = RunStore.get_ticket_state(repo_key, "1")
-    assert %{phase: "QA", url: "https://linear.app/acme/issue/TP-2", pr_watch: nil} = RunStore.get_ticket_state("observed-other-repo", "2")
+    assert %{phase: "Code Review", issue_identifier: "TP-1", linear_updated_at: ~U[2026-10-16 11:00:00Z]} = RunStore.get_ticket_state("1")
+    assert %{phase: "QA", url: "https://linear.app/acme/issue/TP-2", pr_watch: nil} = RunStore.get_ticket_state("2")
   end
 
   test "a store that can't be read or written leaves the tick going", %{repo_key: repo_key} do
@@ -542,7 +542,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     log = ExUnit.CaptureLog.capture_log(fn -> assert {:ok, %{watched: 2, errors: 0}} = Repo.poll(pid) end)
     assert log =~ "PR watch could not write the facts issue_id=1 issue_identifier=TP-1 reason=:store_down"
     assert log =~ "PR watch could not keep the GitHub delivery health repo_key=#{repo_key} reason=:store_down"
-    assert RunStore.get_ticket_state(repo_key, "1") == nil
+    assert RunStore.get_ticket_state("1") == nil
   end
 
   test "open PRs that can't be read on the first tick leave nobody ahead", %{repo_key: repo_key} do
@@ -562,9 +562,9 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     issues!([repo_key |> with_pr(issue("2", "QA"), 2)])
     assert {:ok, %{watched: 1}} = Repo.poll(pid)
 
-    assert %{issue_identifier: "TP-1", pr_watch: nil} = RunStore.get_ticket_state(repo_key, "1")
-    assert %{pr_watch: %{}} = RunStore.get_ticket_state(repo_key, "2")
-    assert %{phase: "Todo", pr_watch: nil} = RunStore.get_ticket_state(repo_key, "9")
+    assert %{issue_identifier: "TP-1", pr_watch: nil} = RunStore.get_ticket_state("1")
+    assert %{pr_watch: %{}} = RunStore.get_ticket_state("2")
+    assert %{phase: "Todo", pr_watch: nil} = RunStore.get_ticket_state("9")
   end
 
   test "holds, the CI Fix origin and an active run are read from Symphony's records", %{repo_key: repo_key} do
@@ -1058,7 +1058,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       {:ok, projected} = SymphonyElixir.Decisions.put("Ship it.", [picked])
       :ok = SymphonyElixir.Decisions.record("1", [picked], repo_key: repo_key, description: projected)
       {:ok, _answered} = Questions.answer({:ticket, repo_key, "1"}, decision.id, "Allow the change")
-      assert %{description: "Ship it."} = RunStore.get_ticket_state(repo_key, "1")
+      assert %{description: "Ship it."} = RunStore.get_ticket_state("1")
 
       # The head is still red only on that check: the grant covers it, so it reads as green and lands,
       # and nothing is asked again.
@@ -1068,7 +1068,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       assert_received {:merged, "https://github.com/acme/app/pull/1", "sha-1"}
       # The merge closes the ticket out in the same step (TP-1305).
       assert_received {:moved, "1", "Done"}
-      assert %{phase: "Done", phase_owner: :symphony} = RunStore.get_ticket_state(repo_key, "1")
+      assert %{phase: "Done", phase_owner: :symphony} = RunStore.get_ticket_state("1")
       refute Questions.deciding({:ticket, repo_key, "1"})
       refute_received {:comment, "1", _body}
       refute_received {:linear_read, _states}

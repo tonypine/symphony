@@ -17,7 +17,7 @@ defmodule SymphonyElixir.PullRequestPageTableTest do
         {:ok, pr()}
       end,
       linear_client: fn _query, _variables, _opts -> {:error, :offline} end,
-      ticket_state: fn _repo_key, _issue_id -> nil end,
+      ticket_state: fn _issue_id -> nil end,
       pr_reviews: fn _repo_key -> [] end,
       ttl_ms: 60_000
     ]

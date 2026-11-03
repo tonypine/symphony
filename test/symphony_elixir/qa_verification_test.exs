@@ -163,16 +163,16 @@ defmodule SymphonyElixir.QaVerificationTest do
     write_workflow_file!(Workflow.workflow_file_path())
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
-    RunStore.delete_ticket_state(@repo_key, @issue_id)
-    RunStore.delete_ticket_state(@repo_key, @other_issue_id)
+    RunStore.delete_ticket_state(@issue_id)
+    RunStore.delete_ticket_state(@other_issue_id)
 
     # Every QA ticket here has its open pull request; the tests that close it say so.
     :ok = TicketPullRequest.put(@repo_key, @issue_id, %{pr_url: @pr_url})
     :ok = TicketPullRequest.put(@repo_key, @other_issue_id, %{pr_url: "https://github.com/acme/repo/pull/817"})
 
     on_exit(fn ->
-      RunStore.delete_ticket_state(@repo_key, @issue_id)
-      RunStore.delete_ticket_state(@repo_key, @other_issue_id)
+      RunStore.delete_ticket_state(@issue_id)
+      RunStore.delete_ticket_state(@other_issue_id)
     end)
 
     on_exit(fn ->
@@ -490,7 +490,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert [%{name: "qa", details: %{signal: "merge_confirmation"}} | _] = Handoff.signals(@repo_key, @issue_id)
 
       # A rework verdict never waits on a person, in either mode.
-      RunStore.delete_ticket_state(@repo_key, @issue_id)
+      RunStore.delete_ticket_state(@issue_id)
       {other_workspace, _head} = git_workspace!()
 
       Process.put(
@@ -654,7 +654,7 @@ defmodule SymphonyElixir.QaVerificationTest do
 
     test "a ticket with no pull request recorded is held the same way" do
       {workspace, _head} = git_workspace!()
-      on_exit(fn -> RunStore.delete_ticket_state(@repo_key, "issue-qa-no-pr") end)
+      on_exit(fn -> RunStore.delete_ticket_state("issue-qa-no-pr") end)
 
       assert :ok =
                QaVerification.run(issue("QA", %{id: "issue-qa-no-pr"}), workspace,
@@ -961,7 +961,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       refute_received {:fixer_create, _attrs}
       refute_received {:fixer_block, _identifier}
       refute blocked?(@issue_id)
-      assert SymphonyElixir.TicketState.self_heal(RunStore.get_ticket_state(@repo_key, @issue_id)) == nil
+      assert SymphonyElixir.TicketState.self_heal(RunStore.get_ticket_state(@issue_id)) == nil
 
       assert %{} = decision = deciding()
       assert decision.title == "QA could not finish its check of TP-816"
@@ -1057,7 +1057,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       refute blocked?(@issue_id)
 
       assert %{component: "dev_server", fix_ticket: nil, signature: signature} =
-               RunStore.get_ticket_state(@repo_key, @issue_id) |> SymphonyElixir.TicketState.self_heal()
+               RunStore.get_ticket_state(@issue_id) |> SymphonyElixir.TicketState.self_heal()
 
       assert signature =~ "dev_server_build_failed"
 
@@ -1282,7 +1282,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       ]
 
       for cause <- causes do
-        RunStore.delete_ticket_state(@repo_key, @issue_id)
+        RunStore.delete_ticket_state(@issue_id)
         {workspace, _head} = git_workspace!()
         result = Map.merge(%{verdict: :blocked, summary: "The run started.", steps: steps, findings: [], reason: "blocked"}, cause)
 
@@ -1366,7 +1366,7 @@ defmodule SymphonyElixir.QaVerificationTest do
             {%{live: true, live_reason: "the issue has the `qa:live` label"}, "**App environments:** fixtures and a live server (the issue has the `qa:live` label)"},
             {%{live_reason: "the issue has the `qa:fixture` label"}, "**App environments:** fixtures only (the issue has the `qa:fixture` label)"}
           ] do
-        RunStore.delete_ticket_state(@repo_key, @issue_id)
+        RunStore.delete_ticket_state(@issue_id)
         {workspace, _head} = git_workspace!()
         Process.put(:qa_live_playbook, Map.merge(%{kind: "macos_app", paths: ["macos/**"], prompt: "Use the app."}, playbook))
 
@@ -1383,7 +1383,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert_received {:memory_tracker_comment, @issue_id, report}
       refute report =~ "App environments"
 
-      RunStore.delete_ticket_state(@repo_key, @issue_id)
+      RunStore.delete_ticket_state(@issue_id)
       Process.put(:qa_live_playbook, %{kind: "macos_app", paths: ["macos/**"], prompt: "Use the app.", live: true, live_reason: "the issue has the `qa:live` label"})
       Process.put(:qa_agent_result, {:error, {:qa_host_tunnel_failed, "ssh exited with status 255"}, %{}})
 
@@ -1443,7 +1443,7 @@ defmodule SymphonyElixir.QaVerificationTest do
             {%{built: true, launched: true, checked: false}, "a healthy qa_check_app did not run"},
             {nil, "qa_build, qa_launch_app, a healthy qa_check_app did not run"}
           ] do
-        RunStore.delete_ticket_state(@repo_key, @issue_id)
+        RunStore.delete_ticket_state(@issue_id)
         {workspace, head} = git_workspace!()
         Process.put(:qa_agent_result, scope_none_result(app_check))
 
@@ -1490,7 +1490,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       refute_received {:fixer_block, _identifier}
       refute_received {:fixer_attach, _identifier, _body}
       refute blocked?(@issue_id)
-      assert SymphonyElixir.TicketState.self_heal(RunStore.get_ticket_state(@repo_key, @issue_id)) == nil
+      assert SymphonyElixir.TicketState.self_heal(RunStore.get_ticket_state(@issue_id)) == nil
       refute_received {:memory_tracker_state_update, _, _}
 
       assert %{} = decision = deciding()
@@ -1529,7 +1529,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       ]
 
       for {name, opts, result} <- reasons do
-        RunStore.delete_ticket_state(@repo_key, @issue_id)
+        RunStore.delete_ticket_state(@issue_id)
         {workspace, _head} = git_workspace!()
         if result, do: Process.put(:qa_agent_result, result), else: Process.delete(:qa_agent_result)
 
@@ -1570,7 +1570,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       ]
 
       for {cause, component} <- causes do
-        RunStore.delete_ticket_state(@repo_key, @issue_id)
+        RunStore.delete_ticket_state(@issue_id)
         {workspace, _head} = git_workspace!()
         Process.put(:qa_agent_result, blocked_cause(cause))
 
@@ -1625,7 +1625,7 @@ defmodule SymphonyElixir.QaVerificationTest do
             {%{ci: :red}, "CI is red on this head"},
             {%{ci: :required_missing}, "a required check never reported on this head"}
           ] do
-        RunStore.delete_ticket_state(@repo_key, @issue_id)
+        RunStore.delete_ticket_state(@issue_id)
         {workspace, head} = git_workspace!()
         watch_head!(head, facts)
         Process.put(:qa_agent_result, fail_result())
@@ -1685,7 +1685,7 @@ defmodule SymphonyElixir.QaVerificationTest do
 
     test "a fail on a green head, on another head, or with no watcher record still goes to Rework" do
       for watch <- [{:same, %{ci: :green}}, {:other, %{ci: :red}}, :none] do
-        RunStore.delete_ticket_state(@repo_key, @issue_id)
+        RunStore.delete_ticket_state(@issue_id)
         {workspace, head} = git_workspace!()
 
         case watch do
@@ -1801,7 +1801,7 @@ defmodule SymphonyElixir.QaVerificationTest do
             {[], @named_walkthrough, "`make-all` did not run on"},
             {[make_all("COMPLETED", "SUCCESS")], "## User walkthrough\n\n1. Run it. Proved by: `make-all` › the QA pre-check's test file\n", "`the QA pre-check's test file` is not in the checkout"}
           ] do
-        RunStore.delete_ticket_state(@repo_key, @issue_id)
+        RunStore.delete_ticket_state(@issue_id)
         {workspace, head} = git_workspace!()
 
         assert :ok = run_named(workspace, description, gh_runner: gh(head, checks))
@@ -2020,7 +2020,7 @@ defmodule SymphonyElixir.QaVerificationTest do
         args, dir -> System.cmd("git", args, cd: dir, stderr_to_stdout: true)
       end
 
-      RunStore.delete_ticket_state(@repo_key, @issue_id)
+      RunStore.delete_ticket_state(@issue_id)
       :ok = TicketPullRequest.put(@repo_key, @issue_id, %{pr_url: @pr_url})
 
       log = capture_log(fn -> assert :ok = run(workspace, git: failing_reset) end)
@@ -2105,7 +2105,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       %{files: files, transcript: @transcript}
     end
 
-    defp events, do: SymphonyElixir.TicketEvents.query(@repo_key, @issue_id, limit: 200)
+    defp events, do: SymphonyElixir.TicketEvents.query(@issue_id, limit: 200)
 
     defp agent_result(result), do: Process.put(:qa_agent_result, {:ok, %{result: result, tokens: %{}}})
 
@@ -2272,7 +2272,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       )
     end
 
-    defp ledger, do: Enum.filter(SymphonyElixir.TicketEvents.query(@repo_key, @issue_id, limit: 200), &(&1.type in ["evidence", "finding.recorded", "verdict.recorded"]))
+    defp ledger, do: Enum.filter(SymphonyElixir.TicketEvents.query(@issue_id, limit: 200), &(&1.type in ["evidence", "finding.recorded", "verdict.recorded"]))
 
     defp stored!(id) do
       assert {:ok, path} = SymphonyElixir.Artifacts.path(id)
@@ -2363,7 +2363,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert :ok = QaVerification.carry_verdict(@repo_key, @issue_id, "new-head")
 
       assert [%{type: "verdict.recorded", run_id: nil, head_sha: "new-head", payload: %{outcome: "pass"}}] =
-               SymphonyElixir.TicketEvents.query(@repo_key, @issue_id, types: ["verdict.recorded"])
+               SymphonyElixir.TicketEvents.query(@issue_id, types: ["verdict.recorded"])
     end
   end
 end

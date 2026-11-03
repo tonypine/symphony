@@ -303,7 +303,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
 
     # A green head, so the QA ticket's own gate is open and only the hold holds it back.
     SymphonyElixir.PrWatchSupport.put_watch!("default", "held", phase: :qa)
-    on_exit(fn -> RunStore.delete_ticket_state("default", "held") end)
+    on_exit(fn -> RunStore.delete_ticket_state("held") end)
 
     question = ask!("held", "Investigate the qa_environment by hand?")
 
@@ -733,7 +733,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     }
 
     {:ok, question} = Questions.ask({:ticket, "default", issue_id}, request, request: true)
-    on_exit(fn -> RunStore.delete_ticket_state("default", issue_id) end)
+    on_exit(fn -> RunStore.delete_ticket_state(issue_id) end)
     question
   end
 end

@@ -51,8 +51,8 @@ defmodule SymphonyElixir.QaSeedTest do
     dir
   end
 
-  defp record(repo_key, issue_id) do
-    %{} = RunStore.get_ticket_state(repo_key, issue_id)
+  defp record(_repo_key, issue_id) do
+    %{} = RunStore.get_ticket_state(issue_id)
   end
 
   test "loads Symphony's own seed: phases, pauses, an access hold, an open question, runs and PRs", %{repo_key: repo_key, dir: dir} do

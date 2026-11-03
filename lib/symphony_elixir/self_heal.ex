@@ -264,7 +264,7 @@ defmodule SymphonyElixir.SelfHeal do
       {:error, {:self_heal_scope_unknown, component}}
     else
       signature = signature(outcome)
-      previous = previous(repo_key, issue.id, opts)
+      previous = previous(issue.id, opts)
 
       ctx = %{
         issue: issue,
@@ -516,14 +516,14 @@ defmodule SymphonyElixir.SelfHeal do
   defp summary(%{outcome: %{summary: summary}}) when is_binary(summary) and summary != "", do: summary
   defp summary(ctx), do: ctx.signature
 
-  defp previous(repo_key, issue_id, opts) do
-    repo_key
-    |> get_ticket_state(issue_id, opts)
+  defp previous(issue_id, opts) do
+    issue_id
+    |> get_ticket_state(opts)
     |> TicketState.self_heal()
   end
 
-  defp get_ticket_state(repo_key, issue_id, opts) do
-    case store(opts).get_ticket_state(repo_key, issue_id) do
+  defp get_ticket_state(issue_id, opts) do
+    case store(opts).get_ticket_state(issue_id) do
       {:error, _reason} -> TicketState.normalize(nil)
       record -> record
     end

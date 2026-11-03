@@ -3195,7 +3195,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert response["held"] == true
       assert response["reason"] == "the run reported a block: waiting on TP-997, TP-998"
       assert response["clearing_condition"] == "when every blocker is terminal"
-      refute Map.has_key?(SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1"), :holds)
+      refute Map.has_key?(SymphonyElixir.RunStore.get_ticket_state("issue-1"), :holds)
 
       assert SymphonyElixir.Pauses.why({:ticket, "repo-a", "issue-1"}) == ["Waiting for TP-997 to finish", "Waiting for TP-998 to finish"]
     end
@@ -3215,7 +3215,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       assert [%{id: _question_id, title: "The run on TP-816 cannot continue on its own"}] = SymphonyElixir.Questions.open({:ticket, "repo-a", "issue-1"})
       assert SymphonyElixir.Pauses.why({:ticket, "repo-a", "issue-1"}) == ["Waiting for your answer: The run on TP-816 cannot continue on its own"]
-      refute Map.has_key?(SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1"), :holds)
+      refute Map.has_key?(SymphonyElixir.RunStore.get_ticket_state("issue-1"), :holds)
     end
 
     test "a block report whose blockers are all terminal waits on a person" do
@@ -3253,7 +3253,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert response["message"] =~ "Blocked"
       assert response["message"] =~ "a person lifts it with Unblock"
       assert SymphonyElixir.Pauses.paused?({:ticket, "repo-a", "issue-1"})
-      refute Map.has_key?(SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1"), :holds)
+      refute Map.has_key?(SymphonyElixir.RunStore.get_ticket_state("issue-1"), :holds)
     end
 
     test "a block report the store refuses to pause on is the tool's error" do
@@ -3312,7 +3312,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                Linear.update_state(context, "Plan Review", linear_client: plan_review_client(), settings: designed_settings())
 
       assert_received {:moved_to, "state-plan-review"}
-      assert %{phase: "Plan Review", phase_owner: :symphony} = SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
+      assert %{phase: "Plan Review", phase_owner: :symphony} = SymphonyElixir.RunStore.get_ticket_state("issue-1")
 
       not_a_plan = fn query, variables, opts ->
         case plan_review_client().(query, variables, opts) do
@@ -3371,7 +3371,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                SymphonyElixir.Handoff.signals("repo-a", "issue-1")
 
       # The agent's move is Symphony's own: the record holds it before Linear is asked.
-      assert %{phase: "Rework", phase_owner: :symphony} = SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
+      assert %{phase: "Rework", phase_owner: :symphony} = SymphonyElixir.RunStore.get_ticket_state("issue-1")
     end
 
     test "a move Linear doesn't make puts the record's phase back, and records no verdict" do
@@ -3383,7 +3383,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
         opts = [linear_client: ci_fix_move_client(moved), settings: designed_settings()]
         assert {:error, _reason} = Linear.update_state(context, "Rework", opts)
         assert_received :state_mutated
-        assert %{phase: "CI Fix", phase_owner: :symphony} = SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
+        assert %{phase: "CI Fix", phase_owner: :symphony} = SymphonyElixir.RunStore.get_ticket_state("issue-1")
       end
 
       assert SymphonyElixir.Handoff.signals("repo-a", "issue-1") == []

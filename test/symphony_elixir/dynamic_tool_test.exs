@@ -1685,7 +1685,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
 
     test "records the request and returns explicit error payloads" do
-      on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("default", "issue-current") end)
+      on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("issue-current") end)
       {:ok, registry} = CommentRegistry.start_link()
 
       client = fn query, _variables, _opts ->
@@ -1740,7 +1740,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
 
     test "refuses a question with a file name in it, then posts the rewritten request with what waits, trade-offs and why" do
-      on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("default", "issue-current") end)
+      on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("issue-current") end)
       {:ok, registry} = CommentRegistry.start_link()
       test_pid = self()
 
@@ -1831,7 +1831,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
 
     test "withdraws the request and returns explicit error payloads" do
-      on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("default", "issue-current") end)
+      on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("issue-current") end)
       request = %{"id" => "comment-1", "body" => "## Action needed: Re-run CI", "createdAt" => "2026-10-04T18:57:00.000Z"}
 
       client = fn query, _variables, _opts ->

@@ -2037,7 +2037,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
     issue_id = "issue-github-agent-handoff"
 
     try do
-      RunStore.delete_ticket_state(repo_key, issue_id)
+      RunStore.delete_ticket_state(issue_id)
       command_security = Map.put(fixture.context.command_security, :origin_repo, "acme/symphony")
 
       context =
@@ -2056,7 +2056,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
       assert details.branch == "auto/ACME-483"
 
       # Opening the PR is a handoff too.
-      RunStore.delete_ticket_state(repo_key, issue_id)
+      RunStore.delete_ticket_state(issue_id)
 
       git_runner = fn ["branch", "--show-current"], _opts -> {"auto/ACME-483\n", 0} end
       gh_runner = fn _args, _opts -> {"https://github.com/acme/symphony/pull/9\n", 0} end
@@ -2071,12 +2071,12 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
       assert Handoff.emitted?(repo_key, issue_id, head)
 
       # A tool call made outside a configured repo records nothing.
-      RunStore.delete_ticket_state(repo_key, issue_id)
+      RunStore.delete_ticket_state(issue_id)
       assert {:ok, _result} = GitHub.push_branch(fixture.context, settings: settings)
       assert Handoff.signals(repo_key, issue_id) == []
     after
       File.rm_rf(fixture.root)
-      RunStore.delete_ticket_state(repo_key, issue_id)
+      RunStore.delete_ticket_state(issue_id)
     end
   end
 
@@ -2097,7 +2097,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
         ]
       )
 
-      RunStore.delete_ticket_state(repo_key, issue_id)
+      RunStore.delete_ticket_state(issue_id)
 
       context =
         fixture.context
@@ -2111,7 +2111,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
       assert Handoff.emitted?(repo_key, issue_id, head)
 
       # A workspace whose HEAD the tool cannot read records no head, so the signal counts for any.
-      RunStore.delete_ticket_state(repo_key, issue_id)
+      RunStore.delete_ticket_state(issue_id)
 
       git_runner = fn
         ["branch", "--show-current"], _opts -> {"auto/ACME-483\n", 0}
@@ -2131,7 +2131,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
       assert Handoff.emitted?(repo_key, issue_id, "any-head-at-all")
 
       # A context whose issue map carries no id hands off under the context's own issue id.
-      RunStore.delete_ticket_state(repo_key, issue_id)
+      RunStore.delete_ticket_state(issue_id)
 
       bare =
         fixture.context
@@ -2142,7 +2142,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
       assert [%{name: "handoff", details: %{head: ^head}}] = Handoff.signals(repo_key, issue_id)
     after
       File.rm_rf(fixture.root)
-      RunStore.delete_ticket_state(repo_key, issue_id)
+      RunStore.delete_ticket_state(issue_id)
     end
   end
 
@@ -2179,7 +2179,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
       assert %{pr_url: ^second, state: "open"} = TicketPullRequest.get(repo_key, issue_id)
     after
       File.rm_rf(workspace)
-      RunStore.delete_ticket_state(repo_key, issue_id)
+      RunStore.delete_ticket_state(issue_id)
     end
   end
 

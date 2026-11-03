@@ -102,7 +102,7 @@ defmodule SymphonyElixir.CiWaitPauseTest do
       assert :ok = CiWait.clear_pause("default", "issue-1", @director)
       assert {:ok, %{reasons: [%{kind: :ticket}, %{waits_on: %{condition: "self_heal:worker_host"}}]}} = Pauses.get(@ticket)
 
-      cleared = RunStore.list_ticket_events("default", "issue-1", types: ["pause.reason_cleared"])
+      cleared = RunStore.list_ticket_events("issue-1", types: ["pause.reason_cleared"])
       assert [%{payload: %{by: @director}}, %{payload: %{by: @director}}] = cleared
     end
 
@@ -111,7 +111,7 @@ defmodule SymphonyElixir.CiWaitPauseTest do
 
       assert :ok = CiWait.clear_pause("default", "issue-1")
       assert {:ok, nil} = Pauses.get(@ticket)
-      assert [%{payload: %{by: %{kind: :symphony}}}] = RunStore.list_ticket_events("default", "issue-1", types: ["pause.cleared"])
+      assert [%{payload: %{by: %{kind: :symphony}}}] = RunStore.list_ticket_events("issue-1", types: ["pause.cleared"])
 
       assert :ok = CiWait.clear_pause("default", "issue-1")
       assert :ok = CiWait.clear_pause(nil, "issue-1")

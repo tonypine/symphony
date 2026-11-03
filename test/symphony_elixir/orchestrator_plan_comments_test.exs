@@ -53,7 +53,7 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
 
   test "records a plan verdict signal when a person's comment sends the plan back for revision" do
     repo_key = "default"
-    RunStore.delete_ticket_state(repo_key, "parent")
+    RunStore.delete_ticket_state("parent")
     backlog = [%{id: "child-1", identifier: "MOT-31", state: "Backlog"}]
     parent = %{parent("Plan Review", backlog, [~U[2026-10-04 12:10:00Z]]) | repo_key: repo_key}
 
@@ -64,7 +64,7 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
     act(state(), parent)
 
     assert [%{name: "plan verdict", details: %{outcome: "changes", to: "Rework"}}] =
-             RunStore.get_ticket_state(repo_key, "parent").signals
+             RunStore.get_ticket_state("parent").signals
   end
 
   test "a comment sends the parent through Rework and records the move as Symphony's own" do

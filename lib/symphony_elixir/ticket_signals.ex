@@ -98,7 +98,7 @@ defmodule SymphonyElixir.TicketSignals do
   """
   @spec recorded_phase(String.t() | nil, String.t() | nil) :: {:ok, String.t() | nil} | :unknown
   def recorded_phase(repo_key, issue_id) when is_binary(repo_key) and is_binary(issue_id) do
-    case RunStore.get_ticket_state(repo_key, issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
       {:error, _reason} -> :unknown
       nil -> {:ok, nil}
       record -> {:ok, record.phase}
@@ -300,7 +300,7 @@ defmodule SymphonyElixir.TicketSignals do
   # A handoff's attempt number counts the ticket's earlier pushes; a second emission for one head is
   # the same event (its key), so the number it would carry is never stored.
   defp record_mapped(repo_key, issue_id, {"attempt.pushed", payload, opts}) do
-    record_event(repo_key, issue_id, "attempt.pushed", Map.put(payload, :attempt, attempts(repo_key, issue_id) + 1), opts)
+    record_event(repo_key, issue_id, "attempt.pushed", Map.put(payload, :attempt, attempts(issue_id) + 1), opts)
   end
 
   # A move changes what dispatch may start (a merge settled unblocks the next ticket of a chain), so
@@ -335,15 +335,15 @@ defmodule SymphonyElixir.TicketSignals do
 
     cond do
       is_binary(phase) and terminal?(repo_key, phase) -> {:terminal, phase}
-      started = run_started(repo_key, issue_id, run_id) -> {:run_ended, %{run_id: run_id, started_at: started.at, ended_at: ended_at, moved_to: moved_to(started.phase, phase)}}
+      started = run_started(issue_id, run_id) -> {:run_ended, %{run_id: run_id, started_at: started.at, ended_at: ended_at, moved_to: moved_to(started.phase, phase)}}
       true -> nil
     end
   end
 
   defp lapse(_repo_key, _issue_id, _event), do: nil
 
-  defp run_started(repo_key, issue_id, run_id) do
-    events = RunStore.list_ticket_events(repo_key, issue_id, types: ["run.started"])
+  defp run_started(issue_id, run_id) do
+    events = RunStore.list_ticket_events(issue_id, types: ["run.started"])
     if is_list(events), do: Enum.find(events, &(&1.payload[:run_id] == run_id))
   end
 
@@ -361,8 +361,8 @@ defmodule SymphonyElixir.TicketSignals do
     end
   end
 
-  defp attempts(repo_key, issue_id) do
-    events = RunStore.list_ticket_events(repo_key, issue_id, types: ["attempt.pushed"])
+  defp attempts(issue_id) do
+    events = RunStore.list_ticket_events(issue_id, types: ["attempt.pushed"])
     if is_list(events), do: length(events), else: 0
   end
 
@@ -391,12 +391,12 @@ defmodule SymphonyElixir.TicketSignals do
 
   defp write_phase(repo_key, issue_id, phase) do
     moved =
-      case RunStore.get_ticket_state(repo_key, issue_id) do
+      case RunStore.get_ticket_state(issue_id) do
         {:error, _reason} = error -> error
         %{phase: ^phase, phase_owner: :symphony} -> :unchanged
-        %{phase: ^phase} -> own_phase(repo_key, issue_id)
+        %{phase: ^phase} -> own_phase(issue_id)
         nil -> repo_key |> TicketState.new(issue_id) |> TicketState.put_phase(phase) |> RunStore.put_ticket_state()
-        record -> record |> TicketState.put_phase(phase) |> update_phase(repo_key, issue_id)
+        record -> record |> TicketState.put_phase(phase) |> update_phase(issue_id)
       end
 
     case moved do
@@ -413,12 +413,12 @@ defmodule SymphonyElixir.TicketSignals do
   end
 
   # Only the phase and when it changed are written, so nothing another writer put on the record is lost.
-  defp update_phase(moved, repo_key, issue_id),
-    do: RunStore.update_ticket_state(repo_key, issue_id, Map.take(moved, [:phase, :phase_at, :phase_owner, :updated_at]))
+  defp update_phase(moved, issue_id),
+    do: RunStore.update_ticket_state(issue_id, Map.take(moved, [:phase, :phase_at, :phase_owner, :updated_at]))
 
   # A move into the phase the record already holds (one an observation wrote) makes it Symphony's.
-  defp own_phase(repo_key, issue_id) do
-    with :ok <- RunStore.update_ticket_state(repo_key, issue_id, %{phase_owner: :symphony}), do: :owned
+  defp own_phase(issue_id) do
+    with :ok <- RunStore.update_ticket_state(issue_id, %{phase_owner: :symphony}), do: :owned
   end
 
   defp projection_written(:ok, _action, _issue_id), do: :ok

@@ -73,6 +73,14 @@ defmodule SymphonyElixirWeb.PresenterTicketStatusTest do
     assert answered.start == %{allowed: true, reason: nil}
   end
 
+  test "a ticket entry names the repository its one record holds, whichever repository's poll listed it" do
+    :ok = RunStore.put_ticket_state(%{repo_key: "hub", issue_id: "moved", issue_identifier: "MT-9", phase: "Todo"})
+    pid = orchestrator(%{dispatch_skipped: [skipped("moved", "MT-9", "default")]})
+
+    assert {:ok, %{repo_key: "hub"}} = Presenter.issue_payload("MT-9", pid, 1_000)
+    assert %{dispatch_skipped: [%{issue_identifier: "MT-9", repo_key: "hub"}]} = Presenter.state_payload(pid, 1_000)
+  end
+
   test "a stop is the reason the Director may release, and the pause says they may" do
     :ok = Pauses.stop({:ticket, "default", "stopped"}, @blocked)
     {:ok, _pause} = Pauses.add_reason({:ticket, "default", "stopped"}, Pauses.ticket_reason(:dependency, "MT-2"))

@@ -17,7 +17,7 @@ defmodule SymphonyElixir.SelfHealTest do
 
   # The run store, standing in for the real one so a test can script every read and write.
   defmodule Store do
-    def get_ticket_state(_repo_key, _issue_id), do: Process.get(:ticket_state)
+    def get_ticket_state(_issue_id), do: Process.get(:ticket_state)
     def list_all_ticket_states, do: Process.get(:ticket_states, [])
 
     def record_ticket_self_heal(_repo_key, _issue_id, attrs) do

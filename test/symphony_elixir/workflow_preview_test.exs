@@ -104,7 +104,7 @@ defmodule SymphonyElixir.WorkflowPreviewLedgerTest do
     assert prompt =~ "- state missing (3):"
     assert prompt =~ "the Director (Sam): The export button stays where it is: users know it there."
     assert prompt =~ "- Rework run 1 (latest): running in Rework"
-    assert RunStore.list_ticket_events("your-repo", "issue_sample_0001", []) == []
+    assert RunStore.list_ticket_events("issue_sample_0001", []) == []
   end
 
   test "turned off, the prompt is the one rendered without a ticket state", %{workflow: file} do
