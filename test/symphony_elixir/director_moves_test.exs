@@ -1079,6 +1079,18 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:error, {:conflict, "MOT-40's question " <> _rest}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), question_id: id}, opts)
     end
 
+    test "a request comment whose row names a Question the record doesn't hold is refused, naming it", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      ask_signing()
+      project_comment("repo-director", "pr", "q-gone", "comment-gone")
+
+      assert {:error, {:conflict, "MOT-40 has no question q-gone"}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-gone"}, opts)
+
+      refute_received {:memory_tracker_reply, _issue_id, _comment_id, _body}
+      assert deciding("pr")
+    end
+
     test "a Question the store can't answer stops Send Decisions before any reply", %{opts: opts} do
       # A plan no repo routes has no record to answer on.
       put_issues([plan("Plan Review")])

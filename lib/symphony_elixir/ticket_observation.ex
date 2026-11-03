@@ -839,8 +839,7 @@ defmodule SymphonyElixir.TicketObservation do
   # A delivery or a by-id read updates the record the reads already keep. A ticket no repo has a
   # record of yet is filed by a delivery (`new: :file`) under the one repo whose poll scope takes it
   # (`PollScope.route/3`), so a new ticket dispatches from its first delivery; a by-id read leaves it
-  # unrouted for the poll. One held in several repos is unrouted, as the poll counts a ticket two
-  # repos return as a conflict. Gives the outcome with the repo it was observed under (nil when none).
+  # unrouted for the poll. Gives the outcome with the repo it was observed under (nil when none).
   defp observe_held_issue(issue, repos, opts, new \\ :unrouted)
 
   defp observe_held_issue(%Issue{id: issue_id} = issue, repos, opts, new) when is_binary(issue_id) do
@@ -848,7 +847,7 @@ defmodule SymphonyElixir.TicketObservation do
       {{:ok, repo_key}, _new} -> observe_under(repo_key, issue, opts)
       {:none, :file} -> file_new(issue, repos, opts)
       {{:error, repo_key, reason}, _new} -> held_failed(repo_key, issue, reason)
-      {_none_or_several, _new} -> unrouted()
+      {:none, _new} -> unrouted()
     end
   end
 
@@ -898,21 +897,14 @@ defmodule SymphonyElixir.TicketObservation do
   defp held_count_key(:error), do: :errors
   defp held_count_key(outcome), do: outcome
 
+  # The repo that holds the ticket's one record, when it is one of `repos`.
   defp holder(%Issue{id: issue_id}, repos) do
-    repos
-    |> repo_keys()
-    |> Enum.reduce_while({:ok, []}, fn repo_key, {:ok, held} ->
-      case read_held(repo_key, issue_id) do
-        {:ok, nil} -> {:cont, {:ok, held}}
-        {:ok, _record} -> {:cont, {:ok, [repo_key | held]}}
-        {:error, reason} -> {:halt, {:error, repo_key, reason}}
-      end
-    end)
-    |> case do
-      {:ok, [repo_key]} -> {:ok, repo_key}
-      {:ok, []} -> :none
-      {:ok, _several} -> :several
-      error -> error
+    repo_keys = repo_keys(repos)
+
+    case read(issue_id) do
+      {:ok, nil} -> :none
+      {:ok, %{repo_key: held_by}} -> if held_by in repo_keys, do: {:ok, held_by}, else: :none
+      {:error, reason} -> {:error, List.first(repo_keys), reason}
     end
   end
 

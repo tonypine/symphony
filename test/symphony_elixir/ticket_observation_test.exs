@@ -108,6 +108,13 @@ defmodule SymphonyElixir.TicketObservationTest do
     assert %{repo_key: ^moved_to} = RunStore.get_ticket_state("issue-observed")
   end
 
+  test "a record the store can't read is an error, and nothing is written", %{repo_key: repo_key} do
+    observe = fn -> TicketObservation.observe(repo_key, linear_issue(), now: @now) end
+
+    assert {:error, {:no_exists, _table}} = ticket_records_unreadable(observe)
+    assert RunStore.get_ticket_state("issue-observed") == nil
+  end
+
   test "a ticket without a record gets one holding what Linear says, with no ledger event", %{repo_key: repo_key} do
     assert {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
 
