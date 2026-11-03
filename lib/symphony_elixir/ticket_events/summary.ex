@@ -157,6 +157,15 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     {"Park brought up to date at start-up", present([question, reason, push])}
   end
 
+  defp summary("workspace.synced", payload, _event) do
+    heads =
+      [{"workspace", :workspace_head}, {"PR", :pr_head}, {"recorded", :recorded_head}]
+      |> Enum.flat_map(fn {label, key} -> if sha = short_sha(text(payload, key)), do: ["#{label} #{sha}"], else: [] end)
+      |> Enum.join(", ")
+
+    {synced_title(text(payload, :action), short_sha(text(payload, :head))), present([heads, text(payload, :reason)])}
+  end
+
   defp summary("note", payload, _event), do: {"Note added", [text(payload, :text)]}
   defp summary(_type, _payload, _event), do: :unknown
 
@@ -248,6 +257,13 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp compact(n), do: Integer.to_string(n)
 
   defp decimal(value), do: value |> :erlang.float_to_binary(decimals: 1) |> String.trim_trailing(".0")
+
+  defp synced_title("reset", head), do: "Workspace reset to the PR head" <> suffix(" ", head)
+  defp synced_title("pushed", head), do: "Workspace's unpushed head" <> suffix(" ", head) <> " pushed to the PR"
+  defp synced_title("reset_and_pushed", head), do: "Workspace reset to a run's unpushed head" <> suffix(" ", head) <> " and pushed"
+  defp synced_title("blocked", _head), do: "Workspace not synced: it holds local work"
+  defp synced_title("failed", _head), do: "Workspace could not be synced"
+  defp synced_title(_none, head), do: "Workspace already on the PR head" <> suffix(" ", head)
 
   defp short_sha(nil), do: nil
   defp short_sha(sha), do: String.slice(sha, 0, 7)

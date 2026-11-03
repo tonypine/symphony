@@ -1436,9 +1436,12 @@ not run on a PR at all. For each step it:
   `proof_check` for `Proved by: <test>`): a check run, a whole workflow, or `workflow / job`.
 
 First the QA run brings its workspace to the PR's current head (GitHub's `refs/pull/<number>/head`),
-so a branch that upkeep updated after the approve is judged at its new head: the workspace is reset
-only when it holds no local change and no unpushed commit, a workspace with either is `blocked`
-naming it, and a PR head that moves during the run is synced once more before it blocks the pass.
+so a branch that upkeep updated after the approve is judged at its new head. It uses the rule every
+review, QA and landing run shares (`SymphonyElixir.WorkspaceSync`, recorded as a `workspace.synced`
+event): the newest of the workspace's head, the PR's head and a run's recorded unpushed head wins,
+unpushed work is pushed first, the workspace is reset only when it holds no local change and no
+commit the PR lacks, a workspace with either is `blocked` naming it, and a PR head that moves during
+the run is synced once more before it blocks the pass.
 
 | What the pre-check finds | Step | The pass |
 | --- | --- | --- |

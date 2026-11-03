@@ -47,6 +47,11 @@ defmodule SymphonyElixir.TicketEvents.Types do
   `source: "backfill"` when the backfill from the holds wrote it (`SymphonyElixir.Pauses.Backfill`),
   as `question.asked` does for a question it wrote.
 
+  `workspace.synced` is machinery-only: before a review, QA, landing or rework run, the heads
+  `SymphonyElixir.WorkspaceSync` compared (the workspace's, the PR's and the unpushed head the
+  newest run recorded), the one that won, what was done (`none`, `reset`, `pushed`,
+  `reset_and_pushed`, `blocked`, `failed`), the head the run stands on and the run kind.
+
   `park.backfilled` is machinery-only: a ticket an idle run parked before parks asked a question was
   brought up to date at start-up (`SymphonyElixir.IdlePark.Backfill`), with what it was given in
   `added` (`question`, `releasable_reason`, `push`), the question's id, the branch pushed and the
@@ -163,6 +168,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
           duration_ms: :non_neg_integer,
           tokens: @tokens,
           head: :string,
+          unpushed_head: :string,
           counted: :boolean,
           transcript: :string
         ] ++ @signal,
@@ -325,6 +331,18 @@ defmodule SymphonyElixir.TicketEvents.Types do
       run_kinds: [],
       required: [added: {:list, :string}],
       optional: [question_id: :string, branch: :string, from: :string] ++ @signal,
+      idempotency: :writer
+    },
+    "workspace.synced" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [
+        workspace_head: :string,
+        pr_head: :string,
+        winner: {:enum, ~w(equal workspace pull_request recorded none)},
+        action: {:enum, ~w(none reset pushed reset_and_pushed blocked failed)}
+      ],
+      optional: [recorded_head: :string, head: :string, run_kind: :string, reason: {:string, 2_000}] ++ @signal,
       idempotency: :writer
     },
     "note" => %{

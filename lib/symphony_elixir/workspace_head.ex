@@ -58,6 +58,31 @@ defmodule SymphonyElixir.WorkspaceHead do
   end
 
   @doc """
+  Pushes the workspace's `HEAD` to its current branch on `origin`, whatever the remotes already
+  hold, with the same origin check as `push_unpushed/3`: `SymphonyElixir.WorkspaceSync` pushes a
+  head it found newer than the PR's. An SSH worker's workspace is not pushed.
+  """
+  @spec push_head(Path.t(), String.t() | nil, Path.t() | nil) :: {:pushed, String.t()} | {:error, term()}
+  def push_head(workspace, nil, source_repo) when is_binary(workspace), do: push_branch(workspace, source_repo)
+  def push_head(_workspace, worker_host, _source_repo), do: {:error, {:remote_worker, worker_host}}
+
+  @doc """
+  The workspace's current branch, or nil when `HEAD` is detached, the workspace is an SSH worker's
+  or it cannot be read.
+  """
+  @spec branch(Path.t() | nil, String.t() | nil) :: String.t() | nil
+  def branch(workspace, nil) when is_binary(workspace) do
+    with true <- File.dir?(workspace),
+         {:ok, branch} <- current_branch(workspace) do
+      branch
+    else
+      _unreadable -> nil
+    end
+  end
+
+  def branch(_workspace, _worker_host), do: nil
+
+  @doc """
   A digest of the workspace's uncommitted changes (tracked and untracked files git does not
   ignore, with their contents), or nil when the tree is clean or the workspace cannot be read. Two
   turns that leave the same digest changed nothing in the tree; a turn that edits, adds or removes a

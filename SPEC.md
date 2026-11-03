@@ -541,7 +541,19 @@ Director's free move into any phase, with its note), `step.started`,
 runs), `finding.resolved`, `checklist.answered`, `drift.detected`, `drift.reverted`,
 `drift.revert_failed`, `pause.set`, `pause.reason_added`, `pause.reason_cleared`, `pause.cleared`,
 `question.asked`, `question.answered`, `question.withdrawn`, `question.reopened`, `park.backfilled`
-(machine only: an older park brought up to date at start-up, with what it was given) and `note`.
+(machine only: an older park brought up to date at start-up, with what it was given),
+`workspace.synced` (machine only: before a review, QA, landing or rework run, the heads the
+newest-known-head rule compared, the one that won and what it did) and `note`.
+
+Before a Code Review, QA or landing run, and a rework on a kept workspace, one rule
+(`SymphonyElixir.WorkspaceSync`) stands the workspace on the newest known head of the ticket's PR. It
+compares the workspace's `HEAD`, the PR's head on GitHub (`refs/pull/<number>/head`) and the
+unpushed head the ticket's newest run recorded when it ended (`run.ended`'s `unpushed_head`); the
+head every other one is an ancestor of wins. Equal heads change nothing; a newer PR head resets the
+workspace to it; a newer workspace head is pushed to the PR's branch first; a newer recorded head
+is restored and pushed. A workspace with uncommitted or untracked files, or whose heads diverge, is
+never reset: a review, QA or landing run is blocked naming the work, and a rework falls back to the
+base-ref reset that keeps it under `refs/symphony/orphaned/`.
 
 The four pause types are machine-written, one per change of a ticket's pause (the one answer to why
 a ticket is not moving; decided only by `SymphonyElixir.Pauses`): `pause.set` for its first reason

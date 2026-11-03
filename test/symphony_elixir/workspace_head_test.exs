@@ -32,6 +32,24 @@ defmodule SymphonyElixir.WorkspaceHeadTest do
     assert WorkspaceHead.push_unpushed(workspace, nil, source) == :nothing
   end
 
+  test "push_head/3 pushes the head to the workspace's branch whatever the remotes hold", %{root: root, remote: remote, source: source, workspace: workspace} do
+    head = WorkspaceHead.read(workspace, nil)
+    assert WorkspaceHead.push_head(workspace, nil, source) == {:pushed, "auto/TP-1"}
+    assert {^head <> "\n", 0} = System.cmd("git", ["-C", remote, "rev-parse", "refs/heads/auto/TP-1"])
+
+    assert WorkspaceHead.push_head(workspace, "worker-1", source) == {:error, {:remote_worker, "worker-1"}}
+    assert WorkspaceHead.push_head(workspace, nil, root) == {:error, :origin_mismatch}
+  end
+
+  test "branch/2 reads the workspace's current branch", %{root: root, workspace: workspace} do
+    assert WorkspaceHead.branch(workspace, nil) == "auto/TP-1"
+    assert WorkspaceHead.branch(workspace, "worker-1") == nil
+    assert WorkspaceHead.branch(Path.join(root, "missing"), nil) == nil
+
+    git!(workspace, ["checkout", "-q", "--detach"])
+    assert WorkspaceHead.branch(workspace, nil) == nil
+  end
+
   test "an SSH worker's workspace is not read", %{source: source, workspace: workspace} do
     commit!(workspace, "fix.txt")
     assert WorkspaceHead.push_unpushed(workspace, "worker-1", source) == :nothing
