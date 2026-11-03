@@ -6479,12 +6479,19 @@ defmodule SymphonyElixir.Orchestrator do
     |> Map.get(repo_key, [])
   end
 
+  # The workspaces the age GC never reclaims: a running ticket's, a ticket's whose retry is due,
+  # and a watched ticket's whose PR is open (its review, QA or landing run is still to come).
   defp active_workspace_identifiers_by_repo(%State{} = state) do
-    state.running
-    |> Map.values()
-    |> Enum.reduce(%{}, fn running_entry, acc ->
-      repo_key = Map.get(running_entry, :repo_key) || state.repo_key
-      identifiers = running_workspace_identifiers(running_entry)
+    running = state.running |> Map.values() |> Enum.map(&{&1, running_workspace_identifiers(&1)})
+    retrying = state.retry_attempts |> Map.values() |> Enum.map(&{&1, retry_identifiers([&1])})
+
+    watching =
+      for {_id, %{pull_request_url: url} = entry} <- state.watching, is_binary(url) do
+        {entry, retry_identifiers([entry])}
+      end
+
+    Enum.reduce(running ++ retrying ++ watching, %{}, fn {entry, identifiers}, acc ->
+      repo_key = Map.get(entry, :repo_key) || state.repo_key
       Map.update(acc, repo_key, identifiers, &(identifiers ++ &1))
     end)
   end

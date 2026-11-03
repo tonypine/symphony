@@ -3848,9 +3848,14 @@ Per-issue workspace path:
 Workspace persistence:
 
 - Workspaces are reused across runs for the same issue.
-- Successful runs do not auto-delete workspaces immediately.
+- A workspace is removed only when its issue reaches a terminal state (reconciliation, a retry that
+  finds the issue terminal, or startup terminal cleanup), when the issue is restarted, when the
+  operator stops its run, or by the age-based GC below. A run that ends (success, failure, timeout,
+  or a stop because the issue moved) with its issue still in an active or watched state, and a move
+  between those states, never remove it; the issue's next run reuses it.
 - Age-based workspace GC MAY later remove successful, failed, crashed, or sideways-state workspaces
-  once their directory age exceeds the configured lifecycle threshold.
+  once their directory age exceeds the configured lifecycle threshold. It never removes the
+  workspace of an issue with a running agent, a retry due, or a watched issue with an open PR.
 - With effective workspace strategy `worktree`, cleanup removes the registered worktree with
   `git worktree remove --force` and deletes Symphony's `auto/<issue.identifier>` branch.
   Forced worktree removal also deletes the working directory on disk, including any
