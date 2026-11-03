@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "move_not_allowed",
+    "message": "SHOP-320 can't block itself."
+  }
+}

@@ -130,6 +130,19 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(page.timeline.map(\.title), ["Stopped by you", "Moved to Backlog by you", "Sent to Rework by you", "Moved to Todo by you"])
         XCTAssertNil(page.timeline[2].detail)
         XCTAssertEqual(page.phase, .unknown)
+
+        // TP-1354: the Director's blocker changes read as such, not as a move.
+        let blockers = ndjson([
+            ["event_type": "director_move", "move": "add_blocker", "blocker": "SHOP-2", "issue_identifier": "SHOP-1", "timestamp": "2026-10-07T11:00:00Z"],
+            ["event_type": "director_move", "move": "remove_blocker", "blocker": "SHOP-2", "issue_identifier": "SHOP-1", "timestamp": "2026-10-07T11:10:00Z"],
+            ["event_type": "director_move", "move": "add_blocker", "issue_identifier": "SHOP-1", "timestamp": "2026-10-07T11:20:00Z"],
+            ["event_type": "director_move", "move": "remove_blocker", "issue_identifier": "SHOP-1", "timestamp": "2026-10-07T11:30:00Z"],
+        ])
+        let linked = TicketPage(identifier: "SHOP-1", sources: TicketPage.Sources(audit: [blockers]), now: date("2026-10-07T13:00:00Z"), timeZone: utc)
+        XCTAssertEqual(
+            linked.timeline.map(\.title),
+            ["Blocker SHOP-2 added by you", "Blocker SHOP-2 removed by you", "Blocker added by you", "Blocker removed by you"]
+        )
         XCTAssertEqual(page.phaseSentence, "Symphony isn't working on SHOP-1 right now")
         XCTAssertEqual(page.badges, [])
     }

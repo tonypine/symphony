@@ -89,7 +89,7 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp summary("decision.withdrawn", payload, _event), do: {"Decision request withdrawn", [text(payload, :title)]}
 
   defp summary("person.action", payload, _event) do
-    title = person_action(text(payload, :action), text(payload, :to) || text(payload, :move))
+    title = person_action(text(payload, :action), text(payload, :blocker) || text(payload, :to) || text(payload, :move))
     {title, prefixed("from", text(payload, :from))}
   end
 
@@ -200,6 +200,8 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp person_action("force", _to), do: "The Director forced a dispatch"
   defp person_action("unblock", _to), do: "The Director unblocked the ticket"
   defp person_action("restart", _to), do: "The Director restarted the ticket"
+  defp person_action("add_blocker", blocker), do: "The Director added " <> (blocker || "a ticket") <> " as a blocker"
+  defp person_action("remove_blocker", blocker), do: "The Director removed " <> (blocker || "a ticket") <> " as a blocker"
   defp person_action(action, _to), do: "The Director acted" <> suffix(": ", action)
 
   # A finding QA has not classified yet (until the findings model, `unclassified`) is a defect.

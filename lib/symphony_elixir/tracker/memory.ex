@@ -24,6 +24,10 @@ defmodule SymphonyElixir.Tracker.Memory do
   it, so the next read sees them (each issue's `"history"`, `"comments"` and `"updatedAt"`), and
   `issue_nodes/1` reads its issues as the Inbox reads Linear's (a QA server's seed, TP-1311). With
   `:memory_tracker_issues` set, a state move or a comment only reports its event.
+
+  A blocked-by link (`add_blocked_by/2`, `remove_blocked_by/2`) is kept as the blocker's id in the
+  issue's `"blockedBy"` list, read back as the issue's `blocked_by` with the blocker's identifier and
+  current state; with `:memory_tracker_issues` set, it edits the issue's `blocked_by` there.
   """
 
   @behaviour SymphonyElixir.Tracker
@@ -238,6 +242,12 @@ defmodule SymphonyElixir.Tracker.Memory do
     end)
   end
 
+  @spec add_blocked_by(String.t(), String.t()) :: :ok | {:error, term()}
+  def add_blocked_by(blocker, blocked_issue_id), do: update_blocked_by(:add, blocker, blocked_issue_id)
+
+  @spec remove_blocked_by(String.t(), String.t()) :: :ok | {:error, term()}
+  def remove_blocked_by(blocker, blocked_issue_id), do: update_blocked_by(:remove, blocker, blocked_issue_id)
+
   @spec fetch_breakdown_history(String.t()) :: {:ok, SymphonyElixir.Tracker.breakdown_history()} | {:error, term()}
   def fetch_breakdown_history(issue_id) do
     send_event({:memory_tracker_breakdown_history, issue_id})
@@ -411,6 +421,50 @@ defmodule SymphonyElixir.Tracker.Memory do
     Application.put_env(:symphony_elixir, key, List.wrap(Application.get_env(:symphony_elixir, key)) ++ [value])
   end
 
+  # Edits the blockers' ids of `blocked_issue_id` where the issues come from, the blocker named by
+  # its id or its identifier; an unknown blocker is `{:issue_not_found, blocker}`.
+  defp update_blocked_by(:add, blocker, blocked_issue_id) do
+    update = fn ids, id -> if id in ids, do: ids, else: ids ++ [id] end
+    event = {:memory_tracker_blocked_by_added, blocker, blocked_issue_id}
+    update_blocked_by(:memory_tracker_add_blocked_by_result, event, blocker, blocked_issue_id, update)
+  end
+
+  defp update_blocked_by(:remove, blocker, blocked_issue_id) do
+    event = {:memory_tracker_blocked_by_removed, blocker, blocked_issue_id}
+    update_blocked_by(:memory_tracker_remove_blocked_by_result, event, blocker, blocked_issue_id, &List.delete/2)
+  end
+
+  defp update_blocked_by(result_key, event, blocker, blocked_issue_id, update) do
+    with :ok <- next_result(result_key),
+         %Issue{} = blocking <- Enum.find(issue_entries(), &(blocker in [&1.id, &1.identifier])) || {:error, {:issue_not_found, blocker}} do
+      put_blocked_by(blocked_issue_id, blocking, update)
+      send_event(event)
+      :ok
+    end
+  end
+
+  defp put_blocked_by(issue_id, blocking, update) do
+    case Application.fetch_env(:symphony_elixir, :memory_tracker_issues) do
+      {:ok, issues} ->
+        issues = Enum.map(issues, &update_issue_blocked_by(&1, issue_id, blocking, update))
+        Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
+
+      :error ->
+        update_file_issue(issue_id, fn entry -> Map.put(entry, "blockedBy", update.(Enum.filter(List.wrap(entry["blockedBy"]), &is_binary/1), blocking.id)) end)
+    end
+  end
+
+  defp update_issue_blocked_by(%Issue{id: issue_id, blocked_by: blockers} = issue, issue_id, blocking, update) do
+    blockers = Enum.filter(List.wrap(blockers), &is_map/1)
+    by_id = Map.new(blockers, &{&1.id, &1})
+    ids = update.(Enum.map(blockers, & &1.id), blocking.id)
+    %{issue | blocked_by: Enum.map(ids, &Map.get(by_id, &1, blocker_of(blocking)))}
+  end
+
+  defp update_issue_blocked_by(issue, _issue_id, _blocking, _update), do: issue
+
+  defp blocker_of(%Issue{} = issue), do: %{id: issue.id, identifier: issue.identifier, state: issue.state}
+
   # Edits the labels where the issues come from, `:memory_tracker_issues` or the issues file, so the
   # next fetch sees them.
   defp update_issue_labels(result_key, event, issue_id, update) do
@@ -526,7 +580,10 @@ defmodule SymphonyElixir.Tracker.Memory do
     end
   end
 
-  defp issues_from_file, do: Enum.flat_map(file_entries(), &issue_from_json/1)
+  defp issues_from_file do
+    entries = file_entries()
+    Enum.flat_map(entries, &issue_from_json(&1, entries))
+  end
 
   defp file_entries do
     case Config.settings() do
@@ -546,7 +603,7 @@ defmodule SymphonyElixir.Tracker.Memory do
     end
   end
 
-  defp issue_from_json(%{"id" => id, "identifier" => identifier, "state" => state} = entry)
+  defp issue_from_json(%{"id" => id, "identifier" => identifier, "state" => state} = entry, entries)
        when is_binary(id) and is_binary(identifier) and is_binary(state) do
     [
       %Issue{
@@ -557,12 +614,20 @@ defmodule SymphonyElixir.Tracker.Memory do
         description: Map.get(entry, "description"),
         labels: Enum.filter(List.wrap(Map.get(entry, "labels")), &is_binary/1),
         team: json_map(entry["team"], key: "key", name: "name"),
-        project: json_map(entry["project"], id: "id", name: "name", slug_id: "slug_id")
+        project: json_map(entry["project"], id: "id", name: "name", slug_id: "slug_id"),
+        blocked_by: file_blockers(entry, entries)
       }
     ]
   end
 
-  defp issue_from_json(_entry), do: []
+  defp issue_from_json(_entry, _entries), do: []
+
+  # The issues an entry's `"blockedBy"` names, each with its identifier and its current state.
+  defp file_blockers(entry, entries) do
+    for blocker_id <- List.wrap(entry["blockedBy"]),
+        %{"id" => ^blocker_id} = blocker <- entries,
+        do: %{id: blocker_id, identifier: blocker["identifier"], state: blocker["state"]}
+  end
 
   # The team (`key`, `name`) or project (`id`, `name`, `slug_id`) of an issues-file entry.
   defp json_map(%{} = value, fields), do: Map.new(fields, fn {field, key} -> {field, value[key]} end)

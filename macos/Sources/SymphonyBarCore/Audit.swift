@@ -134,6 +134,8 @@ public struct AuditRecord: Equatable, Identifiable {
         case "restart": "Restarted"
         case "unblock": "Unblocked"
         case "undo": "Undid a move"
+        case "add_blocker": "Added a blocker"
+        case "remove_blocker": "Removed a blocker"
         default: kindTitle(move)
         }
     }

@@ -40,6 +40,13 @@ defmodule SymphonyElixirWeb.ControlApiController do
   the event as the feed shows it. Text that is blank or longer than the `note` type allows is 400
   and writes nothing; a ticket Symphony has no record of is 404. Unlike a stop's event, the note is
   the request: the answer says whether it was written.
+
+  `blocker` adds or removes a blocked-by link from the ticket page (`SymphonyElixir.DirectorBlockers`):
+  it takes `issue_identifier`, `blocker` (the ticket that blocks it) and `action` (`add` or
+  `remove`), and answers 200 with the ticket's blockers after the change, 409 with the reason the
+  app shows when the change is refused (a ticket blocking itself, a cycle, a ticket Symphony doesn't
+  track, a finished blocker, a link already there or not there), 422 for a missing or unknown
+  parameter and 502, with why, when the tracker refuses the write.
   """
 
   use Phoenix.Controller, formats: [:json]
@@ -47,7 +54,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
   require Logger
 
   alias Plug.Conn
-  alias SymphonyElixir.{AuditLog, DirectorMoves, Orchestrator, TicketEvents, TicketSignals}
+  alias SymphonyElixir.{AuditLog, DirectorBlockers, DirectorMoves, Orchestrator, TicketEvents, TicketSignals}
   alias SymphonyElixir.TicketEvents.Types
   alias SymphonyElixirWeb.{Endpoint, Presenter, TicketEventsController}
 
@@ -204,6 +211,30 @@ defmodule SymphonyElixirWeb.ControlApiController do
       {:error, :missing_ticket} -> error_response(conn, 422, "invalid_request", "repo_key and issue_identifier are required")
       {:error, {:invalid_note, message}} -> error_response(conn, 400, "invalid_note", message)
       {:error, :not_found} -> error_response(conn, 404, "ticket_not_found", "No ticket #{params["issue_identifier"]} in #{params["repo_key"]}")
+    end
+  end
+
+  @spec blocker(Conn.t(), map()) :: Conn.t()
+  def blocker(conn, params) do
+    with {:ok, identifier} <- required_param(params["issue_identifier"], "issue_identifier"),
+         {:ok, blocker} <- required_param(params["blocker"], "blocker"),
+         {:ok, action} <- blocker_action(params["action"]) do
+      opts = [orchestrator: orchestrator(conn), audit_log: Map.get(conn.assigns, :audit_log, [])] ++ Map.get(conn.assigns, :director_blockers, [])
+
+      case DirectorBlockers.change(action, identifier, blocker, opts) do
+        {:error, {:linear, message}} -> error_response(conn, 502, "linear_error", message)
+        result -> respond_move(conn, identifier, result)
+      end
+    else
+      {:error, {:invalid_request, message}} -> error_response(conn, 422, "invalid_request", message)
+    end
+  end
+
+  defp blocker_action(action) do
+    case string_param(action) do
+      "add" -> {:ok, :add}
+      "remove" -> {:ok, :remove}
+      _other -> {:error, {:invalid_request, "action must be add or remove"}}
     end
   end
 

@@ -192,6 +192,10 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       assert render("person.action", %{action: "force"}).title == "The Director forced a dispatch"
       assert render("person.action", %{action: "unblock"}).title == "The Director unblocked the ticket"
       assert render("person.action", %{action: "restart"}).title == "The Director restarted the ticket"
+      assert render("person.action", %{action: "add_blocker", blocker: "TP-12"}).title == "The Director added TP-12 as a blocker"
+      assert render("person.action", %{action: "remove_blocker", blocker: "TP-12"}).title == "The Director removed TP-12 as a blocker"
+      assert render("person.action", %{action: "add_blocker"}).title == "The Director added a ticket as a blocker"
+      assert render("person.action", %{action: "remove_blocker"}).title == "The Director removed a ticket as a blocker"
       assert render("person.action", %{action: "decide"}).title == "The Director acted: decide"
       assert render("person.action", %{}).title == "The Director acted"
     end

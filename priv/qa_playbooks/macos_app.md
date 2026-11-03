@@ -315,6 +315,21 @@ GitHub or Linear in QA:
   freeze". The fixture's state stays the same; the live server proves that the page shows In
   Progress and its running line within seconds of the press while the other tickets keep their
   order. Walk it at 1440×900 and 2560×1440, light and dark: nothing on the action bar is clipped.
+- **Blocked by (TP-1354):** pass `macos/Tests/Fixtures/director-app/ticket-blockers` as
+  `api_fixtures` and open SHOP-320 from Tickets (Todo, waiting on a slot). Its page has a
+  **Blocked by** card listing SHOP-305 "Checkout total rounding", In Progress, with **Remove**,
+  then a field (placeholder "e.g. TP-12"), **Pick a Ticket** and **Add Blocker**. Pick a Ticket
+  lists six open tickets, API-131 to DOCS-40, each with its title. Type API-133 and
+  press **Add Blocker**: `qa_api_requests` lists one `POST /api/v1/control/blocker` whose body
+  has `issue_identifier` `SHOP-320`, `blocker` `API-133` and `action` `add`, and the field
+  empties. Press SHOP-305's **Remove**: the log gains one with `action` `remove`. The fixture's
+  card stays the same after each move; the live server proves that the blocker appears or leaves
+  and that the ticket shows it waits. Then pass `ticket-blockers-refused`, type SHOP-320 and press
+  Add Blocker: the line under the field reads "Couldn't add SHOP-320 as a blocker of SHOP-320:
+  SHOP-320 can't block itself. (HTTP 409)" and the field keeps SHOP-320. VoiceOver reads a row's
+  Remove as "Remove SHOP-305 as a blocker", the field as "Blocker of SHOP-320" and the line as
+  "Blocker not saved: …". Walk it at 1440×900 and 2560×1440, light and dark: nothing on the card
+  is clipped.
 - **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
   state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one
   warning, `symphony.yml sets auto_review.enabled, which is deprecated` (**Remove…**). Before

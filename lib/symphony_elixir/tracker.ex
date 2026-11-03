@@ -96,6 +96,8 @@ defmodule SymphonyElixir.Tracker do
   @callback team_labels(String.t()) :: {:ok, [label()]} | {:error, term()}
   @callback create_label(String.t(), String.t()) :: {:ok, label()} | {:error, term()}
   @callback projects_and_teams() :: {:ok, projects_and_teams()} | {:error, term()}
+  @callback add_blocked_by(String.t(), String.t()) :: :ok | {:error, term()}
+  @callback remove_blocked_by(String.t(), String.t()) :: :ok | {:error, term()}
 
   @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   def fetch_candidate_issues do
@@ -272,6 +274,19 @@ defmodule SymphonyElixir.Tracker do
   def create_label(label_name, team) when is_binary(label_name) and is_binary(team) do
     adapter().create_label(label_name, team)
   end
+
+  @doc """
+  Records that the issue `blocker` (an id or an identifier) blocks the issue `blocked_issue_id`
+  (an id): the Director's add-a-blocker move (`SymphonyElixir.DirectorBlockers`).
+  """
+  @spec add_blocked_by(String.t(), String.t()) :: :ok | {:error, term()}
+  def add_blocked_by(blocker, blocked_issue_id) when is_binary(blocker) and is_binary(blocked_issue_id),
+    do: adapter().add_blocked_by(blocker, blocked_issue_id)
+
+  @doc "Removes the link `add_blocked_by/2` records; a link already gone is `:ok`."
+  @spec remove_blocked_by(String.t(), String.t()) :: :ok | {:error, term()}
+  def remove_blocked_by(blocker, blocked_issue_id) when is_binary(blocker) and is_binary(blocked_issue_id),
+    do: adapter().remove_blocked_by(blocker, blocked_issue_id)
 
   @spec adapter() :: module()
   def adapter do

@@ -70,6 +70,22 @@ final class APIFixturesTests: XCTestCase {
         XCTAssertEqual(fixtures.answer(request("api/v1/artifacts/e5")).1.statusCode, 404)
     }
 
+    func testPostAnswersARefusalWith409WhenOnlyItsFileIsThere() throws {
+        let control = root.appendingPathComponent("fixtures/api/v1/control", isDirectory: true)
+        try FileManager.default.createDirectory(at: control, withIntermediateDirectories: true)
+        let refusal = #"{"error":{"code":"move_not_allowed","message":"SHOP-1 can't block itself."}}"#
+        try Data(refusal.utf8).write(to: control.appendingPathComponent("blocker.409.json"))
+
+        let refused = fixtures.answer(request("api/v1/control/blocker", method: "POST", body: ["blocker": "SHOP-1"]))
+        XCTAssertEqual(refused.1.statusCode, 409)
+        XCTAssertEqual(String(decoding: refused.0, as: UTF8.self), refusal)
+        XCTAssertEqual(fixtures.postCount("/api/v1/control/blocker"), 1)
+
+        // A `.json` answer comes first.
+        try Data(#"{"ok":true}"#.utf8).write(to: control.appendingPathComponent("blocker.json"))
+        XCTAssertEqual(fixtures.answer(request("api/v1/control/blocker", method: "POST")).1.statusCode, 200)
+    }
+
     func testTheLiveChannelWithoutAFixtureIsUnavailable() async throws {
         // No `api/v1/stream.json`: a 404, so the window reads the ticket's feed after each state poll.
         let connect = EventStream.buffered(fixtures.transport)

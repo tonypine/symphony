@@ -42,6 +42,9 @@ public enum ControlAction: Equatable {
     /// Writes the Director's note on the ticket of repo `repoKey`: it shows in the ticket's timeline, and the next
     /// agent run reads it in the ticket's summary.
     case note(repoKey: String, identifier: String, text: String)
+    /// Links (`add`) or unlinks the ticket `blocker` as a blocker of the ticket (TP-1354): Symphony writes the link to
+    /// Linear, and the ticket waits for its blocker at once.
+    case blocker(String, blocker: String, add: Bool)
     /// Pauses dispatch for the repository `key` alone, with the Director's reason when they typed one; its tickets
     /// stay where they are.
     case pauseRepository(key: String, reason: String)
@@ -132,6 +135,8 @@ public enum ControlAction: Equatable {
             return "api/v1/control/undo"
         case .note:
             return "api/v1/control/note"
+        case .blocker:
+            return "api/v1/control/blocker"
         case let .pauseRepository(key, _):
             return "api/v1/control/repos/\(key)/pause"
         case let .resumeRepository(key):
@@ -148,8 +153,8 @@ public enum ControlAction: Equatable {
              let .move(identifier, _, _),
              let .decide(identifier, _, _, _), let .unblock(identifier), let .undo(identifier):
             return identifier
-        case .pause, .pauseWithReason, .pauseForUpdate, .resume, .force, .stopForcing, .stop, .start, .note, .pauseRepository,
-             .resumeRepository:
+        case .pause, .pauseWithReason, .pauseForUpdate, .resume, .force, .stopForcing, .stop, .start, .note, .blocker,
+             .pauseRepository, .resumeRepository:
             return nil
         }
     }
@@ -197,6 +202,8 @@ public enum ControlAction: Equatable {
             return body
         case let .note(repoKey, identifier, text):
             return ["repo_key": repoKey, "issue_identifier": identifier, "text": text]
+        case let .blocker(identifier, blocker, add):
+            return ["issue_identifier": identifier, "blocker": blocker, "action": add ? "add" : "remove"]
         }
     }
 
@@ -237,6 +244,8 @@ public enum ControlAction: Equatable {
             return "Couldn't undo the move on \(identifier)"
         case let .note(_, identifier, _):
             return "Couldn't add the note to \(identifier)"
+        case let .blocker(identifier, blocker, add):
+            return add ? "Couldn't add \(blocker) as a blocker of \(identifier)" : "Couldn't remove \(blocker) as a blocker of \(identifier)"
         case let .pauseRepository(key, _):
             return "Couldn't pause \(key)"
         case let .resumeRepository(key):

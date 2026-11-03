@@ -4,7 +4,8 @@ import Foundation
 /// `<dir>/<path>.json` (for example `api/v1/state.json`); without one it answers `<path>.png` or `<path>.jpg` with its
 /// image type (a screenshot's bytes), `<path>.410.json` with a 410 (a screenshot Symphony no longer keeps), and 404
 /// when there is none of them (the live channel, so the app reads after each state poll); each POST is
-/// appended to the request log as one JSON line and answered 200, with `<dir>/<path>.json` when there is one. A POST
+/// appended to the request log as one JSON line and answered 200, with `<dir>/<path>.json` when there is one, or 409
+/// with `<path>.409.json` when only that is there (Symphony refusing the move). A POST
 /// whose answer changes from one request to the next reads `<path>.1.json` the first time, `<path>.2.json` the second,
 /// and the last one there is after that (Setup's fix, Undo, fix again). `<dir>/github_webhook_secret` stands for the
 /// webhook secret Symphony hands off (`WebhookSecret`), a made-up value. No request leaves the app, so QA walks every
@@ -40,6 +41,9 @@ public struct APIFixtures: Equatable {
         if request.httpMethod?.uppercased() == "POST" {
             let answer = fixture ?? file.flatMap { sequenceFile(of: $0, request: postCount(url.path) + 1) }.flatMap { try? Data(contentsOf: $0) }
             log(request, path: url.path, at: now)
+            if answer == nil, let refusal = file.flatMap(refusalFixture(of:)) {
+                return (refusal, response(url, statusCode: 409))
+            }
             return (answer ?? Data(#"{"ok":true}"#.utf8), response(url, statusCode: 200))
         }
         guard let fixture else {
@@ -64,6 +68,11 @@ public struct APIFixtures: Equatable {
             if let data = try? Data(contentsOf: url) { return (data, statusCode, contentType) }
         }
         return nil
+    }
+
+    /// The POST answer `<path>.409.json` gives next to `file` (`<path>.json`): Symphony's refusal of the move.
+    func refusalFixture(of file: URL) -> Data? {
+        try? Data(contentsOf: file.deletingPathExtension().appendingPathExtension("409").appendingPathExtension("json"))
     }
 
     /// A transport for `ControlAPI`, `ReposAPI` and the window's client that answers from the fixtures.

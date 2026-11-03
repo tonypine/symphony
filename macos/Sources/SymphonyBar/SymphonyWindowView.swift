@@ -38,6 +38,8 @@ final class SymphonyWindowModel: ObservableObject {
     let artifactImages: ArtifactImages
     /// The note field under the ticket page: what is typed, the note on its way, why the last one wasn't added.
     let ticketNote = TicketNoteComposer()
+    /// The ticket page's Blocked by card: the shown ticket's blockers, the ones it can take, the change on its way.
+    let ticketBlockers = TicketBlockersEditor()
     /// The build of the Symphony the window last read, to tell a restart onto another build.
     private var symphonyBuild: DiagnosticsPayload.Build?
     @Published var paused = false
