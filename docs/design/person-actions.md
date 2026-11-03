@@ -17,7 +17,7 @@ re-projected. *Linear* means Symphony follows what Linear says.
 | Action in Linear | Read by | Owner | Through Symphony | Gap |
 | --- | --- | --- | --- | --- |
 | Move to a phase (any state) | the observation; `TicketStateReconciler.reconcile/4` | Symphony once Symphony or the Director wrote the phase (`phase_owner: :symphony`); Linear for a phase an observation wrote (`:external`) | Move to… (`/move`) | — |
-| Promote Backlog → Todo | the poll's active states; `Dispatch.Candidates` | Linear until Symphony moves it | Move to… (`/move`) to Todo, but only for a ticket Symphony has a record of (`DirectorMoves.require_tracked/2`) | Records are made only by the active-state poll or a webhook delivery: [TP-1359](https://linear.app/tonypine/issue/TP-1359) |
+| Promote Backlog → Todo | the poll's active states; `Dispatch.Candidates` | Linear until Symphony moves it | Move to… (`/move`) to Todo; for a ticket of a configured repository Symphony has no record of yet (a Backlog ticket whose webhook delivery was missed), Move to… reads it from Linear and records it first (`DirectorMoves.require_tracked/2`), since [TP-1367](https://linear.app/tonypine/issue/TP-1367) | — |
 | Promote a split-off ticket from Backlog to Todo, and link it as a blocker | `linear_create_subissue` (`AgentTools.Linear.create_subissue/3`) | Symphony | none needed since [TP-1353](https://linear.app/tonypine/issue/TP-1353): a run of a ticket that is not a plan files its sub-ticket in Todo and marks the ticket blocked by it, so the sub-ticket lands first and the ticket continues on its own; a plan run's sub-tickets stay in Backlog until the plan's approval promotes them | — |
 | Approve a plan (Plan Review → Waiting on sub-tickets) | `SymphonyElixir.BreakdownReview` | Symphony | Approve Plan (`/approve_plan`) | — |
 | Reject a plan (→ Rework) | `BreakdownReview` | Symphony | Reject Plan (`/rework`) | — |
@@ -43,14 +43,22 @@ re-projected. *Linear* means Symphony follows what Linear says.
 | Add `protected-paths-approved` | the Setup labels check only (`SymphonyElixir.StateProvisioning`) | — | the Inbox pick that unlocks the paths (`SymphonyElixir.PathUnlock`, via Decide) | — |
 | Set priority | the observation; `Dispatch.Candidates` (the `tickets.priorities` filter and the order) | Linear | none | [TP-1355](https://linear.app/tonypine/issue/TP-1355) |
 | Set or clear a blocker (blocked-by link) | the observation (open blockers); `Issue.blocked?/2`; `Pauses.Dependencies` | Linear | none; Unblock removes only the links Symphony added for competing PRs (`PrWatch.Competitors`) | a person can't add or remove one: [TP-1354](https://linear.app/tonypine/issue/TP-1354) (since [TP-1352](https://linear.app/tonypine/issue/TP-1352), an open blocker holds the ticket in every active phase (In Progress, Rework, CI Fix, Code Review, QA, Merging and the other dispatching phases), not only in Todo; the pause lifts by itself once every blocker is terminal, and the ticket continues in its phase) |
-| Create a ticket, or a sub-ticket of another (parent) | the poll; the webhook (`observe_delivery/2`); the observation (parent, sub-issues) | Linear | none | design question: [TP-1359](https://linear.app/tonypine/issue/TP-1359) |
-| Edit the title or description | the observation; the prompt; `Decisions` (its section is Symphony's, projected) | Linear (the Decisions section: Symphony) | none | design question: [TP-1359](https://linear.app/tonypine/issue/TP-1359) |
-| Change team, project or a route label | `Routing.PollScope`; `Linear.Client.repo_scope_filter/1` | Linear | none | design question: [TP-1359](https://linear.app/tonypine/issue/TP-1359) |
-| Assign or unassign | `Dispatch.Candidates` (the assignee filter) | Linear | none | design question: [TP-1359](https://linear.app/tonypine/issue/TP-1359) |
+| Create a ticket, or a sub-ticket of another (parent) | the poll; the webhook (`observe_delivery/2`); the observation (parent, sub-issues) | Linear (decided: [TP-1359](https://linear.app/tonypine/issue/TP-1359)) | none needed: Symphony follows Linear | — |
+| Edit the title or description | the observation; the prompt; `Decisions` (its section is Symphony's, projected) | Linear (decided: TP-1359; the Decisions section: Symphony) | none needed: Symphony follows Linear | — |
+| Change team, project or a route label | `Routing.PollScope`; `Linear.Client.repo_scope_filter/1` | Linear (decided: TP-1359) | none needed: Symphony follows Linear | — |
+| Assign or unassign | `Dispatch.Candidates` (the assignee filter) | Linear (decided: TP-1359) | none needed: Symphony follows Linear | — |
 | Delete or archive | the webhook (`{:issue_removed, …}`) marks the record removed | Linear | Cancel (`/cancel`) | — |
 
 The gap tickets are chained in this order: TP-1352, TP-1353, TP-1354, TP-1355, TP-1356, TP-1357,
-TP-1358, TP-1359, TP-1360.
+TP-1358, TP-1359, TP-1360. TP-1367 (the Backlog record gap) landed before TP-1359.
+
+### Facts a person writes in Linear
+
+[TP-1359](https://linear.app/tonypine/issue/TP-1359) decided (D1) that a ticket's creation, its parent, its title and description,
+its team, project and route labels and its assignee stay Linear's: a person writes them in Linear,
+Symphony follows them on every read (`TicketObservation`), and a hand edit of them is not drift. They
+are authoring and routing, not moves, so the Director has no control for them. The one gap was
+promoting a Backlog ticket Symphony has no record of yet; [TP-1367](https://linear.app/tonypine/issue/TP-1367) closed it.
 
 ## Texts that send a person to Linear
 
@@ -97,11 +105,11 @@ rg -n -i -e 'in linear|by hand' \
 - `parent_tickets.liquid:50`, `:109`: "a person already promoted it" (by hand in Linear; the move is
   [TP-1353](https://linear.app/tonypine/issue/TP-1353)'s).
 - `parent_tickets.liquid:156`: "so the person approving the plan can set it" (edit the parent's
-  description in Linear; no Director move: TP-1359).
+  description in Linear, which stays Linear's: TP-1359).
 - `ticket_types.liquid:16`, `:39`, `:76`: the operator adds the `plan`, `type:bug` or `type:feature`
   label in Linear (the move is TP-1356's).
 - `ticket_types.liquid:53`, `:91`: "asks the operator to fill them in and move the ticket back to
-  `Todo`" (edit the description, TP-1359; the move is Move to… Todo).
+  `Todo`" (edit the description, which stays Linear's: TP-1359; the move is Move to… Todo).
 - `escape_hatches.liquid:37`: "A person's plain comment that opens with `Decision:` or `Ruling:` is a
   ruling" (a Linear comment; no Director move:
   [TP-1357](https://linear.app/tonypine/issue/TP-1357)).
@@ -130,7 +138,7 @@ files); `release_build.ex:641`, `pr_decision/apply.ex:974`, `self_heal.ex:572`, 
 `:615`, `:616` (a fix ticket's text and Question options, answered with Decide);
 `pr_decision/table.ex:15`; `priv/qa_driver/symphony-qa-driver.swift:57`;
 `priv/qa_playbooks/macos_app.md:511`; `out_of_scope_backlog.liquid:62` ("for a human to file":
-filing a new ticket is the Create-a-ticket row's design question, TP-1359).
+filing a new ticket stays in Linear, decided by TP-1359).
 
 Report what happened, or tell the agent rather than a person: `ticket_events/summary.ex:118`, `:127`
 ("moved … in Linear by hand"); `ticket_state_reconciler.ex:181` (a log line);
