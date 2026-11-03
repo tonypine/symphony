@@ -121,6 +121,73 @@ defmodule SymphonyElixir.Pauses.DependenciesTest do
     end
   end
 
+  describe "a ticket in a later active phase and its blockers" do
+    for phase <- ["In Progress", "Rework", "CI Fix", "Code Review", "QA", "Merging"] do
+      test "in #{phase}, is paused on a linked blocker and released in its phase once the blocker is terminal" do
+        open = issue(%{state: unquote(phase), blocked_by: [blocker("TP-1", "In Progress")]})
+
+        assert Issue.blocked?(open, @terminal)
+        assert Orchestrator.sweep_dependencies_for_test(@repo_key, [open], @terminal) == 1
+        assert Pauses.why(@ticket) == ["Waiting for TP-1 to finish"]
+        assert [%{set_by: %{kind: :rule, name: "Blocked-by links"}}] = reasons()
+
+        assert Orchestrator.sweep_dependencies_for_test(@repo_key, [open], @terminal) == 0
+
+        unblocked = %{open | blocked_by: [blocker("TP-1", "Done")]}
+        refute Issue.blocked?(unblocked, @terminal)
+        assert Orchestrator.sweep_dependencies_for_test(@repo_key, [unblocked], @terminal) == 1
+        refute Pauses.paused?(@ticket)
+      end
+    end
+
+    test "In Progress and waiting on a question, stays paused on a blocker linked meanwhile after the answer, then runs once it is done" do
+      question = %{kind: :question, waits_on: %{question_id: "q-1"}, text: "Waiting for your answer"}
+      {:ok, _pause} = Pauses.set(@ticket, question)
+      waiting = issue(%{state: "In Progress"})
+
+      assert Orchestrator.sweep_dependencies_for_test(@repo_key, [waiting], @terminal) == 0
+      refute Orchestrator.should_dispatch_issue_for_test(waiting, orchestrator_state())
+
+      # A blocker is linked while the question is open; the next poll pauses the ticket on it too.
+      blocked = %{waiting | blocked_by: [blocker("TP-1333", "Todo")]}
+      assert Orchestrator.sweep_dependencies_for_test(@repo_key, [blocked], @terminal) == 1
+      assert Pauses.why(@ticket) == ["Waiting for your answer", "Waiting for TP-1333 to finish"]
+
+      # The answer lifts the question; the blocker still holds the ticket, and says so.
+      {:ok, _pause} = Pauses.clear_reason(@ticket, question)
+      assert Pauses.why(@ticket) == ["Waiting for TP-1333 to finish"]
+      refute Orchestrator.should_dispatch_issue_for_test(blocked, orchestrator_state())
+
+      done = %{blocked | blocked_by: [blocker("TP-1333", "Done")]}
+      assert Orchestrator.sweep_dependencies_for_test(@repo_key, [done], @terminal) == 1
+      refute Pauses.paused?(@ticket)
+      assert Orchestrator.should_dispatch_issue_for_test(done, orchestrator_state())
+    end
+
+    test "a blocker linked while a run is under way leaves the run alone and holds its next dispatch" do
+      agent = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(agent, :kill) end)
+      running = issue(%{state: "In Progress", blocked_by: [blocker("TP-1", "Todo")]})
+
+      entry = %{pid: agent, ref: nil, identifier: "TP-817", issue: running, started_at: DateTime.utc_now()}
+      state = %{orchestrator_state() | running: %{@issue_id => entry}, claimed: MapSet.new([@issue_id])}
+
+      assert Orchestrator.sweep_dependencies_for_test(@repo_key, [running], @terminal) == 1
+      state = Orchestrator.reconcile_issue_states_for_test([running], state)
+
+      assert Map.has_key?(state.running, @issue_id)
+      assert Process.alive?(agent)
+      refute Orchestrator.should_dispatch_issue_for_test(running, orchestrator_state())
+    end
+
+    test "a phase dispatch does not pick work up from gains no reason" do
+      backlog = issue(%{state: "Backlog", blocked_by: [blocker("TP-1", "In Progress")]})
+
+      assert Orchestrator.sweep_dependencies_for_test(@repo_key, [backlog], @terminal) == 0
+      refute Pauses.paused?(@ticket)
+    end
+  end
+
   describe "sweep/3" do
     test "reads each polled ticket under the repo it was polled for, and counts the reasons it set and cleared" do
       open = issue(%{repo_key: nil, blocked_by: [blocker("TP-1", "In Progress")]})
@@ -160,10 +227,20 @@ defmodule SymphonyElixir.Pauses.DependenciesTest do
       skipped = TicketState.new("repo-polled", "issue-3", %{phase: "Todo", blockers: blockers})
       unphased = %{TicketState.new(@repo_key, "issue-4", %{blockers: blockers}) | phase: nil}
 
-      assert Dependencies.sync_records([todo, running, skipped, unphased, %{issue_id: nil}], @terminal, skip: "repo-polled") == 1
+      backlog = TicketState.new(@repo_key, "issue-5", %{phase: "Backlog", blockers: blockers})
+
+      records = [todo, running, skipped, unphased, backlog, %{issue_id: nil}]
+      assert Dependencies.sync_records(records, @terminal, skip: "repo-polled") == 2
       assert Pauses.why(@ticket) == ["Waiting for TP-1 to finish"]
-      refute Pauses.paused?({:ticket, @repo_key, "issue-2"})
+      assert Pauses.why({:ticket, @repo_key, "issue-2"}) == ["Waiting for TP-1 to finish"]
       refute Pauses.paused?({:ticket, "repo-polled", "issue-3"})
+      refute Pauses.paused?({:ticket, @repo_key, "issue-5"})
+
+      # Outside Todo a reason whose blocker went is left to the sweep, which may wait for an app update.
+      held = TicketState.normalize(RunStore.get_ticket_state("issue-2"))
+      gone = %{held | phase: "In Progress", blockers: []}
+      assert Dependencies.sync_records([gone], @terminal, active_states: @active_states) == 0
+      assert Pauses.paused?({:ticket, @repo_key, "issue-2"})
 
       # The same records change nothing; a record whose blocker went is lifted.
       paused = TicketState.normalize(RunStore.get_ticket_state(@issue_id))
@@ -182,8 +259,10 @@ defmodule SymphonyElixir.Pauses.DependenciesTest do
       assert Dependencies.sync_issue(@repo_key, %{read | blocked_by: []}, @terminal) == 1
       refute Pauses.paused?(@ticket)
 
-      # Outside Todo nothing is set; a record the store can't read is left alone.
-      assert Dependencies.sync_issue(@repo_key, %{read | state: "In Progress"}, @terminal) == 0
+      # In a later active phase the read pauses it too; a record the store can't read is left alone.
+      assert Dependencies.sync_issue(@repo_key, %{read | state: "In Progress"}, @terminal, active_states: @active_states) == 1
+      assert Pauses.why(@ticket) == ["Waiting for TP-1 to finish"]
+      :ok = RunStore.clear()
 
       unreadable = fn -> assert Dependencies.sync_issue(@repo_key, read, @terminal, store: UnreadableStore) == 0 end
       log = capture_log(unreadable)
@@ -207,10 +286,10 @@ defmodule SymphonyElixir.Pauses.DependenciesTest do
       refute_received :merge_commit_sha
     end
 
-    test "a ticket out of Todo gains no reason for a blocker the run did not report" do
+    test "a ticket out of Todo also gains a reason for a linked blocker the run did not report" do
       running = issue(%{state: "In Progress", blocked_by: [blocker("TP-997", "Todo"), blocker("TP-998", "Todo")]})
-      assert {0, _cache} = sweep(running, build(), UpdateHold.empty_cache())
-      assert Pauses.why(@ticket) == ["Waiting for TP-997 to finish"]
+      assert {1, _cache} = sweep(running, build(), UpdateHold.empty_cache())
+      assert Pauses.why(@ticket) == ["Waiting for TP-997 to finish", "Waiting for TP-998 to finish"]
     end
 
     test "lifts once its blocker is terminal, with no person's Unblock" do
