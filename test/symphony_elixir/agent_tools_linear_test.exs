@@ -2359,7 +2359,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       assert body =~
                "**Why:** The new hook runs from the workflow settings. “Allow this ticket to change them” lets this ticket change " <>
-                 "the workflow settings file, which runs commands on your Mac and the agents' instructions.\n"
+                 "the workflow settings file, which runs commands on your Mac and the agents' shared guides, also linked from the Claude and Codex agents' folders.\n"
 
       assert body =~ "1. **Allow this ticket to change them** (recommended): The next run changes them.\n"
       assert body =~ "<!-- symphony:unlocks option=1 WORKFLOW.md .agents/skills -->"

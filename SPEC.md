@@ -1250,7 +1250,9 @@ by failed status checks and ignores comment authorship; the ignored reviewer set
 affect CI escalation. A head whose only failed check is `protected paths` is not red: it gets no
 flaky re-run, no CI-fix run and no escalation, and uses no fix attempt, and it reads as its other
 checks, so the reviewer and QA run once they passed. Only a person clears that check, by a decision
-that allows the change (an option whose `unlocks` grants the protected paths the PR changes), and
+that allows the change (an option whose `unlocks` grants the protected paths the PR changes; a
+grant on a folder reached under several names, such as the shared skills in `.agents/skills` and
+their `.claude/skills` and `.codex/skills` links, covers it under every name), and
 the issue is asked about it once it reaches `Merging`, where it waits until such a decision covers
 it. When another check fails beside it, the head is red and the CI-fix run's prompt names
 `protected paths` as not the agent's to fix. A red head on an issue parked for a person, outside `tracker.active_states`

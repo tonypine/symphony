@@ -19,7 +19,9 @@ defmodule SymphonyElixir.PathUnlock do
     decision copied onto another ticket unlocks nothing there. Backticks, Linear's markdown escapes
     and link wrapping around the path are ignored.
 
-  Either way the path must be on the protected list. Each path has a plain description
+  Either way the path must be on the protected list. A grant on an alias of a protected folder
+  (`.claude/skills`, a symlink to `.agents/skills`) is a grant on the real folder, and lifts it
+  under every name (`AgentSandboxConfig.aliases/0`). Each path has a plain description
   (`describe/1`) that a request shows the Director instead of the path.
 
   The decision is read from the ticket's state, whichever way the Director answered: the Decisions
@@ -67,9 +69,7 @@ defmodule SymphonyElixir.PathUnlock do
     ".claude/agents" => "the Claude agent's helper agents",
     ".claude/commands" => "the Claude agent's commands",
     ".claude/hooks" => "the Claude agent's hooks, which run commands on your Mac",
-    ".agents/skills" => "the agents' instructions",
-    ".claude/skills" => "the Claude agent's link to the agents' instructions",
-    ".codex/skills" => "the Codex agent's link to the agents' instructions",
+    ".agents/skills" => "the agents' shared guides, also linked from the Claude and Codex agents' folders",
     "mise.toml" => "the tool versions file, which picks the language versions the repo builds with",
     ".tool-versions" => "the older tool versions file",
     "config/settings_ui_exempt.yml" => "the list of settings that need no control in the Mac app"
@@ -168,11 +168,20 @@ defmodule SymphonyElixir.PathUnlock do
   def grant_text?(text) when is_binary(text), do: named_grants(text) != [] or Regex.match?(@unlocks_marker, text)
   def grant_text?(_text), do: false
 
-  @doc "The entries of `paths` on the protected list, each once, without a leading `./`."
+  @doc """
+  The entries of `paths` on the protected list, each once, without a leading `./`. An alias of a
+  protected folder (`.claude/skills`) is named by its real folder (`.agents/skills`), so a grant
+  on any of its names lifts it under all of them (`AgentSandboxConfig.unlocked_entries/1`).
+  """
   @spec protected([String.t()] | term()) :: [String.t()]
   def protected(paths) when is_list(paths) do
     protected = AgentSandboxConfig.workspace_protected_paths()
-    for path when is_binary(path) <- paths, path = path |> String.trim() |> String.trim_leading("./"), path in protected, uniq: true, do: path
+
+    for path when is_binary(path) <- paths,
+        path = AgentSandboxConfig.real_path(path),
+        path in protected,
+        uniq: true,
+        do: path
   end
 
   def protected(_paths), do: []
@@ -181,7 +190,7 @@ defmodule SymphonyElixir.PathUnlock do
   @spec unprotected([String.t()]) :: [String.t()]
   def unprotected(paths) when is_list(paths) do
     protected = protected(paths)
-    Enum.reject(paths, &(is_binary(&1) and String.trim_leading(String.trim(&1), "./") in protected))
+    Enum.reject(paths, &(is_binary(&1) and AgentSandboxConfig.real_path(&1) in protected))
   end
 
   @doc """
@@ -189,7 +198,7 @@ defmodule SymphonyElixir.PathUnlock do
   workflow settings file, which runs commands on your Mac".
   """
   @spec describe(String.t()) :: String.t()
-  def describe(path), do: Map.get(@descriptions, path, "a file agents may change only with your permission")
+  def describe(path), do: Map.get(@descriptions, AgentSandboxConfig.real_path(path), "a file agents may change only with your permission")
 
   @doc "The descriptions of `paths` (`describe/1`) joined into one phrase: `a; b and c`."
   @spec describe_all([String.t()]) :: String.t()
@@ -248,7 +257,7 @@ defmodule SymphonyElixir.PathUnlock do
     text = text |> String.replace("\\", "") |> String.replace(@link_pattern, "\\1")
 
     for [_match, named, ticket] <- Regex.scan(@grant_pattern, text),
-        path <- [named |> String.replace(@path_wrapping, "") |> String.trim_leading("./")],
+        path <- [named |> String.replace(@path_wrapping, "") |> AgentSandboxConfig.real_path()],
         path in protected,
         do: {path, ticket}
   end
@@ -292,7 +301,7 @@ defmodule SymphonyElixir.PathUnlock do
   def prompt_section([]), do: nil
 
   def prompt_section(grants) when is_list(grants) do
-    paths = Enum.map(grants, &"- `#{&1.path}`, by #{decision_name(&1.decision)}")
+    paths = Enum.map(grants, &"- `#{&1.path}`#{also_named(&1.path)}, by #{decision_name(&1.decision)}")
     answers = grants |> Enum.map(& &1.answer) |> Enum.uniq() |> Enum.join("\n")
 
     Enum.join(
@@ -304,6 +313,13 @@ defmodule SymphonyElixir.PathUnlock do
       ] ++ paths ++ ["", "What the decision says:", PromptSafety.linear_block(answers, "linear_issue_decisions", @prompt_limit)],
       "\n"
     )
+  end
+
+  defp also_named(path) do
+    case AgentSandboxConfig.aliases(path) do
+      [] -> ""
+      aliases -> " (also #{Enum.map_join(aliases, " and ", &"`#{&1}`")})"
+    end
   end
 
   defp decision_name("ruling"), do: "a ruling in a comment"
