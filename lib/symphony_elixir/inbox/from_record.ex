@@ -17,7 +17,7 @@ defmodule SymphonyElixir.Inbox.FromRecord do
 
   The quality gate's holds and skips in the snapshot add a `:clarify` item each
   (`Item.from_quality_gate/1`) for a ticket nothing else lists. An item of a running ticket goes, so does one whose ticket the orchestrator saw leave the state it was listed
-  in (a `:blocked` one stays: the pause is what waits), each takes the state the orchestrator saw,
+  in (one it watches in that very state stays) (a `:blocked` one stays: the pause is what waits), each takes the state the orchestrator saw,
   and the list is sorted oldest first, an item with no known wait last.
 
   `SymphonyElixir.Inbox.items/2` serves it.
@@ -87,12 +87,18 @@ defmodule SymphonyElixir.Inbox.FromRecord do
   # review state, where the record lists it.
   defp left_review?(%{kind: :blocked}, _watched_states, _settings_fun), do: false
 
+  # A ticket the orchestrator watches in the state its item was listed in has not left it: a run
+  # stopped because its record left the active states is watched in its new phase, such as an idle
+  # park's Backlog, and the park's Question holds it there (TP-1351).
   defp left_review?(item, watched_states, settings_fun) do
     case Map.fetch(watched_states, item.issue_id) do
-      {:ok, state} -> not (PlanReview.in_state?(state) or (item.kind == :plan and PlanReview.in_state?(state, settings_fun.(item.repo_key))))
+      {:ok, state} -> not (same_state?(state, item.state) or PlanReview.in_state?(state) or (item.kind == :plan and PlanReview.in_state?(state, settings_fun.(item.repo_key))))
       :error -> false
     end
   end
+
+  defp same_state?(left, right) when is_binary(left) and is_binary(right), do: String.downcase(String.trim(left)) == String.downcase(String.trim(right))
+  defp same_state?(_left, _right), do: false
 
   defp sort_key(%DateTime{} = at), do: DateTime.to_unix(at, :microsecond)
   defp sort_key(_at), do: 0
