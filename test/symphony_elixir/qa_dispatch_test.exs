@@ -17,8 +17,8 @@ defmodule SymphonyElixir.QaDispatchTest do
   setup do
     write_workflow_file!(Workflow.workflow_file_path(), repos: repos())
 
-    RunStore.delete_ticket_state(@designed_repo, @issue_id)
-    on_exit(fn -> RunStore.delete_ticket_state(@designed_repo, @issue_id) end)
+    RunStore.delete_ticket_state(@issue_id)
+    on_exit(fn -> RunStore.delete_ticket_state(@issue_id) end)
 
     :ok
   end
@@ -44,8 +44,8 @@ defmodule SymphonyElixir.QaDispatchTest do
     SymphonyElixir.PrWatchSupport.put_watch!(repo_key, @issue_id, head_sha: head, decision: decision)
   end
 
-  defp head_signals(repo_key) do
-    case RunStore.get_ticket_state(repo_key, @issue_id) do
+  defp head_signals(_repo_key) do
+    case RunStore.get_ticket_state(@issue_id) do
       %{} = record ->
         record
         |> SymphonyElixir.TicketState.recent_signals(10)
@@ -65,7 +65,7 @@ defmodule SymphonyElixir.QaDispatchTest do
 
     test "a designed QA ticket is parked while the head is not green" do
       for status <- ["red", "running", "unknown"] do
-        RunStore.delete_ticket_state(@designed_repo, @issue_id)
+        RunStore.delete_ticket_state(@issue_id)
         record_ci!(@designed_repo, "head-#{status}", status)
         qa_ticket = issue(@designed_repo, "QA")
 

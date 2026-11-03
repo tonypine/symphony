@@ -21,12 +21,12 @@ defmodule SymphonyElixir.DecisionsTest do
 
   # A run store that can't be read.
   defmodule DownStore do
-    def get_ticket_state(_repo_key, _issue_id), do: {:error, :down}
+    def get_ticket_state(_issue_id), do: {:error, :down}
   end
 
   # A run store that reads, but refuses to record a decision.
   defmodule WriteFailingStore do
-    def get_ticket_state(repo_key, issue_id), do: RunStore.get_ticket_state(repo_key, issue_id)
+    def get_ticket_state(issue_id), do: RunStore.get_ticket_state(issue_id)
     def record_ticket_decisions(_repo_key, _issue_id, _entries, _backfill), do: {:error, :disk_full}
   end
 
@@ -254,12 +254,12 @@ defmodule SymphonyElixir.DecisionsTest do
       issue = %{id: @issue_id, description: description}
 
       assert [%{id: "D1", key: "comment-1", date: @date}, %{id: "D2", key: "comment-2", date: "someday"}] = Decisions.stored(issue, repo_key: @repo_key)
-      assert [%{key: "comment-1"}, %{key: "comment-2"}] = RunStore.get_ticket_state(@repo_key, @issue_id).decisions
+      assert [%{key: "comment-1"}, %{key: "comment-2"}] = RunStore.get_ticket_state(@issue_id).decisions
 
       # A section that later holds another entry is not backfilled again: the store is the truth.
       {:ok, edited} = Decisions.put(description, [entry(%{key: "comment-3"})])
       assert [%{key: "comment-1"}, %{key: "comment-2"}] = Decisions.stored(%{issue | description: edited}, repo_key: @repo_key)
-      assert [%{key: "comment-1"}, %{key: "comment-2"}] = RunStore.get_ticket_state(@repo_key, @issue_id).decisions
+      assert [%{key: "comment-1"}, %{key: "comment-2"}] = RunStore.get_ticket_state(@issue_id).decisions
     end
 
     test "reads the description's section when the store can't be read" do
@@ -277,7 +277,7 @@ defmodule SymphonyElixir.DecisionsTest do
 
       assert_received {:description_written, @issue_id, description}
       assert [%{id: "D1", key: "c1", scope: "Deferred to TP-891"}] = Decisions.recorded(description)
-      assert [%{key: "c1", date: ~D[2026-10-13], title: "Keep the legacy partials", scope: "Deferred to TP-891"}] = RunStore.get_ticket_state(@repo_key, @issue_id).decisions
+      assert [%{key: "c1", date: ~D[2026-10-13], title: "Keep the legacy partials", scope: "Deferred to TP-891"}] = RunStore.get_ticket_state(@issue_id).decisions
     end
 
     test "a section removed by hand is rewritten from the store on the next write, with the same entries" do
@@ -303,7 +303,7 @@ defmodule SymphonyElixir.DecisionsTest do
       assert :ok = Decisions.record(@issue_id, [entry(%{key: "c1"})], opts)
 
       refute_received {:description_written, _issue_id, _description}
-      assert [%{key: "c1", date: @date}] = RunStore.get_ticket_state(@repo_key, @issue_id).decisions
+      assert [%{key: "c1", date: @date}] = RunStore.get_ticket_state(@issue_id).decisions
     end
 
     test "refuses a write with no repo to keep it in" do
@@ -320,7 +320,7 @@ defmodule SymphonyElixir.DecisionsTest do
 
       for _write <- 1..3, do: assert(:ok = Decisions.record(@issue_id, [entry(%{key: "c1"}), ruling], tracker: FakeTracker, repo_key: @repo_key))
 
-      assert [%{key: "c1"}, %{key: "ruling-c2"}] = RunStore.get_ticket_state(@repo_key, @issue_id).decisions
+      assert [%{key: "c1"}, %{key: "ruling-c2"}] = RunStore.get_ticket_state(@issue_id).decisions
       assert ticket_events(@repo_key, @issue_id) == []
     end
 
@@ -352,7 +352,7 @@ defmodule SymphonyElixir.DecisionsTest do
       refute description =~ "WORKFLOW.md\n  - "
       assert [%{id: "D1", key: "c1", unlocks: ["WORKFLOW.md"]}] = Decisions.recorded(description)
       assert [%{id: "D1", key: "c1", unlocks: ["WORKFLOW.md"]}] = Decisions.recorded(linear_stored(description))
-      assert [%{key: "c1", unlocks: ["WORKFLOW.md"]}] = RunStore.get_ticket_state(@repo_key, @issue_id).decisions
+      assert [%{key: "c1", unlocks: ["WORKFLOW.md"]}] = RunStore.get_ticket_state(@issue_id).decisions
     end
 
     test "only protected paths are kept, and a hidden line naming none adds nothing" do
@@ -552,7 +552,7 @@ defmodule SymphonyElixir.DecisionsTest do
       assert_received {:description_written, "issue-projected", ^today}
       assert today == @expected
 
-      rendered = RunStore.get_ticket_state(@repo_key, "issue-projected") |> Decisions.render_from_questions()
+      rendered = RunStore.get_ticket_state("issue-projected") |> Decisions.render_from_questions()
       assert Enum.map(rendered, & &1.key) == ["comment-1", "comment-2", "ruling-comment-3"]
       assert {:ok, ^today} = Decisions.put(@stored, rendered)
     end

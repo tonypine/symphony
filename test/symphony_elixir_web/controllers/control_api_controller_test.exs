@@ -150,7 +150,7 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
                Enum.to_list(stream)
 
       assert [%{type: "person.action", payload: %{action: "stop"}, actor: %{kind: :person, name: "the Director"}} = event] =
-               RunStore.list_ticket_events("web", issue_id, [])
+               RunStore.list_ticket_events(issue_id, [])
 
       assert event.summary.title == "The Director stopped the run"
     end
@@ -161,7 +161,7 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
       assert conn.status == 200
       {:ok, stream} = AuditLog.query(dir: tmp_dir)
       assert Enum.to_list(stream) == []
-      assert RunStore.list_ticket_events("web", "ACME-7", []) == []
+      assert RunStore.list_ticket_events("ACME-7", []) == []
     end
 
     test "still answers when the record can't be written", %{tmp_dir: tmp_dir} do
@@ -230,7 +230,7 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
       assert event["summary"]["detail"] == "Keep the export button where it is."
 
       assert [%{id: ^event_id, type: "note", actor: %{kind: :person, name: "the Director"}}] =
-               RunStore.list_ticket_events(ticket.repo_key, ticket.issue_id, [])
+               RunStore.list_ticket_events(ticket.issue_id, [])
 
       assert [%{"event_id" => ^event_id, "issue_identifier" => identifier, "repo_key" => repo_key, "text" => "Keep the export button where it is."}] =
                audit_records(tmp_dir)
@@ -238,7 +238,7 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
       assert {identifier, repo_key} == {ticket.issue_identifier, ticket.repo_key}
 
       # The next agent run starts from the summary, which holds the note in full.
-      assert {:ok, %{notes: 1, text: text}} = Brief.render(ticket.repo_key, ticket.issue_id)
+      assert {:ok, %{notes: 1, text: text}} = Brief.render(ticket.issue_id)
       assert text =~ ~r/Notes \(1\):\n- \S+, the Director: Keep the export button where it is\.\n/
     end
 
@@ -256,7 +256,7 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
         assert json_body(conn)["error"] == %{"code" => "invalid_note", "message" => message}
       end
 
-      assert RunStore.list_ticket_events(ticket.repo_key, ticket.issue_id, []) == []
+      assert RunStore.list_ticket_events(ticket.issue_id, []) == []
       assert audit_records(tmp_dir) == []
 
       # The bound itself is a note.
@@ -275,7 +275,7 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
         assert json_body(conn)["error"]["code"] == "invalid_request"
       end
 
-      assert RunStore.list_ticket_events(ticket.repo_key, ticket.issue_id, []) == []
+      assert RunStore.list_ticket_events(ticket.issue_id, []) == []
       assert audit_records(tmp_dir) == []
     end
 
@@ -289,7 +289,7 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
         assert conn.status == 401
       end
 
-      assert RunStore.list_ticket_events(ticket.repo_key, ticket.issue_id, []) == []
+      assert RunStore.list_ticket_events(ticket.issue_id, []) == []
     end
 
     test "still answers the written note when its audit record can't be written", %{ticket: ticket, tmp_dir: tmp_dir} do
@@ -303,7 +303,7 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
         end)
 
       assert log =~ "Failed to record director_note audit event: issue_identifier=#{ticket.issue_identifier}"
-      assert [%{type: "note"}] = RunStore.list_ticket_events(ticket.repo_key, ticket.issue_id, [])
+      assert [%{type: "note"}] = RunStore.list_ticket_events(ticket.issue_id, [])
     end
   end
 

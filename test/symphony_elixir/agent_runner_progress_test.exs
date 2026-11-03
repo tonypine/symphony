@@ -58,10 +58,10 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     Application.put_env(:symphony_elixir, :progress_agent_recipient, self())
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
     Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-rework", checks: []}})
-    RunStore.delete_ticket_state("default", "issue-progress")
+    RunStore.delete_ticket_state("issue-progress")
 
     on_exit(fn ->
-      RunStore.delete_ticket_state("default", "issue-progress")
+      RunStore.delete_ticket_state("issue-progress")
 
       for key <- [
             :progress_agent_recipient,
@@ -246,7 +246,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       assert {:ok, %{reasons: [%{kind: :question, waits_on: %{question_id: id}}]}} = Pauses.get({:ticket, "default", "issue-progress"})
       assert id == question.id
       assert_signal("blocked", %{to: "Backlog", reason: "idle_park", from: "Rework"})
-      record = TicketState.normalize(RunStore.get_ticket_state("default", "issue-progress"))
+      record = TicketState.normalize(RunStore.get_ticket_state("issue-progress"))
       assert record.phase == "Backlog"
       assert %{kind: :action, state: "Backlog"} = Item.from_question(record, question)
     end
@@ -318,7 +318,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       capture_log(fn -> run_issue!("CI Fix", heads: ["sha-same"], max_turns: 5, repos: designed_repos()) end)
 
       [question] = Questions.open({:ticket, "default", "issue-progress"})
-      record = TicketState.normalize(RunStore.get_ticket_state("default", "issue-progress"))
+      record = TicketState.normalize(RunStore.get_ticket_state("issue-progress"))
       assert %{kind: :action, state: "Backlog"} = Item.from_question(record, question)
 
       server = :"park_unblock_#{System.unique_integer([:positive])}"
@@ -380,14 +380,14 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
     defp assert_parked_on_record(from_state, kind, since) do
       ticket = {:ticket, "default", "issue-progress"}
-      record = TicketState.normalize(RunStore.get_ticket_state("default", "issue-progress"))
+      record = TicketState.normalize(RunStore.get_ticket_state("issue-progress"))
       assert record.phase == "Backlog", "#{kind}: the record is in #{inspect(record.phase)}"
 
       assert [%{title: "TP-337 is parked: its last 2 turns changed nothing"} = question] = Questions.open(ticket)
       assert {:ok, %{reasons: [%{kind: :question, waits_on: %{question_id: id}}]}} = Pauses.get(ticket)
       assert id == question.id
 
-      events = "default" |> SymphonyElixir.TicketEvents.query("issue-progress") |> Enum.filter(&(DateTime.compare(&1.at, since) != :lt))
+      events = "issue-progress" |> SymphonyElixir.TicketEvents.query() |> Enum.filter(&(DateTime.compare(&1.at, since) != :lt))
       assert [%{payload: %{to: "Backlog", from: ^from_state}}] = Enum.filter(events, &(&1.type == "phase.entered"))
       assert [_asked] = Enum.filter(events, &(&1.type == "question.asked"))
       assert [_set] = Enum.filter(events, &(&1.type == "pause.set"))
@@ -410,7 +410,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
         {:ok, _question} = SymphonyElixir.Questions.ask({:ticket, "default", "issue-progress"}, request, request: true)
       end)
 
-      on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("default", "issue-progress") end)
+      on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("issue-progress") end)
 
       run_issue!("In Progress", heads: ["sha-rework"], repos: designed_repos(), max_turns: 5)
 
@@ -904,7 +904,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
       assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
       refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
-      assert SymphonyElixir.CiFix.origin("default", "issue-progress") == nil
+      assert SymphonyElixir.CiFix.origin("issue-progress") == nil
       assert_signal("ci fix return", %{to: "Code Review", kind: :ci_fix, head: "sha-same", move: true})
       assert log =~ "CI is green on issue_id=issue-progress issue_identifier=TP-337's PR head sha-same"
       assert log =~ "returning it to its CI Fix origin"
@@ -918,7 +918,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       run_issue!("CI Fix", heads: ["sha-same"], max_turns: 6, repos: designed_repos())
 
       assert_received {:memory_tracker_state_update, "issue-progress", "Merging"}
-      assert SymphonyElixir.CiFix.origin("default", "issue-progress") == nil
+      assert SymphonyElixir.CiFix.origin("issue-progress") == nil
     end
 
     test "a repair that pushed a new head returns to its origin with the approval re-bound to it" do
@@ -931,7 +931,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       run_issue!("CI Fix", heads: ["sha-same", "sha-new"], max_turns: 6, repos: designed_repos())
 
       assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
-      assert SymphonyElixir.CiFix.origin("default", "issue-progress") == nil
+      assert SymphonyElixir.CiFix.origin("issue-progress") == nil
 
       # The approval moved with the ticket: the head it now covers is the repair's, not the red one's.
       assert [%{head_sha: "sha-new", outcome: "approve"} | _] =
@@ -1323,7 +1323,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
   # The newest signal recorded for the run's issue, asserting its name and details.
   defp assert_signal(name, details) do
-    assert [%{name: ^name, details: ^details} | _rest] = RunStore.get_ticket_state("default", "issue-progress").signals
+    assert [%{name: ^name, details: ^details} | _rest] = RunStore.get_ticket_state("issue-progress").signals
   end
 
   # Refreshes the issue through the Linear client, as the runner does in production.

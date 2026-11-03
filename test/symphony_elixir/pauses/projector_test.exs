@@ -34,13 +34,13 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
   end
 
   defmodule FailingStore do
-    def get_ticket_state(_repo_key, _issue_id), do: {:error, :boom}
+    def get_ticket_state(_issue_id), do: {:error, :boom}
   end
 
   # Reads the record, refuses to write what was projected.
   defmodule UnwritableStore do
-    def get_ticket_state(repo_key, issue_id), do: SymphonyElixir.RunStore.get_ticket_state(repo_key, issue_id)
-    def update_ticket_state(_repo_key, _issue_id, _attrs), do: {:error, :boom}
+    def get_ticket_state(issue_id), do: SymphonyElixir.RunStore.get_ticket_state(issue_id)
+    def update_ticket_state(_issue_id, _attrs), do: {:error, :boom}
   end
 
   setup do
@@ -256,7 +256,7 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
     test "a tracker that raises is a write that failed" do
       {:ok, _pause} = Pauses.set(@ticket, %{kind: :build, waits_on: %{pull_request: 448}})
       {:ok, _pause} = Pauses.add_reason(@ticket, Pauses.ticket_reason(:dependency, "TP-12"))
-      :ok = RunStore.update_ticket_state(@repo_key, @issue_id, %{projected: nil, decisions: [Decisions.entry("c-1", ~D[2026-10-13], "T", "Q?", "A.")]})
+      :ok = RunStore.update_ticket_state(@issue_id, %{projected: nil, decisions: [Decisions.entry("c-1", ~D[2026-10-13], "T", "Q?", "A.")]})
 
       capture_log(fn -> assert {:error, {:error, %RuntimeError{}}} = Projector.apply(stored(), tracker: RaisingTracker) end)
       assert stored().projected == %{labels: [], section: nil, comments: %{}}
@@ -265,7 +265,7 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
     test "a projection the store can't record is logged" do
       {:ok, _pause} = Pauses.set(@ticket, %{kind: :build, waits_on: %{pull_request: 448}})
       {:ok, _pause} = Pauses.add_reason(@ticket, Pauses.ticket_reason(:dependency, "TP-12"))
-      :ok = RunStore.update_ticket_state(@repo_key, @issue_id, %{projected: nil})
+      :ok = RunStore.update_ticket_state(@issue_id, %{projected: nil})
 
       log = capture_log(fn -> assert Projector.apply(stored(), store: UnwritableStore) == :ok end)
       assert log =~ "Failed to record the pause projection"
@@ -375,7 +375,7 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
     test "a record whose comments were never projected counts the questions already ended as replied" do
       {:ok, question} = ask_unprojected(@request)
       {:ok, _answered} = Questions.answer(@ticket, question.id, "Ship today")
-      :ok = RunStore.update_ticket_state(@repo_key, @issue_id, %{projected: %{labels: [], section: nil}})
+      :ok = RunStore.update_ticket_state(@issue_id, %{projected: %{labels: [], section: nil}})
 
       assert Projector.project_now(@ticket) == :ok
       refute_received {:memory_tracker_plan_comments, _issue_id}
@@ -516,7 +516,7 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
     end
   end
 
-  defp stored, do: TicketState.normalize(RunStore.get_ticket_state(@repo_key, @issue_id))
+  defp stored, do: TicketState.normalize(RunStore.get_ticket_state(@issue_id))
 
   defp labels do
     :symphony_elixir

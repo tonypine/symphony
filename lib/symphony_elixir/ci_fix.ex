@@ -109,9 +109,9 @@ defmodule SymphonyElixir.CiFix do
   end
 
   @doc "The phase the ticket's current CI Fix stay came from, or nil when none is recorded."
-  @spec origin(String.t() | nil, String.t() | nil, keyword()) :: origin() | nil
-  def origin(repo_key, issue_id, opts \\ []) do
-    case store(opts).get_ticket_state(resolved_repo_key(repo_key), issue_id) do
+  @spec origin(String.t() | nil, keyword()) :: origin() | nil
+  def origin(issue_id, opts \\ []) do
+    case store(opts).get_ticket_state(issue_id) do
       %{} = record -> TicketState.ci_fix_origin(record)
       _none_or_error -> nil
     end

@@ -165,8 +165,8 @@ defmodule SymphonyElixir.Pauses.Projector do
   projector knows: posted or found by it (`projected.comments`).
   """
   @spec commented?({:ticket, String.t(), String.t()}, String.t(), [opt()]) :: boolean()
-  def commented?({:ticket, repo_key, issue_id}, question_id, opts \\ []) do
-    case Keyword.get(opts, :store, RunStore).get_ticket_state(repo_key, issue_id) do
+  def commented?({:ticket, _repo_key, issue_id}, question_id, opts \\ []) do
+    case Keyword.get(opts, :store, RunStore).get_ticket_state(issue_id) do
       %{} = record -> Map.has_key?(projected_comments(TicketState.normalize(record)) || %{}, question_id)
       _none -> false
     end
@@ -208,7 +208,7 @@ defmodule SymphonyElixir.Pauses.Projector do
   @spec project_now({:ticket, String.t(), String.t()}, [opt()]) :: :ok | {:error, term()}
   def project_now({:ticket, repo_key, issue_id}, opts \\ []) do
     if owns?() do
-      case Keyword.get(opts, :store, RunStore).get_ticket_state(repo_key, issue_id) do
+      case Keyword.get(opts, :store, RunStore).get_ticket_state(issue_id) do
         %{} = record -> apply(record, opts)
         nil -> repair_unrecorded(repo_key, issue_id, opts)
         {:error, _reason} = error -> error
@@ -363,7 +363,7 @@ defmodule SymphonyElixir.Pauses.Projector do
   defp remember(%{projected: projected}, projected, _store), do: :ok
 
   defp remember(record, projected, store) do
-    with {:error, reason} <- store.update_ticket_state(record.repo_key, record.issue_id, %{projected: projected}) do
+    with {:error, reason} <- store.update_ticket_state(record.issue_id, %{projected: projected}) do
       Logger.warning("Failed to record the pause projection of issue_id=#{record.issue_id}: #{inspect(reason)}")
     end
   end

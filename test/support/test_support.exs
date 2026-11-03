@@ -48,6 +48,7 @@ defmodule SymphonyElixir.TestSupport do
           clear_run_store!: 0,
           ticket_events: 2,
           ticket_events: 3,
+          ticket_records_unreadable: 1,
           unix_socket_bind_probe: 0,
           unix_socket_bind_probe: 1,
           unix_socket_bind_supported?: 0,
@@ -328,10 +329,23 @@ defmodule SymphonyElixir.TestSupport do
 
   # The events recorded on a ticket (`SymphonyElixir.TicketEvents`), oldest first, as `{type,
   # payload}`; with `types`, only those types.
-  def ticket_events(repo_key, issue_id, types \\ nil) do
-    for event <- SymphonyElixir.RunStore.list_ticket_events(repo_key, issue_id, []),
+  def ticket_events(_repo_key, issue_id, types \\ nil) do
+    for event <- SymphonyElixir.RunStore.list_ticket_events(issue_id, []),
         is_nil(types) or event.type in List.wrap(types),
         do: {event.type, event.payload}
+  end
+
+  # Runs `fun` while the store can't read a ticket's record (its table is gone), as a store
+  # refusal looks to every reader, then puts the empty table back.
+  def ticket_records_unreadable(fun) do
+    {:atomic, :ok} = :mnesia.delete_table(:symphony_run_store_ticket_index)
+
+    try do
+      fun.()
+    after
+      definition = [attributes: [:issue_id, :repo_key, :record], disc_copies: [node()]]
+      {:atomic, :ok} = :mnesia.create_table(:symphony_run_store_ticket_index, definition)
+    end
   end
 
   def clear_run_store! do

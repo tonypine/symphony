@@ -20,8 +20,8 @@ defmodule SymphonyElixir.RunStoreTicketEventsTest do
 
     assert {:ok, event} = RunStore.append_ticket_event(event("note", %{text: "x"}, run_id: "run-1"))
 
-    assert [{@table, {@repo_key, @issue_id}, @repo_key, @issue_id, "run-1", "note", 1, record}] =
-             :mnesia.dirty_read(@table, {@repo_key, @issue_id})
+    assert [{@table, @issue_id, @repo_key, @issue_id, "run-1", "note", 1, record}] =
+             :mnesia.dirty_read(@table, @issue_id)
 
     assert is_map(record) and not is_struct(record)
     assert Event.normalize(record) == event
@@ -35,19 +35,19 @@ defmodule SymphonyElixir.RunStoreTicketEventsTest do
       |> Enum.map(fn {:ok, event} -> event end)
 
     assert events |> Enum.map(& &1.seq) |> Enum.sort() == Enum.to_list(1..100)
-    assert RunStore.list_ticket_events(@repo_key, @issue_id, []) |> Enum.map(& &1.seq) |> Enum.sort() == Enum.to_list(1..100)
-    assert RunStore.get_ticket_state(@repo_key, @issue_id).event_seq == 100
+    assert RunStore.list_ticket_events(@issue_id, []) |> Enum.map(& &1.seq) |> Enum.sort() == Enum.to_list(1..100)
+    assert RunStore.get_ticket_state(@issue_id).event_seq == 100
   end
 
   test "an event takes the ticket's next seq and leaves the rest of its record as it was" do
     :ok = RunStore.put_ticket_state(%{repo_key: @repo_key, issue_id: @issue_id, phase: "QA", issue_identifier: "TP-1"})
     :ok = RunStore.record_ticket_signal(@repo_key, @issue_id, "handoff", %{to: "QA"})
-    before = RunStore.get_ticket_state(@repo_key, @issue_id)
+    before = RunStore.get_ticket_state(@issue_id)
 
     assert {:ok, %Event{seq: 1, phase: "QA"}} = RunStore.append_ticket_event(event("note", %{text: "x"}))
     assert {:ok, %Event{seq: 2, phase: "Rework"}} = RunStore.append_ticket_event(event("note", %{text: "y"}, phase: "Rework"))
 
-    assert RunStore.get_ticket_state(@repo_key, @issue_id) == %{before | event_seq: 2}
+    assert RunStore.get_ticket_state(@issue_id) == %{before | event_seq: 2}
   end
 
   test "seq never repeats when a whole-record write left the record's event_seq behind" do
@@ -56,7 +56,7 @@ defmodule SymphonyElixir.RunStoreTicketEventsTest do
     :ok = RunStore.put_ticket_state(%{repo_key: @repo_key, issue_id: @issue_id, event_seq: 1})
 
     assert {:ok, %Event{seq: 3}} = RunStore.append_ticket_event(event("note", %{text: "z"}))
-    assert RunStore.get_ticket_state(@repo_key, @issue_id).event_seq == 3
+    assert RunStore.get_ticket_state(@issue_id).event_seq == 3
   end
 
   test "append_ticket_events/1 writes one ticket's events in one transaction, each idempotency key once" do
@@ -72,11 +72,11 @@ defmodule SymphonyElixir.RunStoreTicketEventsTest do
     assert {:ok, [b, ^existing, b_again, c]} = RunStore.append_ticket_events(batch)
     assert b_again == b
     assert {b.seq, c.seq} == {2, 3}
-    assert length(RunStore.list_ticket_events(@repo_key, @issue_id, [])) == 3
-    assert RunStore.get_ticket_state(@repo_key, @issue_id).event_seq == 3
+    assert length(RunStore.list_ticket_events(@issue_id, [])) == 3
+    assert RunStore.get_ticket_state(@issue_id).event_seq == 3
 
     assert {:ok, [^existing]} = RunStore.append_ticket_events([event("note", %{text: "a"}, idempotency: "k1")])
-    assert RunStore.get_ticket_state(@repo_key, @issue_id).event_seq == 3
+    assert RunStore.get_ticket_state(@issue_id).event_seq == 3
   end
 
   test "refuses events of more than one ticket, malformed events and a blank repo key" do
@@ -90,8 +90,7 @@ defmodule SymphonyElixir.RunStoreTicketEventsTest do
 
     assert RunStore.append_ticket_events([%{text: "x"}]) == {:error, :invalid_ticket_event}
     assert RunStore.append_ticket_event(%{event("note", %{text: "x"}) | repo_key: " "}) == {:error, :invalid_repo_key}
-    assert RunStore.list_ticket_events(" ", @issue_id, []) == {:error, :invalid_repo_key}
-    assert RunStore.list_ticket_events(@repo_key, @issue_id, []) == []
+    assert RunStore.list_ticket_events(@issue_id, []) == []
   end
 
   test "list_ticket_events/3 sorts by at then seq and filters by types and run" do
@@ -99,10 +98,10 @@ defmodule SymphonyElixir.RunStoreTicketEventsTest do
     assert {:ok, early} = RunStore.append_ticket_event(event("phase.entered", %{to: "QA"}, at: @at))
     assert {:ok, tie} = RunStore.append_ticket_event(event("note", %{text: "tie"}, at: @at, run_id: "run-1"))
 
-    assert RunStore.list_ticket_events(@repo_key, @issue_id, []) == [early, tie, late]
-    assert RunStore.list_ticket_events(@repo_key, @issue_id, types: ["note"]) == [tie, late]
-    assert RunStore.list_ticket_events(@repo_key, @issue_id, run_id: "run-1", types: "note") == [tie, late]
-    assert RunStore.list_ticket_events(@repo_key, "issue-2", []) == []
+    assert RunStore.list_ticket_events(@issue_id, []) == [early, tie, late]
+    assert RunStore.list_ticket_events(@issue_id, types: ["note"]) == [tie, late]
+    assert RunStore.list_ticket_events(@issue_id, run_id: "run-1", types: "note") == [tie, late]
+    assert RunStore.list_ticket_events("issue-2", []) == []
   end
 
   defp event(type, payload, opts \\ []) do

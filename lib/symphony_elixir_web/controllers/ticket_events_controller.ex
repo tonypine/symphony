@@ -39,7 +39,7 @@ defmodule SymphonyElixirWeb.TicketEventsController do
     with {:ok, record} <- ticket(repo_key, issue_identifier),
          {:ok, opts} <- query_opts(params),
          {:ok, group} <- group(params["group"]),
-         events when is_list(events) <- TicketEvents.query(record.repo_key, record.issue_id, opts) do
+         events when is_list(events) <- TicketEvents.query(record.issue_id, opts) do
       json(conn, record |> page_json(events, group) |> Map.put(:next_since, next_since(events, opts[:since])))
     else
       # A store error that is neither raises, as any read of a store that failed does.
@@ -118,7 +118,7 @@ defmodule SymphonyElixirWeb.TicketEventsController do
 
   # A store error on the history read raises, as the page's own read does.
   defp page_json(record, events, :run) do
-    history = RunStore.list_ticket_events(record.repo_key, record.issue_id, types: @run_header_types)
+    history = RunStore.list_ticket_events(record.issue_id, types: @run_header_types)
     %{timeline: Presenter.ticket_timeline_json(record.repo_key, record.issue_id, events, history)}
   end
 

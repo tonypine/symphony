@@ -14,7 +14,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
     assert :ok = TicketSignals.record(@repo_key, "issue-1", "handoff", %{to: "Code Review"})
 
     assert %{signals: [%{name: "handoff", details: %{to: "Code Review"}}]} =
-             RunStore.get_ticket_state(@repo_key, "issue-1")
+             RunStore.get_ticket_state("issue-1")
   end
 
   test "a pending projection is marked and cleared on a record only; a ticket with no record or no repo key, or a store failure, writes none" do
@@ -22,15 +22,15 @@ defmodule SymphonyElixir.TicketSignalsTest do
     :ok = RunStore.put_ticket_state(TicketState.new(repo_key, "issue-projected"))
 
     assert :ok = TicketSignals.mark_projection(repo_key, "issue-projected", :phase, :boom)
-    assert [%{type: :phase, error: ":boom"} = mark] = RunStore.get_ticket_state(repo_key, "issue-projected").pending_projection
+    assert [%{type: :phase, error: ":boom"} = mark] = RunStore.get_ticket_state("issue-projected").pending_projection
     assert :ok = TicketSignals.clear_projection(repo_key, "issue-projected", mark)
-    assert RunStore.get_ticket_state(repo_key, "issue-projected").pending_projection == []
+    assert RunStore.get_ticket_state("issue-projected").pending_projection == []
 
     log = ExUnit.CaptureLog.capture_log(fn -> assert :ok = TicketSignals.clear_projection("", "issue-projected", mark) end)
     assert log =~ "Failed to clear a pending projection on issue_id=issue-projected"
 
     assert :ok = TicketSignals.mark_projection(repo_key, "issue-unknown", :phase, :boom)
-    assert RunStore.get_ticket_state(repo_key, "issue-unknown") == nil
+    assert RunStore.get_ticket_state("issue-unknown") == nil
     assert :ok = TicketSignals.mark_projection(nil, "issue-projected", :phase, :boom)
 
     log = ExUnit.CaptureLog.capture_log(fn -> assert :ok = TicketSignals.mark_projection("", "issue-projected", :phase, :boom) end)
@@ -46,21 +46,21 @@ defmodule SymphonyElixir.TicketSignalsTest do
     assert :ok = TicketSignals.record(@repo_key, "issue-1", "merge settled", %{})
 
     assert %{signals: [%{name: "merge settled", details: %{}}]} =
-             RunStore.get_ticket_state(@repo_key, "issue-1")
+             RunStore.get_ticket_state("issue-1")
   end
 
   test "records a verdict bound to the head it judged" do
     assert :ok = TicketSignals.record_verdict(@repo_key, "issue-1", "qa", "abc123", "pass")
 
     assert %{verdicts: [%{kind: "qa", head_sha: "abc123", outcome: "pass"}]} =
-             RunStore.get_ticket_state(@repo_key, "issue-1")
+             RunStore.get_ticket_state("issue-1")
   end
 
   test "records the details a verdict carries" do
     assert :ok = TicketSignals.record_verdict(@repo_key, "issue-1", "qa", "abc123", "blocked", %{reason: "no emulator", model: "claude-opus"})
 
     assert %{verdicts: [%{outcome: "blocked", details: %{reason: "no emulator", model: "claude-opus"}}]} =
-             RunStore.get_ticket_state(@repo_key, "issue-1")
+             RunStore.get_ticket_state("issue-1")
   end
 
   test "no-ops when the ticket carries no repo key" do
@@ -69,7 +69,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
     assert :ok = TicketSignals.record_verdict(nil, "issue-1", "qa", nil, "pass")
     assert :ok = TicketSignals.record_verdict(@repo_key, nil, "qa", nil, "pass")
 
-    assert RunStore.get_ticket_state(@repo_key, "issue-1") == nil
+    assert RunStore.get_ticket_state("issue-1") == nil
   end
 
   test "a move asks the orchestrator for a cycle on the ticket's repo at once; a signal that moves nothing does not" do
@@ -120,7 +120,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
   describe "record_phase/3" do
     test "creates the record in the phase when the ticket has none" do
       assert :ok = TicketSignals.record_phase(@repo_key, "issue-1", "In Progress")
-      assert %{phase: "In Progress", updated_at: %DateTime{}} = RunStore.get_ticket_state(@repo_key, "issue-1")
+      assert %{phase: "In Progress", updated_at: %DateTime{}} = RunStore.get_ticket_state("issue-1")
     end
 
     test "moves an existing record and leaves what a read of Linear wrote, so a later read still wins" do
@@ -130,7 +130,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
       assert :ok = TicketSignals.record_phase(@repo_key, "issue-1", "In Progress")
 
       assert %{phase: "In Progress", issue_identifier: "MT-1", title: "Add checkout", linear_updated_at: ^seen, phase_at: %DateTime{} = phase_at} =
-               RunStore.get_ticket_state(@repo_key, "issue-1")
+               RunStore.get_ticket_state("issue-1")
 
       assert DateTime.compare(phase_at, seen) == :gt
     end
@@ -138,10 +138,10 @@ defmodule SymphonyElixir.TicketSignalsTest do
     test "a record already in the phase Symphony wrote is left as it was" do
       record = TicketState.new(@repo_key, "issue-1") |> TicketState.put_phase("QA", ~U[2026-10-29 10:00:00Z])
       :ok = RunStore.put_ticket_state(record)
-      before = RunStore.get_ticket_state(@repo_key, "issue-1")
+      before = RunStore.get_ticket_state("issue-1")
 
       assert :ok = TicketSignals.record_phase(@repo_key, "issue-1", "QA")
-      assert RunStore.get_ticket_state(@repo_key, "issue-1") == before
+      assert RunStore.get_ticket_state("issue-1") == before
     end
 
     test "a move writes the phase as Symphony's; one into the phase an observation wrote only takes it over, unannounced" do
@@ -150,11 +150,11 @@ defmodule SymphonyElixir.TicketSignalsTest do
       :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records()
 
       assert :ok = TicketSignals.record_phase(@repo_key, "issue-1", "Todo")
-      assert %{phase: "Todo", phase_at: ^at, phase_owner: :symphony} = RunStore.get_ticket_state(@repo_key, "issue-1")
+      assert %{phase: "Todo", phase_at: ^at, phase_owner: :symphony} = RunStore.get_ticket_state("issue-1")
       refute_received {:ticket_record, @repo_key, "issue-1", :changed, _fields}
 
       assert :ok = TicketSignals.record_phase(@repo_key, "issue-2", "In Progress")
-      assert %{phase: "In Progress", phase_owner: :symphony} = RunStore.get_ticket_state(@repo_key, "issue-2")
+      assert %{phase: "In Progress", phase_owner: :symphony} = RunStore.get_ticket_state("issue-2")
     end
 
     test "a phase written is announced as a change of the record's phase; one already there is not" do
@@ -193,7 +193,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
         assert :ok = TicketSignals.record_phase(@repo_key, "plan-1", "Plan Review")
         assert_receive {:plan_read, "plan-1"}, 5_000
 
-        eventually(fn -> match?(%{plan_brief: nil, plan_brief_error: ":offline"}, RunStore.get_ticket_state(@repo_key, "plan-1")) end)
+        eventually(fn -> match?(%{plan_brief: nil, plan_brief_error: ":offline"}, RunStore.get_ticket_state("plan-1")) end)
       end)
     end
 
@@ -201,7 +201,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
       assert :ok = TicketSignals.record_phase(nil, "issue-1", "QA")
       assert :ok = TicketSignals.record_phase(@repo_key, nil, "QA")
       assert :ok = TicketSignals.record_phase(@repo_key, "issue-1", nil)
-      assert RunStore.get_ticket_state(@repo_key, "issue-1") == nil
+      assert RunStore.get_ticket_state("issue-1") == nil
     end
 
     test "logs and swallows a store failure" do
@@ -212,7 +212,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
     test "the phase read before a move is the one restore_phase/3 puts back" do
       assert TicketSignals.recorded_phase(@repo_key, "issue-1") == {:ok, nil}
       assert TicketSignals.recorded_phase(nil, "issue-1") == :unknown
-      assert TicketSignals.recorded_phase("  ", "issue-1") == :unknown
+      assert ticket_records_unreadable(fn -> TicketSignals.recorded_phase(@repo_key, "issue-1") end) == :unknown
 
       :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-1", %{phase: "Backlog", issue_identifier: "MT-1"}))
       before = TicketSignals.recorded_phase(@repo_key, "issue-1")
@@ -220,21 +220,21 @@ defmodule SymphonyElixir.TicketSignalsTest do
 
       :ok = TicketSignals.record_phase(@repo_key, "issue-1", "Canceled")
       assert :ok = TicketSignals.restore_phase(@repo_key, "issue-1", before)
-      assert %{phase: "Backlog", issue_identifier: "MT-1"} = RunStore.get_ticket_state(@repo_key, "issue-1")
+      assert %{phase: "Backlog", issue_identifier: "MT-1"} = RunStore.get_ticket_state("issue-1")
 
       # A phase nobody could read is left as the move wrote it; a record that had none goes back to none.
       :ok = TicketSignals.record_phase(@repo_key, "issue-1", "Canceled")
       assert :ok = TicketSignals.restore_phase(@repo_key, "issue-1", :unknown)
-      assert %{phase: "Canceled"} = RunStore.get_ticket_state(@repo_key, "issue-1")
+      assert %{phase: "Canceled"} = RunStore.get_ticket_state("issue-1")
       assert :ok = TicketSignals.restore_phase(@repo_key, "issue-1", {:ok, nil})
-      assert %{phase: nil} = RunStore.get_ticket_state(@repo_key, "issue-1")
+      assert %{phase: nil} = RunStore.get_ticket_state("issue-1")
     end
 
     test "a move's signal writes the phase it entered, with its phase.entered event" do
       assert :ok = TicketSignals.record(@repo_key, "issue-1", "claim", %{from: "Todo", to: "In Progress"})
 
-      assert %{phase: "In Progress"} = RunStore.get_ticket_state(@repo_key, "issue-1")
-      assert [%{type: "phase.entered", phase: "In Progress"}] = RunStore.list_ticket_events(@repo_key, "issue-1", types: ["phase.entered"])
+      assert %{phase: "In Progress"} = RunStore.get_ticket_state("issue-1")
+      assert [%{type: "phase.entered", phase: "In Progress"}] = RunStore.list_ticket_events("issue-1", types: ["phase.entered"])
     end
   end
 
@@ -287,7 +287,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
         issue_id = "issue-signal-#{index}"
         assert :ok = TicketSignals.record(@repo_key, issue_id, name, details)
 
-        assert %{signals: [%{name: ^name, details: ^details}]} = RunStore.get_ticket_state(@repo_key, issue_id)
+        assert %{signals: [%{name: ^name, details: ^details}]} = RunStore.get_ticket_state(issue_id)
 
         case expected do
           :mirrored ->
@@ -344,17 +344,17 @@ defmodule SymphonyElixir.TicketSignalsTest do
              {"attempt.pushed", %{head: "bbb222", attempt: 2}}
            ] = ticket_events(@repo_key, "issue-1")
 
-    assert %{signals: [_, _, _]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert %{signals: [_, _, _]} = RunStore.get_ticket_state("issue-1")
   end
 
   test "a QA fail verdict records its event with its head, in QA, and stays in the verdicts" do
     assert :ok = TicketSignals.record_verdict(@repo_key, "issue-1", "qa", "abc123", "fail", %{reason: "clipped"})
 
     assert [%{type: "verdict.recorded", phase: "QA", head_sha: "abc123", payload: %{kind: "qa", outcome: "fail", head: "abc123"}}] =
-             RunStore.list_ticket_events(@repo_key, "issue-1", [])
+             RunStore.list_ticket_events("issue-1", [])
 
     assert %{verdicts: [%{kind: "qa", head_sha: "abc123", outcome: "fail", details: %{reason: "clipped"}}]} =
-             RunStore.get_ticket_state(@repo_key, "issue-1")
+             RunStore.get_ticket_state("issue-1")
   end
 
   test "a verdict a run gave names that run; one without a run id names none, and the verdicts are the same" do
@@ -366,11 +366,11 @@ defmodule SymphonyElixir.TicketSignalsTest do
              %{type: "verdict.recorded", run_id: "run-qa-1", actor: %{kind: :machine}, phase: "QA", payload: qa_payload},
              %{type: "verdict.recorded", run_id: nil, phase: "Code Review"},
              %{type: "verdict.recorded", run_id: nil, phase: "Epic Review"}
-           ] = RunStore.list_ticket_events(@repo_key, "issue-1", [])
+           ] = RunStore.list_ticket_events("issue-1", [])
 
     assert qa_payload == %{kind: "qa", outcome: "pass", head: "abc123"}
 
-    %{verdicts: verdicts} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    %{verdicts: verdicts} = RunStore.get_ticket_state("issue-1")
     assert verdicts |> Enum.map(&{&1.kind, &1.outcome, &1.details}) |> Enum.sort() == [{"code_review", "approve", %{}}, {"epic_review", "pass", %{}}, {"qa", "pass", %{}}]
   end
 
@@ -406,7 +406,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
     RunStore.record_ticket_verdict(@repo_key, "issue-2", "qa", "abc123", "pass")
 
     snapshot = fn issue_id ->
-      @repo_key |> RunStore.get_ticket_state(issue_id) |> Map.take([:signals, :verdicts, :holds, :decisions]) |> strip_times()
+      RunStore.get_ticket_state(issue_id) |> Map.take([:signals, :verdicts, :holds, :decisions]) |> strip_times()
     end
 
     assert snapshot.("issue-1") == snapshot.("issue-2")
@@ -422,7 +422,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
 
     assert log =~ "Failed to record the verdict.recorded event on issue_id=issue-1: {:invalid_payload, [:kind]}"
     assert log =~ "Failed to record the verdict.recorded event on issue_id=issue-1: {:invalid_payload, [:outcome]}"
-    assert %{verdicts: [%{kind: "pre_push_review"}], signals: [%{name: "fix verdict"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert %{verdicts: [%{kind: "pre_push_review"}], signals: [%{name: "fix verdict"}]} = RunStore.get_ticket_state("issue-1")
     assert ticket_events(@repo_key, "issue-1") == []
   end
 
@@ -492,7 +492,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
 
       assert :ok = TicketSignals.record(repo_key, "issue-protected", "decision returned", %{move: "cancel", from: "In Progress", to: "Canceled"})
       assert %{withdrawn: %{reason: "The ticket was cancelled."}} = Questions.find(ticket, id)
-      assert [%{payload: %{cause: "ticket_moved"}}] = RunStore.list_ticket_events(repo_key, "issue-protected", types: ["question.withdrawn"])
+      assert [%{payload: %{cause: "ticket_moved"}}] = RunStore.list_ticket_events("issue-protected", types: ["question.withdrawn"])
     end
 
     test "a run that ended on a cancelled ticket withdraws every question; one with no start withdraws nothing" do

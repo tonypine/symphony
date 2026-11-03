@@ -65,7 +65,7 @@ defmodule SymphonyElixir.OrchestratorDispatchShadowTest do
   test "a record missing a ticket is one difference naming it, on the poll side", ctx do
     issues = [issue(ctx.repo_key, 1), issue(ctx.repo_key, 2)]
     {_buckets, state} = cycle(%Orchestrator.State{poll_interval_ms: 100}, ctx.repos, issues, 0)
-    :ok = RunStore.delete_ticket_state(ctx.repo_key, "#{ctx.repo_key}-2")
+    :ok = RunStore.delete_ticket_state("#{ctx.repo_key}-2")
 
     log = capture_log(fn -> cycle(state, ctx.repos, issues, 50) end)
 
@@ -144,7 +144,7 @@ defmodule SymphonyElixir.OrchestratorDispatchShadowTest do
     assert_receive {:polled, _repo}
     refute log =~ "Dispatch shadow difference"
 
-    assert %{phase: "Code Review", phase_owner: :symphony} = RunStore.get_ticket_state(ctx.repo_key, issue_id)
+    assert %{phase: "Code Review", phase_owner: :symphony} = RunStore.get_ticket_state(issue_id)
     summary = Shadow.summary()
     assert %{cycles_compared: 2, cycles_with_differences: 0, window_differences: 0, recent: []} = summary
     assert summary.record_newer == %{count: 1, recent: [%{identifier: "ACME-1", side: :both}]}
@@ -169,7 +169,7 @@ defmodule SymphonyElixir.OrchestratorDispatchShadowTest do
     log = capture_log(fn -> Orchestrator.poll_candidate_issue_buckets_for_test(state, ctx.repos, fetcher, 100) end)
     refute log =~ "Dispatch shadow difference"
 
-    assert %{phase: "Code Review"} = RunStore.get_ticket_state(ctx.repo_key, issue_id)
+    assert %{phase: "Code Review"} = RunStore.get_ticket_state(issue_id)
     summary = Shadow.summary()
     assert %{cycles_compared: 2, cycles_with_differences: 0, window_differences: 0, recent: []} = summary
     assert summary.record_newer == %{count: 1, recent: [%{identifier: "ACME-1", side: :both}]}

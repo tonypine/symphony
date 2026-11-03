@@ -699,20 +699,26 @@ move of the old row, above, sets the marker first, so this step finds it set). T
 summary (records read and converted, pauses and questions created, what it skipped and why) is in
 `GET /api/v1/state` under `pause_backfill`.
 
-Once, at start-up, in a task of the boot pass, a ticket the store holds under more than one
-repository (a ticket that moved to another Linear project before the by-ticket index existed) is
-merged into its one by-ticket record (`records_merged_v1` marker): the repository is the ticket's
-current route (the one the index names, else the one whose record observed it last); the events of
-every record, each once, in time order, renumbered under it, with their artifacts; the questions
-and pause reasons of every record, each once (two open questions with the same title and text
-collapse to one); the newest phase, PR facts, verdicts and run history. An open question only a
-record of another repository held was asked before the move, which answered it: it is withdrawn
-with the cause `superseded_by_move`, its `question.withdrawn` event recorded. No record row is
-deleted; the listings and reads reach the ticket through the index only, so the rows it left
-behind are not seen. The report (`records.merged`: when it ran, the tickets checked and merged, and
-each merge's ticket and the repositories folded into it) is kept with the marker and shown in
-`GET /api/v1/state` under `records_merged`; a failed read or write leaves the marker unset, the
-failure shown there, and the next start runs it again.
+A ticket has one record, keyed by its id alone; its repository is a field on the record, not part
+of its key, and so are its events, which are keyed by the ticket. Every reader takes the ticket.
+A writer that passes a repository (the route a new record opens under) writes the ticket's one
+record, and a repository that disagrees with the record's is logged, never a second record. The
+repo poll that returns a ticket is its route: a ticket that moved to another Linear project is
+re-routed by that repo's poll, the same record moving with its questions, pause and events, and
+every other read (a delivery, a by-id read) keeps the repository the record has.
+
+Symphony 0.0.1.792 merged, once, the records a ticket was left with under more than one repository
+into its one record (`records_merged_v1` marker; an open question only another repository's
+record held was withdrawn with the cause `superseded_by_move`); its report (`records.merged`: when
+it ran, the tickets checked and merged, each merge's ticket and the repositories folded into it)
+stays with the marker and is shown in `GET /api/v1/state` under `records_merged`. The first start
+of the next release moves the store off the (repository, ticket) key for good: a store that still
+has that key must show the markers of the by-ticket index (`ticket_index_v1`) and of the merge, or
+the start is refused with a message naming the version to install first (0.0.1.792) and nothing is
+written; otherwise a ticket whose only record is still on the old key is written under its id,
+the events move onto the ticket (the record's repository's copy of an event first, each event once,
+a straggler numbered after the last), the old table is deleted and the step's marker
+(`ticket_pair_key_dropped_v1`) set, with the key's version marker `ticket_index_v2`.
 
 The stream is read through `GET /api/v1/repos/<repo_key>/tickets/<issue_identifier>/events`
 (Section 13.8.2). Each event a write adds (not a backfilled one, an idempotent no-op or a refused

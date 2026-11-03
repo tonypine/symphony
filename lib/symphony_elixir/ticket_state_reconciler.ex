@@ -157,8 +157,8 @@ defmodule SymphonyElixir.TicketStateReconciler do
   end
 
   # The phase is written with when and by whom, so a phase Symphony owned before is Linear's now.
-  defp persist_phase(%{repo_key: repo_key, issue_id: issue_id} = updated, action, store) do
-    case store.update_ticket_state(repo_key, issue_id, Map.take(updated, [:phase, :phase_at, :phase_owner, :updated_at])) do
+  defp persist_phase(%{issue_id: issue_id} = updated, action, store) do
+    case store.update_ticket_state(issue_id, Map.take(updated, [:phase, :phase_at, :phase_owner, :updated_at])) do
       :ok -> :ok
       {:error, reason} -> Logger.warning("Failed to record #{action} for #{issue_id}: #{inspect(reason)}")
     end

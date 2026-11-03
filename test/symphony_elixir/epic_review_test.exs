@@ -71,8 +71,8 @@ defmodule SymphonyElixir.EpicReviewTest do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     for id <- [@issue_id, @other_issue_id] do
-      RunStore.delete_ticket_state(@repo_key, id)
-      on_exit(fn -> RunStore.delete_ticket_state(@repo_key, id) end)
+      RunStore.delete_ticket_state(id)
+      on_exit(fn -> RunStore.delete_ticket_state(id) end)
     end
 
     on_exit(fn ->
@@ -175,7 +175,7 @@ defmodule SymphonyElixir.EpicReviewTest do
     do: {:ok, %{"data" => %{"issueCreate" => %{"success" => true, "issue" => %{"id" => id, "identifier" => identifier}}}}}
 
   defp verdict_runs do
-    for event <- RunStore.list_ticket_events(@repo_key, @issue_id, types: ["verdict.recorded"]) do
+    for event <- RunStore.list_ticket_events(@issue_id, types: ["verdict.recorded"]) do
       {event.payload.outcome, event.run_id}
     end
   end

@@ -362,12 +362,12 @@ defmodule SymphonyElixir.ReleaseBuild do
   defp decisions(record, issue_id) do
     case Keyword.fetch(Map.get(record, :opts, []), :decisions) do
       {:ok, read} -> read.(record.repo_key, issue_id)
-      :error -> stored_decisions(record.repo_key, issue_id)
+      :error -> stored_decisions(issue_id)
     end
   end
 
-  defp stored_decisions(repo_key, issue_id) do
-    case RunStore.get_ticket_state(repo_key, issue_id) do
+  defp stored_decisions(issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
       %{} = ticket_record -> TicketState.decisions(ticket_record)
       _none -> []
     end

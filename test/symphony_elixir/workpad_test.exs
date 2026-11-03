@@ -38,7 +38,7 @@ defmodule SymphonyElixir.WorkpadTest do
     workspace = Path.join(System.tmp_dir!(), "symphony-workpad-bootstrap")
 
     repo_key = "repo-workpad-claim"
-    RunStore.delete_ticket_state(repo_key, "issue-workpad-bootstrap")
+    RunStore.delete_ticket_state("issue-workpad-bootstrap")
 
     issue = %Issue{
       id: "issue-workpad-bootstrap",
@@ -67,7 +67,7 @@ defmodule SymphonyElixir.WorkpadTest do
     assert body =~ "Symphony created this bootstrap workpad before the first agent turn."
 
     assert [%{name: "claim", details: %{from: "Todo", to: "In Progress"}}] =
-             RunStore.get_ticket_state(repo_key, "issue-workpad-bootstrap").signals
+             RunStore.get_ticket_state("issue-workpad-bootstrap").signals
   end
 
   test "bootstrap returns an error when the Todo state update fails" do

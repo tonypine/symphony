@@ -914,10 +914,10 @@ defmodule SymphonyElixir.CoreTest do
     assert updated_state.running == %{}
 
     assert [%{payload: %{run_id: "run-issue-stopped-run-ended", run_kind: "ci_fix", exit: "stopped: its ticket moved to Backlog"}}] =
-             SymphonyElixir.TicketEvents.query("default", issue_id) |> Enum.filter(&(&1.type == "run.ended"))
+             SymphonyElixir.TicketEvents.query(issue_id) |> Enum.filter(&(&1.type == "run.ended"))
 
     # A review run records no run.ended, as on its DOWN.
-    assert SymphonyElixir.TicketEvents.query("default", "issue-stopped-review") |> Enum.filter(&(&1.type == "run.ended")) == []
+    assert SymphonyElixir.TicketEvents.query("issue-stopped-review") |> Enum.filter(&(&1.type == "run.ended")) == []
   end
 
   test "seed_watching_for_test populates watching from completed_run_metadata" do
@@ -1759,10 +1759,10 @@ defmodule SymphonyElixir.CoreTest do
 
       :ok = SymphonyElixir.TicketPullRequest.record_created("designed-repo", issue_id, pr_url, nil)
 
-      RunStore.delete_ticket_state("designed-repo", issue_id)
+      RunStore.delete_ticket_state(issue_id)
 
       on_exit(fn ->
-        RunStore.delete_ticket_state("designed-repo", issue_id)
+        RunStore.delete_ticket_state(issue_id)
         Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
         Application.delete_env(:symphony_elixir, :memory_tracker_issues)
       end)
@@ -1828,7 +1828,7 @@ defmodule SymphonyElixir.CoreTest do
       assert [%{title: "MT-884's last two runs ended without a handoff", id: question_id}] = SymphonyElixir.Questions.open(ticket)
       assert {:ok, %{reasons: [%{kind: :question, waits_on: %{question_id: ^question_id}}]}} = SymphonyElixir.Pauses.get(ticket)
 
-      record = RunStore.get_ticket_state("designed-repo", issue_id)
+      record = RunStore.get_ticket_state(issue_id)
       assert log =~ "handoff_missing: 2 runs"
       assert [%{name: "handoff_missing", details: %{held: true, quiet_runs: 2}} | _rest] = record.signals
 
@@ -5176,7 +5176,7 @@ defmodule SymphonyElixir.CoreTest do
         repo_key: Config.repo_key!()
       }
 
-      RunStore.delete_ticket_state(Config.repo_key!(), "issue-dep-hold")
+      RunStore.delete_ticket_state("issue-dep-hold")
 
       # The Needs Decision label is the pause projector's to write.
       Application.put_env(:symphony_elixir, :pause_projector, true)
@@ -5202,7 +5202,7 @@ defmodule SymphonyElixir.CoreTest do
       refute_received {:memory_tracker_state_update, "issue-dep-hold", _state}
 
       assert [%{name: "decision requested", details: %{question: true, reason: "dependency_source_requires_approval"}}] =
-               RunStore.get_ticket_state(Config.repo_key!(), "issue-dep-hold").signals
+               RunStore.get_ticket_state("issue-dep-hold").signals
 
       assert_receive {:notification_event,
                       %SymphonyElixir.Notifications.Event{

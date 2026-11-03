@@ -13,8 +13,8 @@ defmodule SymphonyElixir.EpicReview.CiRerunTest do
   @runs "https://github.com/acme/app/actions/runs"
 
   setup do
-    RunStore.delete_ticket_state(@repo_key, @issue_id)
-    on_exit(fn -> RunStore.delete_ticket_state(@repo_key, @issue_id) end)
+    RunStore.delete_ticket_state(@issue_id)
+    on_exit(fn -> RunStore.delete_ticket_state(@issue_id) end)
     :ok
   end
 

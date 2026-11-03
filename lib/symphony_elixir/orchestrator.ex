@@ -49,7 +49,6 @@ defmodule SymphonyElixir.Orchestrator do
     StatusDashboard,
     SubIssueWait,
     TicketEvents,
-    TicketMerge,
     TicketObservation,
     TicketPullRequest,
     TicketSignals,
@@ -282,8 +281,6 @@ defmodule SymphonyElixir.Orchestrator do
     # The ledger's one-time history backfill runs in a task: startup never waits for it. The pause
     # backfill runs in the same task right after it: it reads the events the ledger's backfill writes.
     TicketEvents.Backfill.start(run: &SymphonyElixir.Pauses.Backfill.run_after_ledger/1)
-    # Once: a ticket left with records under two repositories is merged into its one record.
-    TicketMerge.start()
     tick_token = make_ref()
     send(self(), {:tick, tick_token})
     schedule_snapshot_publish(config.observability.snapshot_publish_ms)
@@ -995,7 +992,7 @@ defmodule SymphonyElixir.Orchestrator do
   # commit records its start. A record the store can't read starts no clock, so the review keeps
   # waiting, bounded by the epic review's own limit on a stuck workflow run.
   defp ci_wait(repo_key, issue_id, %{sha: sha}) do
-    record = TicketState.normalize(RunStore.get_ticket_state(repo_key, issue_id))
+    record = TicketState.normalize(RunStore.get_ticket_state(issue_id))
     now = DateTime.utc_now()
 
     case CiWait.since(record.signals, sha) do
@@ -1120,19 +1117,19 @@ defmodule SymphonyElixir.Orchestrator do
       outcome: outcome
     }
 
-    start_tracker_task(state, context, fn -> run_setup_block_heal(Map.get(running_entry, :issue), repo_key, heal_opts) end)
+    start_tracker_task(state, context, fn -> run_setup_block_heal(Map.get(running_entry, :issue), heal_opts) end)
   end
 
-  defp run_setup_block_heal(issue, repo_key, heal_opts) do
+  defp run_setup_block_heal(issue, heal_opts) do
     case SelfHeal.heal(issue, heal_opts) do
-      :filed -> {:filed, fix_ticket_held_on(repo_key, issue.id, heal_opts)}
+      :filed -> {:filed, fix_ticket_held_on(issue.id, heal_opts)}
       other -> other
     end
   end
 
   # The fix ticket self-heal just paused the ticket on, as its bookkeeping names it for the log line.
-  defp fix_ticket_held_on(repo_key, issue_id, opts) do
-    case Keyword.get(opts, :store, RunStore).get_ticket_state(repo_key, issue_id) do
+  defp fix_ticket_held_on(issue_id, opts) do
+    case Keyword.get(opts, :store, RunStore).get_ticket_state(issue_id) do
       %{} = record -> get_in(TicketState.self_heal(record) || %{}, [:fix_ticket]) || "its fix ticket"
       _none -> "its fix ticket"
     end
@@ -5239,7 +5236,7 @@ defmodule SymphonyElixir.Orchestrator do
   # active one, so the revalidation sees whether it moved. No record, or one the filter leaves out,
   # reads as an issue Linear no longer returns.
   defp recorded_dispatch_issue(repo_key, issue_id) do
-    case RunStore.get_ticket_state(repo_key, issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
       %{} = record ->
         settings = Config.settings!()
         record = TicketState.normalize(record)
@@ -5399,7 +5396,7 @@ defmodule SymphonyElixir.Orchestrator do
   # since its last progress, against the `watchdog` limits. A record the store can't read lists no
   # runs, so a store error never stops a dispatch.
   defp dispatch_loop(%Issue{id: issue_id, state: issue_state} = issue, repo_key) do
-    record = TicketState.normalize(RunStore.get_ticket_state(repo_key, issue_id))
+    record = TicketState.normalize(RunStore.get_ticket_state(issue_id))
     kind = AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key).kind
     attempt = %{kind: kind, state: issue_state, head: pr_head(issue_id, repo_key)}
 
@@ -5649,7 +5646,7 @@ defmodule SymphonyElixir.Orchestrator do
   # ticket's earlier runs of the same kind.
   defp record_run_started(repo_key, issue_id, %{kind: kind, run_id: run_id, state: issue_state, head: head}) do
     run_kind = to_string(kind)
-    run_number = length(run_events(repo_key, issue_id, "run.started", &(&1[:run_kind] == run_kind))) + 1
+    run_number = length(run_events(issue_id, "run.started", &(&1[:run_kind] == run_kind))) + 1
     payload = %{run_id: run_id, run_kind: run_kind, run_number: run_number, state: issue_state, head: head}
     TicketSignals.record_event(repo_key, issue_id, "run.started", payload, phase: issue_state, run_id: run_id)
   end
@@ -5659,7 +5656,7 @@ defmodule SymphonyElixir.Orchestrator do
   # records `counted: false`, as its dispatch outcome is dropped.
   defp record_run_ended(repo_key, issue_id, run_id, running_entry, reason) do
     head = pr_head(issue_id, repo_key)
-    started = run_events(repo_key, issue_id, "run.started", &(&1[:run_id] == run_id)) |> List.first() || %{}
+    started = run_events(issue_id, "run.started", &(&1[:run_id] == run_id)) |> List.first() || %{}
 
     payload = %{
       run_id: run_id,
@@ -5674,7 +5671,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     opts = [run_id: run_id, at: DateTime.utc_now()]
 
-    case run_transcript(repo_key, issue_id, run_id, running_entry) do
+    case run_transcript(issue_id, run_id, running_entry) do
       {:ok, path} -> record_run_ended_with_transcript(repo_key, issue_id, path, payload, opts)
       :none -> TicketSignals.record_event(repo_key, issue_id, "run.ended", payload, opts)
     end
@@ -5682,12 +5679,12 @@ defmodule SymphonyElixir.Orchestrator do
 
   # A local Claude Code run's transcript (`Transcript.locate/4`). A run whose end was already
   # recorded keeps it, so a repeated end ingests nothing a second time.
-  defp run_transcript(repo_key, issue_id, run_id, running_entry) do
+  defp run_transcript(issue_id, run_id, running_entry) do
     with nil <- Map.get(running_entry, :worker_host),
          SymphonyElixir.ClaudeCode.AppServer <- Map.get(running_entry, :agent_module),
          {:ok, path} <-
            Transcript.locate(:claude, Map.get(running_entry, :workspace_path), Map.get(running_entry, :session_id), Map.get(running_entry, :transcript_path)),
-         [] <- run_events(repo_key, issue_id, "run.ended", &(&1[:run_id] == run_id)) do
+         [] <- run_events(issue_id, "run.ended", &(&1[:run_id] == run_id)) do
       {:ok, path}
     else
       _none -> :none
@@ -5721,8 +5718,8 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp run_events(repo_key, issue_id, type, keep?) do
-    case RunStore.list_ticket_events(repo_key, issue_id, types: [type]) do
+  defp run_events(issue_id, type, keep?) do
+    case RunStore.list_ticket_events(issue_id, types: [type]) do
       events when is_list(events) -> events |> Enum.map(& &1.payload) |> Enum.filter(keep?)
       {:error, _reason} -> []
     end
@@ -10386,16 +10383,10 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp ticket_ci_state(%Issue{id: issue_id} = issue) when is_binary(issue_id) do
-    case issue_repo_key(issue) do
-      nil ->
-        nil
-
-      repo_key ->
-        case RunStore.get_ticket_state(repo_key, issue_id) do
-          %{} = record -> TicketState.current_ci_state(record)
-          _none_or_error -> nil
-        end
+  defp ticket_ci_state(%Issue{id: issue_id}) when is_binary(issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
+      %{} = record -> TicketState.current_ci_state(record)
+      _none_or_error -> nil
     end
   end
 
@@ -10485,7 +10476,7 @@ defmodule SymphonyElixir.Orchestrator do
   # recorded once per head rather than on every poll tick.
   defp latest_head_signal?(%Issue{id: issue_id} = issue, name, head) when is_binary(issue_id) do
     with repo_key when is_binary(repo_key) <- issue_repo_key(issue),
-         %{} = record <- RunStore.get_ticket_state(repo_key, issue_id) do
+         %{} = record <- RunStore.get_ticket_state(issue_id) do
       case TicketState.recent_signals(record, 1) do
         [%{name: ^name, details: details}] -> Map.get(details, :head) == head
         _signals -> false
