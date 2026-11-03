@@ -168,13 +168,16 @@ defmodule SymphonyElixir.TicketEvents.Summary do
 
   defp summary("workspace.rebuilt", payload, _event) do
     heads =
-      [{"PR", :pr_head}, {"branch", :branch_head}, {"recorded", :recorded_head}]
+      [{"PR", :pr_head}, {"branch", :branch_head}, {"recorded", :recorded_head}, {"local", :local_head}]
       |> Enum.flat_map(fn {label, key} -> if sha = short_sha(text(payload, key)), do: ["#{label} #{sha}"], else: [] end)
       |> Enum.join(", ")
 
     title = rebuilt_title(text(payload, :winner), short_sha(text(payload, :head)))
-    {title, present([rebuilt_reason(text(payload, :reason)), heads])}
+    orphaned = if sha = short_sha(text(payload, :orphaned_head)), do: "Its local branch head #{sha} is kept under refs/symphony/orphaned"
+    {title, present([rebuilt_reason(text(payload, :reason)), heads, orphaned])}
   end
+
+  defp summary("workspace.removed", payload, _event), do: {"Workspace removed", [removed_reason(text(payload, :reason))]}
 
   defp summary("note", payload, _event), do: {"Note added", [text(payload, :text)]}
   defp summary(_type, _payload, _event), do: :unknown
@@ -278,11 +281,20 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp rebuilt_title("pull_request", head), do: "Workspace rebuilt on the PR head" <> suffix(" ", head)
   defp rebuilt_title("branch", head), do: "Workspace rebuilt on the branch head" <> suffix(" ", head)
   defp rebuilt_title("recorded", head), do: "Workspace rebuilt on a run's unpushed head" <> suffix(" ", head)
+  defp rebuilt_title("local", head), do: "Workspace rebuilt on its local branch head" <> suffix(" ", head)
   defp rebuilt_title(_main, _head), do: "Workspace rebuilt from main: the ticket has no branch yet"
 
   defp rebuilt_reason("reclaim"), do: "Its old workspace was reclaimed"
+  defp rebuilt_reason("stop"), do: "Its workspace was removed when its run was stopped"
+  defp rebuilt_reason("terminal"), do: "Its workspace was removed when it reached a terminal state"
+  defp rebuilt_reason("cleanup"), do: "Symphony removed its workspace"
   defp rebuilt_reason("host_change"), do: "Its last run was on another host"
   defp rebuilt_reason(_missing), do: "Its workspace folder was missing"
+
+  defp removed_reason("age_gc"), do: "The age GC reclaimed it"
+  defp removed_reason("stop"), do: "Its run was stopped"
+  defp removed_reason("terminal"), do: "The ticket reached a terminal state"
+  defp removed_reason(_cleanup), do: "Symphony cleaned it up"
 
   defp short_sha(nil), do: nil
   defp short_sha(sha), do: String.slice(sha, 0, 7)

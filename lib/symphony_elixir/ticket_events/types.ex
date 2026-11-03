@@ -354,11 +354,20 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:machine],
       run_kinds: [],
       required: [
-        reason: {:enum, ~w(reclaim missing_folder host_change)},
+        reason: {:enum, ~w(reclaim stop terminal cleanup missing_folder host_change)},
         branch: :string,
-        winner: {:enum, ~w(pull_request branch recorded main)}
+        winner: {:enum, ~w(pull_request branch recorded local main)}
       ],
-      optional: [head: :string, pr_head: :string, branch_head: :string, recorded_head: :string] ++ @signal,
+      optional:
+        [head: :string, pr_head: :string, branch_head: :string, recorded_head: :string] ++
+          [local_head: :string, orphaned_head: :string] ++ @signal,
+      idempotency: :writer
+    },
+    "workspace.removed" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [reason: {:enum, ~w(age_gc stop terminal cleanup)}],
+      optional: @signal,
       idempotency: :writer
     },
     "note" => %{

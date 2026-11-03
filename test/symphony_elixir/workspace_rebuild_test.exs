@@ -74,6 +74,32 @@ defmodule SymphonyElixir.WorkspaceRebuildTest do
       assert summary.title == "Workspace rebuilt on the PR head #{String.slice(pr_head, 0, 7)}"
       assert summary.detail =~ "Its workspace folder was missing"
     end
+
+    test "keeps a crashed run's commit that only its local branch holds", ctx do
+      issue = %Issue{id: "issue-crashed", identifier: "TP-89", title: "Continue it", state: "In Progress"}
+
+      capture_log(fn -> assert :ok = run(issue, "run-1") end)
+      assert_received {:turn_on, workspace, _main}
+
+      commit!(workspace, "the run's work")
+      pr_head = git!(workspace, ["rev-parse", "HEAD"])
+      git!(workspace, ["push", "-q", "origin", "HEAD:refs/heads/auto/TP-89", "HEAD:refs/pull/89/head"])
+      :ok = TicketPullRequest.put(ctx.repo_key, issue.id, %{pr_url: "https://github.com/acme/repo/pull/89"})
+      # The run crashed after committing: no run.ended names this head.
+      crashed = commit!(workspace, "committed, never pushed")
+      put_run(ctx, issue, "run-1", ended_at: DateTime.utc_now())
+
+      File.rm_rf!(workspace)
+
+      capture_log(fn -> assert :ok = run(issue, "run-2") end)
+
+      assert_received {:turn_on, ^workspace, ^crashed}
+
+      assert [%{payload: %{winner: "local", head: ^crashed, local_head: ^crashed, pr_head: ^pr_head}, summary: summary}] =
+               TicketEvents.query(issue.id, types: ["workspace.rebuilt"])
+
+      assert summary.title == "Workspace rebuilt on its local branch head #{String.slice(crashed, 0, 7)}"
+    end
   end
 
   describe "choose/2" do
@@ -82,9 +108,75 @@ defmodule SymphonyElixir.WorkspaceRebuildTest do
       pr_head = push_branch!(ctx, "auto/TP-91", ["work"], pr: 91)
       put_pr(ctx, issue, 91)
       put_run(ctx, issue, "old-run", ended_at: DateTime.add(DateTime.utc_now(), -30 * 86_400))
+      :ok = RunStore.put_run(%{repo_key: ctx.repo_key, run_id: "run-without-issue", started_at: DateTime.utc_now()})
+
+      assert :ok =
+               WorkspaceRebuild.record_reclaims([
+                 %{action: :deleted, reason: :age_gc, repo_key: ctx.repo_key, identifier: "TP-91"},
+                 %{action: :deleted, reason: :age_gc, repo_key: " ", identifier: "TP-91"},
+                 %{action: :deleted, reason: :age_gc, repo_key: ctx.repo_key, identifier: "TP-NO-RUN"},
+                 %{action: :failed, reason: :age_gc, repo_key: ctx.repo_key, identifier: "TP-91"}
+               ])
+
+      assert [%{payload: %{reason: "age_gc"}, summary: %{title: "Workspace removed", detail: "The age GC reclaimed it"}}] =
+               TicketEvents.query(issue.id, types: ["workspace.removed"])
 
       assert {:ok, %{reason: :reclaim, winner: :pull_request, head: ^pr_head}} = choose(issue)
       assert [%{payload: %{reason: "reclaim", winner: "pull_request"}}] = TicketEvents.query(issue.id, types: ["workspace.rebuilt"])
+    end
+
+    test "a Stop's or a terminal state's removal names itself, never a missing folder", ctx do
+      issue = issue("TP-104")
+      pr_head = push_branch!(ctx, "auto/TP-104", ["work"], pr: 104)
+      put_pr(ctx, issue, 104)
+      put_run(ctx, issue, "run-a", ended_at: DateTime.utc_now())
+
+      :ok = WorkspaceRebuild.record_removal(ctx.repo_key, issue.id, :stop)
+      assert {:ok, %{reason: :stop, head: ^pr_head}} = choose(issue)
+
+      :ok = WorkspaceRebuild.record_removal(ctx.repo_key, issue.id, :terminal)
+      assert {:ok, %{reason: :terminal}} = choose(issue)
+
+      :ok = WorkspaceRebuild.record_removal(ctx.repo_key, issue.id, nil)
+      assert {:ok, %{reason: :cleanup}} = choose(issue)
+
+      assert ["Its workspace was removed when its run was stopped", "Its workspace was removed when it reached a terminal state", "Symphony removed its workspace"] =
+               issue.id |> TicketEvents.query(types: ["workspace.rebuilt"]) |> Enum.map(&(&1.summary.detail |> String.split(" · ") |> hd()))
+
+      assert ["Its run was stopped", "The ticket reached a terminal state", "Symphony cleaned it up"] =
+               issue.id |> TicketEvents.query(types: ["workspace.removed"]) |> Enum.map(& &1.summary.detail)
+
+      # A removal before the previous run started was made good by that run.
+      put_run(ctx, issue, "run-b", ended_at: DateTime.add(DateTime.utc_now(), 3_600))
+      assert {:ok, %{reason: :missing_folder}} = choose(issue)
+
+      assert :ok = WorkspaceRebuild.record_removal(ctx.repo_key, nil, :stop)
+    end
+
+    test "a local branch head that diverged from the chosen one is kept under refs/symphony/orphaned", ctx do
+      issue = issue("TP-105")
+      pr_head = push_branch!(ctx, "auto/TP-105", ["work"], pr: 105)
+      put_pr(ctx, issue, 105)
+      local = local_commit!(ctx, ctx.main, "crashed run's other work")
+      git!(ctx.primary, ["branch", "auto/TP-105", local])
+
+      assert {:ok, %{winner: :pull_request, head: ^pr_head, local_head: ^local, orphaned_head: ^local}} = choose(issue)
+      assert git!(ctx.primary, ["rev-parse", "refs/symphony/orphaned/#{local}"]) == local
+
+      assert [%{summary: %{detail: detail}}] = TicketEvents.query(issue.id, types: ["workspace.rebuilt"])
+      assert detail =~ "local #{String.slice(local, 0, 7)}"
+      assert detail =~ "Its local branch head #{String.slice(local, 0, 7)} is kept under refs/symphony/orphaned"
+    end
+
+    test "a local branch head behind the chosen one is not kept", ctx do
+      issue = issue("TP-106")
+      first = push_branch!(ctx, "auto/TP-106", ["work"])
+      git!(ctx.primary, ["fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*"])
+      git!(ctx.primary, ["branch", "auto/TP-106", first])
+      pr_head = push_branch!(ctx, "auto/TP-106", ["a person's push"], pr: 106, from: first)
+      put_pr(ctx, issue, 106)
+
+      assert {:ok, %{winner: :pull_request, head: ^pr_head, local_head: ^first, orphaned_head: nil}} = choose(issue)
     end
 
     test "a ticket whose last run was on another host is a host change", ctx do
@@ -181,13 +273,18 @@ defmodule SymphonyElixir.WorkspaceRebuildTest do
       put_run(ctx, issue, "run-a", ended_at: DateTime.utc_now())
       {:ok, _event} = TicketEvents.record(ctx.repo_key, issue.id, "person.action", %{action: "restart"}, actor: %{kind: "person", name: "Tony"})
 
-      assert {:ok, %{winner: :main, branch_head: nil, recorded_head: nil}} = choose(issue)
+      # The first workspace after a Restart starts over: no rebuild, no "folder was missing".
+      assert :not_rebuilt = choose(issue)
+      assert WorkspaceRebuild.start(issue, opts()) == issue
+      assert TicketEvents.query(issue.id, types: ["workspace.rebuilt"]) == []
 
-      # Once a run pushed the new attempt, the branch is the ticket's again.
+      # Once a later run pushed the new attempt, the branch is the ticket's again; the old recorded
+      # head still doesn't count.
       fresh = push_branch!(ctx, "auto/TP-99", ["new attempt"], from: ctx.main, force: true)
       TicketSignals.record_event(ctx.repo_key, issue.id, "attempt.pushed", %{head: fresh})
+      put_run(ctx, issue, "run-b", ended_at: DateTime.add(DateTime.utc_now(), 3_600))
 
-      assert {:ok, %{winner: :branch, head: ^fresh}} = choose(issue)
+      assert {:ok, %{winner: :branch, head: ^fresh, recorded_head: nil, reason: :missing_folder}} = choose(issue)
     end
 
     test "is not a rebuild for a kept workspace, an SSH worker or a clone workspace", ctx do
@@ -204,20 +301,6 @@ defmodule SymphonyElixir.WorkspaceRebuildTest do
       clone = %{settings | workspace: %{settings.workspace | strategy: "clone"}}
       assert :not_rebuilt = WorkspaceRebuild.choose(issue, opts(settings: clone))
       assert :not_rebuilt = WorkspaceRebuild.choose(issue, repo_key: ctx.repo_key)
-    end
-
-    test "a workspace made again with no lifecycle settings is a missing folder", ctx do
-      issue = issue("TP-101")
-      branch_head = push_branch!(ctx, "auto/TP-101", ["work"])
-      put_run(ctx, issue, "run-a", ended_at: DateTime.add(DateTime.utc_now(), -30 * 86_400))
-      settings = Config.settings!()
-      lifecycle = %{settings.workspace.lifecycle | age_gc_enabled: false}
-      no_gc = %{settings | workspace: %{settings.workspace | lifecycle: lifecycle}}
-
-      assert {:ok, %{reason: :missing_folder, head: ^branch_head}} = WorkspaceRebuild.choose(issue, opts(settings: no_gc))
-
-      no_lifecycle = %{settings | workspace: Map.delete(Map.from_struct(settings.workspace), :lifecycle)}
-      assert {:ok, %{reason: :missing_folder}} = WorkspaceRebuild.choose(issue, opts(settings: no_lifecycle))
     end
   end
 

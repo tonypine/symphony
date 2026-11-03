@@ -65,6 +65,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
      %{title: "Workspace reset to the PR head bbb2222", detail: "workspace aaa1111, PR bbb2222"}},
     {"workspace.rebuilt", %{reason: "missing_folder", branch: "auto/TP-1", winner: "pull_request", head: "bbb2222bbbb", pr_head: "bbb2222bbbb", branch_head: "aaa1111aaaa"}, [],
      %{title: "Workspace rebuilt on the PR head bbb2222", detail: "Its workspace folder was missing · PR bbb2222, branch aaa1111"}},
+    {"workspace.removed", %{reason: "age_gc"}, [], %{title: "Workspace removed", detail: "The age GC reclaimed it"}},
     {"note", %{text: "History before 2026-10-20 was backfilled"}, [], %{title: "Note added", detail: "History before 2026-10-20 was backfilled"}}
   ]
 
@@ -148,6 +149,21 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
 
     assert render("workspace.rebuilt", %{reason: "missing_folder", winner: "main"}) ==
              %{title: "Workspace rebuilt from main: the ticket has no branch yet", detail: "Its workspace folder was missing"}
+
+    assert render("workspace.rebuilt", %{reason: "stop", winner: "local", head: "ddd4444dddd", local_head: "ddd4444dddd"}) ==
+             %{title: "Workspace rebuilt on its local branch head ddd4444", detail: "Its workspace was removed when its run was stopped · local ddd4444"}
+
+    assert render("workspace.rebuilt", %{reason: "terminal", winner: "pull_request", head: "bbb2222bbbb", pr_head: "bbb2222bbbb", orphaned_head: "eee5555eeee"}) ==
+             %{
+               title: "Workspace rebuilt on the PR head bbb2222",
+               detail: "Its workspace was removed when it reached a terminal state · PR bbb2222 · Its local branch head eee5555 is kept under refs/symphony/orphaned"
+             }
+
+    assert render("workspace.rebuilt", %{reason: "cleanup", winner: "main"}).detail == "Symphony removed its workspace"
+
+    for {reason, detail} <- [{"stop", "Its run was stopped"}, {"terminal", "The ticket reached a terminal state"}, {"cleanup", "Symphony cleaned it up"}] do
+      assert render("workspace.removed", %{reason: reason}) == %{title: "Workspace removed", detail: detail}
+    end
   end
 
   test "a pause reason's line keeps the capital of a name it opens on" do
