@@ -253,6 +253,18 @@ The held ticket's line says what the build is at: "Waiting for the v0.0.1.750 bu
 fix: queued on GitHub for 23 min; cancelled for lack of a machine, rerun 1 of 2". Once the build is
 published, the line is the update hold's own again.
 
+Every merge to `main` of Symphony's own repository is watched too, held ticket or not (TP-1340): the
+running app carries every fix merged since its build. The poll reads the newest `release` push run on
+`main` at most once a minute, and a `workflow_run` delivery of that workflow on `main` checks its
+commit at once. The same rules apply; with no held ticket to ask, a third cancellation or a failure is
+logged with the commit and the run, pauses nothing, and the Director's update line says it stopped
+("The v0.0.1.785 build: cancelled for lack of a machine 3 times; Symphony stopped rerunning it").
+
+A run cancelled before any job started while a newer `release` run on `main` exists was replaced, not
+starved: the workflow's concurrency group cancels an older pending run once a newer push queues behind
+a running release. Symphony never reruns it, never counts it toward the stop line and never asks about
+it; rerunning it would cancel the newer run in turn and could publish an older build after a newer one.
+
 ## What the watcher does
 
 Every read first applies the upkeep the facts call for, then decides and applies the flow action

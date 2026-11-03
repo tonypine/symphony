@@ -98,18 +98,29 @@ defmodule SymphonyElixirWeb.WatchPayload do
   `build_line` says what the release build those tickets wait for is at while it isn't published
   (`SymphonyElixir.ReleaseBuild.line/3`: "Waiting for the v0.0.1.750 build: queued on GitHub for 23
   min"), nil otherwise; the app shows it in place of its update line.
+
+  `latest_build` is the build of the newest merge to `main` Symphony watched, held ticket or not
+  (`SymphonyElixir.ReleaseBuild.latest_build/1`): its commit, version, state (`queued`,
+  `running`, `built`, `cancelled`, `asked`, `waiting`, `failed` or `not_started`), since when it
+  waits in GitHub's queue, the reruns Symphony sent, the run's page and its line; nil until one was
+  watched. With no ticket held, `build_line` is that build's line ("The v0.0.1.785 build: queued on
+  GitHub for 12 min"), so the Director says what the newest build is at while nothing waits on it.
   """
-  @spec app_update([map()], SymphonyElixir.PrWatch.Release.t() | nil) :: map()
-  def app_update(blocked, release) do
+  @spec app_update([map()], SymphonyElixir.PrWatch.Release.t() | nil, map() | nil) :: map()
+  def app_update(blocked, release, latest_build \\ nil) do
     held = for %{kind: :app_update} = entry <- blocked, do: entry
 
     %{
       unblocks: length(held),
       issue_identifiers: Enum.map(held, & &1.identifier),
       latest_release: latest_release(release),
-      build_line: Enum.find_value(held, &Map.get(&1, :build_line))
+      build_line: Enum.find_value(held, &Map.get(&1, :build_line)) || if(held == [], do: latest_build[:line]),
+      latest_build: latest_build_payload(latest_build)
     }
   end
+
+  defp latest_build_payload(%{} = build), do: %{build | since: iso8601(build.since)}
+  defp latest_build_payload(nil), do: nil
 
   defp latest_release(%{} = release),
     do: %{repo: release.repo, tag: release.tag, published_at: iso8601(release.published_at), source: release.source}

@@ -114,7 +114,12 @@ final class StatusMenuTests: XCTestCase {
             StatusMenu.detailLines(.running(building, external: false)),
             ["2 running · 1 retrying", "Waiting for the v0.0.1.750 build: queued on GitHub for 23 min"]
         )
-        XCTAssertNil(StatusMenu.updateLine(StateSnapshot(running: 0, updateBuildLine: "Waiting for the v0.0.1.750 build")))
+        // With no ticket held, the newest merge's build still says what it is at.
+        XCTAssertEqual(
+            StatusMenu.updateLine(StateSnapshot(running: 0, updateBuildLine: "The v0.0.1.785 build: queued on GitHub for 12 min")),
+            "The v0.0.1.785 build: queued on GitHub for 12 min"
+        )
+        XCTAssertNil(StatusMenu.updateLine(StateSnapshot(running: 0)))
     }
 
     func testDetailLinesLeaveWhatWaitsOnYouToItsItems() {

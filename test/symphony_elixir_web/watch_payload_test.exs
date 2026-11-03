@@ -148,12 +148,31 @@ defmodule SymphonyElixirWeb.WatchPayloadTest do
         recorded_at: @at
       }
 
+      latest_build = %{
+        sha: "9f54098b96666e6e233247d53fc995c3b293c4f2",
+        version: "0.0.1.750",
+        state: "queued",
+        since: ~U[2026-10-16 08:02:00Z],
+        reruns: 1,
+        url: "https://github.com/tonypine/symphony/actions/runs/41086214847",
+        line: "The v0.0.1.750 build: queued on GitHub for 23 min; cancelled for lack of a machine, rerun 1 of 2"
+      }
+
       contract = @app_update_fixture |> File.read!() |> Jason.decode!()
-      assert json(WatchPayload.app_update(@blocked, release)) == contract
+      assert json(WatchPayload.app_update(@blocked, release, latest_build)) == contract
+    end
+
+    test "with no ticket held, the build line is the newest merge's build" do
+      latest_build = %{sha: "9f54098b", version: "0.0.1.785", state: "queued", since: nil, reruns: 0, url: nil, line: "The v0.0.1.785 build: queued on GitHub for 12 min"}
+
+      assert %{unblocks: 0, build_line: "The v0.0.1.785 build: queued on GitHub for 12 min", latest_build: %{state: "queued", since: nil}} =
+               WatchPayload.app_update([], nil, latest_build)
+
+      assert %{build_line: "Waiting for the v0.0.1.750 build: queued on GitHub for 23 min"} = WatchPayload.app_update(@blocked, nil, latest_build)
     end
 
     test "no release is null, and a release without a publish time keeps its tag" do
-      empty = %{unblocks: 0, issue_identifiers: [], latest_release: nil, build_line: nil}
+      empty = %{unblocks: 0, issue_identifiers: [], latest_release: nil, build_line: nil, latest_build: nil}
       assert WatchPayload.app_update([], nil) == empty
 
       release = %{repo: "tonypine/symphony", tag: "v2", published_at: nil, etag: nil, source: :poll, recorded_at: @at}

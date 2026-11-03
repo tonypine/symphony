@@ -7,5 +7,14 @@
     "tag": "v0.0.1.583",
     "published_at": "2026-10-16T08:00:00Z",
     "source": "webhook"
+  },
+  "latest_build": {
+    "sha": "9f54098b96666e6e233247d53fc995c3b293c4f2",
+    "version": "0.0.1.750",
+    "state": "queued",
+    "since": "2026-10-16T08:02:00Z",
+    "reruns": 1,
+    "url": "https://github.com/tonypine/symphony/actions/runs/41086214847",
+    "line": "The v0.0.1.750 build: queued on GitHub for 23 min; cancelled for lack of a machine, rerun 1 of 2"
   }
 }
