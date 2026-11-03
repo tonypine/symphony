@@ -117,4 +117,57 @@ defmodule SymphonyElixir.CiWaitPauseTest do
       assert :ok = CiWait.clear_pause(nil, "issue-1")
     end
   end
+
+  defmodule DownStore do
+    def list_all_ticket_states, do: {:error, :store_down}
+  end
+
+  defmodule RefusingPauses do
+    def clear_reasons(_subject, _match, _opts), do: {:error, :store_down}
+  end
+
+  describe "finished/2: CI completing on the commit lifts the pause (TP-1376)" do
+    test "lifts the CI wait of every ticket paused on the commit, by the CI-wait rule, and frees it to dispatch" do
+      :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records()
+      {:ok, _pause} = CiWait.pause("default", "issue-1", @sha)
+      {:ok, _pause} = CiWait.pause("other", "issue-2", @sha)
+      {:ok, _pause} = Pauses.set({:ticket, "other", "issue-2"}, Pauses.ticket_reason(:dependency, "TP-9"))
+      assert_receive {:ticket_record, "default", "issue-1", :changed, [:pause]}
+
+      assert Enum.sort(CiWait.finished(String.upcase(@sha))) == ["issue-1", "issue-2"]
+
+      assert {:ok, nil} = Pauses.get(@ticket)
+      assert_receive {:ticket_record, "default", "issue-1", :changed, [:pause]}
+      assert [%{payload: %{by: %{kind: :rule, name: "CI wait"}}}] = RunStore.list_ticket_events("issue-1", types: ["pause.cleared"])
+      assert {:ok, %{reasons: [%{kind: :ticket}]}} = Pauses.get({:ticket, "other", "issue-2"})
+    end
+
+    test "a completion on another commit changes nothing" do
+      {:ok, _pause} = CiWait.pause("default", "issue-1", @sha)
+      backfilled = %{kind: :environment, waits_on: %{condition: "ci_wait: CI on 26758a247155 was still running"}, text: "ci_wait: CI on 26758a247155 was still running", releasable: true}
+      {:ok, _pause} = Pauses.set({:ticket, "default", "issue-3"}, backfilled, backfilled: true)
+
+      assert CiWait.finished("080052c11496888fa903ce619291821de45eaa7a2") == []
+      assert CiWait.finished(@sha) == ["issue-1"]
+      assert Pauses.paused?({:ticket, "default", "issue-3"})
+      assert CiWait.finished(nil) == []
+      assert CiWait.finished("") == []
+    end
+
+    test "Unblock still lifts it before CI completes" do
+      {:ok, _pause} = CiWait.pause("default", "issue-1", @sha)
+      assert :ok = CiWait.clear_pause("default", "issue-1", @director)
+      assert {:ok, nil} = Pauses.get(@ticket)
+      assert CiWait.finished(@sha) == []
+    end
+
+    test "a store that can't be read lifts nothing, and a pause that can't be cleared is logged" do
+      assert CiWait.finished(@sha, run_store: DownStore) == []
+
+      {:ok, _pause} = CiWait.pause("default", "issue-1", @sha)
+      log = ExUnit.CaptureLog.capture_log(fn -> assert CiWait.finished(@sha, pauses: RefusingPauses) == [] end)
+      assert log =~ "the CI wait of issue_id=issue-1 could not be lifted: :store_down"
+      assert Pauses.paused?(@ticket)
+    end
+  end
 end
