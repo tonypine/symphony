@@ -103,11 +103,14 @@ defmodule SymphonyElixir.RunStore do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
+  # The store's name is registered before `init/1` has created its tables, so a caller that finds
+  # the store still starting waits for it (`handle_call(:ready, ...)` answers once `init/1` is
+  # done); a store that finished starting is marked ready, and is not asked again.
   @spec ensure_started() :: :ok | {:error, term()}
   def ensure_started do
     case Process.whereis(__MODULE__) do
       pid when is_pid(pid) ->
-        :ok
+        await_ready(pid)
 
       _ ->
         case start_link([]) do
@@ -115,6 +118,18 @@ defmodule SymphonyElixir.RunStore do
           {:error, {:already_started, _pid}} -> :ok
           {:error, reason} -> {:error, reason}
         end
+    end
+  end
+
+  defp await_ready(pid) do
+    if pid == self() or :persistent_term.get({__MODULE__, :ready}, nil) == pid do
+      :ok
+    else
+      try do
+        GenServer.call(pid, :ready, :infinity)
+      catch
+        :exit, _reason -> ensure_started()
+      end
     end
   end
 
@@ -1754,8 +1769,12 @@ defmodule SymphonyElixir.RunStore do
         build_run_index()
 
         case contract_ticket_key() do
-          :ok -> {:ok, %State{dir: dir}}
-          {:error, reason} -> {:stop, reason}
+          :ok ->
+            :persistent_term.put({__MODULE__, :ready}, self())
+            {:ok, %State{dir: dir}}
+
+          {:error, reason} ->
+            {:stop, reason}
         end
 
       {:error, reason} ->
@@ -3058,6 +3077,9 @@ defmodule SymphonyElixir.RunStore do
 
   defp unwrap_nested_error({:error, reason}), do: {:error, reason}
   defp unwrap_nested_error(other), do: other
+
+  @impl true
+  def handle_call(:ready, _from, state), do: {:reply, :ok, state}
 
   @impl true
   def terminate(reason, %State{dir: dir}) do

@@ -48,6 +48,14 @@ defmodule SymphonyElixir.Linear.Adapter do
   }
   """
 
+  @update_priority_mutation """
+  mutation SymphonyUpdateIssuePriority($issueId: String!, $priority: Int!) {
+    issueUpdate(id: $issueId, input: {priority: $priority}) {
+      success
+    }
+  }
+  """
+
   # The issue's own labels with this name, and every label with this name that the issue's team or
   # the whole workspace defines.
   @issue_label_lookup_query """
@@ -468,6 +476,22 @@ defmodule SymphonyElixir.Linear.Adapter do
       _ -> {:error, :issue_update_failed}
     end
   end
+
+  @doc "Sets the issue's priority to Linear's number for it (0 none, 1 urgent, 2 high, 3 medium, 4 low)."
+  @spec update_issue_priority(String.t(), 0..4) :: :ok | {:error, term()}
+  def update_issue_priority(issue_id, priority) when is_binary(issue_id) and priority in 0..4 do
+    variables = %{issueId: issue_id, priority: priority}
+
+    with {:ok, response} <- client_module().graphql(@update_priority_mutation, variables),
+         true <- get_in(response, ["data", "issueUpdate", "success"]) == true do
+      :ok
+    else
+      {:error, reason} -> {:error, reason}
+      _failed -> {:error, :issue_update_failed}
+    end
+  end
+
+  def update_issue_priority(_issue_id, _priority), do: {:error, :invalid_issue_priority}
 
   @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
   def update_issue_state(issue_id, state_name)

@@ -98,6 +98,43 @@ defmodule SymphonyElixir.Tracker.MemoryIssuesFileTest do
     Application.delete_env(:symphony_elixir, :memory_tracker_add_blocked_by_result)
   end
 
+  test "a priority is written into the issues file and read back as the issue's priority", %{issues_file: issues_file} do
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+    assert {:ok, %Issue{priority: nil}} = Memory.fetch_issue_by_identifier("QA-1")
+
+    # Through the tracker boundary, as the Director's move writes it.
+    assert Tracker.update_issue_priority("issue-1", 4) == :ok
+    assert_received {:memory_tracker_priority_updated, "issue-1", 4}
+    assert [%{"priority" => 4}, other] = Jason.decode!(File.read!(issues_file))
+    refute Map.has_key?(other, "priority")
+    assert {:ok, %Issue{priority: 4}} = Memory.fetch_issue_by_identifier("QA-1")
+
+    # A scripted failure writes nothing.
+    Application.put_env(:symphony_elixir, :memory_tracker_update_issue_priority_result, [{:error, :boom}])
+    assert Memory.update_issue_priority("issue-1", 1) == {:error, :boom}
+    assert {:ok, %Issue{priority: 4}} = Memory.fetch_issue_by_identifier("QA-1")
+  after
+    Application.delete_env(:symphony_elixir, :memory_tracker_update_issue_priority_result)
+  end
+
+  test "a scripted plan-comments error is answered as it is" do
+    Application.put_env(:symphony_elixir, :memory_tracker_plan_comments, {:error, :boom})
+    assert Memory.fetch_plan_comments("issue-1") == {:error, :boom}
+  after
+    Application.delete_env(:symphony_elixir, :memory_tracker_plan_comments)
+  end
+
+  test "with issues set in the environment, a priority edits the issue there" do
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+      %Issue{id: "issue-1", identifier: "QA-1", state: "Todo", priority: 4},
+      %Issue{id: "issue-2", identifier: "QA-2", state: "Todo", priority: 3}
+    ])
+
+    assert Memory.update_issue_priority("issue-1", 1) == :ok
+    assert {:ok, %Issue{priority: 1}} = Memory.fetch_issue_by_identifier("QA-1")
+    assert {:ok, %Issue{priority: 3}} = Memory.fetch_issue_by_identifier("QA-2")
+  end
+
   test "with issues set in the environment, a blocked-by link edits the issue's blockers there" do
     issues = [
       %Issue{id: "issue-1", identifier: "QA-1", state: "Todo", blocked_by: [%{id: "issue-3", identifier: "QA-3", state: "Done"}]},

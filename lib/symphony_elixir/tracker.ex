@@ -98,6 +98,7 @@ defmodule SymphonyElixir.Tracker do
   @callback projects_and_teams() :: {:ok, projects_and_teams()} | {:error, term()}
   @callback add_blocked_by(String.t(), String.t()) :: :ok | {:error, term()}
   @callback remove_blocked_by(String.t(), String.t()) :: :ok | {:error, term()}
+  @callback update_issue_priority(String.t(), 0..4) :: :ok | {:error, term()}
 
   @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   def fetch_candidate_issues do
@@ -287,6 +288,14 @@ defmodule SymphonyElixir.Tracker do
   @spec remove_blocked_by(String.t(), String.t()) :: :ok | {:error, term()}
   def remove_blocked_by(blocker, blocked_issue_id) when is_binary(blocker) and is_binary(blocked_issue_id),
     do: adapter().remove_blocked_by(blocker, blocked_issue_id)
+
+  @doc """
+  Sets the priority of the issue `issue_id` (an id) to Linear's number for it: 0 none, 1 urgent,
+  2 high, 3 medium, 4 low. The Director's set-priority move (`SymphonyElixir.DirectorPriority`).
+  """
+  @spec update_issue_priority(String.t(), 0..4) :: :ok | {:error, term()}
+  def update_issue_priority(issue_id, priority) when is_binary(issue_id) and priority in 0..4,
+    do: adapter().update_issue_priority(issue_id, priority)
 
   @spec adapter() :: module()
   def adapter do

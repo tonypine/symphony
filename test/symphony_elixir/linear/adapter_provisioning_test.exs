@@ -23,7 +23,8 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
       {"SymphonyCreateIssue", :create_issue},
       {"SymphonyIssueId", :issue_id},
       {"SymphonyBlockerRelations", :blocker_relations},
-      {"SymphonyDeleteIssueRelation", :delete_issue_relation}
+      {"SymphonyDeleteIssueRelation", :delete_issue_relation},
+      {"SymphonyUpdateIssuePriority", :update_issue_priority}
     ]
 
     def graphql(query, variables) do
@@ -31,6 +32,7 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
         {_operation, :create_workflow_state} -> create_workflow_state(query, variables)
         {_operation, :create_issue} -> create_issue(variables)
         {_operation, :delete_issue_relation} -> delete_issue_relation(variables)
+        {_operation, :update_issue_priority} -> update_issue_priority(variables)
         {_operation, key} when key in [:team_workflow_states, :team_labels] -> team_read(key, query, variables)
         {_operation, key} -> result(key, default(key))
         nil -> flunk("unexpected query: #{query}")
@@ -85,6 +87,7 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
     defp default(:create_issue), do: created_issue()
     defp default(:issue_id), do: %{"data" => %{"issue" => %{"id" => "blocker-id"}}}
     defp default(:delete_issue_relation), do: %{"data" => %{"issueRelationDelete" => %{"success" => true}}}
+    defp default(:update_issue_priority), do: %{"data" => %{"issueUpdate" => %{"success" => true}}}
 
     defp default(:blocker_relations) do
       nodes = [
@@ -129,6 +132,11 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
 
     def fetch_issues_by_states_with_failures(_states) do
       Process.get({__MODULE__, :issues_with_failures}, {:ok, [], []})
+    end
+
+    defp update_issue_priority(variables) do
+      send(self(), {:priority_update, variables})
+      result(:update_issue_priority, default(:update_issue_priority))
     end
 
     defp result(key, default), do: Process.get({__MODULE__, key}, {:ok, default})
@@ -538,6 +546,24 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
 
       assert {:error, :invalid_blocked_by} = Adapter.add_blocked_by(nil, "affected-id")
       assert {:error, :invalid_blocked_by} = Adapter.add_blocked_by("TP-900", nil)
+    end
+  end
+
+  describe "update_issue_priority/2" do
+    test "writes Linear's number for the priority on the issue" do
+      assert :ok = Adapter.update_issue_priority("issue-id", 1)
+      assert_received {:priority_update, %{issueId: "issue-id", priority: 1}}
+    end
+
+    test "reports an update that did not succeed, a failed request and an invalid priority" do
+      put(:update_issue_priority, {:ok, %{"data" => %{"issueUpdate" => %{"success" => false}}}})
+      assert {:error, :issue_update_failed} = Adapter.update_issue_priority("issue-id", 4)
+
+      put(:update_issue_priority, {:error, :rate_limited})
+      assert {:error, :rate_limited} = Adapter.update_issue_priority("issue-id", 4)
+
+      assert {:error, :invalid_issue_priority} = Adapter.update_issue_priority("issue-id", 5)
+      assert {:error, :invalid_issue_priority} = Adapter.update_issue_priority(nil, 1)
     end
   end
 

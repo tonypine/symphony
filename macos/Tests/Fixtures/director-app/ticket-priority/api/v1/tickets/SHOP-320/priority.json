@@ -1,0 +1,6 @@
+{
+  "issue_identifier": "SHOP-320",
+  "priority": "low",
+  "priority_value": 4,
+  "priorities": ["none", "urgent", "high", "medium", "low"]
+}

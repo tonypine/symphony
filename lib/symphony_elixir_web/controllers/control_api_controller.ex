@@ -47,6 +47,13 @@ defmodule SymphonyElixirWeb.ControlApiController do
   app shows when the change is refused (a ticket blocking itself, a cycle, a ticket Symphony doesn't
   track, a finished blocker, a link already there or not there), 422 for a missing or unknown
   parameter and 502, with why, when the tracker refuses the write.
+
+  `priority` sets a ticket's Linear priority from the ticket page (`SymphonyElixir.DirectorPriority`):
+  it takes `issue_identifier` and `priority` (`none`, `urgent`, `high`, `medium` or `low`, or
+  Linear's number), and answers 200 with the ticket's priority after the move, 409 with the reason
+  the app shows when the move is refused (a ticket Symphony doesn't track, the priority it already
+  has), 422 for a missing parameter or a priority that isn't one of Linear's, and 502, with why,
+  when the tracker refuses the write.
   """
 
   use Phoenix.Controller, formats: [:json]
@@ -54,7 +61,8 @@ defmodule SymphonyElixirWeb.ControlApiController do
   require Logger
 
   alias Plug.Conn
-  alias SymphonyElixir.{AuditLog, DirectorBlockers, DirectorMoves, Orchestrator, TicketEvents, TicketSignals}
+  alias SymphonyElixir.{AuditLog, DirectorBlockers, DirectorMoves, DirectorPriority, Orchestrator}
+  alias SymphonyElixir.{TicketEvents, TicketSignals}
   alias SymphonyElixir.TicketEvents.Types
   alias SymphonyElixirWeb.{Endpoint, Presenter, TicketEventsController}
 
@@ -229,6 +237,24 @@ defmodule SymphonyElixirWeb.ControlApiController do
       {:error, {:invalid_request, message}} -> error_response(conn, 422, "invalid_request", message)
     end
   end
+
+  @spec priority(Conn.t(), map()) :: Conn.t()
+  def priority(conn, params) do
+    with {:ok, identifier} <- required_param(params["issue_identifier"], "issue_identifier"),
+         {:ok, priority} <- priority_param(params["priority"]) do
+      opts = [orchestrator: orchestrator(conn), audit_log: Map.get(conn.assigns, :audit_log, [])] ++ Map.get(conn.assigns, :director_priority, [])
+
+      case DirectorPriority.set(identifier, priority, opts) do
+        {:error, {:linear, message}} -> error_response(conn, 502, "linear_error", message)
+        result -> respond_move(conn, identifier, result)
+      end
+    else
+      {:error, {:invalid_request, message}} -> error_response(conn, 422, "invalid_request", message)
+    end
+  end
+
+  defp priority_param(priority) when is_integer(priority), do: {:ok, priority}
+  defp priority_param(priority), do: required_param(priority, "priority")
 
   defp blocker_action(action) do
     case string_param(action) do

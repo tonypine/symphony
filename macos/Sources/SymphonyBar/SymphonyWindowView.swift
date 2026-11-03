@@ -40,6 +40,8 @@ final class SymphonyWindowModel: ObservableObject {
     let ticketNote = TicketNoteComposer()
     /// The ticket page's Blocked by card: the shown ticket's blockers, the ones it can take, the change on its way.
     let ticketBlockers = TicketBlockersEditor()
+    /// The ticket page's Priority card: the shown ticket's Linear priority, the change on its way.
+    let ticketPriority = TicketPriorityEditor()
     /// The build of the Symphony the window last read, to tell a restart onto another build.
     private var symphonyBuild: DiagnosticsPayload.Build?
     @Published var paused = false
