@@ -15,9 +15,10 @@ defmodule SymphonyElixir.DirectorBlockers do
     * the blocker is finished (a terminal phase), so it would block nothing;
     * the link is already there (add) or isn't (remove).
 
-  A change writes Linear first (`SymphonyElixir.Linear.Adapter.add_blocked_by/2` and
-  `remove_blocked_by/2`, the `:linker`); a write Linear refuses is `{:error, {:linear, reason}}`
-  and changes nothing. Then, at once and without waiting for the next read of Linear:
+  A change writes the tracker first (`SymphonyElixir.Tracker.add_blocked_by/2` and
+  `remove_blocked_by/2`, the `:linker`: Linear, or the memory tracker of a QA or local server); a
+  write it refuses is `{:error, {:linear, message}}`, the message saying why in the app's words, and
+  changes nothing. Then, at once and without waiting for the next read of Linear:
 
     * the record's `blockers` gain the blocker (its id, identifier and phase) or lose it, and the
       change is announced (`SymphonyElixirWeb.ObservabilityPubSub.broadcast_ticket_record_changed/3`);
@@ -39,13 +40,13 @@ defmodule SymphonyElixir.DirectorBlockers do
   @director {:person, "the Director"}
 
   @type action :: :add | :remove
-  @type error :: {:invalid, String.t()} | {:conflict, String.t()} | {:linear, term()}
+  @type error :: {:invalid, String.t()} | {:conflict, String.t()} | {:linear, String.t()}
 
   @doc """
   Adds (`:add`) or removes (`:remove`) the link "`blocker` blocks `identifier`", both named by
   identifier or id, as the moduledoc says. Answers the ticket's blockers after the change.
 
-  Options: `:linker` (default `SymphonyElixir.Linear.Adapter`), `:orchestrator` (asked to poll
+  Options: `:linker` (default `SymphonyElixir.Tracker`), `:orchestrator` (asked to poll
   again, default `SymphonyElixir.Orchestrator`), `:audit_log` (the audit log's options),
   `:records` (the tracked records, default every record in the run store), `:terminal_states` and
   `:active_states` (default the settings').
@@ -155,7 +156,7 @@ defmodule SymphonyElixir.DirectorBlockers do
   end
 
   defp write_linear(action, ticket, blocking, opts) do
-    linker = Keyword.get(opts, :linker, SymphonyElixir.Linear.Adapter)
+    linker = Keyword.get(opts, :linker, SymphonyElixir.Tracker)
 
     result =
       case action do
@@ -164,10 +165,28 @@ defmodule SymphonyElixir.DirectorBlockers do
       end
 
     case result do
-      :ok -> :ok
-      {:error, reason} -> {:error, {:linear, reason}}
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to write a blocker link issue_id=#{ticket.issue_id} blocker=#{blocking.issue_id} action=#{action}: #{inspect(reason)}")
+        {:error, {:linear, write_failure(action, ticket, blocking, reason)}}
     end
   end
+
+  # The reason a write failed, in the words the app shows; the raw reason goes to the log.
+  defp write_failure(action, ticket, blocking, reason) do
+    link = "the link #{blocking.issue_identifier} blocks #{ticket.issue_identifier}"
+    verb = if action == :add, do: "add", else: "remove"
+
+    if missing_key?(reason),
+      do: "Symphony has no Linear API key, so it couldn't #{verb} #{link} in Linear.",
+      else: "Linear didn't #{verb} #{link}, so nothing changed. Try again in a moment."
+  end
+
+  defp missing_key?(:missing_linear_api_token), do: true
+  defp missing_key?({_kind, :missing_linear_api_token}), do: true
+  defp missing_key?(_reason), do: false
 
   defp write_record(action, ticket, blocking) do
     blockers =

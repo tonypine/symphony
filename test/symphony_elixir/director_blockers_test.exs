@@ -158,16 +158,32 @@ defmodule SymphonyElixir.DirectorBlockersTest do
     assert twice == "#{blocker.issue_identifier} already blocks #{ticket.issue_identifier}."
   end
 
+  @tag :capture_log
   test "a write Linear refuses changes nothing", ctx do
     Process.put(:linker_reply, {:error, :issue_relation_failed})
-    assert {:error, {:linear, :issue_relation_failed}} = change(:add, ctx.ticket, ctx.blocker, ctx.opts)
+    assert {:error, {:linear, message}} = change(:add, ctx.ticket, ctx.blocker, ctx.opts)
+    assert message == "Linear didn't add the link #{ctx.blocker.issue_identifier} blocks #{ctx.ticket.issue_identifier}, so nothing changed. Try again in a moment."
     assert record(ctx.ticket).blockers == []
     assert RunStore.list_ticket_events(ctx.ticket.issue_id, []) == []
   end
 
+  @tag :capture_log
+  test "a write refused for a missing Linear key says so in plain words", ctx do
+    assert {:ok, _added} = change(:add, ctx.ticket, ctx.blocker, ctx.opts)
+
+    for reason <- [:missing_linear_api_token, {:linear_api_request, :missing_linear_api_token}] do
+      Process.put(:linker_reply, {:error, reason})
+      assert {:error, {:linear, message}} = change(:remove, ctx.ticket, ctx.blocker, ctx.opts)
+      assert message == "Symphony has no Linear API key, so it couldn't remove the link #{ctx.blocker.issue_identifier} blocks #{ctx.ticket.issue_identifier} in Linear."
+    end
+  end
+
   test "names a ticket by id or by identifier in any case, and skips a removed record", ctx do
     %{ticket: ticket, blocker: blocker} = ctx
+    # A record without an identifier is passed over when a ticket is named by identifier.
+    put(ctx.repo, "#{System.unique_integer([:positive])}", %{issue_identifier: nil, phase: "Todo"})
     opts = scoped(ctx.opts)
+    assert {:error, {:conflict, _untracked}} = DirectorBlockers.change(:add, ticket.issue_identifier, "BLK-0", opts)
     assert {:ok, %{blocker: blocker_identifier}} = DirectorBlockers.change(:add, ticket.issue_id, String.downcase(blocker.issue_identifier), opts)
     assert blocker_identifier == blocker.issue_identifier
 

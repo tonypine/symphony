@@ -46,7 +46,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
   `remove`), and answers 200 with the ticket's blockers after the change, 409 with the reason the
   app shows when the change is refused (a ticket blocking itself, a cycle, a ticket Symphony doesn't
   track, a finished blocker, a link already there or not there), 422 for a missing or unknown
-  parameter and 502 when Linear refuses the write.
+  parameter and 502, with why, when the tracker refuses the write.
   """
 
   use Phoenix.Controller, formats: [:json]
@@ -220,7 +220,11 @@ defmodule SymphonyElixirWeb.ControlApiController do
          {:ok, blocker} <- required_param(params["blocker"], "blocker"),
          {:ok, action} <- blocker_action(params["action"]) do
       opts = [orchestrator: orchestrator(conn), audit_log: Map.get(conn.assigns, :audit_log, [])] ++ Map.get(conn.assigns, :director_blockers, [])
-      respond_move(conn, identifier, DirectorBlockers.change(action, identifier, blocker, opts))
+
+      case DirectorBlockers.change(action, identifier, blocker, opts) do
+        {:error, {:linear, message}} -> error_response(conn, 502, "linear_error", message)
+        result -> respond_move(conn, identifier, result)
+      end
     else
       {:error, {:invalid_request, message}} -> error_response(conn, 422, "invalid_request", message)
     end

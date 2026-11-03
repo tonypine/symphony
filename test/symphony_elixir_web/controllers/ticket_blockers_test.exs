@@ -98,11 +98,13 @@ defmodule SymphonyElixirWeb.TicketBlockersTest do
     end
   end
 
+  @tag :capture_log
   test "POST /control/blocker answers 502 when Linear refuses the write", ctx do
     Process.put(:linker_reply, {:error, :issue_relation_failed})
     conn = post_blocker(params(ctx, "add"), ctx)
     assert conn.status == 502
     assert body(conn)["error"]["code"] == "linear_error"
+    assert body(conn)["error"]["message"] =~ ~r/^Linear didn't add the link \S+ blocks \S+, so nothing changed\./
   end
 
   test "POST /control/blocker needs the control token like the other control routes", ctx do
