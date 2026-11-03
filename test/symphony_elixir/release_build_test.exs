@@ -34,7 +34,7 @@ defmodule SymphonyElixir.ReleaseBuildTest do
     :ok = RunStore.clear()
     on_exit(fn -> :ok = RunStore.clear() end)
     test = self()
-    {:ok, github} = Agent.start_link(fn -> %{runs: [], started: false, rerun: :ok, main: []} end)
+    {:ok, github} = Agent.start_link(fn -> %{runs: [], started: :auto, rerun: :ok, main: []} end)
     {:ok, decisions} = Agent.start_link(fn -> [] end)
 
     opts = [
@@ -71,10 +71,9 @@ defmodule SymphonyElixir.ReleaseBuildTest do
         end
 
       ["run", "view", id, "--json", "jobs", "-R", @repo], _opts ->
-        case Agent.get(github, & &1.started) do
+        case jobs(Agent.get(github, & &1)) do
           :down -> {"HTTP 502", 1}
-          false -> {Jason.encode!(%{"jobs" => [%{"name" => "release", "conclusion" => "cancelled", "steps" => []}]}), 0}
-          true -> {Jason.encode!(%{"jobs" => [%{"name" => "release", "steps" => [%{"name" => "Checkout"}], "databaseId" => id}]}), 0}
+          jobs -> {Jason.encode!(%{"jobs" => Enum.map(jobs, &Map.put(&1, "databaseId", id))}), 0}
         end
 
       ["run", "rerun", id, "-R", @repo], _opts ->
@@ -82,6 +81,17 @@ defmodule SymphonyElixir.ReleaseBuildTest do
         if Agent.get(github, & &1.rerun) == :ok, do: {"", 0}, else: {"HTTP 403", 1}
     end
   end
+
+  # A run's jobs: by default, a cancelled run's job ran no step and any other run's job ran a step
+  # that failed; `started: false`, `true` or a list of jobs says otherwise.
+  defp jobs(%{started: :auto, runs: [%{"conclusion" => "cancelled"} | _rest]}), do: jobs(%{started: false})
+
+  defp jobs(%{started: :auto}),
+    do: [%{"name" => "release", "conclusion" => "failure", "steps" => [%{"name" => "Checkout", "conclusion" => "success"}, %{"name" => "Build the app", "conclusion" => "failure"}]}]
+
+  defp jobs(%{started: false}), do: [%{"name" => "release", "conclusion" => "cancelled", "steps" => []}]
+  defp jobs(%{started: true}), do: [%{"name" => "release", "conclusion" => "cancelled", "steps" => [%{"name" => "Checkout", "conclusion" => "success"}]}]
+  defp jobs(%{started: started}), do: started
 
   defp run(attempt, status, conclusion \\ nil) do
     %{
@@ -195,7 +205,7 @@ defmodule SymphonyElixir.ReleaseBuildTest do
       assert_received {:asked, _ticket, %{title: title} = request}
       assert title == "The Symphony v#{version()} build failed"
       assert Enum.map(request.options, & &1.label) == ["Rerun the build", "Wait for a fix"]
-      assert Pauses.why(:symphony) == ["The v#{version()} build failed on GitHub (a step failed); TP-1251 waits for it"]
+      assert Pauses.why(:symphony) == ["The v#{version()} build failed on GitHub (the step “Build the app” of the job “release” failed); TP-1251 waits for it"]
       assert symphony_conditions() == [@condition]
       assert line(opts) =~ "failed on GitHub; you were asked what to do"
 
@@ -227,6 +237,50 @@ defmodule SymphonyElixir.ReleaseBuildTest do
       assert {:ok, %{state: :queued, question: nil}} = check(opts)
       refute_received {:rerun, _id}
       assert symphony_conditions() == []
+    end
+
+    test "a run GitHub ended as failure with its job cancelled before any step ran is rerun, not asked (TP-1368)", %{github: github, opts: opts} do
+      runs(github, [run(1, "completed", "failure")])
+      set(github, :started, false)
+
+      assert {:ok, %{state: :queued, reruns: 1, rerun_attempt: 1}} = check(opts)
+      assert_received {:rerun, "41086214847"}
+      refute_received {:asked, _ticket, _request}
+      assert symphony_conditions() == []
+
+      runs(github, [run(2, "completed", "failure")])
+      assert {:ok, %{reruns: 2}} = check(opts)
+      runs(github, [run(3, "completed", "failure")])
+      assert {:ok, %{state: :asked, question: %{kind: :cancelled, attempt: 3}}} = check(opts)
+      assert_received {:asked, _ticket, %{title: "The Symphony v" <> _rest}}
+    end
+
+    test "a failed run whose job ran steps asks, naming the job and the step that failed, or only what is known", %{github: github, opts: opts} do
+      runs(github, [run(1, "completed", "failure")])
+
+      assert {:ok, %{state: :failed, failure: %{job: "release", step: "Build the app"}}} = check(opts)
+      assert_received {:asked, _ticket, %{question: question}}
+      assert question =~ "GitHub's Symphony v#{version()} build failed: the step “Build the app” of the job “release” failed."
+      refute_received {:rerun, _id}
+
+      for {jobs, words} <- [
+            {[%{"name" => "release", "conclusion" => "failure", "steps" => [%{"name" => "Checkout", "conclusion" => "success"}]}], "the job “release” failed"},
+            {[%{"name" => "release", "conclusion" => "success", "steps" => [%{"name" => "Checkout", "conclusion" => "success"}]}], "GitHub doesn't say which step failed"}
+          ] do
+        :ok = RunStore.clear()
+        set(github, :started, jobs)
+        assert {:ok, %{state: :failed}} = check(opts)
+        assert Pauses.why(:symphony) == ["The v#{version()} build failed on GitHub (#{words}); TP-1251 waits for it"]
+        refute Enum.any?(Pauses.why(:symphony), &(&1 =~ "a step failed"))
+      end
+    end
+
+    test "a build that failed to start with no job ran is a failure, never starved", %{github: github, opts: opts} do
+      runs(github, [run(1, "completed", "startup_failure")])
+      set(github, :started, [])
+
+      assert {:ok, %{state: :failed}} = check(opts)
+      refute_received {:rerun, _id}
     end
 
     test "a build cancelled once a job had started is a failure", %{github: github, opts: opts} do
@@ -635,7 +689,7 @@ defmodule SymphonyElixir.ReleaseBuildTest do
       assert {:ok, %{state: :failed, question: %{subject: :symphony, question_id: id}}} = result
       assert [%{title: title, question: question}] = Questions.open(:symphony)
       assert title == "The Symphony v#{version()} build failed"
-      assert question =~ "a step failed"
+      assert question =~ "the step “Build the app” of the job “release” failed"
       assert symphony_conditions() == []
 
       {:ok, _answered} = Questions.answer(:symphony, id, "Wait for a fix")

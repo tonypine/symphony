@@ -13,12 +13,13 @@ defmodule SymphonyElixir.ReleaseBuild do
       replaced by that run (the workflow's concurrency group cancels an older pending run when a
       newer push queues): it is `:superseded`, never rerun, never asked about;
     * a run GitHub cancelled before any job started (no machine to run it) is rerun by Symphony, at
-      most twice, with no attempt spent; cancelled again, it asks a person on the first held
+      most twice, whether GitHub ended it as `cancelled` or as `failure` (TP-1368): whether a job
+      ran a step decides it, not the conclusion, with no attempt spent; cancelled again, it asks a person on the first held
       ticket through the one decision path (`SymphonyElixir.DecisionRequest`): keep retrying, or
       wait, as R19a asks;
     * a run that failed for a real reason (a build or signing step failed, it ran out of time, or it
-      was cancelled once a job had started) asks a person on the first held ticket: rerun the build,
-      or wait for a fix. While a held ticket waits on it, it also puts an `:environment` reason on
+      was cancelled once a job had started) asks a person on the first held ticket, naming the job
+      and step that failed when the run says: rerun the build, or wait for a fix. While a held ticket waits on it, it also puts an `:environment` reason on
       Symphony's pause with the failure (`waits_on: %{condition: "release_build:<repo key>:<sha>"}`).
       The reason clears once the build is rerun, a person chose to wait, or no held ticket waits on
       the commit any more.
@@ -62,6 +63,8 @@ defmodule SymphonyElixir.ReleaseBuild do
   @latest {:release_build, :latest}
   @latest_every_seconds 60
   @max_reruns 2
+  # The conclusions GitHub gives a run whose job it cancelled before a machine took it.
+  @starved_conclusions ["CANCELLED", "FAILURE"]
   @condition_prefix "release_build:"
   @setter %{kind: :rule, name: "Release build watch"}
   @keep_retrying "Keep retrying"
@@ -102,6 +105,9 @@ defmodule SymphonyElixir.ReleaseBuild do
               question_id: String.t()
             }
 
+  @typedoc "Where a failed build failed: the job, and the step when GitHub names one."
+  @type failure :: %{job: String.t() | nil, step: String.t() | nil}
+
   @type t :: %{
           sha: String.t(),
           repo: String.t() | nil,
@@ -113,6 +119,7 @@ defmodule SymphonyElixir.ReleaseBuild do
           number: pos_integer() | nil,
           attempt: pos_integer() | nil,
           conclusion: String.t() | nil,
+          failure: failure() | nil,
           since: DateTime.t() | nil,
           since_attempt: pos_integer() | nil,
           reruns: non_neg_integer(),
@@ -400,6 +407,7 @@ defmodule SymphonyElixir.ReleaseBuild do
       number: nil,
       attempt: nil,
       conclusion: nil,
+      failure: nil,
       since: nil,
       since_attempt: nil,
       reruns: 0,
@@ -419,8 +427,7 @@ defmodule SymphonyElixir.ReleaseBuild do
       run.status != "COMPLETED" -> %{record | state: if(run.status == "IN_PROGRESS", do: :running, else: :queued)}
       run.attempt == record.rerun_attempt -> %{record | state: :queued}
       run.conclusion == "SUCCESS" -> %{record | state: :built}
-      run.conclusion == "CANCELLED" -> cancelled(record, run)
-      true -> failed(record, run)
+      true -> unsuccessful(record, run)
     end
   end
 
@@ -439,13 +446,29 @@ defmodule SymphonyElixir.ReleaseBuild do
     end
   end
 
-  # Cancelled before any job started: no machine took it. Once a job started, it is a failure.
-  defp cancelled(record, run) do
-    case github(record).run_started?(run.id, gh_opts(record)) do
-      {:ok, false} -> starved(record, run)
-      {:ok, true} -> failed(record, run)
-      {:error, _reason} -> record
+  # Whether a job started decides starvation, not the run's conclusion: GitHub ends a run whose
+  # job it cancelled for lack of a machine as `cancelled` or as `failure`. A run whose jobs ran no
+  # step was starved; once a job ran a step, whatever the conclusion, it is a failure, kept with the
+  # job and step that failed.
+  defp unsuccessful(record, run) do
+    case github(record).run_steps(run.id, gh_opts(record)) do
+      {:ok, jobs} ->
+        if run.conclusion in @starved_conclusions and not Enum.any?(jobs, &(&1.steps != [])),
+          do: starved(record, run),
+          else: failed(Map.put(record, :failure, failure_of(jobs)), run)
+
+      {:error, _reason} ->
+        record
     end
+  end
+
+  defp failure_of(jobs) do
+    Enum.find_value(jobs, fn job ->
+      case Enum.find(job.steps, &(&1.conclusion == "FAILURE")) do
+        %{name: step} -> %{job: job.name, step: step}
+        nil -> nil
+      end
+    end) || Enum.find_value(jobs, &if(&1.conclusion == "FAILURE", do: %{job: &1.name, step: nil}))
   end
 
   defp starved(record, run) do
@@ -682,13 +705,18 @@ defmodule SymphonyElixir.ReleaseBuild do
   defp condition(repo_key, sha), do: "#{@condition_prefix}#{repo_key}:#{sha}"
 
   defp pause_text(record) do
-    "The #{build_name(record)} failed on GitHub (#{failure_words(record.conclusion)}); #{waiting_names(record)} #{verb(record, "waits", "wait")} for it"
+    "The #{build_name(record)} failed on GitHub (#{failure_words(record)}); #{waiting_names(record)} #{verb(record, "waits", "wait")} for it"
   end
 
-  defp failure_words("TIMED_OUT"), do: "it ran out of time"
-  defp failure_words("STARTUP_FAILURE"), do: "it failed to start"
-  defp failure_words("CANCELLED"), do: "it was cancelled while building"
-  defp failure_words(_conclusion), do: "a step failed"
+  # What failed, as far as the run says: never "a step failed" when no step is known to have.
+  defp failure_words(%{conclusion: "TIMED_OUT"}), do: "it ran out of time"
+  defp failure_words(%{conclusion: "STARTUP_FAILURE"}), do: "it failed to start"
+  defp failure_words(record), do: failure_place(Map.get(record, :failure), record.conclusion)
+
+  defp failure_place(%{job: job, step: step}, _conclusion) when is_binary(step), do: "the step “#{step}” of the job “#{job}” failed"
+  defp failure_place(%{job: job}, _conclusion) when is_binary(job), do: "the job “#{job}” failed"
+  defp failure_place(_failure, "CANCELLED"), do: "it was cancelled while building"
+  defp failure_place(_failure, _conclusion), do: "GitHub doesn't say which step failed"
 
   defp waiting_names(%{tickets: tickets}) do
     case for(%{identifier: identifier} when is_binary(identifier) <- tickets, do: identifier) do
@@ -737,11 +765,11 @@ defmodule SymphonyElixir.ReleaseBuild do
 
     %{
       title: "The #{build} failed",
-      question: "GitHub's #{build} failed: #{failure_words(record.conclusion)}. #{names} #{verb(record, "waits", "wait")} for that build. Should Symphony rerun it, or wait for a fix?",
+      question: "GitHub's #{build} failed: #{failure_words(record)}. #{names} #{verb(record, "waits", "wait")} for that build. Should Symphony rerun it, or wait for a fix?",
       why:
         "The build itself failed, which is not a shortage of machines. " <>
           "Symphony paused on the failure so the chain doesn't wait without saying why. " <>
-          "The run's page on GitHub shows which step failed.",
+          "The run's page on GitHub has the failed step's log.",
       if_unanswered: "#{names} #{verb(record, "stays", "stay")} in Todo, and Symphony stays paused on the failed build.",
       options: [
         %{
@@ -773,8 +801,8 @@ defmodule SymphonyElixir.ReleaseBuild do
              "Symphony reran the build #{@max_reruns} times, and GitHub cancelled it again each time."}
 
         :failed ->
-          {"The #{build} failed", "GitHub's #{build} failed: #{failure_words(record.conclusion)}.",
-           "The build itself failed, which is not a shortage of machines. The run's page on GitHub shows which step failed."}
+          {"The #{build} failed", "GitHub's #{build} failed: #{failure_words(record)}.",
+           "The build itself failed, which is not a shortage of machines. The run's page on GitHub has the failed step's log."}
       end
 
     %{

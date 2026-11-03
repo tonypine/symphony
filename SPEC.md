@@ -3335,7 +3335,12 @@ An issue is dispatch-eligible only if all are true:
     `app_update.build_line` gives that line without the fix (null otherwise). Every merge to `main`
     of Symphony's own repository is watched the same way, held issue or not: the newest `release`
     push run on `main`, read at most once a minute by the poll and at once on its `workflow_run`
-    delivery, is rerun when GitHub cancelled it for lack of a machine (twice at most); with no held
+    delivery, is rerun when GitHub cancelled it for lack of a machine (twice at most). Starvation is
+    decided by whether a job started, not by the run's conclusion: a completed run whose conclusion
+    is `failure` or `cancelled` and whose jobs ran no step was cancelled for lack of a machine and is
+    rerun; a run with a job that ran at least one step, whatever its conclusion, is a failure, and
+    its question says which job and step failed, taken from the run (never "a step failed" when no
+    step is known to have failed). With no held
     issue to ask, a third cancellation or a failure is logged with the commit and the run and asked
     as a question on Symphony itself ("Rerun the build" or "Wait for a fix"), which stops no
     dispatch and is withdrawn once the build starts again, is published or a newer merge is watched. `app_update.latest_build` reports that newest merge's build (`sha`, `version`, `state`,
