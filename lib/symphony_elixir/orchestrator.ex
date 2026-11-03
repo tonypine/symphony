@@ -63,7 +63,8 @@ defmodule SymphonyElixir.Orchestrator do
     Verification,
     Workspace,
     WorkspaceCleanup,
-    WorkspaceHead
+    WorkspaceHead,
+    WorkspaceRebuild
   }
 
   alias SymphonyElixir.Artifacts.Transcript
@@ -6225,7 +6226,10 @@ defmodule SymphonyElixir.Orchestrator do
   # The removal runs the repo's before_remove hook and git under the repo's fetch lock, which
   # can take minutes, so it is queued with WorkspaceCleanup and the orchestrator moves on. A run
   # of the same issue waits for it before it creates the workspace again.
+  # The removal is recorded on the ticket, so a later rebuild of its workspace names why the folder
+  # is gone (`WorkspaceRebuild`).
   defp cleanup_issue_workspace(%{identifier: identifier} = issue, worker_host) when is_binary(identifier) do
+    WorkspaceRebuild.record_removal(Map.get(issue, :repo_key), Map.get(issue, :id), Map.get(issue, :remove_reason))
     WorkspaceCleanup.remove(issue, worker_host)
   end
 
@@ -6452,6 +6456,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp apply_workspace_age_gc_result(%State{} = state, {:ran, {:ok, actions}}, now_ms) do
     log_workspace_lifecycle_summary("age GC", actions)
+    WorkspaceRebuild.record_reclaims(actions)
     %{state | workspace_lifecycle_last_check_at_ms: now_ms}
   end
 

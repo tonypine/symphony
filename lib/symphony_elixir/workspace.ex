@@ -742,6 +742,8 @@ defmodule SymphonyElixir.Workspace do
     File.mkdir_p!(Path.dirname(workspace))
 
     Fetcher.with_lock(repo, fn ->
+      forget_deleted_worktree(repo, workspace)
+
       case check_branch_not_checked_out_elsewhere(repo, workspace, branch, siblings) do
         :ok ->
           repo
@@ -752,6 +754,13 @@ defmodule SymphonyElixir.Workspace do
           error
       end
     end)
+  end
+
+  # A workspace folder deleted by hand leaves its worktree registered: `git worktree add` at that
+  # path then fails, the add-failure fallback below would take the registration for a reusable
+  # worktree, and the branch would read as checked out there. The stale registration is pruned first.
+  defp forget_deleted_worktree(repo, workspace) do
+    if registered_worktree?(repo, workspace), do: run_git(repo, ["worktree", "prune"])
   end
 
   defp handle_local_worktree_add_result(:ok, _repo, _workspace), do: {:ok, true}

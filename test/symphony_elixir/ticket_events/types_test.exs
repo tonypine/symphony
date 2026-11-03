@@ -9,7 +9,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
     step.started step.completed step.skipped evidence finding.recorded finding.resolved checklist.answered
     ticket.cancelled ticket.moved drift.detected drift.reverted drift.revert_failed
     pause.set pause.reason_added pause.reason_cleared pause.cleared
-    question.asked question.answered question.withdrawn question.reopened park.backfilled workspace.synced note
+    question.asked question.answered question.withdrawn question.reopened park.backfilled workspace.synced workspace.rebuilt workspace.removed note
   )
 
   describe "catalog/0" do
@@ -135,6 +135,14 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert Types.validate("park.backfilled", payload, :machine, nil) == {:ok, payload}
       assert {:error, {:invalid_payload, [:added]}} = Types.validate("park.backfilled", %{from: "In Progress"}, :machine, nil)
       assert {:error, {:not_allowed, _reason}} = Types.validate("park.backfilled", payload, :person, nil)
+    end
+
+    test "a workspace rebuild is the machine's: why, the heads compared and the one chosen" do
+      payload = %{reason: "reclaim", branch: "auto/TP-1", winner: "pull_request", head: "b2", pr_head: "b2", branch_head: "a1", recorded_head: "c3"}
+
+      assert Types.validate("workspace.rebuilt", payload, :machine, nil) == {:ok, payload}
+      assert {:error, {:invalid_payload, [:reason]}} = Types.validate("workspace.rebuilt", %{payload | reason: "whim"}, :machine, nil)
+      assert {:error, {:not_allowed, _reason}} = Types.validate("workspace.rebuilt", payload, :agent, "rework")
     end
 
     test "a workspace sync is the machine's: the heads compared, the winner and what was done" do

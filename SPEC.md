@@ -543,7 +543,10 @@ runs), `finding.resolved`, `checklist.answered`, `drift.detected`, `drift.revert
 `question.asked`, `question.answered`, `question.withdrawn`, `question.reopened`, `park.backfilled`
 (machine only: an older park brought up to date at start-up, with what it was given),
 `workspace.synced` (machine only: before a review, QA, landing or rework run, the heads the
-newest-known-head rule compared, the one that won and what it did) and `note`.
+newest-known-head rule compared, the one that won and what it did), `workspace.rebuilt` (machine
+only: a workspace made again, why, the heads compared and the one it started on),
+`workspace.removed` (machine only: Symphony removed a ticket's workspace, for the age GC, a Stop, a
+terminal state or another cleanup) and `note`.
 
 Before a Code Review, QA or landing run, and a rework on a kept workspace, one rule
 (`SymphonyElixir.WorkspaceSync`) stands the workspace on the newest known head of the ticket's PR. It
@@ -554,6 +557,18 @@ workspace to it; a newer workspace head is pushed to the PR's branch first; a ne
 is restored and pushed. A workspace with uncommitted or untracked files, or whose heads diverge, is
 never reset: a review, QA or landing run is blocked naming the work, and a rework falls back to the
 base-ref reset that keeps it under `refs/symphony/orphaned/`.
+
+A local worktree workspace made again (Symphony removed it, its folder was deleted by hand, the
+ticket's last run was on another host) starts on the newest known head of the ticket's branch
+(`SymphonyElixir.WorkspaceRebuild`), by the same ancestor rule: the open PR's head, the branch's
+head on `origin`, the newest run's recorded unpushed head and the ticket's local branch in the
+source repository, with the pushed one winning when they diverge. A local branch head the chosen
+head doesn't hold is kept under `refs/symphony/orphaned/<sha>` before the worktree moves the branch.
+The configured base branch is the start only when none exists; what came before the ticket's last
+Restart never counts, and the first workspace after a Restart is no rebuild. Why is read from what
+was recorded since the ticket's previous run started: a `workspace.removed` event, else a previous
+run on another host, else a folder removed by hand. The choice is recorded as a
+`workspace.rebuilt` event naming why, the heads compared and the one chosen.
 
 The four pause types are machine-written, one per change of a ticket's pause (the one answer to why
 a ticket is not moving; decided only by `SymphonyElixir.Pauses`): `pause.set` for its first reason
