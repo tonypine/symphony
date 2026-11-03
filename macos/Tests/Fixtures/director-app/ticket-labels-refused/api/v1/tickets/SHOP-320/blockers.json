@@ -1,0 +1,14 @@
+{
+  "issue_identifier": "SHOP-320",
+  "blockers": [
+    {"issue_identifier": "SHOP-305", "title": "Checkout total rounding", "state": "In Progress"}
+  ],
+  "candidates": [
+    {"issue_identifier": "API-131", "title": "Rate limit headers", "state": "In Progress"},
+    {"issue_identifier": "API-133", "title": "Bulk export endpoint", "state": "Todo"},
+    {"issue_identifier": "API-127", "title": "Pagination cursors", "state": "Code Review"},
+    {"issue_identifier": "SHOP-301", "title": "Saved carts", "state": "Code Review"},
+    {"issue_identifier": "SHOP-290", "title": "Address autocomplete", "state": "QA"},
+    {"issue_identifier": "DOCS-40", "title": "Quick start rewrite", "state": "QA"}
+  ]
+}

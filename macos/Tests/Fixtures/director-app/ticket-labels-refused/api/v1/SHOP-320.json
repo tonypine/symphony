@@ -1,0 +1,22 @@
+{
+  "issue_id": "i-320",
+  "issue_identifier": "SHOP-320",
+  "last_error": null,
+  "open_questions": [],
+  "pause": null,
+  "repo_key": "web-shop",
+  "repository_paused": false,
+  "retry": null,
+  "running": null,
+  "start": {
+    "allowed": true,
+    "reason": null
+  },
+  "status": "slot_waiting",
+  "verdicts": [],
+  "watching": null,
+  "workspace": {
+    "host": null,
+    "path": null
+  }
+}

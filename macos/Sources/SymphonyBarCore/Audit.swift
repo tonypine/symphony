@@ -137,6 +137,8 @@ public struct AuditRecord: Equatable, Identifiable {
         case "add_blocker": "Added a blocker"
         case "remove_blocker": "Removed a blocker"
         case "set_priority": "Set the priority"
+        case "add_label": "Turned a label on"
+        case "remove_label": "Turned a label off"
         default: kindTitle(move)
         }
     }

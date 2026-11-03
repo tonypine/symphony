@@ -89,7 +89,8 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp summary("decision.withdrawn", payload, _event), do: {"Decision request withdrawn", [text(payload, :title)]}
 
   defp summary("person.action", payload, _event) do
-    title = person_action(text(payload, :action), text(payload, :blocker) || text(payload, :to) || text(payload, :move))
+    subject = text(payload, :blocker) || text(payload, :label) || text(payload, :to) || text(payload, :move)
+    title = person_action(text(payload, :action), subject)
     {title, prefixed("from", text(payload, :from))}
   end
 
@@ -202,8 +203,13 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp person_action("restart", _to), do: "The Director restarted the ticket"
   defp person_action("add_blocker", blocker), do: "The Director added " <> (blocker || "a ticket") <> " as a blocker"
   defp person_action("set_priority", to), do: "The Director set the priority to " <> (to || "another priority")
+  defp person_action("add_label", label), do: "The Director added " <> label_name(label)
+  defp person_action("remove_label", label), do: "The Director removed " <> label_name(label)
   defp person_action("remove_blocker", blocker), do: "The Director removed " <> (blocker || "a ticket") <> " as a blocker"
   defp person_action(action, _to), do: "The Director acted" <> suffix(": ", action)
+
+  defp label_name(nil), do: "a label"
+  defp label_name(label), do: "the " <> label <> " label"
 
   # A finding QA has not classified yet (until the findings model, `unclassified`) is a defect.
   defp finding_class(class) when class in [nil, "unclassified"], do: "a defect"

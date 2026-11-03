@@ -54,6 +54,13 @@ defmodule SymphonyElixirWeb.ControlApiController do
   the app shows when the move is refused (a ticket Symphony doesn't track, the priority it already
   has), 422 for a missing parameter or a priority that isn't one of Linear's, and 502, with why,
   when the tracker refuses the write.
+
+  `label` turns one of the labels a person adds for Symphony to read on or off from the ticket page
+  (`SymphonyElixir.DirectorLabels`): it takes `issue_identifier`, `label` and `action` (`add` or
+  `remove`), and answers 200 with the ticket's label toggles after the change, 409 with the reason
+  the app shows when the change is refused (a label Symphony doesn't read, a machine label, the
+  force label, a ticket Symphony doesn't track, a label already on or off), 422 for a missing or
+  unknown parameter and 502, with why, when the tracker refuses the write.
   """
 
   use Phoenix.Controller, formats: [:json]
@@ -61,7 +68,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
   require Logger
 
   alias Plug.Conn
-  alias SymphonyElixir.{AuditLog, DirectorBlockers, DirectorMoves, DirectorPriority, Orchestrator}
+  alias SymphonyElixir.{AuditLog, DirectorBlockers, DirectorLabels, DirectorMoves, DirectorPriority, Orchestrator}
   alias SymphonyElixir.{TicketEvents, TicketSignals}
   alias SymphonyElixir.TicketEvents.Types
   alias SymphonyElixirWeb.{Endpoint, Presenter, TicketEventsController}
@@ -245,6 +252,22 @@ defmodule SymphonyElixirWeb.ControlApiController do
       opts = [orchestrator: orchestrator(conn), audit_log: Map.get(conn.assigns, :audit_log, [])] ++ Map.get(conn.assigns, :director_priority, [])
 
       case DirectorPriority.set(identifier, priority, opts) do
+        {:error, {:linear, message}} -> error_response(conn, 502, "linear_error", message)
+        result -> respond_move(conn, identifier, result)
+      end
+    else
+      {:error, {:invalid_request, message}} -> error_response(conn, 422, "invalid_request", message)
+    end
+  end
+
+  @spec label(Conn.t(), map()) :: Conn.t()
+  def label(conn, params) do
+    with {:ok, identifier} <- required_param(params["issue_identifier"], "issue_identifier"),
+         {:ok, label} <- required_param(params["label"], "label"),
+         {:ok, action} <- blocker_action(params["action"]) do
+      opts = [orchestrator: orchestrator(conn), audit_log: Map.get(conn.assigns, :audit_log, [])] ++ Map.get(conn.assigns, :director_labels, [])
+
+      case DirectorLabels.set(identifier, label, action, opts) do
         {:error, {:linear, message}} -> error_response(conn, 502, "linear_error", message)
         result -> respond_move(conn, identifier, result)
       end
