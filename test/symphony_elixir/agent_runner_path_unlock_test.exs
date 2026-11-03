@@ -80,7 +80,7 @@ defmodule SymphonyElixir.AgentRunnerPathUnlockTest do
     assert :ok = run(ctx, "TP-760", "Drop the setting.")
     assert_receive {:turn, session_opts, _turn_opts, prompt}
     assert session_opts[:unlocked_paths] == [".agents/skills"]
-    assert prompt =~ "- `.agents/skills`, by a person's answer to a question on this ticket"
+    assert prompt =~ "- `.agents/skills` (also `.claude/skills` and `.codex/skills`), by a person's answer to a question on this ticket"
 
     assert :ok = run(ctx, "TP-761", "Drop the setting.")
     assert_receive {:turn, session_opts, _turn_opts, _prompt}
