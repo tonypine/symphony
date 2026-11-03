@@ -720,7 +720,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert %{outcome: :applied} = Apply.apply(action, ctx(:code_review, facts: %{failing_check: "protected paths"}, read: read))
 
       assert_received {:comment, @issue_id, "## Decision needed: Protected files changed on TP-7" <> body}
-      files = "the workflow settings file, which runs commands on your Mac and the agents' instructions"
+      files = "the workflow settings file, which runs commands on your Mac and the agents' shared guides, also linked from the Claude and Codex agents' folders"
       assert body =~ "**Question:** PR #7 of TP-7 changes #{files}. Agents may change these only with a person's permission. Allow the change?"
       assert body =~ "Nothing on the ticket asks for this change."
       assert body =~ "**Allow the change**: TP-7 may change #{files}; PR #7 goes on through review and merges with the change, and the ticket continues in Code Review"

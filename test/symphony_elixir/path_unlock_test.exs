@@ -68,6 +68,53 @@ defmodule SymphonyElixir.PathUnlockTest do
       assert AgentSandboxConfig.unlocked_entries(:nonsense) == []
     end
 
+    test "a grant on an alias of a protected folder is a grant on the real folder, lifted under every name" do
+      names = [".agents/skills", ".claude/skills", ".codex/skills"]
+
+      assert PathUnlock.granted_paths("Unlock `.claude/skills` for TP-760.", "TP-760") == [".agents/skills"]
+      assert PathUnlock.protected(["./.codex/skills", ".claude/skills", ".agents/skills"]) == [".agents/skills"]
+      assert PathUnlock.unprotected([".codex/skills", ".claude/skills/linear/SKILL.md"]) == [".claude/skills/linear/SKILL.md"]
+      assert PathUnlock.describe(".claude/skills") == PathUnlock.describe(".agents/skills")
+
+      for name <- names do
+        assert Enum.sort(AgentSandboxConfig.unlocked_entries([name])) == Enum.sort(Enum.map(names, &("./" <> &1))), name
+        protected = AgentSandboxConfig.workspace_protected_paths([name])
+        assert protected -- names == protected, name
+      end
+
+      # An ungranted ticket keeps every name denied.
+      assert Enum.all?(names, &(&1 in AgentSandboxConfig.workspace_protected_paths([@path])))
+    end
+
+    test "real_path/1 names an alias, and a path under one, by the real folder" do
+      assert AgentSandboxConfig.aliases() == %{".agents/skills" => [".claude/skills", ".codex/skills"]}
+      assert AgentSandboxConfig.aliases(".agents/skills") == [".claude/skills", ".codex/skills"]
+      assert AgentSandboxConfig.aliases("WORKFLOW.md") == []
+      assert AgentSandboxConfig.real_path(" ./.claude/skills ") == ".agents/skills"
+      assert AgentSandboxConfig.real_path(".codex/skills/linear/SKILL.md") == ".agents/skills/linear/SKILL.md"
+      assert AgentSandboxConfig.real_path(".claude/skillset") == ".claude/skillset"
+      assert AgentSandboxConfig.real_path("WORKFLOW.md") == "WORKFLOW.md"
+    end
+
+    test "a grant on an alias stops protecting the files the folder's links point at" do
+      workspace = Path.join(System.tmp_dir!(), "path-unlock-aliases-#{System.unique_integer([:positive])}")
+      on_exit(fn -> File.rm_rf(workspace) end)
+      File.mkdir_p!(Path.join(workspace, "priv/skills/linear"))
+      File.mkdir_p!(Path.join(workspace, ".agents/skills"))
+      File.ln_s!("../../priv/skills/linear", Path.join(workspace, ".agents/skills/linear"))
+
+      for agent <- [".claude", ".codex"] do
+        File.mkdir_p!(Path.join(workspace, agent))
+        File.ln_s!("../.agents/skills", Path.join(workspace, agent <> "/skills"))
+      end
+
+      assert "priv/skills/linear" in AgentSandboxConfig.workspace_link_targets(workspace)
+
+      for name <- [".agents/skills", ".claude/skills", ".codex/skills"] do
+        assert AgentSandboxConfig.workspace_link_targets(workspace, [name]) == [], name
+      end
+    end
+
     test "a grant names its own ticket: a decision copied onto another ticket unlocks nothing there" do
       assert PathUnlock.grants(issue("TP-761", description([entry("ruling-c1", @grant)]))) == []
       assert PathUnlock.granted_paths(@grant, "TP-761") == []
@@ -181,7 +228,7 @@ defmodule SymphonyElixir.PathUnlockTest do
       assert PathUnlock.describe_all(["WORKFLOW.md"]) == "the workflow settings file, which runs commands on your Mac"
 
       assert PathUnlock.describe_all([".agents/skills", "mise.toml", ".agents/skills", "symphony.yml"]) ==
-               "the agents' instructions; the tool versions file, which picks the language versions the repo builds with and the repo's Symphony settings"
+               "the agents' shared guides, also linked from the Claude and Codex agents' folders; the tool versions file, which picks the language versions the repo builds with and the repo's Symphony settings"
     end
   end
 
@@ -227,12 +274,14 @@ defmodule SymphonyElixir.PathUnlockTest do
     section =
       PathUnlock.prompt_section([
         %{id: "a", decision: "D2", path: @path, answer: @grant},
-        %{id: "b", decision: "ruling", path: "WORKFLOW.md", answer: @grant}
+        %{id: "b", decision: "ruling", path: "WORKFLOW.md", answer: @grant},
+        %{id: "c", decision: "D3", path: ".agents/skills", answer: @grant}
       ])
 
     assert section =~ "Protected paths unlocked for this run:"
     assert section =~ "- `#{@path}`, by decision D2"
     assert section =~ "- `WORKFLOW.md`, by a ruling in a comment"
+    assert section =~ "- `.agents/skills` (also `.claude/skills` and `.codex/skills`), by decision D3"
     assert section =~ "<linear_issue_decisions>"
     assert length(String.split(section, @grant)) == 2
   end

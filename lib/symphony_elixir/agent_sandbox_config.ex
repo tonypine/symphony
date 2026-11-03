@@ -54,6 +54,11 @@ defmodule SymphonyElixir.AgentSandboxConfig do
   A person can lift one of the workspace paths for one run of one ticket
   (`SymphonyElixir.PathUnlock`): each builder takes the run's `unlocked_paths` and leaves just
   those out. A path outside `workspace_protected_paths/0` is never lifted.
+
+  Some protected folders are reached under more than one name: the shared skills live in
+  `.agents/skills`, and `.claude/skills` and `.codex/skills` are symlinks to it (`aliases/0`). The
+  sandboxes match real paths, so a name stays denied as long as any of its other names is. A grant
+  is resolved to the real folder (`real_path/1`) and lifts the folder under every name.
   """
 
   @codex_profile "workspace_write"
@@ -150,6 +155,9 @@ defmodule SymphonyElixir.AgentSandboxConfig do
     "~/.mcp.json"
   ]
 
+  # Each protected real folder, relative to the workspace root, and the symlinks that reach it.
+  @aliases %{".agents/skills" => [".claude/skills", ".codex/skills"]}
+
   # Relative to a git dir. The agent writes objects and refs there to commit, but these change
   # what git runs, the agent's and Symphony's host-side git alike: config (filter drivers,
   # `core.fsmonitor`, `core.hooksPath`), hooks and `info/attributes`.
@@ -220,10 +228,36 @@ defmodule SymphonyElixir.AgentSandboxConfig do
 
     unlocked_paths
     |> normalize_sandbox_paths()
-    |> Enum.map(&String.trim_leading(&1, "./"))
+    |> Enum.map(&real_path/1)
+    |> Enum.flat_map(&[&1 | aliases(&1)])
     |> Enum.flat_map(&List.wrap(Map.get(protected, &1)))
     |> Enum.uniq()
   end
+
+  @doc """
+  Each protected real folder with the symlinks that reach it, relative to the workspace root:
+  `%{".agents/skills" => [".claude/skills", ".codex/skills"]}`.
+  """
+  @spec aliases() :: %{String.t() => [String.t()]}
+  def aliases, do: @aliases
+
+  @doc "The other names of the real folder `path` (`aliases/0`), or `[]`."
+  @spec aliases(String.t()) :: [String.t()]
+  def aliases(path), do: Map.get(@aliases, path, [])
+
+  @doc """
+  `path`, relative to the workspace root and without a leading `./`, with an alias of a protected
+  folder (`aliases/0`) replaced by the real folder: `.claude/skills/linear/SKILL.md` is
+  `.agents/skills/linear/SKILL.md`. Any other path is returned as it is.
+  """
+  @spec real_path(String.t()) :: String.t()
+  def real_path(path) do
+    path = path |> String.trim() |> String.trim_leading("./")
+    Enum.find_value(@aliases, path, fn {real, aliases} -> Enum.find_value(aliases, &alias_of(path, &1, real)) end)
+  end
+
+  defp alias_of(path, path, real), do: real
+  defp alias_of(path, name, real), do: if(String.starts_with?(path, name <> "/"), do: real <> String.trim_leading(path, name))
 
   @doc """
   Workspace paths that a symlink inside a write-protected path points at, relative to the

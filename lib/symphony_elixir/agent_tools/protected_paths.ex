@@ -41,8 +41,9 @@ defmodule SymphonyElixir.AgentTools.ProtectedPaths do
   @doc """
   The entries of the protected list (`WORKFLOW.md`, `.agents/skills`) that `files`, changed protected
   files as `verify/5` reports them, fall under: the entry a file is or sits in, and for a file a
-  symlink in a protected path points at, the entry that holds the symlink in `revisions`' trees. A
-  grant of these entries covers the files.
+  symlink in a protected path points at, the entry that holds the symlink in `revisions`' trees.
+  An entry reached through an alias (`.claude/skills`) is named by its real folder
+  (`AgentSandboxConfig.real_path/1`), once. A grant of these entries covers the files.
   """
   @spec entries([String.t()], [String.t()], git_runner()) :: {:ok, [String.t()]} | {:error, term()}
   def entries(files, revisions, run_git) do
@@ -50,7 +51,7 @@ defmodule SymphonyElixir.AgentTools.ProtectedPaths do
     {direct, linked} = Enum.split_with(files, &under(&1, protected))
 
     with {:ok, linking} <- linking_entries(linked, protected, list_links(revisions, run_git)) do
-      {:ok, Enum.uniq(Enum.map(direct, &under(&1, protected)) ++ linking)}
+      {:ok, (Enum.map(direct, &under(&1, protected)) ++ linking) |> Enum.map(&AgentSandboxConfig.real_path/1) |> Enum.uniq()}
     end
   end
 

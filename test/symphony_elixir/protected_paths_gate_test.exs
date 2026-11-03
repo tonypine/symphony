@@ -84,6 +84,39 @@ defmodule SymphonyElixir.ProtectedPathsGateTest do
     assert ProtectedPathsGate.check(@failed, pr(repo, head, base), %{issue([]) | description: description}) == :ok
   end
 
+  describe "a protected folder reached under several names" do
+    # The repo's own layout: the linear guide's text lives in `priv/skills/linear`, linked from
+    # `.agents/skills`, which `.claude/skills` and `.codex/skills` link to in turn.
+    setup %{repo: repo} do
+      File.mkdir_p!(Path.join(repo, "priv/skills/linear"))
+      File.write!(Path.join(repo, "priv/skills/linear/SKILL.md"), "lands in Backlog\n")
+      File.ln_s!("../../priv/skills/linear", Path.join(repo, ".agents/skills/linear"))
+
+      for agent <- [".claude", ".codex"] do
+        File.mkdir_p!(Path.join(repo, agent))
+        File.ln_s!("../.agents/skills", Path.join(repo, agent <> "/skills"))
+      end
+
+      linked = commit!(repo, %{})
+      %{linked: linked, head: commit!(repo, %{"priv/skills/linear/SKILL.md" => "lands in Todo\n"})}
+    end
+
+    test "a grant on any of its names lets the change to the real file land", %{repo: repo, linked: linked, head: head} do
+      for path <- [".agents/skills", ".claude/skills", ".codex/skills", "./.codex/skills"] do
+        assert ProtectedPathsGate.check(@failed, pr(repo, head, linked), issue(["Unlock #{path} for ACME-1049"])) == :ok, path
+      end
+    end
+
+    test "an ungranted ticket stays locked through every name", %{repo: repo, linked: linked, head: head} do
+      assert ProtectedPathsGate.check(@failed, pr(repo, head, linked), issue(["Unlock WORKFLOW.md for ACME-1049"])) ==
+               {:blocked, "protected paths failed and no decision on the ticket unlocks priv/skills/linear/SKILL.md"}
+    end
+
+    test "the change is named once, by the real folder", %{repo: repo, linked: linked, head: head} do
+      assert ProtectedPathsGate.changed_entries(pr(repo, head, linked)) == {:ok, [".agents/skills"]}
+    end
+  end
+
   describe "changed_entries/2" do
     test "names the protected paths the PR changes as the protected list names them", %{repo: repo, base: base} do
       head = commit!(repo, %{"WORKFLOW.md" => "v2\n", ".agents/skills/push/SKILL.md" => "push v2\n", "lib/app.ex" => "v2\n"})
