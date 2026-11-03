@@ -44,6 +44,10 @@ if config_env() == :test do
     # where a test starts it (`TicketEvents.Backfill.start/1`). Set here, not in `test_helper.exs`:
     # `mix test` boots the app before the helper runs.
     ticket_events_backfill: false,
+    # The boot's backfill of tickets parked before parks asked a question
+    # (`SymphonyElixir.IdlePark.Backfill`) runs in a task too, and would write questions under the
+    # tests of the store; it runs where a test starts it.
+    park_backfill: false,
     # The pause projector (`SymphonyElixir.Pauses.Projector`) writes the labels and the Decisions
     # section in place of the holds and the decision store. Its tests and the ones that prove its
     # gates turn it on; off here, the suites of the holds and the decisions keep their own writes.

@@ -540,7 +540,8 @@ Director's free move into any phase, with its note), `step.started`,
 `step.completed`, `step.skipped`, `evidence`, `finding.recorded` (QA
 runs), `finding.resolved`, `checklist.answered`, `drift.detected`, `drift.reverted`,
 `drift.revert_failed`, `pause.set`, `pause.reason_added`, `pause.reason_cleared`, `pause.cleared`,
-`question.asked`, `question.answered`, `question.withdrawn`, `question.reopened` and `note`.
+`question.asked`, `question.answered`, `question.withdrawn`, `question.reopened`, `park.backfilled`
+(machine only: an older park brought up to date at start-up, with what it was given) and `note`.
 
 The four pause types are machine-written, one per change of a ticket's pause (the one answer to why
 a ticket is not moving; decided only by `SymphonyElixir.Pauses`): `pause.set` for its first reason
@@ -2651,6 +2652,13 @@ Important nuance:
   they are, then lift the pause (which empties the counted runs) and dispatch it at once; "Start it
   over from main" is Restart. A ticket parked before parks asked has no question: when its newest
   move signal is the park's, Unblock moves it back the same way.
+- Once per start-up, in a task startup does not wait on, every ticket whose record Symphony put in
+  `Backlog` (`phase_owner` Symphony) with the park's move signal as its newest, and whose pause holds
+  no open question and no reason the Director may release, MUST be brought into the shape a park
+  gives today: its workspace's commits that origin lacks pushed to its branch (a push that fails is
+  logged), the park's question asked (or, when the store refuses it, a releasable reason set), and one
+  `park.backfilled` event naming what it was given (`question`, `releasable_reason`, `push`). A
+  ticket already in that shape is left alone, so a second start-up changes nothing.
 - The first turn SHOULD use the full rendered task prompt. Implementations MAY use a compact
   bootstrap prompt when the target agent transport cannot safely carry the full rendered prompt as a
   single startup message, provided the compact prompt preserves hard security rules and directs the
@@ -3299,7 +3307,15 @@ An issue is dispatch-eligible only if all are true:
     gives the same line, and `app_update.unblocks` counts these issues. While the release build of
     the fix's merge commit isn't published, the `reason` and the gate's line say what it is at
     ("Waiting for the v0.0.1.750 build with MT-15's fix: queued on GitHub for 23 min"), and
-    `app_update.build_line` gives that line without the fix (null otherwise). `app_update.latest_release` reports the newest
+    `app_update.build_line` gives that line without the fix (null otherwise). Every merge to `main`
+    of Symphony's own repository is watched the same way, held issue or not: the newest `release`
+    push run on `main`, read at most once a minute by the poll and at once on its `workflow_run`
+    delivery, is rerun when GitHub cancelled it for lack of a machine (twice at most); with no held
+    issue to ask, a third cancellation or a failure is logged with the commit and the run and pauses
+    nothing. `app_update.latest_build` reports that newest merge's build (`sha`, `version`, `state`,
+    `since`, `reruns`, `url`, `line`; null until one is watched), and with no issue held
+    `app_update.build_line` is its line ("The v0.0.1.785 build: queued on GitHub for 12 min", null
+    once published). `app_update.latest_release` reports the newest
     published release of the repository the app updates from (`repo`, `tag`, `published_at`,
     `source`: `webhook` or `poll`; null until Symphony knows one), so the app checks for the update
     at once instead of waiting for its own timer. Blockers merged in another repository, a build from a

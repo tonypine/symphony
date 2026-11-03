@@ -148,6 +148,14 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp summary("question.withdrawn", payload, _event), do: {"Question withdrawn" <> suffix(": ", text(payload, :reason)), [text(payload, :title)]}
   defp summary("question.reopened", payload, _event), do: {"You took back your answer" <> suffix(": ", text(payload, :title)), []}
 
+  defp summary("park.backfilled", payload, _event) do
+    added = strings(field(payload, :added))
+    question = if "question" in added, do: "asked you whether to run it again"
+    reason = if "releasable_reason" in added, do: "paused it until you unblock it"
+    push = if "push" in added, do: "pushed its work to #{text(payload, :branch) || "its branch"}"
+    {"Park brought up to date at start-up", present([question, reason, push])}
+  end
+
   defp summary("note", payload, _event), do: {"Note added", [text(payload, :text)]}
   defp summary(_type, _payload, _event), do: :unknown
 

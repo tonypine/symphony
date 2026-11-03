@@ -219,6 +219,9 @@ GitHub or Linear in QA:
   `macos/Tests/Fixtures/director-app/update-build-rerun` has the same ticket after GitHub cancelled
   the build for lack of a machine: "…queued on GitHub for 4 min; cancelled for lack of a machine,
   rerun 1 of 2".
+  `macos/Tests/Fixtures/director-app/update-build-latest` has no ticket held and the newest
+  merge's build queued (TP-1340): the menu still reads "The v0.0.1.785 build: queued on GitHub for
+  12 min".
 - **Update-check interval:** pass `update_check_interval_seconds` (a positive integer, such as
   `30`) and the app checks for a release that often in the background, in every update mode,
   through `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL`. A failed check retries at that interval, except a
@@ -299,6 +302,19 @@ GitHub or Linear in QA:
   checked one as "Backlog, the phase it is in". Walk it at 1440×900 and 2560×1440, light and
   dark. At 1440×900 the menu is on screen without scrolling, and nothing on the action bar is
   clipped.
+- **Start Now (TP-1330):** pass `macos/Tests/Fixtures/director-app/start-now` as `api_fixtures`.
+  Every slot is busy (three runs, `max_total` 3) and SHOP-320 waits in Todo on a slot. Open
+  SHOP-320 from Tickets: the action bar has **Start Now** before Stop Run…, enabled, its tooltip
+  "Start SHOP-320's run now, ahead of the queue; the other tickets keep their order". Press it:
+  `qa_api_requests` lists one `POST /api/v1/control/start` whose body has `issue_identifier`
+  `SHOP-320`, and no banner shows. Open SHOP-305 (running): Start Now is dimmed, its tooltip "A
+  run is already working on the ticket". On Tickets, right-click SHOP-320's row: its menu has
+  **Start Now**; on SHOP-305's row the entry is dimmed with that reason under it. Then pass
+  `macos/Tests/Fixtures/director-app/start-now-paused`: Symphony is paused ("Deploy freeze"), and
+  SHOP-320's Start Now is dimmed with the tooltip "Dispatch is paused by the operator: Deploy
+  freeze". The fixture's state stays the same; the live server proves that the page shows In
+  Progress and its running line within seconds of the press while the other tickets keep their
+  order. Walk it at 1440×900 and 2560×1440, light and dark: nothing on the action bar is clipped.
 - **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
   state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one
   warning, `symphony.yml sets auto_review.enabled, which is deprecated` (**Remove…**). Before

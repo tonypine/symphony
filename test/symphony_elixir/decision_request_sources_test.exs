@@ -43,8 +43,9 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
   # Each module that asks a Question directly, and what it asks.
   @question_sources %{
     # A ticket parked in Backlog after turns with no new commit or state change
-    # (`SymphonyElixir.IdlePark`): "<id> is parked: its last N turns changed nothing".
-    "lib/symphony_elixir/agent_runner.ex" => [:idle_park],
+    # (`SymphonyElixir.IdlePark.ask/4`, which the agent runner's park and the start-up backfill of
+    # an older park call): "<id> is parked: its last N turns changed nothing".
+    "lib/symphony_elixir/idle_park.ex" => [:idle_park],
     # The dispatch-loop guard (`SymphonyElixir.DispatchLoop`) and the quiet handoff: "<id> ran N
     # times in M minutes without finishing" and "<id>'s last two runs ended without a handoff".
     "lib/symphony_elixir/orchestrator.ex" => [:dispatch_loop, :quiet_handoff],
@@ -90,8 +91,14 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
     assert orchestrator =~ "DispatchLoop.question_attrs(loop,"
     assert orchestrator =~ "DispatchLoop.question_attrs({:quiet_handoff,"
 
+    idle_park = Map.new(lib_files())["lib/symphony_elixir/idle_park.ex"]
+    assert idle_park =~ "Questions.ask(ticket, question_attrs(name, turns))"
+
     runner = Map.new(lib_files())["lib/symphony_elixir/agent_runner.ex"]
-    assert runner =~ "IdlePark.question_attrs("
+    assert runner =~ "IdlePark.ask("
+
+    backfill = Map.new(lib_files())["lib/symphony_elixir/idle_park/backfill.ex"]
+    assert backfill =~ "IdlePark.ask("
 
     guard = Map.new(lib_files())["lib/symphony_elixir/transition_guard.ex"]
     assert guard =~ "Questions.ask(ticket, block_report_question("

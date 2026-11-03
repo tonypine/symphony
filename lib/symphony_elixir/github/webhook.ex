@@ -14,14 +14,17 @@ defmodule SymphonyElixir.GitHub.Webhook do
   @signature_prefix "sha256="
 
   @type ci_event :: %{
-          event: String.t(),
-          action: String.t() | nil,
-          head_sha: String.t() | nil,
-          conclusion: String.t() | nil,
-          completed_at: DateTime.t() | nil,
-          pr_urls: [String.t()],
-          merged: boolean(),
-          base_ref: String.t() | nil
+          required(:event) => String.t(),
+          required(:action) => String.t() | nil,
+          required(:head_sha) => String.t() | nil,
+          required(:conclusion) => String.t() | nil,
+          required(:completed_at) => DateTime.t() | nil,
+          required(:pr_urls) => [String.t()],
+          required(:merged) => boolean(),
+          required(:base_ref) => String.t() | nil,
+          optional(:workflow) => String.t() | nil,
+          optional(:head_branch) => String.t() | nil,
+          optional(:repo) => String.t() | nil
         }
 
   @typedoc "A push to a branch of `repo_url`: the branch and the commit it now points at."
@@ -97,14 +100,15 @@ defmodule SymphonyElixir.GitHub.Webhook do
   defp parse_event(event, %{"action" => "completed"} = payload) when event in ["check_suite", "check_run", "workflow_run"] do
     case Map.get(payload, event) do
       %{} = subject ->
-        ci_event(
-          event,
+        event
+        |> ci_event(
           "completed",
           Map.get(subject, "head_sha"),
           Map.get(subject, "conclusion"),
           completed_at(subject),
           pr_urls(payload, Map.get(subject, "pull_requests"))
         )
+        |> with_workflow(event, subject, payload)
 
       _other ->
         :ignored
@@ -152,6 +156,19 @@ defmodule SymphonyElixir.GitHub.Webhook do
        base_ref: nil
      }}
   end
+
+  # A workflow run also names its workflow, the branch it ran on and its repository (`owner/name`),
+  # so a release run on the default branch is told apart (`SymphonyElixir.ReleaseBuild.delivered/2`).
+  defp with_workflow({:ci, ci}, "workflow_run", subject, payload) do
+    {:ci,
+     Map.merge(ci, %{
+       workflow: string(Map.get(subject, "name")),
+       head_branch: string(Map.get(subject, "head_branch")),
+       repo: string(get_in(payload, ["repository", "full_name"]))
+     })}
+  end
+
+  defp with_workflow(delivery, _event, _subject, _payload), do: delivery
 
   defp completed_at(subject) do
     parse_datetime(Map.get(subject, "completed_at") || Map.get(subject, "updated_at"))

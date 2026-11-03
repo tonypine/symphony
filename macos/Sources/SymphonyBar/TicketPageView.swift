@@ -215,13 +215,30 @@ extension SymphonyWindowModel {
         }
     }
 
-    /// The banner of the last Move to…, while it shows.
+    /// Start now (TP-1330): Symphony starts the ticket's run at once, ahead of the queue. The button is only clickable
+    /// when the payload said it may start; on success the state and the page are read again at once, so the running
+    /// line shows. A refusal (the state changed between the read and the click) shows Symphony's reason on the banner.
+    func startNow(_ identifier: String) {
+        guard startInFlight == nil else { return }
+        startInFlight = identifier
+        Task {
+            let result = await onControl(TicketStart.action(identifier))
+            if case let .failed(message) = result {
+                showMoveBanner(.failed(itemID: identifier, identifier: identifier, message: message))
+            }
+            client.refresh()
+            readTicket(force: true)
+            startInFlight = nil
+        }
+    }
+
+    /// The banner of the last Move to… or refused Start now, while it shows.
     var moveBanner: InboxBanner? {
         guard let banner = inboxBanner, banner.id == moveBannerID else { return nil }
         return banner
     }
 
-    private func showMoveBanner(_ banner: InboxBanner) {
+    func showMoveBanner(_ banner: InboxBanner) {
         moveBannerID = banner.id
         showBanner(banner)
     }
@@ -286,6 +303,9 @@ struct TicketPageActions {
     var stopRun: () -> Void = {}
     /// A Move to… pick: its sheet.
     var move: (MoveSheet) -> Void = { _ in }
+    /// Start now: the ticket's run starts at once; `starting` while the call is on its way.
+    var start: () -> Void = {}
+    var starting = false
     var copyAPIURL: () -> Void = {}
     var showAuditRecords: () -> Void = {}
     var revealWorktree: (String) -> Void = { _ in }
@@ -342,6 +362,8 @@ struct TicketPageContent: View {
                     openURL: model.onOpenURL,
                     stopRun: { model.openStopRun(page.identifier, origin: .ticketPage) },
                     move: model.openMove,
+                    start: { model.startNow(page.identifier) },
+                    starting: model.startInFlight == page.identifier,
                     copyAPIURL: { model.copyAPIURL(page) },
                     showAuditRecords: { model.showAuditRecords(page) },
                     revealWorktree: model.revealWorktree,
@@ -736,7 +758,7 @@ private struct DoneLine: View {
     }
 }
 
-/// View Transcript (the default), Open in Linear, Stop Run…, Move to…, and the ⋯ menu.
+/// View Transcript (the default), Open in Linear, Start Now, Stop Run…, Move to…, and the ⋯ menu.
 private struct TicketActions: View {
     let page: TicketPage
     let actions: TicketPageActions
@@ -753,6 +775,9 @@ private struct TicketActions: View {
             .help(page.isTracked ? "Open the run's transcript (⌘-click for another window)" : "Symphony no longer keeps this ticket's transcript")
             if let url = page.url {
                 Button(TicketPage.openInLinearTitle) { actions.openURL(url) }
+            }
+            if let start = page.start {
+                StartNowButton(identifier: page.identifier, start: start, starting: actions.starting, action: actions.start)
             }
             Button(StopRunSheet.buttonTitle, action: actions.stopRun)
                 .disabled(!page.isRunning)
@@ -1228,6 +1253,56 @@ struct WrappingStack: Layout {
             widest = max(widest, x - spacing)
         }
         return (places, CGSize(width: widest, height: y + lineHeight))
+    }
+}
+
+// MARK: - TP-1330: Start now
+
+/// Start Now: disabled, its tooltip Symphony's reason, whenever the payload says the start would be refused; a spinner
+/// and "Starting…" while the call is on its way.
+struct StartNowButton: View {
+    let identifier: String
+    let start: TicketStart
+    var starting = false
+    let action: () -> Void
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+
+    var body: some View {
+        Button(action: action) {
+            if starting {
+                HStack(spacing: DesignTokens.Space.s1) {
+                    if offscreenSnapshot {
+                        // `ImageRenderer` can't draw a spinner: a still one stands in.
+                        Image(systemName: "progress.indicator").accessibilityHidden(true)
+                    } else {
+                        ProgressView().controlSize(.small).accessibilityHidden(true)
+                    }
+                    Text(TicketStart.startingTitle)
+                }
+            } else {
+                Text(TicketStart.title)
+            }
+        }
+        .disabled(!start.allowed || starting)
+        .help(start.help(identifier))
+        .accessibilityLabel(starting ? "Starting \(identifier)" : start.accessibilityLabel(identifier))
+    }
+}
+
+/// A Tickets row's Start Now entry: disabled with Symphony's reason under its title when the start would be refused.
+struct StartNowMenuItem: View {
+    let identifier: String
+    let start: TicketStart
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(TicketStart.title)
+            if !start.allowed { Text(start.help(identifier)) }
+        }
+        .disabled(!start.allowed)
+        .help(start.help(identifier))
+        .accessibilityLabel(start.accessibilityLabel(identifier))
     }
 }
 

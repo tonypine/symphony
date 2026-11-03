@@ -108,6 +108,18 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           created_at: DateTime.t() | nil
         }
 
+  @typedoc "A run of one workflow on a branch (`branch_workflow_run/4`): a commit's run, with the commit."
+  @type branch_workflow_run :: %{
+          id: String.t() | nil,
+          number: pos_integer() | nil,
+          attempt: pos_integer(),
+          status: String.t() | nil,
+          conclusion: String.t() | nil,
+          url: String.t() | nil,
+          created_at: DateTime.t() | nil,
+          head_sha: String.t() | nil
+        }
+
   @type run_job :: %{id: String.t() | nil, name: String.t() | nil, conclusion: String.t() | nil}
 
   @type open_pull_request :: %{
@@ -536,6 +548,26 @@ defmodule SymphonyElixir.GitHub.PullRequest do
     with {:ok, output} <- run_gh(args, opts) do
       case Jason.decode(output) do
         {:ok, runs} when is_list(runs) -> {:ok, for(run <- runs, is_map(run), do: normalize_commit_workflow_run(run))}
+        _other -> {:error, :invalid_workflow_runs_payload}
+      end
+    end
+  end
+
+  @doc """
+  The newest run of workflow `workflow` started by a push to `branch` of `repo` (`owner/repo` or
+  `host/owner/repo`), with the commit it ran on (`head_sha`), or nil when it has none, in one request.
+  """
+  @spec branch_workflow_run(String.t(), String.t(), String.t(), keyword()) ::
+          {:ok, branch_workflow_run() | nil} | {:error, term()}
+  def branch_workflow_run(repo, branch, workflow, opts \\ []) when is_binary(repo) and is_binary(branch) and is_binary(workflow) do
+    args =
+      ["run", "list", "-R", repo, "--branch", branch, "--workflow", workflow, "--event", "push", "--limit", "1", "--json"] ++
+        ["databaseId,number,attempt,status,conclusion,url,createdAt,headSha"]
+
+    with {:ok, output} <- run_gh(args, opts) do
+      case Jason.decode(output) do
+        {:ok, [%{} = run | _rest]} -> {:ok, Map.put(normalize_commit_workflow_run(run), :head_sha, normalize_id(run["headSha"]))}
+        {:ok, []} -> {:ok, nil}
         _other -> {:error, :invalid_workflow_runs_payload}
       end
     end
