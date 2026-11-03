@@ -588,18 +588,31 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   defp positive(value) when is_integer(value) and value > 0, do: value
   defp positive(_value), do: nil
 
+  @typedoc "A job of a workflow run's latest attempt, with the steps it ran: what `run_steps/2` reads."
+  @type run_job_steps :: %{
+          name: String.t() | nil,
+          conclusion: String.t() | nil,
+          steps: [%{name: String.t() | nil, conclusion: String.t() | nil}]
+        }
+
   @doc """
-  Whether any job of workflow run `run_id`'s latest attempt started: ran at least one step. A run
-  GitHub cancelled while it waited for a machine started none. The repository is `:repo` when given.
+  The jobs of workflow run `run_id`'s latest attempt, each with the steps it ran and their
+  conclusions (upcased). A job GitHub cancelled while it waited for a machine ran no step. The
+  repository is `:repo` when given.
   """
-  @spec run_started?(String.t(), keyword()) :: {:ok, boolean()} | {:error, term()}
-  def run_started?(run_id, opts \\ []) when is_binary(run_id) do
+  @spec run_steps(String.t(), keyword()) :: {:ok, [run_job_steps()]} | {:error, term()}
+  def run_steps(run_id, opts \\ []) when is_binary(run_id) do
     with {:ok, output} <- run_gh(["run", "view", run_id, "--json", "jobs"] ++ repo_args(opts), opts) do
       case Jason.decode(output) do
-        {:ok, %{"jobs" => jobs}} when is_list(jobs) -> {:ok, Enum.any?(jobs, &match?(%{"steps" => [_ | _]}, &1))}
+        {:ok, %{"jobs" => jobs}} when is_list(jobs) -> {:ok, for(%{} = job <- jobs, do: normalize_job_steps(job))}
         _other -> {:error, :invalid_run_jobs_payload}
       end
     end
+  end
+
+  defp normalize_job_steps(job) do
+    steps = for %{} = step <- List.wrap(job["steps"]), do: %{name: step["name"], conclusion: upcase(step["conclusion"])}
+    %{name: job["name"], conclusion: upcase(job["conclusion"]), steps: steps}
   end
 
   defp list_runs(args, opts) do
