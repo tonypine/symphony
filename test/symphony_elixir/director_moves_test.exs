@@ -40,6 +40,11 @@ defmodule SymphonyElixir.DirectorMovesTest do
     def fetch_issue_by_identifier(_identifier), do: Application.fetch_env!(:symphony_elixir, :director_moves_test_fetch)
   end
 
+  # The by-id read of a ticket with no record: it answers what the test put in the app env.
+  defmodule ByIdTracker do
+    def fetch_issue_states_by_ids(_ids), do: Application.fetch_env!(:symphony_elixir, :director_moves_test_by_id)
+  end
+
   defmodule UnwritableStore do
     def get_ticket_state(issue_id), do: RunStore.get_ticket_state(issue_id)
     def put_own_state_move(_issue_id, _at), do: {:error, :boom}
@@ -86,6 +91,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       Application.delete_env(:symphony_elixir, :director_moves_test_activity)
       Application.delete_env(:symphony_elixir, :director_moves_test_close)
       Application.delete_env(:symphony_elixir, :director_moves_test_workspace)
+      Application.delete_env(:symphony_elixir, :director_moves_test_by_id)
       SubIssueWait.reset_for_test(@waiting)
       restore_app_env(:audit_log_dir, previous_audit_dir)
       File.rm_rf(audit_dir)
@@ -2407,7 +2413,39 @@ defmodule SymphonyElixir.DirectorMovesTest do
                TicketStateReconciler.reconcile(record, "Todo", DateTime.utc_now(), "record")
     end
 
-    test "refuses a phase the repo doesn't name, a ticket with no record and one in no configured repository", %{opts: opts} do
+    test "a Backlog ticket Symphony has no record of is read from Linear, recorded, and moved to Todo", %{opts: opts} do
+      RunStore.delete_ticket_state("pr")
+      put_issues([%{pr("Backlog") | repo_key: "repo-director"}])
+      refute RunStore.get_ticket_state("pr")
+
+      assert {:ok, %{from_state: "Backlog", to_state: "Todo", moved: true}} = DirectorMoves.move(:move, "MOT-40", %{to: "Todo"}, opts)
+      assert_received {:memory_tracker_fetch_issue_states_by_ids, ["pr"]}
+      assert_received {:memory_tracker_state_update, "pr", "Todo"}
+
+      assert %{repo_key: "repo-director", phase: "Todo", phase_owner: :symphony, title: "Add checkout", observed_from: :by_id} =
+               "pr" |> RunStore.get_ticket_state() |> TicketState.normalize()
+    end
+
+    test "a ticket with no record whose by-id read fails or doesn't return it is refused, and no record is written", %{opts: opts} do
+      RunStore.delete_ticket_state("pr")
+      put_issues([%{pr("Backlog") | repo_key: "repo-director"}])
+      opts = Keyword.put(opts, :tracker, ByIdTracker)
+
+      Application.put_env(:symphony_elixir, :director_moves_test_by_id, {:ok, []})
+
+      assert {:error, {:conflict, "Symphony couldn't read MOT-40 from Linear to record it, so it can't move it: Linear didn't return it"}} =
+               DirectorMoves.move(:move, "MOT-40", %{to: "Todo"}, opts)
+
+      Application.put_env(:symphony_elixir, :director_moves_test_by_id, {:error, :linear_down})
+
+      assert {:error, {:conflict, "Symphony couldn't read MOT-40 from Linear to record it, so it can't move it: :linear_down"}} =
+               DirectorMoves.move(:move, "MOT-40", %{to: "Todo"}, opts)
+
+      refute RunStore.get_ticket_state("pr")
+      refute_received {:memory_tracker_state_update, _id, _state}
+    end
+
+    test "refuses a phase the repo doesn't name and a ticket in no configured repository", %{opts: opts} do
       owned("repo-director", "QA")
       assert {:error, {:invalid, "to is required"}} = DirectorMoves.move(:move, "MOT-40", %{to: " "}, opts)
 
@@ -2415,10 +2453,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
                DirectorMoves.move(:move, "MOT-40", %{to: "Shipping"}, opts)
 
       RunStore.delete_ticket_state("pr")
-
-      assert {:error, {:conflict, "Symphony has no record of MOT-40 yet, so it can't move it"}} =
-               DirectorMoves.move(:move, "MOT-40", %{to: "Todo"}, opts)
-
       put_issues([pr("QA")])
 
       assert {:error, {:conflict, "MOT-40 is in no repository Symphony is configured for, so Symphony doesn't track it"}} =

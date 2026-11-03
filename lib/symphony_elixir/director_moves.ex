@@ -78,8 +78,12 @@ defmodule SymphonyElixir.DirectorMoves do
     report's) is answered with the first pick, as `answer_held_question/4` says; any other is
     refused.
 
-  - `:move`: the free move. A ticket Symphony tracks (it has a record under a configured
-    repository, whoever set its phase) goes to `:to`, any phase the repo's workflow names
+  - `:move`: the free move. A ticket in a configured repository (one that routes to a repo key)
+    goes to `:to`, whoever set its phase. A ticket Symphony has no record of yet (a Backlog ticket
+    whose webhook delivery was missed: the poll reads active states only) is read from Linear by id
+    first and observed (`SymphonyElixir.TicketObservation.observe/3`, `source: :by_id`), so its
+    record exists before the move; a read that fails or doesn't return it refuses the move and
+    writes nothing (`:tracker`, default `SymphonyElixir.Tracker`, is the module read). It goes to `:to`, any phase the repo's workflow names
     (`phases/1`), keeping its workspace, branch and pull request: nothing is reset. The record's
     phase is written first, then Linear (`SymphonyElixir.TransitionGuard`), so the phase is
     Symphony's from then on (`phase_owner: :symphony`) and Linear never moves it back; a move Linear
@@ -144,6 +148,7 @@ defmodule SymphonyElixir.DirectorMoves do
     RunStore,
     StateMachine,
     SubIssueWait,
+    TicketObservation,
     TicketPullRequest,
     TicketSignals,
     TicketState,
@@ -952,18 +957,41 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  # Any ticket Symphony tracks moves, whoever set its phase: the move writes the record first, so
-  # the phase it sets is Symphony's (`phase_owner: :symphony`) either way. A ticket in no configured
-  # repository, or one Symphony has no record of, is refused. A record answers with its phase.
+  # Any ticket of a configured repository moves, whoever set its phase: the move writes the record
+  # first, so the phase it sets is Symphony's (`phase_owner: :symphony`) either way. A ticket in no
+  # configured repository is refused. A record answers with its phase; a ticket with none yet is
+  # read from Linear by id and observed first, so the move acts from a record like any other.
   defp require_tracked(%Issue{repo_key: nil} = issue, _opts),
     do: conflict("#{issue.identifier} is in no repository Symphony is configured for, so Symphony doesn't track it")
 
   defp require_tracked(issue, opts) do
     case Keyword.get(opts, :store, RunStore).get_ticket_state(issue.id) do
       %{} = record -> {:ok, TicketState.normalize(record).phase}
-      _none -> conflict("Symphony has no record of #{issue.identifier} yet, so it can't move it")
+      _none -> observe_untracked(issue, Keyword.get(opts, :tracker, Tracker))
     end
   end
+
+  # The by-id read carries blockers and sub-issues, as the reconciler's does, so the record it
+  # writes is the one a webhook delivery would have, and its phase is the state Linear read.
+  defp observe_untracked(issue, tracker) do
+    with {:ok, read} <- read_by_id(tracker, issue.id),
+         {:ok, _outcome} <- TicketObservation.observe(issue.repo_key, read, source: :by_id) do
+      Logger.info("Director move recorded an untracked ticket issue_id=#{issue.id} issue_identifier=#{issue.identifier} repo_key=#{issue.repo_key}")
+      {:ok, read.state}
+    else
+      failure -> conflict("Symphony couldn't read #{issue.identifier} from Linear to record it, so it can't move it: #{untracked_reason(failure)}")
+    end
+  end
+
+  defp read_by_id(tracker, id) do
+    case tracker.fetch_issue_states_by_ids([id]) do
+      {:ok, issues} -> Enum.find_value(issues, :not_found, &(match?(%Issue{id: ^id}, &1) and {:ok, &1}))
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp untracked_reason(:not_found), do: "Linear didn't return it"
+  defp untracked_reason({:error, reason}), do: inspect(reason)
 
   defp unmoved(issue) do
     %{
