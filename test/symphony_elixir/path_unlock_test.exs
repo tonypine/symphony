@@ -1,13 +1,25 @@
 defmodule SymphonyElixir.PathUnlockTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{AgentSandboxConfig, Decisions, PathUnlock}
+  alias SymphonyElixir.{AgentSandboxConfig, Decisions, PathUnlock, Questions}
   alias SymphonyElixir.ClaudeCode.AppServer, as: ClaudeAppServer
   alias SymphonyElixir.Config.Schema.Agent.NetworkAccess
   alias SymphonyElixir.HumanActions.PlainWords
 
   @path "config/settings_ui_exempt.yml"
   @grant "Unlock config/settings_ui_exempt.yml for TP-760 so the run can drop the human_actions.label exemption."
+
+  @request %{
+    title: "Change the agents' shared guides",
+    question: "May TP-760 change the agents' shared guides?",
+    why: "The guide lives there.",
+    if_unanswered: "TP-760 waits.",
+    recommendation_reason: "It is what the ticket needs.",
+    options: [
+      %{label: "Allow this ticket to change the agents' shared guides", effect: "the next run changes them", recommended: true, unlocks: [".agents/skills"]},
+      %{label: "Keep them as they are", effect: "nothing changes"}
+    ]
+  }
 
   setup do
     :ok = RunStore.clear()
@@ -85,6 +97,42 @@ defmodule SymphonyElixir.PathUnlockTest do
       refute "./WORKFLOW.md" in AgentSandboxConfig.deny_write_paths(PathUnlock.paths(granted))
     end
 
+    test "an answered Question grants its picked option's paths with no Decisions section, labelled by the stored decision" do
+      ticket = {:ticket, "repo-a", "issue-TP-760"}
+      {:ok, question} = Questions.ask(ticket, @request, request: true)
+      {:ok, _answered} = Questions.answer(ticket, question.id, "Allow this ticket to change the agents' shared guides")
+      issue = issue("TP-760", "No decisions yet.")
+
+      assert [%{id: id, decision: "question", path: ".agents/skills", answer: "Allow this ticket to change the agents' shared guides"}] = PathUnlock.grants(issue)
+      assert id == question.id <> ":.agents/skills"
+
+      # The decision recorded under the request comment the Question's row names labels the grant.
+      entry = Decisions.entry("comment-7", ~D[2026-11-03], "Guides", "May it?", "Allow this ticket to change the agents' shared guides", [".agents/skills"])
+      :ok = RunStore.update_ticket_state(issue.id, %{decisions: [entry], projected: %{comments: %{question.id => %{comment: "comment-7"}}}})
+
+      assert [%{decision: "D1", path: ".agents/skills"}] = PathUnlock.grants(issue)
+      assert PathUnlock.prompt_section(PathUnlock.grants(issue)) =~ "by decision D1"
+
+      # Another ticket's runs stay locked.
+      assert PathUnlock.grants(issue("TP-761", "No decisions yet.")) == []
+    end
+
+    test "a Question answered with no option, or one that unlocks nothing, grants nothing" do
+      ticket = {:ticket, "repo-a", "issue-TP-760"}
+      {:ok, kept} = Questions.ask(ticket, @request, request: true)
+      {:ok, _answered} = Questions.answer(ticket, kept.id, "Keep them as they are")
+      {:ok, free} = Questions.ask(ticket, %{@request | title: "Another"}, request: true)
+      {:ok, _answered} = Questions.answer(ticket, free.id, "Do something else entirely")
+
+      assert PathUnlock.grants(issue("TP-760", "No decisions yet.")) == []
+      assert PathUnlock.grants(%{identifier: "TP-760", description: "No id."}) == []
+    end
+
+    test "prompt_section/1 names a Question's grant as a person's answer" do
+      assert PathUnlock.prompt_section([%{id: "q:WORKFLOW.md", decision: "question", path: "WORKFLOW.md", answer: "Allow it"}]) =~
+               "- `WORKFLOW.md`, by a person's answer to a question on this ticket"
+    end
+
     test "only the protected paths a recorded option names count" do
       picked = Map.put(Decisions.entry("comment-1", ~D[2026-10-20], "t", "q", "Allow it"), :unlocks, ["lib/app.ex", ".git", "WORKFLOW.md"])
       assert [%{path: "WORKFLOW.md"}] = PathUnlock.grants(issue("TP-760", description([picked])))
@@ -149,17 +197,12 @@ defmodule SymphonyElixir.PathUnlockTest do
       assert denied?(PathUnlock.paths(other))
     end
 
-    test "the unlock applies to one run only" do
+    test "the unlock is the ticket's: every later run keeps it, and the record names the run that first used it" do
       issue = issue("TP-760", description([entry("ruling-c1", @grant)]))
 
       assert [%{path: @path}] = PathUnlock.claim(issue, "repo-a", run_id: "run-1")
-      assert PathUnlock.claim(issue, "repo-a", run_id: "run-2") == []
+      assert [%{path: @path}] = PathUnlock.claim(issue, "repo-a", run_id: "run-2")
       assert %{path_unlocks: [%{id: "ruling-c1:" <> @path, run_id: "run-1"}]} = RunStore.get_ticket_state(issue.id)
-
-      # A new decision unlocks the path for one more run.
-      issue = %{issue | description: description([entry("ruling-c1", @grant), entry("ruling-c9", "Again: " <> @grant)])}
-      assert [%{decision: "D2"}] = PathUnlock.claim(issue, "repo-a", run_id: "run-3")
-      assert PathUnlock.claim(issue, "repo-a", run_id: "run-4") == []
     end
 
     test "a ticket without a grant costs no store call, and a store that can't record the claim unlocks nothing" do

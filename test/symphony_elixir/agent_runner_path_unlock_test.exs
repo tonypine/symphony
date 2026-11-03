@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.AgentRunnerPathUnlockTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.Decisions
+  alias SymphonyElixir.{Decisions, Questions}
 
   @grant "Unlock config/settings_ui_exempt.yml for TP-760 so the run can drop the human_actions.label exemption."
 
@@ -38,7 +38,7 @@ defmodule SymphonyElixir.AgentRunnerPathUnlockTest do
     %{test_root: test_root}
   end
 
-  test "the ticket's next run gets the unlocked path in its sandbox, tools and prompt; later runs and other tickets don't", ctx do
+  test "the ticket's next run gets the unlocked path in its sandbox, tools and prompt, and so do later runs; other tickets don't", ctx do
     {:ok, description} = Decisions.put("Drop the setting.", [Decisions.entry("ruling-c1", ~D[2026-10-14], nil, nil, @grant)])
 
     assert :ok = run(ctx, "TP-760", description)
@@ -50,11 +50,39 @@ defmodule SymphonyElixir.AgentRunnerPathUnlockTest do
 
     assert :ok = run(ctx, "TP-760", description)
     assert_receive {:turn, session_opts, turn_opts, prompt}
-    assert session_opts[:unlocked_paths] == []
-    assert turn_opts[:unlocked_paths] == []
-    refute prompt =~ "Protected paths unlocked for this run:"
+    assert session_opts[:unlocked_paths] == ["config/settings_ui_exempt.yml"]
+    assert turn_opts[:unlocked_paths] == ["config/settings_ui_exempt.yml"]
+    assert prompt =~ "Protected paths unlocked for this run:"
 
     assert :ok = run(ctx, "TP-761", description)
+    assert_receive {:turn, session_opts, _turn_opts, _prompt}
+    assert session_opts[:unlocked_paths] == []
+  end
+
+  test "a protected-path Question answered by its id unlocks the path for the ticket's next run, read from the Question", ctx do
+    ticket = {:ticket, "repo-a", "issue-TP-760"}
+
+    request = %{
+      title: "Change the agents' shared guides",
+      question: "May TP-760 change the agents' shared guides?",
+      why: "The guide lives there.",
+      if_unanswered: "TP-760 waits.",
+      recommendation_reason: "It is what the ticket needs.",
+      options: [
+        %{label: "Allow this ticket to change the agents' shared guides", effect: "the next run changes them", recommended: true, unlocks: [".agents/skills"]},
+        %{label: "Keep them as they are", effect: "nothing changes"}
+      ]
+    }
+
+    {:ok, question} = Questions.ask(ticket, request, request: true)
+    {:ok, _answered} = Questions.answer(ticket, question.id, "Allow this ticket to change the agents' shared guides")
+
+    assert :ok = run(ctx, "TP-760", "Drop the setting.")
+    assert_receive {:turn, session_opts, _turn_opts, prompt}
+    assert session_opts[:unlocked_paths] == [".agents/skills"]
+    assert prompt =~ "- `.agents/skills`, by a person's answer to a question on this ticket"
+
+    assert :ok = run(ctx, "TP-761", "Drop the setting.")
     assert_receive {:turn, session_opts, _turn_opts, _prompt}
     assert session_opts[:unlocked_paths] == []
   end

@@ -1425,6 +1425,32 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:ok, nil} = SymphonyElixir.Pauses.get(ticket)
     end
 
+    test "a protected-path Question answered by its id unlocks the path for the ticket's runs, and no other ticket's", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director", description: "Add the hook."}])
+
+      request = %{
+        title: "Change the agents' shared guides",
+        question: "May MOT-40 change the agents' shared guides?",
+        options: [
+          %{label: "Allow this ticket to change the agents' shared guides", effect: "the next run changes them", recommended: true, unlocks: [".agents/skills"]},
+          %{label: "Keep them as they are", effect: "nothing changes"}
+        ]
+      }
+
+      question = ask_decision(request)
+      pick = [%{question: request.question, answer: "Allow this ticket to change the agents' shared guides"}]
+
+      assert {:ok, %{move: "decide"}} = DirectorMoves.move(:decide, "MOT-40", %{picks: pick, question_id: question.id}, opts)
+
+      # The run reads the ticket as it was dispatched, before the Decisions section reached Linear.
+      stale = %{pr("In Progress") | repo_key: "repo-director", description: "Add the hook."}
+      assert [%{path: ".agents/skills", decision: "D1"}] = SymphonyElixir.PathUnlock.grants(stale)
+
+      assert [%{path: ".agents/skills"}] = SymphonyElixir.PathUnlock.claim(stale, "repo-director", run_id: "run-1")
+      assert [%{path: ".agents/skills"}] = SymphonyElixir.PathUnlock.claim(stale, "repo-director", run_id: "run-2")
+      assert SymphonyElixir.PathUnlock.claim(%{stale | id: "other", identifier: "MOT-41"}, "repo-director", run_id: "run-3") == []
+    end
+
     test "a pick of an option that unlocks nothing records no path", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director", description: "Add the hook."}])
 
