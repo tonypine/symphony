@@ -86,6 +86,10 @@ rewrites them to name the Director move.
 `.symphony/instructions/`:
 
 - `051-step-0-route.md:6`: "wait for human to move it to `Todo`".
+- `052-step-1-start.md:18`: "say so in the workpad `Confusions` so a human can add the label" (the
+  `plan` label, which has no Director move yet: [TP-1356](https://linear.app/tonypine/issue/TP-1356)).
+- `091-step-2-execution.md:5`: "The `qa:live` and `qa:fixture` labels are a person's override of
+  Symphony's choice" (added in Linear today; the move is TP-1356's).
 - `121-priority-vs-expedite.md:5`, `:6`: "they add the `expedite` label"; "`Backlog` -> `Todo` …
   stay with a person".
 
