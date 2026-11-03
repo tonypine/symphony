@@ -20,6 +20,16 @@ defmodule SymphonyElixir.QualityGateTest do
     end
   end
 
+  defmodule SeeingProvider do
+    @behaviour SymphonyElixir.QualityGate.Provider
+
+    @impl true
+    def score(issue, _settings) do
+      send(self(), {:scored_comments, issue.comments})
+      {:ok, %{score: 9, reason: "ok"}}
+    end
+  end
+
   defmodule ErroringProvider do
     @behaviour SymphonyElixir.QualityGate.Provider
 
@@ -184,6 +194,78 @@ defmodule SymphonyElixir.QualityGateTest do
       assert second.skipped == []
       assert second.awaiting_clarification == []
       assert %{passed?: true, awaiting_clarification?: false, rounds_asked: 0, reason: "clear now"} = Map.fetch!(second.cache, "ID-REPLY")
+    end
+
+    test "an Inbox answer to the gate's Question re-scores the ticket with the answer in its comments" do
+      config = config_enabled(pass_threshold: 6, clarification_floor: 4, max_clarification_rounds: 2)
+      Process.put(:quality_gate_stub_results, %{"ID-INBOX" => {:ok, %{score: 5, reason: "needs answer", questions: ["What is done?"]}}})
+      first = QualityGate.evaluate([issue("ID-INBOX")], config, %{}, provider_module: StubProvider, now: ~U[2026-05-05 03:01:00Z])
+      assert [%{rounds_asked: 1}] = first.awaiting_clarification
+
+      # The same answers keep the cache: nothing is scored again.
+      Process.put(:quality_gate_stub_results, %{"ID-INBOX" => {:ok, %{score: 8, reason: "clear now"}}})
+      unchanged = QualityGate.evaluate([issue("ID-INBOX")], config, first.cache, provider_module: StubProvider, answers: %{"ID-INBOX" => []})
+      assert [%{rounds_asked: 1}] = unchanged.awaiting_clarification
+
+      answer = %{text: "Done means the export runs nightly.", option: nil, at: ~U[2026-05-05 03:05:00Z]}
+
+      second =
+        QualityGate.evaluate([issue("ID-INBOX")], config, first.cache,
+          provider_module: StubProvider,
+          answers: %{"ID-INBOX" => [answer]},
+          now: ~U[2026-05-05 03:06:00Z]
+        )
+
+      assert [%Issue{id: "ID-INBOX", comments: []}] = second.passed
+      assert %{passed?: true, reason: "clear now"} = Map.fetch!(second.cache, "ID-INBOX")
+
+      # The answer reads as a comment the provider sees, and it is part of the cache key.
+      third = QualityGate.evaluate([issue("ID-INBOX")], config, second.cache, provider_module: StubProvider, answers: %{"ID-INBOX" => [answer]})
+      assert [%Issue{id: "ID-INBOX"}] = third.passed
+      assert third.cache == second.cache
+    end
+
+    test "the provider reads an Inbox answer as a comment after the issue's own" do
+      config = config_enabled(pass_threshold: 6, clarification_floor: 4)
+      answer = %{text: "Only the export module.", option: nil, at: ~U[2026-05-05 03:05:00Z]}
+
+      for comments <- [[%{author: "Operator", body: "Hi", created_at: nil}], :unknown] do
+        seen = %{issue("ID-SEE") | comments: comments}
+        QualityGate.evaluate([seen], config, %{}, provider_module: SeeingProvider, answers: %{"ID-SEE" => [answer]})
+        assert_received {:scored_comments, scored}
+        assert %{author: "Director (Symphony Inbox)", body: "Answer to the quality gate's questions: Only the export module."} = List.last(scored)
+      end
+    end
+
+    test "Start it as it is lets the ticket through without scoring it, once only after the last scoring" do
+      config = config_enabled(pass_threshold: 6, clarification_floor: 4, max_clarification_rounds: 2)
+      Process.put(:quality_gate_stub_results, %{"ID-START" => {:ok, %{score: 5, reason: "needs answer", questions: ["What is done?"]}}})
+      first = QualityGate.evaluate([issue("ID-START")], config, %{}, provider_module: StubProvider, now: ~U[2026-05-05 03:01:00Z])
+
+      start = %{text: "Start it as it is", option: :start, at: ~U[2026-05-05 03:05:00Z]}
+
+      second =
+        QualityGate.evaluate([issue("ID-START")], config, first.cache,
+          provider_module: StubProvider,
+          answers: %{"ID-START" => [start]},
+          now: ~U[2026-05-05 03:06:00Z]
+        )
+
+      assert [%Issue{id: "ID-START"}] = second.passed
+      assert %{passed?: true, score: nil, reason: "Started as it is by the Director's answer"} = Map.fetch!(second.cache, "ID-START")
+
+      # An edit after that pick is scored as usual: the pick is older than the last scoring.
+      edited = issue("ID-START", updated_at: ~U[2026-05-05 05:00:00Z])
+      third = QualityGate.evaluate([edited], config, second.cache, provider_module: StubProvider, answers: %{"ID-START" => [start]})
+      assert [%{rounds_asked: 1}] = third.awaiting_clarification
+
+      # With no cache entry at all, the pick still lets it through.
+      fresh = QualityGate.evaluate([issue("ID-START")], config, %{}, provider_module: StubProvider, answers: %{"ID-START" => [start]})
+      assert [%Issue{id: "ID-START"}] = fresh.passed
+
+      # A malformed answers option reads as none.
+      none = QualityGate.evaluate([issue("ID-START")], config, %{}, provider_module: StubProvider, answers: :malformed)
+      assert [%{rounds_asked: 1}] = none.awaiting_clarification
     end
 
     test "quality gate comments do not invalidate cached clarification by themselves" do

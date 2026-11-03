@@ -2440,6 +2440,13 @@ The model scores clarity, scope, ambiguity, and sandbox dependency. A user-facin
 `## User walkthrough` section (numbered steps, each with the expected visible result) scores lower; see
 [Writing tickets](../README.md#writing-tickets).
 
+A score from `clarification_floor` up to `pass_threshold` holds the ticket for clarification, up to
+`max_clarification_rounds` rounds. Each round asks the gate's questions as a Question in the
+Director's Inbox and posts them as a comment on the ticket. Answer with Decide, in your own words
+or by an option ("Start it as it is" lets the ticket through, "Move it to Backlog" parks it), or
+reply under the comment in Linear. Either way the gate scores the ticket again with the answer, and
+the ticket starts once it passes. A scoring that ends the round withdraws the open Question.
+
 ### `dashboard`
 
 Live dashboard and status snapshot settings.

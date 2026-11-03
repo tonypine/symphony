@@ -3167,13 +3167,18 @@ defmodule SymphonyElixir.Orchestrator do
   defp with_text_read(issues, _state, _retry), do: issues
 
   defp evaluate_quality_gate_with_comments(issues, gate_config, cache, comment_keys) do
+    questions = quality_gate_questions(issues)
+    answers = Map.new(questions, fn {issue_id, {_ticket, ticket_questions}} -> {issue_id, QualityGate.Question.answers(ticket_questions)} end)
+
     %{passed: passed, skipped: skipped, awaiting_clarification: awaiting_clarification, cache: cache} =
-      QualityGate.evaluate(issues, gate_config, cache)
+      QualityGate.evaluate(issues, gate_config, cache, answers: answers)
 
     comment_keys = retain_quality_gate_comment_keys(comment_keys, issues)
 
     {cache, comment_keys, _awaiting_with_status} =
       post_quality_gate_clarification_comments(awaiting_clarification, gate_config, cache, comment_keys)
+
+    sync_quality_gate_questions(questions, awaiting_clarification)
 
     {cache, comment_keys, skipped_with_status} =
       post_quality_gate_skip_comments(skipped, gate_config, cache, comment_keys)
@@ -3189,6 +3194,28 @@ defmodule SymphonyElixir.Orchestrator do
       comment_keys: comment_keys,
       error_skips_index: error_skips_index
     }
+  end
+
+  # The Questions on each gated ticket's record (`QualityGate.Question`): the answers the gate reads,
+  # and the open gate Question a scoring that ends its round withdraws. A ticket with no repo key to
+  # name its record has none.
+  defp quality_gate_questions(issues) do
+    for %Issue{id: issue_id} = issue <- issues,
+        is_binary(issue_id),
+        repo_key = hold_repo_key(issue),
+        is_binary(repo_key),
+        into: %{} do
+      ticket = {:ticket, repo_key, issue_id}
+      {issue_id, {ticket, QualityGate.Question.questions(ticket)}}
+    end
+  end
+
+  defp sync_quality_gate_questions(questions, awaiting_clarification) do
+    awaiting = Map.new(awaiting_clarification, &{&1.issue_id, &1})
+
+    for {issue_id, {ticket, ticket_questions}} <- questions do
+      QualityGate.Question.sync(ticket, ticket_questions, Map.get(awaiting, issue_id))
+    end
   end
 
   defp apply_quality_gate_evaluation_result(%State{} = state, %{
