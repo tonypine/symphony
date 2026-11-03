@@ -8,7 +8,7 @@ defmodule SymphonyElixir.PrWatchTest do
   @now ~U[2026-10-16 12:00:00Z]
 
   defmodule FailingStore do
-    def get_ticket_state(_repo_key, _issue_id), do: {:error, :store_down}
+    def get_ticket_state(_issue_id), do: {:error, :store_down}
     def list_ticket_states(_repo_key), do: {:error, :store_down}
   end
 

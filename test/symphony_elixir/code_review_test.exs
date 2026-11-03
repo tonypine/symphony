@@ -59,8 +59,8 @@ defmodule SymphonyElixir.CodeReviewTest do
   end
 
   setup do
-    RunStore.delete_ticket_state(@repo_key, @issue_id)
-    on_exit(fn -> RunStore.delete_ticket_state(@repo_key, @issue_id) end)
+    RunStore.delete_ticket_state(@issue_id)
+    on_exit(fn -> RunStore.delete_ticket_state(@issue_id) end)
     :ok
   end
 
@@ -695,7 +695,7 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert_received {:moved, @issue_id, "QA"}
 
       assert [%{payload: %{kind: "code_review", outcome: "approve", head: ^head, reason: reason}}] =
-               RunStore.list_ticket_events(@repo_key, @issue_id, types: ["verdict.recorded"])
+               RunStore.list_ticket_events(@issue_id, types: ["verdict.recorded"])
 
       assert reason ==
                "adds 300, changes 50, removes 2,100 lines outside docs and tests: 2,450 in all, over the limit of 1,500. looks good"
@@ -710,7 +710,7 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert :ok = run(workspace, settings: settings)
 
       assert_received {:moved, @issue_id, "QA"}
-      assert [%{payload: payload}] = RunStore.list_ticket_events(@repo_key, @issue_id, types: ["verdict.recorded"])
+      assert [%{payload: payload}] = RunStore.list_ticket_events(@issue_id, types: ["verdict.recorded"])
       assert payload.reason == "looks good"
     end
 
@@ -1121,7 +1121,7 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert_received {:moved, @issue_id, "QA"}
 
       assert [%{payload: %{reason: "mix.lock: jason 1.4.4 -> 2.0.0. ok"}}] =
-               RunStore.list_ticket_events(@repo_key, @issue_id, types: ["verdict.recorded"])
+               RunStore.list_ticket_events(@issue_id, types: ["verdict.recorded"])
     end
 
     test "a large change to one of the base branch's busy files informs the review" do
@@ -1139,7 +1139,7 @@ defmodule SymphonyElixir.CodeReviewTest do
       refute_received {:reviewed, _, _}
       assert_received {:moved, @issue_id, "QA"}
 
-      assert [%{payload: %{reason: reason}}] = RunStore.list_ticket_events(@repo_key, @issue_id, types: ["verdict.recorded"])
+      assert [%{payload: %{reason: reason}}] = RunStore.list_ticket_events(@issue_id, types: ["verdict.recorded"])
       assert reason =~ "lib/app/router.ex is one of the repository's busiest files, and this change adds 400, changes 0, removes 0 of its lines"
     end
 
@@ -1184,7 +1184,7 @@ defmodule SymphonyElixir.CodeReviewTest do
 
   describe "the verdict's run" do
     defp verdict_runs do
-      for event <- RunStore.list_ticket_events(@repo_key, @issue_id, types: ["verdict.recorded"]) do
+      for event <- RunStore.list_ticket_events(@issue_id, types: ["verdict.recorded"]) do
         {event.payload.outcome, event.run_id}
       end
     end

@@ -203,7 +203,7 @@ defmodule SymphonyElixir.Questions do
   (Backlog, a merge, a terminal state), it was restarted, the hold it was asked with cleared, the
   one who asked withdrew it as not needed, the run that asked ended (only a question that holds
   nothing, `withdraw_lapsed/3`), or the ticket's move to another project answered it
-  (`superseded_by_move`, the merge of its records, `SymphonyElixir.TicketMerge`).
+  (`superseded_by_move`, the merge of its records in Symphony 0.0.1.792).
   """
   @type cause :: String.t()
 
@@ -394,9 +394,9 @@ defmodule SymphonyElixir.Questions do
   defp lapse_cause({:run_ended, _run}), do: "run_ended"
   defp lapse_cause(_moved), do: "ticket_moved"
 
-  defp project_withdrawal({:ticket, repo_key, issue_id}, question, reason, opts) do
+  defp project_withdrawal({:ticket, _repo_key, issue_id}, question, reason, opts) do
     # The pause projector posts the reply from the withdrawn Question when it owns the comments.
-    if not Projector.owns?(), do: reply_withdrawn(issue_id, request_comment_id(repo_key, issue_id, question.id), reason, opts)
+    if not Projector.owns?(), do: reply_withdrawn(issue_id, request_comment_id(issue_id, question.id), reason, opts)
   end
 
   defp reply_withdrawn(_issue_id, nil, _reason, _opts), do: :ok
@@ -409,8 +409,8 @@ defmodule SymphonyElixir.Questions do
 
   # The request comment the pause projector wrote or found for the question, as the ticket's record
   # keeps it: no Linear read.
-  defp request_comment_id(repo_key, issue_id, question_id) do
-    case RunStore.get_ticket_state(repo_key, issue_id) do
+  defp request_comment_id(issue_id, question_id) do
+    case RunStore.get_ticket_state(issue_id) do
       %{projected: %{comments: %{^question_id => %{comment: comment_id}}}} -> comment_id
       _none -> nil
     end
@@ -684,14 +684,14 @@ defmodule SymphonyElixir.Questions do
 
   defp questions(subject) do
     case subject(subject) do
-      {:ok, {:ticket, repo_key, issue_id}} -> ticket_questions(repo_key, issue_id)
+      {:ok, {:ticket, _repo_key, issue_id}} -> ticket_questions(issue_id)
       {:ok, subject} -> subject_questions(subject)
       {:error, _invalid} -> []
     end
   end
 
-  defp ticket_questions(repo_key, issue_id) do
-    case RunStore.get_ticket_state(repo_key, issue_id) do
+  defp ticket_questions(issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
       record when is_map(record) -> TicketState.normalize(record).questions
       _none -> []
     end

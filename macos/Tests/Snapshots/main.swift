@@ -748,6 +748,69 @@ func moveSheet(error: String? = nil) -> some View {
         .background(DesignTokens.Surface.window.color)
 }
 
+// Start now (TP-1330): the `start-now` fixture's SHOP-320, a Todo ticket waiting while every slot is busy, and the
+// `start-now-paused` fixture's, on a paused Symphony.
+let startAPI = here.appendingPathComponent("../Fixtures/director-app/start-now/api/v1").standardizedFileURL
+let startPausedAPI = here.appendingPathComponent("../Fixtures/director-app/start-now-paused/api/v1").standardizedFileURL
+
+/// SHOP-320's page in a window `window` pt wide beside the sidebar, its action bar with Start Now: `starting` while its
+/// call is on its way, and the refusal banner after a refused start when `refused`.
+@MainActor
+func startPage(window: CGFloat, api: URL = startAPI, starting: Bool = false, refused: String? = nil) -> some View {
+    let page = TicketPage(
+        identifier: "SHOP-320",
+        sources: TicketPage.Sources(
+            state: try? Data(contentsOf: api.appendingPathComponent("state.json")),
+            issue: try? Data(contentsOf: api.appendingPathComponent("SHOP-320.json"))
+        ),
+        now: now, timeZone: TimeZone(identifier: "UTC")!
+    )
+    let width = window - DesignTokens.Layout.sidebarWidth
+    return VStack(spacing: 0) {
+        TicketPageBody(page: page, actions: TicketPageActions(starting: starting), width: width)
+        if let refused {
+            InboxBannerView(banner: .failed(itemID: "SHOP-320", identifier: "SHOP-320", message: refused), undo: {}, close: {})
+                .padding(.horizontal, DesignTokens.Space.s5)
+                .padding(.bottom, DesignTokens.Space.s3)
+        }
+    }
+    .frame(width: width)
+    .background(DesignTokens.Surface.content.color)
+}
+
+/// Start Now disabled for each reason Symphony refuses a start with, its tooltip standing in beside it (`ImageRenderer`
+/// draws no tooltip), then the Tickets row menu's entry with its reason under the title.
+@MainActor
+func startDisabledReasons() -> some View {
+    let reasons = [
+        "dispatch is paused by the operator: Deploy freeze",
+        "the repository is paused by you since 2026-10-07 14:03 UTC: Release branch cut",
+        "a Question is waiting for an answer",
+        "a run is already working on the ticket",
+        "the ticket is in Backlog; move it first",
+        "the ticket is Done; only an open ticket can be started",
+        "the ticket's plan waits on a person",
+        "the ticket waits on its sub-tickets",
+    ]
+    return VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+        ForEach(reasons, id: \.self) { reason in
+            let start = TicketStart(allowed: false, reason: reason)
+            HStack(spacing: DesignTokens.Space.s3) {
+                StartNowButton(identifier: "SHOP-320", start: start, action: {})
+                Text(start.help("SHOP-320"))
+                    .font(DesignTokens.TypeStyle.callout.font)
+                    .padding(.horizontal, DesignTokens.Space.s2)
+                    .padding(.vertical, DesignTokens.Space.s1)
+                    .background(DesignTokens.Surface.content.color, in: RoundedRectangle(cornerRadius: 4))
+                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(DesignTokens.Surface.separator.color))
+            }
+        }
+    }
+    .padding(DesignTokens.Space.s5)
+    .frame(width: 760, alignment: .leading)
+    .background(DesignTokens.Surface.window.color)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -886,6 +949,15 @@ MainActor.assumeIsolated {
         render(moveSheet(), scheme, to: "move-sheet-\(suffix).png")
         render(moveSheet(error: "Couldn't move SHOP-430 to In Progress: Symphony has no record of SHOP-430 yet, so it can't move it (HTTP 409)"),
                scheme, to: "move-sheet-refused-\(suffix).png")
+        // Start now (TP-1330): the waiting Todo ticket's action bar at the laptop and desktop viewports, while its call
+        // is on its way, the banner after a refusal, a paused Symphony's page, and each disabled reason.
+        render(startPage(window: 1440), scheme, to: "start-now-laptop-\(suffix).png")
+        render(startPage(window: 2560), scheme, to: "start-now-desktop-\(suffix).png")
+        render(startPage(window: 1440, starting: true), scheme, to: "start-now-starting-laptop-\(suffix).png")
+        render(startPage(window: 1440, refused: "Couldn't start SHOP-320 now: dispatch is paused by the operator (HTTP 409)"),
+               scheme, to: "start-now-refused-laptop-\(suffix).png")
+        render(startPage(window: 1440, api: startPausedAPI), scheme, to: "start-now-paused-laptop-\(suffix).png")
+        render(startDisabledReasons(), scheme, to: "start-now-disabled-reasons-\(suffix).png")
         // A blocked Inbox row's pause (TP-1253): stopped by the Director, and two reasons, one releasable.
         for (identifier, name) in [("TP-897", "stopped"), ("TP-899", "two-reasons")] {
             render(blockedReview(identifier, window: 1440), scheme, to: "inbox-blocked-\(name)-laptop-\(suffix).png")

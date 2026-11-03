@@ -41,7 +41,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   defmodule UnwritableStore do
-    def get_ticket_state(repo_key, issue_id), do: RunStore.get_ticket_state(repo_key, issue_id)
+    def get_ticket_state(issue_id), do: RunStore.get_ticket_state(issue_id)
     def put_own_state_move(_issue_id, _at), do: {:error, :boom}
   end
 
@@ -119,17 +119,17 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
 
     test "records the move's signal in the ticket's signals ledger", %{opts: opts} do
-      RunStore.delete_ticket_state("repo-director", "plan")
+      RunStore.delete_ticket_state("plan")
       put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
 
       assert {:ok, _result} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
 
       assert [%{name: "decision returned", details: %{move: "approve_plan", from: "Plan Review", to: @waiting}}] =
-               RunStore.get_ticket_state("repo-director", "plan").signals
+               RunStore.get_ticket_state("plan").signals
 
       # The Director's move is also a person action on the ticket's events, next to its audit record.
       assert [%{actor: %{kind: :person, name: "the Director"}, payload: payload} = event] =
-               RunStore.list_ticket_events("repo-director", "plan", types: ["person.action"])
+               RunStore.list_ticket_events("plan", types: ["person.action"])
 
       assert payload == %{action: "move", move: "approve_plan", from: "Plan Review", to: @waiting}
       assert event.summary.title == "The Director moved the ticket to #{@waiting}"
@@ -235,13 +235,13 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
     test "records the restart in the ticket's signals ledger", %{opts: opts} do
       github_activity(state: "OPEN")
-      RunStore.delete_ticket_state("repo-restart", "pr")
+      RunStore.delete_ticket_state("pr")
       put_issues([restart_issue()])
 
       assert {:ok, _result} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
 
       assert [%{name: "restart", details: %{move: "restart", from: "Rework", to: "In Progress"}}] =
-               RunStore.get_ticket_state("repo-restart", "pr").signals
+               RunStore.get_ticket_state("pr").signals
 
       assert ticket_events("repo-restart", "pr", "person.action") == [{"person.action", %{action: "restart", from: "Rework", to: "In Progress"}}]
     end
@@ -256,7 +256,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert %{state: :answered, answer: %{text: "Start it over from main"}} = Questions.find({:ticket, "repo-restart", "pr"}, question.id)
       refute Pauses.paused?({:ticket, "repo-restart", "pr"})
-      assert RunStore.get_ticket_state("repo-restart", "pr").dispatches == []
+      assert RunStore.get_ticket_state("pr").dispatches == []
     end
 
     test "lifts an operator's stop, so the ticket the Director stopped runs again from main", %{opts: opts} do
@@ -660,7 +660,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
 
     test "cancels a Backlog ticket Symphony owns: the record first, then Linear, with one ticket.cancelled event", %{opts: opts} do
-      RunStore.delete_ticket_state("repo-cancel", "pr")
+      RunStore.delete_ticket_state("pr")
       :ok = TicketSignals.record_phase("repo-cancel", "pr", "Backlog")
       put_issues([cancel_issue("Backlog")])
 
@@ -679,18 +679,18 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert_received {:memory_tracker_state_update, "pr", "Canceled"}
       refute_received {:memory_tracker_comment, _id, _body}
-      assert %{phase: "Canceled", phase_owner: :symphony} = RunStore.get_ticket_state("repo-cancel", "pr")
+      assert %{phase: "Canceled", phase_owner: :symphony} = RunStore.get_ticket_state("pr")
 
       assert [%{actor: %{kind: :person, name: "the Director"}, payload: payload}] =
-               RunStore.list_ticket_events("repo-cancel", "pr", types: ["ticket.cancelled"])
+               RunStore.list_ticket_events("pr", types: ["ticket.cancelled"])
 
       assert payload == %{from: "Backlog", to: "Canceled", note: "superseded by the secrets redesign", run_stopped: false, pull_requests_closed: []}
-      assert RunStore.list_ticket_events("repo-cancel", "pr", types: ["person.action"]) == []
+      assert RunStore.list_ticket_events("pr", types: ["person.action"]) == []
       assert [%{"move" => "cancel", "from_state" => "Backlog", "to_state" => "Canceled"}] = audit_records()
     end
 
     test "cancels a running ticket: the run stops, its pull request closes with the note, nothing waits on it", %{opts: opts} do
-      RunStore.delete_ticket_state("repo-cancel", "pr")
+      RunStore.delete_ticket_state("pr")
       :ok = SymphonyElixir.TicketPullRequest.record_created("repo-cancel", "pr", @cancel_pr_url, "auto/MOT-40")
       Application.put_env(:symphony_elixir, :director_moves_test_activity, {:ok, %{pr_url: @cancel_pr_url, state: "OPEN"}})
       put_issues([cancel_issue("In Progress")])
@@ -712,7 +712,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:ok, nil} = Pauses.get(ticket)
 
       assert [%{payload: %{run_stopped: true, pull_requests_closed: [@cancel_pr_url], note: "Not needed"}}] =
-               RunStore.list_ticket_events("repo-cancel", "pr", types: ["ticket.cancelled"])
+               RunStore.list_ticket_events("pr", types: ["ticket.cancelled"])
     end
 
     test "a pull request already closed is left, and one GitHub won't read or close is logged", %{opts: opts} do
@@ -731,7 +731,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert log =~ "Cancelled MOT-40 but couldn't close #{@cancel_pr_url}: :forbidden"
 
       assert [%{payload: %{pull_requests_closed: []}}, %{payload: %{pull_requests_closed: []}}] =
-               RunStore.list_ticket_events("repo-cancel", "pr", types: ["ticket.cancelled"])
+               RunStore.list_ticket_events("pr", types: ["ticket.cancelled"])
     end
 
     test "refuses a closed ticket, and a team with no canceled state leaves the record where it was", %{opts: opts} do
@@ -739,14 +739,14 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:error, {:conflict, "MOT-40 is Done; only an open ticket can be cancelled"}} = DirectorMoves.move(:cancel, "MOT-40", %{}, opts)
       assert {:error, {:conflict, "MOT-41 is Canceled; only an open ticket can be cancelled"}} = DirectorMoves.move(:cancel, "MOT-41", %{}, opts)
 
-      RunStore.delete_ticket_state("repo-cancel", "pr")
+      RunStore.delete_ticket_state("pr")
       :ok = TicketSignals.record_phase("repo-cancel", "pr", "QA")
       put_issues([cancel_issue("QA")])
       not_found = [{:error, :state_not_found}, {:error, :state_not_found}]
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, not_found)
 
       assert {:error, {:conflict, "MOT-40's team has no Canceled state, so it can't be cancelled"}} = DirectorMoves.move(:cancel, "MOT-40", %{}, opts)
-      assert %{phase: "QA"} = RunStore.get_ticket_state("repo-cancel", "pr")
+      assert %{phase: "QA"} = RunStore.get_ticket_state("pr")
       assert audit_records() == []
     end
 
@@ -757,12 +757,12 @@ defmodule SymphonyElixir.DirectorMovesTest do
       log = capture_log(fn -> assert {:ok, %{to_state: "Canceled"}} = DirectorMoves.move(:cancel, "MOT-40", %{}, opts) end)
 
       assert log =~ "Cancelled MOT-40 on its record; Linear refused the move, projected again by the reconciler: :linear_down"
-      assert %{phase: "Canceled"} = RunStore.get_ticket_state("repo-cancel", "pr")
-      assert [_event] = RunStore.list_ticket_events("repo-cancel", "pr", types: ["ticket.cancelled"])
+      assert %{phase: "Canceled"} = RunStore.get_ticket_state("pr")
+      assert [_event] = RunStore.list_ticket_events("pr", types: ["ticket.cancelled"])
     end
 
     test "undo within the window puts the record and Linear back to the phase before", %{opts: opts, clock: clock} do
-      RunStore.delete_ticket_state("repo-cancel", "pr")
+      RunStore.delete_ticket_state("pr")
       :ok = TicketSignals.record_phase("repo-cancel", "pr", "Backlog")
       put_issues([cancel_issue("Backlog")])
       assert {:ok, %{to_state: "Canceled"}} = DirectorMoves.move(:cancel, "MOT-40", %{note: "Oops"}, opts)
@@ -773,7 +773,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert {:ok, %{move: "undo", undone: "cancel", from_state: "Canceled", to_state: "Backlog"}} = DirectorMoves.undo("MOT-40", opts)
       assert_received {:memory_tracker_state_update, "pr", "Backlog"}
-      assert %{phase: "Backlog", phase_owner: :symphony} = RunStore.get_ticket_state("repo-cancel", "pr")
+      assert %{phase: "Backlog", phase_owner: :symphony} = RunStore.get_ticket_state("pr")
     end
   end
 
@@ -800,7 +800,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute Pauses.paused?({:ticket, "repo-director", "pr"})
       refute_received {:memory_tracker_state_update, _id, _state}
       assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director: MOT-40 continues in place."}
-      assert [%{name: "unblocked", details: %{by: "the Director"}}] = RunStore.get_ticket_state("repo-director", "pr").signals
+      assert [%{name: "unblocked", details: %{by: "the Director"}}] = RunStore.get_ticket_state("pr").signals
       assert [%{"move" => "unblock", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
 
       # The pause's release, then the Director's unblock as a person action.
@@ -810,7 +810,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
                {"person.action", %{action: "unblock", from: "In Progress", to: "In Progress"}}
              ] = ticket_events("repo-director", "pr")
 
-      assert [%{actor: %{kind: :person, name: "the Director"}}] = RunStore.list_ticket_events("repo-director", "pr", types: ["person.action"])
+      assert [%{actor: %{kind: :person, name: "the Director"}}] = RunStore.list_ticket_events("pr", types: ["person.action"])
     end
 
     test "QA that cannot reach its machine pauses the ticket on it; Unblock clears its reasons, and the ticket resumes (TP-1250)", %{opts: opts} do
@@ -828,7 +828,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
 
       assert Pauses.why(ticket) == ["Waiting for MOT-9 to finish"]
-      assert [%{payload: %{by: %{kind: :person, name: "Director"}}} | _] = RunStore.list_ticket_events("repo-director", "pr", types: ["pause.reason_cleared"])
+      assert [%{payload: %{by: %{kind: :person, name: "Director"}}} | _] = RunStore.list_ticket_events("pr", types: ["pause.reason_cleared"])
     end
 
     test "releases a wait on competing PRs after the PR watcher releases them (TP-989)", %{opts: opts} do
@@ -946,7 +946,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute deciding("pr")
       # The ticket's timeline says so in the Director's words.
       assert [%{summary: %{title: "You answered: Sign them with the old key for now"}}] =
-               RunStore.list_ticket_events("repo-director", "pr", types: ["question.answered"])
+               RunStore.list_ticket_events("pr", types: ["question.answered"])
 
       assert_received {:memory_tracker_reply, "pr", "comment-1", reply}
       assert reply =~ "**Decision:** Sign them with the old key for now"
@@ -954,7 +954,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert [%{key: "comment-1", answer: "Sign them with the old key for now"}] = SymphonyElixir.Decisions.recorded(description)
 
       # The answer is the Question's own event: the decision records no `decision.recorded`.
-      types = "repo-director" |> RunStore.list_ticket_events("pr", []) |> Enum.map(& &1.type)
+      types = RunStore.list_ticket_events("pr", []) |> Enum.map(& &1.type)
       assert "question.answered" in types
       refute "decision.recorded" in types
     end
@@ -978,7 +978,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute deciding("pr")
       refute_received {:memory_tracker_reply, _issue_id, _comment_id, _body}
 
-      record = TicketState.normalize(RunStore.get_ticket_state("repo-director", "pr"))
+      record = TicketState.normalize(RunStore.get_ticket_state("pr"))
       assert [{:question_answer, ^id, "comment-1"}] = for(mark <- record.pending_projection, mark.type == :question_answer, do: TicketState.projection_of(mark))
 
       # Linear answers again: the reply goes under the request and the answer into the section.
@@ -1009,7 +1009,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
         assert {:ok, %{commented: false}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), question_id: id}, opts)
       end)
 
-      record = TicketState.normalize(RunStore.get_ticket_state("repo-director", "pr"))
+      record = TicketState.normalize(RunStore.get_ticket_state("pr"))
       assert [{:question_answer, ^id, nil}] = for(mark <- record.pending_projection, mark.type == :question_answer, do: TicketState.projection_of(mark))
     end
 
@@ -1032,7 +1032,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       id = ask_signing()
       ticket = {:ticket, "repo-director", "pr"}
       settings = fn _repo_key -> Config.settings!() end
-      inbox = fn -> FromRecord.items([RunStore.get_ticket_state("repo-director", "pr")], %{}, settings_fun: settings) end
+      inbox = fn -> FromRecord.items([RunStore.get_ticket_state("pr")], %{}, settings_fun: settings) end
 
       request = %{"id" => "comment-1", "body" => "## Decision needed: Add the release signing secrets\n\n<!-- symphony:question #{id} -->", "createdAt" => "2026-10-31T03:00:00Z"}
       under = %{"id" => "reply-1", "body" => "Decision: option 2", "createdAt" => "2026-10-31T03:01:00Z", "parent" => %{"id" => "comment-1"}}
@@ -1079,6 +1079,18 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:error, {:conflict, "MOT-40's question " <> _rest}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), question_id: id}, opts)
     end
 
+    test "a request comment whose row names a Question the record doesn't hold is refused, naming it", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      ask_signing()
+      project_comment("repo-director", "pr", "q-gone", "comment-gone")
+
+      assert {:error, {:conflict, "MOT-40 has no question q-gone"}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-gone"}, opts)
+
+      refute_received {:memory_tracker_reply, _issue_id, _comment_id, _body}
+      assert deciding("pr")
+    end
+
     test "a Question the store can't answer stops Send Decisions before any reply", %{opts: opts} do
       # A plan no repo routes has no record to answer on.
       put_issues([plan("Plan Review")])
@@ -1104,12 +1116,12 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert %{state: :open, answer: nil, reopened_at: %DateTime{}} = Questions.find(ticket, id)
       assert {:ok, %{reasons: [%{kind: :question, waits_on: %{question_id: ^id}}]}} = Pauses.get(ticket)
       assert %{id: ^id} = deciding("pr")
-      assert "question.reopened" in Enum.map(RunStore.list_ticket_events("repo-director", "pr", []), & &1.type)
+      assert "question.reopened" in Enum.map(RunStore.list_ticket_events("pr", []), & &1.type)
 
       # The answer given again is a new answer.
       assert {:ok, %{moved: false}} = DirectorMoves.move(:decide, "MOT-40", %{picks: [%{question: "Q", answer: "Ship unsigned"}], question_id: id}, opts)
       assert %{state: :answered, answer: %{option: 2}} = Questions.find(ticket, id)
-      assert ["question.answered", "question.answered"] = for(%{type: "question.answered" = type} <- RunStore.list_ticket_events("repo-director", "pr", []), do: type)
+      assert ["question.answered", "question.answered"] = for(%{type: "question.answered" = type} <- RunStore.list_ticket_events("pr", []), do: type)
     end
 
     test "Undo of a Decide that moved the ticket moves it back and reopens its Question", %{opts: opts} do
@@ -1178,7 +1190,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert_received {:memory_tracker_reply, "plan", "comment-8", _reply}
 
       # The refused reply waits for the reconciler; only the posted one is in the Decisions section.
-      record = RunStore.get_ticket_state("repo-director", "plan")
+      record = RunStore.get_ticket_state("plan")
       assert [{:question_answer, ^id, "comment-9"}] = for(mark <- record.pending_projection, mark.type == :question_answer, do: TicketState.projection_of(mark))
       assert ["comment-8"] = Enum.map(record.decisions, & &1.key)
     end
@@ -1190,7 +1202,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       picks = [%{question: "Q", answer: "B", question_id: "q-gone", request_comment_id: "comment-9"}]
       # Nothing is marked pending: the reply has no Question to post it from, so the move fails as before.
       assert {:error, {:linear, :linear_down}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: picks}, opts)
-      assert RunStore.get_ticket_state("repo-director", "plan") == nil
+      assert RunStore.get_ticket_state("plan") == nil
     end
   end
 
@@ -1239,7 +1251,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert %{state: :answered} = Questions.find(ticket, id)
       refute deciding("pr")
       refute_received {:memory_tracker_reply, _issue_id, _comment_id, _body}
-      record = TicketState.normalize(RunStore.get_ticket_state("repo-director", "pr"))
+      record = TicketState.normalize(RunStore.get_ticket_state("pr"))
       assert Enum.any?(record.pending_projection, &(&1.type == :pause))
       refute Enum.any?(record.pending_projection, &(&1.type == :question_answer))
 
@@ -1330,7 +1342,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute deciding("pr")
       # The decision continues the flow in place: nothing moves.
       refute_received {:memory_tracker_state_update, _issue_id, _state}
-      assert [%{name: "decision returned", details: %{move: "decide", from: "In Progress", to: "In Progress"}}] = RunStore.get_ticket_state("repo-director", "pr").signals
+      assert [%{name: "decision returned", details: %{move: "decide", from: "In Progress", to: "In Progress"}}] = RunStore.get_ticket_state("pr").signals
       assert [%{"move" => "decide", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
 
       # The question, then the Director's answer naming it: the Decide that moved nothing has no
@@ -1340,7 +1352,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
                %{type: "pause.set"},
                %{type: "question.answered", payload: %{question_id: question_id, answer: "Add the secrets", by: %{kind: :person, name: "Director"}}},
                %{type: "pause.cleared"}
-             ] = RunStore.list_ticket_events("repo-director", "pr", [])
+             ] = RunStore.list_ticket_events("pr", [])
     end
 
     test "writes the answer into the description's Decisions section, so the next run reads it", %{opts: opts} do
@@ -1384,7 +1396,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert_received {:memory_tracker_description_update, "pr", description}
       refute description =~ "**Unlocks"
       assert [%{key: "comment-1", unlocks: ["WORKFLOW.md"]}] = SymphonyElixir.Decisions.recorded(description)
-      assert [%{key: "comment-1", unlocks: ["WORKFLOW.md"]}] = RunStore.get_ticket_state("repo-director", "pr").decisions
+      assert [%{key: "comment-1", unlocks: ["WORKFLOW.md"]}] = RunStore.get_ticket_state("pr").decisions
       assert [%{path: "WORKFLOW.md", decision: "D1"}] = SymphonyElixir.PathUnlock.grants(%{pr("In Progress") | description: description})
     end
 
@@ -1482,7 +1494,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
       assert_received {:memory_tracker_state_update, "pr", "QA"}
       refute deciding("pr")
-      assert [%{name: "decision returned", details: %{move: "decide", from: "Code Review", to: "QA"}}] = RunStore.get_ticket_state("repo-director", "pr").signals
+      assert [%{name: "decision returned", details: %{move: "decide", from: "Code Review", to: "QA"}}] = RunStore.get_ticket_state("pr").signals
     end
 
     test "QA's Merge without a QA result moves the ticket to Merging itself, with the skip bound to the head", %{opts: opts} do
@@ -1496,7 +1508,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert_received {:memory_tracker_state_update, "pr", "Merging"}
       refute deciding("pr")
 
-      record = RunStore.get_ticket_state("repo-director", "pr")
+      record = RunStore.get_ticket_state("pr")
       assert record.phase == "Merging"
       assert [%{kind: "qa", outcome: "skip", head_sha: "abc123", details: %{reason: "skipped by decision"}}] = record.verdicts
       assert [%{name: "decision returned", details: %{move: "decide", from: "QA", to: "Merging"}}] = record.signals
@@ -1512,7 +1524,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       rework = [%{question: "How should it continue?", answer: "2"}]
       assert {:ok, %{moved: true, to_state: "Rework"}} = DirectorMoves.move(:decide, "MOT-40", %{picks: rework, request_comment_id: "comment-1"}, opts)
       assert_received {:memory_tracker_state_update, "pr", "Rework"}
-      assert RunStore.get_ticket_state("repo-director", "pr").verdicts == []
+      assert RunStore.get_ticket_state("pr").verdicts == []
 
       put_issues([%{pr("QA") | repo_key: "repo-director"}])
       set_qa_hold()
@@ -1538,7 +1550,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       cancel = [%{question: "How should it continue?", answer: "Cancel"}]
       assert {:ok, %{moved: true, to_state: "Cancelled"}} = DirectorMoves.move(:decide, "MOT-40", %{picks: cancel, request_comment_id: "comment-1"}, opts)
       assert_received {:memory_tracker_state_update, "pr", "Cancelled"}
-      assert RunStore.get_ticket_state("repo-director", "pr").phase == "Cancelled"
+      assert RunStore.get_ticket_state("pr").phase == "Cancelled"
     after
       Application.delete_env(:symphony_elixir, :memory_tracker_update_issue_state_result)
     end
@@ -1610,6 +1622,27 @@ defmodule SymphonyElixir.DirectorMovesTest do
                DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "c"}, opts)
 
       refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
+    end
+
+    test "answers an open question nothing pauses the ticket on, by its id, and refuses an unknown or closed one, naming which",
+         %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      ticket = {:ticket, "repo-director", "pr"}
+      request = %{title: "Old title", question: "Ship it?", why: "", if_unanswered: "", recommendation_reason: "", options: []}
+      {:ok, _question} = Questions.ask(ticket, request, backfilled: true, id: "backfill-1", at: ~U[2026-10-20 00:00:00Z])
+      :ok = RunStore.update_ticket_state("pr", %{pause: nil})
+      refute Pauses.paused?(ticket)
+
+      picks = [%{question: "Ship it?", answer: "Yes"}]
+
+      assert {:error, {:conflict, "MOT-40 has no question q-none"}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks, question_id: "q-none"}, opts)
+
+      assert {:ok, %{moved: false}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks, question_id: "backfill-1"}, opts)
+      assert %{state: :answered, answer: %{text: "Yes"}} = Questions.find(ticket, "backfill-1")
+
+      assert {:error, {:conflict, "MOT-40's question backfill-1 is answered, not open"}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks, question_id: "backfill-1"}, opts)
     end
 
     test "a refused directed move is partial: the decision stays recorded and the question answered", %{opts: opts} do
@@ -1710,8 +1743,8 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
   describe "the record moves first" do
     setup do
-      RunStore.delete_ticket_state("repo-director", "plan")
-      RunStore.delete_ticket_state("repo-director", "pr")
+      RunStore.delete_ticket_state("plan")
+      RunStore.delete_ticket_state("pr")
       :ok
     end
 
@@ -1720,9 +1753,9 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert {:ok, %{to_state: @waiting}} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
       assert_received {:memory_tracker_state_update, "plan", @waiting}
-      assert %{phase: @waiting} = RunStore.get_ticket_state("repo-director", "plan")
+      assert %{phase: @waiting} = RunStore.get_ticket_state("plan")
 
-      RunStore.delete_ticket_state("repo-director", "plan")
+      RunStore.delete_ticket_state("plan")
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :linear_down}])
 
       log =
@@ -1731,7 +1764,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
         end)
 
       refute_received {:memory_tracker_state_update, "plan", _state}
-      assert %{phase: @waiting} = RunStore.get_ticket_state("repo-director", "plan")
+      assert %{phase: @waiting} = RunStore.get_ticket_state("plan")
       assert log =~ "Linear refused the move; the record keeps it issue_id=plan issue_identifier=MOT-30 to=#{@waiting}"
     end
 
@@ -1745,9 +1778,9 @@ defmodule SymphonyElixir.DirectorMovesTest do
         end)
 
       refute_received {:memory_tracker_state_update, "plan", _state}
-      assert %{phase: "Rework"} = RunStore.get_ticket_state("repo-director", "plan")
+      assert %{phase: "Rework"} = RunStore.get_ticket_state("plan")
       # The reconciler writes the move to Linear (`TicketObservation.reconcile_all/3`).
-      assert [%{type: :phase, error: ":linear_down"}] = RunStore.get_ticket_state("repo-director", "plan").pending_projection
+      assert [%{type: :phase, error: ":linear_down"}] = RunStore.get_ticket_state("plan").pending_projection
 
       assert log =~
                "Linear refused the Director move's comment; the record keeps the move issue_id=plan issue_identifier=MOT-30 to=Rework"
@@ -1756,29 +1789,29 @@ defmodule SymphonyElixir.DirectorMovesTest do
     test "backlog, restart and a decision's move each write the record's phase", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{note: "Later"}, opts)
-      assert %{phase: "Backlog"} = RunStore.get_ticket_state("repo-director", "pr")
+      assert %{phase: "Backlog"} = RunStore.get_ticket_state("pr")
 
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       set_decision_hold()
       assert {:ok, _result} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1", move: "rework"}, opts)
-      assert %{phase: "Rework"} = RunStore.get_ticket_state("repo-director", "pr")
+      assert %{phase: "Rework"} = RunStore.get_ticket_state("pr")
 
       github_activity(state: "OPEN")
-      RunStore.delete_ticket_state("repo-restart", "pr")
+      RunStore.delete_ticket_state("pr")
       put_issues([restart_issue()])
       assert {:ok, _result} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
-      assert %{phase: "In Progress"} = RunStore.get_ticket_state("repo-restart", "pr")
+      assert %{phase: "In Progress"} = RunStore.get_ticket_state("pr")
     end
 
     test "undo puts the record back as it puts Linear back", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts)
-      assert %{phase: "Backlog"} = RunStore.get_ticket_state("repo-director", "pr")
+      assert %{phase: "Backlog"} = RunStore.get_ticket_state("pr")
 
       put_issues([%{pr("Backlog") | repo_key: "repo-director"}])
       assert {:ok, %{move: "undo", to_state: "In Progress"}} = DirectorMoves.undo("MOT-40", opts)
       assert_received {:memory_tracker_state_update, "pr", "In Progress"}
-      assert %{phase: "In Progress"} = RunStore.get_ticket_state("repo-director", "pr")
+      assert %{phase: "In Progress"} = RunStore.get_ticket_state("pr")
     end
   end
 
@@ -1910,7 +1943,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       question = ask_and_hold("repo-director", {:quiet_handoff, 2})
 
-      assert %{kind: :action} = Item.from_question(TicketState.normalize(RunStore.get_ticket_state("repo-director", "pr")), question)
+      assert %{kind: :action} = Item.from_question(TicketState.normalize(RunStore.get_ticket_state("pr")), question)
 
       assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
 
@@ -1940,7 +1973,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Run it again", opts)
 
       refute Pauses.paused?({:ticket, "repo-director", "pr"})
-      assert RunStore.get_ticket_state("repo-director", "pr").dispatches == []
+      assert RunStore.get_ticket_state("pr").dispatches == []
       assert %{state: :answered, answer: %{option: 1, text: "Run it again", by: @director}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
     end
 
@@ -2028,13 +2061,13 @@ defmodule SymphonyElixir.DirectorMovesTest do
       :ok = RunStore.record_ticket_dispatch("repo-director", "pr", %{kind: :implementation, run_id: "run-1", state: "In Progress"})
       question = park("repo-director", "In Progress")
 
-      assert %{kind: :action} = Item.from_question(TicketState.normalize(RunStore.get_ticket_state("repo-director", "pr")), question)
+      assert %{kind: :action} = Item.from_question(TicketState.normalize(RunStore.get_ticket_state("pr")), question)
 
       assert {:ok, %{move: "unblock", from_state: "Backlog", to_state: "In Progress", moved: true, undo_window_ms: nil}} =
                DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
 
       assert_received {:memory_tracker_state_update, "pr", "In Progress"}
-      assert %{phase: "In Progress", dispatches: []} = RunStore.get_ticket_state("repo-director", "pr")
+      assert %{phase: "In Progress", dispatches: []} = RunStore.get_ticket_state("pr")
       assert %{state: :answered, answer: %{option: 1, text: "Run it again"}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
       assert {:ok, nil} = Pauses.get({:ticket, "repo-director", "pr"})
 
@@ -2061,7 +2094,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       question = park("repo-director", "In Progress")
       picks = [%{question: question.question, answer: " Run it again "}]
 
-      assert {:error, {:conflict, "MOT-40 is not waiting on a decision"}} =
+      assert {:error, {:conflict, "MOT-40 has no question q-other"}} =
                DirectorMoves.move(:decide, "MOT-40", %{picks: picks, question_id: "q-other"}, opts)
 
       assert {:ok, %{move: "unblock", to_state: "In Progress", moved: true}} =
@@ -2078,6 +2111,26 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert {:ok, %{move: "unblock", to_state: "In Progress", moved: true}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
       assert_received {:memory_tracker_state_update, "pr", "In Progress"}
+    end
+
+    test "a ticket parked before TP-1326 boots to its question in the Inbox, and Unblock resumes it (TP-1331)", %{opts: opts} do
+      put_issues([%{pr("Backlog") | repo_key: "repo-director"}])
+      # TP-1248's record as the build before TP-1326 left it: parked, no question, no pause.
+      :ok = TicketSignals.record("repo-director", "pr", "blocked", %{to: "Backlog", reason: "idle_park"})
+      :ok = RunStore.update_ticket_state("pr", %{issue_identifier: "MOT-40"})
+      ticket = {:ticket, "repo-director", "pr"}
+
+      assert %{backfilled: ["MOT-40"]} = IdlePark.Backfill.run(["repo-director"], workspace: fn _repo, _name -> nil end)
+      assert %{backfilled: []} = IdlePark.Backfill.run(["repo-director"], workspace: fn _repo, _name -> nil end)
+
+      assert [question] = Questions.open(ticket)
+      assert %{kind: :action} = Item.from_question(TicketState.normalize(RunStore.get_ticket_state("pr")), question)
+      assert parked?("repo-director")
+
+      assert {:ok, %{move: "unblock", to_state: "In Progress", moved: true}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+      assert_received {:memory_tracker_state_update, "pr", "In Progress"}
+      assert %{state: :answered, answer: %{option: 1}} = Questions.find(ticket, question.id)
+      refute parked?("repo-director")
     end
 
     test "a Backlog ticket no park put there, or one Linear refuses to move back, is not resumed", %{opts: opts} do
@@ -2119,7 +2172,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       question = report_block("repo-director")
       assert question.title == "The run on MOT-40 cannot continue on its own"
 
-      assert %{kind: :action} = Item.from_question(TicketState.normalize(RunStore.get_ticket_state("repo-director", "pr")), question)
+      assert %{kind: :action} = Item.from_question(TicketState.normalize(RunStore.get_ticket_state("pr")), question)
 
       assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
 
@@ -2173,7 +2226,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   describe "move: a ticket Symphony owns into any phase (TP-1327)" do
     # A ticket whose phase Symphony wrote, as every move of Symphony's or the Director's leaves it.
     defp owned(repo_key, state) do
-      RunStore.delete_ticket_state(repo_key, "pr")
+      RunStore.delete_ticket_state("pr")
       :ok = TicketSignals.record_phase(repo_key, "pr", state)
       put_issues([%{pr(state) | repo_key: repo_key}])
     end
@@ -2205,24 +2258,24 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute_received {:close_pr, _url}
       refute_received {:memory_tracker_comment, _id, _body}
 
-      assert %{phase: "In Progress", phase_owner: :symphony, dispatches: []} = RunStore.get_ticket_state("repo-director", "pr")
+      assert %{phase: "In Progress", phase_owner: :symphony, dispatches: []} = RunStore.get_ticket_state("pr")
       assert %{state: :answered, answer: %{text: "Run it again"}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
       refute parked?("repo-director")
 
       assert [%{actor: %{kind: :person, name: "the Director"}, payload: payload} = event] =
-               RunStore.list_ticket_events("repo-director", "pr", types: ["ticket.moved"])
+               RunStore.list_ticket_events("pr", types: ["ticket.moved"])
 
       assert payload == %{from: "Backlog", to: "In Progress", note: "Its work is all committed", run_stopped: false}
       assert event.summary.title == "Moved to In Progress from Backlog"
-      assert RunStore.list_ticket_events("repo-director", "pr", types: ["person.action"]) == []
+      assert RunStore.list_ticket_events("pr", types: ["person.action"]) == []
       assert [%{"move" => "move", "from_state" => "Backlog", "to_state" => "In Progress"}] = audit_records()
 
       # The reconciler reads Linear in the phase the record owns: nothing to move back.
       assert {:ok, _outcome} =
                SymphonyElixir.TicketObservation.observe("repo-director", %{pr("In Progress") | repo_key: "repo-director"}, dispatch_source: "record")
 
-      assert %{phase: "In Progress", phase_owner: :symphony} = RunStore.get_ticket_state("repo-director", "pr")
-      assert RunStore.list_ticket_events("repo-director", "pr", types: ["drift.detected"]) == []
+      assert %{phase: "In Progress", phase_owner: :symphony} = RunStore.get_ticket_state("pr")
+      assert RunStore.list_ticket_events("pr", types: ["drift.detected"]) == []
     end
 
     test "a park whose question was never asked has its reason released too; a block report's question stays", %{opts: opts} do
@@ -2248,7 +2301,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert_received {:memory_tracker_state_update, "pr", "Code Review"}
       assert_receive {:request_refresh, "repo-director", :now}
       refute_received {:close_pr, _url}
-      assert %{phase: "Code Review"} = RunStore.get_ticket_state("repo-director", "pr")
+      assert %{phase: "Code Review"} = RunStore.get_ticket_state("pr")
       assert ["https://github.com/example/repo/pull/7"] = SymphonyElixir.TicketPullRequest.current_urls(%{pr("Code Review") | repo_key: "repo-director"})
     end
 
@@ -2261,7 +2314,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert_received {:stop_running, "pr"}
       assert_received {:memory_tracker_state_update, "pr", "Backlog"}
-      assert [%{payload: payload}] = RunStore.list_ticket_events("repo-cancel", "pr", types: ["ticket.moved"])
+      assert [%{payload: payload}] = RunStore.list_ticket_events("pr", types: ["ticket.moved"])
       assert payload == %{from: "In Progress", to: "Backlog", run_stopped: true}
       {:ok, %{reasons: reasons}} = Pauses.get({:ticket, "repo-cancel", "pr"})
       assert [%{waits_on: %{condition: condition}}] = reasons
@@ -2278,7 +2331,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert {:ok, %{move: "undo", undone: "move", from_state: "Done", to_state: "QA"}} = DirectorMoves.undo("MOT-40", opts)
       assert_received {:memory_tracker_state_update, "pr", "QA"}
-      assert %{phase: "QA", phase_owner: :symphony} = RunStore.get_ticket_state("repo-director", "pr")
+      assert %{phase: "QA", phase_owner: :symphony} = RunStore.get_ticket_state("pr")
     end
 
     test "a move to the phase it is in answers without writing anything", %{opts: opts} do
@@ -2288,7 +2341,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
                DirectorMoves.move(:move, "MOT-40", %{to: "code review"}, opts)
 
       refute_received {:memory_tracker_state_update, _id, _state}
-      assert RunStore.list_ticket_events("repo-director", "pr", types: ["ticket.moved"]) == []
+      assert RunStore.list_ticket_events("pr", types: ["ticket.moved"]) == []
       assert audit_records() == []
       assert {:error, {:conflict, "there is no move on MOT-40 to undo"}} = DirectorMoves.undo("MOT-40", opts)
     end
@@ -2302,26 +2355,26 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert {:ok, %{from_state: "Todo", to_state: "QA", moved: true}} = DirectorMoves.move(:move, "MOT-40", %{to: "QA"}, opts)
       assert_received {:memory_tracker_state_update, "pr", "QA"}
-      assert %{phase: "QA", phase_owner: :symphony} = RunStore.get_ticket_state("repo-director", "pr")
-      assert [%{payload: %{from: "Todo", to: "QA"}}] = RunStore.list_ticket_events("repo-director", "pr", types: ["ticket.moved"])
+      assert %{phase: "QA", phase_owner: :symphony} = RunStore.get_ticket_state("pr")
+      assert [%{payload: %{from: "Todo", to: "QA"}}] = RunStore.list_ticket_events("pr", types: ["ticket.moved"])
       assert [%{"move" => "move", "from_state" => "Todo", "to_state" => "QA"}] = audit_records()
 
       :counters.add(clock, 1, 1_000)
       assert {:ok, %{move: "undo", undone: "move", to_state: "Todo"}} = DirectorMoves.undo("MOT-40", opts)
       assert_received {:memory_tracker_state_update, "pr", "Todo"}
-      assert %{phase: "Todo"} = RunStore.get_ticket_state("repo-director", "pr")
+      assert %{phase: "Todo"} = RunStore.get_ticket_state("pr")
     end
 
     test "a ticket created in Linear in Todo (phase owner external) moves to Backlog and stays there", %{opts: opts} do
-      RunStore.delete_ticket_state("repo-director", "pr")
+      RunStore.delete_ticket_state("pr")
       put_issues([%{pr("Todo") | repo_key: "repo-director"}])
       {:stamped, record} = TicketStateReconciler.reconcile(TicketState.new("repo-director", "pr"), "Todo")
       :ok = RunStore.put_ticket_state(record)
-      assert %{phase: "Todo", phase_owner: :external} = RunStore.get_ticket_state("repo-director", "pr")
+      assert %{phase: "Todo", phase_owner: :external} = RunStore.get_ticket_state("pr")
 
       assert {:ok, %{from_state: "Todo", to_state: "Backlog", moved: true}} = DirectorMoves.move(:move, "MOT-40", %{to: "Backlog"}, opts)
       assert_received {:memory_tracker_state_update, "pr", "Backlog"}
-      assert %{phase: "Backlog", phase_owner: :symphony} = record = RunStore.get_ticket_state("repo-director", "pr")
+      assert %{phase: "Backlog", phase_owner: :symphony} = record = RunStore.get_ticket_state("pr")
 
       # Linear still reading Todo is drift on a phase Symphony now owns: the record keeps Backlog.
       assert {:kept, %{phase: "Backlog"}, %{linear_phase: "Todo"}} =
@@ -2335,7 +2388,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:error, {:conflict, "Shipping is not a phase of MOT-40's workflow; it names Backlog, Todo, In Progress" <> _rest}} =
                DirectorMoves.move(:move, "MOT-40", %{to: "Shipping"}, opts)
 
-      RunStore.delete_ticket_state("repo-director", "pr")
+      RunStore.delete_ticket_state("pr")
 
       assert {:error, {:conflict, "Symphony has no record of MOT-40 yet, so it can't move it"}} =
                DirectorMoves.move(:move, "MOT-40", %{to: "Todo"}, opts)
@@ -2355,14 +2408,14 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:error, {:conflict, "MOT-40's team has no Epic Review state, so it can't move there"}} =
                DirectorMoves.move(:move, "MOT-40", %{to: "Epic Review"}, opts)
 
-      assert %{phase: "QA"} = RunStore.get_ticket_state("repo-director", "pr")
+      assert %{phase: "QA"} = RunStore.get_ticket_state("pr")
 
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :linear_down}])
       log = capture_log(fn -> assert {:ok, %{to_state: "Todo"}} = DirectorMoves.move(:move, "MOT-40", %{to: "Todo"}, opts) end)
 
       assert log =~ "Moved MOT-40 to Todo on its record; Linear refused the move, projected again by the reconciler: :linear_down"
-      assert %{phase: "Todo"} = RunStore.get_ticket_state("repo-director", "pr")
-      assert [_event] = RunStore.list_ticket_events("repo-director", "pr", types: ["ticket.moved"])
+      assert %{phase: "Todo"} = RunStore.get_ticket_state("pr")
+      assert [_event] = RunStore.list_ticket_events("pr", types: ["ticket.moved"])
     end
 
     test "phases/1 lists every phase the workflow names, once each, in board order" do
@@ -2460,7 +2513,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   defp ask_signing do
     assert :ok = SymphonyElixir.DecisionRequest.ask(%{id: "pr", state: "In Progress", repo_key: "repo-director"}, signing_request(), [])
     assert_received {:memory_tracker_comment, "pr", _body}
-    :ok = RunStore.update_ticket_state("repo-director", "pr", %{issue_identifier: "MOT-40", phase: "In Progress"})
+    :ok = RunStore.update_ticket_state("pr", %{issue_identifier: "MOT-40", phase: "In Progress"})
     [%{id: id}] = Questions.open({:ticket, "repo-director", "pr"})
     id
   end
@@ -2482,8 +2535,8 @@ defmodule SymphonyElixir.DirectorMovesTest do
   defp restore_app_env(key, value), do: Application.put_env(:symphony_elixir, key, value)
 
   # The request comment the pause projector wrote for the Question, as the ticket's record keeps it.
-  defp project_comment(repo_key, issue_id, question_id, comment_id) do
+  defp project_comment(_repo_key, issue_id, question_id, comment_id) do
     projected = %{labels: [], section: nil, comments: %{question_id => %{comment: comment_id, reply: nil}}}
-    :ok = RunStore.update_ticket_state(repo_key, issue_id, %{projected: projected})
+    :ok = RunStore.update_ticket_state(issue_id, %{projected: projected})
   end
 end

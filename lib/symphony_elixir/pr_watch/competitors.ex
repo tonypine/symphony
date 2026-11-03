@@ -431,7 +431,7 @@ defmodule SymphonyElixir.PrWatch.Competitors do
     store = store(opts)
     _ = sync_pause(repo_key, issue_id, [], Pauses.director())
 
-    with %{} = record <- store.get_ticket_state(repo_key, issue_id),
+    with %{} = record <- store.get_ticket_state(issue_id),
          %{links: [_ | _] = links} = watch <- TicketState.pr_watch(record) do
       issue = %Issue{id: issue_id, identifier: record.issue_identifier}
       log_unlinked(issue, for(%{linked: true, released: false} = link <- links, unlink(link, issue, opts), do: link))

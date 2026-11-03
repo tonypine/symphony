@@ -82,20 +82,20 @@ defmodule SymphonyElixir.CiFixTest do
   describe "record_origin/4 and origin/3" do
     test "round-trips the phase the ticket's stay came from, and clears it with nil" do
       assert :ok = CiFix.record_origin(@repo_key, @issue_id, "QA")
-      assert CiFix.origin(@repo_key, @issue_id) == "QA"
+      assert CiFix.origin(@issue_id) == "QA"
 
       assert :ok = CiFix.record_origin(@repo_key, @issue_id, nil)
-      assert CiFix.origin(@repo_key, @issue_id) == nil
+      assert CiFix.origin(@issue_id) == nil
     end
 
     test "origin/3 is nil for a ticket with no record" do
-      assert CiFix.origin(@repo_key, "issue-never-seen") == nil
-      assert CiFix.origin(@repo_key, nil) == nil
+      assert CiFix.origin("issue-never-seen") == nil
+      assert CiFix.origin(nil) == nil
     end
 
     test "falls back to the configured repo when none is given" do
       assert :ok = CiFix.record_origin(nil, @issue_id, "Merging")
-      assert CiFix.origin(nil, @issue_id) == "Merging"
+      assert CiFix.origin(@issue_id) == "Merging"
     end
   end
 
@@ -127,7 +127,7 @@ defmodule SymphonyElixir.CiFixTest do
     test "appends the outcome and details to the ticket's signals ledger" do
       assert :ok = CiFix.record_verdict(@repo_key, @issue_id, "mechanical", %{to: "Merging", origin: "Merging"})
 
-      assert %{signals: [signal | _]} = RunStore.get_ticket_state(@repo_key, @issue_id)
+      assert %{signals: [signal | _]} = RunStore.get_ticket_state(@issue_id)
       assert signal.name == "fix verdict"
       assert signal.details == %{outcome: "mechanical", to: "Merging", origin: "Merging"}
     end
@@ -135,7 +135,7 @@ defmodule SymphonyElixir.CiFixTest do
     test "takes no details when none are given" do
       assert :ok = CiFix.record_verdict(@repo_key, @issue_id, "cannot_fix")
 
-      assert %{signals: [signal | _]} = RunStore.get_ticket_state(@repo_key, @issue_id)
+      assert %{signals: [signal | _]} = RunStore.get_ticket_state(@issue_id)
       assert signal.details == %{outcome: "cannot_fix"}
     end
   end

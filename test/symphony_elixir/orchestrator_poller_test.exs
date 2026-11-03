@@ -26,7 +26,7 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
     assert {:ok, %{dispatchable: [%{identifier: "ACME-71"}]}, state} =
              Orchestrator.poll_candidate_issue_buckets_for_test(state, repos, fn _repo -> {:ok, [issue]} end, 0)
 
-    record = RunStore.get_ticket_state(repo_key, issue.id)
+    record = RunStore.get_ticket_state(issue.id)
 
     assert Map.take(record, [:issue_identifier, :phase, :title, :labels, :priority, :assignee, :blockers, :url, :linear_updated_at]) == %{
              issue_identifier: "ACME-71",
@@ -43,7 +43,7 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
     assert {:ok, _buckets, _state} =
              Orchestrator.poll_candidate_issue_buckets_for_test(state, repos, fn _repo -> {:ok, [issue]} end, 100)
 
-    assert RunStore.get_ticket_state(repo_key, issue.id) == record
+    assert RunStore.get_ticket_state(issue.id) == record
   end
 
   test "every repo is due at boot, polled in config order; cross-repo duplicates go to conflicts before dispatch" do

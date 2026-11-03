@@ -40,11 +40,16 @@ defmodule SymphonyElixir.BlockedByGateTest do
       assert Issue.blocked?(todo_blocked_by(:unreadable), terminal_states())
     end
 
-    test "outside Todo, a run already under way is not held by its blockers" do
+    test "in a later active phase, its next dispatch is held by its blockers too" do
       issue = %{todo_blocked_by(blocker("MT-2", "Merging")) | state: "In Progress"}
 
-      refute Issue.blocked?(issue, terminal_states())
-      assert Orchestrator.should_dispatch_issue_for_test(issue, orchestrator_state())
+      assert Issue.blocked?(issue, terminal_states())
+      assert sweep(issue) == 1
+      refute Orchestrator.should_dispatch_issue_for_test(issue, orchestrator_state())
+    end
+
+    test "a terminal ticket is never blocked" do
+      refute Issue.blocked?(%{todo_blocked_by(blocker("MT-2", "Todo")) | state: "Done"}, terminal_states())
     end
 
     test "non-issues are never blocked" do

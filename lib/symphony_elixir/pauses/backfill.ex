@@ -178,7 +178,7 @@ defmodule SymphonyElixir.Pauses.Backfill do
 
     with {:ok, legacy} <- legacy_events(store, record),
          {:ok, written} <- write(ticket, plan.items, legacy, now),
-         :ok <- store.update_ticket_state(record.repo_key, record.issue_id, %{pause_backfilled_at: now}) do
+         :ok <- store.update_ticket_state(record.issue_id, %{pause_backfilled_at: now}) do
       asked = MapSet.new(record.questions, & &1.id)
       created = Enum.count(written, &new_question?(&1, asked))
 
@@ -204,7 +204,7 @@ defmodule SymphonyElixir.Pauses.Backfill do
   defp legacy_events(_store, %{decisions: []}), do: {:ok, %{}}
 
   defp legacy_events(store, record) do
-    with {:ok, events} <- listed(store.list_ticket_events(record.repo_key, record.issue_id, types: ["decision.recorded"])),
+    with {:ok, events} <- listed(store.list_ticket_events(record.issue_id, types: ["decision.recorded"])),
          do: {:ok, Map.new(events, &{&1.idempotency, &1.id})}
   end
 

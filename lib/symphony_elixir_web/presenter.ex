@@ -24,7 +24,6 @@ defmodule SymphonyElixirWeb.Presenter do
     StartNow,
     StateMachine,
     StrayProcesses,
-    TicketMerge,
     TicketObservation,
     TicketState,
     URLUtils,
@@ -133,7 +132,7 @@ defmodule SymphonyElixirWeb.Presenter do
           dispatch_shadow: dispatch_shadow_payload(),
           reconcile: reconcile_payload(),
           pause_backfill: pause_backfill_payload(PauseBackfill.summary()),
-          records_merged: records_merged_payload(TicketMerge.report()),
+          records_merged: records_merged_payload(RunStore.get_report(RunStore.records_merged_marker())),
           orchestrator: Orchestrator.diagnostics(orchestrator)
         }
 
@@ -321,8 +320,8 @@ defmodule SymphonyElixirWeb.Presenter do
           untracked_issue_payload(issue_identifier)
         else
           payload = issue_payload_body(issue_identifier, running, retry, watching, waiting)
-          record = ticket_state_record(payload.repo_key, payload.issue_id, issue_identifier)
-          {:ok, record_payload(payload, record, not is_nil(running))}
+          record = ticket_state_record(payload.issue_id, issue_identifier)
+          {:ok, record_payload(with_record_repo_key(payload, record), record, not is_nil(running))}
         end
 
       _ ->
@@ -388,8 +387,9 @@ defmodule SymphonyElixirWeb.Presenter do
   # from the repositories' pauses in the snapshot. A ticket the snapshot lists among the running
   # ones has a run already working on it, so its Start now is not allowed.
   defp with_ticket_status(entry, records, repositories, running?) do
+    record = Map.get(records, entry.issue_id)
+    entry = with_record_repo_key(entry, record)
     repo_key = entry.repo_key
-    record = Map.get(records, if(is_nil(repo_key), do: entry.issue_id, else: {repo_key, entry.issue_id}))
 
     repository_pause =
       Enum.find_value(repositories, fn repository ->
@@ -398,6 +398,13 @@ defmodule SymphonyElixirWeb.Presenter do
 
     Map.merge(entry, ticket_status(record, repository_pause, running?))
   end
+
+  # The repository a ticket entry names is its one record's: the record's field is where the ticket
+  # lives, whichever repository's poll or run put the entry in the snapshot.
+  defp with_record_repo_key(entry, %{repo_key: repo_key}) when is_binary(repo_key) and repo_key != "",
+    do: %{entry | repo_key: repo_key}
+
+  defp with_record_repo_key(entry, _record), do: entry
 
   # The ticket's phase as its record holds it; a record the payload doesn't have holds none.
   defp record_phase(record) when is_map(record), do: Map.get(record, :phase)
@@ -482,14 +489,14 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
-  defp ticket_state_record(repo_key, issue_id, issue_identifier) when is_binary(repo_key) and is_binary(issue_id) do
-    case RunStore.get_ticket_state(repo_key, issue_id) do
+  defp ticket_state_record(issue_id, issue_identifier) when is_binary(issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
       %{} = record -> TicketState.normalize(record)
       _none_or_error -> ticket_state_by_identifier(issue_identifier)
     end
   end
 
-  defp ticket_state_record(_repo_key, _issue_id, issue_identifier), do: ticket_state_by_identifier(issue_identifier)
+  defp ticket_state_record(_issue_id, issue_identifier), do: ticket_state_by_identifier(issue_identifier)
 
   # A store error reads as no record: `normalize/1` turns the wrapped error into an empty one.
   defp ticket_state_by_identifier(issue_identifier) do
@@ -499,17 +506,16 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Enum.find(&(&1.issue_identifier == issue_identifier))
   end
 
-  # Every ticket state record, read once for the state payload, by `{repo_key, issue_id}` and by
-  # `issue_id` alone (an entry without a repo key). A store error reads as no record.
+  # Every ticket state record, read once for the state payload, by ticket. A store error reads as
+  # no record.
   defp ticket_state_records do
-    records = RunStore.list_all_ticket_states() |> List.wrap() |> Enum.map(&TicketState.normalize/1)
-    Map.merge(Map.new(records, &{&1.issue_id, &1}), Map.new(records, &{{&1.repo_key, &1.issue_id}, &1}))
+    RunStore.list_all_ticket_states() |> List.wrap() |> Enum.map(&TicketState.normalize/1) |> Map.new(&{&1.issue_id, &1})
   end
 
   # The issues the PR and CI watcher watches, with the facts it last read of each one's PR, read
   # from the ticket state records so they are there right after a restart.
   defp watched_issues_payload(records) do
-    watched = for {{_repo_key, _issue_id}, record} <- records, record.pr_watch, do: record
+    watched = for {_issue_id, record} <- records, record.pr_watch, do: record
 
     watched
     |> Enum.sort_by(&{&1.repo_key || "", &1.issue_identifier || &1.issue_id || ""})
@@ -844,9 +850,10 @@ defmodule SymphonyElixirWeb.Presenter do
   defp pause_backfill_payload(%{at: at} = summary), do: %{summary | at: iso8601(at)}
   defp pause_backfill_payload(nil), do: nil
 
-  # The one-time merge of a ticket's duplicate records (`TicketMerge`, `records.merged`): when it ran,
-  # the tickets checked and merged, each merge's ticket and the repositories folded into it; or this
-  # start's failure while it has not run.
+  # The report the one-time merge of a ticket's duplicate records left in the store (`records.merged`,
+  # Symphony 0.0.1.792): when it ran, the tickets checked and merged, each merge's ticket and the
+  # repositories folded into it. The store this release starts on must have it
+  # (`RunStore.contract_ticket_key/0`).
   defp records_merged_payload(%{at: at} = report), do: %{report | at: iso8601(at)}
   defp records_merged_payload(_none), do: nil
 

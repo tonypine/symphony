@@ -26,12 +26,12 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
         issue("in-review", "MT-2", "Todo", blocked_by: [blocker("MT-91", "In Review")]),
         issue("unblocked", "MT-3", "Todo", blocked_by: [blocker("MT-92", "Done"), blocker("MT-93", "Canceled")]),
         issue("unknown-blocker", "MT-4", "Todo", blocked_by: [%{id: "b", identifier: "MT-94", state: nil}]),
-        issue("under-way", "MT-5", "In Progress", blocked_by: [blocker("MT-95", "Todo")])
+        issue("in-progress", "MT-5", "In Progress", blocked_by: [blocker("MT-95", "Todo")])
       ]
 
       {cache, record} = assert_same_candidates!(issues)
 
-      assert gate(cache) == %{"MT-1" => false, "MT-2" => false, "MT-3" => true, "MT-4" => false, "MT-5" => true}
+      assert gate(cache) == %{"MT-1" => false, "MT-2" => false, "MT-3" => true, "MT-4" => false, "MT-5" => false}
       assert gate(record) == gate(cache)
     end
 

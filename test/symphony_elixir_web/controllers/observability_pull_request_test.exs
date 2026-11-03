@@ -217,7 +217,7 @@ defmodule SymphonyElixirWeb.ObservabilityPullRequestTest do
         github_repos: %{"symphony" => "tonypine/symphony"},
         pull_request: fn @url -> {:ok, pull_request()} end,
         linear_client: linear,
-        ticket_state: fn "symphony", "id-TP-892" -> record end,
+        ticket_state: fn "id-TP-892" -> record end,
         pr_reviews: fn "symphony" -> reviews end,
         ttl_ms: 0
       ],

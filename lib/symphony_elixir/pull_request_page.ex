@@ -82,7 +82,7 @@ defmodule SymphonyElixir.PullRequestPage do
   - `:github_repos`: each repo key's GitHub repository (`owner/repo`, or `host/owner/repo`);
   - `:pull_request`: `(url) -> {:ok, PullRequest.page()} | {:error, reason}`;
   - `:linear_client`: `(query, variables, opts) -> {:ok, body} | {:error, reason}`;
-  - `:ticket_state`: `(repo_key, issue_id) -> record | nil`, the ticket's record;
+  - `:ticket_state`: `(issue_id) -> record | nil`, the ticket's one record;
   - `:pr_reviews`: `(repo_key) -> [record]`, the repo's PR review records;
   - `:live`: `() -> References.live()`, what runs and waits on the Director now;
   - `:now_ms` and `:ttl_ms`: the monotonic time now and how long a page is kept.
@@ -186,7 +186,7 @@ defmodule SymphonyElixir.PullRequestPage do
     reviews = pr_reviews(repo_key, opts)
     own_review = Enum.find(reviews, &(pull_request_number(Map.get(&1, :pr_url)) == number)) || %{}
     node = read_ticket(url, Map.get(own_review, :issue_identifier) || pull_request_ticket(pr), opts)
-    record = ticket_record(repo_key, (node && node["id"]) || Map.get(own_review, :issue_id), opts)
+    record = ticket_record((node && node["id"]) || Map.get(own_review, :issue_id), opts)
     verdicts = verdicts(record, pr)
     code_review = Enum.filter(verdicts, &(&1.kind == "code_review"))
 
@@ -308,10 +308,10 @@ defmodule SymphonyElixir.PullRequestPage do
     end
   end
 
-  defp ticket_record(_repo_key, nil, _opts), do: nil
+  defp ticket_record(nil, _opts), do: nil
 
-  defp ticket_record(repo_key, issue_id, opts) do
-    case Keyword.get(opts, :ticket_state, &RunStore.get_ticket_state/2).(repo_key, issue_id) do
+  defp ticket_record(issue_id, opts) do
+    case Keyword.get(opts, :ticket_state, &RunStore.get_ticket_state/1).(issue_id) do
       %{} = record -> TicketState.normalize(record)
       _none_or_error -> nil
     end

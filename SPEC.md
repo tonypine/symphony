@@ -540,7 +540,8 @@ Director's free move into any phase, with its note), `step.started`,
 `step.completed`, `step.skipped`, `evidence`, `finding.recorded` (QA
 runs), `finding.resolved`, `checklist.answered`, `drift.detected`, `drift.reverted`,
 `drift.revert_failed`, `pause.set`, `pause.reason_added`, `pause.reason_cleared`, `pause.cleared`,
-`question.asked`, `question.answered`, `question.withdrawn`, `question.reopened` and `note`.
+`question.asked`, `question.answered`, `question.withdrawn`, `question.reopened`, `park.backfilled`
+(machine only: an older park brought up to date at start-up, with what it was given) and `note`.
 
 The four pause types are machine-written, one per change of a ticket's pause (the one answer to why
 a ticket is not moving; decided only by `SymphonyElixir.Pauses`): `pause.set` for its first reason
@@ -707,20 +708,26 @@ move of the old row, above, sets the marker first, so this step finds it set). T
 summary (records read and converted, pauses and questions created, what it skipped and why) is in
 `GET /api/v1/state` under `pause_backfill`.
 
-Once, at start-up, in a task of the boot pass, a ticket the store holds under more than one
-repository (a ticket that moved to another Linear project before the by-ticket index existed) is
-merged into its one by-ticket record (`records_merged_v1` marker): the repository is the ticket's
-current route (the one the index names, else the one whose record observed it last); the events of
-every record, each once, in time order, renumbered under it, with their artifacts; the questions
-and pause reasons of every record, each once (two open questions with the same title and text
-collapse to one); the newest phase, PR facts, verdicts and run history. An open question only a
-record of another repository held was asked before the move, which answered it: it is withdrawn
-with the cause `superseded_by_move`, its `question.withdrawn` event recorded. No record row is
-deleted; the listings and reads reach the ticket through the index only, so the rows it left
-behind are not seen. The report (`records.merged`: when it ran, the tickets checked and merged, and
-each merge's ticket and the repositories folded into it) is kept with the marker and shown in
-`GET /api/v1/state` under `records_merged`; a failed read or write leaves the marker unset, the
-failure shown there, and the next start runs it again.
+A ticket has one record, keyed by its id alone; its repository is a field on the record, not part
+of its key, and so are its events, which are keyed by the ticket. Every reader takes the ticket.
+A writer that passes a repository (the route a new record opens under) writes the ticket's one
+record, and a repository that disagrees with the record's is logged, never a second record. The
+repo poll that returns a ticket is its route: a ticket that moved to another Linear project is
+re-routed by that repo's poll, the same record moving with its questions, pause and events, and
+every other read (a delivery, a by-id read) keeps the repository the record has.
+
+Symphony 0.0.1.792 merged, once, the records a ticket was left with under more than one repository
+into its one record (`records_merged_v1` marker; an open question only another repository's
+record held was withdrawn with the cause `superseded_by_move`); its report (`records.merged`: when
+it ran, the tickets checked and merged, each merge's ticket and the repositories folded into it)
+stays with the marker and is shown in `GET /api/v1/state` under `records_merged`. The first start
+of the next release moves the store off the (repository, ticket) key for good: a store that still
+has that key must show the markers of the by-ticket index (`ticket_index_v1`) and of the merge, or
+the start is refused with a message naming the version to install first (0.0.1.792) and nothing is
+written; otherwise a ticket whose only record is still on the old key is written under its id,
+the events move onto the ticket (the record's repository's copy of an event first, each event once,
+a straggler numbered after the last), the old table is deleted and the step's marker
+(`ticket_pair_key_dropped_v1`) set, with the key's version marker `ticket_index_v2`.
 
 The stream is read through `GET /api/v1/repos/<repo_key>/tickets/<issue_identifier>/events`
 (Section 13.8.2). Each event a write adds (not a backfilled one, an idempotent no-op or a refused
@@ -2618,8 +2625,9 @@ Important nuance:
   `Blocked` hold from a block report), or that posted a decision request itself, MUST end after
   that turn, without the idle park below and without a handoff: the hold, not another turn, says
   when the ticket continues.
-- When the workspace `HEAD` is readable, two consecutive turns with no new commit, no issue state
-  change and no newly attached PR MUST end the run, move the issue to
+- When the workspace `HEAD` is readable, two consecutive turns with no new commit, no change to the
+  workspace's uncommitted files (a turn that edits files without committing them made progress), no
+  issue state change and no newly attached PR MUST end the run, move the issue to
   `Backlog` and post a comment saying why. This does not apply in `Merging`. Nor does it apply to
   a `Rework` run while the attached PR's head is the workspace `HEAD`, that `HEAD` differs from the
   one the run started on or from the head the `Rework` started from, and its checks are still
@@ -2638,13 +2646,15 @@ Important nuance:
   conflict was found in `Merging` and the PR head is still the one that conflicted, and to the
   post-PR state otherwise. A PR that still conflicts, or whose mergeability GitHub has not computed
   yet, is parked as before, even when a CI failure is pending too.
-- Before the park, commits in the workspace that no remote has MUST be pushed to the workspace's
-  branch on `origin` (only when every push URL of the workspace's `origin` is the source repo's),
+- Before the park, the workspace's uncommitted changes MUST be committed on its branch
+  (`git add -A`, a `WIP: parked by Symphony` commit that skips the repo's hooks), then commits in
+  the workspace that no remote has MUST be pushed to the workspace's branch on `origin` (only when every push URL of the workspace's `origin` is the source repo's),
   so a parked ticket's work is never only in its workspace; a push that fails is logged and the
   park goes on. The park MUST write the ticket's record before Linear: the move into `Backlog`
   (its `phase.entered`), then its question through the one decision path ("Run it again",
   recommended; "Start it over from main"; "Leave it parked"), which pauses the ticket on it, then
-  the Linear move and the comment. The park's move signal names the phase the ticket was parked
+  the Linear move and the comment, which names the commit the park made and the branch it pushed,
+  or says nothing was committed or pushed. The park's move signal names the phase the ticket was parked
   from. The park MUST finish even when the run is stopped partway through: the orchestrator stops
   a run once the ticket's record leaves the active states, which the park's first write does. A run
   the orchestrator stops that way MUST still record its `run.ended`. A move with no repo key, so no
@@ -2653,6 +2663,13 @@ Important nuance:
   they are, then lift the pause (which empties the counted runs) and dispatch it at once; "Start it
   over from main" is Restart. A ticket parked before parks asked has no question: when its newest
   move signal is the park's, Unblock moves it back the same way.
+- Once per start-up, in a task startup does not wait on, every ticket whose record Symphony put in
+  `Backlog` (`phase_owner` Symphony) with the park's move signal as its newest, and whose pause holds
+  no open question and no reason the Director may release, MUST be brought into the shape a park
+  gives today: its workspace's commits that origin lacks pushed to its branch (a push that fails is
+  logged), the park's question asked (or, when the store refuses it, a releasable reason set), and one
+  `park.backfilled` event naming what it was given (`question`, `releasable_reason`, `push`). A
+  ticket already in that shape is left alone, so a second start-up changes nothing.
 - The first turn SHOULD use the full rendered task prompt. Implementations MAY use a compact
   bootstrap prompt when the target agent transport cannot safely carry the full rendered prompt as a
   single startup message, provided the compact prompt preserves hard security rules and directs the
@@ -3083,7 +3100,7 @@ Rules:
 - **Holds overlay, never relocate.** `Blocked` and `Needs Decision` are holds persisted in the
   ticket-state store and projected as machine-owned labels, which only the machine writes. A held
   ticket MUST NOT dispatch and MUST NOT move because of the hold. `Blocked` is set by an open
-  blocked-by dependency on a `Todo` ticket, an agent's request to park in `Backlog` from
+  blocked-by dependency on a ticket in any active phase, an agent's request to park in `Backlog` from
   `In Progress` or `Rework` (its block report), a self-heal fix ticket (including the PR and CI
   watcher's fix ticket for a check that keeps failing), or the watcher's wait on competing PRs (its
   `landing` kind), and clears by itself when
@@ -3277,13 +3294,20 @@ An issue is dispatch-eligible only if all are true:
   a retry waiting for a slot (see 5.4).
 - Global concurrency slots are available.
 - Per-state concurrency slots are available.
-- Blocker rule for `Todo` state passes:
-  - If the issue state is `Todo`, do not dispatch when any blocker is non-terminal.
+- Blocker rule passes, in every active phase:
+  - In any active state (`Todo`, `In Progress`, `Rework`, `CI Fix`, `Code Review`, `QA`, `Merging`
+    and the other states dispatch picks work up from), do not dispatch when any blocker is
+    non-terminal. The ticket's pause carries one dependency reason per open blocker ("Waiting for
+    TP-12 to finish"), as a `Todo` ticket's does, and lifts on its own once every blocker is
+    terminal; the ticket then dispatches again in its phase, with no state move. Outside `Todo`, a
+    blocker whose fix merged into Symphony itself also waits until the running app includes its
+    merge commit.
   - A blocker counts as resolved only once its state is in `terminal_states`. `Merging`,
     `Code Review`, `QA` and `Rework` still block, since the blocker's change is not on the
     default branch yet. A blocker without a known state counts as open.
-  - A run whose issue ends a turn back in `Todo` with an open blocker stops; the issue is
-    dispatched again on the first poll after every blocker is terminal.
+  - A blocker linked while a run is under way never stops the worker: the turn in flight finishes,
+    the run starts no further turn, and the next dispatch is held. The issue is dispatched again on
+    the first poll after every blocker is terminal.
   - The status snapshot lists each held candidate with its open blockers (`blocked` in
     `/api/v1/state`, for example "MT-12 waiting on MT-15 (In Progress)"), and the dashboard shows
     them under "Waiting on blockers".
@@ -3523,7 +3547,7 @@ Epic lanes:
   approved and not finished (any state other than `Backlog`, `Triage` or a terminal state).
 - An active epic yields while nothing on its path can run: every open issue on the path is in
   `Plan Review`, `Backlog` or `Triage`, has no known state, is a plan parent waiting on its
-  sub-issues (outside `Rework`), or is a `Todo` with open blockers. A yielded epic takes no lane.
+  sub-issues (outside `Rework`), or has open blockers in any active phase. A yielded epic takes no lane.
 - The other active epics are ordered by the parent's priority, then the parent's creation time. The
   first `min(epic_lanes, max_concurrent_agents)` of them each reserve one slot (a lane); the rest
   wait for a lane. `epic_lanes` defaults to `max_concurrent_agents`.

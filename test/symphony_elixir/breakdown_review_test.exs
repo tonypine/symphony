@@ -393,31 +393,31 @@ defmodule SymphonyElixir.BreakdownReviewTest do
 
     test "records a plan verdict signal for each promoted sub-ticket" do
       repo_key = "default"
-      RunStore.delete_ticket_state(repo_key, "c1")
+      RunStore.delete_ticket_state("c1")
       parent = %{parent(@waiting, [sub("c1", "Backlog")]) | repo_key: repo_key}
       put_history("parent", [approval()], [history_sub("c1", "Backlog")])
 
       review([parent], orchestrator_state())
 
       assert [%{name: "plan verdict", details: %{outcome: "approve", sub_issue: "MT-c1", to: "Todo"}}] =
-               RunStore.get_ticket_state(repo_key, "c1").signals
+               RunStore.get_ticket_state("c1").signals
     end
 
     test "records a deprioritized signal for each replaced sub-ticket" do
       repo_key = "default"
-      RunStore.delete_ticket_state(repo_key, "c1")
+      RunStore.delete_ticket_state("c1")
       parent = %{parent("Rework", [sub("c1", "Backlog")]) | repo_key: repo_key}
       put_history("parent", rejection(), [history_sub("c1", "Backlog")])
 
       review([parent], orchestrator_state())
 
       assert [%{name: "deprioritized", details: %{outcome: "changes", sub_issue: "MT-c1", to: "Canceled"}}] =
-               RunStore.get_ticket_state(repo_key, "c1").signals
+               RunStore.get_ticket_state("c1").signals
     end
 
     test "a team that spells it Cancelled leaves the replaced sub-ticket's record in Cancelled" do
       repo_key = "default"
-      RunStore.delete_ticket_state(repo_key, "c1")
+      RunStore.delete_ticket_state("c1")
       :ok = RunStore.put_ticket_state(TicketState.new(repo_key, "c1", %{phase: "Backlog", issue_identifier: "MT-c1"}))
       parent = %{parent("Rework", [sub("c1", "Backlog")]) | repo_key: repo_key}
       put_history("parent", rejection(), [history_sub("c1", "Backlog")])
@@ -427,7 +427,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       log = capture_log(fn -> review([parent], orchestrator_state()) end)
 
       assert_received {:memory_tracker_state_update, "c1", "Cancelled"}
-      record = RunStore.get_ticket_state(repo_key, "c1")
+      record = RunStore.get_ticket_state("c1")
       assert record.phase == "Cancelled"
       assert [%{name: "deprioritized", details: %{to: "Cancelled"}}] = record.signals
       refute log =~ "Linear refused the move"

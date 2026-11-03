@@ -2,6 +2,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
+  alias SymphonyElixir.Inbox.FromRecord
   alias SymphonyElixir.Inbox.Item
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.Pauses
@@ -58,10 +59,10 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     Application.put_env(:symphony_elixir, :progress_agent_recipient, self())
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
     Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-rework", checks: []}})
-    RunStore.delete_ticket_state("default", "issue-progress")
+    RunStore.delete_ticket_state("issue-progress")
 
     on_exit(fn ->
-      RunStore.delete_ticket_state("default", "issue-progress")
+      RunStore.delete_ticket_state("issue-progress")
 
       for key <- [
             :progress_agent_recipient,
@@ -246,7 +247,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       assert {:ok, %{reasons: [%{kind: :question, waits_on: %{question_id: id}}]}} = Pauses.get({:ticket, "default", "issue-progress"})
       assert id == question.id
       assert_signal("blocked", %{to: "Backlog", reason: "idle_park", from: "Rework"})
-      record = TicketState.normalize(RunStore.get_ticket_state("default", "issue-progress"))
+      record = TicketState.normalize(RunStore.get_ticket_state("issue-progress"))
       assert record.phase == "Backlog"
       assert %{kind: :action, state: "Backlog"} = Item.from_question(record, question)
     end
@@ -296,6 +297,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     test "leaves the record in Backlog with its phase.entered, its question and its pause, from every run kind" do
       for {kind, state, setup, run_opts} <- [
             {:implementation, "In Progress", fn -> :ok end, pr_url: nil},
+            {:implementation_with_pr, "In Progress", fn -> :ok end, []},
             {:rework, "Rework", fn -> :ok end, pr_url: nil},
             {:ci_fix, "CI Fix", &red_ci_failure/0, repos: designed_repos()},
             {:merge_conflict, "In Progress", &unresolved_conflict/0, []}
@@ -318,7 +320,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       capture_log(fn -> run_issue!("CI Fix", heads: ["sha-same"], max_turns: 5, repos: designed_repos()) end)
 
       [question] = Questions.open({:ticket, "default", "issue-progress"})
-      record = TicketState.normalize(RunStore.get_ticket_state("default", "issue-progress"))
+      record = TicketState.normalize(RunStore.get_ticket_state("issue-progress"))
       assert %{kind: :action, state: "Backlog"} = Item.from_question(record, question)
 
       server = :"park_unblock_#{System.unique_integer([:positive])}"
@@ -380,18 +382,106 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
     defp assert_parked_on_record(from_state, kind, since) do
       ticket = {:ticket, "default", "issue-progress"}
-      record = TicketState.normalize(RunStore.get_ticket_state("default", "issue-progress"))
+      record = TicketState.normalize(RunStore.get_ticket_state("issue-progress"))
       assert record.phase == "Backlog", "#{kind}: the record is in #{inspect(record.phase)}"
 
       assert [%{title: "TP-337 is parked: its last 2 turns changed nothing"} = question] = Questions.open(ticket)
       assert {:ok, %{reasons: [%{kind: :question, waits_on: %{question_id: id}}]}} = Pauses.get(ticket)
       assert id == question.id
 
-      events = "default" |> SymphonyElixir.TicketEvents.query("issue-progress") |> Enum.filter(&(DateTime.compare(&1.at, since) != :lt))
+      events = "issue-progress" |> SymphonyElixir.TicketEvents.query() |> Enum.filter(&(DateTime.compare(&1.at, since) != :lt))
       assert [%{payload: %{to: "Backlog", from: ^from_state}}] = Enum.filter(events, &(&1.type == "phase.entered"))
       assert [_asked] = Enum.filter(events, &(&1.type == "question.asked"))
       assert [_set] = Enum.filter(events, &(&1.type == "pause.set"))
       assert_signal("blocked", %{to: "Backlog", reason: "idle_park", from: from_state})
+
+      # Unblock answers it, and the Inbox lists it while the orchestrator watches the stopped run's
+      # ticket in Backlog, as it does once the park's record write stops the run (TP-1351).
+      assert Questions.held(ticket).id == question.id
+      snapshot = %{running: [], watching: [%{issue_id: "issue-progress", state: "Backlog"}]}
+
+      assert [%{kind: :action, state: "Backlog", ask: "TP-337 is parked: its last 2 turns changed nothing"}] =
+               RunStore.list_all_ticket_states() |> FromRecord.items(snapshot) |> Enum.filter(&(&1.issue_id == "issue-progress"))
+    end
+  end
+
+  describe "a park's uncommitted work (TP-1351)" do
+    test "two turns that change files without committing them do not park the ticket" do
+      tree = fn _workspace, nil -> "tree-#{turns()}" end
+
+      run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 3, runner_opts: [workspace_tree_reader: tree])
+
+      assert turns() == 3
+      refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+      assert Questions.open({:ticket, "default", "issue-progress"}) == []
+    end
+
+    test "a tree left as it was for two turns still parks" do
+      tree = fn _workspace, nil -> "tree-dirty" end
+
+      run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 5, runner_opts: [workspace_tree_reader: tree])
+
+      assert turns() == 2
+      assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+    end
+
+    test "the park commits and pushes first, and its note says what it committed and pushed, or that nothing was" do
+      for {committed, pushed, said} <- [
+            {{:committed, "sha-wip"}, {:pushed, "auto/TP-337"}, ["committed the workspace's uncommitted changes as `sha-wip`", "pushed the branch `auto/TP-337` to origin"]},
+            {:nothing, :nothing, ["no uncommitted changes, so nothing was committed", "Nothing was left unpushed, so nothing was pushed"]},
+            {{:error, :index_locked}, {:error, :origin_mismatch}, ["could not commit the workspace's uncommitted changes", "The push to origin failed"]}
+          ] do
+        next_run()
+        test_pid = self()
+        committer = fn workspace, nil -> send(test_pid, {:committed_in, workspace}) && committed end
+        pusher = fn _workspace, nil, _source_repo -> send(test_pid, :pushed_after_commit) && pushed end
+
+        runner_opts = [workspace_committer: committer, workspace_pusher: pusher]
+        capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 5, runner_opts: runner_opts) end)
+
+        assert_received {:committed_in, workspace}
+        assert workspace =~ "TP-337"
+        assert_received :pushed_after_commit
+        assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue in Backlog" <> note}
+        for line <- said, do: assert(note =~ line)
+        refute note =~ "Its work is on its branch"
+      end
+    end
+
+    test "a real workspace's uncommitted files are committed and its branch is on origin after the park" do
+      root = Path.join(System.tmp_dir!(), "symphony-park-git-#{System.unique_integer([:positive])}")
+      remote = Path.join(root, "remote.git")
+      source = Path.join(root, "source")
+      File.mkdir_p!(root)
+      on_exit(fn -> File.rm_rf(root) end)
+
+      git!(root, ["init", "--bare", "-b", "main", remote])
+      git!(root, ["clone", remote, source])
+      File.write!(Path.join(source, "README.md"), "readme")
+      git!(source, ["add", "README.md"])
+      git!(source, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "readme"])
+      git!(source, ["push", "origin", "main"])
+
+      setup_workspace = fn workspace ->
+        File.rm_rf!(workspace)
+        git!(root, ["clone", remote, workspace])
+        git!(workspace, ["checkout", "-b", "auto/TP-337"])
+        # The agent's turns left 117 files' worth of edits uncommitted: here, two files.
+        File.write!(Path.join(workspace, "README.md"), "edited")
+        File.write!(Path.join(workspace, "new.ex"), "new")
+      end
+
+      pusher = fn workspace, nil, _source_repo -> SymphonyElixir.WorkspaceHead.push_unpushed(workspace, nil, source) end
+
+      opts = [heads: ["sha-same"], pr_url: nil, max_turns: 5, workspace_setup: setup_workspace]
+      capture_log(fn -> run_issue!("In Progress", opts ++ [runner_opts: [workspace_pusher: pusher]]) end)
+
+      assert turns() == 2
+      assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue in Backlog" <> note}
+      assert [_line, sha] = Regex.run(~r/uncommitted changes as `([0-9a-f]{40})`/, note)
+      assert git!(root, ["ls-remote", remote, "refs/heads/auto/TP-337"]) =~ sha
+      assert git!(remote, ["log", "-1", "--format=%s", "auto/TP-337"]) == "WIP: parked by Symphony\n"
+      assert git!(remote, ["show", "auto/TP-337:new.ex"]) == "new"
     end
   end
 
@@ -410,7 +500,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
         {:ok, _question} = SymphonyElixir.Questions.ask({:ticket, "default", "issue-progress"}, request, request: true)
       end)
 
-      on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("default", "issue-progress") end)
+      on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("issue-progress") end)
 
       run_issue!("In Progress", heads: ["sha-rework"], repos: designed_repos(), max_turns: 5)
 
@@ -456,7 +546,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     refute_received {:pr_head_fetched, _pr_url}
 
     assert log =~
-             "Parking issue_id=issue-progress issue_identifier=TP-337 in Backlog after 2 turns with no new commit or state change; " <>
+             "Parking issue_id=issue-progress issue_identifier=TP-337 in Backlog after 2 turns with no new commit, file change or state change; " <>
                "Symphony has no open PR recorded for it, so CI on its head was not checked"
 
     refute log =~ "at dispatch"
@@ -904,7 +994,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
       assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
       refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
-      assert SymphonyElixir.CiFix.origin("default", "issue-progress") == nil
+      assert SymphonyElixir.CiFix.origin("issue-progress") == nil
       assert_signal("ci fix return", %{to: "Code Review", kind: :ci_fix, head: "sha-same", move: true})
       assert log =~ "CI is green on issue_id=issue-progress issue_identifier=TP-337's PR head sha-same"
       assert log =~ "returning it to its CI Fix origin"
@@ -918,7 +1008,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       run_issue!("CI Fix", heads: ["sha-same"], max_turns: 6, repos: designed_repos())
 
       assert_received {:memory_tracker_state_update, "issue-progress", "Merging"}
-      assert SymphonyElixir.CiFix.origin("default", "issue-progress") == nil
+      assert SymphonyElixir.CiFix.origin("issue-progress") == nil
     end
 
     test "a repair that pushed a new head returns to its origin with the approval re-bound to it" do
@@ -931,7 +1021,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       run_issue!("CI Fix", heads: ["sha-same", "sha-new"], max_turns: 6, repos: designed_repos())
 
       assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
-      assert SymphonyElixir.CiFix.origin("default", "issue-progress") == nil
+      assert SymphonyElixir.CiFix.origin("issue-progress") == nil
 
       # The approval moved with the ticket: the head it now covers is the repair's, not the red one's.
       assert [%{head_sha: "sha-new", outcome: "approve"} | _] =
@@ -1280,6 +1370,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     test_root = Path.join(System.tmp_dir!(), "symphony-agent-runner-progress-#{System.unique_integer([:positive])}")
     workspace = Path.join(test_root, "TP-337")
     File.mkdir_p!(workspace)
+    if setup_workspace = Keyword.get(opts, :workspace_setup), do: setup_workspace.(workspace)
     reviewer? = Keyword.get(opts, :reviewer, false)
 
     write_workflow_file!(Workflow.workflow_file_path(),
@@ -1323,7 +1414,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
   # The newest signal recorded for the run's issue, asserting its name and details.
   defp assert_signal(name, details) do
-    assert [%{name: ^name, details: ^details} | _rest] = RunStore.get_ticket_state("default", "issue-progress").signals
+    assert [%{name: ^name, details: ^details} | _rest] = RunStore.get_ticket_state("issue-progress").signals
   end
 
   # Refreshes the issue through the Linear client, as the runner does in production.
@@ -1334,6 +1425,11 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     end
 
     &Client.fetch_issue_states_by_ids_for_test(&1, graphql_fun)
+  end
+
+  defp git!(dir, args) do
+    {output, 0} = System.cmd("git", args, cd: dir, stderr_to_stdout: true)
+    output
   end
 
   defp at_turn(values, offset \\ 0) do

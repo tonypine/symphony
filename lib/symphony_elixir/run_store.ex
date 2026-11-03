@@ -15,12 +15,17 @@ defmodule SymphonyElixir.RunStore do
   @totals_table :symphony_run_store_totals
   @pr_review_table :symphony_run_store_pr_reviews
   @ci_check_table :symphony_run_store_ci_checks
-  @ticket_state_table :symphony_run_store_ticket_states
-  # The by-ticket index beside the pair key: issue id -> the record, with its repository as a field
-  # (`ticket_index_marker/0`). The pair key stays written and read, so the previous release reads
-  # this store unchanged.
+  # A ticket's one record, keyed by its id alone: issue id -> the record, with its repository as a
+  # field routing writes (`ticket_index_marker/0`). The (repository, ticket) table the releases
+  # before kept is deleted by this release's first start (`contract_ticket_key/0`).
   @ticket_index_table :symphony_run_store_ticket_index
-  @ticket_index_marker "ticket_index_v1"
+  @ticket_index_marker "ticket_index_v2"
+  @pair_table :symphony_run_store_ticket_states
+  @expand_marker "ticket_index_v1"
+  @merge_marker "records_merged_v1"
+  @pair_key_dropped_marker "ticket_pair_key_dropped_v1"
+  # The release that merged each ticket's records into one (TP-1338): a store must have run it.
+  @merge_release "0.0.1.792"
   @ticket_events_table :symphony_run_store_ticket_events
   @artifacts_table :symphony_run_store_artifacts
   @ticket_pull_request_table :symphony_run_store_ticket_pull_requests
@@ -40,7 +45,6 @@ defmodule SymphonyElixir.RunStore do
     {@totals_table, [:key, :record], []},
     {@pr_review_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key]]},
     {@ci_check_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key]]},
-    {@ticket_state_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key, :issue_id]]},
     {@ticket_index_table, [:issue_id, :repo_key, :record], []},
     {@ticket_pull_request_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key]]},
     {@verification_allocation_table, [:key, :repo_key, :run_id, :record], [index: [:repo_key]]},
@@ -670,42 +674,40 @@ defmodule SymphonyElixir.RunStore do
 
   def put_ticket_state(_record), do: {:error, :invalid_ticket_state_record}
 
-  @spec get_ticket_state(String.t(), String.t()) :: map() | nil | {:error, term()}
-  def get_ticket_state(repo_key, issue_id) when is_binary(issue_id) do
-    with {:ok, repo_key} <- normalize_repo_key(repo_key),
-         :ok <- ensure_started() do
-      transaction(fn -> read_ticket_state(repo_key, issue_id) end)
+  @doc "The ticket `issue_id`'s one record, or nil; its repository is the record's `repo_key`."
+  @spec get_ticket_state(String.t()) :: map() | nil | {:error, term()}
+  def get_ticket_state(issue_id) when is_binary(issue_id) do
+    with :ok <- ensure_started() do
+      transaction(fn -> read_ticket_record(nil, issue_id) end)
     end
   end
 
-  def get_ticket_state(_repo_key, _issue_id), do: {:error, :invalid_issue_id}
+  def get_ticket_state(_issue_id), do: {:error, :invalid_issue_id}
 
+  @doc """
+  Merges `attrs` into the ticket `issue_id`'s record; `{:error, :ticket_state_not_found}` when it
+  has none. A `repo_key` in `attrs` is the route observation writes: the same record moves to it.
+  """
   @spec update_ticket_state(String.t(), map()) :: :ok | {:error, term()}
-  def update_ticket_state(issue_id, attrs) when is_binary(issue_id) and is_map(attrs), do: {:error, :missing_repo_key}
-
-  @spec update_ticket_state(String.t(), String.t(), map()) :: :ok | {:error, term()}
-  def update_ticket_state(repo_key, issue_id, attrs) when is_binary(issue_id) and is_map(attrs) do
-    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+  def update_ticket_state(issue_id, attrs) when is_binary(issue_id) and is_map(attrs) do
+    with :ok <- valid_route(attrs),
          :ok <- ensure_started() do
-      update_ticket_state_record(repo_key, issue_id, attrs)
+      update_ticket_state_record(issue_id, attrs)
       |> unwrap_nested_error()
     end
   end
 
-  def update_ticket_state(_repo_key, _issue_id, _attrs), do: {:error, :invalid_ticket_state_record}
+  def update_ticket_state(_issue_id, _attrs), do: {:error, :invalid_ticket_state_record}
 
+  @doc "Deletes the ticket `issue_id`'s record."
   @spec delete_ticket_state(String.t()) :: :ok | {:error, term()}
-  def delete_ticket_state(issue_id) when is_binary(issue_id), do: {:error, :missing_repo_key}
-
-  @spec delete_ticket_state(String.t(), String.t()) :: :ok | {:error, term()}
-  def delete_ticket_state(repo_key, issue_id) when is_binary(issue_id) do
-    with {:ok, repo_key} <- normalize_repo_key(repo_key),
-         :ok <- ensure_started() do
-      durable_transaction(fn -> delete_ticket_record(repo_key, issue_id) end)
+  def delete_ticket_state(issue_id) when is_binary(issue_id) do
+    with :ok <- ensure_started() do
+      durable_transaction(fn -> delete_ticket_record(issue_id) end)
     end
   end
 
-  def delete_ticket_state(_repo_key, _issue_id), do: {:error, :invalid_issue_id}
+  def delete_ticket_state(_issue_id), do: {:error, :invalid_issue_id}
 
   @spec list_ticket_states() :: [map()] | {:error, term()}
   def list_ticket_states, do: list_ticket_states(Config.repo_key!())
@@ -767,18 +769,17 @@ defmodule SymphonyElixir.RunStore do
   def append_ticket_events(_events), do: {:error, :invalid_ticket_event}
 
   @doc """
-  The events of `repo_key`'s ticket `issue_id`, oldest first by `at`, then `seq`. `opts`:
-  `types:` (the types to keep) and `run_id:` (the run to keep).
+  The events of the ticket `issue_id`, oldest first by `at`, then `seq`. `opts`: `types:` (the
+  types to keep) and `run_id:` (the run to keep).
   """
-  @spec list_ticket_events(String.t(), String.t(), keyword()) :: [Event.t()] | {:error, term()}
-  def list_ticket_events(repo_key, issue_id, opts) when is_binary(issue_id) and is_list(opts) do
-    with {:ok, repo_key} <- normalize_repo_key(repo_key),
-         :ok <- ensure_started() do
-      transaction(fn -> repo_key |> read_ticket_events(issue_id) |> filter_ticket_events(opts) end)
+  @spec list_ticket_events(String.t(), keyword()) :: [Event.t()] | {:error, term()}
+  def list_ticket_events(issue_id, opts) when is_binary(issue_id) and is_list(opts) do
+    with :ok <- ensure_started() do
+      transaction(fn -> issue_id |> read_ticket_events() |> filter_ticket_events(opts) end)
     end
   end
 
-  def list_ticket_events(_repo_key, _issue_id, _opts), do: {:error, :invalid_issue_id}
+  def list_ticket_events(_issue_id, _opts), do: {:error, :invalid_issue_id}
 
   @doc """
   Writes the artifact row (`SymphonyElixir.Artifacts`) keyed by its `id`, replacing the one the id
@@ -1559,12 +1560,18 @@ defmodule SymphonyElixir.RunStore do
   end
 
   @doc """
-  The marker (`get_marker/1`) of the by-ticket index's version: set once a start of this release
-  created the index beside the pair key, so every record write since writes both and every read
-  tries the index first. The merge of a ticket's duplicate records reads it.
+  The marker (`get_marker/1`) of the by-ticket key's version: set once a start of this release
+  found every ticket's one record under its id alone (`contract_ticket_key/0`).
   """
   @spec ticket_index_marker() :: String.t()
   def ticket_index_marker, do: @ticket_index_marker
+
+  @doc """
+  The marker (`get_marker/1`) the merge of each ticket's duplicate records set (Symphony
+  #{@merge_release}), with its report beside it (`get_report/1`, `records.merged`).
+  """
+  @spec records_merged_marker() :: String.t()
+  def records_merged_marker, do: @merge_marker
 
   @doc """
   Marks the one-time job `name` done at `at` (`put_marker/2`) and keeps its `report` beside the
@@ -1589,43 +1596,128 @@ defmodule SymphonyElixir.RunStore do
   end
 
   @doc """
-  Every ticket id the (repository, ticket) key holds a record of, with the repositories holding
-  one, sorted: a ticket listed with more than one has duplicate records
-  (`SymphonyElixir.TicketMerge`).
+  The one-time step of this release that moves a ticket's record off the (repository, ticket) key
+  for good (`ticket_index_marker/0`), run by every start before the store answers. A store with no
+  (repository, ticket) table (a new one, or one this step already ran on) has nothing to move. A
+  store that has one must show the markers of the two releases before this one: the by-ticket index
+  (`ticket_index_v1`) and the merge of a ticket's duplicate records (`records_merged_v1`, Symphony
+  #{@merge_release}); one that lacks either is refused with `{:store_not_merged, message}`, the
+  message naming the version to install first, and nothing is written. Otherwise, in one durable
+  transaction, a ticket whose only record is still on the old key is written to the by-ticket
+  index, and the ticket events move onto the ticket's id (the record's repository's copy of an
+  event first, each event once by id, a straggler numbered after the last); then the old table is
+  deleted and the step's own marker (`ticket_pair_key_dropped_v1`) set. A ticket the merge left
+  under several repositories with none indexed refuses the start as well. Interrupted, the next
+  start runs it again: every write is the same.
   """
-  @spec ticket_record_repositories() :: %{String.t() => [String.t()]} | {:error, term()}
-  def ticket_record_repositories do
-    with :ok <- ensure_started() do
-      transaction(fn ->
-        # A row is {table, key, repo_key, issue_id, record}: each ticket id with its repositories.
-        {@ticket_state_table, :_, :_, :_, :_}
-        |> :mnesia.match_object()
-        |> Enum.group_by(&elem(&1, 3), &elem(&1, 2))
-        |> Map.new(&sort_repo_keys/1)
-      end)
+  @spec contract_ticket_key() :: :ok | {:error, term()}
+  def contract_ticket_key do
+    result = if @pair_table in :mnesia.system_info(:tables), do: drop_pair_key(), else: :ok
+    with :ok <- result, do: mark_ticket_index()
+  end
+
+  defp drop_pair_key do
+    with :ok <- load_pair_table(),
+         :ok <- merged_store(),
+         :ok <- unwrap_nested_error(durable_transaction(&move_off_pair_key/0)) do
+      # A failed delete stops the start with Mnesia's reason; the next start runs the step again.
+      {:atomic, :ok} = :mnesia.delete_table(@pair_table)
+      durable_transaction(fn -> :mnesia.write({@totals_table, {:marker, @pair_key_dropped_marker}, DateTime.utc_now()}) end)
     end
   end
 
-  @doc """
-  Merges the records of ticket `issue_id` in one durable transaction that holds every one of its
-  record rows' write locks. `fun` gets one entry per (repository, ticket) record, each with its
-  repository, its record (normalized), its events (oldest first) and whether the by-ticket index
-  names it (`indexed`), and returns:
+  defp load_pair_table do
+    wait_fun = Application.get_env(:symphony_elixir, :run_store_wait_for_tables, &:mnesia.wait_for_tables/2)
 
-    * `{:ok, merge}`, where `merge` holds the merged `record`, its `events` in order and the
-      `repo_key` it lives under: the record is written under that repository's pair key and the
-      by-ticket index, that pair key's events are replaced by `events`, renumbered from 1 under the
-      ticket and repository (the record's `event_seq` the last), and every artifact an event names
-      lists the ticket under that repository. No other record row is deleted or changed. Answers
-      `{:ok, merge}` with the record and events as written;
-    * `:skip`: nothing is written, and `{:ok, :skip}` is answered.
-  """
-  @spec merge_ticket_records(String.t(), ([map()] -> {:ok, map()} | :skip)) :: {:ok, map() | :skip} | {:error, term()}
-  def merge_ticket_records(issue_id, fun) when is_binary(issue_id) and is_function(fun, 1) do
-    with :ok <- ensure_started() do
-      durable_transaction(fn -> write_merged_ticket(issue_id, fun) end)
+    case wait_fun.([@pair_table], @table_load_timeout_ms) do
+      :ok -> :ok
+      {:timeout, tables} -> {:error, {:mnesia_table_timeout, tables}}
+      {:error, reason} -> {:error, reason}
     end
   end
+
+  defp merged_store do
+    missing = Enum.filter([@expand_marker, @merge_marker], &(:mnesia.transaction(fn -> read_marker(&1) end) == {:atomic, nil}))
+
+    case missing do
+      [] ->
+        :ok
+
+      missing ->
+        message =
+          "This store was written by a Symphony release before #{@merge_release}, which never merged each ticket's records into one " <>
+            "(#{Enum.join(missing, " and ")} unset). Install Symphony #{@merge_release} first and start it once; then install this release."
+
+        Logger.error(message)
+        {:error, {:store_not_merged, message}}
+    end
+  end
+
+  defp move_off_pair_key do
+    rows = :mnesia.match_object({@pair_table, :_, :_, :_, :_})
+    indexed = MapSet.new(:mnesia.all_keys(@ticket_index_table))
+
+    rows
+    |> Enum.reject(fn {_table, _key, _repo_key, issue_id, _record} -> MapSet.member?(indexed, issue_id) end)
+    |> Enum.group_by(&elem(&1, 3))
+    |> Enum.reduce_while(:ok, fn
+      {issue_id, [{_table, _key, repo_key, issue_id, record}]}, :ok ->
+        write_ticket_record(repo_key, issue_id, record |> TicketState.normalize() |> Map.put(:repo_key, repo_key))
+        {:cont, :ok}
+
+      {issue_id, _several}, :ok ->
+        {:halt,
+         {:error,
+          {:store_not_merged,
+           "Ticket #{issue_id} still has records under several repositories and none is its one record. Install Symphony #{@merge_release} first and start it once; then install this release."}}}
+    end)
+    |> then(fn
+      :ok -> rekey_ticket_events()
+      error -> error
+    end)
+  end
+
+  # Every event row still keyed by (repository, ticket) moves onto its ticket's id.
+  defp rekey_ticket_events do
+    {@ticket_events_table, {:_, :_}, :_, :_, :_, :_, :_, :_}
+    |> :mnesia.match_object()
+    |> Enum.group_by(fn row -> elem(row, 3) end)
+    |> Enum.each(fn {issue_id, rows} -> rekey_ticket(issue_id, rows) end)
+  end
+
+  defp rekey_ticket(issue_id, rows) do
+    record = read_ticket_record(nil, issue_id, :write)
+    Enum.each(rows, &:mnesia.delete_object/1)
+
+    {own, others} = Enum.split_with(rows, fn row -> record != nil and elem(row, 2) == record.repo_key end)
+    own = Enum.map(own, &Event.normalize(elem(&1, 7)))
+    own_keys = MapSet.new(own, &event_key/1)
+    strays = others |> Enum.map(&Event.normalize(elem(&1, 7))) |> Enum.uniq_by(&event_key/1) |> Enum.reject(&MapSet.member?(own_keys, event_key(&1)))
+    Enum.each(own, &write_ticket_event_row/1)
+    renumber_strays(record, issue_id, own, strays)
+  end
+
+  # A ticket with no record keeps its events as they are; a record's straggler events (another
+  # repository's key held them, the merge did not) are numbered after its last.
+  defp renumber_strays(nil, _issue_id, _own, strays), do: Enum.each(strays, &write_ticket_event_row/1)
+  defp renumber_strays(_record, _issue_id, _own, []), do: :ok
+
+  defp renumber_strays(record, issue_id, own, strays) do
+    record = TicketState.normalize(record)
+    last = own |> Enum.map(& &1.seq) |> Enum.max(fn -> 0 end) |> max(record.event_seq)
+
+    {events, last} =
+      strays
+      |> Enum.sort_by(&{datetime_sort_key(&1.at), &1.seq})
+      |> Enum.map_reduce(last, fn event, seq -> {%{event | seq: seq + 1, repo_key: record.repo_key}, seq + 1} end)
+
+    Enum.each(events, &write_ticket_event_row/1)
+    write_ticket_record(record.repo_key, issue_id, %{record | event_seq: last})
+  end
+
+  # An event is the same event under any repository by its id; one without an id by what it says.
+  defp event_key(%Event{id: id}) when is_binary(id), do: id
+  defp event_key(%Event{} = event), do: {event.type, event.at, event.idempotency, event.run_id, event.payload}
 
   defp mark_ticket_index do
     durable_transaction(fn ->
@@ -1660,8 +1752,11 @@ defmodule SymphonyElixir.RunStore do
     case setup_mnesia(dir) do
       :ok ->
         build_run_index()
-        :ok = mark_ticket_index()
-        {:ok, %State{dir: dir}}
+
+        case contract_ticket_key() do
+          :ok -> {:ok, %State{dir: dir}}
+          {:error, reason} -> {:stop, reason}
+        end
 
       {:error, reason} ->
         {:stop, reason}
@@ -2107,34 +2202,13 @@ defmodule SymphonyElixir.RunStore do
     end)
   end
 
-  defp read_ticket_state(repo_key, issue_id), do: read_ticket_record(repo_key, issue_id)
-
-  # The ticket's record, read through the by-ticket index first and the pair key after: a record
-  # found only through the pair key is written to the index on this read, so the index fills as the
-  # store is used. A record whose repository is not `repo_key`'s (the ticket moved) is returned as it
-  # is, and the difference logged: the caller never opens a second record. A ticket that already
-  # holds a pair row under another repository too, and no index row, is left to the pair key: which
-  # of its records is the ticket's is the merge's call (`ticket_index_marker/0`), not a read's.
+  # The ticket's one record, read by its id: the by-ticket key is the record's only key. A record
+  # whose repository is not the caller's `repo_key` (the ticket moved) is returned as it is, and the
+  # difference logged; the caller never opens a second record. nil `repo_key`: no route to check.
   defp read_ticket_record(repo_key, issue_id, lock \\ :read) do
     case :mnesia.read(@ticket_index_table, issue_id, lock) do
-      [{@ticket_index_table, ^issue_id, ^repo_key, record}] ->
-        record
-
       [{@ticket_index_table, ^issue_id, record_repo_key, record}] ->
-        log_repository_mismatch(issue_id, record_repo_key, repo_key)
-        record
-
-      [] ->
-        read_pair_ticket_record(repo_key, issue_id, lock)
-    end
-  end
-
-  defp read_pair_ticket_record(repo_key, issue_id, lock) do
-    key = scoped_key(repo_key, issue_id)
-
-    case :mnesia.read(@ticket_state_table, key, lock) do
-      [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] ->
-        if indexable?(repo_key, issue_id), do: :mnesia.write({@ticket_index_table, issue_id, repo_key, record})
+        if repo_key && record_repo_key != repo_key, do: log_repository_mismatch(issue_id, record_repo_key, repo_key)
         record
 
       [] ->
@@ -2142,6 +2216,7 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
+  # The ticket's record, or a new one routed to `repo_key` when it has none yet.
   defp read_or_new_ticket_record(repo_key, issue_id, lock \\ :read) do
     case read_ticket_record(repo_key, issue_id, lock) do
       nil -> TicketState.new(repo_key, issue_id)
@@ -2149,33 +2224,22 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
-  # Writes the record under its pair key and the by-ticket index in the caller's transaction. Its
-  # repository is the route it was written through.
+  # Writes the record under its ticket in the caller's transaction. Its repository is its own field
+  # (`repo_key`, routed by observation), else `repo_key` for a new record; a ticket pause names the
+  # record's repository, so a re-routed record carries its pause with it.
   defp write_ticket_record(repo_key, issue_id, record) do
-    record = Map.put(record, :repo_key, repo_key)
-    :mnesia.write({@ticket_state_table, scoped_key(repo_key, issue_id), repo_key, issue_id, record})
-
-    if :mnesia.read(@ticket_index_table, issue_id, :write) != [] or indexable?(repo_key, issue_id) do
-      :mnesia.write({@ticket_index_table, issue_id, repo_key, record})
-    end
-
+    record_repo_key = Map.get(record, :repo_key) || repo_key
+    record = record |> Map.put(:repo_key, record_repo_key) |> reroute_pause(record_repo_key, issue_id)
+    :mnesia.write({@ticket_index_table, issue_id, record_repo_key, record})
     :ok
   end
 
-  # No pair row of the ticket under another repository: the index can't pick a stranded record.
-  defp indexable?(repo_key, issue_id) do
-    @ticket_state_table
-    |> :mnesia.index_read(issue_id, :issue_id)
-    |> Enum.all?(&match?({@ticket_state_table, _key, ^repo_key, ^issue_id, _record}, &1))
-  end
+  defp reroute_pause(%{pause: %{subject: {:ticket, repo_key, _id}}} = record, repo_key, _issue_id), do: record
+  defp reroute_pause(%{pause: %{subject: {:ticket, _other, _id}} = pause} = record, repo_key, issue_id), do: %{record | pause: %{pause | subject: {:ticket, repo_key, issue_id}}}
+  defp reroute_pause(record, _repo_key, _issue_id), do: record
 
-  defp delete_ticket_record(repo_key, issue_id) do
-    :mnesia.delete({@ticket_state_table, scoped_key(repo_key, issue_id)})
-
-    case :mnesia.read(@ticket_index_table, issue_id, :write) do
-      [{@ticket_index_table, ^issue_id, ^repo_key, _record}] -> :mnesia.delete({@ticket_index_table, issue_id})
-      _other -> :ok
-    end
+  defp delete_ticket_record(issue_id) do
+    :mnesia.delete({@ticket_index_table, issue_id})
   end
 
   # Once per caller's repository for each change of the record's, not once per read.
@@ -2195,20 +2259,31 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
-  defp update_ticket_state_record(repo_key, issue_id, attrs) do
+  # A route an update writes is a repository key like any other.
+  defp valid_route(attrs) do
+    case Map.fetch(normalize_record(attrs), :repo_key) do
+      {:ok, repo_key} -> with {:ok, _repo_key} <- normalize_repo_key(repo_key), do: :ok
+      :error -> :ok
+    end
+  end
+
+  # `attrs` may carry `repo_key`: the route observation writes, which re-routes the one record.
+  defp update_ticket_state_record(issue_id, attrs) do
     durable_transaction(fn ->
-      case read_ticket_record(repo_key, issue_id) do
+      case read_ticket_record(nil, issue_id) do
         nil ->
           {:error, :ticket_state_not_found}
 
         record ->
+          route = attrs |> normalize_record() |> Map.get(:repo_key)
+
           updated =
             record
             |> Map.merge(normalize_update(attrs, [:key, :repo_key, :issue_id]))
-            |> Map.put(:repo_key, repo_key)
+            |> Map.put(:repo_key, route || Map.get(record, :repo_key))
             |> TicketState.normalize()
 
-          write_ticket_record(repo_key, issue_id, updated)
+          write_ticket_record(nil, issue_id, updated)
           :ok
       end
     end)
@@ -2225,8 +2300,9 @@ defmodule SymphonyElixir.RunStore do
 
   defp write_ticket_events(repo_key, issue_id, events) do
     record = read_or_new_ticket_record(repo_key, issue_id, :write)
+    repo_key = record.repo_key
 
-    stored = read_ticket_events(repo_key, issue_id)
+    stored = read_ticket_events(issue_id)
     last_seq = stored |> Enum.map(& &1.seq) |> Enum.max(fn -> 0 end) |> max(record.event_seq)
 
     {appended, _stored, last_seq} =
@@ -2285,63 +2361,13 @@ defmodule SymphonyElixir.RunStore do
       (ticket == %{} or Enum.any?(Map.get(artifact, :tickets, []), &(Map.take(&1, Map.keys(ticket)) == ticket)))
   end
 
-  defp write_merged_ticket(issue_id, fun) do
-    indexed_repo_key =
-      case :mnesia.read(@ticket_index_table, issue_id, :write) do
-        [{@ticket_index_table, ^issue_id, repo_key, _record}] -> repo_key
-        [] -> nil
-      end
-
-    rows = :mnesia.index_read(@ticket_state_table, issue_id, :issue_id)
-
-    entries =
-      for {@ticket_state_table, key, repo_key, ^issue_id, _record} <- rows,
-          [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] <- [:mnesia.read(@ticket_state_table, key, :write)] do
-        events = read_ticket_events(repo_key, issue_id)
-        indexed = repo_key == indexed_repo_key
-        %{repo_key: repo_key, record: TicketState.normalize(record), events: events, indexed: indexed}
-      end
-
-    case fun.(Enum.sort_by(entries, & &1.repo_key)) do
-      {:ok, %{repo_key: repo_key, record: record, events: events} = merge} ->
-        :mnesia.delete({@ticket_events_table, scoped_key(repo_key, issue_id)})
-
-        events =
-          for {event, seq} <- Enum.with_index(events, 1) do
-            event = %{event | repo_key: repo_key, issue_id: issue_id, seq: seq}
-            write_ticket_event_row(event)
-            event
-          end
-
-        record = %{TicketState.normalize(record) | repo_key: repo_key, issue_id: issue_id, event_seq: length(events)}
-        :mnesia.write({@ticket_state_table, scoped_key(repo_key, issue_id), repo_key, issue_id, record})
-        :mnesia.write({@ticket_index_table, issue_id, repo_key, record})
-        events |> Enum.flat_map(& &1.artifacts) |> Enum.uniq() |> Enum.each(&list_artifact_ticket(&1, repo_key, issue_id))
-        {:ok, %{merge | record: record, events: events}}
-
-      :skip ->
-        {:ok, :skip}
-    end
-  end
-
   defp write_ticket_event_row(%Event{} = event) do
-    :mnesia.write({@ticket_events_table, scoped_key(event.repo_key, event.issue_id), event.repo_key, event.issue_id, event.run_id, event.type, event.seq, Event.to_record(event)})
+    :mnesia.write({@ticket_events_table, event.issue_id, event.repo_key, event.issue_id, event.run_id, event.type, event.seq, Event.to_record(event)})
   end
 
-  defp list_artifact_ticket(id, repo_key, issue_id) do
-    case read_artifact(id, :write) do
-      %{} = artifact ->
-        ticket = %{repo_key: repo_key, issue_id: issue_id}
-        write_artifact(Map.update(artifact, :tickets, [ticket], &Enum.uniq(&1 ++ [ticket])))
-
-      nil ->
-        :ok
-    end
-  end
-
-  defp read_ticket_events(repo_key, issue_id) do
+  defp read_ticket_events(issue_id) do
     @ticket_events_table
-    |> :mnesia.read(scoped_key(repo_key, issue_id))
+    |> :mnesia.read(issue_id)
     |> Enum.map(fn {@ticket_events_table, _key, _repo_key, _issue_id, _run_id, _type, _seq, record} -> Event.normalize(record) end)
     |> Enum.sort_by(&{datetime_sort_key(&1.at), &1.seq})
   end
@@ -2720,19 +2746,12 @@ defmodule SymphonyElixir.RunStore do
     |> Enum.map(fn {^table, _key, ^repo_key, _id, record} -> record end)
   end
 
-  # The ticket records of `repo_key` (or of every repository, `:all`), one per ticket the by-ticket
-  # index names, read from it: a pair row of an indexed ticket is listed only through the index, so
-  # a record the ticket left behind under another repository (it moved, or its records were merged,
-  # `merge_ticket_records/2`) is never listed beside it.
+  # The ticket records whose repository is `repo_key` (or of every repository, `:all`): one per
+  # ticket, under the repository its record names.
   defp listed_ticket_records(repo_key) do
-    indexed = Map.new(:mnesia.match_object({@ticket_index_table, :_, :_, :_}), fn {_table, id, repo, record} -> {id, {repo, record}} end)
-    pair_rows = :mnesia.match_object({@ticket_state_table, :_, if(repo_key == :all, do: :_, else: repo_key), :_, :_})
-
-    unindexed = for {_table, _key, _repo, id, record} <- pair_rows, not Map.has_key?(indexed, id), do: record
-    unindexed ++ for({_issue_id, {repo, record}} <- indexed, repo_key in [:all, repo], do: record)
+    pattern = {@ticket_index_table, :_, if(repo_key == :all, do: :_, else: repo_key), :_}
+    for {_table, _issue_id, _repo, record} <- :mnesia.match_object(pattern), do: record
   end
-
-  defp sort_repo_keys({issue_id, repo_keys}), do: {issue_id, Enum.sort(repo_keys)}
 
   defp read_report(name) do
     case :mnesia.read(@totals_table, {:report, name}) do

@@ -7,7 +7,6 @@ defmodule SymphonyElixir.Linear.Issue do
   # while the sub-tickets are worked. `breakdown` is its older name, still accepted.
   @breakdown_labels ["plan", "breakdown"]
   @rework_state "rework"
-  @todo_state "todo"
   @backlog_state "backlog"
   @done_state "done"
 
@@ -153,12 +152,13 @@ defmodule SymphonyElixir.Linear.Issue do
   def open_blockers(_issue, _terminal_states), do: []
 
   @doc """
-  True when the issue is in `Todo` with at least one open blocker (see `open_blockers/2`); Symphony
-  holds it until every blocker is terminal.
+  True when the issue is outside `terminal_states` with at least one open blocker (see
+  `open_blockers/2`); in any active phase, `Todo` or later, Symphony holds it until every blocker is
+  terminal (`SymphonyElixir.Pauses.Dependencies`).
   """
   @spec blocked?(t(), Enumerable.t(String.t())) :: boolean()
   def blocked?(%__MODULE__{state: state} = issue, terminal_states) when is_binary(state) do
-    normalize_state(state) == @todo_state and open_blockers(issue, terminal_states) != []
+    normalize_state(state) not in Enum.map(terminal_states, &normalize_state/1) and open_blockers(issue, terminal_states) != []
   end
 
   def blocked?(_issue, _terminal_states), do: false

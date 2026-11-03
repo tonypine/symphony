@@ -46,6 +46,11 @@ defmodule SymphonyElixir.TicketEvents.Types do
   `source: "backfill"` when the backfill from the holds wrote it (`SymphonyElixir.Pauses.Backfill`),
   as `question.asked` does for a question it wrote.
 
+  `park.backfilled` is machinery-only: a ticket an idle run parked before parks asked a question was
+  brought up to date at start-up (`SymphonyElixir.IdlePark.Backfill`), with what it was given in
+  `added` (`question`, `releasable_reason`, `push`), the question's id, the branch pushed and the
+  phase it was parked from.
+
   A question to a person is machinery-only too (`SymphonyElixir.Questions`): `question.asked`, then
   `question.answered` (the answer as given, and the option it picked) or `question.withdrawn` (with
   the reason and its `cause`: `ticket_moved`, `restarted`, `hold_cleared`, `superseded`, `superseded_by_move`, or
@@ -312,6 +317,13 @@ defmodule SymphonyElixir.TicketEvents.Types do
       run_kinds: [],
       required: [cleared: :list],
       optional: [by: :map] ++ @signal,
+      idempotency: :writer
+    },
+    "park.backfilled" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [added: {:list, :string}],
+      optional: [question_id: :string, branch: :string, from: :string] ++ @signal,
       idempotency: :writer
     },
     "note" => %{

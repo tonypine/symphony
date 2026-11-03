@@ -16,12 +16,19 @@ defmodule SymphonyElixir.IdlePark do
   left; one that names no phase goes back to `In Progress`.
   """
 
-  alias SymphonyElixir.{DispatchLoop, TicketState}
+  require Logger
+
+  alias SymphonyElixir.{DispatchLoop, Pauses, Questions, TicketState}
 
   @signal_reason "idle_park"
   @park_state "Backlog"
   @resume_state "In Progress"
   @leave_parked "Leave it parked"
+  @idle_turns 2
+
+  @doc "How many turns in a row that change nothing park a run: its last #{@idle_turns}."
+  @spec idle_turns() :: pos_integer()
+  def idle_turns, do: @idle_turns
 
   @doc "The `reason` of a park's move signal."
   @spec signal_reason() :: String.t()
@@ -40,8 +47,8 @@ defmodule SymphonyElixir.IdlePark do
       title: title,
       question: "#{title}. Should Symphony run it again where it stopped, start it over from main, or leave it parked?",
       why:
-        "The last #{turns} turns on #{name} made no new commit and moved it nowhere, so another turn would repeat them. " <>
-          "Symphony parked it in #{@park_state} and keeps its work: its commits are on its branch.",
+        "The last #{turns} turns on #{name} made no new commit, changed no file and moved it nowhere, so another turn would repeat them. " <>
+          "Symphony parked it in #{@park_state} and keeps its work; the park's comment on the ticket says what it committed and pushed.",
       if_unanswered: "#{name} stays parked in #{@park_state} and Symphony starts no run on it.",
       recommendation_reason: "A new run continues from the parked work, with nothing lost.",
       options: [
@@ -58,6 +65,28 @@ defmodule SymphonyElixir.IdlePark do
         %{label: @leave_parked, effect: "#{name} stays parked in #{@park_state} until you decide.", recommended: false}
       ]
     }
+  end
+
+  @doc """
+  Pauses the parked `ticket` (named `name`, parked from `from_state` after `turns` idle turns) on
+  the park's question (`question_attrs/2`, asked through `SymphonyElixir.Questions.ask/3`), which
+  the Inbox lists: `{:asked, question_id}`. One the store refuses is logged and pauses the ticket on
+  a reason the Director releases with Unblock instead, as a dispatch loop's does: `:reason_set`.
+  The park's writer (`SymphonyElixir.AgentRunner`) and the start-up backfill of an older park
+  (`SymphonyElixir.IdlePark.Backfill`) both call it.
+  """
+  @spec ask(Questions.ticket(), String.t(), String.t() | nil, pos_integer()) :: {:asked, String.t()} | :reason_set
+  def ask({:ticket, _repo_key, _issue_id} = ticket, name, from_state, turns) when is_binary(name) and is_integer(turns) do
+    case Questions.ask(ticket, question_attrs(name, turns)) do
+      {:ok, %{id: question_id}} ->
+        {:asked, question_id}
+
+      {:error, reason} ->
+        Logger.warning("Failed to ask the park's question for #{name}: #{inspect(reason)}")
+        text = "#{turns} turns in #{from_state || @resume_state} made no new commit and no state change, so Symphony parked it in #{@park_state}"
+        _ = Pauses.set(ticket, %{kind: :environment, waits_on: %{condition: @signal_reason}, text: String.slice(text, 0, 300), releasable: true})
+        :reason_set
+    end
   end
 
   @doc """

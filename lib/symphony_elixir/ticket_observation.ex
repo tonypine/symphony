@@ -206,7 +206,7 @@ defmodule SymphonyElixir.TicketObservation do
     issue = %{issue | blocked_by: open_blockers(issue, repo_key, opts)}
 
     result =
-      with {:ok, stored} <- read(repo_key, issue_id),
+      with {:ok, stored} <- read(issue_id),
            do: observe_record(repo_key, stored, issue, {now, source}, opts)
 
     count(result)
@@ -439,7 +439,7 @@ defmodule SymphonyElixir.TicketObservation do
   # read's mark is dropped, so a mark written while Linear is written stays for the next run. A move
   # that lands in Linear between this read and the write is drift, which the next observation moves back.
   defp reproject(repo_key, issue_id, projection, polled, tracker) do
-    with %{} = stored <- RunStore.get_ticket_state(repo_key, issue_id),
+    with %{} = stored <- RunStore.get_ticket_state(issue_id),
          record = TicketState.normalize(stored),
          %{} = mark <- Enum.find(record.pending_projection, &(TicketState.projection_of(&1) == projection)) do
       case projection_write(record, projection, polled) do
@@ -526,7 +526,7 @@ defmodule SymphonyElixir.TicketObservation do
   end
 
   defp mark_not_found(repo_key, issue_id, now) do
-    case RunStore.update_ticket_state(repo_key, issue_id, %{not_found_at: now, updated_at: now}) do
+    case RunStore.update_ticket_state(issue_id, %{not_found_at: now, updated_at: now}) do
       :ok -> :ok
       {:error, reason} -> Logger.warning("Ticket reconcile: marking a record not found failed issue_id=#{issue_id} repo_key=#{repo_key}: #{inspect(reason)}")
     end
@@ -539,10 +539,10 @@ defmodule SymphonyElixir.TicketObservation do
   end
 
   defp observe_record(repo_key, stored, %Issue{id: issue_id} = issue, {now, source}, opts) do
-    record = stored || TicketState.new(repo_key, issue_id)
+    record = reroute(stored, repo_key, source) || TicketState.new(repo_key, issue_id)
     owned = owned_phase(stored, issue, opts)
 
-    case TicketState.observe(record, keep_phase(issue, owned), now, source) do
+    case record |> TicketState.observe(keep_phase(issue, owned), now, source) |> rerouted(stored) do
       {_record, :stale} ->
         {:ok, :stale}
 
@@ -557,6 +557,20 @@ defmodule SymphonyElixir.TicketObservation do
         stored |> write_and_compare(observed, source, now, opts, revert) |> announce(change, source)
     end
   end
+
+  # A ticket's one record follows its route: the repo poll that returns it (each repo polls its own
+  # scope, the project a ticket is in) moves the same record to that repo, with its questions, pause
+  # and events. Every other read keeps the repository the record has.
+  defp reroute(%{repo_key: held_by} = stored, repo_key, :poll) when held_by != repo_key do
+    Logger.info("Ticket record re-routed issue_id=#{stored.issue_id} from_repo_key=#{held_by} repo_key=#{repo_key}")
+    %{TicketState.normalize(stored) | repo_key: repo_key}
+  end
+
+  defp reroute(stored, _repo_key, _source), do: stored
+
+  # A re-route alone is a change to write, even when Linear's fields are the same.
+  defp rerouted({observed, :unchanged}, %{repo_key: held_by}) when observed.repo_key != held_by, do: {observed, :changed}
+  defp rerouted(result, _stored), do: result
 
   defp observed_delivery?({:issue, _action, %Issue{}, _updated_at}), do: true
   defp observed_delivery?({:issue_removed, issue_id, _identifier}), do: is_binary(issue_id)
@@ -577,10 +591,13 @@ defmodule SymphonyElixir.TicketObservation do
   defp changed(stored, observed) do
     before = if stored, do: TicketState.observation(stored), else: %{}
 
-    for {field, value} <- TicketState.observation(observed),
-        field not in [:linear_updated_at, :observed_at, :observed_from, :updated_at],
-        Map.get(before, field) != value,
-        do: field
+    fields =
+      for {field, value} <- TicketState.observation(observed),
+          field not in [:linear_updated_at, :observed_at, :observed_from, :updated_at],
+          Map.get(before, field) != value,
+          do: field
+
+    if stored && stored.repo_key != observed.repo_key, do: fields ++ [:repo_key], else: fields
   end
 
   # `revert` moves a drifted ticket back once the record is written (`revert/5`).
@@ -822,8 +839,7 @@ defmodule SymphonyElixir.TicketObservation do
   # A delivery or a by-id read updates the record the reads already keep. A ticket no repo has a
   # record of yet is filed by a delivery (`new: :file`) under the one repo whose poll scope takes it
   # (`PollScope.route/3`), so a new ticket dispatches from its first delivery; a by-id read leaves it
-  # unrouted for the poll. One held in several repos is unrouted, as the poll counts a ticket two
-  # repos return as a conflict. Gives the outcome with the repo it was observed under (nil when none).
+  # unrouted for the poll. Gives the outcome with the repo it was observed under (nil when none).
   defp observe_held_issue(issue, repos, opts, new \\ :unrouted)
 
   defp observe_held_issue(%Issue{id: issue_id} = issue, repos, opts, new) when is_binary(issue_id) do
@@ -831,7 +847,7 @@ defmodule SymphonyElixir.TicketObservation do
       {{:ok, repo_key}, _new} -> observe_under(repo_key, issue, opts)
       {:none, :file} -> file_new(issue, repos, opts)
       {{:error, repo_key, reason}, _new} -> held_failed(repo_key, issue, reason)
-      {_none_or_several, _new} -> unrouted()
+      {:none, _new} -> unrouted()
     end
   end
 
@@ -881,21 +897,14 @@ defmodule SymphonyElixir.TicketObservation do
   defp held_count_key(:error), do: :errors
   defp held_count_key(outcome), do: outcome
 
+  # The repo that holds the ticket's one record, when it is one of `repos`.
   defp holder(%Issue{id: issue_id}, repos) do
-    repos
-    |> repo_keys()
-    |> Enum.reduce_while({:ok, []}, fn repo_key, {:ok, held} ->
-      case read_held(repo_key, issue_id) do
-        {:ok, nil} -> {:cont, {:ok, held}}
-        {:ok, _record} -> {:cont, {:ok, [repo_key | held]}}
-        {:error, reason} -> {:halt, {:error, repo_key, reason}}
-      end
-    end)
-    |> case do
-      {:ok, [repo_key]} -> {:ok, repo_key}
-      {:ok, []} -> :none
-      {:ok, _several} -> :several
-      error -> error
+    repo_keys = repo_keys(repos)
+
+    case read(issue_id) do
+      {:ok, nil} -> :none
+      {:ok, %{repo_key: held_by}} -> if held_by in repo_keys, do: {:ok, held_by}, else: :none
+      {:error, reason} -> {:error, List.first(repo_keys), reason}
     end
   end
 
@@ -910,7 +919,7 @@ defmodule SymphonyElixir.TicketObservation do
   defp mark_removed(repo_key, issue_id, now) do
     with {:ok, stored} when not is_nil(stored) <- read_held(repo_key, issue_id),
          removed = TicketState.mark_removed(stored, now),
-         :ok <- RunStore.update_ticket_state(repo_key, issue_id, Map.take(removed, [:removed_at, :updated_at])) do
+         :ok <- RunStore.update_ticket_state(issue_id, Map.take(removed, [:removed_at, :updated_at])) do
       :ok = ObservabilityPubSub.broadcast_ticket_record_changed(repo_key, issue_id, [:removed_at])
       :removed
     else
@@ -954,8 +963,8 @@ defmodule SymphonyElixir.TicketObservation do
     end
   end
 
-  defp read(repo_key, issue_id) do
-    case RunStore.get_ticket_state(repo_key, issue_id) do
+  defp read(issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
       {:error, reason} -> {:error, reason}
       stored -> {:ok, stored}
     end
@@ -964,7 +973,7 @@ defmodule SymphonyElixir.TicketObservation do
   # The record `repo_key` holds: the ticket's one record when its repository is `repo_key` (a record
   # another repository holds is that one's: `SymphonyElixir.RunStore` reads by ticket first).
   defp read_held(repo_key, issue_id) do
-    case read(repo_key, issue_id) do
+    case read(issue_id) do
       {:ok, %{repo_key: held_by}} when held_by != repo_key -> {:ok, nil}
       result -> result
     end
@@ -975,7 +984,7 @@ defmodule SymphonyElixir.TicketObservation do
   end
 
   defp write(_stored, observed) do
-    with :ok <- RunStore.update_ticket_state(observed.repo_key, observed.issue_id, TicketState.observation(observed)),
+    with :ok <- RunStore.update_ticket_state(observed.issue_id, Map.put(TicketState.observation(observed), :repo_key, observed.repo_key)),
          do: {:ok, :updated}
   end
 

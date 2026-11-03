@@ -24,6 +24,7 @@ defmodule SymphonyElixir.Orchestrator do
     ForcedQueue,
     ForcedStatus,
     Handoff,
+    IdlePark,
     Initiatives,
     Notifications,
     Pauses,
@@ -49,7 +50,6 @@ defmodule SymphonyElixir.Orchestrator do
     StatusDashboard,
     SubIssueWait,
     TicketEvents,
-    TicketMerge,
     TicketObservation,
     TicketPullRequest,
     TicketSignals,
@@ -282,8 +282,9 @@ defmodule SymphonyElixir.Orchestrator do
     # The ledger's one-time history backfill runs in a task: startup never waits for it. The pause
     # backfill runs in the same task right after it: it reads the events the ledger's backfill writes.
     TicketEvents.Backfill.start(run: &SymphonyElixir.Pauses.Backfill.run_after_ledger/1)
-    # Once: a ticket left with records under two repositories is merged into its one record.
-    TicketMerge.start()
+    # Once per boot: a ticket an idle run parked before parks asked a question gets the question,
+    # the releasable reason and the push a park gives today, in a task of its own.
+    IdlePark.Backfill.start(configured_repo_keys(repo_key))
     tick_token = make_ref()
     send(self(), {:tick, tick_token})
     schedule_snapshot_publish(config.observability.snapshot_publish_ms)
@@ -995,7 +996,7 @@ defmodule SymphonyElixir.Orchestrator do
   # commit records its start. A record the store can't read starts no clock, so the review keeps
   # waiting, bounded by the epic review's own limit on a stuck workflow run.
   defp ci_wait(repo_key, issue_id, %{sha: sha}) do
-    record = TicketState.normalize(RunStore.get_ticket_state(repo_key, issue_id))
+    record = TicketState.normalize(RunStore.get_ticket_state(issue_id))
     now = DateTime.utc_now()
 
     case CiWait.since(record.signals, sha) do
@@ -1120,19 +1121,19 @@ defmodule SymphonyElixir.Orchestrator do
       outcome: outcome
     }
 
-    start_tracker_task(state, context, fn -> run_setup_block_heal(Map.get(running_entry, :issue), repo_key, heal_opts) end)
+    start_tracker_task(state, context, fn -> run_setup_block_heal(Map.get(running_entry, :issue), heal_opts) end)
   end
 
-  defp run_setup_block_heal(issue, repo_key, heal_opts) do
+  defp run_setup_block_heal(issue, heal_opts) do
     case SelfHeal.heal(issue, heal_opts) do
-      :filed -> {:filed, fix_ticket_held_on(repo_key, issue.id, heal_opts)}
+      :filed -> {:filed, fix_ticket_held_on(issue.id, heal_opts)}
       other -> other
     end
   end
 
   # The fix ticket self-heal just paused the ticket on, as its bookkeeping names it for the log line.
-  defp fix_ticket_held_on(repo_key, issue_id, opts) do
-    case Keyword.get(opts, :store, RunStore).get_ticket_state(repo_key, issue_id) do
+  defp fix_ticket_held_on(issue_id, opts) do
+    case Keyword.get(opts, :store, RunStore).get_ticket_state(issue_id) do
       %{} = record -> get_in(TicketState.self_heal(record) || %{}, [:fix_ticket]) || "its fix ticket"
       _none -> "its fix ticket"
     end
@@ -1475,15 +1476,18 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # Under `dispatch.source: record` dispatch reads every repo's records each cycle, not only the one
-  # this cycle polled: each Todo record of another repo is paused on the open blockers it observed
+  # this cycle polled: each active record of another repo is paused on the open blockers it observed
   # (`Pauses.Dependencies.sync_records/3`), so the pause holds it before its repo's next poll. The
   # polled repo's tickets are swept from the poll's own read (`resolve_update_holds/2`).
   defp sync_recorded_dependencies({:record, _held}, list_records, repo_result) do
     polled = with {repo_name, _result} <- repo_result, do: repo_name
 
     case list_records.() do
-      records when is_list(records) -> Dependencies.sync_records(records, terminal_state_set(), skip: polled)
-      _unreadable -> 0
+      records when is_list(records) ->
+        Dependencies.sync_records(records, terminal_state_set(), skip: polled, active_states: active_state_set())
+
+      _unreadable ->
+        0
     end
   end
 
@@ -1612,14 +1616,17 @@ defmodule SymphonyElixir.Orchestrator do
   defp resolve_update_holds(_repo_result, cache), do: cache
 
   # Runs in the poll task: brings each polled ticket's pause in line with what it waits on
-  # (`SymphonyElixir.Pauses.Dependencies`) — a ticket in Todo with an open blocker pauses on it, and
-  # one whose blockers all went terminal is released and dispatches, with no state move and no person
-  # involved. A fix ticket merged into Symphony itself also waits for the running app, through the
-  # same cache as `UpdateHold`.
+  # (`SymphonyElixir.Pauses.Dependencies`) — a ticket in any active phase with an open blocker pauses
+  # on it, and one whose blockers all went terminal is released and dispatches in its phase, with no
+  # state move and no person involved. A fix ticket merged into Symphony itself also waits for the
+  # running app, through the same cache as `UpdateHold`.
   defp sweep_dependencies(repo_name, issues, terminal_states, cache) do
     case Config.settings_for_repo(repo_name) do
-      {:ok, _settings} -> Dependencies.sweep(issues, terminal_states, repo_key: repo_name, update_hold_cache: cache)
-      {:error, _reason} -> {0, cache}
+      {:ok, settings} ->
+        Dependencies.sweep(issues, terminal_states, repo_key: repo_name, update_hold_cache: cache, active_states: active_state_set(settings))
+
+      {:error, _reason} ->
+        {0, cache}
     end
   end
 
@@ -4337,9 +4344,9 @@ defmodule SymphonyElixir.Orchestrator do
 
   # The reason the first closed dispatch gate (every one but the usage limit) gives, or nil when
   # all are open. `/api/v1/state` lists it under `dispatch_skipped`, so no candidate is passed over
-  # in silence. A `Todo` issue waits until every blocker is terminal (`Issue.blocked?/2`), a ticket
-  # with a hold waits for it to lift, and a `breakdown` parent waits on its sub-issues (see
-  # `issue_held?/2`). The review flow parks a Code Review ticket whose repo has no reviewer
+  # in silence. An issue in any active phase waits until every blocker is terminal
+  # (`Issue.blocked?/2`), a ticket with a hold waits for it to lift, and a `breakdown` parent waits
+  # on its sub-issues (see `issue_held?/2`). The review flow parks a Code Review ticket whose repo has no reviewer
   # enabled, and a Code Review or QA ticket whose head is not green yet: the reviewer and
   # the QA agent only run on a green head. A `Merging` issue waits for CI after its landing run, or
   # is landed by GitHub auto-merge. Symphony's own pause starts no pass at all; a repository's pause
@@ -4472,8 +4479,8 @@ defmodule SymphonyElixir.Orchestrator do
     %{state | epic_lanes: EpicLanes.plan(issues, max_total, Config.settings!().agent.epic_lanes, terminal_state_set())}
   end
 
-  # Candidates held in `Todo` by open blockers, held by self-heal on a fix ticket, or waiting for a
-  # blocker's fix the running app does not include yet (the `UpdateHold` reasons on their pauses),
+  # Candidates held in any active phase by open blockers, held by self-heal on a fix ticket, or
+  # waiting for a blocker's fix the running app does not include yet (the `UpdateHold` reasons on their pauses),
   # recomputed on every poll tick for the snapshot.
   defp put_blocked(%State{} = state, issues) do
     terminal_states = Config.settings!().tracker.terminal_states
@@ -5094,7 +5101,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp active_retry_issue?(_issue, _terminal_states), do: false
 
-  # A paused issue waits for its pause to lift (a `Todo` one on its open blockers, see
+  # A paused issue waits for its pause to lift (one in any active phase on its open blockers, see
   # `SymphonyElixir.Pauses.Dependencies`). A `breakdown` parent waits while its sub-issues are
   # worked, in the waiting state or, when that
   # is off, in its active state; it is dispatched again for close-out once every sub-issue is terminal.
@@ -5239,7 +5246,7 @@ defmodule SymphonyElixir.Orchestrator do
   # active one, so the revalidation sees whether it moved. No record, or one the filter leaves out,
   # reads as an issue Linear no longer returns.
   defp recorded_dispatch_issue(repo_key, issue_id) do
-    case RunStore.get_ticket_state(repo_key, issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
       %{} = record ->
         settings = Config.settings!()
         record = TicketState.normalize(record)
@@ -5399,7 +5406,7 @@ defmodule SymphonyElixir.Orchestrator do
   # since its last progress, against the `watchdog` limits. A record the store can't read lists no
   # runs, so a store error never stops a dispatch.
   defp dispatch_loop(%Issue{id: issue_id, state: issue_state} = issue, repo_key) do
-    record = TicketState.normalize(RunStore.get_ticket_state(repo_key, issue_id))
+    record = TicketState.normalize(RunStore.get_ticket_state(issue_id))
     kind = AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key).kind
     attempt = %{kind: kind, state: issue_state, head: pr_head(issue_id, repo_key)}
 
@@ -5649,7 +5656,7 @@ defmodule SymphonyElixir.Orchestrator do
   # ticket's earlier runs of the same kind.
   defp record_run_started(repo_key, issue_id, %{kind: kind, run_id: run_id, state: issue_state, head: head}) do
     run_kind = to_string(kind)
-    run_number = length(run_events(repo_key, issue_id, "run.started", &(&1[:run_kind] == run_kind))) + 1
+    run_number = length(run_events(issue_id, "run.started", &(&1[:run_kind] == run_kind))) + 1
     payload = %{run_id: run_id, run_kind: run_kind, run_number: run_number, state: issue_state, head: head}
     TicketSignals.record_event(repo_key, issue_id, "run.started", payload, phase: issue_state, run_id: run_id)
   end
@@ -5659,7 +5666,7 @@ defmodule SymphonyElixir.Orchestrator do
   # records `counted: false`, as its dispatch outcome is dropped.
   defp record_run_ended(repo_key, issue_id, run_id, running_entry, reason) do
     head = pr_head(issue_id, repo_key)
-    started = run_events(repo_key, issue_id, "run.started", &(&1[:run_id] == run_id)) |> List.first() || %{}
+    started = run_events(issue_id, "run.started", &(&1[:run_id] == run_id)) |> List.first() || %{}
 
     payload = %{
       run_id: run_id,
@@ -5674,7 +5681,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     opts = [run_id: run_id, at: DateTime.utc_now()]
 
-    case run_transcript(repo_key, issue_id, run_id, running_entry) do
+    case run_transcript(issue_id, run_id, running_entry) do
       {:ok, path} -> record_run_ended_with_transcript(repo_key, issue_id, path, payload, opts)
       :none -> TicketSignals.record_event(repo_key, issue_id, "run.ended", payload, opts)
     end
@@ -5682,12 +5689,12 @@ defmodule SymphonyElixir.Orchestrator do
 
   # A local Claude Code run's transcript (`Transcript.locate/4`). A run whose end was already
   # recorded keeps it, so a repeated end ingests nothing a second time.
-  defp run_transcript(repo_key, issue_id, run_id, running_entry) do
+  defp run_transcript(issue_id, run_id, running_entry) do
     with nil <- Map.get(running_entry, :worker_host),
          SymphonyElixir.ClaudeCode.AppServer <- Map.get(running_entry, :agent_module),
          {:ok, path} <-
            Transcript.locate(:claude, Map.get(running_entry, :workspace_path), Map.get(running_entry, :session_id), Map.get(running_entry, :transcript_path)),
-         [] <- run_events(repo_key, issue_id, "run.ended", &(&1[:run_id] == run_id)) do
+         [] <- run_events(issue_id, "run.ended", &(&1[:run_id] == run_id)) do
       {:ok, path}
     else
       _none -> :none
@@ -5721,8 +5728,8 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp run_events(repo_key, issue_id, type, keep?) do
-    case RunStore.list_ticket_events(repo_key, issue_id, types: [type]) do
+  defp run_events(issue_id, type, keep?) do
+    case RunStore.list_ticket_events(issue_id, types: [type]) do
       events when is_list(events) -> events |> Enum.map(& &1.payload) |> Enum.filter(keep?)
       {:error, _reason} -> []
     end
@@ -5848,7 +5855,7 @@ defmodule SymphonyElixir.Orchestrator do
   # it (`Pauses.Dependencies.sync_issue/4`) before the gate reads its pause.
   defp sync_read_dependencies(%Issue{} = issue, terminal_states) do
     with repo_key when is_binary(repo_key) <- hold_repo_key(issue),
-         do: Dependencies.sync_issue(repo_key, issue, terminal_states)
+         do: Dependencies.sync_issue(repo_key, issue, terminal_states, active_states: active_state_set())
   end
 
   # From the record, the issue starts only when its record still says what the candidate said: the
@@ -10386,16 +10393,10 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp ticket_ci_state(%Issue{id: issue_id} = issue) when is_binary(issue_id) do
-    case issue_repo_key(issue) do
-      nil ->
-        nil
-
-      repo_key ->
-        case RunStore.get_ticket_state(repo_key, issue_id) do
-          %{} = record -> TicketState.current_ci_state(record)
-          _none_or_error -> nil
-        end
+  defp ticket_ci_state(%Issue{id: issue_id}) when is_binary(issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
+      %{} = record -> TicketState.current_ci_state(record)
+      _none_or_error -> nil
     end
   end
 
@@ -10485,7 +10486,7 @@ defmodule SymphonyElixir.Orchestrator do
   # recorded once per head rather than on every poll tick.
   defp latest_head_signal?(%Issue{id: issue_id} = issue, name, head) when is_binary(issue_id) do
     with repo_key when is_binary(repo_key) <- issue_repo_key(issue),
-         %{} = record <- RunStore.get_ticket_state(repo_key, issue_id) do
+         %{} = record <- RunStore.get_ticket_state(issue_id) do
       case TicketState.recent_signals(record, 1) do
         [%{name: ^name, details: details}] -> Map.get(details, :head) == head
         _signals -> false

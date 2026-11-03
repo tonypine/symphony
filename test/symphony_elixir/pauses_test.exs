@@ -33,7 +33,7 @@ defmodule SymphonyElixir.PausesTest do
       assert {:ok, %{reasons: [_question, _dependency]}} = Pauses.add_reason(@ticket, @dependency, at: @later)
 
       assert Pauses.why(@ticket) == ["Waiting for your answer", "Waiting for TP-1194 to finish"]
-      assert Enum.map(TicketState.pause_reasons(RunStore.get_ticket_state(@repo_key, @issue_id)), & &1.kind) == [:question, :ticket]
+      assert Enum.map(TicketState.pause_reasons(RunStore.get_ticket_state(@issue_id)), & &1.kind) == [:question, :ticket]
 
       assert {:ok, %{reasons: [%{kind: :ticket}], since: @at, set_by: @symphony}} =
                Pauses.clear_reason(@ticket, @question, by: @person, at: @later)
@@ -58,12 +58,12 @@ defmodule SymphonyElixir.PausesTest do
 
       refute Pauses.paused?(@ticket)
       assert Pauses.why(@ticket) == []
-      assert RunStore.get_ticket_state(@repo_key, @issue_id).pause == nil
+      assert RunStore.get_ticket_state(@issue_id).pause == nil
 
       assert {"pause.cleared", %{cleared: [%{reason: :question, text: "Waiting for your answer", waits_on: %{question_id: "q-1"}}], by: @symphony}} =
                List.last(ticket_events(@repo_key, @issue_id))
 
-      assert [%{summary: %{title: "Moving again"}}] = RunStore.list_ticket_events(@repo_key, @issue_id, types: ["pause.cleared"])
+      assert [%{summary: %{title: "Moving again"}}] = RunStore.list_ticket_events(@issue_id, types: ["pause.cleared"])
     end
 
     test "setting a reason of the same kind and waits_on twice adds no reason and records no event" do
@@ -82,7 +82,7 @@ defmodule SymphonyElixir.PausesTest do
       {:ok, _pause} = Pauses.add_reason(@ticket, @dependency)
 
       assert [%{summary: %{title: "Paused: waiting for your answer"}}, %{summary: %{title: "Also paused: waiting for TP-1194 to finish"}}] =
-               RunStore.list_ticket_events(@repo_key, @issue_id, [])
+               RunStore.list_ticket_events(@issue_id, [])
     end
 
     test "each change sends the live channel one notice of its event once stored; a no-op sends none" do
@@ -93,7 +93,7 @@ defmodule SymphonyElixir.PausesTest do
       {:ok, _pause} = Pauses.set(@ticket, @question, at: @at)
       {:ok, nil} = Pauses.clear(@ticket, at: @later)
 
-      [set, cleared] = RunStore.list_ticket_events(@repo_key, @issue_id, [])
+      [set, cleared] = RunStore.list_ticket_events(@issue_id, [])
       assert_receive {:ticket_event, %{event_id: id, type: "pause.set", issue_identifier: "TP-1230"}} when id == set.id
       assert_receive {:ticket_event, %{event_id: id, type: "pause.cleared"}} when id == cleared.id
       refute_received {:ticket_event, _notice}
@@ -104,7 +104,7 @@ defmodule SymphonyElixir.PausesTest do
 
       {:ok, _pause} = Pauses.set(@ticket, @dependency, at: @at)
 
-      record = RunStore.get_ticket_state(@repo_key, @issue_id)
+      record = RunStore.get_ticket_state(@issue_id)
       assert %{phase: "In Progress", issue_identifier: "TP-1230", pause: %{since: @at}, updated_at: @at} = record
     end
 
@@ -157,7 +157,7 @@ defmodule SymphonyElixir.PausesTest do
 
       assert Pauses.set(@ticket, @question, at: "now") == {:error, {:invalid_option, :at}}
       refute Pauses.paused?(@ticket)
-      assert RunStore.get_ticket_state(@repo_key, @issue_id) == nil
+      assert RunStore.get_ticket_state(@issue_id) == nil
 
       {:ok, pause} = Pauses.set(@ticket, @question, at: @at)
       assert Pauses.add_reason(@ticket, long, at: @later) == {:error, {:invalid_reason, long}}
@@ -165,7 +165,7 @@ defmodule SymphonyElixir.PausesTest do
       assert Pauses.clear(@ticket, at: "now") == {:error, {:invalid_option, :at}}
 
       assert Pauses.get(@ticket) == {:ok, pause}
-      assert %{pause: ^pause, updated_at: @at} = RunStore.get_ticket_state(@repo_key, @issue_id)
+      assert %{pause: ^pause, updated_at: @at} = RunStore.get_ticket_state(@issue_id)
       assert ticket_events(@repo_key, @issue_id) |> Enum.map(&elem(&1, 0)) == ["pause.set"]
 
       at_limit = %{long | text: String.duplicate("w", 300)}
@@ -190,10 +190,10 @@ defmodule SymphonyElixir.PausesTest do
       assert [
                %{type: "pause.set", payload: %{source: "backfill", reason: "ticket"}, idempotency: "backfill:pause.set:ticket:" <> _},
                %{type: "pause.reason_added", payload: %{source: "backfill", reason: "question"}, idempotency: "backfill:pause.reason_added:question:" <> _}
-             ] = RunStore.list_ticket_events(@repo_key, @issue_id, [])
+             ] = RunStore.list_ticket_events(@issue_id, [])
 
       assert {:ok, _pause} = Pauses.add_reason(@ticket, %{kind: :environment, waits_on: %{condition: "CI"}}, at: @later)
-      assert %{payload: payload, idempotency: nil} = List.last(RunStore.list_ticket_events(@repo_key, @issue_id, []))
+      assert %{payload: payload, idempotency: nil} = List.last(RunStore.list_ticket_events(@issue_id, []))
       refute Map.has_key?(payload, :source)
     end
   end
@@ -218,7 +218,7 @@ defmodule SymphonyElixir.PausesTest do
       assert Pauses.clear_reason_change(@ticket, nil, @question, at: @later) == {:ok, nil, []}
 
       refute Pauses.paused?(@ticket)
-      assert RunStore.get_ticket_state(@repo_key, @issue_id) == nil
+      assert RunStore.get_ticket_state(@issue_id) == nil
       assert ticket_events(@repo_key, @issue_id) == []
     end
 
@@ -390,7 +390,7 @@ defmodule SymphonyElixir.PausesTest do
       assert {:ok, nil} = Pauses.clear(:symphony)
       refute Pauses.paused?(:symphony)
 
-      assert RunStore.list_ticket_events(@repo_key, @issue_id, []) == []
+      assert RunStore.list_ticket_events(@issue_id, []) == []
     end
   end
 
@@ -609,7 +609,7 @@ defmodule SymphonyElixir.PausesTest do
       assert :ok = Pauses.release_stop(@ticket, by: Pauses.director())
 
       assert [%{type: "pause.set"}, %{type: "pause.cleared", payload: %{by: %{kind: :person, name: "Director"}}}] =
-               @repo_key |> SymphonyElixir.TicketEvents.query(@issue_id) |> Enum.filter(&String.starts_with?(&1.type, "pause."))
+               @issue_id |> SymphonyElixir.TicketEvents.query() |> Enum.filter(&String.starts_with?(&1.type, "pause."))
     end
 
     test "a stop or a release the store refuses is an error" do

@@ -59,6 +59,8 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
      %{title: "You answered: Wait for the release", detail: "Ship TP-12 today"}},
     {"question.withdrawn", %{question_id: "q-1", title: "Ship TP-12 today", reason: "TP-12 was cancelled"}, [], %{title: "Question withdrawn: TP-12 was cancelled", detail: "Ship TP-12 today"}},
     {"question.reopened", %{question_id: "q-1", title: "Ship TP-12 today"}, [], %{title: "You took back your answer: Ship TP-12 today", detail: nil}},
+    {"park.backfilled", %{added: ["question", "push"], question_id: "q-1", branch: "auto/TP-1248"}, [],
+     %{title: "Park brought up to date at start-up", detail: "asked you whether to run it again · pushed its work to auto/TP-1248"}},
     {"note", %{text: "History before 2026-10-20 was backfilled"}, [], %{title: "Note added", detail: "History before 2026-10-20 was backfilled"}}
   ]
 
@@ -110,6 +112,11 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     assert render("question.answered", %{}) == %{title: "You answered", detail: nil}
     assert render("question.asked", %{}) == %{title: "Asked you", detail: nil}
     assert render("question.withdrawn", %{}) == %{title: "Question withdrawn", detail: nil}
+  end
+
+  test "a park brought up to date reads the reason it was paused on, and a push naming no branch" do
+    assert render("park.backfilled", %{added: ["releasable_reason", "push"]}) ==
+             %{title: "Park brought up to date at start-up", detail: "paused it until you unblock it · pushed its work to its branch"}
   end
 
   test "a pause reason's line keeps the capital of a name it opens on" do

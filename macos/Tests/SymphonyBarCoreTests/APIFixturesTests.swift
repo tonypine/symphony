@@ -222,6 +222,23 @@ final class APIFixturesTests: XCTestCase {
         }
     }
 
+    /// The fixture QA reads the newest merge's build line in with no ticket held (TP-1340): `update-build-latest` has
+    /// nothing waiting for an update and the v0.0.1.785 build queued, and the menu still says what that build is at.
+    func testTheLatestBuildFixtureShowsTheBuildLineWithNothingHeld() throws {
+        let directory = Self.shippedRunning.deletingLastPathComponent()
+            .appendingPathComponent("update-build-latest", isDirectory: true)
+        let shipped = APIFixtures(directory: directory, requestLog: root.appendingPathComponent("api-requests.jsonl"))
+        let data = shipped.answer(URLRequest(url: SymphonyState.stateURL(base: APIFixtures.baseURL))).0
+        guard case let .state(snapshot) = SymphonyState.poll(data: data, statusCode: 200) else {
+            return XCTFail("the update-build-latest fixture doesn't read as a state")
+        }
+        XCTAssertEqual(snapshot.updateUnblocks, 0)
+        XCTAssertEqual(
+            StatusMenu.detailLines(.running(snapshot, external: false)).last,
+            "The v0.0.1.785 build: queued on GitHub for 12 min"
+        )
+    }
+
     /// The update fixtures QA launches with the update feed's `--fake-release 9.9.9 9999`: dispatch paused for an
     /// update to v9.9.9, with two runs finishing (`update-paused`) or none (`update-paused-idle`).
     func testTheUpdateFixturesReadAsDispatchPausedForAnUpdate() throws {

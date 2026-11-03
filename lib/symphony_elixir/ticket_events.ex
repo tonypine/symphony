@@ -121,7 +121,7 @@ defmodule SymphonyElixir.TicketEvents do
   end
 
   @doc """
-  The events of `repo_key`'s ticket `issue_id`, oldest first by `at`, then `seq` (see
+  The events of the ticket `issue_id`, oldest first by `at`, then `seq` (see
   `t:query_opt/0` for `opts`).
 
   `open_findings: true` keeps the `finding.recorded` events no unsuperseded `finding.resolved`
@@ -133,8 +133,8 @@ defmodule SymphonyElixir.TicketEvents do
   page never ends inside a group of events that share one `at`, so a reader that pages with
   `since:` the last event's `at` never skips an event.
   """
-  @spec query(String.t(), String.t(), [query_opt()]) :: [Event.t()] | {:error, term()}
-  def query(repo_key, issue_id, opts \\ []), do: repo_key |> RunStore.list_ticket_events(issue_id, []) |> read(opts)
+  @spec query(String.t(), [query_opt()]) :: [Event.t()] | {:error, term()}
+  def query(issue_id, opts \\ []), do: issue_id |> RunStore.list_ticket_events([]) |> read(opts)
 
   @doc """
   The event stream of a subject that is not a ticket: Symphony itself (`:symphony`) or a repository
@@ -175,15 +175,15 @@ defmodule SymphonyElixir.TicketEvents do
     ObservabilityPubSub.broadcast_ticket_event(%{
       repo_key: event.repo_key,
       issue_id: event.issue_id,
-      issue_identifier: issue_identifier(event.repo_key, event.issue_id),
+      issue_identifier: issue_identifier(event.issue_id),
       event_id: event.id,
       type: event.type,
       at: event.at
     })
   end
 
-  defp issue_identifier(repo_key, issue_id) do
-    case RunStore.get_ticket_state(repo_key, issue_id) do
+  defp issue_identifier(issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
       %{issue_identifier: identifier} when is_binary(identifier) -> identifier
       _none -> nil
     end

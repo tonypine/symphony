@@ -581,8 +581,8 @@ defmodule SymphonyElixir.Pauses do
 
   defp update(subject, _at, fun), do: RunStore.update_subject_pause(subject, &fun.(normalize(&1)))
 
-  defp read({:ticket, repo_key, issue_id}) do
-    with record when not is_tuple(record) <- RunStore.get_ticket_state(repo_key, issue_id),
+  defp read({:ticket, _repo_key, issue_id}) do
+    with record when not is_tuple(record) <- RunStore.get_ticket_state(issue_id),
          do: {:ok, TicketState.normalize(record).pause}
   end
 

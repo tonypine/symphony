@@ -648,7 +648,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
       end
 
       # A webhook said ACME-1781 was removed: its record stays, and it is never listed.
-      assert :ok = RunStore.put_ticket_state(TicketState.mark_removed(RunStore.get_ticket_state(@repo_key, removed.id), now))
+      assert :ok = RunStore.put_ticket_state(TicketState.mark_removed(RunStore.get_ticket_state(removed.id), now))
 
       comment = %{id: "comment-1", kind: "inline_comment", author: "reviewer", body: "Please handle this edge case.", path: "lib/a.ex", line: 1}
       comment = Map.merge(comment, %{created_at: comment_at, updated_at: comment_at})
@@ -814,7 +814,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
              RunStore.list_pr_reviews()
 
     assert [%{name: "review verdict", details: %{outcome: "rework", to: "In Progress"}} | _] =
-             RunStore.get_ticket_state(@repo_key, "issue-1780").signals
+             RunStore.get_ticket_state("issue-1780").signals
   end
 
   test "plain non-bot reviewer comments trigger rework after cooldown and are stored for the prompt" do

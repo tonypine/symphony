@@ -757,7 +757,7 @@ agent:
   one, in parent priority then age order, holds one lane: its sub-tickets run there one after
   another, and the lane stays reserved while the current part is landing, so the next part starts
   as soon as it is unblocked. An epic whose path only waits on people (every open ticket on it is in
-  review, in Backlog or Triage, a parent waiting on its sub-tickets, or a Todo held by blockers)
+  review, in Backlog or Triage, a parent waiting on its sub-tickets, or a ticket held by blockers)
   yields its lane to the next epic or the shared pool, and takes one again at the next poll once a
   ticket on its path can run. The lane also runs whatever is in the way of the next
   part: sub-tickets of sub-tickets at any depth, and tickets blocking any of those (transitively,

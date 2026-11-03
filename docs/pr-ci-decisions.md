@@ -262,6 +262,11 @@ ticket, "Rerun the build" or "Wait for a fix", which stops no dispatch. Picking 
 checks the build at once and reruns it; the question is withdrawn once the build starts again on
 GitHub, is published, or a newer merge is the one watched.
 
+A run cancelled before any job started while a newer `release` run on `main` exists was replaced, not
+starved: the workflow's concurrency group cancels an older pending run once a newer push queues behind
+a running release. Symphony never reruns it, never counts it toward the stop line and never asks about
+it; rerunning it would cancel the newer run in turn and could publish an older build after a newer one.
+
 ## What the watcher does
 
 Every read first applies the upkeep the facts call for, then decides and applies the flow action

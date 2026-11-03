@@ -154,7 +154,7 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
     :ok
   end
 
-  defp watch(issue_id), do: @repo_key |> RunStore.get_ticket_state(issue_id) |> TicketState.pr_watch()
+  defp watch(issue_id), do: RunStore.get_ticket_state(issue_id) |> TicketState.pr_watch()
   defp decision(issue_id), do: watch(issue_id).decision
   defp moves(issue_id), do: for({^issue_id, state} <- World.calls(:move), do: state)
   defp comments(issue_id), do: for({^issue_id, body} <- World.calls(:comment), do: body)
@@ -396,7 +396,7 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
       # Decide writes the Question first; the Decisions section follows once Linear answers.
       %{id: id} = deciding(issue_id)
       {:ok, _answered} = Questions.answer({:ticket, @repo_key, issue_id}, id, "Accept the new base")
-      assert RunStore.get_ticket_state(@repo_key, issue_id).decisions == []
+      assert RunStore.get_ticket_state(issue_id).decisions == []
       tick!(pid)
 
       assert %{rule: "R27", kind: :dispatch} = decision(issue_id)
@@ -417,7 +417,7 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
 
       # Undo: the Question is open again; the decision stays.
       {:ok, _reopened} = Questions.reopen(ticket, id)
-      assert [%{answer: "Accept the new base"}] = RunStore.get_ticket_state(@repo_key, issue_id).decisions
+      assert [%{answer: "Accept the new base"}] = RunStore.get_ticket_state(issue_id).decisions
       tick!(pid)
 
       # The base still reads as changed: the ticket waits on the person, asked again.
@@ -464,7 +464,7 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
       assert %{rule: "R6", kind: :decision, owner: :person, outcome: :applied} = decision(asked)
       assert %{title: "No pull request on TP-40"} = deciding(asked)
       assert %{rule: "R5", kind: :wait, owner: :agent} = decision(waiting)
-      assert RunStore.get_ticket_state(@repo_key, plan) == nil
+      assert RunStore.get_ticket_state(plan) == nil
       Enum.each([asked, waiting], &accounted!/1)
 
       # Asked once a stay: answered and still without a PR, it isn't asked again.
@@ -517,7 +517,7 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
   # A person answered the request titled `title`: the answer is recorded and its question no longer
   # waits.
   defp answer!(issue_id, title, answer) do
-    record = RunStore.get_ticket_state(@repo_key, issue_id)
+    record = RunStore.get_ticket_state(issue_id)
     entry = %{key: "comment-#{issue_id}", date: "2026-10-16", title: title, question: "", answer: answer, scope: ""}
     :ok = RunStore.put_ticket_state(TicketState.put_decisions(record, [entry]))
     withdraw!(issue_id)

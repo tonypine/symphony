@@ -18,7 +18,7 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
     def get_marker(name), do: fail(:get_marker) || if(Process.get(:ignore_marker), do: nil, else: RunStore.get_marker(name))
     def put_marker(name, at), do: fail(:put_marker) || RunStore.put_marker(name, at)
     def list_all_ticket_states, do: fail(:list_all_ticket_states) || RunStore.list_all_ticket_states()
-    def list_ticket_events(repo_key, issue_id, opts), do: fail(:list_ticket_events) || RunStore.list_ticket_events(repo_key, issue_id, opts)
+    def list_ticket_events(issue_id, opts), do: fail(:list_ticket_events) || RunStore.list_ticket_events(issue_id, opts)
     def append_ticket_events(events), do: fail(:append_ticket_events) || RunStore.append_ticket_events(events)
 
     defp fail(name), do: if(name in Process.get(:fail, []), do: {:error, {:failed, name}})
@@ -185,7 +185,7 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       assert Enum.map(events(), & &1.type) == ["decision.recorded", "note"]
       assert events(types: ["hold.set", "hold.cleared", "decision.requested"]) == []
       assert [%{payload: %{text: "History before " <> _}}] = events(types: ["note"])
-      assert TicketEvents.query(@repo_key, @issue_id, open_decisions: true) == []
+      assert TicketEvents.query(@issue_id, open_decisions: true) == []
     end
 
     test "a ticket that can't be read or written leaves the marker unset for the next run", %{audit: audit} do
@@ -290,7 +290,7 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
 
   defp events(issue_id \\ @issue_id, opts \\ [])
   defp events(opts, []) when is_list(opts), do: events(@issue_id, opts)
-  defp events(issue_id, opts), do: TicketEvents.query(@repo_key, issue_id, Keyword.put(opts, :limit, 200))
+  defp events(issue_id, opts), do: TicketEvents.query(issue_id, Keyword.put(opts, :limit, 200))
 
   defp move(name, attrs), do: Map.merge(%{event_type: "director_move", move: name, repo_key: @repo_key, issue_id: @issue_id}, attrs)
 

@@ -224,7 +224,7 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
       # Code Review dispatches on a green head only.
       assert {:ok, :changed} = RunStore.record_ci_state(repo_key, review_ticket.id, "abc123", "green", DateTime.utc_now())
       SymphonyElixir.PrWatchSupport.put_watch!(repo_key, review_ticket.id, head_sha: "abc123", decision: :dispatch)
-      on_exit(fn -> RunStore.delete_ticket_state(repo_key, review_ticket.id) end)
+      on_exit(fn -> RunStore.delete_ticket_state(review_ticket.id) end)
 
       orchestrator_name = Module.concat(__MODULE__, :CodeReviewDispatchOrchestrator)
       {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
@@ -348,7 +348,7 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
       on_exit(fn ->
         Application.delete_env(:symphony_elixir, :qa_verification_recipient)
         Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
-        SymphonyElixir.RunStore.delete_ticket_state(repo_key, "issue-qa-closed")
+        SymphonyElixir.RunStore.delete_ticket_state("issue-qa-closed")
       end)
 
       assert :ok =
@@ -374,7 +374,7 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
 
       :ok = SymphonyElixir.TicketPullRequest.put(repo_key, "issue-qa-closed-fail", %{pr_url: pr_url})
       :ok = SymphonyElixir.TicketPullRequest.mark_finished(repo_key, pr_url, "closed")
-      on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state(repo_key, "issue-qa-closed-fail") end)
+      on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("issue-qa-closed-fail") end)
 
       assert_raise RuntimeError, ~r/closed_pull_request_hold_failed/, fn ->
         AgentRunner.run(run_issue, nil, tracker: FailingCommentTracker, issue_enricher: fn issue -> {:ok, issue} end)

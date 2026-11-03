@@ -959,7 +959,7 @@ defmodule SymphonyElixir.DirectorMoves do
     do: conflict("#{issue.identifier} is in no repository Symphony is configured for, so Symphony doesn't track it")
 
   defp require_tracked(issue, opts) do
-    case Keyword.get(opts, :store, RunStore).get_ticket_state(issue.repo_key, issue.id) do
+    case Keyword.get(opts, :store, RunStore).get_ticket_state(issue.id) do
       %{} = record -> {:ok, TicketState.normalize(record).phase}
       _none -> conflict("Symphony has no record of #{issue.identifier} yet, so it can't move it")
     end
@@ -1105,7 +1105,7 @@ defmodule SymphonyElixir.DirectorMoves do
     do: "Unblocked by the Director: #{identifier} goes back to #{from_state} with its workspace and branch as they are."
 
   defp ticket_signals(issue, opts) do
-    case Keyword.get(opts, :store, RunStore).get_ticket_state(issue.repo_key, issue.id) do
+    case Keyword.get(opts, :store, RunStore).get_ticket_state(issue.id) do
       %{} = record -> TicketState.normalize(record).signals
       _none -> []
     end
@@ -1152,37 +1152,43 @@ defmodule SymphonyElixir.DirectorMoves do
   # own move instead.
   defp decide(%Issue{} = issue, input, opts) do
     case deciding(issue, input) do
+      {:held, question} -> decide_held_question(issue, question, input, opts)
       %{} = question -> answer(issue, input, question, decide_target(input[:move], picked_move(question, input.picks)), opts)
-      nil -> decide_held_question(issue, input, opts)
+      {:error, _reason} = error -> error
     end
   end
 
-  # The decision request's Question the Director answers: the open one the Inbox row names, else the
-  # newest the ticket waits on (`Questions.deciding/1`). A question Unblock answers is never one.
+  # The Question the Director answers: the one `question_id` names, open, whatever asked it and
+  # whether or not anything pauses the ticket on it (one Unblock answers, `Questions.held/1`, does
+  # what its option asks); else the newest decision request the ticket waits on
+  # (`Questions.deciding/1`). An unknown or closed Question is refused, naming which.
   defp deciding(issue, input) do
     ticket = ticket(issue)
 
-    with id when is_binary(id) <- blank_to_nil(input[:question_id]),
-         %{state: :open, request: true} = question <- Questions.find(ticket, String.trim(id)) do
-      question
-    else
-      _none -> Questions.deciding(ticket)
+    case blank_to_nil(input[:question_id]) do
+      nil -> Questions.deciding(ticket) || conflict("#{issue.identifier} is not waiting on a decision")
+      id -> named_question(issue, ticket, String.trim(id))
     end
   end
 
-  # The Inbox answers a question Unblock answers (`Questions.held/1`: a dispatch loop's, a quiet
-  # handoff's, a park's, a block report's) with Decide, as it answers any question: its first pick
-  # is the answer, and the option it picked does what `answer_held_question/4` says.
-  defp decide_held_question(issue, %{question_id: question_id, picks: [%{answer: answer} | _picks]}, opts) when is_binary(question_id) do
-    question_id = String.trim(question_id)
-
-    case Questions.held(ticket(issue)) do
-      %{id: ^question_id} -> answer_and_act(issue, question_id, String.trim(answer), opts)
-      _other -> conflict("#{issue.identifier} is not waiting on a decision")
+  defp named_question(issue, ticket, id) do
+    case Questions.find(ticket, id) do
+      nil -> conflict("#{issue.identifier} has no question #{id}")
+      %{state: :open} = question -> if unblock_question?(question), do: {:held, question}, else: question
+      %{state: state} -> conflict("#{issue.identifier}'s question #{id} is #{state}, not open")
     end
   end
 
-  defp decide_held_question(issue, _input, _opts), do: conflict("#{issue.identifier} is not waiting on a decision")
+  defp unblock_question?(question) do
+    labels = [DispatchLoop.option_label(:unblock), TransitionGuard.unblock_option()]
+    Enum.any?(question.options, &(&1.label in labels))
+  end
+
+  # The Inbox answers a question Unblock answers (a dispatch loop's, a quiet handoff's, a park's, a
+  # block report's) with Decide, as it answers any question: its first pick is the answer, and the
+  # option it picked does what `answer_held_question/4` says.
+  defp decide_held_question(issue, question, %{picks: [%{answer: answer} | _picks]}, opts),
+    do: answer_and_act(issue, question.id, String.trim(answer), opts)
 
   # The move a decision makes: the Director's explicit move, else the one the Question or the picked
   # option carries (a merge confirmation's `Merging`, a Code Review escalation's QA state, QA's
@@ -1282,7 +1288,7 @@ defmodule SymphonyElixir.DirectorMoves do
   defp row_comment_id(issue, question_id), do: issue |> rows() |> Enum.find_value(&(&1.question_id == question_id && &1.comment_id))
 
   defp rows(issue) do
-    case RunStore.get_ticket_state(issue.repo_key, issue.id) do
+    case RunStore.get_ticket_state(issue.id) do
       %{projected: %{comments: %{} = comments}} ->
         for {question_id, %{comment: comment_id}} <- comments,
             is_binary(comment_id),

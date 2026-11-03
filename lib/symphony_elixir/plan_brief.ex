@@ -293,7 +293,7 @@ defmodule SymphonyElixir.PlanBrief do
   end
 
   defp write(repo_key, issue_id, attrs) do
-    case RunStore.update_ticket_state(repo_key, issue_id, attrs) do
+    case RunStore.update_ticket_state(issue_id, attrs) do
       :ok ->
         ObservabilityPubSub.broadcast_ticket_record_changed(repo_key, issue_id, [:plan_brief])
 
@@ -305,7 +305,7 @@ defmodule SymphonyElixir.PlanBrief do
 
   # Only the repo that holds the ticket's record: another repo reads the same record (by ticket).
   defp in_plan_review?(repo_key, issue_id, opts) do
-    case RunStore.get_ticket_state(repo_key, issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
       %{phase: phase, repo_key: ^repo_key} -> plan_review?(repo_key, phase, opts)
       _none_or_error -> false
     end

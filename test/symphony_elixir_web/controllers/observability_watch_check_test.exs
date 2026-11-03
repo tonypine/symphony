@@ -96,7 +96,7 @@ defmodule SymphonyElixirWeb.ObservabilityWatchCheckTest do
 
     start_supervised!({Watcher, fn -> {:error, :unauthorized} end})
     assert %{"error" => %{"code" => "watch_check_failed", "message" => "The PR watcher could not read: :unauthorized"}} = json_response(check("TP-1"), 502)
-    assert %{} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert %{} = RunStore.get_ticket_state("issue-1")
   end
 
   test "Check Now is refused to a browser on another origin, and only answers POST" do

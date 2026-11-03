@@ -208,7 +208,7 @@ defmodule SymphonyElixir.OrchestratorClaimsTest do
     send(pid, :publish_snapshot)
     TicketObservation.reset()
     send(pid, :run_poll_cycle)
-    wait_until(fn -> RunStore.get_ticket_state("default", moved.id).phase == "Rework" end)
+    wait_until(fn -> RunStore.get_ticket_state(moved.id).phase == "Rework" end)
     wait_until_idle(pid)
     assert :sys.get_state(pid).repo_poll_due_at_ms["default"] == not_due
 
@@ -218,7 +218,7 @@ defmodule SymphonyElixir.OrchestratorClaimsTest do
     wait_until(fn -> TicketObservation.summary().stale >= 1 end)
     wait_until_idle(pid)
 
-    record = RunStore.get_ticket_state("default", moved.id)
+    record = RunStore.get_ticket_state(moved.id)
     assert {record.phase, record.linear_updated_at} == {"Rework", ~U[2026-10-29 10:00:00Z]}
     :sys.replace_state(pid, &%{&1 | running: %{}, claimed: MapSet.new()})
   end
@@ -239,7 +239,7 @@ defmodule SymphonyElixir.OrchestratorClaimsTest do
 
     capture_log(fn ->
       send(pid, :run_poll_cycle)
-      wait_until(fn -> match?(%{phase: "Backlog"}, RunStore.get_ticket_state("default", parked.id)) end)
+      wait_until(fn -> match?(%{phase: "Backlog"}, RunStore.get_ticket_state(parked.id)) end)
     end)
 
     assert :sys.get_state(pid).running == %{}
@@ -256,7 +256,7 @@ defmodule SymphonyElixir.OrchestratorClaimsTest do
 
     assert_received {:state, %{running: running}}
     assert running == %{}
-    assert %{phase: "Backlog", issue_identifier: "MT-REVALIDATED", observed_from: :by_id} = RunStore.get_ticket_state("default", parked.id)
+    assert %{phase: "Backlog", issue_identifier: "MT-REVALIDATED", observed_from: :by_id} = RunStore.get_ticket_state(parked.id)
   end
 
   test "a by-id read of a ticket no repo has a record of writes no record; the poll files it" do
@@ -265,7 +265,7 @@ defmodule SymphonyElixir.OrchestratorClaimsTest do
 
     capture_log(fn -> Orchestrator.dispatch_chosen_issues_for_test([%{unseen | state: "Todo"}], orchestrator_state()) end)
 
-    assert RunStore.get_ticket_state("default", unseen.id) == nil
+    assert RunStore.get_ticket_state(unseen.id) == nil
     assert TicketObservation.summary().unrouted >= 1
   end
 

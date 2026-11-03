@@ -16,7 +16,9 @@ owns the state; Linear is a window") a rule that code is checked against.
 ## Context
 
 Symphony keeps a record per ticket in its own store (`SymphonyElixir.TicketState`, persisted by
-`SymphonyElixir.RunStore`): the phase, the holds with their reason or decision payload, the verdicts
+`SymphonyElixir.RunStore`, keyed by the ticket's id alone since TP-1339; the repository is a field
+on the record that routing writes, so a ticket that moves to another project keeps its one record):
+the phase, the holds with their reason or decision payload, the verdicts
 bound to a PR head, the CI state of each head, the ticket's pull request, the self-heal record and
 the runs dispatched. Linear shows the same facts as workflow states, machine labels (`Blocked`,
 `Needs Decision`, `CI red`, `CI green`) and Symphony's description blocks.
