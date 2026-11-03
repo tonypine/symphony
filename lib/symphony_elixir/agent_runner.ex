@@ -50,7 +50,8 @@ defmodule SymphonyElixir.AgentRunner do
     Workpad,
     Workspace,
     WorkspaceCleanup,
-    WorkspaceHead
+    WorkspaceHead,
+    WorkspaceSync
   }
 
   @dev_server_pid_key {__MODULE__, :verification_dev_server_pid}
@@ -369,7 +370,7 @@ defmodule SymphonyElixir.AgentRunner do
 
       _ ->
         issue
-        |> sync_workspace_to_pr_head(opts)
+        |> sync_workspace_to_pr_head(opts, worker_host)
         |> Workspace.create_for_issue(worker_host, Keyword.get(opts, :repo_key),
           active_workspace_identifiers: Keyword.get(opts, :active_workspace_identifiers, []),
           on_hook: workspace_hook_listener(codex_update_recipient, issue)
@@ -394,28 +395,55 @@ defmodule SymphonyElixir.AgentRunner do
 
   # When an issue is dispatched to rework an existing PR (resolve a merge
   # conflict or address reviewer comments), the workspace must reflect the
-  # latest remote PR head before the worktree is created or reused. Otherwise a
-  # reused worktree keeps its stale state (base_ref nil => no `git reset --hard`)
-  # and a fresh worktree branches off configured trunk, so commits pushed to the
-  # PR head after the run (e.g. via the GitHub UI) stay invisible to the agent.
-  # Mirror the explicit PR-run wiring (`SymphonyElixir.PrRun`) by pointing the
-  # workspace branch/base ref at the PR head. An explicit base ref already on the
+  # latest PR head before the run. A kept local workspace on the PR's branch is
+  # brought there by the one newest-known-head rule (`SymphonyElixir.WorkspaceSync`):
+  # a person's push is fetched and the workspace reset to it, unpushed work is
+  # pushed first, and the workspace is then reused as it is (no base ref, so no
+  # second reset). Otherwise (a fresh worktree, an SSH worker, no PR recorded, or
+  # a workspace the rule would not reset) the workspace branch/base ref is pinned
+  # at the PR head, mirroring the explicit PR-run wiring (`SymphonyElixir.PrRun`):
+  # a fresh worktree starts there, and a reused one keeps its local work under
+  # refs/symphony/orphaned before the reset. An explicit base ref already on the
   # issue (PR runs) is left untouched. Fork/cross-repo CI reworks deliberately do
   # not pin to origin/<head_ref>, because that ref is not guaranteed to exist in
   # the local origin remote.
-  defp sync_workspace_to_pr_head(%Issue{workspace_base_ref: ref} = issue, _opts)
+  defp sync_workspace_to_pr_head(%Issue{workspace_base_ref: ref} = issue, _opts, _worker_host)
        when is_binary(ref) and ref != "",
        do: issue
 
-  defp sync_workspace_to_pr_head(%Issue{} = issue, opts) do
+  defp sync_workspace_to_pr_head(%Issue{} = issue, opts, worker_host) do
     case resolve_pr_head_ref(issue, opts) do
       head_ref when is_binary(head_ref) and head_ref != "" ->
-        %Issue{issue | workspace_branch: head_ref, workspace_base_ref: "origin/#{head_ref}"}
+        if kept_workspace_synced?(issue, head_ref, opts, worker_host),
+          do: %Issue{issue | workspace_branch: head_ref},
+          else: %Issue{issue | workspace_branch: head_ref, workspace_base_ref: "origin/#{head_ref}"}
 
       _ ->
         issue
     end
   end
+
+  defp kept_workspace_synced?(issue, head_ref, opts, nil) do
+    repo_key = run_repo_key(issue, opts)
+    settings = Keyword.fetch!(opts, :settings)
+
+    with {:ok, workspace} <- Workspace.local_path_for_issue(issue, repo_key),
+         true <- File.dir?(workspace),
+         {:ok, %{head: head}} <-
+           WorkspaceSync.sync(issue, workspace,
+             run_kind: RunKind.classify(issue, settings: settings),
+             repo_key: repo_key,
+             settings: settings,
+             expected_branch: head_ref
+           ) do
+      Logger.info("Reusing #{issue_context(issue)}'s kept workspace on the PR head #{String.slice(head, 0, 12)}")
+      true
+    else
+      _not_synced -> false
+    end
+  end
+
+  defp kept_workspace_synced?(_issue, _head_ref, _opts, _worker_host), do: false
 
   # A pending merge conflict wins (its snapshot pins the exact head); otherwise
   # reviewer-comment and same-repo CI reworks target the same PR head branch.
@@ -642,9 +670,30 @@ defmodule SymphonyElixir.AgentRunner do
   # A ticket whose history summary is over its size limit starts no agent until the Director says how
   # it goes on (`PromptBuilder.ticket_ledger_gate/2`).
   defp run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host) do
-    case PromptBuilder.ticket_ledger_gate(issue, repo_key: run_repo_key(issue, opts)) do
-      :start -> start_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
-      gate -> stop_for_ticket_summary(gate, issue, opts)
+    with :ok <- sync_landing_workspace(workspace, issue, opts, worker_host) do
+      case PromptBuilder.ticket_ledger_gate(issue, repo_key: run_repo_key(issue, opts)) do
+        :start -> start_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
+        gate -> stop_for_ticket_summary(gate, issue, opts)
+      end
+    end
+  end
+
+  # A landing run in `Merging` stands on the PR's current head, like a review or a QA run
+  # (`SymphonyElixir.WorkspaceSync.before_run/3`): it never lands from a stale workspace.
+  defp sync_landing_workspace(workspace, issue, opts, worker_host) do
+    settings = Keyword.fetch!(opts, :settings)
+
+    case RunKind.classify(issue, settings: settings) do
+      :landing ->
+        WorkspaceSync.before_run(issue, workspace,
+          run_kind: :landing,
+          repo_key: run_repo_key(issue, opts),
+          settings: settings,
+          worker_host: worker_host
+        )
+
+      _other ->
+        :ok
     end
   end
 

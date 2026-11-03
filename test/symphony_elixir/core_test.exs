@@ -4531,6 +4531,8 @@ defmodule SymphonyElixir.CoreTest do
       File.mkdir_p!(Path.dirname(old_workspace))
       git!(primary_repo, ["worktree", "add", "-b", "auto/TON-218", old_workspace, "origin/feature-head"])
       git!(primary_repo, ["push", "origin", "auto/TON-218"])
+      # GitHub keeps the PR's head at refs/pull/218/head, where the landing run's sync fetches it.
+      git!(primary_repo, ["push", "origin", "auto/TON-218:refs/pull/218/head"])
 
       # A post-rename dispatch already built a fresh auto/TP-218 worktree on trunk.
       {:ok, new_workspace} =

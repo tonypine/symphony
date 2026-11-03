@@ -1218,4 +1218,45 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert [%{head_sha: "the-repaired-head"} | _] = verdicts()
     end
   end
+
+  # A kept workspace is behind its PR when branch upkeep merged the base branch in after the last
+  # run. `origin` is a bare repo holding the PR head where GitHub keeps it, `refs/pull/815/head`.
+  describe "the workspace synced to the PR head" do
+    setup do
+      :ok = SymphonyElixir.TicketPullRequest.put(@repo_key, @issue_id, %{pr_url: "https://github.com/acme/repo/pull/815"})
+      {workspace, head} = git_workspace!()
+      origin = workspace <> "-origin.git"
+      on_exit(fn -> File.rm_rf(origin) end)
+
+      for args <- [["init", "-q", "--bare", origin], ["remote", "add", "origin", origin]], do: {_out, 0} = System.cmd("git", args, cd: workspace)
+      {_out, 0} = System.cmd("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "upkeep"], cd: workspace)
+      {pr_head, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: workspace)
+      {_out, 0} = System.cmd("git", ["push", "-q", "origin", "HEAD:refs/pull/815/head"], cd: workspace)
+      {_out, 0} = System.cmd("git", ["reset", "-q", "--hard", head], cd: workspace)
+
+      %{workspace: workspace, head: head, pr_head: String.trim(pr_head)}
+    end
+
+    test "a review run stands on the PR's current head, and the verdict binds to it", %{workspace: workspace, pr_head: pr_head} do
+      capture_log(fn -> assert :ok = run(workspace, settings: designed_settings()) end)
+
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      assert [%{outcome: "approve", head_sha: ^pr_head}] = verdicts()
+
+      assert [%{payload: %{winner: "pull_request", action: "reset", head: ^pr_head, run_kind: "code_review"}}] =
+               SymphonyElixir.TicketEvents.query(@issue_id, types: ["workspace.synced"])
+    end
+
+    test "a workspace with local work is not reviewed: the run fails naming it", %{workspace: workspace, head: head, pr_head: pr_head} do
+      File.write!(Path.join(workspace, "notes.txt"), "draft")
+
+      capture_log(fn ->
+        assert {:error, {:workspace_sync_failed, {:workspace_dirty, ^head, ^pr_head, ["local changes (?? notes.txt)"]}}} =
+                 run(workspace, settings: designed_settings())
+      end)
+
+      refute_received {:reviewed, _, _}
+      assert verdicts() == []
+    end
+  end
 end

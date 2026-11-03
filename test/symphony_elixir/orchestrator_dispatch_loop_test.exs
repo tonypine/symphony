@@ -169,6 +169,25 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
       assert [{"run.ended", %{run_id: "run-1", exit: "ended normally", head: "sha-pushed", counted: true}}] = ticket_events(@repo_key, @issue_id)
     end
 
+    test "a run that leaves commits no remote has records its unpushed head" do
+      workspace = Path.join(System.tmp_dir!(), "dispatch-loop-unpushed-#{System.unique_integer([:positive])}")
+      origin = workspace <> "-origin.git"
+      on_exit(fn -> File.rm_rf(workspace) && File.rm_rf(origin) end)
+      File.mkdir_p!(workspace)
+
+      for args <- [["init", "-q"], ["init", "-q", "--bare", origin], ["remote", "add", "origin", origin]], do: {_out, 0} = System.cmd("git", args, cd: workspace)
+      {_out, 0} = System.cmd("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "pushed"], cd: workspace)
+      {_out, 0} = System.cmd("git", ["push", "-q", "origin", "HEAD:refs/heads/auto/TP-1"], cd: workspace)
+      {_out, 0} = System.cmd("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "unpushed"], cd: workspace)
+      {head, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: workspace)
+      head = String.trim(head)
+
+      pid = start_orchestrator(:DownUnpushed)
+      send_down(pid, "run-1", "In Progress", :normal, workspace_path: workspace)
+
+      assert [{"run.ended", %{run_id: "run-1", unpushed_head: ^head}}] = ticket_events(@repo_key, @issue_id)
+    end
+
     test "a failure is recorded with its reason" do
       down(:DownFailed, :boom)
 

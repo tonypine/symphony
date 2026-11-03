@@ -70,7 +70,8 @@ defmodule SymphonyElixir.CodeReview do
     Tracker,
     TransitionGuard,
     Workspace,
-    WorkspaceHead
+    WorkspaceHead,
+    WorkspaceSync
   }
 
   alias SymphonyElixir.HumanActions.PlainWords
@@ -102,13 +103,23 @@ defmodule SymphonyElixir.CodeReview do
     settings = Keyword.fetch!(opts, :settings)
 
     if reviewer_run?(issue, settings) do
-      review(issue, workspace, opts, settings)
+      with :ok <- sync_workspace(issue, workspace, opts, settings) do
+        review(issue, workspace, opts, settings)
+      end
     else
       :skip
     end
   end
 
   def run(_issue, _workspace, _opts), do: :skip
+
+  # The review stands on the PR's current head (`SymphonyElixir.WorkspaceSync.before_run/3`): a
+  # workspace behind it is reset, unpushed work is pushed first, and one that cannot be brought there
+  # is not reviewed.
+  defp sync_workspace(issue, workspace, opts, settings) do
+    sync_opts = [run_kind: @verdict_kind, repo_key: repo_key(issue, opts), settings: settings] ++ Keyword.take(opts, [:worker_host, :git, :pusher, :source_repo, :recorded_head])
+    WorkspaceSync.before_run(issue, workspace, sync_opts)
+  end
 
   @doc """
   Whether `issue` is the ticket this module reviews: one in the configured Code Review state.

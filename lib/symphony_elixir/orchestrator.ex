@@ -5689,8 +5689,10 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # The run's `run.ended` event, keyed by its run id, with how it ended, how long it ran, the tokens
-  # it spent and its transcript. A run a usage limit, an unreachable model API or a CI wait stopped
-  # records `counted: false`, as its dispatch outcome is dropped.
+  # it spent, its transcript and the head its workspace held that no remote has (`unpushed_head`),
+  # which the next run's `SymphonyElixir.WorkspaceSync` compares. A run a usage limit, an
+  # unreachable model API or a CI wait stopped records `counted: false`, as its dispatch outcome is
+  # dropped.
   defp record_run_ended(repo_key, issue_id, run_id, running_entry, reason) do
     head = pr_head(issue_id, repo_key)
     started = run_events(issue_id, "run.started", &(&1[:run_id] == run_id)) |> List.first() || %{}
@@ -5701,6 +5703,7 @@ defmodule SymphonyElixir.Orchestrator do
       run_number: started[:run_number],
       exit: run_exit(reason, repo_key, issue_id, head),
       head: head,
+      unpushed_head: WorkspaceHead.unpushed_head(Map.get(running_entry, :workspace_path), Map.get(running_entry, :worker_host)),
       duration_ms: run_duration_ms(Map.get(running_entry, :started_at)),
       tokens: Map.get(running_entry, :total_tokens),
       counted: not uncounted_exit?(reason)

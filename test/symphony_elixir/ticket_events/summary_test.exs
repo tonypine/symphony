@@ -61,6 +61,8 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     {"question.reopened", %{question_id: "q-1", title: "Ship TP-12 today"}, [], %{title: "You took back your answer: Ship TP-12 today", detail: nil}},
     {"park.backfilled", %{added: ["question", "push"], question_id: "q-1", branch: "auto/TP-1248"}, [],
      %{title: "Park brought up to date at start-up", detail: "asked you whether to run it again · pushed its work to auto/TP-1248"}},
+    {"workspace.synced", %{workspace_head: "aaa1111aaaa", pr_head: "bbb2222bbbb", winner: "pull_request", action: "reset", head: "bbb2222bbbb", run_kind: "qa"}, [],
+     %{title: "Workspace reset to the PR head bbb2222", detail: "workspace aaa1111, PR bbb2222"}},
     {"note", %{text: "History before 2026-10-20 was backfilled"}, [], %{title: "Note added", detail: "History before 2026-10-20 was backfilled"}}
   ]
 
@@ -117,6 +119,22 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
   test "a park brought up to date reads the reason it was paused on, and a push naming no branch" do
     assert render("park.backfilled", %{added: ["releasable_reason", "push"]}) ==
              %{title: "Park brought up to date at start-up", detail: "paused it until you unblock it · pushed its work to its branch"}
+  end
+
+  test "a workspace sync names the heads it compared and what it did" do
+    heads = %{workspace_head: "aaa1111aaaa", pr_head: "bbb2222bbbb"}
+
+    assert render("workspace.synced", Map.merge(heads, %{action: "none", head: "bbb2222bbbb"})).title == "Workspace already on the PR head bbb2222"
+    assert render("workspace.synced", Map.merge(heads, %{action: "pushed", head: "aaa1111aaaa"})).title == "Workspace's unpushed head aaa1111 pushed to the PR"
+
+    assert render("workspace.synced", Map.merge(heads, %{action: "reset_and_pushed", head: "ccc3333cccc", recorded_head: "ccc3333cccc"})) ==
+             %{title: "Workspace reset to a run's unpushed head ccc3333 and pushed", detail: "workspace aaa1111, PR bbb2222, recorded ccc3333"}
+
+    assert render("workspace.synced", Map.merge(heads, %{action: "blocked", reason: "local changes (?? notes.txt)"})) ==
+             %{title: "Workspace not synced: it holds local work", detail: "workspace aaa1111, PR bbb2222 · local changes (?? notes.txt)"}
+
+    assert render("workspace.synced", Map.merge(heads, %{action: "failed", reason: ":boom"})).title == "Workspace could not be synced"
+    assert render("workspace.synced", %{}) == %{title: "Workspace already on the PR head", detail: nil}
   end
 
   test "a pause reason's line keeps the capital of a name it opens on" do

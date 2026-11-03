@@ -267,6 +267,16 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
+  @doc """
+  The local path `create_for_issue/4` gives the issue's workspace, whether or not it exists yet, so
+  a caller can look at a kept workspace before the run reuses it.
+  """
+  @spec local_path_for_issue(map() | String.t() | nil, String.t() | nil) :: {:ok, Path.t()} | {:error, term()}
+  def local_path_for_issue(issue_or_identifier, repo_key \\ nil) do
+    context = issue_context(issue_or_identifier, repo_key)
+    workspace_path_for_issue(safe_identifier(context.repo_key), safe_identifier(context.issue_identifier), nil)
+  end
+
   @spec validate(Path.t()) :: :ok | {:error, term()}
   def validate(workspace), do: validate(workspace, nil)
 
