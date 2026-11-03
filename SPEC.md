@@ -3339,9 +3339,19 @@ An issue is dispatch-eligible only if all are true:
   - A blocker counts as resolved only once its state is in `terminal_states`. `Merging`,
     `Code Review`, `QA` and `Rework` still block, since the blocker's change is not on the
     default branch yet. A blocker without a known state counts as open.
-  - A blocker linked while a run is under way never stops the worker: the turn in flight finishes,
-    the run starts no further turn, and the next dispatch is held. The issue is dispatched again on
-    the first poll after every blocker is terminal.
+  - A blocker linked while a run is under way never stops the worker once its agent session
+    started: the turn in flight finishes, the run starts no further turn, and the next dispatch is
+    held. A blocker that reaches the ticket's record while the run is still starting (dispatched, no
+    agent session yet) stops that start, and the pause holds the ticket. The issue is dispatched
+    again on the first poll after every blocker is terminal.
+  - Linear sends a new ticket's create and its blocked-by links as separate webhook deliveries. The
+    first dispatch of a ticket Linear created less than a few seconds ago (`Config.dispatch_settle_ms/0`,
+    five seconds) waits: one timer is set for the end of that settle, and the ticket is read by id
+    with its relations when it fires or at the ticket's next record change, whichever comes first.
+    The read pauses the ticket on any open blocker it finds; the ticket then dispatches only if it is
+    still unblocked. The candidate is listed under `dispatch_skipped` meanwhile ("waiting for its
+    relations: Linear created it a moment ago"). An older ticket, or one with no creation time,
+    dispatches at once.
   - The status snapshot lists each held candidate with its open blockers (`blocked` in
     `/api/v1/state`, for example "MT-12 waiting on MT-15 (In Progress)"), and the dashboard shows
     them under "Waiting on blockers".

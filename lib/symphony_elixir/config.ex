@@ -35,6 +35,7 @@ defmodule SymphonyElixir.Config do
   @default_server_port 0
   @default_git_network_timeout_ms 300_000
   @default_mcp_tool_timeout_ms 600_000
+  @dispatch_settle_ms 5_000
   @openrouter_api_key_env "OPENROUTER_API_KEY"
   @codex_auto_approve_all_approval_policy "auto_approve_all"
   @codex_auto_approve_all_wire_approval_policy "never"
@@ -607,6 +608,17 @@ defmodule SymphonyElixir.Config do
   """
   @spec dispatch_source() :: String.t()
   def dispatch_source, do: dispatch_setting(:source)
+
+  @doc """
+  How long after a ticket's creation in Linear its first dispatch waits for its relations
+  (`SymphonyElixir.Dispatch.Settle`): five seconds. Linear sends a new ticket's create and its
+  blocked-by links as separate deliveries, so a ticket created with blockers is read once more by id
+  when this settle ends (or at the ticket's next record change, whichever comes first) and dispatches
+  only if it is still unblocked. A constant, not a symphony.yml setting; tests set
+  `:dispatch_settle_ms` in the application env.
+  """
+  @spec dispatch_settle_ms() :: non_neg_integer()
+  def dispatch_settle_ms, do: Application.get_env(:symphony_elixir, :dispatch_settle_ms, @dispatch_settle_ms)
 
   @doc """
   How many poll cycles the dispatch shadow report's window covers (`SymphonyElixir.Dispatch.Shadow`):
