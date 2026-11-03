@@ -48,7 +48,9 @@ arguments from prompts.
   intentionally safe to expose through a world-readable Linear CDN URL.
 - `linear_create_subissue` with `{"title": "...", "description": "...", "priority": 3, "blocked_by": ["TP-12"]}`:
   creates a child of the current issue in its team and project, assigned to its
-  assignee, in `Backlog`. `priority` is optional (0 none, 1 urgent, 2 high,
+  assignee. A ticket a run splits off lands in `Todo`, chained in front of the
+  ticket it splits (the current issue is blocked by it); a plan ticket's
+  sub-issues land in `Backlog` for the plan review. `priority` is optional (0 none, 1 urgent, 2 high,
   3 medium, 4 low). `blocked_by` is optional: identifiers of the current issue's
   sub-issues (existing ones or ones this run created) that block the new one;
   any other identifier is refused before the issue is created. Title and
