@@ -59,6 +59,7 @@ defmodule SymphonyElixir.CodeReview do
     ClosedPullRequest,
     Config,
     DecisionRequest,
+    EmptyChange,
     EscalationRules,
     Handoff,
     MergeConfirmation,
@@ -117,9 +118,11 @@ defmodule SymphonyElixir.CodeReview do
   # workspace behind it is reset, unpushed work is pushed first, and one that cannot be brought there
   # is not reviewed.
   defp sync_workspace(issue, workspace, opts, settings) do
-    sync_opts = [run_kind: @verdict_kind, repo_key: repo_key(issue, opts), settings: settings] ++ Keyword.take(opts, [:worker_host, :git, :pusher, :source_repo, :recorded_head])
-    WorkspaceSync.before_run(issue, workspace, sync_opts)
+    WorkspaceSync.before_run(issue, workspace, sync_opts(issue, opts, settings))
   end
+
+  defp sync_opts(issue, opts, settings),
+    do: [run_kind: @verdict_kind, repo_key: repo_key(issue, opts), settings: settings] ++ Keyword.take(opts, [:worker_host, :git, :pusher, :source_repo, :recorded_head])
 
   @doc """
   Whether `issue` is the ticket this module reviews: one in the configured Code Review state.
@@ -567,19 +570,58 @@ defmodule SymphonyElixir.CodeReview do
         skip_qa(issue, opts, settings, extra, reason)
 
       {:nothing_to_verify, reason} ->
-        Logger.warning("Code Review approved #{issue_label(issue)}, but #{reason}; holding it instead of skipping QA")
+        Logger.warning("Code Review approved #{issue_label(issue)}, but #{reason}; asking GitHub before holding it instead of skipping QA")
 
-        hold_empty_change(issue, opts)
+        nothing_to_verify(issue, workspace, opts, settings, extra)
     end
   end
 
-  # An empty diff is no change at all — a workspace built from the base branch, or a branch whose
-  # work already landed — so it neither skips QA into `Merging` nor goes to QA: the ticket pauses
-  # here on a person's decision (`SymphonyElixir.ClosedPullRequest`).
-  defp hold_empty_change(issue, opts) do
-    pr_url = TicketPullRequest.current_url(issue, repo_key(issue, opts))
+  # A local "nothing to verify" neither skips QA into `Merging` nor goes to QA, and it is asked of
+  # GitHub before anything else (`SymphonyElixir.EmptyChange`). GitHub's own empty diff is no change
+  # at all — a branch whose work already landed, or lost it — and the ticket pauses here on a
+  # person's decision (`SymphonyElixir.ClosedPullRequest`); with no open pull request it pauses on
+  # that. A diff that is not empty means the workspace is out of sync: it is re-synced once and the
+  # approve decides again, while a workspace that still finds nothing pauses the ticket on a reason
+  # the Director releases with Unblock. A sync that moved the workspace to a commit the reviewer did
+  # not judge is not approved: the run fails and the review runs again on that commit.
+  defp nothing_to_verify(issue, workspace, opts, settings, extra) do
+    case TicketPullRequest.current_url(issue, repo_key(issue, opts)) do
+      nil -> hold_empty_change(issue, opts, ClosedPullRequest.missing_cause(issue, repo_key(issue, opts)))
+      pr_url -> ask_github(issue, workspace, opts, settings, extra, pr_url)
+    end
+  end
 
-    case ClosedPullRequest.pause(issue, {:no_change, pr_url}, hold_opts(issue, opts)) do
+  defp ask_github(issue, workspace, opts, settings, extra, pr_url) do
+    head = workspace_head(workspace, opts)
+    empty_opts = [repo_key: repo_key(issue, opts), run: "Code Review"] ++ Keyword.take(opts, [:gh_runner])
+
+    case EmptyChange.check(issue, pr_url, head, empty_opts) do
+      {:empty, heads} -> hold_empty_change(issue, opts, {:no_change, pr_url, heads})
+      {:not_empty, heads} -> out_of_sync(issue, workspace, opts, settings, extra, {head, heads, empty_opts})
+      {:error, reason} -> {:error, {:code_review_diff_unreadable, reason}}
+    end
+  end
+
+  defp out_of_sync(issue, workspace, opts, settings, extra, {head, heads, empty_opts}) do
+    if Keyword.get(opts, :empty_change_resynced, false) do
+      EmptyChange.pause(issue, heads, empty_opts)
+    else
+      case EmptyChange.resync(issue, workspace, heads, [sync_opts: sync_opts(issue, opts, settings)] ++ empty_opts) do
+        :resynced -> decide_again(issue, workspace, opts, settings, extra, head)
+        paused_or_error -> paused_or_error
+      end
+    end
+  end
+
+  defp decide_again(issue, workspace, opts, settings, extra, head) do
+    case workspace_head(workspace, opts) do
+      ^head -> approve(issue, workspace, Keyword.put(opts, :empty_change_resynced, true), settings, extra)
+      moved -> {:error, {:code_review_head_moved, head, moved}}
+    end
+  end
+
+  defp hold_empty_change(issue, opts, cause) do
+    case ClosedPullRequest.pause(issue, cause, hold_opts(issue, opts)) do
       :ok -> :ok
       {:error, error} -> {:error, {:code_review_hold_failed, error}}
     end

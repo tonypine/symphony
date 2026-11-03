@@ -20,9 +20,12 @@ defmodule SymphonyElixir.QaVerification do
       pass) -> rerun once on the same head, then a Needs Decision hold in `QA`; never the self-heal
       lane, since nothing in the environment is broken
     * skip (the deterministic docs-only/internal-only rule, `SymphonyElixir.QaPolicy`) -> `Merging`
-    * no open pull request, or a head that changes nothing -> a Needs Decision hold in `QA`
+    * no open pull request, or a PR whose diff GitHub reports empty -> a Needs Decision hold in `QA`
       (`SymphonyElixir.ClosedPullRequest`), with no verdict recorded: an empty diff means there is
-      no change to verify, never a docs-only one
+      no change to verify, never a docs-only one. A workspace that finds nothing to verify while
+      GitHub's diff is not empty is out of sync: it is re-synced once, and one that still finds
+      nothing pauses the ticket on a reason the Director releases with Unblock
+      (`SymphonyElixir.EmptyChange`)
     * `blocked` (tooling or environment) -> retried boundedly on the same head, then the self-heal
       lane when the QA tools raised the block themselves or only a person can clear it, else a Needs
       Decision hold in `QA`: a block nothing names as broken gets no fix ticket
@@ -68,6 +71,7 @@ defmodule SymphonyElixir.QaVerification do
     Config,
     DecisionMove,
     DecisionRequest,
+    EmptyChange,
     Handoff,
     MergeConfirmation,
     PrWatch,
@@ -230,13 +234,14 @@ defmodule SymphonyElixir.QaVerification do
   # The one newest-known-head rule (`SymphonyElixir.WorkspaceSync`): the workspace stands on the PR's
   # current head, unpushed work pushed first, and a workspace with local work is never reset.
   defp sync_to_pr_head(issue, workspace, opts) do
-    sync_opts = [run_kind: @run_kind, repo_key: repo_key(issue, opts)] ++ Keyword.take(opts, [:git, :settings, :source_repo, :pusher, :recorded_head])
-
-    case WorkspaceSync.sync(issue, workspace, sync_opts) do
+    case WorkspaceSync.sync(issue, workspace, sync_opts(issue, opts)) do
       {:ok, _outcome} -> :ok
       {:error, _reason} = error -> error
     end
   end
+
+  defp sync_opts(issue, opts),
+    do: [run_kind: @run_kind, repo_key: repo_key(issue, opts)] ++ Keyword.take(opts, [:git, :settings, :source_repo, :pusher, :recorded_head])
 
   # A verdict binds to a head SHA; with no head to bind to, the run says so once and leaves the
   # ticket where it is, so the next tick can try again rather than record a verdict on nothing.
@@ -276,8 +281,34 @@ defmodule SymphonyElixir.QaVerification do
 
     case policy.decide(issue, settings, workspace: workspace, repo_key: repo_key(issue, opts)) do
       {:skip, reason} -> skip(issue, opts, settings, head, reason)
-      {:nothing_to_verify, _reason} -> hold(issue, opts, head, {:no_change, pr_url})
+      {:nothing_to_verify, _reason} -> nothing_to_verify(issue, workspace, opts, settings, head, pr_url)
       {:run, playbooks, _reason} -> pre_check(issue, workspace, opts, settings, {head, pr_url}, playbooks)
+    end
+  end
+
+  # A local "nothing to verify" is asked of GitHub before anything else (`SymphonyElixir.EmptyChange`):
+  # only GitHub's own empty diff asks the Restart-or-Cancel question. A non-empty one means the
+  # workspace is out of sync: it is re-synced once and the run decides again, and a workspace that
+  # still finds nothing pauses the ticket on a reason the Director releases with Unblock. A diff
+  # GitHub cannot answer is a block, retried like any other.
+  defp nothing_to_verify(issue, workspace, opts, settings, head, pr_url) do
+    empty_opts = [repo_key: repo_key(issue, opts), run: "QA"] ++ Keyword.take(opts, [:gh_runner])
+
+    case EmptyChange.check(issue, pr_url, head, empty_opts) do
+      {:empty, heads} -> hold(issue, opts, head, {:no_change, pr_url, heads})
+      {:not_empty, heads} -> out_of_sync(issue, workspace, opts, settings, heads, empty_opts)
+      {:error, reason} -> blocked(issue, opts, settings, head, blocked_outcome("GitHub's diff of the pull request could not be read: #{inspect(reason)}", %{}))
+    end
+  end
+
+  defp out_of_sync(issue, workspace, opts, settings, heads, empty_opts) do
+    if Keyword.get(opts, :qa_change_resynced, false) do
+      EmptyChange.pause(issue, heads, empty_opts)
+    else
+      case EmptyChange.resync(issue, workspace, heads, [sync_opts: sync_opts(issue, opts)] ++ empty_opts) do
+        :resynced -> read_synced_head(issue, workspace, Keyword.put(opts, :qa_change_resynced, true), settings)
+        paused_or_error -> paused_or_error
+      end
     end
   end
 

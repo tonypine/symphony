@@ -1319,6 +1319,38 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     end
   end
 
+  describe "fetch_diff/2" do
+    test "reads the pull request's head and base branch, then counts the files the compare changes" do
+      pr_url = "https://github.com/acme/symphony/pull/132"
+
+      runner = fn
+        ["api", "repos/acme/symphony/pulls/132", "--jq", _jq], _opts -> {~s({"head":"h1","base_ref":"release/1"}\n), 0}
+        ["api", "repos/acme/symphony/compare/release%2F1...h1", "--jq", _jq], _opts -> {~s({"base":"b1","changed_files":3}\n), 0}
+      end
+
+      assert {:ok, diff} = PullRequest.fetch_diff(pr_url, gh_runner: runner)
+      assert diff == %{head: "h1", base: "b1", base_ref: "release/1", changed_files: 3}
+    end
+
+    test "reports an unreadable pull request, compare or url" do
+      pr_url = "https://github.com/acme/symphony/pull/132"
+      pr = fn output -> fn ["api", "repos/acme/symphony/pulls/132" | _rest], _opts -> {output, 0} end end
+
+      compare = fn output ->
+        fn
+          ["api", "repos/acme/symphony/pulls/132" | _rest], _opts -> {~s({"head":"h1","base_ref":"main"}), 0}
+          ["api", "repos/acme/symphony/compare/main...h1" | _rest], _opts -> output
+        end
+      end
+
+      assert {:error, :invalid_diff_payload} = PullRequest.fetch_diff(pr_url, gh_runner: pr.(~s({"head":null})))
+      assert {:error, :invalid_diff_payload} = PullRequest.fetch_diff(pr_url, gh_runner: pr.("nope"))
+      assert {:error, :invalid_diff_payload} = PullRequest.fetch_diff(pr_url, gh_runner: compare.({~s({"base":"b1"}), 0}))
+      assert {:error, {:gh_failed, _args, 1, "Not Found"}} = PullRequest.fetch_diff(pr_url, gh_runner: compare.({"Not Found", 1}))
+      assert {:error, :invalid_pr_url} = PullRequest.fetch_diff("not a url", gh_runner: pr.(""))
+    end
+  end
+
   describe "fetch_summary/2" do
     test "reads a pull request's title, body, state, review decision, size and checks in one gh call" do
       test_pid = self()
