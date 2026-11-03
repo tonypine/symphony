@@ -29,9 +29,10 @@ defmodule SymphonyElixirWeb.ControlApiController do
   answer (the Inbox row's) or the `request_comment_id` of its request (still accepted, resolved to
   its question), and the optional `move` the decision directs. `decisions` takes a plan's `picks`,
   each with the `question_id` or the `request_comment_id` of the question it answers. `move` takes
-  `to`, any phase the repo's workflow names, and an optional `note`: it answers 409 when Symphony
-  doesn't track the ticket or `to` is not a phase of the repo, and 200 with `moved: false` when the
-  ticket is already there.
+  `to`, any phase the repo's workflow names, and an optional `note`: a ticket of a configured
+  repository Symphony has no record of yet is read from Linear and recorded first. It answers 409
+  when the ticket is in no configured repository, that read fails, or `to` is not a phase of the
+  repo, and 200 with `moved: false` when the ticket is already there.
 
   `note` writes the Director's note on a ticket: it takes `repo_key`, `issue_identifier` and
   `text`, resolves the ticket as the events feed does (`SymphonyElixirWeb.TicketEventsController`),
