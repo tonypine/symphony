@@ -8,7 +8,11 @@ defmodule SymphonyElixirWeb.LinearWebhookController do
   the record yet: a delivery that changes a record only asks for a poll of its repo at once, and
   the poll reads Linear. A `Comment` delivery that creates or edits a review brief on a ticket in
   `Plan Review` starts the capture of the plan's brief on its record
-  (`SymphonyElixir.PlanBrief.observe_delivery/2`), in a task of its own.
+  (`SymphonyElixir.PlanBrief.observe_delivery/2`), in a task of its own. An `Issue` delivery that
+  changes a parent's sub-issues (a child re-parented, filed, removed or moved to another state:
+  `SymphonyElixir.Linear.Webhook.parent_ids/1`) reads those parents again into their records
+  (`SymphonyElixir.TicketObservation.observe_parents/2`), in a task of its own too, since Linear
+  sends that change to the child only.
 
   The `Linear-Signature` HMAC is the only authentication, so the route sits outside the
   same-origin and bearer-token pipelines. A rejected delivery is logged by its reason only, never
@@ -47,6 +51,7 @@ defmodule SymphonyElixirWeb.LinearWebhookController do
         parsed = Webhook.parse(conn.body_params)
         observation = TicketObservation.observe_delivery(parsed, observation_opts())
         PlanBrief.observe_delivery(parsed)
+        observe_parents(conn.body_params)
         Deliveries.accepted(conn.body_params, DateTime.utc_now(), observation)
         conn |> put_status(200) |> json(%{status: "accepted"})
 
@@ -55,6 +60,20 @@ defmodule SymphonyElixirWeb.LinearWebhookController do
         Deliveries.rejected(reason)
         error_response(conn, 401, "invalid_signature", "The webhook signature did not verify")
     end
+  end
+
+  defp observe_parents(delivery) do
+    case Webhook.parent_ids(delivery) do
+      [] -> :ok
+      parent_ids -> start_observing_parents(parent_ids)
+    end
+  end
+
+  defp start_observing_parents(parent_ids) do
+    opts = Keyword.drop(observation_opts(), [:timeout_ms, :observe_fun])
+    observe = fn -> TicketObservation.observe_parents(parent_ids, opts) end
+    {:ok, _pid} = Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, observe)
+    :ok
   end
 
   # Tests set the observation's options (its time bound, or an observation that fails) here.

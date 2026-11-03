@@ -154,14 +154,16 @@ defmodule SymphonyElixir.EpicReview do
   @doc """
   Whether `issue` is the ticket this module reviews: an epic parent. That is a
   `breakdown` parent in the configured `Epic Review` state (the run that moved it there stopped),
-  or one whose sub-issues are all terminal — the state the poll dispatches it from the moment its
-  plan's children land. A parent in `Rework` is planning again, not closing out, and one with no
-  sub-issues (or children still open) belongs to the executor run.
+  or one ready for its close (`SymphonyElixir.SubIssueWait.close_out_ready?/3`): its sub-issues are
+  all terminal, or it waits in `Waiting on sub-tickets` with none left — the state the poll
+  dispatches it from the moment its plan's children land or leave. A parent in `Rework` is planning
+  again, not closing out, and one with no sub-issues outside the waiting state (or children still
+  open) belongs to the executor run.
   """
   @spec epic_review_run?(Issue.t(), map()) :: boolean()
   def epic_review_run?(%Issue{} = issue, settings) when is_map(settings) do
     Issue.breakdown?(issue) and not Issue.replanning?(issue) and
-      (in_state?(issue, state(settings)) or Issue.close_out_ready?(issue, terminal_states(settings)))
+      (in_state?(issue, state(settings)) or SubIssueWait.close_out_ready?(issue, terminal_states(settings), settings))
   end
 
   def epic_review_run?(_issue, _settings), do: false
