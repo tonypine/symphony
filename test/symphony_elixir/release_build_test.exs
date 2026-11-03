@@ -22,7 +22,7 @@ defmodule SymphonyElixir.ReleaseBuildTest do
     :ok = RunStore.clear()
     on_exit(fn -> :ok = RunStore.clear() end)
     test = self()
-    {:ok, github} = Agent.start_link(fn -> %{runs: [], started: false, rerun: :ok} end)
+    {:ok, github} = Agent.start_link(fn -> %{runs: [], started: false, rerun: :ok, main: []} end)
     {:ok, decisions} = Agent.start_link(fn -> [] end)
 
     opts = [
@@ -44,8 +44,16 @@ defmodule SymphonyElixir.ReleaseBuildTest do
   # `gh` as GitHub answers the release runs of the commit, a run's jobs and a rerun.
   defp gh(github, test) do
     fn
-      ["run", "list", "-R", @repo, "--commit", @sha, "--workflow", "release", "--limit", "5", "--json", _fields], _opts ->
+      ["run", "list", "-R", @repo, "--commit", _sha, "--workflow", "release", "--limit", "5", "--json", _fields], _opts ->
         case Agent.get(github, & &1.runs) do
+          :down -> {"HTTP 502", 1}
+          runs -> {Jason.encode!(runs), 0}
+        end
+
+      ["run", "list", "-R", @repo, "--branch", "main", "--workflow", "release", "--event", "push", "--limit", "1", "--json", _fields], _opts ->
+        send(test, :main_read)
+
+        case Agent.get(github, & &1.main) do
           :down -> {"HTTP 502", 1}
           runs -> {Jason.encode!(runs), 0}
         end
@@ -420,5 +428,226 @@ defmodule SymphonyElixir.ReleaseBuildTest do
       assert ReleaseBuild.delivered(nil, opts) == :ignored
       assert Ingest.deliver({:ci, %{elem(delivery, 1) | event: "check_run"}}, nil, watchers: []) == :unavailable
     end
+  end
+
+  describe "every merge to main, held ticket or not (TP-1340)" do
+    @build %{version: "0.0.1.749", sha: "d3d301b0", repo: "https://github.com/acme/symphony"}
+
+    defp main_run(attempt, status, conclusion \\ nil), do: Map.put(run(attempt, status, conclusion), "headSha", String.upcase(@sha))
+
+    defp release_delivery(extra \\ %{}) do
+      Map.merge(
+        %{
+          event: "workflow_run",
+          action: "completed",
+          head_sha: String.upcase(@sha),
+          conclusion: "cancelled",
+          completed_at: nil,
+          pr_urls: [],
+          merged: false,
+          base_ref: nil,
+          workflow: "release",
+          head_branch: "main",
+          repo: "acme/symphony"
+        },
+        extra
+      )
+    end
+
+    test "with no ticket held, a cancelled release run on main is rerun on the poll, logged and kept", %{github: github, opts: opts} do
+      runs(github, [run(1, "completed", "cancelled")])
+      set(github, :main, [main_run(1, "completed", "cancelled")])
+
+      log = ExUnit.CaptureLog.capture_log(fn -> assert :ok = ReleaseBuild.watch([], @build, %{}, @repo_key, opts) end)
+      assert_received {:rerun, "41086214847"}
+      assert log =~ "Reran the release build of #{@sha}"
+      assert %{state: :queued, reruns: 1, tickets: [], url: "https://github.com/acme/symphony/actions/runs/41086214847"} = ReleaseBuild.get(@sha)
+      assert symphony_conditions() == []
+
+      assert %{sha: @sha, version: version, state: "queued", reruns: 1, since: @now, line: line} =
+               ReleaseBuild.latest_build(now: @now)
+
+      assert version == version()
+      assert line == "The v#{version()} build: queued on GitHub for less than a minute; cancelled for lack of a machine, rerun 1 of 2"
+
+      # Read at most once a minute: the poll's read, and the newer-run check before the rerun.
+      assert :ok = ReleaseBuild.watch([], @build, %{}, @repo_key, opts)
+      assert_received :main_read
+      assert_received :main_read
+      refute_received :main_read
+      later = Keyword.put(opts, :now, DateTime.add(@now, 61, :second))
+      runs(github, [run(2, "completed", "success")])
+      assert :ok = ReleaseBuild.watch([], @build, %{}, @repo_key, later)
+      assert_received :main_read
+      assert %{state: :built} = ReleaseBuild.get(@sha)
+      assert %{state: "built", line: nil} = ReleaseBuild.latest_build(later)
+
+      # A published build is not read again.
+      runs(github, :down)
+      assert :ok = ReleaseBuild.watch([], @build, %{}, @repo_key, Keyword.put(opts, :now, DateTime.add(@now, 125, :second)))
+      assert %{state: :built} = ReleaseBuild.get(@sha)
+    end
+
+    test "a release run on main of Symphony's own repository starts the watch on its delivery", %{github: github, opts: opts} do
+      supervisor = start_supervised!(Task.Supervisor)
+      runs(github, [run(1, "completed", "cancelled")])
+      opts = [supervisor: supervisor, build: @build] ++ opts
+
+      assert :unavailable = Ingest.deliver({:ci, release_delivery()}, "https://github.com/acme/symphony", [watchers: []] ++ opts)
+      assert_receive {:rerun, "41086214847"}, 1_000
+      await_checks(supervisor)
+      assert %{sha: @sha} = ReleaseBuild.latest_build(opts)
+      assert %{state: :queued, reruns: 1} = ReleaseBuild.get(@sha)
+
+      # Another workflow, branch or repository on an unwatched commit is not a merge's build.
+      other = "0000000000000000000000000000000000000000"
+      assert ReleaseBuild.delivered(release_delivery(%{head_sha: other, workflow: "ci"}), opts) == :ignored
+      assert ReleaseBuild.delivered(release_delivery(%{head_sha: other, head_branch: "auto/TP-1"}), opts) == :ignored
+      assert ReleaseBuild.delivered(release_delivery(%{head_sha: other, repo: "acme/other"}), opts) == :ignored
+      assert ReleaseBuild.delivered(release_delivery(%{head_sha: other}), Keyword.put(opts, :build, %{@build | repo: nil})) == :ignored
+    end
+
+    test "an older release run's delivery doesn't move the newest merge", %{github: github, opts: opts} do
+      supervisor = start_supervised!(Task.Supervisor)
+      opts = [supervisor: supervisor, build: @build] ++ opts
+      :ok = RunStore.put_github_updates({:release_build, :latest}, %{sha: "newer", number: 800, read_at: @now})
+      runs(github, [run(1, "queued")])
+
+      assert ReleaseBuild.delivered(release_delivery(), opts) == :started
+      await_checks(supervisor)
+      assert %{state: :queued} = ReleaseBuild.get(@sha)
+      assert %{sha: "newer"} = RunStore.get_github_updates({:release_build, :latest})
+
+      # A newest merge with no run number yet is replaced; a delivery GitHub can't answer changes nothing.
+      :ok = RunStore.put_github_updates({:release_build, :latest}, %{sha: "newer", number: nil, read_at: @now})
+      assert ReleaseBuild.delivered(release_delivery(%{head_sha: "1111111111111111111111111111111111111111"}), opts) == :started
+      await_checks(supervisor)
+      assert %{sha: "1111111111111111111111111111111111111111"} = RunStore.get_github_updates({:release_build, :latest})
+
+      :ok = RunStore.put_github_updates({:release_build, :latest}, %{sha: "newer", number: 900, read_at: @now})
+      runs(github, [%{run(1, "queued") | "number" => nil}])
+      assert ReleaseBuild.delivered(release_delivery(%{head_sha: "2222222222222222222222222222222222222222"}), opts) == :started
+      await_checks(supervisor)
+      assert %{state: :queued} = ReleaseBuild.get("2222222222222222222222222222222222222222")
+      assert %{sha: "newer"} = RunStore.get_github_updates({:release_build, :latest})
+
+      # A build whose run carries no number yet has no version.
+      :ok = RunStore.put_github_updates({:release_build, :latest}, %{sha: "2222222222222222222222222222222222222222", number: nil, read_at: @now})
+      assert %{version: nil, line: "The release build: queued on GitHub for 23 min"} = ReleaseBuild.latest_build(now: @now)
+
+      # The newest merge's own run, published and read again, stays the newest.
+      :ok = RunStore.put_github_updates({:release_build, "2222222222222222222222222222222222222222"}, %{ReleaseBuild.get("2222222222222222222222222222222222222222") | state: :built})
+      runs(github, [%{run(1, "completed", "success") | "number" => nil}])
+      assert ReleaseBuild.delivered(release_delivery(%{head_sha: "2222222222222222222222222222222222222222"}), opts) == :started
+      await_checks(supervisor)
+      assert %{sha: "2222222222222222222222222222222222222222", read_at: @now} = RunStore.get_github_updates({:release_build, :latest})
+
+      runs(github, :down)
+      assert ReleaseBuild.delivered(release_delivery(%{head_sha: "3333333333333333333333333333333333333333"}), opts) == :started
+      await_checks(supervisor)
+      assert ReleaseBuild.get("3333333333333333333333333333333333333333") == nil
+    end
+
+    test "an older release run cancelled before it started while a newer run exists is replaced, never rerun", %{github: github, opts: opts} do
+      supervisor = start_supervised!(Task.Supervisor)
+      opts = [supervisor: supervisor, build: @build] ++ opts
+      # GitHub cancels run 750, still pending, once run 751 of a newer push queues behind a running release.
+      runs(github, [run(1, "completed", "cancelled")])
+      set(github, :main, [%{main_run(1, "queued") | "number" => 751, "headSha" => "ABCDEF0123456789ABCDEF0123456789ABCDEF01"}])
+
+      assert ReleaseBuild.delivered(release_delivery(), opts) == :started
+      await_checks(supervisor)
+      refute_received {:rerun, _id}
+      refute_received {:asked, _ticket, _request}
+      assert %{state: :superseded, reruns: 0, question: nil} = ReleaseBuild.get(@sha)
+      assert ReleaseBuild.line(@sha, nil, opts) == "Waiting for the v#{version()} build: replaced by a newer build"
+
+      # A held ticket waiting on the replaced commit doesn't rerun it either, and it is not read again.
+      assert {:ok, %{state: :superseded}} = check(opts)
+      refute_received {:rerun, _id}
+      assert ReleaseBuild.delivered(@sha, opts) == :ignored
+      runs(github, :down)
+      assert :ok = ReleaseBuild.watch([], @build, %{}, @repo_key, opts)
+      assert %{state: :superseded} = ReleaseBuild.get(@sha)
+
+      # The newest run of main, or one GitHub can't number, is starved, not replaced: it is rerun.
+      runs(github, [run(1, "completed", "cancelled")])
+
+      for {sha, newest} <- [{String.duplicate("4", 40), 750}, {String.duplicate("5", 40), nil}] do
+        set(github, :main, [%{main_run(1, "queued") | "number" => newest}])
+        assert {:ok, %{state: :queued, reruns: 1}} = ReleaseBuild.check(sha, @repo, @repo_key, [], opts)
+        assert_received {:rerun, "41086214847"}
+      end
+
+      # When GitHub can't say whether a newer run exists, nothing is rerun and the check tries again later.
+      set(github, :main, :down)
+      assert {:ok, %{state: :not_started, reruns: 0}} = ReleaseBuild.check(String.duplicate("6", 40), @repo, @repo_key, [], opts)
+      refute_received {:rerun, _id}
+    end
+
+    test "with no ticket to ask, a build cancelled again or failed is logged once and stops no dispatch", %{github: github, opts: opts} do
+      record = %{sha: @sha, repo: @repo, repo_key: @repo_key, tickets: [], state: :queued, run_id: "41086214847"}
+      record = Map.merge(record, %{number: 750, attempt: 3, conclusion: nil})
+      :ok = RunStore.put_github_updates({:release_build, @sha}, Map.merge(record, %{since: @created, since_attempt: 3, reruns: 2, rerun_attempt: 2, question: nil, answer: nil}))
+      :ok = RunStore.put_github_updates({:release_build, :latest}, %{sha: @sha, number: 750, read_at: @now})
+      runs(github, [run(3, "completed", "cancelled")])
+
+      log = ExUnit.CaptureLog.capture_log(fn -> assert {:ok, %{state: :cancelled, question: nil}} = ReleaseBuild.check(@sha, @repo, @repo_key, [], opts) end)
+      assert log =~ "The release build of #{@sha} was cancelled for lack of a machine again and no held ticket waits on it: run_id=41086214847"
+      refute_received {:asked, _ticket, _request}
+      assert ReleaseBuild.latest_build(now: @now).line == "The v#{version()} build: cancelled for lack of a machine 3 times; Symphony stopped rerunning it"
+
+      log = ExUnit.CaptureLog.capture_log(fn -> assert {:ok, %{state: :cancelled}} = ReleaseBuild.check(@sha, @repo, @repo_key, [], opts) end)
+      refute log =~ "no held ticket"
+
+      runs(github, [run(4, "completed", "failure")])
+      log = ExUnit.CaptureLog.capture_log(fn -> assert {:ok, %{state: :failed}} = ReleaseBuild.check(@sha, @repo, @repo_key, [], opts) end)
+      assert log =~ "The release build of #{@sha} failed and no held ticket waits on it"
+      assert symphony_conditions() == []
+      assert ReleaseBuild.latest_build(now: @now).line == "The v#{version()} build: failed on GitHub"
+    end
+
+    test "a failed build several unnamed held tickets wait on names them together", %{github: github, opts: opts} do
+      runs(github, [run(1, "completed", "failure")])
+      unnamed = [%{id: "issue-1", identifier: nil, state: "Todo"}, %{id: "issue-2", identifier: nil, state: "Todo"}]
+
+      assert {:ok, %{state: :failed}} = ReleaseBuild.check(@sha, @repo, @repo_key, unnamed, opts)
+      assert {:ok, %{reasons: [%{text: text}]}} = Pauses.get(:symphony)
+      assert text =~ "the held tickets wait for it"
+    end
+
+    test "nothing watched yet, or main unreadable, changes nothing", %{github: github, opts: opts} do
+      assert ReleaseBuild.latest_build() == nil
+      :ok = RunStore.put_github_updates({:release_build, :latest}, %{sha: "unknown", number: nil, read_at: nil})
+      assert ReleaseBuild.latest_build() == nil
+
+      assert :ok = ReleaseBuild.watch([], @build, %{}, @repo_key, opts)
+      assert_received :main_read
+      set(github, :main, :down)
+      assert :ok = ReleaseBuild.watch([], @build, %{}, @repo_key, opts)
+      assert :ok = ReleaseBuild.watch_main(nil, @repo_key, [], opts)
+
+      # The newest merge, kept nowhere, is read again next time.
+      set(github, :main, [main_run(1, "queued")])
+      runs(github, [run(1, "queued")])
+      log = ExUnit.CaptureLog.capture_log(fn -> assert :ok = ReleaseBuild.watch_main(@repo, @repo_key, [], Keyword.put(opts, :run_store, FailingStore)) end)
+      assert log =~ "Could not record the newest release build"
+
+      # A merge a held ticket waits on was checked already.
+      assert :ok = ReleaseBuild.watch_main(@repo, @repo_key, [@sha], opts)
+      refute_received {:rerun, _id}
+      assert ReleaseBuild.get(@sha) == nil
+      assert ReleaseBuild.latest_build() == nil
+    end
+  end
+
+  # Waits for the checks a delivery started under `supervisor` to finish.
+  defp await_checks(supervisor) do
+    for pid <- Task.Supervisor.children(supervisor) do
+      ref = Process.monitor(pid)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 1_000
+    end
+
+    :ok
   end
 end

@@ -127,19 +127,35 @@ defmodule SymphonyElixir.GitHubWebhookTest do
           }
         }
 
+        workflow = if event == "workflow_run", do: %{workflow: nil, head_branch: nil, repo: "example/repo"}, else: %{}
+
         assert Webhook.parse(event, payload, @events) ==
                  {:ci,
-                  %{
-                    event: event,
-                    action: "completed",
-                    head_sha: "abc123",
-                    conclusion: "failure",
-                    completed_at: ~U[2026-05-06 09:00:00Z],
-                    pr_urls: ["https://github.com/example/repo/pull/7"],
-                    merged: false,
-                    base_ref: nil
-                  }}
+                  Map.merge(
+                    %{
+                      event: event,
+                      action: "completed",
+                      head_sha: "abc123",
+                      conclusion: "failure",
+                      completed_at: ~U[2026-05-06 09:00:00Z],
+                      pr_urls: ["https://github.com/example/repo/pull/7"],
+                      merged: false,
+                      base_ref: nil
+                    },
+                    workflow
+                  )}
       end
+    end
+
+    test "a completed workflow run names its workflow, the branch it ran on and its repository" do
+      payload = %{
+        "action" => "completed",
+        "repository" => @repository,
+        "workflow_run" => %{"head_sha" => "abc123", "conclusion" => "cancelled", "name" => "release", "head_branch" => "main", "pull_requests" => []}
+      }
+
+      assert {:ci, %{event: "workflow_run", workflow: "release", head_branch: "main", repo: "example/repo", head_sha: "abc123"}} =
+               Webhook.parse("workflow_run", payload, @events)
     end
 
     test "a completed check falls back to its updated_at, and reads a missing or unparseable time as nil" do
