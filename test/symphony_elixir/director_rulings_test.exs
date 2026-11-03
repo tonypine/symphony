@@ -105,7 +105,6 @@ defmodule SymphonyElixir.DirectorRulingsTest do
     replies = [
       {{:error, :missing_linear_api_token}, "Symphony has no Linear API key, so it couldn't record the decision on #{ctx.ticket.issue_identifier}."},
       {{:error, {:linear_api_request, :missing_linear_api_token}}, "Symphony has no Linear API key"},
-      {{:ok, "Text\n\n#{Decisions.start_marker()}\n- lost"}, "has lost its end marker"},
       {{:error, :timeout}, "Symphony couldn't record the decision on #{ctx.ticket.issue_identifier}, so nothing changed. Try again in a moment."}
     ]
 
@@ -122,6 +121,22 @@ defmodule SymphonyElixir.DirectorRulingsTest do
     end
 
     assert events(ctx.ticket, "decision.recorded") == []
+  end
+
+  test "a Decisions section that lost its end marker still records the ruling, sending nobody to Linear", ctx do
+    Process.put(:description_reply, {:ok, "Text\n\n#{Decisions.start_marker()}\n- lost"})
+
+    log =
+      capture_log(fn ->
+        assert {:ok, payload} = DirectorRulings.record(ctx.ticket.issue_identifier, "Keep the old endpoint", ctx.opts)
+        assert [%{id: "D1", answer: "Keep the old endpoint"}] = payload.decisions
+      end)
+
+    assert log =~ "unterminated"
+    refute log =~ "in Linear"
+    refute_received {:tracker, :update, _issue_id, _description}
+    assert [%{id: "D1", answer: "Keep the old endpoint"}] = stored(ctx.ticket)
+    assert [%{summary: %{title: "The Director ruled"}}] = events(ctx.ticket, "decision.recorded")
   end
 
   test "lists the ticket's decisions, a Decide answer and a ruling alike, by identifier or id", ctx do
