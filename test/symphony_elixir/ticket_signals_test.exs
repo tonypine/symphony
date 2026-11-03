@@ -208,7 +208,8 @@ defmodule SymphonyElixir.TicketSignalsTest do
       log = capture_log(fn -> assert :ok = TicketSignals.record_phase("  ", "issue-1", "QA") end)
       assert log =~ "Failed to write the record's phase QA on issue_id=issue-1"
 
-      log = capture_log(fn -> assert :ok = ticket_records_unreadable(fn -> TicketSignals.record_phase(@repo_key, "issue-1", "QA") end) end)
+      write = fn -> TicketSignals.record_phase(@repo_key, "issue-1", "QA") end
+      log = capture_log(fn -> assert :ok = ticket_records_unreadable(write) end)
       assert log =~ "Failed to write the record's phase QA on issue_id=issue-1"
     end
 
