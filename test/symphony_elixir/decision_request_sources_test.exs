@@ -51,6 +51,9 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
     "lib/symphony_elixir/orchestrator.ex" => [:dispatch_loop, :quiet_handoff],
     # The questions the backfill finds in the holds and decisions already recorded.
     "lib/symphony_elixir/pauses/backfill.ex" => [:backfill],
+    # The issue-scoping quality gate's clarification: its questions for a ticket scored below the
+    # threshold, answered in the Inbox.
+    "lib/symphony_elixir/quality_gate/question.ex" => [:quality_gate],
     # A run's block report that names no blocker: "The run on <id> cannot continue on its own".
     "lib/symphony_elixir/transition_guard.ex" => [:block_report]
   }
