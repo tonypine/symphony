@@ -38,6 +38,7 @@ defmodule SymphonyElixir.PlanCommentsTest do
 
       # Close-out, other states, other issues: nothing.
       refute PlanComments.action(%{parent | sub_issues: [%{id: "c1", identifier: "MT-2", state: "Done"}]}, @terminal, settings)
+      refute PlanComments.action(%{parent | state: @waiting, sub_issues: []}, @terminal, settings)
       refute PlanComments.action(%{parent | state: "In Progress"}, @terminal, settings)
       refute PlanComments.action(%{parent | state: "Rework"}, @terminal, settings)
       refute PlanComments.action(%{parent | labels: ["feature"]}, @terminal, settings)

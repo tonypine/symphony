@@ -123,6 +123,46 @@ defmodule SymphonyElixir.Linear.Webhook do
   def parse(%{"type" => type}) when is_binary(type) and type not in ["Issue", "Comment"], do: :ignored
   def parse(_delivery), do: {:error, :malformed}
 
+  @doc """
+  The ids of the parents whose sub-issue list a verified `Issue` delivery changes, as a raw body or
+  decoded: a child filed (`create`) or removed (`remove`) under a parent names that parent; an
+  `update` that moved the child to another parent (`updatedFrom` holds `parentId`) names the old one
+  and the new one, and one that changed its state (`updatedFrom` holds `stateId`) names its parent,
+  whose list carries each child's state. Any other delivery names none. A parent's own delivery
+  never says its children changed, so this is how its record learns it.
+  """
+  @spec parent_ids(binary() | map()) :: [String.t()]
+  def parent_ids(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, %{} = delivery} -> parent_ids(delivery)
+      _not_an_object -> []
+    end
+  end
+
+  def parent_ids(%{"type" => "Issue", "action" => action, "data" => %{} = data} = delivery) do
+    from = Map.get(delivery, "updatedFrom")
+    from = if is_map(from), do: from, else: %{}
+
+    ids =
+      case action do
+        action when action in ["create", "remove"] -> [data["parentId"]]
+        "update" -> update_parent_ids(data, from)
+        _other -> []
+      end
+
+    ids |> Enum.map(&string/1) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+  end
+
+  def parent_ids(_delivery), do: []
+
+  defp update_parent_ids(data, from) do
+    cond do
+      Map.has_key?(from, "parentId") -> [from["parentId"], data["parentId"]]
+      Map.has_key?(from, "stateId") -> [data["parentId"]]
+      true -> []
+    end
+  end
+
   defp action("create"), do: :create
   defp action("update"), do: :update
   defp action("remove"), do: :remove

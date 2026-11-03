@@ -244,6 +244,44 @@ defmodule SymphonyElixir.TicketObservation do
   end
 
   @doc """
+  Observes the parents a child's delivery touched (`SymphonyElixir.Linear.Webhook.parent_ids/1`):
+  a child re-parented away, filed, removed or moved to another state changes its parent's sub-issue
+  list, but Linear sends that change to the child, never to the parent. So the parents are read by
+  id (one Linear request, `:tracker`'s `fetch_issue_states_by_ids/1`) and each observed like a
+  delivery (`source: :webhook`) under the repo whose record of it the reads already keep: a changed
+  record is announced and asks for a poll of its repo at once, so a parent left with no open
+  sub-issue closes out within seconds. A parent no repo holds a record of is left to the poll
+  (`unrouted`), and a failed read is counted under `errors`. Returns the counts, as
+  `observe_held/2` does. `opts`: `:repos`, `:orchestrator`, `:tracker`, and those of `observe/3`.
+  """
+  @spec observe_parents([String.t()], keyword()) :: held_counts()
+  def observe_parents(parent_ids, opts) when is_list(parent_ids) do
+    {repos, opts} = Keyword.pop_lazy(opts, :repos, &configured_repos/0)
+    {orchestrator, opts} = Keyword.pop(opts, :orchestrator, Orchestrator)
+    empty = Map.put(empty_summary(), :unrouted, 0)
+
+    with [_ | _] = ids <- Enum.uniq(parent_ids),
+         {:ok, issues} <- fetch_by_ids(Keyword.get(opts, :tracker, Tracker), ids) do
+      opts = Keyword.put(opts, :source, :webhook)
+      Enum.reduce(issues, empty, &observe_parent(&1, repos, orchestrator, opts, &2))
+    else
+      [] ->
+        empty
+
+      {:error, reason} ->
+        Logger.warning("Reading the parents of a delivered sub-issue failed parent_ids=#{inspect(parent_ids)}: #{inspect(reason)}")
+        bump(:errors)
+        %{empty | errors: 1}
+    end
+  end
+
+  defp observe_parent(issue, repos, orchestrator, opts, acc) do
+    {outcome, repo_key} = observe_held_issue(issue, repos, opts)
+    if outcome == :updated, do: Orchestrator.request_refresh(orchestrator, repo_key, due: :now)
+    Map.update!(acc, held_count_key(outcome), &(&1 + 1))
+  end
+
+  @doc """
   Observes every issue of `issues` for `repo_key` (see `observe/3`), and returns how many had each
   outcome. A store error is logged with the issue it was for and counted under `errors`; it never
   stops the others.
@@ -282,6 +320,9 @@ defmodule SymphonyElixir.TicketObservation do
     missing) and the poll did not return are read by id, at most 50 a run, and observed (counted
     under `unobserved_filled`). One Linear does not return (archived or deleted) is marked
     `not_found_at` and not read again.
+  - the repo's parents in `Plan Review`, `Waiting on sub-tickets` or `Epic Review` the poll did not
+    return are read by id, at most 50 a run, and observed, so a sub-issue list a missed delivery
+    left behind (a child re-parented away, cancelled or deleted) is current within one interval.
   - each record in `Plan Review` whose capture of the plan's brief failed (`plan_brief_error`) is
     captured again (`SymphonyElixir.PlanBrief.retry_failed/3`).
 
@@ -424,6 +465,7 @@ defmodule SymphonyElixir.TicketObservation do
             do: reproject(repo_key, record.issue_id, TicketState.projection_of(mark), Map.get(polled, record.issue_id), tracker)
 
         fill_unobserved(repo_key, records, polled, tracker, opts)
+        refresh_parents(repo_key, records, polled, tracker, opts)
         PlanBrief.retry_failed(repo_key, records, [])
 
       {:error, reason} ->
@@ -524,6 +566,44 @@ defmodule SymphonyElixir.TicketObservation do
       {:error, reason} -> Logger.warning("Ticket reconcile: reading the unobserved records failed repo_key=#{repo_key}: #{inspect(reason)}")
     end
   end
+
+  # The repo's parents in `Plan Review`, `Waiting on sub-tickets` or `Epic Review` the poll did not
+  # return (`Plan Review` is never polled), read by id at most `@fill_limit` a run, so a sub-issue
+  # list a missed delivery left behind is current within one interval. Records no read observed yet
+  # are `fill_unobserved/5`'s.
+  defp refresh_parents(repo_key, records, polled, tracker, opts) do
+    states = Keyword.get_lazy(opts, :parent_states, fn -> parent_states(repo_key) end)
+
+    ids =
+      for %{phase: phase, linear_updated_at: %DateTime{}, removed_at: nil, not_found_at: nil} = record <- records,
+          is_binary(phase) and normalize_state(phase) in states,
+          issue_id = record.issue_id,
+          not Map.has_key?(polled, issue_id),
+          do: issue_id
+
+    with [_ | _] = ids <- Enum.take(ids, @fill_limit),
+         {:ok, issues} <- fetch_by_ids(tracker, ids) do
+      observe_all(repo_key, issues, Keyword.put(opts, :source, :by_id))
+      :ok
+    else
+      [] -> :ok
+      {:error, reason} -> Logger.warning("Ticket reconcile: reading the parents failed repo_key=#{repo_key}: #{inspect(reason)}")
+    end
+  end
+
+  defp parent_states(repo_key) do
+    case Config.settings_for_repo(repo_key) do
+      {:ok, %{tracker: tracker}} ->
+        for state <- [tracker.plan_review_state, tracker.waiting_on_sub_issues_state, tracker.epic_review_state],
+            is_binary(state),
+            do: normalize_state(state)
+
+      {:error, _reason} ->
+        []
+    end
+  end
+
+  defp normalize_state(state), do: state |> String.trim() |> String.downcase()
 
   defp mark_not_found(repo_key, issue_id, now) do
     case RunStore.update_ticket_state(issue_id, %{not_found_at: now, updated_at: now}) do

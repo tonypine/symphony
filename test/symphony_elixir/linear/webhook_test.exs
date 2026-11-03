@@ -206,4 +206,33 @@ defmodule SymphonyElixir.Linear.WebhookTest do
       end
     end
   end
+
+  describe "parent_ids/1" do
+    defp issue(action, data, extra \\ %{}), do: Map.merge(%{"type" => "Issue", "action" => action, "data" => Map.merge(%{"id" => "child"}, data)}, extra)
+
+    test "names the old and the new parent of a re-parented child, and the parent of a child filed, removed or moved to another state" do
+      assert Webhook.parent_ids(issue("update", %{"parentId" => "new"}, %{"updatedFrom" => %{"parentId" => "old"}})) == ["old", "new"]
+      # Detached from its parent, or given one it had none of.
+      assert Webhook.parent_ids(issue("update", %{"parentId" => nil}, %{"updatedFrom" => %{"parentId" => "old"}})) == ["old"]
+      assert Webhook.parent_ids(issue("update", %{"parentId" => "new"}, %{"updatedFrom" => %{"parentId" => nil}})) == ["new"]
+      # Cancelled, or any other state: its parent's list carries each child's state.
+      assert Webhook.parent_ids(issue("update", %{"parentId" => "p"}, %{"updatedFrom" => %{"stateId" => "s"}})) == ["p"]
+      assert Webhook.parent_ids(issue("create", %{"parentId" => "p"})) == ["p"]
+      assert Webhook.parent_ids(issue("remove", %{"parentId" => "p"})) == ["p"]
+      assert Webhook.parent_ids(issue("update", %{"parentId" => "p"}, %{"updatedFrom" => %{"parentId" => "p"}})) == ["p"]
+      assert Webhook.parent_ids(Jason.encode!(issue("create", %{"parentId" => "p"}))) == ["p"]
+    end
+
+    test "names none for any other change, a child with no parent, or a delivery that is not an Issue" do
+      assert Webhook.parent_ids(issue("update", %{"parentId" => "p"}, %{"updatedFrom" => %{"priority" => 2}})) == []
+      assert Webhook.parent_ids(issue("update", %{"parentId" => "p"})) == []
+      assert Webhook.parent_ids(issue("update", %{"parentId" => "p"}, %{"updatedFrom" => "garbled"})) == []
+      assert Webhook.parent_ids(issue("create", %{})) == []
+      assert Webhook.parent_ids(issue("create", %{"parentId" => ""})) == []
+      assert Webhook.parent_ids(issue("archive", %{"parentId" => "p"})) == []
+      assert Webhook.parent_ids(%{"type" => "Comment", "action" => "create", "data" => %{"parentId" => "p"}}) == []
+      assert Webhook.parent_ids("not json") == []
+      assert Webhook.parent_ids("[]") == []
+    end
+  end
 end

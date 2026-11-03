@@ -141,8 +141,20 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       assert Issue.close_out_ready?(parent, ["Done", "Cancelled"])
 
       assert SubIssueWait.held?(%{parent | sub_issues: [%{id: "c3", identifier: "MT-4", state: "Todo"}]}, ["Done"], settings)
-      assert SubIssueWait.held?(%{parent | sub_issues: []}, ["Done"], settings)
+      # Every child re-parented away or deleted: the parent waits on nothing and closes out.
+      refute SubIssueWait.held?(%{parent | sub_issues: []}, ["Done"], settings)
+      assert SubIssueWait.close_out_ready?(%{parent | sub_issues: []}, ["Done"], settings)
+      refute Issue.close_out_ready?(%{parent | sub_issues: []}, ["Done"])
+      assert RunKind.classify(%{parent | sub_issues: []}, terminal_states: ["Done"], settings: settings) == :epic_review
+      # Outside the waiting state a parent with no sub-issues has no plan yet: it gets a plan run.
+      refute SubIssueWait.close_out_ready?(%{parent | state: "Todo", sub_issues: []}, ["Done"], settings)
+      unplanned = %{parent | state: "Todo", sub_issues: []}
+      assert RunKind.classify(unplanned, terminal_states: ["Done"], settings: settings) == :breakdown
+      # Sub-issues a read did not carry are not "none left".
+      assert SubIssueWait.held?(%{parent | sub_issues: :unknown}, ["Done"], settings)
+      refute SubIssueWait.close_out_ready?(nil, ["Done"], settings)
       assert SubIssueWait.held?(%{parent | labels: ["feature"]}, ["Done", "Cancelled"], settings)
+      assert SubIssueWait.held?(%{parent | labels: ["feature"], sub_issues: []}, ["Done"], settings)
       refute SubIssueWait.held?(%{parent | state: "In Progress", sub_issues: []}, ["Done"], settings)
       refute SubIssueWait.held?(%{parent | state: nil}, ["Done"], settings)
       refute SubIssueWait.held?(nil, ["Done"], settings)
@@ -214,7 +226,9 @@ defmodule SymphonyElixir.SubIssueWaitTest do
 
       refute SubIssueWait.close?(%{done | state: "In Progress"}, terminal, settings)
       refute SubIssueWait.close?(%{done | labels: ["breakdown"]}, terminal, settings)
-      refute SubIssueWait.close?(%{done | sub_issues: []}, terminal, settings)
+      # Every sub-ticket re-parented to another epic or deleted: nothing is left to wait on.
+      assert SubIssueWait.close?(%{done | sub_issues: []}, terminal, settings)
+      refute SubIssueWait.close?(%{done | sub_issues: :unknown}, terminal, settings)
       refute SubIssueWait.close?(nil, terminal, settings)
       refute SubIssueWait.close?(%{done | id: nil}, terminal, settings)
 
@@ -231,6 +245,10 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       assert body ==
                "Every sub-ticket is finished, so this ticket is Done:\n\n- MT-2: Done\n- MT-3: Backlog\n\n" <>
                  "Sub-tickets in Backlog stay there until a person promotes them."
+
+      capture_log([level: :info], fn -> assert :ok = SubIssueWait.close(%{waiting | sub_issues: []}, SymphonyElixir.Tracker.Memory) end)
+      assert_received {:memory_tracker_state_update, "p", "Done"}
+      assert_received {:memory_tracker_comment, "p", "No sub-ticket is left under this ticket, so it is Done."}
     end
 
     test "tells a never-approved plan, with every open sub-issue in Backlog, from an approved one" do
@@ -289,7 +307,9 @@ defmodule SymphonyElixir.SubIssueWaitTest do
 
       # Anything else a human puts in the waiting state is left alone.
       refute Orchestrator.should_dispatch_issue_for_test(%{closed_out | labels: ["feature"]}, state)
-      refute Orchestrator.should_dispatch_issue_for_test(%{closed_out | sub_issues: []}, state)
+      # Every sub-ticket re-parented to another epic: none is left to wait on, so its close-out runs.
+      assert Orchestrator.should_dispatch_issue_for_test(%{closed_out | sub_issues: []}, state)
+      refute Orchestrator.should_dispatch_issue_for_test(%{closed_out | sub_issues: :unknown}, state)
 
       fetcher = fn ["parent-wait"] -> {:ok, [parent]} end
       stale = %{parent | state: "In Progress", sub_issues: []}
@@ -493,6 +513,22 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       log = capture_log(fn -> Orchestrator.close_finished_parents_for_test([waiting], state) end)
       assert log =~ "Failed to refresh issues waiting on sub-issues before closing them; retrying next poll reason=:timeout"
       refute_received {:memory_tracker_state_update, _issue_id, _state}
+    end
+
+    test "moves an issue waiting after its PR merged to Done once its last sub-ticket is re-parented away" do
+      state = orchestrator_state()
+      # Its last open child moved to another epic: the fresh read lists no sub-ticket at all.
+      waiting = %Issue{id: "orphaned", identifier: "MT-1801", title: "Audit", state: @waiting, labels: ["improvement"], sub_issues: []}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [waiting])
+      :ok = RunStore.put_merged_wait("orphaned")
+
+      refute Orchestrator.should_dispatch_issue_for_test(waiting, state)
+
+      capture_log([level: :info], fn -> Orchestrator.close_finished_parents_for_test([waiting], state) end)
+
+      assert_received {:memory_tracker_state_update, "orphaned", "Done"}
+      assert_received {:memory_tracker_comment, "orphaned", "No sub-ticket is left under this ticket, so it is Done."}
+      refute RunStore.merged_wait?("orphaned")
     end
 
     test "a poll cycle parks a breakdown parent In Progress and does not dispatch it" do
