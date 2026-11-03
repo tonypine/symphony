@@ -39,12 +39,16 @@ defmodule SymphonyElixir.ReleaseBuild do
   ticket's line reads the build's state from it (`line/3`): "Waiting for the v0.0.1.750 build with
   TP-1238's fix: queued on GitHub for 23 min"; with none held, the state payload's `app_update`
   carries the newest merge's (`latest_build/1`): "The v0.0.1.785 build: queued on GitHub for 12 min".
+
+  A check that finds the run finished, built or not, where the last check found it unfinished, lifts
+  the CI wait of a ticket paused on the commit (`SymphonyElixir.CiWait.finished/2`), in case its `workflow_run` delivery never came.
   """
 
   require Logger
 
   alias SymphonyElixir.{
     BuildInfo,
+    CiWait,
     DecisionRequest,
     MergeConfirmation,
     Pauses,
@@ -72,6 +76,8 @@ defmodule SymphonyElixir.ReleaseBuild do
   @rerun_build "Rerun the build"
   @wait_for_fix "Wait for a fix"
   @lack_of_machine "cancelled for lack of a machine"
+  # What a build is at before its run finished.
+  @unfinished_states [:not_started, :queued, :running]
 
   @typedoc """
   What the build's run is at: `:not_started` (no run yet), `:queued`, `:running`, `:built`,
@@ -322,9 +328,11 @@ defmodule SymphonyElixir.ReleaseBuild do
     case github(opts).commit_workflow_runs(repo, sha, @workflow, gh_opts(opts)) do
       {:ok, runs} ->
         run = List.first(runs)
+        unfinished? = record.state in @unfinished_states
         record = record |> take_answer(run, opts) |> step(run) |> settle_question()
         stored = put(record, opts)
         sync_pause(stored, opts)
+        if unfinished?, do: ci_finished(sha, run)
         {:ok, stored}
 
       {:error, reason} ->
@@ -334,6 +342,13 @@ defmodule SymphonyElixir.ReleaseBuild do
   end
 
   def check(_sha, _repo, _repo_key, _tickets, _opts), do: {:error, :no_repository}
+
+  # A read that finds the run finished where the last one found it queued or running is CI on the
+  # commit completing, as its `workflow_run` delivery would say: a ticket paused waiting for CI on it
+  # is lifted (`SymphonyElixir.CiWait`), whichever of the two comes first. A run read as finished
+  # before is no completion: a pause set since waits on another run's.
+  defp ci_finished(sha, %{status: "COMPLETED"}), do: CiWait.finished(sha)
+  defp ci_finished(_sha, _run), do: []
 
   @doc "What the last check of commit `sha`'s build found, or nil. `opts`: `:run_store`."
   @spec get(String.t(), keyword()) :: t() | nil

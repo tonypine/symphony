@@ -2065,6 +2065,10 @@ The QA agent:
   on that commit, recorded in the ticket-state record), the review is not started again and the
   ticket is held `Blocked` with `waits_on.type` `ci_wait` and a reason naming the commit and the
   workflows still running, which a person lifts with `Unblock`; the next wait starts from zero.
+  The hold MUST also lift by itself once CI on that commit completes, success or failure: a
+  `workflow_run` or `check_suite` delivery that completed on the commit, or the release-build
+  watch's read of a finished run on it, whichever comes first, clears it and the review is
+  dispatched at once, never on a timer. A completion on another commit changes nothing.
 - The epic review MUST NOT judge a failed workflow run on the base branch head it reviews before it
   reran it once: once every run on the commit finished, it reruns the failed jobs of each failed run
   (`gh run rerun <id> --failed`) and waits for the rerun as for an unfinished run, the wait on that
@@ -3159,7 +3163,8 @@ Rules:
   PR #12 (Title) to land: …" for a person's pull request with no ticket); the PR watcher clears each
   as its competitor lands or leaves the race, and `Unblock` clears every one of them and no other
   reason. Beside a CI-wait hold, the pause waits on an `environment` reason ("Waiting for CI on
-  <commit> to finish"), which clears when the epic review finds CI settled on its commit; beside
+  <commit> to finish"), which clears when CI on that commit completes or the epic review finds CI
+  settled on its commit; beside
   self-heal's access hold, on one naming the broken QA component ("The QA machine is not
   reachable"), which clears when a QA pass or an epic review reaches a pass or fail verdict. `Unblock`
   clears both. A ticket stopped, held back by its blockers or on a hold is listed under

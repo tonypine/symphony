@@ -10,6 +10,7 @@ defmodule SymphonyElixir.PrWatch.IngestTest do
   import SymphonyElixir.PrWatchParity,
     only: [check_failed: 2, check_passed: 2, synchronize: 2, merged: 1, push: 0, push: 1, red: 0]
 
+  alias SymphonyElixir.Pauses
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.PrWatch.{Health, Ingest, Release, Repo}
   alias SymphonyElixir.PrWatchParity, as: Parity
@@ -132,6 +133,35 @@ defmodule SymphonyElixir.PrWatch.IngestTest do
       release = %{repo: "tonypine/symphony", tag: "v2.0.0", published_at: ~U[2026-10-16 08:00:00Z], prerelease: false}
       assert Ingest.deliver({:release, release}, "https://github.com/tonypine/symphony", watchers: [:nobody]) == :ok
       assert %{tag: "v2.0.0", published_at: ~U[2026-10-16 08:00:00Z], source: :webhook} = Release.latest()
+    end
+
+    test "a finished workflow run or check suite on a commit lifts the CI wait of a ticket paused on it (TP-1376)" do
+      sha = "080052c11496888fa903ce619291821de45eaa7a"
+      ticket = {:ticket, @repo_key, "epic-1"}
+
+      completed = fn event, head ->
+        event = %{event: event, action: "completed", head_sha: head, conclusion: "success", completed_at: nil}
+        {:ci, Map.merge(event, %{pr_urls: [], merged: false, base_ref: nil})}
+      end
+
+      deliver = &Ingest.deliver(&1, @repo_url, watchers: [])
+
+      {:ok, _pause} = SymphonyElixir.CiWait.pause(@repo_key, "epic-1", sha)
+      :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records()
+
+      assert deliver.(completed.("workflow_run", "1111111111111111111111111111111111111111")) == :unavailable
+      assert deliver.(completed.("check_run", sha)) == :unavailable
+      {:ci, suite} = completed.("check_suite", sha)
+      assert deliver.({:ci, %{suite | action: "requested"}}) == :unavailable
+      assert Pauses.paused?(ticket)
+
+      assert deliver.(completed.("workflow_run", sha)) == :unavailable
+      refute Pauses.paused?(ticket)
+      assert_receive {:ticket_record, @repo_key, "epic-1", :changed, [:pause]}
+
+      {:ok, _pause} = SymphonyElixir.CiWait.pause(@repo_key, "epic-1", sha)
+      assert deliver.({:ci, %{suite | conclusion: "failure"}}) == :unavailable
+      refute Pauses.paused?(ticket)
     end
 
     test "deliveries reach every registered watcher" do

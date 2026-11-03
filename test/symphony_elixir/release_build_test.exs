@@ -124,6 +124,23 @@ defmodule SymphonyElixir.ReleaseBuildTest do
   end
 
   describe "check/5" do
+    test "a read that finds the run finished lifts the CI wait of a ticket paused on the commit (TP-1376)", %{github: github, opts: opts} do
+      ticket = {:ticket, @repo_key, "epic-1320"}
+      {:ok, _pause} = SymphonyElixir.CiWait.pause(@repo_key, "epic-1320", @sha)
+
+      runs(github, [run(1, "in_progress")])
+      assert {:ok, %{state: :running}} = check(opts)
+      assert Pauses.paused?(ticket)
+
+      runs(github, [run(1, "completed", "failure")])
+      assert {:ok, %{state: :failed}} = check(opts)
+      refute Pauses.paused?(ticket)
+
+      {:ok, _pause} = SymphonyElixir.CiWait.pause(@repo_key, "epic-1320", @sha)
+      assert {:ok, %{state: :failed}} = check(opts)
+      assert Pauses.paused?(ticket)
+    end
+
     test "a queued build reads how long GitHub has had it in its queue", %{github: github, opts: opts} do
       runs(github, [run(1, "queued")])
 

@@ -18,7 +18,18 @@ defmodule SymphonyElixir.CiWait do
   for the epic review's rerun of a red commit (`SymphonyElixir.EpicReview.CiRerun` records a fresh
   start when it reruns). The reason clears (`clear_pause/3`) when the epic review finds no workflow
   run on its commit still going, and on `Unblock`.
+
+  A paused ticket is not dispatched, so no review runs to find CI settled: the completion of CI on
+  the commit lifts the reason itself (`finished/2`, TP-1376). A `workflow_run` or `check_suite`
+  delivery that completed on the commit (`SymphonyElixir.PrWatch.Ingest`), or the release-build
+  watch's read of a finished run on it (`SymphonyElixir.ReleaseBuild`), whichever comes first, clears
+  the reason of every ticket whose pause names that commit, success or failure alike. The cleared
+  pause frees the ticket and the orchestrator dispatches it at once, as after `Unblock`: the review
+  then judges CI as it always does, a red run through its rerun-then-gap path, and a workflow still
+  going on the commit through a fresh wait. A completion on another commit changes nothing.
   """
+
+  require Logger
 
   alias SymphonyElixir.{Pauses, TicketState}
 
@@ -121,6 +132,53 @@ defmodule SymphonyElixir.CiWait do
   def clear_pause(repo_key, issue_id, by \\ nil) do
     if repo_key, do: Pauses.clear_reasons({:ticket, repo_key, issue_id}, &ci_wait_reason?/1, clear_opts(by))
     :ok
+  end
+
+  def finished(sha, opts \\ [])
+
+  @doc """
+  CI on commit `sha` completed (success or failure): clears the CI-wait reason naming that commit
+  from every ticket's pause in the store, by the CI-wait rule, and returns the ids of the tickets it
+  lifted. Tickets waiting on another commit, and reasons backfilled from holds (which name no
+  commit), stay. `opts`: `:run_store` (default `SymphonyElixir.RunStore`) and `:pauses` (default
+  `SymphonyElixir.Pauses`).
+  """
+  @spec finished(String.t() | nil, keyword()) :: [String.t()]
+  def finished(sha, opts) when is_binary(sha) and sha != "" do
+    sha = String.downcase(sha)
+
+    for %{issue_id: issue_id, repo_key: repo_key} = record <- ticket_records(opts),
+        is_binary(issue_id) and is_binary(repo_key),
+        Enum.any?(TicketState.pause_reasons(record), &names?(&1, sha)),
+        lifted?(Keyword.get(opts, :pauses, Pauses), repo_key, issue_id, sha) do
+      Logger.info("CI on #{String.slice(sha, 0, 12)} finished; lifted the CI wait of issue_id=#{issue_id} issue_identifier=#{record.issue_identifier}")
+      issue_id
+    end
+  end
+
+  def finished(_sha, _opts), do: []
+
+  defp ticket_records(opts) do
+    case Keyword.get(opts, :run_store, SymphonyElixir.RunStore).list_all_ticket_states() do
+      records when is_list(records) -> Enum.map(records, &TicketState.normalize/1)
+      _error -> []
+    end
+  end
+
+  defp names?(%{kind: :environment, waits_on: %{condition: @condition_prefix <> short = condition}}, sha) when short != "",
+    do: condition =~ @condition and String.starts_with?(sha, short)
+
+  defp names?(_reason, _sha), do: false
+
+  defp lifted?(pauses, repo_key, issue_id, sha) do
+    case pauses.clear_reasons({:ticket, repo_key, issue_id}, &names?(&1, sha), by: @setter) do
+      {:ok, _pause} ->
+        true
+
+      {:error, reason} ->
+        Logger.warning("CI on #{String.slice(sha, 0, 12)} finished but the CI wait of issue_id=#{issue_id} could not be lifted: #{inspect(reason)}")
+        false
+    end
   end
 
   defp clear_opts(nil), do: []
