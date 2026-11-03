@@ -166,6 +166,16 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     {synced_title(text(payload, :action), short_sha(text(payload, :head))), present([heads, text(payload, :reason)])}
   end
 
+  defp summary("workspace.rebuilt", payload, _event) do
+    heads =
+      [{"PR", :pr_head}, {"branch", :branch_head}, {"recorded", :recorded_head}]
+      |> Enum.flat_map(fn {label, key} -> if sha = short_sha(text(payload, key)), do: ["#{label} #{sha}"], else: [] end)
+      |> Enum.join(", ")
+
+    title = rebuilt_title(text(payload, :winner), short_sha(text(payload, :head)))
+    {title, present([rebuilt_reason(text(payload, :reason)), heads])}
+  end
+
   defp summary("note", payload, _event), do: {"Note added", [text(payload, :text)]}
   defp summary(_type, _payload, _event), do: :unknown
 
@@ -264,6 +274,15 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp synced_title("blocked", _head), do: "Workspace not synced: it holds local work"
   defp synced_title("failed", _head), do: "Workspace could not be synced"
   defp synced_title(_none, head), do: "Workspace already on the PR head" <> suffix(" ", head)
+
+  defp rebuilt_title("pull_request", head), do: "Workspace rebuilt on the PR head" <> suffix(" ", head)
+  defp rebuilt_title("branch", head), do: "Workspace rebuilt on the branch head" <> suffix(" ", head)
+  defp rebuilt_title("recorded", head), do: "Workspace rebuilt on a run's unpushed head" <> suffix(" ", head)
+  defp rebuilt_title(_main, _head), do: "Workspace rebuilt from main: the ticket has no branch yet"
+
+  defp rebuilt_reason("reclaim"), do: "Its old workspace was reclaimed"
+  defp rebuilt_reason("host_change"), do: "Its last run was on another host"
+  defp rebuilt_reason(_missing), do: "Its workspace folder was missing"
 
   defp short_sha(nil), do: nil
   defp short_sha(sha), do: String.slice(sha, 0, 7)

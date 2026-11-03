@@ -63,6 +63,8 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
      %{title: "Park brought up to date at start-up", detail: "asked you whether to run it again · pushed its work to auto/TP-1248"}},
     {"workspace.synced", %{workspace_head: "aaa1111aaaa", pr_head: "bbb2222bbbb", winner: "pull_request", action: "reset", head: "bbb2222bbbb", run_kind: "qa"}, [],
      %{title: "Workspace reset to the PR head bbb2222", detail: "workspace aaa1111, PR bbb2222"}},
+    {"workspace.rebuilt", %{reason: "missing_folder", branch: "auto/TP-1", winner: "pull_request", head: "bbb2222bbbb", pr_head: "bbb2222bbbb", branch_head: "aaa1111aaaa"}, [],
+     %{title: "Workspace rebuilt on the PR head bbb2222", detail: "Its workspace folder was missing · PR bbb2222, branch aaa1111"}},
     {"note", %{text: "History before 2026-10-20 was backfilled"}, [], %{title: "Note added", detail: "History before 2026-10-20 was backfilled"}}
   ]
 
@@ -135,6 +137,17 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
 
     assert render("workspace.synced", Map.merge(heads, %{action: "failed", reason: ":boom"})).title == "Workspace could not be synced"
     assert render("workspace.synced", %{}) == %{title: "Workspace already on the PR head", detail: nil}
+  end
+
+  test "a workspace rebuild names why, the heads it compared and the one it chose" do
+    assert render("workspace.rebuilt", %{reason: "reclaim", winner: "branch", head: "aaa1111aaaa", branch_head: "aaa1111aaaa"}) ==
+             %{title: "Workspace rebuilt on the branch head aaa1111", detail: "Its old workspace was reclaimed · branch aaa1111"}
+
+    assert render("workspace.rebuilt", %{reason: "host_change", winner: "recorded", head: "ccc3333cccc", recorded_head: "ccc3333cccc"}) ==
+             %{title: "Workspace rebuilt on a run's unpushed head ccc3333", detail: "Its last run was on another host · recorded ccc3333"}
+
+    assert render("workspace.rebuilt", %{reason: "missing_folder", winner: "main"}) ==
+             %{title: "Workspace rebuilt from main: the ticket has no branch yet", detail: "Its workspace folder was missing"}
   end
 
   test "a pause reason's line keeps the capital of a name it opens on" do

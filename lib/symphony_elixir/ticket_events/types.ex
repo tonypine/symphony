@@ -52,6 +52,11 @@ defmodule SymphonyElixir.TicketEvents.Types do
   newest run recorded), the one that won, what was done (`none`, `reset`, `pushed`,
   `reset_and_pushed`, `blocked`, `failed`), the head the run stands on and the run kind.
 
+  `workspace.rebuilt` is machinery-only: a ticket's workspace made again (`reclaim`, `missing_folder`,
+  `host_change`) started on the newest known head of its branch (`SymphonyElixir.WorkspaceRebuild`):
+  the heads compared (the open PR's, the branch's on `origin`, the unpushed head the newest run
+  recorded), the one chosen (`winner`, `main` when none exists) and the head the workspace starts on.
+
   `park.backfilled` is machinery-only: a ticket an idle run parked before parks asked a question was
   brought up to date at start-up (`SymphonyElixir.IdlePark.Backfill`), with what it was given in
   `added` (`question`, `releasable_reason`, `push`), the question's id, the branch pushed and the
@@ -343,6 +348,17 @@ defmodule SymphonyElixir.TicketEvents.Types do
         action: {:enum, ~w(none reset pushed reset_and_pushed blocked failed)}
       ],
       optional: [recorded_head: :string, head: :string, run_kind: :string, reason: {:string, 2_000}] ++ @signal,
+      idempotency: :writer
+    },
+    "workspace.rebuilt" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [
+        reason: {:enum, ~w(reclaim missing_folder host_change)},
+        branch: :string,
+        winner: {:enum, ~w(pull_request branch recorded main)}
+      ],
+      optional: [head: :string, pr_head: :string, branch_head: :string, recorded_head: :string] ++ @signal,
       idempotency: :writer
     },
     "note" => %{

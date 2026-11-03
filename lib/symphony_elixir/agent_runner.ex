@@ -51,6 +51,7 @@ defmodule SymphonyElixir.AgentRunner do
     Workspace,
     WorkspaceCleanup,
     WorkspaceHead,
+    WorkspaceRebuild,
     WorkspaceSync
   }
 
@@ -371,6 +372,7 @@ defmodule SymphonyElixir.AgentRunner do
       _ ->
         issue
         |> sync_workspace_to_pr_head(opts, worker_host)
+        |> rebuild_start(issue, opts, worker_host)
         |> Workspace.create_for_issue(worker_host, Keyword.get(opts, :repo_key),
           active_workspace_identifiers: Keyword.get(opts, :active_workspace_identifiers, []),
           on_hook: workspace_hook_listener(codex_update_recipient, issue)
@@ -444,6 +446,22 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp kept_workspace_synced?(_issue, _head_ref, _opts, _worker_host), do: false
+
+  # A workspace made again (reclaimed, its folder deleted, the ticket moved host) starts on the newest
+  # head Symphony knows of the ticket's branch, never main while a branch exists anywhere
+  # (`SymphonyElixir.WorkspaceRebuild`). That choice also replaces the `origin/<head>` pin
+  # `sync_workspace_to_pr_head/3` puts on a rework, which misses a newer unpushed head a run recorded;
+  # an explicit base ref the issue came with (PR runs) is left untouched.
+  defp rebuild_start(issue, %Issue{workspace_base_ref: ref}, _opts, _worker_host) when is_binary(ref) and ref != "", do: issue
+
+  defp rebuild_start(issue, _dispatched, opts, worker_host) do
+    WorkspaceRebuild.start(issue,
+      repo_key: run_repo_key(issue, opts),
+      settings: Keyword.fetch!(opts, :settings),
+      worker_host: worker_host,
+      run_id: Keyword.get(opts, :run_id)
+    )
+  end
 
   # A pending merge conflict wins (its snapshot pins the exact head); otherwise
   # reviewer-comment and same-repo CI reworks target the same PR head branch.
