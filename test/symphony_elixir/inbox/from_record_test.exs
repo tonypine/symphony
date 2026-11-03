@@ -153,6 +153,14 @@ defmodule SymphonyElixir.Inbox.FromRecordTest do
       assert Enum.map(kept, & &1.identifier) == ["SHOP-3", "SHOP-1", "SHOP-2", "SHOP-4"]
     end
 
+    test "a question of a ticket the orchestrator watches in the state it is listed in stays, as a stopped park's does", %{records: records} do
+      [listed] = items(records) |> Enum.filter(&(&1.identifier == "SHOP-1"))
+      watched = String.upcase(" #{listed.state} ")
+
+      assert [%{identifier: "SHOP-1", state: ^watched}] = records |> items(%{watching: [%{issue_id: "id-SHOP-1", state: watched}]}) |> Enum.filter(&(&1.identifier == "SHOP-1"))
+      assert [] = records |> items(%{watching: [%{issue_id: "id-SHOP-1", state: nil}]}) |> Enum.filter(&(&1.identifier == "SHOP-1"))
+    end
+
     test "a clarification for a ticket already listed adds no row, and a record with no issue id none", %{situation: situation, records: records} do
       plan = Enum.find(records, &(&1.issue_identifier == "SHOP-3"))
       [clarification] = situation.snapshot.awaiting_clarification

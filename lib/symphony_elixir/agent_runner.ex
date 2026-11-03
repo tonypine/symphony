@@ -1334,12 +1334,13 @@ defmodule SymphonyElixir.AgentRunner do
       is_nil(pending_pr_conflict(issue, opts))
   end
 
-  # A turn makes progress when it adds a commit, changes the issue state or attaches a PR. Without a
+  # A turn makes progress when it adds a commit, changes the workspace's uncommitted files, changes
+  # the issue state or attaches a PR. Without a
   # readable workspace HEAD (an SSH worker, no git checkout) progress is unknown and no turn
   # counts as empty.
   defp initial_progress(workspace, worker_host, issue, opts) do
     head = read_workspace_head(workspace, worker_host, opts)
-    fingerprint = progress_fingerprint(head, issue, opts)
+    fingerprint = progress_fingerprint(head, read_workspace_tree(workspace, worker_host, opts), issue, opts)
     rework_base = rework_base(issue, head, opts)
     %{rework_base: rework_base, start_head: head, head: head, fingerprint: fingerprint, empty_turns: 0}
   end
@@ -1384,7 +1385,8 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp track_turn_progress(%{progress: progress} = run_context, %Issue{} = refreshed_issue) do
     head = read_workspace_head(run_context.workspace, run_context.worker_host, run_context.opts)
-    fingerprint = progress_fingerprint(head, refreshed_issue, run_context.opts)
+    tree = read_workspace_tree(run_context.workspace, run_context.worker_host, run_context.opts)
+    fingerprint = progress_fingerprint(head, tree, refreshed_issue, run_context.opts)
     empty_turns = if is_nil(head) or fingerprint != progress.fingerprint, do: 0, else: progress.empty_turns + 1
 
     %{run_context | progress: %{progress | head: head, fingerprint: fingerprint, empty_turns: empty_turns}}
@@ -1395,7 +1397,14 @@ defmodule SymphonyElixir.AgentRunner do
     reader.(workspace, worker_host)
   end
 
-  defp progress_fingerprint(head, issue, opts), do: {head, Map.get(issue, :state), ticket_pr_url(issue, opts)}
+  # The uncommitted changes count too: a turn that edited files without committing them (its
+  # validation outlasted it) made progress, and only a turn that changed nothing counts toward a park.
+  defp read_workspace_tree(workspace, worker_host, opts) do
+    reader = Keyword.get(opts, :workspace_tree_reader, &WorkspaceHead.worktree_digest/2)
+    reader.(workspace, worker_host)
+  end
+
+  defp progress_fingerprint(head, tree, issue, opts), do: {head, tree, Map.get(issue, :state), ticket_pr_url(issue, opts)}
 
   # Nothing moves an issue out of `Rework` once its rework is done: the post-PR move skips `Rework`.
   # The rework is done once the workspace HEAD has moved past the head the Rework started from (by
@@ -1644,17 +1653,35 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp park_idle_run(%Issue{} = issue, run_context) do
     forget_rework_base(issue, run_context.opts)
-    push_parked_work(issue, run_context)
-    park_idle_issue(issue, run_context.opts)
+    committed = commit_parked_work(issue, run_context)
+    pushed = push_parked_work(issue, run_context)
+    park_idle_issue(issue, {committed, pushed}, run_context.opts)
   end
 
-  # A parked ticket's work is on origin, never only in its workspace: commits the agent made and
-  # didn't push are pushed to its branch first (`WorkspaceHead.push_unpushed/3`). A push that fails
-  # is logged and the park goes on: the commits stay in the workspace, which the park keeps.
+  # A parked ticket's work is on origin, never only in its workspace: changes the agent left
+  # uncommitted are committed on its branch (`WorkspaceHead.commit_worktree/2`), then commits it
+  # didn't push are pushed (`push_parked_work/2`). A commit that fails is logged and the park goes
+  # on: the changes stay in the workspace, which the park keeps.
+  defp commit_parked_work(%Issue{} = issue, %{workspace: workspace, worker_host: worker_host, opts: opts}) do
+    committer = Keyword.get(opts, :workspace_committer, &WorkspaceHead.commit_worktree/2)
+    result = committer.(workspace, worker_host)
+
+    case result do
+      {:committed, sha} -> Logger.info("Committed #{issue_context(issue)}'s uncommitted changes as #{sha} before parking it")
+      :nothing -> :ok
+      {:error, reason} -> Logger.warning("Could not commit #{issue_context(issue)}'s uncommitted changes before parking it; they stay in its workspace reason=#{inspect(reason)}")
+    end
+
+    result
+  end
+
+  # Commits the agent made and didn't push are pushed to its branch (`WorkspaceHead.push_unpushed/3`).
+  # A push that fails is logged and the park goes on: the commits stay in the workspace.
   defp push_parked_work(%Issue{} = issue, %{workspace: workspace, worker_host: worker_host, opts: opts}) do
     pusher = Keyword.get(opts, :workspace_pusher, &WorkspaceHead.push_unpushed/3)
+    result = pusher.(workspace, worker_host, Keyword.fetch!(opts, :settings).workspace.repo)
 
-    case pusher.(workspace, worker_host, Keyword.fetch!(opts, :settings).workspace.repo) do
+    case result do
       {:pushed, branch} ->
         Logger.info("Pushed #{issue_context(issue)}'s unpushed commits to origin #{branch} before parking it")
 
@@ -1664,6 +1691,8 @@ defmodule SymphonyElixir.AgentRunner do
       {:error, reason} ->
         Logger.warning("Could not push #{issue_context(issue)}'s unpushed commits before parking it; they stay in its workspace reason=#{inspect(reason)}")
     end
+
+    result
   end
 
   # A fix on an approved PR (the CI failure or conflict came from `Merging`) whose PR head is still
@@ -1749,14 +1778,14 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp park_idle_issue(%Issue{} = issue, opts) do
+  defp park_idle_issue(%Issue{} = issue, saved, opts) do
     Logger.warning(
-      "Parking #{issue_context(issue)} in #{@idle_park_state} after #{@max_empty_turns} turns with no new commit or state change" <>
+      "Parking #{issue_context(issue)} in #{@idle_park_state} after #{@max_empty_turns} turns with no new commit, file change or state change" <>
         idle_park_pr_note(issue, opts)
     )
 
     repo_key = run_repo_key(issue, opts)
-    run_park(fn -> park_issue(issue, repo_key, opts) end)
+    run_park(fn -> park_issue(issue, repo_key, saved, opts) end)
   end
 
   # The park is one unit the run's stop never cuts: its first write puts the record in Backlog, and
@@ -1779,7 +1808,7 @@ defmodule SymphonyElixir.AgentRunner do
   # question that pauses the ticket on it, then the Linear move (`TransitionGuard.perform/4`, which
   # finds the record already in Backlog and only projects it), then the note. A Linear move that
   # fails leaves the record parked and marked for the reconciler to project again.
-  defp park_issue(%Issue{id: issue_id} = issue, repo_key, opts) do
+  defp park_issue(%Issue{id: issue_id} = issue, repo_key, saved, opts) do
     label = "parking #{issue_context(issue)} in #{@idle_park_state}"
     ctx = %{settings: Keyword.fetch!(opts, :settings), repo_key: repo_key}
 
@@ -1787,7 +1816,7 @@ defmodule SymphonyElixir.AgentRunner do
     :ok = hold_parked_issue(issue, repo_key)
 
     with :ok <- with_linear_retry(fn -> TransitionGuard.perform(issue_id, :idle_park, ctx) end, label, opts),
-         :ok <- with_linear_retry(fn -> Tracker.create_comment(issue_id, idle_park_note()) end, label, opts) do
+         :ok <- with_linear_retry(fn -> Tracker.create_comment(issue_id, idle_park_note(saved)) end, label, opts) do
       :ok
     else
       {:error, reason} -> {:error, {:idle_park_failed, reason}}
@@ -1809,11 +1838,22 @@ defmodule SymphonyElixir.AgentRunner do
     if attached_pr?(issue, opts), do: "", else: "; Symphony has no open PR recorded for it, so CI on its head was not checked"
   end
 
-  defp idle_park_note do
+  # The note says what the park saved: the commit it made of the uncommitted changes and the push
+  # of the branch, or that there was nothing to commit or push, so it never claims work is on origin
+  # when it is not.
+  defp idle_park_note({committed, pushed}) do
     """
-    Symphony parked this issue in #{@idle_park_state}: the agent's last #{@max_empty_turns} turns made no new commit and no state change, so another turn would repeat them. Its work is on its branch. Answer its question in the Inbox, or Unblock it in the Director app, to run it again where it stopped.
+    Symphony parked this issue in #{@idle_park_state}: the agent's last #{@max_empty_turns} turns made no new commit, no change to its files and no state change, so another turn would repeat them. #{parked_commit_note(committed)} #{parked_push_note(pushed)} Answer its question in the Inbox, or Unblock it in the Director app, to run it again where it stopped.
     """
   end
+
+  defp parked_commit_note({:committed, sha}), do: "Symphony committed the workspace's uncommitted changes as `#{sha}` (`WIP: parked by Symphony`)."
+  defp parked_commit_note(:nothing), do: "The workspace had no uncommitted changes, so nothing was committed."
+  defp parked_commit_note({:error, _reason}), do: "Symphony could not commit the workspace's uncommitted changes; they stay in its workspace."
+
+  defp parked_push_note({:pushed, branch}), do: "It pushed the branch `#{branch}` to origin."
+  defp parked_push_note(:nothing), do: "Nothing was left unpushed, so nothing was pushed."
+  defp parked_push_note({:error, _reason}), do: "The push to origin failed; the commits stay in its workspace."
 
   defp attached_pr?(%Issue{} = issue, opts), do: is_binary(ticket_pr_url(issue, opts))
 

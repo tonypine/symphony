@@ -10,6 +10,8 @@ defmodule SymphonyElixir.WorkspaceHead do
 
   alias SymphonyElixir.Workspace
 
+  @wip_message "WIP: parked by Symphony"
+
   @spec read(Path.t(), String.t() | nil) :: String.t() | nil
   def read(workspace, nil) when is_binary(workspace) do
     if File.dir?(workspace), do: rev_parse_head(workspace), else: nil
@@ -52,6 +54,101 @@ defmodule SymphonyElixir.WorkspaceHead do
     case unpushed_head(workspace, worker_host) do
       nil -> :nothing
       _head -> push_branch(workspace, source_repo)
+    end
+  end
+
+  @doc """
+  A digest of the workspace's uncommitted changes (tracked and untracked files git does not
+  ignore, with their contents), or nil when the tree is clean or the workspace cannot be read. Two
+  turns that leave the same digest changed nothing in the tree; a turn that edits, adds or removes a
+  file changes it. Reads only: it writes no object and touches no index.
+  """
+  @spec worktree_digest(Path.t() | nil, String.t() | nil) :: String.t() | nil
+  def worktree_digest(workspace, nil) when is_binary(workspace) do
+    with true <- toplevel?(workspace),
+         {status, 0} when status != "" <- git(workspace, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]),
+         {diff, 0} <- git(workspace, ["diff", "HEAD", "--binary", "--no-ext-diff"]),
+         {untracked, 0} <- git(workspace, ["ls-files", "-z", "--others", "--exclude-standard"]) do
+      untracked
+      |> String.split(<<0>>, trim: true)
+      |> Enum.map(&untracked_content(workspace, &1))
+      |> then(&[status, diff | &1])
+      |> then(&:crypto.hash(:sha256, &1))
+      |> Base.encode16(case: :lower)
+    else
+      _clean_or_unreadable -> nil
+    end
+  end
+
+  def worktree_digest(_workspace, _worker_host), do: nil
+
+  @doc """
+  Commits every uncommitted change of the workspace (`git add -A`, then a commit `WIP: parked by Symphony`
+  that skips the repo's hooks) on its current branch, so a parked ticket's work is never only in its
+  working tree: `{:committed, sha}`, `:nothing` when the tree is clean (or the workspace is an SSH
+  worker's, or not a checkout of its own), or an error. `push_unpushed/3` pushes the commit after.
+  """
+  @spec commit_worktree(Path.t() | nil, String.t() | nil) :: {:committed, String.t()} | :nothing | {:error, term()}
+  def commit_worktree(workspace, nil) when is_binary(workspace) do
+    with true <- toplevel?(workspace),
+         {status, 0} <- git(workspace, ["status", "--porcelain=v1", "--untracked-files=all"]),
+         false <- String.trim(status) == "" do
+      commit_all(workspace)
+    else
+      {output, status} when is_integer(status) -> {:error, {:status_failed, status, String.trim(output)}}
+      _clean_or_not_a_checkout -> :nothing
+    end
+  end
+
+  def commit_worktree(_workspace, _worker_host), do: :nothing
+
+  defp commit_all(workspace) do
+    with {:ok, _branch} <- current_branch(workspace),
+         {_output, 0} <- git(workspace, ["add", "-A"]),
+         {_output, 0} <- git(workspace, identity(workspace) ++ ["commit", "--no-verify", "-m", @wip_message]),
+         {sha, 0} <- git(workspace, ["rev-parse", "HEAD"]) do
+      {:committed, String.trim(sha)}
+    else
+      {output, status} when is_integer(status) -> {:error, {:commit_failed, status, String.trim(output)}}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  # The workspace's own author when its git config names one, else Symphony's, so a checkout with no
+  # identity configured still gets its commit.
+  defp identity(workspace) do
+    Enum.flat_map([{"user.name", "Symphony"}, {"user.email", "symphony@localhost"}], fn {key, default} ->
+      case git(workspace, ["config", "--get", key]) do
+        {value, 0} when value != "" -> ["-c", "#{key}=#{String.trim(value)}"]
+        _unset -> ["-c", "#{key}=#{default}"]
+      end
+    end)
+  end
+
+  # Only the workspace's own checkout: a directory inside another repository is not the ticket's.
+  defp toplevel?(workspace) do
+    with true <- File.dir?(workspace),
+         {output, 0} <- git(workspace, ["rev-parse", "--show-toplevel"]) do
+      same_dir?(String.trim(output), workspace)
+    else
+      _not_a_checkout -> false
+    end
+  end
+
+  # The same directory, symlinks resolved: git names the top level by its real path.
+  defp same_dir?(left, right) do
+    with {:ok, %File.Stat{inode: inode, major_device: device}} <- File.stat(left),
+         {:ok, %File.Stat{inode: ^inode, major_device: ^device}} <- File.stat(right) do
+      true
+    else
+      _other -> false
+    end
+  end
+
+  defp untracked_content(workspace, path) do
+    case File.read(Path.join(workspace, path)) do
+      {:ok, content} -> [path, <<0>>, content]
+      {:error, reason} -> [path, <<0>>, Atom.to_string(reason)]
     end
   end
 

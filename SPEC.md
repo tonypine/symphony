@@ -2617,8 +2617,9 @@ Important nuance:
   `Blocked` hold from a block report), or that posted a decision request itself, MUST end after
   that turn, without the idle park below and without a handoff: the hold, not another turn, says
   when the ticket continues.
-- When the workspace `HEAD` is readable, two consecutive turns with no new commit, no issue state
-  change and no newly attached PR MUST end the run, move the issue to
+- When the workspace `HEAD` is readable, two consecutive turns with no new commit, no change to the
+  workspace's uncommitted files (a turn that edits files without committing them made progress), no
+  issue state change and no newly attached PR MUST end the run, move the issue to
   `Backlog` and post a comment saying why. This does not apply in `Merging`. Nor does it apply to
   a `Rework` run while the attached PR's head is the workspace `HEAD`, that `HEAD` differs from the
   one the run started on or from the head the `Rework` started from, and its checks are still
@@ -2637,13 +2638,15 @@ Important nuance:
   conflict was found in `Merging` and the PR head is still the one that conflicted, and to the
   post-PR state otherwise. A PR that still conflicts, or whose mergeability GitHub has not computed
   yet, is parked as before, even when a CI failure is pending too.
-- Before the park, commits in the workspace that no remote has MUST be pushed to the workspace's
-  branch on `origin` (only when every push URL of the workspace's `origin` is the source repo's),
+- Before the park, the workspace's uncommitted changes MUST be committed on its branch
+  (`git add -A`, a `WIP: parked by Symphony` commit that skips the repo's hooks), then commits in
+  the workspace that no remote has MUST be pushed to the workspace's branch on `origin` (only when every push URL of the workspace's `origin` is the source repo's),
   so a parked ticket's work is never only in its workspace; a push that fails is logged and the
   park goes on. The park MUST write the ticket's record before Linear: the move into `Backlog`
   (its `phase.entered`), then its question through the one decision path ("Run it again",
   recommended; "Start it over from main"; "Leave it parked"), which pauses the ticket on it, then
-  the Linear move and the comment. The park's move signal names the phase the ticket was parked
+  the Linear move and the comment, which names the commit the park made and the branch it pushed,
+  or says nothing was committed or pushed. The park's move signal names the phase the ticket was parked
   from. The park MUST finish even when the run is stopped partway through: the orchestrator stops
   a run once the ticket's record leaves the active states, which the park's first write does. A run
   the orchestrator stops that way MUST still record its `run.ended`. A move with no repo key, so no
