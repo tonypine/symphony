@@ -1668,6 +1668,10 @@ Fields:
   - When set, it MUST be lower than the effective pass threshold.
 - `max_clarification_rounds` (positive integer)
   - Default: `2`.
+  - Each clarification round SHOULD be asked as a Question on the ticket (the same entity a run's
+    decision request raises), answerable in the person's own words or by an option. The next scoring
+    MUST read the answers, and a scoring that ends the round SHOULD withdraw the open Question. A
+    reply under the gate's comment in the tracker MAY also count as an answer.
 - `on_error` (`pass` or `skip`)
   - Default: `pass`.
 

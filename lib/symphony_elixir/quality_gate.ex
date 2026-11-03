@@ -28,6 +28,7 @@ defmodule SymphonyElixir.QualityGate do
   require Logger
 
   alias SymphonyElixir.{AgentLabels, AuditLog, Config.Schema, Linear.Issue, Secret}
+  alias SymphonyElixir.QualityGate.Question
 
   @anthropic_provider "anthropic"
   @openai_provider "openai"
@@ -132,6 +133,13 @@ defmodule SymphonyElixir.QualityGate do
       defaults to `DateTime.utc_now/0`.
     * `:provider_module` — override the provider implementation. Used by
       tests to inject a stub.
+    * `:answers` — `%{issue_id => [answer]}`, the answers a person gave in
+      the Inbox to the gate's clarification Questions
+      (`SymphonyElixir.QualityGate.Question.answers/1`). Each is read as a
+      comment on the issue, so it changes the comment activity the cache keys
+      on and the provider reads it. The newest answer, when it is newer than
+      the issue's last scoring and picks "Start it as it is", lets the issue
+      through without scoring it.
   """
   def evaluate(issues, config, cache \\ %{}, opts \\ [])
 
@@ -139,10 +147,15 @@ defmodule SymphonyElixir.QualityGate do
   def evaluate(issues, %Schema.QualityGate{enabled: true} = config, cache, opts) do
     now = Keyword.get(opts, :now, DateTime.utc_now())
     provider_override = Keyword.get(opts, :provider_module)
+    answers = Keyword.get(opts, :answers, %{})
 
     {passed_rev, skipped_rev, awaiting_rev, new_cache} =
       Enum.reduce(issues, {[], [], [], cache}, fn issue, {passed, skipped, awaiting, cache_acc} ->
-        case evaluate_issue(issue, config, cache_acc, now, provider_override) do
+        issue_answers = issue_answers(answers, issue)
+
+        provider = {provider_override, issue_answers}
+
+        case evaluate_issue(with_answers(issue, issue_answers), config, cache_acc, now, provider) do
           {:pass, cache_next} ->
             {[issue | passed], skipped, awaiting, cache_next}
 
@@ -364,7 +377,7 @@ defmodule SymphonyElixir.QualityGate do
     Questions:
     #{formatted_questions}
 
-    Reply in Linear with 1-2 sentences per question. Symphony will re-evaluate this issue on the next poll.
+    Answer in the Symphony Inbox, or reply here with 1-2 sentences per question. Symphony scores this issue again once it reads an answer.
     """
   end
 
@@ -384,11 +397,11 @@ defmodule SymphonyElixir.QualityGate do
             cached_decision(issue, refreshed_entry, config, refreshed_cache, now, provider_override)
 
           :stale ->
-            score_and_record(issue, config, cache, now, provider_override)
+            rescore(issue, entry, config, cache, now, provider_override)
         end
 
       _stale_or_missing ->
-        score_and_record(issue, config, cache, now, provider_override)
+        rescore(issue, nil, config, cache, now, provider_override)
     end
   end
 
@@ -397,7 +410,7 @@ defmodule SymphonyElixir.QualityGate do
     {:pass, cache}
   end
 
-  defp cached_decision(_issue, %{passed?: true}, _config, cache, _now, _provider_override), do: {:pass, cache}
+  defp cached_decision(_issue, %{passed?: true}, _config, cache, _now, _provider), do: {:pass, cache}
 
   defp cached_decision(issue, %{awaiting_clarification?: true} = entry, _config, cache, _now, _provider_override),
     do: {:awaiting_clarification, build_clarification_entry(issue, entry), cache}
@@ -405,8 +418,49 @@ defmodule SymphonyElixir.QualityGate do
   defp cached_decision(issue, %{passed?: false} = entry, _config, cache, _now, _provider_override),
     do: {:skip, build_skip_entry(issue, entry), cache}
 
-  defp cached_decision(issue, _entry, config, cache, now, provider_override),
-    do: score_and_record(issue, config, cache, now, provider_override)
+  defp cached_decision(issue, entry, config, cache, now, provider),
+    do: rescore(issue, entry, config, cache, now, provider)
+
+  # A person who answered "Start it as it is" after the last scoring lets the issue through.
+  defp rescore(issue, entry, config, cache, now, {provider_override, answers}) do
+    if started_by_answer?(answers, entry) do
+      Logger.info("QualityGate passed issue=#{issue.identifier || issue.id} on the Director's answer")
+      {:pass, put_cache(cache, issue, nil, "Started as it is by the Director's answer", true, now)}
+    else
+      score_and_record(issue, config, cache, now, provider_override)
+    end
+  end
+
+  defp started_by_answer?([], _entry), do: false
+
+  defp started_by_answer?(answers, entry) do
+    %{option: option, at: at} = List.last(answers)
+    option == :start and newer_than_scoring?(at, entry)
+  end
+
+  defp newer_than_scoring?(at, %{scored_at: %DateTime{} = scored_at}), do: DateTime.compare(at, scored_at) == :gt
+  defp newer_than_scoring?(_at, _entry), do: true
+
+  defp issue_answers(answers, %Issue{id: issue_id}) when is_map(answers) do
+    case Map.get(answers, issue_id) do
+      list when is_list(list) -> list
+      _none -> []
+    end
+  end
+
+  defp issue_answers(_answers, _issue), do: []
+
+  # Each answer reads as a comment, after the issue's own.
+  defp with_answers(issue, []), do: issue
+
+  defp with_answers(%Issue{comments: comments} = issue, answers) do
+    answer_comments =
+      for %{text: text, at: at} <- answers do
+        %{author: Question.answer_author(), body: "Answer to the quality gate's questions: #{text}", created_at: at}
+      end
+
+    %{issue | comments: if(is_list(comments), do: comments, else: []) ++ answer_comments}
+  end
 
   defp score_and_record(%Issue{} = issue, config, cache, now, provider_override) do
     case provider_settings(config) do

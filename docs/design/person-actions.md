@@ -24,7 +24,7 @@ re-projected. *Linear* means Symphony follows what Linear says.
 | Comment on a plan under review | `SymphonyElixir.PlanComments` | Linear (a person's comment) | Ask for Changes (`/changes`) | — |
 | Reply under a `## Decision needed:` request | `Pauses.Projector` (the reply is the answer) | Symphony (the Question) | Decide (`/decide`); a plan's answers with Send Decisions (`/decisions`) | — |
 | Comment a ruling (`Decision:` / `Ruling:`) | `Linear.IssueNormalizer` rulings; `SymphonyElixir.Decisions` | Linear | none: a note (`/note`) is not a decision | [TP-1357](https://linear.app/tonypine/issue/TP-1357) |
-| Answer the quality gate's clarification questions (a comment) | `SymphonyElixir.QualityGate` (comment activity re-scores the ticket) | Linear | none: a note (`/note`) does not re-score | [TP-1360](https://linear.app/tonypine/issue/TP-1360) |
+| Answer the quality gate's clarification questions | `SymphonyElixir.QualityGate` (an answer, or a reply's comment activity, re-scores the ticket); `QualityGate.Question` | Symphony (the Question); a reply in Linear still re-scores | Decide (`/decide`) on the gate's Question, in an option (Start it as it is, Move it to Backlog) or in the person's own words, since [TP-1360](https://linear.app/tonypine/issue/TP-1360) | — |
 | Comment for the next run | the prompt's recent comments (`SymphonyElixir.PromptBuilder`) | Linear | Note (`/note`): it reaches the ticket history the prompt carries | — |
 | Cancel | the observation (phase) | Symphony | Cancel (`/cancel`) | — |
 | Park in Backlog | the observation (phase) | Symphony | Backlog (`/backlog`) | — |
@@ -108,8 +108,9 @@ rg -n -i -e 'in linear|by hand' \
     the document's id and URL in the workpad, where later runs find it.
   - `issue_has_no_project` ("ask a person to add the issue to a project"): stays. A ticket's project is
     Linear's (TP-1359), so a person sets it in Linear and it is not drift.
-- `quality_gate.ex`, "Reply in Linear with 1-2 sentences per question": stays for
-  [TP-1360](https://linear.app/tonypine/issue/TP-1360), which asks the questions as an Inbox Question.
+- `quality_gate.ex`, "Reply in Linear with 1-2 sentences per question": fixed by
+  [TP-1360](https://linear.app/tonypine/issue/TP-1360), "Answer in the Symphony Inbox, or reply here":
+  the gate asks its questions as an Inbox Question.
 
 `priv/playbook/`:
 

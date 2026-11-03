@@ -3,6 +3,8 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
 
   import ExUnit.CaptureLog
 
+  alias SymphonyElixir.{Inbox, Questions}
+
   defmodule PassProvider do
     @behaviour SymphonyElixir.QualityGate.Provider
 
@@ -233,6 +235,110 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
     snapshot = GenServer.call(pid, :snapshot)
     assert snapshot.awaiting_clarification == []
     assert snapshot.skipped == []
+  end
+
+  test "the gate's questions are an Inbox Question; an answer there re-scores the ticket, which starts once it passes" do
+    issue = %Issue{
+      id: "issue-inbox-1",
+      identifier: "MT-INBOX",
+      title: "Clarify in the Inbox",
+      description: "Almost ready",
+      state: "Todo",
+      team: %{key: "Test"},
+      url: "https://example.org/issues/MT-INBOX",
+      labels: [],
+      comments: [],
+      updated_at: ~U[2026-05-05 03:00:00Z]
+    }
+
+    Application.put_env(:symphony_elixir, :quality_gate_anthropic_module, ReplyAwareProvider)
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      quality_gate: %{
+        enabled: true,
+        provider: "anthropic",
+        model: "claude-haiku-4-5-20251001",
+        pass_threshold: 6,
+        clarification_floor: 4,
+        max_clarification_rounds: 2,
+        on_error: "pass"
+      }
+    )
+
+    name = Module.concat(__MODULE__, :InboxAnswerOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: name)
+    on_exit(fn -> if Process.alive?(pid), do: Process.exit(pid, :normal) end)
+
+    send(pid, :run_poll_cycle)
+
+    assert_receive {:memory_tracker_comment, "issue-inbox-1", body}, 500
+    assert body =~ "Answer in the Symphony Inbox, or reply here"
+    wait_for_awaiting_clarification(pid, "issue-inbox-1")
+
+    # The Inbox lists the gate's Question, with its questions, for Decide to answer.
+    item = wait_for_inbox_question("issue-inbox-1")
+    assert item.ask == "MT-INBOX needs answers before it starts (round 1 of 2)"
+    assert item.review.question =~ "It asks: 1) What is done? 2) Which module? 3) What is out of scope?"
+    assert ticket = {:ticket, item.repo_key, "issue-inbox-1"}
+    assert [%{id: question_id, step: "quality_gate"}] = Questions.open(ticket)
+
+    # The Director's answer, in their own words, clears the pause and reaches the gate at once.
+    {:ok, _answered} = Questions.answer(ticket, question_id, "Acceptance criteria are clear: the nightly export runs and is listed.")
+
+    assert_bootstrap_workpad_comment("issue-inbox-1")
+    assert Questions.open(ticket) == []
+  end
+
+  test "a reply in Linear re-scores the ticket and withdraws the gate's open Question" do
+    issue = %Issue{
+      id: "issue-linear-reply-1",
+      identifier: "MT-LREPLY",
+      title: "Clarify in Linear",
+      description: "Almost ready",
+      state: "Todo",
+      team: %{key: "Test"},
+      url: "https://example.org/issues/MT-LREPLY",
+      labels: [],
+      comments: [],
+      updated_at: ~U[2026-05-05 03:00:00Z]
+    }
+
+    Application.put_env(:symphony_elixir, :quality_gate_anthropic_module, ReplyAwareProvider)
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      quality_gate: %{
+        enabled: true,
+        provider: "anthropic",
+        model: "claude-haiku-4-5-20251001",
+        pass_threshold: 6,
+        clarification_floor: 4,
+        max_clarification_rounds: 2,
+        on_error: "pass"
+      }
+    )
+
+    name = Module.concat(__MODULE__, :LinearReplyOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: name)
+    on_exit(fn -> if Process.alive?(pid), do: Process.exit(pid, :normal) end)
+
+    send(pid, :run_poll_cycle)
+    assert_receive {:memory_tracker_comment, "issue-linear-reply-1", _body}, 500
+    item = wait_for_inbox_question("issue-linear-reply-1")
+    ticket = {:ticket, item.repo_key, "issue-linear-reply-1"}
+    assert [%{id: question_id}] = Questions.open(ticket)
+
+    reply = %{author: "Operator", body: "Acceptance criteria are clear and the module is listed.", created_at: ~U[2026-05-05 04:00:00Z]}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue | comments: [reply]}])
+
+    force_repo_poll_due(pid)
+    send(pid, :run_poll_cycle)
+
+    assert_bootstrap_workpad_comment("issue-linear-reply-1")
+    assert %{state: :withdrawn} = Questions.find(ticket, question_id)
   end
 
   test "orchestrator passes high-scoring issues through unchanged" do
@@ -662,6 +768,20 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
   defp wait_for_orchestrator_state(pid, predicate, timeout_ms \\ 1_000) when is_function(predicate, 1) do
     deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
     do_wait_for_orchestrator_state(pid, predicate, deadline_ms)
+  end
+
+  defp wait_for_inbox_question(issue_id, attempts \\ 100) do
+    case Enum.find(Inbox.rows(), &(&1.issue_id == issue_id and &1.kind == :action)) do
+      nil when attempts > 0 ->
+        Process.sleep(10)
+        wait_for_inbox_question(issue_id, attempts - 1)
+
+      nil ->
+        flunk("Timed out waiting for the Inbox to list the gate's Question on #{issue_id}")
+
+      item ->
+        item
+    end
   end
 
   defp force_repo_poll_due(pid) do
