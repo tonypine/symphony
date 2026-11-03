@@ -168,6 +168,15 @@ defmodule SymphonyElixir.DirectorLabelsTest do
     assert log =~ "Failed to record director_move audit event"
   end
 
+  test "finds a ticket by identifier past a record that has none yet", ctx do
+    nameless = %{ctx.ticket | issue_id: "nameless-#{System.unique_integer([:positive])}", issue_identifier: nil}
+    opts = Keyword.put(ctx.opts, :records, [nameless, ctx.ticket])
+
+    assert {:ok, %{issue_identifier: identifier}} = DirectorLabels.labels(String.downcase(ctx.ticket.issue_identifier), opts)
+    assert identifier == ctx.ticket.issue_identifier
+    assert {:error, {:conflict, _message}} = DirectorLabels.labels("LAB-none", Keyword.put(opts, :records, [nameless]))
+  end
+
   test "takes the escalate labels and the force label from the ticket's repository's settings", ctx do
     settings = %{auto_review: %{acceptance_gate: %{escalate: %{labels: ["needs-human", "security"]}}}, agent: %{force_label: "rush"}}
     repo = ctx.repo
