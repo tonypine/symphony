@@ -94,9 +94,9 @@ Holds pause a ticket in its current phase. They are attributes persisted at the 
 
 A ticket's workspace follows its known state, not the end of a run.
 
-- **Made** by the first run that needs it: the run creates the folder (or the `auto/<identifier>` worktree) under the repo's workspace root, from the base branch.
+- **Made** by the first run that needs it (the ticket's first, or its first after a Restart): the run creates the folder (or the `auto/<identifier>` worktree) under the repo's workspace root, from the base branch.
 - **Kept** while the ticket is in any phase. A run that ends with its ticket still in a phase leaves it, whether it handed off, was stopped by a move, timed out or failed. A move between the phases (Code Review, QA, Rework, CI Fix, Merging, back and forth) leaves it, and so do a person's push in Merging sending the ticket back to Code Review (R11), a drift revert and a Director move. The next run of the ticket reuses it.
-- **Rebuilt** only when it is gone: a run that finds no workspace makes one again as above.
+- **Rebuilt** only when it is gone: a run that finds no workspace makes one again, starting on the newest known head of the ticket's branch, never guessed from main (`SymphonyElixir.WorkspaceRebuild`). The heads compared are the open PR's head, the branch's head on `origin`, the newest run's recorded unpushed head and the ticket's local branch; the head every other one is an ancestor of wins, and the pushed one wins when they diverge. The base branch is the start only when none of those exists. The choice is recorded as a `workspace.rebuilt` event naming why, the heads compared and the one chosen (SPEC.md §4.1.11).
 - **Removed** in four cases only, each by the machine:
   - a terminal state (Done, Canceled): the orchestrator queues the removal when it reads the state, and the startup sweep removes what a terminal ticket left;
   - Restart, a person's move in the Director, which closes the PR and starts over from main;
