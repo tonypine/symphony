@@ -35,6 +35,7 @@ re-projected. *Linear* means Symphony follows what Linear says.
 | Add or remove `Blocked`, `Needs Decision`, the CI labels | `Pauses.Projector.labels/0`; `SymphonyElixir.MachineLabels` | Symphony (projected; a hand edit is put back) | Unblock (`/unblock`), Decide (`/decide`) | — |
 | Add or remove the force label (`expedite`) | `Issue.forced?/2` | Linear | Force (`/force`, `clear` removes it); `symphony force` | — |
 | Add or remove `plan` / `breakdown` | `Issue.breakdown?/1` | Linear | none | [TP-1356](https://linear.app/tonypine/issue/TP-1356) |
+| Add or remove `type:bug` / `type:feature` | `priv/playbook/ticket_types.liquid` (`issue.labels`: the per-type steps and readiness check) | Linear | none | [TP-1356](https://linear.app/tonypine/issue/TP-1356) |
 | Add or remove `qa:skip` | `QaAgent.Selection` | Linear | none | [TP-1356](https://linear.app/tonypine/issue/TP-1356) |
 | Add or remove `skip-update-hold` | `SymphonyElixir.UpdateHold`; `Pauses.Dependencies` | Linear | none | [TP-1356](https://linear.app/tonypine/issue/TP-1356) |
 | Add or remove `qa:live` / `qa:fixture` | `SymphonyElixir.QaPolicy` | Linear | none | [TP-1356](https://linear.app/tonypine/issue/TP-1356) |
@@ -79,7 +80,22 @@ rewrites them to name the Director move.
 
 - `status_map.liquid:7`: Backlog "except when a person triages it to `Todo`".
 - `out_of_scope_backlog.liquid:9`: "a human promotes it to `Todo`".
+- `parent_tickets.liquid:7`: "The `plan` label is a human's signal" (added in Linear; the move is
+  TP-1356's).
 - `parent_tickets.liquid:26`, `:32`, `:126`, `:169`: approve or reject a plan "by moving the parent".
+- `parent_tickets.liquid:36`, `:119`: "A person comments on the plan under review to ask for a
+  change" (a Linear comment; the replacement is Ask for Changes).
+- `parent_tickets.liquid:109`: "a human already promoted it" (by hand in Linear; the move is
+  [TP-1353](https://linear.app/tonypine/issue/TP-1353)'s).
+- `parent_tickets.liquid:156`: "so the person approving the plan can set it" (edit the parent's
+  description in Linear; no Director move: TP-1359).
+- `ticket_types.liquid:16`, `:39`, `:76`: the operator adds the `plan`, `type:bug` or `type:feature`
+  label in Linear (the move is TP-1356's).
+- `ticket_types.liquid:53`, `:91`: "asks the operator to fill them in and move the ticket back to
+  `Todo`" (edit the description, TP-1359; the move is Move to… Todo).
+- `escape_hatches.liquid:37`: "A person's plain comment that opens with `Decision:` or `Ruling:` is a
+  ruling" (a Linear comment; no Director move:
+  [TP-1357](https://linear.app/tonypine/issue/TP-1357)).
 - `review_brief.liquid:69`, `:76`, `:91`: "move the parent to `Waiting on sub-tickets`", "move the
   parent to `Rework`", "move the ticket to `Canceled`".
 
@@ -97,6 +113,8 @@ Some texts name Linear but are not about a ticket, so they stay. These are the S
 fixes that ask a person to fix their Linear workspace: `setup/fixes.ex:94`, `:97`, `:106`;
 `setup/checks/labels.ex:113`, `:139`; `setup/checks/statuses.ex:139`;
 `setup/checks/deprecated_labels.ex:90`; `state_provisioning.ex:182`; and
-`control_api_controller.ex:331` (create the missing force label). One more stays because it reports
+`control_api_controller.ex:331` (create the missing force label). `out_of_scope_backlog.liquid:51` ("for a
+human to file") stays too: filing a new ticket in Linear is the Create-a-ticket row's design question
+(TP-1359), not an action on a ticket Symphony owns. One more stays because it reports
 what happened rather than telling a person what to do: `ticket_events/summary.ex:118`, `:127`
 ("moved … in Linear by hand").
