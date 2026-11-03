@@ -4371,9 +4371,14 @@ Scoped Linear tool extension contract:
   Each `blocked_by` identifier MUST name a sub-issue of the current issue (an existing child, or
   one the run created earlier); otherwise the call MUST fail with an explicit error before the
   issue is created. Accepted identifiers become `blocks` relations on the new issue, created right
-  after it. Without a `priority`, the new issue MUST inherit the current issue's priority. The new
-  issue MUST land in the team's `Backlog` state (falling back to a `backlog`-type state), never an
-  active state, so an agent cannot start other agents; a human promotes it. Title and description
+  after it. Without a `priority`, the new issue MUST inherit the current issue's priority. When the
+  current issue is a plan parent (the `plan` or `breakdown` label), the new issue MUST land in the
+  team's `Backlog` state (falling back to a `backlog`-type state), where the plan's approval promotes
+  it. Otherwise it MUST land in the team's `Todo` state, and the current issue MUST be marked blocked
+  by it (a `blocks` relation from the new issue, created after the `blocked_by` ones), so the
+  split-off work lands first and the current issue continues once it is terminal, with no person
+  promoting or linking anything; a link Linear refuses MUST fail with an explicit error naming the
+  created issue, so the run can add it with `linear_add_blocked_by`. Title and description
   MUST pass the same secret scan as comments before any Linear call. Creation MUST NOT be capped per run; a title matching
   (ignoring case and spacing) one the run already filed under the same parent MUST be refused with an
   explicit error naming the earlier sub-issue's identifier, and creation MUST be refused when the
@@ -6804,7 +6809,13 @@ infrastructure.
   top-level comment on an approved plan gets one reply and moves nothing, and a reply inside a
   thread or a comment from before the service started gets none
 - plan parent in `In Progress` with an approved non-terminal sub-issue moves to the waiting state;
-  a plan parent in the waiting state whose sub-issues are all terminal moves to `Epic Review`
+  a plan parent in the waiting state whose sub-issues are all terminal, or that has none left (each
+  re-parented to another epic or deleted), moves to `Epic Review`; a non-plan ticket the merge put
+  there with none left moves to `Done`
+- a child's webhook delivery that moves it to another parent, or files, removes or changes the
+  state of it, reads its old and new parent again by id, so their sub-issue lists are current within
+  seconds; the reconcile reads by id the parents in `Plan Review`, the waiting state and
+  `Epic Review` its poll did not return
 - plan parent moved from `Plan Review` to the waiting state has its `Backlog` sub-issues moved
   to `Todo` within one poll; sub-issues in other states, or moved back to `Backlog` after the
   approval, are left alone, and a re-poll moves nothing

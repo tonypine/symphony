@@ -1060,6 +1060,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
              "data" => %{
                "issue" => %{
                  "id" => "issue-current",
+                 "labels" => %{"nodes" => [%{"name" => "plan"}]},
                  "team" => %{"id" => "team-1", "states" => %{"nodes" => [%{"id" => "state-backlog", "name" => "Backlog"}]}}
                }
              }
@@ -1104,7 +1105,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
           "linear_create_subissue",
           %{"title" => "Slice", "description" => "body"},
           Keyword.put(opts, :linear_client, fn _query, _variables, _opts ->
-            {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "team" => %{"states" => %{"nodes" => [%{"id" => "s", "name" => "Todo"}]}}}}}}
+            plan = %{"nodes" => [%{"name" => "plan"}]}
+            {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "labels" => plan, "team" => %{"states" => %{"nodes" => [%{"id" => "s", "name" => "Todo"}]}}}}}}
           end)
         )
 
@@ -1123,6 +1125,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
                  "data" => %{
                    "issue" => %{
                      "id" => "issue-current",
+                     "labels" => %{"nodes" => [%{"name" => "plan"}]},
                      "team" => %{"id" => "team-1", "states" => %{"nodes" => [%{"id" => "state-backlog", "name" => "Backlog"}]}},
                      "children" => %{"nodes" => [%{"id" => "issue-a", "identifier" => "TP-2"}]}
                    }
@@ -1163,6 +1166,49 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       response = DynamicTool.execute("linear_create_subissue", %{args | "title" => "Slice 3"}, Keyword.put(opts, :linear_client, client.(%{"success" => true}, nil)))
       assert %{"error" => %{"code" => "subissue_not_returned"}} = Jason.decode!(response["output"])
+    end
+
+    test "a ticket that is not a plan files in Todo, in front of itself, and names a failed link or a missing Todo state" do
+      {:ok, registry} = CommentRegistry.start_link()
+      test_pid = self()
+
+      client = fn states, relation_result ->
+        fn query, variables, _opts ->
+          send(test_pid, {:linear_called, query, variables})
+
+          cond do
+            query =~ "SymphonyAgentSubissueScope" ->
+              {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "identifier" => "TP-40", "team" => %{"id" => "team-1", "states" => %{"nodes" => states}}}}}}
+
+            query =~ "SymphonyAgentCreateSubissue" ->
+              {:ok, %{"data" => %{"issueCreate" => %{"success" => true, "issue" => %{"id" => "issue-new", "identifier" => "TP-41"}}}}}
+
+            true ->
+              {:ok, %{"data" => %{"issueRelationCreate" => relation_result}}}
+          end
+        end
+      end
+
+      states = [%{"id" => "state-backlog", "name" => "Backlog"}, %{"id" => "state-todo", "name" => "Todo"}]
+      opts = [issue: %Issue{id: "issue-current"}, comment_registry: registry, linear_client: client.(states, %{"success" => true})]
+
+      response = DynamicTool.execute("linear_create_subissue", %{"title" => "Server first", "description" => "body"}, opts)
+      assert response["success"] == true
+      assert %{"data" => %{"issueCreate" => %{"issue" => %{"identifier" => "TP-41", "blocks" => ["TP-40"]}}}} = Jason.decode!(response["output"])
+      assert_received {:linear_called, _mutation, %{input: %{"stateId" => "state-todo"}}}
+      assert_received {:linear_called, _relation, %{input: %{"issueId" => "issue-new", "relatedIssueId" => "issue-current", "type" => "blocks"}}}
+
+      response =
+        DynamicTool.execute("linear_create_subissue", %{"title" => "Server second", "description" => "body"}, Keyword.put(opts, :linear_client, client.(states, %{"success" => false})))
+
+      assert %{"error" => %{"code" => "split_link_failed", "identifier" => "TP-41", "blocked" => "TP-40", "message" => message}} = Jason.decode!(response["output"])
+      assert message =~ "Created TP-41 in Todo, but could not mark TP-40 blocked by it"
+      assert message =~ "linear_add_blocked_by"
+
+      no_todo = client.([%{"id" => "state-backlog", "name" => "Backlog"}], %{"success" => true})
+      response = DynamicTool.execute("linear_create_subissue", %{"title" => "Server third", "description" => "body"}, Keyword.put(opts, :linear_client, no_todo))
+      assert %{"error" => %{"code" => "child_state_not_found", "available_states" => ["Backlog"], "message" => message}} = Jason.decode!(response["output"])
+      assert message =~ "no Todo state"
     end
   end
 

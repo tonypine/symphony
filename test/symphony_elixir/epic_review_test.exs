@@ -302,7 +302,10 @@ defmodule SymphonyElixir.EpicReviewTest do
              )
 
       refute EpicReview.epic_review_run?(epic(%{labels: []}), settings!())
-      refute EpicReview.epic_review_run?(epic(%{sub_issues: []}), settings!())
+      # Every child re-parented to another epic while it waits: none left, so it closes out.
+      assert EpicReview.epic_review_run?(epic(%{sub_issues: []}), settings!())
+      # No sub-issues outside the waiting state: no plan yet, the plan run's.
+      refute EpicReview.epic_review_run?(epic(%{state: "In Progress", sub_issues: []}), settings!())
       refute EpicReview.epic_review_run?(epic(%{state: "Rework"}), settings!())
       refute EpicReview.epic_review_run?(%Issue{id: "x", state: nil}, settings!())
     end

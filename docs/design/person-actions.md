@@ -18,7 +18,7 @@ re-projected. *Linear* means Symphony follows what Linear says.
 | --- | --- | --- | --- | --- |
 | Move to a phase (any state) | the observation; `TicketStateReconciler.reconcile/4` | Symphony once Symphony or the Director wrote the phase (`phase_owner: :symphony`); Linear for a phase an observation wrote (`:external`) | Move to… (`/move`) | — |
 | Promote Backlog → Todo | the poll's active states; `Dispatch.Candidates` | Linear until Symphony moves it | Move to… (`/move`) to Todo, but only for a ticket Symphony has a record of (`DirectorMoves.require_tracked/2`) | Records are made only by the active-state poll or a webhook delivery: [TP-1359](https://linear.app/tonypine/issue/TP-1359) |
-| Promote a split-off ticket from Backlog to Todo, and link it as a blocker | `linear_create_subissue` (`Codex.DynamicTool`) files in Backlog: "a human promotes it" | Linear | none: a person promotes it by hand (TP-1334) | [TP-1353](https://linear.app/tonypine/issue/TP-1353) |
+| Promote a split-off ticket from Backlog to Todo, and link it as a blocker | `linear_create_subissue` (`AgentTools.Linear.create_subissue/3`) | Symphony | none needed since [TP-1353](https://linear.app/tonypine/issue/TP-1353): a run of a ticket that is not a plan files its sub-ticket in Todo and marks the ticket blocked by it, so the sub-ticket lands first and the ticket continues on its own; a plan run's sub-tickets stay in Backlog until the plan's approval promotes them | — |
 | Approve a plan (Plan Review → Waiting on sub-tickets) | `SymphonyElixir.BreakdownReview` | Symphony | Approve Plan (`/approve_plan`) | — |
 | Reject a plan (→ Rework) | `BreakdownReview` | Symphony | Reject Plan (`/rework`) | — |
 | Comment on a plan under review | `SymphonyElixir.PlanComments` | Linear (a person's comment) | Ask for Changes (`/changes`) | — |
@@ -77,11 +77,10 @@ rg -n -i -e 'in linear|by hand' \
 - `lib/symphony_elixir/sub_issue_wait.ex:233`: "stay there until a person promotes them".
 - `lib/symphony_elixir/start_now.ex:53`: "the ticket is in Backlog; move it first" (it doesn't name
   Move to…).
-- `lib/symphony_elixir/codex/dynamic_tool.ex:164` (`linear_create_subissue`: "a human promotes
-  it"), `:2131` ("a person promoted it"), `:2174` ("for a human to remove" a blocked-by link),
-  `:2088`, `:2162` and `:2202` ("for a human to add" or "to make" a blocked-by link; the
-  replacement is TP-1354's move), `:1997` ("for a human to attach" a document),
-  `:1974` ("ask a person to add the issue to a project"), and `:2447` and `:2456` (a human approves
+- `lib/symphony_elixir/codex/dynamic_tool.ex:2154` ("a person promoted it"), `:2197` ("for a human
+  to remove" a blocked-by link), `:2111`, `:2185` and `:2225` ("for a human to add" or "to make" a
+  blocked-by link; the replacement is TP-1354's move), `:2020` ("for a human to attach" a document),
+  `:1997` ("ask a person to add the issue to a project"), and `:2470` and `:2479` (a human approves
   a merge by moving the issue to `Merging` in Linear; the replacement is Decide on the merge
   Question under manual review, or Move to… Merging).
 - `lib/symphony_elixir/quality_gate.ex:367`: "Reply in Linear with 1-2 sentences per question". The
@@ -90,7 +89,6 @@ rg -n -i -e 'in linear|by hand' \
 `priv/playbook/`:
 
 - `status_map.liquid:7`: Backlog "except when a person triages it to `Todo`".
-- `out_of_scope_backlog.liquid:9`: "a human promotes it to `Todo`".
 - `parent_tickets.liquid:7`: "The `plan` label is a human's signal" (added in Linear; the move is
   TP-1356's).
 - `parent_tickets.liquid:26`, `:32`, `:126`, `:169`: approve or reject a plan "by moving the parent".
@@ -131,7 +129,7 @@ update); `github/webhook_setup.ex:1003` and `mix/tasks/settings.ui_coverage.ex:4
 files); `release_build.ex:641`, `pr_decision/apply.ex:974`, `self_heal.ex:572`, `:579`, `:586`,
 `:615`, `:616` (a fix ticket's text and Question options, answered with Decide);
 `pr_decision/table.ex:15`; `priv/qa_driver/symphony-qa-driver.swift:57`;
-`priv/qa_playbooks/macos_app.md:511`; `out_of_scope_backlog.liquid:51` ("for a human to file":
+`priv/qa_playbooks/macos_app.md:511`; `out_of_scope_backlog.liquid:62` ("for a human to file":
 filing a new ticket is the Create-a-ticket row's design question, TP-1359).
 
 Report what happened, or tell the agent rather than a person: `ticket_events/summary.ex:118`, `:127`

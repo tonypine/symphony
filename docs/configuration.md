@@ -183,11 +183,11 @@ issues:
   name) waits in while its sub-tickets are
   worked, default `Waiting on sub-tickets`; `null` turns it off. It counts as active without being
   listed in `states.active`, but an issue in it is dispatched only for the epic review, once it is
-  a plan ticket whose sub-tickets are all terminal: Symphony moves it to `states.epic_review` and
-  runs the review there. Any other ticket whose PR merges with a
+  a plan ticket whose sub-tickets are all terminal, or that has none left (each re-parented to
+  another epic or deleted): Symphony moves it to `states.epic_review` and runs the review there. Any other ticket whose PR merges with a
   sub-ticket still open outside `Backlog` moves here instead of `Done`; Symphony moves it to `Done`
   itself, with no run and a comment listing how each sub-ticket ended, once every sub-ticket outside
-  `Backlog` is terminal; one a person moves here waits for them. `Backlog` sub-tickets stay there for a person to promote and hold nothing: with only those
+  `Backlog` is terminal or none is left; one a person moves here waits for them. `Backlog` sub-tickets stay there for a person to promote and hold nothing: with only those
   open the ticket goes to `Done` on merge. With the state off it
   goes to `Done` on merge as before. Tickets that went `Done` before this wait existed are not
   revisited: `mix symphony.done_with_open_subtickets --config /path/to/symphony.yml` lists every

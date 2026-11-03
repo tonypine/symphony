@@ -43,6 +43,7 @@ defmodule SymphonyElixir.RunKind do
   """
 
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.SubIssueWait
 
   @type t ::
           :implementation
@@ -124,7 +125,7 @@ defmodule SymphonyElixir.RunKind do
     settings = Keyword.get(signals, :settings)
 
     cond do
-      Issue.breakdown?(issue) -> parent_kind(issue, terminal_states)
+      Issue.breakdown?(issue) -> parent_kind(issue, terminal_states, settings)
       in_state?(issue, @landing_state) -> :landing
       in_state?(issue, @rework_state) -> :rework
       (kind = phase_kind(issue, settings)) != nil -> kind
@@ -135,9 +136,10 @@ defmodule SymphonyElixir.RunKind do
   end
 
   # An epic parent is closed by reviewing the epic: the parent's epic review is started from
-  # `Waiting on sub-tickets` once every sub-issue is terminal (`SymphonyElixir.EpicReview`).
-  defp parent_kind(%Issue{} = issue, terminal_states) do
-    if Issue.close_out_ready?(issue, terminal_states) and not Issue.replanning?(issue),
+  # `Waiting on sub-tickets` once every sub-issue is terminal, or none is left
+  # (`SymphonyElixir.EpicReview`).
+  defp parent_kind(%Issue{} = issue, terminal_states, settings) do
+    if SubIssueWait.close_out_ready?(issue, terminal_states, settings) and not Issue.replanning?(issue),
       do: :epic_review,
       else: :breakdown
   end

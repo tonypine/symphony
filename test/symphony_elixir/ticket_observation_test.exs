@@ -628,6 +628,45 @@ defmodule SymphonyElixir.TicketObservationTest do
     end
   end
 
+  describe "observe_parents/2" do
+    defp observe_parents(ids), do: TicketObservation.observe_parents(ids, tracker: ReconcileTracker)
+
+    # TP-1364: a child re-parented away or cancelled changes its parent's list, but Linear tells the child.
+    test "reads the parents again by id, writes their current sub-issues from the webhook and asks for a poll", %{repo_key: repo_key} do
+      Process.register(self(), ReconcileProbe)
+      on_exit(fn -> :persistent_term.erase({ReconcileTracker, :fetch_issue_states_by_ids}) end)
+      parent = linear_issue(%{id: "parent-1", identifier: "ACME-30", state: "Waiting on sub-tickets", blocked_by: [], updated_at: @linear_at})
+      {:ok, :updated} = TicketObservation.observe(repo_key, parent, now: @now, terminal_states: [])
+
+      left = %{parent | sub_issues: [], updated_at: DateTime.add(@linear_at, 60)}
+      reply(:fetch_issue_states_by_ids, {:ok, [left, linear_issue(%{id: "new-parent", identifier: "ACME-31"})]})
+      :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records()
+
+      opts = [now: DateTime.add(@now, 60), tracker: ReconcileTracker, orchestrator: self(), terminal_states: []]
+      assert %{updated: 1, unrouted: 1, errors: 0} = TicketObservation.observe_parents(["parent-1", "new-parent", "parent-1"], opts)
+
+      assert_received {:tracker, {:fetch_issue_states_by_ids, ["parent-1", "new-parent"]}}
+      assert %{sub_issues: [], observed_from: :webhook} = RunStore.get_ticket_state("parent-1")
+      assert_receive {:"$gen_cast", {:request_refresh, ^repo_key, :now}}
+      assert_receive {:ticket_record, ^repo_key, "parent-1", :changed, [:sub_issues]}
+
+      # Nothing changed since: no poll asked for.
+      assert %{unchanged: 1} = TicketObservation.observe_parents(["parent-1"], opts)
+      refute_received {:"$gen_cast", _request}
+    end
+
+    test "names no parent and reads nothing, or logs a failed read" do
+      Process.register(self(), ReconcileProbe)
+      on_exit(fn -> :persistent_term.erase({ReconcileTracker, :fetch_issue_states_by_ids}) end)
+      assert %{updated: 0, errors: 0, unrouted: 0} = TicketObservation.observe_parents([], tracker: ReconcileTracker)
+      refute_received {:tracker, _call}
+
+      reply(:fetch_issue_states_by_ids, {:error, :unavailable})
+      log = capture_log(fn -> assert %{errors: 1} = observe_parents(["parent-1"]) end)
+      assert log =~ ~s(Reading the parents of a delivered sub-issue failed parent_ids=["parent-1"]: :unavailable)
+    end
+  end
+
   describe "observe_held/2" do
     defp by_id(attrs) do
       linear_issue(Map.merge(%{project: @project, team: %{key: "Test", name: "Test"}, blocked_by: []}, attrs))
@@ -1189,6 +1228,44 @@ defmodule SymphonyElixir.TicketObservationTest do
 
       # Nothing left unobserved: no read.
       reconcile(repo_key, [])
+      refute_received {:tracker, {:fetch_issue_states_by_ids, _ids}}
+    end
+
+    # TP-1364: Plan Review is never polled, and a missed delivery leaves a parent's sub-issue list behind.
+    test "parents in Plan Review, Waiting on sub-tickets or Epic Review the poll did not return are read by id", %{repo_key: repo_key} do
+      children = [%{id: "child-1", identifier: "ACME-20", state: "Todo"}]
+
+      for {id, state} <- [{"parent-plan", "Plan Review"}, {"parent-wait", "Waiting on sub-tickets"}, {"parent-polled", "Epic Review"}, {"not-a-parent", "Todo"}] do
+        issue = linear_issue(%{id: id, state: state, sub_issues: children, updated_at: @read_at})
+        {:ok, :updated} = TicketObservation.observe(repo_key, issue, now: @now)
+      end
+
+      # Its last child was re-parented to another epic: Linear lists no child under it any more.
+      read = linear_issue(%{id: "parent-plan", state: "Plan Review", sub_issues: [], updated_at: DateTime.add(@read_at, 60)})
+      reply(:fetch_issue_states_by_ids, {:ok, [read]})
+
+      polled = linear_issue(%{id: "parent-polled", state: "Epic Review", sub_issues: children, updated_at: @read_at})
+      reconcile(repo_key, [polled])
+
+      assert_received {:tracker, {:fetch_issue_states_by_ids, ids}}
+      assert Enum.sort(ids) == ["parent-plan", "parent-wait"]
+      refute_received {:tracker, {:fetch_issue_states_by_ids, _ids}}
+      assert %{sub_issues: [], observed_from: :by_id} = RunStore.get_ticket_state("parent-plan")
+      assert %{sub_issues: [_child]} = RunStore.get_ticket_state("parent-wait")
+    end
+
+    test "a failed read of the parents is logged, and a repo whose settings can't be read reads none", %{repo_key: repo_key} do
+      parent = linear_issue(%{id: "parent-plan", state: "Plan Review", updated_at: @read_at})
+      {:ok, :updated} = TicketObservation.observe(repo_key, parent, now: @now)
+      reply(:fetch_issue_states_by_ids, {:error, :unavailable})
+
+      log = capture_log(fn -> reconcile(repo_key, []) end)
+      assert log =~ "Ticket reconcile: reading the parents failed repo_key=#{repo_key}: :unavailable"
+      assert_received {:tracker, {:fetch_issue_states_by_ids, ["parent-plan"]}}
+
+      :ok = RunStore.put_ticket_state(%{TicketState.normalize(RunStore.get_ticket_state("parent-plan")) | repo_key: "no-such-repo"})
+      TicketObservation.reconcile_all("no-such-repo", [], now: @now, tracker: ReconcileTracker, task_supervisor: @moves)
+      settle()
       refute_received {:tracker, {:fetch_issue_states_by_ids, _ids}}
     end
 

@@ -1,12 +1,23 @@
 {% comment %}
 name: out_of_scope_backlog
-description: Split work and file out-of-scope improvements as Backlog sub-issues of the current issue with linear_create_subissue instead of expanding scope.
+description: Split work and file out-of-scope improvements as sub-issues of the current issue with linear_create_subissue instead of expanding scope.
 vars: []
 {% endcomment %}## Splitting work and out-of-scope improvements
 
 Use `linear_create_subissue` to file new work. It always creates a child of the
-current issue in the same team and project, assigned to the same assignee, in
-`Backlog`; a human promotes it to `Todo`. It takes only `title`, `description`,
+current issue in the same team and project, assigned to the same assignee. Where
+it lands depends on the current issue:
+
+- A plan ticket's sub-issue lands in `Backlog`, where it waits for the plan's
+  approval, which promotes it to `Todo`.
+- Any other ticket's sub-issue lands in `Todo`, and the current issue is marked
+  blocked by it: the new ticket lands first, and the current issue waits for it
+  and then continues in its phase on its own. The turn in flight finishes; the
+  next run waits. If Linear refuses that link, the tool says so after the new
+  issue exists: mark the current issue blocked by it with
+  `linear_add_blocked_by`.
+
+It takes only `title`, `description`,
 an optional `priority` (0 none, 1 urgent, 2 high, 3 medium, 4 low) and an
 optional `blocked_by` list of sibling sub-issue identifiers. It refuses a title
 this run already filed under the current issue and names the earlier sub-issue;

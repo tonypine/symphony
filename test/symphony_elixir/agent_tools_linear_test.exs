@@ -1302,6 +1302,84 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
   end
 
   describe "create_subissue/3" do
+    test "a ticket that is not a plan files its sub-issue in Todo and waits for it" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      scope = Map.put(split_scope(), "children", %{"nodes" => [%{"id" => "issue-old", "identifier" => "TP-50"}]})
+
+      assert {:ok, response} =
+               Linear.create_subissue(
+                 %{issue: %Issue{id: "issue-parent"}, comment_registry: registry},
+                 %{"title" => "Split: the server side first", "description" => "body", "blocked_by" => ["TP-50"]},
+                 linear_client: subissue_client(self(), scope)
+               )
+
+      assert_received {:linear_called, scope_query, %{id: "issue-parent"}}
+      assert scope_query =~ "labels { nodes { name } }"
+      assert_received {:linear_called, _mutation, %{input: %{"stateId" => "state-todo", "parentId" => "issue-parent-uuid"}}}
+
+      # The new issue is blocked by its sibling first, then marked as blocking the issue that split it off.
+      assert_received {:linear_called, _relation, %{input: %{"issueId" => "issue-old", "relatedIssueId" => "issue-new", "type" => "blocks"}}}
+      assert_received {:linear_called, _relation, %{input: %{"issueId" => "issue-new", "relatedIssueId" => "issue-parent-uuid", "type" => "blocks"}}}
+
+      assert %{"identifier" => "TP-999", "blockedBy" => ["TP-50"], "blocks" => ["TP-500"]} = get_in(response, ["data", "issueCreate", "issue"])
+      assert Linear.CommentRegistry.created_subissues(registry) == %{"TP-999" => "issue-new"}
+    end
+
+    test "a plan run's sub-issue lands in Backlog and holds nothing back" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+
+      states = [%{"id" => "state-todo", "name" => "Todo", "type" => "unstarted"}, %{"id" => "state-backlog", "name" => "Backlog", "type" => "backlog"}]
+
+      for label <- ["plan", "Breakdown"] do
+        scope = Map.put(split_scope(states), "labels", %{"nodes" => [%{"name" => "type:feature"}, %{"name" => label}, %{}]})
+
+        assert {:ok, response} =
+                 Linear.create_subissue(
+                   %{issue_id: "issue-parent", comment_registry: registry},
+                   %{"title" => "Slice for #{label}", "description" => "body"},
+                   linear_client: subissue_client(self(), scope)
+                 )
+
+        assert_received {:linear_called, _mutation, %{input: %{"stateId" => "state-backlog"}}}
+        refute Map.has_key?(get_in(response, ["data", "issueCreate", "issue"]), "blocks")
+      end
+
+      refute_received {:linear_called, "mutation SymphonyAgentCreateIssueRelation" <> _rest, _variables}
+    end
+
+    test "names the created issue when the issue that split it off cannot be marked blocked by it" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      scope = Map.delete(split_scope(), "identifier")
+
+      client = fn query, variables, opts ->
+        if query =~ "SymphonyAgentCreateIssueRelation",
+          do: {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => false}}}},
+          else: subissue_client(self(), scope).(query, variables, opts)
+      end
+
+      assert {:error, {:split_link_failed, "TP-999", "issue-parent-uuid", {:linear_mutation_failed, "issueRelationCreate", _body}}} =
+               Linear.create_subissue(
+                 %{issue_id: "issue-parent", comment_registry: registry},
+                 %{"title" => "Split", "description" => "body"},
+                 linear_client: client
+               )
+
+      assert Linear.CommentRegistry.created_subissues(registry) == %{"TP-999" => "issue-new"}
+    end
+
+    test "a ticket that is not a plan refuses to file when its team has no Todo state" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+
+      assert {:error, {:child_state_not_found, "Todo", ["Backlog"]}} =
+               Linear.create_subissue(
+                 %{issue_id: "issue-parent", comment_registry: registry},
+                 %{"title" => "Split", "description" => "body"},
+                 linear_client: subissue_client(self(), split_scope([%{"id" => "state-backlog", "name" => "Backlog", "type" => "backlog"}]))
+               )
+
+      assert Linear.CommentRegistry.created_subissues(registry) == %{}
+    end
+
     test "creates a Backlog child of the current issue in its team, project and assignee" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
       test_pid = self()
@@ -1342,7 +1420,11 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       test_pid = self()
 
       scope =
-        %{"id" => "issue-parent-uuid", "team" => %{"id" => "team-1", "states" => %{"nodes" => [%{"id" => "state-ideas", "name" => "Ideas", "type" => "backlog"}]}}}
+        %{
+          "id" => "issue-parent-uuid",
+          "labels" => %{"nodes" => [%{"name" => "breakdown"}]},
+          "team" => %{"id" => "team-1", "states" => %{"nodes" => [%{"id" => "state-ideas", "name" => "Ideas", "type" => "backlog"}]}}
+        }
 
       assert {:ok, _response} =
                Linear.create_subissue(
@@ -2725,9 +2807,16 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     end
   end
 
+  # A plan parent's scope: `create_subissue/3` files its sub-issues in Backlog.
   defp subissue_scope(states \\ [%{"id" => "state-backlog", "name" => "Backlog", "type" => "backlog"}]) do
+    states |> split_scope() |> Map.put("labels", %{"nodes" => [%{"name" => "Plan"}]})
+  end
+
+  # Any other issue's scope: `create_subissue/3` files its sub-issue in Todo, in front of it.
+  defp split_scope(states \\ [%{"id" => "state-backlog", "name" => "Backlog", "type" => "backlog"}, %{"id" => "state-todo", "name" => "Todo", "type" => "unstarted"}]) do
     %{
       "id" => "issue-parent-uuid",
+      "identifier" => "TP-500",
       "team" => %{"id" => "team-1", "states" => %{"nodes" => states}},
       "project" => %{"id" => "project-1"},
       "assignee" => %{"id" => "user-1"}
@@ -2738,18 +2827,23 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     fn query, variables, _opts ->
       send(test_pid, {:linear_called, query, variables})
 
-      if query =~ "SymphonyAgentSubissueScope" do
-        {:ok, %{"data" => %{"issue" => scope}}}
-      else
-        {:ok,
-         %{
-           "data" => %{
-             "issueCreate" => %{
-               "success" => true,
-               "issue" => %{"id" => "issue-new", "identifier" => "TP-999", "url" => "https://linear.app/x/TP-999", "state" => %{"name" => "Backlog"}}
+      cond do
+        query =~ "SymphonyAgentSubissueScope" ->
+          {:ok, %{"data" => %{"issue" => scope}}}
+
+        query =~ "SymphonyAgentCreateIssueRelation" ->
+          {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => true}}}}
+
+        true ->
+          {:ok,
+           %{
+             "data" => %{
+               "issueCreate" => %{
+                 "success" => true,
+                 "issue" => %{"id" => "issue-new", "identifier" => "TP-999", "url" => "https://linear.app/x/TP-999", "state" => %{"name" => "Backlog"}}
+               }
              }
-           }
-         }}
+           }}
       end
     end
   end
