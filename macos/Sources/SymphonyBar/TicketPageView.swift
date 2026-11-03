@@ -60,6 +60,7 @@ extension SymphonyWindowModel {
             selection = view
         case let .ticket(identifier):
             ticketNote.show(identifier)
+            ticketBlockers.show(identifier)
             ticketSources = TicketPage.Sources()
             ticketSlowReadAt = nil
             readTicket(force: true)
@@ -110,9 +111,11 @@ extension SymphonyWindowModel {
                 sources.audit = audit
                 ticketSlowReadAt = Date()
             }
+            let blockers = await readBlockers(identifier)
             readingTicket = false
             // A page left while its reads were out doesn't take them.
             guard shownTicket == identifier else { return }
+            ticketBlockers.apply(blockers, for: identifier)
             // A Check Now answer and the feed's events that came in meanwhile stay.
             sources.check = ticketSources.check
             sources.events = ticketSources.events
@@ -268,6 +271,36 @@ extension SymphonyWindowModel {
         }
     }
 
+    /// The body of ticket `identifier`'s blockers endpoint, nil when it didn't answer one.
+    func readBlockers(_ identifier: String) async -> Data? {
+        if case let .loaded(data) = await client.get(TicketBlockersEditor.path(identifier)) { return data }
+        return nil
+    }
+
+    /// The Blocked by card's Add Blocker, or a pick from its menu: Symphony links the blocker, then the card and the
+    /// page read again, so the ticket shows it waits.
+    func addBlocker(_ blocker: String?) {
+        Task {
+            if await ticketBlockers.add(blocker, send: onControl, read: { [weak self] in await self?.readTicketBlockers($0) }) {
+                client.refresh()
+            }
+        }
+    }
+
+    /// A blocker row's Remove: Symphony unlinks it, then the card and the page read again.
+    func removeBlocker(_ blocker: String) {
+        Task {
+            if await ticketBlockers.remove(blocker, send: onControl, read: { [weak self] in await self?.readTicketBlockers($0) }) {
+                client.refresh()
+            }
+        }
+    }
+
+    private func readTicketBlockers(_ path: String) async -> Data? {
+        if case let .loaded(data) = await client.get(path) { return data }
+        return nil
+    }
+
     /// The ticket's API URL on the clipboard.
     func copyAPIURL(_ page: TicketPage) {
         guard let url = apiURL()?.appendingPathComponent(page.apiPath) else { return }
@@ -379,6 +412,9 @@ struct TicketPageContent: View {
                     releasing: model.controlInFlight == .unblock(page.identifier)
                 ),
                 images: model.artifactImages,
+                blockers: model.ticketBlockers,
+                addBlocker: model.addBlocker,
+                removeBlocker: model.removeBlocker,
                 note: model.ticketNote,
                 submitNote: model.submitNote,
                 banner: model.moveBanner.flatMap { $0.identifier == page.identifier ? $0 : nil },
@@ -398,6 +434,10 @@ struct TicketPageView: View {
     let actions: TicketPageActions
     /// The timeline's screenshots, read through the window's client.
     var images: ArtifactImages?
+    /// The Blocked by card, with its Add Blocker and each row's Remove.
+    var blockers: TicketBlockersEditor?
+    var addBlocker: (String?) -> Void = { _ in }
+    var removeBlocker: (String) -> Void = { _ in }
     /// The note field pinned under the page, so it stays reachable however long the timeline is.
     var note: TicketNoteComposer?
     var submitNote: () -> Void = {}
@@ -415,7 +455,7 @@ struct TicketPageView: View {
         ScrollView {
             TicketPageBody(
                 page: page, brief: brief, actions: actions, width: width, folded: $folded, images: images,
-                openScreenshot: { fullScreenshot = $0 }
+                openScreenshot: { fullScreenshot = $0 }, blockers: blockers, addBlocker: addBlocker, removeBlocker: removeBlocker
             )
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
@@ -445,6 +485,9 @@ struct TicketPageBody: View {
     var folded: Binding<Set<String>> = .constant([])
     var images: ArtifactImages?
     var openScreenshot: (TicketScreenshot) -> Void = { _ in }
+    var blockers: TicketBlockersEditor?
+    var addBlocker: (String?) -> Void = { _ in }
+    var removeBlocker: (String) -> Void = { _ in }
 
     static let sideColumnWidth: CGFloat = 300
     static let mainColumnMinWidth: CGFloat = 460
@@ -479,6 +522,13 @@ struct TicketPageBody: View {
                 .frame(minWidth: sideBySide ? Self.mainColumnMinWidth : nil, maxWidth: .infinity, alignment: .topLeading)
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
                     Card(title: "Ticket") { FactsGrid(facts: page.facts, open: { actions.open(pullRequest: $0, repoKey: page.repoKey) }) }
+                    if let blockers {
+                        Card(title: TicketBlockersEditor.title) {
+                            TicketBlockersCard(
+                                identifier: page.identifier, editor: blockers, add: addBlocker, remove: removeBlocker, open: actions.openTicket
+                            )
+                        }
+                    }
                     if let message = page.lastMessage {
                         Card(title: "Last message") { ChipText(text: message) }
                     }

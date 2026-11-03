@@ -639,7 +639,9 @@ let ledgerNow = ISO8601DateFormatter().date(from: "2026-10-18T11:20:00Z")!
 /// SHOP-410's page in a window `window` pt wide beside the sidebar, with the note field pinned under it as the window
 /// shows it: the laptop viewport (1440) and the desktop one (2560).
 @MainActor
-func ledgerPage(window: CGFloat, feed: Bool = true, note: TicketNoteComposer? = nil, repositoryPaused: Bool = false) -> some View {
+func ledgerPage(
+    window: CGFloat, feed: Bool = true, note: TicketNoteComposer? = nil, repositoryPaused: Bool = false, blockers: TicketBlockersEditor? = nil
+) -> some View {
     let events = feed ? (try? Data(contentsOf: ledgerAPI.appendingPathComponent("repos/web-shop/tickets/SHOP-410/events.json"))).flatMap(TicketEventsPayload.decode) : nil
     var page = TicketPage(
         identifier: "SHOP-410",
@@ -654,7 +656,7 @@ func ledgerPage(window: CGFloat, feed: Bool = true, note: TicketNoteComposer? = 
     page.repositoryPaused = repositoryPaused
     let width = window - DesignTokens.Layout.sidebarWidth
     return VStack(spacing: 0) {
-        TicketPageBody(page: page, actions: TicketPageActions(), width: width)
+        TicketPageBody(page: page, actions: TicketPageActions(), width: width, blockers: blockers)
         TicketNoteBar(page: page, composer: note ?? TicketNoteComposer(), submit: {})
     }
     .frame(width: width)
@@ -811,6 +813,23 @@ func startDisabledReasons() -> some View {
     .background(DesignTokens.Surface.window.color)
 }
 
+/// The Blocked by card (TP-1354) on SHOP-410's page: two blockers, the add field with a typed identifier, and the
+/// refusal of the ticket as its own blocker when `refused`.
+@MainActor
+func blockersEditor(refused: Bool) -> TicketBlockersEditor {
+    TicketBlockersEditor(
+        identifier: "SHOP-410",
+        blockers: [
+            .init(identifier: "SHOP-402", title: "Fix the CSV exporter's date column", state: "In Progress"),
+            .init(identifier: "SHOP-399", title: "Move exports to the jobs queue", state: "Todo"),
+        ],
+        candidates: [.init(identifier: "SHOP-411", title: "Rename the export button", state: "Todo")],
+        load: .loaded,
+        entry: refused ? "SHOP-410" : "",
+        refusal: refused ? "Couldn't add SHOP-410 as a blocker of SHOP-410: SHOP-410 can't block itself. (HTTP 409)" : nil
+    )
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -830,6 +849,10 @@ func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
 
 MainActor.assumeIsolated {
     for (scheme, suffix) in [(ColorScheme.light, "light"), (.dark, "dark")] {
+        // The Blocked by card (TP-1354): the laptop and desktop viewports, and the refusal of a ticket as its own blocker.
+        render(ledgerPage(window: 1440, blockers: blockersEditor(refused: false)), scheme, to: "ticket-blockers-1440-\(suffix).png")
+        render(ledgerPage(window: 2560, blockers: blockersEditor(refused: false)), scheme, to: "ticket-blockers-2560-\(suffix).png")
+        render(ledgerPage(window: 1440, blockers: blockersEditor(refused: true)), scheme, to: "ticket-blockers-refused-\(suffix).png")
         render(review(width: 640, picks: picks), scheme, to: "inbox-write-in-\(suffix).png")
         // Chips inside the question, story and options, wrapping with the text (TP-952).
         render(review(width: 1200), scheme, to: "decision-chips-wide-\(suffix).png")

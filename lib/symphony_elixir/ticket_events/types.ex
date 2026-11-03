@@ -84,7 +84,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @type error :: {:unknown_type, term()} | {:invalid_payload, [atom() | String.t()]} | {:not_allowed, String.t()}
 
   @verdict_kinds ~w(code_review qa ci_fix plan_review epic_review)
-  @person_actions ~w(stop move force unblock restart)
+  @person_actions ~w(stop move force unblock restart add_blocker remove_blocker)
   @step_modes ~w(orchestrated delegated output)
   @evidence {:any_of, [:string, {:list, :string}]}
   @tokens {:any_of, [:non_neg_integer, :map]}
@@ -246,7 +246,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:person],
       run_kinds: [],
       required: [action: {:enum, @person_actions}],
-      optional: [move: :string, from: :string, to: :string] ++ @signal,
+      optional: [move: :string, from: :string, to: :string, blocker: :string] ++ @signal,
       idempotency: :writer
     },
     "step.started" => @step,
