@@ -1034,8 +1034,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   with review comments. `identifier` names the sub-issue; then either `title` and/or `description`
   replace its fields and `blocked_by` sets the complete list of sibling sub-issues that block it
   (links to siblings left out are removed, links to other issues stay), or `cancel_reason` cancels
-  it after posting the reason on it. A sub-issue outside `Backlog` was promoted by a person and is
-  refused, as is any issue that is not a child of the current one.
+  it after posting the reason on it. A sub-issue outside `Backlog` (promoted by the plan's
+  approval, or filed in `Todo` by a run of a ticket that is not a plan) is refused, as is any
+  issue that is not a child of the current one.
   """
   @spec update_subissue(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def update_subissue(context, attrs, opts \\ []) when is_map(attrs) do

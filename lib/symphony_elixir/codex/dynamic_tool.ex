@@ -186,7 +186,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_update_subissue",
       "description" =>
-        "Change a Backlog sub-issue of the current Linear issue to bring a plan in line with review comments: replace its `title` and/or `description`, set `blocked_by` to the complete list of sibling sub-issues that block it, or cancel it with `cancel_reason` (posted on it first). A sub-issue outside Backlog was promoted by a person and is refused.",
+        "Change a Backlog sub-issue of the current Linear issue to bring a plan in line with review comments: replace its `title` and/or `description`, set `blocked_by` to the complete list of sibling sub-issues that block it, or cancel it with `cancel_reason` (posted on it first). A sub-issue outside Backlog (promoted by the plan's approval, or filed in Todo by a run of a ticket that is not a plan) is refused.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
