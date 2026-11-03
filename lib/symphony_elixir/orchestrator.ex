@@ -69,7 +69,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   alias SymphonyElixir.Artifacts.Transcript
   alias SymphonyElixir.Config.{Cache, Schema}
-  alias SymphonyElixir.Dispatch.{Candidates, Settings, Shadow}
+  alias SymphonyElixir.Dispatch.{Candidates, Settings, Settle, Shadow}
   alias SymphonyElixir.Linear.{Client, Issue, RateLimit, TransientRetry, Usage}
   alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.QaDriver.DevServerLease
@@ -103,6 +103,8 @@ defmodule SymphonyElixir.Orchestrator do
   # A landing session can see its issue turn terminal (for example Linear's
   # "PR merged -> Done" automation) before it posts its final workpad update.
   @merging_state "merging"
+  # The dispatch-skipped reason of a ticket Linear created a moment ago (`Dispatch.Settle`).
+  @settle_reason "waiting for its relations: Linear created it a moment ago"
   # The reviewer state, as the fallback when a repo's settings are unavailable.
   @code_review_state "Code Review"
   # The QA state, the fallback when a repo's settings are unavailable.
@@ -186,6 +188,7 @@ defmodule SymphonyElixir.Orchestrator do
       dispatch_skipped: %{},
       operator_pause_logged: false,
       cycle_requested: false,
+      dispatch_settle: %{},
       dispatch_settings: nil,
       config_reload_handler: nil,
       workspace_lifecycle_last_check_at_ms: nil,
@@ -377,8 +380,8 @@ defmodule SymphonyElixir.Orchestrator do
   # decision of the PR watcher may start a run (`SymphonyElixir.PrWatch.Repo`: the reviewer, QA).
   # Both live in the store, so a dispatch cycle reads them with no Linear read, on either dispatch
   # source.
-  defp handle_info_message({:ticket_record, _repo_key, _issue_id, :changed, [field]}, state) when field in [:pause, :pr_watch] do
-    {:noreply, request_cycle(state)}
+  defp handle_info_message({:ticket_record, _repo_key, issue_id, :changed, [field]}, state) when field in [:pause, :pr_watch] do
+    {:noreply, state |> stop_blocked_start(issue_id) |> request_cycle()}
   end
 
   # A reload of `symphony.yml` or a repository's workflow that changes what dispatch reads (a slot
@@ -395,11 +398,21 @@ defmodule SymphonyElixir.Orchestrator do
   # dispatch from the record, its repo gets a cycle at once, as a move made there does, so a ticket
   # the change frees is considered within seconds. With dispatch from the poll cache the change waits
   # for the repo's poll.
-  defp handle_info_message({:ticket_record, repo_key, _issue_id, :changed, _fields}, state) do
+  #
+  # A new ticket's settle (`Dispatch.Settle`) ends at its first such change, with its by-id read, and
+  # a run still in its start window whose record now names an open blocker is stopped.
+  defp handle_info_message({:ticket_record, repo_key, issue_id, :changed, _fields}, state) do
+    state = state |> settle_dispatch_read(issue_id) |> stop_blocked_start(issue_id)
+
     case dispatch_source_in_use() do
       :record -> handle_cast_message({:request_refresh, repo_key, :now}, state)
       :poll -> {:noreply, state}
     end
+  end
+
+  # The end of a new ticket's settle: its by-id read, then a cycle that dispatches it if unblocked.
+  defp handle_info_message({:dispatch_settle, issue_id}, state) do
+    {:noreply, settle_dispatch_read(state, issue_id)}
   end
 
   defp handle_info_message(:publish_snapshot, state) do
@@ -4164,9 +4177,10 @@ defmodule SymphonyElixir.Orchestrator do
   # Dispatch read the issue again from Linear and found it no longer dispatchable, or found no
   # worker free; each case is logged where it happens.
   defp note_dropped_at_dispatch(%State{} = state, %Issue{id: issue_id} = issue) do
-    if Enum.any?([state.running, state.slot_waiting, state.retry_attempts], &Map.has_key?(&1, issue_id)),
-      do: state,
-      else: put_dispatch_skipped(state, issue, "not started: the issue read again before dispatch was no longer dispatchable, or no worker was free")
+    if Settle.settling?(state.dispatch_settle, issue_id) or
+         Enum.any?([state.running, state.slot_waiting, state.retry_attempts], &Map.has_key?(&1, issue_id)),
+       do: state,
+       else: put_dispatch_skipped(state, issue, "not started: the issue read again before dispatch was no longer dispatchable, or no worker was free")
   end
 
   # A pause starts no dispatch pass, so its candidates are listed here: each with the gate that
@@ -5222,7 +5236,86 @@ defmodule SymphonyElixir.Orchestrator do
     |> MapSet.new()
   end
 
+  # A ticket Linear created a moment ago waits for its relations before its first dispatch
+  # (`Dispatch.Settle`): one timer for the end of its settle, and nothing starts until its by-id
+  # read settles it.
   defp dispatch_issue(%State{} = state, issue, attempt, preferred_worker_host) do
+    now = DateTime.utc_now()
+    settle_ms = Config.dispatch_settle_ms()
+    state = %{state | dispatch_settle: Settle.prune(state.dispatch_settle, now, settle_ms)}
+
+    if Settle.pending?(state.dispatch_settle, issue, now, settle_ms) do
+      state
+      |> start_dispatch_settle(issue, now, settle_ms)
+      |> put_dispatch_skipped(issue, @settle_reason)
+      |> release_undispatched_claim(issue.id)
+    else
+      dispatch_settled_issue(state, issue, attempt, preferred_worker_host)
+    end
+  end
+
+  defp start_dispatch_settle(%State{} = state, %Issue{id: issue_id} = issue, now, settle_ms) do
+    if Settle.settling?(state.dispatch_settle, issue_id) do
+      state
+    else
+      delay_ms = Settle.delay_ms(issue, now, settle_ms)
+      Logger.info("Holding the first dispatch of a new ticket for its relations: #{issue_context(issue)} settle_ms=#{delay_ms}")
+      timer = Process.send_after(self(), {:dispatch_settle, issue_id}, delay_ms)
+      %{state | dispatch_settle: Settle.start(state.dispatch_settle, issue, timer, dispatch_repo_key(state, issue))}
+    end
+  end
+
+  # Reads a settling ticket by id with its relations (observed into its record), pauses it on any
+  # open blocker the read found, settles it and asks for a cycle. A failed read settles it too: the
+  # dispatch's own revalidation reads it again. A ticket with no settle under way is left alone.
+  defp settle_dispatch_read(%State{} = state, issue_id) do
+    case Settle.finish(state.dispatch_settle, issue_id) do
+      {:settling, %{timer: timer, repo_key: repo_key}, settle} ->
+        Process.cancel_timer(timer)
+        sync_settle_read(fetch_observed_issues_by_ids([issue_id]), issue_id, repo_key)
+        request_cycle(%{state | dispatch_settle: settle})
+
+      :not_settling ->
+        state
+    end
+  end
+
+  defp sync_settle_read({:ok, issues}, issue_id, repo_key) do
+    case Enum.find(issues, &match?(%Issue{id: ^issue_id}, &1)) do
+      %Issue{} = read ->
+        read
+        |> freeze_issue_repo_key(issue_repo_key(read) || repo_key)
+        |> sync_read_dependencies(terminal_state_set())
+
+      nil ->
+        Logger.info("Settle read of a new ticket found nothing: issue_id=#{issue_id}")
+    end
+  end
+
+  defp sync_settle_read({:error, reason}, issue_id, _repo_key),
+    do: Logger.warning("Settle read of a new ticket failed: issue_id=#{issue_id}: #{inspect(reason)}")
+
+  # A blocked-by link that reaches a ticket's record while its run is starting (dispatched, no agent
+  # session yet) stops that start: the record's open blocker pauses the ticket
+  # (`Pauses.Dependencies.sync_issue/4`) and the run is stopped before its first turn, so the ticket
+  # holds in its phase as a blocked one does. A run whose session started finishes its turn.
+  defp stop_blocked_start(%State{} = state, issue_id) do
+    with running_entry when is_map(running_entry) <- Map.get(state.running, issue_id),
+         true <- Settle.starting?(running_entry) and not pr_run_entry?(running_entry),
+         %{} = record <- RunStore.get_ticket_state(issue_id),
+         %Issue{} = recorded <- Candidates.issue_from_record(record),
+         terminal_states = terminal_state_set(),
+         true <- Issue.blocked?(recorded, terminal_states) do
+      Logger.info("Stopping the start of #{issue_context(recorded)}; a blocker reached it before its first turn")
+      sync_read_dependencies(recorded, terminal_states)
+      :ok = record_stopped_run_ended(state, running_entry, recorded.state)
+      terminate_running_issue(state, issue_id, false, status: "stopped", error: "blocked before its first turn")
+    else
+      _not_a_blocked_start -> state
+    end
+  end
+
+  defp dispatch_settled_issue(%State{} = state, issue, attempt, preferred_worker_host) do
     repo_key = dispatch_repo_key(state, issue)
     sticky_route? = retry_attempt?(attempt)
     terminal_states = terminal_state_set()
