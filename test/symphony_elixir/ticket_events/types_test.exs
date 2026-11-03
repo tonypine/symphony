@@ -9,7 +9,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
     step.started step.completed step.skipped evidence finding.recorded finding.resolved checklist.answered
     ticket.cancelled ticket.moved drift.detected drift.reverted drift.revert_failed
     pause.set pause.reason_added pause.reason_cleared pause.cleared
-    question.asked question.answered question.withdrawn question.reopened note
+    question.asked question.answered question.withdrawn question.reopened park.backfilled note
   )
 
   describe "catalog/0" do
@@ -127,6 +127,14 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
 
       assert Types.validate("drift.revert_failed", Map.put(phases, :error, ":timeout"), :machine, nil) == {:ok, Map.put(phases, :error, ":timeout")}
       assert {:error, {:invalid_payload, [:error]}} = Types.validate("drift.reverted", Map.put(phases, :error, ":timeout"), :machine, nil)
+    end
+
+    test "a park brought up to date is the machine's: what it was given, the question, the branch and the phase it left" do
+      payload = %{added: ["question", "push"], question_id: "q-1", branch: "auto/TP-1248", from: "In Progress"}
+
+      assert Types.validate("park.backfilled", payload, :machine, nil) == {:ok, payload}
+      assert {:error, {:invalid_payload, [:added]}} = Types.validate("park.backfilled", %{from: "In Progress"}, :machine, nil)
+      assert {:error, {:not_allowed, _reason}} = Types.validate("park.backfilled", payload, :person, nil)
     end
 
     test "a cancel is the person's: the phases, the note, the stop and the pull requests it closed" do

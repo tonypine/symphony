@@ -36,7 +36,6 @@ defmodule SymphonyElixir.AgentRunner do
     PrReviewPoller,
     PrWatch,
     QaVerification,
-    Questions,
     RunKind,
     RunStore,
     SetupBlock,
@@ -58,7 +57,7 @@ defmodule SymphonyElixir.AgentRunner do
   @idle_park_state "Backlog"
   @merging_state "Merging"
   # Consecutive turns with no new commit, no state change and no PR change that end the run.
-  @max_empty_turns 2
+  @max_empty_turns IdlePark.idle_turns()
   # Fallback when settings are unavailable; the effective value comes from
   # `agent.codex_stdio_prompt_soft_limit` (see Config.Schema.Agent).
   @codex_stdio_prompt_soft_limit_fallback 65_536
@@ -1801,19 +1800,12 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # The park asks its question through the one path (`IdlePark.question_attrs/2`), which pauses the
-  # ticket on it. Asked once the record is in Backlog, so the Inbox lists it there. One the store
-  # refuses pauses the ticket on a reason the Director releases with Unblock instead, as a dispatch
-  # loop's does; the park stands either way.
+  # The park asks its question through the one path (`IdlePark.ask/4`), which pauses the ticket on
+  # it. Asked once the record is in Backlog, so the Inbox lists it there. One the store refuses
+  # pauses the ticket on a reason the Director releases with Unblock instead; the park stands either
+  # way.
   defp hold_parked_issue(%Issue{id: issue_id} = issue, repo_key) do
-    ticket = {:ticket, repo_key, issue_id}
-
-    with {:error, reason} <- Questions.ask(ticket, IdlePark.question_attrs(issue.identifier || issue_id, @max_empty_turns)) do
-      Logger.warning("Failed to ask the park's question for #{issue_context(issue)}: #{inspect(reason)}")
-      text = "#{@max_empty_turns} turns in #{issue.state} made no new commit and no state change, so Symphony parked it in #{@idle_park_state}"
-      _ = Pauses.set(ticket, %{kind: :environment, waits_on: %{condition: IdlePark.signal_reason()}, text: String.slice(text, 0, 300), releasable: true})
-    end
-
+    _ = IdlePark.ask({:ticket, repo_key, issue_id}, issue.identifier || issue_id, issue.state, @max_empty_turns)
     :ok
   end
 

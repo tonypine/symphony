@@ -540,7 +540,8 @@ Director's free move into any phase, with its note), `step.started`,
 `step.completed`, `step.skipped`, `evidence`, `finding.recorded` (QA
 runs), `finding.resolved`, `checklist.answered`, `drift.detected`, `drift.reverted`,
 `drift.revert_failed`, `pause.set`, `pause.reason_added`, `pause.reason_cleared`, `pause.cleared`,
-`question.asked`, `question.answered`, `question.withdrawn`, `question.reopened` and `note`.
+`question.asked`, `question.answered`, `question.withdrawn`, `question.reopened`, `park.backfilled`
+(machine only: an older park brought up to date at start-up, with what it was given) and `note`.
 
 The four pause types are machine-written, one per change of a ticket's pause (the one answer to why
 a ticket is not moving; decided only by `SymphonyElixir.Pauses`): `pause.set` for its first reason
@@ -2645,6 +2646,13 @@ Important nuance:
   they are, then lift the pause (which empties the counted runs) and dispatch it at once; "Start it
   over from main" is Restart. A ticket parked before parks asked has no question: when its newest
   move signal is the park's, Unblock moves it back the same way.
+- Once per start-up, in a task startup does not wait on, every ticket whose record Symphony put in
+  `Backlog` (`phase_owner` Symphony) with the park's move signal as its newest, and whose pause holds
+  no open question and no reason the Director may release, MUST be brought into the shape a park
+  gives today: its workspace's commits that origin lacks pushed to its branch (a push that fails is
+  logged), the park's question asked (or, when the store refuses it, a releasable reason set), and one
+  `park.backfilled` event naming what it was given (`question`, `releasable_reason`, `push`). A
+  ticket already in that shape is left alone, so a second start-up changes nothing.
 - The first turn SHOULD use the full rendered task prompt. Implementations MAY use a compact
   bootstrap prompt when the target agent transport cannot safely carry the full rendered prompt as a
   single startup message, provided the compact prompt preserves hard security rules and directs the

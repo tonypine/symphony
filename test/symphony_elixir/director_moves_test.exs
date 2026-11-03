@@ -2080,6 +2080,26 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert_received {:memory_tracker_state_update, "pr", "In Progress"}
     end
 
+    test "a ticket parked before TP-1326 boots to its question in the Inbox, and Unblock resumes it (TP-1331)", %{opts: opts} do
+      put_issues([%{pr("Backlog") | repo_key: "repo-director"}])
+      # TP-1248's record as the build before TP-1326 left it: parked, no question, no pause.
+      :ok = TicketSignals.record("repo-director", "pr", "blocked", %{to: "Backlog", reason: "idle_park"})
+      :ok = RunStore.update_ticket_state("repo-director", "pr", %{issue_identifier: "MOT-40"})
+      ticket = {:ticket, "repo-director", "pr"}
+
+      assert %{backfilled: ["MOT-40"]} = IdlePark.Backfill.run(["repo-director"], workspace: fn _repo, _name -> nil end)
+      assert %{backfilled: []} = IdlePark.Backfill.run(["repo-director"], workspace: fn _repo, _name -> nil end)
+
+      assert [question] = Questions.open(ticket)
+      assert %{kind: :action} = Item.from_question(TicketState.normalize(RunStore.get_ticket_state("repo-director", "pr")), question)
+      assert parked?("repo-director")
+
+      assert {:ok, %{move: "unblock", to_state: "In Progress", moved: true}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+      assert_received {:memory_tracker_state_update, "pr", "In Progress"}
+      assert %{state: :answered, answer: %{option: 1}} = Questions.find(ticket, question.id)
+      refute parked?("repo-director")
+    end
+
     test "a Backlog ticket no park put there, or one Linear refuses to move back, is not resumed", %{opts: opts} do
       put_issues([%{pr("Backlog") | repo_key: "repo-director"}])
       :ok = TicketSignals.record("repo-director", "pr", "blocked", %{to: "Backlog", reason: "idle_park"})

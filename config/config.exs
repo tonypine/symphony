@@ -48,6 +48,10 @@ if config_env() == :test do
     # in a task too, and would set its marker under the tests of the store; it runs where a test
     # starts it.
     ticket_merge: false,
+    # The boot's backfill of tickets parked before parks asked a question
+    # (`SymphonyElixir.IdlePark.Backfill`) runs in a task too, and would write questions under the
+    # tests of the store; it runs where a test starts it.
+    park_backfill: false,
     # The pause projector (`SymphonyElixir.Pauses.Projector`) writes the labels and the Decisions
     # section in place of the holds and the decision store. Its tests and the ones that prove its
     # gates turn it on; off here, the suites of the holds and the decisions keep their own writes.
