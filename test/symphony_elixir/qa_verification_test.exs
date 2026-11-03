@@ -22,6 +22,7 @@ defmodule SymphonyElixir.QaVerificationTest do
   @symphony_repo_key "repo-symphony"
   @fix_ticket "TP-900"
   @pr_url "https://github.com/acme/repo/pull/816"
+  @base_head "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
 
   @playbook %{kind: "cli", paths: ["lib/symphony_elixir/cli.ex"], prompt: "Follow the CLI playbook."}
 
@@ -148,6 +149,17 @@ defmodule SymphonyElixir.QaVerificationTest do
     def decide(_issue, _settings, _opts), do: {:nothing_to_verify, "the head changes no files against its base branch"}
   end
 
+  # A workspace out of sync with its PR finds nothing to verify once; after the re-sync it runs.
+  defmodule OnceEmptyPolicy do
+    alias SymphonyElixir.QaVerificationTest.RunPolicy
+
+    def decide(issue, settings, opts) do
+      if Process.put(:once_empty_decided, true),
+        do: RunPolicy.decide(issue, settings, opts),
+        else: {:nothing_to_verify, "the head changes no files against its base branch"}
+    end
+  end
+
   defmodule NoPlaybookPolicy do
     def decide(_issue, _settings, _opts), do: {:run, [], "the change delivers or updates a user journey"}
   end
@@ -241,6 +253,17 @@ defmodule SymphonyElixir.QaVerificationTest do
   end
 
   defp verdicts, do: Handoff.verdicts(@repo_key, @issue_id, "qa")
+
+  defp nothing_opts(gh_runner), do: [qa_policy: NothingToVerifyPolicy, gh_runner: gh_runner]
+
+  # Answers GitHub's diff of the PR (`SymphonyElixir.GitHub.PullRequest.fetch_diff/2`): its head
+  # `pr_head`, compared with main at `@base_head`, changes `changed_files` files.
+  defp github_diff(pr_head, changed_files) do
+    fn
+      ["api", "repos/acme/repo/pulls/816", "--jq", _jq], _opts -> {Jason.encode!(%{head: pr_head, base_ref: "main"}), 0}
+      ["api", "repos/acme/repo/compare/main..." <> _head, "--jq", _jq], _opts -> {Jason.encode!(%{base: @base_head, changed_files: changed_files}), 0}
+    end
+  end
 
   # The ticket's open decision request, as the Director's Decide answers it.
   defp deciding(issue_id \\ @issue_id), do: SymphonyElixir.Questions.deciding({:ticket, @repo_key, issue_id})
@@ -672,10 +695,10 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert Handoff.verdicts(@repo_key, "issue-qa-no-pr", "qa") == []
     end
 
-    test "a head with nothing to verify is held instead of skipped into Merging" do
-      {workspace, _head} = git_workspace!()
+    test "a PR whose diff GitHub reports empty is held instead of skipped into Merging" do
+      {workspace, head} = git_workspace!()
 
-      assert :ok = run(workspace, qa_policy: NothingToVerifyPolicy)
+      capture_log(fn -> assert :ok = run(workspace, nothing_opts(github_diff(head, 0))) end)
 
       refute_received {:qa_agent_run, _, _}
       refute_received {:memory_tracker_state_update, _, _}
@@ -684,7 +707,24 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert_received {:memory_tracker_comment, @issue_id, request}
       assert request =~ "Restart or cancel TP-816"
       assert request =~ "(PR #816) that changes nothing"
-      assert %{options: [%{label: "Restart"}, %{label: "Cancel"}]} = deciding()
+      assert request =~ "GitHub compared the latest commit of the pull request with the latest commit of the main branch and found no changed file."
+      assert request =~ "Symphony's copy of the work stood on that same commit."
+      assert %{options: [%{label: "Restart", recommended?: true}, %{label: "Cancel"}]} = deciding()
+
+      assert %{details: details} = Enum.find(Handoff.signals(@repo_key, @issue_id), &(&1.name == "empty_change_checked"))
+      assert Map.take(details, [:workspace, :pr, :base, :changed_files]) == %{workspace: head, pr: head, base: @base_head, changed_files: 0}
+    end
+
+    test "a diff GitHub cannot answer blocks the run and asks nothing" do
+      {workspace, head} = git_workspace!()
+      refused = fn _args, _opts -> {"HTTP 502", 1} end
+
+      capture_log(fn -> assert :ok = run(workspace, qa_policy: NothingToVerifyPolicy, gh_runner: refused) end)
+
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "GitHub's diff of the pull request could not be read"
+      assert [%{outcome: "blocked", head_sha: ^head}] = verdicts()
+      assert deciding() == nil
     end
 
     test "a request that cannot be posted for a closed pull request is reported, its question left open" do
@@ -1959,6 +1999,52 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
 
     defp head_of!(origin), do: git!(["rev-parse", "refs/pull/816/head"], origin)
+
+    # GitHub's PR diff is not empty, so a workspace that finds nothing to verify is out of sync, never
+    # an empty change: the walkthrough's "press Update branch, the ticket lands, no restart question".
+    test "a local nothing to verify with a non-empty GitHub diff re-syncs, runs QA and asks no question" do
+      {workspace, _head, pr_head, _origin} = behind_pr_workspace!()
+
+      opts = [qa_policy: OnceEmptyPolicy, gh_runner: github_diff(pr_head, 3)]
+      log = capture_log(fn -> assert :ok = run(workspace, opts) end)
+
+      assert log =~ "found nothing to verify while GitHub's PR head #{String.slice(pr_head, 0, 12)} changes 3 files; re-synced its workspace"
+      assert git!(["rev-parse", "HEAD"], workspace) == pr_head
+      assert_received {:qa_agent_run, %{sha: ^pr_head}, %Schema{}}
+      assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+      refute_received {:memory_tracker_comment, @issue_id, "## Decision needed" <> _rest}
+      assert deciding() == nil
+      assert {:ok, nil} = Pauses.get({:ticket, @repo_key, @issue_id})
+    end
+
+    test "a workspace that still finds nothing after the re-sync pauses on a reason Unblock releases" do
+      {workspace, _head, pr_head, _origin} = behind_pr_workspace!()
+
+      capture_log(fn -> assert :ok = run(workspace, nothing_opts(github_diff(pr_head, 3))) end)
+
+      refute_received {:qa_agent_run, _, _}
+      refute_received {:memory_tracker_state_update, _, _}
+      refute_received {:memory_tracker_comment, @issue_id, "## Decision needed" <> _rest}
+      assert deciding() == nil
+      assert verdicts() == []
+
+      short = String.slice(pr_head, 0, 12)
+      assert {:ok, %{reasons: [%{text: text, releasable: true, waits_on: %{condition: "empty_change:" <> ^short}}]}} = Pauses.get({:ticket, @repo_key, @issue_id})
+
+      assert text ==
+               "QA found no change in its workspace at #{short}, but GitHub's PR head #{short} changes 3 files against main at #{String.slice(@base_head, 0, 12)}. Unblock runs it again."
+    end
+
+    test "a workspace the re-sync cannot bring to the PR head pauses on the Unblock reason" do
+      {workspace, head} = git_workspace!()
+      pr_head = "9999999999999999999999999999999999999999"
+
+      capture_log(fn -> assert :ok = run(workspace, nothing_opts(github_diff(pr_head, 2))) end)
+
+      assert deciding() == nil
+      assert {:ok, %{reasons: [%{text: text, releasable: true}]}} = Pauses.get({:ticket, @repo_key, @issue_id})
+      assert text =~ "QA found no change in its workspace at #{String.slice(head, 0, 12)}, but GitHub's PR head 999999999999 changes 2 files"
+    end
 
     test "a workspace behind the PR head is reset to it, and the verdict binds to the PR head" do
       {workspace, _head, pr_head, _origin} = behind_pr_workspace!()

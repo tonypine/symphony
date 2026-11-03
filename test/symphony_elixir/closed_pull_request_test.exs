@@ -134,6 +134,27 @@ defmodule SymphonyElixir.ClosedPullRequestTest do
   end
 
   describe "request/2" do
+    # Only GitHub's own empty diff asks this question, and its why says what was compared.
+    test "a truly empty pull request names what GitHub compared and recommends Restart" do
+      issue = %Issue{id: "issue-empty", identifier: "TP-7", title: "Empty", state: "QA"}
+      sha = "0123456789abcdef0123456789abcdef01234567"
+      same = %{workspace: sha, pr: sha, base: "fedcba9876543210fedcba9876543210fedcba98", base_ref: "main", changed_files: 0}
+
+      request = ClosedPullRequest.request(issue, {:no_change, @pr_url, same})
+      assert request.title == "Restart or cancel TP-7"
+      assert request.why =~ "GitHub compared the latest commit of the pull request with the latest commit of the main branch and found no changed file."
+      assert request.why =~ "Symphony's copy of the work stood on that same commit."
+      assert request.why =~ "The exact commits are in the ticket's history."
+      assert [%{label: "Restart", recommended: true}, %{label: "Cancel", recommended: false}] = request.options
+      assert :ok = SymphonyElixir.DecisionRequest.check(request)
+
+      other = ClosedPullRequest.request(issue, {:no_change, @pr_url, %{same | workspace: "aaaaaaa1"}})
+      assert other.why =~ "stood on another commit, so this answer comes from GitHub alone"
+
+      unread = ClosedPullRequest.request(issue, {:no_change, @pr_url, %{same | workspace: nil}})
+      assert unread.why =~ "could not read which commit its copy of the work stood on"
+    end
+
     test "asks to reopen a missing pull request", %{issue_id: issue_id} do
       request = ClosedPullRequest.request(issue(issue_id, "QA"), :no_pull_request)
 
@@ -151,10 +172,12 @@ defmodule SymphonyElixir.ClosedPullRequestTest do
       assert request.question =~ ~s("issue-bare" has its pull request closed)
       assert request.if_unanswered == ~s("issue-bare" stays and nothing runs on it.)
 
-      empty = ClosedPullRequest.request(%Issue{id: "issue-bare", identifier: "TP-1", title: "", state: ""}, {:no_change, "https://example.com/change"})
+      heads = %{workspace: "w1", pr: "p1", base: "b1", base_ref: "main", changed_files: 0}
+      issue = %Issue{id: "issue-bare", identifier: "TP-1", title: "", state: ""}
+      empty = ClosedPullRequest.request(issue, {:no_change, "https://example.com/change", heads})
       assert empty.question =~ "TP-1 has a pull request that changes nothing"
 
-      named = ClosedPullRequest.request(%Issue{id: "issue-bare", identifier: "TP-1", title: "", state: ""}, {:no_change, @pr_url})
+      named = ClosedPullRequest.request(issue, {:no_change, @pr_url, heads})
       assert named.question =~ "TP-1 has a pull request (PR #512) that changes nothing"
     end
   end

@@ -14,8 +14,10 @@ defmodule SymphonyElixir.ClosedPullRequest do
   paused on a Needs Decision hold (`SymphonyElixir.DecisionRequest.ask/4`) instead. The PR and
   CI watcher sends such a ticket to Rework first (rule R8, D5), and a Rework run starts: it opens a
   new pull request from main. The QA run checks the same before its policy
-  (`SymphonyElixir.QaVerification`), and the QA run and the Code Review approve hold an empty diff
-  rather than skip QA (`SymphonyElixir.QaPolicy`).
+  (`SymphonyElixir.QaVerification`), and the QA run and the Code Review approve hold a pull request
+  whose diff GitHub reports empty rather than skip QA (`SymphonyElixir.QaPolicy`,
+  `SymphonyElixir.EmptyChange`): a workspace that only finds nothing locally is out of sync, never
+  this question.
 
   The request asks a person to reopen the pull request (the recommended option: the next poll's
   lookup records it open again, `SymphonyElixir.TicketPullRequest.Lookup`), restart the ticket, or
@@ -24,7 +26,7 @@ defmodule SymphonyElixir.ClosedPullRequest do
 
   require Logger
 
-  alias SymphonyElixir.{DecisionMove, DecisionRequest, TicketPullRequest}
+  alias SymphonyElixir.{DecisionMove, DecisionRequest, EmptyChange, TicketPullRequest}
   alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Linear.Issue
 
@@ -32,10 +34,12 @@ defmodule SymphonyElixir.ClosedPullRequest do
 
   @typedoc """
   Why the ticket has no change to work on: its pull request at the URL is closed, it has no open
-  pull request at all, or its head changes nothing against the base branch (with the PR URL when
-  it has one).
+  pull request at all, or GitHub's compare of its base branch to its head changes no file (with the
+  PR URL and the commits compared, `SymphonyElixir.EmptyChange`). Only GitHub's own empty diff is a
+  `:no_change` cause: a workspace that finds nothing to verify on its own is out of sync, never this
+  question.
   """
-  @type cause :: {:closed, String.t()} | :no_pull_request | {:no_change, String.t() | nil}
+  @type cause :: {:closed, String.t()} | :no_pull_request | {:no_change, String.t(), EmptyChange.heads()}
 
   @doc """
   Pauses `issue` on the hold before a run starts when it sits in a phase that works on its existing
@@ -123,16 +127,16 @@ defmodule SymphonyElixir.ClosedPullRequest do
 
   defp record(_repo_key, _issue_id), do: nil
 
-  defp title(issue, {:no_change, _url}), do: "Restart or cancel #{label(issue)}"
+  defp title(issue, {:no_change, _url, _heads}), do: "Restart or cancel #{label(issue)}"
   defp title(issue, _closed_or_missing), do: "Reopen the pull request of #{label(issue)}"
 
   defp problem({:closed, url}), do: "has its pull request#{pr_name(url)} closed"
   defp problem(:no_pull_request), do: "has no open pull request"
-  defp problem({:no_change, url}), do: "has a pull request#{pr_suffix(url)} that changes nothing against the main branch"
+  defp problem({:no_change, url, _heads}), do: "has a pull request#{pr_suffix(url)} that changes nothing against the main branch"
 
-  defp why({:no_change, _url}) do
-    "Its branch has no commit that the main branch lacks. Either the work already reached the main branch another way, or the branch lost it. " <>
-      "Symphony does not skip the checks for a change it cannot see."
+  defp why({:no_change, _url, heads}) do
+    EmptyChange.compared(heads) <>
+      "\n\nEither the work already reached the main branch another way, or the branch lost it. Symphony does not skip the checks for a change it cannot see."
   end
 
   defp why(_closed_or_missing) do
@@ -140,7 +144,7 @@ defmodule SymphonyElixir.ClosedPullRequest do
       "Without an open pull request, a run would check the main branch instead of the ticket's work."
   end
 
-  defp options({:no_change, _url}) do
+  defp options({:no_change, _url, _heads}) do
     [
       %{label: "Restart", effect: "you restart the ticket from the Symphony app; it starts again from the main branch with a fresh pull request", recommended: true},
       cancel_option()
@@ -159,7 +163,7 @@ defmodule SymphonyElixir.ClosedPullRequest do
   defp cancel_option,
     do: DecisionMove.option(%{label: "Cancel", effect: "Symphony moves the ticket to Canceled; nothing is merged", recommended: false}, %{to: "Canceled"})
 
-  defp recommendation_reason({:no_change, _url}), do: "Restarting rebuilds the change, so the review and QA see real work."
+  defp recommendation_reason({:no_change, _url, _heads}), do: "Restarting rebuilds the change, so the review and QA see real work."
   defp recommendation_reason(_cause), do: "Reopening keeps the work, the review and the checks already done."
 
   defp pr_or_its({:closed, url}), do: pr(url)

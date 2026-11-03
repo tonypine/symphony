@@ -423,6 +423,35 @@ defmodule SymphonyElixir.GitHub.PullRequest do
     end
   end
 
+  @typedoc """
+  GitHub's own view of a pull request's diff: its head, the head of its base branch, the base
+  branch's name and how many files the compare of the base to the head changes.
+  """
+  @type diff :: %{head: String.t(), base: String.t(), base_ref: String.t(), changed_files: non_neg_integer()}
+
+  @doc """
+  GitHub's diff of the pull request at `pr_url` against its base branch, in two REST reads: the pull
+  request's head and base branch, then the compare of that base branch to the head
+  (`repos/<owner>/<repo>/compare/<base>...<head>`), whose changed files it counts.
+  """
+  @spec fetch_diff(String.t(), keyword()) :: {:ok, diff()} | {:error, term()}
+  def fetch_diff(pr_url, opts \\ []) when is_binary(pr_url) and is_list(opts) do
+    with {:ok, host, owner, repo, number} <- parse_github_pr_url(pr_url, opts),
+         {:ok, output} <- run_gh(github_api_args(host, "repos/#{owner}/#{repo}/pulls/#{number}") ++ ["--jq", "{head: .head.sha, base_ref: .base.ref}"], opts),
+         {:ok, %{"head" => head, "base_ref" => base_ref}} when is_binary(head) and is_binary(base_ref) <- Jason.decode(output),
+         ref = URI.encode(base_ref, &URI.char_unreserved?/1),
+         compare_jq = "{base: .base_commit.sha, changed_files: (.files | length)}",
+         {:ok, output} <- run_gh(github_api_args(host, "repos/#{owner}/#{repo}/compare/#{ref}...#{head}") ++ ["--jq", compare_jq], opts),
+         {:ok, %{"base" => base, "changed_files" => files}} when is_binary(base) and is_integer(files) <- Jason.decode(output) do
+      {:ok, %{head: head, base: base, base_ref: base_ref, changed_files: files}}
+    else
+      :error -> {:error, :invalid_pr_url}
+      {:ok, _decoded} -> {:error, :invalid_diff_payload}
+      {:error, %Jason.DecodeError{}} -> {:error, :invalid_diff_payload}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   @open_pull_requests_query """
   query($owner: String!, $name: String!) {
     repository(owner: $owner, name: $name) {

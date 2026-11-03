@@ -14,6 +14,8 @@ defmodule SymphonyElixir.CodeReviewTest do
 
   @repo_key "repo-code-review"
   @issue_id "issue-code-review"
+  @pr_url "https://github.com/acme/repo/pull/815"
+  @base_head "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
 
   # The real reviewer runs the escalation rules' check on the diff context it built, before it
   # starts, and returns the reasons with its verdict (`ReviewAgent.evaluate/4`); the fake does the
@@ -46,8 +48,13 @@ defmodule SymphonyElixir.CodeReviewTest do
   defmodule FakeQaPolicy do
     @playbook %{kind: "cli", paths: ["lib/symphony_elixir/cli.ex"], prompt: "Follow the CLI playbook."}
 
+    # A list answers its decisions in turn, the last one for every later call.
     def decide(_issue, _settings, _opts) do
-      Process.get(:fake_qa_policy_result, {:run, [@playbook], "the change delivers or updates a user journey"})
+      case Process.get(:fake_qa_policy_result, {:run, [@playbook], "the change delivers or updates a user journey"}) do
+        [next | rest] when rest != [] -> tap(next, fn _next -> Process.put(:fake_qa_policy_result, rest) end)
+        [last] -> last
+        result -> result
+      end
     end
   end
 
@@ -125,6 +132,21 @@ defmodule SymphonyElixir.CodeReviewTest do
   end
 
   defp verdicts, do: SymphonyElixir.Handoff.verdicts(@repo_key, @issue_id, "code_review")
+
+  # Answers GitHub's diff of the PR (`SymphonyElixir.GitHub.PullRequest.fetch_diff/2`): its head
+  # `pr_head`, compared with main at `@base_head`, changes `changed_files` files. `on_read` runs when
+  # the diff is read, as a push landing then would.
+  defp github_diff(pr_head, changed_files, on_read \\ fn -> :ok end) do
+    fn
+      ["api", "repos/acme/repo/pulls/815", "--jq", _jq], _opts ->
+        on_read.()
+        {Jason.encode!(%{head: pr_head, base_ref: "main"}), 0}
+
+      ["api", "repos/acme/repo/compare/main..." <> _head, "--jq", _jq], _opts ->
+        {Jason.encode!(%{base: @base_head, changed_files: changed_files}), 0}
+    end
+  end
+
   defp signals, do: SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
   defp deciding, do: Questions.deciding({:ticket, @repo_key, @issue_id})
 
@@ -278,22 +300,8 @@ defmodule SymphonyElixir.CodeReviewTest do
 
     # A workspace built from the base branch (the ticket's pull request closed) diffs empty: that is
     # no change at all, so the approve neither skips QA into Merging nor hands the ticket to QA.
-    test "an approve whose head changes nothing holds the ticket in Code Review" do
-      {workspace, _head} = git_workspace!()
-      Process.put(:fake_qa_policy_result, {:nothing_to_verify, "the head changes no files against its base branch"})
-
-      assert :ok = run(workspace, settings: designed_settings())
-
-      refute_received {:moved, @issue_id, _state}
-      assert_received {:commented, @issue_id, request}
-      assert request =~ "## Decision needed: Restart or cancel TP-815"
-      assert request =~ "has a pull request that changes nothing against the main branch"
-      assert request =~ "the ticket stays in Code Review until the decision is recorded"
-      assert %{options: [%{label: "Restart", recommended?: true}, %{label: "Cancel"}]} = deciding()
-      refute Enum.any?(signals(), &(&1.details[:signal] == "code_review_approve_skip"))
-    end
-
-    test "an empty-change hold that cannot be posted is reported" do
+    # Without an open pull request there is no GitHub diff to ask: the ticket pauses on that instead.
+    test "an empty-change hold with no pull request asks to reopen it, and one that cannot be posted is reported" do
       {workspace, _head} = git_workspace!()
       Process.put(:fake_qa_policy_result, {:nothing_to_verify, "the head changes no files against its base branch"})
       Process.put(:fake_tracker_comment_result, {:error, :linear_down})
@@ -304,7 +312,7 @@ defmodule SymphonyElixir.CodeReviewTest do
       end)
 
       # The question stays asked and pauses the ticket; its comment is marked pending.
-      assert [%{id: id}] = Questions.open({:ticket, @repo_key, @issue_id})
+      assert [%{id: id, title: "Reopen the pull request of TP-815"}] = Questions.open({:ticket, @repo_key, @issue_id})
       assert %{id: ^id} = deciding()
     end
 
@@ -1223,7 +1231,7 @@ defmodule SymphonyElixir.CodeReviewTest do
   # run. `origin` is a bare repo holding the PR head where GitHub keeps it, `refs/pull/815/head`.
   describe "the workspace synced to the PR head" do
     setup do
-      :ok = SymphonyElixir.TicketPullRequest.put(@repo_key, @issue_id, %{pr_url: "https://github.com/acme/repo/pull/815"})
+      :ok = SymphonyElixir.TicketPullRequest.put(@repo_key, @issue_id, %{pr_url: @pr_url})
       {workspace, head} = git_workspace!()
       origin = workspace <> "-origin.git"
       on_exit(fn -> File.rm_rf(origin) end)
@@ -1245,6 +1253,103 @@ defmodule SymphonyElixir.CodeReviewTest do
 
       assert [%{payload: %{winner: "pull_request", action: "reset", head: ^pr_head, run_kind: "code_review"}}] =
                SymphonyElixir.TicketEvents.query(@issue_id, types: ["workspace.synced"])
+    end
+
+    test "an approve whose PR diff GitHub reports empty holds the ticket in Code Review", %{workspace: workspace, pr_head: head} do
+      Process.put(:fake_qa_policy_result, {:nothing_to_verify, "the head changes no files against its base branch"})
+
+      capture_log(fn -> assert :ok = run(workspace, settings: designed_settings(), gh_runner: github_diff(head, 0)) end)
+
+      refute_received {:moved, @issue_id, _state}
+      assert_received {:commented, @issue_id, request}
+      assert request =~ "## Decision needed: Restart or cancel TP-815"
+      assert request =~ "has a pull request (PR #815) that changes nothing against the main branch"
+      assert request =~ "Symphony's copy of the work stood on that same commit."
+      assert request =~ "GitHub compared the latest commit of the pull request with the latest commit of the main branch and found no changed file."
+      assert request =~ "the ticket stays in Code Review until the decision is recorded"
+      assert %{options: [%{label: "Restart", recommended?: true}, %{label: "Cancel"}]} = deciding()
+      refute Enum.any?(signals(), &(&1.details[:signal] == "code_review_approve_skip"))
+    end
+
+    test "an approve whose PR diff GitHub cannot read fails the run and asks nothing", %{workspace: workspace} do
+      Process.put(:fake_qa_policy_result, {:nothing_to_verify, "the head changes no files against its base branch"})
+      refused = fn _args, _opts -> {"HTTP 502", 1} end
+
+      capture_log(fn ->
+        assert {:error, {:code_review_diff_unreadable, {:pr_diff_unreadable, {:gh_failed, _args, 1, "HTTP 502"}}}} =
+                 run(workspace, settings: designed_settings(), gh_runner: refused)
+      end)
+
+      refute_received {:moved, @issue_id, _state}
+      assert deciding() == nil
+    end
+
+    defp review_opts(gh_runner), do: [settings: designed_settings(), gh_runner: gh_runner]
+
+    @nothing {:nothing_to_verify, "the head changes no files against its base branch"}
+    @runs {:run, [%{kind: "cli", paths: ["lib/symphony_elixir/cli.ex"], prompt: "Follow the CLI playbook."}], "the change delivers or updates a user journey"}
+
+    test "a local nothing to verify with a non-empty GitHub diff re-syncs and approves into QA, asking nothing",
+         %{workspace: workspace, pr_head: pr_head} do
+      Process.put(:fake_qa_policy_result, [@nothing, @runs])
+
+      capture_log(fn -> assert :ok = run(workspace, review_opts(github_diff(pr_head, 3))) end)
+
+      assert_received {:moved, @issue_id, "QA"}
+      refute_received {:commented, @issue_id, "## Decision needed" <> _rest}
+      assert deciding() == nil
+    end
+
+    test "a workspace that still finds nothing after the re-sync pauses on a reason Unblock releases", %{workspace: workspace, pr_head: pr_head} do
+      Process.put(:fake_qa_policy_result, @nothing)
+
+      capture_log(fn -> assert :ok = run(workspace, review_opts(github_diff(pr_head, 3))) end)
+
+      refute_received {:moved, @issue_id, _state}
+      assert deciding() == nil
+      short = String.slice(pr_head, 0, 12)
+      assert {:ok, %{reasons: [%{text: text, releasable: true}]}} = Pauses.get({:ticket, @repo_key, @issue_id})
+      assert text == "Code Review found no change in its workspace at #{short}, but GitHub's PR head #{short} changes 3 files against main at abcdefabcdef. Unblock runs it again."
+    end
+
+    test "a re-sync that cannot fetch the PR pauses on the Unblock reason", %{workspace: workspace, pr_head: pr_head} do
+      Process.put(:fake_qa_policy_result, @nothing)
+      fetches = start_supervised!({Agent, fn -> 0 end})
+
+      git = fn
+        ["fetch" | _rest] = args, dir ->
+          if Agent.get_and_update(fetches, &{&1, &1 + 1}) == 0, do: System.cmd("git", args, cd: dir, stderr_to_stdout: true), else: {"fatal: unreachable", 128}
+
+        args, dir ->
+          System.cmd("git", args, cd: dir, stderr_to_stdout: true)
+      end
+
+      capture_log(fn -> assert :ok = run(workspace, [git: git] ++ review_opts(github_diff(pr_head, 3))) end)
+
+      assert deciding() == nil
+      assert {:ok, %{reasons: [%{text: "Code Review found no change in its workspace at " <> _rest}]}} = Pauses.get({:ticket, @repo_key, @issue_id})
+    end
+
+    test "a re-sync that moves the workspace to a commit the reviewer did not judge fails the run", %{workspace: workspace, pr_head: pr_head} do
+      Process.put(:fake_qa_policy_result, [@nothing, @runs])
+      origin = workspace <> "-origin.git"
+
+      push_upkeep = fn ->
+        {_out, 0} = System.cmd("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "upkeep again"], cd: workspace)
+        {_out, 0} = System.cmd("git", ["push", "-q", "-f", origin, "HEAD:refs/pull/815/head"], cd: workspace)
+        {_out, 0} = System.cmd("git", ["reset", "-q", "--hard", pr_head], cd: workspace)
+        :ok
+      end
+
+      capture_log(fn ->
+        assert {:error, {:code_review_head_moved, ^pr_head, moved}} =
+                 run(workspace, review_opts(github_diff(pr_head, 3, push_upkeep)))
+
+        refute moved == pr_head
+      end)
+
+      refute_received {:moved, @issue_id, _state}
+      assert deciding() == nil
     end
 
     test "a workspace with local work is not reviewed: the run fails naming it", %{workspace: workspace, head: head, pr_head: pr_head} do
