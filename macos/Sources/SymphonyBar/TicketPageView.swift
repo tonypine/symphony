@@ -63,6 +63,7 @@ extension SymphonyWindowModel {
             ticketBlockers.show(identifier)
             ticketPriority.show(identifier)
             ticketLabels.show(identifier)
+            ticketDecisions.show(identifier)
             ticketSources = TicketPage.Sources()
             ticketSlowReadAt = nil
             readTicket(force: true)
@@ -116,12 +117,14 @@ extension SymphonyWindowModel {
             let blockers = await readBlockers(identifier)
             let priority = await readTicketPath(TicketPriorityEditor.path(identifier))
             let labels = await readTicketPath(TicketLabelsEditor.path(identifier))
+            let decisions = await readTicketPath(TicketDecisionsEditor.path(identifier))
             readingTicket = false
             // A page left while its reads were out doesn't take them.
             guard shownTicket == identifier else { return }
             ticketBlockers.apply(blockers, for: identifier)
             ticketPriority.apply(priority, for: identifier)
             ticketLabels.apply(labels, for: identifier)
+            ticketDecisions.apply(decisions, for: identifier)
             // A Check Now answer and the feed's events that came in meanwhile stay.
             sources.check = ticketSources.check
             sources.events = ticketSources.events
@@ -320,6 +323,16 @@ extension SymphonyWindowModel {
         }
     }
 
+    /// Record on the Decisions card: Symphony writes the ruling into the ticket's Decisions, then the card and the page
+    /// read again.
+    func recordDecision() {
+        Task {
+            if await ticketDecisions.record(send: onControl, read: { [weak self] in await self?.readTicketPath($0) }) {
+                client.refresh()
+            }
+        }
+    }
+
     private func readTicketPath(_ path: String) async -> Data? {
         if case let .loaded(data) = await client.get(path) { return data }
         return nil
@@ -443,6 +456,8 @@ struct TicketPageContent: View {
                 setPriority: model.setPriority,
                 labels: model.ticketLabels,
                 setLabel: model.setLabel,
+                decisions: model.ticketDecisions,
+                recordDecision: model.recordDecision,
                 note: model.ticketNote,
                 submitNote: model.submitNote,
                 banner: model.moveBanner.flatMap { $0.identifier == page.identifier ? $0 : nil },
@@ -472,6 +487,9 @@ struct TicketPageView: View {
     /// The Labels card, with its toggles.
     var labels: TicketLabelsEditor?
     var setLabel: (String, Bool) -> Void = { _, _ in }
+    /// The Decisions card, with its Record a decision field.
+    var decisions: TicketDecisionsEditor?
+    var recordDecision: () -> Void = {}
     /// The note field pinned under the page, so it stays reachable however long the timeline is.
     var note: TicketNoteComposer?
     var submitNote: () -> Void = {}
@@ -490,7 +508,8 @@ struct TicketPageView: View {
             TicketPageBody(
                 page: page, brief: brief, actions: actions, width: width, folded: $folded, images: images,
                 openScreenshot: { fullScreenshot = $0 }, blockers: blockers, addBlocker: addBlocker, removeBlocker: removeBlocker,
-                priority: priority, setPriority: setPriority, labels: labels, setLabel: setLabel
+                priority: priority, setPriority: setPriority, labels: labels, setLabel: setLabel,
+                decisions: decisions, recordDecision: recordDecision
             )
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
@@ -527,6 +546,8 @@ struct TicketPageBody: View {
     var setPriority: (TicketPriority) -> Void = { _ in }
     var labels: TicketLabelsEditor?
     var setLabel: (String, Bool) -> Void = { _, _ in }
+    var decisions: TicketDecisionsEditor?
+    var recordDecision: () -> Void = {}
 
     static let sideColumnWidth: CGFloat = 300
     static let mainColumnMinWidth: CGFloat = 460
@@ -549,6 +570,11 @@ struct TicketPageBody: View {
                     }
                     if let now = page.now {
                         Card(title: "Now") { NowGrid(now: now, reveal: actions.revealWorktree) }
+                    }
+                    if let decisions {
+                        Card(title: TicketDecisionsEditor.title) {
+                            TicketDecisionsCard(identifier: page.identifier, editor: decisions, record: recordDecision)
+                        }
                     }
                     Card(title: "Timeline") {
                         if page.timeline.isEmpty {

@@ -51,6 +51,9 @@ public enum ControlAction: Equatable {
     /// Adds (`on`) or removes the label `label` on the ticket (TP-1356), one of the labels a person adds for Symphony
     /// to read; `title` is its toggle's name ("Skip QA"). Symphony writes it to Linear and reads it at once.
     case label(String, label: String, title: String, on: Bool)
+    /// Records the Director's ruling `text` on the ticket (TP-1357), a decision no Question asked for: Symphony writes
+    /// it into the ticket's Decisions, and every later run follows it.
+    case decision(String, text: String)
     /// Pauses dispatch for the repository `key` alone, with the Director's reason when they typed one; its tickets
     /// stay where they are.
     case pauseRepository(key: String, reason: String)
@@ -147,6 +150,8 @@ public enum ControlAction: Equatable {
             return "api/v1/control/priority"
         case .label:
             return "api/v1/control/label"
+        case .decision:
+            return "api/v1/control/decision"
         case let .pauseRepository(key, _):
             return "api/v1/control/repos/\(key)/pause"
         case let .resumeRepository(key):
@@ -164,7 +169,7 @@ public enum ControlAction: Equatable {
              let .decide(identifier, _, _, _), let .unblock(identifier), let .undo(identifier):
             return identifier
         case .pause, .pauseWithReason, .pauseForUpdate, .resume, .force, .stopForcing, .stop, .start, .note, .blocker,
-             .priority, .label, .pauseRepository, .resumeRepository:
+             .priority, .label, .decision, .pauseRepository, .resumeRepository:
             return nil
         }
     }
@@ -218,6 +223,8 @@ public enum ControlAction: Equatable {
             return ["issue_identifier": identifier, "priority": priority.rawValue]
         case let .label(identifier, label, _, on):
             return ["issue_identifier": identifier, "label": label, "action": on ? "add" : "remove"]
+        case let .decision(identifier, text):
+            return ["issue_identifier": identifier, "text": text]
         }
     }
 
@@ -264,6 +271,8 @@ public enum ControlAction: Equatable {
             return "Couldn't set \(identifier) to \(priority.title)"
         case let .label(identifier, _, title, on):
             return "Couldn't turn \(on ? "on" : "off") \(title) on \(identifier)"
+        case let .decision(identifier, _):
+            return "Couldn't record the decision on \(identifier)"
         case let .pauseRepository(key, _):
             return "Couldn't pause \(key)"
         case let .resumeRepository(key):

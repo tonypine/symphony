@@ -355,6 +355,19 @@ GitHub or Linear in QA:
   409)" and Skip QA stays off. VoiceOver reads each checkbox as "Skip QA on SHOP-320: Once
   approved, it goes on without a QA pass" and the line as "Label not saved: …". Walk it at
   1440×900 and 2560×1440, light and dark: nothing on the card is clipped.
+- **Decisions (TP-1357):** pass `macos/Tests/Fixtures/director-app/ticket-decisions` as
+  `api_fixtures` and open SHOP-320 from Tickets. Its page has a **Decisions** card listing D1
+  (Excel export, "Ship CSV in this ticket; Excel waits for SHOP-330."), then a "Record a decision"
+  field and a **Record a decision** button, off while the field is blank. Type "Keep the old
+  endpoint until TP-1400 lands" and press the button: `qa_api_requests` lists one
+  `POST /api/v1/control/decision` whose body has `issue_identifier` `SHOP-320` and that `text`,
+  and the field clears. The live server proves that the card then lists it as D2, that the
+  ticket's Decisions section in Linear shows it, and that the ticket's next run reads it among its
+  decisions. Then pass `ticket-decisions-refused` and record the same text: the line under the
+  field reads "Couldn't record the decision on SHOP-320: SHOP-320 already has this decision (D1).
+  (HTTP 409)" and the text stays. VoiceOver reads the field as "Decision on SHOP-320" and the
+  line as "Decision not recorded: …". Walk it at 1440×900 and 2560×1440, light and dark: nothing
+  on the card is clipped.
 - **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
   state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one
   warning, `symphony.yml sets auto_review.enabled, which is deprecated` (**Remove…**). Before

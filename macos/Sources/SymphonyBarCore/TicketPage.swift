@@ -662,6 +662,7 @@ public struct TicketPage: Equatable {
         case "set_priority": return move.priority.map { "Priority set to \($0) by you" } ?? "Priority set by you"
         case "add_label": return "\(move.labelTitle ?? move.label ?? "A label") turned on by you"
         case "remove_label": return "\(move.labelTitle ?? move.label ?? "A label") turned off by you"
+        case "record_decision": return "Decision recorded by you"
         default: return "Moved to \(move.toState ?? "another state") by you"
         }
     }

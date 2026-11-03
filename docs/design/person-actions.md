@@ -23,7 +23,7 @@ re-projected. *Linear* means Symphony follows what Linear says.
 | Reject a plan (→ Rework) | `BreakdownReview` | Symphony | Reject Plan (`/rework`) | — |
 | Comment on a plan under review | `SymphonyElixir.PlanComments` | Linear (a person's comment) | Ask for Changes (`/changes`) | — |
 | Reply under a `## Decision needed:` request | `Pauses.Projector` (the reply is the answer) | Symphony (the Question) | Decide (`/decide`); a plan's answers with Send Decisions (`/decisions`) | — |
-| Comment a ruling (`Decision:` / `Ruling:`) | `Linear.IssueNormalizer` rulings; `SymphonyElixir.Decisions` | Linear | none: a note (`/note`) is not a decision | [TP-1357](https://linear.app/tonypine/issue/TP-1357) |
+| Comment a ruling (`Decision:` / `Ruling:`) | `Linear.IssueNormalizer` rulings; `SymphonyElixir.Decisions` | Symphony (the record's decisions); a comment in Linear is left as it was | Record a decision (`/decision`) on the ticket page, since [TP-1357](https://linear.app/tonypine/issue/TP-1357) | — |
 | Answer the quality gate's clarification questions | `SymphonyElixir.QualityGate` (an answer, or a reply's comment activity, re-scores the ticket); `QualityGate.Question` | Symphony (the Question); a reply in Linear still re-scores | Decide (`/decide`) on the gate's Question, in an option (Start it as it is, Move it to Backlog) or in the person's own words, since [TP-1360](https://linear.app/tonypine/issue/TP-1360) | — |
 | Comment for the next run | the prompt's recent comments (`SymphonyElixir.PromptBuilder`) | Linear | Note (`/note`): it reaches the ticket history the prompt carries | — |
 | Cancel | the observation (phase) | Symphony | Cancel (`/cancel`) | — |

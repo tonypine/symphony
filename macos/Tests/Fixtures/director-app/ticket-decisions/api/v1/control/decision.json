@@ -1,0 +1,22 @@
+{
+  "action": "record_decision",
+  "decisions": [
+    {
+      "answer": "Ship CSV in this ticket; Excel waits for SHOP-330.",
+      "date": "2026-11-01",
+      "id": "D1",
+      "question": "Ship the Excel export here, or leave it for SHOP-330?",
+      "scope": "Deferred to SHOP-330",
+      "title": "Excel export"
+    },
+    {
+      "answer": "Keep the old endpoint until TP-1400 lands",
+      "date": "2026-11-03",
+      "id": "D2",
+      "question": "No question asked: the Director recorded this ruling on the ticket page.",
+      "scope": "As answered",
+      "title": "Ruling by the Director"
+    }
+  ],
+  "issue_identifier": "SHOP-320"
+}

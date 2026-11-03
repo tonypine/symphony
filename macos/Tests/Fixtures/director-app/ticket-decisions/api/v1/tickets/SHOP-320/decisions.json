@@ -1,0 +1,13 @@
+{
+  "decisions": [
+    {
+      "answer": "Ship CSV in this ticket; Excel waits for SHOP-330.",
+      "date": "2026-11-01",
+      "id": "D1",
+      "question": "Ship the Excel export here, or leave it for SHOP-330?",
+      "scope": "Deferred to SHOP-330",
+      "title": "Excel export"
+    }
+  ],
+  "issue_identifier": "SHOP-320"
+}

@@ -44,6 +44,8 @@ final class SymphonyWindowModel: ObservableObject {
     let ticketPriority = TicketPriorityEditor()
     /// The ticket page's Labels card: the labels a person adds for Symphony to read, the change on its way.
     let ticketLabels = TicketLabelsEditor()
+    /// The ticket page's Decisions card: the decisions recorded on the ticket, and the Director's ruling on its way.
+    let ticketDecisions = TicketDecisionsEditor()
     /// The build of the Symphony the window last read, to tell a restart onto another build.
     private var symphonyBuild: DiagnosticsPayload.Build?
     @Published var paused = false

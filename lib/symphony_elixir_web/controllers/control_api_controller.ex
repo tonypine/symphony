@@ -61,6 +61,13 @@ defmodule SymphonyElixirWeb.ControlApiController do
   the app shows when the change is refused (a label Symphony doesn't read, a machine label, the
   force label, a ticket Symphony doesn't track, a label already on or off), 422 for a missing or
   unknown parameter and 502, with why, when the tracker refuses the write.
+
+  `decision` records the Director's ruling on a ticket from its page, a decision no Question asked
+  for (`SymphonyElixir.DirectorRulings`): it takes `issue_identifier` and `text`, and answers 200
+  with the ticket's decisions after it, 400 `invalid_decision` for a blank text or one longer than a
+  decision holds, 409 with the reason the app shows when it is refused (a ticket Symphony doesn't
+  track, a decision with the same text already recorded), 422 for a missing `issue_identifier` and
+  502, with why, when the tracker or the store refuses the write.
   """
 
   use Phoenix.Controller, formats: [:json]
@@ -68,7 +75,8 @@ defmodule SymphonyElixirWeb.ControlApiController do
   require Logger
 
   alias Plug.Conn
-  alias SymphonyElixir.{AuditLog, DirectorBlockers, DirectorLabels, DirectorMoves, DirectorPriority, Orchestrator}
+  alias SymphonyElixir.{AuditLog, DirectorBlockers, DirectorLabels, DirectorMoves, DirectorPriority, DirectorRulings}
+  alias SymphonyElixir.Orchestrator
   alias SymphonyElixir.{TicketEvents, TicketSignals}
   alias SymphonyElixir.TicketEvents.Types
   alias SymphonyElixirWeb.{Endpoint, Presenter, TicketEventsController}
@@ -273,6 +281,23 @@ defmodule SymphonyElixirWeb.ControlApiController do
       end
     else
       {:error, {:invalid_request, message}} -> error_response(conn, 422, "invalid_request", message)
+    end
+  end
+
+  @spec decision(Conn.t(), map()) :: Conn.t()
+  def decision(conn, params) do
+    case required_param(params["issue_identifier"], "issue_identifier") do
+      {:ok, identifier} ->
+        opts = [orchestrator: orchestrator(conn), audit_log: Map.get(conn.assigns, :audit_log, [])] ++ Map.get(conn.assigns, :director_rulings, [])
+
+        case DirectorRulings.record(identifier, params["text"], opts) do
+          {:error, {:invalid, message}} -> error_response(conn, 400, "invalid_decision", message)
+          {:error, {:linear, message}} -> error_response(conn, 502, "linear_error", message)
+          result -> respond_move(conn, identifier, result)
+        end
+
+      {:error, {:invalid_request, message}} ->
+        error_response(conn, 422, "invalid_request", message)
     end
   end
 
