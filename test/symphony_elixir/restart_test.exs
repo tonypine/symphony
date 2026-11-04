@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.RestartTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Restart, TicketPullRequest}
+  alias SymphonyElixir.{AgentProcesses, Restart, TicketPullRequest, WorkspaceCleanup}
 
   @pr_url "https://github.com/acme/widgets/pull/41"
 
@@ -68,6 +68,44 @@ defmodule SymphonyElixir.RestartTest do
       assert_received {:fetch_activity, @pr_url}
       assert_received {:close, @pr_url}
       assert_received {:remove_workspaces, "MT-RESTART"}
+    end
+
+    test "the workspace is never removed while the run's agent is still running" do
+      Application.put_env(:symphony_elixir, :restart_test_activity, activity([]))
+      server = agent_processes_with_live_agent!("/workspaces/repo-a/MT-RESTART")
+
+      assert {:error, {:restart, message}} =
+               Restart.perform(issue(pr_url: @pr_url), opts(agent_processes: [server: server, timeout_ms: 50]))
+
+      assert message =~ "the agent of its run is still running"
+      assert message =~ "its workspace was kept"
+      refute_received {:close, _pr_url}
+      refute_received {:remove_workspaces, _identifier}
+    end
+
+    test "waits for the removal the stopped run queued before it removes the workspace itself" do
+      test_pid = self()
+
+      remove_fun = fn issue, _worker_host ->
+        send(test_pid, {:stop_removal, issue.identifier, self()})
+
+        receive do
+          :release -> :ok
+        end
+      end
+
+      cleanup = Module.concat(__MODULE__, "Cleanup#{System.unique_integer([:positive])}")
+      start_supervised!({WorkspaceCleanup, name: cleanup, remove_fun: remove_fun})
+      :ok = WorkspaceCleanup.remove(%{identifier: "MT-RESTART"}, nil, cleanup)
+      assert_receive {:stop_removal, "MT-RESTART", removal}
+
+      opts = opts(workspace_cleanup: cleanup)
+      reset = Task.async(fn -> {Restart.perform(issue([]), opts), Process.info(self(), :messages)} end)
+      refute Task.yield(reset, 50)
+
+      send(removal, :release)
+      assert {:ok, {:ok, {:messages, messages}}} = Task.yield(reset, 5_000)
+      assert {:remove_workspaces, "MT-RESTART"} in messages
     end
 
     test "a ticket with no pull request at all still resets" do
@@ -258,6 +296,20 @@ defmodule SymphonyElixir.RestartTest do
 
       assert_received {:remove_workspaces, "MT-RESTART"}
     end
+  end
+
+  # An `AgentProcesses` server tracking one agent in `workspace` whose group always reads alive.
+  # The agent is `cat`, which ends when the test closes its port.
+  defp agent_processes_with_live_agent!(workspace) do
+    name = Module.concat(__MODULE__, "AgentProcesses#{System.unique_integer([:positive])}")
+    ledger_path = Path.join(System.tmp_dir!(), "restart_test_#{System.unique_integer([:positive])}/agent_processes.json")
+    always_alive = fn _pid, _signal -> {"", 0} end
+    start_supervised!({AgentProcesses, name: name, ledger_path: ledger_path, signal: always_alive}, id: name)
+    port = Port.open({:spawn_executable, System.find_executable("cat")}, [:binary])
+    on_exit(fn -> if Port.info(port), do: Port.close(port) end)
+    :ok = AgentProcesses.track(port, server: name, workspace: workspace)
+    :sys.get_state(name)
+    name
   end
 
   defp linear_settings do

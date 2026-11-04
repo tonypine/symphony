@@ -132,6 +132,28 @@ defmodule SymphonyElixir.AgentProcessesTest do
     assert read_ledger(path) == []
   end
 
+  test "await_exit returns once the agents tracked in the workspace are gone" do
+    server = start_server(grace_ms: 5_000, start_time: fn _pid -> {:ok, "Sat Oct  3 07:50:16 2026"} end)
+    port = open_agent(@eof_ignoring_agent)
+    os_pid = os_pid(port)
+    :ok = AgentProcesses.track(port, server: server, workspace: "/workspaces/repo/TP-7")
+    other = open_agent(@eof_ignoring_agent)
+    :ok = AgentProcesses.track(other, server: server, workspace: "/workspaces/repo/TP-8")
+    sync(server)
+
+    assert {:error, {:still_running, [^os_pid]}} = AgentProcesses.await_exit("TP-7", server: server, timeout_ms: 100)
+
+    Port.close(port)
+    assert :ok = AgentProcesses.await_exit("TP-7", server: server, timeout_ms: 3_000)
+    refute group_alive?(os_pid)
+    assert :ok = AgentProcesses.await_exit("TP-NONE", server: server)
+  end
+
+  test "await_exit returns at once without the server" do
+    assert :ok = AgentProcesses.await_exit("TP-7", server: unique_name())
+    assert :ok = AgentProcesses.await_exit(nil)
+  end
+
   test "records no start time when it can't be read" do
     path = ledger_path()
     server = start_server(ledger_path: path, start_time: fn _pid -> {:error, :denied} end)

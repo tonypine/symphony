@@ -12,6 +12,12 @@ defmodule SymphonyElixir.WorkspaceCleanup do
   creates or reuses its issue's workspace: it returns once no removal for that issue is queued
   or running.
 
+  A removal never runs under a live agent: its task first waits for the agent process groups
+  tracked in the issue's workspace to exit (`SymphonyElixir.AgentProcesses.await_exit/2`), since a
+  stopped run's agent is signalled only after its task ended. One still running after the wait is
+  logged and its removal skipped, so the workspace stays with the agent in it; the startup sweep
+  and the workspace age GC find it later.
+
   The server only queues and starts tasks, so a call never waits on a removal (except
   `await/1`, which is meant to). A removal whose task cannot start is logged and dropped; the
   startup sweep and the workspace age GC find what it left. Without the server (some tests),
@@ -22,11 +28,12 @@ defmodule SymphonyElixir.WorkspaceCleanup do
 
   require Logger
 
-  alias SymphonyElixir.Workspace
+  alias SymphonyElixir.{AgentProcesses, Workspace}
 
   @max_concurrent 4
 
   defstruct remove_fun: nil,
+            await_fun: nil,
             task_supervisor: nil,
             max_concurrent: @max_concurrent,
             running: %{},
@@ -43,6 +50,7 @@ defmodule SymphonyElixir.WorkspaceCleanup do
     {:ok,
      %__MODULE__{
        remove_fun: Keyword.get(opts, :remove_fun, &Workspace.remove_issue_workspaces/2),
+       await_fun: Keyword.get(opts, :await_fun, &AgentProcesses.await_exit/1),
        task_supervisor: Keyword.get(opts, :task_supervisor, SymphonyElixir.TaskSupervisor),
        max_concurrent: Keyword.get(opts, :max_concurrent, @max_concurrent)
      }}
@@ -154,10 +162,23 @@ defmodule SymphonyElixir.WorkspaceCleanup do
     end
   end
 
-  defp start_task(%__MODULE__{remove_fun: remove_fun, task_supervisor: task_supervisor}, issue, worker_host) do
-    {:ok, Task.Supervisor.async_nolink(task_supervisor, fn -> remove_fun.(issue, worker_host) end)}
+  defp start_task(%__MODULE__{task_supervisor: task_supervisor} = state, issue, worker_host) do
+    {:ok, Task.Supervisor.async_nolink(task_supervisor, fn -> remove_after_agents_exit(state, issue, worker_host) end)}
   catch
     :exit, reason -> {:error, reason}
+  end
+
+  defp remove_after_agents_exit(%__MODULE__{remove_fun: remove_fun, await_fun: await_fun}, issue, worker_host) do
+    case await_fun.(issue.identifier) do
+      :ok ->
+        remove_fun.(issue, worker_host)
+
+      {:error, reason} ->
+        Logger.warning(
+          "Workspace cleanup skipped: an agent is still running in it issue_id=#{inspect(Map.get(issue, :id))} " <>
+            "issue_identifier=#{issue.identifier} worker_host=#{inspect(worker_host)} reason=#{inspect(reason)}"
+        )
+    end
   end
 
   defp reply_waiters(state, identifier) do

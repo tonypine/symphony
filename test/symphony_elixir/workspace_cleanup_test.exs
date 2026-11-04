@@ -150,4 +150,42 @@ defmodule SymphonyElixir.WorkspaceCleanupTest do
     refute File.exists?(workspace)
     assert :ok = WorkspaceCleanup.await("MT-8", missing)
   end
+
+  test "a removal waits for the agents in the workspace to exit before it removes anything" do
+    test_pid = self()
+
+    await_fun = fn identifier ->
+      send(test_pid, {:awaiting, identifier, self()})
+
+      receive do
+        :exited -> :ok
+      end
+    end
+
+    server = start_cleanup!(await_fun: await_fun)
+
+    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-9"}, nil, server)
+    assert_receive {:awaiting, "MT-9", awaiting}
+    refute_receive {:removing, "MT-9", _worker_host, _removal}, 50
+
+    send(awaiting, :exited)
+    assert_receive {:removing, "MT-9", nil, removal}
+    send(removal, :release)
+    assert :ok = WorkspaceCleanup.await("MT-9", server)
+  end
+
+  test "a removal is skipped while an agent is still running in the workspace" do
+    server = start_cleanup!(await_fun: fn _identifier -> {:error, {:still_running, [4242]}} end)
+
+    log =
+      capture_log(fn ->
+        assert :ok = WorkspaceCleanup.remove(%{id: "issue-10", identifier: "MT-10"}, "worker-01", server)
+        assert :ok = WorkspaceCleanup.await("MT-10", server)
+      end)
+
+    refute_received {:removing, "MT-10", _worker_host, _removal}
+    assert log =~ "Workspace cleanup skipped: an agent is still running in it"
+    assert log =~ "issue_identifier=MT-10"
+    assert log =~ "still_running"
+  end
 end

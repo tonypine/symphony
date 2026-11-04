@@ -3904,6 +3904,14 @@ Workspace persistence:
   `git worktree remove --force` and deletes Symphony's `auto/<issue.identifier>` branch.
   Forced worktree removal also deletes the working directory on disk, including any
   uncommitted changes inside that worktree.
+  A directory at the workspace path that git no longer lists as a worktree (what a removal leaves
+  when something kept writing in it) is deleted with the branch; when git cannot list the
+  worktrees at all, the directory is kept and the removal reports it.
+- A removal never runs while an agent process group tracked in the workspace is alive: it first
+  waits for the stopped run's agent to exit, and skips the removal (logged) when it outlives the
+  wait. A Restart of a ticket with a live run ends that run first, as the operator's Stop does
+  (no pull request is closed by the stop), waits for its agent to exit and for the stop's queued
+  removal, then performs the reset.
 
 ### 9.2 Workspace Creation and Reuse
 
@@ -3919,7 +3927,9 @@ Algorithm summary:
    - Validate that repo route's primary clone is configured for the current host.
    - Fetch `origin` in that primary clone when `fetch_before_dispatch == true`.
    - Ensure the workspace is a registered git worktree for branch `auto/<issue.identifier>`,
-     creating it with `git worktree add` when absent.
+     creating it with `git worktree add` when absent. A directory at the path that git does not
+     list as a worktree is removed and the worktree created again; when git cannot list the
+     worktrees, the run fails with `workspace_not_registered_worktree` and the directory stays.
    - When the issue's attached PR is open, same-repo, and its head branch is the issue's own
      branch under an earlier team key (`auto/TON-218` for `TP-218`, after a Linear team-key
      rename), use that PR head branch instead and sync the worktree to `origin/<head>`, so the

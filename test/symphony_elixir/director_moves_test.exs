@@ -249,7 +249,11 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert [%{name: "restart", details: %{move: "restart", from: "Rework", to: "In Progress"}}] =
                RunStore.get_ticket_state("pr").signals
 
-      assert ticket_events("repo-restart", "pr", "person.action") == [{"person.action", %{action: "restart", from: "Rework", to: "In Progress"}}]
+      assert ticket_events("repo-restart", "pr", "person.action") == [
+               {"person.action", %{action: "restart", from: "Rework", to: "In Progress", run_stopped: false}}
+             ]
+
+      assert [%{"run_stopped" => false}] = audit_records()
     end
 
     test "answers a dispatch loop's question, so the ticket starts again with its count at zero", %{opts: opts} do
@@ -299,6 +303,44 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
       assert_received {:remove_workspaces, "MOT-40"}
       assert_received {:memory_tracker_state_update, "pr", "In Progress"}
+    end
+
+    test "a ticket with a live run has that run ended first, then is reset and moved", %{opts: opts} do
+      github_activity(state: "OPEN")
+      put_issues([restart_issue(state: "In Progress")])
+      orchestrator = start_supervised!({FakeOrchestrator, self()})
+
+      assert {:ok, %{to_state: "In Progress", moved: true}} =
+               DirectorMoves.move(:restart, "MOT-40", %{reason: "Read the new description"}, restart_opts(Keyword.put(opts, :orchestrator, orchestrator)))
+
+      assert_received {:stop_running, "pr"}
+      assert_received {:close_pr, @restart_pr_url}
+      assert_received {:remove_workspaces, "MOT-40"}
+      assert_received {:memory_tracker_state_update, "pr", "In Progress"}
+
+      assert ticket_events("repo-restart", "pr", "person.action") == [
+               {"person.action", %{action: "restart", from: "In Progress", to: "In Progress", run_stopped: true}}
+             ]
+
+      assert [%{"move" => "restart", "run_stopped" => true}] = audit_records()
+    end
+
+    test "a reset that fails after the run was ended says the ticket stays stopped", %{opts: opts} do
+      github_activity(state: "OPEN")
+      Application.put_env(:symphony_elixir, :director_moves_test_close, {:error, :forbidden})
+      put_issues([restart_issue(state: "In Progress")])
+      orchestrator = start_supervised!({FakeOrchestrator, self()})
+
+      assert {:error, {:restart, message}} =
+               DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(Keyword.put(opts, :orchestrator, orchestrator)))
+
+      assert message ==
+               "MOT-40 was not restarted: GitHub refused to close #{@restart_pr_url} (:forbidden); " <>
+                 "its run was ended, so it stays stopped until you restart or unblock it"
+
+      assert_received {:stop_running, "pr"}
+      refute_received {:remove_workspaces, _identifier}
+      refute_received {:memory_tracker_state_update, _id, _state}
     end
 
     test "a restart can't be undone: it closed the pull request and removed the workspace", %{opts: opts} do

@@ -1232,7 +1232,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
-  test "worktree strategy rejects existing directories that are not registered worktrees" do
+  test "worktree strategy rebuilds an existing directory that is not a registered worktree" do
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -1246,7 +1246,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       create_primary_repo!(primary_repo)
       File.mkdir_p!(stale_workspace)
-      File.write!(Path.join(stale_workspace, "stale.txt"), "manual directory\n")
+      File.write!(Path.join(stale_workspace, "stale.txt"), "left by a removal under a live run\n")
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
@@ -1257,11 +1257,51 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       assert {:ok, expected_workspace} = SymphonyElixir.PathSafety.canonicalize(stale_workspace)
 
-      assert {:error, {:workspace_not_registered_worktree, ^expected_workspace}} =
-               Workspace.create_for_issue("MT-STALE")
+      log =
+        capture_log(fn ->
+          assert {:ok, ^expected_workspace} = Workspace.create_for_issue("MT-STALE")
+        end)
 
-      assert File.read!(Path.join(stale_workspace, "stale.txt")) == "manual directory\n"
-      refute git_branch_exists?(primary_repo, "auto/MT-STALE")
+      assert log =~ "Workspace is not a registered worktree; removing it and creating the worktree again"
+      refute File.exists?(Path.join(stale_workspace, "stale.txt"))
+      assert File.exists?(Path.join(stale_workspace, ".git"))
+      assert git_branch_exists?(primary_repo, "auto/MT-STALE")
+      {worktrees, 0} = System.cmd("git", ["-C", primary_repo, "worktree", "list", "--porcelain"])
+      assert worktrees =~ "worktree #{expected_workspace}"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "removing a workspace that is not a registered worktree deletes the directory and its branch" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-worktree-stale-remove-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      primary_repo = Path.join(test_root, "primary")
+      workspace_root = Path.join(test_root, "workspaces")
+      stale_workspace = Path.join([workspace_root, "default", "MT-STALE-RM"])
+
+      create_primary_repo!(primary_repo)
+      {_output, 0} = System.cmd("git", ["-C", primary_repo, "branch", "auto/MT-STALE-RM"])
+      File.mkdir_p!(stale_workspace)
+      File.write!(Path.join(stale_workspace, "stale.txt"), "left by a removal under a live run\n")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false
+      )
+
+      log = capture_log(fn -> assert :ok = Workspace.remove_issue_workspaces_checked("MT-STALE-RM") end)
+
+      assert log =~ "Removing a workspace that is not a registered worktree"
+      refute File.exists?(stale_workspace)
+      refute git_branch_exists?(primary_repo, "auto/MT-STALE-RM")
     after
       File.rm_rf(test_root)
     end
@@ -1293,7 +1333,11 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
         capture_log(fn ->
           assert {:error, {:workspace_not_registered_worktree, _workspace}} =
                    Workspace.create_for_issue("MT-WT-LIST-FAIL")
+
+          assert {:error, [_reason]} = Workspace.remove_issue_workspaces_checked("MT-WT-LIST-FAIL")
         end)
+
+      assert File.dir?(stale_workspace)
 
       assert log =~ "Git worktree list failed"
       assert log =~ primary_repo
@@ -5200,6 +5244,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert trace =~ "auto/MT-SSH-WT"
       assert trace =~ "symphony_git \"$repo\" worktree remove --force"
       assert trace =~ "workspace_branch_delete_skipped"
+      refute trace =~ "workspace_not_registered_worktree"
       refute trace =~ "git clone"
     after
       File.rm_rf(test_root)

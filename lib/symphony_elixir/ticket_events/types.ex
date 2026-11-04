@@ -258,7 +258,9 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:person],
       run_kinds: [],
       required: [action: {:enum, @person_actions}],
-      optional: [move: :string, from: :string, to: :string, blocker: :string, label: :string] ++ @signal,
+      optional:
+        [move: :string, from: :string, to: :string, blocker: :string, label: :string, run_stopped: :boolean] ++
+          @signal,
       idempotency: :writer
     },
     "step.started" => @step,
