@@ -1,0 +1,59 @@
+{
+  "attempts": {
+    "current_retry_attempt": 0,
+    "restart_count": 0
+  },
+  "connected": {
+    "blocked_by": [],
+    "blocks": [
+      {
+        "identifier": "TP-893",
+        "state": "Todo",
+        "title": "Show the new review steps in the app"
+      }
+    ],
+    "parent": {
+      "children": [
+        "completed",
+        "completed",
+        "completed",
+        "completed",
+        "started",
+        "unstarted",
+        "unstarted"
+      ],
+      "done": 4,
+      "identifier": "TP-870",
+      "title": "Simplify the review flow",
+      "total": 7
+    },
+    "related": [
+      {
+        "identifier": "TP-891",
+        "state": "Code Review",
+        "title": "Remove the retired review states and the version switch from the code"
+      }
+    ],
+    "sub_tickets": []
+  },
+  "issue_id": "i-892",
+  "issue_identifier": "TP-892",
+  "last_error": null,
+  "logs": {
+    "codex_session_logs": []
+  },
+  "recent_events": [],
+  "repo_key": "symphony",
+  "retry": null,
+  "running": null,
+  "status": "watching",
+  "tracked": {},
+  "verdicts": [],
+  "watching": {
+    "pull_request_url": "https://github.com/tonypine/symphony/pull/448"
+  },
+  "workspace": {
+    "host": null,
+    "path": "/Users/director/symphony-workspaces/symphony/TP-892"
+  }
+}

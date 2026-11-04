@@ -728,6 +728,64 @@ final class ChipTextViewTests: XCTestCase {
         XCTAssertFalse(view.image(width: 320) === image)
     }
 
+    // MARK: - File locations (TP-1386)
+
+    func testAFileLocationIsALinkAndATicketInsideItIsNoChip() throws {
+        let item = try decision()
+        let catalog = "/Users/me/symphony-workspaces/symphony/TP-891/index.html"
+        let content = ChipTextContent("Open \(catalog) for TP-891.", references: item.references)
+        XCTAssertEqual(content.fileLocations.map(\.url.path), [catalog])
+        XCTAssertEqual(content.mentions.map(\.key), ["TP-891"], "only the mention outside the path")
+        XCTAssertEqual(content.mentions.first?.range.location, ("Open \(catalog) for " as NSString).length)
+
+        let view = ChipTextView(content: content, style: ChipTextStyle(font: font))
+        let text = view.attributedText()
+        let range = try XCTUnwrap(content.fileLocations.first?.range)
+        XCTAssertEqual(text.attribute(.link, at: range.location, effectiveRange: nil) as? URL, URL(fileURLWithPath: catalog))
+        XCTAssertEqual(text.attribute(ChipTextView.fileLocationAttribute, at: NSMaxRange(range) - 1, effectiveRange: nil) as? Int, 0)
+        XCTAssertNil(text.attribute(.link, at: NSMaxRange(range), effectiveRange: nil), "the full stop is no part of it")
+    }
+
+    func testAClickOnAFileLocationOpensIt() throws {
+        let catalog = "/Users/me/symphony-workspaces/symphony/TP-1382/index.html"
+        let view = ChipTextView(content: try XCTUnwrap(ChipTextContent.chips("The catalog: \(catalog)", references: [:])), style: ChipTextStyle(font: font))
+        XCTAssertEqual(view.content.mentions, [], "no references: no chips, only the link")
+        var opened: [FileLocation] = []
+        view.openFileLocation = { opened.append($0) }
+        view.setFrameSize(CGSize(width: 600, height: view.height(forWidth: 600)))
+        let link = try XCTUnwrap(view.fileLocationRects(0).first)
+        let point = CGPoint(x: link.midX, y: link.midY)
+        XCTAssertEqual(view.fileLocationIndex(at: point), 0)
+        XCTAssertNil(view.fileLocationIndex(at: CGPoint(x: 2, y: link.midY)))
+        XCTAssertNil(view.fileLocationRects(1).first)
+
+        view.mouseDown(with: try mouse(.leftMouseDown, at: point, in: view))
+        view.mouseDragged(with: try mouse(.leftMouseDragged, at: point, in: view))
+        view.mouseUp(with: try mouse(.leftMouseUp, at: point, in: view))
+        XCTAssertEqual(opened.map(\.url.path), [catalog])
+        XCTAssertEqual(opened.first?.opening, .browser)
+
+        view.mouseDown(with: try mouse(.leftMouseDown, at: point, in: view))
+        view.mouseUp(with: try mouse(.leftMouseUp, at: CGPoint(x: 2, y: link.midY), in: view))
+        XCTAssertEqual(opened.count, 1, "released off the link")
+
+        view.clicked(onLink: URL(fileURLWithPath: catalog), at: view.content.fileLocations[0].range.location)
+        XCTAssertEqual(opened.count, 2, "TextKit's own link click")
+
+        XCTAssertNil(ChipTextContent.chips("No location here.", references: [:]))
+    }
+
+    func testAFileLocationInAControlsTextTakesTheClick() throws {
+        let host = NSView(frame: CGRect(x: 0, y: 0, width: 600, height: 100))
+        let content = try XCTUnwrap(ChipTextContent.chips("You open /tmp/catalog/index.html and approve.", references: [:]))
+        let view = ChipTextView(content: content, style: ChipTextStyle(font: font, selectable: false))
+        host.addSubview(view)
+        view.frame = CGRect(x: 0, y: 0, width: 600, height: view.height(forWidth: 600))
+        let link = try XCTUnwrap(view.fileLocationRects(0).first)
+        XCTAssertNil(view.hitTest(CGPoint(x: 2, y: link.midY)))
+        XCTAssertTrue(view.hitTest(CGPoint(x: link.midX, y: link.midY)) === view)
+    }
+
     // MARK: - Helpers
 
     /// The What happened paragraph about #448, TP-880 and TP-891, at the body size.

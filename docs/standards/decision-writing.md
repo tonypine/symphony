@@ -20,7 +20,10 @@ refuses the parts of it a machine can check (see [What the tool refuses](#what-t
 2. **No code.** No file names or paths, code identifiers, branch names, commit hashes, template
    syntax or backticks. No internal jargon either: "partials", "head", "verdict", "hold", "feed". Say what
    a thing does, not where it lives or what it is called in the code. A pull request is
-   "PR #448".
+   "PR #448". One exception: a review of files in the workspace (an HTML catalog or prototype the
+   Director opens in a browser) gives the file's absolute path in the workspace, or a `file://` link
+   to it, in `why`, `decision.question` or an option's `effect`. The Inbox and the ticket page show
+   it as a link: an `.html` file opens in the default browser, any other file is shown in Finder.
 3. **`why` is short.** At most two short paragraphs, one fact per sentence, subject first.
 4. **Each option's `effect` says what will happen to the work**, in the Director's terms: what
    moves, what waits, what ships.
@@ -99,7 +102,10 @@ labels, effects or trade-offs hold:
 
 - backticks;
 - template syntax: `{%` or `%}`;
-- a path or a file name with an extension: `foo.ex`, `lib/…`, `*.liquid`, `.md`, a link;
+- a path or a file name with an extension: `foo.ex`, `lib/…`, `*.liquid`, `.md`, a link; except,
+  in `why`, `decision.question` and an option's `effect`, an absolute path under the configured
+  workspace root or a `file://` link to one. A file location outside the root is refused, and the
+  error names the root;
 - a commit hash: a run of 7 to 40 hex characters with both a digit and a letter;
 - a branch name: `auto/…` or `origin/…`;
 - an internal word: "head", "verdict", "hold" or "feed" (and their plurals).
