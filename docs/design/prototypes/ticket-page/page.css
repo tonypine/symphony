@@ -1,0 +1,161 @@
+/*
+ * The ticket page prototype's own CSS: the bar on top, the window that holds the page at its real
+ * width and height, and the few pieces the catalog's Page layout story leaves out (a run's
+ * transcript, a finding, the note field, the Question leaving). Every colour, type style, radius,
+ * shadow, spacing and duration is a token of the catalog's tokens.css; every component is its
+ * components.css, unchanged.
+ */
+
+html, body { margin: 0; height: 100%; }
+body { background: var(--surface-window); background-image: var(--backdrop-glow); background-attachment: fixed; color: var(--text-primary); font: var(--type-body); }
+
+/* ---------- The bar on top ---------- */
+
+.proto-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-5);
+  padding: var(--space-2) var(--space-5);
+  background: var(--material-glass-thick);
+  -webkit-backdrop-filter: var(--material-blur);
+  backdrop-filter: var(--material-blur);
+  box-shadow: 0 1px 0 var(--stroke-separator), 0 8px 24px -16px var(--shadow-far);
+}
+.bar-id { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.bar-id b { display: block; font: var(--type-row-title); }
+.bar-id span span { display: block; font: var(--type-caption); color: var(--text-secondary); }
+.bar-mark { width: 22px; height: 22px; border-radius: 7px; background: var(--accent-fill); box-shadow: var(--accent-glow), var(--edge-highlight); flex: none; }
+.bar-sep { width: 1px; height: 20px; background: var(--stroke-separator); }
+.bar-grow { flex: 1; }
+.bar-tool { display: inline-flex; align-items: center; gap: var(--space-2); }
+.bar-label { font: var(--type-label); letter-spacing: var(--tracking-label); color: var(--text-secondary); }
+.bar-switch { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 var(--space-2) 0 var(--space-1); border: 0; border-radius: var(--radius-capsule); font: 550 12px/1 var(--font-text); color: var(--text-secondary); background: transparent; transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), transform var(--motion-instant) var(--ease-standard); }
+.bar-switch:hover { background: var(--surface-hover); color: var(--text-primary); }
+.bar-switch:active { background: var(--surface-pressed); transform: scale(var(--press-scale)); }
+.bar-switch .knob { position: relative; width: 26px; height: 16px; border-radius: var(--radius-capsule); background: var(--surface-sunken); box-shadow: inset 0 0 0 1px var(--stroke-strong); transition: background var(--motion-standard) var(--ease-standard); }
+.bar-switch .knob::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px var(--shadow-near); transition: transform var(--motion-spring) var(--ease-bounce); }
+.bar-switch[aria-checked="true"] { color: var(--text-primary); }
+.bar-switch[aria-checked="true"] .knob { background: var(--accent); box-shadow: none; }
+.bar-switch[aria-checked="true"] .knob::after { transform: translateX(10px); }
+
+/* ---------- The window: the page at its real size, scaled down as one when Fit is on ---------- */
+
+.proto-canvas { display: grid; justify-items: center; gap: var(--space-2); padding: var(--space-4) var(--space-6) var(--space-8); }
+.proto-caption { margin: 0; font: var(--type-caption); color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.08em; font-variant-numeric: tabular-nums; }
+.proto-zoom { justify-self: center; }
+.proto-window {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-sheet);
+  background: var(--surface-window);
+  box-shadow: var(--elevation-3), inset 0 0 0 1px var(--stroke-separator);
+  container-type: inline-size;
+  transition: width var(--motion-slow) var(--ease-spring), height var(--motion-slow) var(--ease-spring);
+}
+.proto-scroll { height: 100%; overflow: auto; overscroll-behavior: contain; scroll-padding: var(--space-6); }
+.proto-scroll[inert] { overflow: hidden; }
+
+/* The page in the window: the catalog's grid, with its sticky columns kept inside the window. */
+.proto-window .ticket-page { min-height: 0; }
+.proto-window .ticket-page > .zone-sheet { height: calc(var(--win-h, 1360px) - 2 * var(--space-4)); }
+.proto-window .zone-title .zone-sub { margin-left: var(--space-2); text-transform: none; letter-spacing: 0; color: var(--text-tertiary); }
+.proto-window .zone-title .zone-sub::before { content: "·"; margin-right: var(--space-2); }
+
+/* The laptop's decision sheet covers the window, not the page, so it stays put while the page scrolls. */
+.proto-window > .dsheet-layer { z-index: 10; border-radius: inherit; }
+.dsheet-layer.no-enter .dsheet,
+.dsheet-layer.no-enter .dsheet-scrim { animation: none; }
+.dsheet-layer.is-closing { pointer-events: none; }
+.dsheet-layer.is-closing .dsheet { animation: sheet-out var(--motion-standard) var(--ease-exit) forwards; }
+.dsheet-layer.is-closing .dsheet-scrim { animation: fade-out var(--motion-standard) var(--ease-exit) forwards; }
+@keyframes sheet-out { to { opacity: 0; transform: translateX(32px); } }
+@keyframes fade-out { to { opacity: 0; } }
+
+/* ---------- Pieces the catalog's story leaves out ---------- */
+
+.proto-window h2, .proto-window h3, .proto-window h4, .proto-window p { margin: 0; }
+
+/* A run, unfolded: who ran it and what it cost, its findings, then its steps, each unfolding into its lines */
+.run-group .run-body { display: grid; gap: var(--space-3); padding-top: var(--space-2); padding-right: var(--space-2); }
+.run-group .run-body > .run-meta { font: var(--type-secondary); color: var(--text-secondary); font-variant-numeric: tabular-nums; padding: 0 var(--space-2); }
+.run-group .step-list { margin: 0 calc(-1 * var(--space-1)); }
+
+.finding-card { display: grid; gap: var(--space-2); padding: var(--space-3) var(--space-4); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--status-problem) 25%, transparent), var(--elevation-1); }
+.finding-card.resolved { box-shadow: inset 0 0 0 1px var(--stroke-separator), var(--elevation-1); }
+.finding-card .card-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-1) var(--space-3); }
+.finding-card .card-head h3 { display: flex; align-items: center; gap: var(--space-2); font: var(--type-row-title); }
+.finding-card .card-body { max-width: var(--measure); color: var(--text-primary); }
+.finding-shots { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.attachment .thumb img { width: 100%; height: 100%; object-fit: cover; object-position: left top; transition: transform var(--motion-slow) var(--ease-spring); }
+.attachment:not([aria-disabled="true"]):hover .thumb img { transform: scale(1.06); }
+
+.tl-entry .detail-link { display: flex; align-items: center; gap: var(--space-2); font: var(--type-secondary); color: var(--text-primary); }
+
+/* The note for the next run */
+.note-panel { gap: var(--space-3); }
+.note-now { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: var(--space-2); padding: var(--space-2) var(--space-3); border-radius: var(--radius-row); background: var(--surface-raised); }
+.note-now .glyph { margin-top: 2px; color: var(--accent-text); }
+.note-now .t-secondary { display: block; margin-top: 2px; font: var(--type-secondary); }
+.note-panel .input { height: auto; padding: var(--space-2) 10px; }
+.note-panel textarea { resize: none; min-height: 38px; line-height: 19px; }
+.note-foot { display: flex; justify-content: flex-end; }
+
+.decision-list { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
+.decision-list li { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: var(--space-2); }
+.decision-list .glyph { margin-top: 2px; color: var(--status-done); }
+.decision-list b { display: block; font: var(--type-row-title); }
+.decision-list .t-secondary { display: block; margin-top: 2px; font: var(--type-secondary); }
+
+.label-chips { display: inline-flex; flex-wrap: wrap; gap: var(--space-1); }
+.ws { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; }
+.path-text { overflow-wrap: anywhere; font-size: 11px; color: var(--text-secondary); }
+
+.own-fold .own-words { padding-top: var(--space-2); }
+.own-words .hint { margin: 0; }
+
+/* ---------- Motion: the Question leaving, a refusal read again ---------- */
+
+.question-block.is-leaving { animation: q-leave var(--motion-slow) var(--ease-exit) forwards; pointer-events: none; }
+.zone-decide.is-leaving { animation: q-leave var(--motion-slow) var(--ease-exit) forwards; pointer-events: none; }
+.zone-sheet.is-leaving { animation: column-leave var(--motion-slow) var(--ease-exit) forwards; pointer-events: none; }
+@keyframes q-leave {
+  40% { opacity: 0.6; transform: scale(0.985); }
+  to { opacity: 0; transform: translateY(calc(var(--enter-offset) * -1)) scale(0.97); }
+}
+@keyframes column-leave { to { opacity: 0; transform: translateX(32px); } }
+.refusal.nudge { animation: ds-shake var(--motion-slow) var(--ease-standard); }
+
+/* Reduce Motion, on the bar's switch: the same tokens the system setting sets */
+.reduce-motion {
+  --motion-instant: 0.01s;
+  --motion-fast: 0.01s;
+  --motion-standard: 0.01s;
+  --motion-slow: 0.01s;
+  --motion-spring: 0.01s;
+  --motion-stagger: 0ms;
+  --press-scale: 1;
+  --lift: 0px;
+  --enter-offset: 0px;
+  --enter-scale: 1;
+}
+.reduce-motion .dot.live::after,
+.reduce-motion .step.current .bar::after,
+.reduce-motion .steps-mini i.current,
+.reduce-motion .sl-msg.typing .text::after { animation: none !important; }
+.reduce-motion :is(.sl-msg.is-new, .sl-msg.is-new .text, .tl-entry.is-new, .toast, .refusal) { animation: none !important; }
+.reduce-motion::view-transition-group(*),
+.reduce-motion::view-transition-old(*),
+.reduce-motion::view-transition-new(*) { animation: none !important; }
+
+/* ---------- Flash and screenshots ---------- */
+
+.proto-flash { position: fixed; left: 50%; bottom: var(--space-6); z-index: 40; transform: translateX(-50%); }
+.proto-lightbox { position: fixed; inset: 0; z-index: 50; }
+.proto-lightbox .sheet-scrim { position: absolute; inset: 0; border-radius: 0; cursor: zoom-out; }
+.proto-lightbox .shot-sheet { width: min(1280px, 92vw); margin: 0; cursor: default; }
+.proto-lightbox .sheet-body img { display: block; width: 100%; border-radius: var(--radius-row); box-shadow: 0 0 0 1px var(--stroke-separator); }
+.proto-window .menu[hidden] { display: none; }
