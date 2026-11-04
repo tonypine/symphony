@@ -1249,9 +1249,11 @@ button.chip:not([aria-disabled="true"]):active,
   .timeline-layout { grid-template-columns: 200px minmax(0, 780px); }
 }
 
-/* Question block */
-.question-split { display: grid; grid-template-columns: minmax(0, 720px); gap: var(--space-4); }
-.question-block { display: grid; gap: var(--space-4); max-width: 720px; }
+/* Question block: the options take the full width of what holds them; Send lines up with their right edge */
+.question-block { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); align-items: start; }
+.question-block .q-main { display: grid; gap: var(--space-4); min-width: 0; }
+.question-block .options { max-width: none; }
+.question-block .own-words { max-width: none; }
 .question-callout {
   position: relative;
   display: grid;
@@ -1263,16 +1265,77 @@ button.chip:not([aria-disabled="true"]):active,
   overflow: hidden;
 }
 .question-callout::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--status-you); }
-.question-callout .kicker { display: inline-flex; align-items: center; gap: 6px; font: 650 11px/14px var(--font-text); letter-spacing: 0.08em; color: var(--status-you-text); }
-.question-callout h2 { margin: 0; font: var(--type-sentence); letter-spacing: -0.012em; max-width: var(--measure); }
+.question-callout .kicker { display: flex; align-items: center; gap: 6px; font: 650 11px/14px var(--font-text); letter-spacing: 0.08em; color: var(--status-you-text); }
+.question-callout .kicker .age { margin-left: auto; font: var(--type-secondary); letter-spacing: 0; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.question-callout h2 { margin: 0; font: var(--type-sentence); letter-spacing: -0.012em; max-width: var(--measure); text-wrap: balance; }
 .question-why p { margin: 0 0 var(--space-2); max-width: var(--measure); }
+.question-why .path { font-size: 11px; color: var(--text-secondary); overflow-wrap: anywhere; }
 .question-why .unanswered { display: flex; gap: var(--space-2); align-items: flex-start; color: var(--text-secondary); font: var(--type-secondary); max-width: var(--measure); }
 .question-why .unanswered .glyph { color: var(--status-you); width: 13px; height: 13px; margin-top: 1px; }
-.question-send { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); justify-content: flex-end; }
-.question-split > .side { max-width: 720px; }
+.question-send { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); justify-content: flex-end; padding-top: var(--space-4); border-top: 1px solid var(--stroke-separator); }
+.question-send .pick,
+.dsheet-foot .pick { display: grid; gap: 2px; margin-right: auto; font: var(--type-secondary); }
+.question-send .pick b,
+.dsheet-foot .pick b { font: 600 13px/18px var(--font-text); color: var(--text-primary); }
 
 @container (min-width: 1600px) {
-  .question-split { grid-template-columns: minmax(0, 720px) 340px; gap: var(--space-8); align-items: start; }
+  .question-block { grid-template-columns: minmax(0, 1fr) 300px; gap: var(--space-8); max-width: 1240px; }
+  .question-block .question-send { position: sticky; top: var(--space-4); flex-direction: column; align-items: stretch; justify-content: flex-start; padding: var(--space-4); border: 0; border-radius: var(--radius-card); background: var(--surface-content); box-shadow: var(--elevation-1), var(--edge-highlight); }
+  .question-block .question-send .pick { margin: 0; }
+  .question-block .question-send .btn { width: 100%; justify-content: center; }
+}
+
+/* Decisions line: the one line a ticket page keeps about its open Questions */
+.decision-cta { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4); border-radius: var(--radius-card); background: linear-gradient(135deg, var(--tint-you), color-mix(in oklab, var(--tint-you), transparent 70%)); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--status-you) 25%, transparent); }
+.cta-mark { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 10px; color: #fff; background: var(--status-you); box-shadow: 0 4px 10px -4px color-mix(in oklab, var(--status-you) 70%, transparent), var(--edge-highlight); }
+.cta-mark .glyph { width: 16px; height: 16px; }
+.decision-cta .cta-text { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.decision-cta .cta-text b { font: var(--type-heading); }
+.decision-cta .cta-text .t-secondary { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: var(--measure); }
+
+/* Decision sheet: the open Questions in a side sheet; the body scrolls, the header and Send stay put */
+.dsheet-layer { position: absolute; inset: 0; z-index: 5; overflow: hidden; border-radius: var(--radius-card); }
+.dsheet-scrim { position: absolute; inset: 0; background: var(--surface-overlay); cursor: pointer; animation: ds-fade var(--motion-standard) var(--ease-standard); }
+.dsheet {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(520px, calc(100% - var(--space-4)));
+  height: min(calc(100% - var(--space-4)), 860px);
+  border-radius: var(--radius-sheet);
+  background: var(--material-glass-thick);
+  -webkit-backdrop-filter: var(--material-blur);
+  backdrop-filter: var(--material-blur);
+  box-shadow: var(--elevation-4), inset 0 0 0 1px var(--material-edge);
+  overflow: hidden;
+  animation: ds-sheet-side var(--motion-spring) var(--ease-spring);
+}
+.dsheet-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); padding: var(--space-4) var(--space-4) var(--space-4) var(--space-5); border-bottom: 1px solid var(--stroke-separator); }
+.dsheet-head h2 { margin: 0; font: var(--type-heading); }
+.dsheet-head .sub { margin: 0; font: var(--type-secondary); color: var(--text-secondary); }
+.dsheet-body { overflow: auto; overscroll-behavior: contain; padding: var(--space-5); display: grid; gap: var(--space-5); align-content: start; }
+.dsheet-body .q-sep { margin: 0; border: 0; border-top: 1px solid var(--stroke-separator); }
+.question-block.in-sheet { grid-template-columns: minmax(0, 1fr); max-width: none; gap: var(--space-4); }
+.dsheet-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-3); padding: var(--space-4) var(--space-5); border-top: 1px solid var(--stroke-separator); background: color-mix(in oklab, var(--surface-raised), transparent 40%); }
+.sheet-stage { position: relative; height: 880px; border-radius: var(--radius-card); overflow: hidden; background: var(--surface-window); box-shadow: inset 0 0 0 1px var(--stroke-separator); }
+.ghost-cta { position: absolute; top: var(--space-8); left: var(--space-8); right: var(--space-8); max-width: 980px; }
+.ghost-page { display: grid; gap: var(--space-4); padding: var(--space-8); }
+.ghost-page span { display: block; height: 18px; border-radius: 6px; background: var(--surface-content); }
+.ghost-page span:first-child { width: 40%; height: 28px; }
+.ghost-page span:nth-child(3) { height: 160px; }
+.ghost-page span:last-child { height: 320px; }
+
+@keyframes ds-sheet-side {
+  from { opacity: 0; transform: translateX(32px); }
+}
+@keyframes ds-fade {
+  from { opacity: 0; }
+}
+
+@container (min-width: 1600px) {
+  .dsheet { width: 640px; height: min(calc(100% - var(--space-4)), 1360px); }
 }
 
 /* Board group: groups always stack, top to bottom in the order the Director acts on them */
@@ -1368,18 +1431,21 @@ button.chip:not([aria-disabled="true"]):active,
   .control-bar .summary { flex-basis: auto; padding: 0; }
 }
 
-/* Page layout: the whole ticket page, so each section's place is decided once */
-.ticket-page { display: grid; gap: var(--space-6); grid-template-columns: minmax(0, 1fr) 300px; grid-template-areas: "head head" "run facts" "question facts" "timeline facts"; align-items: start; }
+/* Page layout: the whole ticket page, read top to bottom: header, decisions, the run now, the timeline; facts beside */
+.ticket-page { position: relative; display: grid; gap: var(--space-6); grid-template-columns: minmax(0, 1fr) 300px; grid-template-areas: "head head" "run facts" "timeline facts"; align-items: start; min-height: 900px; }
+.ticket-page.has-decision { grid-template-areas: "head head" "decide facts" "run facts" "timeline facts"; }
 .ticket-page > .zone-head { grid-area: head; }
+.ticket-page > .zone-decide { grid-area: decide; min-width: 0; }
 .ticket-page > .zone-run { grid-area: run; min-width: 0; }
-.ticket-page > .zone-question { grid-area: question; min-width: 0; }
-.ticket-page > .zone-timeline { grid-area: timeline; min-width: 0; }
+.ticket-page > .zone-timeline { grid-area: timeline; min-width: 0; margin-top: calc(-1 * var(--space-2)); }
 .ticket-page > .zone-facts { grid-area: facts; position: sticky; top: var(--space-4); }
+.ticket-page > .zone-sheet { position: absolute; inset: calc(-1 * var(--space-6)); }
+.ticket-page .zone-title { margin: 0 0 var(--space-2) var(--space-1); font: var(--type-caption); color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; }
 .ticket-page .facts-rail { width: 100%; }
 .ticket-page .tl-index { display: none !important; }
-.ticket-page .timeline-layout,
-.ticket-page .question-split { grid-template-columns: minmax(0, 1fr); }
-.ticket-page .question-block { max-width: none; }
+.ticket-page .timeline-layout { grid-template-columns: minmax(0, 1fr); }
+.tl-day { display: flex; align-items: baseline; gap: var(--space-2); }
+.tl-day .t-secondary { font: var(--type-secondary); text-transform: none; letter-spacing: 0; }
 .run-panel { display: grid; gap: var(--space-4); padding: var(--space-4) var(--space-5); border-radius: var(--radius-card); background: var(--surface-content); box-shadow: var(--elevation-1), var(--edge-highlight); }
 .run-panel .run-title { display: flex; align-items: center; gap: var(--space-2); font: var(--type-heading); }
 .run-panel .run-title .t-secondary { margin-left: auto; }
@@ -1389,9 +1455,13 @@ button.chip:not([aria-disabled="true"]):active,
 .run-panel .run-extra { display: none; }
 
 @container (min-width: 1600px) {
-  .ticket-page { grid-template-columns: minmax(0, 760px) minmax(0, 620px) 360px; grid-template-areas: "head head head" "question run facts" "timeline run facts"; justify-content: center; column-gap: var(--space-8); }
-  .ticket-page > .zone-run { position: sticky; top: var(--space-4); grid-row: 2 / span 2; }
-  .run-panel .run-extra { display: grid; gap: var(--space-4); }
+  .ticket-page { grid-template-columns: minmax(0, 980px) 360px; justify-content: center; column-gap: var(--space-8); transition: grid-template-columns var(--motion-standard) var(--ease-standard); }
+  .ticket-page.sheet-open { grid-template-columns: minmax(0, 980px) 360px 640px; grid-template-areas: "head head sheet" "decide facts sheet" "run facts sheet" "timeline facts sheet"; }
+  .ticket-page.sheet-open > .zone-sheet { position: sticky; inset: auto; top: var(--space-4); grid-area: sheet; align-self: start; height: min(1360px, 100%); }
+  .ticket-page.sheet-open .dsheet-layer { position: relative; height: 1360px; overflow: visible; }
+  .ticket-page.sheet-open .dsheet-scrim { display: none; }
+  .ticket-page.sheet-open .dsheet { top: 0; right: 0; width: 100%; height: 100%; }
+  .run-panel .run-extra { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-6); align-items: start; }
 }
 
 .layout-note { display: flex; gap: var(--space-2); align-items: center; padding: 6px 12px; border-radius: var(--radius-capsule); font: var(--type-secondary); color: var(--accent-text); background: var(--accent-tint); justify-self: start; }

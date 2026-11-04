@@ -225,7 +225,7 @@ window.CATALOG = (function () {
     const verdict = { passed: "done", failed: "problem", running: "working", stopped: "idle" }[p.verdict] || "working";
     const glyph = { passed: "done", failed: "problem", running: "run-start", stopped: "run-end" }[p.verdict] || "run-start";
     const word = { passed: "Passed", failed: "Failed", running: "Running", stopped: "Stopped" }[p.verdict] || "";
-    const body = fold("run-" + (p.foldKey || "run"), p.expanded, '<div class="run-body"><ol class="timeline">' + (p.entries || []).map(tlEntry).join("") + "</ol></div>");
+    const body = fold("run-" + (p.foldKey || "run"), p.expanded, '<div class="run-body"><ol class="timeline">' + (p.entries || []).slice().reverse().map(tlEntry).join("") + "</ol></div>");
     return '<div class="run-group"><button type="button" class="run-head role-' + verdict + stateClass(p.state) + '" aria-expanded="' + !!p.expanded + '" data-toggle="expanded" data-key="run">' +
       '<span class="time">' + esc(p.time) + '</span><span class="mark">' + (p.verdict === "running" ? '<span class="dot live role-working"></span>' : icon(glyph)) + "</span>" +
       '<span class="name">' + icon("chevron-right", "disclose") + "<b>" + esc(p.title) + "</b>" + badge(verdict, word, "small") + (p.tokens ? '<span class="t-secondary">' + esc(p.tokens) + "</span>" : "") + "</span>" +
@@ -1112,7 +1112,7 @@ window.CATALOG = (function () {
         { kind: "rule", time: "10:27", headHtml: head("Pushed", "and handed off to Code Review") },
       ] })) + "</div>",
       docs: {
-        what: "One run of an agent on the timeline, folded to a single line with its verdict and duration, unfolding into its steps.",
+        what: "One run of an agent on the timeline, folded to a single line with its verdict and duration, unfolding into its steps, newest first.",
         when: ["Folded by default once it ended; the running one is unfolded and live."],
         states: [["Folded", "one line"], ["Unfolded", "its entries indented under a rule"], ["Running", "a live dot, no end time"], ["Failed", "red verdict"], ["Header hover, pressed, focused", "as a row"]],
         motion: "Hover eases in; the connecting line runs from each mark to the next.",
@@ -1351,7 +1351,7 @@ window.CATALOG = (function () {
 
   function actionRail(p) {
     const moves = [];
-    if (p.role === "you") moves.push(button({ label: "Answer in the Inbox", variant: "primary", glyph: "tray" }));
+    if (p.role === "you") { if (!p.cta) moves.push(button({ label: "Answer in the Inbox", variant: "primary", glyph: "tray" })); }
     else moves.push(button({ label: "Approve and Merge…", variant: "primary", disabled: !!p.blocked, reason: "Checks are still running on PR #812." }));
     moves.push(button({ label: "Open Pull Request", variant: "secondary", glyph: "pr" }));
     moves.push(button({ label: "Force", variant: "secondary", glyph: "forced" }));
@@ -1388,23 +1388,80 @@ window.CATALOG = (function () {
       "</aside>";
   }
 
+  const QUESTIONS = [
+    {
+      title: "Review the design catalog", age: "3 h 12 min", prop: "selected", textProp: "text",
+      why: "TP-1382 (Design system catalog) built every Director component and section as stories you can open in a browser. Open the catalog from the path below, try the controls, switch theme and viewport, then pick an answer.",
+      path: "/Users/tonypine/symphony-workspaces/symphony/TP-1382/docs/design/catalog/index.html",
+      unanswered: "TP-1382 stays where it is and TP-1383 (Three prototypes) waits.",
+      opts: [
+        { label: "Approve the catalog", effect: "TP-1382 goes to Code Review and lands; TP-1383 starts from the approved catalog.", good: "The prototypes start today.", recommended: true, why: "Every component and section is in the catalog in light and dark." },
+        { label: "Ask for changes (write them below)", effect: "The next run applies your words and asks again.", cost: "One more review round." },
+      ],
+    },
+    {
+      title: "Let TP-1382 change the file that sets how agents work?", age: "40 min", prop: "selected2", textProp: "text2",
+      why: "The catalog needs one line in the file that sets how agents work, so later tickets can find it. Agents may change that file only when you say so.",
+      unanswered: "TP-1382 leaves the line out; the catalog still opens.",
+      opts: [
+        { label: "Allow this change", effect: "The next run adds the line, and PR #812 carries it.", good: "Later tickets find the catalog on their own.", recommended: true, why: "The line only names the catalog's folder." },
+        { label: "Keep the file as it is", effect: "TP-1382 leaves the line out.", risk: "Each later ticket is told about the catalog by hand." },
+      ],
+    },
+  ];
+
+  const answerOf = (p, q) => {
+    const sel = Number(p[q.prop]);
+    if (sel === 3) return String(p[q.textProp] || "").trim() ? "In your own words" : "";
+    return sel > 0 && q.opts[sel - 1] ? q.opts[sel - 1].label : "";
+  };
+
+  /* One Question's text and answers; the options take the full width of whatever holds them. */
+  function questionBody(p, q, n) {
+    const sel = Number(p[q.prop]);
+    const optionsHtml = q.opts.map((o, i) => option(Object.assign({}, o, { selected: sel === i + 1, set: q.prop + "=" + (i + 1), key: q.prop + i, hotkey: n ? null : i + 1 }))).join("");
+    const own = ownWords({ picked: sel === 3, text: p[q.textProp], hotkey: n ? null : 3, send: false }).replace('data-set="picked=true"', 'data-set="' + q.prop + '=3"').replace('data-set="picked=false"', 'data-set="' + q.prop + '=0"').replace('data-bind="text"', 'data-bind="' + q.textProp + '"').replace('data-key="own"', 'data-key="own-' + q.prop + '"');
+    return '<div class="question-callout"><span class="kicker">' + icon("question", "glyph-sm") + (n ? "QUESTION " + n[0] + " OF " + n[1] : "YOUR DECISION") + '<span class="age">' + esc(q.age) + "</span></span><h2>" + esc(q.title) + "</h2></div>" +
+      '<div class="question-why"><p>' + esc(q.why) + "</p>" +
+      (q.path ? '<p class="t-mono path">' + esc(q.path) + "</p>" : "") +
+      '<p class="unanswered">' + icon("cost") + "<span><b>If you don't answer:</b> " + esc(q.unanswered) + "</span></p></div>" +
+      '<div class="options" role="radiogroup" aria-label="Answers">' + optionsHtml + own + "</div>";
+  }
+
+  function sendArea(answers, total) {
+    const done = answers.filter(Boolean).length;
+    const label = done > 1 ? "Send " + done + " Decisions…" : "Send Decision…";
+    const pick = total === 1 ? (answers[0] ? '<span class="pick"><span class="t-secondary">Your answer</span><b>' + esc(answers[0]) + "</b></span>" : "") :
+      '<span class="pick"><span class="t-secondary">Answered</span><b>' + done + " of " + total + "</b></span>";
+    return pick + (done ? "" : refusal(total === 1 ? "Pick an answer first." : "Answer at least one question first.")) + button({ label: label, variant: "primary", size: "large", disabled: !done, showReason: false, key: "send" });
+  }
+
   function questionBlock(p) {
-    const opts = [
-      { label: "Approve the catalog", effect: "TP-1382 goes to Code Review and lands; TP-1383 starts from the approved catalog.", good: "The prototypes start today.", recommended: true, why: "Every component and section is in the catalog in light and dark.", hotkey: 1 },
-      { label: "Ask for changes (write them below)", effect: "The next run applies your words and asks again.", cost: "One more review round.", hotkey: 2 },
-    ];
-    const sel = Number(p.selected);
-    const optionsHtml = opts.map((o, i) => option(Object.assign({}, o, { selected: sel === i + 1, set: "selected=" + (i + 1), key: "q" + i }))).join("");
-    const own = ownWords({ picked: sel === 3, text: p.text, hotkey: 3, send: false }).replace('data-set="picked=true"', 'data-set="selected=3"').replace('data-set="picked=false"', 'data-set="selected=0"');
-    const chosen = sel > 0 && (sel < 3 || String(p.text || "").trim());
-    const block = '<section class="question-block" aria-label="Question"><div class="question-callout"><span class="kicker">' + icon("question", "glyph-sm") + 'YOUR DECISION</span><h2>Review the design catalog</h2></div>' +
-      '<div class="question-why"><p>TP-1382 (Design system catalog) built every Director component and section as stories you can open in a browser. Open the catalog from the path below, try the controls, switch theme and viewport, then pick an answer.</p>' +
-      '<p class="t-mono" style="font-size:11px;color:var(--text-secondary)">/Users/tonypine/symphony-workspaces/symphony/TP-1382/docs/design/catalog/index.html</p>' +
-      '<p class="unanswered">' + icon("cost") + "<span><b>If you don't answer:</b> TP-1382 stays where it is and TP-1383 (Three prototypes) waits.</span></p></div>" +
-      '<div class="options" role="radiogroup" aria-label="Answers">' + optionsHtml + own + "</div>" +
-      '<div class="question-send">' + (chosen ? "" : refusal("Pick an answer first.")) + button({ label: "Send Decision…", variant: "primary", size: "large", disabled: !chosen, showReason: false }) + "</div></section>";
-    const side = card({ title: "Where this ticket sits", html: kv([["Part of", "TP-1381 · Phase 3b"], ["Its work", "PR #812 · checks passing"], ["Unblocks", "TP-1383 · Three prototypes"]]) });
-    return '<div class="question-split">' + block + '<div class="side">' + side + "</div></div>";
+    const q = QUESTIONS[0];
+    return '<section class="question-block" aria-label="Question"><div class="q-main">' + questionBody(p, q) + "</div>" +
+      '<div class="question-send">' + sendArea([answerOf(p, q)], 1) + "</div></section>";
+  }
+
+  /* The CTA at the top of a ticket page: what waits on the Director, and one move that opens the sheet. */
+  function decisionCta(p) {
+    const n = Math.max(1, Math.min(QUESTIONS.length, Number(p.questions) || 1));
+    const qs = QUESTIONS.slice(0, n);
+    return '<section class="decision-cta" aria-label="Decisions"><span class="cta-mark">' + icon("question") + "</span>" +
+      '<span class="cta-text"><b>' + (n === 1 ? "A question waits on you" : n + " questions wait on you") + "</b>" +
+      '<span class="t-secondary">' + esc(qs.map((q) => q.title).join(" · ")) + " · oldest " + esc(qs[0].age) + "</span></span>" +
+      button({ label: n === 1 ? "Answer…" : "Answer " + n + "…", variant: "primary", key: "cta" }).replace("<button ", '<button aria-expanded="' + !!p.sheetOpen + '" data-set="sheetOpen=' + !p.sheetOpen + '" ') + "</section>";
+  }
+
+  /* The side sheet that holds every open Question, scrolling on its own; one Send at its foot. */
+  function decisionSheet(p) {
+    const n = Math.max(1, Math.min(QUESTIONS.length, Number(p.questions) || 1));
+    const qs = QUESTIONS.slice(0, n);
+    const body = qs.map((q, i) => '<section class="question-block in-sheet" aria-label="Question ' + (i + 1) + '">' + questionBody(p, q, n > 1 ? [i + 1, n] : null) + "</section>").join('<hr class="q-sep">');
+    return '<div class="dsheet-layer"><div class="dsheet-scrim" data-set="sheetOpen=false" aria-hidden="true"></div>' +
+      '<aside class="dsheet" role="dialog" aria-label="Your decisions"><header class="dsheet-head"><span class="cta-mark">' + icon("question") + "</span><div><h2>" + (n === 1 ? "Your decision" : n + " decisions wait on you") + "</h2>" +
+      '<p class="sub">TP-1382 · Design system catalog</p></div><button type="button" class="icon-btn" aria-label="Close" title="Close (Esc)" data-set="sheetOpen=false" data-key="sheet-close">' + icon("close") + "</button></header>" +
+      '<div class="dsheet-body">' + body + "</div>" +
+      '<footer class="dsheet-foot">' + sendArea(qs.map((q) => answerOf(p, q)), n) + "</footer></aside></div>";
   }
 
   function boardGroup(title, role, items, expanded, hint, key, o) {
@@ -1477,9 +1534,9 @@ window.CATALOG = (function () {
   function timelineSection(p) {
     const index = '<nav class="tl-index only-wide" aria-label="Days"><h4>Days</h4>' + [["Today", 12, true], ["Yesterday", 7], ["Mon 2 Nov", 4], ["Fri 30 Oct", 9]].map((d) =>
       '<button type="button"' + (d[2] ? ' aria-current="true"' : "") + "><span>" + esc(d[0]) + '</span><span class="n">' + d[1] + "</span></button>").join("") + "</nav>";
-    return '<div class="timeline-layout">' + index + '<section class="timeline-section"><div class="tl-day">Today</div><ol class="timeline">' + DAY.slice(0, 1).map(tlEntry).join("") + "</ol>" +
+    return '<div class="timeline-layout">' + index + '<section class="timeline-section"><div class="tl-day">Today<span class="t-secondary">newest first</span></div><ol class="timeline">' + DAY.slice(3).reverse().map(tlEntry).join("") + "</ol>" +
       runGroup({ title: "Implementation run 1", verdict: "failed", time: "09:02", duration: "22 min", tokens: "1.4M tokens", expanded: p.runOpen, entries: DAY.slice(1, 3), foldKey: "tl" }).replace('data-toggle="expanded"', 'data-toggle="runOpen"') +
-      '<ol class="timeline">' + DAY.slice(3).map(tlEntry).join("") + "</ol></section></div>";
+      '<ol class="timeline">' + DAY.slice(0, 1).map(tlEntry).join("") + "</ol></section></div>";
   }
 
   function runPanel() {
@@ -1491,11 +1548,14 @@ window.CATALOG = (function () {
   }
 
   function ticketPage(p) {
-    return '<div class="ticket-page"><div class="zone-head">' + pageHeader(p) + "</div>" +
-      '<div class="zone-run">' + runPanel() + "</div>" +
-      '<div class="zone-question">' + questionBlock(p).replace('<div class="side">', '<div class="side" hidden>') + "</div>" +
-      '<div class="zone-timeline">' + timelineSection(p) + "</div>" +
-      '<div class="zone-facts">' + factsRail(p) + "</div></div>";
+    const asks = p.role === "you";
+    const open = asks && !!p.sheetOpen;
+    return '<div class="ticket-page' + (asks ? " has-decision" : "") + (open ? " sheet-open" : "") + '"><div class="zone-head">' + pageHeader(Object.assign({}, p, { cta: asks })) + "</div>" +
+      (asks ? '<div class="zone-decide">' + decisionCta(p) + "</div>" : "") +
+      '<div class="zone-run"><h3 class="zone-title">The run now</h3>' + runPanel() + "</div>" +
+      '<div class="zone-timeline"><h3 class="zone-title">Timeline</h3>' + timelineSection(p) + "</div>" +
+      '<div class="zone-facts">' + factsRail(p) + "</div>" +
+      (open ? '<div class="zone-sheet">' + decisionSheet(p) + "</div>" : "") + "</div>";
   }
 
   const frame = (inner) => '<div class="section-frame">' + inner + "</div>";
@@ -1506,22 +1566,32 @@ window.CATALOG = (function () {
     {
       title: "Page layout",
       wide: true,
-      args: { page: "ticket", boardPick: "", ident: "TP-1382", title: "Design system catalog as HTML: every Director component and section as stories", role: "you", blocked: false, noRun: false, more: false, selected: 0, text: "", runOpen: false, fNow: true, fWork: true, fLinks: false, stacked: false, g1: true, g2: true, g3: true, emptyYou: false },
-      controls: [{ name: "page", label: "Page", type: "select", options: [{ value: "ticket", label: "Ticket page" }, { value: "board", label: "Board" }] }].concat(HEADER_CONTROLS.slice(0, 1)),
+      args: { page: "ticket", boardPick: "", ident: "TP-1382", title: "Design system catalog as HTML: every Director component and section as stories", role: "you", blocked: false, noRun: false, more: false, questions: 2, sheetOpen: false, selected: 0, text: "", selected2: 0, text2: "", runOpen: false, fNow: true, fWork: true, fLinks: false, stacked: false, g1: true, g2: true, g3: true, emptyYou: false },
+      controls: [
+        { name: "page", label: "Page", type: "select", options: [{ value: "ticket", label: "Ticket page" }, { value: "board", label: "Board" }] },
+        HEADER_CONTROLS[0],
+        { name: "questions", label: "Open questions", type: "select", options: [{ value: 1, label: "One" }, { value: 2, label: "Two" }], when: (p) => p.page === "ticket" && p.role === "you" },
+        { name: "sheetOpen", label: "Decisions sheet open", type: "toggle", when: (p) => p.page === "ticket" && p.role === "you" },
+      ],
       render: (p) => frame(p.page === "board" ? board(Object.assign({}, p, { selected: p.boardPick })).replace(/data-set="selected=/g, 'data-set="boardPick=') : ticketPage(p)),
       docs: {
-        what: "Where every section goes on a whole page, at both widths. The page is designed once, as a whole: a wider window rearranges what the Director sees side by side; it never just stretches lines or sets groups side by side because there is room.",
+        what: "Where every section goes on a whole page, at both widths. The ticket page reads top to bottom in the order the Director needs it: who and where it stands (the header), what waits on them (the decisions), what is happening now (the run's steps), then what happened (the timeline, newest first). The facts rail is the reference beside it. A wider window gives the same structure more room; it never moves sections around.",
+        when: ["Decisions never sit in the page itself: the page shows one line saying what waits, and Answer opens them in a side sheet on the right, where several Questions scroll on their own.", "The run's steps always sit directly on top of the timeline, so the run now and the history read as one story."],
         responsive: [
-          "Ticket page, laptop (1180 pt): the header across the top; one main column with the run now, the Question and the timeline; the facts rail (300 pt) on the right, its later groups folded.",
-          "Ticket page, desktop (2200 pt): the header across the top with the key facts as chips under the situation; three zones: the Question and the timeline (at most 760 pt, so lines keep their measure), the run now in its own sticky column with its tokens and time by stage, and the facts rail (360 pt) with every group open.",
+          "Ticket page, laptop (1180 pt): the header across the top; the main column holds the decisions line, the run's steps and the timeline, in that order; the facts rail (300 pt) on the right, its later groups folded. The decisions sheet (520 pt) slides over the right of the page, over a dimmed page, and closes on a click outside it.",
+          "Ticket page, desktop (2200 pt): the same order and the same two columns, wider: the main column up to 980 pt (the timeline keeps its measure) with the run's tokens and time by stage beside its steps; the facts rail (360 pt) with every group open. The decisions sheet (640 pt) docks as a third column on the far right, so the page stays readable beside it.",
           "Board, laptop: the situation groups stacked top to bottom in the order the Director acts on them; each row says where the ticket stands in two lines. Picking a row opens its page.",
           "Board, desktop: the groups still stack; each row turns into one line of aligned columns (what it waits on, repo, steps, age), and a preview of the picked ticket sits beside the list, so the Director can act without leaving the board.",
         ],
-        tokens: ["--space-6", "--space-8", "--measure", "section tokens"],
+        motion: "The sheet slides in from the right on a spring (0.5 s) while the page dims; on desktop the page's columns ease aside to make room.",
+        tokens: ["--space-6", "--space-8", "--measure", "--radius-sheet", "--material-glass-thick", "section tokens"],
       },
       stories: [
         { name: "Ticket page, laptop", viewport: "laptop", args: { page: "ticket" } },
+        { name: "Ticket page, laptop, decisions open", viewport: "laptop", args: { page: "ticket", sheetOpen: true, selected: 1 } },
         { name: "Ticket page, desktop", viewport: "desktop", args: { page: "ticket", fLinks: true } },
+        { name: "Ticket page, desktop, decisions open", viewport: "desktop", args: { page: "ticket", fLinks: true, sheetOpen: true, selected: 1 } },
+        { name: "Ticket page, nothing waits on you", viewport: "laptop", args: { page: "ticket", role: "working" } },
         { name: "Board, laptop", viewport: "laptop", args: { page: "board" } },
         { name: "Board, desktop", viewport: "desktop", args: { page: "board", boardPick: "TP-1375" } },
       ],
@@ -1573,8 +1643,8 @@ window.CATALOG = (function () {
       controls: [{ name: "runOpen", label: "Run group unfolded", type: "toggle" }],
       render: (p) => frame(timelineSection(p)),
       docs: {
-        what: "A day of a ticket's history, newest last: phase moves, pauses, questions, runs folded into groups, the Director's own actions and the rules Symphony applied.",
-        responsive: ["Laptop: one column of at most 780 pt.", "Desktop: the same column, with a list of days beside it that jumps between them; the extra width goes to finding your way, never to longer lines.", "On the ticket page the timeline keeps one column at both widths: the day list belongs to the full history view."],
+        what: "A day of a ticket's history, newest first, so the latest event is the first thing read: phase moves, pauses, questions, runs folded into groups, the Director's own actions and the rules Symphony applied.",
+        responsive: ["Laptop: one column of at most 780 pt.", "Desktop: the same column, with a list of days beside it that jumps between them; the extra width goes to finding your way, never to longer lines.", "On the ticket page the timeline keeps one column at both widths, directly under the run's steps: the day list belongs to the full history view.", "Newest first at every level: days, entries in a day, and the entries inside an unfolded run."],
         tokens: ["timeline entry tokens", "--measure"],
       },
       stories: VIEWPORT_STORIES([{ name: "Run unfolded", viewport: "laptop", args: { runOpen: true } }]),
@@ -1586,12 +1656,32 @@ window.CATALOG = (function () {
       controls: [{ name: "selected", label: "Picked answer", type: "select", options: [{ value: 0, label: "None yet" }, { value: 1, label: "Approve the catalog" }, { value: 2, label: "Ask for changes" }, { value: 3, label: "My own words" }] }, { name: "text", label: "Own words", type: "textarea", when: (p) => Number(p.selected) === 3 }],
       render: (p) => frame(questionBlock(p)),
       docs: {
-        what: "A Question as the Director answers it: the callout with the question, why it is asked and what happens if it waits, the option cards, the own-words card, and a large Send.",
-        when: ["Send stays off until an answer is picked (and, for own words, written), and says so."],
-        responsive: ["Laptop: one column of at most 720 pt, with “Where this ticket sits” under it.", "Desktop: the same column, with “Where this ticket sits” as a 340 pt card beside it.", "On the ticket page the facts rail already says where it sits, so the card is left out.", "Every paragraph stops at the measure."],
+        what: "A Question as the Director answers it: the callout with the question, why it is asked and what happens if it waits, the option cards, the own-words card, and a large Send that repeats the picked answer.",
+        when: ["Send stays off until an answer is picked (and, for own words, written), and says so.", "On the ticket page Questions open in the decisions sheet; see Decision sheet."],
+        responsive: ["Laptop: one column. The option cards fill the column's width, and Send sits under them, its right edge on theirs.", "Desktop: Send moves into a column on the far right (300 pt), sticky, with the picked answer above it; the options fill the rest, up to 1240 pt in all.", "The option cards stretch; the text inside them stops at the measure."],
         tokens: ["--tint-you", "--status-you", "option card tokens", "--control-lg", "--measure"],
       },
-      stories: VIEWPORT_STORIES([{ name: "Option picked", viewport: "laptop", args: { selected: 1 } }, { name: "Own words", viewport: "laptop", args: { selected: 3, text: "Approve, but make the dark status tints a step stronger first." } }]),
+      stories: VIEWPORT_STORIES([{ name: "Option picked", viewport: "laptop", args: { selected: 1 } }, { name: "Option picked, desktop", viewport: "desktop", args: { selected: 1 } }, { name: "Own words", viewport: "laptop", args: { selected: 3, text: "Approve, but make the dark status tints a step stronger first." } }]),
+    },
+    {
+      title: "Decision sheet",
+      wide: true,
+      args: { questions: 2, sheetOpen: true, selected: 0, text: "", selected2: 0, text2: "" },
+      controls: [
+        { name: "questions", label: "Open questions", type: "select", options: [{ value: 1, label: "One" }, { value: 2, label: "Two" }] },
+        { name: "sheetOpen", label: "Open", type: "toggle" },
+        { name: "selected", label: "First answer", type: "select", options: [{ value: 0, label: "None yet" }, { value: 1, label: "Approve the catalog" }, { value: 2, label: "Ask for changes" }, { value: 3, label: "My own words" }] },
+        { name: "selected2", label: "Second answer", type: "select", options: [{ value: 0, label: "None yet" }, { value: 1, label: "Allow this change" }, { value: 2, label: "Keep the file as it is" }, { value: 3, label: "My own words" }], when: (p) => Number(p.questions) === 2 },
+      ],
+      render: (p) => frame('<div class="sheet-stage"><div class="ghost-page" aria-hidden="true"><span></span><span></span><span></span><span></span></div>' + (p.sheetOpen ? decisionSheet(p) : '<div class="ghost-cta">' + decisionCta(p) + "</div>") + "</div>"),
+      docs: {
+        what: "Every Question open on a ticket, in a side sheet on the right: a header with the count and a close button, the Questions one under the other, and one Send at the foot that sends every answered one. The ticket page itself keeps only one line about them (the decisions line with Answer), so it stays quiet.",
+        when: ["Open it from the decisions line at the top of a ticket page. Close it with the close button, Esc, or a click on the dimmed page.", "Answer one, some or all: Send counts what is answered and leaves the rest open."],
+        responsive: ["Laptop: 520 pt over the right of the page, the page dimmed behind it.", "Desktop: 640 pt, docked as a column on the far right; the page stays bright and readable beside it.", "As tall as the window; the Questions scroll inside it while its header and Send stay put."],
+        motion: "Slides in from the right on a spring (0.5 s); the dimmed page fades in at 0.28 s.",
+        tokens: ["--radius-sheet", "--material-glass-thick", "--elevation-4", "--surface-overlay", "--motion-spring"],
+      },
+      stories: VIEWPORT_STORIES([{ name: "One question", viewport: "laptop", args: { questions: 1 } }, { name: "Answered one of two", viewport: "laptop", args: { selected: 1 } }, { name: "Both answered", viewport: "desktop", args: { selected: 1, selected2: 1 } }]),
     },
     {
       title: "Board group",
