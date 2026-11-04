@@ -283,6 +283,15 @@ window.CATALOG = (function () {
       (p.send ? '<div class="foot">' + button({ label: "Send Decision…", variant: "primary", disabled: empty, reason: "Write your answer first.", showReason: true }) + "</div>" : "") + "</div>";
   }
 
+  function stageBar(p) {
+    const parts = [["Writing the code", p.code, "s1"], ["Code Review", p.review, "s2"], ["QA", p.qa, "s3"], ["Merging", p.merge, "s4"], ["Waiting on you", p.waiting, "s5"]];
+    const total = parts.reduce((a, x) => a + (Number(x[1]) || 0), 0);
+    const k = p.key ? p.key + "-" : "";
+    const track = total ? '<div class="stage-track" role="img" aria-label="' + esc(p.label) + '">' + parts.filter((x) => Number(x[1]) > 0).map((x) => '<span class="stage-seg ' + x[2] + '" data-anim="seg-' + k + x[2] + '" style="flex:' + Number(x[1]) + '" title="' + esc(x[0]) + ": " + esc(x[1]) + " " + esc(p.unit) + '"></span>').join("") + "</div>" : '<div class="stage-track empty"></div>';
+    return '<div class="stage-bar"><div class="meter-head"><span>' + esc(p.label) + '</span><span class="value">' + (total ? esc(total) + " " + esc(p.unit) + " in all" : "Nothing yet") + "</span></div>" + track +
+      '<ul class="stage-legend">' + parts.map((x) => '<li><span class="key stage-seg ' + x[2] + '"></span>' + esc(x[0]) + ' <span class="v">' + esc(x[1] || 0) + "</span></li>").join("") + "</ul></div>";
+  }
+
   function meter(p) {
     const cap = Math.max(1, Number(p.cap) || 1);
     const used = Math.max(0, Number(p.used) || 0);
@@ -310,7 +319,7 @@ window.CATALOG = (function () {
   const DAY = [
     { kind: "phase", time: "09:02", headHtml: head("Moved to In Progress", "from Todo"), actor: "Symphony" },
     { kind: "run-started", time: "09:02", headHtml: head("Implementation run 1 started"), detail: "Claude · laptop workspace" },
-    { kind: "run-failed", time: "09:24", headHtml: head("Implementation run 1 ended:", "checks failed"), detail: "22 min · 1.4M tokens" },
+    { kind: "run-failed", time: "09:24", headHtml: head("Implementation run 1 ended:", "checks failed"), detail: "Two tests failed in the orchestrator" },
     { kind: "pause-set", time: "09:30", headHtml: head("Paused:", "Deploy freeze"), detail: "Dispatch paused for every ticket", actor: "Tony" },
     { kind: "pause-cleared", time: "10:05", headHtml: head("Pause cleared"), detail: "Dispatch resumed", actor: "Tony" },
     { kind: "question-asked", time: "10:40", headHtml: head("Question asked:", "Review the design catalog"), detail: "Two options, one recommended" },
@@ -478,7 +487,7 @@ window.CATALOG = (function () {
         when: [
           "Press: a control shrinks to 97 % in 0.1 s while held and springs back.",
           "Lift: a clickable card or option rises 1 pt with a deeper shadow on hover, on a spring.",
-          "Fold: a group, card or run opens to its height in 0.28 s; its rows fade down into place one after another, 35 ms apart; the chevron turns on a spring. Board groups, collapsible cards, run groups and the facts rail fold this way.",
+          "Fold: a group, card or run opens to its height in 0.28 s; its rows fade down into place one after another, 35 ms apart; the chevron turns on a spring. Board groups, collapsible cards and run groups fold this way.",
           "Slide: a selection moves rather than jumps: the segmented thumb, the switch knob, a meter's fill.",
           "Enter: what floats (menus, tooltips, toasts, sheets) rises a few points and fades in on a spring; it leaves faster than it came.",
           "Values that change on a poll update in place; nothing moves under the pointer.",
@@ -845,13 +854,7 @@ window.CATALOG = (function () {
         { name: "waiting", label: "Waiting on you", type: "number", min: 0 },
         { name: "unit", label: "Unit", type: "select", options: ["min", "M tokens"] },
       ],
-      render: (p) => {
-        const parts = [["Writing the code", p.code, "s1"], ["Code Review", p.review, "s2"], ["QA", p.qa, "s3"], ["Merging", p.merge, "s4"], ["Waiting on you", p.waiting, "s5"]];
-        const total = parts.reduce((a, x) => a + (Number(x[1]) || 0), 0);
-        const track = total ? '<div class="stage-track" role="img" aria-label="' + esc(p.label) + '">' + parts.filter((x) => Number(x[1]) > 0).map((x) => '<span class="stage-seg ' + x[2] + '" data-anim="seg-' + x[2] + '" style="flex:' + Number(x[1]) + '" title="' + esc(x[0]) + ": " + esc(x[1]) + " " + esc(p.unit) + '"></span>').join("") + "</div>" : '<div class="stage-track empty"></div>';
-        return '<div class="stage-bar"><div class="meter-head"><span>' + esc(p.label) + '</span><span class="value">' + (total ? esc(total) + " " + esc(p.unit) + " in all" : "Nothing yet") + "</span></div>" + track +
-          '<ul class="stage-legend">' + parts.map((x) => '<li><span class="key stage-seg ' + x[2] + '"></span>' + esc(x[0]) + ' <span class="v">' + esc(x[1] || 0) + "</span></li>").join("") + "</ul></div>";
-      },
+      render: (p) => stageBar(p),
       docs: {
         what: "Where a ticket's time or tokens went, stage by stage, as one bar split into segments with a legend that carries the numbers.",
         when: ["Segments keep their landing order left to right. The legend is always there, so colour is never the only way to read it."],
@@ -1060,7 +1063,7 @@ window.CATALOG = (function () {
         const a = [["Stage", badge("you", "Waiting on you", "small"), true], ["Repo", chip({ kind: "repo", text: "symphony", interactive: false }), true], ["Pull request", "PR #812 · checks passing"], ["Part of", p.missing ? "" : "TP-1381 · Phase 3b"]];
         const b = [["Runs", "3 · 1 h 12 min"], ["Tokens", p.missing ? "" : "6.2M of 8M"], ["Waiting since", "Today 11:15"]];
         if (!p.grouped) return '<div style="width:360px">' + kv(a.concat(b), p.layout === "stacked") + "</div>";
-        return '<div style="width:360px"><div class="kv-group"><h4>Now</h4>' + kv(a, p.layout === "stacked") + '</div><div class="kv-group"><h4>Work</h4>' + kv(b, p.layout === "stacked") + "</div></div>";
+        return '<div style="width:360px"><div class="kv-group"><h4>Ticket</h4>' + kv(a, p.layout === "stacked") + '</div><div class="kv-group"><h4>Work</h4>' + kv(b, p.layout === "stacked") + "</div></div>";
       },
       docs: {
         what: "Facts about one thing as label and value pairs: the facts rail, popovers, the review's context card.",
@@ -1374,22 +1377,66 @@ window.CATALOG = (function () {
       { role: "working", word: "Waiting for CI", cause: "Checks are running on PR #812.", waits: "Code Review starts when they pass.", age: "6 min" };
     return '<header class="page-header"><div class="head-main"><div class="ident-line"><span class="ident">' + esc(p.ident) + "</span>" + chip({ kind: "repo", text: "symphony", interactive: false }) + chip({ kind: "epic", text: "Phase 3b", interactive: false }) + "</div>" +
       "<h1>" + esc(p.title) + "</h1>" + '<div class="head-status">' + situation(Object.assign({ size: "large" }, s)) +
-      '<div class="head-facts only-wide">' + chip({ kind: "status", role: "done", text: "PR #812 · 14 files", interactive: false }) + chip({ kind: "status", role: "idle", text: "3 runs · 1 h 12 min", interactive: false }) + chip({ kind: "status", role: "you", text: "6.2M of 8M tokens", interactive: false }) + "</div>" +
       "</div></div>" + actionRail(p) + "</header>";
   }
 
-  function factsGroup(key, title, summary, open, html) {
-    return '<section class="card collapsible"><button type="button" class="fold-head" aria-expanded="' + !!open + '" data-toggle="' + key + '" data-key="fh-' + key + '">' + icon("chevron-right", "disclose") + esc(title) +
-      '<span class="summary when-folded">' + esc(summary) + "</span></button>" + fold("facts-" + key, open, '<div class="fold-body">' + html + "</div>") + "</section>";
+  /* The ticket's work and its connections, each a titled panel like the run's steps: the title sits
+     outside the card, so every column of the page starts on the same line. The work panel is the one
+     place the page shows the pull request, the runs, their time and their tokens. */
+  const RUNS = [
+    { name: "Implementation run 1", verdict: "failed", word: "Checks failed", min: 22, tokens: 1.4 },
+    { name: "Code Review", verdict: "passed", word: "Passed", min: 8, tokens: 0.4 },
+    { name: "Implementation run 2", verdict: "current", word: "Running", min: 42, tokens: 4.4 },
+  ];
+  const fmtMin = (m) => (m >= 60 ? Math.floor(m / 60) + " h " + (m % 60 ? (m % 60) + " min" : "") : m + " min").trim();
+
+  function figure(value, label) {
+    return '<div class="figure"><span class="figure-value">' + esc(value) + '</span><span class="figure-label">' + esc(label) + "</span></div>";
+  }
+
+  function workPanel(p) {
+    const runs = p.noRun ? [] : RUNS;
+    const min = runs.reduce((a, r) => a + r.min, 0);
+    const tok = runs.reduce((a, r) => a + r.tokens, 0);
+    const pr = p.noPr ? '<p class="empty-line">No pull request yet: the first run opens one.</p>' :
+      '<a class="pr-line" href="#" onclick="return false">' + icon("pr", "pr-glyph") + '<span class="pr-name">PR #812</span><span class="t-secondary">14 files · +412 −88</span>' + badge("done", "Checks passing", "small") + "</a>";
+    const runRows = runs.map((r) => {
+      const role = r.verdict === "failed" ? "problem" : r.verdict === "current" ? "working" : "done";
+      return '<li class="run-row"><span class="dot role-' + role + (r.verdict === "current" ? " live" : "") + '"></span><span class="run-name">' + esc(r.name) + '<span class="t-secondary">' + esc(r.word) + "</span></span>" +
+        '<span class="num">' + esc(fmtMin(r.min)) + '</span><span class="num">' + esc(r.tokens.toFixed(1)) + "M</span></li>";
+    }).join("");
+    const usage = runs.length ?
+      '<div class="figures">' + figure(fmtMin(min), "on runs") + figure(String(runs.length), runs.length === 1 ? "run" : "runs") + figure(tok.toFixed(1) + "M", "tokens") + "</div>" +
+      meter({ label: "Tokens against the ticket's cap", used: Math.round(tok * 1e6), cap: 8000000, unit: "tokens", resets: "never: the cap is per ticket" }) +
+      '<div class="usage-split">' + stageBar({ key: "time", label: "Time by stage", code: 64, review: 8, qa: 0, merge: 0, waiting: 192, unit: "min" }) +
+      stageBar({ key: "tokens", label: "Tokens by stage", code: 5.8, review: 0.4, qa: 0, merge: 0, waiting: 0, unit: "M tokens" }) + "</div>" +
+      '<ol class="run-list" aria-label="Runs"><li class="run-row run-head"><span></span><span>Run</span><span class="num">Time</span><span class="num">Tokens</span></li>' + runRows + "</ol>" :
+      '<p class="empty-line">No run yet: time and tokens appear when the first run starts.</p>';
+    return '<section class="facts-group"><h3 class="zone-title">Work</h3><div class="panel work-panel"><div class="panel-sub"><h4>Pull request</h4>' + pr + '</div><div class="panel-sub"><h4>Usage</h4>' + usage + "</div></div></section>";
+  }
+
+  function relRow(t, note, self) {
+    const tag = self ? "div" : "button";
+    return "<li><" + tag + (self ? "" : ' type="button"') + ' class="rel-row' + (self ? " is-self" : "") + '"' + (self ? ' aria-current="true"' : "") + '><span class="dot role-' + esc(t.role) + '"></span><span class="rel-ident">' + esc(t.ident) + "</span>" +
+      '<span class="rel-title">' + esc(t.title) + (note ? '<span class="rel-note">' + esc(note) + "</span>" : "") + "</span>" + badge(t.role, t.word, "small") + (self ? "" : icon("chevron-right", "rel-go")) + "</" + tag + "></li>";
+  }
+
+  function connectedPanel(p) {
+    const self = { ident: "TP-1382", title: "Design system catalog", role: p.role === "you" ? "you" : "working", word: p.role === "you" ? "Waiting on you" : "Code Review" };
+    const next = { ident: "TP-1383", title: "Three ticket page prototypes", role: "idle", word: "Todo" };
+    const later = { ident: "TP-1384", title: "Ticket page built in the app", role: "idle", word: "Backlog" };
+    const blocker = { ident: "TP-1375", title: "First dispatch waits for its relations", role: "problem", word: "Checks failed" };
+    const epic = p.noEpic ? '<div class="panel-sub"><h4>Epic</h4><p class="empty-line">Not part of an epic.</p></div>' :
+      '<div class="panel-sub"><h4>Epic</h4><button type="button" class="epic-head"><span class="epic-ident">TP-1381</span><span class="epic-title">Phase 3b: the Director redesigned around a ticket’s situation</span>' + icon("chevron-right", "rel-go") + "</button>" +
+      '<div class="epic-progress"><div class="epic-track" role="img" aria-label="0 of 3 done, 1 in progress, 2 waiting"><span class="seg role-working"></span><span class="seg role-idle"></span><span class="seg role-idle"></span></div><span class="t-secondary">0 of 3 done · this is the 1st</span></div>' +
+      '<ol class="rel-list">' + relRow(self, "This ticket", true) + relRow(next, "Waits for this one") + relRow(later, "") + "</ol></div>";
+    const held = '<div class="panel-sub"><h4>Waiting on</h4>' + (p.blockedBy ? '<ol class="rel-list">' + relRow(blocker, "Must land before this one starts its next run") + "</ol>" : '<p class="empty-line">Nothing: no ticket holds this one up.</p>') + "</div>";
+    const holds = '<div class="panel-sub"><h4>Holding up</h4><ol class="rel-list">' + relRow(next, "Starts when this one lands") + "</ol></div>";
+    return '<section class="facts-group"><h3 class="zone-title">Connected</h3><div class="panel connected-panel">' + epic + held + holds + "</div></section>";
   }
 
   function factsRail(p) {
-    const role = p.role || "working";
-    return '<aside class="facts-rail" aria-label="Facts">' +
-      factsGroup("fNow", "Now", role === "you" ? "Waiting on you" : "Code Review", p.fNow, kv([["Stage", badge(role, role === "you" ? "Waiting on you" : "Code Review", "small"), true], ["Waiting on", role === "you" ? "You" : "CI on PR #812"], ["Since", "Today 11:15"]], p.stacked)) +
-      factsGroup("fWork", "Work", "PR #812 · 3 runs", p.fWork, kv([["Pull request", '<a href="#" onclick="return false">PR #812</a> · 14 files', true], ["Runs", "3 · 1 h 12 min"], ["Tokens", meter({ label: "", used: 6200000, cap: 8000000, unit: "tokens", resets: "never" }).replace('class="meter ', 'style="width:100%" class="meter '), true]], p.stacked)) +
-      factsGroup("fLinks", "Connected", "Phase 3b · blocks 1", p.fLinks, kv([["Part of", "TP-1381 · Phase 3b"], ["Blocks", "TP-1383 · Three prototypes"], ["Repo", chip({ kind: "repo", text: "symphony", interactive: false }), true]], p.stacked)) +
-      "</aside>";
+    return '<aside class="facts-rail" aria-label="Facts">' + workPanel(p) + connectedPanel(p) + "</aside>";
   }
 
   const QUESTIONS = [
@@ -1539,23 +1586,20 @@ window.CATALOG = (function () {
     const index = '<nav class="tl-index only-wide" aria-label="Days"><h4>Days</h4>' + [["Today", 12, true], ["Yesterday", 7], ["Mon 2 Nov", 4], ["Fri 30 Oct", 9]].map((d) =>
       '<button type="button"' + (d[2] ? ' aria-current="true"' : "") + "><span>" + esc(d[0]) + '</span><span class="n">' + d[1] + "</span></button>").join("") + "</nav>";
     return '<div class="timeline-layout">' + index + '<section class="timeline-section"><div class="tl-day">Today<span class="t-secondary">newest first</span></div><ol class="timeline">' + DAY.slice(3).reverse().map(tlEntry).join("") + "</ol>" +
-      runGroup({ title: "Implementation run 1", verdict: "failed", time: "09:02", duration: "22 min", tokens: "1.4M tokens", expanded: p.runOpen, entries: DAY.slice(1, 3), foldKey: "tl" }).replace('data-toggle="expanded"', 'data-toggle="runOpen"') +
+      runGroup({ title: "Implementation run 1", verdict: "failed", time: "09:02", duration: "22 min", tokens: "", expanded: p.runOpen, entries: DAY.slice(1, 3), foldKey: "tl" }).replace('data-toggle="expanded"', 'data-toggle="runOpen"') +
       '<ol class="timeline">' + DAY.slice(0, 1).map(tlEntry).join("") + "</ol></section></div>";
   }
 
   function runPanel() {
-    return '<section class="run-panel" aria-label="The run now"><div class="run-title"><span class="dot live role-working"></span>Implementation run 2<span class="t-secondary">14 min</span></div>' +
-      steps({ code: "passed", build: "passed", checks: "passed", tests: "current", handoff: "pending", testsNote: "212 of 340" }) +
-      '<div class="run-extra">' + meter({ label: "Tokens on this ticket", used: 6200000, cap: 8000000, unit: "tokens", resets: "never: the cap is per ticket" }) +
-      '<div class="stage-bar"><div class="meter-head"><span>Time by stage</span><span class="value">161 min in all</span></div><div class="stage-track"><span class="stage-seg s1" style="flex:42"></span><span class="stage-seg s2" style="flex:18"></span><span class="stage-seg s3" style="flex:25"></span><span class="stage-seg s4" style="flex:6"></span><span class="stage-seg s5" style="flex:70"></span></div></div>' +
-      "</div></section>";
+    return '<section class="panel run-panel" aria-label="The run now"><div class="run-title"><span class="dot live role-working"></span>Implementation run 2<span class="t-secondary">on the tests step</span></div>' +
+      steps({ code: "passed", build: "passed", checks: "passed", tests: "current", handoff: "pending", testsNote: "212 of 340" }) + "</section>";
   }
 
   function ticketPage(p) {
     const asks = p.role === "you";
     const open = asks && !!p.sheetOpen;
     return '<div class="ticket-page' + (asks ? " has-decision" : "") + (open ? " sheet-open" : "") + '"><div class="zone-head">' + pageHeader(Object.assign({}, p, { cta: asks })) + "</div>" +
-      (asks ? '<div class="zone-decide only-narrow">' + decisionCta(p) + "</div>" : "") +
+      (asks ? '<div class="zone-decide only-narrow"><h3 class="zone-title">Waiting on you</h3>' + decisionCta(p) + "</div>" : "") +
       '<div class="zone-run"><h3 class="zone-title">The run now</h3>' + runPanel() + "</div>" +
       '<div class="zone-timeline"><h3 class="zone-title">Timeline</h3>' + timelineSection(p) + "</div>" +
       '<div class="zone-facts">' + factsRail(p) + "</div>" +
@@ -1571,7 +1615,7 @@ window.CATALOG = (function () {
     {
       title: "Page layout",
       wide: true,
-      args: { page: "ticket", boardPick: "", ident: "TP-1382", title: "Design system catalog as HTML: every Director component and section as stories", role: "you", blocked: false, noRun: false, more: false, questions: 2, sheetOpen: false, selected: 0, text: "", selected2: 0, text2: "", runOpen: false, fNow: true, fWork: true, fLinks: false, stacked: false, g1: true, g2: true, g3: true, emptyYou: false },
+      args: { page: "ticket", boardPick: "", ident: "TP-1382", title: "Design system catalog as HTML: every Director component and section as stories", role: "you", blocked: false, noRun: false, more: false, questions: 2, sheetOpen: false, selected: 0, text: "", selected2: 0, text2: "", runOpen: false, blockedBy: false, noEpic: false, noPr: false, g1: true, g2: true, g3: true, emptyYou: false },
       controls: [
         { name: "page", label: "Page", type: "select", options: [{ value: "ticket", label: "Ticket page" }, { value: "board", label: "Board" }] },
         HEADER_CONTROLS[0],
@@ -1580,11 +1624,12 @@ window.CATALOG = (function () {
       ],
       render: (p) => frame(p.page === "board" ? board(Object.assign({}, p, { selected: p.boardPick })).replace(/data-set="selected=/g, 'data-set="boardPick=') : ticketPage(p)),
       docs: {
-        what: "Where every section goes on a whole page, at both widths. The ticket page reads top to bottom in the order the Director needs it: who and where it stands (the header, one row across the page), what waits on them (the decisions), what is happening now (the run's steps), then what happened (the timeline, newest first). The facts rail is the reference beside it. A wider window gives the same structure more room; it never moves sections around.",
+        what: "Where every section goes on a whole page, at both widths. The ticket page reads top to bottom in the order the Director needs it: who and where it stands (the header, one row across the page), what waits on them (the decisions), what is happening now (the run's steps), then what happened (the timeline, newest first). The facts rail is the reference beside the run and the timeline: the ticket's work (pull request, time, tokens) in one panel and its connections in another. A wider window gives the same structure more room; it never moves sections around.",
         when: ["The header is always one row across the whole page; every column starts under it.", "On a laptop the decisions never sit in the page itself: the page shows one line saying what waits, and Answer opens them in a side sheet on the right, where several Questions scroll on their own. On a desktop there is room for them, so they are always there as a column and the page needs no such line.", "The run's steps always sit directly on top of the timeline, so the run now and the history read as one story."],
         responsive: [
-          "Ticket page, laptop (1180 pt): the header across the top; the main column holds the decisions line, the run's steps and the timeline, in that order; the facts rail (300 pt) on the right, its later groups folded. The decisions sheet (520 pt) slides over the right of the page, over a dimmed page, and closes on a click outside it.",
-          "Ticket page, desktop (2200 pt): the header is one row across the page, the moves on the identifier's line so the title has the whole width, the situation and the key facts on the line under it. Under the header, three columns: the main column (up to 1080 pt) with the run's steps on top of the timeline and the run's tokens and time by stage beside its steps; the facts rail (360 pt) with every group open; and, when something waits on the Director, the decisions (640 pt) on the far right, always open and scrolling on their own. No decisions line, no Answer button: the answers are already on the page. With nothing waiting, the page keeps two columns.",
+          "Ticket page, laptop (1180 pt): the header across the top; the main column holds the decisions line, the run's steps and the timeline, in that order; the facts rail (340 pt) on the right with Work and Connected. The decisions sheet (520 pt) slides over the right of the page, over a dimmed page, and closes on a click outside it.",
+          "Ticket page, desktop (2200 pt): the header is one row across the page, the moves on the identifier's line so the title has the whole width, the situation and the key facts on the line under it. Under the header, three columns: the main column with the run's steps on top of the timeline; the facts rail (440 pt) with Work and Connected; and, when something waits on the Director, the decisions (600 pt) on the far right, always open and scrolling on their own. No decisions line, no Answer button: the answers are already on the page. With nothing waiting, the page keeps two columns, the main one up to 1040 pt.",
+          "Every column opens with its title outside its card (The run now, Work, Waiting on you), so the columns start on one line. The pull request, the time and the tokens appear once, in Work.",
           "Board, laptop: the situation groups stacked top to bottom in the order the Director acts on them; each row says where the ticket stands in two lines. Picking a row opens its page.",
           "Board, desktop: the groups still stack; each row turns into one line of aligned columns (what it waits on, repo, steps, age), and a preview of the picked ticket sits beside the list, so the Director can act without leaving the board.",
         ],
@@ -1594,9 +1639,9 @@ window.CATALOG = (function () {
       stories: [
         { name: "Ticket page, laptop", viewport: "laptop", args: { page: "ticket" } },
         { name: "Ticket page, laptop, decisions open", viewport: "laptop", args: { page: "ticket", sheetOpen: true, selected: 1 } },
-        { name: "Ticket page, desktop", viewport: "desktop", args: { page: "ticket", fLinks: true } },
-        { name: "Ticket page, desktop, one answer picked", viewport: "desktop", args: { page: "ticket", fLinks: true, selected: 1 } },
-        { name: "Ticket page, desktop, nothing waits on you", viewport: "desktop", args: { page: "ticket", fLinks: true, role: "working" } },
+        { name: "Ticket page, desktop", viewport: "desktop", args: { page: "ticket" } },
+        { name: "Ticket page, desktop, one answer picked", viewport: "desktop", args: { page: "ticket", selected: 1 } },
+        { name: "Ticket page, desktop, nothing waits on you", viewport: "desktop", args: { page: "ticket", role: "working" } },
         { name: "Ticket page, nothing waits on you", viewport: "laptop", args: { page: "ticket", role: "working" } },
         { name: "Board, laptop", viewport: "laptop", args: { page: "board" } },
         { name: "Board, desktop", viewport: "desktop", args: { page: "board", boardPick: "TP-1375" } },
@@ -1610,7 +1655,7 @@ window.CATALOG = (function () {
       render: (p) => frame(pageHeader(p)),
       docs: {
         what: "The top of a ticket page: the identifier with its repo and epic, the title, the situation line, and the action rail.",
-        responsive: ["Laptop (1180 pt): the action rail sits on its own row under the situation line, so the title keeps the full width. The title wraps (balanced) and stops at 30 em.", "Desktop (2200 pt): one row across the whole page. The action rail shares the top line with the identifier, so the title runs the full width under them (up to 56 em, about 120 characters, before it wraps). The situation and the key facts (pull request, runs, tokens) share the line under the title, the facts right aligned.", "The age sits inside the status pill, next to the word it counts (Waiting on you, for 3 h 12 min), so it always has the same place to be read."],
+        responsive: ["Laptop (1180 pt): the action rail sits on its own row under the situation line, so the title keeps the full width. The title wraps (balanced) and stops at 30 em.", "Desktop (2200 pt): one row across the whole page. The action rail shares the top line with the identifier, so the title runs the full width under them (up to 56 em, about 120 characters, before it wraps). The situation sits on the line under the title. The header carries no facts: the pull request, the time and the tokens are in the facts rail's Work panel.", "The age sits inside the status pill, next to the word it counts (Waiting on you, for 3 h 12 min), so it always has the same place to be read."],
         tokens: ["--type-title", "--tracking-display", "--space-8", "--measure"],
       },
       stories: VIEWPORT_STORIES([{ name: "Waiting on you", viewport: "laptop", args: { role: "you", blocked: false } }, { name: "Short title", viewport: "desktop", args: { title: "Checkout total rounding", ident: "SHOP-305" } }]),
@@ -1632,15 +1677,30 @@ window.CATALOG = (function () {
     {
       title: "Facts rail",
       wide: true,
-      args: { role: "working", stacked: false, fNow: true, fWork: true, fLinks: false },
-      controls: [{ name: "role", label: "Situation", type: "select", options: [{ value: "working", label: "Waiting for CI" }, { value: "you", label: "Waiting on you" }] }, { name: "stacked", label: "Labels above values", type: "toggle" }, { name: "fNow", label: "Now open", type: "toggle" }, { name: "fWork", label: "Work open", type: "toggle" }, { name: "fLinks", label: "Connected open", type: "toggle" }],
+      args: { role: "working", noPr: false, noRun: false, noEpic: false, blockedBy: false },
+      controls: [
+        { name: "role", label: "Situation", type: "select", options: [{ value: "working", label: "Waiting for CI" }, { value: "you", label: "Waiting on you" }] },
+        { name: "noPr", label: "No pull request yet", type: "toggle" },
+        { name: "noRun", label: "No run yet", type: "toggle" },
+        { name: "noEpic", label: "Not part of an epic", type: "toggle" },
+        { name: "blockedBy", label: "Another ticket holds it up", type: "toggle" },
+      ],
       render: (p) => frame(factsRail(p)),
       docs: {
-        what: "The ticket's facts in folding groups: Now, Work, Connected. Unknown facts are left out; a folded group still says what is inside.",
-        responsive: ["Laptop: one column, 300 pt, beside the page's main column; Connected starts folded.", "Desktop: one column, 360 pt, every group open. The rail stays a column: facts are read top to bottom, never spread across the page.", "Values wrap inside their column; labels never wrap."],
-        tokens: ["--radius-card", "--space-4", "collapsible card tokens", "key-value list tokens"],
+        what: "The column beside the run's steps and the timeline, in two panels. Work is the one place the page shows the pull request, the time and the tokens: three figures (time on runs, tokens, runs), the tokens against the ticket's cap, time and tokens by stage, and every run with its time and tokens. Connected shows where the ticket sits: its epic with the epic's progress and its tickets in order, what this ticket waits on, and what waits on it.",
+        when: ["Nothing in Work is repeated elsewhere on the page: the header carries no fact chips and the run's steps carry no time or tokens.", "Each panel's title sits outside the card, like The run now and Timeline, so the columns start on one line. The panels never fold: what is there is short enough to read in full.", "A fact that is unknown says so in a plain line (No pull request yet, Not part of an epic, Nothing holds this one up), never a dash."],
+        responsive: ["Laptop: one column, 340 pt, beside the page's main column.", "Desktop: one column, 440 pt, the wider room going to the figures, the run list and the ticket titles. The rail stays a column: facts are read top to bottom, never spread across the page.", "Ticket titles wrap inside their row; the identifier, the stage and the numbers never wrap."],
+        states: [["Typical", "a pull request, three runs, an epic, one ticket waiting on this one"], ["No pull request yet", "a plain line in its place"], ["No run yet", "no figures; a plain line says when they appear"], ["Not part of an epic", "a plain line"], ["Held up", "the ticket it waits on, with its stage"]],
+        motion: "A ticket row lifts its background on hover and its arrow nudges right; numbers update in place.",
+        tokens: ["--radius-card", "--elevation-1", "--space-4", "--space-5", "--surface-sunken", "--surface-hover", "--accent-tint", "meter tokens", "stacked stage bar tokens"],
       },
-      stories: [{ name: "Laptop", viewport: "laptop" }, { name: "Desktop", viewport: "desktop", args: { fLinks: true } }, { name: "Folded", viewport: "laptop", args: { fNow: true, fWork: false, fLinks: false } }, { name: "Stacked labels", viewport: "laptop", args: { stacked: true } }],
+      stories: [
+        { name: "Laptop", viewport: "laptop" },
+        { name: "Desktop", viewport: "desktop" },
+        { name: "Held up by another ticket", viewport: "laptop", args: { blockedBy: true } },
+        { name: "No pull request or run yet", viewport: "laptop", args: { noPr: true, noRun: true } },
+        { name: "Not part of an epic", viewport: "laptop", args: { noEpic: true } },
+      ],
     },
     {
       title: "Timeline",
