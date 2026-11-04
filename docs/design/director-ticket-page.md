@@ -1,29 +1,33 @@
 # The Director's ticket page
 
-Design research for the ticket page, and the three prototypes built on it (TP-1383, second design
-ticket of Phase 3b, TP-1381). The page is designed again from scratch around one question: **where
-does this ticket stand, and why?**
+Design research for the ticket page, and the prototype built on it (TP-1383, second design ticket of
+Phase 3b, TP-1381). The page is designed again from scratch around one question: **where does this
+ticket stand, and why?**
 
-**Choice:** not made yet. Tony picks one of the three prototypes in the Inbox; the pick, its date and
-its reason are recorded here and in the chosen prototype's page title.
+**Chosen: the catalog's Page layout (TP-1382, Sections › Page layout, laptop and desktop), on
+2026-11-04, because** Tony found it more polished than the three alternatives this ticket first built
+(A · Story, B · Stage, C · Desk; see [Earlier alternatives](#earlier-alternatives)). It is decision D2
+on TP-1383. The prototype below rebuilds that layout as one page, with the life of a real ticket in
+it, and is what Tony reviews next.
 
-The prototypes are plain HTML, CSS and JavaScript built from the design catalog
-([`catalog/index.html`](catalog/index.html), TP-1382). They open from disk in a browser, with no build
-and no network:
+The prototype is plain HTML, CSS and JavaScript built from the design catalog
+([`catalog/index.html`](catalog/index.html), TP-1382). It opens from disk in a browser, with no build
+and no network: [`prototypes/ticket-page/index.html`](prototypes/ticket-page/index.html).
 
-| Prototype | File | The idea |
-| --- | --- | --- |
-| A · Story | [`prototypes/ticket-page/a.html`](prototypes/ticket-page/a.html) | The timeline is the page. The run that is running now is its newest entry, unfolded and live; the open Question sits above it; the facts sit in a rail beside it. |
-| B · Stage | [`prototypes/ticket-page/b.html`](prototypes/ticket-page/b.html) | A stage on top answers "does anything need me" and "where does it stand and why" on its own: one sentence, the phases, the Question. Below it the page splits: the run, step by step, beside the ticket's history. |
-| C · Desk | [`prototypes/ticket-page/c.html`](prototypes/ticket-page/c.html) | A desk of cards, one question each. The full timeline is a drawer: it slides over the cards on a laptop and stays docked on the right on a desktop. |
+It keeps the catalog's structure and markup zone by zone (the header across the page; on a laptop the
+decisions line, then the lifecycle on top of the timeline, with the facts rail beside them and the
+decisions in a side sheet; on a desktop the decisions as a third column on the far right) and draws
+every part with the catalog's own components and tokens. Its own CSS adds only the frame around the
+page and the pieces the catalog's story leaves out: a run's transcript in its line, a finding with
+its screenshot, the note for the next run, the earlier decisions, the details, and the Question's exit.
 
-Each page has the same control bar on top: switch between A, B and C; pick the **moment** in the
-ticket's life (Running, Waiting on you, Shipped); pick the **width** (Laptop, content 1180 pt;
-Desktop, content 2200 pt); **Fit** scales the page down to the window, off shows it at its real size;
-**Theme** follows the system or forces light or dark; **Reduce motion** shows the page as it moves with
-the system setting on. The settings travel in the address, so switching prototype keeps them.
+The bar on top picks the **moment** in the ticket's life (Running, Waiting on you, Shipped), the
+**width** (Laptop, a 1440 × 900 window with 1180 × 820 pt of content; Desktop, a 1440p display with
+2200 × 1360 pt), the **theme** (System, Light, Dark) and **Reduce motion**; **Fit** scales the window
+down as one when the browser is smaller, so what is seen is always the layout at that width. The
+settings travel in the address.
 
-All three draw the same ticket from one file, [`fixtures.js`](prototypes/ticket-page/fixtures.js):
+The page draws one ticket from one file, [`fixtures.js`](prototypes/ticket-page/fixtures.js):
 TP-1244, "The paused line on the ticket page", merged as PR #741 on 30 October 2026. Its blocker
 TP-1251 (PR #728), its merge commit and the screenshots QA shows are this repository's own (the
 snapshots under `macos/Tests/Snapshots`). The run-by-run detail between them is a reconstruction of how
@@ -38,7 +42,7 @@ matters when they do. **Often**: every visit, most visits, some visits, rarely. 
 (the person must do something, or the ticket stops), *decides* (it changes what the person does next),
 *explains* (it says why), *records* (it is there to look up). The rank sets the tier: tier 1 is on the
 first screen without scrolling at both widths, tier 2 is visible on the page, tier 3 is one click away
-(a fold, a filter, a drawer), tier 4 is on demand (a menu, a link out).
+(a fold, the decision sheet), tier 4 is on demand (a menu, a link out).
 
 | # | Fact | Often | Matters | Tier |
 | --- | --- | --- | --- | --- |
@@ -104,16 +108,16 @@ answer. The layout answers them top to bottom, or left to right on a desktop, in
 6. **What can I do from here?** The moves, always in the same place, each saying why when it can't act
    now; the note for the next run; the facts to look up.
 
-How each prototype orders them:
+How the page answers them, top to bottom, then left to right:
 
-| Question | A · Story | B · Stage | C · Desk |
-| --- | --- | --- | --- |
-| 1 Needs me | the Question, first in the body | the Question, inside the stage | the Question, a card across the desk |
-| 2 Where and why | the header's situation and phase path | the stage's sentence, phases and tokens | "Where it stands" card |
-| 3 Running now | the newest timeline entry, unfolded and live | the run pane, left of the history | "Running now" card |
-| 4 Since I looked | a marker in the timeline | a marker in the history | "Since you last looked" card; a line opens the drawer at it |
-| 5 Run in detail | unfold the run, then a step | pick a run in the history; the run pane shows it | unfold it in the drawer |
-| 6 Moves | header rail; note in the rail | header rail; note under the split | header rail; note card |
+| Question | Laptop (1180 pt) | Desktop (2200 pt) |
+| --- | --- | --- |
+| 1 Needs me | the decisions line under the header ("A question waits on you"), whose Answer opens the decision sheet | the decisions column on the far right, always open |
+| 2 Where and why | the header's situation (kind, cause, what moves it next, for how long); the lifecycle under it: the stages with their state, visits and time, and the tokens by stage | the same |
+| 3 Running now | the newest line of the timeline: the run now, unfolded, its current step open and live | the same |
+| 4 Since I looked | the line "Since you last looked, at 16:50" in the timeline, and a dot on everything newer; the count beside the Timeline title | the same |
+| 5 Run in detail | unfold any run, then any step; findings and screenshots sit in the run | the same |
+| 6 Moves | the header's moves (Stop Run… inside More); the note for the next run in the facts rail | the same, Stop Run… in the rail |
 
 ## 3. The situation vocabulary
 
@@ -151,7 +155,7 @@ retrying, cancelled), and the line takes a glyph of its own for each.
 
 ## 4. Interaction and motion
 
-Every control is one of the catalog's, and has all of its states. The prototypes show each one live.
+Every control is one of the catalog's, and has all of its states; the prototype shows each one live, and the pointer turns into a hand on everything that acts on a click.
 
 | Control | Hover | Pressed | Selected | Focused | Disabled, with its reason |
 | --- | --- | --- | --- | --- | --- |
@@ -162,7 +166,7 @@ Every control is one of the catalog's, and has all of its states. The prototypes
 | Timeline entry (a row) | overlay | – | accent tint and ring; arrows move the selection | ring | – |
 | Run line (fold) | overlay | pressed overlay | unfolded: a tint on the whole group | ring | – |
 | Step line (fold) | overlay | pressed overlay | unfolded: a tint on the step | ring | a step with nothing in it yet can't unfold and says so on hover |
-| Filter chips and index | overlay | 95 % | accent ring, the count stays | ring | – |
+| Decisions line, Answer | primary brightens | settles | Answer stays pressed while the sheet is open | ring | – |
 | Check row, relation row, epic | overlay; the arrow slides 2 pt | pressed overlay | – | ring | – |
 | Screenshot | the image grows 6 % inside its frame | 97 % | opens large in a sheet | ring | – |
 | Segmented controls (page bar) | overlay | – | the thumb slides on a spring | ring | – |
@@ -178,11 +182,16 @@ line of the run now enters at the bottom of its step, fades up and flashes the w
 newest words carry a caret while it writes. Entries newer than the person's last look keep a small
 accent dot; the marker line "Since you last looked, at 16:50" sits between old and new.
 
-**An answered Question leaves the page.** Send: the Question block settles (98.5 %), fades and lifts
-8 pt away in 0.42 s; the page redraws without it; the situation turns to "Starting a run"; the
-timeline gains "Answered" and "Pause cleared" at the top with the enter motion; a toast confirms the
-answer was sent. The place of the Question becomes the quiet line "Nothing needs you", so nothing
-below it jumps further than the Question's own height.
+**An answered Question leaves the page.** Send: the Question settles (98.5 %), fades and lifts away
+(0.45 s); on a laptop the sheet then slides out to the right as the dimmed page clears, and the
+decisions line fades with it; on a desktop the decisions column slides out to the right. The page
+then glides into its new shape (a view transition where the browser has one): the situation turns to
+"Starting a run", the desktop gives the columns back to the main column, and the timeline gains
+"Answered" and "Pause cleared" at its top with the enter motion; a toast confirms the answer was sent.
+
+**The decision sheet** (laptop) slides in from the right on a spring (0.5 s) while the page dims
+(0.28 s), and focus moves to the first answer; it closes the same way out, on the close button,
+Escape or a click on the dimmed page, and focus returns to Answer.
 
 **Reduce Motion.** Every duration drops to 0.01 s, presses don't scale, nothing lifts or slides: folds
 open at once, new entries and lines appear without moving or flashing, the live dot and the flowing
@@ -191,69 +200,67 @@ of gliding. Nothing that carries meaning is lost: the new-since dot, the tints a
 
 **Keyboard.** Tab reaches every control in reading order. 1 to 4 pick an option of the open Question
 when focus is not in a text field. Arrow keys move the selection in the timeline. Return and Space
-toggle a fold or select a row. Escape closes a menu, a screenshot or the timeline drawer.
+toggle a fold or select a row. Escape closes a menu, a screenshot or the decision sheet; inside the More menu the arrow keys move between its items.
 
 ## 5. Responsive rules
 
 Two widths: a **laptop** window (1440 × 900 pt, content about 1180 pt, the functional viewport: every
 control reachable, scroll and fold allowed, nothing clipped) and a **1440p display** (content about
 2200 pt, the optimize viewport: use the space). Each section is laid out by its own width, not the
-window's (a container query at 1600 pt, the catalog's breakpoint).
+window's (a container query at 1600 pt, the catalog's breakpoint). A wider window gives the same
+structure more room; it never moves sections around.
 
 **What never stretches.** Reading text keeps its measure (68 characters): the situation's cause, the
-Question's why and its options' effects, a finding, the brief, a step's lines. Controls keep their
-three heights (24, 30, 36 pt). A column of facts keeps a fixed width (340 to 420 pt on a laptop, about
-420 to 440 pt on a desktop); C's cards share the width evenly, and their text still stops at the
-measure. Screenshots keep their aspect ratio. The timeline keeps its column of times
-and marks.
-
-**What gains a column on a desktop**, prototype by prototype:
+Question's why and its options' effects, a finding, a step's lines. Controls keep their three heights
+(24, 30, 36 pt). The facts rail keeps a fixed width (340 pt on a laptop, 440 pt on a desktop), the
+decisions keep theirs (a 520 pt sheet on a laptop, a 600 pt column on a desktop), and the main column
+stops at 1040 pt on a desktop when nothing waits on the person. Screenshots keep their aspect ratio.
+The timeline keeps its column of times and marks.
 
 | | Laptop (1180 pt) | Desktop (2200 pt) |
 | --- | --- | --- |
-| A · Story | two columns: the timeline body (fluid) and the facts rail (340 pt); filters as chips above the timeline | three columns: a filter index (200 pt), the timeline body (up to 860 pt) and the facts rail, split into two columns of about 420 pt |
-| B · Stage | the stage across; then the run pane (fluid) beside the history (420 pt); the facts in a two-column band under them | the stage across, its side column wider (520 pt); then three panes: history (560 pt), the run (fluid), the facts (440 pt) |
-| C · Desk | two columns of cards; the Question and the four first cards across both; the timeline a drawer over the cards (600 pt) | four columns of cards; the timeline docked as a fifth column (640 pt), the cards in three |
+| Header | the identifier, title and situation; the moves on their own row under them | one row across the page; the moves on the identifier's line, so the title has the whole width |
+| Decisions | one line under the header; Answer opens the side sheet over a dimmed page | a column on the far right, always open, scrolling on its own; no line, no Answer |
+| Main column | the lifecycle on top of the timeline, fluid | the same, fluid next to the decisions, up to 1040 pt without them |
+| Facts rail | 340 pt: pull request and every check, connected tickets, the note for the next run, decisions, details | the same, 440 pt |
 
-**What collapses.** At both widths the checks fold behind "Show every check" while they pass (their
-sum stays on the line); a red check would unfold them. The rarer moves sit in More at both widths. On
-a laptop the timeline's filters become chips above it, and in C the timeline drawer covers the cards
-and dims them; on a desktop it never covers anything.
+**What collapses.** Ended runs fold into their line (a short bar per step and where it stopped); a
+run's steps fold into their name and state. The rarer moves sit in More; on a laptop Stop Run… is the
+last item there, in red.
 
-**Scrolling.** The page scrolls as one; nothing scrolls sideways at either width. Only C's drawer
-scrolls on its own, so the cards stay where they are.
+**Scrolling.** The page scrolls as one inside the window; nothing scrolls sideways at either width.
+The decision sheet and the desktop's decisions column scroll on their own, with their header and Send
+in place. The facts rail is sticky: when it is taller than the window it scrolls with the page until
+its foot is in view and stays there, so no fact is out of reach.
 
-## The three architectures, compared
+## Earlier alternatives
 
-| | A · Story | B · Stage | C · Desk |
-| --- | --- | --- | --- |
-| Reads as | one story, newest first | an answer, then the evidence | a set of answers side by side |
-| Strength | everything in time order, nothing hidden; the run now is the story's latest line | the order of the questions is the order of the page; the run now has a whole pane | scans fastest; each card stands alone and could be reused on other pages |
-| Cost | the situation and the phases live in the header only; a long timeline pushes the older facts down | the run pane and the history repeat the runs (as detail and as rows) | the story is split: what happened lives in a drawer, and the cards repeat parts of it |
-| Laptop | dense but complete | the split leaves the history narrow (420 pt) | two columns of cards scroll long |
-| Desktop | wide whitespace around a measured body | the best use of the width: three panes, no drawer | the docked drawer makes it a dashboard plus a timeline |
-
-**Recommendation: B · Stage.** It is the only one whose layout is the list of questions in §2: the
-stage answers "does anything need me" and "where does it stand and why" before anything else, the run
-pane answers "what is running now" on the page with the run's own steps, and the history answers "what
-happened since I looked" beside it. It keeps the timeline visible (unlike C) without making the person
-read it to learn the situation (unlike A).
+This ticket first built three other architectures for the same page, from the same fixtures:
+**A · Story** (the timeline is the page, the facts in a rail beside it), **B · Stage** (a stage on top
+with the situation and the Question, then the run beside the history) and **C · Desk** (a desk of
+cards, the timeline as a drawer). Tony chose none of them (decision D2): the catalog's Page layout
+reads more polished. They are kept in the PR's history (its first commit) and are no longer in the
+tree, so there is one page to review.
 
 ## Catalog additions
 
-Added to the catalog in the same change, with their stories and their rows in
+Added to the catalog in this change, with their stories and their rows in
 [`design-system.md`](design-system.md):
 
-- **Phase path** (new component): the phases a ticket went through in order, with counts and times.
 - **Step list** (new component): a run's steps top to bottom, each unfolding into what the agent did,
-  with a live state for the run now. It is the run's transcript, in place.
+  with a live state for the run now. It is the run's transcript, in place; the prototype draws every
+  run's steps with it.
+- **Phase path** (new component): the phases a ticket went through in order, with counts and times.
+  The chosen layout shows the same facts in the lifecycle's stages; the component stays for the
+  board's preview and the history view.
 - **Situation line**: the five kinds it lacked (waiting for a slot, waiting for a build, blocked by a
   ticket, retrying, cancelled) and a glyph per kind.
 - **Timeline entry**: selected, new since you looked, the marker line, and the entering motion.
 
-The catalog's building blocks are exported (`window.CATALOG.kit`) so the prototypes draw with the
+The catalog's building blocks are exported (`window.CATALOG.kit`) so the prototype draws with the
 catalog's own markup instead of copies.
 
 ## The choice
 
-Pending: Tony's pick in the Inbox. Recorded here as "Chosen: …, on …, because …" when made.
+Chosen: the catalog's Page layout, on 2026-11-04, because it is more polished than A, B or C
+(decision D2 on TP-1383). Next: Tony reviews the rebuilt page and approves it, or writes what to change.

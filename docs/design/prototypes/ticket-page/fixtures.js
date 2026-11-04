@@ -1,5 +1,5 @@
 /*
- * The facts of one ticket's life, shared by the three ticket page prototypes.
+ * The facts of one ticket's life, drawn by the ticket page prototype (index.html).
  *
  * The ticket is TP-1244, "The paused line on the ticket page", merged as PR #741 on Fri 30 Oct
  * 2026 at 21:05 (commit da402827). Its blocker TP-1251 merged as PR #728 at 15:22 that day, and the
@@ -9,7 +9,7 @@
  * the page has one of each thing it must show: an implementation run, a CI fix, a review round, a
  * QA pass with a finding and a screenshot, a question asked and answered, a pause, and a merge.
  *
- * A prototype never reads this file's times as strings to decide anything: every view is drawn
+ * The page never reads this file's times as strings to decide anything: every view is drawn
  * from the events and runs below, up to the moment the page shows (see moments).
  */
 window.TICKET_LIFE = (function () {
@@ -248,7 +248,7 @@ window.TICKET_LIFE = (function () {
     { group: "Pull request", items: [["Body", "4 s"], ["Protected paths", "3 s"]] },
   ];
 
-  /* The moments a prototype can show. Each names the time the page is drawn at, when the person
+  /* The moments the prototype can show. Each names the time the page is drawn at, when the person
      last looked, and the live facts that are not events: the run that is running and how far it
      got, the pull request's checks, and what is left of the tokens. */
   const moments = {
@@ -257,20 +257,20 @@ window.TICKET_LIFE = (function () {
       situation: { role: "working", glyph: "working", word: "Working on the tests step", cause: "Implementation run 2 is answering Code Review's finding.", waits: "It hands off to Code Review when it pushes.", since: "2026-10-30T16:39" },
       phase: "Rework",
       live: { run: "r4", step: "tests", upto: "16:47", stream: ["16:49", "16:53"] },
-      pr: { number: 741, title: "TP-1244 The paused line on the ticket page", head: "8b03e51", state: "open", checks: "passed", checkedAt: "16:29", note: "Checks passed on the commit the CI fix pushed. The run will push a new one." },
+      pr: { number: 741, title: "TP-1244 The paused line on the ticket page", head: "8b03e51", size: "9 files · +486 −52", checksOn: "on the CI fix’s commit", state: "open", checks: "passed", checkedAt: "16:29", note: "Checks passed on the commit the CI fix pushed. The run will push a new one." },
     },
     waiting: {
       label: "Waiting on you", now: "2026-10-30T17:52", lastSeen: "2026-10-30T16:50",
       situation: { role: "you", glyph: "you", word: "Waiting on you", cause: "Implementation run 3 asked how the paused line's times should read.", waits: "Answer below; the next run starts at once.", since: "2026-10-30T17:44" },
       phase: "Rework",
       openQuestion: "q1",
-      pr: { number: 741, title: "TP-1244 The paused line on the ticket page", head: "5d2e7a0", state: "open", checks: "passed", checkedAt: "17:05", note: "Checks passed. QA sent it back for one finding." },
+      pr: { number: 741, title: "TP-1244 The paused line on the ticket page", head: "5d2e7a0", size: "9 files · +503 −52", checksOn: "on the newest commit", state: "open", checks: "passed", checkedAt: "17:05", note: "Checks passed. QA sent it back for one finding." },
     },
     shipped: {
       label: "Shipped", now: "2026-10-30T21:30", lastSeen: "2026-10-30T17:52",
       situation: { role: "done", glyph: "done", word: "Shipped", cause: "Merged as PR #741 at 21:05.", waits: "", since: "2026-10-30T21:05" },
       phase: "Done",
-      pr: { number: 741, title: "TP-1244 The paused line on the ticket page", head: "da40282", state: "merged", checks: "passed", checkedAt: "20:58", note: "Merged into main as commit da402827." },
+      pr: { number: 741, title: "TP-1244 The paused line on the ticket page", head: "da40282", size: "9 files · +505 −52", checksOn: "on the merged commit", state: "merged", checks: "passed", checkedAt: "20:58", note: "Merged into main as commit da402827." },
     },
   };
 
