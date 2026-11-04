@@ -229,31 +229,45 @@ window.CATALOG = (function () {
     const verdict = { passed: "done", failed: "problem", running: "working", stopped: "idle" }[p.verdict] || "working";
     const glyph = { passed: "done", failed: "problem", running: "run-start", stopped: "run-end" }[p.verdict] || "run-start";
     const word = { passed: "Passed", failed: "Failed", running: "Running", stopped: "Stopped" }[p.verdict] || "";
-    const body = fold("run-" + (p.foldKey || "run"), p.expanded, '<div class="run-body"><ol class="timeline">' + (p.entries || []).slice().reverse().map(tlEntry).join("") + "</ol></div>");
+    const strip = p.steps ? '<div class="run-steps">' + steps(p.steps) + "</div>" : "";
+    const body = fold("run-" + (p.foldKey || "run"), p.expanded, '<div class="run-body">' + strip + '<ol class="timeline">' + (p.entries || []).slice().reverse().map(tlEntry).join("") + "</ol></div>");
     return '<div class="run-group"><button type="button" class="run-head role-' + verdict + stateClass(p.state) + '" aria-expanded="' + !!p.expanded + '" data-toggle="expanded" data-key="run">' +
       '<span class="time">' + esc(p.time) + '</span><span class="mark">' + (p.verdict === "running" ? '<span class="dot live role-working"></span>' : icon(glyph)) + "</span>" +
-      '<span class="name">' + icon("chevron-right", "disclose") + "<b>" + esc(p.title) + "</b>" + badge(verdict, word, "small") + (p.tokens ? '<span class="t-secondary">' + esc(p.tokens) + "</span>" : "") + "</span>" +
+      '<span class="name">' + icon("chevron-right", "disclose") + "<b>" + esc(p.title) + "</b>" + badge(verdict, word, "small") + (p.steps ? miniSteps(p.steps) : "") + (p.tokens ? '<span class="t-secondary">' + esc(p.tokens) + "</span>" : "") + "</span>" +
       '<span class="dur" title="How long the run took">' + esc(p.duration) + "</span></button>" + body + "</div>";
   }
 
   const STEP_NAMES = [["code", "Writing the code"], ["build", "Build"], ["checks", "Checks"], ["tests", "Tests"], ["handoff", "Handoff"]];
+  /* The ticket's whole path, not one run's: the stages a ticket moves through to land. */
+  const STAGE_NAMES = [["coding", "Coding"], ["review", "Code Review"], ["qa", "QA"], ["merging", "Merging"], ["done", "Done"]];
   const STEP_STATES = {
     passed: { word: "Passed", glyph: "done", role: "done" },
     failed: { word: "Failed", glyph: "problem", role: "problem" },
     paused: { word: "Paused", glyph: "idle", role: "idle" },
     skipped: { word: "Skipped", glyph: "chevron-right", role: "idle" },
     current: { word: "Now", glyph: "working", role: "working" },
+    returned: { word: "Sent back", glyph: "undo", role: "you" },
     pending: { word: "Not started", glyph: "clock", role: "idle" },
   };
   const STEP_OPTIONS = Object.keys(STEP_STATES).map((k) => ({ value: k, label: STEP_STATES[k].word }));
 
   function steps(p) {
-    return '<ol class="steps" aria-label="Steps of the run">' + STEP_NAMES.map((s) => {
+    const stages = p.kind === "ticket";
+    return '<ol class="steps' + (stages ? " stages" : "") + '" aria-label="' + (stages ? "Stages of the ticket" : "Steps of the run") + '">' + (stages ? STAGE_NAMES : STEP_NAMES).map((s) => {
       const st = STEP_STATES[p[s[0]]] || STEP_STATES.pending;
       const detail = p[s[0] + "Note"] || "";
       return '<li class="step ' + esc(p[s[0]]) + " role-" + st.role + '"><span class="bar"></span><span class="name">' + icon(st.glyph) + esc(s[1]) + "</span>" +
         '<span class="state">' + esc(st.word) + (detail ? " · " + esc(detail) : "") + "</span></li>";
     }).join("") + "</ol>";
+  }
+
+  /* The same steps folded into one line of the timeline: a short bar per step, the current step's
+     name beside them. The run's line unfolds into the full strip. */
+  function miniSteps(p) {
+    const at = STEP_NAMES.find((s) => p[s[0]] === "current" || p[s[0]] === "failed" || p[s[0]] === "paused");
+    const said = STEP_NAMES.map((s) => s[1] + ", " + (STEP_STATES[p[s[0]]] || STEP_STATES.pending).word.toLowerCase()).join("; ");
+    return '<span class="steps-mini" role="img" aria-label="Steps: ' + esc(said) + '">' + STEP_NAMES.map((s) => '<i class="' + esc(p[s[0]] || "pending") + '"></i>').join("") + "</span>" +
+      (at ? '<span class="steps-mini-at role-' + (STEP_STATES[p[at[0]]] || STEP_STATES.pending).role + '">' + esc(at[1]) + "</span>" : "");
   }
 
   function tags(p) {
@@ -283,13 +297,25 @@ window.CATALOG = (function () {
       (p.send ? '<div class="foot">' + button({ label: "Send Decision…", variant: "primary", disabled: empty, reason: "Write your answer first.", showReason: true }) + "</div>" : "") + "</div>";
   }
 
+  /* With a cap, the bar is the whole allowance: the stages fill it from the left and the rest stays
+     empty, so one bar says both where the tokens went and how much is left. A stage passed as
+     undefined is left out of the legend (agents spend no tokens waiting on you). */
   function stageBar(p) {
-    const parts = [["Writing the code", p.code, "s1"], ["Code Review", p.review, "s2"], ["QA", p.qa, "s3"], ["Merging", p.merge, "s4"], ["Waiting on you", p.waiting, "s5"]];
-    const total = parts.reduce((a, x) => a + (Number(x[1]) || 0), 0);
+    const parts = [["Coding", p.code, "s1"], ["Code Review", p.review, "s2"], ["QA", p.qa, "s3"], ["Merging", p.merge, "s4"], ["Waiting on you", p.waiting, "s5"]].filter((x) => x[1] !== undefined && x[1] !== "");
+    const round = (n) => Math.round(n * 10) / 10;
+    const total = round(parts.reduce((a, x) => a + (Number(x[1]) || 0), 0));
+    const cap = Number(p.cap) || 0;
+    const pct = cap ? Math.min(100, Math.round((total / cap) * 100)) : 0;
+    const role = pct >= 95 ? "problem" : pct >= 75 ? "you" : "accent";
     const k = p.key ? p.key + "-" : "";
-    const track = total ? '<div class="stage-track" role="img" aria-label="' + esc(p.label) + '">' + parts.filter((x) => Number(x[1]) > 0).map((x) => '<span class="stage-seg ' + x[2] + '" data-anim="seg-' + k + x[2] + '" style="flex:' + Number(x[1]) + '" title="' + esc(x[0]) + ": " + esc(x[1]) + " " + esc(p.unit) + '"></span>').join("") + "</div>" : '<div class="stage-track empty"></div>';
-    return '<div class="stage-bar"><div class="meter-head"><span>' + esc(p.label) + '</span><span class="value">' + (total ? esc(total) + " " + esc(p.unit) + " in all" : "Nothing yet") + "</span></div>" + track +
-      '<ul class="stage-legend">' + parts.map((x) => '<li><span class="key stage-seg ' + x[2] + '"></span>' + esc(x[0]) + ' <span class="v">' + esc(x[1] || 0) + "</span></li>").join("") + "</ul></div>";
+    const segs = parts.filter((x) => Number(x[1]) > 0).map((x) => '<span class="stage-seg ' + x[2] + '" data-anim="seg-' + k + x[2] + '" style="flex:' + Number(x[1]) + '" title="' + esc(x[0]) + ": " + esc(x[1]) + " " + esc(p.unit) + '"></span>').join("");
+    const rest = cap && cap > total ? '<span class="stage-seg rest" data-anim="seg-' + k + 'rest" style="flex:' + round(cap - total) + '" title="Left: ' + round(cap - total) + " " + esc(p.unit) + '"></span>' : "";
+    const label = esc(p.label) + (cap ? ", " + pct + " percent of the cap" : "");
+    const track = total || cap ? '<div class="stage-track' + (total ? "" : " empty") + '" role="img" aria-label="' + label + '">' + segs + (total ? rest : "") + "</div>" : '<div class="stage-track empty"></div>';
+    const value = cap ? esc(total) + " of " + esc(cap) + " " + esc(p.unit) + " · " + pct + " %" : total ? esc(total) + " " + esc(p.unit) + " in all" : "Nothing yet";
+    const note = cap ? '<div class="meter-note role-' + role + (role === "accent" ? " calm" : "") + '">' + esc(pct >= 100 ? "At the cap: no new run starts." : pct >= 95 ? "Almost at the cap: the run finishes, the next one waits." : pct >= 75 ? "Getting close: " + (100 - pct) + " % left of the ticket's cap." : (100 - pct) + " % of the ticket's cap left.") + "</div>" : "";
+    return '<div class="stage-bar' + (cap ? " has-cap" : "") + '"><div class="meter-head"><span>' + esc(p.label) + '</span><span class="value">' + value + "</span></div>" + track +
+      '<ul class="stage-legend">' + parts.map((x) => '<li><span class="key stage-seg ' + x[2] + '"></span>' + esc(x[0]) + ' <span class="v">' + esc(x[1] || 0) + "</span></li>").join("") + "</ul>" + note + "</div>";
   }
 
   function meter(p) {
@@ -844,26 +870,27 @@ window.CATALOG = (function () {
     },
     {
       title: "Stacked stage bar",
-      args: { label: "Time by stage", code: 42, review: 18, qa: 25, merge: 6, waiting: 70, unit: "min" },
+      args: { label: "Time by stage", code: 42, review: 18, qa: 25, merge: 6, waiting: 70, unit: "min", cap: 0 },
       controls: [
         { name: "label", label: "Label", type: "text" },
-        { name: "code", label: "Writing the code", type: "number", min: 0 },
+        { name: "code", label: "Coding", type: "number", min: 0 },
         { name: "review", label: "Code Review", type: "number", min: 0 },
         { name: "qa", label: "QA", type: "number", min: 0 },
         { name: "merge", label: "Merging", type: "number", min: 0 },
-        { name: "waiting", label: "Waiting on you", type: "number", min: 0 },
+        { name: "waiting", label: "Waiting on you", type: "number", min: 0, when: (p) => p.waiting !== undefined },
         { name: "unit", label: "Unit", type: "select", options: ["min", "M tokens"] },
+        { name: "cap", label: "Cap (0 for none)", type: "number", min: 0, step: 0.5 },
       ],
       render: (p) => stageBar(p),
       docs: {
         what: "Where a ticket's time or tokens went, stage by stage, as one bar split into segments with a legend that carries the numbers.",
-        when: ["Segments keep their landing order left to right. The legend is always there, so colour is never the only way to read it."],
+        when: ["Segments keep their landing order left to right. The legend is always there, so colour is never the only way to read it.", "With a cap, the bar is the whole allowance: the stages fill it from the left, the rest stays empty, and a note says how much is left. Use it for a ticket's tokens, so one bar replaces a meter and a stage split."],
         avoid: "Status colours in the segments (they are stages, not states) other than the gray for waiting.",
         states: [["Typical", "every stage present"], ["One stage dominant", "a stuck review"], ["Empty", "a track with “Nothing yet”"]],
         motion: "Segments resize on a spring when the numbers change; the order never moves.",
         tokens: ["chart series 1 to 4", "--status-idle", "--radius-mark"],
       },
-      stories: [{ name: "Typical ticket" }, { name: "Stuck in review", args: { review: 180, qa: 0, merge: 0, waiting: 5 } }, { name: "Tokens by stage", args: { label: "Tokens by stage", code: 4.2, review: 0.8, qa: 1.1, merge: 0.1, waiting: 0, unit: "M tokens" } }, { name: "Empty", args: { code: 0, review: 0, qa: 0, merge: 0, waiting: 0 } }],
+      stories: [{ name: "Typical ticket" }, { name: "Stuck in review", args: { review: 180, qa: 0, merge: 0, waiting: 5 } }, { name: "Tokens by stage", args: { label: "Tokens by stage", code: 4.2, review: 0.8, qa: 1.1, merge: 0.1, waiting: 0, unit: "M tokens" } }, { name: "Tokens against the ticket's cap", args: { label: "Tokens", code: 5.8, review: 0.4, qa: 0, merge: 0, waiting: undefined, unit: "M tokens", cap: 8 } }, { name: "Near the cap", args: { label: "Tokens", code: 5.8, review: 0.8, qa: 0.4, merge: 0, waiting: undefined, unit: "M tokens", cap: 8 } }, { name: "Empty", args: { code: 0, review: 0, qa: 0, merge: 0, waiting: 0 } }],
     },
     {
       title: "Text field",
@@ -1106,22 +1133,22 @@ window.CATALOG = (function () {
     },
     {
       title: "Run group",
-      args: { title: "Implementation run 2", verdict: "passed", time: "10:05", duration: "22 min", tokens: "1.8M tokens", expanded: false, state: "default" },
+      args: { title: "Implementation run 2", verdict: "passed", time: "10:05", duration: "22 min", tokens: "1.8M tokens", withSteps: true, expanded: false, state: "default" },
       controls: [
         { name: "title", label: "Title", type: "text" }, { name: "verdict", label: "Verdict", type: "select", options: ["passed", "failed", "running", "stopped"] },
         { name: "time", label: "Started", type: "text" }, { name: "duration", label: "Duration", type: "text" }, { name: "tokens", label: "Tokens", type: "text" },
-        { name: "expanded", label: "Unfolded", type: "toggle" }, STATE,
+        { name: "withSteps", label: "Shows its steps", type: "toggle" }, { name: "expanded", label: "Unfolded", type: "toggle" }, STATE,
       ],
-      render: (p) => '<div style="width:600px">' + runGroup(Object.assign({}, p, { entries: [
+      render: (p) => '<div style="width:720px">' + runGroup(Object.assign({}, p, { steps: p.withSteps ? { code: "passed", build: "passed", checks: p.verdict === "failed" ? "failed" : "passed", tests: p.verdict === "failed" ? "pending" : p.verdict === "running" ? "current" : "passed", handoff: p.verdict === "passed" ? "passed" : p.verdict === "stopped" ? "paused" : "pending" } : null, entries: [
         { kind: "run-started", time: p.time, headHtml: head("Started"), detail: "Claude" },
         { kind: "phase", time: "10:12", headHtml: head("Build passed") },
         { kind: p.verdict === "failed" ? "run-failed" : "run-passed", time: "10:20", headHtml: head(p.verdict === "failed" ? "Tests failed" : "Tests passed"), detail: p.verdict === "failed" ? "2 failures in the orchestrator" : "" },
         { kind: "rule", time: "10:27", headHtml: head("Pushed", "and handed off to Code Review") },
       ] })) + "</div>",
       docs: {
-        what: "One run of an agent on the timeline, folded to a single line with its verdict and duration, unfolding into its steps, newest first.",
+        what: "One run of an agent on the timeline, folded to a single line with its verdict, its steps as short bars and the step it is on or stopped at, and its duration. Unfolded, the full step strip sits above the run's entries, newest first.",
         when: ["Folded by default once it ended; the running one is unfolded and live."],
-        states: [["Folded", "one line"], ["Unfolded", "its entries indented under a rule"], ["Running", "a live dot, no end time"], ["Failed", "red verdict"], ["Header hover, pressed, focused", "as a row"]],
+        states: [["Folded", "one line, the steps as five short bars"], ["Unfolded", "the step strip, then its entries indented under a rule"], ["Running", "a live dot, no end time"], ["Failed", "red verdict"], ["Header hover, pressed, focused", "as a row"]],
         motion: "Hover eases in; the connecting line runs from each mark to the next.",
         tokens: ["--status-*", "--tint-*", "--radius-row", "--motion-standard"],
         access: "A disclosure: “Implementation run 2, passed, 22 minutes, collapsed”.",
@@ -1133,13 +1160,15 @@ window.CATALOG = (function () {
     },
     {
       title: "Step strip",
-      args: { code: "passed", build: "passed", checks: "passed", tests: "current", handoff: "pending", testsNote: "" },
-      controls: STEP_NAMES.map((s) => ({ name: s[0], label: s[1], type: "select", options: STEP_OPTIONS })),
+      args: { kind: "run", code: "passed", build: "passed", checks: "passed", tests: "current", handoff: "pending", testsNote: "", coding: "current", review: "returned", qa: "skipped", merging: "pending", done: "pending" },
+      controls: [{ name: "kind", label: "Strip", type: "select", options: [{ value: "run", label: "A run's steps" }, { value: "ticket", label: "The ticket's stages" }] }]
+        .concat(STEP_NAMES.map((s) => ({ name: s[0], label: s[1], type: "select", options: STEP_OPTIONS, when: (p) => p.kind !== "ticket" })))
+        .concat(STAGE_NAMES.map((s) => ({ name: s[0], label: s[1], type: "select", options: STEP_OPTIONS, when: (p) => p.kind === "ticket" }))),
       render: (p) => steps(p),
       docs: {
-        what: "The five steps of an implementation run, left to right, so where a run stands or where it stopped reads at once.",
-        when: ["Writing the code, Build, Checks, Tests, Handoff, always in that order. Each step says its state in words under its name."],
-        states: [["Passed", "green bar"], ["Failed", "red tint and word"], ["Paused", "gray bar"], ["Skipped", "dashed bar"], ["Current", "blue tint, partial bar"], ["Not started", "empty bar"]],
+        what: "Steps left to right, so where something stands or where it stopped reads at once. Two strips use it: a run's five steps, and the ticket's five stages in its lifecycle.",
+        when: ["A run: Writing the code, Build, Checks, Tests, Handoff, always in that order; on the timeline it folds into the run's line as five short bars.", "The ticket: Coding, Code Review, QA, Merging, Done, always in that order; each stage's note carries its time.", "Each step says its state in words under its name."],
+        states: [["Passed", "green bar"], ["Failed", "red tint and word"], ["Sent back", "orange bar: a review returned the ticket"], ["Paused", "gray bar"], ["Skipped", "dashed bar"], ["Current", "blue tint, partial bar"], ["Not started", "empty bar"]],
         motion: "The current step\u2019s bar flows while it works; a step that passes fills its bar on a spring.",
         tokens: ["--status-done", "--status-problem", "--status-working", "--status-idle", "--radius-row"],
         access: "A list: “Steps of the run. Writing the code, passed. Build, passed…”.",
@@ -1148,6 +1177,8 @@ window.CATALOG = (function () {
         { name: "Current: tests" }, { name: "All passed", args: { tests: "passed", handoff: "passed" } }, { name: "Failed at checks", args: { checks: "failed", tests: "pending", handoff: "pending" } },
         { name: "Paused at build", args: { build: "paused", checks: "pending", tests: "pending", handoff: "pending" } }, { name: "Tests skipped", args: { tests: "skipped", handoff: "passed" } },
         { name: "Not started", args: { code: "current", build: "pending", checks: "pending", tests: "pending" } },
+        { name: "Ticket stages: in Coding, sent back once", args: { kind: "ticket", codingNote: "1 h 4 min", reviewNote: "8 min" } },
+        { name: "Ticket stages: merging", args: { kind: "ticket", coding: "passed", review: "passed", qa: "passed", merging: "current", done: "pending" } },
       ],
     },
     {
@@ -1380,9 +1411,9 @@ window.CATALOG = (function () {
       "</div></div>" + actionRail(p) + "</header>";
   }
 
-  /* The ticket's work and its connections, each a titled panel like the run's steps: the title sits
-     outside the card, so every column of the page starts on the same line. The work panel is the one
-     place the page shows the pull request, the runs, their time and their tokens. */
+  /* The ticket's lifecycle, its pull request and its connections, each a titled panel: the title sits
+     outside the card, so every column of the page starts on the same line. Each fact appears once:
+     time and tokens in the lifecycle, checks in the pull request, a run's steps on its timeline line. */
   const RUNS = [
     { name: "Implementation run 1", verdict: "failed", word: "Checks failed", min: 22, tokens: 1.4 },
     { name: "Code Review", verdict: "passed", word: "Passed", min: 8, tokens: 0.4 },
@@ -1390,29 +1421,60 @@ window.CATALOG = (function () {
   ];
   const fmtMin = (m) => (m >= 60 ? Math.floor(m / 60) + " h " + (m % 60 ? (m % 60) + " min" : "") : m + " min").trim();
 
-  function figure(value, label) {
-    return '<div class="figure"><span class="figure-value">' + esc(value) + '</span><span class="figure-label">' + esc(label) + "</span></div>";
-  }
-
-  function workPanel(p) {
+  function lifecyclePanel(p) {
     const runs = p.noRun ? [] : RUNS;
     const min = runs.reduce((a, r) => a + r.min, 0);
-    const tok = runs.reduce((a, r) => a + r.tokens, 0);
-    const pr = p.noPr ? '<p class="empty-line">No pull request yet: the first run opens one.</p>' :
-      '<a class="pr-line" href="#" onclick="return false">' + icon("pr", "pr-glyph") + '<span class="pr-name">PR #812</span><span class="t-secondary">14 files · +412 −88</span>' + badge("done", "Checks passing", "small") + "</a>";
-    const runRows = runs.map((r) => {
-      const role = r.verdict === "failed" ? "problem" : r.verdict === "current" ? "working" : "done";
-      return '<li class="run-row"><span class="dot role-' + role + (r.verdict === "current" ? " live" : "") + '"></span><span class="run-name">' + esc(r.name) + '<span class="t-secondary">' + esc(r.word) + "</span></span>" +
-        '<span class="num">' + esc(fmtMin(r.min)) + '</span><span class="num">' + esc(r.tokens.toFixed(1)) + "M</span></li>";
-    }).join("");
-    const usage = runs.length ?
-      '<div class="figures">' + figure(fmtMin(min), "on runs") + figure(String(runs.length), runs.length === 1 ? "run" : "runs") + figure(tok.toFixed(1) + "M", "tokens") + "</div>" +
-      meter({ label: "Tokens against the ticket's cap", used: Math.round(tok * 1e6), cap: 8000000, unit: "tokens", resets: "never: the cap is per ticket" }) +
-      '<div class="usage-split">' + stageBar({ key: "time", label: "Time by stage", code: 64, review: 8, qa: 0, merge: 0, waiting: 192, unit: "min" }) +
-      stageBar({ key: "tokens", label: "Tokens by stage", code: 5.8, review: 0.4, qa: 0, merge: 0, waiting: 0, unit: "M tokens" }) + "</div>" +
-      '<ol class="run-list" aria-label="Runs"><li class="run-row run-head"><span></span><span>Run</span><span class="num">Time</span><span class="num">Tokens</span></li>' + runRows + "</ol>" :
-      '<p class="empty-line">No run yet: time and tokens appear when the first run starts.</p>';
-    return '<section class="facts-group"><h3 class="zone-title">Work</h3><div class="panel work-panel"><div class="panel-sub"><h4>Pull request</h4>' + pr + '</div><div class="panel-sub"><h4>Usage</h4>' + usage + "</div></div></section>";
+    const stage = p.noRun ? { coding: "current", review: "pending", qa: "skipped", merging: "pending", done: "pending", codingNote: "no run yet", qaNote: "not needed here" } :
+      { coding: "current", review: "returned", qa: "skipped", merging: "pending", done: "pending", codingNote: "1 h 4 min", reviewNote: "8 min", qaNote: "not needed here" };
+    const tokens = p.noRun ? { label: "Tokens", code: 0, review: 0, qa: 0, merge: 0, cap: 8, unit: "M tokens" } : { label: "Tokens", code: 5.8, review: 0.4, qa: 0, merge: 0, cap: 8, unit: "M tokens" };
+    const where = p.noRun ? "In Coding: waiting for a free slot" : "In Coding, the second time: Code Review sent it back once";
+    return '<section class="panel lifecycle-panel" aria-label="Lifecycle"><div class="life-head"><span class="dot role-working' + (p.noRun ? "" : " live") + '"></span><span class="life-where">' + esc(where) + "</span>" +
+      '<span class="life-sum">' + esc(runs.length ? fmtMin(min) + " of work in " + runs.length + " runs" : "No run yet") + "</span></div>" +
+      steps(Object.assign({ kind: "ticket" }, stage)) + stageBar(Object.assign({ key: "life" }, tokens)) + "</section>";
+  }
+
+  /* A pull request's checks, by workflow, every job with its state: passed, failed, running, waiting, skipped. */
+  const CHECK_STATES = {
+    passed: { word: "Passed", role: "done", glyph: "done" },
+    failed: { word: "Failed", role: "problem", glyph: "problem" },
+    running: { word: "Running", role: "working", glyph: "" },
+    waiting: { word: "Waiting", role: "idle", glyph: "clock" },
+    skipped: { word: "Skipped", role: "idle", glyph: "chevron-right" },
+  };
+  function checkRuns(ci) {
+    const pick = (passed, running, failed) => (ci === "failed" ? failed : ci === "running" ? running : passed);
+    return [
+      { name: "Elixir checks", jobs: [
+        ["Format", "passed", "42 s"], ["Lint", "passed", "1 min 4 s"], ["Build", "passed", "1 min 12 s"], ["Dialyzer", "passed", "1 min 40 s"],
+        ["Tests, part 1 of 4", pick("passed", "running", "failed"), pick("2 min 12 s", "1 min 50 s", "2 min 12 s")],
+        ["Tests, part 2 of 4", pick("passed", "running", "passed"), pick("2 min 4 s", "1 min 50 s", "2 min 4 s")],
+        ["Tests, parts 3 and 4", pick("passed", "passed", "passed"), "1 min 58 s"],
+        ["Coverage report", pick("passed", "waiting", "skipped"), pick("18 s", "", "")],
+      ] },
+      { name: "Mac app", jobs: [["What changed", "passed", "8 s"], ["App build", "skipped", ""]] },
+    ];
+  }
+
+  function checksBlock(ci) {
+    const groups = checkRuns(ci);
+    const all = groups.reduce((a, g) => a.concat(g.jobs), []);
+    const n = (st) => all.filter((j) => j[1] === st).length;
+    const sum = [n("failed") ? n("failed") + " failed" : "", n("running") ? n("running") + " running" : "", n("passed") + " passed", n("waiting") ? n("waiting") + " waiting" : "", n("skipped") ? n("skipped") + " skipped" : ""].filter(Boolean).join(" · ");
+    return '<div class="panel-sub"><h4>Checks<span class="t-secondary">' + esc(sum) + "</span></h4>" + groups.map((g) =>
+      '<div class="check-group"><h5>' + esc(g.name) + "</h5><ol class=\"check-list\">" + g.jobs.map((j) => {
+        const st = CHECK_STATES[j[1]];
+        const mark = j[1] === "running" ? '<span class="dot live role-working"></span>' : icon(st.glyph);
+        return '<li><button type="button" class="check-row ' + esc(j[1]) + " role-" + st.role + '" aria-label="' + esc(j[0] + ", " + st.word.toLowerCase() + (j[2] ? ", " + j[2] : "")) + '"><span class="mark">' + mark + '</span><span class="check-name">' + esc(j[0]) + "</span>" +
+          '<span class="check-state">' + esc(st.word) + '</span><span class="num">' + esc(j[2] || "") + "</span></button></li>";
+      }).join("") + "</ol></div>").join("") + "</div>";
+  }
+
+  function prPanel(p) {
+    const ci = p.ci || "running";
+    const badgeFor = { passed: ["done", "Checks passing"], running: ["working", "Checks running"], failed: ["problem", "1 check failed"] }[ci];
+    const body = p.noPr ? '<p class="empty-line">No pull request yet: the first run opens one, and its checks appear here.</p>' :
+      '<a class="pr-line" href="#" onclick="return false">' + icon("pr", "pr-glyph") + '<span class="pr-name">PR #812</span><span class="t-secondary">14 files · +412 −88</span>' + badge(badgeFor[0], badgeFor[1], "small") + "</a>" + checksBlock(ci);
+    return '<section class="facts-group"><h3 class="zone-title">Pull request</h3><div class="panel pr-panel">' + body + "</div></section>";
   }
 
   function relRow(t, note, self) {
@@ -1436,7 +1498,7 @@ window.CATALOG = (function () {
   }
 
   function factsRail(p) {
-    return '<aside class="facts-rail" aria-label="Facts">' + workPanel(p) + connectedPanel(p) + "</aside>";
+    return '<aside class="facts-rail" aria-label="Facts">' + prPanel(p) + connectedPanel(p) + "</aside>";
   }
 
   const QUESTIONS = [
@@ -1582,17 +1644,20 @@ window.CATALOG = (function () {
       '<span class="spacer"></span><span class="summary">' + esc(p.summary) + "</span></div>";
   }
 
+  const RUN_NOW = [
+    { kind: "phase", time: "11:44", headHtml: head("Moved to In Progress", "from Code Review"), detail: "Code Review sent it back: the timeline missed a stopped run", actor: "Symphony" },
+    { kind: "run-started", time: "11:45", headHtml: head("Implementation run 2 started"), detail: "Claude · laptop workspace" },
+  ];
+  const RUN_NOW_STEPS = { code: "passed", build: "passed", checks: "passed", tests: "current", handoff: "pending", testsNote: "212 of 340" };
+  const RUN_ONE_STEPS = { code: "passed", build: "passed", checks: "failed", tests: "pending", handoff: "pending", checksNote: "2 tests" };
+
   function timelineSection(p) {
     const index = '<nav class="tl-index only-wide" aria-label="Days"><h4>Days</h4>' + [["Today", 12, true], ["Yesterday", 7], ["Mon 2 Nov", 4], ["Fri 30 Oct", 9]].map((d) =>
       '<button type="button"' + (d[2] ? ' aria-current="true"' : "") + "><span>" + esc(d[0]) + '</span><span class="n">' + d[1] + "</span></button>").join("") + "</nav>";
-    return '<div class="timeline-layout">' + index + '<section class="timeline-section"><div class="tl-day">Today<span class="t-secondary">newest first</span></div><ol class="timeline">' + DAY.slice(3).reverse().map(tlEntry).join("") + "</ol>" +
-      runGroup({ title: "Implementation run 1", verdict: "failed", time: "09:02", duration: "22 min", tokens: "", expanded: p.runOpen, entries: DAY.slice(1, 3), foldKey: "tl" }).replace('data-toggle="expanded"', 'data-toggle="runOpen"') +
+    const now = p.noRun ? "" : runGroup({ title: "Implementation run 2", verdict: "running", time: "11:45", duration: "42 min so far", expanded: p.runNowOpen, entries: RUN_NOW, steps: RUN_NOW_STEPS, foldKey: "tl-now" }).replace('data-toggle="expanded"', 'data-toggle="runNowOpen"');
+    return '<div class="timeline-layout">' + index + '<section class="timeline-section"><div class="tl-day">Today<span class="t-secondary">newest first</span></div>' + now + '<ol class="timeline">' + DAY.slice(3).reverse().map(tlEntry).join("") + "</ol>" +
+      runGroup({ title: "Implementation run 1", verdict: "failed", time: "09:02", duration: "22 min", tokens: "", expanded: p.runOpen, entries: DAY.slice(1, 3), steps: RUN_ONE_STEPS, foldKey: "tl" }).replace('data-toggle="expanded"', 'data-toggle="runOpen"') +
       '<ol class="timeline">' + DAY.slice(0, 1).map(tlEntry).join("") + "</ol></section></div>";
-  }
-
-  function runPanel() {
-    return '<section class="panel run-panel" aria-label="The run now"><div class="run-title"><span class="dot live role-working"></span>Implementation run 2<span class="t-secondary">on the tests step</span></div>' +
-      steps({ code: "passed", build: "passed", checks: "passed", tests: "current", handoff: "pending", testsNote: "212 of 340" }) + "</section>";
   }
 
   function ticketPage(p) {
@@ -1600,7 +1665,7 @@ window.CATALOG = (function () {
     const open = asks && !!p.sheetOpen;
     return '<div class="ticket-page' + (asks ? " has-decision" : "") + (open ? " sheet-open" : "") + '"><div class="zone-head">' + pageHeader(Object.assign({}, p, { cta: asks })) + "</div>" +
       (asks ? '<div class="zone-decide only-narrow"><h3 class="zone-title">Waiting on you</h3>' + decisionCta(p) + "</div>" : "") +
-      '<div class="zone-run"><h3 class="zone-title">The run now</h3>' + runPanel() + "</div>" +
+      '<div class="zone-run"><h3 class="zone-title">Lifecycle</h3>' + lifecyclePanel(p) + "</div>" +
       '<div class="zone-timeline"><h3 class="zone-title">Timeline</h3>' + timelineSection(p) + "</div>" +
       '<div class="zone-facts">' + factsRail(p) + "</div>" +
       /* Laptop: the decisions open in a sheet over the page. Desktop: they are always there, a column under the header. */
@@ -1615,21 +1680,23 @@ window.CATALOG = (function () {
     {
       title: "Page layout",
       wide: true,
-      args: { page: "ticket", boardPick: "", ident: "TP-1382", title: "Design system catalog as HTML: every Director component and section as stories", role: "you", blocked: false, noRun: false, more: false, questions: 2, sheetOpen: false, selected: 0, text: "", selected2: 0, text2: "", runOpen: false, blockedBy: false, noEpic: false, noPr: false, g1: true, g2: true, g3: true, emptyYou: false },
+      args: { page: "ticket", boardPick: "", ident: "TP-1382", title: "Design system catalog as HTML: every Director component and section as stories", role: "you", blocked: false, noRun: false, more: false, questions: 2, sheetOpen: false, selected: 0, text: "", selected2: 0, text2: "", runOpen: false, runNowOpen: false, ci: "running", blockedBy: false, noEpic: false, noPr: false, g1: true, g2: true, g3: true, emptyYou: false },
       controls: [
         { name: "page", label: "Page", type: "select", options: [{ value: "ticket", label: "Ticket page" }, { value: "board", label: "Board" }] },
         HEADER_CONTROLS[0],
         { name: "questions", label: "Open questions", type: "select", options: [{ value: 1, label: "One" }, { value: 2, label: "Two" }], when: (p) => p.page === "ticket" && p.role === "you" },
         { name: "sheetOpen", label: "Decisions sheet open (laptop)", type: "toggle", when: (p) => p.page === "ticket" && p.role === "you" },
+        { name: "runNowOpen", label: "The run now unfolded", type: "toggle", when: (p) => p.page === "ticket" },
+        { name: "ci", label: "Checks", type: "select", options: [{ value: "running", label: "Running" }, { value: "failed", label: "One failed" }, { value: "passed", label: "All passed" }], when: (p) => p.page === "ticket" },
       ],
       render: (p) => frame(p.page === "board" ? board(Object.assign({}, p, { selected: p.boardPick })).replace(/data-set="selected=/g, 'data-set="boardPick=') : ticketPage(p)),
       docs: {
-        what: "Where every section goes on a whole page, at both widths. The ticket page reads top to bottom in the order the Director needs it: who and where it stands (the header, one row across the page), what waits on them (the decisions), what is happening now (the run's steps), then what happened (the timeline, newest first). The facts rail is the reference beside the run and the timeline: the ticket's work (pull request, time, tokens) in one panel and its connections in another. A wider window gives the same structure more room; it never moves sections around.",
-        when: ["The header is always one row across the whole page; every column starts under it.", "On a laptop the decisions never sit in the page itself: the page shows one line saying what waits, and Answer opens them in a side sheet on the right, where several Questions scroll on their own. On a desktop there is room for them, so they are always there as a column and the page needs no such line.", "The run's steps always sit directly on top of the timeline, so the run now and the history read as one story."],
+        what: "Where every section goes on a whole page, at both widths. The ticket page reads top to bottom in the order the Director needs it: who and where it stands (the header, one row across the page), what waits on them (the decisions), where the ticket is on its way to landing (the lifecycle: its stages with the time each took, and one token bar split by stage), then what happened (the timeline, newest first, the run now at the top with its steps folded into its line). The facts rail is the reference beside them: the pull request with every check, and the ticket's connections. A wider window gives the same structure more room; it never moves sections around.",
+        when: ["The header is always one row across the whole page; every column starts under it.", "On a laptop the decisions never sit in the page itself: the page shows one line saying what waits, and Answer opens them in a side sheet on the right, where several Questions scroll on their own. On a desktop there is room for them, so they are always there as a column and the page needs no such line.", "The lifecycle always sits directly on top of the timeline: the stages say where the ticket is, the timeline says how it got there.", "Each fact appears once: time and tokens in the lifecycle, the checks in the pull request panel, a run's steps on the run's own line of the timeline."],
         responsive: [
-          "Ticket page, laptop (1180 pt): the header across the top; the main column holds the decisions line, the run's steps and the timeline, in that order; the facts rail (340 pt) on the right with Work and Connected. The decisions sheet (520 pt) slides over the right of the page, over a dimmed page, and closes on a click outside it.",
-          "Ticket page, desktop (2200 pt): the header is one row across the page, the moves on the identifier's line so the title has the whole width, the situation and the key facts on the line under it. Under the header, three columns: the main column with the run's steps on top of the timeline; the facts rail (440 pt) with Work and Connected; and, when something waits on the Director, the decisions (600 pt) on the far right, always open and scrolling on their own. No decisions line, no Answer button: the answers are already on the page. With nothing waiting, the page keeps two columns, the main one up to 1040 pt.",
-          "Every column opens with its title outside its card (The run now, Work, Waiting on you), so the columns start on one line. The pull request, the time and the tokens appear once, in Work.",
+          "Ticket page, laptop (1180 pt): the header across the top; the main column holds the decisions line, the lifecycle and the timeline, in that order; the facts rail (340 pt) on the right with the pull request and Connected. The decisions sheet (520 pt) slides over the right of the page, over a dimmed page, and closes on a click outside it.",
+          "Ticket page, desktop (2200 pt): the header is one row across the page, the moves on the identifier's line so the title has the whole width, the situation and the key facts on the line under it. Under the header, three columns: the main column with the lifecycle on top of the timeline; the facts rail (440 pt) with the pull request and Connected; and, when something waits on the Director, the decisions (600 pt) on the far right, always open and scrolling on their own. No decisions line, no Answer button: the answers are already on the page. With nothing waiting, the page keeps two columns, the main one up to 1040 pt.",
+          "Every column opens with its title outside its card (Lifecycle, Pull request, Waiting on you), so the columns start on one line.",
           "Board, laptop: the situation groups stacked top to bottom in the order the Director acts on them; each row says where the ticket stands in two lines. Picking a row opens its page.",
           "Board, desktop: the groups still stack; each row turns into one line of aligned columns (what it waits on, repo, steps, age), and a preview of the picked ticket sits beside the list, so the Director can act without leaving the board.",
         ],
@@ -1638,6 +1705,7 @@ window.CATALOG = (function () {
       },
       stories: [
         { name: "Ticket page, laptop", viewport: "laptop", args: { page: "ticket" } },
+        { name: "Ticket page, laptop, the run now unfolded", viewport: "laptop", args: { page: "ticket", role: "working", runNowOpen: true } },
         { name: "Ticket page, laptop, decisions open", viewport: "laptop", args: { page: "ticket", sheetOpen: true, selected: 1 } },
         { name: "Ticket page, desktop", viewport: "desktop", args: { page: "ticket" } },
         { name: "Ticket page, desktop, one answer picked", viewport: "desktop", args: { page: "ticket", selected: 1 } },
@@ -1655,7 +1723,7 @@ window.CATALOG = (function () {
       render: (p) => frame(pageHeader(p)),
       docs: {
         what: "The top of a ticket page: the identifier with its repo and epic, the title, the situation line, and the action rail.",
-        responsive: ["Laptop (1180 pt): the action rail sits on its own row under the situation line, so the title keeps the full width. The title wraps (balanced) and stops at 30 em.", "Desktop (2200 pt): one row across the whole page. The action rail shares the top line with the identifier, so the title runs the full width under them (up to 56 em, about 120 characters, before it wraps). The situation sits on the line under the title. The header carries no facts: the pull request, the time and the tokens are in the facts rail's Work panel.", "The age sits inside the status pill, next to the word it counts (Waiting on you, for 3 h 12 min), so it always has the same place to be read."],
+        responsive: ["Laptop (1180 pt): the action rail sits on its own row under the situation line, so the title keeps the full width. The title wraps (balanced) and stops at 30 em.", "Desktop (2200 pt): one row across the whole page. The action rail shares the top line with the identifier, so the title runs the full width under them (up to 56 em, about 120 characters, before it wraps). The situation sits on the line under the title. The header carries no facts: time and tokens are in the lifecycle, the pull request and its checks in the facts rail.", "The age sits inside the status pill, next to the word it counts (Waiting on you, for 3 h 12 min), so it always has the same place to be read."],
         tokens: ["--type-title", "--tracking-display", "--space-8", "--measure"],
       },
       stories: VIEWPORT_STORIES([{ name: "Waiting on you", viewport: "laptop", args: { role: "you", blocked: false } }, { name: "Short title", viewport: "desktop", args: { title: "Checkout total rounding", ident: "SHOP-305" } }]),
@@ -1675,45 +1743,63 @@ window.CATALOG = (function () {
       stories: VIEWPORT_STORIES([{ name: "More open, laptop", viewport: "laptop", args: { more: true } }, { name: "Waiting on you", viewport: "laptop", args: { role: "you", blocked: false } }, { name: "Nothing running", viewport: "desktop", args: { blocked: false, noRun: true } }]),
     },
     {
+      title: "Lifecycle",
+      wide: true,
+      args: { noRun: false },
+      controls: [{ name: "noRun", label: "No run yet", type: "toggle" }],
+      render: (p) => frame('<div style="max-width:780px"><h3 class="zone-title">Lifecycle</h3>' + lifecyclePanel(p) + "</div>"),
+      docs: {
+        what: "Where the ticket is on its whole way to landing: the stages it moves through (Coding, Code Review, QA, Merging, Done), each with its state and the time it took, then one token bar against the ticket's cap, split by the same stages. It sits on top of the timeline on the ticket page.",
+        when: ["The stages are the ticket's, not one run's: a run's own steps (writing the code, build, checks, tests, handoff) sit on that run's line in the timeline.", "A stage that sent the ticket back says so (Sent back) and keeps its time; a stage the ticket skips says why.", "One bar for tokens: the stages fill the ticket's cap from the left and what is left stays empty, so where the tokens went and how much is left read together. Its colour turns orange from 75 % and red from 95 %, as the progress meter does."],
+        responsive: ["Laptop: the main column's width, up to 780 pt; the stages share it equally.", "Desktop: the same, up to 1040 pt; stage names and their notes never wrap mid-word."],
+        states: [["In Coding, sent back once", "Coding now, Code Review sent back, QA skipped"], ["No run yet", "Coding now with no time, an empty bar"]],
+        motion: "The current stage's bar flows while it works; the token bar's segments grow on a spring when a run spends.",
+        tokens: ["step strip tokens", "stacked stage bar tokens", "--radius-card", "--elevation-1"],
+      },
+      stories: [{ name: "Laptop", viewport: "laptop" }, { name: "Desktop", viewport: "desktop" }, { name: "No run yet", viewport: "laptop", args: { noRun: true } }],
+    },
+    {
       title: "Facts rail",
       wide: true,
-      args: { role: "working", noPr: false, noRun: false, noEpic: false, blockedBy: false },
+      args: { role: "working", noPr: false, ci: "running", noEpic: false, blockedBy: false },
       controls: [
         { name: "role", label: "Situation", type: "select", options: [{ value: "working", label: "Waiting for CI" }, { value: "you", label: "Waiting on you" }] },
         { name: "noPr", label: "No pull request yet", type: "toggle" },
-        { name: "noRun", label: "No run yet", type: "toggle" },
+        { name: "ci", label: "Checks", type: "select", options: [{ value: "running", label: "Running" }, { value: "failed", label: "One failed" }, { value: "passed", label: "All passed" }], when: (p) => !p.noPr },
         { name: "noEpic", label: "Not part of an epic", type: "toggle" },
         { name: "blockedBy", label: "Another ticket holds it up", type: "toggle" },
       ],
       render: (p) => frame(factsRail(p)),
       docs: {
-        what: "The column beside the run's steps and the timeline, in two panels. Work is the one place the page shows the pull request, the time and the tokens: three figures (time on runs, tokens, runs), the tokens against the ticket's cap, time and tokens by stage, and every run with its time and tokens. Connected shows where the ticket sits: its epic with the epic's progress and its tickets in order, what this ticket waits on, and what waits on it.",
-        when: ["Nothing in Work is repeated elsewhere on the page: the header carries no fact chips and the run's steps carry no time or tokens.", "Each panel's title sits outside the card, like The run now and Timeline, so the columns start on one line. The panels never fold: what is there is short enough to read in full.", "A fact that is unknown says so in a plain line (No pull request yet, Not part of an epic, Nothing holds this one up), never a dash."],
-        responsive: ["Laptop: one column, 340 pt, beside the page's main column.", "Desktop: one column, 440 pt, the wider room going to the figures, the run list and the ticket titles. The rail stays a column: facts are read top to bottom, never spread across the page.", "Ticket titles wrap inside their row; the identifier, the stage and the numbers never wrap."],
-        states: [["Typical", "a pull request, three runs, an epic, one ticket waiting on this one"], ["No pull request yet", "a plain line in its place"], ["No run yet", "no figures; a plain line says when they appear"], ["Not part of an epic", "a plain line"], ["Held up", "the ticket it waits on, with its stage"]],
-        motion: "A ticket row lifts its background on hover and its arrow nudges right; numbers update in place.",
+        what: "The column beside the lifecycle and the timeline, in two panels. Pull request: the pull request with its size and the state of its checks, then every check, by workflow, with its state (passed, failed, running, waiting, skipped) and how long it took. Connected shows where the ticket sits: its epic with the epic's progress and its tickets in order, what this ticket waits on, and what waits on it.",
+        when: ["The checks are listed in full, never summed up alone: a failed or running one is read in place, and each row opens its log.", "Time and tokens are not here: they belong to the lifecycle, beside the stages they were spent in.", "Each panel's title sits outside the card, like Lifecycle and Timeline, so the columns start on one line. The panels never fold: what is there is short enough to read in full.", "A fact that is unknown says so in a plain line (No pull request yet, Not part of an epic, Nothing holds this one up), never a dash."],
+        responsive: ["Laptop: one column, 340 pt, beside the page's main column.", "Desktop: one column, 440 pt, the wider room going to the check names and the ticket titles. The rail stays a column: facts are read top to bottom, never spread across the page.", "Check names and ticket titles wrap inside their row; the state, the identifier and the numbers never wrap."],
+        states: [["Checks running", "a live dot on each running check, the rest passed or waiting"], ["One check failed", "the failed row in red, the report after it skipped"], ["All passed", "every row green"], ["No pull request yet", "a plain line in its place"], ["Not part of an epic", "a plain line"], ["Held up", "the ticket it waits on, with its stage"]],
+        motion: "A check or ticket row lifts its background on hover and its arrow nudges right; a running check's dot pulses; states update in place.",
         tokens: ["--radius-card", "--elevation-1", "--space-4", "--space-5", "--surface-sunken", "--surface-hover", "--accent-tint", "meter tokens", "stacked stage bar tokens"],
       },
       stories: [
         { name: "Laptop", viewport: "laptop" },
         { name: "Desktop", viewport: "desktop" },
         { name: "Held up by another ticket", viewport: "laptop", args: { blockedBy: true } },
-        { name: "No pull request or run yet", viewport: "laptop", args: { noPr: true, noRun: true } },
+        { name: "A check failed", viewport: "laptop", args: { ci: "failed" } },
+        { name: "All checks passed", viewport: "desktop", args: { ci: "passed" } },
+        { name: "No pull request yet", viewport: "laptop", args: { noPr: true } },
         { name: "Not part of an epic", viewport: "laptop", args: { noEpic: true } },
       ],
     },
     {
       title: "Timeline",
       wide: true,
-      args: { runOpen: false },
-      controls: [{ name: "runOpen", label: "Run group unfolded", type: "toggle" }],
+      args: { runOpen: false, runNowOpen: false },
+      controls: [{ name: "runNowOpen", label: "The run now unfolded", type: "toggle" }, { name: "runOpen", label: "Run 1 unfolded", type: "toggle" }],
       render: (p) => frame(timelineSection(p)),
       docs: {
         what: "A day of a ticket's history, newest first, so the latest event is the first thing read: phase moves, pauses, questions, runs folded into groups, the Director's own actions and the rules Symphony applied.",
-        responsive: ["Laptop: one column of at most 780 pt.", "Desktop: the same column, with a list of days beside it that jumps between them; the extra width goes to finding your way, never to longer lines.", "On the ticket page the timeline keeps one column at both widths, directly under the run's steps: the day list belongs to the full history view.", "Newest first at every level: days, entries in a day, and the entries inside an unfolded run."],
+        responsive: ["Laptop: one column of at most 780 pt.", "Desktop: the same column, with a list of days beside it that jumps between them; the extra width goes to finding your way, never to longer lines.", "On the ticket page the timeline keeps one column at both widths, directly under the lifecycle: the day list belongs to the full history view.", "Newest first at every level: days, entries in a day, and the entries inside an unfolded run.", "A run's steps are folded into its line: a short bar per step and the step it is on (or stopped at). Unfolding the run shows the full step strip above its entries."],
         tokens: ["timeline entry tokens", "--measure"],
       },
-      stories: VIEWPORT_STORIES([{ name: "Run unfolded", viewport: "laptop", args: { runOpen: true } }]),
+      stories: VIEWPORT_STORIES([{ name: "The run now unfolded", viewport: "laptop", args: { runNowOpen: true } }, { name: "Failed run unfolded", viewport: "laptop", args: { runOpen: true } }]),
     },
     {
       title: "Question block",

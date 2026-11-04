@@ -557,6 +557,10 @@ button.chip:not([aria-disabled="true"]):active,
 .stage-legend .key { width: 8px; height: 8px; border-radius: 3px; }
 .stage-legend .v { color: var(--text-primary); font-variant-numeric: tabular-nums; }
 .stage-track.empty { background: var(--surface-sunken); border-radius: var(--radius-capsule); }
+.stage-seg.rest { background: var(--surface-sunken); box-shadow: inset 0 0 0 1px var(--stroke-separator); }
+.stage-bar .meter-note { font: var(--type-secondary); }
+.stage-bar .meter-note.role-you { color: var(--status-you-text); }
+.stage-bar .meter-note.role-problem { color: var(--status-problem-text); }
 
 /* ---------- Text field and search field ---------- */
 
@@ -976,6 +980,22 @@ button.chip:not([aria-disabled="true"]):active,
 .step.current .bar::after { width: 55%; background: linear-gradient(90deg, var(--status-working), color-mix(in oklab, var(--status-working) 50%, white), var(--status-working)); background-size: 200% 100%; animation: ds-flow 1.6s linear infinite; }
 .step.current .state { color: var(--status-working-text); font-weight: 550; }
 .step.pending .name { color: var(--text-secondary); }
+.step.returned .bar::after { width: 100%; background: var(--status-you); }
+.step.returned .state { color: var(--status-you-text); font-weight: 550; }
+
+/* A run's steps folded into its timeline line: one short bar per step */
+.steps-mini { display: inline-flex; align-items: center; gap: 2px; margin-left: var(--space-1); }
+.steps-mini i { width: 14px; height: 4px; border-radius: 2px; background: var(--surface-sunken); box-shadow: inset 0 0 0 1px var(--stroke-separator); }
+.steps-mini i.passed { background: var(--status-done); box-shadow: none; }
+.steps-mini i.failed { background: var(--status-problem); box-shadow: none; }
+.steps-mini i.paused { background: var(--status-idle); box-shadow: none; }
+.steps-mini i.skipped { background: repeating-linear-gradient(90deg, var(--stroke-strong) 0 3px, transparent 3px 5px); box-shadow: none; }
+.steps-mini i.current { background: linear-gradient(90deg, var(--status-working), color-mix(in oklab, var(--status-working) 45%, white), var(--status-working)); background-size: 200% 100%; animation: ds-flow 1.6s linear infinite; box-shadow: none; }
+.steps-mini-at { font: var(--type-secondary); font-weight: 550; white-space: nowrap; color: var(--text-secondary); }
+.steps-mini-at.role-working { color: var(--status-working-text); }
+.steps-mini-at.role-problem { color: var(--status-problem-text); }
+.run-group .run-body .run-steps { padding: var(--space-2) 0 var(--space-3); }
+.run-group .run-body .run-steps .steps { width: 100%; }
 
 @keyframes ds-flow {
   from { background-position: 200% 0; }
@@ -984,6 +1004,7 @@ button.chip:not([aria-disabled="true"]):active,
 
 @media (prefers-reduced-motion: reduce) {
   .step.current .bar::after { animation: none; }
+  .steps-mini i.current { animation: none; }
 }
 
 /* ---------- Option card and own words ---------- */
@@ -1257,18 +1278,30 @@ button.chip:not([aria-disabled="true"]):active,
 .pr-line .pr-name { font-weight: 600; }
 .pr-line .t-secondary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-secondary); }
 
-.figures { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); }
-.figure { display: grid; gap: 2px; padding: var(--space-2) var(--space-3); border-radius: var(--radius-row); background: var(--surface-sunken); }
-.figure-value { font: 650 20px/24px var(--font-display, var(--font-text)); letter-spacing: -0.01em; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.figure-label { font: var(--type-secondary); color: var(--text-secondary); }
-.usage-split { display: grid; gap: var(--space-4); }
-
-.run-list { display: grid; margin: 0; padding: 0; list-style: none; font: var(--type-secondary); }
-.run-row { display: grid; grid-template-columns: 8px minmax(0, 1fr) 64px 52px; align-items: center; gap: var(--space-2); padding: 6px 0; border-top: 1px solid var(--stroke-separator); }
-.run-row .num { text-align: right; font-variant-numeric: tabular-nums; }
-.run-row .run-name { display: grid; min-width: 0; color: var(--text-primary); }
-.run-row .run-name .t-secondary { font: var(--type-caption); }
-.run-row.run-head { border-top: 0; padding-top: 0; font: var(--type-caption); color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; }
+/* Pull request: every check, by workflow */
+.pr-panel h4 { display: flex; align-items: baseline; gap: var(--space-2); }
+.pr-panel h4 .t-secondary { margin-left: auto; font: var(--type-secondary); font-weight: 400; font-variant-numeric: tabular-nums; }
+.check-group { display: grid; gap: 2px; }
+.check-group + .check-group { margin-top: var(--space-2); }
+.check-group h5 { margin: 0 0 2px; font: var(--type-caption); color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; }
+.check-list { display: grid; margin: 0; padding: 0; list-style: none; }
+.check-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto 64px; align-items: center; gap: var(--space-2); width: calc(100% + 2 * var(--space-2)); margin: 0 calc(-1 * var(--space-2)); padding: 5px var(--space-2); border: 0; border-radius: var(--radius-row); background: none; font: var(--type-secondary); color: var(--text-primary); text-align: left; cursor: pointer; transition: background var(--motion-fast) var(--ease-standard); }
+.check-row:hover { background: var(--surface-hover); }
+.check-row:active { background: var(--surface-pressed); }
+.check-row:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: 0; }
+.check-row .mark { display: grid; place-items: center; width: 16px; height: 16px; color: var(--status-idle); }
+.check-row .mark .glyph { width: 13px; height: 13px; }
+.check-row.role-done .mark { color: var(--status-done); }
+.check-row.role-problem .mark { color: var(--status-problem); }
+.check-row .check-name { min-width: 0; }
+.check-row .check-state { color: var(--text-secondary); white-space: nowrap; }
+.check-row.failed { background: var(--tint-problem); }
+.check-row.failed:hover { background: color-mix(in oklab, var(--tint-problem), var(--surface-hover)); }
+.check-row.failed .check-state { color: var(--status-problem-text); font-weight: 550; }
+.check-row.running .check-state { color: var(--status-working-text); font-weight: 550; }
+.check-row.skipped .check-name,
+.check-row.waiting .check-name { color: var(--text-secondary); }
+.check-row .num { text-align: right; color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .epic-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: baseline; gap: var(--space-2); margin: 0 calc(-1 * var(--space-2)); padding: 6px var(--space-2); border: 0; border-radius: var(--radius-row); background: none; font: inherit; color: inherit; text-align: left; transition: background var(--motion-fast) var(--ease-standard); }
 .epic-head:hover { background: var(--surface-hover); }
@@ -1457,7 +1490,7 @@ button.rel-row:hover .rel-go { transform: translateX(2px); }
 .preview-card .steps { width: 100%; }
 .preview-card .step { padding: 8px 8px 6px; }
 .preview-card .step .name,
-.run-panel .step .name { white-space: normal; align-items: flex-start; }
+.lifecycle-panel .step .name { white-space: normal; align-items: flex-start; }
 
 /* Table with filters: filters above at laptop, a facet column beside at desktop */
 .table-section { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); align-items: start; }
@@ -1507,9 +1540,13 @@ button.rel-row:hover .rel-go { transform: translateX(2px); }
 .ticket-page .timeline-layout { grid-template-columns: minmax(0, 1fr); }
 .tl-day { display: flex; align-items: baseline; gap: var(--space-2); }
 .tl-day .t-secondary { font: var(--type-secondary); text-transform: none; letter-spacing: 0; }
-.run-panel .run-title { display: flex; align-items: center; gap: var(--space-2); font: var(--type-heading); }
-.run-panel .run-title .t-secondary { margin-left: auto; font: var(--type-secondary); }
-.run-panel .steps { width: 100%; }
+/* Lifecycle: the ticket's stages, then one token bar against its cap */
+.lifecycle-panel { gap: var(--space-4); }
+.lifecycle-panel .life-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.lifecycle-panel .life-where { font: var(--type-heading); min-width: 0; }
+.lifecycle-panel .life-sum { margin-left: auto; font: var(--type-secondary); color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lifecycle-panel .steps { width: 100%; }
+.lifecycle-panel .stage-bar { width: 100%; padding-top: var(--space-4); border-top: 1px solid var(--stroke-separator); }
 
 @container (min-width: 1600px) {
   /* Desktop: the header is one row across the page; every column starts under it. */
