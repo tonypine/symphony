@@ -14,6 +14,14 @@ defmodule SymphonyElixir.HumanActions.PlainWords do
   - Symphony's internal words, which mean nothing to the Director: `head`, `verdict`, `hold` and
     `feed` (and their plurals).
 
+  One kind of path is a place for the Director to look rather than code: a file in a ticket's
+  workspace, such as the HTML prototype a design review asks them to open in a browser. In `why`,
+  `decision.question` and each option's `effect`, an absolute path under the configured workspace
+  root, or a `file://` link to one, passes (`findings/2`'s `:workspace_root`), and the Director's app
+  shows it as a link. An absolute path or `file://` link outside the root is refused as
+  `:outside_workspace`, and the message names the root. Every other field, and a relative path or
+  any other link anywhere, is refused as before.
+
   Ticket identifiers (`TP-891`), PR numbers (`#448`, `PR #448`), numbers and ordinary sentences
   pass. Symphony's own requests are written to pass the same check: their fixed words are plain, and
   the text they quote from elsewhere (a ticket's title, a failure's reason) goes through `scrub/1`,
@@ -21,13 +29,15 @@ defmodule SymphonyElixir.HumanActions.PlainWords do
   """
 
   @typedoc "What kind of code a token is."
-  @type kind :: :backticks | :template | :branch | :link | :path | :file | :hash | :jargon
+  @type kind :: :backticks | :template | :branch | :link | :path | :file | :hash | :jargon | :outside_workspace
 
   @typedoc "One token of code found in a field of a request."
   @type finding :: %{field: String.t(), token: String.t(), kind: kind()}
 
   @backtick_span ~r/`[^`\n]*`|`/
   @template_span ~r/\{%.*?%\}|\{%|%\}/
+  # The fields a file location for the Director to open may sit in.
+  @location_field ~r/^(?:why|decision\.question|decision\.options\[\d+\]\.effect)$/
   @branch ~r/^(?:auto|origin)\/\S+$/
   @link ~r/^[a-z][a-z0-9+.-]*:\/\/\S+$/i
   @file_name ~r/^(?<stem>[\w*.-]*)\.[A-Za-z][A-Za-z0-9]{0,9}$/
@@ -56,7 +66,8 @@ defmodule SymphonyElixir.HumanActions.PlainWords do
     path: "the path",
     file: "the file name",
     hash: "the commit hash",
-    jargon: "the internal word"
+    jargon: "the internal word",
+    outside_workspace: "the file location outside the workspace root"
   }
 
   @doc """
@@ -64,22 +75,71 @@ defmodule SymphonyElixir.HumanActions.PlainWords do
   unblocks, the recommendation's reason, and each option's label, effect and trade-offs. The request
   is the map `SymphonyElixir.HumanActions.Request.render_hold/2` renders; each finding names the
   field as the tool's input names it (`decision.options[0].effect`).
+
+  `opts[:workspace_root]` is the configured workspace root: an absolute path or `file://` link
+  under it in `why`, `decision.question` or an option's `effect` is no finding, and one outside it
+  is `:outside_workspace`. Without a root every path is a finding, as in any other field.
   """
-  @spec findings(map()) :: [finding()]
-  def findings(request) do
+  @spec findings(map(), keyword()) :: [finding()]
+  def findings(request, opts \\ []) do
+    root = opts |> Keyword.get(:workspace_root) |> expand_root()
+
     request
     |> fields()
-    |> Enum.flat_map(fn {field, text} -> Enum.map(tokens(text), fn {kind, token} -> %{field: field, token: token, kind: kind} end) end)
+    |> Enum.flat_map(fn {field, text} ->
+      location_field? = Regex.match?(@location_field, field)
+
+      for {kind, token} <- tokens(text), kind = location_kind(kind, token, location_field?, root) do
+        %{field: field, token: token, kind: kind}
+      end
+    end)
   end
 
-  @doc "`:ok` when `request` holds no code, else `{:error, message}` naming each token and its field."
-  @spec check(map()) :: :ok | {:error, String.t()}
-  def check(request) do
-    case findings(request) do
+  @doc """
+  `:ok` when `request` holds no code, else `{:error, message}` naming each token and its field.
+  `opts` as `findings/2` takes them.
+  """
+  @spec check(map(), keyword()) :: :ok | {:error, String.t()}
+  def check(request, opts \\ []) do
+    case findings(request, opts) do
       [] -> :ok
-      findings -> {:error, message(findings)}
+      findings -> {:error, message(findings, Keyword.get(opts, :workspace_root))}
     end
   end
+
+  # A path or link in a field that may carry a file location: none when it is one under the root,
+  # `:outside_workspace` when it is one elsewhere, its kind when it is no file location.
+  defp location_kind(kind, token, true = _location_field?, root) when kind in [:path, :link] and is_binary(root) do
+    case file_location(token) do
+      nil -> kind
+      path -> if within?(path, root), do: nil, else: :outside_workspace
+    end
+  end
+
+  defp location_kind(kind, _token, _location_field?, _root), do: kind
+
+  # The absolute path a word names: itself when it starts with one slash, the path of a `file://`
+  # link with no host (or `localhost`), else nil.
+  defp file_location("//" <> _rest), do: nil
+  defp file_location("/" <> _rest = path), do: path
+
+  defp file_location(word) do
+    case URI.parse(word) do
+      %URI{scheme: scheme, host: host, path: "/" <> _rest = path} when host in [nil, "", "localhost"] ->
+        if String.downcase(scheme) == "file", do: URI.decode(path)
+
+      _uri ->
+        nil
+    end
+  end
+
+  defp within?(path, root) do
+    path = Path.expand(path)
+    path == root or String.starts_with?(path, String.trim_trailing(root, "/") <> "/")
+  end
+
+  defp expand_root(root) when is_binary(root) and root != "", do: Path.expand(root)
+  defp expand_root(_root), do: nil
 
   @doc "The code tokens in `text`, each with its kind, in the order found and without repeats."
   @spec tokens(String.t() | nil) :: [{kind(), String.t()}]
@@ -130,9 +190,13 @@ defmodule SymphonyElixir.HumanActions.PlainWords do
     if String.first(word) == String.upcase(String.first(word)), do: String.capitalize(plain), else: plain
   end
 
-  @doc "The `invalid_human_action` message for `findings`: each token by field, and what to do instead."
-  @spec message([finding()]) :: String.t()
-  def message(findings) do
+  @doc """
+  The `invalid_human_action` message for `findings`: each token by field, and what to do instead.
+  With a `workspace_root`, a finding of a path, file name or link also says how to give a file for
+  the Director to open, naming the root.
+  """
+  @spec message([finding()], String.t() | nil) :: String.t()
+  def message(findings, workspace_root) do
     by_field =
       findings
       |> Enum.group_by(& &1.field)
@@ -143,8 +207,18 @@ defmodule SymphonyElixir.HumanActions.PlainWords do
 
     "A decision is read by the Director, who does not read code. #{by_field}. " <>
       "Rewrite it in plain words: say what the thing does, not where it lives or what it is called in the code or inside Symphony. " <>
-      "Name a ticket by its identifier and a short name, and a PR as PR #123."
+      "Name a ticket by its identifier and a short name, and a PR as PR #123." <> location_hint(findings, expand_root(workspace_root))
   end
+
+  defp location_hint(findings, root) when is_binary(root) do
+    if Enum.any?(findings, &(&1.kind in [:path, :file, :link, :outside_workspace])),
+      do:
+        " A file for the person to open in a browser or in Finder may go in `why`, `decision.question` or an option's `effect` " <>
+          "as an absolute path or file:// link under the workspace root #{root}.",
+      else: ""
+  end
+
+  defp location_hint(_findings, nil), do: ""
 
   defp fields(request) do
     options = request |> Map.get(:options) |> List.wrap()

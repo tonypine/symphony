@@ -1,15 +1,18 @@
 import AppKit
 import SymphonyBarCore
 
-/// One paragraph a `ChipTextView` shows: the text, a bold lead before it ("If you don't answer:"), and the mentions
-/// found in it by the item's `references`.
+/// One paragraph a `ChipTextView` shows: the text, a bold lead before it ("If you don't answer:"), the mentions
+/// found in it by the item's `references`, and the file locations it points at (`FileLocations`, TP-1386).
 public struct ChipTextContent: Equatable {
     public var lead: String?
     public var text: String
     /// The lead, a space and the text: what a selection copies from.
     public var source: String
-    /// The mentions, with ranges in `source`.
+    /// The mentions, with ranges in `source`. A ticket identifier inside a file location ("…/TP-1382/index.html")
+    /// is part of the location, not a mention.
     public var mentions: [Mention]
+    /// The files the text points at, each a link, with ranges in `source`.
+    public var fileLocations: [FileLocation]
 
     public init(_ text: String, references: [String: Reference], lead: String? = nil) {
         let prefix = lead.map { "\($0) " } ?? ""
@@ -17,17 +20,29 @@ public struct ChipTextContent: Equatable {
         self.lead = lead
         self.text = text
         source = prefix + text
-        mentions = Mentions.find(in: text, references: references).map { mention in
+        let locations = FileLocations.find(in: text).map { location in
+            var location = location
+            location.range.location += offset
+            return location
+        }
+        fileLocations = locations
+        mentions = Mentions.find(in: text, references: references).compactMap { mention in
             var mention = mention
             mention.range.location += offset
-            return mention
+            let inLocation = locations.contains { NSIntersectionRange($0.range, mention.range).length > 0 }
+            return inLocation ? nil : mention
         }
     }
 
     /// The content of a text whose item resolved its mentions; nil when it has no `references` (an older Symphony, or
-    /// a ticket page whose ticket isn't in the Inbox), so the text is drawn as plain text, as it was before chips.
+    /// a ticket page whose ticket isn't in the Inbox) and no file location, so the text is drawn as plain text, as it
+    /// was before chips. A text with file locations and no `references` shows its links and no chips.
     public static func chips(_ text: String, references: [String: Reference], lead: String? = nil) -> ChipTextContent? {
-        references.isEmpty ? nil : ChipTextContent(text, references: references, lead: lead)
+        var content = ChipTextContent(text, references: references, lead: lead)
+        guard references.isEmpty else { return content }
+        guard !content.fileLocations.isEmpty else { return nil }
+        content.mentions = []
+        return content
     }
 }
 
@@ -72,6 +87,8 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     public var openMentionDirectly: ((Mention) -> Void)?
     /// Copy Link, Open in Linear and Open on GitHub in a chip's menu.
     public var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    /// A click on a file location's link: an HTML file in the default browser, anything else shown in Finder.
+    public var openFileLocation: (FileLocation) -> Void = { $0.open(in: NSWorkspace.shared) }
     public var popover: ChipPopoverPresenting?
     public var hoverDelay: TimeInterval = DesignTokens.Chip.hoverDelay
     /// Scrolls the review a distance down, in points, through its SwiftUI scroll view's own position: that scroll view
@@ -108,11 +125,13 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     let focusRing = ChipFocusRing()
 
     private var pressedChip: Int?
+    private var pressedLocation: Int?
     private var hoverWork: DispatchWorkItem?
     private var hoverArea: NSTrackingArea?
     private lazy var chipElements: [ChipAccessibilityElement] = makeChipElements()
 
     public static let chipAttribute = NSAttributedString.Key("SymphonyChip")
+    public static let fileLocationAttribute = NSAttributedString.Key("SymphonyFileLocation")
 
     public init(content: ChipTextContent, style: ChipTextStyle) {
         self.content = content
@@ -200,6 +219,14 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         }
         for (location, kern) in kerns {
             string.addAttribute(.kern, value: kern, range: NSRange(location: location, length: 1))
+        }
+        for (index, location) in content.fileLocations.enumerated() {
+            string.addAttributes([
+                .link: location.url,
+                Self.fileLocationAttribute: index,
+                .foregroundColor: NSColor.linkColor,
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+            ], range: location.range)
         }
         return string
     }
@@ -321,15 +348,21 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     /// and caret offsets put half of a character's kerning on its neighbour, so they miss the room before and after a
     /// chip by half; the glyph origins don't.
     private func chipFrames(_ index: Int, in manager: NSTextLayoutManager) -> [CGRect] {
-        guard content.mentions.indices.contains(index), let contentManager = manager.textContentManager else { return [] }
+        guard content.mentions.indices.contains(index) else { return [] }
         let mention = content.mentions[index]
+        return frames(of: mention.range, room: leadingRoom(for: mention), in: manager)
+    }
+
+    /// The rectangles a range of the text takes in a layout's text container, one per line, `room` added before its
+    /// first character.
+    private func frames(of characters: NSRange, room: CGFloat, in manager: NSTextLayoutManager) -> [CGRect] {
+        guard let contentManager = manager.textContentManager else { return [] }
         manager.ensureLayout(for: manager.documentRange)
         let documentStart = contentManager.documentRange.location
-        guard let start = contentManager.location(documentStart, offsetBy: mention.range.location),
-            let end = contentManager.location(start, offsetBy: mention.range.length),
+        guard let start = contentManager.location(documentStart, offsetBy: characters.location),
+            let end = contentManager.location(start, offsetBy: characters.length),
             let range = NSTextRange(location: start, end: end)
         else { return [] }
-        let room = leadingRoom(for: mention)
         var frames: [CGRect] = []
         manager.enumerateTextLayoutFragments(from: start, options: [.ensuresLayout]) { fragment in
             guard fragment.rangeInElement.location.compare(range.endLocation) == .orderedAscending else { return false }
@@ -337,14 +370,14 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
             let fragmentFrame = fragment.layoutFragmentFrame
             for line in fragment.textLineFragments {
                 let lineRange = NSRange(location: paragraphStart + line.characterRange.location, length: line.characterRange.length)
-                let chars = NSIntersectionRange(lineRange, mention.range)
+                let chars = NSIntersectionRange(lineRange, characters)
                 guard chars.length > 0 else { continue }
                 let bounds = line.typographicBounds
                 let glyphs = GlyphOrigins(line)
                 let x = { (location: Int) in
                     fragmentFrame.minX + bounds.minX + glyphs.x(at: location - paragraphStart - line.characterRange.location)
                 }
-                let minX = x(chars.location) - (chars.location == mention.range.location ? room : 0)
+                let minX = x(chars.location) - (chars.location == characters.location ? room : 0)
                 let maxX = x(NSMaxRange(chars))
                 frames.append(CGRect(x: minX, y: fragmentFrame.minY + bounds.minY, width: maxX - minX, height: bounds.height))
             }
@@ -356,6 +389,29 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     /// The chip at `point` in the view, nil in plain text.
     public func chipIndex(at point: CGPoint) -> Int? {
         content.mentions.indices.first { index in chipRects(index).contains { $0.contains(point) } }
+    }
+
+    // MARK: - File locations
+
+    /// The rectangles of a file location's link in the view, one per line it is on.
+    public func fileLocationRects(_ index: Int) -> [CGRect] {
+        guard content.fileLocations.indices.contains(index), let manager = textLayoutManager else { return [] }
+        let origin = textContainerOrigin
+        return frames(of: content.fileLocations[index].range, room: 0, in: manager).map { $0.offsetBy(dx: origin.x, dy: origin.y) }
+    }
+
+    /// The file location whose link is at `point` in the view, nil elsewhere.
+    public func fileLocationIndex(at point: CGPoint) -> Int? {
+        content.fileLocations.indices.first { index in fileLocationRects(index).contains { $0.contains(point) } }
+    }
+
+    /// TextKit's own link click (the link attribute) opens the location as a click on it does.
+    override open func clicked(onLink link: Any, at charIndex: Int) {
+        guard let location = content.fileLocations.first(where: { NSLocationInRange(charIndex, $0.range) }) else {
+            super.clicked(onLink: link, at: charIndex)
+            return
+        }
+        openFileLocation(location)
     }
 
     /// Draws the chips that sit in a layout fragment, under its text: tinted, or dotted-underlined when missing (the
@@ -521,7 +577,12 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     }
 
     override open func mouseDown(with event: NSEvent) {
-        guard let chip = chipIndex(at: convert(event.locationInWindow, from: nil)) else {
+        let point = convert(event.locationInWindow, from: nil)
+        if chipIndex(at: point) == nil, let location = fileLocationIndex(at: point) {
+            pressedLocation = location
+            return
+        }
+        guard let chip = chipIndex(at: point) else {
             super.mouseDown(with: event)
             return
         }
@@ -530,10 +591,17 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     }
 
     override open func mouseDragged(with event: NSEvent) {
-        if pressedChip == nil { super.mouseDragged(with: event) }
+        if pressedChip == nil, pressedLocation == nil { super.mouseDragged(with: event) }
     }
 
     override open func mouseUp(with event: NSEvent) {
+        if let pressed = pressedLocation {
+            pressedLocation = nil
+            if fileLocationIndex(at: convert(event.locationInWindow, from: nil)) == pressed {
+                openFileLocation(content.fileLocations[pressed])
+            }
+            return
+        }
         guard let pressed = pressedChip else {
             super.mouseUp(with: event)
             return
@@ -544,11 +612,11 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         }
     }
 
-    /// Out of a control's text, a click outside a chip goes to the control.
+    /// Out of a control's text, a click outside a chip or a file location's link goes to the control.
     override open func hitTest(_ point: NSPoint) -> NSView? {
         guard !style.selectable else { return super.hitTest(point) }
         let local = superview.map { convert(point, from: $0) } ?? point
-        return chipIndex(at: local) == nil ? nil : super.hitTest(point)
+        return chipIndex(at: local) == nil && fileLocationIndex(at: local) == nil ? nil : super.hitTest(point)
     }
 
     override open func menu(for event: NSEvent) -> NSMenu? {

@@ -20,6 +20,7 @@ defmodule SymphonyElixir.DecisionRequest do
 
   require Logger
 
+  alias SymphonyElixir.Config
   alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.Questions
@@ -44,13 +45,23 @@ defmodule SymphonyElixir.DecisionRequest do
   #{@title_max_length} characters, a question, why it is asked, what happens if nobody answers,
   #{@option_count.first} to #{@option_count.last} options each with a label and what it does, exactly
   one of them recommended with the reason why, at most #{@max_tradeoffs} trade-offs an option, and
-  no code or internal word in any of it (`SymphonyElixir.HumanActions.PlainWords`).
+  no code or internal word in any of it (`SymphonyElixir.HumanActions.PlainWords`), except a file
+  location under the configured workspace root in `why`, `decision.question` or an option's
+  `effect`: the place a design review asks the person to open. With no settings to read, every path
+  is refused.
   """
   @spec check(map()) :: :ok | {:error, String.t()}
   def check(request) when is_map(request) do
     case Enum.find(checks(request), fn {valid?, _message} -> not valid?.() end) do
       {_check, message} -> {:error, message}
-      nil -> PlainWords.check(request)
+      nil -> PlainWords.check(request, workspace_root: workspace_root())
+    end
+  end
+
+  defp workspace_root do
+    case Config.settings() do
+      {:ok, settings} -> settings.workspace.root
+      {:error, _reason} -> nil
     end
   end
 
