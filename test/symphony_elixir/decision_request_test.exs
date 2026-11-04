@@ -2,6 +2,7 @@ defmodule SymphonyElixir.DecisionRequestTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.{Config, DecisionRequest, MergeConfirmation, Pauses, Questions, RunStore}
+  alias SymphonyElixir.Config.Cache
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Pauses.Projector
@@ -106,7 +107,7 @@ defmodule SymphonyElixir.DecisionRequestTest do
     test "with no settings to read, every path is refused" do
       catalog = Path.join([Config.settings!().workspace.root, @repo_key, "TP-1382", "index.html"])
       File.write!(Workflow.symphony_file_path(), "repositories: [unclosed\n")
-      :ok = SymphonyElixir.Config.Cache.clear()
+      :ok = Cache.clear()
 
       assert {:error, message} = DecisionRequest.check(request(%{why: "The catalog is at #{catalog}."}))
       assert message =~ ~s(`why` has the path "#{catalog}")

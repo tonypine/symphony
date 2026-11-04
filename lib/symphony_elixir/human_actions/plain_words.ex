@@ -196,7 +196,7 @@ defmodule SymphonyElixir.HumanActions.PlainWords do
   the Director to open, naming the root.
   """
   @spec message([finding()], String.t() | nil) :: String.t()
-  def message(findings, workspace_root \\ nil) do
+  def message(findings, workspace_root) do
     by_field =
       findings
       |> Enum.group_by(& &1.field)

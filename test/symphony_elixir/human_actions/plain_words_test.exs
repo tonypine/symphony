@@ -179,7 +179,8 @@ defmodule SymphonyElixir.HumanActions.PlainWordsTest do
             {%{why: "See //server/share/index.html today."}, "why", :path},
             {%{why: "See symphony/TP-1382/index.html today."}, "why", :path}
           ] do
-        assert [%{field: ^field, kind: ^kind} | _rest] = PlainWords.findings(request(attrs), workspace_root: @root), inspect(attrs)
+        findings = PlainWords.findings(request(attrs), workspace_root: @root)
+        assert [%{field: ^field, kind: ^kind} | _rest] = findings, inspect(attrs)
       end
 
       assert [%{field: "why", kind: :path}] = PlainWords.findings(request(%{why: "Open #{@catalog} now."}), workspace_root: nil)
