@@ -1561,3 +1561,129 @@ button.rel-row:hover .rel-go { transform: translateX(2px); }
 }
 
 .layout-note { display: flex; gap: var(--space-2); align-items: center; padding: 6px 12px; border-radius: var(--radius-capsule); font: var(--type-secondary); color: var(--accent-text); background: var(--accent-tint); justify-self: start; }
+
+/* ---------- Phase path ---------- */
+
+/* The phases a ticket went through, in the order it first entered each, with how many times it
+   entered and how long it spent there in all. The phase it is in now carries its status colour. */
+.phase-path { display: flex; flex-wrap: wrap; align-items: stretch; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+.phase-path .phase {
+  position: relative;
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  padding: 6px 10px 6px 10px;
+  border: 0;
+  border-radius: var(--radius-row);
+  font: inherit;
+  color: var(--text-primary);
+  text-align: left;
+  background: var(--surface-raised);
+  box-shadow: inset 0 0 0 1px var(--stroke-separator);
+  transition: background var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard), transform var(--motion-instant) var(--ease-standard);
+}
+.phase-path .phase + .phase { margin-left: 14px; }
+.phase-path .phase + .phase::before { content: ""; position: absolute; left: -12px; top: 50%; width: 8px; height: 8px; border-top: 1.5px solid var(--stroke-strong); border-right: 1.5px solid var(--stroke-strong); transform: translateY(-50%) rotate(45deg) scale(0.75); }
+.phase-path .phase-name { display: flex; align-items: baseline; gap: 5px; font: 600 12px/16px var(--font-text); white-space: nowrap; }
+.phase-path .visits { font: 650 10.5px/14px var(--font-text); color: var(--status-you-text); font-variant-numeric: tabular-nums; }
+.phase-path .phase-meta { font: var(--type-caption); color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.phase-path .phase.current { background: var(--role-tint); box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--role) 45%, transparent); }
+.phase-path .phase.current .phase-name { color: var(--role-text); }
+.phase-path .phase.later { background: transparent; box-shadow: inset 0 0 0 1px var(--stroke-separator); }
+.phase-path .phase.later .phase-name { color: var(--text-tertiary); }
+.phase-path button.phase:not([aria-disabled="true"]):hover,
+.phase-path .phase.is-hover { background: var(--surface-hover); box-shadow: inset 0 0 0 1px var(--stroke-strong); }
+.phase-path button.phase.current:not([aria-disabled="true"]):hover { background: color-mix(in oklab, var(--role-tint), var(--surface-hover)); }
+.phase-path button.phase:not([aria-disabled="true"]):active,
+.phase-path .phase.is-pressed { transform: scale(var(--press-scale)); }
+.phase-path button.phase[aria-pressed="true"] { box-shadow: inset 0 0 0 1.5px var(--accent); background: var(--accent-tint); }
+.phase-path-sum { font: var(--type-secondary); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.phase-path.compact .phase-meta { display: none; }
+.phase-path.compact .phase { padding: 3px 8px; }
+
+/* ---------- Step list ---------- */
+
+/* A run's steps top to bottom. Each step unfolds into what the agent did in it: what it said, the
+   tools it called and what they returned. The step it is on now is live: new lines enter at the
+   bottom and the step keeps a live dot. This is the run's transcript, in place. */
+.step-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.sl-step { border-radius: var(--radius-row); transition: background var(--motion-standard) var(--ease-standard); }
+.sl-step:has(> .sl-head[aria-expanded="true"]) { background: color-mix(in oklab, var(--surface-hover), transparent 40%); }
+.sl-head {
+  display: grid;
+  grid-template-columns: 12px 20px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 32px;
+  padding: 5px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-row);
+  font: var(--type-body);
+  color: var(--text-primary);
+  background: transparent;
+  text-align: left;
+  transition: background var(--motion-fast) var(--ease-standard), transform var(--motion-instant) var(--ease-standard);
+}
+.sl-head:not([aria-disabled="true"]):hover,
+.sl-head.is-hover { background: var(--surface-hover); }
+.sl-head:not([aria-disabled="true"]):active,
+.sl-head.is-pressed { background: var(--surface-pressed); }
+.sl-head[aria-disabled="true"] .disclose { visibility: hidden; }
+.sl-head .sl-mark { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; color: var(--role); background: var(--role-tint); }
+.sl-head .sl-mark .glyph { width: 11px; height: 11px; }
+.sl-head .sl-name { font-weight: 550; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sl-head .sl-state { font: var(--type-secondary); color: var(--role-text); font-weight: 550; white-space: nowrap; }
+.sl-head .sl-dur { min-width: 52px; font: var(--type-secondary); color: var(--text-secondary); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sl-step.pending .sl-name { color: var(--text-secondary); font-weight: 500; }
+.sl-step.pending .sl-state { color: var(--text-tertiary); font-weight: 500; }
+.sl-msgs { display: grid; gap: 1px; margin: 0; padding: 2px var(--space-2) var(--space-2) calc(var(--space-2) + 12px + var(--space-2) + 9px); list-style: none; }
+.sl-msg { display: grid; grid-template-columns: 40px 16px minmax(0, 1fr); gap: var(--space-2); align-items: baseline; padding: 3px 0 3px var(--space-3); border-left: 1.5px solid var(--stroke-separator); font: var(--type-secondary); color: var(--text-primary); }
+.sl-msg .time { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.sl-msg .kind { align-self: center; color: var(--text-tertiary); }
+.sl-msg .kind .glyph { width: 12px; height: 12px; }
+.sl-msg .text { min-width: 0; max-width: var(--measure); overflow-wrap: anywhere; }
+.sl-msg.tool .text,
+.sl-msg.result .text { font: var(--type-mono); font-size: 11.5px; color: var(--text-secondary); }
+.sl-msg.say .kind { color: var(--accent-text); }
+.sl-msg.result.failed .text { color: var(--status-problem-text); }
+.sl-msg.is-new { animation: ds-enter var(--motion-standard) var(--ease-spring); }
+.sl-msg.is-new .text { animation: sl-flash 1.6s var(--ease-standard); }
+.sl-msg.typing .text::after { content: ""; display: inline-block; width: 6px; height: 12px; margin-left: 2px; vertical-align: -1px; border-radius: 1px; background: var(--status-working); animation: sl-caret 1s steps(2) infinite; }
+
+@keyframes sl-flash {
+  from { background: var(--tint-working); }
+  to { background: transparent; }
+}
+@keyframes sl-caret {
+  50% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sl-msg.is-new,
+  .sl-msg.is-new .text { animation: none; }
+  .sl-msg.typing .text::after { animation: none; }
+}
+
+/* ---------- Timeline: selection, what is new, and where the person last looked ---------- */
+
+.tl-entry[tabindex] { cursor: pointer; }
+.tl-entry[aria-selected="true"] { background: var(--accent-tint); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 35%, transparent); }
+.tl-entry[aria-selected="true"]:hover { background: var(--accent-tint-strong); }
+.tl-entry:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: 0; }
+.tl-entry .what .head .new-dot,
+.run-group .run-head .new-dot { display: inline-block; width: 6px; height: 6px; margin: 0 6px 1px 0; border-radius: 50%; background: var(--accent); vertical-align: middle; }
+.tl-entry.is-new,
+.timeline > li.is-new { animation: tl-enter var(--motion-slow) var(--ease-spring); }
+.tl-entry.is-new { background: var(--accent-tint); transition: background 1.2s var(--ease-standard) 0.6s; }
+.tl-since { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-2) var(--space-2) 66px; font: 600 11px/14px var(--font-text); color: var(--accent-text); letter-spacing: 0.02em; }
+.tl-since::before,
+.tl-since::after { content: ""; flex: 1; height: 1px; background: color-mix(in oklab, var(--accent) 40%, transparent); }
+.tl-since::before { flex: 0 0 12px; }
+
+@keyframes tl-enter {
+  from { opacity: 0; transform: translateY(calc(var(--enter-offset) * -2)) scale(0.98); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tl-entry.is-new,
+  .timeline > li.is-new { animation: none; }
+}

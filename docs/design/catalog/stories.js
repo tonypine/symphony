@@ -69,6 +69,12 @@ window.CATALOG = (function () {
     stop: '<rect x="3.5" y="3.5" width="9" height="9" rx="1.5"/>',
     undo: '<path d="M5.5 3 2.5 6l3 3"/><path d="M2.5 6H10a3.5 3.5 0 0 1 0 7H7"/>',
     sparkle: '<path d="M8 1.5 9.4 6.6 14.5 8 9.4 9.4 8 14.5 6.6 9.4 1.5 8l5.1-1.4z"/>',
+    say: '<path d="M2.5 3h11v8H7.5L4.5 13.5V11h-2z"/>',
+    build: '<path d="M2.5 5 8 2l5.5 3v6L8 14l-5.5-3z"/><path d="M2.5 5 8 8l5.5-3M8 8v6"/>',
+    cancelled: '<circle cx="8" cy="8" r="6.3"/><path d="m3.6 12.4 8.8-8.8"/>',
+    note: '<path d="M3 2.5h10v8l-3 3H3z"/><path d="M10 13.5v-3h3M5.5 6h5M5.5 8.5h3"/>',
+    folder: '<path d="M1.8 4.2a1 1 0 0 1 1-1h3.4l1.5 1.6h5.5a1 1 0 0 1 1 1v6.9a1 1 0 0 1-1 1H2.8a1 1 0 0 1-1-1z"/>',
+    eye: '<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/>',
   };
 
   const icon = (name, cls) => '<svg class="glyph' + (cls ? " " + cls : "") + '" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (ICONS[name] || ICONS.info) + "</svg>";
@@ -144,9 +150,10 @@ window.CATALOG = (function () {
     const word = p.word || ROLES[role].word;
     const large = p.size === "large";
     /* Large (the page header): the age is anchored to the word, in one status pill, so it never floats at the end of the line. */
-    const lead = large ? '<span class="state-pill">' + icon(ROLES[role].glyph) + '<span class="word">' + esc(word) + "</span>" +
+    const glyph = p.glyph || ROLES[role].glyph;
+    const lead = large ? '<span class="state-pill">' + icon(glyph) + '<span class="word">' + esc(word) + "</span>" +
       (p.age ? '<span class="since" title="Since this situation began">' + icon("clock") + "<span>for " + esc(p.age) + "</span></span>" : "") + "</span>" :
-      icon(ROLES[role].glyph) + '<span class="word">' + esc(word) + "</span>";
+      icon(glyph) + '<span class="word">' + esc(word) + "</span>";
     return '<p class="situation role-' + esc(role) + (large ? " situation-lg" : "") + (p.compact ? " situation-compact" : "") + '" style="margin:0">' + lead +
       (p.cause ? '<span class="cause">' + esc(p.cause) + "</span>" : "") +
       (p.waits ? '<span class="waits">' + esc(p.waits) + "</span>" : "") +
@@ -216,9 +223,9 @@ window.CATALOG = (function () {
 
   function tlEntry(p) {
     const k = TL[p.kind] || TL.phase;
-    return '<li class="tl-entry role-' + k.role + stateClass(p.state) + '"><span class="time">' + esc(p.time) + "</span>" +
+    return '<li class="tl-entry role-' + k.role + stateClass(p.state) + (p.fresh ? " is-new" : "") + '"' + (p.selectable ? ' tabindex="0" role="option" aria-selected="' + !!p.selected + '"' + (p.toggle ? ' data-toggle="' + esc(p.toggle) + '"' : "") : "") + '><span class="time">' + esc(p.time) + "</span>" +
       '<span class="mark" title="' + esc(k.word) + '">' + icon(k.glyph) + "</span>" +
-      '<span class="what"><span class="head">' + p.headHtml + "</span>" +
+      '<span class="what"><span class="head">' + (p.unseen ? '<span class="new-dot" title="New since you last looked"></span>' : "") + p.headHtml + "</span>" +
       (p.detail ? '<span class="detail">' + esc(p.detail) + "</span>" : "") +
       (p.actor ? '<span class="actor">' + esc(p.actor) + "</span>" : "") + "</span></li>";
   }
@@ -329,6 +336,47 @@ window.CATALOG = (function () {
       '<div class="meter-head"><span>' + esc(p.label) + '</span><span class="value">' + esc(fmt(used)) + " of " + esc(fmt(cap)) + " " + esc(p.unit) + " · " + pct + " %</span></div>" +
       '<div class="meter-track"><div class="meter-fill" data-anim="meter-fill" style="width:' + pct + '%"></div></div>' +
       '<div class="meter-note' + (role === "accent" ? " calm" : "") + '">' + esc(note) + "</div></div>";
+  }
+
+  /* The phases a ticket went through, in the order it first entered each. Each phase is
+     { name, visits, time, state: "passed" | "current" | "later", role }; a phase entered more than
+     once shows its count, so a ticket sent back twice reads "Code Review ×3". */
+  function phasePath(p) {
+    const items = (p.phases || []).map((ph, i) => {
+      const cls = "phase " + esc(ph.state || "passed") + (ph.state === "current" ? " role-" + esc(ph.role || "working") : "") + (i === Number(p.hoverAt) ? stateClass("hover") : "");
+      const said = ph.name + (ph.visits > 1 ? ", entered " + ph.visits + " times" : "") + (ph.time ? ", " + ph.time + " in all" : "") + (ph.state === "current" ? ", now" : ph.state === "later" ? ", not yet" : "");
+      const inner = '<span class="phase-name">' + esc(ph.name) + (ph.visits > 1 ? '<span class="visits">×' + esc(ph.visits) + "</span>" : "") + "</span>" +
+        (ph.time ? '<span class="phase-meta">' + esc(ph.time) + "</span>" : "");
+      return p.interactive ? '<li style="display:contents"><button type="button" class="' + cls + '" aria-label="' + esc(said) + '"' + attr("aria-pressed", ph.picked ? "true" : null) + attr("data-phase", ph.name) + ">" + inner + "</button></li>"
+        : '<li class="' + cls + '" aria-label="' + esc(said) + '">' + inner + "</li>";
+    }).join("");
+    return '<ol class="phase-path' + (p.compact ? " compact" : "") + '" aria-label="Phases, in the order the ticket entered them">' + items + "</ol>";
+  }
+
+  const MSG_GLYPH = { say: "say", tool: "log", result: "arrow" };
+  const SL_STATES = {
+    passed: { word: "Passed", glyph: "done", role: "done" },
+    failed: { word: "Failed", glyph: "problem", role: "problem" },
+    current: { word: "Now", glyph: "working", role: "working" },
+    stopped: { word: "Stopped", glyph: "run-end", role: "idle" },
+    asked: { word: "Asked you", glyph: "question", role: "you" },
+    skipped: { word: "Skipped", glyph: "chevron-right", role: "idle" },
+    pending: { word: "Not started", glyph: "clock", role: "idle" },
+  };
+
+  /* A run's steps, top to bottom, each folding into its lines: { name, state, duration, open, msgs:
+     [{ time, kind: "say" | "tool" | "result", text, failed, fresh, typing }] }. */
+  function stepList(p) {
+    return '<ol class="step-list" aria-label="Steps of the run">' + (p.steps || []).map((st, i) => {
+      const s = SL_STATES[st.state] || SL_STATES.pending;
+      const msgs = st.msgs || [];
+      const has = msgs.length > 0;
+      const head = '<button type="button" class="sl-head' + (i === Number(p.hoverAt) ? " is-hover" : "") + '" aria-expanded="' + (has && !!st.open) + '"' + (has ? attr("data-step", st.id || String(i)) + (p.setProp ? attr("data-set", p.setProp + "=" + (st.open ? -1 : i)) : "") : ' aria-disabled="true" title="Nothing happened in this step yet"') + ">" +
+        icon("chevron-right", "disclose") + '<span class="sl-mark">' + (st.state === "current" ? '<span class="dot live role-working"></span>' : icon(s.glyph)) + "</span>" +
+        '<span class="sl-name">' + esc(st.name) + '</span><span class="sl-state">' + esc(st.stateWord || s.word) + '</span><span class="sl-dur">' + esc(st.duration || "") + "</span></button>";
+      const lines = '<ol class="sl-msgs">' + msgs.map((m) => '<li class="sl-msg ' + esc(m.kind || "say") + (m.failed ? " failed" : "") + (m.fresh ? " is-new" : "") + (m.typing ? " typing" : "") + '"><span class="time">' + esc(m.time || "") + '</span><span class="kind" title="' + esc({ say: "The agent said", tool: "A tool call", result: "What it returned" }[m.kind] || "") + '">' + icon(MSG_GLYPH[m.kind] || "say") + '</span><span class="text">' + esc(m.text) + "</span></li>").join("") + "</ol>";
+      return '<li class="sl-step ' + esc(st.state || "pending") + " role-" + s.role + '">' + head + (has ? fold("step-" + (st.id || i), st.open, lines) : "") + "</li>";
+    }).join("") + "</ol>";
   }
 
   /* Fixtures */
@@ -812,9 +860,10 @@ window.CATALOG = (function () {
     },
     {
       title: "Situation line",
-      args: { role: "working", word: "Waiting for CI", cause: "Checks are running on PR #812.", waits: "Code Review starts when they pass.", age: "6 min", size: "regular", compact: false },
+      args: { role: "working", glyph: "", word: "Waiting for CI", cause: "Checks are running on PR #812.", waits: "Code Review starts when they pass.", age: "6 min", size: "regular", compact: false },
       controls: [
         { name: "role", label: "Colour role", type: "role" },
+        { name: "glyph", label: "Glyph", type: "select", options: [{ value: "", label: "The role's own" }, "clock", "build", "lock", "pause", "refresh", "cancelled"] },
         { name: "word", label: "Where it stands", type: "text" },
         { name: "cause", label: "Cause", type: "text" },
         { name: "waits", label: "What it waits on", type: "text" },
@@ -827,7 +876,7 @@ window.CATALOG = (function () {
         what: "One line that says where a ticket stands: a glyph and a word in its status colour, the cause, what it waits on, and for how long. It opens the ticket page and sits under every row that needs a reason.",
         when: ["The word is the situation in the Director's words (Waiting for CI, Waiting on you, Writing the code, Needs attention).", "The cause is one short sentence of fact; the wait names who or what moves it next.", "The age counts from when this situation began, not from when the ticket was filed."],
         avoid: "Internal state names, two situations in one line, or a line that runs past the measure.",
-        states: [["Waiting for CI", "working, waits on checks"], ["Waiting on you", "you, waits on an answer"], ["Writing the code", "working"], ["Needs attention", "problem, names its fix"], ["Paused", "idle, names what lifts it"], ["Forced", "forced"], ["Shipped", "done"], ["Large", "page header size: the word and its age in one status pill"], ["Compact", "the wait left out, for rows"]],
+        states: [["Waiting for CI", "working, waits on checks"], ["Waiting on you", "you, waits on an answer"], ["Writing the code", "working"], ["Needs attention", "problem, names its fix"], ["Paused", "idle, names what lifts it"], ["Forced", "forced"], ["Shipped", "done"], ["Waiting for a slot", "idle, clock"], ["Waiting for a build", "working, box"], ["Blocked by a ticket", "idle, lock, names the ticket"], ["Retrying", "problem, names the try and when"], ["Cancelled", "idle, slashed circle"], ["Large", "page header size: the word and its age in one status pill"], ["Compact", "the wait left out, for rows"]],
         tokens: ["--status-*", "--status-*-text", "--type-body", "--measure"],
         access: "Read as one sentence: “Waiting for CI. Checks are running on PR 812. Code Review starts when they pass. 6 minutes.”",
       },
@@ -839,6 +888,11 @@ window.CATALOG = (function () {
         { name: "Paused", args: { role: "idle", word: "Paused", cause: "Dispatch is paused: Deploy freeze.", waits: "Starts when you resume dispatch.", age: "1 h 4 min" } },
         { name: "Forced", args: { role: "forced", word: "Forced", cause: "You pushed it ahead of the queue.", waits: "Runs as soon as a slot frees.", age: "2 min" } },
         { name: "Shipped", args: { role: "done", word: "Shipped", cause: "Merged as PR #797.", waits: "", age: "yesterday" } },
+        { name: "Waiting for a slot", args: { role: "idle", glyph: "clock", word: "Waiting for a slot", cause: "Three runs are ahead of it; Symphony runs four at a time.", waits: "Starts when a slot frees.", age: "12 min" } },
+        { name: "Waiting for a build", args: { role: "working", glyph: "build", word: "Waiting for a build", cause: "The app for this commit is being built for QA.", waits: "QA starts when the build is ready.", age: "4 min" } },
+        { name: "Blocked by a ticket", args: { role: "idle", glyph: "lock", word: "Blocked by TP-1251", cause: "It is in Code Review.", waits: "Starts when TP-1251 lands.", age: "17 h" } },
+        { name: "Retrying", args: { role: "problem", glyph: "refresh", word: "Retrying", cause: "The run stopped: the agent hit its usage limit.", waits: "Try 2 of 3 starts at 16:20.", age: "3 min" } },
+        { name: "Cancelled", args: { role: "idle", glyph: "cancelled", word: "Cancelled", cause: "You cancelled it; PR #812 was closed.", waits: "", age: "2 days" } },
         { name: "Large", args: { size: "large" } },
         { name: "Compact", args: { compact: true } },
       ],
@@ -1102,17 +1156,18 @@ window.CATALOG = (function () {
     },
     {
       title: "Timeline entry",
-      args: { kind: "phase", time: "09:02", strong: "Moved to Code Review", rest: "from In Progress", detail: "The push opened PR #812", actor: "Symphony", state: "default" },
+      args: { kind: "phase", time: "09:02", strong: "Moved to Code Review", rest: "from In Progress", detail: "The push opened PR #812", actor: "Symphony", state: "default", selected: false, unseen: false, since: false },
       controls: [
         { name: "kind", label: "Class", type: "select", options: TL_OPTIONS },
         { name: "time", label: "Time", type: "text" }, { name: "strong", label: "What", type: "text" }, { name: "rest", label: "More", type: "text" },
         { name: "detail", label: "Detail", type: "text" }, { name: "actor", label: "Who", type: "text" }, STATE_NO_PRESS,
+        { name: "selected", label: "Selected", type: "toggle" }, { name: "unseen", label: "New since you looked", type: "toggle" }, { name: "since", label: "Where you last looked", type: "toggle" },
       ],
-      render: (p) => '<ol class="timeline" style="width:560px">' + tlEntry(Object.assign({}, p, { headHtml: head(p.strong, p.rest) })) + "</ol>",
+      render: (p) => '<ol class="timeline" style="width:560px">' + (p.since ? '<li class="tl-since">Since you last looked, at 16:20</li>' : "") + tlEntry(Object.assign({}, p, { headHtml: head(p.strong, p.rest), selectable: true, toggle: "selected" })) + "</ol>",
       docs: {
         what: "One thing that happened to a ticket, at a time, with a glyph and colour per class so a day reads at a glance.",
         when: ["Phase move: arrow, accent. Pause set: pause, gray. Pause cleared: play, blue. Question asked: speech bubble, orange. Question answered: bubble with a tick, green. Run started: play circle, blue. Run ended: its verdict (passed green, failed red, stopped gray). Person action: hand, accent. Rule action: gear, gray.", "The first words in bold say what happened; detail and who did it follow in secondary."],
-        states: [["Each class", "glyph and colour above"], ["Hover", "hover overlay"]],
+        states: [["Each class", "glyph and colour above"], ["Hover", "hover overlay"], ["Selected", "accent tint and ring; the page shows its detail"], ["New since you looked", "an accent dot before its words, under the line that marks where you last looked"], ["Entering", "a new entry drops in at the top on a spring and its tint fades"]],
         tokens: ["--tint-*", "--status-*", "--accent", "--type-secondary", "--measure"],
         access: "Each entry reads “09:02, phase move, moved to Code Review from In Progress, Symphony”.",
       },
@@ -1129,6 +1184,8 @@ window.CATALOG = (function () {
         { name: "Person action", args: { kind: "person", strong: "Forced ahead of the queue", rest: "", detail: "", actor: "Tony" } },
         { name: "Rule action", args: { kind: "rule", strong: "Branch updated", rest: "with the newest main", detail: "Rule: keep the branch current while in Merging", actor: "" } },
         { name: "Hover", args: { state: "hover" } },
+        { name: "Selected", args: { selected: true } },
+        { name: "New since you looked", args: { unseen: true, since: true } },
       ],
     },
     {
@@ -1180,6 +1237,66 @@ window.CATALOG = (function () {
         { name: "Ticket stages: in Coding, sent back once", args: { kind: "ticket", codingNote: "1 h 4 min", reviewNote: "8 min" } },
         { name: "Ticket stages: merging", args: { kind: "ticket", coding: "passed", review: "passed", qa: "passed", merging: "current", done: "pending" } },
       ],
+    },
+    {
+      title: "Phase path",
+      args: { at: "rework", compact: false, interactive: true, state: "default" },
+      controls: [
+        { name: "at", label: "Where the ticket is", type: "select", options: [{ value: "progress", label: "In Progress, first time" }, { value: "rework", label: "Rework, sent back twice" }, { value: "done", label: "Done" }] },
+        { name: "compact", label: "Compact (no times)", type: "toggle" }, { name: "interactive", label: "Filters the timeline", type: "toggle" },
+        { name: "state", label: "Shown state", type: "select", options: [{ value: "default", label: "Live (use the pointer)" }, { value: "hover", label: "Hover on the second" }] },
+      ],
+      render: (p) => {
+        const all = [["Todo", 1, "17 h 43 min"], ["In Progress", 1, "38 min"], ["CI Fix", 1, "10 min"], ["Code Review", 3, "29 min"], ["Rework", 2, "1 h 2 min"], ["QA", 2, "36 min"], ["Merging", 1, "2 h"], ["Done", 1, ""]];
+        const upto = { progress: 1, rework: 4, done: 7 }[p.at];
+        const phases = all.map((x, i) => ({ name: x[0], visits: i <= upto ? (p.at === "progress" ? 1 : x[1]) : 0, time: i < upto ? x[2] : i === upto ? (p.at === "done" ? "" : "12 min so far") : "", state: i < upto ? "passed" : i === upto ? "current" : "later", role: p.at === "done" ? "done" : p.at === "rework" ? "you" : "working" }))
+          .filter((x, i) => p.at !== "progress" || i <= 1 || i >= 3);
+        return '<div style="display:grid;gap:8px;max-width:980px">' + phasePath({ phases: phases, compact: p.compact, interactive: p.interactive, hoverAt: p.state === "hover" ? 1 : -1 }) +
+          '<span class="phase-path-sum">' + (p.at === "done" ? "14 moves in 23 h 22 min" : p.at === "rework" ? "9 moves so far · sent back twice" : "1 move so far") + "</span></div>";
+      },
+      docs: {
+        what: "Where a ticket has been: its phases in the order it first entered each, with how many times it entered and how long it spent there in all. The phase it is in now carries its status colour; phases still ahead are outlined and faint.",
+        when: ["Under the situation line on the ticket page, so “sent back twice” reads without counting timeline entries.", "Each phase that filters the timeline is a button: pressing it shows only that phase's moves and runs."],
+        avoid: "Listing every move here (that is the timeline), or a phase the ticket's workflow never enters.",
+        states: [["Passed", "raised surface"], ["Current", "status tint and ring"], ["Later", "outline, faint name"], ["Entered more than once", "×n in the waiting colour"], ["Hover, pressed, picked", "as a chip"], ["Compact", "names and counts only"]],
+        motion: "Hover eases in; a press settles to 97 %; a new phase enters at the end with the enter pattern.",
+        tokens: ["--surface-raised", "--role-tint", "--status-you-text", "--radius-row", "--type-caption"],
+        access: "An ordered list: “Code Review, entered 3 times, 29 minutes in all”.",
+      },
+      stories: [{ name: "Sent back twice" }, { name: "First time in progress", args: { at: "progress" } }, { name: "Done", args: { at: "done" } }, { name: "Compact", args: { compact: true } }, { name: "Hover", args: { state: "hover" } }],
+    },
+    {
+      title: "Step list",
+      args: { live: true, openStep: 3, failed: false, state: "default" },
+      controls: [
+        { name: "live", label: "Running now", type: "toggle" }, { name: "failed", label: "Tests failed", type: "toggle", when: (p) => !p.live },
+        { name: "openStep", label: "Unfolded step", type: "select", options: [{ value: -1, label: "None" }, { value: 0, label: "Writing the code" }, { value: 1, label: "Build" }, { value: 2, label: "Checks" }, { value: 3, label: "Tests" }] },
+        { name: "state", label: "Shown state", type: "select", options: [{ value: "default", label: "Live (use the pointer)" }, { value: "hover", label: "Hover on the first" }] },
+      ],
+      render: (p) => {
+        const o = Number(p.openStep);
+        const tests = p.live ? "current" : p.failed ? "failed" : "passed";
+        const testMsgs = [{ time: "16:44", kind: "tool", text: "swift test --filter TicketPageTests" }, { time: "16:46", kind: "result", text: p.failed && !p.live ? "2 failures: pausedLineFallsBackToPaused, pausedLineOrdersReasons" : "131 tests passed", failed: p.failed && !p.live }]
+          .concat(p.live ? [{ time: "16:47", kind: "say", text: "The fallback works. Now recording the two snapshots it changes.", fresh: true, typing: true }] : []);
+        const steps = [
+          { name: "Writing the code", state: "passed", duration: "4 min", msgs: [{ time: "16:39", kind: "say", text: "Code Review found a reason without words shows its raw code. I'll fall back to “Paused”." }, { time: "16:40", kind: "tool", text: "edit TicketPage.swift" }] },
+          { name: "Build", state: "passed", duration: "2 min", msgs: [{ time: "16:43", kind: "tool", text: "swift build" }, { time: "16:44", kind: "result", text: "Build complete" }] },
+          { name: "Checks", state: "passed", duration: "1 min", msgs: [{ time: "16:44", kind: "result", text: "format and lint clean" }] },
+          { name: "Tests", state: tests, duration: p.live ? "3 min so far" : "3 min", msgs: testMsgs },
+          { name: "Handoff", state: p.live || p.failed ? "pending" : "passed", duration: "", msgs: p.live || p.failed ? [] : [{ time: "16:58", kind: "tool", text: "git push" }] },
+        ].map((st, i) => Object.assign(st, { open: i === o }));
+        return '<div style="width:640px">' + stepList({ steps: steps, setProp: "openStep", hoverAt: p.state === "hover" ? 0 : -1 }) + "</div>";
+      },
+      docs: {
+        what: "A run's steps, top to bottom, each unfolding into what the agent did in it: what it said, each tool it called and what came back. It is the run's transcript, in place on the page, so “what is it doing now” never needs another window.",
+        when: ["Inside an unfolded run on the timeline, or as the body of the run-now panel.", "The step it is on now is unfolded and live: new lines enter at the bottom; the newest line of the agent's own words shows a caret while it writes.", "A step with nothing in it yet cannot unfold, and says so on hover."],
+        avoid: "Raw logs: a tool's long output is cut to its last line here, the whole of it opens from the line.",
+        states: [["Passed, failed, now, stopped, asked you, skipped, not started", "glyph, colour and word"], ["Unfolded", "its lines under a rule"], ["Live line", "enters with the enter pattern and a brief tint"], ["Hover, pressed", "as a row"]],
+        motion: "The fold opens on the shared fold; lines stagger in by 35 ms; with Reduce Motion they appear at once and nothing flashes.",
+        tokens: ["--status-*", "--tint-*", "--type-mono", "--radius-row", "--motion-stagger"],
+        access: "A disclosure per step: “Tests, now, 3 minutes so far, expanded”; each line reads its time, its kind and its text.",
+      },
+      stories: [{ name: "Live, on the tests step" }, { name: "Ended, all passed", args: { live: false, openStep: -1 } }, { name: "Ended, tests failed", args: { live: false, failed: true, openStep: 3 } }, { name: "All folded", args: { openStep: -1 } }, { name: "Hover", args: { state: "hover", openStep: -1 } }],
     },
     {
       title: "Option card",
@@ -1886,6 +2003,8 @@ window.CATALOG = (function () {
   return {
     esc: esc,
     ROLE_OPTIONS: ROLE_OPTIONS,
+    /* The building blocks, for pages built from the catalog (the prototypes under docs/design/prototypes) */
+    kit: { esc: esc, icon: icon, refusal: refusal, ownWords: ownWords, tlEntry: tlEntry, ROLES: ROLES, TL: TL, button: button, badge: badge, kbd: kbd, situation: situation, chip: chip, fold: fold, kv: kv, tags: tags, option: option, steps: steps, miniSteps: miniSteps, stageBar: stageBar, phasePath: phasePath, stepList: stepList },
     groups: [
       { id: "tokens", title: "Tokens", items: tokens },
       { id: "components", title: "Components", items: components },
