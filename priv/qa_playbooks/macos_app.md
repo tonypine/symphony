@@ -253,6 +253,18 @@ GitHub or Linear in QA:
     Rework, …" with **Open PR**. The Inbox lists none of TP-704, TP-707 and TP-709.
   - VoiceOver: the card's summary reads as one element (the status word, the line, who acts
     next, since when, Updated), each action row as one, and each button by its title.
+- **File locations in a question (TP-1386):** pass
+  `macos/Tests/Fixtures/director-app/inbox-file-location` as `api_fixtures`. It is
+  `inbox-decision` with TP-892's decision pointing at files in its workspace. In the Inbox,
+  TP-892's why ends "The two steps side by side are at
+  /Users/director/symphony-workspaces/symphony/TP-892/design/index.html." and the option "Update
+  them in TP-892 now" ends with a `file://` link to `final-verification.png`. Each location is
+  drawn as a link (underlined, the link colour), without the sentence's full stop, and the
+  ticket number inside the path is not a chip. Clicking the `index.html` one asks the default
+  browser to open it (the file does not exist on the QA host, so the browser shows it missing),
+  and clicking the `.png` one reveals it in Finder instead of picking the option. Open TP-892
+  from the Inbox: its **Your decision** card shows the same `index.html` link. Walk it at
+  1440×900, light and dark: the link stays readable and nothing on the cards is clipped.
 - **Ticket timeline (TP-1193):** pass `macos/Tests/Fixtures/director-app/ticket-ledger` as
   `api_fixtures` and open SHOP-410 from Tickets (Code Review & QA). Its clock is 2026-10-18 11:20
   UTC. It serves the ticket's events feed and no live channel, so the page reads the feed after
