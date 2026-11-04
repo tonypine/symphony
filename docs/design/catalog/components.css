@@ -506,9 +506,13 @@ button.chip:not([aria-disabled="true"]):active,
 .situation .cause { color: var(--text-primary); }
 .situation .waits { color: var(--text-secondary); }
 .situation .age { margin-left: auto; padding-left: var(--space-3); color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.situation-lg { font: 400 15px/21px var(--font-text); }
+.situation-lg { font: 400 15px/21px var(--font-text); align-items: center; row-gap: var(--space-2); max-width: none; }
 .situation-lg .glyph { width: 18px; height: 18px; }
 .situation-compact .waits { display: none; }
+.situation-lg .cause { margin-left: var(--space-1); }
+.situation .state-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 3px 3px 10px; border-radius: var(--radius-capsule); background: var(--role-tint); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--role) 22%, transparent); white-space: nowrap; }
+.situation .state-pill .since { display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; padding: 2px 9px 2px 7px; border-radius: var(--radius-capsule); font: 600 13px/18px var(--font-text); color: var(--text-primary); font-variant-numeric: tabular-nums; background: var(--surface-content); box-shadow: var(--elevation-1), var(--edge-highlight); }
+.situation .state-pill .since .glyph { width: 13px; height: 13px; color: var(--role); }
 .situation-pill { padding: 6px 12px 6px 10px; border-radius: var(--radius-capsule); background: var(--role-tint); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--role) 18%, transparent); }
 
 /* ---------- Progress meter ---------- */
@@ -1213,11 +1217,20 @@ button.chip:not([aria-disabled="true"]):active,
 .page-header .ident-line .ident { font: 650 12px/16px var(--font-text); color: var(--text-secondary); font-variant-numeric: tabular-nums; letter-spacing: 0.01em; }
 .page-header h1 { margin: 6px 0 var(--space-3); font: var(--type-title); letter-spacing: var(--tracking-display); max-width: 30em; text-wrap: balance; }
 .page-header .head-main { min-width: 0; }
-.page-header .head-facts { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
+.page-header .head-facts { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.page-header .head-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3) var(--space-6); }
+.page-header .head-status .situation { max-width: none; min-width: 0; }
 
+/* Desktop: one row across the whole page. The identifier line shares the top line with the moves,
+   so the title gets the full width under them; the situation and the key facts share the line below. */
 @container (min-width: 1600px) {
-  .page-header { grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-8); }
-  .page-header .action-rail { justify-content: flex-end; padding-top: 22px; }
+  .page-header { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "ident rail" "title title" "status status"; column-gap: var(--space-8); row-gap: 0; }
+  .page-header .head-main { display: contents; }
+  .page-header .ident-line { grid-area: ident; align-self: start; min-height: var(--control-md); }
+  .page-header h1 { grid-area: title; max-width: 56em; margin: var(--space-2) 0 var(--space-4); text-wrap: pretty; }
+  .page-header .head-status { grid-area: status; }
+  .page-header .head-facts { margin-left: auto; }
+  .page-header .action-rail { grid-area: rail; justify-content: flex-end; }
 }
 
 /* Action rail */
@@ -1440,6 +1453,7 @@ button.chip:not([aria-disabled="true"]):active,
 .ticket-page > .zone-timeline { grid-area: timeline; min-width: 0; margin-top: calc(-1 * var(--space-2)); }
 .ticket-page > .zone-facts { grid-area: facts; position: sticky; top: var(--space-4); }
 .ticket-page > .zone-sheet { position: absolute; inset: calc(-1 * var(--space-6)); }
+.ticket-page > .zone-sheet:not(.is-open) { display: none; }
 .ticket-page .zone-title { margin: 0 0 var(--space-2) var(--space-1); font: var(--type-caption); color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; }
 .ticket-page .facts-rail { width: 100%; }
 .ticket-page .tl-index { display: none !important; }
@@ -1455,12 +1469,15 @@ button.chip:not([aria-disabled="true"]):active,
 .run-panel .run-extra { display: none; }
 
 @container (min-width: 1600px) {
-  .ticket-page { grid-template-columns: minmax(0, 980px) 360px; justify-content: center; column-gap: var(--space-8); transition: grid-template-columns var(--motion-standard) var(--ease-standard); }
-  .ticket-page.sheet-open { grid-template-columns: minmax(0, 980px) 360px 640px; grid-template-areas: "head head sheet" "decide facts sheet" "run facts sheet" "timeline facts sheet"; }
-  .ticket-page.sheet-open > .zone-sheet { position: sticky; inset: auto; top: var(--space-4); grid-area: sheet; align-self: start; height: min(1360px, 100%); }
-  .ticket-page.sheet-open .dsheet-layer { position: relative; height: 1360px; overflow: visible; }
-  .ticket-page.sheet-open .dsheet-scrim { display: none; }
-  .ticket-page.sheet-open .dsheet { top: 0; right: 0; width: 100%; height: 100%; }
+  /* Desktop: the header is one row across the page; every column starts under it. */
+  .ticket-page { grid-template-columns: minmax(0, 1080px) 360px; grid-template-rows: auto auto 1fr; grid-template-areas: "head head" "run facts" "timeline facts"; justify-content: center; column-gap: var(--space-8); }
+  .ticket-page.has-decision { grid-template-columns: minmax(0, 1080px) 360px 640px; grid-template-areas: "head head head" "run facts sheet" "timeline facts sheet"; }
+  /* The decisions are always there on desktop: a column on the far right, under the header, never a sheet. */
+  .ticket-page > .zone-sheet,
+  .ticket-page > .zone-sheet:not(.is-open) { display: grid; grid-template-rows: auto minmax(0, 1fr); position: sticky; inset: auto; top: var(--space-4); grid-area: sheet; align-self: start; height: 1240px; min-width: 0; }
+  .ticket-page .zone-sheet .dsheet-layer { position: relative; inset: auto; height: 100%; overflow: visible; border-radius: var(--radius-card); }
+  .ticket-page .zone-sheet .dsheet-scrim { display: none; }
+  .ticket-page .zone-sheet .dsheet { top: 0; right: 0; width: 100%; height: 100%; border-radius: var(--radius-card); background: var(--surface-content); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: var(--elevation-1), var(--edge-highlight); animation: none; }
   .run-panel .run-extra { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-6); align-items: start; }
 }
 

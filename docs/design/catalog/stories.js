@@ -142,11 +142,15 @@ window.CATALOG = (function () {
   function situation(p) {
     const role = p.role || "working";
     const word = p.word || ROLES[role].word;
-    return '<p class="situation role-' + esc(role) + (p.size === "large" ? " situation-lg" : "") + (p.compact ? " situation-compact" : "") + '" style="margin:0">' +
-      icon(ROLES[role].glyph) + '<span class="word">' + esc(word) + "</span>" +
+    const large = p.size === "large";
+    /* Large (the page header): the age is anchored to the word, in one status pill, so it never floats at the end of the line. */
+    const lead = large ? '<span class="state-pill">' + icon(ROLES[role].glyph) + '<span class="word">' + esc(word) + "</span>" +
+      (p.age ? '<span class="since" title="Since this situation began">' + icon("clock") + "<span>for " + esc(p.age) + "</span></span>" : "") + "</span>" :
+      icon(ROLES[role].glyph) + '<span class="word">' + esc(word) + "</span>";
+    return '<p class="situation role-' + esc(role) + (large ? " situation-lg" : "") + (p.compact ? " situation-compact" : "") + '" style="margin:0">' + lead +
       (p.cause ? '<span class="cause">' + esc(p.cause) + "</span>" : "") +
       (p.waits ? '<span class="waits">' + esc(p.waits) + "</span>" : "") +
-      (p.age ? '<span class="age" title="Since this situation began">' + esc(p.age) + "</span>" : "") + "</p>";
+      (p.age && !large ? '<span class="age" title="Since this situation began">' + esc(p.age) + "</span>" : "") + "</p>";
   }
 
   function chip(p) {
@@ -788,7 +792,7 @@ window.CATALOG = (function () {
         what: "One line that says where a ticket stands: a glyph and a word in its status colour, the cause, what it waits on, and for how long. It opens the ticket page and sits under every row that needs a reason.",
         when: ["The word is the situation in the Director's words (Waiting for CI, Waiting on you, Writing the code, Needs attention).", "The cause is one short sentence of fact; the wait names who or what moves it next.", "The age counts from when this situation began, not from when the ticket was filed."],
         avoid: "Internal state names, two situations in one line, or a line that runs past the measure.",
-        states: [["Waiting for CI", "working, waits on checks"], ["Waiting on you", "you, waits on an answer"], ["Writing the code", "working"], ["Needs attention", "problem, names its fix"], ["Paused", "idle, names what lifts it"], ["Forced", "forced"], ["Shipped", "done"], ["Large", "page header size"], ["Compact", "the wait left out, for rows"]],
+        states: [["Waiting for CI", "working, waits on checks"], ["Waiting on you", "you, waits on an answer"], ["Writing the code", "working"], ["Needs attention", "problem, names its fix"], ["Paused", "idle, names what lifts it"], ["Forced", "forced"], ["Shipped", "done"], ["Large", "page header size: the word and its age in one status pill"], ["Compact", "the wait left out, for rows"]],
         tokens: ["--status-*", "--status-*-text", "--type-body", "--measure"],
         access: "Read as one sentence: “Waiting for CI. Checks are running on PR 812. Code Review starts when they pass. 6 minutes.”",
       },
@@ -1369,9 +1373,9 @@ window.CATALOG = (function () {
     const s = p.role === "you" ? { role: "you", word: "Waiting on you", cause: "A question: review the design catalog.", waits: "Answer it in the Inbox.", age: "3 h 12 min" } :
       { role: "working", word: "Waiting for CI", cause: "Checks are running on PR #812.", waits: "Code Review starts when they pass.", age: "6 min" };
     return '<header class="page-header"><div class="head-main"><div class="ident-line"><span class="ident">' + esc(p.ident) + "</span>" + chip({ kind: "repo", text: "symphony", interactive: false }) + chip({ kind: "epic", text: "Phase 3b", interactive: false }) + "</div>" +
-      "<h1>" + esc(p.title) + "</h1>" + situation(Object.assign({ size: "large" }, s)) +
+      "<h1>" + esc(p.title) + "</h1>" + '<div class="head-status">' + situation(Object.assign({ size: "large" }, s)) +
       '<div class="head-facts only-wide">' + chip({ kind: "status", role: "done", text: "PR #812 · 14 files", interactive: false }) + chip({ kind: "status", role: "idle", text: "3 runs · 1 h 12 min", interactive: false }) + chip({ kind: "status", role: "you", text: "6.2M of 8M tokens", interactive: false }) + "</div>" +
-      "</div>" + actionRail(p) + "</header>";
+      "</div></div>" + actionRail(p) + "</header>";
   }
 
   function factsGroup(key, title, summary, open, html) {
@@ -1459,7 +1463,7 @@ window.CATALOG = (function () {
     const body = qs.map((q, i) => '<section class="question-block in-sheet" aria-label="Question ' + (i + 1) + '">' + questionBody(p, q, n > 1 ? [i + 1, n] : null) + "</section>").join('<hr class="q-sep">');
     return '<div class="dsheet-layer"><div class="dsheet-scrim" data-set="sheetOpen=false" aria-hidden="true"></div>' +
       '<aside class="dsheet" role="dialog" aria-label="Your decisions"><header class="dsheet-head"><span class="cta-mark">' + icon("question") + "</span><div><h2>" + (n === 1 ? "Your decision" : n + " decisions wait on you") + "</h2>" +
-      '<p class="sub">TP-1382 · Design system catalog</p></div><button type="button" class="icon-btn" aria-label="Close" title="Close (Esc)" data-set="sheetOpen=false" data-key="sheet-close">' + icon("close") + "</button></header>" +
+      '<p class="sub">TP-1382 · Design system catalog</p></div><span class="only-narrow"><button type="button" class="icon-btn" aria-label="Close" title="Close (Esc)" data-set="sheetOpen=false" data-key="sheet-close">' + icon("close") + "</button></span></header>" +
       '<div class="dsheet-body">' + body + "</div>" +
       '<footer class="dsheet-foot">' + sendArea(qs.map((q) => answerOf(p, q)), n) + "</footer></aside></div>";
   }
@@ -1551,11 +1555,12 @@ window.CATALOG = (function () {
     const asks = p.role === "you";
     const open = asks && !!p.sheetOpen;
     return '<div class="ticket-page' + (asks ? " has-decision" : "") + (open ? " sheet-open" : "") + '"><div class="zone-head">' + pageHeader(Object.assign({}, p, { cta: asks })) + "</div>" +
-      (asks ? '<div class="zone-decide">' + decisionCta(p) + "</div>" : "") +
+      (asks ? '<div class="zone-decide only-narrow">' + decisionCta(p) + "</div>" : "") +
       '<div class="zone-run"><h3 class="zone-title">The run now</h3>' + runPanel() + "</div>" +
       '<div class="zone-timeline"><h3 class="zone-title">Timeline</h3>' + timelineSection(p) + "</div>" +
       '<div class="zone-facts">' + factsRail(p) + "</div>" +
-      (open ? '<div class="zone-sheet">' + decisionSheet(p) + "</div>" : "") + "</div>";
+      /* Laptop: the decisions open in a sheet over the page. Desktop: they are always there, a column under the header. */
+      (asks ? '<div class="zone-sheet' + (open ? " is-open" : "") + '"><h3 class="zone-title only-wide">Waiting on you</h3>' + decisionSheet(p) + "</div>" : "") + "</div>";
   }
 
   const frame = (inner) => '<div class="section-frame">' + inner + "</div>";
@@ -1571,26 +1576,27 @@ window.CATALOG = (function () {
         { name: "page", label: "Page", type: "select", options: [{ value: "ticket", label: "Ticket page" }, { value: "board", label: "Board" }] },
         HEADER_CONTROLS[0],
         { name: "questions", label: "Open questions", type: "select", options: [{ value: 1, label: "One" }, { value: 2, label: "Two" }], when: (p) => p.page === "ticket" && p.role === "you" },
-        { name: "sheetOpen", label: "Decisions sheet open", type: "toggle", when: (p) => p.page === "ticket" && p.role === "you" },
+        { name: "sheetOpen", label: "Decisions sheet open (laptop)", type: "toggle", when: (p) => p.page === "ticket" && p.role === "you" },
       ],
       render: (p) => frame(p.page === "board" ? board(Object.assign({}, p, { selected: p.boardPick })).replace(/data-set="selected=/g, 'data-set="boardPick=') : ticketPage(p)),
       docs: {
-        what: "Where every section goes on a whole page, at both widths. The ticket page reads top to bottom in the order the Director needs it: who and where it stands (the header), what waits on them (the decisions), what is happening now (the run's steps), then what happened (the timeline, newest first). The facts rail is the reference beside it. A wider window gives the same structure more room; it never moves sections around.",
-        when: ["Decisions never sit in the page itself: the page shows one line saying what waits, and Answer opens them in a side sheet on the right, where several Questions scroll on their own.", "The run's steps always sit directly on top of the timeline, so the run now and the history read as one story."],
+        what: "Where every section goes on a whole page, at both widths. The ticket page reads top to bottom in the order the Director needs it: who and where it stands (the header, one row across the page), what waits on them (the decisions), what is happening now (the run's steps), then what happened (the timeline, newest first). The facts rail is the reference beside it. A wider window gives the same structure more room; it never moves sections around.",
+        when: ["The header is always one row across the whole page; every column starts under it.", "On a laptop the decisions never sit in the page itself: the page shows one line saying what waits, and Answer opens them in a side sheet on the right, where several Questions scroll on their own. On a desktop there is room for them, so they are always there as a column and the page needs no such line.", "The run's steps always sit directly on top of the timeline, so the run now and the history read as one story."],
         responsive: [
           "Ticket page, laptop (1180 pt): the header across the top; the main column holds the decisions line, the run's steps and the timeline, in that order; the facts rail (300 pt) on the right, its later groups folded. The decisions sheet (520 pt) slides over the right of the page, over a dimmed page, and closes on a click outside it.",
-          "Ticket page, desktop (2200 pt): the same order and the same two columns, wider: the main column up to 980 pt (the timeline keeps its measure) with the run's tokens and time by stage beside its steps; the facts rail (360 pt) with every group open. The decisions sheet (640 pt) docks as a third column on the far right, so the page stays readable beside it.",
+          "Ticket page, desktop (2200 pt): the header is one row across the page, the moves on the identifier's line so the title has the whole width, the situation and the key facts on the line under it. Under the header, three columns: the main column (up to 1080 pt) with the run's steps on top of the timeline and the run's tokens and time by stage beside its steps; the facts rail (360 pt) with every group open; and, when something waits on the Director, the decisions (640 pt) on the far right, always open and scrolling on their own. No decisions line, no Answer button: the answers are already on the page. With nothing waiting, the page keeps two columns.",
           "Board, laptop: the situation groups stacked top to bottom in the order the Director acts on them; each row says where the ticket stands in two lines. Picking a row opens its page.",
           "Board, desktop: the groups still stack; each row turns into one line of aligned columns (what it waits on, repo, steps, age), and a preview of the picked ticket sits beside the list, so the Director can act without leaving the board.",
         ],
-        motion: "The sheet slides in from the right on a spring (0.5 s) while the page dims; on desktop the page's columns ease aside to make room.",
+        motion: "On a laptop the sheet slides in from the right on a spring (0.5 s) while the page dims. On a desktop nothing moves: the decisions column is there from the start.",
         tokens: ["--space-6", "--space-8", "--measure", "--radius-sheet", "--material-glass-thick", "section tokens"],
       },
       stories: [
         { name: "Ticket page, laptop", viewport: "laptop", args: { page: "ticket" } },
         { name: "Ticket page, laptop, decisions open", viewport: "laptop", args: { page: "ticket", sheetOpen: true, selected: 1 } },
         { name: "Ticket page, desktop", viewport: "desktop", args: { page: "ticket", fLinks: true } },
-        { name: "Ticket page, desktop, decisions open", viewport: "desktop", args: { page: "ticket", fLinks: true, sheetOpen: true, selected: 1 } },
+        { name: "Ticket page, desktop, one answer picked", viewport: "desktop", args: { page: "ticket", fLinks: true, selected: 1 } },
+        { name: "Ticket page, desktop, nothing waits on you", viewport: "desktop", args: { page: "ticket", fLinks: true, role: "working" } },
         { name: "Ticket page, nothing waits on you", viewport: "laptop", args: { page: "ticket", role: "working" } },
         { name: "Board, laptop", viewport: "laptop", args: { page: "board" } },
         { name: "Board, desktop", viewport: "desktop", args: { page: "board", boardPick: "TP-1375" } },
@@ -1604,7 +1610,7 @@ window.CATALOG = (function () {
       render: (p) => frame(pageHeader(p)),
       docs: {
         what: "The top of a ticket page: the identifier with its repo and epic, the title, the situation line, and the action rail.",
-        responsive: ["Laptop (1180 pt): the action rail sits on its own row under the situation line, so the title keeps the full width.", "Desktop (2200 pt): the action rail moves to the right of the title, and the key facts (pull request, runs, tokens) appear as chips under the situation line.", "The title wraps (balanced) and stops at 30 em; the situation line stops at the measure (68 characters)."],
+        responsive: ["Laptop (1180 pt): the action rail sits on its own row under the situation line, so the title keeps the full width. The title wraps (balanced) and stops at 30 em.", "Desktop (2200 pt): one row across the whole page. The action rail shares the top line with the identifier, so the title runs the full width under them (up to 56 em, about 120 characters, before it wraps). The situation and the key facts (pull request, runs, tokens) share the line under the title, the facts right aligned.", "The age sits inside the status pill, next to the word it counts (Waiting on you, for 3 h 12 min), so it always has the same place to be read."],
         tokens: ["--type-title", "--tracking-display", "--space-8", "--measure"],
       },
       stories: VIEWPORT_STORIES([{ name: "Waiting on you", viewport: "laptop", args: { role: "you", blocked: false } }, { name: "Short title", viewport: "desktop", args: { title: "Checkout total rounding", ident: "SHOP-305" } }]),
@@ -1675,9 +1681,9 @@ window.CATALOG = (function () {
       ],
       render: (p) => frame('<div class="sheet-stage"><div class="ghost-page" aria-hidden="true"><span></span><span></span><span></span><span></span></div>' + (p.sheetOpen ? decisionSheet(p) : '<div class="ghost-cta">' + decisionCta(p) + "</div>") + "</div>"),
       docs: {
-        what: "Every Question open on a ticket, in a side sheet on the right: a header with the count and a close button, the Questions one under the other, and one Send at the foot that sends every answered one. The ticket page itself keeps only one line about them (the decisions line with Answer), so it stays quiet.",
+        what: "Every Question open on a ticket, in a side sheet on the right: a header with the count and a close button, the Questions one under the other, and one Send at the foot that sends every answered one. On a laptop the ticket page keeps only one line about them (the decisions line with Answer), so it stays quiet; on a desktop the same panel is a column of the page, always open.",
         when: ["Open it from the decisions line at the top of a ticket page. Close it with the close button, Esc, or a click on the dimmed page.", "Answer one, some or all: Send counts what is answered and leaves the rest open."],
-        responsive: ["Laptop: 520 pt over the right of the page, the page dimmed behind it.", "Desktop: 640 pt, docked as a column on the far right; the page stays bright and readable beside it.", "As tall as the window; the Questions scroll inside it while its header and Send stay put."],
+        responsive: ["Laptop: 520 pt over the right of the page, the page dimmed behind it.", "Desktop: on the ticket page, a 640 pt column on the far right under the header, always open, with no close button; the page stays bright and readable beside it. Shown alone, as here, it is the 640 pt sheet.", "As tall as the window; the Questions scroll inside it while its header and Send stay put."],
         motion: "Slides in from the right on a spring (0.5 s); the dimmed page fades in at 0.28 s.",
         tokens: ["--radius-sheet", "--material-glass-thick", "--elevation-4", "--surface-overlay", "--motion-spring"],
       },
