@@ -83,10 +83,7 @@
     current = { item: item, story: story, view: view };
     props = storyProps(item, story);
     expanded[item.key] = true;
-    if (story.viewport && view === "canvas") {
-      prefs.viewport = story.viewport;
-      $("viewport").value = story.viewport;
-    }
+    if (story.viewport && view === "canvas") prefs.viewport = story.viewport;
     if (missing) flash("No story at that link. Showing " + item.title + " / " + story.name + ".");
     renderAll();
   }
@@ -156,8 +153,93 @@
     el.className = "stage vp-" + prefs.viewport + (prefs.background === "card" ? " bg-card" : "");
   }
 
+  /*
+   * Motion across a redraw. A story redraws as new HTML, so a CSS transition would never
+   * run. Before drawing, remember the state attributes of every element with a data-anim
+   * or data-key; after drawing, give each new element its old values for one frame and
+   * then its new ones, so folds, thumbs, knobs, radios and fills move instead of jumping.
+   */
+  var MORPH_ATTRS = ["aria-expanded", "aria-checked", "aria-pressed", "aria-selected", "data-open", "style"];
+
+  function morphKeys(root) {
+    var seen = {};
+    var out = {};
+    Array.prototype.forEach.call(root.querySelectorAll("[data-anim],[data-key]"), function (el) {
+      var id = el.getAttribute("data-anim") || el.getAttribute("data-key");
+      seen[id] = (seen[id] || 0) + 1;
+      out[id + "#" + seen[id]] = el;
+    });
+    return out;
+  }
+
+  function snapshot(root) {
+    var els = morphKeys(root);
+    var snap = {};
+    Object.keys(els).forEach(function (k) {
+      var values = {};
+      MORPH_ATTRS.forEach(function (a) { values[a] = els[k].getAttribute(a); });
+      snap[k] = values;
+    });
+    return snap;
+  }
+
+  function morph(root, before) {
+    var els = morphKeys(root);
+    var pending = [];
+    Object.keys(els).forEach(function (k) {
+      var old = before[k];
+      if (!old) return;
+      var el = els[k];
+      var now = {};
+      var changed = false;
+      MORPH_ATTRS.forEach(function (a) {
+        now[a] = el.getAttribute(a);
+        if (now[a] !== old[a]) changed = true;
+      });
+      if (!changed) return;
+      MORPH_ATTRS.forEach(function (a) {
+        if (old[a] === null) el.removeAttribute(a); else el.setAttribute(a, old[a]);
+      });
+      pending.push([el, now]);
+    });
+    if (!pending.length) return;
+    void root.offsetWidth;
+    window.requestAnimationFrame(function () {
+      pending.forEach(function (x) {
+        MORPH_ATTRS.forEach(function (a) {
+          if (x[1][a] === null) x[0].removeAttribute(a); else x[0].setAttribute(a, x[1][a]);
+        });
+      });
+    });
+  }
+
+  /*
+   * Entrances (a menu, a toast, a count, a refusal) play when the element appears, not on
+   * every redraw: one that was already on the stage, unchanged, keeps still. The Motion
+   * token's Enter story marks its demo with data-replay so Play again replays it.
+   */
+  var ENTERS = ".count, .refusal, .own-words, .empty, .menu, .toast, .sheet, .clear, .preview-card, .error, .sort";
+
+  function enterSig(el) {
+    return (el.getAttribute("class") || "") + "|" + el.textContent;
+  }
+
+  function entrances(root) {
+    var seen = {};
+    Array.prototype.forEach.call(root.querySelectorAll(ENTERS), function (el) { seen[enterSig(el)] = true; });
+    return seen;
+  }
+
+  function keepStill(root, seen) {
+    Array.prototype.forEach.call(root.querySelectorAll(ENTERS), function (el) {
+      if (seen[enterSig(el)] && !el.closest("[data-replay]")) el.style.animation = "none";
+    });
+  }
+
   function renderStage() {
     var stage = $("stage");
+    var before = snapshot(stage);
+    var entered = entrances(stage);
     applyStageFrame(stage);
     var item = current.item;
     var wide = !!item.wide;
@@ -172,6 +254,8 @@
       stage.innerHTML = '<div class="stage-inner ds' + (wide ? " wide" : "") + (prefs.background === "card" ? " on-content" : "") + '">' +
         renderStory(item, current.story, props) + "</div>";
     }
+    keepStill(stage, entered);
+    morph(stage, before);
     if (typeof item.mounted === "function") item.mounted(stage, props);
   }
 
@@ -251,6 +335,8 @@
     html += "<h2>Stories</h2><ul class=\"story-links\">" + item.stories.map(function (s) {
       return '<li><a href="' + esc(hashFor(item, s, "canvas")) + '">' + esc(s.name) + "</a></li>";
     }).join("") + "</ul>";
+    if (d.sizes) html += "<h2>Sizes</h2><p>" + d.sizes + "</p>";
+    if (d.motion) html += "<h2>Motion</h2><p>" + d.motion + "</p>";
     if (d.tokens) html += "<h2>Tokens</h2>" + list(d.tokens.map(function (t) { return "<code>" + esc(t) + "</code>"; }));
     if (d.responsive) html += "<h2>Laptop and desktop</h2>" + (Array.isArray(d.responsive) ? list(d.responsive) : "<p>" + d.responsive + "</p>");
     if (d.access) html += "<h2>Keyboard and VoiceOver</h2><p>" + d.access + "</p>";
@@ -260,8 +346,23 @@
 
   /* ---------- Render everything ---------- */
 
+  function renderToolbar() {
+    Array.prototype.forEach.call(document.querySelectorAll("[data-pref]"), function (group) {
+      var name = group.getAttribute("data-pref");
+      var buttons = group.querySelectorAll("button[data-value]");
+      Array.prototype.forEach.call(buttons, function (b, i) {
+        var on = b.getAttribute("data-value") === String(prefs[name]);
+        b.setAttribute("aria-checked", String(on));
+        if (on) group.style.setProperty("--i", i);
+      });
+      group.style.setProperty("--n", buttons.length);
+    });
+    $("all-states").setAttribute("aria-checked", String(!!prefs.allStates));
+  }
+
   function renderAll() {
     document.documentElement.dataset.theme = prefs.theme;
+    renderToolbar();
     var docs = current.view === "docs";
     $("tab-canvas").setAttribute("aria-selected", String(!docs));
     $("tab-docs").setAttribute("aria-selected", String(docs));
@@ -345,19 +446,18 @@
   $("tab-canvas").addEventListener("click", function () { go(current.item, current.story, "canvas"); });
   $("tab-docs").addEventListener("click", function () { go(current.item, current.story, "docs"); });
 
-  ["theme", "viewport", "background"].forEach(function (name) {
-    var el = $(name);
-    el.value = prefs[name];
-    el.addEventListener("change", function () {
-      prefs[name] = el.value;
+  Array.prototype.forEach.call(document.querySelectorAll("[data-pref]"), function (group) {
+    group.addEventListener("click", function (e) {
+      var b = e.target.closest("button[data-value]");
+      if (!b) return;
+      prefs[group.getAttribute("data-pref")] = b.getAttribute("data-value");
       savePrefs();
       renderAll();
     });
   });
 
-  $("all-states").checked = prefs.allStates;
-  $("all-states").addEventListener("change", function (e) {
-    prefs.allStates = e.target.checked;
+  $("all-states").addEventListener("click", function () {
+    prefs.allStates = !prefs.allStates;
     savePrefs();
     if (current.view === "docs") go(current.item, current.story, "canvas"); else renderAll();
   });

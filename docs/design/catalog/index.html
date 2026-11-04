@@ -12,8 +12,9 @@
   <div class="shell">
     <aside class="sidebar" aria-label="Catalog">
       <div class="brand">
-        <strong>Director design catalog</strong>
-        <span>Tokens, components and sections, one story per state</span>
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-text"><strong>Director design catalog</strong>
+        <span>Tokens, components and sections, one story per state</span></span>
       </div>
       <div class="side-search">
         <input id="search" type="search" placeholder="Find a component or story" aria-label="Find a component or story" autocomplete="off">
@@ -25,33 +26,36 @@
     <main class="main">
       <header class="toolbar" role="toolbar" aria-label="Canvas settings">
         <div class="tabs" role="tablist" aria-label="View">
-          <button id="tab-canvas" role="tab" aria-selected="true">Canvas</button>
-          <button id="tab-docs" role="tab" aria-selected="false">Docs</button>
+          <button id="tab-canvas" type="button" role="tab" aria-selected="true">Canvas</button>
+          <button id="tab-docs" type="button" role="tab" aria-selected="false">Docs</button>
         </div>
         <span class="tool-sep"></span>
-        <label class="tool">Theme
-          <select id="theme">
-            <option value="system">System</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </label>
-        <label class="tool">Viewport
-          <select id="viewport">
-            <option value="fit">Fit</option>
-            <option value="laptop">Laptop · 1180 pt</option>
-            <option value="desktop">Desktop · 2200 pt</option>
-          </select>
-        </label>
-        <label class="tool">Background
-          <select id="background">
-            <option value="page">Page</option>
-            <option value="card">Card</option>
-          </select>
-        </label>
-        <label class="tool check"><input id="all-states" type="checkbox"> Show all states</label>
+        <div class="tool"><span class="tool-label">Theme</span>
+          <div class="pref" data-pref="theme" role="radiogroup" aria-label="Theme">
+            <span class="pref-thumb" aria-hidden="true"></span>
+            <button type="button" role="radio" data-value="system">System</button>
+            <button type="button" role="radio" data-value="light">Light</button>
+            <button type="button" role="radio" data-value="dark">Dark</button>
+          </div>
+        </div>
+        <div class="tool"><span class="tool-label">Viewport</span>
+          <div class="pref" data-pref="viewport" role="radiogroup" aria-label="Viewport">
+            <span class="pref-thumb" aria-hidden="true"></span>
+            <button type="button" role="radio" data-value="fit">Fit</button>
+            <button type="button" role="radio" data-value="laptop" title="Laptop: 1180 pt of content">Laptop</button>
+            <button type="button" role="radio" data-value="desktop" title="Desktop: 2200 pt of content">Desktop</button>
+          </div>
+        </div>
+        <div class="tool"><span class="tool-label">Background</span>
+          <div class="pref" data-pref="background" role="radiogroup" aria-label="Background">
+            <span class="pref-thumb" aria-hidden="true"></span>
+            <button type="button" role="radio" data-value="page">Page</button>
+            <button type="button" role="radio" data-value="card">Card</button>
+          </div>
+        </div>
+        <button id="all-states" class="tool-switch" type="button" role="switch" aria-checked="false"><span class="knob" aria-hidden="true"></span>Show all states</button>
         <span class="tool-grow"></span>
-        <button id="copy-link" class="tool-btn" title="Copy a link that opens this story">Copy link</button>
+        <button id="copy-link" class="tool-btn" type="button" title="Copy a link that opens this story"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 9a3 3 0 0 0 4.2 0l2-2A3 3 0 0 0 9 2.8l-.8.8M9 7a3 3 0 0 0-4.2 0l-2 2A3 3 0 0 0 7 13.2l.8-.8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>Copy link</button>
       </header>
 
       <div class="crumbs" id="crumbs"></div>
@@ -64,7 +68,7 @@
           <div class="controls-head">
             <strong>Controls</strong>
             <span id="controls-note" class="controls-note"></span>
-            <button id="reset" class="tool-btn">Reset</button>
+            <button id="reset" class="tool-btn" type="button">Reset</button>
           </div>
           <div id="controls" class="controls-grid"></div>
         </section>

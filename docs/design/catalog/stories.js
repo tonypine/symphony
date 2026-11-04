@@ -84,6 +84,11 @@ window.CATALOG = (function () {
 
   const ROLE_OPTIONS = Object.keys(ROLES).map((k) => ({ value: k, label: ROLES[k].word + " (" + ROLES[k].hue + ")" }));
 
+  /* Three control sizes: small 24 pt, medium 30 pt, large 36 pt. "regular" reads as medium. */
+  const SIZES = { small: "sm", medium: "md", regular: "md", large: "lg" };
+  const sizeClass = (size) => " sz-" + (SIZES[size] || "md");
+  const SIZE = { name: "size", label: "Size", type: "select", options: [{ value: "small", label: "Small · 24 pt" }, { value: "medium", label: "Medium · 30 pt" }, { value: "large", label: "Large · 36 pt" }] };
+
   const stateClass = (s) => ({ hover: " is-hover", pressed: " is-pressed", focused: " is-focused" }[s] || "");
   const attr = (name, value) => (value === undefined || value === null || value === false ? "" : " " + name + '="' + esc(value) + '"');
 
@@ -109,7 +114,7 @@ window.CATALOG = (function () {
 
   function button(p) {
     const variant = { primary: " btn-primary", destructive: " btn-destructive", "destructive-filled": " btn-destructive-filled", quiet: " btn-quiet" }[p.variant] || "";
-    const size = { large: " btn-lg", small: " btn-sm" }[p.size] || "";
+    const size = sizeClass(p.size);
     const glyph = p.glyph && p.glyph !== "none" ? icon(p.glyph) : "";
     const b = '<button type="button" class="btn' + variant + size + (p.disabled ? "" : stateClass(p.state)) + '"' +
       (p.disabled ? ' aria-disabled="true"' + attr("title", p.reason) : "") + attr("data-key", p.key) + ">" + glyph + esc(p.label) + "</button>";
@@ -122,6 +127,17 @@ window.CATALOG = (function () {
 
   const kbd = (keys, plain) => '<span class="kbd-hint' + (plain ? " plain" : "") + '" aria-label="' + esc(keys.replace(/\s+/g, " ")) + '">' +
     String(keys).trim().split(/\s+/).map((k) => '<kbd class="kbd">' + esc(k) + "</kbd>").join("") + "</span>";
+
+  /* A segmented control: equal segments and one thumb that slides to the selection */
+  function segmented(opts, selected, o) {
+    o = o || {};
+    const n = Math.max(1, opts.length);
+    const sel = Math.max(0, Math.min(n - 1, Number(selected) || 0));
+    return '<div class="segmented' + (o.size ? sizeClass(o.size) : "") + '" role="radiogroup"' + attr("aria-label", o.label) + ' data-anim="' + esc(o.anim || "seg") + '" style="--n:' + n + ";--i:" + sel + '"' +
+      (o.disabled ? ' aria-disabled="true"' + attr("title", o.reason) : "") + '><span class="seg-thumb" aria-hidden="true"></span>' + opts.map((label, i) =>
+      '<button type="button" role="radio" class="segment' + (i === Number(o.hoverAt) && i !== sel ? " is-hover" : "") + (i === sel && o.focused ? " is-focused" : "") + '" aria-checked="' + (i === sel) + '"' +
+      (o.disabled ? ' aria-disabled="true"' : ' data-set="' + esc(o.prop || "selected") + "=" + i + '" data-key="' + esc((o.anim || "seg") + i) + '"') + ">" + esc(label) + "</button>").join("") + "</div>";
+  }
 
   function situation(p) {
     const role = p.role || "working";
@@ -157,8 +173,13 @@ window.CATALOG = (function () {
       '<span class="lead">' + (p.live && role === "working" ? '<span class="dot live role-working"></span>' : icon(ROLES[role].glyph)) + "</span>" +
       '<span class="main"><span class="line1"><span class="ident">' + esc(p.ident) + '</span><span class="title">' + esc(p.title) + "</span></span>" +
       (p.twoLine && p.line2 ? '<span class="line2">' + esc(p.line2) + "</span>" : "") + "</span>" +
+      (p.wide ? '<span class="xcol xcol-waits"><span>' + esc(p.line2 || "") + "</span></span>" + '<span class="xcol xcol-repo">' + chip({ kind: "repo", text: p.repo || "symphony", interactive: false }) + "</span>" +
+        '<span class="xcol xcol-steps mini-steps" aria-label="Steps">' + (p.steps || "passed passed current pending pending").split(" ").map((k) => '<i class="' + esc(k) + '"></i>').join("") + "</span>" : "") +
       '<span class="trail">' + (p.badge ? badge(role, p.badge, "small") : "") + reason + fix + (p.age ? '<span class="age">' + esc(p.age) + "</span>" : "") + "</span></div>";
   }
+
+  /* An animated fold: the body is always drawn, data-open opens it (see components.css) */
+  const fold = (key, open, inner) => '<div class="fold" data-anim="fold-' + esc(key) + '" data-open="' + !!open + '"><div class="fold-inner">' + inner + "</div></div>";
 
   function card(p) {
     const tag = p.clickable ? "button" : "section";
@@ -204,7 +225,7 @@ window.CATALOG = (function () {
     const verdict = { passed: "done", failed: "problem", running: "working", stopped: "idle" }[p.verdict] || "working";
     const glyph = { passed: "done", failed: "problem", running: "run-start", stopped: "run-end" }[p.verdict] || "run-start";
     const word = { passed: "Passed", failed: "Failed", running: "Running", stopped: "Stopped" }[p.verdict] || "";
-    const body = p.expanded ? '<div class="run-body"><ol class="timeline">' + (p.entries || []).map(tlEntry).join("") + "</ol></div>" : "";
+    const body = fold("run-" + (p.foldKey || "run"), p.expanded, '<div class="run-body"><ol class="timeline">' + (p.entries || []).map(tlEntry).join("") + "</ol></div>");
     return '<div class="run-group"><button type="button" class="run-head role-' + verdict + stateClass(p.state) + '" aria-expanded="' + !!p.expanded + '" data-toggle="expanded" data-key="run">' +
       '<span class="time">' + esc(p.time) + '</span><span class="mark">' + (p.verdict === "running" ? '<span class="dot live role-working"></span>' : icon(glyph)) + "</span>" +
       '<span class="name">' + icon("chevron-right", "disclose") + "<b>" + esc(p.title) + "</b>" + badge(verdict, word, "small") + (p.tokens ? '<span class="t-secondary">' + esc(p.tokens) + "</span>" : "") + "</span>" +
@@ -267,7 +288,7 @@ window.CATALOG = (function () {
     const note = pct >= 100 ? "At the cap: no new run starts until " + p.resets + "." : pct >= 95 ? "Almost at the cap: runs still finish, new ones wait from 100 %." : pct >= 75 ? "Getting close: " + (100 - pct) + " % left until " + p.resets + "." : "Plenty left. Resets " + p.resets + ".";
     return '<div class="meter role-' + role + '" role="meter" aria-valuenow="' + pct + '" aria-valuemin="0" aria-valuemax="100" aria-label="' + esc(p.label) + ", " + pct + ' percent">' +
       '<div class="meter-head"><span>' + esc(p.label) + '</span><span class="value">' + esc(fmt(used)) + " of " + esc(fmt(cap)) + " " + esc(p.unit) + " · " + pct + " %</span></div>" +
-      '<div class="meter-track"><div class="meter-fill" style="width:' + pct + '%"></div></div>' +
+      '<div class="meter-track"><div class="meter-fill" data-anim="meter-fill" style="width:' + pct + '%"></div></div>' +
       '<div class="meter-note' + (role === "accent" ? " calm" : "") + '">' + esc(note) + "</div></div>";
   }
 
@@ -367,26 +388,47 @@ window.CATALOG = (function () {
     {
       title: "Spacing",
       docs: {
-        what: "A 4 pt grid. Every gap and padding is one of seven steps.",
-        when: ["4 between a glyph and its word; 8 between related lines; 12 row and tile padding; 16 between cards; 20 window inset; 24 between sections; 32 above an empty state."],
-        tokens: ["--space-1", "--space-2", "--space-3", "--space-4", "--space-5", "--space-6", "--space-8"],
+        what: "A 4 pt grid. Every gap and padding is one of eight steps.",
+        when: ["4 between a glyph and its word; 8 between related lines and controls; 12 row padding and the gap between cards in a stack; 16 card padding and between cards side by side; 20 card padding sideways; 24 between sections and the page inset; 32 above an empty state; 40 between the zones of a page on a desktop."],
+        tokens: ["--space-1", "--space-2", "--space-3", "--space-4", "--space-5", "--space-6", "--space-8", "--space-10"],
       },
-      render: () => '<div class="specimen">' + [[1, 4, "Glyph to word"], [2, 8, "Related lines, badges"], [3, 12, "Row and tile padding"], [4, 16, "Between cards"], [5, 20, "Window inset"], [6, 24, "Between sections"], [8, 32, "Above an empty state"]].map((s) =>
+      render: () => '<div class="specimen">' + [[1, 4, "Glyph to word"], [2, 8, "Related lines, controls in a row"], [3, 12, "Row padding, cards in a stack"], [4, 16, "Card padding, cards side by side"], [5, 20, "Card padding sideways"], [6, 24, "Between sections, page inset"], [8, 32, "Above an empty state, page zones"], [10, 40, "Desktop zones"]].map((s) =>
         '<div class="specimen-row"><code>--space-' + s[0] + " · " + s[1] + ' pt</code><span style="display:flex;align-items:center;gap:12px"><span class="space-bar" style="width:' + s[1] + 'px"></span><span class="t-secondary">' + esc(s[2]) + "</span></span></div>").join("") + "</div>",
       stories: [{ name: "All steps" }],
     },
     {
+      title: "Control sizes",
+      args: { size: "medium" },
+      controls: [SIZE],
+      docs: {
+        what: "Three heights that every control shares: buttons, icon buttons, menu buttons, pop-ups, segmented controls, fields. A control is small, medium or large, and never any other height.",
+        when: ["Small · 24 pt, radius 7: inside rows, toasts, table headers, dense filter bars. Chips and switches are always this height.", "Medium · 30 pt, radius 9: the default for rails, cards, sheets and toolbars.", "Large · 36 pt, radius 11: one main action where it is the whole point of the place (a Question's Send, an empty state's action)."],
+        avoid: "Mixing sizes in one row, or setting a height on a control by hand. A container may set the size once for all of its controls.",
+        tokens: ["--control-sm", "--control-md", "--control-lg", "--radius-control-sm", "--radius-control-md", "--radius-control-lg"],
+      },
+      render: (p, ctx) => {
+        if (ctx.story.id === "one-row-one-size") {
+          return '<div class="btn-row' + sizeClass(p.size) + '">' + button({ label: "Approve Plan", variant: "primary", size: p.size }) + button({ label: "Open Checks", variant: "secondary", size: p.size }) +
+            '<button type="button" class="menu-btn' + sizeClass(p.size) + '">Move to…' + icon("chevron-down", "chev") + "</button>" + segmented(["Day", "Week", "Month"], 1, { size: p.size, anim: "seg-sz" }) +
+            '<div class="input search' + sizeClass(p.size) + '" style="width:200px">' + icon("search") + '<input type="search" aria-label="Search" placeholder="Search"></div><button type="button" class="icon-btn' + sizeClass(p.size) + '" aria-label="More" title="More">' + icon("more") + "</button></div>";
+        }
+        return '<div class="size-guide">' + [["small", "Small", 24, 7], ["medium", "Medium", 30, 9], ["large", "Large", 36, 11]].map((z) =>
+          "<div>" + button({ label: z[1], variant: "secondary", size: z[0] }) + '<span class="t-secondary">' + z[2] + " pt · radius " + z[3] + "</span></div>").join("") + "</div>";
+      },
+      stories: [{ name: "Three heights" }, { name: "One row, one size" }, { name: "One row, small", args: { size: "small" } }, { name: "One row, large", args: { size: "large" } }],
+    },
+    {
       title: "Radii",
       docs: {
-        what: "Four radii, used concentrically: an inner radius is the outer radius minus the inset between them.",
-        when: ["Card 14 for cards and section containers; row 10 for rows, option cards and tiles inside a card (14 − 4); control 6 for buttons and fields; mark 4 for chart ends and meters; capsule for badges, chips and count badges."],
-        tokens: ["--radius-card", "--radius-row", "--radius-control", "--radius-mark", "--radius-capsule"],
+        what: "Continuous rounded corners, used concentrically: an inner radius is the outer radius minus the inset between them.",
+        when: ["Sheet 22; card 16 for cards and section containers; row 10 for rows, option cards and tiles inside a card; controls 7, 9 and 11 by size; mark 4 for small marks; capsule for chips, badges, segmented controls, switches, search fields and meters."],
+        tokens: ["--radius-sheet", "--radius-card", "--radius-row", "--radius-control-sm", "--radius-control-md", "--radius-control-lg", "--radius-mark", "--radius-capsule"],
       },
       render: (p, ctx) => {
         if (ctx.story.id === "concentric") {
-          return '<div class="card" style="width:360px;padding:4px"><div class="row is-hover role-working">' + '<span class="lead">' + icon("working") + '</span><span class="main"><span class="line1"><span class="ident">Row 10</span><span class="title">inside a card of 14, 4 inset</span></span></span></div></div>';
+          return '<div class="card" style="width:380px;padding:6px"><div class="row is-hover role-working">' + '<span class="lead">' + icon("working") + '</span><span class="main"><span class="line1"><span class="ident">Row 10</span><span class="title">inside a card of 16, 6 inset</span></span></span></div></div>';
         }
-        return '<div style="display:flex;flex-wrap:wrap;gap:24px">' + [["Card", 14], ["Row", 10], ["Control", 6], ["Mark", 4], ["Capsule", 999]].map((r) =>
+        return '<div style="display:flex;flex-wrap:wrap;gap:24px">' + [["Sheet", 22], ["Card", 16], ["Row", 10], ["Control, large", 11], ["Control", 9], ["Control, small", 7], ["Mark", 4], ["Capsule", 999]].map((r) =>
           '<div style="display:grid;gap:8px;justify-items:center"><div class="radius-box" style="border-radius:' + r[1] + "px;" + (r[1] > 100 ? "height:36px" : "") + '"></div><span class="t-secondary">' + esc(r[0]) + " · " + (r[1] > 100 ? "height / 2" : r[1] + " pt") + "</span></div>").join("") + "</div>";
       },
       stories: [{ name: "All radii" }, { name: "Concentric" }],
@@ -394,43 +436,97 @@ window.CATALOG = (function () {
     {
       title: "Elevation",
       docs: {
-        what: "Content is flat. Only layers that float over content cast a shadow, and in the app those come from the system.",
-        when: ["Level 0: anything inside a card. Level 1: a card, a hairline only. Level 2: menus, tooltips, toasts. Level 3: sheets."],
-        avoid: "Never a shadow on a row, a tile or a chart, and never a home-made blur.",
-        tokens: ["--elevation-0", "--elevation-1", "--elevation-2", "--elevation-3"],
+        what: "Layered soft shadows: a hairline ring, a near shadow and a far one. Content sits flat on its card; only what rises casts more.",
+        when: ["Level 0: anything inside a card. Level 1: a card, a group, a toggle row. Level 2: a card under the pointer, a tooltip, a preview pane. Level 3: menus, pop-up lists, toasts. Level 4: sheets."],
+        avoid: "A shadow on a row, a chip or a chart, or a shadow without the hairline ring (it blurs the edge in dark).",
+        tokens: ["--elevation-0", "--elevation-1", "--elevation-2", "--elevation-3", "--elevation-4", "--edge-highlight"],
       },
-      render: () => '<div style="display:flex;flex-wrap:wrap;gap:32px;padding:16px">' + [0, 1, 2, 3].map((n) =>
-        '<div class="elev-box" style="box-shadow:var(--elevation-' + n + ')">Level ' + n + "<br>" + ["Inside a card", "Card", "Menu, tooltip, toast", "Sheet"][n] + "</div>").join("") + "</div>",
+      render: () => '<div style="display:flex;flex-wrap:wrap;gap:32px;padding:16px">' + [0, 1, 2, 3, 4].map((n) =>
+        '<div class="elev-box" style="box-shadow:var(--elevation-' + n + ')">Level ' + n + "<br>" + ["Inside a card", "Card", "Hovered card, tooltip", "Menu, toast", "Sheet"][n] + "</div>").join("") + "</div>",
       stories: [{ name: "Levels" }],
     },
     {
+      title: "Materials",
+      docs: {
+        what: "Glass for what floats over content: a translucent fill, a strong blur that saturates what is behind, and a bright inner edge. Menus, pop-up lists, tooltips, toasts, sheets and bars use it; content never does.",
+        when: ["Thick glass (88 % in light) for anything with text to read: menus, toasts, sheets. Regular glass (72 %) for bars over scrolling content.", "The window behind carries a faint iris and blue glow, so the glass has something to refract."],
+        avoid: "Glass on cards or rows, or text on regular glass over a busy picture.",
+        tokens: ["--material-glass", "--material-glass-thick", "--material-blur", "--material-edge", "--backdrop-glow"],
+        access: "With Reduce Transparency on, the app draws the same layers opaque.",
+      },
+      render: () => '<div class="glass-demo"><div class="glass-under">' + TICKETS.slice(0, 4).map((t) => row(Object.assign({}, t, { twoLine: true }))).join("") + "</div>" +
+        '<div class="glass-over" style="background:var(--material-glass)"><b>Regular glass</b><span class="t-secondary">Bars over scrolling content</span></div>' +
+        '<div class="glass-over thick" style="background:var(--material-glass-thick)"><b>Thick glass</b><span class="t-secondary">Menus, toasts, sheets</span></div></div>',
+      stories: [{ name: "Glass over content" }],
+    },
+    {
       title: "Motion",
-      args: { duration: "--motion-standard", easing: "--ease-standard", play: false },
+      args: { duration: "--motion-spring", easing: "--ease-spring", play: false, open: false, picked: 0, on: false },
       controls: [
-        { name: "duration", label: "Duration", type: "select", options: [{ value: "--motion-fast", label: "Fast · 0.12 s" }, { value: "--motion-standard", label: "Standard · 0.25 s" }, { value: "--motion-slow", label: "Slow · 0.4 s" }] },
-        { name: "easing", label: "Easing", type: "select", options: [{ value: "--ease-standard", label: "Standard" }, { value: "--ease-enter", label: "Enter" }, { value: "--ease-exit", label: "Exit" }] },
+        { name: "duration", label: "Duration", type: "select", when: (p) => p.demo === "ball", options: [{ value: "--motion-instant", label: "Instant · 0.1 s" }, { value: "--motion-fast", label: "Fast · 0.16 s" }, { value: "--motion-standard", label: "Standard · 0.28 s" }, { value: "--motion-slow", label: "Slow · 0.45 s" }, { value: "--motion-spring", label: "Spring · 0.5 s" }] },
+        { name: "easing", label: "Easing", type: "select", when: (p) => p.demo === "ball", options: [{ value: "--ease-standard", label: "Standard" }, { value: "--ease-enter", label: "Enter" }, { value: "--ease-exit", label: "Exit" }, { value: "--ease-spring", label: "Spring" }, { value: "--ease-bounce", label: "Bounce" }] },
+        { name: "open", label: "Open", type: "toggle", when: (p) => p.demo === "fold" },
+        { name: "picked", label: "Picked", type: "number", min: 0, max: 2, when: (p) => p.demo === "select" },
+        { name: "on", label: "On", type: "toggle", when: (p) => p.demo === "select" },
       ],
       docs: {
-        what: "Three durations and three easings. Hover and pressed use fast; sections appearing, folding and selection use standard; nothing in the Director is slow except the sheet.",
-        when: ["A tooltip and a chip's popover wait 0.5 s of hover before they open (--motion-hover-delay).", "Values that change on a poll update in place; nothing moves under the pointer."],
-        tokens: ["--motion-fast", "--motion-standard", "--motion-slow", "--motion-hover-delay", "--ease-standard", "--ease-enter", "--ease-exit"],
-        access: "With Reduce Motion on every duration is zero and nothing loops.",
+        what: "Motion is part of each component, not a speed on a list. Five patterns cover the Director: press, lift, fold, slide and enter. Each uses one duration and one easing from here, and each component's docs say which.",
+        when: [
+          "Press: a control shrinks to 97 % in 0.1 s while held and springs back.",
+          "Lift: a clickable card or option rises 1 pt with a deeper shadow on hover, on a spring.",
+          "Fold: a group, card or run opens to its height in 0.28 s; its rows fade down into place one after another, 35 ms apart; the chevron turns on a spring. Board groups, collapsible cards, run groups and the facts rail fold this way.",
+          "Slide: a selection moves rather than jumps: the segmented thumb, the switch knob, a meter's fill.",
+          "Enter: what floats (menus, tooltips, toasts, sheets) rises a few points and fades in on a spring; it leaves faster than it came.",
+          "Values that change on a poll update in place; nothing moves under the pointer.",
+        ],
+        tokens: ["--motion-instant", "--motion-fast", "--motion-standard", "--motion-slow", "--motion-spring", "--motion-hover-delay", "--motion-stagger", "--ease-standard", "--ease-enter", "--ease-exit", "--ease-spring", "--ease-bounce", "--press-scale", "--lift", "--enter-offset"],
+        access: "With Reduce Motion on, every duration is near zero, nothing scales, lifts or loops, and folds and selections simply change.",
       },
-      render: (p) => '<div style="display:grid;gap:12px;width:520px"><div class="motion-track" data-motion><span class="motion-ball" style="transition:left var(' + esc(p.duration) + ") var(" + esc(p.easing) + ')"></span></div>' +
-        '<div style="display:flex;gap:12px;align-items:center">' + button({ label: "Play again", glyph: "play", key: "play" }).replace("<button ", '<button data-toggle="play" ') + '<span class="t-secondary">' + esc(p.duration) + " with " + esc(p.easing) + "</span></div></div>",
+      render: (p, ctx) => {
+        const id = ctx.story.id;
+        const replay = (label) => button({ label: label || "Play again", glyph: "play", variant: "secondary", size: "small" }).replace("<button ", '<button data-toggle="play" data-key="play" ');
+        if (id === "fold") {
+          const items = [TICKETS[1], TICKETS[3], TICKETS[6]];
+          return '<div style="width:640px">' + boardGroup("Working", "working", items, p.open, "3 runs", "open") + '<p class="t-secondary" style="margin:12px 4px 0">Click the heading: the group grows to its height while its rows fade down in turn.</p></div>';
+        }
+        if (id === "slide") {
+          return '<div style="display:grid;gap:20px;justify-items:start">' + segmented(["Day", "Week", "Month"], p.picked, { prop: "picked", anim: "seg-motion" }) +
+            '<div class="toggle-row"><span class="label" id="mo-l">Notify me about new questions</span><span class="effect">Click the switch, then the segments.</span><button type="button" role="switch" class="switch" aria-labelledby="mo-l" aria-checked="' + !!p.on + '" data-toggle="on" data-key="mo-sw"></button></div>' +
+            meter({ label: "Tokens today", used: p.on ? 4200000 : 1600000, cap: 5000000, unit: "tokens", resets: "at midnight" }) + "</div>";
+        }
+        if (id === "press-and-lift") {
+          return '<div style="display:grid;gap:20px;justify-items:start;width:520px"><div class="btn-row">' + button({ label: "Press and hold me", variant: "primary" }) + button({ label: "Or me", variant: "secondary" }) + "</div>" +
+            card({ clickable: true, title: "Waiting on you", body: "Hover me: I rise a point on a spring. Press me: I settle." }) + "</div>";
+        }
+        if (id === "enter") {
+          return '<div style="display:grid;gap:16px;justify-items:start" data-replay="' + !!p.play + '">' + replay("Play the entrances again") +
+            '<div class="toast role-done" role="status">' + icon("done") + '<span class="msg">TP-1382 moved to Rework<span class="sub">A toast rises from the bottom edge.</span></span>' + button({ label: "Undo", variant: "quiet", size: "small" }) + "</div>" +
+            '<div style="position:relative;height:170px;width:260px"><ul class="menu" role="menu" style="position:relative;top:0">' + ["Todo", "In Progress", "Rework"].map((x, i) => '<li class="menu-item' + (i === 1 ? " is-hover" : "") + '" role="menuitem" tabindex="-1">' + icon("check", "check") + esc(x) + "</li>").join("") + "</ul></div></div>";
+        }
+        return '<div style="display:grid;gap:12px;width:520px"><div class="motion-track" data-motion><span class="motion-ball" style="transition:left var(' + esc(p.duration) + ") var(" + esc(p.easing) + ')"></span></div>' +
+          '<div style="display:flex;gap:12px;align-items:center">' + replay() + '<span class="t-secondary">' + esc(p.duration) + " with " + esc(p.easing) + "</span></div></div>";
+      },
       mounted: (stage) => {
         stage.querySelectorAll("[data-motion]").forEach((track) => {
           window.setTimeout(() => track.classList.add("go"), 60);
         });
       },
-      stories: [{ name: "Durations and easings" }, { name: "Fast", args: { duration: "--motion-fast" } }, { name: "Slow", args: { duration: "--motion-slow" } }],
+      stories: [
+        { name: "Durations and easings", args: { demo: "ball" } },
+        { name: "Spring", args: { demo: "ball", duration: "--motion-spring", easing: "--ease-spring" } },
+        { name: "Bounce", args: { demo: "ball", duration: "--motion-spring", easing: "--ease-bounce" } },
+        { name: "Fold", args: { demo: "fold" } },
+        { name: "Slide", args: { demo: "select" } },
+        { name: "Press and lift", args: { demo: "press" } },
+        { name: "Enter", args: { demo: "enter" } },
+      ],
     },
     {
       title: "Focus ring",
       docs: {
-        what: "A 3 pt ring in the accent at half strength, drawn only when focus came from the keyboard.",
-        when: ["Every control, row, card and option that takes focus draws it. A pointer click never does."],
-        tokens: ["--focus-ring", "--focus-ring-color"],
+        what: "A 2 pt ring in the iris at half strength, 2 pt outside the shape and following its corners, drawn only when focus came from the keyboard.",
+        when: ["Every control, row, card and option that takes focus draws it. A pointer click never does. Fields draw an accent edge with a soft halo instead."],
+        tokens: ["--focus-ring-color", "--focus-ring-width", "--focus-ring-offset"],
         access: "Tab moves through controls in reading order; the ring is the only sign of where the keyboard is, so nothing may hide it.",
       },
       render: (p, ctx) => {
@@ -447,21 +543,31 @@ window.CATALOG = (function () {
   const components = [
     {
       title: "Button",
-      args: { label: "Approve Plan", variant: "primary", size: "regular", glyph: "none", state: "default", disabled: false, reason: "Checks are still running on PR #812." },
+      args: { label: "Approve Plan", variant: "primary", size: "medium", glyph: "none", state: "default", disabled: false, reason: "Checks are still running on PR #812." },
       controls: [
         { name: "label", label: "Label", type: "text" },
         { name: "variant", label: "Kind", type: "select", options: [{ value: "primary", label: "Primary" }, { value: "secondary", label: "Secondary" }, { value: "destructive", label: "Destructive" }, { value: "destructive-filled", label: "Destructive, in a sheet" }, { value: "quiet", label: "Quiet" }] },
-        { name: "size", label: "Size", type: "select", options: ["small", "regular", "large"] },
+        SIZE,
         { name: "glyph", label: "Glyph", type: "select", options: ["none", "play", "stop", "refresh", "pr", "plus", "undo"] },
         STATE, DISABLED, REASON,
       ],
-      render: (p) => button(p),
+      render: (p, ctx) => {
+        if (ctx.story.id !== "sizes-side-by-side") return button(p);
+        const kinds = [["primary", "Primary"], ["secondary", "Secondary"], ["destructive", "Destructive"], ["quiet", "Quiet"]];
+        return '<div class="btn-sizes"><span></span><span class="t-label">Small · 24 pt</span><span class="t-label">Medium · 30 pt</span><span class="t-label">Large · 36 pt</span>' +
+          kinds.map((k) => '<span class="t-label">' + k[1] + "</span>" + ["small", "medium", "large"].map((z) => button({ label: p.label, variant: k[0], size: z, glyph: p.glyph })).join("")).join("") +
+          '<span class="t-label">Icon button</span>' + ["small", "medium", "large"].map((z) => '<button type="button" class="icon-btn' + sizeClass(z) + '" aria-label="More" title="More">' + icon("more") + "</button>").join("") +
+          '<span class="t-label">Menu button</span>' + ["small", "medium", "large"].map((z) => '<button type="button" class="menu-btn' + sizeClass(z) + '">Move to…' + icon("chevron-down", "chev") + "</button>").join("") +
+          '<span class="t-label">Field</span>' + ["small", "medium", "large"].map((z) => '<div class="input search' + sizeClass(z) + '" style="width:180px">' + icon("search") + '<input type="search" aria-label="Search" placeholder="Search"></div>').join("") + "</div>";
+      },
       docs: {
         what: "A labelled action. One primary button per place (the move we expect), secondary for the others, destructive for what stops or throws work away, quiet for low-stakes actions inside text and cards.",
         when: ["Name it with its verb in title case: Approve Plan, Stop Run…, Send Decision….", "End the label with “…” when it opens a sheet that asks for more.", "Disabled always says why, in an inline refusal under it and as its help text."],
         avoid: "Two primary buttons side by side, or a disabled button without a reason.",
-        states: [["Default", "resting"], ["Hover", "one step darker"], ["Pressed", "two steps darker, 98 % scale"], ["Focused", "the focus ring"], ["Disabled with reason", "tertiary text on raised, the reason underneath"]],
-        tokens: ["--accent", "--accent-hover", "--accent-pressed", "--status-problem", "--radius-control", "--motion-fast", "--focus-ring"],
+        sizes: "Three sizes, and every control shares them: small 24 pt (inside rows, toasts, dense bars), medium 30 pt (the default: rails, sheets, cards), large 36 pt (one main action on an empty page or a Question's Send). A button never takes another height, whatever it sits in.",
+        states: [["Default", "resting, with a hairline edge and a top highlight; primary in the iris fill with a soft coloured glow"], ["Hover", "lighter fill, the shadow grows"], ["Pressed", "darker, scales to 97 %"], ["Focused", "the focus ring outside the shape"], ["Disabled with reason", "tertiary text on raised, the not-allowed pointer, the reason underneath"]],
+        motion: "Hover and pressed ease in 0.16 s; the press scales to 97 % in 0.1 s and springs back when released.",
+        tokens: ["--control-sm", "--control-md", "--control-lg", "--radius-control-sm … lg", "--accent-fill", "--accent-glow", "--status-problem", "--motion-fast", "--press-scale", "--focus-ring-color"],
         access: "VoiceOver reads the label and “button”; a disabled button reads “dimmed” and then the reason.",
       },
       stories: [
@@ -481,19 +587,21 @@ window.CATALOG = (function () {
         { name: "Quiet hover", args: { variant: "quiet", label: "Show All", state: "hover" } },
         { name: "With a glyph", args: { variant: "secondary", label: "Run Again", glyph: "refresh" } },
         { name: "Small", args: { size: "small", variant: "secondary", label: "Open" } },
+        { name: "Medium", args: { size: "medium", variant: "secondary", label: "Open Checks" } },
         { name: "Large", args: { size: "large", label: "Send Decision…" } },
+        { name: "Sizes side by side", args: { label: "Approve" } },
       ],
     },
     {
       title: "Icon button",
-      args: { glyph: "inspector", label: "Show the details pane", state: "default", toggled: false, disabled: false, reason: "No ticket is selected." },
+      args: { glyph: "inspector", label: "Show the details pane", size: "medium", state: "default", toggled: false, disabled: false, reason: "No ticket is selected." },
       controls: [
         { name: "glyph", label: "Glyph", type: "select", options: ["inspector", "refresh", "more", "close", "link", "filter", "columns", "search"] },
-        { name: "label", label: "Help text", type: "text" },
+        { name: "label", label: "Help text", type: "text" }, SIZE,
         STATE, { name: "toggled", label: "On", type: "toggle" }, DISABLED, REASON,
       ],
       render: (p) => {
-        const b = '<button type="button" class="icon-btn' + (p.disabled ? "" : stateClass(p.state)) + '" aria-label="' + esc(p.label) + '" title="' + esc(p.disabled ? p.reason : p.label) + '"' +
+        const b = '<button type="button" class="icon-btn' + sizeClass(p.size) + (p.disabled ? "" : stateClass(p.state)) + '" aria-label="' + esc(p.label) + '" title="' + esc(p.disabled ? p.reason : p.label) + '"' +
           (p.disabled ? ' aria-disabled="true"' : ' aria-pressed="' + !!p.toggled + '" data-toggle="toggled" data-key="ib"') + ">" + icon(p.glyph) + "</button>";
         return p.disabled ? '<span class="btn-group" style="align-items:center">' + b + refusal(p.reason) + "</span>" : b;
       },
@@ -502,30 +610,34 @@ window.CATALOG = (function () {
         when: ["Always has help text that names the action; that text is what VoiceOver reads.", "A toggle (show or hide a pane) shows its on state with the accent tint."],
         avoid: "An icon button for a move that changes Linear or a run: those get a labelled button.",
         states: [["Default", "secondary glyph, no background"], ["Hover", "hover overlay"], ["Pressed", "pressed overlay"], ["Focused", "focus ring"], ["On", "accent glyph on accent tint"], ["Disabled with reason", "tertiary glyph, reason as help and underneath"]],
-        tokens: ["--surface-hover", "--surface-pressed", "--accent-tint", "--radius-control"],
+        sizes: "Square, at the three control heights: 24, 30 and 36 pt, so it lines up with the buttons beside it.",
+        motion: "Pressed shrinks it to 92 %; switching on pops the glyph with a small bounce.",
+        tokens: ["--surface-hover", "--surface-pressed", "--accent-tint", "--control-sm … lg", "--radius-control-sm … lg"],
       },
       stories: [
         { name: "Default" }, { name: "Hover", args: { state: "hover" } }, { name: "Pressed", args: { state: "pressed" } }, { name: "Focused", args: { state: "focused" } },
-        { name: "On", args: { toggled: true } }, { name: "Disabled with reason", args: { disabled: true } },
+        { name: "On", args: { toggled: true } }, { name: "Small", args: { size: "small" } }, { name: "Large", args: { size: "large" } }, { name: "Disabled with reason", args: { disabled: true } },
       ],
     },
     {
       title: "Menu button",
-      args: { label: "Move to…", open: false, state: "default", disabled: false, reason: "Moves wait while a run is working." },
-      controls: [{ name: "label", label: "Label", type: "text" }, { name: "open", label: "Menu open", type: "toggle" }, STATE, DISABLED, REASON],
+      args: { label: "Move to…", size: "medium", open: false, state: "default", disabled: false, reason: "Moves wait while a run is working." },
+      controls: [{ name: "label", label: "Label", type: "text" }, SIZE, { name: "open", label: "Menu open", type: "toggle" }, STATE, DISABLED, REASON],
       render: (p) => {
-        const items = [["Todo", ""], ["In Progress", ""], ["Rework", ""], ["sep"], ["Backlog", "⌘ ⌫"], ["Canceled", ""]];
+        const items = [["Todo", ""], ["In Progress", ""], ["Rework", ""], ["sep"], ["Backlog", "⌘ ⌫"], ["Canceled", "", "destructive"]];
         const menu = p.open && !p.disabled ? '<ul class="menu" role="menu">' + items.map((it, i) => it[0] === "sep" ? '<li class="menu-sep" role="separator"></li>' :
-          '<li class="menu-item' + (i === 1 ? " is-hover" : "") + '" role="menuitem">' + icon("check", "check") + esc(it[0]) + (it[1] ? kbd(it[1], true) : "") + "</li>").join("") + "</ul>" : "";
-        const b = '<button type="button" class="menu-btn' + (p.disabled ? "" : stateClass(p.state)) + '" aria-haspopup="menu" aria-expanded="' + (!!p.open && !p.disabled) + '"' +
+          '<li class="menu-item' + (i === 1 ? " is-hover" : "") + (it[2] ? " " + it[2] : "") + '" role="menuitem" tabindex="-1">' + icon("check", "check") + esc(it[0]) + (it[1] ? kbd(it[1], true) : "") + "</li>").join("") + "</ul>" : "";
+        const b = '<button type="button" class="menu-btn' + sizeClass(p.size) + (p.disabled ? "" : stateClass(p.state)) + '" aria-haspopup="menu" aria-expanded="' + (!!p.open && !p.disabled) + '"' +
           (p.disabled ? ' aria-disabled="true"' + attr("title", p.reason) : ' data-toggle="open" data-key="mb"') + ">" + esc(p.label) + icon("chevron-down", "chev") + "</button>";
         return '<div style="min-height:' + (p.open ? 200 : 40) + 'px"><span class="menu-wrap">' + b + menu + "</span>" + (p.disabled ? '<div style="margin-top:4px">' + refusal(p.reason) + "</div>" : "") + "</div>";
       },
       docs: {
         what: "A button that opens a short menu of related moves, for a set that does not fit the action rail.",
         when: ["The label names the set and ends with “…” or a chevron; each item is a verb or a destination.", "Destructive items sit last, under a separator."],
-        states: [["Closed", "like a secondary button with a chevron"], ["Hover", "one step darker"], ["Pressed / open", "two steps darker while the menu shows"], ["Focused", "focus ring"], ["Disabled with reason", "reason underneath"]],
-        tokens: ["--elevation-2", "--radius-row", "--accent (menu highlight)"],
+        states: [["Closed", "like a secondary button with a chevron"], ["Hover", "lighter, the shadow grows"], ["Pressed", "scales to 97 %"], ["Open", "accent edge while the menu shows, the chevron turned"], ["Focused", "focus ring"], ["Disabled with reason", "reason underneath"]],
+        sizes: "Small, medium (default) and large, the same heights as buttons.",
+        motion: "The menu rises 6 pt and fades in on a spring (0.28 s) from the button's corner; the chevron turns over with it.",
+        tokens: ["--material-glass-thick", "--material-blur", "--elevation-3", "--accent (menu highlight)", "--ease-spring"],
         access: "Space or Return opens the menu, arrows move, Escape closes.",
       },
       stories: [
@@ -535,9 +647,9 @@ window.CATALOG = (function () {
     },
     {
       title: "Segmented control",
-      args: { options: "Day, Week, Month", selected: 1, hoverAt: -1, state: "default", disabled: false, reason: "The period is fixed while comparing two epics." },
+      args: { options: "Day, Week, Month", selected: 1, size: "medium", hoverAt: -1, state: "default", disabled: false, reason: "The period is fixed while comparing two epics." },
       controls: [
-        { name: "options", label: "Segments", type: "text" },
+        { name: "options", label: "Segments", type: "text" }, SIZE,
         { name: "selected", label: "Selected segment", type: "number", min: 0, max: 6 },
         { name: "hoverAt", label: "Shown hover on", type: "number", min: -1, max: 6 },
         { name: "state", label: "Shown state", type: "select", options: [{ value: "default", label: "Live (use the pointer)" }, { value: "focused", label: "Focused" }] },
@@ -545,22 +657,22 @@ window.CATALOG = (function () {
       ],
       render: (p) => {
         const opts = String(p.options).split(",").map((s) => s.trim()).filter(Boolean);
-        const seg = '<div class="segmented" role="radiogroup"' + (p.disabled ? ' aria-disabled="true"' + attr("title", p.reason) : "") + ">" + opts.map((o, i) =>
-          '<button type="button" role="radio" class="segment' + (i === Number(p.hoverAt) && i !== Number(p.selected) ? " is-hover" : "") + (i === Number(p.selected) && p.state === "focused" ? " is-focused" : "") + '" aria-checked="' + (i === Number(p.selected)) + '"' +
-          (p.disabled ? ' aria-disabled="true"' : ' data-set="selected=' + i + '" data-key="seg' + i + '"') + ">" + esc(o) + "</button>").join("") + "</div>";
+        const seg = segmented(opts, p.selected, { size: p.size, hoverAt: p.hoverAt, focused: p.state === "focused", disabled: p.disabled, reason: p.reason, label: "Period" });
         return p.disabled ? '<span class="btn-group">' + seg + refusal(p.reason) + "</span>" : seg;
       },
       docs: {
         what: "Two to five mutually exclusive views of the same thing: a period, a unit, a layout.",
         when: ["Segments are short nouns. The choice applies at once, with no confirmation."],
         avoid: "More than five segments (use a pop-up), or segments that trigger moves.",
-        states: [["Selected", "raised segment on a sunken track"], ["Hover", "hover overlay on an unselected segment"], ["Pressed", "pressed overlay"], ["Focused", "ring on the selected segment"], ["Disabled with reason", "tertiary text, reason underneath"]],
-        tokens: ["--surface-sunken", "--surface-content", "--radius-control", "--motion-fast"],
+        states: [["Selected", "a raised capsule thumb on a sunken capsule track"], ["Hover", "hover overlay on an unselected segment"], ["Pressed", "pressed overlay"], ["Focused", "ring on the selected segment"], ["Disabled with reason", "tertiary text, reason underneath"]],
+        sizes: "Small, medium (default) and large; segments share the width equally so the thumb can slide.",
+        motion: "Picking a segment slides the thumb to it on a spring (0.5 s, about 2 % overshoot); the words cross-fade their colour. Click one on the canvas to see it.",
+        tokens: ["--surface-sunken", "--surface-content", "--radius-capsule", "--motion-spring", "--ease-spring"],
         access: "A radio group: arrows move the selection, VoiceOver reads “Week, selected, 2 of 3”.",
       },
       stories: [
         { name: "Default" }, { name: "Segment hover", args: { hoverAt: 2 } }, { name: "Focused", args: { state: "focused" } },
-        { name: "Two segments", args: { options: "Tokens, Runs", selected: 0 } }, { name: "Disabled with reason", args: { disabled: true } },
+        { name: "Two segments", args: { options: "Tokens, Runs", selected: 0 } }, { name: "Small", args: { size: "small" } }, { name: "Large", args: { size: "large" } }, { name: "Disabled with reason", args: { disabled: true } },
       ],
     },
     {
@@ -584,7 +696,9 @@ window.CATALOG = (function () {
         when: ["Status chips carry the status glyph and word on the status tint.", "Repo and epic chips carry their glyph; label chips a small colour swatch.", "In a filter bar every chip is a toggle; selected chips show the accent outline."],
         avoid: "Chips as buttons for moves, or a status chip without its word.",
         states: [["Default", "raised or tinted capsule"], ["Hover", "tint up to 26 %"], ["Pressed", "one step darker"], ["Selected", "accent tint and outline"], ["Focused", "focus ring"], ["Disabled with reason", "tertiary, reason underneath"]],
-        tokens: ["--tint-*", "--surface-raised", "--accent-tint", "--radius-capsule", "--type-label"],
+        sizes: "One height: 24 pt, the small control size, so a filter bar of chips lines up with small buttons and fields.",
+        motion: "Hover and selection ease their tint in 0.16 s; pressed shrinks the chip to 95 %.",
+        tokens: ["--tint-*", "--surface-content", "--accent-tint", "--control-sm", "--radius-capsule", "--type-label"],
         access: "A filter chip is a toggle button: VoiceOver reads “symphony, repo filter, selected”.",
       },
       stories: [
@@ -637,6 +751,7 @@ window.CATALOG = (function () {
         what: "How many things wait in a place: the Inbox, a board group, a filter.",
         when: ["Coloured only for what needs the Director (orange) or a problem (red); every other count is quiet."],
         states: [["Count", "1 to 99"], ["Over 99", "99+"], ["Quiet", "secondary text on sunken"], ["Zero", "not drawn at all"]],
+        motion: "A new count pops in with a small bounce.",
         tokens: ["--status-you", "--status-problem", "--surface-sunken", "--radius-capsule"],
         access: "Read as part of its place: “Inbox, 4 waiting”.",
       },
@@ -651,6 +766,7 @@ window.CATALOG = (function () {
         what: "The smallest status mark, for a dense place where a glyph would be too heavy: the dispatch control, a connection state, a legend.",
         when: ["Always beside a word. It pulses only for something live and visible, and never with Reduce Motion."],
         states: [["One per status", "the six status colours"], ["Live", "a slow pulse while working"]],
+        motion: "Live sends a soft ring out from the dot every 1.8 s; nothing else moves.",
         tokens: ["--status-*", "--motion-standard"],
       },
       stories: Object.keys(ROLES).map((k) => ({ name: ROLES[k].word, args: { role: k, label: ROLES[k].word } })).concat([{ name: "Working, live", args: { role: "working", live: true, label: "3 working" } }]),
@@ -703,6 +819,7 @@ window.CATALOG = (function () {
         what: "How much of a cap is used: tokens against the daily budget, a ticket against its token cap, runs against a limit.",
         when: ["The fill carries severity: accent below 75 %, orange from 75 %, red from 95 %. The note under it says what happens at the cap, in words."],
         states: [["Calm", "below 75 %"], ["Near the cap", "75 to 95 %"], ["At the cap", "95 % and over"], ["Empty", "nothing used yet"]],
+        motion: "The fill grows to a new value on a spring (0.45 s) and glows faintly in its colour. Change Used in the controls to see it.",
         tokens: ["--accent", "--status-you", "--status-problem", "--radius-mark", "--motion-standard"],
         access: "A meter: “Tokens today, 42 percent”.",
       },
@@ -727,7 +844,7 @@ window.CATALOG = (function () {
       render: (p) => {
         const parts = [["Writing the code", p.code, "s1"], ["Code Review", p.review, "s2"], ["QA", p.qa, "s3"], ["Merging", p.merge, "s4"], ["Waiting on you", p.waiting, "s5"]];
         const total = parts.reduce((a, x) => a + (Number(x[1]) || 0), 0);
-        const track = total ? '<div class="stage-track" role="img" aria-label="' + esc(p.label) + '">' + parts.filter((x) => Number(x[1]) > 0).map((x) => '<span class="stage-seg ' + x[2] + '" style="flex:' + Number(x[1]) + '" title="' + esc(x[0]) + ": " + esc(x[1]) + " " + esc(p.unit) + '"></span>').join("") + "</div>" : '<div class="stage-track empty"></div>';
+        const track = total ? '<div class="stage-track" role="img" aria-label="' + esc(p.label) + '">' + parts.filter((x) => Number(x[1]) > 0).map((x) => '<span class="stage-seg ' + x[2] + '" data-anim="seg-' + x[2] + '" style="flex:' + Number(x[1]) + '" title="' + esc(x[0]) + ": " + esc(x[1]) + " " + esc(p.unit) + '"></span>').join("") + "</div>" : '<div class="stage-track empty"></div>';
         return '<div class="stage-bar"><div class="meter-head"><span>' + esc(p.label) + '</span><span class="value">' + (total ? esc(total) + " " + esc(p.unit) + " in all" : "Nothing yet") + "</span></div>" + track +
           '<ul class="stage-legend">' + parts.map((x) => '<li><span class="key stage-seg ' + x[2] + '"></span>' + esc(x[0]) + ' <span class="v">' + esc(x[1] || 0) + "</span></li>").join("") + "</ul></div>";
       },
@@ -736,25 +853,28 @@ window.CATALOG = (function () {
         when: ["Segments keep their landing order left to right. The legend is always there, so colour is never the only way to read it."],
         avoid: "Status colours in the segments (they are stages, not states) other than the gray for waiting.",
         states: [["Typical", "every stage present"], ["One stage dominant", "a stuck review"], ["Empty", "a track with “Nothing yet”"]],
+        motion: "Segments resize on a spring when the numbers change; the order never moves.",
         tokens: ["chart series 1 to 4", "--status-idle", "--radius-mark"],
       },
       stories: [{ name: "Typical ticket" }, { name: "Stuck in review", args: { review: 180, qa: 0, merge: 0, waiting: 5 } }, { name: "Tokens by stage", args: { label: "Tokens by stage", code: 4.2, review: 0.8, qa: 1.1, merge: 0.1, waiting: 0, unit: "M tokens" } }, { name: "Empty", args: { code: 0, review: 0, qa: 0, merge: 0, waiting: 0 } }],
     },
     {
       title: "Text field",
-      args: { label: "Reason", value: "", placeholder: "Deploy freeze", help: "Shown to everyone who sees the pause.", error: "", state: "default", disabled: false, reason: "The reason is set by the rule that paused it." },
+      args: { label: "Reason", value: "", placeholder: "Deploy freeze", help: "Shown to everyone who sees the pause.", error: "", size: "medium", state: "default", disabled: false, reason: "The reason is set by the rule that paused it." },
       controls: [
-        { name: "label", label: "Label", type: "text" }, { name: "value", label: "Value", type: "text" }, { name: "placeholder", label: "Placeholder", type: "text" },
+        { name: "label", label: "Label", type: "text" }, { name: "value", label: "Value", type: "text" }, { name: "placeholder", label: "Placeholder", type: "text" }, SIZE,
         { name: "help", label: "Help", type: "text" }, { name: "error", label: "Error", type: "text" }, STATE_NO_PRESS, DISABLED, REASON,
       ],
-      render: (p) => '<div class="field"><label for="tf">' + esc(p.label) + '</label><div class="input' + (p.error ? " invalid" : "") + (p.disabled ? " disabled" : stateClass(p.state)) + '">' +
+      render: (p) => '<div class="field' + sizeClass(p.size) + '"><label for="tf">' + esc(p.label) + '</label><div class="input' + (p.error ? " invalid" : "") + (p.disabled ? " disabled" : stateClass(p.state)) + '">' +
         '<input id="tf" value="' + esc(p.value) + '" placeholder="' + esc(p.placeholder) + '"' + (p.disabled ? " disabled" : "") + "></div>" +
         (p.disabled ? refusal(p.reason) : p.error ? '<span class="error">' + esc(p.error) + "</span>" : p.help ? '<span class="help">' + esc(p.help) + "</span>" : "") + "</div>",
       docs: {
         what: "One line of text the Director types: a reason, a name, a number.",
         when: ["The label sits above; help or the error sits under it, never both. The error says what to change."],
-        states: [["Empty", "placeholder in tertiary"], ["Filled", "value in primary"], ["Hover", "stronger edge"], ["Focused", "accent edge and focus ring"], ["Error", "red edge and the message"], ["Disabled with reason", "raised, reason underneath"]],
-        tokens: ["--surface-content", "--stroke-strong", "--accent", "--status-problem", "--radius-control", "--focus-ring"],
+        states: [["Empty", "placeholder in tertiary"], ["Filled", "value in primary"], ["Hover", "stronger edge"], ["Focused", "accent edge and a soft accent halo"], ["Error", "red edge and the message"], ["Disabled with reason", "raised, reason underneath"]],
+        sizes: "Small, medium (default) and large, the same heights as buttons, so a field and its button line up.",
+        motion: "The halo eases in on focus (0.16 s). An error shakes the field once and the message rises in; with Reduce Motion it only appears.",
+        tokens: ["--surface-content", "--stroke-strong", "--accent", "--accent-tint-strong", "--status-problem", "--radius-control-md"],
       },
       stories: [
         { name: "Empty" }, { name: "Filled", args: { value: "Deploy freeze" } }, { name: "Hover", args: { state: "hover" } }, { name: "Focused", args: { state: "focused", value: "Deploy fr" } },
@@ -763,36 +883,40 @@ window.CATALOG = (function () {
     },
     {
       title: "Search field",
-      args: { query: "", placeholder: "Search tickets", state: "default", results: 12 },
-      controls: [{ name: "query", label: "Query", type: "text" }, { name: "placeholder", label: "Placeholder", type: "text" }, { name: "results", label: "Results", type: "number", min: 0 }, STATE_NO_PRESS],
-      render: (p) => '<div class="field" style="width:280px"><div class="input search' + stateClass(p.state) + '">' + icon("search") +
+      args: { query: "", placeholder: "Search tickets", size: "medium", state: "default", results: 12 },
+      controls: [{ name: "query", label: "Query", type: "text" }, { name: "placeholder", label: "Placeholder", type: "text" }, { name: "results", label: "Results", type: "number", min: 0 }, SIZE, STATE_NO_PRESS],
+      render: (p) => '<div class="field' + sizeClass(p.size) + '" style="width:280px"><div class="input search' + stateClass(p.state) + '">' + icon("search") +
         '<input type="search" aria-label="' + esc(p.placeholder) + '" value="' + esc(p.query) + '" placeholder="' + esc(p.placeholder) + '">' +
         (p.query ? '<span class="result-count">' + (Number(p.results) ? esc(p.results) + " found" : "None") + '</span><button type="button" class="clear" aria-label="Clear the search" data-set="query=" data-key="clr">' + icon("close") + "</button>" : kbd("⌘ F")) + "</div>" +
         (p.query && !Number(p.results) ? '<span class="help">Nothing matches “' + esc(p.query) + "”. Search looks at identifiers and titles.</span>" : "") + "</div>",
       docs: {
         what: "Filters the current list as the Director types. Its shortcut is ⌘F.",
         when: ["The count of matches shows inside the field; the clear button appears once there is a query."],
-        states: [["Empty", "glyph, placeholder, shortcut"], ["Focused", "focus ring"], ["With a query", "count and clear"], ["No results", "a line that says what it searched"]],
-        tokens: ["--surface-sunken", "--focus-ring", "--text-tertiary"],
+        states: [["Empty", "a sunken capsule: glyph, placeholder, shortcut"], ["Hover", "stronger edge"], ["Focused", "lifts to the content colour with the accent halo"], ["With a query", "count and clear"], ["No results", "a line that says what it searched"]],
+        sizes: "Small, medium (default) and large.",
+        motion: "The clear button pops in with a small bounce once there is a query.",
+        tokens: ["--surface-sunken", "--accent-tint-strong", "--text-tertiary", "--radius-capsule"],
       },
       stories: [{ name: "Empty" }, { name: "Hover", args: { state: "hover" } }, { name: "Focused", args: { state: "focused" } }, { name: "With a query", args: { query: "catalog", results: 3 } }, { name: "No results", args: { query: "storybook", results: 0 } }],
     },
     {
       title: "Pop-up",
-      args: { label: "Repo", value: "All repos", options: "All repos, symphony, web-shop", open: false, state: "default", disabled: false, reason: "Only one repo is set up." },
-      controls: [{ name: "label", label: "Label", type: "text" }, { name: "value", label: "Value", type: "text" }, { name: "options", label: "Choices", type: "text" }, { name: "open", label: "Open", type: "toggle" }, STATE, DISABLED, REASON],
+      args: { label: "Repo", value: "All repos", options: "All repos, symphony, web-shop", size: "medium", open: false, state: "default", disabled: false, reason: "Only one repo is set up." },
+      controls: [{ name: "label", label: "Label", type: "text" }, { name: "value", label: "Value", type: "text" }, { name: "options", label: "Choices", type: "text" }, SIZE, { name: "open", label: "Open", type: "toggle" }, STATE, DISABLED, REASON],
       render: (p) => {
         const opts = String(p.options).split(",").map((s) => s.trim()).filter(Boolean);
         const menu = p.open && !p.disabled ? '<ul class="menu" role="listbox">' + opts.map((o) => '<li class="menu-item" role="option" aria-checked="' + (o === p.value) + '" data-set="value=' + esc(o) + '">' + icon("check", "check") + esc(o) + "</li>").join("") + "</ul>" : "";
-        const b = '<button type="button" class="popup' + (p.disabled ? "" : stateClass(p.state)) + '" aria-haspopup="listbox" aria-expanded="' + (!!p.open && !p.disabled) + '"' + (p.disabled ? ' aria-disabled="true"' + attr("title", p.reason) : ' data-toggle="open" data-key="pu"') + ">" +
+        const b = '<button type="button" class="popup' + sizeClass(p.size) + (p.disabled ? "" : stateClass(p.state)) + '" aria-haspopup="listbox" aria-expanded="' + (!!p.open && !p.disabled) + '"' + (p.disabled ? ' aria-disabled="true"' + attr("title", p.reason) : ' data-toggle="open" data-key="pu"') + ">" +
           '<span class="popup-label"><span>' + esc(p.label) + "</span><span>" + esc(p.value) + "</span></span>" + icon("updown", "chev") + "</button>";
         return '<div style="min-height:' + (p.open ? 40 + opts.length * 26 : 40) + 'px"><span class="menu-wrap">' + b + menu + "</span>" + (p.disabled ? '<div style="margin-top:4px">' + refusal(p.reason) + "</div>" : "") + "</div>";
       },
       docs: {
         what: "One choice out of a list too long for a segmented control: a repo, an epic, a unit.",
         when: ["The label names what is chosen and the value shows the choice; the open list ticks the current one."],
-        states: [["Default", "label and value"], ["Hover", "one step darker"], ["Pressed", "two steps darker"], ["Open", "the list with a tick"], ["Focused", "focus ring"], ["Disabled with reason", "reason underneath"]],
-        tokens: ["--elevation-2", "--radius-control", "--accent"],
+        states: [["Default", "label and value"], ["Hover", "lighter, the shadow grows"], ["Pressed", "scales to 97 %"], ["Open", "accent edge and the list with a tick"], ["Focused", "focus ring"], ["Disabled with reason", "reason underneath"]],
+        sizes: "Small, medium (default) and large, the same heights as buttons.",
+        motion: "The list rises and fades in on a spring; picking a value closes it and the new value is there at once.",
+        tokens: ["--material-glass-thick", "--elevation-3", "--radius-control-md", "--accent"],
       },
       stories: [{ name: "Default" }, { name: "Hover", args: { state: "hover" } }, { name: "Pressed", args: { state: "pressed" } }, { name: "Open", args: { open: true } }, { name: "Focused", args: { state: "focused" } }, { name: "Disabled with reason", args: { disabled: true, value: "symphony" } }],
     },
@@ -806,7 +930,8 @@ window.CATALOG = (function () {
         what: "A setting that is on or off, with one line under its label that says what being on does.",
         when: ["The effect line is a consequence, not a restatement of the label. The change applies at once."],
         states: [["Off", "sunken track"], ["On", "accent track"], ["Hover", "slightly brighter"], ["Pressed", "knob stretches"], ["Focused", "focus ring"], ["Disabled with reason", "the reason replaces the effect line"]],
-        tokens: ["--accent", "--surface-sunken", "--motion-standard", "--radius-capsule"],
+        motion: "The knob travels on a lively spring (0.5 s, about 8 % overshoot) and the track's colour eases with it; while pressed the knob stretches toward where it will go.",
+        tokens: ["--accent-fill", "--surface-sunken", "--motion-spring", "--ease-bounce", "--radius-capsule"],
         access: "A switch: “Notify me about new questions, on”, with the effect as its help.",
       },
       stories: [{ name: "On" }, { name: "Off", args: { on: false } }, { name: "Hover", args: { state: "hover" } }, { name: "Pressed", args: { state: "pressed" } }, { name: "Focused", args: { state: "focused" } }, { name: "Disabled with reason", args: { disabled: true, on: false } }],
@@ -822,7 +947,8 @@ window.CATALOG = (function () {
         when: ["Short, plain sentences, at most 260 pt wide."],
         avoid: "Anything the Director needs to act: that goes on the page, not in a tooltip.",
         states: [["Above / below", "placement"], ["On hover", "fades in after the hover delay"], ["Long text", "wraps at 260 pt"]],
-        tokens: ["--elevation-2", "--motion-hover-delay", "--radius-control", "--type-secondary"],
+        motion: "After 0.5 s of hover it fades in and slides 4 pt toward its anchor; it leaves at once.",
+        tokens: ["--material-glass-thick", "--elevation-2", "--motion-hover-delay", "--type-secondary"],
       },
       stories: [{ name: "Above" }, { name: "Below", args: { placement: "below" } }, { name: "Long text wraps", args: { text: "This ticket waits on TP-1383 (Three ticket page prototypes). It starts on its own once TP-1383 is done, or when you remove the link." } }, { name: "On hover (live)", args: { always: false, text: "Hover the button: I appear after half a second." } }],
     },
@@ -842,6 +968,7 @@ window.CATALOG = (function () {
         what: "One ticket in a list: its status glyph, identifier and title, a badge, its age, and when it has a problem, the button that fixes it.",
         when: ["One line (28 pt) in dense lists, two lines (44 pt) when the second line carries the situation.", "Clicking selects; Return or a double click opens the ticket page.", "A problem row ends with its fix button; a disabled fix says why in place of the button's action."],
         states: [["Default", "no background"], ["Hover", "hover overlay at radius 10"], ["Pressed", "pressed overlay"], ["Selected", "accent fill, white text"], ["Selected, window not focused", "gray fill"], ["Focused", "focus ring"], ["Working", "a live dot in place of the glyph"]],
+        motion: "Hover eases in 0.16 s; selection fills with the iris in the same time; pressed sinks the row a hair. Click the row on the canvas to select it.",
         tokens: ["--surface-hover", "--surface-pressed", "--accent", "--radius-row", "--type-row-title", "--motion-fast"],
         access: "One element: “TP-1376, A CI-wait pause lifts itself…, symphony, working, 14 minutes”; its buttons are custom actions.",
       },
@@ -870,6 +997,7 @@ window.CATALOG = (function () {
         what: "A sortable table for comparing many tickets on the same columns: Tickets, Usage, Shipped.",
         when: ["Header labels are short nouns; clicking one sorts by it, clicking again reverses. The sorted column shows its arrow.", "Numbers align right with tabular figures."],
         states: [["Header default", "secondary label"], ["Header hover", "hover overlay"], ["Header sorted", "primary label with an arrow"], ["Row hover", "hover overlay"], ["Row selected", "accent fill"], ["Row focused", "focus ring"], ["Empty", "one line that says why and how to widen the filter"]],
+        motion: "Rows and header cells ease their background in 0.16 s; a new sort arrow pops in.",
         tokens: ["--stroke-separator", "--surface-hover", "--accent", "--type-label", "--radius-row"],
         access: "Column headers are sort buttons that read their order: “Age, sorted, oldest first”.",
       },
@@ -891,6 +1019,7 @@ window.CATALOG = (function () {
         when: ["Title in sentence case; an optional trailing link (Show All) opens more of the same.", "A card that opens something as a whole is clickable and gets hover and pressed; others have no hover."],
         avoid: "A card with nothing to say: hide it (Quiet when healthy). Use the empty state only where its absence would confuse.",
         states: [["Default", "content surface, hairline"], ["With a link", "trailing link"], ["Clickable: hover, pressed", "raised surface"], ["Focused", "focus ring"], ["Selected", "accent outline"], ["Empty", "one quiet line"]],
+        motion: "A clickable card lifts 1 pt on hover with a deeper shadow, on a spring, and settles back when pressed.",
         tokens: ["--surface-content", "--elevation-1", "--radius-card", "--space-4", "--type-heading"],
       },
       stories: [
@@ -908,12 +1037,13 @@ window.CATALOG = (function () {
       controls: [{ name: "title", label: "Title", type: "text" }, { name: "summary", label: "Summary when folded", type: "text" }, { name: "expanded", label: "Open", type: "toggle" }, { name: "empty", label: "Empty", type: "toggle" }, STATE_NO_PRESS],
       render: (p) => '<div style="width:520px"><section class="card collapsible"><button type="button" class="fold-head' + stateClass(p.state) + '" aria-expanded="' + (!!p.expanded && !p.empty) + '"' + (p.empty ? ' aria-disabled="true"' : ' data-toggle="expanded" data-key="fold"') + ">" +
         (p.empty ? "" : icon("chevron-right", "disclose")) + esc(p.title) + '<span class="summary">' + esc(p.empty ? "None yet" : p.summary) + "</span></button>" +
-        (p.expanded && !p.empty ? '<div class="fold-body"><div class="list">' + TICKETS.slice(3, 6).map((t) => row(t)).join("") + "</div></div>" : "") + "</section></div>",
+        (p.empty ? "" : fold("card", p.expanded, '<div class="fold-body"><div class="list">' + TICKETS.slice(3, 6).map((t, i) => '<div style="--i:' + i + '">' + row(t) + "</div>").join("") + "</div></div>")) + "</section></div>",
       docs: {
         what: "A card whose body folds away, for history and detail the Director opens on demand.",
         when: ["Folded, the header still says what is inside (a count, a duration). The fold is remembered per card."],
         states: [["Open", "chevron down"], ["Folded", "chevron right and the summary"], ["Header hover", "hover overlay"], ["Header focused", "focus ring"], ["Empty", "no chevron, “None yet”"]],
-        tokens: ["--radius-card", "--surface-hover", "--motion-standard"],
+        motion: "Opening grows the body to its height (0.28 s, standard easing) while its rows fade down into place one after another, 35 ms apart; the chevron turns on a spring. Folding plays it backwards, all at once. Click the header on the canvas.",
+        tokens: ["--radius-card", "--surface-hover", "--motion-standard", "--motion-stagger", "--ease-spring"],
         access: "The header is a disclosure button: “Earlier runs, collapsed, 3 runs”.",
       },
       stories: [{ name: "Open" }, { name: "Folded", args: { expanded: false } }, { name: "Header hover", args: { expanded: false, state: "hover" } }, { name: "Header focused", args: { expanded: false, state: "focused" } }, { name: "Empty", args: { empty: true } }],
@@ -985,6 +1115,7 @@ window.CATALOG = (function () {
         what: "One run of an agent on the timeline, folded to a single line with its verdict and duration, unfolding into its steps.",
         when: ["Folded by default once it ended; the running one is unfolded and live."],
         states: [["Folded", "one line"], ["Unfolded", "its entries indented under a rule"], ["Running", "a live dot, no end time"], ["Failed", "red verdict"], ["Header hover, pressed, focused", "as a row"]],
+        motion: "Hover eases in; the connecting line runs from each mark to the next.",
         tokens: ["--status-*", "--tint-*", "--radius-row", "--motion-standard"],
         access: "A disclosure: “Implementation run 2, passed, 22 minutes, collapsed”.",
       },
@@ -1002,6 +1133,7 @@ window.CATALOG = (function () {
         what: "The five steps of an implementation run, left to right, so where a run stands or where it stopped reads at once.",
         when: ["Writing the code, Build, Checks, Tests, Handoff, always in that order. Each step says its state in words under its name."],
         states: [["Passed", "green bar"], ["Failed", "red tint and word"], ["Paused", "gray bar"], ["Skipped", "dashed bar"], ["Current", "blue tint, partial bar"], ["Not started", "empty bar"]],
+        motion: "The current step\u2019s bar flows while it works; a step that passes fills its bar on a spring.",
         tokens: ["--status-done", "--status-problem", "--status-working", "--status-idle", "--radius-row"],
         access: "A list: “Steps of the run. Writing the code, passed. Build, passed…”.",
       },
@@ -1025,6 +1157,7 @@ window.CATALOG = (function () {
         what: "One answer to a Question: its label, what it does, its trade-offs, and whether we recommend it. The cards of a Question form a radio group.",
         when: ["Label first, the effect under it, never on one line together.", "Trade-offs are tagged good, cost or risk, one line each.", "The recommended card carries the Recommended badge and a line saying why."],
         states: [["Default", "hairline"], ["Hover", "raised"], ["Pressed", "darker"], ["Focused", "focus ring"], ["Selected", "accent ring and tint, filled radio"], ["Recommended", "badge and the why line"], ["Not answerable", "no radio, the reason"]],
+        motion: "Hover lifts the card 1 pt and rings the radio in the accent; picking it snaps the radio\u2019s dot in with a bounce and draws the accent edge.",
         tokens: ["--accent", "--accent-tint", "--radius-row", "--status-done / you / problem (tags)", "--focus-ring"],
         access: "“Option 1 of 2, Approve the catalog, recommended, selected”, then its effect and its tags. Number keys pick an option.",
       },
@@ -1045,6 +1178,7 @@ window.CATALOG = (function () {
         what: "The last card of every Question: the Director's own answer instead of the options. Picking it opens a field under the cards.",
         when: ["The field starts three lines tall and grows to eight. Send stays off until there are words, and says so."],
         states: [["Not picked", "a card like the others"], ["Picked, empty", "field shown, Send off with its reason"], ["Picked, with words", "Send on"], ["Focused", "accent edge and ring"]],
+        motion: "Picking it unfolds the field below on a spring.",
         tokens: ["--accent", "--radius-row", "--type-body", "--focus-ring"],
         access: "The card reads as an option; the field is labelled “Answer in my own words…” with the hint as its help.",
       },
@@ -1068,6 +1202,7 @@ window.CATALOG = (function () {
       docs: {
         what: "A file attached to a ticket (a screenshot, a PDF, a log), as a thumbnail with its name. Clicking opens it in Quick Look.",
         states: [["Image, PDF, log", "a preview or the kind's glyph"], ["Hover, pressed, focused", "as a row"], ["Loading", "a shimmer"], ["Failed to load", "red glyph, Try Again"]],
+        motion: "Hover deepens the frame and zooms the picture 6 % on a spring; pressed shrinks it to 97 %. Loading shimmers.",
         tokens: ["--surface-raised", "--radius-row", "--radius-control", "--surface-hover"],
       },
       stories: [
@@ -1083,12 +1218,13 @@ window.CATALOG = (function () {
         { name: "glyph", label: "Glyph", type: "select", options: ["tray", "search", "stop", "doc", "done"] }, { name: "good", label: "Good news", type: "toggle" },
         { name: "title", label: "Title", type: "text" }, { name: "message", label: "Message", type: "textarea" }, { name: "action", label: "Action", type: "text" },
       ],
-      render: (p) => '<div class="empty' + (p.good ? " good" : "") + '">' + icon(p.good && p.glyph === "tray" ? "done" : p.glyph) + "<h3>" + esc(p.title) + "</h3><p>" + esc(p.message) + "</p>" + (p.action ? button({ label: p.action, variant: "secondary" }) : "") + "</div>",
+      render: (p) => '<div class="empty' + (p.good ? " good" : "") + '"><span class="glyph-wrap">' + icon(p.good && p.glyph === "tray" ? "done" : p.glyph) + "</span><h3>" + esc(p.title) + "</h3><p>" + esc(p.message) + "</p>" + (p.action ? button({ label: p.action, variant: "secondary", size: "large" }) : "") + "</div>",
       docs: {
         what: "What a view shows when it has nothing: a glyph, a sentence that says what that means, at most one action.",
         when: ["An empty Inbox is good news and says so.", "No results says what was searched and how to widen it.", "Symphony stopped is one placeholder per view, with Start Symphony."],
         avoid: "An empty state for a section with nothing to say on a busy page: hide the section instead.",
         states: [["Good news", "green tick"], ["No results", "with Clear Filters"], ["Stopped", "with Start Symphony"]],
+        motion: "It rises and fades in once when it appears (0.45 s spring).",
         tokens: ["--text-tertiary", "--status-done", "--space-8", "--measure-narrow"],
       },
       stories: [
@@ -1116,7 +1252,8 @@ window.CATALOG = (function () {
         when: ["A move made from the app shows one for 10 seconds with Undo. A decision is held for those 10 seconds and sent when they end."],
         avoid: "Toasts for routine progress, or more than one at a time.",
         states: [["Info", "accent"], ["Success", "green"], ["Warning", "orange"], ["Error", "red, with Try Again"], ["Countdown", "a draining line and the seconds left"]],
-        tokens: ["--elevation-2", "--radius-row", "--status-*"],
+        motion: "It rises 16 pt from the bottom edge on a spring and fades in; the countdown line drains in real time.",
+        tokens: ["--material-glass-thick", "--material-blur", "--elevation-3", "--status-*", "--ease-spring"],
         access: "Announced once when it appears.",
       },
       stories: [
@@ -1130,15 +1267,16 @@ window.CATALOG = (function () {
       title: "Sheet header",
       args: { title: "Stop the run on TP-1382?", sub: "The agent stops at once. Its work so far stays on the branch.", close: true, body: true, destructive: true },
       controls: [{ name: "title", label: "Title (a question)", type: "text" }, { name: "sub", label: "Explanation", type: "textarea" }, { name: "close", label: "Close button", type: "toggle" }, { name: "body", label: "Show the rest of the sheet", type: "toggle" }, { name: "destructive", label: "Destructive action", type: "toggle" }],
-      render: (p) => '<div class="sheet" role="dialog" aria-label="' + esc(p.title) + '"><header class="sheet-head"><h2>' + esc(p.title) + "</h2>" + (p.sub ? '<p class="sub">' + esc(p.sub) + "</p>" : "") +
+      render: (p) => '<div class="sheet-scrim"><div class="sheet" role="dialog" aria-label="' + esc(p.title) + '"><header class="sheet-head"><h2>' + esc(p.title) + "</h2>" + (p.sub ? '<p class="sub">' + esc(p.sub) + "</p>" : "") +
         (p.close ? '<button type="button" class="icon-btn" aria-label="Close" title="Close (Esc)">' + icon("close") + "</button>" : "") + "</header>" +
         (p.body ? '<div class="sheet-body"><p><b>What happens:</b> the run ends now and TP-1382 stays in In Progress, paused.</p><p class="muted"><b>What stays the same:</b> the pull request, the branch and every comment.</p></div><footer class="sheet-foot">' +
-          button({ label: "Cancel", variant: "secondary" }) + button({ label: p.destructive ? "Stop Run" : "Continue", variant: p.destructive ? "destructive-filled" : "primary" }) + "</footer>" : "") + "</div>",
+          button({ label: "Cancel", variant: "secondary" }) + button({ label: p.destructive ? "Stop Run" : "Continue", variant: p.destructive ? "destructive-filled" : "primary" }) + "</footer>" : "") + "</div></div>",
       docs: {
         what: "The top of every consequence sheet: the move asked as a question, then one line on what it does.",
         when: ["The title is the question (“Stop the run on TP-1382?”), the explanation says what happens and what doesn't. The footer names the action with its verb."],
         states: [["Question only", "title"], ["With explanation", "title and line"], ["Destructive", "the action in the destructive style"], ["Without close", "when Cancel is the only way out"]],
-        tokens: ["--elevation-3", "--radius-card", "--type-sentence", "--space-5"],
+        motion: "The sheet drops 10 pt and grows from 96 % on a spring as it opens over a dimmed window.",
+        tokens: ["--material-glass-thick", "--elevation-4", "--radius-sheet", "--type-sentence", "--space-6", "--ease-spring"],
         access: "A dialog named by its title; Esc cancels, Return takes the default.",
       },
       stories: [
@@ -1156,6 +1294,7 @@ window.CATALOG = (function () {
         when: ["Say the cause, then what lifts it if the Director can do something: “A run is still finishing. Stop it first.”"],
         avoid: "“Not available”, or a reason only in a tooltip.",
         states: [["Under a button", "beside its disabled action"], ["Standalone", "in a row or a card"], ["With a way to fix it", "a link that does it"]],
+        motion: "It rises in with the control it explains, never after it.",
         tokens: ["--text-secondary", "--text-tertiary", "--accent", "--type-secondary", "--measure-narrow"],
         access: "Read as the disabled control's help.",
       },
@@ -1216,8 +1355,13 @@ window.CATALOG = (function () {
     else moves.push(button({ label: "Approve and Merge…", variant: "primary", disabled: !!p.blocked, reason: "Checks are still running on PR #812." }));
     moves.push(button({ label: "Open Pull Request", variant: "secondary", glyph: "pr" }));
     moves.push(button({ label: "Force", variant: "secondary", glyph: "forced" }));
-    moves.push(button({ label: "Stop Run…", variant: "destructive", disabled: !!p.noRun, reason: "No run is working." }));
-    moves.push('<span class="menu-wrap rail-more"><button type="button" class="menu-btn">More' + icon("chevron-down", "chev") + "</button></span>");
+    /* Desktop shows the destructive move in the rail; laptop keeps it in More, last */
+    moves.push('<span class="only-wide rail-sep" aria-hidden="true"></span>');
+    moves.push('<span class="only-wide">' + button({ label: "Stop Run…", variant: "destructive", disabled: !!p.noRun, reason: "No run is working." }) + "</span>");
+    const items = [["Move to…", ""], ["Restart…", ""], ["Copy Link", "⌘ L"], ["sep"], ["Stop Run…", "", "destructive only-narrow"]];
+    const menu = p.more ? '<ul class="menu" role="menu">' + items.map((it) => it[0] === "sep" ? '<li class="menu-sep" role="separator"></li>' :
+      '<li class="menu-item' + (it[2] ? " " + it[2] : "") + '" role="menuitem" tabindex="-1"' + (it[0] === "Stop Run…" && p.noRun ? ' aria-disabled="true"' : "") + ">" + esc(it[0]) + (it[1] ? kbd(it[1], true) : "") + "</li>").join("") + "</ul>" : "";
+    moves.push('<span class="menu-wrap"><button type="button" class="menu-btn" aria-haspopup="menu" aria-expanded="' + !!p.more + '" data-toggle="more" data-key="rail-more">More' + icon("chevron-down", "chev") + "</button>" + menu + "</span>");
     return '<div class="action-rail" role="toolbar" aria-label="Moves">' + moves.join("") + "</div>";
   }
 
@@ -1225,16 +1369,23 @@ window.CATALOG = (function () {
     const s = p.role === "you" ? { role: "you", word: "Waiting on you", cause: "A question: review the design catalog.", waits: "Answer it in the Inbox.", age: "3 h 12 min" } :
       { role: "working", word: "Waiting for CI", cause: "Checks are running on PR #812.", waits: "Code Review starts when they pass.", age: "6 min" };
     return '<header class="page-header"><div class="head-main"><div class="ident-line"><span class="ident">' + esc(p.ident) + "</span>" + chip({ kind: "repo", text: "symphony", interactive: false }) + chip({ kind: "epic", text: "Phase 3b", interactive: false }) + "</div>" +
-      "<h1>" + esc(p.title) + "</h1>" + situation(Object.assign({ size: "large" }, s)) + "</div>" + actionRail(p) + "</header>";
+      "<h1>" + esc(p.title) + "</h1>" + situation(Object.assign({ size: "large" }, s)) +
+      '<div class="head-facts only-wide">' + chip({ kind: "status", role: "done", text: "PR #812 · 14 files", interactive: false }) + chip({ kind: "status", role: "idle", text: "3 runs · 1 h 12 min", interactive: false }) + chip({ kind: "status", role: "you", text: "6.2M of 8M tokens", interactive: false }) + "</div>" +
+      "</div>" + actionRail(p) + "</header>";
+  }
+
+  function factsGroup(key, title, summary, open, html) {
+    return '<section class="card collapsible"><button type="button" class="fold-head" aria-expanded="' + !!open + '" data-toggle="' + key + '" data-key="fh-' + key + '">' + icon("chevron-right", "disclose") + esc(title) +
+      '<span class="summary when-folded">' + esc(summary) + "</span></button>" + fold("facts-" + key, open, '<div class="fold-body">' + html + "</div>") + "</section>";
   }
 
   function factsRail(p) {
-    const groups = [
-      ["Now", [["Stage", badge(p.role || "working", p.role === "you" ? "Waiting on you" : "Code Review", "small"), true], ["Waiting on", p.role === "you" ? "You" : "CI on PR #812"], ["Since", "Today 11:15"]]],
-      ["Work", [["Pull request", '<a href="#" onclick="return false" style="color:var(--accent)">PR #812</a> · 14 files', true], ["Runs", "3 · 1 h 12 min"], ["Tokens", meter({ label: "", used: 6200000, cap: 8000000, unit: "tokens", resets: "never" }).replace('class="meter ', 'style="width:180px" class="meter '), true]]],
-      ["Connected", [["Part of", "TP-1381 · Phase 3b"], ["Blocks", "TP-1383 · Three prototypes"], ["Repo", chip({ kind: "repo", text: "symphony", interactive: false }), true]]],
-    ];
-    return '<aside class="facts-rail' + (p.spread ? " can-spread" : "") + '" aria-label="Facts">' + groups.map((g) => '<section class="card"><div class="kv-group"><h4>' + esc(g[0]) + "</h4>" + kv(g[1], p.stacked) + "</div></section>").join("") + "</aside>";
+    const role = p.role || "working";
+    return '<aside class="facts-rail" aria-label="Facts">' +
+      factsGroup("fNow", "Now", role === "you" ? "Waiting on you" : "Code Review", p.fNow, kv([["Stage", badge(role, role === "you" ? "Waiting on you" : "Code Review", "small"), true], ["Waiting on", role === "you" ? "You" : "CI on PR #812"], ["Since", "Today 11:15"]], p.stacked)) +
+      factsGroup("fWork", "Work", "PR #812 · 3 runs", p.fWork, kv([["Pull request", '<a href="#" onclick="return false">PR #812</a> · 14 files', true], ["Runs", "3 · 1 h 12 min"], ["Tokens", meter({ label: "", used: 6200000, cap: 8000000, unit: "tokens", resets: "never" }).replace('class="meter ', 'style="width:100%" class="meter '), true]], p.stacked)) +
+      factsGroup("fLinks", "Connected", "Phase 3b · blocks 1", p.fLinks, kv([["Part of", "TP-1381 · Phase 3b"], ["Blocks", "TP-1383 · Three prototypes"], ["Repo", chip({ kind: "repo", text: "symphony", interactive: false }), true]], p.stacked)) +
+      "</aside>";
   }
 
   function questionBlock(p) {
@@ -1246,109 +1397,184 @@ window.CATALOG = (function () {
     const optionsHtml = opts.map((o, i) => option(Object.assign({}, o, { selected: sel === i + 1, set: "selected=" + (i + 1), key: "q" + i }))).join("");
     const own = ownWords({ picked: sel === 3, text: p.text, hotkey: 3, send: false }).replace('data-set="picked=true"', 'data-set="selected=3"').replace('data-set="picked=false"', 'data-set="selected=0"');
     const chosen = sel > 0 && (sel < 3 || String(p.text || "").trim());
-    const block = '<section class="question-block" aria-label="Question"><div class="question-callout"><span class="kicker">YOUR DECISION</span><h2>Review the design catalog</h2></div>' +
+    const block = '<section class="question-block" aria-label="Question"><div class="question-callout"><span class="kicker">' + icon("question", "glyph-sm") + 'YOUR DECISION</span><h2>Review the design catalog</h2></div>' +
       '<div class="question-why"><p>TP-1382 (Design system catalog) built every Director component and section as stories you can open in a browser. Open the catalog from the path below, try the controls, switch theme and viewport, then pick an answer.</p>' +
       '<p class="t-mono" style="font-size:11px;color:var(--text-secondary)">/Users/tonypine/symphony-workspaces/symphony/TP-1382/docs/design/catalog/index.html</p>' +
       '<p class="unanswered">' + icon("cost") + "<span><b>If you don't answer:</b> TP-1382 stays where it is and TP-1383 (Three prototypes) waits.</span></p></div>" +
       '<div class="options" role="radiogroup" aria-label="Answers">' + optionsHtml + own + "</div>" +
-      '<div class="question-send">' + (chosen ? "" : refusal("Pick an answer first.")) + button({ label: "Send Decision…", variant: "primary", disabled: !chosen, showReason: false }) + "</div></section>";
+      '<div class="question-send">' + (chosen ? "" : refusal("Pick an answer first.")) + button({ label: "Send Decision…", variant: "primary", size: "large", disabled: !chosen, showReason: false }) + "</div></section>";
     const side = card({ title: "Where this ticket sits", html: kv([["Part of", "TP-1381 · Phase 3b"], ["Its work", "PR #812 · checks passing"], ["Unblocks", "TP-1383 · Three prototypes"]]) });
     return '<div class="question-split">' + block + '<div class="side">' + side + "</div></div>";
   }
 
-  function boardGroup(title, role, items, expanded, hint, key) {
+  function boardGroup(title, role, items, expanded, hint, key, o) {
+    o = o || {};
     const empty = !items.length;
-    return '<section class="board-group' + (empty ? " empty" : "") + '"><button type="button" class="group-head" aria-expanded="' + (!empty && expanded) + '"' + (empty ? ' aria-disabled="true"' : ' data-toggle="' + key + '" data-key="bg-' + key + '"') + ">" +
+    const rows = items.map((t, i) => '<div style="--i:' + i + '">' + row(Object.assign({}, t, { twoLine: true, wide: !!o.wide, selected: o.selected === t.ident, set: o.selectable ? "selected=" + (o.selected === t.ident ? "" : t.ident) : null, key: o.selectable ? "r-" + t.ident : null })) + "</div>").join("");
+    return '<section class="board-group' + (empty ? " empty" : "") + '"><button type="button" class="group-head" aria-expanded="' + (!empty && !!expanded) + '"' + (empty ? ' aria-disabled="true"' : ' data-toggle="' + key + '" data-key="bg-' + key + '"') + ">" +
       (empty ? "" : icon("chevron-right", "disclose")) + '<span class="role-' + role + '">' + icon(ROLES[role].glyph) + "</span>" + esc(title) + (empty ? "" : '<span class="count' + (role === "you" || role === "problem" ? " role-" + role : " count-quiet") + '">' + items.length + "</span>") +
       '<span class="hint">' + esc(empty ? "None right now" : hint) + "</span></button>" +
-      (!empty && expanded ? '<div class="rows list" role="listbox">' + items.map((t) => row(Object.assign({}, t, { twoLine: true }))).join("") + "</div>" : "") + "</section>";
+      (empty ? "" : fold("bg-" + key, expanded, '<div class="rows list" role="listbox">' + rows + "</div>")) + "</section>";
+  }
+
+  const BOARD_STEPS = { "TP-1382": "passed passed passed passed paused", "TP-1375": "passed passed failed pending pending", "TP-1376": "passed passed passed current pending", "SHOP-305": "passed passed passed passed current", "TP-1380": "current pending pending pending pending" };
+
+  function boardPreview(t) {
+    if (!t) return '<div class="preview-card"><div class="empty" style="padding:24px 8px;max-width:none"><span class="glyph-wrap">' + icon("inspector") + "</span><h3>Pick a ticket</h3><p>Its situation, steps and moves show here without leaving the board.</p></div></div>";
+    const st = (BOARD_STEPS[t.ident] || "passed passed current pending pending").split(" ");
+    const stepsHtml = steps({ code: st[0], build: st[1], checks: st[2], tests: st[3], handoff: st[4] });
+    return '<div class="preview-card" aria-label="Preview"><div class="ident-line t-secondary" style="display:flex;gap:8px;align-items:center"><b>' + esc(t.ident) + "</b>" + chip({ kind: "repo", text: t.repo || "symphony", interactive: false }) + "</div>" +
+      "<h2>" + esc(t.title) + "</h2>" + situation({ role: t.role, word: t.badge, cause: t.line2 + ".", age: t.age }) + stepsHtml +
+      kv([["Pull request", "PR #812 · 14 files"], ["Runs", "3 · 1 h 12 min"], ["Part of", "TP-1381 · Phase 3b"]]) +
+      '<div class="btn-row">' + button({ label: t.role === "you" ? "Answer in the Inbox" : t.fix || "Open Ticket", variant: "primary" }) + button({ label: "Open Pull Request", variant: "secondary", glyph: "pr" }) + "</div></div>";
   }
 
   function board(p) {
     const you = p.emptyYou ? [] : [TICKETS[0]];
-    return '<div class="board' + (p.columns ? " columns" : "") + '">' +
-      boardGroup("Waiting on you", "you", you, p.g1, "oldest 3 h 12 min", "g1") +
-      boardGroup("Needs attention", "problem", [Object.assign({}, TICKETS[2], { fix: "Open Checks", fixPrimary: true })], p.g2, "a fix run starts on its own", "g2") +
-      boardGroup("Working", "working", [TICKETS[1], TICKETS[3], TICKETS[6]], p.g3, "3 runs", "g3") +
-      boardGroup("Forced", "forced", [], false, "", "g4") + "</div>";
+    const problem = [Object.assign({}, TICKETS[2], { fix: "Open Checks", fixPrimary: true })];
+    const working = [TICKETS[1], TICKETS[3], TICKETS[6]];
+    const all = you.concat(problem, working);
+    const o = { wide: true, selectable: true, selected: p.selected };
+    const groups = '<div class="board">' +
+      boardGroup("Waiting on you", "you", you, p.g1, "oldest 3 h 12 min", "g1", o) +
+      boardGroup("Needs attention", "problem", problem, p.g2, "a fix run starts on its own", "g2", o) +
+      boardGroup("Working", "working", working, p.g3, "3 runs", "g3", o) +
+      boardGroup("Forced", "forced", [], false, "", "g4", o) + "</div>";
+    const picked = all.filter((t) => t.ident === p.selected)[0];
+    return '<div class="board-page with-preview">' + groups + '<aside class="board-preview">' + boardPreview(picked) + "</aside></div>";
   }
 
   function tableSection(p) {
-    const chips = [["status", "Waiting on you", "you"], ["status", "Needs attention", "problem"], ["status", "Working", "working"], ["repo", "symphony"], ["epic", "Phase 3b"]];
-    const chooser = p.chooser ? '<ul class="menu column-chooser" role="menu" style="left:auto;right:0">' + ["Ticket", "Title", "Stage", "Repo", "Age", "Tokens", "Epic", "Last run"].map((c, i) =>
-      '<li class="menu-item" role="menuitemcheckbox" aria-checked="' + (i < 6) + '">' + icon("check", "check") + esc(c) + "</li>").join("") + "</ul>" : "";
-    return '<section class="table-section"><div class="filter-bar"><div class="input search">' + icon("search") + '<input type="search" aria-label="Search tickets" placeholder="Search tickets"></div>' +
-      chips.map((c, i) => chip({ kind: c[0], text: c[1], role: c[2], pressed: i === 3 || (i === 0 && !!p.filtered), toggle: i === 0 ? "filtered" : null, key: "fc" + i })).join("") +
-      '<span class="spacer"></span><span class="menu-wrap"><button type="button" class="menu-btn" aria-expanded="' + !!p.chooser + '" data-toggle="chooser" data-key="cc">' + icon("columns") + "Columns" + icon("chevron-down", "chev") + "</button>" + chooser + "</span></div>" +
-      table({ sort: p.sort || "age-desc", fill: true, selectedRow: p.selectedRow === undefined ? -1 : p.selectedRow, hoverRow: -1, focusedRow: -1 }) + "</section>";
+    const facets = [
+      ["Status", [["status", "Waiting on you", "you", 1], ["status", "Needs attention", "problem", 1], ["status", "Working", "working", 2]]],
+      ["Repo", [["repo", "symphony", null, 4], ["repo", "web-shop", null, 1]]],
+      ["Epic", [["epic", "Phase 3b", null, 2]]],
+    ];
+    let n = 0;
+    const chooser = p.chooser ? '<ul class="menu column-chooser" role="menu" style="left:0">' + ["Ticket", "Title", "Stage", "Repo", "Age", "Tokens", "Epic", "Last run"].map((c, i) =>
+      '<li class="menu-item" role="menuitemcheckbox" tabindex="-1" aria-checked="' + (i < 6) + '">' + icon("check", "check") + esc(c) + "</li>").join("") + "</ul>" : "";
+    const bar = '<div class="filter-bar sz-sm"><div class="input search">' + icon("search") + '<input type="search" aria-label="Search tickets" placeholder="Search tickets"></div>' +
+      facets.map((f) => '<div class="facet"><span class="facet-label">' + esc(f[0]) + "</span>" + f[1].map((c) => {
+        const i = n++;
+        const on = i === 3 || (i === 0 && !!p.filtered);
+        return chip({ kind: c[0], text: c[1], role: c[2], pressed: on, toggle: i === 0 ? "filtered" : null, key: "fc" + i }).replace("</button>", ' <span class="n only-wide">' + c[3] + "</span></button>");
+      }).join("") + "</div>").join("") +
+      '<span class="spacer"></span><span class="menu-wrap"><button type="button" class="menu-btn" aria-haspopup="menu" aria-expanded="' + !!p.chooser + '" data-toggle="chooser" data-key="cc">' + icon("columns") + "Columns" + icon("chevron-down", "chev") + "</button>" + chooser + "</span></div>";
+    return '<section class="table-section">' + bar + '<div class="table-wrap">' + table({ sort: p.sort || "age-desc", fill: true, selectedRow: p.selectedRow === undefined ? -1 : p.selectedRow, hoverRow: -1, focusedRow: -1 }) + "</div></section>";
   }
 
   function controlBar(p) {
-    const seg = '<div class="segmented" role="radiogroup" aria-label="Period">' + ["Day", "Week", "Month"].map((o, i) => '<button type="button" role="radio" class="segment" aria-checked="' + (i === Number(p.period)) + '" data-set="period=' + i + '">' + o + "</button>").join("") + "</div>";
     const pop = (label, value) => '<button type="button" class="popup"><span class="popup-label"><span>' + esc(label) + "</span><span>" + esc(value) + "</span></span>" + icon("updown", "chev") + "</button>";
-    return '<div class="control-bar" role="toolbar" aria-label="What the page shows">' +
-      '<span class="group"><span class="lbl">Period</span>' + seg + "</span>" +
+    return '<div class="control-bar sz-sm" role="toolbar" aria-label="What the page shows">' +
+      '<span class="group"><span class="lbl">Period</span>' + segmented(["Day", "Week", "Month"], p.period, { prop: "period", anim: "cb-seg", label: "Period" }) + "</span>" +
       '<span class="group"><span class="lbl">Unit</span>' + pop("", p.unit) + "</span>" +
       '<span class="group">' + pop("Repo", p.repo) + "</span>" +
       '<span class="group">' + pop("Epic", p.epic) + "</span>" +
-      '<span class="spacer"></span><span class="summary">' + esc(p.summary) + "</span>" +
-      (p.repo !== "All repos" || p.epic !== "All epics" ? button({ label: "Clear", variant: "quiet", size: "small" }) : "") + "</div>";
+      (p.repo !== "All repos" || p.epic !== "All epics" ? button({ label: "Clear", variant: "quiet", size: "small" }) : "") +
+      '<span class="spacer"></span><span class="summary">' + esc(p.summary) + "</span></div>";
+  }
+
+  function timelineSection(p) {
+    const index = '<nav class="tl-index only-wide" aria-label="Days"><h4>Days</h4>' + [["Today", 12, true], ["Yesterday", 7], ["Mon 2 Nov", 4], ["Fri 30 Oct", 9]].map((d) =>
+      '<button type="button"' + (d[2] ? ' aria-current="true"' : "") + "><span>" + esc(d[0]) + '</span><span class="n">' + d[1] + "</span></button>").join("") + "</nav>";
+    return '<div class="timeline-layout">' + index + '<section class="timeline-section"><div class="tl-day">Today</div><ol class="timeline">' + DAY.slice(0, 1).map(tlEntry).join("") + "</ol>" +
+      runGroup({ title: "Implementation run 1", verdict: "failed", time: "09:02", duration: "22 min", tokens: "1.4M tokens", expanded: p.runOpen, entries: DAY.slice(1, 3), foldKey: "tl" }).replace('data-toggle="expanded"', 'data-toggle="runOpen"') +
+      '<ol class="timeline">' + DAY.slice(3).map(tlEntry).join("") + "</ol></section></div>";
+  }
+
+  function runPanel() {
+    return '<section class="run-panel" aria-label="The run now"><div class="run-title"><span class="dot live role-working"></span>Implementation run 2<span class="t-secondary">14 min</span></div>' +
+      steps({ code: "passed", build: "passed", checks: "passed", tests: "current", handoff: "pending", testsNote: "212 of 340" }) +
+      '<div class="run-extra">' + meter({ label: "Tokens on this ticket", used: 6200000, cap: 8000000, unit: "tokens", resets: "never: the cap is per ticket" }) +
+      '<div class="stage-bar"><div class="meter-head"><span>Time by stage</span><span class="value">161 min in all</span></div><div class="stage-track"><span class="stage-seg s1" style="flex:42"></span><span class="stage-seg s2" style="flex:18"></span><span class="stage-seg s3" style="flex:25"></span><span class="stage-seg s4" style="flex:6"></span><span class="stage-seg s5" style="flex:70"></span></div></div>' +
+      "</div></section>";
+  }
+
+  function ticketPage(p) {
+    return '<div class="ticket-page"><div class="zone-head">' + pageHeader(p) + "</div>" +
+      '<div class="zone-run">' + runPanel() + "</div>" +
+      '<div class="zone-question">' + questionBlock(p).replace('<div class="side">', '<div class="side" hidden>') + "</div>" +
+      '<div class="zone-timeline">' + timelineSection(p) + "</div>" +
+      '<div class="zone-facts">' + factsRail(p) + "</div></div>";
   }
 
   const frame = (inner) => '<div class="section-frame">' + inner + "</div>";
 
+  const HEADER_CONTROLS = [{ name: "role", label: "Situation", type: "select", options: [{ value: "working", label: "Waiting for CI" }, { value: "you", label: "Waiting on you" }] }, { name: "blocked", label: "Approve disabled", type: "toggle" }, { name: "noRun", label: "No run working", type: "toggle" }, { name: "more", label: "More menu open", type: "toggle" }];
+
   const sections = [
+    {
+      title: "Page layout",
+      wide: true,
+      args: { page: "ticket", boardPick: "", ident: "TP-1382", title: "Design system catalog as HTML: every Director component and section as stories", role: "you", blocked: false, noRun: false, more: false, selected: 0, text: "", runOpen: false, fNow: true, fWork: true, fLinks: false, stacked: false, g1: true, g2: true, g3: true, emptyYou: false },
+      controls: [{ name: "page", label: "Page", type: "select", options: [{ value: "ticket", label: "Ticket page" }, { value: "board", label: "Board" }] }].concat(HEADER_CONTROLS.slice(0, 1)),
+      render: (p) => frame(p.page === "board" ? board(Object.assign({}, p, { selected: p.boardPick })).replace(/data-set="selected=/g, 'data-set="boardPick=') : ticketPage(p)),
+      docs: {
+        what: "Where every section goes on a whole page, at both widths. The page is designed once, as a whole: a wider window rearranges what the Director sees side by side; it never just stretches lines or sets groups side by side because there is room.",
+        responsive: [
+          "Ticket page, laptop (1180 pt): the header across the top; one main column with the run now, the Question and the timeline; the facts rail (300 pt) on the right, its later groups folded.",
+          "Ticket page, desktop (2200 pt): the header across the top with the key facts as chips under the situation; three zones: the Question and the timeline (at most 760 pt, so lines keep their measure), the run now in its own sticky column with its tokens and time by stage, and the facts rail (360 pt) with every group open.",
+          "Board, laptop: the situation groups stacked top to bottom in the order the Director acts on them; each row says where the ticket stands in two lines. Picking a row opens its page.",
+          "Board, desktop: the groups still stack; each row turns into one line of aligned columns (what it waits on, repo, steps, age), and a preview of the picked ticket sits beside the list, so the Director can act without leaving the board.",
+        ],
+        tokens: ["--space-6", "--space-8", "--measure", "section tokens"],
+      },
+      stories: [
+        { name: "Ticket page, laptop", viewport: "laptop", args: { page: "ticket" } },
+        { name: "Ticket page, desktop", viewport: "desktop", args: { page: "ticket", fLinks: true } },
+        { name: "Board, laptop", viewport: "laptop", args: { page: "board" } },
+        { name: "Board, desktop", viewport: "desktop", args: { page: "board", boardPick: "TP-1375" } },
+      ],
+    },
     {
       title: "Page header",
       wide: true,
-      args: { ident: "TP-1382", title: "Design system catalog as HTML, Storybook-shaped: every Director component and section as stories per state", role: "working", blocked: true, noRun: false },
-      controls: [{ name: "ident", label: "Identifier", type: "text" }, { name: "title", label: "Title", type: "textarea" }, { name: "role", label: "Situation", type: "select", options: [{ value: "working", label: "Waiting for CI" }, { value: "you", label: "Waiting on you" }] }, { name: "blocked", label: "Approve disabled", type: "toggle" }, { name: "noRun", label: "No run working", type: "toggle" }],
+      args: { ident: "TP-1382", title: "Design system catalog as HTML, Storybook-shaped: every Director component and section as stories per state", role: "working", blocked: true, noRun: false, more: false },
+      controls: [{ name: "ident", label: "Identifier", type: "text" }, { name: "title", label: "Title", type: "textarea" }].concat(HEADER_CONTROLS),
       render: (p) => frame(pageHeader(p)),
       docs: {
         what: "The top of a ticket page: the identifier with its repo and epic, the title, the situation line, and the action rail.",
-        responsive: ["Laptop (1180 pt): the action rail sits on its own row under the situation line, left aligned, so the title keeps the full width.", "Desktop (2200 pt): the action rail moves to the right of the title, top aligned with it.", "The title wraps (balanced) and stops at 30 em; the situation line stops at the measure (68 characters)."],
-        tokens: ["--type-title", "--space-6", "--measure"],
+        responsive: ["Laptop (1180 pt): the action rail sits on its own row under the situation line, so the title keeps the full width.", "Desktop (2200 pt): the action rail moves to the right of the title, and the key facts (pull request, runs, tokens) appear as chips under the situation line.", "The title wraps (balanced) and stops at 30 em; the situation line stops at the measure (68 characters)."],
+        tokens: ["--type-title", "--tracking-display", "--space-8", "--measure"],
       },
       stories: VIEWPORT_STORIES([{ name: "Waiting on you", viewport: "laptop", args: { role: "you", blocked: false } }, { name: "Short title", viewport: "desktop", args: { title: "Checkout total rounding", ident: "SHOP-305" } }]),
     },
     {
       title: "Action rail",
       wide: true,
-      args: { role: "working", blocked: true, noRun: false },
-      controls: [{ name: "role", label: "Situation", type: "select", options: [{ value: "working", label: "Waiting for CI" }, { value: "you", label: "Waiting on you" }] }, { name: "blocked", label: "Approve disabled", type: "toggle" }, { name: "noRun", label: "No run working", type: "toggle" }],
+      args: { role: "working", blocked: true, noRun: false, more: false },
+      controls: HEADER_CONTROLS,
       render: (p) => frame(actionRail(p)),
       docs: {
-        what: "The moves a ticket allows, in one row: the expected move first and primary, then the others, the destructive one last, and More for the rest.",
+        what: "The moves a ticket allows, in one row of medium buttons: the expected move first and primary, then the others, and More for the rest.",
         when: ["A disabled move stays in its place and says why under it, so the rail never jumps."],
-        responsive: ["Laptop: the rail wraps onto a second line before any button shrinks; More always stays last.", "Desktop: one row, beside the title in the page header."],
-        tokens: ["--space-2", "button tokens"],
+        responsive: ["Laptop: the expected move and two others; Stop Run… lives in More, last and in red, so a destructive move is never the easiest one to hit.", "Desktop: Stop Run… joins the rail after a separator; More keeps the rare moves.", "The rail wraps onto a second line before any button shrinks."],
+        tokens: ["--control-md", "--space-2", "button tokens"],
       },
-      stories: VIEWPORT_STORIES([{ name: "Waiting on you", viewport: "laptop", args: { role: "you", blocked: false } }, { name: "Nothing running", viewport: "laptop", args: { blocked: false, noRun: true } }]),
+      stories: VIEWPORT_STORIES([{ name: "More open, laptop", viewport: "laptop", args: { more: true } }, { name: "Waiting on you", viewport: "laptop", args: { role: "you", blocked: false } }, { name: "Nothing running", viewport: "desktop", args: { blocked: false, noRun: true } }]),
     },
     {
       title: "Facts rail",
       wide: true,
-      args: { role: "working", stacked: false, spread: true },
-      controls: [{ name: "role", label: "Situation", type: "select", options: [{ value: "working", label: "Waiting for CI" }, { value: "you", label: "Waiting on you" }] }, { name: "stacked", label: "Labels above values", type: "toggle" }, { name: "spread", label: "Spread on wide screens", type: "toggle" }],
+      args: { role: "working", stacked: false, fNow: true, fWork: true, fLinks: false },
+      controls: [{ name: "role", label: "Situation", type: "select", options: [{ value: "working", label: "Waiting for CI" }, { value: "you", label: "Waiting on you" }] }, { name: "stacked", label: "Labels above values", type: "toggle" }, { name: "fNow", label: "Now open", type: "toggle" }, { name: "fWork", label: "Work open", type: "toggle" }, { name: "fLinks", label: "Connected open", type: "toggle" }],
       render: (p) => frame(factsRail(p)),
       docs: {
-        what: "The ticket's facts in small grouped cards: Now, Work, Connected. Unknown facts are left out.",
-        responsive: ["Laptop: one column, 300 pt, beside the page's main column.", "Desktop: the groups spread into three columns of up to 300 pt each, under the header, so the timeline below gets the full width.", "Values wrap inside their column; labels never wrap."],
-        tokens: ["--radius-card", "--space-4", "key-value list tokens"],
+        what: "The ticket's facts in folding groups: Now, Work, Connected. Unknown facts are left out; a folded group still says what is inside.",
+        responsive: ["Laptop: one column, 300 pt, beside the page's main column; Connected starts folded.", "Desktop: one column, 360 pt, every group open. The rail stays a column: facts are read top to bottom, never spread across the page.", "Values wrap inside their column; labels never wrap."],
+        tokens: ["--radius-card", "--space-4", "collapsible card tokens", "key-value list tokens"],
       },
-      stories: VIEWPORT_STORIES([{ name: "Stacked labels", viewport: "laptop", args: { stacked: true } }]),
+      stories: [{ name: "Laptop", viewport: "laptop" }, { name: "Desktop", viewport: "desktop", args: { fLinks: true } }, { name: "Folded", viewport: "laptop", args: { fNow: true, fWork: false, fLinks: false } }, { name: "Stacked labels", viewport: "laptop", args: { stacked: true } }],
     },
     {
       title: "Timeline",
       wide: true,
       args: { runOpen: false },
       controls: [{ name: "runOpen", label: "Run group unfolded", type: "toggle" }],
-      render: (p) => frame('<section class="timeline-section"><div class="tl-day">Today</div><ol class="timeline">' + DAY.slice(0, 1).map(tlEntry).join("") + "</ol>" +
-        runGroup({ title: "Implementation run 1", verdict: "failed", time: "09:02", duration: "22 min", tokens: "1.4M tokens", expanded: p.runOpen, entries: DAY.slice(1, 3) }).replace('data-toggle="expanded"', 'data-toggle="runOpen"') +
-        '<ol class="timeline">' + DAY.slice(3).map(tlEntry).join("") + "</ol></section>"),
+      render: (p) => frame(timelineSection(p)),
       docs: {
         what: "A day of a ticket's history, newest last: phase moves, pauses, questions, runs folded into groups, the Director's own actions and the rules Symphony applied.",
-        responsive: ["Laptop and desktop: the timeline keeps one column of at most 760 pt so every line stays under the measure; the extra width on desktop goes to the facts and the margins, never to longer lines."],
+        responsive: ["Laptop: one column of at most 780 pt.", "Desktop: the same column, with a list of days beside it that jumps between them; the extra width goes to finding your way, never to longer lines.", "On the ticket page the timeline keeps one column at both widths: the day list belongs to the full history view."],
         tokens: ["timeline entry tokens", "--measure"],
       },
       stories: VIEWPORT_STORIES([{ name: "Run unfolded", viewport: "laptop", args: { runOpen: true } }]),
@@ -1360,26 +1586,30 @@ window.CATALOG = (function () {
       controls: [{ name: "selected", label: "Picked answer", type: "select", options: [{ value: 0, label: "None yet" }, { value: 1, label: "Approve the catalog" }, { value: 2, label: "Ask for changes" }, { value: 3, label: "My own words" }] }, { name: "text", label: "Own words", type: "textarea", when: (p) => Number(p.selected) === 3 }],
       render: (p) => frame(questionBlock(p)),
       docs: {
-        what: "A Question as the Director answers it: the callout with the question, why it is asked and what happens if it waits, the option cards, the own-words card, and Send.",
+        what: "A Question as the Director answers it: the callout with the question, why it is asked and what happens if it waits, the option cards, the own-words card, and a large Send.",
         when: ["Send stays off until an answer is picked (and, for own words, written), and says so."],
-        responsive: ["Laptop: one column of at most 720 pt.", "Desktop: the same column, with “Where this ticket sits” as a 300 pt card beside it instead of under it.", "Every paragraph stops at the measure."],
-        tokens: ["--tint-you", "--status-you", "option card tokens", "--measure"],
+        responsive: ["Laptop: one column of at most 720 pt, with “Where this ticket sits” under it.", "Desktop: the same column, with “Where this ticket sits” as a 340 pt card beside it.", "On the ticket page the facts rail already says where it sits, so the card is left out.", "Every paragraph stops at the measure."],
+        tokens: ["--tint-you", "--status-you", "option card tokens", "--control-lg", "--measure"],
       },
       stories: VIEWPORT_STORIES([{ name: "Option picked", viewport: "laptop", args: { selected: 1 } }, { name: "Own words", viewport: "laptop", args: { selected: 3, text: "Approve, but make the dark status tints a step stronger first." } }]),
     },
     {
       title: "Board group",
       wide: true,
-      args: { g1: true, g2: true, g3: true, g4: false, columns: false, emptyYou: false },
-      controls: [{ name: "g1", label: "Waiting on you open", type: "toggle" }, { name: "g2", label: "Needs attention open", type: "toggle" }, { name: "g3", label: "Working open", type: "toggle" }, { name: "emptyYou", label: "Nothing waits on you", type: "toggle" }, { name: "columns", label: "Columns on wide screens", type: "toggle" }],
+      args: { g1: true, g2: true, g3: true, g4: false, emptyYou: false, selected: "" },
+      controls: [{ name: "g1", label: "Waiting on you open", type: "toggle" }, { name: "g2", label: "Needs attention open", type: "toggle" }, { name: "g3", label: "Working open", type: "toggle" }, { name: "emptyYou", label: "Nothing waits on you", type: "toggle" }, { name: "selected", label: "Picked ticket", type: "select", options: [{ value: "", label: "None" }, { value: "TP-1382", label: "TP-1382" }, { value: "TP-1375", label: "TP-1375" }, { value: "TP-1376", label: "TP-1376" }] }],
       render: (p) => frame(board(p)),
       docs: {
-        what: "Tickets grouped by their situation, each group a heading with its glyph, count and a hint, then its rows. A group with nothing in it stays as a collapsed heading that says so.",
-        responsive: ["Laptop: groups stack in one column, rows full width.", "Desktop: groups sit side by side in three columns, each its own list.", "Rows cut their title at the end before the age or the fix button would wrap."],
-        tokens: ["row tokens", "--status-*", "--radius-row"],
+        what: "Tickets grouped by their situation, each group a card with a heading (glyph, count, a hint) and its rows. A group with nothing in it stays as a quiet heading that says so.",
+        when: ["Groups always stack, in the order the Director acts on them: Waiting on you, Needs attention, Working, Forced. Click a heading to fold it; click a row to pick it."],
+        avoid: "Groups side by side: a situation is read with the ones above and below it, and side by side would cut every title short.",
+        responsive: ["Laptop: groups stacked full width; each row has two lines (the title, then where it stands). Picking a row opens its page.", "Desktop: groups still stacked. Each row becomes one line of aligned columns (title, what it waits on, repo, steps, age), and a preview of the picked ticket sits beside the list, sticky, with its moves.", "Rows cut their title at the end before the age or the fix button would wrap."],
+        motion: "A group folds on a 0.28 s height animation while its rows fade down in turn, 35 ms apart; the chevron turns on a spring. The preview rises in when a row is picked.",
+        tokens: ["row tokens", "--status-*", "--radius-card", "--motion-standard", "--motion-stagger"],
       },
       stories: [
-        { name: "Laptop", viewport: "laptop" }, { name: "Desktop", viewport: "desktop", args: { columns: true } },
+        { name: "Laptop", viewport: "laptop" }, { name: "Desktop", viewport: "desktop", args: { selected: "TP-1375" } },
+        { name: "Desktop, nothing picked", viewport: "desktop" },
         { name: "Empty group collapsed", viewport: "laptop", args: { emptyYou: true } }, { name: "Groups folded", viewport: "laptop", args: { g1: false, g2: false, g3: false } },
       ],
     },
@@ -1390,11 +1620,11 @@ window.CATALOG = (function () {
       controls: [{ name: "chooser", label: "Column chooser open", type: "toggle" }, { name: "filtered", label: "Status filter on", type: "toggle" }, { name: "sort", label: "Sorted by", type: "select", options: [{ value: "age-desc", label: "Age" }, { value: "tokens-desc", label: "Tokens" }, { value: "ident-asc", label: "Ticket" }] }],
       render: (p) => frame(tableSection(p)),
       docs: {
-        what: "A table of tickets with a search field and filter chips above it, and a Columns menu that picks which columns show.",
-        responsive: ["Laptop: the Repo column hides (the repo filter chip says it); the filter bar wraps onto two lines if it must; the Title column wraps at 42 characters.", "Desktop: every chosen column shows; the table fills the width, but the Title column still wraps at its measure."],
-        tokens: ["table tokens", "chip tokens", "--elevation-2"],
+        what: "A table of tickets with a search field and filter chips, and a Columns menu that picks which columns show. Its controls are small (24 pt).",
+        responsive: ["Laptop: the filters sit in one bar above the table and wrap if they must; the Repo column hides (the repo chip says it); the Title column wraps at 42 characters.", "Desktop: the filters move into a sticky column on the left, grouped by Status, Repo and Epic with a count on each chip; every chosen column shows; the Title column still wraps at its measure."],
+        tokens: ["table tokens", "chip tokens", "--control-sm", "--elevation-3"],
       },
-      stories: VIEWPORT_STORIES([{ name: "Column chooser open", viewport: "laptop", args: { chooser: true } }, { name: "Filtered", viewport: "laptop", args: { filtered: true } }]),
+      stories: VIEWPORT_STORIES([{ name: "Column chooser open", viewport: "laptop", args: { chooser: true } }, { name: "Filtered", viewport: "desktop", args: { filtered: true } }]),
     },
     {
       title: "Control bar",
@@ -1403,9 +1633,9 @@ window.CATALOG = (function () {
       controls: [{ name: "period", label: "Period", type: "select", options: [{ value: 0, label: "Day" }, { value: 1, label: "Week" }, { value: 2, label: "Month" }] }, { name: "unit", label: "Unit", type: "select", options: ["Tokens", "Runs", "Hours"] }, { name: "repo", label: "Repo", type: "select", options: ["All repos", "symphony", "web-shop"] }, { name: "epic", label: "Epic", type: "select", options: ["All epics", "Phase 3b", "Phase 3a"] }, { name: "summary", label: "Summary", type: "text" }],
       render: (p) => frame(controlBar(p)),
       docs: {
-        what: "The bar above Usage and Shipped that sets what the page shows: the period, the unit, the repo and the epic, with a one-line summary of the result.",
-        responsive: ["Laptop: the controls keep one line and the summary drops to the next line when they do not fit together.", "Desktop: one line, the summary right aligned.", "Clear appears only when a repo or an epic is picked."],
-        tokens: ["--surface-raised", "--radius-row", "segmented control and pop-up tokens"],
+        what: "The glass bar above Usage and Shipped that sets what the page shows: the period, the unit, the repo and the epic, with a one-line summary of the result. Its controls are small (24 pt).",
+        responsive: ["Laptop: the controls on one line, the summary on its own line under them.", "Desktop: one line, the summary right aligned.", "Clear appears only when a repo or an epic is picked."],
+        tokens: ["--material-glass", "--radius-card", "--control-sm", "segmented control and pop-up tokens"],
       },
       stories: VIEWPORT_STORIES([{ name: "Filtered", viewport: "laptop", args: { repo: "symphony", epic: "Phase 3b", summary: "Mar 3 to Mar 9 · 6.2M tokens in Phase 3b" } }]),
     },

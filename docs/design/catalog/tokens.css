@@ -1,86 +1,104 @@
 /*
  * Design tokens of the Director (the Symphony Mac app), as CSS custom properties.
  *
- * Each token is a named role. The app maps every role to a system value, so light, dark,
- * Increase Contrast and later macOS refinements follow on their own. The values here are
- * for the catalog and for reviews only.
+ * The look: the current macOS (translucent glass for what floats, continuous rounded
+ * corners, the system font) with the craft of today's best web apps (layered soft
+ * shadows, a brand accent with depth, springy motion that is part of every component).
  *
- * Light and dark come from one declaration each, through light-dark(): the theme switch
- * sets color-scheme on the root element (system, light or dark).
+ * Each token is a named role. Light and dark come from one declaration each, through
+ * light-dark(): the theme switch sets color-scheme on the root element.
  */
 
 :root {
   color-scheme: light dark;
 
-  /* Surfaces */
-  --surface-window: light-dark(#ececec, #2b2b2b);
-  --surface-content: light-dark(#ffffff, #1e1e1e);
-  --surface-raised: light-dark(#f5f5f7, #2c2c2e);
-  --surface-sunken: light-dark(#e4e4e6, #161616);
-  --surface-hover: light-dark(rgba(0, 0, 0, 0.045), rgba(255, 255, 255, 0.06));
-  --surface-pressed: light-dark(rgba(0, 0, 0, 0.09), rgba(255, 255, 255, 0.11));
-  --surface-overlay: light-dark(rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0.45));
+  /* ---------- Surfaces ---------- */
+  --surface-window: light-dark(#f2f2f6, #121216);
+  --surface-content: light-dark(#ffffff, #1b1b21);
+  --surface-raised: light-dark(#f7f7fa, #23232a);
+  --surface-sunken: light-dark(#e9e9ef, #0c0c10);
+  --surface-hover: light-dark(rgba(28, 28, 52, 0.05), rgba(255, 255, 255, 0.06));
+  --surface-pressed: light-dark(rgba(28, 28, 52, 0.09), rgba(255, 255, 255, 0.1));
+  --surface-overlay: light-dark(rgba(18, 18, 30, 0.22), rgba(0, 0, 0, 0.55));
 
-  /* Lines */
-  --stroke-separator: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
-  --stroke-strong: light-dark(rgba(0, 0, 0, 0.2), rgba(255, 255, 255, 0.2));
+  /* Glass: the material of what floats over content (menus, popovers, toasts, sheets, bars) */
+  --material-glass: light-dark(rgba(255, 255, 255, 0.72), rgba(38, 38, 46, 0.68));
+  --material-glass-thick: light-dark(rgba(252, 252, 254, 0.88), rgba(34, 34, 42, 0.86));
+  --material-blur: blur(28px) saturate(1.8);
+  --material-edge: light-dark(rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.1));
 
-  /* Text */
-  --text-primary: light-dark(rgba(0, 0, 0, 0.85), rgba(255, 255, 255, 0.88));
-  --text-secondary: light-dark(rgba(0, 0, 0, 0.55), rgba(255, 255, 255, 0.58));
-  --text-tertiary: light-dark(rgba(0, 0, 0, 0.3), rgba(255, 255, 255, 0.3));
+  /* The window behind everything carries a faint glow of the brand, never under text */
+  --backdrop-glow: radial-gradient(1200px 600px at 12% -10%, light-dark(rgba(108, 92, 255, 0.1), rgba(108, 92, 255, 0.16)), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, light-dark(rgba(36, 150, 255, 0.07), rgba(36, 150, 255, 0.1)), transparent 60%);
+
+  /* ---------- Lines ---------- */
+  --stroke-separator: light-dark(rgba(24, 24, 48, 0.08), rgba(255, 255, 255, 0.08));
+  --stroke-strong: light-dark(rgba(24, 24, 48, 0.15), rgba(255, 255, 255, 0.15));
+  --stroke-highlight: light-dark(rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.07));
+
+  /* ---------- Text ---------- */
+  --text-primary: light-dark(#16161d, #f2f2f6);
+  --text-secondary: light-dark(#5c5c6e, #a5a5b4);
+  --text-tertiary: light-dark(#9898a8, #6c6c7c);
   --text-on-accent: #ffffff;
 
-  /* Accent: selection, links, the default button */
-  --accent: light-dark(#007aff, #0a84ff);
-  --accent-hover: light-dark(#0069db, #3395ff);
-  --accent-pressed: light-dark(#0058b8, #0a6fd6);
-  --accent-tint: light-dark(rgba(0, 122, 255, 0.1), rgba(10, 132, 255, 0.2));
-  --accent-tint-strong: light-dark(rgba(0, 122, 255, 0.18), rgba(10, 132, 255, 0.3));
+  /* ---------- Accent: Symphony's iris, for selection, links and the expected move ---------- */
+  --accent: light-dark(#5b4cf5, #6d5ff7);
+  --accent-hover: light-dark(#4f40ea, #7c70ff);
+  --accent-pressed: light-dark(#4234d0, #5e51e6);
+  --accent-text: light-dark(#4a3be0, #aaa2ff);
+  --accent-tint: light-dark(rgba(91, 76, 245, 0.1), rgba(124, 112, 255, 0.18));
+  --accent-tint-strong: light-dark(rgba(91, 76, 245, 0.17), rgba(124, 112, 255, 0.28));
+  --accent-fill: linear-gradient(180deg, color-mix(in oklab, var(--accent) 82%, white) 0%, var(--accent) 100%);
+  --accent-fill-hover: linear-gradient(180deg, color-mix(in oklab, var(--accent-hover) 80%, white) 0%, var(--accent-hover) 100%);
+  --accent-glow: 0 1px 2px color-mix(in oklab, var(--accent) 35%, transparent), 0 6px 16px -6px color-mix(in oklab, var(--accent) 70%, transparent);
 
-  /* Status: reserved, always with a glyph and a word */
-  --status-you: light-dark(#ff9500, #ff9f0a);
-  --status-working: light-dark(#007aff, #0a84ff);
-  --status-problem: light-dark(#ff3b30, #ff453a);
-  --status-done: light-dark(#28cd41, #32d74b);
-  --status-idle: light-dark(#8e8e93, #98989d);
-  --status-forced: light-dark(#af52de, #bf5af2);
+  /* ---------- Status: reserved, always with a glyph and a word ---------- */
+  --status-you: light-dark(#f08a00, #ffa733);
+  --status-working: light-dark(#1d8cff, #3d9fff);
+  --status-problem: light-dark(#ec3a4c, #ff5c68);
+  --status-done: light-dark(#18a957, #3bd47c);
+  --status-idle: light-dark(#8a8a99, #8f8f9e);
+  --status-forced: light-dark(#be3bd6, #d567ee);
 
   /* Status text: the hue darkened in light so a word in it keeps 4.5:1 on content */
-  --status-you-text: light-dark(#b25e00, #ffb340);
-  --status-working-text: light-dark(#0062cc, #4da3ff);
-  --status-problem-text: light-dark(#d70015, #ff6961);
-  --status-done-text: light-dark(#1b7f2c, #4fe065);
-  --status-idle-text: light-dark(#6c6c70, #aeaeb2);
-  --status-forced-text: light-dark(#8a3bb5, #d38cf5);
+  --status-you-text: light-dark(#a35200, #ffbf6e);
+  --status-working-text: light-dark(#0a63c4, #80bfff);
+  --status-problem-text: light-dark(#c0142b, #ff8f96);
+  --status-done-text: light-dark(#0f733a, #74e3a3);
+  --status-idle-text: light-dark(#5b5b6a, #b3b3c0);
+  --status-forced-text: light-dark(#8c1fa4, #e7a0f6);
 
-  /* Status tints: 14 % in light, 22 % in dark, behind a word kept in text-primary */
-  --tint-you: light-dark(rgba(255, 149, 0, 0.14), rgba(255, 159, 10, 0.22));
-  --tint-working: light-dark(rgba(0, 122, 255, 0.14), rgba(10, 132, 255, 0.22));
-  --tint-problem: light-dark(rgba(255, 59, 48, 0.14), rgba(255, 69, 58, 0.22));
-  --tint-done: light-dark(rgba(40, 205, 65, 0.14), rgba(50, 215, 75, 0.22));
-  --tint-idle: light-dark(rgba(142, 142, 147, 0.14), rgba(152, 152, 157, 0.22));
-  --tint-forced: light-dark(rgba(175, 82, 222, 0.14), rgba(191, 90, 242, 0.22));
+  /* Status tints: 12 % in light, 20 % in dark, behind a word kept in text-primary */
+  --tint-you: light-dark(rgba(240, 138, 0, 0.13), rgba(255, 167, 51, 0.2));
+  --tint-working: light-dark(rgba(29, 140, 255, 0.12), rgba(61, 159, 255, 0.2));
+  --tint-problem: light-dark(rgba(236, 58, 76, 0.12), rgba(255, 92, 104, 0.2));
+  --tint-done: light-dark(rgba(24, 169, 87, 0.12), rgba(59, 212, 124, 0.18));
+  --tint-idle: light-dark(rgba(138, 138, 153, 0.13), rgba(143, 143, 158, 0.2));
+  --tint-forced: light-dark(rgba(190, 59, 214, 0.12), rgba(213, 103, 238, 0.2));
 
-  /* Type: the system font only, no external fonts */
+  /* ---------- Type: the system font only, no external fonts ---------- */
   --font-text: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, monospace;
 
-  --type-title: 600 22px/28px var(--font-text);
-  --type-sentence: 600 17px/22px var(--font-text);
+  --type-title: 700 26px/32px var(--font-display);
+  --type-sentence: 650 18px/24px var(--font-display);
   --type-heading: 600 15px/20px var(--font-text);
   --type-row-title: 600 13px/18px var(--font-text);
-  --type-body: 400 13px/18px var(--font-text);
+  --type-body: 400 13px/19px var(--font-text);
   --type-secondary: 400 12px/16px var(--font-text);
-  --type-label: 500 11px/14px var(--font-text);
-  --type-caption: 400 10px/13px var(--font-text);
-  --type-mono: 400 12px/16px var(--font-mono);
+  --type-label: 550 11px/14px var(--font-text);
+  --type-caption: 500 10px/13px var(--font-text);
+  --type-mono: 450 12px/16px var(--font-mono);
+  --tracking-display: -0.022em;
+  --tracking-label: 0.02em;
 
   /* Measure: no line of reading text runs past it */
   --measure: 68ch;
   --measure-narrow: 52ch;
 
-  /* Spacing: a 4 pt grid */
+  /* ---------- Spacing: a 4 pt grid ---------- */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -88,32 +106,63 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
+  --space-10: 40px;
 
-  /* Radii: concentric, the inner radius is the outer minus the inset */
-  --radius-card: 14px;
+  /* ---------- Controls: three sizes, every control is one of them ---------- */
+  --control-sm: 24px;
+  --control-md: 30px;
+  --control-lg: 36px;
+
+  /* ---------- Radii: concentric, the inner radius is the outer minus the inset ---------- */
+  --radius-sheet: 22px;
+  --radius-card: 16px;
   --radius-row: 10px;
-  --radius-control: 6px;
+  --radius-control-sm: 7px;
+  --radius-control-md: 9px;
+  --radius-control-lg: 11px;
+  --radius-control: var(--radius-control-md);
   --radius-mark: 4px;
   --radius-capsule: 999px;
 
-  /* Elevation: content is flat; only floating layers cast a shadow */
+  /* ---------- Elevation: layered soft shadows; content is flat, what floats rises ---------- */
+  --shadow-ring: light-dark(rgba(24, 24, 48, 0.07), rgba(255, 255, 255, 0.075));
+  --shadow-near: light-dark(rgba(24, 24, 48, 0.06), rgba(0, 0, 0, 0.35));
+  --shadow-far: light-dark(rgba(24, 24, 60, 0.1), rgba(0, 0, 0, 0.55));
+  --shadow-deep: light-dark(rgba(20, 20, 60, 0.18), rgba(0, 0, 0, 0.7));
   --elevation-0: none;
-  --elevation-1: 0 0 0 0.5px var(--stroke-separator);
-  --elevation-2: 0 0 0 0.5px var(--stroke-separator), 0 4px 14px light-dark(rgba(0, 0, 0, 0.12), rgba(0, 0, 0, 0.45));
-  --elevation-3: 0 0 0 0.5px var(--stroke-separator), 0 18px 48px light-dark(rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.6));
+  --elevation-1: 0 0 0 1px var(--shadow-ring), 0 1px 2px var(--shadow-near), 0 3px 8px -4px var(--shadow-far);
+  --elevation-2: 0 0 0 1px var(--shadow-ring), 0 2px 4px var(--shadow-near), 0 12px 28px -10px var(--shadow-far);
+  --elevation-3: 0 0 0 1px var(--shadow-ring), 0 4px 10px var(--shadow-near), 0 22px 48px -14px var(--shadow-deep);
+  --elevation-4: 0 0 0 1px var(--shadow-ring), 0 8px 20px var(--shadow-near), 0 40px 90px -24px var(--shadow-deep);
+  --edge-highlight: inset 0 1px 0 var(--stroke-highlight);
 
-  /* Motion */
-  --motion-fast: 0.12s;
-  --motion-standard: 0.25s;
-  --motion-slow: 0.4s;
+  /* ---------- Motion: durations, easings and the patterns built from them ---------- */
+  --motion-instant: 0.1s;
+  --motion-fast: 0.16s;
+  --motion-standard: 0.28s;
+  --motion-slow: 0.45s;
+  --motion-spring: 0.5s;
   --motion-hover-delay: 0.5s;
-  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
-  --ease-enter: cubic-bezier(0, 0, 0.2, 1);
-  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --motion-stagger: 35ms;
 
-  /* Focus ring: keyboard focus only */
-  --focus-ring-color: light-dark(rgba(0, 122, 255, 0.5), rgba(10, 132, 255, 0.6));
-  --focus-ring: 0 0 0 3px var(--focus-ring-color);
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-enter: cubic-bezier(0, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.3, 0, 1, 1);
+  /* A critically damped spring with a hint of overshoot (about 2 %) */
+  --ease-spring: linear(0, 0.006, 0.025 2.8%, 0.101 6.1%, 0.539 18.9%, 0.721 25.3%, 0.849 31.5%, 0.937 38.1%, 0.968 41.8%, 0.991 45.7%, 1.006 50.1%, 1.015 55%, 1.017 63.9%, 1.001 85.9%, 1);
+  /* A livelier spring for knobs and marks that snap into place (about 8 %) */
+  --ease-bounce: linear(0, 0.157 5.1%, 0.528 13.2%, 0.828 21.4%, 1.008 29.5%, 1.064 33.4%, 1.081 37.6%, 1.074 42.2%, 1.025 52.6%, 0.995 63.9%, 0.99 71.5%, 1.001 92.4%, 1);
+
+  /* Patterns */
+  --press-scale: 0.97;
+  --lift: -1px;
+  --enter-offset: 6px;
+  --enter-scale: 0.97;
+
+  /* ---------- Focus ring: keyboard focus only, drawn outside the shape ---------- */
+  --focus-ring-color: light-dark(rgba(91, 76, 245, 0.55), rgba(140, 128, 255, 0.7));
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
 }
 
 :root[data-theme="light"] {
@@ -126,8 +175,15 @@
 
 @media (prefers-reduced-motion: reduce) {
   :root {
-    --motion-fast: 0s;
-    --motion-standard: 0s;
-    --motion-slow: 0s;
+    --motion-instant: 0.01s;
+    --motion-fast: 0.01s;
+    --motion-standard: 0.01s;
+    --motion-slow: 0.01s;
+    --motion-spring: 0.01s;
+    --motion-stagger: 0ms;
+    --press-scale: 1;
+    --lift: 0px;
+    --enter-offset: 0px;
+    --enter-scale: 1;
   }
 }
