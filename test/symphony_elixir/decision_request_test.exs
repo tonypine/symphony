@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.DecisionRequestTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{DecisionRequest, MergeConfirmation, Pauses, Questions, RunStore}
+  alias SymphonyElixir.{Config, DecisionRequest, MergeConfirmation, Pauses, Questions, RunStore}
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Pauses.Projector
@@ -88,6 +88,29 @@ defmodule SymphonyElixir.DecisionRequestTest do
     test "refuses code and Symphony's internal words, as the agent tool does" do
       assert {:error, message} = DecisionRequest.check(request(%{why: "The PR head 2f5af5ab failed.", if_unanswered: "The hold stays."}))
       assert message =~ "`why` has the internal word \"head\", the commit hash \"2f5af5ab\"; `if_unanswered` has the internal word \"hold\""
+    end
+  end
+
+  describe "check/1 with a file location (TP-1386)" do
+    test "passes a path under the configured workspace root and refuses one outside it, naming the root" do
+      root = Config.settings!().workspace.root
+      catalog = Path.join([root, @repo_key, "TP-1382", "index.html"])
+
+      assert DecisionRequest.check(request(%{why: "The catalog is at #{catalog} for you to open.", question: "Approve file://#{catalog}?"})) == :ok
+
+      assert {:error, message} = DecisionRequest.check(request(%{why: "The catalog is at /opt/catalog/index.html."}))
+      assert message =~ ~s(`why` has the file location outside the workspace root "/opt/catalog/index.html")
+      assert message =~ "under the workspace root #{Path.expand(root)}."
+    end
+
+    test "with no settings to read, every path is refused" do
+      catalog = Path.join([Config.settings!().workspace.root, @repo_key, "TP-1382", "index.html"])
+      File.write!(Workflow.symphony_file_path(), "repositories: [unclosed\n")
+      :ok = SymphonyElixir.Config.Cache.clear()
+
+      assert {:error, message} = DecisionRequest.check(request(%{why: "The catalog is at #{catalog}."}))
+      assert message =~ ~s(`why` has the path "#{catalog}")
+      refute message =~ "workspace root"
     end
   end
 

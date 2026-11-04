@@ -412,6 +412,10 @@ their words (`docs/standards/decision-writing.md`):
 - The tool refuses a request holding backticks, template syntax, a path or file name, a
   commit hash or an `auto/` or `origin/` branch, and names each token and its field.
   Rewrite it in plain words and call it again.
+- One path is allowed: a review of files in the workspace (an HTML catalog or prototype
+  the person opens in a browser) gives the file's absolute path in the workspace, or a
+  `file://` link to it, in `why`, `decision.question` or an option's `effect`. The Inbox
+  shows it as a link that opens it. A path outside the workspace root is refused.
 
 Before: "How should TP-892 handle the legacy partials that Code Review keeps flagging?",
 why "Code Review sent PR #448 back again (head 2f5af5ab). Its only finding is that the

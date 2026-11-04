@@ -131,6 +131,65 @@ defmodule SymphonyElixir.HumanActions.PlainWordsTest do
                "Name a ticket by its identifier and a short name, and a PR as PR #123."
   end
 
+  describe "a file location in the workspace (TP-1386)" do
+    @root "/Users/me/symphony-workspaces"
+    @catalog "/Users/me/symphony-workspaces/symphony/TP-1382/index.html"
+
+    test "an absolute path or file:// link under the root passes in why, the question and each option's effect" do
+      located =
+        request(%{
+          question: "Does the catalog at #{@catalog} look right?",
+          why: "The catalog is ready (file://#{@catalog}).",
+          options: [
+            %{label: "Approve it", effect: "You open file://localhost#{@catalog}, and TP-1382 moves on.", recommended: true},
+            %{label: "Ask for changes", effect: "The next run edits #{Path.dirname(@catalog)}/ and asks again."}
+          ]
+        })
+
+      assert PlainWords.check(located, workspace_root: @root) == :ok
+      assert PlainWords.check(located, workspace_root: @root <> "/") == :ok
+      assert PlainWords.check(request(%{why: "Open #{@root}."}), workspace_root: "/Users/me/x/../symphony-workspaces") == :ok
+      assert PlainWords.check(request(%{why: "Open file:///Users/me/symphony-workspaces/symphony/TP-1382/a%20b.html."}), workspace_root: @root) == :ok
+    end
+
+    test "a file location outside the root is refused, and the message names the root" do
+      outside = request(%{why: "Open /etc/passwd or file:///Users/me/symphony-workspaces-old/x.html or #{@root}/../secrets."})
+
+      assert PlainWords.findings(outside, workspace_root: @root) == [
+               %{field: "why", token: "/etc/passwd", kind: :outside_workspace},
+               %{field: "why", token: "file:///Users/me/symphony-workspaces-old/x.html", kind: :outside_workspace},
+               %{field: "why", token: "#{@root}/../secrets", kind: :outside_workspace}
+             ]
+
+      assert {:error, message} = PlainWords.check(outside, workspace_root: @root)
+      assert message =~ ~s(`why` has the file location outside the workspace root "/etc/passwd")
+
+      assert message =~
+               "A file for the person to open in a browser or in Finder may go in `why`, `decision.question` or an option's `effect` " <>
+                 "as an absolute path or file:// link under the workspace root #{@root}."
+    end
+
+    test "other fields, relative paths, other links and a missing root still refuse a path" do
+      for {attrs, field, kind} <- [
+            {%{title: "Review #{@catalog}"}, "title", :path},
+            {%{if_unanswered: "Nobody opens #{@catalog}."}, "if_unanswered", :path},
+            {%{options: [%{label: "Open #{@catalog}", effect: "x", recommended: true}, %{label: "y", effect: "z"}]}, "decision.options[0].label", :path},
+            {%{why: "See https://example.com/index.html today."}, "why", :link},
+            {%{why: "See file://server/share/index.html today."}, "why", :link},
+            {%{why: "See //server/share/index.html today."}, "why", :path},
+            {%{why: "See symphony/TP-1382/index.html today."}, "why", :path}
+          ] do
+        assert [%{field: ^field, kind: ^kind} | _rest] = PlainWords.findings(request(attrs), workspace_root: @root), inspect(attrs)
+      end
+
+      assert [%{field: "why", kind: :path}] = PlainWords.findings(request(%{why: "Open #{@catalog} now."}), workspace_root: nil)
+      assert [%{field: "why", kind: :path}] = PlainWords.findings(request(%{why: "Open #{@catalog} now."}))
+
+      assert {:error, message} = PlainWords.check(request(%{why: "Head 2f5af5ab."}), workspace_root: @root)
+      refute message =~ "workspace root"
+    end
+  end
+
   test "the standard's rewritten example passes" do
     rewritten = %{
       title: "Let TP-892 ship without the old instructions' Final verification text",
