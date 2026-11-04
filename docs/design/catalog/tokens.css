@@ -1,0 +1,133 @@
+/*
+ * Design tokens of the Director (the Symphony Mac app), as CSS custom properties.
+ *
+ * Each token is a named role. The app maps every role to a system value, so light, dark,
+ * Increase Contrast and later macOS refinements follow on their own. The values here are
+ * for the catalog and for reviews only.
+ *
+ * Light and dark come from one declaration each, through light-dark(): the theme switch
+ * sets color-scheme on the root element (system, light or dark).
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* Surfaces */
+  --surface-window: light-dark(#ececec, #2b2b2b);
+  --surface-content: light-dark(#ffffff, #1e1e1e);
+  --surface-raised: light-dark(#f5f5f7, #2c2c2e);
+  --surface-sunken: light-dark(#e4e4e6, #161616);
+  --surface-hover: light-dark(rgba(0, 0, 0, 0.045), rgba(255, 255, 255, 0.06));
+  --surface-pressed: light-dark(rgba(0, 0, 0, 0.09), rgba(255, 255, 255, 0.11));
+  --surface-overlay: light-dark(rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0.45));
+
+  /* Lines */
+  --stroke-separator: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
+  --stroke-strong: light-dark(rgba(0, 0, 0, 0.2), rgba(255, 255, 255, 0.2));
+
+  /* Text */
+  --text-primary: light-dark(rgba(0, 0, 0, 0.85), rgba(255, 255, 255, 0.88));
+  --text-secondary: light-dark(rgba(0, 0, 0, 0.55), rgba(255, 255, 255, 0.58));
+  --text-tertiary: light-dark(rgba(0, 0, 0, 0.3), rgba(255, 255, 255, 0.3));
+  --text-on-accent: #ffffff;
+
+  /* Accent: selection, links, the default button */
+  --accent: light-dark(#007aff, #0a84ff);
+  --accent-hover: light-dark(#0069db, #3395ff);
+  --accent-pressed: light-dark(#0058b8, #0a6fd6);
+  --accent-tint: light-dark(rgba(0, 122, 255, 0.1), rgba(10, 132, 255, 0.2));
+  --accent-tint-strong: light-dark(rgba(0, 122, 255, 0.18), rgba(10, 132, 255, 0.3));
+
+  /* Status: reserved, always with a glyph and a word */
+  --status-you: light-dark(#ff9500, #ff9f0a);
+  --status-working: light-dark(#007aff, #0a84ff);
+  --status-problem: light-dark(#ff3b30, #ff453a);
+  --status-done: light-dark(#28cd41, #32d74b);
+  --status-idle: light-dark(#8e8e93, #98989d);
+  --status-forced: light-dark(#af52de, #bf5af2);
+
+  /* Status text: the hue darkened in light so a word in it keeps 4.5:1 on content */
+  --status-you-text: light-dark(#b25e00, #ffb340);
+  --status-working-text: light-dark(#0062cc, #4da3ff);
+  --status-problem-text: light-dark(#d70015, #ff6961);
+  --status-done-text: light-dark(#1b7f2c, #4fe065);
+  --status-idle-text: light-dark(#6c6c70, #aeaeb2);
+  --status-forced-text: light-dark(#8a3bb5, #d38cf5);
+
+  /* Status tints: 14 % in light, 22 % in dark, behind a word kept in text-primary */
+  --tint-you: light-dark(rgba(255, 149, 0, 0.14), rgba(255, 159, 10, 0.22));
+  --tint-working: light-dark(rgba(0, 122, 255, 0.14), rgba(10, 132, 255, 0.22));
+  --tint-problem: light-dark(rgba(255, 59, 48, 0.14), rgba(255, 69, 58, 0.22));
+  --tint-done: light-dark(rgba(40, 205, 65, 0.14), rgba(50, 215, 75, 0.22));
+  --tint-idle: light-dark(rgba(142, 142, 147, 0.14), rgba(152, 152, 157, 0.22));
+  --tint-forced: light-dark(rgba(175, 82, 222, 0.14), rgba(191, 90, 242, 0.22));
+
+  /* Type: the system font only, no external fonts */
+  --font-text: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, monospace;
+
+  --type-title: 600 22px/28px var(--font-text);
+  --type-sentence: 600 17px/22px var(--font-text);
+  --type-heading: 600 15px/20px var(--font-text);
+  --type-row-title: 600 13px/18px var(--font-text);
+  --type-body: 400 13px/18px var(--font-text);
+  --type-secondary: 400 12px/16px var(--font-text);
+  --type-label: 500 11px/14px var(--font-text);
+  --type-caption: 400 10px/13px var(--font-text);
+  --type-mono: 400 12px/16px var(--font-mono);
+
+  /* Measure: no line of reading text runs past it */
+  --measure: 68ch;
+  --measure-narrow: 52ch;
+
+  /* Spacing: a 4 pt grid */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Radii: concentric, the inner radius is the outer minus the inset */
+  --radius-card: 14px;
+  --radius-row: 10px;
+  --radius-control: 6px;
+  --radius-mark: 4px;
+  --radius-capsule: 999px;
+
+  /* Elevation: content is flat; only floating layers cast a shadow */
+  --elevation-0: none;
+  --elevation-1: 0 0 0 0.5px var(--stroke-separator);
+  --elevation-2: 0 0 0 0.5px var(--stroke-separator), 0 4px 14px light-dark(rgba(0, 0, 0, 0.12), rgba(0, 0, 0, 0.45));
+  --elevation-3: 0 0 0 0.5px var(--stroke-separator), 0 18px 48px light-dark(rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.6));
+
+  /* Motion */
+  --motion-fast: 0.12s;
+  --motion-standard: 0.25s;
+  --motion-slow: 0.4s;
+  --motion-hover-delay: 0.5s;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-enter: cubic-bezier(0, 0, 0.2, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+
+  /* Focus ring: keyboard focus only */
+  --focus-ring-color: light-dark(rgba(0, 122, 255, 0.5), rgba(10, 132, 255, 0.6));
+  --focus-ring: 0 0 0 3px var(--focus-ring-color);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0s;
+    --motion-standard: 0s;
+    --motion-slow: 0s;
+  }
+}

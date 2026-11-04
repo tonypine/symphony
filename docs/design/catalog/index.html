@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en" data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Director design catalog</title>
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="components.css">
+  <link rel="stylesheet" href="catalog.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar" aria-label="Catalog">
+      <div class="brand">
+        <strong>Director design catalog</strong>
+        <span>Tokens, components and sections, one story per state</span>
+      </div>
+      <div class="side-search">
+        <input id="search" type="search" placeholder="Find a component or story" aria-label="Find a component or story" autocomplete="off">
+        <span class="kbd-key" aria-hidden="true">/</span>
+      </div>
+      <nav id="tree" class="tree"></nav>
+    </aside>
+
+    <main class="main">
+      <header class="toolbar" role="toolbar" aria-label="Canvas settings">
+        <div class="tabs" role="tablist" aria-label="View">
+          <button id="tab-canvas" role="tab" aria-selected="true">Canvas</button>
+          <button id="tab-docs" role="tab" aria-selected="false">Docs</button>
+        </div>
+        <span class="tool-sep"></span>
+        <label class="tool">Theme
+          <select id="theme">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+        <label class="tool">Viewport
+          <select id="viewport">
+            <option value="fit">Fit</option>
+            <option value="laptop">Laptop · 1180 pt</option>
+            <option value="desktop">Desktop · 2200 pt</option>
+          </select>
+        </label>
+        <label class="tool">Background
+          <select id="background">
+            <option value="page">Page</option>
+            <option value="card">Card</option>
+          </select>
+        </label>
+        <label class="tool check"><input id="all-states" type="checkbox"> Show all states</label>
+        <span class="tool-grow"></span>
+        <button id="copy-link" class="tool-btn" title="Copy a link that opens this story">Copy link</button>
+      </header>
+
+      <div class="crumbs" id="crumbs"></div>
+
+      <section id="canvas-view" class="canvas-view" aria-label="Canvas">
+        <div class="canvas-scroll" id="canvas-scroll">
+          <div class="stage" id="stage"></div>
+        </div>
+        <section class="controls" aria-label="Controls">
+          <div class="controls-head">
+            <strong>Controls</strong>
+            <span id="controls-note" class="controls-note"></span>
+            <button id="reset" class="tool-btn">Reset</button>
+          </div>
+          <div id="controls" class="controls-grid"></div>
+        </section>
+      </section>
+
+      <section id="docs-view" class="docs-view" aria-label="Docs" hidden></section>
+    </main>
+  </div>
+
+  <div id="flash" class="flash" role="status" aria-live="polite"></div>
+
+  <script src="stories.js"></script>
+  <script src="catalog.js"></script>
+</body>
+</html>
