@@ -28,6 +28,30 @@ final class FileLocationsTests: XCTestCase {
         XCTAssertEqual(workspace.browsed.map(\.path), [catalog, "/tmp/Prototype.HTM"])
         XCTAssertEqual(workspace.revealed.map(\.path), ["/tmp/shot.png", "/tmp/folder"])
     }
+
+    /// The `inbox-file-location` fixture QA walks: TP-892's decision holds a workspace HTML page in its why, which the
+    /// Inbox and the ticket page's "Your decision" card show, and a `file://` link to a screenshot in an option.
+    func testTheFileLocationFixtureHoldsAPageForTheBrowserAndAFileForFinder() throws {
+        let folder = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/director-app/inbox-file-location/api/v1", isDirectory: true)
+        let items = try XCTUnwrap(InboxPayload.decode(Data(contentsOf: folder.appendingPathComponent("inbox.json")))?.items)
+        let workspace = "/Users/director/symphony-workspaces/symphony/TP-892"
+        let issue = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent("TP-892.json"))) as? [String: Any])
+        XCTAssertEqual((issue["workspace"] as? [String: Any])?["path"] as? String, workspace)
+
+        let brief = try XCTUnwrap(TicketPage.Brief(identifier: "TP-892", items: items))
+        XCTAssertEqual(brief.title, "Your decision")
+        let page = brief.paragraphs.flatMap { FileLocations.find(in: $0) }
+        XCTAssertEqual(page.map(\.url.path), ["\(workspace)/design/index.html"])
+        XCTAssertEqual(page.map(\.opening), [.browser])
+
+        let options = try XCTUnwrap(items.first { $0.identifier == "TP-892" }?.review.action?.options)
+        let effects = options.flatMap { FileLocations.find(in: $0.effect ?? "") }
+        XCTAssertEqual(effects.map(\.url.path), ["\(workspace)/design/final-verification.png"])
+        XCTAssertEqual(effects.map(\.opening), [.finder])
+    }
 }
 
 private final class RecordingWorkspace: FileLocationWorkspace {
