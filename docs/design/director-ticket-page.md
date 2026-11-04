@@ -8,7 +8,8 @@ ticket stand, and why?**
 2026-11-04, because** Tony found it more polished than the three alternatives this ticket first built
 (A · Story, B · Stage, C · Desk; see [Earlier alternatives](#earlier-alternatives)). It is decision D2
 on TP-1383. The prototype below rebuilds that layout as one page, with the life of a real ticket in
-it, and is what Tony reviews next.
+it. Tony approved the rebuilt page on 2026-11-04 (decision D3 on TP-1383): it is the design the
+Swift ticket page is built from.
 
 The prototype is plain HTML, CSS and JavaScript built from the design catalog
 ([`catalog/index.html`](catalog/index.html), TP-1382). It opens from disk in a browser, with no build
@@ -263,4 +264,8 @@ catalog's own markup instead of copies.
 ## The choice
 
 Chosen: the catalog's Page layout, on 2026-11-04, because it is more polished than A, B or C
-(decision D2 on TP-1383). Next: Tony reviews the rebuilt page and approves it, or writes what to change.
+(decision D2 on TP-1383).
+
+Approved: the rebuilt prototype, [`prototypes/ticket-page/index.html`](prototypes/ticket-page/index.html),
+on 2026-11-04, because Tony reviewed it at both widths and in both themes and approved it as it is
+(decision D3 on TP-1383). The Swift implementation is filed by hand after Phase 3a.
