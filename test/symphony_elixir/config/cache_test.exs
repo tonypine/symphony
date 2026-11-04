@@ -82,29 +82,33 @@ defmodule SymphonyElixir.Config.CacheTest do
 
       test_pid = self()
 
+      # The reader is global to the node: a refresh the Cache process runs on a file event (a
+      # watcher an earlier test of the shard left running) may read the rejected file too. The read
+      # that finds it rejected marks its stamp, so the next call of this test reads nothing.
       Application.put_env(:symphony_elixir, :config_cache_file_reader, fn path ->
-        send(test_pid, {:read, path})
+        send(test_pid, {:read, path, self()})
         File.read(path)
       end)
 
-      File.write!(symphony_path, config(1) <> "pull_request:\n  enabled: true\n")
-      bump_mtime!(symphony_path)
-
       log =
         ExUnit.CaptureLog.capture_log(fn ->
+          # Written inside the capture: a refresh on the file's event logs the rejection too.
+          File.write!(symphony_path, config(1) <> "pull_request:\n  enabled: true\n")
+          bump_mtime!(symphony_path)
+
           assert {:ok, %{"repositories" => [%{"key" => "r1"}]}, [stale: true]} = Cache.get_symphony(symphony_path)
           entry = status_entry(symphony_path)
           assert entry.last_error == {:invalid_symphony_config, "unknown symphony.yml key `pull_request`"}
           assert is_integer(entry.stale_since)
+          assert_received {:read, _path, _reader}
 
           assert {:ok, _value, [stale: true]} = Cache.get_symphony(symphony_path)
+          refute_received {:read, _path, ^test_pid}
           assert %{stale_since: stale_since} = status_entry(symphony_path)
           assert stale_since == entry.stale_since
         end)
 
       assert log =~ "keeping last known good value"
-      assert_received {:read, _path}
-      refute_received {:read, _path}
 
       File.write!(symphony_path, config(2))
       bump_mtime!(symphony_path)
