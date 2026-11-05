@@ -281,7 +281,9 @@ defmodule SymphonyElixir.Workpad.ProjectionTest do
       assert :ok = Projection.project_now({:ticket, "repo-a", issue_id}, settings: settings, linear_client: unused)
 
       record_steps!(issue_id)
-      assert :ok = Projection.project_now({:ticket, "repo-a", issue_id}, settings: settings, linear_client: client(self(), [%{"id" => "c", "body" => "hi"}]), link: fn _id -> nil end)
+      other_comment = client(self(), [%{"id" => "c", "body" => "hi"}])
+      opts = [settings: settings, linear_client: other_comment, link: fn _id -> nil end]
+      assert :ok = Projection.project_now({:ticket, "repo-a", issue_id}, opts)
       refute_received {:updated, _variables}
 
       write_workflow_file!(Workflow.workflow_file_path(), agent_kind: "claude")
@@ -294,7 +296,8 @@ defmodule SymphonyElixir.Workpad.ProjectionTest do
       record_steps!(issue_id)
       failing = fn _query, _variables, _opts -> {:error, :boom} end
 
-      assert {:error, _reason} = Projection.project_now({:ticket, "repo-a", issue_id}, settings: settings, linear_client: failing)
+      ticket = {:ticket, "repo-a", issue_id}
+      assert {:error, _reason} = Projection.project_now(ticket, settings: settings, linear_client: failing)
     end
 
     test "project_later/2 projects in a task of its own and logs a failure", %{issue_id: issue_id} do
@@ -302,14 +305,18 @@ defmodule SymphonyElixir.Workpad.ProjectionTest do
       record_steps!(issue_id)
       recipient = self()
 
-      await_projection(Projection.project_later({:ticket, "repo-a", issue_id}, settings: settings, linear_client: client(recipient, [workpad_comment(bootstrap())]), link: fn _id -> nil end))
+      ticket = {:ticket, "repo-a", issue_id}
+      workpad = client(recipient, [workpad_comment(bootstrap())])
+      opts = [settings: settings, linear_client: workpad, link: fn _id -> nil end]
+      await_projection(Projection.project_later(ticket, opts))
       assert_received {:updated, %{id: "comment-workpad"}}
 
       log =
         capture_log(fn ->
           failing = fn _query, _variables, _opts -> {:error, :boom} end
-          await_projection(Projection.project_later({:ticket, "repo-a", issue_id}, settings: settings, linear_client: failing))
-          await_projection(Projection.project_later({:ticket, "repo-a", issue_id}, settings: settings, linear_client: failing, steps: :not_a_list))
+          await_projection(Projection.project_later(ticket, settings: settings, linear_client: failing))
+          bad_steps = [settings: settings, linear_client: failing, steps: :not_a_list]
+          await_projection(Projection.project_later(ticket, bad_steps))
         end)
 
       assert log =~ "Failed to project the workpad of issue_id=#{issue_id}: "

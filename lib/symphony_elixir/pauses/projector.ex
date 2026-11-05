@@ -58,8 +58,9 @@ defmodule SymphonyElixir.Pauses.Projector do
 
   require Logger
 
-  alias SymphonyElixir.{DecisionRequest, Decisions, IssueSummary, RunStore, TicketSignals, TicketState, Tracker, Walkthrough}
+  alias SymphonyElixir.{DecisionRequest, Decisions, IssueSummary, RunStore, TicketSignals, TicketState, Tracker}
   alias SymphonyElixir.HumanActions.Request
+  alias SymphonyElixir.Walkthrough
 
   @blocked "Blocked"
   @question_label "Needs Decision"

@@ -391,7 +391,8 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert %{steps: [%{proof: %{by: :qa}}, %{proof: %{by: :qa}}, %{proof: %{by: :qa}}]} =
                QaVerification.journey(issue("QA", %{description: description}), nil)
 
-      assert %{steps: [%{proof: %{by: :qa}} | _rest]} = QaVerification.journey(issue("QA", %{id: nil, description: description}), "make-all")
+      journey = QaVerification.journey(issue("QA", %{id: nil, description: description}), "make-all")
+      assert %{steps: [%{proof: %{by: :qa}} | _rest]} = journey
     end
 
     test "a step that quotes a proof line in its prose is QA's to walk, its text whole" do

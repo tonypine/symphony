@@ -319,8 +319,14 @@ defmodule SymphonyElixir.Walkthrough do
   # The step's author asked QA to walk it: its last `Proved by:` outside inline code says `QA`.
   defp qa_marked?(text) do
     case last_proved_by(text) do
-      nil -> false
-      {position, length} -> text |> binary_part(position + length, byte_size(text) - position - length) |> normalize_spec() |> qa_spec?()
+      nil ->
+        false
+
+      {position, length} ->
+        text
+        |> binary_part(position + length, byte_size(text) - position - length)
+        |> normalize_spec()
+        |> qa_spec?()
     end
   end
 

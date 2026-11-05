@@ -3,6 +3,7 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
 
   import ExUnit.CaptureLog
 
+  alias SymphonyElixir.Codex.DynamicTool
   alias SymphonyElixir.{Decisions, DirectorMoves, Pauses, Questions, TicketState, Workflow}
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.Issue
@@ -235,7 +236,8 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
       assert written =~ "1. Run it.\n2. Look at it. Proved by: QA\n\n#{SymphonyElixir.Walkthrough.proofs_start_marker()}"
       assert written =~ "- Step 1 · Proved by: `test/a_test.exs`\n#{SymphonyElixir.Walkthrough.proofs_end_marker()}\n\n## Acceptance criteria"
       assert written =~ ~r/- 20\d\d-\d\d-\d\d: Attempt 1 pushed \(abc1234\)\n/
-      assert stored().projected.section == Projector.desired(stored(), RunStore.list_ticket_events(@issue_id, types: ["evidence"])).section
+      evidence = RunStore.list_ticket_events(@issue_id, types: ["evidence"])
+      assert stored().projected.section == Projector.desired(stored(), evidence).section
       refute stored().projected.section == Projector.desired(stored()).section
 
       assert Projector.project_now(@ticket) == :ok
@@ -259,7 +261,7 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
 
       issue = %Issue{id: @issue_id, identifier: "TP-817", repo_key: @repo_key}
 
-      SymphonyElixir.Codex.DynamicTool.execute("linear_record_walkthrough_proofs", %{"proofs" => [%{"step" => 1, "test" => "test/a_test.exs"}]},
+      DynamicTool.execute("linear_record_walkthrough_proofs", %{"proofs" => [%{"step" => 1, "test" => "test/a_test.exs"}]},
         issue: issue,
         linear_client: client,
         run_id: "run-1",

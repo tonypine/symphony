@@ -178,7 +178,8 @@ defmodule SymphonyElixir.WalkthroughTest do
 
   describe "put_proofs/2" do
     test "renders one Proved by: line per proved step at the walkthrough's end, leaving every other byte" do
-      description = Walkthrough.put_proofs(@description, [%{step: 2, test: "test/a_test.exs"}, %{step: 1, test: "test/b_test.exs"}, %{step: 2, test: "test/c_test.exs"}])
+      proofs = [%{step: 2, test: "test/a_test.exs"}, %{step: 1, test: "test/b_test.exs"}, %{step: 2, test: "test/c_test.exs"}]
+      description = Walkthrough.put_proofs(@description, proofs)
 
       block =
         Enum.join(

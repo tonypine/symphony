@@ -1,9 +1,9 @@
 defmodule SymphonyElixir.QaAgent.SelectionTest do
   use ExUnit.Case, async: false
 
-  alias SymphonyElixir.{RunStore, TicketEvents}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Selection
+  alias SymphonyElixir.{RunStore, TicketEvents}
 
   @live_server %{paths: ["lib/**"], walkthrough_mentions: ["Director"]}
   @server_change ["lib/symphony_elixir/questions.ex"]
