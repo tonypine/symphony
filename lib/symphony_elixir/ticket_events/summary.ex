@@ -241,8 +241,9 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp summary(_type, _payload, _event), do: :unknown
 
   # A step's outcome: "Build failed after 4 min: back to writing the code", "Tests passed in 2 min",
-  # "Paused on your answer", "Checks skipped: no Elixir changed". A delegated step's title and
-  # reason are the agent's words, so they go in the detail and the title says "Step".
+  # "Paused on your answer", "Checks skipped: no Elixir changed". A delegated step's title, reason
+  # and the step it returns to are the agent's words, so they go in the detail and the title says
+  # "Step".
   defp step_outcome("passed", payload) do
     {name, detail} = step_name(payload, "", "Step")
     {name <> " passed" <> suffix(" in ", duration(count(payload, :duration_ms))), detail}
@@ -251,7 +252,12 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp step_outcome("failed", payload) do
     {name, detail} = step_name(payload, "", "Step")
     back = text(payload, :returns_to_title) || prefixed_text("step", text(payload, :returns_to))
-    {name <> " failed" <> suffix(" after ", duration(count(payload, :duration_ms))) <> suffix(": back to ", back), detail}
+    failed = name <> " failed" <> suffix(" after ", duration(count(payload, :duration_ms)))
+
+    # The step it returns to is the agent's words for a delegated step, so it joins the detail.
+    if text(payload, :mode) in @symphony_steps,
+      do: {failed <> suffix(": back to ", back), detail},
+      else: {failed, detail ++ [prefixed_text("back to", back)]}
   end
 
   defp step_outcome("paused", payload), do: {"Paused on your answer", [text(payload, :title)]}

@@ -289,8 +289,11 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       assert render("step.completed", Map.merge(delegated, %{outcome: "skipped", reason: "nothing to change"})) ==
                %{title: "Step skipped", detail: "Writing the code · nothing to change"}
 
-      assert render("step.completed", Map.merge(delegated, %{outcome: "failed", returns_to: "code", returns_to_title: "writing the code"})) ==
-               %{title: "Step failed: back to writing the code", detail: "Writing the code"}
+      assert render("step.completed", Map.merge(delegated, %{outcome: "failed", returns_to: "code", returns_to_title: "writing the code", duration_ms: 240_000})) ==
+               %{title: "Step failed after 4 min", detail: "Writing the code · back to writing the code"}
+
+      assert render("step.completed", Map.merge(delegated, %{outcome: "failed", returns_to: "code"})) ==
+               %{title: "Step failed", detail: "Writing the code · back to step code"}
     end
 
     test "a step stored before its outcome was recorded, and a stored step.skipped, still read" do
@@ -340,6 +343,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
             {"step.started", %{step_id: "s", title: @long, mode: "delegated"}},
             {"step.completed", %{step_id: "s", title: @long, mode: "delegated", outcome: "passed"}},
             {"step.completed", %{step_id: "s", title: "Looking", mode: "delegated", outcome: "skipped", reason: @long}},
+            {"step.completed", %{step_id: "s", title: "Look", mode: "delegated", outcome: "failed", returns_to: "code", returns_to_title: @long}},
             {"evidence", %{caption: @long}},
             {"finding.resolved", %{finding_id: "f", how: @long}},
             {"checklist.answered", %{item: @long, answer: @long}},
