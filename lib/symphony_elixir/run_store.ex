@@ -6,7 +6,7 @@ defmodule SymphonyElixir.RunStore do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{Config, Paths, Pauses, TicketState}
+  alias SymphonyElixir.{Config, Paths, Pauses, TicketMerge, TicketState}
   alias SymphonyElixir.RunStore.RunIndex
   alias SymphonyElixir.TicketEvents.Event
 
@@ -21,11 +21,8 @@ defmodule SymphonyElixir.RunStore do
   @ticket_index_table :symphony_run_store_ticket_index
   @ticket_index_marker "ticket_index_v2"
   @pair_table :symphony_run_store_ticket_states
-  @expand_marker "ticket_index_v1"
   @merge_marker "records_merged_v1"
   @pair_key_dropped_marker "ticket_pair_key_dropped_v1"
-  # The release that merged each ticket's records into one (TP-1338): a store must have run it.
-  @merge_release "0.0.1.792"
   @ticket_events_table :symphony_run_store_ticket_events
   @artifacts_table :symphony_run_store_artifacts
   @ticket_pull_request_table :symphony_run_store_ticket_pull_requests
@@ -1517,8 +1514,8 @@ defmodule SymphonyElixir.RunStore do
   def ticket_index_marker, do: @ticket_index_marker
 
   @doc """
-  The marker (`get_marker/1`) the merge of each ticket's duplicate records set (Symphony
-  #{@merge_release}), with its report beside it (`get_report/1`, `records.merged`).
+  The marker (`get_marker/1`) the merge of each ticket's duplicate records set, with its report
+  beside it (`get_report/1`, `records.merged`).
   """
   @spec records_merged_marker() :: String.t()
   def records_merged_marker, do: @merge_marker
@@ -1546,19 +1543,22 @@ defmodule SymphonyElixir.RunStore do
   end
 
   @doc """
-  The one-time step of this release that moves a ticket's record off the (repository, ticket) key
-  for good (`ticket_index_marker/0`), run by every start before the store answers. A store with no
-  (repository, ticket) table (a new one, or one this step already ran on) has nothing to move. A
-  store that has one must show the markers of the two releases before this one: the by-ticket index
-  (`ticket_index_v1`) and the merge of a ticket's duplicate records (`records_merged_v1`, Symphony
-  #{@merge_release}); one that lacks either is refused with `{:store_not_merged, message}`, the
-  message naming the version to install first, and nothing is written. Otherwise, in one durable
-  transaction, a ticket whose only record is still on the old key is written to the by-ticket
-  index, and the ticket events move onto the ticket's id (the record's repository's copy of an
-  event first, each event once by id, a straggler numbered after the last); then the old table is
-  deleted and the step's own marker (`ticket_pair_key_dropped_v1`) set. A ticket the merge left
-  under several repositories with none indexed refuses the start as well. Interrupted, the next
-  start runs it again: every write is the same.
+  The one-time step that moves a ticket's record off the (repository, ticket) key for good
+  (`ticket_index_marker/0`), run by every start before the store answers, from whichever release
+  wrote the store. A store with no (repository, ticket) table (a new one, or one this step already
+  ran on) has nothing to move. Otherwise, in one durable transaction:
+
+    * a ticket whose only record is on the old key is written to the by-ticket index;
+    * a ticket with records under several repositories is merged into its one record
+      (`SymphonyElixir.TicketMerge`), its events renumbered from 1 and its artifacts listed under
+      it. A store with the merge's marker (`records_merged_v1`) already folded the tickets its index
+      names, so what those left on the old key is not read again;
+    * a store without that marker gets it, with the merge's report beside it (`records.merged`);
+    * the other ticket events move onto the ticket's id (the record's repository's copy of an event
+      first, each event once by id, a straggler numbered after the last).
+
+  Then the old table is deleted and the step's own marker (`ticket_pair_key_dropped_v1`) set.
+  Interrupted, the next start runs it again: every write is the same.
   """
   @spec contract_ticket_key() :: :ok | {:error, term()}
   def contract_ticket_key do
@@ -1568,7 +1568,6 @@ defmodule SymphonyElixir.RunStore do
 
   defp drop_pair_key do
     with :ok <- load_pair_table(),
-         :ok <- merged_store(),
          :ok <- unwrap_nested_error(durable_transaction(&move_off_pair_key/0)) do
       # A failed delete stops the start with Mnesia's reason; the next start runs the step again.
       {:atomic, :ok} = :mnesia.delete_table(@pair_table)
@@ -1586,45 +1585,69 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
-  defp merged_store do
-    missing = Enum.filter([@expand_marker, @merge_marker], &(:mnesia.transaction(fn -> read_marker(&1) end) == {:atomic, nil}))
+  defp move_off_pair_key do
+    now = DateTime.utc_now()
+    merge_ran? = read_marker(@merge_marker) != nil
+    indexed = Map.new(:mnesia.match_object({@ticket_index_table, :_, :_, :_}), fn {_table, issue_id, repo_key, _record} -> {issue_id, repo_key} end)
+    tickets = :mnesia.match_object({@pair_table, :_, :_, :_, :_}) |> Enum.group_by(&elem(&1, 3)) |> Enum.sort()
 
-    case missing do
-      [] ->
+    merges = Enum.flat_map(tickets, fn {issue_id, rows} -> move_ticket(issue_id, rows, Map.get(indexed, issue_id), merge_ran?, now) end)
+    rekey_ticket_events()
+    if not merge_ran?, do: put_merge_report(TicketMerge.report(merges, length(tickets), now), now)
+    :ok
+  end
+
+  defp move_ticket(issue_id, [{_table, _key, repo_key, issue_id, record}], nil, _merge_ran?, _now) do
+    write_ticket_record(repo_key, issue_id, record |> TicketState.normalize() |> Map.put(:repo_key, repo_key))
+    []
+  end
+
+  defp move_ticket(_issue_id, [_one], _indexed_repo_key, _merge_ran?, _now), do: []
+  defp move_ticket(_issue_id, _rows, indexed_repo_key, true, _now) when is_binary(indexed_repo_key), do: []
+  defp move_ticket(issue_id, rows, indexed_repo_key, _merge_ran?, now), do: [{issue_id, merge_ticket(issue_id, rows, indexed_repo_key, now)}]
+
+  defp merge_ticket(issue_id, rows, indexed_repo_key, now) do
+    entries =
+      for {_table, _key, repo_key, ^issue_id, record} <- Enum.sort_by(rows, &elem(&1, 2)) do
+        %{
+          repo_key: repo_key,
+          record: TicketState.normalize(record),
+          events: pair_key_events(repo_key, issue_id),
+          indexed: repo_key == indexed_repo_key
+        }
+      end
+
+    merge = TicketMerge.merge(issue_id, entries, now)
+    Enum.each(entries, &:mnesia.delete({@ticket_events_table, {&1.repo_key, issue_id}}))
+
+    events = for {event, seq} <- Enum.with_index(merge.events, 1), do: %{event | repo_key: merge.repo_key, issue_id: issue_id, seq: seq}
+    Enum.each(events, &write_ticket_event_row/1)
+    write_ticket_record(merge.repo_key, issue_id, %{merge.record | event_seq: length(events)})
+    events |> Enum.flat_map(& &1.artifacts) |> Enum.uniq() |> Enum.each(&list_artifact_ticket(&1, merge.repo_key, issue_id))
+    merge
+  end
+
+  defp pair_key_events(repo_key, issue_id) do
+    @ticket_events_table
+    |> :mnesia.read({repo_key, issue_id})
+    |> Enum.map(&Event.normalize(elem(&1, 7)))
+    |> Enum.sort_by(&{datetime_sort_key(&1.at), &1.seq})
+  end
+
+  defp list_artifact_ticket(id, repo_key, issue_id) do
+    case read_artifact(id, :write) do
+      %{} = artifact ->
+        ticket = %{repo_key: repo_key, issue_id: issue_id}
+        write_artifact(Map.update(artifact, :tickets, [ticket], &Enum.uniq(&1 ++ [ticket])))
+
+      nil ->
         :ok
-
-      missing ->
-        message =
-          "This store was written by a Symphony release before #{@merge_release}, which never merged each ticket's records into one " <>
-            "(#{Enum.join(missing, " and ")} unset). Install Symphony #{@merge_release} first and start it once; then install this release."
-
-        Logger.error(message)
-        {:error, {:store_not_merged, message}}
     end
   end
 
-  defp move_off_pair_key do
-    rows = :mnesia.match_object({@pair_table, :_, :_, :_, :_})
-    indexed = MapSet.new(:mnesia.all_keys(@ticket_index_table))
-
-    rows
-    |> Enum.reject(fn {_table, _key, _repo_key, issue_id, _record} -> MapSet.member?(indexed, issue_id) end)
-    |> Enum.group_by(&elem(&1, 3))
-    |> Enum.reduce_while(:ok, fn
-      {issue_id, [{_table, _key, repo_key, issue_id, record}]}, :ok ->
-        write_ticket_record(repo_key, issue_id, record |> TicketState.normalize() |> Map.put(:repo_key, repo_key))
-        {:cont, :ok}
-
-      {issue_id, _several}, :ok ->
-        {:halt,
-         {:error,
-          {:store_not_merged,
-           "Ticket #{issue_id} still has records under several repositories and none is its one record. Install Symphony #{@merge_release} first and start it once; then install this release."}}}
-    end)
-    |> then(fn
-      :ok -> rekey_ticket_events()
-      error -> error
-    end)
+  defp put_merge_report(report, now) do
+    :mnesia.write({@totals_table, {:marker, @merge_marker}, now})
+    :mnesia.write({@totals_table, {:report, @merge_marker}, report})
   end
 
   # Every event row still keyed by (repository, ticket) moves onto its ticket's id.
