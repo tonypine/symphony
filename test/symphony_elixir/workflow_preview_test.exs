@@ -109,7 +109,7 @@ defmodule SymphonyElixir.WorkflowPreviewLedgerTest do
 
   test "with the default settings, the ledger brief is on and the prompt carries it", %{workflow: file} do
     refute File.read!(Workflow.symphony_file_path()) =~ "ledger:"
-    assert Config.settings!().ledger.prompt_brief_enabled == true
+    assert Config.prompt_brief_enabled?() == true
 
     assert {:ok, prompt} = WorkflowPreview.render(file: file)
     assert prompt =~ "Ticket history (every decision, open finding and note in full"
