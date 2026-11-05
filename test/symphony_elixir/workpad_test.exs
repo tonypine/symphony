@@ -67,7 +67,7 @@ defmodule SymphonyElixir.WorkpadTest do
     assert body =~ "Symphony created this bootstrap workpad before the first agent turn."
 
     assert [%{name: "claim", details: %{from: "Todo", to: "In Progress"}}] =
-             RunStore.get_ticket_state("issue-workpad-bootstrap").signals
+             ticket_signals("issue-workpad-bootstrap")
   end
 
   test "bootstrap returns an error when the Todo state update fails" do

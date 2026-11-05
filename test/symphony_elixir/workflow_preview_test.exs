@@ -107,6 +107,15 @@ defmodule SymphonyElixir.WorkflowPreviewLedgerTest do
     assert RunStore.list_ticket_events("issue_sample_0001", []) == []
   end
 
+  test "with the default settings, the ledger brief is on and the prompt carries it", %{workflow: file} do
+    refute File.read!(Workflow.symphony_file_path()) =~ "ledger:"
+    assert Config.settings!().ledger.prompt_brief_enabled == true
+
+    assert {:ok, prompt} = WorkflowPreview.render(file: file)
+    assert prompt =~ "Ticket history (every decision, open finding and note in full"
+    assert prompt =~ "<ticket_ledger>\n"
+  end
+
   test "turned off, the prompt is the one rendered without a ticket state", %{workflow: file} do
     path = Workflow.symphony_file_path()
     File.write!(path, File.read!(path) <> "ledger:\n  prompt_brief_enabled: false\n")

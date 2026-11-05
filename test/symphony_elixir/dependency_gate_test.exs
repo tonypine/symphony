@@ -101,7 +101,7 @@ defmodule SymphonyElixir.DependencyGateTest do
     refute_received {:memory_tracker_state_update, "issue-dependency-gate-terminal", _state}
 
     assert [%{name: "decision requested", details: %{question: true, reason: "dependency_source_requires_approval"}}] =
-             RunStore.get_ticket_state("issue-dependency-gate-terminal").signals
+             ticket_signals("issue-dependency-gate-terminal")
   end
 
   test "issue_terminal? reads the refreshed state and treats lookup failures as active" do

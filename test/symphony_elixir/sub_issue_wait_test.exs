@@ -209,7 +209,7 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       refute_received {:memory_tracker_state_update, _issue_id, _state}
       assert_received {:memory_tracker_comment, "p", _wait_comment}
       assert RunStore.merged_wait?("p")
-      assert [%{name: "merge settled", details: %{to: @waiting}}] = RunStore.get_ticket_state("p").signals
+      assert [%{name: "merge settled", details: %{to: @waiting}}] = ticket_signals("p")
       :ok = RunStore.delete_merged_wait("p")
 
       waiting = %{issue | state: @waiting}
@@ -577,7 +577,7 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       Orchestrator.park_breakdown_parents_for_test([parent], orchestrator_state())
 
       assert [%{name: "plan verdict", details: %{outcome: "approve", to: @waiting}}] =
-               RunStore.get_ticket_state("parent-signal").signals
+               ticket_signals("parent-signal")
     end
 
     test "records a merge settled signal when an issue waiting on its sub-tickets is closed" do
@@ -602,7 +602,7 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       Orchestrator.close_finished_parents_for_test([waiting], orchestrator_state())
 
       assert [%{name: "merge settled", details: %{sub_issues: 1}}] =
-               RunStore.get_ticket_state("waiting-signal").signals
+               ticket_signals("waiting-signal")
     end
   end
 

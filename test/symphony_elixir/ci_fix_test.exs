@@ -124,10 +124,10 @@ defmodule SymphonyElixir.CiFixTest do
   end
 
   describe "record_verdict/4" do
-    test "appends the outcome and details to the ticket's signals ledger" do
+    test "records the outcome and details as the ticket's signal" do
       assert :ok = CiFix.record_verdict(@repo_key, @issue_id, "mechanical", %{to: "Merging", origin: "Merging"})
 
-      assert %{signals: [signal | _]} = RunStore.get_ticket_state(@issue_id)
+      assert [signal | _] = ticket_signals(@issue_id)
       assert signal.name == "fix verdict"
       assert signal.details == %{outcome: "mechanical", to: "Merging", origin: "Merging"}
     end
@@ -135,7 +135,7 @@ defmodule SymphonyElixir.CiFixTest do
     test "takes no details when none are given" do
       assert :ok = CiFix.record_verdict(@repo_key, @issue_id, "cannot_fix")
 
-      assert %{signals: [signal | _]} = RunStore.get_ticket_state(@issue_id)
+      assert [signal | _] = ticket_signals(@issue_id)
       assert signal.details == %{outcome: "cannot_fix"}
     end
   end

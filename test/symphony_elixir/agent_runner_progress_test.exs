@@ -1492,7 +1492,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
   # The newest signal recorded for the run's issue, asserting its name and details.
   defp assert_signal(name, details) do
-    assert [%{name: ^name, details: ^details} | _rest] = RunStore.get_ticket_state("issue-progress").signals
+    assert [%{name: ^name, details: ^details} | _rest] = ticket_signals("issue-progress")
   end
 
   # Refreshes the issue through the Linear client, as the runner does in production.

@@ -20,6 +20,7 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
     def list_all_ticket_states, do: fail(:list_all_ticket_states) || RunStore.list_all_ticket_states()
     def list_ticket_events(issue_id, opts), do: fail(:list_ticket_events) || RunStore.list_ticket_events(issue_id, opts)
     def append_ticket_events(events), do: fail(:append_ticket_events) || RunStore.append_ticket_events(events)
+    def update_ticket_state(issue_id, attrs), do: fail(:update_ticket_state) || RunStore.update_ticket_state(issue_id, attrs)
 
     defp fail(name), do: if(name in Process.get(:fail, []), do: {:error, {:failed, name}})
   end
@@ -130,8 +131,9 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       assert unblock.payload == %{action: "unblock", from: "QA", to: "QA"}
       assert %{at: @now, idempotency: "backfill:note:history", payload: %{text: "History before 2026-10-20 12:00 UTC was backfilled from the ticket's snapshot"}} = note
 
-      # The record's views read what its snapshot held.
+      # The record's views read what its snapshot held, and the snapshot's fields are dropped.
       record = RunStore.get_ticket_state(@issue_id)
+      assert record.legacy_history == nil
 
       assert Enum.map(TicketState.signals(record), &{&1.name, &1.details}) == [
                {"decision requested", %{hold: "needs_decision", reason: 42}},
@@ -162,10 +164,14 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       assert events() == events
     end
 
-    test "each view over a backfilled ticket's events equals the field its record still keeps", %{audit: audit} do
-      # A record as epic 1 found it, each list newest first as the live writers kept it: verdicts
-      # before the runs they ended the count of, every entry timed.
-      put_ticket(%{
+    test "a store from before epic 1, upgraded straight to this release, backfills and every view reads as its fields did", %{audit: audit} do
+      # A record as epic 1 found it, written by a release before it: no event stream, no marker, its
+      # signals, verdicts and dispatches in fields of its own, each list newest first as the live
+      # writers kept it, verdicts before the runs they ended the count of, every entry timed.
+      stored = %{
+        repo_key: @repo_key,
+        issue_id: @issue_id,
+        issue_identifier: "TP-1",
         phase: "QA",
         signals: [
           signal(12, "ci_wait_started", %{sha: "bbb2222"}),
@@ -185,15 +191,68 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
           %{kind: "rework", run_id: "run-2", state: "Rework", head: "aaa1111", at: at(8), outcome: %{exit: "ended normally", head: "bbb2222", at: at(9)}},
           %{kind: "rework", run_id: "run-1", state: "Rework", head: "aaa1111", at: at(6), outcome: %{exit: "failed (:boom)", head: "aaa1111", at: at(7)}}
         ]
-      })
+      }
+
+      {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_ticket_index, @issue_id, @repo_key, stored}) end)
+      held = TicketState.legacy_history(stored)
+
+      # The release starts on it: the store loads, a write before the backfill runs keeps what the
+      # record held, and the startup's backfill converts it.
+      restart_run_store()
+      :ok = RunStore.update_ticket_state(@issue_id, %{phase: "QA"})
+      assert TicketState.legacy_history(RunStore.get_ticket_state(@issue_id)) == held
 
       assert {:ok, %{tickets: 1}} = Backfill.run(now: @now, audit_log: audit)
+      assert RunStore.get_marker(Backfill.marker()) == @now
 
-      record = TicketState.normalize(RunStore.get_ticket_state(@issue_id))
-      assert TicketState.signals(record) == record.signals
-      assert TicketState.recent_signals(record, 3) == Enum.take(record.signals, 3)
-      assert TicketState.verdicts(record) == record.verdicts
-      assert TicketState.dispatches(record) == record.dispatches
+      record = RunStore.get_ticket_state(@issue_id)
+      assert record.legacy_history == nil
+      refute Enum.any?([:signals, :verdicts, :dispatches], &Map.has_key?(record, &1))
+
+      assert TicketState.signals(record) == held.signals
+      assert TicketState.recent_signals(record, 3) == Enum.take(held.signals, 3)
+      assert TicketState.verdicts(record) == held.verdicts
+      assert TicketState.dispatches(record) == held.dispatches
+
+      # A start after it changes nothing the views read.
+      restart_run_store()
+      assert {:ok, %{tickets: 0, events: 0}} = Backfill.run(now: @now, audit_log: audit)
+      assert TicketState.signals(record) == held.signals
+      assert TicketState.verdicts(record) == held.verdicts
+    end
+
+    test "a record written before the backfill ran still converts the history it kept", %{audit: audit} do
+      put_ticket(%{
+        signals: [signal(1, "claim", %{from: "Todo", to: "In Progress"})],
+        verdicts: [%{kind: "qa", head_sha: "a", outcome: "fail", recorded_at: at(2)}]
+      })
+
+      :ok = RunStore.update_ticket_state(@issue_id, %{phase: "Rework"})
+      refute Map.has_key?(RunStore.get_ticket_state(@issue_id), :signals)
+
+      assert {:ok, %{tickets: 1, events: 3}} = Backfill.run(now: @now, audit_log: audit)
+      assert [%{name: "claim"}] = TicketState.signals(%{issue_id: @issue_id})
+      assert [%{outcome: "fail"}] = TicketState.verdicts(%{issue_id: @issue_id})
+      assert RunStore.get_ticket_state(@issue_id).legacy_history == nil
+    end
+
+    test "after the marker, a record still carrying its old fields drops them, and a drop that fails is logged", %{audit: audit} do
+      :ok = RunStore.put_marker(Backfill.marker(), @now)
+      put_ticket(%{signals: [signal(1, "claim", %{to: "In Progress"})]})
+      put_ticket(%{issue_id: "issue-2"})
+
+      Process.put(:fail, [:update_ticket_state])
+      log = capture_log(fn -> assert {:ok, %{tickets: 0, events: 0}} = Backfill.run(now: @now, audit_log: audit, store: Store) end)
+      assert log =~ "Failed to drop the converted history of issue_id=#{@issue_id}"
+      refute log =~ "issue-2"
+
+      Process.put(:fail, [])
+      assert {:ok, %{tickets: 0, events: 0}} = Backfill.run(now: @now, audit_log: audit, store: Store)
+      assert RunStore.get_ticket_state(@issue_id).legacy_history == nil
+      assert events() == []
+
+      Process.put(:fail, [:list_all_ticket_states])
+      assert {:error, {:failed, :list_all_ticket_states}} = Backfill.run(store: Store)
     end
 
     test "a ticket without a record yields nothing", %{audit: audit} do
@@ -360,6 +419,18 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
     ref = Process.monitor(pid)
     send(pid, :go)
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+  end
+
+  defp restart_run_store do
+    case Supervisor.terminate_child(SymphonyElixir.Supervisor, RunStore) do
+      :ok -> :ok
+      {:error, :not_found} -> if pid = Process.whereis(RunStore), do: GenServer.stop(pid), else: :ok
+    end
+
+    case Supervisor.restart_child(SymphonyElixir.Supervisor, RunStore) do
+      {:ok, _pid} -> :ok
+      {:error, :not_found} -> with({:ok, _pid} <- GenServer.start(RunStore, [], name: RunStore), do: :ok)
+    end
   end
 
   defp put_ticket(attrs) do

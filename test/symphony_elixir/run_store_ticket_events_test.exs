@@ -41,7 +41,7 @@ defmodule SymphonyElixir.RunStoreTicketEventsTest do
 
   test "an event takes the ticket's next seq and leaves the rest of its record as it was" do
     :ok = RunStore.put_ticket_state(%{repo_key: @repo_key, issue_id: @issue_id, phase: "QA", issue_identifier: "TP-1"})
-    :ok = RunStore.record_ticket_signal(@repo_key, @issue_id, "handoff", %{to: "QA"})
+    :ok = RunStore.set_ci_fix_origin(@repo_key, @issue_id, "Code Review")
     before = RunStore.get_ticket_state(@issue_id)
 
     assert {:ok, %Event{seq: 1, phase: "QA"}} = RunStore.append_ticket_event(event("note", %{text: "x"}))

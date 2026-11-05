@@ -182,7 +182,7 @@ defmodule SymphonyElixir.TicketObservationTest do
   end
 
   test "a newer title reaches an existing record and leaves its other fields", %{repo_key: repo_key} do
-    held = repo_key |> TicketState.new("issue-observed") |> TicketState.record_verdict("qa", "a", "pass", @now)
+    held = repo_key |> TicketState.new("issue-observed") |> TicketState.put_ci_fix_origin("QA", @now)
     :ok = RunStore.put_ticket_state(held)
     {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
 
@@ -192,7 +192,7 @@ defmodule SymphonyElixir.TicketObservationTest do
     record = RunStore.get_ticket_state("issue-observed")
     assert record.title == "Observe every poll, renamed"
     assert record.linear_updated_at == DateTime.add(@linear_at, 300)
-    assert [%{kind: "qa", outcome: "pass"}] = record.verdicts
+    assert record.ci_fix_origin == "QA"
   end
 
   test "an older issue is dropped, counted as stale, and the record untouched", %{repo_key: repo_key} do

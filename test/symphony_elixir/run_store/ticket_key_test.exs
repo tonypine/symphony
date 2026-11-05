@@ -28,14 +28,10 @@ defmodule SymphonyElixir.RunStore.TicketKeyTest do
       writers = [
         fn -> RunStore.put_ticket_state(TicketState.new(@repo_key, issue_id, %{phase: "Todo"})) end,
         fn -> RunStore.update_ticket_state(issue_id, %{phase: "In Progress"}) end,
-        fn -> RunStore.record_ticket_signal(@repo_key, issue_id, "handoff", %{}) end,
         fn -> RunStore.put_ticket_pr_watch(@repo_key, issue_id, "ACME-1", %{pr_url: "https://github.com/acme/app/pull/1", head_sha: "abc"}) end,
-        fn -> RunStore.record_ticket_verdict(@repo_key, issue_id, "qa", "abc", "pass") end,
         fn -> RunStore.mark_ticket_projection(@repo_key, issue_id, :phase, :linear_down) end,
         fn -> RunStore.record_ticket_self_heal(@repo_key, issue_id, %{retries: 1}) end,
         fn -> RunStore.record_ticket_decisions(@repo_key, issue_id, [decision()], []) end,
-        fn -> RunStore.record_ticket_dispatch(@repo_key, issue_id, dispatch()) end,
-        fn -> RunStore.record_ticket_dispatch_outcome(@repo_key, issue_id, "run-1", %{exit: "ended normally", head: "a"}) end,
         fn -> RunStore.claim_path_unlocks(@repo_key, issue_id, ["grant-1"], "run-1") end,
         fn -> RunStore.clear_ticket_fix_ticket(@repo_key, issue_id) end,
         fn -> RunStore.record_ci_state(@repo_key, issue_id, "abc", "green", @at) end,
@@ -53,7 +49,7 @@ defmodule SymphonyElixir.RunStore.TicketKeyTest do
 
       refute @pair_table in :mnesia.system_info(:tables)
 
-      assert %{phase: "In Progress", signals: [%{name: "handoff"}], ci_fix_origin: "Code Review", event_seq: 1} =
+      assert %{phase: "In Progress", ci_fix_origin: "Code Review", event_seq: 1} =
                RunStore.get_ticket_state(issue_id)
 
       assert [%Event{seq: 1, repo_key: @repo_key}] = RunStore.list_ticket_events(issue_id, [])
@@ -68,13 +64,13 @@ defmodule SymphonyElixir.RunStore.TicketKeyTest do
 
       log =
         capture_log(fn ->
-          assert :ok = RunStore.record_ticket_signal(@other_repo_key, issue_id, "observed", %{})
+          assert :ok = RunStore.set_ci_fix_origin(@other_repo_key, issue_id, "QA")
           appended = RunStore.append_ticket_events([event(issue_id, @other_repo_key)])
           assert {:ok, [%Event{repo_key: @repo_key, seq: 1}]} = appended
         end)
 
       assert count(log, "issue_id=#{issue_id} record_repo_key=#{@repo_key} repo_key=#{@other_repo_key}") == 1
-      assert {@repo_key, %{phase: "QA", signals: [%{name: "observed"}], event_seq: 1}} = index_row(issue_id)
+      assert {@repo_key, %{phase: "QA", ci_fix_origin: "QA", event_seq: 1}} = index_row(issue_id)
       assert [%Event{repo_key: @repo_key}] = RunStore.list_ticket_events(issue_id, [])
     end
 
@@ -279,8 +275,6 @@ defmodule SymphonyElixir.RunStore.TicketKeyTest do
       [] -> nil
     end
   end
-
-  defp dispatch, do: %{kind: :rework, run_id: "run-1", state: "Rework", head: "a"}
 
   defp keep_question(_questions, pause), do: {:write, %{}, pause, [], :kept}
 

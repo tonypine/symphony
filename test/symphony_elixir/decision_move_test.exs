@@ -43,7 +43,7 @@ defmodule SymphonyElixir.DecisionMoveTest do
 
     record = RunStore.get_ticket_state(@issue_id)
     assert record.phase == "Merging"
-    assert [%{kind: "qa", outcome: "skip", head_sha: "abc123", details: %{reason: "skipped by decision"}}] = record.verdicts
+    assert [%{kind: "qa", outcome: "skip", head_sha: "abc123", details: %{reason: "skipped by decision"}}] = ticket_verdicts()
   end
 
   test "perform/4 answers the guard's refusal, and tries Canceled's other spelling only for a missing state" do

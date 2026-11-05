@@ -3,13 +3,14 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
   Converts each ticket's history from before the event stream existed (`SymphonyElixir.TicketEvents`)
   into events, once, from its snapshot (`SymphonyElixir.TicketState`) and the audit log.
 
-  For every ticket record of every repo, the backfill converts the snapshot's `signals`, `verdicts`
-  and `dispatches`, and the last 14 days of `run_stopped` and `director_move` audit records, into the
-  events the live writes record for them:
+  For every ticket record of every repo, the backfill converts the `signals`, `verdicts` and
+  `dispatches` the snapshot kept (`SymphonyElixir.TicketState.legacy_history/1`), and the last 14
+  days of `run_stopped` and `director_move` audit records, into the events the live writes record
+  for them, so the record's views over its events (`SymphonyElixir.TicketState.signals/1`,
+  `verdicts/1`, `dispatches/1`) read what the snapshot held:
 
     * A signal goes through `SymphonyElixir.TicketSignals.signal_event/2`, the live mapping, with
-      its name and details, so the record's view of its signals (`SymphonyElixir.TicketState.signals/1`)
-      reads what the snapshot held. A signal live writes record next to a pause or a question (a
+      its name and details. A signal live writes record next to a pause or a question (a
       held `blocked`, `dispatch_loop`, `ci_wait`, a held `handoff_missing`, `unblocked`, a
       `decision requested`, a review's merge confirmation or escalation, a Decide that moved
       nothing) is a machine `note` naming it, as live; the pauses and questions record their own
@@ -32,8 +33,11 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
   Each ticket's events are appended oldest first in one transaction
   (`SymphonyElixir.RunStore.append_ticket_events/1`), ending with one `note`: "History before <date>
   was backfilled from the ticket's snapshot", where <date> is the cutoff. A ticket already holding
-  that note is done. The whole backfill runs once: the run store marker `ticket_events_backfill_v1`
-  is set when every ticket is done, and a run after it does nothing.
+  that note is done. Once a ticket is done, the snapshot's fields are dropped from its record
+  (`legacy_history: nil`). The whole backfill runs once: the run store marker
+  `ticket_events_backfill_v1` is set when every ticket is done; a run after it converts nothing and
+  only drops the fields a record still carries (a release before this one kept them on the record
+  after converting them).
   """
 
   require Logger
@@ -92,7 +96,7 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
     store = Keyword.get(opts, :store, RunStore)
 
     case store.get_marker(@marker) do
-      %DateTime{} -> {:ok, %{tickets: 0, events: 0}}
+      %DateTime{} -> with :ok <- drop_converted(store), do: {:ok, %{tickets: 0, events: 0}}
       nil -> backfill(store, Keyword.get(opts, :now) || DateTime.utc_now(), opts)
       {:error, reason} -> {:error, reason}
     end
@@ -107,6 +111,24 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
         end
 
       finish(store, results, now)
+    end
+  end
+
+  # A record still carrying the snapshot's fields after the marker was set drops them: its history
+  # was converted then.
+  defp drop_converted(store) do
+    with {:ok, records} <- read(store.list_all_ticket_states()) do
+      for record <- Enum.map(records, &TicketState.normalize/1), is_binary(record.issue_id), do: drop_history(store, record)
+      :ok
+    end
+  end
+
+  defp drop_history(_store, %{legacy_history: nil}), do: :ok
+
+  defp drop_history(store, record) do
+    case store.update_ticket_state(record.issue_id, %{legacy_history: nil}) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Failed to drop the converted history of issue_id=#{record.issue_id}: #{inspect(reason)}")
     end
   end
 
@@ -153,6 +175,7 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
         if Enum.any?(existing, &(&1.idempotency == @note_key)), do: :done, else: append(store, record, existing, audit, now)
       end
 
+    if result == :done or match?({:ok, _count}, result), do: drop_history(store, record)
     logged(result, record)
   end
 
@@ -187,14 +210,15 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
   # The snapshot's entries as `%{at, source, hash, mapping}`, each mapping an event's type, payload
   # and options (or nil for an entry that is no event), the ones without a timestamp left out.
   defp entries(record, audit) do
-    signals = for signal <- record.signals, do: entry(signal.at, "signal", signal, TicketSignals.signal_event(signal.name, signal.details))
+    history = TicketState.legacy_history(record)
+    signals = for signal <- history.signals, do: entry(signal.at, "signal", signal, TicketSignals.signal_event(signal.name, signal.details))
 
     verdicts =
-      for verdict <- record.verdicts do
+      for verdict <- history.verdicts do
         entry(verdict.recorded_at, "verdict", verdict, TicketSignals.verdict_event(verdict.kind, verdict.outcome, verdict.head_sha, details: verdict.details))
       end
 
-    dispatches = Enum.flat_map(record.dispatches, &dispatch_entries/1)
+    dispatches = Enum.flat_map(history.dispatches, &dispatch_entries/1)
 
     moves =
       for move <- audit, matches_repo?(move, record.repo_key) do

@@ -61,9 +61,6 @@ defmodule SymphonyElixir.EpicReview.CiRerunTest do
     end
   end
 
-  # What the record kept: the events view cannot see a signal whose note the event store refused.
-  defp record_signals(name), do: Enum.filter(RunStore.get_ticket_state(@issue_id).signals, &(&1.name == name))
-
   defp signals(name), do: Enum.filter(Handoff.signals(@repo_key, @issue_id), &(&1.name == name))
 
   test "names the signals it records" do
@@ -85,7 +82,7 @@ defmodule SymphonyElixir.EpicReview.CiRerunTest do
     assert log =~ "Epic review did not rerun the failed CI on feed00112233: it could not record the rerun"
   end
 
-  test "a rerun of red CI records its signal on the record and as a note naming ci_rerun and the commit, before it reruns" do
+  test "a rerun of red CI records its signal as a note naming ci_rerun and the commit, before it reruns" do
     assert {:wait, [%{id: "701"}]} = check([ci_run("701", "FAILURE")])
 
     assert [%{details: %{sha: @sha, runs: [%{id: "701"}]}}] = signals("ci_rerun")
@@ -108,38 +105,40 @@ defmodule SymphonyElixir.EpicReview.CiRerunTest do
     assert log =~ "Epic review did not rerun the failed CI on feed00112233: it could not record the rerun"
   end
 
-  test "a rerun whose note the event store refuses after the record kept it is still made, once" do
+  test "a rerun whose note the event store refuses is not made, so a commit is never rerun twice" do
     log =
       capture_log(fn ->
         {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_events, :read_only)
 
         try do
-          assert {:wait, [%{id: "701"}]} = check([ci_run("701", "FAILURE")])
+          assert {:proceed, nil} = check([ci_run("701", "FAILURE")])
         after
           {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_events, :read_write)
         end
       end)
 
-    assert log =~ "Failed to record the note event of the ci_rerun signal"
-    assert [%{details: %{sha: @sha}}] = record_signals("ci_rerun")
-    assert [["run", "rerun", "701" | _rest]] = reruns()
+    assert log =~ "Epic review did not rerun the failed CI on feed00112233: it could not record the rerun"
+    assert signals("ci_rerun") == []
+    assert reruns() == []
   end
 
-  test "a cancelled run's rerun whose note the event store refuses is still made and counted" do
+  test "a cancelled run's rerun whose note the event store refuses is not made" do
     cancelled = [ci_run("701", "CANCELLED")]
 
-    capture_log(fn ->
-      {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_events, :read_only)
+    log =
+      capture_log(fn ->
+        {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_events, :read_only)
 
-      try do
-        assert {:wait, [%{id: "701"}]} = check(cancelled)
-      after
-        {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_events, :read_write)
-      end
-    end)
+        try do
+          assert {:proceed, nil} = check(cancelled)
+        after
+          {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_events, :read_write)
+        end
+      end)
 
-    assert [%{details: %{run: "701"}}] = record_signals("ci_cancel_rerun")
-    assert [["run", "rerun", "701" | _rest]] = reruns()
+    assert log =~ "Epic review did not rerun the cancelled run 701 on feed00112233: it could not record the rerun"
+    assert signals("ci_cancel_rerun") == []
+    assert reruns() == []
   end
 
   test "a rerun gh refuses proceeds naming it, and the commit is not rerun again" do
