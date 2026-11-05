@@ -19,9 +19,9 @@ again on the default branch and on other PRs.
    fails only some of the time (a race, an order or timing dependence, state shared
    between tests) and fix it at that cause: make the race deterministic by injecting
    the delay or the message order, and wait on a message or a monitor, not a sleep.
-   Prove the fix with a repeated run of that test alone, for example
-   `mix test <file>:<line> --repeat-until-failure 500`, and record the command and its
-   result in the workpad.
+   Prove the fix with a repeated run of that test alone (its file and line, with
+   `--repeat-until-failure 500`), and record the command and its result in the
+   workpad.
 4. Fix a failure in code the ticket didn't touch the same way, on the same branch: it
    blocks this PR and every other one until someone fixes it. Say in the workpad and
    the PR description which failure the fix is for and that it is outside the

@@ -190,6 +190,31 @@ defmodule SymphonyElixir.WalkthroughTest do
     end
   end
 
+  describe "check_proofs/2" do
+    test "returns the proofs, trimmed, without writing the description, and refuses as record_proofs/2 does" do
+      description = "## User walkthrough\n\n1. Do it.\n2. Look. Proved by: QA\n"
+
+      assert {:ok, [%{step: 1, test: "test/a_test.exs"}]} = Walkthrough.check_proofs(description, [%{"step" => 1, "test" => " test/a_test.exs "}])
+
+      assert {:error, {:invalid_walkthrough_proof, "step 2 ends with `Proved by: QA`" <> _rest}} =
+               Walkthrough.check_proofs(description, [%{"step" => 2, "test" => "test/a_test.exs"}])
+
+      assert {:error, {:invalid_walkthrough_proof, _message}} = Walkthrough.check_proofs(description, [])
+    end
+  end
+
+  describe "with_recorded_proofs/3" do
+    test "lays the recorded proofs over the steps, the latest a step's, and leaves every step QA's without a proof check" do
+      steps = Walkthrough.steps("1. Do it.\n2. Look.", "make-all")
+      recorded = [%{step: 2, test: "test/a_test.exs"}, %{step: 2, test: "test/b_test.exs"}, %{step: 9, test: "test/c_test.exs"}]
+
+      assert [%{proof: %{by: :qa}}, %{proof: %{by: :test, check: "make-all", test: "test/b_test.exs"}}] =
+               Walkthrough.with_recorded_proofs(steps, recorded, "make-all")
+
+      assert Walkthrough.with_recorded_proofs(steps, recorded, " ") == steps
+    end
+  end
+
   describe "record_proofs/2" do
     @description """
     ## Goal

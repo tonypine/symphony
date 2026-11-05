@@ -7,6 +7,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.QaAndroid.Driver, as: QaAndroidDriver
+  alias SymphonyElixir.TicketEvents
 
   # A spy for the writer `TransitionGuard.perform/4` moves through: it records every move it is
   # asked to make and answers with the result a test sets (`:ok` by default).
@@ -1475,25 +1476,38 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert %{"error" => %{"code" => "unexpected_arguments", "arguments" => ["description"]}} = Jason.decode!(response["output"])
     end
 
-    test "writes the steps' proofs into the walkthrough through AgentTools.Linear" do
-      client = fn query, variables, _opts ->
-        if query =~ "SymphonyAgentIssueDescription" do
-          {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "description" => @walkthrough}}}}
-        else
-          send(self(), {:description, variables.description})
-          {:ok, %{"data" => %{"issueUpdate" => %{"success" => true, "issue" => %{"id" => "issue-current", "url" => "https://linear.app/acme/issue/TP-7"}}}}}
-        end
+    test "records each step's proof as an evidence event and leaves the description alone" do
+      :ok = RunStore.clear()
+
+      client = fn query, _variables, _opts ->
+        if query =~ "SymphonyAgentIssueDescription",
+          do: {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "description" => @walkthrough}}}},
+          else: flunk("the proofs must not edit the description")
       end
 
-      args = %{"proofs" => [%{"step" => 1, "test" => "test/symphony_elixir/walkthrough_test.exs"}]}
+      args = %{"proofs" => [%{"step" => 1, "test" => " test/symphony_elixir/walkthrough_test.exs "}, %{"step" => 2, "test" => "looks right"}]}
+      issue = %Issue{id: "issue-current", identifier: "TP-7", repo_key: "repo-a"}
+      response = DynamicTool.execute("linear_record_walkthrough_proofs", args, issue: issue, linear_client: client, run_id: "run-1", run_kind: "implementation")
+
+      assert %{"steps" => [1, 2], "events" => [%{"type" => "evidence"}, %{"type" => "evidence"}]} = Jason.decode!(response["output"])
+
+      assert [first, second] = TicketEvents.query("issue-current", types: ["evidence"])
+      assert first.payload == %{caption: "Walkthrough step 1 is proved by test/symphony_elixir/walkthrough_test.exs", proof: %{step: 1, test: "test/symphony_elixir/walkthrough_test.exs"}}
+      assert second.payload.proof == %{step: 2, test: "looks right"}
+      assert first.run_id == "run-1"
+    end
+
+    test "a refused event is the tool's error, after the proofs passed the walkthrough" do
+      client = fn query, _variables, _opts ->
+        if query =~ "SymphonyAgentIssueDescription",
+          do: {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "description" => @walkthrough}}}},
+          else: flunk("the proofs must not edit the description")
+      end
+
+      args = %{"proofs" => [%{"step" => 1, "test" => "test/x_test.exs"}]}
       response = DynamicTool.execute("linear_record_walkthrough_proofs", args, issue: %Issue{id: "issue-current"}, linear_client: client)
 
-      assert %{"issue" => %{"id" => "issue-current"}, "steps" => [1]} = Jason.decode!(response["output"])
-
-      assert_received {:description, description}
-
-      assert description ==
-               String.replace(@walkthrough, "Expected: saved.", "Expected: saved. Proved by: `test/symphony_elixir/walkthrough_test.exs`")
+      assert %{"error" => %{"reason" => "no_ticket"}} = Jason.decode!(response["output"])
     end
 
     test "refuses a check name before writing, with the reason" do

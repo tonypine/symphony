@@ -1890,8 +1890,8 @@ The QA agent:
 
 - **Walkthrough proofs.** The person writing a ticket describes the user's flow in plain steps and
   names no test and no check. The implementer, who writes the tests, ends each step a test of its PR
-  covers with `Proved by: <test>` through `linear_record_walkthrough_proofs`, naming only tests in
-  the PR and never a check. The repository names the check that runs them (`proof_check`, Section
+  covers with `Proved by: <test>` through `linear_record_walkthrough_proofs`, which records each
+  proof as an `evidence` event on the ticket's history, naming only tests in the PR and never a check. The repository names the check that runs them (`proof_check`, Section
   5.4.8b). A step ending in `Proved by: <test>` is proved by that test, run by the `proof_check`; the
   older `Proved by: <check> › <test>` MUST still be read, naming the check itself; `Proved by: QA`, or
   no line, is a QA step. A `Proved by:` inside inline code is a quotation in the step's prose, not its
@@ -4580,15 +4580,16 @@ Scoped Linear tool extension contract:
   In the QA scope alone (a QA pass and an epic review), `linear_get_document` MUST also list and
   read the documents the parent issue's runs created (marked by the parent's attachments, listed
   apart from the issue's own); `linear_update_document` still MUST refuse them.
-- `linear_update_issue_summary` and `linear_record_walkthrough_proofs` are the only tools that write
-  the current issue's description (the Decisions section is Symphony's own write, outside any tool).
+- `linear_update_issue_summary` is the only tool that writes the current issue's description (the
+  Decisions section is Symphony's own write, outside any tool).
   `linear_record_walkthrough_proofs` accepts only `proofs`, a list of a step number and a test; it
-  MUST read the description right before writing and change only the `Proved by:` line of each named
-  step of its `## User walkthrough` (replacing a test proof, or appending one), leaving every other
-  byte unchanged. It MUST refuse, with nothing written, a test holding a ` › ` or ` > ` separator (a
-  check name), `QA`, a step the walkthrough lacks, a step its author ended with `Proved by: QA`, and a
-  test that fails the comments' secret scan; the read-only reviewer and QA scopes MUST NOT advertise
-  or execute it. `linear_update_issue_summary`
+  MUST read the description, check each proof against its `## User walkthrough`, and record one
+  `evidence` event per step on the ticket's history with `proof` (the step and the test), leaving the
+  description unchanged. It MUST refuse, with nothing recorded, a test holding a ` › ` or ` > `
+  separator (a check name), `QA`, a step the walkthrough lacks, a step its author ended with
+  `Proved by: QA`, and a test that fails the comments' secret scan; the read-only reviewer and QA
+  scopes MUST NOT advertise or execute it. The QA journey MUST read a step's proof from the
+  description's `Proved by:` line and from the recorded `evidence` events, the latest event winning. `linear_update_issue_summary`
   MUST only write the Symphony summary block between `<!-- symphony:summary:start -->` and
   `<!-- symphony:summary:end -->`. It accepts only a one-line `status`, an optional `links` object
   (`review_brief`, the URL of the review brief comment, and `artifacts`, a list of `label` and

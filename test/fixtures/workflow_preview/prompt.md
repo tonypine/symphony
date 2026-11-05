@@ -1,3 +1,21 @@
+## Steps
+
+An implementation run follows these steps (the default list, `phases.implementation.steps`):
+
+1. `code` Write the code · delegated
+2. `build` Build · machine · times out after 15 min · on failure returns to `code`
+   - when macos/ changed: `cd macos && swift build`
+   - when Elixir files changed: `mix compile --warnings-as-errors`
+3. `checks` Format, specs and credo · machine · when Elixir files changed · times out after 10 min · on failure returns to `code`
+   - `mix format --check-formatted && mix specs.check && mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES`
+4. `tests` Tests and coverage · machine · times out after 30 min · on failure returns to `code`
+   - when Elixir files changed: `mix test $SYMPHONY_CHANGED_TEST_FILES && mix cover.changed`
+   - when macos/ changed: `cd macos && swift test --filter "$SYMPHONY_CHANGED_SWIFT_TEST_FILTER"`
+5. `handoff` Hand off: push and open the pull request · delegated
+
+
+---
+
 Symphony runtime context:
 
 - This is an unattended orchestration session. Work only in the prepared repository workspace; do not read, write, or summarize files outside it.
@@ -13,6 +31,12 @@ Symphony runtime context:
 - Final message must report completed actions and blockers only. Do not include next steps for the user.
 - Repo key: `app`.
 - Follow the repository workflow below after this managed context.
+
+Ticket tools:
+
+- `ticket_events` reads this ticket's history (Symphony's ledger) and `ticket_record` adds an event to it. Symphony fills the run, phase and head; verdicts, moves, pauses and questions are Symphony's, and `ticket_record` refuses them.
+- This implementation run records `step.completed` for each delegated step as it ends it, `evidence` for every screenshot or output it attaches (the files as `artifacts`), and each walkthrough step's proof as `evidence` with `proof` (the step and the test), which `linear_record_walkthrough_proofs` records; a `note` keeps a choice worth knowing later.
+- This run follows a step list: Symphony runs its build, checks and tests itself between turns and brings a failure back to the step it names, with the output. Run none of them yourself: write the code, record what you changed, and end the turn; the handoff step pushes.
 
 You are working on a Linear ticket `ABC-123`
 
@@ -111,30 +135,12 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
   `write_stdin` polling; if a command is still running, wait at least 30
   seconds before polling again unless there is a specific reason to expect
   immediate failure output.
-- Split checks by cost, not by kind. CI is the gate: it runs the full test
-  suite, the 100% coverage report and Dialyzer on every push.
-  - Cheap checks run locally, in any phase: `mix format --check-formatted`,
-    `mix compile --warnings-as-errors`, `mix specs.check`,
-    `mix credo --strict <changed files>`, `mix cover.changed` (line coverage
-    of the `lib/` modules you changed), `mix settings.ui_coverage`, and the
-    test files you added or changed plus the test files of the modules you
-    changed (`mix test <file>` or `<file>:<line>`).
-  - Slow, compute-heavy checks never run locally: the full `mix test`,
-    `make check` and `make test` (both run the whole suite), `mix test --stale`
-    (a workspace has no stale manifest on its first run, so it runs all 2,400+
-    tests, about 2.5 minutes timed on 2026-10-04), `make coverage`
-    (coverage instrumentation recompiles every module and roughly doubles CPU
-    and wall time), and Dialyzer. They are several times slower in the
-    sandbox than in CI, CI runs them again anyway, and several agents running
-    them at once overload the shared host.
-  - `make all` stays available as an optional extra for a change to shared
-    infrastructure (the config schema, orchestrator core) when you judge a
-    full local run worth it. Run it with `TEST_MAX_CASES=2 BEAM_SCHEDULERS=2`
-    and record why in the workpad.
-  - When a check's cost is unclear, time it once and add it to the right list
-    here.
-  - Use `make test-profile`, `make coverage-profile`, or `make dialyzer-profile`
-    only when a ticket asks you to optimize slow tests or gate behavior.
+- Checks are the step list's, not yours. This run follows a step list: after
+  your turn Symphony runs the build, the checks and the tests itself, with your
+  session closed, and a step that fails brings the run back to the step it
+  names with its output. Run none of them: write the code, record what you
+  changed, and end the turn. CI is the gate for the full suite, the 100%
+  coverage report and Dialyzer, and they never run locally either.
 - In sandboxed Elixir runs, `mix` commands (and `make all`) need no Hex
   install or env overrides. Symphony passes the host's `MIX_HOME` and
   `MIX_ARCHIVES` to the agent so Hex and Rebar resolve, and points `HEX_HOME`,
@@ -145,17 +151,6 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
   concurrent runs never write to it: use it directly for scratch files, without
   ad-hoc subfolders to avoid collisions. Symphony removes it when the run
   succeeds.
-- In the Claude sandbox, build and test a Swift package (`macos/`) with
-  `swift build --disable-sandbox --build-system native` and
-  `swift test --disable-sandbox --build-system native`.
-  `--disable-sandbox` skips SwiftPM's own `sandbox-exec`, which can't nest
-  inside the agent sandbox. `--build-system native` keeps `TMPDIR` for the
-  link step: the default Swift Build drops it there and fails with
-  `error: permissionDenied`. Symphony lets the sandbox write the per-user
-  `TemporaryItems` dir, where Foundation's atomic writes go. Ignore the
-  warnings about `~/Library/org.swift.swiftpm` caches and the
-  `--build-system native` deprecation. Plain `swiftc` still needs
-  `-module-cache-path <workspace dir>`.
 - Never run CPU, memory or disk load generators or stress tools on the host:
   no `yes`, busy loops (one per core or otherwise), `stress`, or parallel test
   floods. The machine is shared with other agent runs, QA passes and workspace
@@ -163,8 +158,8 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
   lower CPU priority anyway. To reproduce a timing flake, make the race
   deterministic instead: inject the delay or the message order, use the
   injectable clock, and add explicit synchronisation (wait on a message or a
-  monitor, not a sleep). Then prove it stable with
-  `mix test <file>:<line> --repeat-until-failure N` on the targeted test only.
+  monitor, not a sleep). Then prove it stable with a repeated run
+  (`--repeat-until-failure N`) of the targeted test only.
 - Don't leave background processes running: stop any server or watcher before
   ending the turn. When the run ends, Symphony kills only the agent's own
   process group. A detached process escapes it: it is reparented to launchd in
@@ -289,7 +284,7 @@ What a red head, a conflict or a closed PR does in each state is decided by one 
     - all known callers of those functions, using grep/search results where applicable,
     - existing test coverage for the affected code,
     - estimated blast radius (`narrow`, `moderate`, or `wide`) with justification.
-    - new branches and error/edge paths introduced by the change, and the exact test that will exercise each. The repo enforces a 100% coverage threshold in CI; an unexercised branch will fail the CI `coverage report` job, so plan the test now and check it before push with `mix cover.changed`. If a path is genuinely unreachable from tests (boundary I/O shim), call it out here and plan to extend `mix.exs` `test_coverage` `ignore_modules` rather than skipping the gate.
+    - new branches and error/edge paths introduced by the change, and the exact test that will exercise each. The repo enforces a 100% coverage threshold in CI; an unexercised branch will fail the CI `coverage report` job, so plan the test now (the step list's tests step checks the changed modules' coverage). If a path is genuinely unreachable from tests (boundary I/O shim), call it out here and plan to extend `mix.exs` `test_coverage` `ignore_modules` rather than skipping the gate.
     - Do not write the first code edit until this analysis is recorded.
 11. Compact context and proceed to execution.
 
@@ -334,9 +329,9 @@ again on the default branch and on other PRs.
    fails only some of the time (a race, an order or timing dependence, state shared
    between tests) and fix it at that cause: make the race deterministic by injecting
    the delay or the message order, and wait on a message or a monitor, not a sleep.
-   Prove the fix with a repeated run of that test alone, for example
-   `mix test <file>:<line> --repeat-until-failure 500`, and record the command and its
-   result in the workpad.
+   Prove the fix with a repeated run of that test alone (its file and line, with
+   `--repeat-until-failure 500`), and record the command and its result in the
+   workpad.
 4. Fix a failure in code the ticket didn't touch the same way, on the same branch: it
    blocks this PR and every other one until someone fixes it. Say in the workpad and
    the PR description which failure the fix is for and that it is outside the
@@ -728,29 +723,17 @@ In this repository, a QA pass of the Director has two environments: the committe
     - Update the workpad immediately after each meaningful milestone (for example: reproduction complete, code change landed, validation run, review feedback addressed).
     - Never leave completed work unchecked in the plan.
     - For tickets that started as `Todo` with an attached PR, run the full PR feedback sweep protocol immediately after kickoff and before new feature work.
-5.  Run validation/tests required for the scope.
-    - Mandatory gate: execute all ticket-provided `Validation`/`Test Plan`/ `Testing` requirements when present; treat unmet items as incomplete work.
-    - Prefer a targeted proof that directly demonstrates the behavior you changed.
-    - Run the cheap, targeted checks from `Command and output hygiene`, not the full suite: CI runs the full test suite, coverage and Dialyzer.
-    - For long-running validation, use long waits and sparse polling so progress-only terminal output does not create many tiny transcript events.
-    - Keep terminal output fed back into the model small: preserve failing command, exit code, and the most relevant error lines; summarize successful or repetitive output instead of pasting complete logs.
-    - You may make temporary local proof edits to validate assumptions (for example: tweak a local build input for `make`, or hardcode a UI account / response path) when this increases confidence.
-    - Revert every temporary proof edit before commit/push.
-    - Document these temporary proof steps and outcomes in the workpad `Validation`/`Notes` sections so reviewers can follow the evidence.
+    - Record your work on the ticket's history as you go, with `ticket_record`: `step.completed` for each delegated step of the step list when you end it (its `outcome`: `passed`, `failed` with the step it `returns_to`, or `skipped` with a `reason`), `evidence` for every screenshot or output you attach (the files as `artifacts`, a `caption` saying what it shows), and a `note` for a choice a later run should know. The Director's timeline shows these events as the run works.
+5.  Leave the checks to the step list.
+    - This run follows a step list: once you end the `code` step, Symphony runs the build, the checks and the tests itself, with your session closed. A step that fails brings the run back to `code` with its output: fix what it names and end the step again.
+    - Do not run the build, the format, specs or lint checks, the tests, the coverage check or the Swift build and tests yourself, and never the full suite or Dialyzer: write the code, commit it, record what you changed, and end the turn. CI is the gate for the full suite, the 100% coverage report and Dialyzer.
+    - Execute every ticket-provided `Validation`/`Test Plan`/`Testing` requirement that is not a check the step list runs (a preview to read, a fixture to render); treat unmet items as incomplete work.
+    - You may make temporary local proof edits to validate assumptions; revert every one before you commit, and document them in the workpad `Validation`/`Notes` sections.
 6.  Re-check all acceptance criteria and close any gaps.
-    - When the ticket has a `## User walkthrough`, record the proof of every step an automated test in this PR covers, before the handoff push: call `linear_record_walkthrough_proofs` with each step's number and its test, and Symphony ends that step in the ticket description with `Proved by: <test>`. Name the test as the code has it: its file path, or a test or scenario name as written. Name only tests in this PR, and never a check name: the repo's `proof_check` in WORKFLOW.md is the check that runs them, and the tool refuses a ` › ` separator. Leave a step no test covers as it is, for QA; the tool refuses a step its author marked `Proved by: QA`. The QA pre-check then confirms each named test on the PR head, and QA links its result instead of walking the step.
-7.  Before every `git push` attempt, run the targeted pre-push checks for your scope and confirm they pass; if one fails, address it and rerun until green.
-    - Targeted pre-push checks: `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix specs.check`, `mix credo --strict <changed files>`, `mix cover.changed`, `mix settings.ui_coverage`, and every new or changed test file plus the test files of the modules you changed.
-    - Do not run `make all`, `make check`, `make coverage`, the full `mix test`, `mix test --stale` or Dialyzer before a push (see `Command and output hygiene` for the optional `make all` on shared infrastructure). CI is the gate for the full suite, the 100% coverage report and Dialyzer.
-    - `git push` runs the repo's `.githooks/pre-push` hook, which reruns the format, compile and credo checks on the Elixir files the push changes and rejects the push when one fails. Never use `git push --no-verify`. When the hook fails, fix the issue it names (it prints the fixing command, such as `mix format`), commit, and push again.
-    - `github_push_branch` skips repo hooks, so when the push changes an Elixir file it needs the result of `.githooks/pre-push --head` for the commit it pushes. Run that command in your shell after your last commit: it runs the same checks in your sandbox and records the result in `tmp/push-check`. The tool refuses the push when the result is missing, is for another commit, or names a failed check; fix what it names, commit, run the command again and push. A push that changes no Elixir file needs no result.
-    - If a prior push's CI checks are still failing, follow the `CI failure triage protocol` before re-pushing. A CI coverage gap is a red check like any other: add tests that exercise the missing branches, or extend `mix.exs` `test_coverage` `ignore_modules` only for genuinely untestable I/O shims.
-    - After staging/committing changes and before pushing, run `git diff origin/main..HEAD` to review committed-only diff for:
-      - stray debug statements, `console.log`, hardcoded test values, or temporary proof edits,
-      - unintended file changes outside the ticket's scope,
-      - incomplete hunks, half-finished removals, or reverted-only placeholders.
-    - Only push after this review is clean.
-    - Record the targeted checks you ran with their results (for example `format, compile, specs, credo — clean; test/foo_test.exs test/bar_test.exs — 42 tests, 0 failures`) and `diff reviewed — clean` in the workpad before each push.
+    - When the ticket has a `## User walkthrough`, record the proof of every step an automated test in this PR covers, before the handoff push: call `linear_record_walkthrough_proofs` with each step's number and its test. It records each proof as an `evidence` event with `proof` (the step and the test) on the ticket's history and leaves the description as it is. Name the test as the code has it: its file path, or a test or scenario name as written. Name only tests in this PR, and never a check name: the repo's `proof_check` in WORKFLOW.md is the check that runs them, and the tool refuses a ` › ` separator. Leave a step no test covers as it is, for QA; the tool refuses a step its author marked `Proved by: QA`. The QA pre-check then confirms each named test on the PR head, and QA links its result instead of walking the step.
+7.  The `handoff` step pushes. When the step list reaches it, the build, checks and tests passed on your changes.
+    - `github_push_branch` skips repo hooks, so when the push changes an Elixir file it needs the result of `.githooks/pre-push --head` for the commit it pushes. Run that command in your shell after your last commit: it records the result in `tmp/push-check`. The tool refuses the push when the result is missing, is for another commit, or names a failed check; fix what it names, commit, run the command again and push. Never use `git push --no-verify`.
+    - After committing and before pushing, run `git diff origin/main..HEAD` and review it for stray debug statements, hardcoded test values, temporary proof edits, unintended files outside the ticket's scope, and incomplete hunks. Only push after this review is clean, and record `diff reviewed — clean` and the step list's results in the workpad.
 8.  Attach PR URL to the issue (prefer attachment; use the workpad comment only if attachment is unavailable).
     - Ensure the GitHub PR has label `symphony` (add it if missing).
     - Ensure the PR body is reviewer-facing and follows `.github/pull_request_template.md`:
@@ -764,7 +747,7 @@ In this repository, a QA pass of the Director has two environments: the committe
       - Never launch an app, an `NSApplication`, or a window on the host to get them, not even a throwaway harness. The host is the operator's desktop: windows and "quit unexpectedly" dialogs land on their screen. The agent sandbox also blocks the window server, so such a harness crashes inside AppKit instead of drawing.
       - Render SwiftUI views offscreen with `ImageRenderer` instead (no `NSApplication`, no window), write the PNG with ImageIO, and attach that. Compile it with plain `swiftc -module-cache-path <workspace dir>`.
       - When a view can't be rendered offscreen, or the ticket wants the running app, leave the screenshots to the QA pass, which runs the app on the QA VM, and say so in the workpad.
-9.  Merge latest `origin/main` into branch, resolve conflicts, and rerun checks.
+9.  Merge latest `origin/main` into branch and resolve conflicts during the `code` step, before you end it, so the step list's checks run on the merge.
 10. Update the workpad comment with final checklist status and validation notes.
     - Mark completed plan/acceptance/validation checklist items as checked.
     - Add final handoff notes (commit + validation summary) in the same workpad comment.
@@ -816,8 +799,10 @@ Apply this whenever a ticket adds or changes a screen or pane.
 1. `Rework` means the work came back for changes. Continue on the **same** pull request and the same branch: never close the PR, never cut a new branch, and never move the workpad's prior plan aside.
 2. Read what sent it back — the reviewer's verdict and reasons, the failing assertions, the user journey QA ran — and address it directly. The old verdict does not survive the change: the new head is reviewed again from scratch.
    - When the report names a red check without its failing assertion, read the check's log with `github_ci_log` (`job_id` or `run_id` from the check's URL, or `pr_number` for the PR's failed checks) before changing anything: it returns the failed steps, their annotations and the last lines of their log.
-   - When the change adds, renames or moves a test that proves a walkthrough step, record the step's proof again with `linear_record_walkthrough_proofs` (`Proved by: <test>`, never a check name). A QA pre-check finding on a step's `Proved by:` line is fixed by making that test run and pass on the PR head, or by recording the test that does.
+   - When the change adds, renames or moves a test that proves a walkthrough step, record the step's proof again with `linear_record_walkthrough_proofs`: it records an `evidence` event with `proof` (the step and the test, never a check name) and leaves the description as it is. A QA pre-check finding on a step's proof is fixed by making that test run and pass on the PR head, or by recording the test that does.
+   - Record each finding you fix with `ticket_record` as `finding.resolved`: its `finding_id`, `how` you fixed it, and `evidence` when you have it. Symphony fills the head that fixes it, and the next QA verdict confirms or reopens it. Record `evidence` for every screenshot or output you attach, and `step.completed` for each delegated step of the step list when you end it.
 3. Before planning, read every prior QA report and the workpad's superseded attempts, and list the findings by class (clipped, truncated, mechanism broken, state missing) in the workpad, with the head each was found on.
+   - Read the open findings first with `ticket_events` and `open_findings: true`: each comes with its state (open, resolved awaiting QA, or reopened), its class and its screenshots, so the plan starts from what is still open rather than from the reports alone.
    - If the same class fails for the second time on this ticket, do not push a third attempt of the same kind. Ask the person with `linear_request_human_action`: the finding history in `why` (what QA found each time, in plain words), the ways forward as its options (for a layout, two layouts to choose from), and stop. The person answers in the Inbox, by an option or in their own words, and the next run reads the answer in the Decisions section.
 4. Keep the single workpad comment; extend its `Plan`, `Acceptance Criteria` and `Validation` with what the verdict adds instead of superseding what is there.
 5. Push the changes to the same branch. That push is the handoff: it moves the ticket to `Code Review` for a review of the new head. Do not ask for the state by hand.

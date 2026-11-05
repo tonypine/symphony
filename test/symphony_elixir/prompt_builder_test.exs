@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.PromptBuilderTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{DecisionRequest, Decisions, TicketEvents, TicketState, WorkflowPreview}
+  alias SymphonyElixir.{DecisionRequest, Decisions, RunKind, TicketEvents, TicketState, WorkflowPreview}
   alias SymphonyElixir.TicketEvents.Brief
 
   test "prompt builder uses PR prompt branch for PR runs" do
@@ -1277,5 +1277,93 @@ defmodule SymphonyElixir.PromptBuilderTest do
     path = Workflow.symphony_file_path()
     File.write!(path, File.read!(path) <> "ledger:\n  " <> yaml <> "\n")
     Cache.clear()
+  end
+
+  describe "the ticket tools paragraph" do
+    @repo_workflow Path.expand("../../WORKFLOW.md", __DIR__)
+    # The checks the step list runs: an implementation prompt that walks it names none of them.
+    @check_commands ["mix format", "mix compile", "mix specs.check", "mix credo", "mix test", "mix cover.changed", "swift build", "swift test"]
+
+    defp tools_prompt(opts) do
+      {:ok, workflow} = Workflow.parse_repo_workflow("---\nprompts: {}\n---\nBody for {{ issue.identifier }} ({{ run.kind }}, {{ run.step_runner }})\n")
+      issue = %Issue{identifier: "TOOLS-1", title: "t", state: "In Progress", repo_key: "your-repo"}
+      PromptBuilder.build_prompt(issue, [workflow: workflow, prompt_mode: :issue, agent_kind: "claude"] ++ opts)
+    end
+
+    defp repo_prompt(run_kind) do
+      {:ok, workflow} = Workflow.load(@repo_workflow)
+      opts = [workflow: workflow, prompt_mode: :issue, agent_kind: "claude", run_kind: run_kind]
+      PromptBuilder.build_prompt(WorkflowPreview.sample_issue(), opts)
+    end
+
+    test "every run kind's prompt names both tools and what that kind records" do
+      records = %{
+        "implementation" => "This implementation run records `step.completed` for each delegated step as it ends it",
+        "breakdown" => "This plan run records a `note` for each choice the plan makes",
+        "close_out" => "A run records `step.completed` for each delegated step",
+        "rework" => "This rework run reads `ticket_events` with `open_findings: true` before it plans, records `finding.resolved`",
+        "landing" => "This landing run records a `note` for what held the merge",
+        "code_review" => "This code review run records `evidence` for every screenshot or output it attaches",
+        "epic_review" => "This epic review run records `evidence` for each requirement and walkthrough step it checked",
+        "ci_fix" => "This CI-fix run records a `note` naming the red check's cause",
+        "review_feedback" => "This review-feedback run reads `ticket_events` with `open_findings: true`",
+        "qa" => "This QA run records `evidence` for each walkthrough step it proves, with the environment it proved it in"
+      }
+
+      assert Map.keys(records) |> Enum.sort() == RunKind.names() |> Enum.sort()
+
+      for {kind, line} <- records do
+        prompt = tools_prompt(run_kind: kind)
+        assert prompt =~ "Ticket tools:\n\n- `ticket_events` reads this ticket's history", kind
+        assert prompt =~ "`ticket_record` adds an event to it", kind
+        assert prompt =~ "- " <> line, kind
+      end
+    end
+
+    test "the run comes from the dispatch's profile, and only a run walking a step list is told the list runs the checks" do
+      assert tools_prompt(run_profile: %{kind: :implementation}) =~ "Body for TOOLS-1 (implementation, true)"
+      assert tools_prompt(run_profile: %{kind: :implementation}) =~ "This run follows a step list: Symphony runs its build, checks and tests itself"
+      assert tools_prompt(run_kind: :rework) =~ "Body for TOOLS-1 (rework, false)"
+      refute tools_prompt(run_kind: :rework) =~ "This run follows a step list"
+      assert tools_prompt(run_kind: "implementation", step_runner: false) =~ "(implementation, false)"
+      assert tools_prompt([]) =~ "Body for TOOLS-1 (, false)"
+      assert tools_prompt([]) =~ "- A run records `step.completed` for each delegated step"
+      assert PromptBuilder.prompt_run(run_kind: "nonsense", run_profile: :none) == %{kind: nil, step_runner: false}
+    end
+
+    test "a run a decision unlocked protected paths for is told which, after the ticket tools paragraph" do
+      grant = %{id: "D1:WORKFLOW.md", decision: "D1", path: "WORKFLOW.md", answer: "Allow it."}
+      prompt = tools_prompt(run_kind: "implementation", path_unlocks: [grant])
+
+      assert prompt =~ "Protected paths unlocked for this run:"
+      assert prompt =~ "- `WORKFLOW.md`"
+      assert :binary.match(prompt, "Ticket tools:") < :binary.match(prompt, "Protected paths unlocked")
+    end
+
+    test "a PR prompt carries no ticket tools paragraph" do
+      write_workflow_file!(Workflow.workflow_file_path(), prompt: "Issue {{ issue.identifier }}")
+      pr = %{number: 7, title: "t", intent: "address comments", url: "https://github.com/example/repo/pull/7", head_ref: "f", base_ref: "main", body: "b"}
+      issue = %Issue{identifier: "TOOLS-2", run_kind: :pr, pr_context: pr}
+      prompt = PromptBuilder.build_prompt(issue, prompt_mode: :pr, run_kind: "implementation")
+      assert prompt =~ "Symphony PR runtime context:"
+      refute prompt =~ "Ticket tools:"
+    end
+
+    test "an implementation prompt that walks the step list names no check command; a rework prompt still runs its checks" do
+      implementation = repo_prompt("implementation")
+
+      for command <- @check_commands, do: refute(implementation =~ command, "the implementation prompt names #{command}")
+
+      assert implementation =~ "Leave the checks to the step list."
+      assert implementation =~ "The `handoff` step pushes."
+      assert implementation =~ "`step.completed` for each delegated step of the step list when you end it"
+      assert implementation =~ "It records each proof as an `evidence` event with `proof` (the step and the test) on the ticket's history and leaves the description as it is."
+
+      rework = repo_prompt("rework")
+      assert rework =~ "`mix format --check-formatted`"
+      assert rework =~ "Targeted pre-push checks:"
+      assert rework =~ "Read the open findings first with `ticket_events` and `open_findings: true`"
+      assert rework =~ "Record each finding you fix with `ticket_record` as `finding.resolved`"
+    end
   end
 end

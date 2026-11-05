@@ -355,6 +355,14 @@ defmodule SymphonyElixir.QaAgent do
     work running in the background. Run each command in the foreground with a timeout, or poll it
     until it finishes, before you answer.
 
+    Record what you proved on the ticket's history before the verdict, with the `ticket_record`
+    tool: one `evidence` event for each walkthrough step you walked, whose `caption` names the step
+    (its number and a few words), what you saw, and the environment you proved it in (the committed
+    fixtures or the live server, and the appearance and window size when they matter), with the
+    step's screenshots or logs as `artifacts`. The Director's timeline shows each step's evidence.
+    The verdict is not an event you record: the `qa_verdict` tool records it, and `ticket_record`
+    refuses one.
+
     Your last act is to record the verdict: call the `qa_verdict` tool once with it, then end your
     turn. The call is the verdict, recorded the moment it arrives, so nothing you write after it
     counts. If the tool refuses the verdict, it says why: fix it and call the tool again. The verdict

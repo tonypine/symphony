@@ -10,6 +10,7 @@ defmodule SymphonyElixir.PromptBuilder do
     Decisions,
     LandingOrder,
     MergeConfirmation,
+    PhaseSteps,
     PromptSafety,
     QaModeContract,
     QaPolicy,
@@ -107,6 +108,7 @@ defmodule SymphonyElixir.PromptBuilder do
     agent_context = agent_context_for_prompt(opts, workflow_source)
     prompt_mode = prompt_mode(opts)
     qa_mode = qa_mode_section(prompt_mode, opts, workflow_source)
+    run = prompt_run(opts)
 
     template =
       opts
@@ -120,6 +122,7 @@ defmodule SymphonyElixir.PromptBuilder do
       "attempt" => Keyword.get(opts, :attempt),
       "agent" => to_solid_value(agent_context),
       "repo_key" => repo_key,
+      "run" => to_solid_map(run),
       "state_machine" => @state_machine,
       "issue" => issue |> strip_decisions(opts) |> prompt_issue_map(repo_key) |> to_solid_map(),
       "pr" => issue |> prompt_pr_map(opts) |> to_solid_map(),
@@ -127,7 +130,7 @@ defmodule SymphonyElixir.PromptBuilder do
       "ci_failure" => to_solid_value(ci_failure),
       "pr_conflict" => to_solid_value(pr_conflict)
     })
-    |> prepend_managed_context(prompt_mode, agent_context, repo_key, qa_mode)
+    |> prepend_managed_context(prompt_mode, agent_context, repo_key, qa_mode, run)
     |> append_extra_prompt(Keyword.get(opts, :extra_prompt) || Keyword.get(opts, :prompt_context))
     |> append_reviewer_comments(reviewer_comments)
     |> append_ci_failure(ci_failure)
@@ -141,6 +144,23 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_linear_input_warnings(linear_input_warnings)
     |> append_codex_transport_output_guard(agent_context, opts)
   end
+
+  @doc """
+  The run a prompt is for, as the template reads it (`run.kind`, `run.step_runner`): its kind,
+  from `:run_kind` or the dispatch's `:run_profile` (nil when neither names one), and whether it
+  walks a step list whose machine steps run the build, checks and tests between agent turns
+  (`SymphonyElixir.PhaseSteps.walk?/1`; `:step_runner` overrides it). An instruction file branches
+  on `run.step_runner` to leave the checks to the step list.
+  """
+  @spec prompt_run(keyword()) :: %{kind: String.t() | nil, step_runner: boolean()}
+  def prompt_run(opts) when is_list(opts) do
+    kind = opts |> Keyword.get(:run_kind) |> Kernel.||(run_profile_kind(Keyword.get(opts, :run_profile))) |> Schema.Phases.kind()
+    step_runner = Keyword.get_lazy(opts, :step_runner, fn -> kind != nil and PhaseSteps.walk?(PhaseSteps.steps(kind)) end)
+    %{kind: kind && Atom.to_string(kind), step_runner: step_runner == true}
+  end
+
+  defp run_profile_kind(%{kind: kind}), do: kind
+  defp run_profile_kind(_profile), do: nil
 
   @spec build_compact_prompt(SymphonyElixir.Linear.Issue.t(), keyword()) :: String.t()
   def build_compact_prompt(issue, opts \\ []) do
@@ -452,15 +472,87 @@ defmodule SymphonyElixir.PromptBuilder do
 
   defp append_extra_prompt(prompt, _extra_prompt), do: prompt
 
-  defp prepend_managed_context(prompt, :pr, agent_context, repo_key, _qa_mode) do
+  defp prepend_managed_context(prompt, :pr, agent_context, repo_key, _qa_mode, _run) do
     managed_pr_context(agent_context, repo_key) <> "\n\n" <> prompt
   end
 
-  defp prepend_managed_context(prompt, _prompt_mode, agent_context, repo_key, qa_mode) do
-    [managed_issue_context(agent_context, repo_key), qa_mode, prompt]
+  defp prepend_managed_context(prompt, _prompt_mode, agent_context, repo_key, qa_mode, run) do
+    [managed_issue_context(agent_context, repo_key), ticket_tools_paragraph(run), qa_mode, prompt]
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n\n")
   end
+
+  @doc """
+  The managed context's paragraph on the two ticket tools every issue run is offered
+  (`SymphonyElixir.AgentTools.TicketLedger`): `ticket_events` reads the ticket's history and
+  `ticket_record` adds to it, and what a run of `run`'s kind records there. A run that walks a step
+  list (`run.step_runner`) is told the step list runs the checks and the handoff step pushes.
+  """
+  @spec ticket_tools_paragraph(%{kind: String.t() | nil, step_runner: boolean()}) :: String.t()
+  def ticket_tools_paragraph(%{kind: kind, step_runner: step_runner}) do
+    [
+      "Ticket tools:",
+      "",
+      "- `ticket_events` reads this ticket's history (Symphony's ledger) and `ticket_record` adds an event to it. Symphony fills the run, phase and head; " <>
+        "verdicts, moves, pauses and questions are Symphony's, and `ticket_record` refuses them.",
+      "- " <> records_line(kind),
+      step_runner_line(step_runner)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
+  end
+
+  @evidence_line "`evidence` for every screenshot or output it attaches (the files as `artifacts`)"
+
+  defp records_line("implementation") do
+    "This implementation run records `step.completed` for each delegated step as it ends it, #{@evidence_line}, and each walkthrough step's proof " <>
+      "as `evidence` with `proof` (the step and the test), which `linear_record_walkthrough_proofs` records; a `note` keeps a choice worth knowing later."
+  end
+
+  defp records_line(kind) when kind in ["rework", "review_feedback"] do
+    "This #{kind_words(kind)} run reads `ticket_events` with `open_findings: true` before it plans, records `finding.resolved` for each finding it fixes " <>
+      "(Symphony fills the head that fixes it), #{@evidence_line}, `step.completed` for each delegated step and a walkthrough proof again as `evidence` " <>
+      "with `proof` when it changes the test."
+  end
+
+  defp records_line("ci_fix") do
+    "This CI-fix run records a `note` naming the red check's cause, #{@evidence_line}, and `finding.resolved` for an open finding the repair fixes."
+  end
+
+  defp records_line("breakdown") do
+    "This plan run records a `note` for each choice the plan makes and why; the sub-tickets, documents and requests are the rest of its record."
+  end
+
+  defp records_line("landing") do
+    "This landing run records a `note` for what held the merge and how it landed, and #{@evidence_line}."
+  end
+
+  defp records_line("code_review") do
+    "This code review run records #{@evidence_line} and a `note` for each risk it weighed; its verdict is the verdict tool's."
+  end
+
+  defp records_line("epic_review") do
+    "This epic review run records `evidence` for each requirement and walkthrough step it checked against what shipped; its outcome is Symphony's."
+  end
+
+  defp records_line("qa") do
+    "This QA run records `evidence` for each walkthrough step it proves, with the environment it proved it in, and `finding.recorded` for each defect, " <>
+      "before its verdict; the verdict is the verdict tool's."
+  end
+
+  defp records_line(_kind) do
+    "A run records `step.completed` for each delegated step, #{@evidence_line}, `finding.resolved` for each open finding it fixes, and a `note` for a choice worth knowing later."
+  end
+
+  defp kind_words("review_feedback"), do: "review-feedback"
+  defp kind_words(kind), do: kind
+
+  defp step_runner_line(true) do
+    "- This run follows a step list: Symphony runs its build, checks and tests itself between turns and brings a failure back to the step it names, " <>
+      "with the output. Run none of them yourself: write the code, record what you changed, and end the turn; the handoff step pushes."
+  end
+
+  defp step_runner_line(_step_runner), do: nil
 
   defp managed_issue_context(agent_context, repo_key) do
     [

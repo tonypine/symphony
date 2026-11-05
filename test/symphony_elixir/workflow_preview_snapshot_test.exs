@@ -22,8 +22,9 @@ defmodule SymphonyElixir.WorkflowPreviewSnapshotTest do
     :ok
   end
 
+  # The preview the CLI prints by default: an implementation run's, its step list above the prompt.
   test "the preview matches its snapshot" do
-    assert {:ok, prompt} = WorkflowPreview.render(file: @repo_workflow, agent_kind: "claude", repo_key: "app")
+    assert {:ok, prompt} = WorkflowPreview.render(file: @repo_workflow, agent_kind: "claude", repo_key: "app", run_kind: "implementation")
     Snapshot.assert_snapshot!(Path.join("workflow_preview", "prompt.md"), prompt)
   end
 

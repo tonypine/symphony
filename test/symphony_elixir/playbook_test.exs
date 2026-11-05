@@ -221,7 +221,7 @@ defmodule SymphonyElixir.PlaybookTest do
     assert flat =~ "Every red check is a defect to fix, never a check to rerun."
     assert flat =~ "A test that fails only some of the time is a defect like any other."
     assert flat =~ "fix it at that cause"
-    assert flat =~ "`mix test <file>:<line> --repeat-until-failure 500`"
+    assert flat =~ "Prove the fix with a repeated run of that test alone (its file and line, with `--repeat-until-failure 500`)"
     assert flat =~ "Fix a failure in code the ticket didn't touch the same way, on the same branch"
     assert flat =~ "make the failing step robust where you can, for example a bounded retry inside the step. When you cannot, ask with `linear_request_human_action`."
     assert flat =~ "A CI-fix run ends in one of three ways only:"
@@ -672,9 +672,16 @@ defmodule SymphonyElixir.PlaybookTest do
       "sub_issues" => []
     }
 
-    # `state_machine` is always assigned at runtime (`PromptBuilder`, always `designed`), so an
-    # instruction file that still branches on it renders.
-    assigns = %{"issue" => issue, "attempt" => nil, "agent" => %{"workpad_heading" => "## Symphony Workpad"}, "state_machine" => "designed"}
+    # `state_machine` (always `designed`) and `run` are always assigned at runtime (`PromptBuilder`),
+    # so an instruction file that branches on them renders.
+    assigns = %{
+      "issue" => issue,
+      "attempt" => nil,
+      "agent" => %{"workpad_heading" => "## Symphony Workpad"},
+      "run" => %{"kind" => nil, "step_runner" => false},
+      "state_machine" => "designed"
+    }
+
     assert {:ok, rendered, []} = Solid.render(Solid.parse!(source), assigns, @render_opts)
     IO.iodata_to_binary(rendered)
   end

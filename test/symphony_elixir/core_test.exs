@@ -4,6 +4,7 @@ defmodule SymphonyElixir.CoreTest do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.ReviewAgent, as: ReviewAgentConfig
   alias SymphonyElixir.Config.Schema.Tracker, as: TrackerConfig
+  alias SymphonyElixir.PromptBuilder
   alias SymphonyElixir.Secret
 
   defmodule TerminalGuardDependencyAudit do

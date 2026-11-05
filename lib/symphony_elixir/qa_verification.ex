@@ -176,10 +176,11 @@ defmodule SymphonyElixir.QaVerification do
   @spec journey(Issue.t(), String.t() | nil, String.t()) :: %{source: String.t(), text: String.t() | nil, steps: [Walkthrough.step()]}
   def journey(issue, proof_check, label \\ "the ticket"), do: journey_for(issue, proof_check, label)
 
-  defp journey_for(%Issue{description: description}, proof_check, label) when is_binary(description) do
+  defp journey_for(%Issue{description: description} = issue, proof_check, label) when is_binary(description) do
     cond do
       text = Walkthrough.section(description) ->
-        %{source: "#{label}'s `## User walkthrough`", text: text, steps: Walkthrough.steps(text, proof_check)}
+        steps = text |> Walkthrough.steps(proof_check) |> Walkthrough.with_recorded_proofs(recorded_proofs(issue), proof_check)
+        %{source: "#{label}'s `## User walkthrough`", text: text, steps: steps}
 
       text = section(description, @acceptance_heading) ->
         %{source: "#{label}'s acceptance criteria", text: text, steps: []}
@@ -190,6 +191,19 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   defp journey_for(_issue, _proof_check, label), do: %{source: "#{label}'s walkthrough and acceptance criteria", text: nil, steps: []}
+
+  # The proofs the implementer recorded as `evidence` events with `proof`
+  # (`linear_record_walkthrough_proofs`), oldest first; until TP-1397 projects them into the
+  # description's `Proved by:` lines, the journey reads them on top of the description's. A store
+  # that cannot be read has none: its `{:error, reason}` is no proof event.
+  defp recorded_proofs(%Issue{id: issue_id}) when is_binary(issue_id) do
+    issue_id |> TicketEvents.query(types: ["evidence"]) |> List.wrap() |> Enum.flat_map(&recorded_proof/1)
+  end
+
+  defp recorded_proofs(_issue), do: []
+
+  defp recorded_proof(%{payload: %{proof: %{step: step, test: test}}}) when is_integer(step) and is_binary(test), do: [%{step: step, test: test}]
+  defp recorded_proof(_event), do: []
 
   defp verify(issue, workspace, opts, settings) do
     case Keyword.get(opts, :worker_host) do
