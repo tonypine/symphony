@@ -130,7 +130,7 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
 
 ## Command and output hygiene
 
-- For long-running commands (dependency installs, an optional `make all`), use
+- For long-running commands (dependency installs), use
   longer tool waits such as `yield_time_ms: 30000` to `60000`. Avoid tight
   `write_stdin` polling; if a command is still running, wait at least 30
   seconds before polling again unless there is a specific reason to expect
@@ -141,7 +141,7 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
   names with its output. Run none of them: write the code, record what you
   changed, and end the turn. CI is the gate for the full suite, the 100%
   coverage report and Dialyzer, and they never run locally either.
-- In sandboxed Elixir runs, `mix` commands (and `make all`) need no Hex
+- In sandboxed Elixir runs, `mix` commands need no Hex
   install or env overrides. Symphony passes the host's `MIX_HOME` and
   `MIX_ARCHIVES` to the agent so Hex and Rebar resolve, and points `HEX_HOME`,
   `ELIXIR_MAKE_CACHE_DIR` and Dialyzer's core PLTs at a cache folder your
@@ -800,11 +800,9 @@ Apply this whenever a ticket adds or changes a screen or pane.
    - When the report names a red check without its failing assertion, read the check's log with `github_ci_log` (`job_id` or `run_id` from the check's URL, or `pr_number` for the PR's failed checks) before changing anything: it returns the failed steps, their annotations and the last lines of their log.
    - When the change adds, renames or moves a test that proves a walkthrough step, record the step's proof again with `linear_record_walkthrough_proofs`: it records an `evidence` event with `proof` (the step and the test, never a check name) and leaves the description as it is. A QA pre-check finding on a step's proof is fixed by making that test run and pass on the PR head, or by recording the test that does.
    - Record each finding you fix with `ticket_record` as `finding.resolved`: its `finding_id`, `how` you fixed it, and `evidence` when you have it. Symphony fills the head that fixes it, and the next QA verdict confirms or reopens it. Record `evidence` for every screenshot or output you attach, and `step.completed` for each delegated step of the step list when you end it.
-3. Before planning, read every prior QA report and the workpad's superseded attempts, and list the findings by class (clipped, truncated, mechanism broken, state missing) in the workpad, with the head each was found on.
-   - Read the open findings first with `ticket_events` and `open_findings: true`: each comes with its state (open, resolved awaiting QA, or reopened), its class and its screenshots, so the plan starts from what is still open rather than from the reports alone.
-   - If the same class fails for the second time on this ticket, do not push a third attempt of the same kind. Ask the person with `linear_request_human_action`: the finding history in `why` (what QA found each time, in plain words), the ways forward as its options (for a layout, two layouts to choose from), and stop. The person answers in the Inbox, by an option or in their own words, and the next run reads the answer in the Decisions section.
+3. The `findings` step ran before this turn: Symphony kept the open findings by class on the ticket's timeline, and when the same class failed twice it asked the person before any code. Read the open findings first with `ticket_events` and `open_findings: true`: each comes with its state (open, resolved awaiting QA, or reopened), its class and its screenshots, so the plan starts from what is still open.
 4. Keep the single workpad comment; extend its `Acceptance Criteria` and `Notes` with what the verdict adds instead of superseding what is there (Symphony writes `Plan` and `Validation` from the run's steps).
-5. Push the changes to the same branch. That push is the handoff: it moves the ticket to `Code Review` for a review of the new head. Do not ask for the state by hand.
+5. Push the changes to the same branch when the step list reaches its `handoff` step. That push is the handoff: it moves the ticket to `Code Review` for a review of the new head. Do not ask for the state by hand.
 6. `Restart` is the full reset — close the pull request, a fresh branch from main, the prior attempt superseded in the workpad. It is a person's move from the Director app; an agent can neither request nor perform it. If you judge that the approach itself is wrong, say so plainly in the workpad and ask for a person with `linear_request_human_action` rather than starting over on your own.
 
 ## Review brief

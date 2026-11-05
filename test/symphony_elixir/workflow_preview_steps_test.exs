@@ -65,7 +65,7 @@ defmodule SymphonyElixir.WorkflowPreviewStepsTest do
 
     Snapshot.assert_snapshot!(Path.join("workflow_preview", "ticket_tools.md"), sections)
     assert sections =~ "## implementation\n\n" <> "- `ticket_events`"
-    assert [_one] = Regex.scan(~r/This run follows a step list: Symphony runs its build, checks and tests itself/, sections)
+    assert [_implementation, _rework] = Regex.scan(~r/This run follows a step list: Symphony runs its build, checks and tests itself/, sections)
   end
 
   test "removing a step from symphony.yml changes the next preview", %{workflow: workflow} do
@@ -150,8 +150,13 @@ defmodule SymphonyElixir.WorkflowPreviewStepsTest do
     output = preview_cli(["--file", workflow])
     assert output =~ "An implementation run follows these steps"
 
+    output = preview_cli(["--file", workflow, "--kind", "ci_fix"])
+    assert output =~ "A ci_fix run follows no step list"
+
     output = preview_cli(["--file", workflow, "--kind", "rework"])
-    assert output =~ "A rework run follows no step list"
+    assert output =~ "A rework run follows these steps (the default list, `phases.rework.steps`):"
+    assert output =~ "1. `findings` Read the open findings · machine · times out after 1 min · on failure returns to `code`\n   - `symphony:findings`\n"
+    assert output =~ "2. `code` Write the code · delegated\n"
 
     assert {:error, message} = CLI.evaluate(["workflow", "preview", "--file", workflow, "--kind", "deploy"], %{})
     assert message =~ "Unknown run kind `deploy`"

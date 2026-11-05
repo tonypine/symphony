@@ -368,6 +368,51 @@ defmodule SymphonyElixir.AgentRunnerTest do
     refute_received {:session_started, 3}
   end
 
+  describe "a rework run" do
+    defp rework_profile do
+      AgentRunner.run_profile(%Issue{id: @issue_id, identifier: "TP-900", title: "Walk the steps", state: "Rework"}, Config.settings!())
+    end
+
+    defp fail_qa!(run_id, description) do
+      payload = %{class: "clipped", severity: "major", description: description}
+      {:ok, _event} = TicketEvents.record("default", @issue_id, "finding.recorded", payload, actor: {:agent, run_id, "qa"}, run_id: run_id)
+    end
+
+    test "whose QA failed twice on one class pauses before any agent turn, and the answer reaches the code step", ctx do
+      ctx = Map.put(ctx, :orchestrator, self())
+      fail_qa!("qa-1", "The table is clipped")
+      fail_qa!("qa-2", "The header is clipped")
+
+      task = start_run(ctx, [], in_progress_for(5), run_profile: rework_profile())
+
+      assert_receive {:run_step, @issue_id, {:answer_wanted, runner, %{id: "findings"}, question_id}}, 5_000
+      refute_received {:session_started, _count}
+      refute_received {:turn, _count, _session, _prompt}
+      refute_received {:run_step, @issue_id, {:machine, _step}}
+
+      {:ok, _answered} = Questions.answer(@ticket, question_id, "1")
+      send(runner, {:run_step_turn, @issue_id})
+
+      assert_receive {:turn, 1, 1, prompt}, 5_000
+      assert prompt =~ "This turn is the `code` step"
+      assert prompt =~ "Question: QA failed TP-900 twice on clipped."
+      Task.shutdown(task, :brutal_kill)
+    end
+
+    test "with nothing repeated starts on the code step in its slot", ctx do
+      ctx = Map.put(ctx, :orchestrator, self())
+      fail_qa!("qa-1", "The table is clipped")
+
+      task = start_run(ctx, [], in_progress_for(5), run_profile: rework_profile())
+
+      assert_receive {:turn, 1, 1, prompt}, 5_000
+      assert prompt =~ "This turn is the `code` step"
+      refute_received {:run_step, @issue_id, {:machine, %{id: "findings"}}}
+      refute_received {:run_step, @issue_id, {:turn_wanted, _runner, %{id: "code"}}}
+      Task.shutdown(task, :brutal_kill)
+    end
+  end
+
   test "a run that is gone by the answer leaves the next run to resume the step on it", ctx do
     ctx = Map.put(ctx, :orchestrator, self())
     {:ok, question} = Questions.ask(@ticket, layout_request(), asked_by: %{kind: :run, name: "The run"}, request: true)
