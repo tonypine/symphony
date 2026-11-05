@@ -60,7 +60,11 @@ defmodule SymphonyElixir.RunStoreTicketEventsTest do
   end
 
   test "upgrade_ticket_events/2 adds fields to the payloads of the events it names and to nothing else" do
-    {:ok, [first, second]} = RunStore.append_ticket_events([event("note", %{text: "a"}, idempotency: "k1"), event("note", %{text: "b"}, idempotency: "k2")])
+    {:ok, [first, second]} =
+      RunStore.append_ticket_events([
+        event("note", %{text: "a"}, idempotency: "k1"),
+        event("note", %{text: "b"}, idempotency: "k2")
+      ])
 
     assert RunStore.upgrade_ticket_events(@issue_id, %{}) == :ok
     assert RunStore.upgrade_ticket_events(@issue_id, %{first.seq => %{signal: "claim"}, 99 => %{signal: "other"}}) == :ok
