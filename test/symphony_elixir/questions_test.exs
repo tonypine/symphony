@@ -342,6 +342,19 @@ defmodule SymphonyElixir.QuestionsTest do
       refute Questions.lapsed?(rule_asked, run_end([]))
     end
 
+    test "a question a run's step pauses on outlives the run, and Cancel withdraws it (TP-1394)" do
+      step_paused = ask_as!(%{kind: :run, name: "The run"}, "Pick a layout", step: "code")
+
+      refute Questions.lapsed?(step_paused, run_end([]))
+      assert {:ok, []} = Questions.withdraw_lapsed(@ticket, run_end([]), replies: Replies)
+
+      assert {:ok, [%{id: id, state: :withdrawn, withdrawn: %{reason: "The ticket was cancelled."}}]} =
+               Questions.withdraw_lapsed(@ticket, {:terminal, "Canceled"}, replies: Replies)
+
+      assert id == step_paused.id
+      refute Pauses.paused?(@ticket)
+    end
+
     test "a Restart withdraws a run-asked question with its reason: the pause clears, and its request is answered" do
       question = ask_as!(%{kind: :run, name: "The run"}, "Pick a layout", request: true)
       project_comment(question, "comment-1")

@@ -37,6 +37,7 @@ defmodule SymphonyElixir.AgentRunner do
     PrReviewPoller,
     PrWatch,
     QaVerification,
+    Questions,
     RunKind,
     RunStore,
     SetupBlock,
@@ -815,16 +816,25 @@ defmodule SymphonyElixir.AgentRunner do
   # the session stopped and the slot free. Any other run is one agent session, turn after turn.
   defp new_walk(%{kind: kind}) do
     steps = PhaseSteps.steps(kind)
-    if PhaseSteps.walk?(steps), do: %{steps: steps, step: hd(steps), carry: nil, started_ms: nil}
+    if PhaseSteps.walk?(steps), do: %{steps: steps, step: hd(steps), carry: nil, started_ms: nil, started_at: nil, notes: %{}, answers: [], session_id: nil}
   end
 
   defp new_walk(_profile), do: nil
 
-  # A list that opens on machine steps runs them before the first turn.
-  defp start_walk(agent_module, %{walk: %{step: step}} = run_context, max_turns) do
-    if PhaseSteps.machine?(step),
-      do: run_machine_steps(agent_module, nil, run_context, step, 0, max_turns),
-      else: start_turn_session(agent_module, run_context, 1, max_turns)
+  # A list that opens on machine steps runs them before the first turn. A ticket whose last step
+  # paused on a Question that is answered now, by a run that is gone (Symphony restarted while it
+  # waited), resumes on that step.
+  defp start_walk(agent_module, %{walk: %{steps: steps, step: step}} = run_context, max_turns) do
+    case PhaseSteps.resume_point(steps, step_context(run_context)) do
+      {paused, question} ->
+        Logger.info("Resuming step #{paused.id} of #{issue_context(run_context.issue)} on the answer to question #{question.id}")
+        resume_walk(agent_module, run_context, paused, question, 0, max_turns)
+
+      nil ->
+        if PhaseSteps.machine?(step),
+          do: run_machine_steps(agent_module, nil, run_context, step, 0, max_turns),
+          else: start_turn_session(agent_module, run_context, 1, max_turns)
+    end
   end
 
   defp start_walk(agent_module, run_context, max_turns), do: start_turn_session(agent_module, run_context, 1, max_turns)
@@ -859,13 +869,18 @@ defmodule SymphonyElixir.AgentRunner do
     audit_prompt_sent(issue, Keyword.get(opts, :run_id), prompt, turn_number, max_turns, agent_module, opts)
     run_context = start_walk_turn(run_context)
 
-    case run_agent_turn(agent_module, app_session, prompt, run_context) do
+    turn_result = run_agent_turn(agent_module, app_session, prompt, run_context)
+    # A resumed step's conversation is resumed once, by its first turn.
+    run_context = Map.delete(run_context, :resume_session_id)
+
+    case turn_result do
       {:ok, turn_session} ->
         Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
+        run_context = remember_turn_session(run_context, turn_session)
 
         case maybe_hold_for_dependency_approval(workspace, issue, turn_session, run_context) do
           :ok ->
-            continue_after_completed_turn(
+            continue_after_turn(
               issue,
               issue_state_fetcher,
               opts,
@@ -926,19 +941,24 @@ defmodule SymphonyElixir.AgentRunner do
       app_session,
       prompt,
       issue,
-      on_message: codex_message_handler(codex_update_recipient, issue),
-      settings: Keyword.fetch!(opts, :settings),
-      repo_key: Keyword.get(opts, :repo_key),
-      run_id: Keyword.get(opts, :run_id),
-      run_profile: Keyword.get(opts, :run_profile),
-      agent_tmp_dir: Keyword.get(opts, :agent_tmp_dir),
-      linear_comment_registry: Keyword.get(opts, :linear_comment_registry),
-      dependency_audit_module: dependency_audit_module(opts),
-      dependency_audit_base_ref: Keyword.get(opts, :dependency_audit_base_ref),
-      dependency_audit_command_runner: Keyword.get(opts, :dependency_audit_command_runner),
-      unlocked_paths: Keyword.get(opts, :unlocked_paths, [])
+      [
+        on_message: codex_message_handler(codex_update_recipient, issue),
+        settings: Keyword.fetch!(opts, :settings),
+        repo_key: Keyword.get(opts, :repo_key),
+        run_id: Keyword.get(opts, :run_id),
+        run_profile: Keyword.get(opts, :run_profile),
+        agent_tmp_dir: Keyword.get(opts, :agent_tmp_dir),
+        linear_comment_registry: Keyword.get(opts, :linear_comment_registry),
+        dependency_audit_module: dependency_audit_module(opts),
+        dependency_audit_base_ref: Keyword.get(opts, :dependency_audit_base_ref),
+        dependency_audit_command_runner: Keyword.get(opts, :dependency_audit_command_runner),
+        unlocked_paths: Keyword.get(opts, :unlocked_paths, [])
+      ] ++ resume_opts(run_context)
     )
   end
+
+  defp resume_opts(%{resume_session_id: session_id}), do: [resume_session_id: session_id]
+  defp resume_opts(_run_context), do: []
 
   defp continue_after_completed_turn(issue, issue_state_fetcher, opts, run_context, agent_module, app_session, turn_number, max_turns) do
     case continue_with_issue?(issue, issue_state_fetcher, opts, run_context) do
@@ -1080,16 +1100,86 @@ defmodule SymphonyElixir.AgentRunner do
   defp maybe_put_option(opts, _key, nil), do: opts
   defp maybe_put_option(opts, key, value), do: Keyword.put(opts, key, value)
 
-  defp continue_active_issue(agent_module, app_session, %{walk: %{} = walk} = run_context, refreshed_issue, turn_number, max_turns) do
-    PhaseSteps.record_turn_passed(walk.step, step_context(run_context), System.monotonic_time(:millisecond) - walk.started_ms)
+  # A walk's agent turn that asked a person through the question tool ends its step `paused` on the
+  # Question before anything else reads the turn: the run waits for the answer instead of ending.
+  defp continue_after_turn(issue, fetcher, opts, %{walk: %{step: step} = walk} = run_context, agent_module, app_session, turn, max_turns)
+       when step.mode != "machine" do
+    case PhaseSteps.asked_question(step_context(run_context), walk.started_at) do
+      nil ->
+        continue_after_completed_turn(issue, fetcher, opts, run_context, agent_module, app_session, turn, max_turns)
+
+      asked ->
+        pause_walk(agent_module, run_context, step, asked, turn, max_turns)
+    end
+  end
+
+  defp continue_after_turn(issue, fetcher, opts, run_context, agent_module, app_session, turn, max_turns),
+    do: continue_after_completed_turn(issue, fetcher, opts, run_context, agent_module, app_session, turn, max_turns)
+
+  defp remember_turn_session(%{walk: %{} = walk} = run_context, turn_session), do: %{run_context | walk: %{walk | session_id: turn_session[:session_id]}}
+  defp remember_turn_session(run_context, _turn_session), do: run_context
+
+  # How the walk's agent step ended picks what comes next: the step the agent recorded for a
+  # delegated one (`PhaseSteps.agent_outcome/3`), the answer of an orchestrated one
+  # (`PhaseSteps.read_answer/2`). Neither is ever passed on Symphony's guess: a turn that ends without
+  # it is retried once, then the step fails and the run ends.
+  defp continue_active_issue(agent_module, app_session, %{walk: %{} = walk} = run_context, issue, turn, max_turns) do
+    context = step_context(run_context)
+
+    case step_outcome(walk.step, context, walk) do
+      {:passed, answer} -> advance_walk(agent_module, app_session, run_context, issue, answer, turn, max_turns)
+      {:returns_to, step_id} -> return_walk(agent_module, app_session, run_context, issue, step_id, turn, max_turns)
+      {:paused, question_id} -> pause_walk(agent_module, run_context, walk.step, question_id, turn, max_turns)
+      {:retry, notes} -> retry_walk_step(agent_module, app_session, run_context, notes, turn, max_turns)
+      {:fail, why} -> fail_walk_step(run_context, context, why)
+    end
+  end
+
+  defp continue_active_issue(agent_module, app_session, run_context, refreshed_issue, turn_number, max_turns) do
+    Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
+
+    do_run_codex_turns(agent_module, app_session, Map.delete(run_context, :fresh_session), turn_number + 1, max_turns)
+  end
+
+  defp step_outcome(%{mode: "delegated"} = step, context, walk) do
+    case PhaseSteps.agent_outcome(step, context, walk.started_at) do
+      {outcome, _reason} when outcome in [:passed, :skipped] -> {:passed, nil}
+      {:failed, returns_to} -> {:returns_to, returns_to}
+      {:paused, question_id} -> {:paused, question_id}
+      :none when not is_map_key(walk.notes, :reminder) -> {:retry, %{reminder: true}}
+      :none -> {:fail, "The agent ended two turns of the #{step.title} step without recording how it ended."}
+    end
+  end
+
+  defp step_outcome(step, context, walk) do
+    case PhaseSteps.read_answer(step, context) do
+      {:ok, answer} when answer == %{} ->
+        PhaseSteps.record_turn_passed(step, context, walk_duration_ms(walk))
+        {:passed, nil}
+
+      {:ok, answer} ->
+        PhaseSteps.record_turn_passed(step, context, walk_duration_ms(walk))
+        PhaseSteps.record_note(context, "The #{step.title} step answered: #{Jason.encode!(answer)}")
+        {:passed, {step, answer}}
+
+      {:error, why} when not is_map_key(walk.notes, :answer_error) ->
+        {:retry, %{answer_error: why}}
+
+      {:error, why} ->
+        {:fail, "The #{step.title} step's answer was refused twice: #{why}."}
+    end
+  end
+
+  defp walk_duration_ms(%{started_ms: started_ms}) when is_integer(started_ms), do: System.monotonic_time(:millisecond) - started_ms
+  defp walk_duration_ms(_walk), do: 0
+
+  defp advance_walk(agent_module, app_session, %{walk: walk} = run_context, refreshed_issue, answer, turn_number, max_turns) do
+    walk = %{walk | answers: walk.answers ++ List.wrap(answer)}
+    run_context = %{run_context | walk: walk}
 
     case PhaseSteps.next(walk.steps, walk.step, :passed) do
-      {:ok, %{mode: "machine"} = step} ->
-        run_machine_steps(agent_module, app_session, run_context, step, turn_number, max_turns)
-
       {:ok, step} ->
-        run_context = Map.delete(%{run_context | walk: %{walk | step: step, carry: nil}}, :fresh_session)
-        do_run_codex_turns(agent_module, app_session, run_context, turn_number + 1, max_turns)
+        walk_to(agent_module, app_session, run_context, step, turn_number, max_turns)
 
       # Past the last step the run goes on as one session does.
       :end ->
@@ -1098,10 +1188,148 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp continue_active_issue(agent_module, app_session, run_context, refreshed_issue, turn_number, max_turns) do
-    Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
+  # The agent recorded its step `failed`, back to the step it names; one the list lacks ends the walk.
+  defp return_walk(agent_module, app_session, %{walk: walk} = run_context, issue, step_id, turn, max_turns) do
+    case Enum.find(walk.steps, &(&1.id == step_id)) do
+      nil -> continue_active_issue(agent_module, app_session, %{run_context | walk: nil}, issue, turn, max_turns)
+      step -> walk_to(agent_module, app_session, run_context, step, turn, max_turns)
+    end
+  end
 
-    do_run_codex_turns(agent_module, app_session, Map.delete(run_context, :fresh_session), turn_number + 1, max_turns)
+  defp walk_to(agent_module, app_session, run_context, %{mode: "machine"} = step, turn_number, max_turns),
+    do: run_machine_steps(agent_module, app_session, run_context, step, turn_number, max_turns)
+
+  defp walk_to(agent_module, app_session, %{walk: walk} = run_context, step, turn_number, max_turns) do
+    run_context = Map.delete(%{run_context | walk: %{walk | step: step, carry: nil, notes: %{}}}, :fresh_session)
+    do_run_codex_turns(agent_module, app_session, run_context, turn_number + 1, max_turns)
+  end
+
+  # One more turn on the same step, in the same session, with what the last one missed.
+  defp retry_walk_step(agent_module, app_session, %{walk: walk} = run_context, notes, turn_number, max_turns) do
+    run_context = Map.delete(%{run_context | walk: %{walk | notes: notes}}, :fresh_session)
+    do_run_codex_turns(agent_module, app_session, run_context, turn_number + 1, max_turns)
+  end
+
+  # The step's second turn missed it too: it ends `failed` back to itself, with why as a note, and the
+  # run ends there rather than take the step as passed.
+  defp fail_walk_step(%{walk: walk, issue: issue}, context, why) do
+    step = walk.step
+    returns_to = if step.mode == "orchestrated" and is_binary(step.on_fail), do: step.on_fail, else: step.id
+    PhaseSteps.record_turn_completed(step, context, %{outcome: "failed", returns_to: returns_to}, walk_duration_ms(walk))
+    PhaseSteps.record_note(context, why)
+    Logger.warning("Step #{step.id} of #{issue_context(issue)} failed: #{why} Ending the run")
+    :ok
+  end
+
+  # A step paused on a Question: its `step.completed` says so (unless the agent recorded it), the
+  # agent's session ends and the run holds no slot while the orchestrator waits for the answer
+  # (`{:answer_wanted, ...}`). The answer resumes the run on the same step at once; a Question
+  # withdrawn (Cancel) or no orchestrator to wait with ends the run, and the ticket's next run resumes
+  # the step once it is answered (`PhaseSteps.resume_point/2`).
+  defp pause_walk(agent_module, %{walk: walk} = run_context, step, question_id, turn_number, max_turns) do
+    context = step_context(run_context)
+
+    if step.mode != "machine" and PhaseSteps.agent_outcome(step, context, walk.started_at) != {:paused, question_id} do
+      paused = %{outcome: "paused", question_id: question_id}
+      PhaseSteps.record_turn_completed(step, context, paused, walk_duration_ms(walk))
+    end
+
+    stop_current_session(agent_module)
+    Logger.info("Step #{step.id} of #{issue_context(run_context.issue)} paused on question #{question_id}; waiting for the answer with no session")
+
+    with :answered <- await_answer(run_context, step, question_id),
+         {:ok, question} <- resumable(run_context, question_id) do
+      resume_walk(agent_module, run_context, step, question, turn_number, max_turns)
+    else
+      {:error, {:orchestrator_down, _reason}} = error ->
+        error
+
+      ended ->
+        Logger.info("Step #{step.id} of #{issue_context(run_context.issue)} ends with its run: #{inspect(ended)}")
+        :ok
+    end
+  end
+
+  defp await_answer(%{codex_update_recipient: recipient, issue: %Issue{id: issue_id}}, step, question_id) when is_pid(recipient) do
+    monitor = Process.monitor(recipient)
+    send(recipient, {:run_step, issue_id, {:answer_wanted, self(), %{id: step.id, title: step.title, mode: step.mode}, question_id}})
+
+    receive do
+      {:run_step_turn, ^issue_id} ->
+        Process.demonitor(monitor, [:flush])
+        :answered
+
+      {:run_step_question_ended, ^issue_id} ->
+        Process.demonitor(monitor, [:flush])
+        :question_ended
+
+      {:DOWN, ^monitor, :process, _pid, reason} ->
+        {:error, {:orchestrator_down, reason}}
+    end
+  end
+
+  defp await_answer(_run_context, _step, _question_id), do: :no_orchestrator
+
+  # Between turns the run reads the ticket's record, never Linear: the Question answered, the ticket
+  # still in the phase the run works, and nothing else holding it.
+  defp resumable(%{issue: issue, opts: opts}, question_id) do
+    ticket = {:ticket, run_repo_key(issue, opts), issue.id}
+
+    with %{state: :answered} = question <- Questions.find(ticket, question_id) || :question_gone,
+         :ok <- same_phase(issue),
+         :ok <- unpaused(ticket) do
+      {:ok, question}
+    end
+  end
+
+  defp same_phase(%Issue{id: issue_id, state: state}) do
+    case RunStore.get_ticket_state(issue_id) do
+      %{phase: phase} when is_binary(phase) and is_binary(state) ->
+        if String.downcase(phase) == String.downcase(state), do: :ok, else: {:moved_to, phase}
+
+      _unknown ->
+        :ok
+    end
+  end
+
+  defp unpaused(ticket) do
+    case Pauses.get(ticket) do
+      {:ok, %{reasons: [_ | _] = reasons}} -> {:held, Enum.map(reasons, & &1.kind)}
+      _free -> :ok
+    end
+  end
+
+  # The step resumes as the answer says. An agent step gets a new turn on it, in a new session that
+  # resumes the paused turn's conversation when the agent can (Claude's `--resume`), with the
+  # question and the answer verbatim in the prompt; a machine step goes on past the step, runs it
+  # again, or hands the person's own words to the agent step it returns to on failure.
+  defp resume_walk(agent_module, %{walk: walk} = run_context, %{mode: "machine"} = step, question, turn_number, max_turns) do
+    case {PhaseSteps.machine_resume(question), PhaseSteps.next(walk.steps, step, :failed)} do
+      {:go_on, _on_fail} ->
+        case PhaseSteps.next(walk.steps, step, :passed) do
+          {:ok, next_step} -> resume_at(agent_module, run_context, next_step, nil, turn_number, max_turns)
+          :end -> :ok
+        end
+
+      {:words, {:ok, %{mode: mode} = on_fail}} when mode != "machine" ->
+        resume_at(agent_module, run_context, on_fail, question, turn_number, max_turns)
+
+      _again ->
+        run_machine_steps(agent_module, nil, run_context, step, turn_number, max_turns)
+    end
+  end
+
+  defp resume_walk(agent_module, run_context, step, question, turn_number, max_turns),
+    do: resume_at(agent_module, run_context, step, question, turn_number, max_turns)
+
+  defp resume_at(agent_module, run_context, %{mode: "machine"} = step, _question, turn_number, max_turns),
+    do: run_machine_steps(agent_module, nil, run_context, step, turn_number, max_turns)
+
+  defp resume_at(agent_module, %{walk: walk} = run_context, step, question, turn_number, max_turns) do
+    notes = if question, do: %{resume: question}, else: %{}
+    run_context = %{run_context | walk: %{walk | step: step, carry: nil, notes: notes}}
+    run_context = if question && is_binary(walk.session_id), do: Map.put(run_context, :resume_session_id, walk.session_id), else: run_context
+    start_turn_session(agent_module, run_context, turn_number + 1, max_turns)
   end
 
   # The machine steps from `step` on, run by Symphony. When one of them runs a command, the agent's
@@ -1121,8 +1349,7 @@ defmodule SymphonyElixir.AgentRunner do
         next_walk_turn(agent_module, app_session, run_context, frees_slot?, turn_number, max_turns)
 
       {:paused, paused, question_id} ->
-        Logger.info("Step #{paused.id} of #{issue_context(run_context.issue)} paused on question #{question_id}; ending the run")
-        :ok
+        pause_walk(agent_module, run_context, paused, question_id, turn_number, max_turns)
 
       {:end, _carry} ->
         Logger.info("Step list of #{issue_context(run_context.issue)} ended after its machine steps; ending the run")
@@ -1163,10 +1390,12 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp notify_step(_run_context, _notice), do: :ok
 
-  defp step_context(%{issue: issue, opts: opts, workspace: workspace, worker_host: worker_host}) do
+  defp step_context(%{issue: issue, opts: opts, workspace: workspace, worker_host: worker_host} = run_context) do
     repo_key = run_repo_key(issue, opts)
 
     %{
+      steps: (Map.get(run_context, :walk) || %{steps: []}).steps,
+      answer_dir: Keyword.get(opts, :agent_tmp_dir),
       repo_key: repo_key,
       issue_id: issue.id,
       identifier: issue.identifier,
@@ -1180,10 +1409,18 @@ defmodule SymphonyElixir.AgentRunner do
     |> Map.reject(fn {key, value} -> key == :runner and is_nil(value) end)
   end
 
-  # A walk's turn records its step's start; the whole prompt opens a new session.
-  defp start_walk_turn(%{walk: %{} = walk} = run_context) do
-    PhaseSteps.record_turn_started(walk.step, step_context(run_context))
-    %{run_context | walk: %{walk | started_ms: System.monotonic_time(:millisecond)}}
+  # A walk's turn records its step's start, and an orchestrated step's earlier answer is removed;
+  # a retry of the step (a reminder, a refused answer) is the same step, started once.
+  defp start_walk_turn(%{walk: %{notes: notes} = walk} = run_context) when notes == %{} or is_map_key(notes, :resume) do
+    context = step_context(run_context)
+    PhaseSteps.record_turn_started(walk.step, context)
+    if walk.step.mode == "orchestrated", do: PhaseSteps.clear_answer(walk.step, context)
+    %{run_context | walk: %{walk | started_ms: System.monotonic_time(:millisecond), started_at: DateTime.utc_now()}}
+  end
+
+  defp start_walk_turn(%{walk: %{step: %{mode: "orchestrated"} = step}} = run_context) do
+    PhaseSteps.clear_answer(step, step_context(run_context))
+    run_context
   end
 
   defp start_walk_turn(run_context), do: run_context
@@ -1195,8 +1432,12 @@ defmodule SymphonyElixir.AgentRunner do
         else: build_turn_prompt(issue, opts, turn_number, max_turns)
 
     case run_context do
-      %{walk: %{step: step, carry: carry}} -> prompt <> "\n\n" <> PhaseSteps.prompt_section(step, carry)
-      _one_session -> prompt
+      %{walk: %{step: step, carry: carry} = walk} ->
+        notes = Map.merge(walk.notes, %{answers: walk.answers, answer_path: PhaseSteps.answer_path(step, step_context(run_context))})
+        prompt <> "\n\n" <> PhaseSteps.prompt_section(step, carry, notes)
+
+      _one_session ->
+        prompt
     end
   end
 

@@ -6,6 +6,11 @@ list the commit subjects since the previous release (see `docs/releasing.md`).
 
 ## Unreleased
 
+- A run's agent steps end the way the agent records them, never on Symphony's guess: a turn that
+  forgets is reminded once, then the step fails with a note. An orchestrated step can ask for an
+  answer of a given shape (`answer` in `phases`), checked before it passes. A step that needs a
+  person's answer pauses with no session and no slot, shows as a question in the Inbox, and the
+  answer resumes the run on that step at once, under the same run.
 - An implementation run walks its step list: Symphony runs the build, checks and tests itself
   between agent turns, with the agent's session closed and its slot free for another ticket; a
   failed step sends the run back to writing the code with the output, a step that hangs twice

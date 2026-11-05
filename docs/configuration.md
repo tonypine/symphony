@@ -3301,15 +3301,38 @@ it, checking it, testing it and handing it off. Each kind under `phases` (a run 
 `breakdown`, `epic_review`) holds one setting, its `steps` list. A kind the file doesn't set follows
 its default list; a `symphony.yml` with no `phases` key follows every default. `symphony workflow
 preview` prints the list a run will follow above its prompt (`--kind` names the run kind, default
-`implementation`), so a change to the list shows in the next preview. The step runner that drives
-the list (TP-1393) follows; until it lands, a run is still one agent session and the list is what
-the preview shows.
+`implementation`), so a change to the list shows in the next preview. The step runner
+(`SymphonyElixir.PhaseSteps`) drives a list that holds a machine step; any other list leaves the run
+one agent session.
+
+How each step ends:
+
+- A `delegated` step is one agent turn that ends when the agent records `step.completed` for it
+  with `ticket_record` (`passed`, `failed` with the step it returns to, `paused` on a question, or
+  `skipped` with a reason). A turn that ends without it is retried once with a reminder; a second
+  one ends the step `failed` back to itself, with a note on the ticket's history, and ends the run.
+- An `orchestrated` step is one agent turn from its `prompt`. When it has an `answer`, the agent
+  writes its answer as a JSON object to the file the prompt names, and Symphony checks it: an answer
+  that is missing, not JSON or misses a field or a type is retried once, then the step ends
+  `failed`. A good answer is a note on the ticket's history and goes into the prompts of the run's
+  later turns.
+- A `machine` step is Symphony's (below).
+- Any step pauses on a Question: a delegated or orchestrated step whose agent asks one through the
+  question tool, and a machine step at its no-result limit. The run stops its agent session and
+  frees its slot; the ticket shows "paused on your answer" on the step and the question is in the
+  Inbox. The answer resumes the run on the same step at once (once a slot is free and Symphony's
+  pause, if any, lifts), with the question and the answer in the turn's prompt. A run that is gone
+  by then (Symphony restarted) is resumed by the ticket's next run, at that step. For a machine
+  step, "Go on past it" moves on to the next step, "Run it again" runs it again, and an answer in
+  the person's own words goes to the agent step it returns to on failure. Cancel withdraws the
+  question and ends the run; Stop works as for any run.
 
 The Director edits the lists in Settings › Phases: pick a run kind, then reorder its steps (drag, or
 the arrow buttons), add or remove one, set its title, id, kind, command or prompt, timeout, the step
 it returns to on failure and its no-result limit, or reset the kind to its default list (which
 removes `phases.<kind>` from the file). A step the rules below refuse says why on its row and is not
-saved. Under the list, a preview shows the list as `symphony workflow preview` prints it. Save checks
+saved. The editor has no control for an orchestrated step's `answer` yet: set it in the file by hand,
+and don't save that kind's list from Settings, which would drop it. Under the list, a preview shows the list as `symphony workflow preview` prints it. Save checks
 the file with `symphony check` first and rewrites only the kind's `steps:` block, as an indented
 list; a block it can't read (an anchor, a folded `>` prompt) is reported with its line, to change by
 hand.
@@ -3375,6 +3398,9 @@ Each step has:
   own secrets are removed), with the agent's session closed and its slot free.
 - `prompt` (required for an `orchestrated` step, refused on any other): the instructions of its
   agent turn.
+- `answer` (an `orchestrated` step only; default none): the answer its agent gives, each field the
+  JSON object must hold with its type, `string`, `number`, `boolean`, `list` or `object`
+  (`answer: {layout: string, columns: number}`).
 - `when` (a `machine` step only; default `always`): the step runs only when the change matches,
   with the same values as a command's `when`; otherwise it is skipped.
 - `timeout_ms` (above 0; default 600000, ten minutes, for a machine step, and the agent's turn
@@ -3388,14 +3414,14 @@ Each step has:
 A list is refused when `symphony.yml` loads, with the step named: an `on_fail` that names a step not
 in the list, failures that can loop through steps none of which is delegated (`build` returning to
 `tests` returning to `build` would run the same commands again on the same code), a machine step
-with no command, an orchestrated step with no prompt, a `command`, `prompt` or `when` on a step of
-another mode, two steps with one id, an unknown key, and an unknown kind. A running Symphony keeps
+with no command, an orchestrated step with no prompt, a `command`, `prompt`, `when` or `answer` on a
+step of another mode, an `answer` field with a malformed name or an unknown type, two steps with one id, an unknown key, and an unknown kind. A running Symphony keeps
 the list it last loaded until the edit is fixed (see `symphony check`).
 
 **Upgrading.** The key is new and nothing is renamed or removed: a `symphony.yml` without `phases`
 loads as before and follows the default list, so no migration is needed. A file that sets `phases`
 is refused by a build older than this one (an unknown key), so set it only once Symphony runs a
-build that has it.
+build that has it. The same holds for a step's `answer`, which a build older than TP-1394 refuses.
 
 ## `WORKFLOW.md`
 

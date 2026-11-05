@@ -2378,8 +2378,10 @@ defmodule SymphonyElixir.Config.Schema do
       One step of a run's list: its `id` (what `on_fail` names), `title`, `mode`, the `command` of a
       machine step or the `prompt` of an orchestrated one, how long it may run (`timeout_ms`), the
       step a failure returns to (`on_fail`; none ends the run), how many times in a row it may end
-      with no result before the run pauses on a Question (`no_result_limit`, decision 3), and for a
-      machine step when it runs at all (`when`).
+      with no result before the run pauses on a Question (`no_result_limit`, decision 3), for a
+      machine step when it runs at all (`when`), and for an orchestrated step the answer its agent
+      gives (`answer`: each field the answer must hold and its type, `string`, `number`, `boolean`,
+      `list` or `object`), which Symphony checks before the step passes.
 
       A machine step's `command` is a shell command, or a list of `{run, when}` entries run in
       order, each only when its condition holds: `build` runs `swift build` when `macos/` changed
@@ -2393,7 +2395,8 @@ defmodule SymphonyElixir.Config.Schema do
       @primary_key false
       @modes ~w(machine orchestrated delegated)
       @conditions ~w(always macos_changed elixir_changed)
-      @keys ~w(id title mode command prompt timeout_ms on_fail no_result_limit when)
+      @keys ~w(id title mode command prompt answer timeout_ms on_fail no_result_limit when)
+      @answer_types ~w(string number boolean list object)
       @id_format ~r/^[a-z][a-z0-9_]*$/
       # A machine step that sets no timeout gets ten minutes; an agent turn has the agent's own.
       @machine_timeout_ms 600_000
@@ -2429,6 +2432,7 @@ defmodule SymphonyElixir.Config.Schema do
         field(:mode, :string)
         embeds_many(:command, Command, on_replace: :delete)
         field(:prompt, :string)
+        field(:answer, {:map, :string}, default: %{})
         field(:timeout_ms, :integer)
         field(:on_fail, :string)
         field(:no_result_limit, :integer, default: 2)
@@ -2443,13 +2447,17 @@ defmodule SymphonyElixir.Config.Schema do
       @spec conditions() :: [String.t()]
       def conditions, do: @conditions
 
+      @doc "The types a field of an orchestrated step's `answer` takes."
+      @spec answer_types() :: [String.t()]
+      def answer_types, do: @answer_types
+
       @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
       def changeset(schema, attrs) do
         attrs = command_entries(attrs)
         step = step_name(attrs)
 
         schema
-        |> cast(attrs, [:id, :title, :mode, :prompt, :timeout_ms, :on_fail, :no_result_limit, :when])
+        |> cast(attrs, [:id, :title, :mode, :prompt, :answer, :timeout_ms, :on_fail, :no_result_limit, :when])
         |> reject_unknown_keys(attrs, @keys, step)
         |> validate_required([:id], message: "is required for every step")
         |> validate_format(:id, @id_format, message: "`#{step}` must be lowercase letters, digits and underscores, starting with a letter")
@@ -2460,6 +2468,7 @@ defmodule SymphonyElixir.Config.Schema do
         |> validate_number(:no_result_limit, greater_than: 0, message: "of step `#{step}` must be greater than 0")
         |> cast_embed(:command, with: &Command.changeset(&1, &2, step, @conditions))
         |> validate_mode_fields(attrs, step)
+        |> validate_answer(step)
         |> default_title()
         |> default_machine_timeout()
       end
@@ -2491,7 +2500,17 @@ defmodule SymphonyElixir.Config.Schema do
         |> require_for_mode(mode, "machine", :command, get_field(changeset, :command) != [], step)
         |> require_for_mode(mode, "orchestrated", :prompt, present?(get_field(changeset, :prompt)), step)
         |> refuse_off_mode(mode, "machine", :when, Map.has_key?(attrs, "when"), step)
+        |> refuse_off_mode(mode, "orchestrated", :answer, Map.has_key?(attrs, "answer"), step)
       end
+
+      defp validate_answer(changeset, step) do
+        validate_change(changeset, :answer, fn :answer, answer ->
+          for {name, _type} <- answer |> Enum.sort() |> Enum.reject(&answer_field?/1) |> Enum.take(1),
+              do: {:answer, "field `#{name}` of step `#{step}` must be a lowercase name with a type: #{Enum.join(@answer_types, ", ")}"}
+        end)
+      end
+
+      defp answer_field?({name, type}), do: name =~ @id_format and type in @answer_types
 
       defp require_for_mode(changeset, mode, mode, field, false, step),
         do: add_error(changeset, field, "is required for #{mode} step `#{step}`")

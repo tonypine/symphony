@@ -302,7 +302,8 @@ defmodule SymphonyElixir.Questions do
       so does a question a request comment shows (`request: true`, the agent's
       `linear_request_human_action`: a protected-path authorization, a plan's choice): the run
       ended because it asked, and the question holds the ticket until it is answered or ends for
-      another reason (TP-1321);
+      another reason (TP-1321); and so does a question a run's step pauses on (`step` set,
+      `SymphonyElixir.PhaseSteps`): its answer resumes the step, in the run or in the next one;
     * a merge settled and a terminal state end every question.
 
   A question no longer open lapses with nothing.
@@ -366,7 +367,8 @@ defmodule SymphonyElixir.Questions do
   end
 
   defp open_lapse_reason(question, {:run_ended, %{moved_to: to} = run}) when is_binary(to) do
-    if run_asked?(question) and question.request != true and asked_in?(question, run), do: "The run that asked ended and the ticket moved on to #{to}."
+    if run_asked?(question) and question.request != true and is_nil(question.step) and asked_in?(question, run),
+      do: "The run that asked ended and the ticket moved on to #{to}."
   end
 
   defp open_lapse_reason(_question, {:run_ended, _run}), do: nil

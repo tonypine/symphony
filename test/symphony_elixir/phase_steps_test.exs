@@ -375,7 +375,206 @@ defmodule SymphonyElixir.PhaseStepsTest do
       assert [%{payload: %{step_id: "code", outcome: "passed", duration_ms: 1_200}}] = events("step.completed")
 
       assert PhaseSteps.prompt_section(step(steps, "triage"), nil) =~ "Sort the findings."
-      refute PhaseSteps.prompt_section(step(steps, "code"), nil) =~ "failed"
+      refute PhaseSteps.prompt_section(step(steps, "code"), nil) =~ "step (Build) failed"
     end
+
+    test "a delegated step's prompt says how to end it, and a retry reminds the agent", _ctx do
+      code = step(steps(), "code")
+      section = PhaseSteps.prompt_section(code, nil)
+
+      assert section =~ "End this step by recording `step.completed` for it with `ticket_record` (payload `step_id: \"code\"`"
+      assert section =~ "ask them with the question tool and end the turn"
+      refute section =~ "Reminder"
+
+      assert PhaseSteps.prompt_section(code, nil, %{reminder: true}) =~
+               "Reminder: the last turn ended without recording `step.completed` for the `code` step."
+    end
+
+    test "the agent's own end of a delegated step, read from the ledger for this run since the step started", ctx do
+      code = step(steps(), "code")
+      context = context(ctx, %{})
+      since = DateTime.utc_now()
+
+      assert PhaseSteps.agent_outcome(code, context, since) == :none
+
+      # Symphony's records, another step's and another run's do not count.
+      :ok = PhaseSteps.record_turn_passed(code, context, 10)
+      record_agent!("handoff", %{outcome: "passed"})
+      record_agent!("code", %{outcome: "passed"}, "run-other")
+      assert PhaseSteps.agent_outcome(code, context, since) == :none
+
+      record_agent!("code", %{outcome: "failed", returns_to: "code"})
+      assert PhaseSteps.agent_outcome(code, context, since) == {:failed, "code"}
+
+      record_agent!("code", %{outcome: "skipped", reason: "nothing to change"})
+      assert PhaseSteps.agent_outcome(code, context, since) == {:skipped, "nothing to change"}
+
+      record_agent!("code", %{outcome: "paused", question_id: "q-1"})
+      assert PhaseSteps.agent_outcome(code, context, since) == {:paused, "q-1"}
+
+      record_agent!("code", %{outcome: "passed"})
+      assert PhaseSteps.agent_outcome(code, context, since) == {:passed, nil}
+
+      # One recorded before the step started is an earlier attempt's.
+      assert PhaseSteps.agent_outcome(code, context, DateTime.add(DateTime.utc_now(), 1, :second)) == :none
+      assert PhaseSteps.agent_outcome(code, Map.delete(context, :run_id), since) == {:passed, nil}
+    end
+
+    test "a question a run asked since the step started is the one it pauses on", ctx do
+      context = context(ctx, %{})
+      since = DateTime.utc_now()
+      ticket = {:ticket, @repo_key, @issue_id}
+
+      {:ok, _symphony} = Questions.ask(ticket, request("Symphony's own"), asked_by: %{kind: :symphony, name: "Symphony"})
+      {:ok, _earlier} = Questions.ask(ticket, request("An earlier one"), asked_by: %{kind: :run, name: "The run"}, at: DateTime.add(since, -60, :second))
+      assert PhaseSteps.asked_question(context, since) == nil
+
+      {:ok, asked} = Questions.ask(ticket, request("Pick a layout"), asked_by: %{kind: :run, name: "The run"})
+      assert PhaseSteps.asked_question(context, since) == asked.id
+
+      {:ok, _answered} = Questions.answer(ticket, asked.id, "1")
+      assert PhaseSteps.asked_question(context, since) == nil
+    end
+
+    test "the step the next run resumes at: the last step paused on a Question that is answered now", ctx do
+      steps = steps()
+      context = context(ctx, %{})
+      ticket = {:ticket, @repo_key, @issue_id}
+
+      assert PhaseSteps.resume_point(steps, context) == nil
+
+      {:ok, question} = Questions.ask(ticket, request("Pick a layout"), asked_by: %{kind: :run, name: "The run"})
+      :ok = PhaseSteps.record_turn_started(step(steps, "code"), context)
+      :ok = PhaseSteps.record_turn_completed(step(steps, "code"), context, %{outcome: "paused", question_id: question.id}, 5)
+
+      # Open: nothing to resume yet.
+      assert PhaseSteps.resume_point(steps, context) == nil
+
+      {:ok, _answered} = Questions.answer(ticket, question.id, "1")
+      assert {%Step{id: "code"}, %{id: id, state: :answered}} = PhaseSteps.resume_point(steps, context)
+      assert id == question.id
+
+      # A list without the step resumes nothing, and neither does a step event after the pause.
+      assert PhaseSteps.resume_point(Enum.reject(steps, &(&1.id == "code")), context) == nil
+      :ok = PhaseSteps.record_turn_started(step(steps, "code"), context)
+      assert PhaseSteps.resume_point(steps, context) == nil
+    end
+
+    test "a machine step's answer goes on past it, runs it again, or hands the person's words on" do
+      options = [%{label: "Go on past it"}, %{label: "Run it again"}]
+
+      assert PhaseSteps.machine_resume(%{answer: %{option: 1}, options: options}) == :go_on
+      assert PhaseSteps.machine_resume(%{answer: %{option: 2}, options: options}) == :again
+      assert PhaseSteps.machine_resume(%{answer: %{option: nil, text: "skip the Swift tests"}, options: options}) == :words
+    end
+
+    test "a resumed step's prompt carries the question and the answer verbatim, and earlier answers", _ctx do
+      code = step(steps(), "code")
+      question = %{question: "Which layout: one column or two?", answer: %{text: "Two columns, as in the mock."}}
+      layout = %Step{id: "layout", title: "Pick a layout", mode: "orchestrated"}
+
+      section = PhaseSteps.prompt_section(code, nil, %{resume: question, answers: [{layout, %{"columns" => 2}}]})
+
+      assert section =~ "Symphony paused this step on a question, and the person answered it."
+      assert section =~ "Question: Which layout: one column or two?"
+      assert section =~ "Answer: Two columns, as in the mock."
+      assert section =~ ~s|- Earlier steps of this run answered:\n  - `layout` (Pick a layout): {"columns":2}|
+    end
+
+    test "Symphony records a step's end it saw, filling the title of the step it returns to, and a note", ctx do
+      steps = steps()
+      context = Map.put(context(ctx, %{}), :steps, steps)
+
+      :ok = PhaseSteps.record_turn_completed(step(steps, "handoff"), context, %{outcome: "failed", returns_to: "code"}, 7)
+      :ok = PhaseSteps.record_turn_completed(step(steps, "handoff"), Map.delete(context, :steps), %{outcome: "failed", returns_to: "handoff"}, 7)
+      :ok = PhaseSteps.record_note(context, "The agent ended two turns without recording how the step ended.")
+
+      assert [first, second] = events("step.completed")
+      assert %{returns_to: "code", returns_to_title: "Write the code", duration_ms: 7} = first.payload
+      assert %{returns_to_title: "handoff"} = second.payload
+
+      assert [%{payload: %{text: "The agent ended two turns without recording how the step ended."}}] = events("note")
+    end
+  end
+
+  describe "an orchestrated step's answer" do
+    defp layout_step do
+      [
+        %{"id" => "code", "mode" => "delegated"},
+        %{"id" => "layout", "title" => "Pick a layout", "mode" => "orchestrated", "prompt" => "Pick one.", "answer" => %{"layout" => "string", "columns" => "number"}}
+      ]
+      |> steps()
+      |> step("layout")
+    end
+
+    test "its prompt names the file and the fields, and a refused answer is said on the retry", ctx do
+      context = context(ctx, %{}, %{answer_dir: ctx.workspace})
+      path = PhaseSteps.answer_path(layout_step(), context)
+      assert path == Path.join(ctx.workspace, "symphony-step-answer-layout.json")
+      assert PhaseSteps.answer_path(layout_step(), Map.delete(context, :answer_dir)) == Path.join(System.tmp_dir!(), "symphony-step-answer-layout.json")
+
+      section = PhaseSteps.prompt_section(layout_step(), nil, %{answer_path: path})
+      assert section =~ "writing your answer as one JSON object to `#{path}`, with the fields `columns` (number), `layout` (string)"
+      assert section =~ "Pick one."
+      assert PhaseSteps.prompt_section(layout_step(), nil) =~ "to `the answer file`"
+
+      assert PhaseSteps.prompt_section(layout_step(), nil, %{answer_error: "the answer is not JSON"}) =~
+               "Your last answer was refused: the answer is not JSON. Write it again"
+
+      # One with no answer says nothing of a file.
+      refute PhaseSteps.prompt_section(%Step{id: "triage", title: "Triage", mode: "orchestrated", prompt: "Sort.", answer: %{}}, nil) =~ "JSON"
+    end
+
+    test "is read from its file and checked against the step's answer", ctx do
+      path = Path.join(ctx.workspace, "symphony-step-answer-layout.json")
+      quoted = "'#{path}'"
+
+      read = fn result ->
+        context = context(ctx, %{"cat #{quoted}" => [result], "rm -f #{quoted}" => [{:ok, {"", 0}}]}, %{answer_dir: ctx.workspace})
+        PhaseSteps.read_answer(layout_step(), context)
+      end
+
+      assert read.({:ok, {~s({"layout": "two columns", "columns": 2, "why": "the mock"}), 0}}) ==
+               {:ok, %{"layout" => "two columns", "columns" => 2, "why" => "the mock"}}
+
+      assert read.({:ok, {~s({"layout": 2}), 0}}) == {:error, "the answer lacks `columns` (number), `layout` (string)"}
+      assert read.({:ok, {"[1, 2]", 0}}) == {:error, "the answer is not a JSON object"}
+      assert read.({:ok, {"two columns", 0}}) == {:error, "the answer is not JSON"}
+      assert read.({:ok, {"cat: no such file", 1}}) == {:error, "no answer was written to #{path}"}
+
+      context = context(ctx, %{"rm -f #{quoted}" => [{:ok, {"", 0}}]}, %{answer_dir: ctx.workspace})
+      assert PhaseSteps.clear_answer(layout_step(), context) == :ok
+      assert_received {:ran, "rm -f " <> ^quoted, _env, _timeout}
+
+      assert PhaseSteps.read_answer(%Step{id: "triage", mode: "orchestrated", answer: %{}}, context) == {:ok, %{}}
+    end
+
+    test "every type, and an answer over its size" do
+      step = %Step{id: "x", mode: "orchestrated", answer: %{"a" => "string", "b" => "number", "c" => "boolean", "d" => "list", "e" => "object"}}
+
+      assert {:ok, _answer} = PhaseSteps.check_answer(step, ~s({"a": "", "b": 1.5, "c": false, "d": [], "e": {}}))
+      assert {:error, "the answer lacks `c` (boolean), `d` (list), `e` (object)"} = PhaseSteps.check_answer(step, ~s({"a": "", "b": 1, "c": 1, "d": {}, "e": []}))
+      assert {:error, "the answer is over 64 KB"} = PhaseSteps.check_answer(step, String.duplicate(" ", 64 * 1024 + 1))
+    end
+  end
+
+  defp record_agent!(step_id, fields, run_id \\ "run-steps") do
+    payload = Map.merge(%{step_id: step_id, title: step_id, mode: "delegated"}, fields)
+    {:ok, _event} = TicketEvents.record(@repo_key, @issue_id, "step.completed", payload, actor: {:agent, run_id, "implementation"}, run_id: run_id)
+    :ok
+  end
+
+  defp request(title) do
+    %{
+      title: title,
+      question: "#{title}: which of the two should the ticket use?",
+      why: "The ticket names both. Only you can say which one it wants.",
+      if_unanswered: "The ticket stays paused on this step.",
+      recommendation_reason: "The first matches the mock.",
+      options: [
+        %{label: "The first", effect: "The run builds the first one.", recommended: true},
+        %{label: "The second", effect: "The run builds the second one."}
+      ]
+    }
   end
 end
