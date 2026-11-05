@@ -2,7 +2,7 @@ import SwiftUI
 import SymphonyBarCore
 
 /// Settings › Phases (`phases.<kind>.steps`): the step list a run kind follows, reorderable by drag or by the arrow
-/// buttons, each step's title, id, kind, command or prompt, timeout and the step it returns to on failure; Add step,
+/// buttons, each step's title, id, kind, command or prompt (with an orchestrated step's answer fields), timeout and the step it returns to on failure; Add step,
 /// Remove and Reset to default; a step the rules refuse says why on its row. Under the list, the list as
 /// `symphony workflow preview` prints it.
 struct PhasesSection: View {
@@ -204,6 +204,60 @@ private struct PhaseStepRow: View {
     }
 }
 
+/// An orchestrated step's answer (`answer`): each field the agent's JSON answer must hold, with its type, which
+/// Symphony checks before the step passes. A field Symphony would refuse says why on its line.
+private struct PhaseAnswerFields: View {
+    @Binding var step: PhaseStep
+
+    var body: some View {
+        LabeledContent("Answer") {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                if step.answer.isEmpty {
+                    Text("No fields: Symphony doesn't check the agent's answer.")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach($step.answer) { $field in
+                    VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                        HStack {
+                            TextField("Field name", text: $field.name, prompt: Text("lowercase_name"))
+                                .labelsHidden()
+                                .font(.system(.body, design: .monospaced))
+                                .accessibilityLabel("Answer field name")
+                            Picker("Type", selection: $field.type) {
+                                ForEach(AnswerType.allCases) { type in
+                                    Text(type.title).tag(type)
+                                }
+                            }
+                            .labelsHidden()
+                            .fixedSize()
+                            .pointerStyle(.link)
+                            .accessibilityLabel("Type of the answer field \(field.name)")
+                            Button {
+                                step.removeAnswerField(field.id)
+                            } label: {
+                                Image(systemName: "minus.circle")
+                            }
+                            .buttonStyle(.borderless)
+                            .pointerStyle(.link)
+                            .help("Remove this field")
+                            .accessibilityLabel("Remove the answer field \(field.name)")
+                        }
+                        if let reason = PhaseValidation.answerReason(for: field, in: step.answer) {
+                            Text(reason)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                Button("Add field") { step.addAnswerField() }
+                    .pointerStyle(.link)
+                    .accessibilityLabel("Add an answer field to \(step.stepID)")
+            }
+        }
+    }
+}
+
 /// The fields of one step, only those its kind takes.
 private struct PhaseStepFields: View {
     @Binding var step: PhaseStep
@@ -261,6 +315,7 @@ private struct PhaseStepFields: View {
                         .frame(minHeight: 60, maxHeight: 160)
                         .accessibilityLabel("Prompt")
                 }
+                PhaseAnswerFields(step: $step)
             case .delegated:
                 EmptyView()
             }
