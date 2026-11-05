@@ -2710,6 +2710,12 @@ Important nuance:
   conflict was found in `Merging` and the PR head is still the one that conflicted, and to the
   post-PR state otherwise. A PR that still conflicts, or whose mergeability GitHub has not computed
   yet, is parked as before, even when a CI failure is pending too.
+  Nor does it apply while the branch on `origin` is at the workspace `HEAD` and the attached PR
+  still shows an older head: GitHub has not attached the push yet, which is progress the PR can't
+  show. The run waits for GitHub instead (up to two minutes per idle turn), nudges the PR with a
+  no-op base update once it has lagged for a minute, records each step as a `note` event on the
+  ticket ("waiting for GitHub to pick up <sha>", "nudged it", "picked up"), and then judges the new
+  head as above.
 - Before the park, the workspace's uncommitted changes MUST be committed on its branch
   (`git add -A`, a `WIP: parked by Symphony` commit that skips the repo's hooks), then commits in
   the workspace that no remote has MUST be pushed to the workspace's branch on `origin` (only when every push URL of the workspace's `origin` is the source repo's),
