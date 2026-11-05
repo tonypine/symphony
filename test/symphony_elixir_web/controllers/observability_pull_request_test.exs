@@ -42,7 +42,7 @@ defmodule SymphonyElixirWeb.ObservabilityPullRequestTest do
   setup do
     endpoint_config = Application.get_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, [])
     on_exit(fn -> Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, endpoint_config) end)
-    :ok
+    :ok = RunStore.clear()
   end
 
   test "an open pull request with two Code Review verdicts" do
@@ -194,17 +194,21 @@ defmodule SymphonyElixirWeb.ObservabilityPullRequestTest do
       {:ok, %{"data" => %{"attachmentsForURL" => %{"nodes" => [%{"issue" => issue}]}, "issues" => %{"nodes" => [issue]}}}}
     end
 
-    record = %{
-      issue_id: "id-TP-892",
-      verdicts: [
-        %{kind: "code_review", head_sha: "c3", outcome: "request_changes", recorded_at: ~U[2026-10-13 08:40:00Z]},
-        %{kind: "code_review", head_sha: "c1", outcome: "request_changes", recorded_at: ~U[2026-10-13 05:00:00Z]}
-      ],
-      signals: [
-        %{name: "code_review", at: ~U[2026-10-13 08:40:03Z], details: %{signal: "code_review_rework", reason: "The review instructions still describe the Supervisor check. Findings follow."}},
-        %{name: "code_review", at: ~U[2026-10-13 05:00:02Z], details: %{signal: "code_review_rework", reason: "The playbook still names the Final verification step."}}
-      ]
-    }
+    # The ticket's verdicts and signals are its events, which the page reads under its id.
+    :ok = put_verdict("symphony", "id-TP-892", "code_review", "c1", "request_changes", %{}, ~U[2026-10-13 05:00:00Z])
+    :ok = put_signal("symphony", "id-TP-892", "code_review", %{signal: "code_review_rework", reason: "The playbook still names the Final verification step."}, ~U[2026-10-13 05:00:02Z])
+    :ok = put_verdict("symphony", "id-TP-892", "code_review", "c3", "request_changes", %{}, ~U[2026-10-13 08:40:00Z])
+
+    :ok =
+      put_signal(
+        "symphony",
+        "id-TP-892",
+        "code_review",
+        %{signal: "code_review_rework", reason: "The review instructions still describe the Supervisor check. Findings follow."},
+        ~U[2026-10-13 08:40:03Z]
+      )
+
+    record = %{issue_id: "id-TP-892"}
 
     reviews = [
       %{issue_id: "id-TP-892", issue_identifier: "TP-892", pr_url: @url, landing: %{files: ["lib/symphony_elixir/code_review.ex", "mix.exs"]}},

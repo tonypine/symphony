@@ -31,7 +31,7 @@ defmodule SymphonyElixirWeb.ObservabilityHistoryTest do
         started_at: DateTime.utc_now()
       })
 
-    :ok = RunStore.record_ticket_verdict(Config.repo_key!(), "history-issue-1", "code_review", "abc", "approve")
+    :ok = put_verdict(Config.repo_key!(), "history-issue-1", "code_review", "abc", "approve")
 
     body = json_response(get(build_conn(), "/api/v1/history?days=3"), 200)
 

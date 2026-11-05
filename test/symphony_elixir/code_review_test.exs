@@ -262,7 +262,7 @@ defmodule SymphonyElixir.CodeReviewTest do
       {workspace, head} = git_workspace!()
 
       # A mechanical repair pushed this head; the lane re-binds the approval it carries to it.
-      :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "code_review", "the-repaired-head", "approve")
+      :ok = put_verdict(@repo_key, @issue_id, "code_review", "the-repaired-head", "approve")
       assert :ok = CiFix.carry_verdict(@repo_key, @issue_id, "Code Review", head, designed_settings())
 
       assert :ok = run(workspace, settings: designed_settings())
@@ -472,12 +472,15 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert [%{name: "code_review", details: %{signal: "code_review_escalate", reason: "touches protected files"}}] =
                SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
 
-      # The verdict, then the escalation's request: the escalation signal is no phase move.
+      # The verdict, then the escalation's request: the escalation signal is no phase move, only a
+      # note naming it.
       assert [
                {"verdict.recorded", %{kind: "code_review", outcome: "block"}},
                {"question.asked", %{title: "Code Review escalated TP-815"}},
                {"pause.set", %{reason: "question"}}
-             ] = ticket_events(@repo_key, @issue_id)
+             ] = ticket_events(@repo_key, @issue_id, ["verdict.recorded", "question.asked", "pause.set", "phase.entered"])
+
+      assert [{"note", %{signal: "code_review", signal_details: %{signal: "code_review_escalate"}}}] = ticket_events(@repo_key, @issue_id, ["note"])
     end
 
     test "a reviewer block error pauses the ticket on a Needs Decision hold" do

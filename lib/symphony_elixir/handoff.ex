@@ -73,16 +73,16 @@ defmodule SymphonyElixir.Handoff do
   def verdicts(repo_key, issue_id, kind) do
     case ticket_state(repo_key, issue_id) do
       nil -> []
-      record -> record |> TicketState.normalize() |> Map.fetch!(:verdicts) |> Enum.filter(&(&1.kind == kind))
+      record -> record |> TicketState.verdicts() |> Enum.filter(&(&1.kind == kind))
     end
   end
 
-  @doc "The ticket's signals ledger, newest first; empty when there is none."
+  @doc "The ticket's signals (`TicketState.signals/1`), newest first; empty when there are none."
   @spec signals(String.t() | nil, String.t() | nil) :: [map()]
   def signals(repo_key, issue_id) do
     case ticket_state(repo_key, issue_id) do
       nil -> []
-      record -> record |> TicketState.normalize() |> Map.fetch!(:signals)
+      record -> TicketState.signals(record)
     end
   end
 

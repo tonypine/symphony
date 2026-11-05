@@ -456,7 +456,7 @@ Who writes it, and when it changes:
 - At startup, the backfill seeds a record, source `backfill`, for each ticket of each configured repo
   that has none, from the PR URLs Symphony already stores, first found wins: the CI poller's
   record, the PR review poller's record (unless the auto-merge lane saw that PR merge), then the
-  newest `handoff` signal in the ticket's signals ledger that carries a `pr_url`. It makes no
+  newest `handoff` signal of the ticket's events that carries a `pr_url`. It makes no
   GitHub or tracker request and never overwrites a record, whatever its PR or state.
 - The branch lookup finds a PR Symphony did not open (a person opened it by hand, or the backfill
   missed it). Once per repo per poll cycle, on the active tickets the poll just read, and off the
@@ -511,10 +511,14 @@ spec says a run's or a ticket's "attached PR", it means the PR the record answer
 
 Each ticket has one durable, typed, append-only event stream, kept in the durable run store per
 `repo_key` and issue ID. It is Symphony's record of the ticket's history; the tracker is a projection
-of it. Until readers move over, the snapshot fields of the ticket's state record (`signals`,
-`verdicts`, `dispatches`, `decisions`) stay the source of truth and keep being written:
-every write to them also records its event (dual-write), and nothing user-facing reads the stream
-yet.
+of it. A ticket's signals, verdicts and dispatched runs are only events: the state record keeps
+no field for them, and its signals, verdicts and dispatches are views over the stream (the machine's
+and people's events that carry a `signal`, with the `signal_details` it was recorded with; each
+machine `verdict.recorded` that carries no `signal`, with its `details`; each `run.started` since the
+ticket's last verdict or lifted pause reason, with how its `run.ended` says it ended, a run that
+ended `counted: false` dropped). A signal recorded next to a pause or a question is a machine `note`
+naming it. Every reader (the dispatch-loop guard, the CI wait, the reviews, the Director's
+verdicts) reads those views.
 
 The event:
 
@@ -734,8 +738,12 @@ once, in a task the startup does not wait for (a failure is logged). For every t
 every repo it converts the snapshot's signals (through the same mapping as the live writes),
 verdicts and dispatches, and the last 14 days of `run_stopped` and `director_move` audit records,
 older than the ticket's first live event, into events keyed `backfill:<source>:<hash>` at their
-original time. A signal live writes leave to a pause or a question (a held block, a dispatch loop
-or CI wait, an unblock, a decision request) is no event: the pause backfill below records those.
+original time, so the views above read what the snapshot held. A signal live writes record next to
+a pause or a question (a held block, a dispatch loop or CI wait, an unblock, a decision request) is
+a machine `note` naming it, as live; the pause backfill below records the pauses and questions. The
+record keeps the snapshot's fields only until its ticket is converted, and then drops them, so a
+store from before the stream upgraded straight to a release without those fields still backfills
+first.
 Each recorded decision becomes `decision.recorded` under its key, so an answer already recorded is
 not recorded twice and the ticket's history shows every decision with its answer. Each
 ticket's events are appended oldest first in one transaction and end with one note saying until when

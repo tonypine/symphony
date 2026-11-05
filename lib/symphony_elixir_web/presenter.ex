@@ -540,11 +540,13 @@ defmodule SymphonyElixirWeb.Presenter do
 
   @verdict_kinds ["code_review", "qa"]
 
-  # The ticket's Code Review and QA verdicts, newest first, as the ledger keeps them.
+  # The ticket's Code Review and QA verdicts, newest first, read from its events
+  # (`TicketState.verdicts/1`).
   defp verdicts_payload(nil), do: []
 
   defp verdicts_payload(record) do
-    record.verdicts
+    record
+    |> TicketState.verdicts()
     |> Enum.filter(&(&1.kind in @verdict_kinds))
     |> Enum.map(&%{kind: &1.kind, outcome: &1.outcome, head_sha: &1.head_sha, recorded_at: iso8601(&1.recorded_at)})
   end

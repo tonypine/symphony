@@ -62,8 +62,7 @@ defmodule SymphonyElixir.TicketPullRequest.Backfill do
   # The newest handoff signal that names a PR, as `%{issue_id:, pr_url:, branch:}`.
   defp handoff_pr(record) do
     record
-    |> TicketState.normalize()
-    |> Map.fetch!(:signals)
+    |> TicketState.signals()
     |> Enum.find_value(%{}, fn
       %{name: @handoff_signal, details: %{pr_url: pr_url} = details} when is_binary(pr_url) ->
         %{issue_id: Map.get(record, :issue_id), pr_url: pr_url, branch: Map.get(details, :branch)}

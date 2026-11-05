@@ -814,7 +814,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
              RunStore.list_pr_reviews()
 
     assert [%{name: "review verdict", details: %{outcome: "rework", to: "In Progress"}} | _] =
-             RunStore.get_ticket_state("issue-1780").signals
+             ticket_signals("issue-1780")
   end
 
   test "plain non-bot reviewer comments trigger rework after cooldown and are stored for the prompt" do

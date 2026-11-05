@@ -174,7 +174,9 @@ defmodule SymphonyElixir.MergeConfirmationTest do
                Questions.open({:ticket, @repo_key, @issue_id})
 
       assert %{id: ^id} = deciding()
-      assert [{"question.asked", %{title: "Merge TP-825", confirm: "Merging"}}, {"pause.set", %{reason: "question"}}] = ticket_events(@repo_key, @issue_id)
+
+      assert [{"question.asked", %{title: "Merge TP-825", confirm: "Merging"}}, {"pause.set", %{reason: "question"}}] =
+               ticket_events(@repo_key, @issue_id, ["question.asked", "pause.set", "phase.entered"])
     end
 
     test "round-trips through Request.parse, as Linear reads its own comment back" do

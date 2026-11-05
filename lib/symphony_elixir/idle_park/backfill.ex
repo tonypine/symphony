@@ -80,10 +80,10 @@ defmodule SymphonyElixir.IdlePark.Backfill do
 
   # `{:ok, from_state}` for a ticket Symphony parked whose pause has neither the park's question nor
   # a reason the Director releases; `:none` for any other.
-  defp old_park(repo_key, %{issue_id: issue_id, phase: phase, phase_owner: :symphony, signals: signals}) when is_binary(issue_id) do
+  defp old_park(repo_key, %{issue_id: issue_id, phase: phase, phase_owner: :symphony} = record) when is_binary(issue_id) do
     ticket = {:ticket, repo_key, issue_id}
 
-    with {:ok, from_state} <- IdlePark.parked_from(phase, signals),
+    with {:ok, from_state} <- IdlePark.parked_from(phase, TicketState.signals(record)),
          [] <- Questions.open(ticket),
          false <- Pauses.releasable?(ticket) do
       {:ok, from_state}

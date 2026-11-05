@@ -312,7 +312,7 @@ defmodule SymphonyElixir.PullRequestPage do
 
   defp ticket_record(issue_id, opts) do
     case Keyword.get(opts, :ticket_state, &RunStore.get_ticket_state/1).(issue_id) do
-      %{} = record -> TicketState.normalize(record)
+      %{} = record -> record |> TicketState.normalize() |> Map.merge(%{verdicts: TicketState.verdicts(record), signals: TicketState.signals(record)})
       _none_or_error -> nil
     end
   end

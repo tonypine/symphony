@@ -10,11 +10,36 @@ defmodule SymphonyElixir.TicketSignalsTest do
     :ok = RunStore.clear()
   end
 
-  test "records a signal in the ticket's ledger" do
+  test "records a signal as its event only, which the record's signals read back" do
     assert :ok = TicketSignals.record(@repo_key, "issue-1", "handoff", %{to: "Code Review"})
 
-    assert %{signals: [%{name: "handoff", details: %{to: "Code Review"}}]} =
-             RunStore.get_ticket_state("issue-1")
+    assert [%{name: "handoff", details: %{to: "Code Review"}}] = signals("issue-1")
+    assert [%{type: "note", payload: %{signal: "handoff", signal_details: %{to: "Code Review"}}}] = RunStore.list_ticket_events("issue-1", [])
+    refute Map.has_key?(RunStore.get_ticket_state("issue-1"), :signals)
+  end
+
+  test "a signal's details are kept as the JSON an event's payload is served as" do
+    pid = self()
+    details = %{at: ~U[2026-01-02 03:04:05Z], day: ~D[2026-01-02], pair: {:a, 1}, uri: URI.parse("https://x.test"), pid: pid, list: [{1, 2}]}
+    assert :ok = TicketSignals.record(@repo_key, "issue-1", "brand_new", details)
+
+    assert [%{details: kept}] = signals("issue-1")
+    assert kept.at == ~U[2026-01-02 03:04:05Z] and kept.day == ~D[2026-01-02]
+    assert kept.pair == [:a, 1]
+    assert kept.list == [[1, 2]]
+    assert %{host: "x.test"} = kept.uri
+    assert kept.pid == inspect(pid)
+    assert {:ok, _json} = Jason.encode(kept)
+  end
+
+  test "record_kept/4 says whether the signal was kept" do
+    assert :ok = TicketSignals.record_kept(@repo_key, "issue-1", "ci_rerun", %{sha: "abc123", runs: [%{id: "1"}]})
+    assert [%{name: "ci_rerun", details: %{sha: "abc123", runs: [%{id: "1"}]}}] = signals("issue-1")
+    assert [%{type: "note", payload: %{text: "Symphony reran the failed CI · sha abc123 (ci_rerun)"}}] = RunStore.list_ticket_events("issue-1", [])
+
+    assert {:error, :no_ticket} = TicketSignals.record_kept(nil, "issue-1", "ci_rerun", %{})
+    assert {:error, :no_ticket} = TicketSignals.record_kept(@repo_key, nil, "ci_rerun", %{})
+    assert {:error, _reason} = TicketSignals.record_kept("", "issue-1", "ci_rerun", %{sha: "abc123"})
   end
 
   test "a pending projection is marked and cleared on a record only; a ticket with no record or no repo key, or a store failure, writes none" do
@@ -45,22 +70,21 @@ defmodule SymphonyElixir.TicketSignalsTest do
   test "records a signal with no details" do
     assert :ok = TicketSignals.record(@repo_key, "issue-1", "merge settled", %{})
 
-    assert %{signals: [%{name: "merge settled", details: %{}}]} =
-             RunStore.get_ticket_state("issue-1")
+    assert [%{name: "merge settled", details: %{}}] = signals("issue-1")
+    assert [%{payload: payload}] = RunStore.list_ticket_events("issue-1", [])
+    refute Map.has_key?(payload, :signal_details)
   end
 
   test "records a verdict bound to the head it judged" do
     assert :ok = TicketSignals.record_verdict(@repo_key, "issue-1", "qa", "abc123", "pass")
 
-    assert %{verdicts: [%{kind: "qa", head_sha: "abc123", outcome: "pass"}]} =
-             RunStore.get_ticket_state("issue-1")
+    assert [%{kind: "qa", head_sha: "abc123", outcome: "pass"}] = verdicts("issue-1")
   end
 
   test "records the details a verdict carries" do
     assert :ok = TicketSignals.record_verdict(@repo_key, "issue-1", "qa", "abc123", "blocked", %{reason: "no emulator", model: "claude-opus"})
 
-    assert %{verdicts: [%{outcome: "blocked", details: %{reason: "no emulator", model: "claude-opus"}}]} =
-             RunStore.get_ticket_state("issue-1")
+    assert [%{outcome: "blocked", details: %{reason: "no emulator", model: "claude-opus"}}] = verdicts("issue-1")
   end
 
   test "no-ops when the ticket carries no repo key" do
@@ -286,17 +310,18 @@ defmodule SymphonyElixir.TicketSignalsTest do
       {"ci_flake", %{sha: "abc123", runs: ["https://ci/1"], workflows: ["ci"], jobs: [], tests: []}, "note"}
     ]
 
-    test "every signal name in use yields its event, or is mirrored by a hold or decision event" do
+    test "every signal name in use yields its event, or a note when a pause or question event records the same change" do
       for {{name, details, expected}, index} <- Enum.with_index(@signals) do
         issue_id = "issue-signal-#{index}"
         assert :ok = TicketSignals.record(@repo_key, issue_id, name, details)
 
-        assert %{signals: [%{name: ^name, details: ^details}]} = RunStore.get_ticket_state(issue_id)
+        assert [%{name: ^name, details: ^details}] = signals(issue_id)
 
         case expected do
           :mirrored ->
             assert TicketSignals.event(name, details) == :mirrored
-            assert ticket_events(@repo_key, issue_id) == [], name
+            assert [{"note", payload}] = ticket_events(@repo_key, issue_id), name
+            assert payload.text =~ "(#{name})"
 
           type ->
             assert [{^type, payload}] = ticket_events(@repo_key, issue_id), "#{name} #{inspect(details)}"
@@ -348,7 +373,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
              {"attempt.pushed", %{head: "bbb222", attempt: 2}}
            ] = ticket_events(@repo_key, "issue-1")
 
-    assert %{signals: [_, _, _]} = RunStore.get_ticket_state("issue-1")
+    assert [_, _, _] = signals("issue-1")
   end
 
   test "a QA fail verdict records its event with its head, in QA, and stays in the verdicts" do
@@ -357,8 +382,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
     assert [%{type: "verdict.recorded", phase: "QA", head_sha: "abc123", payload: %{kind: "qa", outcome: "fail", head: "abc123"}}] =
              RunStore.list_ticket_events("issue-1", [])
 
-    assert %{verdicts: [%{kind: "qa", head_sha: "abc123", outcome: "fail", details: %{reason: "clipped"}}]} =
-             RunStore.get_ticket_state("issue-1")
+    assert [%{kind: "qa", head_sha: "abc123", outcome: "fail", details: %{reason: "clipped"}}] = verdicts("issue-1")
   end
 
   test "a verdict a run gave names that run; one without a run id names none, and the verdicts are the same" do
@@ -374,8 +398,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
 
     assert qa_payload == %{kind: "qa", outcome: "pass", head: "abc123"}
 
-    %{verdicts: verdicts} = RunStore.get_ticket_state("issue-1")
-    assert verdicts |> Enum.map(&{&1.kind, &1.outcome, &1.details}) |> Enum.sort() == [{"code_review", "approve", %{}}, {"epic_review", "pass", %{}}, {"qa", "pass", %{}}]
+    assert verdicts("issue-1") |> Enum.map(&{&1.kind, &1.outcome, &1.details}) |> Enum.sort() == [{"code_review", "approve", %{}}, {"epic_review", "pass", %{}}, {"qa", "pass", %{}}]
   end
 
   test "verdict_event/4 binds the event to the run it names, and to none without one" do
@@ -403,21 +426,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
              ticket_events(@repo_key, "issue-1")
   end
 
-  test "the snapshot fields are the same with the events as without them" do
-    TicketSignals.record(@repo_key, "issue-1", "claim", %{from: "Todo", to: "In Progress"})
-    TicketSignals.record_verdict(@repo_key, "issue-1", "qa", "abc123", "pass")
-    RunStore.record_ticket_signal(@repo_key, "issue-2", "claim", %{from: "Todo", to: "In Progress"})
-    RunStore.record_ticket_verdict(@repo_key, "issue-2", "qa", "abc123", "pass")
-
-    snapshot = fn issue_id ->
-      RunStore.get_ticket_state(issue_id) |> Map.take([:signals, :verdicts, :holds, :decisions]) |> strip_times()
-    end
-
-    assert snapshot.("issue-1") == snapshot.("issue-2")
-    assert length(ticket_events(@repo_key, "issue-1")) == 2
-  end
-
-  test "a refused event is logged and swallowed: the signal and the verdict are still recorded" do
+  test "a refused event is logged and swallowed, and records nothing" do
     log =
       capture_log(fn ->
         assert :ok = TicketSignals.record_verdict(@repo_key, "issue-1", "pre_push_review", "abc123", "pass")
@@ -426,7 +435,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
 
     assert log =~ "Failed to record the verdict.recorded event on issue_id=issue-1: {:invalid_payload, [:kind]}"
     assert log =~ "Failed to record the verdict.recorded event on issue_id=issue-1: {:invalid_payload, [:outcome]}"
-    assert %{verdicts: [%{kind: "pre_push_review"}], signals: [%{name: "fix verdict"}]} = RunStore.get_ticket_state("issue-1")
+    assert verdicts("issue-1") == [] and signals("issue-1") == []
     assert ticket_events(@repo_key, "issue-1") == []
   end
 
@@ -551,10 +560,6 @@ defmodule SymphonyElixir.TicketSignalsTest do
     Process.register(self(), Orchestrator)
   end
 
-  defp strip_times(snapshot) do
-    Map.new(snapshot, fn {key, entries} -> {key, Enum.map(entries, &Map.drop(&1, [:at, :recorded_at]))} end)
-  end
-
   test "logs and swallows a store failure" do
     log =
       capture_log(fn ->
@@ -562,7 +567,10 @@ defmodule SymphonyElixir.TicketSignalsTest do
         assert :ok = TicketSignals.record_verdict("  ", "issue-1", "qa", nil, "pass")
       end)
 
-    assert log =~ "Failed to record handoff signal"
-    assert log =~ "Failed to record qa verdict"
+    assert log =~ "Failed to record the note event on issue_id=issue-1"
+    assert log =~ "Failed to record the verdict.recorded event on issue_id=issue-1"
   end
+
+  defp signals(issue_id), do: TicketState.signals(%{issue_id: issue_id})
+  defp verdicts(issue_id), do: TicketState.verdicts(%{issue_id: issue_id})
 end

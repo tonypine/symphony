@@ -93,7 +93,7 @@ defmodule SymphonyElixir.Shipped do
   defp claims(records) do
     for record <- list_or_empty(records),
         record = TicketState.normalize(record),
-        %{name: "claim", at: %DateTime{} = at} <- record.signals,
+        %{name: "claim", at: %DateTime{} = at} <- TicketState.signals(record),
         reduce: %{} do
       acc -> Map.update(acc, {record.repo_key, record.issue_id}, at, &Enum.min([&1, at], DateTime))
     end

@@ -22,12 +22,12 @@ defmodule SymphonyElixir.TicketEvents do
   A question asked on Symphony itself or on a repository records the same `question.*` events on
   that subject's own stream (`build_subject/4`, `query_subject/2`), which no ticket's record holds.
 
-  The machinery writes events next to the snapshot fields of `SymphonyElixir.TicketState`
-  (`SymphonyElixir.TicketSignals`, `SymphonyElixir.Pauses`, `SymphonyElixir.Questions`, and the
-  orchestrator's `run.started` and `run.ended` next to its dispatches) and next to the audit records
-  of the Director's stop, force and Inbox moves (`person.action`), and nothing reads them yet: the
-  snapshot fields (`signals`, `verdicts`, `decisions`, `dispatches`) stay the source of
-  truth until readers move over.
+  The machinery writes the ticket's signals, verdicts and runs only as events
+  (`SymphonyElixir.TicketSignals`, the orchestrator's `run.started` and `run.ended`), and
+  `SymphonyElixir.TicketState.signals/1`, `verdicts/1` and `dispatches/1` are views over them; the
+  pauses and questions record theirs next to the record's fields (`SymphonyElixir.Pauses`,
+  `SymphonyElixir.Questions`), and the Director's stop, force and Inbox moves next to their audit
+  records (`person.action`).
   """
 
   alias SymphonyElixir.RunStore
@@ -87,7 +87,8 @@ defmodule SymphonyElixir.TicketEvents do
 
   @typedoc """
   `query/3`'s options: `types:`, `since:` (exclusive, on `at`), `run_id:`, `open_findings:`,
-  `open_decisions:` and `limit:` (default #{@default_limit}, at most #{@max_limit}).
+  `open_decisions:` and `limit:` (default #{@default_limit}, at most #{@max_limit}; `:all` reads
+  every event, for the record's views over the stream, `SymphonyElixir.TicketState.signals/1`).
   """
   @type query_opt ::
           {:types, [String.t()] | String.t()}
@@ -95,7 +96,7 @@ defmodule SymphonyElixir.TicketEvents do
           | {:run_id, String.t()}
           | {:open_findings, boolean()}
           | {:open_decisions, boolean()}
-          | {:limit, pos_integer()}
+          | {:limit, pos_integer() | :all}
 
   @doc """
   Records an event of `type` with `payload` on `repo_key`'s ticket `issue_id` (see
@@ -419,10 +420,13 @@ defmodule SymphonyElixir.TicketEvents do
 
   defp limit(opts) do
     case Keyword.get(opts, :limit, @default_limit) do
+      :all -> :all
       limit when is_integer(limit) -> limit |> max(1) |> min(@max_limit)
       _limit -> @default_limit
     end
   end
+
+  defp page(events, :all), do: events
 
   defp page(events, limit) do
     case Enum.split(events, limit) do

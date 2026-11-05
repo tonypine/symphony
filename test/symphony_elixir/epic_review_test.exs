@@ -984,7 +984,7 @@ defmodule SymphonyElixir.EpicReviewTest do
     # The review already reran this commit's failed run once and it failed again, so the agent
     # judges the red commit (`SymphonyElixir.EpicReview.CiRerun`).
     setup do
-      RunStore.record_ticket_signal(@repo_key, @issue_id, "ci_rerun", %{
+      put_signal(@repo_key, @issue_id, "ci_rerun", %{
         sha: @sha,
         runs: [%{id: "501", workflow: "CI", url: @red_run, jobs: ["verify"], tests: []}]
       })

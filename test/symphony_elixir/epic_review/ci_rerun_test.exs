@@ -12,9 +12,10 @@ defmodule SymphonyElixir.EpicReview.CiRerunTest do
   @other_sha "beef0011223344556677889900aabbccddeeff00"
   @runs "https://github.com/acme/app/actions/runs"
 
+  # The signals are the ticket's events, which a deleted record leaves: the store starts empty.
   setup do
-    RunStore.delete_ticket_state(@issue_id)
-    on_exit(fn -> RunStore.delete_ticket_state(@issue_id) end)
+    :ok = RunStore.clear()
+    on_exit(fn -> RunStore.clear() end)
     :ok
   end
 
@@ -79,6 +80,21 @@ defmodule SymphonyElixir.EpicReview.CiRerunTest do
 
     assert reruns() == []
     assert log =~ "Epic review did not rerun the failed CI on feed00112233: it could not record the rerun"
+  end
+
+  test "a rerun of red CI records its note naming ci_rerun and the commit, before it reruns, and nothing in the record" do
+    assert {:wait, [%{id: "701"}]} = check([ci_run("701", "FAILURE")])
+
+    assert [{"note", rerun}, {"note", wait}] = ticket_events(@repo_key, @issue_id)
+    assert rerun.text == "Symphony reran the failed CI · sha #{@sha} (ci_rerun)"
+    assert %{signal: "ci_rerun", signal_details: %{sha: @sha, runs: [%{id: "701", jobs: ["verify"], tests: ["TestFlaky"]}]}} = rerun
+    assert %{signal: "ci_wait_started", signal_details: %{sha: @sha}} = wait
+    assert [%{type: "note", actor: %{kind: :machine}} | _rest] = RunStore.list_ticket_events(@issue_id, [])
+    refute Map.has_key?(RunStore.get_ticket_state(@issue_id), :signals)
+
+    # The note is what the next review reads: the commit is never rerun again.
+    assert {:proceed, %{name: :ci_rerun}} = check([ci_run("701", "FAILURE")])
+    assert [["run", "rerun", "701" | _rest]] = reruns()
   end
 
   test "a rerun gh refuses proceeds naming it, and the commit is not rerun again" do

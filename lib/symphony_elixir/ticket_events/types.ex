@@ -15,8 +15,11 @@ defmodule SymphonyElixir.TicketEvents.Types do
       as atoms.
 
   An optional field given as nil is left out. A field the type does
-  not name is rejected. Every type a machine or a person writes also takes an optional `signal`, the
-  legacy signal name it mirrors, so readers of the signals ledger can move over to events.
+  not name is rejected. Every type a machine or a person writes, and `note`, also takes an optional
+  `signal`, the name of the signal it records, and `signal_details`, the details the signal was
+  recorded with: `SymphonyElixir.TicketState.signals/1` reads the ticket's signals back from them,
+  from the machine's and people's events only. A `verdict.recorded` also takes the `details` the
+  verdict carries (`SymphonyElixir.TicketState.verdicts/1`).
 
   The idempotency rule names the payload fields a key is derived from when the writer passes none
   (`{:fields, fields}`, used only when every field is present); `:writer` dedupes only on a key the
@@ -132,7 +135,9 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @evidence_statuses ~w(pass fail blocked skipped unprovable)
   @environments ~w(fixture live)
   @tokens {:any_of, [:non_neg_integer, :map]}
-  @signal [signal: :string]
+  # The signal an event records (`SymphonyElixir.TicketSignals`) and the details it was recorded
+  # with, which `SymphonyElixir.TicketState.signals/1` reads back.
+  @signal [signal: :string, signal_details: :map]
   @drift [record_phase: :string, linear_phase: :string]
   @pause_reasons ~w(question ticket build person environment)
   # Where a pause's or a question's event came from when no live write recorded it: the backfill
@@ -220,7 +225,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:machine],
       run_kinds: [],
       required: [kind: {:enum, @verdict_kinds}, outcome: :string],
-      optional: [head: :string, reason: :string] ++ @signal,
+      optional: [head: :string, reason: :string, details: :map] ++ @signal,
       idempotency: :writer
     },
     "decision.requested" => %{
@@ -443,7 +448,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:machine, :agent, :person],
       run_kinds: :any,
       required: [text: {:string, 4_000}],
-      optional: [],
+      optional: @signal,
       idempotency: :writer
     }
   }

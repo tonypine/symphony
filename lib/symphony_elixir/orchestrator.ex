@@ -1059,7 +1059,7 @@ defmodule SymphonyElixir.Orchestrator do
     record = TicketState.normalize(RunStore.get_ticket_state(issue_id))
     now = DateTime.utc_now()
 
-    case CiWait.since(record.signals, sha) do
+    case CiWait.since(TicketState.signals(record), sha) do
       nil ->
         record_ticket_signal(repo_key, issue_id, CiWait.start_signal(), %{sha: sha})
         :wait
@@ -5694,7 +5694,7 @@ defmodule SymphonyElixir.Orchestrator do
     kind = AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key).kind
     attempt = %{kind: kind, state: issue_state, head: pr_head(issue_id, repo_key)}
 
-    case DispatchLoop.check(record.dispatches, attempt, DispatchLoop.limits(Config.settings!().watchdog), DateTime.utc_now()) do
+    case DispatchLoop.check(TicketState.dispatches(record), attempt, DispatchLoop.limits(Config.settings!().watchdog), DateTime.utc_now()) do
       :ok -> :ok
       {:loop, loop} -> {:loop, loop, record}
     end
@@ -5707,7 +5707,7 @@ defmodule SymphonyElixir.Orchestrator do
   # the next dispatch finds the same loop and tries again; the question, still open, is not asked
   # twice.
   defp hold_dispatch_loop(%State{} = state, %Issue{id: issue_id} = issue, repo_key, loop, record) do
-    attrs = DispatchLoop.hold_attrs(loop, record.signals)
+    attrs = DispatchLoop.hold_attrs(loop, TicketState.signals(record))
     pause_on_question(repo_key, issue, DispatchLoop.question_attrs(loop, issue.identifier || issue_id), DispatchLoop.hold_type(), attrs.reason)
     Logger.error("Holding #{issue_context(issue)} instead of dispatching it again: #{attrs.reason}")
     record_ticket_signal(repo_key, issue_id, DispatchLoop.hold_type(), %{kind: loop.kind, count: loop.count, window_ms: loop.window_ms})
@@ -5922,22 +5922,22 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # Every run started for a ticket is recorded in its store record, best effort, for the
-  # dispatch-loop guard. A PR run is an operator's explicit dispatch with no Linear ticket behind it.
+  # Every run started for a ticket is recorded as its `run.started` event, best effort, which the
+  # dispatch-loop guard reads (`TicketState.dispatches/1`). A PR run is an operator's explicit
+  # dispatch with no Linear ticket behind it.
   defp record_dispatch(_issue, _repo_key, _run_id, _run_profile, %{run_kind: :pr}), do: :ok
 
-  defp record_dispatch(%Issue{id: issue_id, state: issue_state}, repo_key, run_id, %{kind: kind}, _running_attrs) do
-    dispatch = %{kind: kind, run_id: run_id, state: issue_state, head: pr_head(issue_id, repo_key)}
+  defp record_dispatch(%Issue{id: issue_id, state: issue_state}, repo_key, run_id, %{kind: kind}, _running_attrs),
+    do:
+      record_run_started(repo_key, issue_id, %{
+        kind: kind,
+        run_id: run_id,
+        state: issue_state,
+        head: pr_head(issue_id, repo_key)
+      })
 
-    repo_key
-    |> RunStore.record_ticket_dispatch(issue_id, dispatch)
-    |> log_run_store_error("record the dispatch")
-
-    record_run_started(repo_key, issue_id, dispatch)
-  end
-
-  # The run's `run.started` event, next to its dispatch, keyed by its run id. Its number counts the
-  # ticket's earlier runs of the same kind.
+  # The run's `run.started` event, keyed by its run id. Its number counts the ticket's earlier runs
+  # of the same kind.
   defp record_run_started(repo_key, issue_id, %{kind: kind, run_id: run_id, state: issue_state, head: head}) do
     run_kind = to_string(kind)
     run_number = length(run_events(issue_id, "run.started", &(&1[:run_kind] == run_kind))) + 1
@@ -6056,33 +6056,18 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp record_stopped_run_ended(_state, _running_entry, _state_name), do: :ok
 
-  # How the run ended, for the dispatch-loop guard's hold reason: its exit and the PR head it left. A
-  # run stopped by a usage limit or an unreachable model API counts no attempt, and an epic review
-  # waiting for CI is not a loop (`SymphonyElixir.CiWait` bounds that wait), so both are dropped.
+  # How the run ended, as its `run.ended` event, which the dispatch-loop guard's hold reason reads
+  # (`TicketState.dispatches/1`): its exit and the PR head it left. A run stopped by a usage limit or
+  # an unreachable model API counts no attempt, and an epic review waiting for CI is not a loop
+  # (`SymphonyElixir.CiWait` bounds that wait), so the event says `counted: false` and the guard
+  # drops it.
   defp record_dispatch_outcome(%{run_id: run_id, issue: %Issue{id: issue_id}} = running_entry, reason) when is_binary(run_id) do
-    if pr_run_entry?(running_entry) do
-      :ok
-    else
-      repo_key = running_entry_repo_key(running_entry)
-
-      repo_key
-      |> RunStore.record_ticket_dispatch_outcome(issue_id, run_id, dispatch_outcome(reason, issue_id, repo_key))
-      |> log_run_store_error("record the end of the run")
-
-      record_run_ended(repo_key, issue_id, run_id, running_entry, reason)
-    end
+    if pr_run_entry?(running_entry),
+      do: :ok,
+      else: record_run_ended(running_entry_repo_key(running_entry), issue_id, run_id, running_entry, reason)
   end
 
   defp record_dispatch_outcome(_running_entry, _reason), do: :ok
-
-  defp dispatch_outcome(reason, issue_id, repo_key) do
-    if uncounted_exit?(reason), do: %{counted: false}, else: counted_dispatch_outcome(reason, issue_id, repo_key)
-  end
-
-  defp counted_dispatch_outcome(:normal, issue_id, repo_key), do: %{exit: "ended normally", head: pr_head(issue_id, repo_key)}
-
-  defp counted_dispatch_outcome(reason, issue_id, repo_key),
-    do: %{exit: "failed (#{reason |> agent_exit_reason_summary() |> String.slice(0, 120)})", head: pr_head(issue_id, repo_key)}
 
   defp run_profile_log_fields(%{kind: kind, model: model, effort: effort}) do
     "run_kind=#{kind} model=#{model || "default"} effort=#{effort || "default"}"

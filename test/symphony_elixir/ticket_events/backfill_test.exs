@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.TicketEvents.BackfillTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{AuditLog, TicketEvents}
+  alias SymphonyElixir.{AuditLog, TicketEvents, TicketState}
   alias SymphonyElixir.TicketEvents.Backfill
 
   @repo_key "repo-a"
@@ -20,6 +20,7 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
     def list_all_ticket_states, do: fail(:list_all_ticket_states) || RunStore.list_all_ticket_states()
     def list_ticket_events(issue_id, opts), do: fail(:list_ticket_events) || RunStore.list_ticket_events(issue_id, opts)
     def append_ticket_events(events), do: fail(:append_ticket_events) || RunStore.append_ticket_events(events)
+    def update_ticket_state(issue_id, attrs), do: fail(:update_ticket_state) || RunStore.update_ticket_state(issue_id, attrs)
 
     defp fail(name), do: if(name in Process.get(:fail, []), do: {:error, {:failed, name}})
   end
@@ -70,7 +71,7 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       audit!(audit, %{event_type: "run_stopped", repo_key: @repo_key, issue_id: "issue-unknown"}, at(18))
       audit!(audit, %{event_type: "run_stopped", repo_key: @repo_key}, at(18))
 
-      log = capture_log(fn -> assert {:ok, %{tickets: 1, events: 14}} = Backfill.run(now: @now, audit_log: audit) end)
+      log = capture_log(fn -> assert {:ok, %{tickets: 1, events: 20}} = Backfill.run(now: @now, audit_log: audit) end)
       assert log =~ "Skipped a backfilled verdict.recorded event"
 
       events = events()
@@ -78,6 +79,12 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       assert Enum.map(events, & &1.type) == [
                "phase.entered",
                "attempt.pushed",
+               "note",
+               "note",
+               "note",
+               "note",
+               "note",
+               "note",
                "note",
                "verdict.recorded",
                "run.started",
@@ -95,15 +102,22 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       assert events |> Enum.map(& &1.at) |> Enum.chunk_every(2, 1, :discard) |> Enum.all?(fn [a, b] -> DateTime.compare(a, b) != :gt end)
       assert Enum.all?(events, &String.starts_with?(&1.idempotency, "backfill:"))
       assert Enum.all?(events, &is_binary(&1.summary.title))
-      assert Enum.map(events, & &1.seq) == Enum.to_list(1..14)
+      assert Enum.map(events, & &1.seq) == Enum.to_list(1..20)
 
-      [entered, pushed, waiting, verdict | runs] = events
+      [entered, pushed, blocked, unblocked, loop, waiting, review, decide, requested, verdict | runs] = events
       [started, ended, started2, ended2, ended3, started4, stop, rework, unblock, note] = runs
 
       assert %{at: at1, phase: "In Progress", payload: %{to: "In Progress", from: "Todo", signal: "claim"}} = entered
       assert at1 == at(1)
       assert %{payload: %{head: "aaa1111", attempt: 1, pr_url: "https://github.com/acme/app/pull/1"}, head_sha: "aaa1111"} = pushed
-      assert waiting.payload.text =~ "Waiting for CI"
+      assert %{text: "Waiting for CI · sha aaa1111 (ci_wait_started)", signal: "ci_wait_started", signal_details: %{sha: "aaa1111"}} = waiting.payload
+
+      # A signal a pause or a question mirrors live is a machine note naming it, as live.
+      for {note, name} <- [{blocked, "blocked"}, {unblocked, "unblocked"}, {loop, "dispatch_loop"}, {review, "code_review"}, {decide, "decision returned"}, {requested, "decision requested"}] do
+        assert %{actor: %{kind: :machine}, payload: %{signal: ^name, text: text}} = note
+        assert text =~ "(#{name})"
+      end
+
       assert %{phase: "QA", payload: %{kind: "qa", outcome: "pass", head: "aaa1111"}} = verdict
       assert %{run_id: "run-1", phase: "In Progress", payload: %{run_kind: "implementation", run_number: 1, state: "In Progress"}} = started
       assert %{run_id: "run-1", payload: %{exit: "handoff", run_number: 1, duration_ms: 60_000, head: "aaa1111"}} = ended
@@ -116,6 +130,31 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       assert rework.payload == %{action: "move", move: "rework", from: "QA", to: "Rework"}
       assert unblock.payload == %{action: "unblock", from: "QA", to: "QA"}
       assert %{at: @now, idempotency: "backfill:note:history", payload: %{text: "History before 2026-10-20 12:00 UTC was backfilled from the ticket's snapshot"}} = note
+
+      # The record's views read what its snapshot held, and the snapshot's fields are dropped.
+      record = RunStore.get_ticket_state(@issue_id)
+      assert record.legacy_history == nil
+
+      assert Enum.map(TicketState.signals(record), &{&1.name, &1.details}) == [
+               {"decision requested", %{hold: "needs_decision", reason: 42}},
+               {"decision returned", %{move: "decide", from: "QA", to: "QA"}},
+               {"code_review", %{signal: "merge_confirmation", reason: "ready to merge"}},
+               {"ci_wait_started", %{sha: "aaa1111"}},
+               {"dispatch_loop", %{kind: "implementation", count: 3, window_ms: 1_000}},
+               {"unblocked", %{by: :operator}},
+               {"blocked", %{reason: "waiting on TP-1", held: true}},
+               {"handoff", %{head: "aaa1111", pr_url: "https://github.com/acme/app/pull/1"}},
+               {"claim", %{from: "Todo", to: "In Progress"}}
+             ]
+
+      assert Enum.map(TicketState.signals(record), & &1.at) == Enum.map([10, 9, 8, 7, 6, 5, 4, 2, 1], &at/1)
+      assert [%{kind: "qa", head_sha: "aaa1111", outcome: "pass", details: %{}}] = TicketState.verdicts(record)
+
+      assert [
+               %{run_id: "run-4", kind: "qa", state: "QA", outcome: nil},
+               %{run_id: "run-2", outcome: %{exit: "ended"}},
+               %{run_id: "run-1", kind: "implementation", outcome: %{exit: "handoff", head: "aaa1111"}}
+             ] = TicketState.dispatches(record)
 
       assert {:ok, %{tickets: 0, events: 0}} = Backfill.run(now: @now, audit_log: audit)
       assert RunStore.get_marker(Backfill.marker()) == @now
@@ -169,7 +208,7 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       assert c3_at == at(30)
     end
 
-    test "a hold's or a decision request's signal is no event, and the record's decisions are still the Director's answers", %{audit: audit} do
+    test "a hold's or a decision request's signal is a note naming it, and the record's decisions are still the Director's answers", %{audit: audit} do
       put_ticket(%{
         signals: [
           signal(1, "decision requested", %{question: true, reason: :dependency_source_requires_approval}),
@@ -180,11 +219,19 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
         decisions: [decision("c-1", ~D[2026-10-17], "Keep the old copy")]
       })
 
-      assert {:ok, %{tickets: 1, events: 2}} = Backfill.run(now: @now, audit_log: audit)
+      assert {:ok, %{tickets: 1, events: 6}} = Backfill.run(now: @now, audit_log: audit)
 
-      assert Enum.map(events(), & &1.type) == ["decision.recorded", "note"]
+      assert Enum.map(events(), & &1.type) == ["decision.recorded", "note", "note", "note", "note", "note"]
       assert events(types: ["hold.set", "hold.cleared", "decision.requested"]) == []
-      assert [%{payload: %{text: "History before " <> _}}] = events(types: ["note"])
+
+      assert [
+               %{payload: %{signal: "decision requested"}},
+               %{payload: %{signal: "blocked"}},
+               %{payload: %{signal: "unblocked"}},
+               %{payload: %{signal: "qa"}},
+               %{payload: %{text: "History before " <> _}}
+             ] = events(types: ["note"])
+
       assert TicketEvents.query(@issue_id, open_decisions: true) == []
     end
 
@@ -206,6 +253,40 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       assert {:ok, %{tickets: 0, events: 0}} = Backfill.run(now: @now, audit_log: audit, store: Store)
       assert RunStore.get_marker(Backfill.marker()) == @now
       assert length(events()) == 2
+    end
+
+    test "a record written before the backfill ran still converts the snapshot it kept", %{audit: audit} do
+      put_ticket(%{
+        signals: [signal(1, "claim", %{from: "Todo", to: "In Progress"})],
+        verdicts: [%{kind: "qa", head_sha: "a", outcome: "fail", recorded_at: at(2)}]
+      })
+
+      :ok = RunStore.update_ticket_state(@issue_id, %{phase: "Rework"})
+      refute Map.has_key?(RunStore.get_ticket_state(@issue_id), :signals)
+
+      assert {:ok, %{tickets: 1, events: 3}} = Backfill.run(now: @now, audit_log: audit)
+      assert [%{name: "claim"}] = TicketState.signals(%{issue_id: @issue_id})
+      assert [%{outcome: "fail"}] = TicketState.verdicts(%{issue_id: @issue_id})
+      assert RunStore.get_ticket_state(@issue_id).legacy_history == nil
+    end
+
+    test "after the marker, a record still carrying the snapshot's fields drops them, and a drop that fails is logged", %{audit: audit} do
+      :ok = RunStore.put_marker(Backfill.marker(), @now)
+      put_ticket(%{signals: [signal(1, "claim", %{to: "In Progress"})]})
+      put_ticket(%{issue_id: "issue-2"})
+
+      Process.put(:fail, [:update_ticket_state])
+      log = capture_log(fn -> assert {:ok, %{tickets: 0, events: 0}} = Backfill.run(now: @now, audit_log: audit, store: Store) end)
+      assert log =~ "Failed to drop the converted history of issue_id=#{@issue_id}"
+      refute log =~ "issue-2"
+
+      Process.put(:fail, [])
+      assert {:ok, %{tickets: 0, events: 0}} = Backfill.run(now: @now, audit_log: audit, store: Store)
+      assert RunStore.get_ticket_state(@issue_id).legacy_history == nil
+      assert events() == []
+
+      Process.put(:fail, [:list_all_ticket_states])
+      assert {:error, {:failed, :list_all_ticket_states}} = Backfill.run(store: Store)
     end
 
     test "a store or audit log that can't be read fails the run", %{audit: audit} do

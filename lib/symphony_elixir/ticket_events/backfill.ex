@@ -3,17 +3,20 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
   Converts each ticket's history from before the event stream existed (`SymphonyElixir.TicketEvents`)
   into events, once, from its snapshot (`SymphonyElixir.TicketState`) and the audit log.
 
-  For every ticket record of every repo, the backfill converts the snapshot's `signals`, `verdicts`
-  and `dispatches`, and the last 14 days of `run_stopped` and `director_move` audit records, into the
-  events the live writes record for them:
+  For every ticket record of every repo, the backfill converts the `signals`, `verdicts` and
+  `dispatches` the snapshot kept (`SymphonyElixir.TicketState.legacy_history/1`), and the last 14
+  days of `run_stopped` and `director_move` audit records, into the events the live writes record
+  for them, so the record's views over its events (`SymphonyElixir.TicketState.signals/1`,
+  `verdicts/1`, `dispatches/1`) read what the snapshot held:
 
-    * A signal goes through `SymphonyElixir.TicketSignals.event/2`, the live mapping. A signal live
-      writes leave to a pause or a question (`:mirrored`: a held `blocked`, `dispatch_loop`,
-      `ci_wait`, a held `handoff_missing`, `unblocked`, a `decision requested` and a review's merge
-      confirmation or escalation) is no event: the holds and decision requests they stood beside
-      are retired, and the pauses and questions record their own (`SymphonyElixir.Pauses.Backfill`).
-      A Decide that moved nothing is no event either: its answer comes from `decisions`.
-    * A verdict is `verdict.recorded`, a dispatch `run.started` and, once it ended, `run.ended`.
+    * A signal goes through `SymphonyElixir.TicketSignals.signal_event/2`, the live mapping, with its
+      name and details. A signal live writes record next to a pause or a question (a held
+      `blocked`, `dispatch_loop`, `ci_wait`, a held `handoff_missing`, `unblocked`, a `decision
+      requested`, a review's merge confirmation or escalation, a Decide that moved nothing) is a
+      machine `note` naming it, as live; the pauses and questions record their own events
+      (`SymphonyElixir.Pauses.Backfill`).
+    * A verdict is `verdict.recorded` with its details, a dispatch `run.started` and, once it ended,
+      `run.ended`.
     * A stop is the Director's `person.action` `stop`, and an Inbox move the action that names it, as
       the live writes record them; a Decide is none.
 
@@ -30,8 +33,10 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
   Each ticket's events are appended oldest first in one transaction
   (`SymphonyElixir.RunStore.append_ticket_events/1`), ending with one `note`: "History before <date>
   was backfilled from the ticket's snapshot", where <date> is the cutoff. A ticket already holding
-  that note is done. The whole backfill runs once: the run store marker `ticket_events_backfill_v1`
-  is set when every ticket is done, and a run after it does nothing.
+  that note is done. Once a ticket is done, the snapshot's fields are dropped from its record
+  (`legacy_history: nil`). The whole backfill runs once: the run store marker
+  `ticket_events_backfill_v1` is set when every ticket is done; a run after it converts nothing and
+  only drops the fields a record still carries.
   """
 
   require Logger
@@ -90,7 +95,7 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
     store = Keyword.get(opts, :store, RunStore)
 
     case store.get_marker(@marker) do
-      %DateTime{} -> {:ok, %{tickets: 0, events: 0}}
+      %DateTime{} -> with :ok <- drop_converted(store), do: {:ok, %{tickets: 0, events: 0}}
       nil -> backfill(store, Keyword.get(opts, :now) || DateTime.utc_now(), opts)
       {:error, reason} -> {:error, reason}
     end
@@ -105,6 +110,26 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
         end
 
       finish(store, results, now)
+    end
+  end
+
+  # A record still carrying the snapshot's fields after the marker was set (the backfill before
+  # this release kept them on the record) drops them: its history was converted then.
+  defp drop_converted(store) do
+    with {:ok, records} <- read(store.list_all_ticket_states()) do
+      records
+      |> Enum.map(&TicketState.normalize/1)
+      |> Enum.filter(&is_binary(&1.issue_id))
+      |> Enum.each(&drop_history(store, &1))
+    end
+  end
+
+  defp drop_history(_store, %{legacy_history: nil}), do: :ok
+
+  defp drop_history(store, record) do
+    case store.update_ticket_state(record.issue_id, %{legacy_history: nil}) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Failed to drop the converted history of issue_id=#{record.issue_id}: #{inspect(reason)}")
     end
   end
 
@@ -151,6 +176,7 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
         if Enum.any?(existing, &(&1.idempotency == @note_key)), do: :done, else: append(store, record, existing, audit, now)
       end
 
+    if result == :done or match?({:ok, _count}, result), do: drop_history(store, record)
     logged(result, record)
   end
 
@@ -185,14 +211,15 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
   # The snapshot's entries as `%{at, source, hash, mapping}`, each mapping an event's type, payload
   # and options (or nil for an entry that is no event), the ones without a timestamp left out.
   defp entries(record, audit) do
-    signals = for signal <- record.signals, do: entry(signal.at, "signal", signal, signal_mapping(signal))
+    history = TicketState.legacy_history(record)
+    signals = for signal <- history.signals, do: entry(signal.at, "signal", signal, TicketSignals.signal_event(signal.name, signal.details))
 
     verdicts =
-      for verdict <- record.verdicts do
-        entry(verdict.recorded_at, "verdict", verdict, TicketSignals.verdict_event(verdict.kind, verdict.outcome, verdict.head_sha))
+      for verdict <- history.verdicts do
+        entry(verdict.recorded_at, "verdict", verdict, TicketSignals.verdict_event(verdict.kind, verdict.outcome, verdict.head_sha, details: verdict.details))
       end
 
-    dispatches = Enum.flat_map(record.dispatches, &dispatch_entries/1)
+    dispatches = Enum.flat_map(history.dispatches, &dispatch_entries/1)
 
     moves =
       for move <- audit, matches_repo?(move, record.repo_key) do
@@ -203,13 +230,6 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
   end
 
   defp entry(at, source, term, mapping), do: %{at: at, source: source, hash: hash(term), mapping: mapping}
-
-  defp signal_mapping(%{name: name, details: details}) do
-    case TicketSignals.event(name, details) do
-      :mirrored -> nil
-      mapping -> mapping
-    end
-  end
 
   defp dispatch_entries(%{run_id: run_id} = dispatch) when is_binary(run_id) do
     started = {"run.started", compact(%{run_id: run_id, run_kind: dispatch.kind, state: dispatch.state, head: dispatch.head}), compact_opts(phase: dispatch.state, run_id: run_id)}

@@ -1027,7 +1027,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       :ok = put_pending_ci_failure(approved: true)
       :ok = SymphonyElixir.CiFix.record_origin("default", "issue-progress", "Code Review")
       # The approval the lane carries, bound to the head the red one replaced.
-      :ok = RunStore.record_ticket_verdict("default", "issue-progress", "code_review", "sha-same", "approve")
+      :ok = put_verdict("default", "issue-progress", "code_review", "sha-same", "approve")
       Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-new", checks: @green_checks}})
 
       run_issue!("CI Fix", heads: ["sha-same", "sha-new"], max_turns: 6, repos: designed_repos())
@@ -1426,7 +1426,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
   # The newest signal recorded for the run's issue, asserting its name and details.
   defp assert_signal(name, details) do
-    assert [%{name: ^name, details: ^details} | _rest] = RunStore.get_ticket_state("issue-progress").signals
+    assert [%{name: ^name, details: ^details} | _rest] = ticket_signals("issue-progress")
   end
 
   # Refreshes the issue through the Linear client, as the runner does in production.

@@ -1,9 +1,11 @@
 defmodule SymphonyElixir.PullRequestPageTest do
-  use ExUnit.Case, async: true
-
-  import ExUnit.CaptureLog
+  use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.PullRequestPage
+
+  setup do
+    :ok = RunStore.clear()
+  end
 
   @url "https://github.com/tonypine/symphony/pull/448"
 
@@ -172,8 +174,7 @@ defmodule SymphonyElixir.PullRequestPageTest do
         verdict("code_review", "c2", "request_changes", ~U[2026-10-13 10:00:00Z]),
         verdict("code_review", "c1", "request_changes", ~U[2026-10-13 09:00:00Z]),
         verdict("code_review", "old", "request_changes", ~U[2026-10-01 09:00:00Z]),
-        verdict("acceptance", "c1", "pass", ~U[2026-10-13 09:30:00Z]),
-        %{kind: "code_review", head_sha: nil, outcome: "inconclusive", recorded_at: nil}
+        %{kind: "code_review", head_sha: nil, outcome: "inconclusive", recorded_at: ~U[2026-10-13 08:00:00Z]}
       ]
 
       signals = [
@@ -181,15 +182,14 @@ defmodule SymphonyElixir.PullRequestPageTest do
         signal("code_review", ~U[2026-10-13 11:00:02Z], %{reason: "QA runs: app files changed", review_reason: "The wording is gone. Ready."}),
         signal("code_review", ~U[2026-10-13 09:00:01Z], %{reason: "The playbook still names the old step. See the findings."}),
         signal("code_review", ~U[2026-10-13 09:00:05Z], %{reason: "A later signal of the same run."}),
-        signal("code_review_deepening", ~U[2026-10-13 10:00:01Z], %{reason: "Not this one."}),
-        signal("code_review", nil, %{reason: "No time."})
+        signal("code_review_deepening", ~U[2026-10-13 10:00:01Z], %{reason: "Not this one."})
       ]
 
       record = ticket_record(verdicts, signals)
       {:ok, page} = PullRequestPage.fetch("symphony", 448, opts(ticket_state: fn "id-TP-892" -> record end))
 
       assert page.review_history == [
-               %{at: nil, kind: "code_review", verdict: "inconclusive", reason: nil},
+               %{at: "2026-10-13T08:00:00Z", kind: "code_review", verdict: "inconclusive", reason: nil},
                %{at: "2026-10-13T09:00:00Z", kind: "code_review", verdict: "request_changes", reason: "The playbook still names the old step."},
                %{at: "2026-10-13T10:00:00Z", kind: "code_review", verdict: "request_changes", reason: nil},
                %{at: "2026-10-13T11:00:00Z", kind: "code_review", verdict: "approve", reason: "The wording is gone."},
@@ -353,5 +353,10 @@ defmodule SymphonyElixir.PullRequestPageTest do
   defp verdict(kind, head, outcome, at), do: %{kind: kind, head_sha: head, outcome: outcome, recorded_at: at}
   defp signal(name, at, details), do: %{name: name, at: at, details: details}
 
-  defp ticket_record(verdicts, signals), do: %{issue_id: "id-TP-892", verdicts: verdicts, signals: signals}
+  # The ticket's verdicts and signals are its events, written under its id; the record names it.
+  defp ticket_record(verdicts, signals) do
+    for v <- verdicts, do: :ok = put_verdict("symphony", "id-TP-892", v.kind, v.head_sha, v.outcome, %{}, v.recorded_at)
+    for signal <- signals, do: :ok = put_signal("symphony", "id-TP-892", signal.name, signal.details, signal.at)
+    %{issue_id: "id-TP-892"}
+  end
 end

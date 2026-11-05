@@ -48,6 +48,18 @@ defmodule SymphonyElixir.TestSupport do
           clear_run_store!: 0,
           ticket_events: 2,
           ticket_events: 3,
+          put_signal: 4,
+          put_signal: 5,
+          put_verdict: 5,
+          put_verdict: 6,
+          put_verdict: 7,
+          put_dispatch: 3,
+          put_dispatch: 4,
+          put_dispatch_outcome: 4,
+          put_dispatch_outcome: 5,
+          ticket_signals: 1,
+          ticket_verdicts: 1,
+          ticket_dispatches: 1,
           ticket_records_unreadable: 1,
           unix_socket_bind_probe: 0,
           unix_socket_bind_probe: 1,
@@ -333,6 +345,45 @@ defmodule SymphonyElixir.TestSupport do
     for event <- SymphonyElixir.RunStore.list_ticket_events(issue_id, []),
         is_nil(types) or event.type in List.wrap(types),
         do: {event.type, event.payload}
+  end
+
+  # The ticket's signals, verdicts and dispatched runs are events only (`TicketState.signals/1`,
+  # `verdicts/1`, `dispatches/1`). These write one as the live writers do, at `at` when given, with
+  # none of their side effects (no phase written, no cycle asked), and read the views back.
+  def put_signal(repo_key, issue_id, name, details, at \\ nil) do
+    {type, payload, opts} = SymphonyElixir.TicketSignals.signal_event(name, details)
+    record_event!(repo_key, issue_id, type, payload, opts, at)
+  end
+
+  def put_verdict(repo_key, issue_id, kind, head_sha, outcome, details \\ %{}, at \\ nil) do
+    {type, payload, opts} = SymphonyElixir.TicketSignals.verdict_event(kind, outcome, head_sha, details: details)
+    record_event!(repo_key, issue_id, type, payload, opts, at)
+  end
+
+  # A run Symphony dispatched: `attrs` names its `:kind`, `:run_id`, `:state` and `:head`.
+  def put_dispatch(repo_key, issue_id, attrs, at \\ nil) do
+    attrs = Map.new(attrs)
+    run_id = Map.get(attrs, :run_id) || "run-#{System.unique_integer([:positive])}"
+    payload = %{run_id: run_id, run_kind: to_string(Map.get(attrs, :kind) || "implementation"), state: Map.get(attrs, :state), head: Map.get(attrs, :head)}
+    record_event!(repo_key, issue_id, "run.started", payload, [run_id: run_id], at)
+  end
+
+  # How the run `run_id` ended: `attrs` names its `:exit` and `:head`, or `counted: false`.
+  def put_dispatch_outcome(repo_key, issue_id, run_id, attrs, at \\ nil) do
+    attrs = Map.new(attrs)
+    payload = %{run_id: run_id, exit: Map.get(attrs, :exit) || "ended normally", head: Map.get(attrs, :head), counted: Map.get(attrs, :counted)}
+    record_event!(repo_key, issue_id, "run.ended", payload, [run_id: run_id], at)
+  end
+
+  def ticket_signals(issue_id), do: SymphonyElixir.TicketState.signals(%{issue_id: issue_id})
+  def ticket_verdicts(issue_id), do: SymphonyElixir.TicketState.verdicts(%{issue_id: issue_id})
+  def ticket_dispatches(issue_id), do: SymphonyElixir.TicketState.dispatches(%{issue_id: issue_id})
+
+  defp record_event!(repo_key, issue_id, type, payload, opts, at) do
+    payload = payload |> Enum.reject(fn {_key, value} -> is_nil(value) end) |> Map.new()
+    opts = if at, do: Keyword.put(opts, :at, at), else: opts
+    {:ok, _event} = SymphonyElixir.TicketEvents.record(repo_key, issue_id, type, payload, opts)
+    :ok
   end
 
   # Runs `fun` while the store can't read a ticket's record (its table is gone), as a store

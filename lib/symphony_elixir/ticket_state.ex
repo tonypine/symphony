@@ -3,9 +3,7 @@ defmodule SymphonyElixir.TicketState do
   The canonical per-ticket state machine record.
 
   A record holds everything the machine owns for one ticket: its current phase, the phase
-  a CI Fix stay came from (so a mechanical repair can return it), the CI state of each PR head it has seen, its verdict records, its
-  signals ledger (the timeline both the machinery and agents read) and the runs dispatched since it
-  last made progress, which `SymphonyElixir.DispatchLoop` counts, when the phase was last written
+  a CI Fix stay came from (so a mechanical repair can return it), the CI state of each PR head it has seen, when the phase was last written
   (`phase_at`, by a move of Symphony's or an observation that changed it) and by whom (`phase_owner`:
   `:symphony` for a move of Symphony's or the Director's, `:external` for an observation of Linear),
   and the decisions a person recorded
@@ -29,13 +27,19 @@ defmodule SymphonyElixir.TicketState do
   `SymphonyElixir.Pauses.Projector`): the machine labels, the hash of the Decisions section and the
   questions' request comments and replies; and the plan's brief as it entered `Plan Review`
   (`plan_brief`, `SymphonyElixir.PlanBrief`): the review brief, the sub-tickets and the open choices,
-  with when they were read, and why the last capture failed (`plan_brief_error`, nil when it didn't).
+  with when they were read, and why the last capture failed (`plan_brief_error`, nil when it didn't);
+  and, on a record from before the event stream existed, the `signals`, `verdicts` and `dispatches`
+  it kept then (`legacy_history`), until the ledger's backfill converts them into events
+  (`SymphonyElixir.TicketEvents.Backfill`) and drops them.
+
+  The ticket's verdicts, its signals (the timeline both the machinery and agents read) and the runs
+  dispatched since it last made progress, which `SymphonyElixir.DispatchLoop` counts, are views over
+  its event stream (`signals/1`, `recent_signals/2`, `verdicts/1`, `dispatches/1`), never fields of
+  the record: `SymphonyElixir.TicketSignals` and the orchestrator record them only as events.
 
   The record is persisted by `SymphonyElixir.RunStore`; this module owns its shape and the
-  operations that move it. It is inert by design: nothing dispatches on a record yet. It exists so
-  every later sub-ticket of the state-machine redesign reads and writes the ticket's state in one
-  place, and so the signals ledger can be injected into run prompts (see
-  `SymphonyElixir.PromptBuilder`).
+  operations that move it. It exists so the machinery reads and writes the ticket's state in one
+  place, and so the signals can be injected into run prompts (see `SymphonyElixir.PromptBuilder`).
   """
 
   alias SymphonyElixir.Linear.Issue
@@ -44,12 +48,16 @@ defmodule SymphonyElixir.TicketState do
   alias SymphonyElixir.PrDecision
   alias SymphonyElixir.PrWatch.Attempts
   alias SymphonyElixir.Questions
+  alias SymphonyElixir.TicketEvents
+  alias SymphonyElixir.TicketEvents.Event
 
-  @max_signals 50
-  @max_verdicts 50
   @max_ci_states 20
   # The dispatch-loop limits are validated to at most this many runs (`Config.Schema.Watchdog`).
   @max_dispatches 50
+  # A verdict and a lifted pause reason are progress: the runs dispatched before them are no longer
+  # counted as a loop.
+  @progress_types ["pause.reason_cleared", "pause.cleared"]
+  @dispatch_types ["run.started", "run.ended", "verdict.recorded" | @progress_types]
 
   @typedoc """
   A verdict record binds an outcome to the head SHA it judged. `details` is what the verdict
@@ -75,7 +83,13 @@ defmodule SymphonyElixir.TicketState do
   @typedoc "The ticket's project as the read saw it: its id, name and slug id."
   @type project :: %{id: String.t() | nil, name: String.t() | nil, slug_id: String.t() | nil}
 
-  @typedoc "One entry of the signals ledger."
+  @typedoc """
+  What a record from before the event stream existed kept in its own fields, each list newest
+  first, until the ledger's backfill converts it into events (`legacy_history/1`).
+  """
+  @type legacy_history :: %{signals: [signal()], verdicts: [verdict()], dispatches: [dispatch()]}
+
+  @typedoc "One signal the ticket's events record (`signals/1`)."
   @type signal :: %{name: String.t(), details: map(), at: DateTime.t()}
 
   @typedoc """
@@ -258,10 +272,7 @@ defmodule SymphonyElixir.TicketState do
           phase_owner: phase_owner(),
           ci_fix_origin: String.t() | nil,
           ci_states: [ci_state()],
-          verdicts: [verdict()],
-          signals: [signal()],
           self_heal: self_heal() | nil,
-          dispatches: [dispatch()],
           path_unlocks: [path_unlock()],
           decisions: [decision()],
           pr_watch: pr_watch() | nil,
@@ -290,6 +301,7 @@ defmodule SymphonyElixir.TicketState do
           projected: projected() | nil,
           plan_brief: PlanBrief.t() | nil,
           plan_brief_error: String.t() | nil,
+          legacy_history: legacy_history() | nil,
           updated_at: DateTime.t() | nil
         }
 
@@ -321,7 +333,7 @@ defmodule SymphonyElixir.TicketState do
 
   @doc """
   A new record for `repo_key`'s `issue_id`, with any `attrs` applied. `attrs` may set `:phase`,
-  `:issue_identifier`, `:ci_states`, `:verdicts` and `:signals`; anything else is kept.
+  `:issue_identifier` and `:ci_states`; anything else is kept.
   """
   @spec new(String.t(), String.t(), map()) :: t()
   def new(repo_key, issue_id, attrs \\ %{}) when is_binary(issue_id) do
@@ -347,10 +359,7 @@ defmodule SymphonyElixir.TicketState do
       phase_owner: phase_owner(Map.get(record, :phase_owner)),
       ci_fix_origin: map_string(record, :ci_fix_origin),
       ci_states: normalize_ci_states(Map.get(record, :ci_states)),
-      verdicts: normalize_verdicts(Map.get(record, :verdicts)),
-      signals: normalize_signals(Map.get(record, :signals)),
       self_heal: normalize_self_heal(Map.get(record, :self_heal)),
-      dispatches: normalize_dispatches(Map.get(record, :dispatches)),
       path_unlocks: normalize_path_unlocks(Map.get(record, :path_unlocks)),
       decisions: normalize_decisions(Map.get(record, :decisions)),
       pr_watch: normalize_pr_watch(Map.get(record, :pr_watch)),
@@ -379,6 +388,7 @@ defmodule SymphonyElixir.TicketState do
       projected: normalize_projected(Map.get(record, :projected)),
       plan_brief: PlanBrief.normalize(Map.get(record, :plan_brief)),
       plan_brief_error: map_string(record, :plan_brief_error),
+      legacy_history: carried_history(record),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -393,10 +403,7 @@ defmodule SymphonyElixir.TicketState do
       phase_owner: :external,
       ci_fix_origin: nil,
       ci_states: [],
-      verdicts: [],
-      signals: [],
       self_heal: nil,
-      dispatches: [],
       path_unlocks: [],
       decisions: [],
       pr_watch: nil,
@@ -425,6 +432,7 @@ defmodule SymphonyElixir.TicketState do
       projected: nil,
       plan_brief: nil,
       plan_brief_error: nil,
+      legacy_history: nil,
       updated_at: nil
     }
   end
@@ -723,18 +731,14 @@ defmodule SymphonyElixir.TicketState do
   @doc """
   Sets the ticket's pause (`SymphonyElixir.Pauses`, its only writer); nil, or a pause with no reason
   left, clears it. A reason that lifts is progress — a person unblocked it, answered its question,
-  or what it waited on landed — so the runs dispatched before it are no longer counted as a loop.
+  or what it waited on landed — which its `pause.reason_cleared` or `pause.cleared` event records
+  (`dispatches/1`).
   """
   @spec put_pause(t(), map() | nil, DateTime.t()) :: t()
   def put_pause(record, pause, at \\ DateTime.utc_now()) do
-    record = normalize(record)
-    pause = Pauses.normalize(pause)
-    kept = for reason <- (pause && pause.reasons) || [], do: {reason.kind, reason.waits_on}
-    lifted? = Enum.any?(pause_reasons(record), &({&1.kind, &1.waits_on} not in kept))
-
     record
-    |> Map.put(:pause, pause)
-    |> Map.update!(:dispatches, &if(lifted?, do: [], else: &1))
+    |> normalize()
+    |> Map.put(:pause, Pauses.normalize(pause))
     |> Map.put(:updated_at, at)
   end
 
@@ -835,41 +839,6 @@ defmodule SymphonyElixir.TicketState do
     |> Map.put(:updated_at, at)
   end
 
-  @doc """
-  Records a named signal at the head of the ledger, with `details` (a map) and the time it
-  happened. Unknown signal names are kept as given; the ledger is bounded to the newest entries.
-  """
-  @spec record_signal(t(), String.t(), map(), DateTime.t()) :: t()
-  def record_signal(record, name, details \\ %{}, at \\ DateTime.utc_now()) do
-    signal = %{name: normalize_string(name) || "", details: Map.new(details || %{}), at: at}
-
-    record
-    |> normalize()
-    |> Map.update!(:signals, &Enum.take([signal | &1], @max_signals))
-    |> Map.put(:updated_at, at)
-  end
-
-  @doc """
-  Records a verdict bound to the head SHA it judged, with the `details` it carries. A verdict is a
-  decision recorded, so the runs dispatched before it are no longer counted as a loop.
-  """
-  @spec record_verdict(t(), String.t(), String.t() | nil, String.t(), DateTime.t(), map()) :: t()
-  def record_verdict(record, kind, head_sha, outcome, at \\ DateTime.utc_now(), details \\ %{}) do
-    verdict = %{
-      kind: normalize_string(kind) || "",
-      head_sha: normalize_string(head_sha),
-      outcome: normalize_string(outcome) || "",
-      recorded_at: at,
-      details: Map.new(details || %{})
-    }
-
-    record
-    |> normalize()
-    |> Map.update!(:verdicts, &Enum.take([verdict | &1], @max_verdicts))
-    |> Map.put(:dispatches, [])
-    |> Map.put(:updated_at, at)
-  end
-
   @doc "Upserts the CI state (`running` / `green` / `red`) of one PR head, newest first."
   @spec record_ci_state(t(), String.t() | nil, String.t(), DateTime.t()) :: t()
   def record_ci_state(record, head_sha, status, at \\ DateTime.utc_now()) do
@@ -932,55 +901,178 @@ defmodule SymphonyElixir.TicketState do
   end
 
   @doc """
-  Records a run Symphony dispatched for the ticket at the head of its dispatches: `attrs` names its
-  `:kind` (an atom or a string), `:run_id`, and the `:state` and PR `:head` it starts on. The list is
-  bounded to the newest entries.
+  The ticket's signals, newest first, read from its event stream (`signals_in/1`). A record whose
+  events can't be read has none.
   """
-  @spec record_dispatch(t(), map(), DateTime.t()) :: t()
-  def record_dispatch(record, attrs, at \\ DateTime.utc_now()) when is_map(attrs) do
+  @spec signals(map()) :: [signal()]
+  def signals(record), do: record |> events() |> signals_in()
+
+  @doc "The newest `limit` signals, newest first, for prompt injection."
+  @spec recent_signals(map(), non_neg_integer()) :: [signal()]
+  def recent_signals(record, limit \\ 10) when is_integer(limit) and limit >= 0, do: record |> signals() |> Enum.take(limit)
+
+  @doc """
+  The signals `events` (oldest first) record, newest first: each event the machine or a person
+  wrote whose payload names a `signal`, with the details it was recorded with (`signal_details`) and
+  the event's time. An event recorded before signals carried their details reads its details from
+  its payload (`legacy_details/2`).
+  """
+  @spec signals_in([Event.t()]) :: [signal()]
+  def signals_in(events) when is_list(events) do
+    events
+    |> Enum.flat_map(&signal_in/1)
+    |> Enum.reverse()
+  end
+
+  @doc """
+  The ticket's verdicts, newest first, read from its event stream (`verdicts_in/1`). A record whose
+  events can't be read has none.
+  """
+  @spec verdicts(map()) :: [verdict()]
+  def verdicts(record), do: record |> events(types: ["verdict.recorded"]) |> verdicts_in()
+
+  @doc """
+  The verdicts `events` (oldest first) record, newest first: each `verdict.recorded` the machine
+  wrote for a verdict (`SymphonyElixir.TicketSignals.record_verdict/7`), bound to the head it
+  judged, with the details it carries. A verdict a signal records (a CI Fix verdict, a plan's) is
+  that signal's, not a verdict here.
+  """
+  @spec verdicts_in([Event.t()]) :: [verdict()]
+  def verdicts_in(events) when is_list(events) do
+    events
+    |> Enum.filter(&verdict_event?/1)
+    |> Enum.map(fn %Event{payload: payload, at: at} ->
+      %{
+        kind: map_string(payload, :kind) || "",
+        head_sha: map_string(payload, :head),
+        outcome: map_string(payload, :outcome) || "",
+        recorded_at: at,
+        details: verdict_details(Map.get(payload, :details), payload)
+      }
+    end)
+    |> Enum.reverse()
+  end
+
+  @doc """
+  The runs dispatched since the ticket last made progress, newest first, read from its event stream
+  (`dispatches_in/1`). A record whose events can't be read lists none, so a store error never stops
+  a dispatch.
+  """
+  @spec dispatches(map()) :: [dispatch()]
+  def dispatches(record), do: record |> events(types: @dispatch_types) |> dispatches_in()
+
+  @doc """
+  The runs `events` (oldest first) dispatched since the ticket last made progress, newest first, at
+  most #{@max_dispatches}: each `run.started`, with how its `run.ended` says it ended (its exit and
+  the PR head it left, nil while it runs). A run that ended `counted: false` (stopped by a usage
+  limit, say) is dropped, so it never counts towards a loop. A verdict (`verdicts_in/1`) and a
+  lifted pause reason (`pause.reason_cleared`, `pause.cleared`) are progress: the runs before them
+  are not listed.
+  """
+  @spec dispatches_in([Event.t()]) :: [dispatch()]
+  def dispatches_in(events) when is_list(events) do
+    events
+    |> Enum.reduce([], &dispatch_step/2)
+    |> Enum.take(@max_dispatches)
+  end
+
+  @doc """
+  What a record from before the event stream existed kept in its `signals`, `verdicts` and
+  `dispatches`, each newest first, for the ledger's backfill to convert
+  (`SymphonyElixir.TicketEvents.Backfill`); empty lists when it kept none.
+  """
+  @spec legacy_history(map()) :: legacy_history()
+  def legacy_history(record) when is_map(record) do
+    case Map.get(normalize(record), :legacy_history) do
+      %{} = history -> history
+      nil -> %{signals: [], verdicts: [], dispatches: []}
+    end
+  end
+
+  # A record written by this release carries `legacy_history` (nil once converted, or when it never
+  # kept any); one from before it reads its old fields.
+  defp carried_history(record) do
+    history =
+      if Map.has_key?(record, :legacy_history), do: Map.get(record, :legacy_history), else: Map.take(record, [:signals, :verdicts, :dispatches])
+
+    case history do
+      %{} = history ->
+        normalized = %{
+          signals: normalize_signals(Map.get(history, :signals)),
+          verdicts: normalize_verdicts(Map.get(history, :verdicts)),
+          dispatches: normalize_dispatches(Map.get(history, :dispatches))
+        }
+
+        if normalized == %{signals: [], verdicts: [], dispatches: []}, do: nil, else: normalized
+
+      _none ->
+        nil
+    end
+  end
+
+  defp events(record, opts \\ [])
+
+  # A store that can't be read (`{:error, reason}`) reads as no events.
+  defp events(%{issue_id: issue_id}, opts) when is_binary(issue_id) do
+    events = TicketEvents.query(issue_id, [limit: :all] ++ opts)
+    if is_list(events), do: events, else: []
+  end
+
+  defp events(_record, _opts), do: []
+
+  defp signal_in(%Event{actor: %{kind: kind}, payload: %{signal: name} = payload, at: at} = event) when kind in [:machine, :person] and is_binary(name) do
+    details =
+      case Map.get(payload, :signal_details) do
+        %{} = details -> details
+        _none -> legacy_details(event.type, payload)
+      end
+
+    [%{name: name, details: details, at: at}]
+  end
+
+  defp signal_in(_event), do: []
+
+  # The details an event recorded before signals carried theirs implies: its payload's own fields,
+  # and the move a handoff's `phase.entered` was.
+  defp legacy_details(type, payload) do
+    details = Map.drop(payload, [:signal, :signal_details, :attempt])
+    if type == "phase.entered" and payload.signal == "handoff", do: Map.put(details, :move, true), else: details
+  end
+
+  defp verdict_event?(%Event{type: "verdict.recorded", actor: %{kind: :machine}, payload: payload}), do: not Map.has_key?(payload, :signal)
+  defp verdict_event?(_event), do: false
+
+  # A verdict recorded before verdicts carried their details has its reason as its only one.
+  defp verdict_details(%{} = details, _payload), do: details
+  defp verdict_details(_details, %{reason: reason}) when is_binary(reason), do: %{reason: reason}
+  defp verdict_details(_details, _payload), do: %{}
+
+  defp dispatch_step(%Event{type: "run.started", payload: payload, at: at}, dispatches) do
     dispatch = %{
-      kind: kind_string(Map.get(attrs, :kind)) || "",
-      run_id: map_string(attrs, :run_id),
-      state: map_string(attrs, :state),
-      head: map_string(attrs, :head),
+      kind: map_string(payload, :run_kind) || "",
+      run_id: map_string(payload, :run_id),
+      state: map_string(payload, :state),
+      head: map_string(payload, :head),
       at: at,
       outcome: nil
     }
 
-    record
-    |> normalize()
-    |> Map.update!(:dispatches, &Enum.take([dispatch | &1], @max_dispatches))
-    |> Map.put(:updated_at, at)
+    [dispatch | dispatches]
   end
 
-  @doc """
-  Records how the dispatched run `run_id` ended: its `:exit` and the PR `:head` it left. A run that
-  `counted: false` names (one stopped by a usage limit, say) is dropped instead, so it never counts
-  towards a loop. A run the record does not list is ignored.
-  """
-  @spec record_dispatch_outcome(t(), String.t() | nil, map(), DateTime.t()) :: t()
-  def record_dispatch_outcome(record, run_id, attrs, at \\ DateTime.utc_now()) when is_map(attrs) do
-    record = normalize(record)
-    run_id = normalize_string(run_id)
+  defp dispatch_step(%Event{type: "run.ended", payload: payload, at: at}, dispatches) do
+    run_id = map_string(payload, :run_id)
 
-    if run_id && Enum.any?(record.dispatches, &(&1.run_id == run_id)) do
-      record
-      |> Map.update!(:dispatches, &put_dispatch_outcome(&1, run_id, attrs, at))
-      |> Map.put(:updated_at, at)
-    else
-      record
-    end
+    if Map.get(payload, :counted) == false,
+      do: Enum.reject(dispatches, &(&1.run_id == run_id)),
+      else: Enum.map(dispatches, &if(&1.run_id == run_id, do: %{&1 | outcome: dispatch_outcome(payload, at)}, else: &1))
   end
 
-  @doc "The runs dispatched since the ticket last made progress, newest first."
-  @spec dispatches(t()) :: [dispatch()]
-  def dispatches(record), do: record |> normalize() |> Map.fetch!(:dispatches)
-
-  @doc "The newest `limit` signals, newest first, for prompt injection."
-  @spec recent_signals(t(), non_neg_integer()) :: [signal()]
-  def recent_signals(record, limit \\ 10) when is_integer(limit) and limit >= 0 do
-    record |> normalize() |> Map.fetch!(:signals) |> Enum.take(limit)
+  defp dispatch_step(%Event{type: type} = event, dispatches) do
+    if verdict_event?(event) or type in @progress_types, do: [], else: dispatches
   end
+
+  defp dispatch_outcome(payload, at), do: %{exit: map_string(payload, :exit) || "", head: map_string(payload, :head), at: at}
 
   defp normalize_pr_watch(%{facts: %PrDecision.Facts{} = facts} = watch) do
     %{
@@ -1078,9 +1170,7 @@ defmodule SymphonyElixir.TicketState do
   defp datetime(_value), do: nil
 
   defp normalize_verdicts(verdicts) when is_list(verdicts) do
-    verdicts
-    |> Enum.flat_map(&normalize_verdict/1)
-    |> Enum.take(@max_verdicts)
+    Enum.flat_map(verdicts, &normalize_verdict/1)
   end
 
   defp normalize_verdicts(_verdicts), do: []
@@ -1092,7 +1182,7 @@ defmodule SymphonyElixir.TicketState do
         head_sha: map_string(verdict, :head_sha),
         outcome: map_string(verdict, :outcome) || "",
         recorded_at: map_datetime(verdict, :recorded_at),
-        details: verdict_details(Map.get(verdict, :details))
+        details: legacy_verdict_details(Map.get(verdict, :details))
       }
     ]
   end
@@ -1100,8 +1190,8 @@ defmodule SymphonyElixir.TicketState do
   defp normalize_verdict(_verdict), do: []
 
   # Verdicts recorded before verdicts carried details have none.
-  defp verdict_details(details) when is_map(details), do: details
-  defp verdict_details(_details), do: %{}
+  defp legacy_verdict_details(details) when is_map(details), do: details
+  defp legacy_verdict_details(_details), do: %{}
 
   defp normalize_ci_states(states) when is_list(states) do
     states
@@ -1124,9 +1214,7 @@ defmodule SymphonyElixir.TicketState do
   defp normalize_ci_state(_state), do: []
 
   defp normalize_signals(signals) when is_list(signals) do
-    signals
-    |> Enum.flat_map(&normalize_signal/1)
-    |> Enum.take(@max_signals)
+    Enum.flat_map(signals, &normalize_signal/1)
   end
 
   defp normalize_signals(_signals), do: []
@@ -1136,13 +1224,6 @@ defmodule SymphonyElixir.TicketState do
   end
 
   defp normalize_signal(_signal), do: []
-
-  defp put_dispatch_outcome(dispatches, run_id, %{counted: false}, _at), do: Enum.reject(dispatches, &(&1.run_id == run_id))
-
-  defp put_dispatch_outcome(dispatches, run_id, attrs, at) do
-    outcome = %{exit: map_string(attrs, :exit) || "", head: map_string(attrs, :head), at: at}
-    Enum.map(dispatches, &if(&1.run_id == run_id, do: %{&1 | outcome: outcome}, else: &1))
-  end
 
   defp normalize_path_unlocks(unlocks) when is_list(unlocks) do
     for %{id: id} = unlock <- unlocks, is_binary(id) do
@@ -1191,9 +1272,7 @@ defmodule SymphonyElixir.TicketState do
   end
 
   defp normalize_dispatches(dispatches) when is_list(dispatches) do
-    dispatches
-    |> Enum.flat_map(&normalize_dispatch/1)
-    |> Enum.take(@max_dispatches)
+    Enum.flat_map(dispatches, &normalize_dispatch/1)
   end
 
   defp normalize_dispatches(_dispatches), do: []
@@ -1217,9 +1296,6 @@ defmodule SymphonyElixir.TicketState do
     do: %{exit: map_string(outcome, :exit) || "", head: map_string(outcome, :head), at: map_datetime(outcome, :at)}
 
   defp normalize_dispatch_outcome(_outcome), do: nil
-
-  defp kind_string(kind) when is_atom(kind) and not is_nil(kind), do: Atom.to_string(kind)
-  defp kind_string(kind), do: normalize_string(kind)
 
   # Self-heal bookkeeping keeps only a non-blank component: anything else is no bookkeeping at all.
   defp normalize_self_heal(attrs) when is_map(attrs), do: self_heal_from(attrs, map_datetime(attrs, :at))

@@ -1207,7 +1207,7 @@ defmodule SymphonyElixir.DirectorMoves do
 
   defp ticket_signals(issue, opts) do
     case Keyword.get(opts, :store, RunStore).get_ticket_state(issue.id) do
-      %{} = record -> TicketState.normalize(record).signals
+      %{} = record -> TicketState.signals(record)
       _none -> []
     end
   end

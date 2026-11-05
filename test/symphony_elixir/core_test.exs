@@ -1831,7 +1831,7 @@ defmodule SymphonyElixir.CoreTest do
 
       record = RunStore.get_ticket_state(issue_id)
       assert log =~ "handoff_missing: 2 runs"
-      assert [%{name: "handoff_missing", details: %{held: true, quiet_runs: 2}} | _rest] = record.signals
+      assert [%{name: "handoff_missing", details: %{held: true, quiet_runs: 2}} | _rest] = SymphonyElixir.TicketState.signals(record)
 
       # The question is the one Unblock answers.
       assert %{id: ^question_id} = SymphonyElixir.Questions.held(ticket)
@@ -5205,7 +5205,7 @@ defmodule SymphonyElixir.CoreTest do
       refute_received {:memory_tracker_state_update, "issue-dep-hold", _state}
 
       assert [%{name: "decision requested", details: %{question: true, reason: "dependency_source_requires_approval"}}] =
-               RunStore.get_ticket_state("issue-dep-hold").signals
+               ticket_signals("issue-dep-hold")
 
       assert_receive {:notification_event,
                       %SymphonyElixir.Notifications.Event{

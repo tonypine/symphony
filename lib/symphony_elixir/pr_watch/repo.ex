@@ -1465,9 +1465,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp base_run(%{run_id: run_id, sha: sha, basis: basis}), do: " base_run_id=#{run_id} base_sha=#{sha} compared_by=#{basis}"
   defp base_run(_unknown), do: ""
 
-  # The heads the ticket's runs left, which Symphony put there.
-  defp run_heads(%{dispatches: dispatches}) do
-    for dispatch <- dispatches, head <- [dispatch.head, dispatch.outcome && dispatch.outcome.head], is_binary(head), uniq: true, do: head
+  # The heads the ticket's runs left, which Symphony put there (`TicketState.dispatches/1`).
+  defp run_heads(%{} = record) do
+    for dispatch <- TicketState.dispatches(record), head <- [dispatch.head, dispatch.outcome && dispatch.outcome.head], is_binary(head), uniq: true, do: head
   end
 
   defp run_heads(nil), do: []

@@ -1,15 +1,22 @@
 defmodule SymphonyElixir.ReviewQualityTest do
-  use ExUnit.Case, async: true
+  use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.ReviewQuality
+
+  setup do
+    :ok = RunStore.clear()
+  end
 
   @dates [~D[2026-10-12], ~D[2026-10-13]]
 
   defp verdict(kind, outcome, at), do: %{kind: kind, head_sha: "abc", outcome: outcome, recorded_at: at}
   defp decision(to, at), do: %{name: "decision returned", details: %{move: "decide", to: to}, at: at}
 
+  # The ticket's verdicts and signals are its events: they are written to the store under its id.
   defp ticket(repo_key, issue_id, verdicts, signals \\ []) do
-    %{repo_key: repo_key, issue_id: issue_id, issue_identifier: String.upcase(issue_id), verdicts: verdicts, signals: signals}
+    for v <- verdicts, do: :ok = put_verdict(repo_key, issue_id, v.kind, v.head_sha, v.outcome, %{}, v.recorded_at)
+    for signal <- signals, do: :ok = put_signal(repo_key, issue_id, signal.name, signal.details, signal.at)
+    %{repo_key: repo_key, issue_id: issue_id, issue_identifier: String.upcase(issue_id)}
   end
 
   defp payload(records), do: ReviewQuality.payload(@dates, ticket_states: records, manual_review: &if(&1 == "web", do: "on", else: "off"))

@@ -18,11 +18,8 @@ defmodule SymphonyElixir.TicketStateTest do
                phase_at: nil,
                phase_owner: :external,
                ci_states: [],
-               verdicts: [],
-               signals: [],
                ci_fix_origin: nil,
                self_heal: nil,
-               dispatches: [],
                path_unlocks: [],
                decisions: [],
                pr_watch: nil,
@@ -51,21 +48,16 @@ defmodule SymphonyElixir.TicketStateTest do
                projected: nil,
                plan_brief: nil,
                plan_brief_error: nil,
+               legacy_history: nil,
                updated_at: nil
              }
     end
 
     test "applies the given attributes" do
-      record =
-        TicketState.new("repo-a", "issue-1", %{
-          issue_identifier: "ACME-1",
-          phase: "In Progress",
-          signals: [%{name: "handoff", details: %{to: "Code Review"}, at: @at}]
-        })
+      record = TicketState.new("repo-a", "issue-1", %{issue_identifier: "ACME-1", phase: "In Progress"})
 
       assert record.issue_identifier == "ACME-1"
       assert record.phase == "In Progress"
-      assert [%{name: "handoff", details: %{to: "Code Review"}, at: @at}] = record.signals
     end
   end
 
@@ -157,11 +149,8 @@ defmodule SymphonyElixir.TicketStateTest do
                phase_at: nil,
                phase_owner: :external,
                ci_states: [],
-               verdicts: [],
-               signals: [],
                ci_fix_origin: nil,
                self_heal: nil,
-               dispatches: [],
                path_unlocks: [],
                decisions: [],
                pr_watch: nil,
@@ -190,6 +179,7 @@ defmodule SymphonyElixir.TicketStateTest do
                projected: nil,
                plan_brief: nil,
                plan_brief_error: nil,
+               legacy_history: nil,
                updated_at: nil
              }
     end
@@ -207,9 +197,9 @@ defmodule SymphonyElixir.TicketStateTest do
         })
 
       assert record.phase == nil
-      assert [%{kind: "review verdict", outcome: "approve"}] = record.verdicts
+      assert [%{kind: "review verdict", outcome: "approve", details: %{}}] = record.legacy_history.verdicts
       assert [%{head_sha: "abc", status: "green"}] = record.ci_states
-      assert [%{name: "handoff", details: %{}, at: nil}] = record.signals
+      assert [%{name: "handoff", details: %{}, at: nil}] = record.legacy_history.signals
       assert record.updated_at == nil
     end
 
@@ -219,8 +209,6 @@ defmodule SymphonyElixir.TicketStateTest do
         issue_id: "issue-1",
         issue_identifier: "ACME-1",
         phase: "QA",
-        signals: [%{name: "handoff", details: %{to: "QA"}, at: @at}],
-        verdicts: [%{kind: "qa", head_sha: "abc", outcome: "pass", recorded_at: @at, details: %{}}],
         updated_at: @at
       }
 
@@ -322,9 +310,8 @@ defmodule SymphonyElixir.TicketStateTest do
     test "treats non-list collections as empty" do
       record = TicketState.normalize(%{holds: :x, verdicts: :x, ci_states: :x, signals: :x})
       refute Map.has_key?(record, :holds)
-      assert record.verdicts == []
+      assert record.legacy_history == nil
       assert record.ci_states == []
-      assert record.signals == []
     end
   end
 
@@ -403,33 +390,6 @@ defmodule SymphonyElixir.TicketStateTest do
     end
   end
 
-  describe "record_signal/4" do
-    test "prepends the newest signal and stamps the time" do
-      record =
-        TicketState.new("repo-a", "issue-1")
-        |> TicketState.record_signal("handoff", %{to: "Code Review"}, @at)
-        |> TicketState.record_signal("review verdict", %{outcome: "approve"})
-
-      assert [%{name: "review verdict"}, %{name: "handoff", details: %{to: "Code Review"}, at: @at}] = record.signals
-      assert record.updated_at != nil
-    end
-
-    test "keeps an unknown signal name and defaults its details" do
-      record = TicketState.new("repo-a", "issue-1") |> TicketState.record_signal("something new", nil, @at)
-      assert [%{name: "something new", details: %{}, at: @at}] = record.signals
-    end
-
-    test "bounds the ledger to the newest signals" do
-      record =
-        Enum.reduce(1..60, TicketState.new("repo-a", "issue-1"), fn n, record ->
-          TicketState.record_signal(record, "handoff", %{n: n}, @at)
-        end)
-
-      assert length(record.signals) == 50
-      assert hd(record.signals).details == %{n: 60}
-    end
-  end
-
   describe "the holds a record kept from before they were retired" do
     test "are dropped, and a question an old hold carried reads as asked with a request" do
       carried = %{id: "q-1", state: :open, title: "Pick", question: "Which?", request: nil}
@@ -462,92 +422,162 @@ defmodule SymphonyElixir.TicketStateTest do
     end
   end
 
-  describe "record_verdict/5" do
-    test "records a verdict bound to its head SHA" do
-      record = TicketState.new("repo-a", "issue-1") |> TicketState.record_verdict("review verdict", "abc123", "approve", @at)
-      assert [%{kind: "review verdict", head_sha: "abc123", outcome: "approve", recorded_at: @at}] = record.verdicts
-    end
+  describe "legacy_history/1" do
+    test "a record from before the event stream keeps its old fields until the backfill drops them" do
+      stored = %{
+        repo_key: "repo-a",
+        issue_id: "issue-1",
+        signals: [%{name: "handoff", details: %{to: "QA"}, at: @at}, %{name: :atom}],
+        verdicts: [%{kind: "qa", head_sha: "abc", outcome: "pass", recorded_at: @at}],
+        dispatches: [
+          %{kind: "qa", run_id: "run-1", at: @at, outcome: %{exit: "failed (boom)", head: "a", at: @at}},
+          %{kind: "qa", outcome: %{}},
+          %{kind: :atom},
+          "junk"
+        ]
+      }
 
-    test "keeps the details a verdict carries, and none for a record from before details" do
-      details = %{reason: "the sandbox refused the build", model: "claude-opus"}
-      record = TicketState.new("repo-a", "issue-1") |> TicketState.record_verdict("qa", "abc123", "blocked", @at, details)
-      assert [%{outcome: "blocked", details: ^details}] = record.verdicts
+      record = TicketState.normalize(stored)
+      refute Map.has_key?(record, :signals)
+      refute Map.has_key?(record, :verdicts)
+      refute Map.has_key?(record, :dispatches)
 
-      old = %{TicketState.new("repo-a", "issue-1") | verdicts: [%{kind: "qa", head_sha: "abc123", outcome: "pass", recorded_at: @at}]}
-      assert [%{outcome: "pass", details: %{}}] = TicketState.normalize(old).verdicts
-      assert [%{details: %{}}] = TicketState.record_verdict(TicketState.new("repo-a", "issue-1"), "qa", "abc123", "pass", @at, nil).verdicts
-    end
+      assert %{
+               signals: [%{name: "handoff", details: %{to: "QA"}, at: @at}],
+               verdicts: [%{kind: "qa", head_sha: "abc", outcome: "pass", recorded_at: @at, details: %{}}],
+               dispatches: [
+                 %{kind: "qa", run_id: "run-1", outcome: %{exit: "failed (boom)", head: "a", at: @at}},
+                 %{kind: "qa", run_id: nil, at: nil, outcome: %{exit: "", head: nil, at: nil}}
+               ]
+             } = TicketState.legacy_history(stored)
 
-    test "defaults a blank outcome and head SHA" do
-      record = TicketState.new("repo-a", "issue-1") |> TicketState.record_verdict("QA verdict", nil, nil, @at)
-      assert [%{kind: "QA verdict", head_sha: nil, outcome: ""}] = record.verdicts
-    end
-
-    test "bounds the verdicts to the newest" do
-      record =
-        Enum.reduce(1..60, TicketState.new("repo-a", "issue-1"), fn n, record ->
-          TicketState.record_verdict(record, "review verdict", "sha-#{n}", "approve", @at)
-        end)
-
-      assert length(record.verdicts) == 50
-      assert hd(record.verdicts).head_sha == "sha-60"
+      # Normalized again, as every write does, the history is kept; once dropped it never comes back.
+      assert TicketState.legacy_history(record) == TicketState.legacy_history(stored)
+      dropped = stored |> Map.put(:legacy_history, nil) |> TicketState.normalize()
+      assert dropped.legacy_history == nil
+      assert TicketState.legacy_history(dropped) == %{signals: [], verdicts: [], dispatches: []}
+      assert TicketState.normalize(%{legacy_history: :junk}).legacy_history == nil
+      assert TicketState.normalize(%{signals: [], verdicts: []}).legacy_history == nil
     end
   end
 
-  describe "dispatches" do
-    test "records a dispatched run newest first, bounded to the newest" do
-      record =
-        Enum.reduce(1..55, TicketState.new("repo-a", "issue-1"), fn n, record ->
-          TicketState.record_dispatch(record, %{kind: :implementation, run_id: "run-#{n}", state: "In Progress", head: " "}, @at)
-        end)
+  describe "signals_in/1" do
+    test "reads the machine's and people's signals newest first, with their details" do
+      events = [
+        event("phase.entered", %{to: "In Progress", signal: "claim", signal_details: %{from: "Todo", to: "In Progress"}}, at: at(1)),
+        event("note", %{text: "agent", signal: "claim"}, actor: {:agent, "run-1", "implementation"}, at: at(2)),
+        event("note", %{text: "no signal"}, at: at(3)),
+        event("person.action", %{action: "stop", signal: "stopped"}, actor: {:person, "the Director"}, at: at(4)),
+        event("note", %{text: "Waiting for CI (ci_wait_started)", signal: "ci_wait_started", signal_details: %{sha: "abc"}}, at: at(5))
+      ]
 
-      assert length(TicketState.dispatches(record)) == 50
-      assert [%{kind: "implementation", run_id: "run-55", state: "In Progress", head: nil, at: @at, outcome: nil} | _rest] = record.dispatches
-      assert record.updated_at == @at
-      assert [%{kind: "qa"}] = TicketState.record_dispatch(TicketState.new("repo-a", "issue-1"), %{kind: " qa "}).dispatches
-      assert [%{kind: ""}] = TicketState.record_dispatch(TicketState.new("repo-a", "issue-1"), %{}).dispatches
+      assert TicketState.signals_in(events) == [
+               %{name: "ci_wait_started", details: %{sha: "abc"}, at: at(5)},
+               %{name: "stopped", details: %{action: "stop"}, at: at(4)},
+               %{name: "claim", details: %{from: "Todo", to: "In Progress"}, at: at(1)}
+             ]
     end
 
-    test "records how a run ended, and drops one that counts no attempt" do
-      record =
-        TicketState.new("repo-a", "issue-1")
-        |> TicketState.record_dispatch(%{kind: "rework", run_id: "run-1", head: "a"}, @at)
-        |> TicketState.record_dispatch(%{kind: "rework", run_id: "run-2", head: "a"}, @at)
+    test "an event from before signals carried their details reads them from its payload" do
+      events = [
+        event("phase.entered", %{to: "Code Review", via: "handoff", signal: "handoff"}, at: at(1)),
+        event("attempt.pushed", %{head: "abc", attempt: 2, signal: "handoff"}, at: at(2)),
+        event("phase.entered", %{to: "QA", signal: "code_review"}, at: at(3))
+      ]
 
-      ended = TicketState.record_dispatch_outcome(record, "run-1", %{exit: "ended normally", head: "b"}, @at)
-      assert [%{run_id: "run-2", outcome: nil}, %{run_id: "run-1", outcome: %{exit: "ended normally", head: "b", at: @at}}] = ended.dispatches
+      assert [
+               %{name: "code_review", details: %{to: "QA"}},
+               %{name: "handoff", details: %{head: "abc"}},
+               %{name: "handoff", details: %{to: "Code Review", via: "handoff", move: true}}
+             ] = TicketState.signals_in(events)
+    end
+  end
 
-      assert [%{run_id: "run-1"}] = TicketState.record_dispatch_outcome(ended, "run-2", %{counted: false}, @at).dispatches
-      blank = TicketState.record_dispatch_outcome(ended, "run-2", %{}, @at)
-      assert [%{outcome: %{exit: "", head: nil}}, _run] = blank.dispatches
-      assert TicketState.record_dispatch_outcome(record, "run-9", %{exit: "x"}, @at) == record
-      assert TicketState.record_dispatch_outcome(record, nil, %{exit: "x"}, @at) == record
-      assert %DateTime{} = TicketState.record_dispatch_outcome(record, "run-1", %{exit: "x"}).updated_at
+  describe "verdicts_in/1" do
+    test "reads the machine's verdicts newest first, bound to their heads, with their details" do
+      events = [
+        event("verdict.recorded", %{kind: "qa", outcome: "blocked", head: "abc", details: %{model: "m", component: "qa"}}, at: at(1)),
+        event("verdict.recorded", %{kind: "ci_fix", outcome: "mechanical", signal: "fix verdict"}, at: at(2)),
+        event("verdict.recorded", %{kind: "code_review", outcome: "approve", head: "def", reason: "fine"}, at: at(3)),
+        event("verdict.recorded", %{kind: "qa", outcome: "pass"}, at: at(4)),
+        event("note", %{text: "not a verdict"}, at: at(5))
+      ]
+
+      assert TicketState.verdicts_in(events) == [
+               %{kind: "qa", head_sha: nil, outcome: "pass", recorded_at: at(4), details: %{}},
+               %{kind: "code_review", head_sha: "def", outcome: "approve", recorded_at: at(3), details: %{reason: "fine"}},
+               %{kind: "qa", head_sha: "abc", outcome: "blocked", recorded_at: at(1), details: %{model: "m", component: "qa"}}
+             ]
+    end
+  end
+
+  describe "dispatches_in/1" do
+    test "lists the runs since the last progress newest first, with how each ended" do
+      events = [
+        started("run-0", at(0)),
+        verdict(at(1)),
+        started("run-1", at(2), head: "a"),
+        started("run-2", at(3)),
+        event("run.ended", %{run_id: "run-1", exit: "ended normally", head: "b"}, at: at(4)),
+        started("run-3", at(5)),
+        event("run.ended", %{run_id: "run-3", exit: "usage limit", counted: false}, at: at(6)),
+        event("verdict.recorded", %{kind: "ci_fix", outcome: "mechanical", signal: "fix verdict"}, at: at(7))
+      ]
+
+      assert [
+               %{kind: "implementation", run_id: "run-2", state: "In Progress", head: nil, at: at2, outcome: nil},
+               %{run_id: "run-1", head: "a", outcome: %{exit: "ended normally", head: "b", at: at4}}
+             ] = TicketState.dispatches_in(events)
+
+      assert at2 == at(3) and at4 == at(4)
     end
 
-    test "a stored record keeps its dispatches through normalization and drops malformed ones" do
-      record =
-        TicketState.normalize(%{
-          dispatches: [
-            %{kind: "qa", run_id: "run-1", at: @at, outcome: %{exit: "failed (boom)", head: "a", at: @at}},
-            %{kind: "qa", outcome: "junk"},
-            %{kind: :atom},
-            "junk"
-          ]
-        })
+    test "a verdict and a lifted pause reason end the count, and the list is bounded" do
+      assert TicketState.dispatches_in([started("run-1", at(1)), verdict(at(2))]) == []
+      assert TicketState.dispatches_in([started("run-1", at(1)), event("pause.reason_cleared", %{reason: "question", text: "x"}, at: at(2))]) == []
+      assert TicketState.dispatches_in([started("run-1", at(1)), event("pause.cleared", %{cleared: []}, at: at(2))]) == []
 
-      assert [%{kind: "qa", outcome: %{exit: "failed (boom)", head: "a", at: @at}}, %{kind: "qa", outcome: nil, at: nil}] =
-               record.dispatches
-
-      assert TicketState.normalize(%{dispatches: "junk"}).dispatches == []
-      assert TicketState.normalize(%{dispatches: [%{kind: "qa", outcome: %{}}]}).dispatches |> hd() |> Map.fetch!(:outcome) == %{exit: "", head: nil, at: nil}
+      runs = for n <- 1..60, do: started("run-#{n}", at(n))
+      assert [%{run_id: "run-60"} | _rest] = dispatches = TicketState.dispatches_in(runs)
+      assert length(dispatches) == 50
     end
+  end
 
-    test "a verdict ends the count" do
-      record = TicketState.record_dispatch(TicketState.new("repo-a", "issue-1"), %{kind: "implementation", run_id: "run-1"}, @at)
-      assert [_run] = TicketState.dispatches(record)
+  describe "the views read the ticket's events" do
+    test "a record with no issue id has no events to read" do
+      assert TicketState.signals(%{}) == []
+      assert TicketState.recent_signals(%{}, 1) == []
+      assert TicketState.verdicts(%{issue_id: nil}) == []
+      assert TicketState.dispatches(TicketState.normalize(nil)) == []
+    end
+  end
 
-      assert record |> TicketState.record_verdict("code_review", "a", "approve", @at) |> TicketState.dispatches() == []
+  describe "no module writes the record's old fields" do
+    test "the signals, verdicts and dispatches are written only as events" do
+      writers = ~r/record_ticket_(signal|verdict|dispatch)|TicketState\.record_(signal|verdict|dispatch)|Map\.(update!|put)\([^)]*:(signals|verdicts|dispatches)\b/
+
+      offenders =
+        for path <- Path.wildcard("lib/**/*.ex"),
+            {line, number} <- path |> File.read!() |> String.split("\n") |> Enum.with_index(1),
+            Regex.match?(writers, line),
+            do: "#{path}:#{number}: #{String.trim(line)}"
+
+      assert offenders == []
+
+      for name <- [:record_signal, :record_verdict, :record_dispatch, :record_dispatch_outcome], arity <- 2..6 do
+        refute function_exported?(TicketState, name, arity)
+      end
+
+      writers = [
+        :record_ticket_signal,
+        :record_ticket_verdict,
+        :record_ticket_dispatch,
+        :record_ticket_dispatch_outcome
+      ]
+
+      for name <- writers, arity <- 3..6 do
+        refute function_exported?(SymphonyElixir.RunStore, name, arity)
+      end
     end
   end
 
@@ -1100,4 +1130,18 @@ defmodule SymphonyElixir.TicketStateTest do
       assert Map.drop(removed, [:removed_at, :updated_at]) == Map.drop(record, [:removed_at, :updated_at])
     end
   end
+
+  defp event(type, payload, opts) do
+    {actor, opts} = Keyword.pop(opts, :actor, :machine)
+    {:ok, event} = SymphonyElixir.TicketEvents.build("repo-a", "issue-1", type, payload, [actor: actor] ++ opts)
+    event
+  end
+
+  defp started(run_id, at, opts \\ []) do
+    event("run.started", %{run_id: run_id, run_kind: "implementation", state: "In Progress", head: Keyword.get(opts, :head)}, at: at)
+  end
+
+  defp verdict(at), do: event("verdict.recorded", %{kind: "code_review", outcome: "approve"}, at: at)
+
+  defp at(minute), do: DateTime.add(@at, minute * 60, :second)
 end

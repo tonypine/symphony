@@ -11,7 +11,9 @@ defmodule SymphonyElixir.EpicReview.CiRerun do
     1. reads each failed run's failed jobs (`SymphonyElixir.GitHub.CiLog`) for their job and test
        names, which the rerun's attempt replaces;
     2. records a `ci_rerun` signal bound to the commit, before it reruns anything, so no review
-       reruns that commit again; a review that cannot record it does not rerun at all;
+       reruns that commit again: a machine `note` naming `ci_rerun` and the commit on the epic's
+       history, with the runs it reruns (`SymphonyElixir.TicketSignals.record_kept/4`); a review
+       that cannot record it does not rerun at all;
     3. reruns each failed run's failed jobs (`gh run rerun <id> --failed`), records a fresh
        `ci_wait_started` (`SymphonyElixir.CiWait`) so the rerun gets a wait of its own, and returns
        `{:wait, runs}`: the review waits for the rerun as for any unfinished run.
@@ -31,7 +33,7 @@ defmodule SymphonyElixir.EpicReview.CiRerun do
 
   require Logger
 
-  alias SymphonyElixir.{CiWait, Handoff, RunStore, TicketSignals}
+  alias SymphonyElixir.{CiWait, Handoff, TicketSignals}
   alias SymphonyElixir.GitHub.{CiLog, PullRequest}
 
   @rerun_signal "ci_rerun"
@@ -119,7 +121,7 @@ defmodule SymphonyElixir.EpicReview.CiRerun do
   end
 
   defp record_cancel_rerun(repo_key, issue_id, sha, run) do
-    case RunStore.record_ticket_signal(repo_key, issue_id, @cancel_signal, %{sha: sha, run: run.id, workflow: run.workflow_name}) do
+    case TicketSignals.record_kept(repo_key, issue_id, @cancel_signal, %{sha: sha, run: run.id, workflow: run.workflow_name}) do
       :ok ->
         :ok
 
@@ -134,7 +136,7 @@ defmodule SymphonyElixir.EpicReview.CiRerun do
   defp first_red(repo_key, issue_id, sha, failed, opts) do
     reran = Enum.map(failed, &rerun_entry(&1, opts))
 
-    case RunStore.record_ticket_signal(repo_key, issue_id, @rerun_signal, %{sha: sha, runs: reran}) do
+    case TicketSignals.record_kept(repo_key, issue_id, @rerun_signal, %{sha: sha, runs: reran}) do
       :ok ->
         rerun(repo_key, issue_id, sha, failed, opts)
 

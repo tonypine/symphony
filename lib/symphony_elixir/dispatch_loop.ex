@@ -2,9 +2,10 @@ defmodule SymphonyElixir.DispatchLoop do
   @moduledoc """
   The general guard against dispatching one ticket over and over without progress.
 
-  The orchestrator records every run it dispatches in the ticket's store record
-  (`SymphonyElixir.TicketState.record_dispatch/3`) with the run kind, the state and the PR head it
-  started on, and records how the run ended. Before the next dispatch, `check/4` counts the runs of
+  The orchestrator records every run it dispatches as its `run.started` event, with the run kind,
+  the state and the PR head it started on, and how the run ended as its `run.ended`; the ticket's
+  dispatches are the view over them (`SymphonyElixir.TicketState.dispatches/1`). Before the next
+  dispatch, `check/4` counts the runs of
   the same kind since the ticket last made progress, in two windows (`watchdog.dispatch_loop_runs`
   within `watchdog.dispatch_loop_window_ms`, 4 in 10 minutes by default, and
   `watchdog.dispatch_loop_long_runs` within `watchdog.dispatch_loop_long_window_ms`, 8 in an hour).
@@ -14,8 +15,8 @@ defmodule SymphonyElixir.DispatchLoop do
 
   Progress ends the count. A run that started on another state or another PR head is older than the
   last state move or push, so it is not counted; a verdict recorded and a pause reason lifted (a
-  person unblocked the ticket, answered its question, or what it waited on landed) empty the record's
-  runs (`SymphonyElixir.TicketState`). A run stopped by a usage limit or an unreachable model API is
+  person unblocked the ticket, answered its question, or what it waited on landed) end the list of
+  runs (`SymphonyElixir.TicketState.dispatches_in/1`). A run stopped by a usage limit or an unreachable model API is
   dropped when it ends, since the orchestrator counts no attempt for it, and so is an epic review
   that found CI still running on its commit: CI takes longer than the window, and that wait has its
   own bound (`SymphonyElixir.CiWait`). Lifting the loop's pause itself, with `Unblock` or

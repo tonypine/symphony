@@ -921,21 +921,6 @@ defmodule SymphonyElixir.RunStore do
   def finish_ticket_pull_request(_repo_key, _pr_url, _state, _at), do: {:error, :invalid_ticket_pull_request_record}
 
   @doc """
-  Appends a named signal to the ticket's signals ledger, creating the record when none exists. The
-  read-modify-write runs in one durable transaction, so concurrent signals never lose an entry.
-  """
-  @spec record_ticket_signal(String.t(), String.t(), String.t(), map()) :: :ok | {:error, term()}
-  def record_ticket_signal(repo_key, issue_id, name, details) when is_binary(issue_id) do
-    with {:ok, repo_key} <- normalize_repo_key(repo_key),
-         :ok <- ensure_started() do
-      durable_transaction(fn -> write_ticket_signal(repo_key, issue_id, name, details) end)
-      |> unwrap_nested_error()
-    end
-  end
-
-  def record_ticket_signal(_repo_key, _issue_id, _name, _details), do: {:error, :invalid_issue_id}
-
-  @doc """
   Writes the PR and CI watcher's fact record (`TicketState.put_pr_watch/3`) on the ticket's record,
   creating the record when none exists (a ticket moved by hand has none) and stamping its identifier
   when the record has none. Nil clears it. The read-modify-write runs in one durable transaction,
@@ -951,27 +936,6 @@ defmodule SymphonyElixir.RunStore do
   end
 
   def put_ticket_pr_watch(_repo_key, _issue_id, _issue_identifier, _pr_watch), do: {:error, :invalid_issue_id}
-
-  @doc """
-  Appends a verdict, bound to the head SHA it judged and carrying `details`, to the ticket's record,
-  creating the record when none exists. The read-modify-write runs in one durable transaction.
-  """
-  @spec record_ticket_verdict(String.t(), String.t(), String.t(), String.t() | nil, String.t()) ::
-          :ok | {:error, term()}
-  def record_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome),
-    do: record_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome, %{})
-
-  @spec record_ticket_verdict(String.t(), String.t(), String.t(), String.t() | nil, String.t(), map()) ::
-          :ok | {:error, term()}
-  def record_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome, details) when is_binary(issue_id) do
-    with {:ok, repo_key} <- normalize_repo_key(repo_key),
-         :ok <- ensure_started() do
-      durable_transaction(fn -> write_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome, details) end)
-      |> unwrap_nested_error()
-    end
-  end
-
-  def record_ticket_verdict(_repo_key, _issue_id, _kind, _head_sha, _outcome, _details), do: {:error, :invalid_issue_id}
 
   @doc """
   Marks a projection of the ticket's record to Linear as failed (`TicketState.mark_projection/4`).
@@ -1035,36 +999,6 @@ defmodule SymphonyElixir.RunStore do
   end
 
   def record_ticket_decisions(_repo_key, _issue_id, _entries, _backfill), do: {:error, :invalid_issue_id}
-
-  @doc """
-  Records a run Symphony dispatched for the ticket (`TicketState.record_dispatch/3`), creating the
-  record when none exists. The read-modify-write runs in one durable transaction.
-  """
-  @spec record_ticket_dispatch(String.t(), String.t(), map()) :: :ok | {:error, term()}
-  def record_ticket_dispatch(repo_key, issue_id, attrs) when is_binary(issue_id) and is_map(attrs) do
-    with {:ok, repo_key} <- normalize_repo_key(repo_key),
-         :ok <- ensure_started() do
-      durable_transaction(fn -> write_ticket_dispatch(repo_key, issue_id, attrs) end)
-      |> unwrap_nested_error()
-    end
-  end
-
-  def record_ticket_dispatch(_repo_key, _issue_id, _attrs), do: {:error, :invalid_issue_id}
-
-  @doc """
-  Records how the dispatched run `run_id` ended (`TicketState.record_dispatch_outcome/4`). A record
-  the store does not have yet lists no run, so it is a no-op.
-  """
-  @spec record_ticket_dispatch_outcome(String.t(), String.t(), String.t(), map()) :: :ok | {:error, term()}
-  def record_ticket_dispatch_outcome(repo_key, issue_id, run_id, attrs) when is_binary(issue_id) and is_map(attrs) do
-    with {:ok, repo_key} <- normalize_repo_key(repo_key),
-         :ok <- ensure_started() do
-      durable_transaction(fn -> write_ticket_dispatch_outcome(repo_key, issue_id, run_id, attrs) end)
-      |> unwrap_nested_error()
-    end
-  end
-
-  def record_ticket_dispatch_outcome(_repo_key, _issue_id, _run_id, _attrs), do: {:error, :invalid_issue_id}
 
   @doc """
   Marks the path-unlock grants in `ids` as used by `run_id` in the ticket's record
@@ -2430,14 +2364,6 @@ defmodule SymphonyElixir.RunStore do
     {:ok, length(changed)}
   end
 
-  defp write_ticket_signal(repo_key, issue_id, name, details) do
-    record = read_ticket_record(repo_key, issue_id) || TicketState.new(repo_key, issue_id)
-
-    updated = TicketState.record_signal(record, name, details)
-    write_ticket_record(repo_key, issue_id, updated)
-    :ok
-  end
-
   defp write_ticket_pr_watch(repo_key, issue_id, issue_identifier, pr_watch) do
     record = read_or_new_ticket_record(repo_key, issue_id)
 
@@ -2457,14 +2383,6 @@ defmodule SymphonyElixir.RunStore do
         write_ticket_record(repo_key, issue_id, updated)
         {:ok, claimed}
     end
-  end
-
-  defp write_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome, details) do
-    record = read_ticket_record(repo_key, issue_id) || TicketState.new(repo_key, issue_id)
-
-    updated = TicketState.record_verdict(record, kind, head_sha, outcome, DateTime.utc_now(), details)
-    write_ticket_record(repo_key, issue_id, updated)
-    :ok
   end
 
   defp write_ticket_projection(repo_key, issue_id, change) do
@@ -2496,26 +2414,6 @@ defmodule SymphonyElixir.RunStore do
       updated ->
         write_ticket_record(repo_key, issue_id, updated)
         {:ok, updated.decisions}
-    end
-  end
-
-  defp write_ticket_dispatch(repo_key, issue_id, attrs) do
-    record = read_ticket_record(repo_key, issue_id) || TicketState.new(repo_key, issue_id)
-
-    updated = TicketState.record_dispatch(record, attrs)
-    write_ticket_record(repo_key, issue_id, updated)
-    :ok
-  end
-
-  defp write_ticket_dispatch_outcome(repo_key, issue_id, run_id, attrs) do
-    case read_ticket_record(repo_key, issue_id) do
-      nil ->
-        :ok
-
-      record ->
-        updated = TicketState.record_dispatch_outcome(record, run_id, attrs)
-        write_ticket_record(repo_key, issue_id, updated)
-        :ok
     end
   end
 
