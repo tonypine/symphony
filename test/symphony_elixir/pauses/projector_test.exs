@@ -236,8 +236,8 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
       assert written =~ "1. Run it.\n2. Look at it. Proved by: QA\n\n#{SymphonyElixir.Walkthrough.proofs_start_marker()}"
       assert written =~ "- Step 1 · Proved by: `test/a_test.exs`\n#{SymphonyElixir.Walkthrough.proofs_end_marker()}\n\n## Acceptance criteria"
       assert written =~ ~r/- 20\d\d-\d\d-\d\d: Attempt 1 pushed \(abc1234\)\n/
-      evidence = RunStore.list_ticket_events(@issue_id, types: ["evidence"])
-      assert stored().projected.section == Projector.desired(stored(), evidence).section
+      history = RunStore.list_ticket_events(@issue_id, types: ["evidence", "attempt.pushed", "verdict.recorded"])
+      assert stored().projected.section == Projector.desired(stored(), history).section
       refute stored().projected.section == Projector.desired(stored()).section
 
       assert Projector.project_now(@ticket) == :ok
@@ -247,6 +247,24 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
       assert Projector.project_now(@ticket) == :ok
       assert_received {:memory_tracker_description_update, @issue_id, rewritten}
       assert rewritten == String.replace(written, "test/a_test.exs", "test/b_test.exs")
+    end
+
+    test "a push or a verdict on a ticket with no question and no proof adds its line to the summary block" do
+      {:ok, summary} = SymphonyElixir.IssueSummary.new(%{"status" => "PR open", "changelog_entry" => "Opened the PR"})
+      {:ok, description} = SymphonyElixir.IssueSummary.put(@description, summary, ~D[2026-11-04])
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | description: description}])
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id))
+
+      assert :ok = SymphonyElixir.TicketSignals.record(@repo_key, @issue_id, "handoff", %{head: "abc1234def"})
+      assert_received {:memory_tracker_description_update, @issue_id, pushed}
+      assert pushed =~ ~r/- 20\d\d-\d\d-\d\d: Attempt 1 pushed \(abc1234\)\n/
+      refute pushed =~ "verdict"
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | description: pushed}])
+      assert :ok = SymphonyElixir.TicketSignals.record_verdict(@repo_key, @issue_id, "code_review", "abc1234def", "approve")
+      assert_received {:memory_tracker_description_update, @issue_id, judged}
+      assert judged =~ ~r/- 20\d\d-\d\d-\d\d: Code Review verdict: approve \(abc1234\)\n/
+      assert judged =~ "Attempt 1 pushed (abc1234)"
     end
 
     test "linear_record_walkthrough_proofs projects the block it recorded" do

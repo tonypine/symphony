@@ -4595,8 +4595,10 @@ Scoped Linear tool extension contract:
   `<!-- symphony:proofs:start -->` and `<!-- symphony:proofs:end -->` at the end of the walkthrough in
   the same pass as the Decisions section. The workpad's `### Plan` and `### Validation` MUST be
   rendered from the run's `step.*` events between their own markers, leaving every other byte of the
-  workpad as it is, and the summary block's changelog MUST carry a line per `attempt.pushed` and
-  `verdict.recorded` event. `linear_update_issue_summary`
+  workpad as it is, again after each such event whether the step runner or the agent's
+  `ticket_record` records it, one projection of a ticket at a time; the summary block's changelog
+  MUST carry a line per `attempt.pushed` and `verdict.recorded` event, written when the event is
+  recorded. `linear_update_issue_summary`
   MUST only write the Symphony summary block between `<!-- symphony:summary:start -->` and
   `<!-- symphony:summary:end -->`. It accepts only a one-line `status`, an optional `links` object
   (`review_brief`, the URL of the review brief comment, and `artifacts`, a list of `label` and

@@ -88,6 +88,7 @@ defmodule SymphonyElixir.Pauses.Projector do
           labels: [String.t()],
           entries: [Decisions.entry()],
           proofs: [Walkthrough.recorded()],
+          changelog: [String.t()],
           section: String.t() | nil,
           comments: [comment()]
         }
@@ -134,7 +135,10 @@ defmodule SymphonyElixir.Pauses.Projector do
 
     entries = Decisions.render_from_questions(record)
     proofs = Walkthrough.proofs_of(events)
-    %{labels: labels, entries: entries, proofs: proofs, section: hash(entries, proofs), comments: comments(record)}
+    changelog = IssueSummary.event_entries(events)
+
+    %{labels: labels, entries: entries, proofs: proofs, changelog: changelog, comments: comments(record)}
+    |> Map.put(:section, hash(entries, proofs, changelog))
   end
 
   # A question a request comment shows in Linear: one asked with `request: true`; one asked before
@@ -403,9 +407,12 @@ defmodule SymphonyElixir.Pauses.Projector do
 
   # The Decisions entries alone hash as they did before proofs were projected, so a ticket with no
   # proof is not written again.
-  defp hash([], []), do: nil
-  defp hash(entries, []), do: digest(entries)
-  defp hash(entries, proofs), do: digest({entries, proofs})
+  # A description with no push or verdict line keeps the hash it had before the changelog was
+  # projected, so no ticket's description is written again for it.
+  defp hash([], [], []), do: nil
+  defp hash(entries, [], []), do: digest(entries)
+  defp hash(entries, proofs, []), do: digest({entries, proofs})
+  defp hash(entries, proofs, changelog), do: digest({entries, proofs, changelog})
 
   defp digest(term) do
     :sha256

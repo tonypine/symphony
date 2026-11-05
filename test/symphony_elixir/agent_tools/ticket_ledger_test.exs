@@ -2,7 +2,7 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.AgentTools.TicketLedger
-  alias SymphonyElixir.{Artifacts, Paths, TicketEvents}
+  alias SymphonyElixir.{Artifacts, Paths, TicketEvents, Workpad}
   alias SymphonyElixir.Codex.DynamicTool
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.TicketEvents.Types
@@ -291,6 +291,27 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
 
       failed = %{"step_id" => "walk-1", "title" => "Walk step 1", "mode" => "delegated", "outcome" => "failed"}
       assert {false, %{"error" => %{"reason" => "invalid_payload"}}} = call("ticket_record", %{"type" => "step.completed", "payload" => failed}, session(ctx))
+    end
+
+    test "a delegated step the agent records rewrites the workpad's Plan", ctx do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear", tracker_api_token: "token", agent_kind: "claude")
+      test = self()
+      workpad = %{"id" => "comment-workpad", "body" => Workpad.bootstrap_body("## Symphony Workpad", ctx.workspace), "user" => %{"name" => "Symphony"}}
+
+      linear = fn query, variables, _opts ->
+        if String.contains?(query, "SymphonyAgentUpdateComment") do
+          send(test, {:updated, variables})
+          {:ok, %{"data" => %{"commentUpdate" => %{"success" => true}}}}
+        else
+          {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => [workpad]}}}}}
+        end
+      end
+
+      code = %{"step_id" => "code", "title" => "Code", "mode" => "delegated", "outcome" => "passed"}
+      assert {true, _event} = call("ticket_record", %{"type" => "step.completed", "payload" => code}, session(ctx, linear_client: linear))
+
+      assert_receive {:updated, %{id: "comment-workpad", body: body}}, 5_000
+      assert body =~ "- [x] Code: passed"
     end
 
     test "a session with no ticket is refused by both tools", ctx do

@@ -20,8 +20,10 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
   and records no event.
   """
 
-  alias SymphonyElixir.{Artifacts, PathSafety, RunStore, TicketEvents, WorkspaceHead}
+  alias SymphonyElixir.{Artifacts, PathSafety, PhaseSteps, RunStore, TicketEvents, WorkspaceHead}
+  alias SymphonyElixir.Config.Schema.Phases
   alias SymphonyElixir.TicketEvents.{Event, Types}
+  alias SymphonyElixir.Workpad.Projection
 
   @max_limit 200
   @screenshot_exts ~w(.png .jpg .jpeg)
@@ -126,9 +128,13 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
   defp finding_state(:resolved), do: "resolved_awaiting_qa"
   defp finding_state(state), do: Atom.to_string(state)
 
-  @doc "`ticket_record`: records `args`' event on the current ticket (see the moduledoc)."
-  @spec record(context(), map()) :: {:ok, map()} | {:error, error() | term()}
-  def record(context, args) do
+  @doc """
+  `ticket_record`: records `args`' event on the current ticket (see the moduledoc). A step event
+  projects the workpad (`SymphonyElixir.Workpad.Projection`) with `opts`' `:linear_client` and
+  `:settings`.
+  """
+  @spec record(context(), map(), keyword()) :: {:ok, map()} | {:error, error() | term()}
+  def record(context, args, opts \\ []) do
     type = Map.get(args, "type")
     run_kind = Map.get(context, :run_kind)
 
@@ -149,9 +155,17 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
              parent: parent,
              artifacts: artifact_ids
            ) do
+      project(type, ticket, run_kind, Keyword.take(opts, [:linear_client, :settings]))
       {:ok, %{"event" => event_json(event)}}
     end
   end
+
+  # A delegated step's event changes the workpad's Plan, rendered in the run's step-list order
+  # (`SymphonyElixir.Workpad.Projection`), as the step runner's own step events do.
+  defp project(type, ticket, run_kind, opts) when type in ["step.started", "step.completed"],
+    do: Projection.project_later({:ticket, ticket.repo_key, ticket.issue_id}, [steps: PhaseSteps.steps(Phases.kind(run_kind))] ++ opts)
+
+  defp project(_type, _ticket, _run_kind, _opts), do: :ok
 
   defp ticket(context) do
     issue = Map.get(context, :issue) || %{}
