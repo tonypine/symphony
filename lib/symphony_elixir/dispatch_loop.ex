@@ -37,6 +37,8 @@ defmodule SymphonyElixir.DispatchLoop do
   @run_again "Run it again"
   @start_over "Start it over from main"
   @keep_paused "Keep it paused"
+  # A run that spent its token budget is unblocked by this option (`SymphonyElixir.TokenBudget`).
+  @another_budget "Give it another budget"
 
   @typedoc "The two limits: `runs` within `window_ms`, and `long_runs` within `long_window_ms`."
   @type limits :: %{
@@ -135,19 +137,31 @@ defmodule SymphonyElixir.DispatchLoop do
 
   @doc """
   What the answer to a `question_attrs/2` question asks for, by the option it picked: `:unblock`
-  for "#{@run_again}", `:restart` for "#{@start_over}", and `:keep` for "#{@keep_paused}", a
+  for "#{@run_again}" (and a spent budget's "#{@another_budget}"), `:restart` for "#{@start_over}", and `:keep` for "#{@keep_paused}", a
   free-text answer or a question not answered.
   """
   @spec answer_move(map()) :: :unblock | :restart | :keep
   def answer_move(%{state: :answered, answer: %{option: number}, options: options}) when is_integer(number) do
     case Enum.at(options, number - 1) do
-      %{label: @run_again} -> :unblock
+      %{label: label} when label in [@run_again, @another_budget] -> :unblock
       %{label: @start_over} -> :restart
       _other -> :keep
     end
   end
 
   def answer_move(_question), do: :keep
+
+  @doc """
+  The labels of the options that answer a held question with Unblock: "#{@run_again}" (a dispatch
+  loop's, a quiet handoff's, a park's) and "#{@another_budget}" (a spent token budget's,
+  `SymphonyElixir.TokenBudget`).
+  """
+  @spec unblock_labels() :: [String.t()]
+  def unblock_labels, do: [@run_again, @another_budget]
+
+  @doc "The label of the option that gives a run that spent its token budget another one."
+  @spec another_budget_label() :: String.t()
+  def another_budget_label, do: @another_budget
 
   @doc "The label of the option a `question_attrs/2` question answers for `move` (`:unblock`, `:restart` or `:keep`)."
   @spec option_label(:unblock | :restart | :keep) :: String.t()

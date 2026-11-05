@@ -1113,7 +1113,8 @@ defmodule SymphonyElixir.DirectorMoves do
   defp release_loop(issue) do
     ticket = ticket(issue)
 
-    ticket |> answer_held(Questions.held(ticket), DispatchLoop.option_label(:unblock)) |> log_failed("Moved #{issue.identifier} but couldn't answer its question")
+    held = Questions.held(ticket)
+    ticket |> answer_held(held, loop_unblock_label(held)) |> log_failed("Moved #{issue.identifier} but couldn't answer its question")
     ticket |> Pauses.clear_reasons(&loop_reason?/1, by: Pauses.director()) |> log_failed("Moved #{issue.identifier} but couldn't clear its pause")
   end
 
@@ -1155,13 +1156,17 @@ defmodule SymphonyElixir.DirectorMoves do
 
   # A block report's question is answered with its own option, "Unblock and run again"
   # (`TransitionGuard.block_report_question/1`); a dispatch loop's or a quiet handoff's with "Run it
-  # again".
+  # again", and a spent token budget's with "Give it another budget" (`SymphonyElixir.TokenBudget`).
   defp unblock_label(%{options: options}) do
     labels = Enum.map(options, & &1.label)
-    Enum.find([TransitionGuard.unblock_option(), DispatchLoop.option_label(:unblock)], &(&1 in labels))
+    Enum.find([TransitionGuard.unblock_option() | DispatchLoop.unblock_labels()], &(&1 in labels))
   end
 
   defp unblock_label(nil), do: nil
+
+  # The Unblock option of a loop's, a park's or a spent budget's question, never a block report's.
+  defp loop_unblock_label(%{options: options}), do: Enum.find_value(options, &(&1.label in DispatchLoop.unblock_labels() && &1.label))
+  defp loop_unblock_label(nil), do: nil
 
   defp pause_reasons(ticket) do
     case Pauses.get(ticket) do
@@ -1283,7 +1288,7 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   defp unblock_question?(question) do
-    labels = [DispatchLoop.option_label(:unblock), TransitionGuard.unblock_option()]
+    labels = [TransitionGuard.unblock_option() | DispatchLoop.unblock_labels()]
     Enum.any?(question.options, &(&1.label in labels))
   end
 

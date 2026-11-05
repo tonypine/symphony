@@ -267,7 +267,7 @@ defmodule SymphonyElixir.Pauses.Projector do
 
   # The events the description pass renders: the proofs, and the pushes and verdicts of the summary
   # block's changelog. A store that cannot be read has none.
-  defp history(issue_id), do: issue_id |> RunStore.list_ticket_events(types: ["evidence", "attempt.pushed", "verdict.recorded"]) |> List.wrap() |> Enum.filter(&is_struct/1)
+  defp history(issue_id), do: issue_id |> RunStore.list_ticket_events(types: ["evidence" | IssueSummary.event_types()]) |> List.wrap() |> Enum.filter(&is_struct/1)
 
   defp apply_section(_tracker, _issue_id, last, %{section: section}, _events) when section in [nil, last], do: {last, []}
 

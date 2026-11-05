@@ -107,7 +107,8 @@ defmodule SymphonyElixir.Questions do
     withdrawn: nil,
     legacy_event: nil,
     reopened_at: nil,
-    taken_back: []
+    taken_back: [],
+    pause_text: nil
   }
   @option_defaults %{label: "", effect: "", good: [], cost: [], risk: [], recommended?: false, unlocks: []}
   # An answer that names an option by its number: "2" or "option 2".
@@ -169,18 +170,21 @@ defmodule SymphonyElixir.Questions do
           withdrawn: %{reason: String.t(), at: DateTime.t()} | nil,
           legacy_event: String.t() | nil,
           reopened_at: DateTime.t() | nil,
-          taken_back: [String.t()]
+          taken_back: [String.t()],
+          pause_text: String.t() | nil
         }
 
   @typedoc """
   `ask/3`'s options: `asked_by:` (`t:asker/0`, default Symphony), `step:` and `confirm:` (strings),
   `request: true` when a `## Decision needed:` comment shows the question in Linear
   (`SymphonyElixir.DecisionRequest.ask/4`), `asked_in:` (the phase it was asked in, which that comment
-  names) and `at:` (a `DateTime`, default now); for the backfill only, `backfilled: true` with `id:`,
-  `answer:` and `legacy_event:` (see the module doc).
+  names), `at:` (a `DateTime`, default now) and `pause_text:` (the line the ticket's pause reads
+  while the question is open, in place of "Waiting for your answer: " and its title); for the
+  backfill only, `backfilled: true` with `id:`, `answer:` and `legacy_event:` (see the module doc).
   """
   @type ask_opt ::
           {:asked_by, map()}
+          | {:pause_text, String.t() | nil}
           | {:step, String.t() | nil}
           | {:confirm, String.t() | nil}
           | {:request, boolean()}
@@ -504,13 +508,14 @@ defmodule SymphonyElixir.Questions do
   @doc """
   The open question on `ticket` that the Director's Unblock answers: one Symphony asked when it
   paused the ticket on a dispatch loop or a quiet handoff (`SymphonyElixir.DispatchLoop`), an idle
-  run's park (`SymphonyElixir.IdlePark`), or a
+  run's park (`SymphonyElixir.IdlePark`), a run that spent its token budget
+  (`SymphonyElixir.TokenBudget`), or a
   run's block report asked (`SymphonyElixir.TransitionGuard.block_report_question/1`), known by its
   Unblock option. The newest when there are several; nil when there is none.
   """
   @spec held(ticket()) :: question() | nil
   def held(ticket) do
-    labels = [DispatchLoop.option_label(:unblock), TransitionGuard.unblock_option()]
+    labels = [TransitionGuard.unblock_option() | DispatchLoop.unblock_labels()]
     ticket |> open() |> Enum.filter(fn question -> Enum.any?(question.options, &(&1.label in labels)) end) |> List.last()
   end
 
@@ -714,6 +719,8 @@ defmodule SymphonyElixir.Questions do
     end
   end
 
+  # The pause's line: the asker's own (`pause_text:`), else the question's title.
+  defp reason(%{pause_text: text} = question) when is_binary(text), do: Map.put(waits_on(question.id), :text, String.slice(text, 0, 300))
   defp reason(question), do: Map.put(waits_on(question.id), :text, "Waiting for your answer: #{question.title}")
 
   defp waits_on(id), do: %{kind: :question, waits_on: %{question_id: id}}
@@ -756,7 +763,8 @@ defmodule SymphonyElixir.Questions do
       withdrawn: nil,
       legacy_event: nil,
       reopened_at: nil,
-      taken_back: []
+      taken_back: [],
+      pause_text: line(Keyword.get(opts, :pause_text))
     }
     |> backfilled(opts, Keyword.get(opts, :backfilled) == true)
   end

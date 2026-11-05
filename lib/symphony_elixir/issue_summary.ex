@@ -10,14 +10,15 @@ defmodule SymphonyElixir.IssueSummary do
   (`drop_empty_heading/1`). `strip/1` removes it, so a description read as
   requirements never carries Symphony's own summary.
 
-  The changelog also carries a line for each push and each verdict on the ticket's history
-  (`event_entries/1`, from `attempt.pushed` and `verdict.recorded`): `put/4` and `put_changelog/2`
+  The changelog also carries a line for each push and each verdict on the ticket's history, and for
+  each run that spent its token budget (`event_entries/1`, from `attempt.pushed`, `verdict.recorded`
+  and a `run.ended` with `budget_exhausted`): `put/4` and `put_changelog/2`
   merge them into the entries the block holds, each line once, newest day first, so the block reads
   the same whoever wrote the last entry. A line is found again by its text after Linear rewrote
   the list (`*` bullets), so it is never written twice.
   """
 
-  alias SymphonyElixir.RunStore
+  alias SymphonyElixir.{RunStore, TokenBudget}
   alias SymphonyElixir.TicketEvents.Event
 
   @start_marker "<!-- symphony:summary:start -->"
@@ -34,7 +35,7 @@ defmodule SymphonyElixir.IssueSummary do
   # right above `---` (a setext heading), never a person's text.
   @empty_heading ~r/(^|\n)#+[ \t]*\s*\z/
   @entry_date ~r/^- (\d{4}-\d{2}-\d{2})\b/
-  @event_types ["attempt.pushed", "verdict.recorded"]
+  @event_types ["attempt.pushed", "verdict.recorded", "run.ended"]
   @kind_names %{"qa" => "QA", "ci_fix" => "CI Fix", "code_review" => "Code Review", "epic_review" => "Epic Review"}
 
   @type artifact :: %{label: String.t(), url: String.t()}
@@ -115,6 +116,10 @@ defmodule SymphonyElixir.IssueSummary do
 
   def put_changelog(description, _events), do: description
 
+  @doc "The types of the events a changelog line comes from (`event_entries/1`)."
+  @spec event_types() :: [String.t()]
+  def event_types, do: @event_types
+
   @doc "The events of the ticket `issue_id` its changelog carries a line for, oldest first; none when the store cannot be read."
   @spec history(String.t()) :: [Event.t()]
   def history(issue_id) when is_binary(issue_id), do: issue_id |> RunStore.list_ticket_events(types: @event_types) |> List.wrap() |> Enum.filter(&match?(%Event{}, &1))
@@ -122,13 +127,18 @@ defmodule SymphonyElixir.IssueSummary do
   @doc """
   The changelog lines of a ticket's `events`, oldest first: one per `attempt.pushed`
   (`2026-11-05: Attempt 2 pushed (abc1234)`) and one per `verdict.recorded`
-  (`2026-11-05: Code Review verdict: approve (abc1234)`), dated by the day the event happened.
+  (`2026-11-05: Code Review verdict: approve (abc1234)`), and one per `run.ended` of a run that
+  spent its token budget (`2026-11-05: Run 2 ended: token budget spent (100M tokens of a 100M limit)`),
+  dated by the day the event happened. Any other run's end has no line.
   """
   @spec event_entries([Event.t() | map()]) :: [String.t()]
   def event_entries(events) when is_list(events), do: Enum.flat_map(events, &event_entry/1)
 
   defp event_entry(%{type: type, at: %DateTime{} = at, payload: payload}) when type in @event_types and is_map(payload) do
-    ["- #{Date.to_iso8601(DateTime.to_date(at))}: " <> plain(event_text(type, payload))]
+    case event_text(type, payload) do
+      nil -> []
+      text -> ["- #{Date.to_iso8601(DateTime.to_date(at))}: " <> plain(text)]
+    end
   end
 
   defp event_entry(_event), do: []
@@ -143,6 +153,16 @@ defmodule SymphonyElixir.IssueSummary do
     name = if is_binary(kind), do: Map.get_lazy(@kind_names, kind, fn -> kind |> String.split("_", trim: true) |> Enum.map_join(" ", &String.capitalize/1) end), else: "Review"
     outcome = field(payload, :outcome)
     "#{name} verdict" <> if(is_binary(outcome), do: ": " <> String.replace(outcome, "_", " "), else: "") <> head_suffix(payload)
+  end
+
+  # Only a run that spent its token budget: nil for any other run's end.
+  defp event_text("run.ended", payload) do
+    with %{} = budget <- field(payload, :budget_exhausted) do
+      run = field(payload, :run_number)
+      tokens = field(budget, :tokens)
+      total = if is_map(tokens), do: field(tokens, :total_tokens)
+      if(is_integer(run), do: "Run #{run}", else: "A run") <> " ended: " <> TokenBudget.exit_text(total, field(budget, :limit))
+    end
   end
 
   defp head_suffix(payload) do
