@@ -6112,7 +6112,7 @@ Minimum endpoints:
     | `approve_plan` | a plan in `Plan Review` | the waiting state | none; Symphony promotes its `Backlog` sub-tickets as for a person's approval |
     | `rework` | a plan in `Plan Review` | `Rework` | `reason` (required), posted before the move |
     | `restart` | any open ticket | `In Progress`, after the reset | `reason` (required), posted before the move; the reset (close the pull requests, remove the workspaces, supersede the workpad) runs first, and a reset that fails answers `502` `restart_incomplete` and makes no move |
-    | `decisions` | a plan in `Plan Review` | `Rework` through `plan_revise` for a plan under review (its revision), no move for an approved plan | each pick naming its `question_id` or its `request_comment_id` answers that Question first, then is posted as a reply under its request, the rest in one comment; `picks` are required (`[{"question", "answer", "question_id", "request_comment_id"}]`) |
+    | `decisions` | a plan in `Plan Review` | `Rework` through `plan_revise` for a plan under review (its revision), no move for an approved plan | each pick naming its `question_id` or its `request_comment_id` answers that Question first, then is posted as a reply under its request, the rest in one comment; `picks` are required (`[{"question", "answer", "text", "question_id", "request_comment_id"}]`) |
     | `changes` | a plan in `Plan Review` | as `decisions` | `reason` (required), posted before the move |
     | `backlog` | any open ticket | `Backlog` | `note` (optional), posted before the move |
     | `unblock` | any ticket waiting on an access, dispatch-loop, quiet-handoff or operator-stop hold | no move; the hold clears and the ticket continues in place | one comment, posted after the hold clears |
@@ -6148,6 +6148,11 @@ Minimum endpoints:
     again, which reruns it on `Rerun the build`). It answers `{move, subject, repo_key,
     question_id, option, answered}`, `404` (`question_not_found`) when no such question is open,
     and `422` without `picks`.
+  - A pick of `decide` or `decisions` may carry `text`, the person's own words: the pick then
+    answers in those words, whatever its `answer`, as the Inbox's "Answer in my own words…" does,
+    so the Question is answered with them and the decision on the ticket shows them. A pick whose
+    `answer` is the own-words option ("In my own words", "Answer in my own words…") without `text`
+    answers `422` and answers nothing.
   - A missing `issue_identifier`, `reason` or `picks`, or a `decide` with neither `question_id` nor
     `request_comment_id`, answers `422`, an
     unknown ticket `404`, and a
