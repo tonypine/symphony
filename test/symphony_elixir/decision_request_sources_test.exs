@@ -51,6 +51,8 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
     "lib/symphony_elixir/orchestrator.ex" => [:dispatch_loop, :quiet_handoff],
     # The questions the backfill finds in the holds and decisions already recorded.
     "lib/symphony_elixir/pauses/backfill.ex" => [:backfill],
+    # A machine step with no result twice: the output and the ways forward (go on, retry, own words).
+    "lib/symphony_elixir/phase_steps.ex" => [:step_no_result],
     # The issue-scoping quality gate's clarification: its questions for a ticket scored below the
     # threshold, answered in the Inbox.
     "lib/symphony_elixir/quality_gate/question.ex" => [:quality_gate],

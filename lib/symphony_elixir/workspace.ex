@@ -2517,13 +2517,11 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
-  defp remote_env_assignments(env) when is_list(env) do
+  defp remote_env_assignments(env) do
     Enum.map(env, fn {key, value} ->
       "export #{key}=#{shell_escape(to_string(value))}"
     end)
   end
-
-  defp remote_env_assignments(_env), do: []
 
   defp log_workspace_removal_failure(workspace, issue_context, worker_host, reason, output) do
     sanitized_output = sanitize_hook_output_for_log(output)

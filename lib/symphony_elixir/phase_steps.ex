@@ -76,6 +76,7 @@ defmodule SymphonyElixir.PhaseSteps do
           optional(:worker_host) => String.t() | nil,
           optional(:base_branch) => String.t() | nil,
           optional(:changes) => changes(),
+          optional(:steps) => [Step.t()],
           optional(:runner) => (String.t(), map(), pos_integer() -> runner_result()),
           optional(:artifact_opts) => [Artifacts.ingest_opt()],
           optional(:on_step) => (notice() -> term())
