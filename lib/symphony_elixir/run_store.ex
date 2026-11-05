@@ -782,6 +782,25 @@ defmodule SymphonyElixir.RunStore do
   def append_ticket_events(_events), do: {:error, :invalid_ticket_event}
 
   @doc """
+  Adds fields to the payloads of the ticket's stored events, in one durable transaction: `upgrades`
+  maps an event's `seq` to the fields to add. The one write that touches a stored event, a format
+  upgrade of events an earlier release wrote (`SymphonyElixir.TicketEvents.Backfill`): everything
+  else about each event stays, and a `seq` the ticket does not hold is ignored.
+  """
+  @spec upgrade_ticket_events(String.t(), %{optional(non_neg_integer()) => map()}) :: :ok | {:error, term()}
+  def upgrade_ticket_events(_issue_id, upgrades) when map_size(upgrades) == 0, do: :ok
+
+  def upgrade_ticket_events(issue_id, upgrades) when is_binary(issue_id) and is_map(upgrades) do
+    with :ok <- ensure_started() do
+      durable_transaction(fn ->
+        @ticket_events_table
+        |> :mnesia.read(issue_id, :write)
+        |> Enum.each(&upgrade_ticket_event_row(&1, upgrades))
+      end)
+    end
+  end
+
+  @doc """
   The events of the ticket `issue_id`, oldest first by `at`, then `seq`. `opts`: `types:` (the
   types to keep) and `run_id:` (the run to keep).
   """
@@ -2340,6 +2359,18 @@ defmodule SymphonyElixir.RunStore do
 
   defp write_ticket_event_row(%Event{} = event) do
     :mnesia.write({@ticket_events_table, event.issue_id, event.repo_key, event.issue_id, event.run_id, event.type, event.seq, Event.to_record(event)})
+  end
+
+  defp upgrade_ticket_event_row({@ticket_events_table, _key, _repo_key, _issue_id, _run_id, _type, seq, record} = row, upgrades) do
+    case upgrades do
+      %{^seq => fields} ->
+        :mnesia.delete_object(row)
+        event = Event.normalize(record)
+        write_ticket_event_row(%{event | payload: Map.merge(event.payload, fields)})
+
+      _other ->
+        :ok
+    end
   end
 
   defp read_ticket_events(issue_id) do

@@ -59,6 +59,20 @@ defmodule SymphonyElixir.RunStoreTicketEventsTest do
     assert RunStore.get_ticket_state(@issue_id).event_seq == 3
   end
 
+  test "upgrade_ticket_events/2 adds fields to the payloads of the events it names and to nothing else" do
+    {:ok, [first, second]} =
+      RunStore.append_ticket_events([
+        event("note", %{text: "a"}, idempotency: "k1"),
+        event("note", %{text: "b"}, idempotency: "k2")
+      ])
+
+    assert RunStore.upgrade_ticket_events(@issue_id, %{}) == :ok
+    assert RunStore.upgrade_ticket_events(@issue_id, %{first.seq => %{signal: "claim"}, 99 => %{signal: "other"}}) == :ok
+
+    assert [upgraded, ^second] = RunStore.list_ticket_events(@issue_id, [])
+    assert upgraded == %{first | payload: %{text: "a", signal: "claim"}}
+  end
+
   test "append_ticket_events/1 writes one ticket's events in one transaction, each idempotency key once" do
     assert {:ok, existing} = RunStore.append_ticket_event(event("note", %{text: "a"}, idempotency: "k1"))
 

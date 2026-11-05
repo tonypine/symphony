@@ -744,13 +744,22 @@ a pause or a question (a held block, a dispatch loop or CI wait, an unblock, a d
 a machine `note` naming it, as live; the pause backfill below records the pauses and questions. A
 record from before the stream keeps the snapshot's fields (as its `legacy_history`) only until its
 ticket is converted, and then drops them, so a store from before the stream upgraded straight to a
-release whose record has no such fields still backfills first; a start after the marker drops the
-fields a record converted by an earlier release still carries.
+release whose record has no such fields still backfills first.
+A record converted by an earlier release can still carry the fields after the marker, with events
+the views can't read as the fields did: that release wrote a signal's note with no `signal`, a
+signal a pause or a question mirrored as no event, every other signal with no `signal_details` and
+a verdict with no `details`. On every start, such a record is reconciled before its fields are
+dropped: each entry claims the event closest in time that says it, and the fields that event lacks
+are added to its payload in place, the one write that touches a stored event, so no signal or
+verdict reads twice. An entry no event says is appended at its own time, keyed
+`backfill:reconciled:<source>:<hash>`: a signal as a machine `note` naming it, a verdict as its
+`verdict.recorded`. A second handoff of one head stays the one attempt. A record whose reconcile
+fails keeps its fields for the next start.
 Each recorded decision becomes `decision.recorded` under its key, so an answer already recorded is
 not recorded twice and the ticket's history shows every decision with its answer. Each
 ticket's events are appended oldest first in one transaction and end with one note saying until when
-the history was backfilled. A run store marker (`ticket_events_backfill_v1`) makes a later start a
-no-op.
+the history was backfilled. A run store marker (`ticket_events_backfill_v1`) means a later start
+converts nothing; it only reconciles a record still carrying the fields.
 
 In the same task, right after it (and never before its marker is set), the pause backfill fills
 each record's pause and questions once from the record alone, never Linear, reading the holds a

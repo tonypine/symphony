@@ -196,12 +196,20 @@ defmodule SymphonyElixir.TicketSignals do
   """
   @spec signal_event(String.t(), term()) :: {String.t(), map(), keyword()}
   def signal_event(name, details) do
-    {type, payload, opts} =
-      case event(name, details) do
-        :mirrored -> note(name, if(is_map(details), do: details, else: %{}))
-        mapping -> mapping
-      end
+    case event(name, details) do
+      :mirrored -> signal_note(name, details)
+      mapping -> with_signal(mapping, name, details)
+    end
+  end
 
+  @doc """
+  The machine `note` a signal `name` with `details` is recorded as when no other event says it,
+  carrying `signal` and `signal_details` as `signal_event/2` does.
+  """
+  @spec signal_note(String.t(), term()) :: {String.t(), map(), keyword()}
+  def signal_note(name, details), do: name |> note(if(is_map(details), do: details, else: %{})) |> with_signal(name, details)
+
+  defp with_signal({type, payload, opts}, name, details) do
     {type, compact(Map.merge(payload, %{signal: name, signal_details: details_map(details) || %{}})), opts}
   end
 
