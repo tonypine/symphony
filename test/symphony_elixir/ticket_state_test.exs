@@ -208,8 +208,11 @@ defmodule SymphonyElixir.TicketStateTest do
       assert record.updated_at == nil
 
       # The old fields of a record from before the event stream are its history, for the backfill.
-      assert %{verdicts: [%{kind: "review verdict", outcome: "approve", details: %{}}], signals: [%{name: "handoff", details: %{}, at: nil}], dispatches: []} =
-               record.legacy_history
+      assert %{
+               verdicts: [%{kind: "review verdict", outcome: "approve", details: %{}}],
+               signals: [%{name: "handoff", details: %{}, at: nil}],
+               dispatches: []
+             } = record.legacy_history
     end
 
     test "a record stored before event_seq reads back with event_seq 0 and its other fields unchanged" do
@@ -439,7 +442,11 @@ defmodule SymphonyElixir.TicketStateTest do
         issue_id: "issue-1",
         signals: [%{name: "handoff", details: %{to: "QA"}, at: @at}, %{name: :atom}],
         verdicts: [%{kind: "qa", head_sha: "abc", outcome: "pass", recorded_at: @at}],
-        dispatches: [%{kind: "qa", run_id: "run-1", at: @at, outcome: %{exit: "failed (boom)", head: "a", at: @at}}, %{kind: "qa", outcome: "junk"}, "junk"]
+        dispatches: [
+          %{kind: "qa", run_id: "run-1", at: @at, outcome: %{exit: "failed (boom)", head: "a", at: @at}},
+          %{kind: "qa", outcome: "junk"},
+          "junk"
+        ]
       }
 
       record = TicketState.normalize(stored)
@@ -448,7 +455,10 @@ defmodule SymphonyElixir.TicketStateTest do
       assert %{
                signals: [%{name: "handoff", details: %{to: "QA"}, at: @at}],
                verdicts: [%{kind: "qa", head_sha: "abc", outcome: "pass", recorded_at: @at, details: %{}}],
-               dispatches: [%{kind: "qa", run_id: "run-1", outcome: %{exit: "failed (boom)", head: "a", at: @at}}, %{kind: "qa", outcome: nil, at: nil}]
+               dispatches: [
+                 %{kind: "qa", run_id: "run-1", outcome: %{exit: "failed (boom)", head: "a", at: @at}},
+                 %{kind: "qa", outcome: nil, at: nil}
+               ]
              } = TicketState.legacy_history(record)
 
       # Normalized again (a write before the backfill ran), the record keeps it.
@@ -1184,7 +1194,10 @@ defmodule SymphonyElixir.TicketStateViewsTest do
       assert [%{name: "fix verdict", details: %{outcome: "mechanical", head: "bbb2222"}}, %{name: "code_review"}, %{name: "merge settled"}, %{name: "ci_wait_started"} | _] =
                TicketState.signals(%{issue_id: @issue_id})
 
-      assert [%{kind: "qa", outcome: "pass"}, %{kind: "code_review", outcome: "approve", details: %{reason: "fine"}}] = TicketState.verdicts(%{issue_id: @issue_id})
+      assert [
+               %{kind: "qa", outcome: "pass"},
+               %{kind: "code_review", outcome: "approve", details: %{reason: "fine"}}
+             ] = TicketState.verdicts(%{issue_id: @issue_id})
     end
   end
 
@@ -1264,7 +1277,12 @@ defmodule SymphonyElixir.TicketStateViewsTest do
     refute Enum.any?([:signals, :verdicts, :dispatches], &Map.has_key?(record, &1))
     assert TicketState.normalize(record).legacy_history == nil
 
-    assert {length(TicketState.signals(record)), length(TicketState.verdicts(record)), length(TicketState.dispatches(record))} ==
-             {signals, verdicts, dispatches}
+    counts = {
+      length(TicketState.signals(record)),
+      length(TicketState.verdicts(record)),
+      length(TicketState.dispatches(record))
+    }
+
+    assert counts == {signals, verdicts, dispatches}
   end
 end

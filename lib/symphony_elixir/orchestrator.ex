@@ -5931,7 +5931,13 @@ defmodule SymphonyElixir.Orchestrator do
   defp record_dispatch(_issue, _repo_key, _run_id, _run_profile, %{run_kind: :pr}), do: :ok
 
   defp record_dispatch(%Issue{id: issue_id, state: issue_state}, repo_key, run_id, %{kind: kind}, _running_attrs),
-    do: record_run_started(repo_key, issue_id, %{kind: kind, run_id: run_id, state: issue_state, head: pr_head(issue_id, repo_key)})
+    do:
+      record_run_started(repo_key, issue_id, %{
+        kind: kind,
+        run_id: run_id,
+        state: issue_state,
+        head: pr_head(issue_id, repo_key)
+      })
 
   # The run's `run.started` event, keyed by its run id. Its number counts the ticket's earlier runs
   # of the same kind.
