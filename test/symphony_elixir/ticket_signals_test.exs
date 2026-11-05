@@ -353,7 +353,8 @@ defmodule SymphonyElixir.TicketSignalsTest do
               type
           end
 
-        assert [%{type: ^type, payload: payload, actor: %{kind: :machine}, at: %DateTime{}}] = RunStore.list_ticket_events(issue_id, []), "#{name} #{inspect(details)}"
+        events = RunStore.list_ticket_events(issue_id, [])
+        assert [%{type: ^type, payload: payload, actor: %{kind: :machine}, at: %DateTime{}}] = events, "#{name} #{inspect(details)}"
         if type == "note", do: assert(payload.text =~ "(#{name})")
 
         # Enough to rebuild the record's entry: the name and the details it was recorded with.
