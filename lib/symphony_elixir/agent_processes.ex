@@ -29,6 +29,7 @@ defmodule SymphonyElixir.AgentProcesses do
   alias SymphonyElixir.{Paths, ProcessTree, Workspace}
 
   @default_grace_ms 3_000
+  @default_await_ms 10_000
   @poll_interval_ms 100
   @ledger_file "agent_processes.json"
 
@@ -79,6 +80,35 @@ defmodule SymphonyElixir.AgentProcesses do
     GenServer.call(server, {:dispatch_blocked_reason, Workspace.safe_identifier(identifier)})
   catch
     :exit, _reason -> nil
+  end
+
+  @doc """
+  Waits until no agent process group tracked in the issue's workspace is alive, so the workspace
+  can be removed without pulling it from under a run's agent: a stopped run's group gets SIGTERM
+  once its port closes and SIGKILL after the grace period, after its task has already ended.
+  `{:error, {:still_running, pgids}}` names the groups still alive after `:timeout_ms` (default
+  10 s). `:ok` at once when nothing is tracked there, or when the server isn't running.
+  """
+  @spec await_exit(String.t() | nil, keyword()) :: :ok | {:error, {:still_running, [os_pid()]}}
+  def await_exit(identifier, opts \\ []) do
+    timeout_ms = Keyword.get(opts, :timeout_ms, @default_await_ms)
+
+    case workspace_groups(Keyword.get(opts, :server, __MODULE__), Workspace.safe_identifier(identifier)) do
+      {[], _signal} ->
+        :ok
+
+      {pgids, signal} ->
+        case await_groups_exit(pgids, System.monotonic_time(:millisecond) + timeout_ms, signal) do
+          [] -> :ok
+          survivors -> {:error, {:still_running, survivors}}
+        end
+    end
+  end
+
+  defp workspace_groups(server, safe_identifier) do
+    GenServer.call(server, {:workspace_groups, safe_identifier})
+  catch
+    :exit, _reason -> {[], nil}
   end
 
   @doc """
@@ -158,6 +188,13 @@ defmodule SymphonyElixir.AgentProcesses do
 
     state = if blocked == state.blocked, do: state, else: write_ledger(%{state | blocked: blocked})
     {:reply, reason, state}
+  end
+
+  # The groups this instance tracks in the workspace, running or stopping, and the signal function
+  # the caller polls them with, outside the server so its own signals are never held up.
+  def handle_call({:workspace_groups, safe_identifier}, _from, state) do
+    pgids = for {pgid, entry} <- state.entries, workspace_identifier(entry) == safe_identifier, do: pgid
+    {:reply, {pgids, state.signal}, state}
   end
 
   @impl true

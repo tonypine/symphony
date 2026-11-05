@@ -8,7 +8,12 @@ defmodule SymphonyElixir.Restart do
   performs it, and `SymphonyElixir.TransitionGuard` refuses an agent's request that would amount
   to one (asking for `In Progress` from a post-implementation phase).
 
-  `perform/2` runs the reset:
+  `perform/2` runs the reset. A run the ticket had is already ended by the caller
+  (`SymphonyElixir.DirectorMoves` stops it as Stop does), so first the reset waits for it to be
+  gone: the agent process groups tracked in the ticket's workspace have exited
+  (`SymphonyElixir.AgentProcesses.await_exit/2`) and the removal the stop queued has finished
+  (`SymphonyElixir.WorkspaceCleanup.await/2`). The workspace is never removed under a live agent:
+  one still running after the wait stops the reset there. Then:
 
     1. every open pull request of the ticket is closed on GitHub;
     2. the ticket's workspaces are removed, which deletes the worktree and its branch, so the next
@@ -24,18 +29,22 @@ defmodule SymphonyElixir.Restart do
   person can read the message in the Inbox and try again.
 
   Options: `:github` (the pull request module, default `SymphonyElixir.GitHub.PullRequest`),
-  `:workspace` (the workspace module, default `SymphonyElixir.Workspace`), and the workpad's own
+  `:workspace` (the workspace module, default `SymphonyElixir.Workspace`), `:agent_processes`
+  (the options `SymphonyElixir.AgentProcesses.await_exit/2` waits with), `:workspace_cleanup` (the
+  `SymphonyElixir.WorkspaceCleanup` server awaited), and the workpad's own
   `:settings`, `:linear_client`, `:now` and `:linear_retry_opts`, which pass through to
   `SymphonyElixir.Workpad.supersede/2`.
   """
 
   require Logger
 
+  alias SymphonyElixir.AgentProcesses
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.TicketPullRequest
   alias SymphonyElixir.Workpad
   alias SymphonyElixir.Workspace
+  alias SymphonyElixir.WorkspaceCleanup
 
   @typedoc "The reset stopped at `message`, which names the step and what GitHub or Linear said."
   @type error :: {:error, {:restart, String.t()}}
@@ -43,9 +52,23 @@ defmodule SymphonyElixir.Restart do
   @doc "Runs the full reset for `issue`. The caller moves the ticket to `In Progress` afterwards."
   @spec perform(Issue.t(), keyword()) :: :ok | error()
   def perform(%Issue{} = issue, opts) when is_list(opts) do
-    with :ok <- close_pull_requests(issue, opts),
+    with :ok <- await_run_gone(issue, opts),
+         :ok <- close_pull_requests(issue, opts),
          :ok <- remove_workspaces(issue, opts) do
       supersede_workpad(issue, opts)
+    end
+  end
+
+  # A stopped run's agent is signalled after its task ended, and the stop queued its own removal of
+  # the workspace; both are waited for, so the removal below never runs under the agent or races
+  # the stop's.
+  defp await_run_gone(%Issue{identifier: identifier}, opts) do
+    case AgentProcesses.await_exit(identifier, Keyword.get(opts, :agent_processes, [])) do
+      :ok ->
+        WorkspaceCleanup.await(identifier, Keyword.get(opts, :workspace_cleanup, WorkspaceCleanup))
+
+      {:error, {:still_running, pgids}} ->
+        failed("the agent of its run is still running (process groups #{Enum.map_join(pgids, ", ", &Integer.to_string/1)}), so its workspace was kept")
     end
   end
 

@@ -99,9 +99,11 @@ A ticket's workspace follows its known state, not the end of a run.
 - **Rebuilt** only when it is gone: a run that finds no workspace makes one again, starting on the newest known head of the ticket's branch, never guessed from main (`SymphonyElixir.WorkspaceRebuild`). The heads compared are the open PR's head, the branch's head on `origin`, the newest run's recorded unpushed head and the ticket's local branch; the head every other one is an ancestor of wins, and the pushed one wins when they diverge. The base branch is the start only when none of those exists. The choice is recorded as a `workspace.rebuilt` event naming why, the heads compared and the one chosen (SPEC.md §4.1.11).
 - **Removed** in four cases only, each by the machine:
   - a terminal state (Done, Canceled): the orchestrator queues the removal when it reads the state, and the startup sweep removes what a terminal ticket left;
-  - Restart, a person's move in the Director, which closes the PR and starts over from main;
+  - Restart, a person's move in the Director, which ends a live run first (as Stop does), closes the PR and starts over from main;
   - the operator's Stop of a run;
   - the age GC of idle workspaces, which reclaims a workspace older than `max_age_days` but never one whose ticket has a run going, a retry due, or an open PR it is waiting on in a phase.
+
+A removal waits for the agent processes of a stopped run to exit, so a workspace is never removed under a live agent. A removal that finds a directory git no longer lists as a worktree deletes it with the branch, so the next run gets a fresh worktree; a run that finds one fails and keeps it.
 
 The startup sweep of orphan folders (a folder no ticket, run or retry claims) follows `orphan_action`, which only logs by default.
 

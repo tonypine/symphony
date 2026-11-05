@@ -406,7 +406,8 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         case .restart:
             title = "Restart \(id) from main?"
             targetState = "In Progress"
-            happens = "Closes \(id)'s open pull request, removes its workspace so the next run branches fresh from main, supersedes the workpad, and moves \(id) to In Progress."
+            // The Inbox item carries no live-run flag, so the sheet names the run's end whenever one may be live.
+            happens = "Ends the current run of \(id) if one is going, closes its open pull request, removes its workspace so the next run branches fresh from main, supersedes the workpad, and moves \(id) to In Progress."
             stays = "The issue and its comments stay, and the previous attempt stays in the workpad under a Superseded heading."
         case .decide:
             // The sheet names the pick and what it does (D12d): `Send "Leave it to TP-891"?` and the option's effect.

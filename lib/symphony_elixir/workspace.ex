@@ -1256,8 +1256,8 @@ defmodule SymphonyElixir.Workspace do
           "if [ -n \"$registered\" ]; then",
           "  symphony_git \"$repo\" worktree remove --force \"$workspace\"",
           "elif [ -e \"$workspace\" ]; then",
-          "  echo \"workspace_not_registered_worktree: $workspace\"",
-          "  exit 42",
+          # A directory git no longer lists as a worktree is removed with the branch (TP-1384).
+          "  rm -rf \"$workspace\"",
           "fi",
           remote_after_create_marker_remove_command(),
           "if symphony_git \"$repo\" rev-parse --verify \"refs/heads/$branch\" >/dev/null 2>&1; then",
@@ -2669,16 +2669,23 @@ defmodule SymphonyElixir.Workspace do
   # The remove and the branch delete run under the repo's fetch lock, like a
   # dispatch's `worktree add`: both write the shared `.git/worktrees` and refs. The
   # `before_remove` hook runs before it, so a slow hook holds up no other dispatch.
+  # A directory left at the workspace path that git no longer lists as a worktree is removed with
+  # the branch, so the next run gets a fresh worktree; one git can't list worktrees for is kept.
   defp remove_local_worktree(repo, workspace, issue_context) do
-    cond do
-      registered_worktree?(repo, workspace) ->
+    case {worktree_registered(repo, workspace), File.exists?(workspace)} do
+      {{:ok, true}, _exists} ->
         maybe_run_before_remove_hook(workspace, issue_context, nil)
         Fetcher.with_lock(repo, fn -> remove_registered_worktree(repo, workspace, issue_context) end)
 
-      File.exists?(workspace) ->
+      {{:ok, false}, true} ->
+        Logger.warning("Removing a workspace that is not a registered worktree repo=#{repo} workspace=#{workspace}")
+        File.rm_rf!(workspace)
+        Fetcher.with_lock(repo, fn -> delete_local_worktree_branch(repo, worktree_branch(issue_context)) end)
+
+      {:error, true} ->
         {:error, {:workspace_not_registered_worktree, workspace}, ""}
 
-      true ->
+      {_registration, false} ->
         Fetcher.with_lock(repo, fn -> delete_local_worktree_branch(repo, worktree_branch(issue_context)) end)
     end
   end
@@ -2720,23 +2727,27 @@ defmodule SymphonyElixir.Workspace do
 
   defp branch_checked_out_elsewhere?(_output), do: false
 
-  defp registered_worktree?(repo, workspace) do
+  defp registered_worktree?(repo, workspace), do: worktree_registered(repo, workspace) == {:ok, true}
+
+  # Whether git lists `workspace` as one of `repo`'s worktrees, or `:error` when the list fails.
+  defp worktree_registered(repo, workspace) do
     workspace = Path.expand(workspace)
 
     case git_output(repo, ["worktree", "list", "--porcelain"]) do
       {:ok, output} ->
-        output
-        |> String.split("\n", trim: true)
-        |> Enum.filter(&String.starts_with?(&1, "worktree "))
-        |> Enum.map(&String.replace_prefix(&1, "worktree ", ""))
-        |> Enum.any?(&(Path.expand(&1) == workspace))
+        {:ok,
+         output
+         |> String.split("\n", trim: true)
+         |> Enum.filter(&String.starts_with?(&1, "worktree "))
+         |> Enum.map(&String.replace_prefix(&1, "worktree ", ""))
+         |> Enum.any?(&(Path.expand(&1) == workspace))}
 
       {:error, reason, output} ->
         sanitized_output = sanitize_hook_output_for_log(output)
 
         Logger.warning("Git worktree list failed repo=#{repo} workspace=#{workspace} reason=#{inspect(reason)} output=#{inspect(sanitized_output)}")
 
-        false
+        :error
     end
   end
 

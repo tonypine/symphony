@@ -645,7 +645,7 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(sheet.title, "Restart BIL-206 from main?")
         XCTAssertEqual(
             sheet.happens,
-            "Closes BIL-206's open pull request, removes its workspace so the next run branches fresh from main, supersedes the workpad, and moves BIL-206 to In Progress."
+            "Ends the current run of BIL-206 if one is going, closes its open pull request, removes its workspace so the next run branches fresh from main, supersedes the workpad, and moves BIL-206 to In Progress."
         )
         XCTAssertEqual(sheet.stays, "The issue and its comments stay, and the previous attempt stays in the workpad under a Superseded heading.")
         XCTAssertEqual(sheet.targetState, "In Progress")

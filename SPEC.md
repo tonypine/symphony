@@ -3904,6 +3904,14 @@ Workspace persistence:
   `git worktree remove --force` and deletes Symphony's `auto/<issue.identifier>` branch.
   Forced worktree removal also deletes the working directory on disk, including any
   uncommitted changes inside that worktree.
+  A directory at the workspace path that git no longer lists as a worktree (what a removal leaves
+  when something kept writing in it) is deleted with the branch; when git cannot list the
+  worktrees at all, the directory is kept and the removal reports it.
+- A removal never runs while an agent process group tracked in the workspace is alive: it first
+  waits for the stopped run's agent to exit, and skips the removal (logged) when it outlives the
+  wait. A Restart of a ticket with a live run ends that run first, as the operator's Stop does
+  (no pull request is closed by the stop), waits for its agent to exit and for the stop's queued
+  removal, then performs the reset.
 
 ### 9.2 Workspace Creation and Reuse
 

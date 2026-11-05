@@ -14,14 +14,19 @@ defmodule SymphonyElixir.DirectorMoves do
   - `:rework`: a plan in `Plan Review` gets the reason as a comment, then moves to `Rework`, which
     rejects the plan: Symphony cancels its sub-tickets still in `Backlog` and plans again
     (`SymphonyElixir.BreakdownReview`); the full reset is `:restart`;
-  - `:restart`: the full reset, and only a person makes it (design doc D7). It closes the ticket's
+  - `:restart`: the full reset, and only a person makes it (design doc D7). A run the ticket has
+    is ended first, as `/control/stop` ends it (`SymphonyElixir.Orchestrator.stop_running/2`: the
+    `stop` removal reason, so no pull request is closed by the stop), and the reset waits for its
+    agent to exit before it touches the workspace. It closes the ticket's
     pull requests, removes its workspaces — so the next dispatch branches fresh from the configured
     base branch — and supersedes the workpad, then moves the ticket to `In Progress`
     (`SymphonyElixir.Restart`). The question a dispatch loop or a quiet handoff paused the ticket on
     is answered "Start it over from main" (`SymphonyElixir.DispatchLoop`), since the attempt it held
     is the one thrown away, and an operator's stop is released (`SymphonyElixir.Pauses.stop/2`).
     Every other open question nobody needs any more is withdrawn with the reason
-    (`SymphonyElixir.Questions.withdraw_lapsed/3`);
+    (`SymphonyElixir.Questions.withdraw_lapsed/3`). Its `director_move` audit record and its
+    `person.action` event say whether a run was ended (`run_stopped`). A reset that fails after
+    the run was ended leaves the ticket stopped, as Stop does, until Restart or Unblock;
   - `:decisions`: a plan in `Plan Review` gets the Director's answers to its questions, in place:
     each pick naming its Question (`question_id`, or the `request_comment_id` whose Inbox row names
     it) answers that Question first (`SymphonyElixir.Questions.answer/4`); each pick naming its
@@ -286,6 +291,17 @@ defmodule SymphonyElixir.DirectorMoves do
   # Cancel moves through the team's canceled state under either spelling, so its target is the one
   # Linear took.
   defp do_move(:cancel, issue, input, opts), do: cancel(issue, blank_to_nil(input[:note]), opts)
+
+  # Restart ends the ticket's live run first, as Stop does, so the reset never pulls the workspace
+  # from under it and the next dispatch starts a fresh run; whether one was ended goes on the
+  # move's records.
+  defp do_move(:restart, issue, input, opts) do
+    with {:ok, to_state} <- target(:restart, issue, Config.settings!()),
+         run_stopped? = stop_restarted_run(issue, opts),
+         {:ok, comment} <- apply_move(:restart, issue, to_state, Map.put(input, :run_stopped, run_stopped?), opts) do
+      finish(:restart, issue, to_state, comment, opts, %{}, %{run_stopped: run_stopped?})
+    end
+  end
 
   # The free move names its own target, any phase of the repo.
   defp do_move(:move, issue, input, opts), do: free_move(issue, String.trim(input.to), blank_to_nil(input[:note]), opts)
@@ -637,7 +653,7 @@ defmodule SymphonyElixir.DirectorMoves do
         comment_then_move(:restart, issue, restart_comment(issue.identifier, String.trim(input[:reason])), to_state, opts)
 
       {:error, {:restart, message}} ->
-        {:error, {:restart, "#{issue.identifier} was not restarted: #{message}"}}
+        {:error, {:restart, "#{issue.identifier} was not restarted: #{message}" <> stopped_note(input[:run_stopped])}}
     end
   end
 
@@ -672,6 +688,9 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   defp apply_move(move, issue, to_state, _input, opts), do: comment_then_move(move, issue, nil, to_state, opts)
+
+  defp stopped_note(true), do: "; its run was ended, so it stays stopped until you restart or unblock it"
+  defp stopped_note(_stopped), do: ""
 
   # The answers or the changes are posted, so the move itself starts the plan's revision rather than
   # wait for the comment poll to notice its own comments: the parent goes to `Rework`, as
@@ -873,6 +892,12 @@ defmodule SymphonyElixir.DirectorMoves do
         {:ok, @canceled_state}
     end
   end
+
+  # The run is stopped as `/control/stop` stops it, and the stop's pause stays until the reset is
+  # done: Restart's `clear_restarted_hold/1` releases it, and a failed reset leaves the ticket
+  # stopped rather than dispatched onto a half-reset workspace. True when a run was stopped.
+  defp stop_restarted_run(issue, opts),
+    do: match?({:ok, %{stopped: true}}, Orchestrator.stop_running(Keyword.get(opts, :orchestrator, Orchestrator), issue.id))
 
   # The run is stopped as `/control/stop` stops it, then the stop's pause and hold are lifted: the
   # ticket is cancelled, not stopped. The hold the stop writes in a task finds no pause when it lands,
@@ -1530,13 +1555,14 @@ defmodule SymphonyElixir.DirectorMoves do
   defp signal_name(:restart), do: "restart"
   defp signal_name(_move), do: "decision returned"
 
-  defp restart_opts(opts), do: Keyword.take(opts, [:github, :workspace, :settings, :linear_client, :now, :linear_retry_opts])
+  defp restart_opts(opts), do: Keyword.take(opts, [:github, :workspace, :agent_processes, :workspace_cleanup, :settings, :linear_client, :now, :linear_retry_opts])
 
   # A Decide that answered a Question is remembered whether or not it moved the ticket (`undo`):
   # Undo reopens the Question.
-  defp finish(move, issue, to_state, comment, opts, undo \\ %{}) do
+  # `extra` goes on the audit record and the `person.action` event (a restart's `run_stopped`).
+  defp finish(move, issue, to_state, comment, opts, undo \\ %{}, extra \\ %{}) do
     name = Atom.to_string(move)
-    record_audit(name, issue, issue.state, to_state || issue.state, comment)
+    record_audit(name, issue, issue.state, to_state || issue.state, comment, extra)
     Logger.info("Director move #{name} issue_id=#{issue.id} issue_identifier=#{issue.identifier} from=#{issue.state} to=#{to_state || issue.state}")
     undoable? = undoable_move?(move, to_state, undo)
 
@@ -1610,21 +1636,23 @@ defmodule SymphonyElixir.DirectorMoves do
       {:error, reason} -> Logger.warning("Failed to record director_move audit event: issue_id=#{issue.id} reason=#{inspect(reason)}")
     end
 
-    record_person_action(move, issue, from_state, to_state)
+    record_person_action(move, issue, from_state, to_state, Map.take(extra, [:run_stopped]))
   end
 
   # Each move the audit records is also the Director's action on the ticket's events, best effort.
   # A Decide records none: its answer is the `decision.recorded` that `SymphonyElixir.Decisions`
   # writes, a Cancel's is its `ticket.cancelled` and a free move's its `ticket.moved`. The control API authenticates one shared
   # token, so the actor is the Director.
-  defp record_person_action(move, _issue, _from_state, _to_state) when move in ["decide", "cancel", "move"], do: :ok
+  # A restart's also says whether it ended a run (`run_stopped`).
+  defp record_person_action(move, _issue, _from_state, _to_state, _details) when move in ["decide", "cancel", "move"], do: :ok
 
-  defp record_person_action(move, %Issue{repo_key: repo_key, id: issue_id}, from_state, to_state) when is_binary(repo_key) do
+  defp record_person_action(move, %Issue{repo_key: repo_key, id: issue_id}, from_state, to_state, details) when is_binary(repo_key) do
     payload = if move in ["unblock", "restart"], do: %{action: move}, else: %{action: "move", move: move}
-    TicketSignals.record_event(repo_key, issue_id, "person.action", Map.merge(payload, %{from: from_state, to: to_state}), actor: @director)
+    payload = payload |> Map.merge(%{from: from_state, to: to_state}) |> Map.merge(details)
+    TicketSignals.record_event(repo_key, issue_id, "person.action", payload, actor: @director)
   end
 
-  defp record_person_action(_move, _issue, _from_state, _to_state), do: :ok
+  defp record_person_action(_move, _issue, _from_state, _to_state, _details), do: :ok
 
   # The orchestrator polls the ticket's repo at once, so the Inbox and the dashboard follow the move
   # and what it unblocks (an approved plan's first sub-ticket) dispatches on the next cycle. The
