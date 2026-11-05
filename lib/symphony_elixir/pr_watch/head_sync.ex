@@ -63,7 +63,7 @@ defmodule SymphonyElixir.PrWatch.HeadSync do
   and `:poll_ms`.
   """
   @spec await(target(), keyword()) :: outcome()
-  def await(%{pr_url: pr_url, head: head} = target, opts \\ []) when is_binary(pr_url) and is_binary(head) do
+  def await(%{pr_url: pr_url, head: head} = target, opts) when is_binary(pr_url) and is_binary(head) do
     case read(target, opts) do
       {:lagging, pr_head, _base} = lagging ->
         note(target, :waiting, pr_head)
