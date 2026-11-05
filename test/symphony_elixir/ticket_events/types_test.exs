@@ -321,8 +321,12 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert %{optional: [%{name: "returns_to", required_when: %{field: "outcome", equals: "failed"}}, returns_to_title | _]} = Types.schema("step.completed")
       refute Map.has_key?(returns_to_title, :required_when)
 
-      assert %{optional: [%{name: "artifacts", type: "list", item: %{type: "string"}}, %{name: "proof", type: "map", fields: proof} | step_fields]} =
-               Types.schema("evidence")
+      assert %{
+               optional: [
+                 %{name: "artifacts", type: "list", item: %{type: "string"}},
+                 %{name: "proof", type: "map", fields: proof} | step_fields
+               ]
+             } = Types.schema("evidence")
 
       assert Enum.map(step_fields, & &1.name) == ~w(step status details environment links)
       assert %{type: "enum", values: ~w(fixture live)} = Enum.find(step_fields, &(&1.name == "environment"))

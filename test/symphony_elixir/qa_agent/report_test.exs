@@ -148,14 +148,25 @@ defmodule SymphonyElixir.QaAgent.ReportTest do
 
     test "a file with no upload names its file and artifact id; a step with no environment or status says neither" do
       events = [evidence("e1", "qa-1", %{caption: "c", step: "Step 1"}, [@list_shot, @added_shot])]
-      links = %{@list_shot => %{label: "qa-evidence/list.png", url: nil}, @added_shot => %{label: nil, url: "https://uploads.linear.app/qa/x.png"}}
+
+      links = %{
+        @list_shot => %{label: "qa-evidence/list.png", url: nil},
+        @added_shot => %{label: nil, url: "https://uploads.linear.app/qa/x.png"}
+      }
 
       body = Report.render(Map.merge(outcome(), %{events: events, run_id: "qa-1", links: links}))
       assert body =~ "- **noted** Step 1 (evidence: qa-evidence/list.png (artifact `#{@list_shot}`), [333333333333](https://uploads.linear.app/qa/x.png))\n"
     end
 
     test "a pass that recorded no step or finding renders its steps and findings as given" do
-      given = outcome(%{verdict: :blocked, reason: "the QA host failed", steps: [%{name: "Open the app", status: "blocked", details: "", evidence: []}], findings: ["no host"]})
+      given =
+        outcome(%{
+          verdict: :blocked,
+          reason: "the QA host failed",
+          steps: [%{name: "Open the app", status: "blocked", details: "", evidence: []}],
+          findings: ["no host"]
+        })
+
       body = Report.render(Map.merge(given, %{events: [evidence("e1", "qa-1", %{caption: "QA session transcript"}, [@transcript])], run_id: "qa-1", links: %{}}))
 
       assert body =~ "### Steps\n\n- **blocked** Open the app\n"
