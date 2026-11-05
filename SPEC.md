@@ -2825,7 +2825,8 @@ the run waits (Cancel withdraws every open Question of a ticket it cancels, and 
 the run; Stop ends it as any run. A run that is gone when the answer comes (Symphony restarted)
 leaves the step to the ticket's next run: one whose ticket's last step event is a `step.completed`
 paused on a Question now answered starts at that step, with the question and the answer in its
-prompt. A Question a step paused on (`step` set) is not withdrawn when the run that asked ends.
+prompt. A Question a step paused on is not withdrawn when the run that asked ends: the agent's
+question tool asks it as a request (`request: true`), and a machine step's is asked by Symphony.
 
 ### 7.3 Transition Triggers
 

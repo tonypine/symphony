@@ -342,16 +342,18 @@ defmodule SymphonyElixir.QuestionsTest do
       refute Questions.lapsed?(rule_asked, run_end([]))
     end
 
-    test "a question a run's step pauses on outlives the run, and Cancel withdraws it (TP-1394)" do
-      step_paused = ask_as!(%{kind: :run, name: "The run"}, "Pick a layout", step: "code")
+    test "the questions a run's step pauses on outlive the run, and Cancel withdraws them (TP-1394)" do
+      # The agent's question tool asks as a request; a machine step's question is Symphony's.
+      agent_asked = ask_as!(%{kind: :run, name: "The run"}, "Pick a layout", request: true)
+      machine_step = ask_as!(%{kind: :symphony, name: "Symphony"}, "The step found nothing", step: "checks")
 
-      refute Questions.lapsed?(step_paused, run_end([]))
+      refute Questions.lapsed?(agent_asked, run_end([]))
+      refute Questions.lapsed?(machine_step, run_end([]))
       assert {:ok, []} = Questions.withdraw_lapsed(@ticket, run_end([]), replies: Replies)
 
-      assert {:ok, [%{id: id, state: :withdrawn, withdrawn: %{reason: "The ticket was cancelled."}}]} =
-               Questions.withdraw_lapsed(@ticket, {:terminal, "Canceled"}, replies: Replies)
-
-      assert id == step_paused.id
+      assert {:ok, withdrawn} = Questions.withdraw_lapsed(@ticket, {:terminal, "Canceled"}, replies: Replies)
+      assert Enum.sort(Enum.map(withdrawn, & &1.id)) == Enum.sort([agent_asked.id, machine_step.id])
+      assert Enum.all?(withdrawn, &match?(%{state: :withdrawn, withdrawn: %{reason: "The ticket was cancelled."}}, &1))
       refute Pauses.paused?(@ticket)
     end
 
