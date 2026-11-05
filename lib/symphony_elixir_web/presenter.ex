@@ -37,7 +37,7 @@ defmodule SymphonyElixirWeb.Presenter do
   alias SymphonyElixir.Linear.Webhook.Deliveries, as: LinearWebhookDeliveries
   alias SymphonyElixir.Pauses.Backfill, as: PauseBackfill
   alias SymphonyElixir.Repo.Status, as: RepoStatus
-  alias SymphonyElixir.TicketEvents.Event
+  alias SymphonyElixir.TicketEvents.{Event, Summary}
   alias SymphonyElixirWeb.WatchPayload
 
   @empty_codex_totals %{
@@ -602,9 +602,11 @@ defmodule SymphonyElixirWeb.Presenter do
   depth. Otherwise an event whose `run_id` names a run of `history` sits in that run's `events`, and
   any other event stays at the top level. A run is `{kind: "run", run_id, run_kind, run_number,
   status, verdict, started_at, ended_at, exit, head, summary, events}`, its header read from
-  `history` (the ticket's `run.started`, `run.ended` and `verdict.recorded` events, oldest first),
-  not from the page: `status` is `running` until its `run.ended`, then `ended`, and `verdict` is the
-  newest verdict naming the run (`{kind, outcome, head, at}`), else null.
+  `history` (the ticket's `run.started`, `run.ended`, `verdict.recorded` and step events, oldest
+  first), not from the page: `status` is `running` until its `run.ended`, then `ended`, `verdict` is
+  the newest verdict naming the run (`{kind, outcome, head, at}`), else null, and `summary` is the
+  run's line (`SymphonyElixir.TicketEvents.Summary.run_group/1`), which names the step a running run
+  is on.
   """
   @spec ticket_timeline_json(String.t(), String.t(), [Event.t()], [Event.t()]) :: [map()]
   def ticket_timeline_json(repo_key, issue_id, events, history) do
@@ -661,8 +663,9 @@ defmodule SymphonyElixirWeb.Presenter do
       |> Map.new(&{&1.run_id, &1})
 
     history
-    |> Enum.filter(&(&1.type in ["run.started", "run.ended"] and is_binary(&1.run_id)))
+    |> Enum.filter(&(&1.type in ["run.started", "run.ended", "step.started", "step.completed"] and is_binary(&1.run_id)))
     |> Enum.group_by(& &1.run_id)
+    |> Map.filter(fn {_run_id, events} -> Enum.any?(events, &(&1.type in ["run.started", "run.ended"])) end)
     |> Map.new(fn {run_id, events} -> {run_id, run_header(run_id, events, Map.get(verdicts, run_id))} end)
   end
 
@@ -681,7 +684,7 @@ defmodule SymphonyElixirWeb.Presenter do
       ended_at: ended && DateTime.to_iso8601(ended.at),
       exit: payload_field(ended, :exit),
       head: payload_field(ended, :head) || payload_field(started, :head),
-      summary: (ended || started).summary
+      summary: Summary.run_group(events)
     }
   end
 

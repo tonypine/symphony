@@ -295,13 +295,13 @@ defmodule SymphonyElixir.TicketEvents.BriefTest do
 
       events = [
         event(0, "run.started", %{run_id: "run-1", run_kind: "implementation", run_number: 1, state: "In Progress"}, run_id: "run-1"),
-        event(1, "step.completed", %{title: "Profile the query", mode: "orchestrated"}, actor: {:agent, "run-1", "implementation"}),
+        event(1, "step.completed", %{step_id: "profile", title: "Profile the query", mode: "delegated", outcome: "passed"}, actor: {:agent, "run-1", "implementation"}),
         event(2, "run.ended", %{run_id: "run-1", exit: "success", head: @head}, run_id: "run-1"),
-        event(3, "step.started", %{title: "Look", mode: "delegated"}, actor: {:agent, "run-2", "ci_fix"}),
+        event(3, "step.started", %{step_id: "look", title: "Look", mode: "delegated"}, actor: {:agent, "run-2", "ci_fix"}),
         event(4, "run.started", %{run_id: "run-x", run_kind: "code_review", state: "Code Review"}, run_id: "run-x"),
         event(5, "attempt.pushed", %{head: @head}, run_id: "run-m"),
         event(10, "run.started", %{run_id: "run-3", run_kind: "rework", run_number: 1, state: "Rework", head: @head}, run_id: "run-3"),
-        event(11, "step.completed", %{title: "Fix the dialog", mode: "orchestrated"}, actor: rework),
+        event(11, "step.completed", %{step_id: "code", title: "Fix the dialog", mode: "delegated", outcome: "passed"}, actor: rework),
         event(12, "checklist.answered", %{item: "Viewports", answer: long}, actor: rework),
         event(13, "evidence", %{caption: "After the fix"}, actor: rework, artifacts: ["art1"]),
         event(14, "finding.resolved", %{finding_id: "f1", how: long}, actor: rework),
@@ -322,7 +322,7 @@ defmodule SymphonyElixir.TicketEvents.BriefTest do
                - Code Review run: in Code Review, no end recorded, started 2026-10-22T10:04:00Z
                - Agent run: no end recorded, started 2026-10-22T10:05:00Z
                - Rework run 1 (latest): running in Rework, at 4f1c2a9, started 2026-10-22T10:10:00Z
-                 - 2026-10-22T10:11:00Z Step completed: Fix the dialog
+                 - 2026-10-22T10:11:00Z Step passed: Fix the dialog
                  - 2026-10-22T10:12:00Z Checklist item answered: Viewports: #{long}
                  - 2026-10-22T10:13:00Z Evidence recorded: After the fix (files: art1)
                  - 2026-10-22T10:14:00Z Finding marked resolved: #{long}

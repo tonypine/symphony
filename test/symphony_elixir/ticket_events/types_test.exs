@@ -6,7 +6,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
   @types ~w(
     phase.entered hold.set hold.cleared run.started run.started_by_person run.ended attempt.pushed verdict.recorded
     decision.requested decision.withdrawn decision.recorded person.action
-    step.started step.completed step.skipped evidence finding.recorded finding.resolved finding.confirmed checklist.answered
+    step.started step.completed evidence finding.recorded finding.resolved finding.confirmed checklist.answered
     ticket.cancelled ticket.moved drift.detected drift.reverted drift.revert_failed
     pause.set pause.reason_added pause.reason_cleared pause.cleared
     question.asked question.answered question.withdrawn question.reopened park.backfilled workspace.synced workspace.rebuilt workspace.removed note
@@ -219,7 +219,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert {:error, {:not_allowed, reason}} = Types.validate("note", %{text: "x"}, :agent, "nope")
       assert reason =~ "nope"
       assert {:error, {:not_allowed, _}} = Types.validate("note", %{text: "x"}, :agent, nil)
-      assert {:error, {:not_allowed, _}} = Types.validate("step.started", step(), :machine, nil)
+      assert {:error, {:not_allowed, _}} = Types.validate("step.started", step(), :person, nil)
       assert {:error, {:not_allowed, _}} = Types.validate("verdict.recorded", %{kind: "qa", outcome: "pass"}, :person, nil)
       assert {:error, {:not_allowed, reason}} = Types.validate("note", %{text: "x"}, :robot, nil)
       assert reason =~ ":robot"
@@ -245,9 +245,9 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       machine = fn type, payload -> Types.validate(type, payload, :machine, nil) end
       resolved = fn evidence -> Types.validate("finding.resolved", %{finding_id: "f", how: "fixed", evidence: evidence}, :agent, "rework") end
 
-      assert {:ok, %{step_id: nil}} = step.("step.started", %{step_id: nil})
-      assert {:ok, %{step_id: "s1"}} = step.("step.completed", %{step_id: "s1"})
-      assert {:error, {:invalid_payload, [:mode]}} = step.("step.skipped", %{mode: "manual"})
+      assert {:ok, %{step_id: "code"}} = step.("step.started", %{})
+      assert {:error, {:invalid_payload, [:step_id]}} = step.("step.started", %{step_id: nil})
+      assert {:error, {:invalid_payload, [:mode]}} = step.("step.started", %{mode: "manual"})
       assert {:error, {:invalid_payload, [:title]}} = step.("step.started", %{title: String.duplicate("t", 201)})
 
       ended = %{run_id: "run-1", exit: "success", run_number: 2, duration_ms: 10, tokens: %{total: 5}, counted: true}
@@ -292,7 +292,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
 
   describe "agent_types/1" do
     test "a QA run also records findings; every other run kind records the same agent types; nothing else is an agent's" do
-      every = ~w(checklist.answered evidence finding.resolved note step.completed step.skipped step.started)
+      every = ~w(checklist.answered evidence finding.resolved note step.completed step.started)
 
       assert Types.agent_types("qa") == Enum.sort(["finding.recorded" | every])
       assert Types.agent_types(:qa) == Types.agent_types("qa")
@@ -306,10 +306,15 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
 
   describe "schema/1" do
     test "describes each field a tool's caller may send, leaving out the machinery's signal" do
-      assert %{required: [%{name: "title", type: "string", max: 200}, %{name: "mode", type: "enum", values: ~w(orchestrated delegated output)}]} =
-               Types.schema("step.started")
+      modes = ~w(machine orchestrated delegated)
 
-      assert %{optional: [%{name: "step_id", type: "string", max: 200, nullable: true}]} = Types.schema("step.started")
+      assert %{required: [%{name: "step_id", max: 200}, %{name: "title", max: 200}, %{name: "mode", type: "enum", values: ^modes}]} = Types.schema("step.started")
+      assert %{optional: [command, prompt_ref]} = Types.schema("step.started")
+      assert command.required_when == %{field: "mode", equals: "machine"}
+      assert prompt_ref.required_when == %{field: "mode", equals: "orchestrated"}
+
+      assert %{optional: [%{name: "returns_to", required_when: %{field: "outcome", equals: "failed"}}, returns_to_title | _]} = Types.schema("step.completed")
+      refute Map.has_key?(returns_to_title, :required_when)
 
       assert %{optional: [%{name: "artifacts", type: "list", item: %{type: "string"}}, %{name: "proof", type: "map", fields: proof}]} =
                Types.schema("evidence")
@@ -318,6 +323,68 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert %{optional: [_head, %{name: "evidence", type: "any_of", of: [%{type: "string"}, %{type: "list"}]}]} = Types.schema("finding.resolved")
       refute Enum.any?(Types.schema("phase.entered").optional, &(&1.name == "signal"))
       assert Types.schema("nope") == nil
+    end
+  end
+
+  describe "the step model" do
+    test "a step's mode names how it runs: a machine step its command, an orchestrated one its prompt" do
+      machine = fn type, payload -> Types.validate(type, payload, :machine, nil) end
+      build = %{step_id: "build", title: "Build", mode: "machine"}
+
+      assert {:ok, %{command: "mix compile"}} = machine.("step.started", Map.put(build, :command, "mix compile"))
+      assert {:error, {:invalid_payload, [:command]}} = machine.("step.started", build)
+      assert {:ok, %{prompt_ref: "code"}} = machine.("step.started", %{build | mode: :orchestrated} |> Map.put(:prompt_ref, "code"))
+      assert {:error, {:invalid_payload, [:prompt_ref]}} = machine.("step.started", %{build | mode: "orchestrated"})
+      assert {:error, {:invalid_payload, [:command]}} = machine.("step.started", step() |> Map.put(:command, "mix test"))
+      assert {:error, {:invalid_payload, [:prompt_ref]}} = machine.("step.started", Map.merge(build, %{command: "mix compile", prompt_ref: "code"}))
+      # A command out of bounds is named once.
+      assert {:error, {:invalid_payload, [:command]}} = machine.("step.started", Map.put(build, :command, String.duplicate("c", 2_001)))
+      # A mode the catalog refuses leaves its conditional fields unjudged.
+      assert {:error, {:invalid_payload, [:mode]}} = machine.("step.started", %{build | mode: "manual"} |> Map.put(:command, "make"))
+    end
+
+    test "Symphony records machine and orchestrated steps; an agent only delegated ones" do
+      for type <- ["step.started", "step.completed"] do
+        assert type in Types.agent_types("implementation")
+      end
+
+      assert {:ok, _payload} = Types.validate("step.started", step(), :agent, "implementation")
+
+      assert {:error, {:not_allowed, reason}} =
+               Types.validate("step.started", %{step_id: "build", title: "Build", mode: "machine", command: "mix compile"}, :agent, "implementation")
+
+      assert reason =~ "delegated"
+
+      completed = %{step_id: "tests", title: "Tests", mode: "orchestrated", outcome: "passed"}
+      assert {:error, {:not_allowed, _reason}} = Types.validate("step.completed", completed, :agent, "rework")
+      assert {:ok, _payload} = Types.validate("step.completed", completed, :machine, nil)
+    end
+
+    test "a failed step names the step it returns to, a paused one the Question it waits on, a skipped one why" do
+      completed = fn attrs -> Types.validate("step.completed", Map.merge(%{step_id: "build", title: "Build", mode: "machine"}, attrs), :machine, nil) end
+
+      assert {:ok, %{outcome: "passed", duration_ms: 120_000}} = completed.(%{outcome: :passed, duration_ms: 120_000})
+
+      assert {:ok, %{returns_to: "code", returns_to_title: "writing the code"}} =
+               completed.(%{outcome: "failed", returns_to: "code", returns_to_title: "writing the code", duration_ms: 240_000})
+
+      assert {:error, {:invalid_payload, [:returns_to]}} = completed.(%{outcome: "failed"})
+      assert {:ok, %{question_id: "q-1"}} = completed.(%{outcome: "paused", question_id: "q-1"})
+      assert {:error, {:invalid_payload, [:question_id]}} = completed.(%{outcome: "paused"})
+      assert {:ok, %{reason: "no Elixir changed"}} = completed.(%{outcome: "skipped", reason: "no Elixir changed"})
+      assert {:error, {:invalid_payload, [:reason]}} = completed.(%{outcome: "skipped"})
+
+      # Each is refused on any other outcome.
+      assert {:error, {:invalid_payload, [:returns_to, :question_id, :reason]}} =
+               completed.(%{outcome: "passed", returns_to: "code", question_id: "q-1", reason: "why"})
+
+      assert {:error, {:invalid_payload, [:outcome]}} = completed.(%{outcome: "done"})
+      assert {:error, {:invalid_payload, [:outcome]}} = completed.(%{})
+    end
+
+    test "a skip is a step.completed: the type list stays closed" do
+      refute Map.has_key?(Types.catalog(), "step.skipped")
+      assert Types.validate("step.skipped", step(), :agent, "implementation") == {:error, {:unknown_type, "step.skipped"}}
     end
   end
 
@@ -334,5 +401,5 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
   end
 
   defp finding, do: %{class: "unclassified", severity: "high", description: "The button is clipped."}
-  defp step, do: %{title: "Open the app", mode: "orchestrated"}
+  defp step, do: %{step_id: "code", title: "Writing the code", mode: "delegated"}
 end

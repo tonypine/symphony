@@ -18,10 +18,10 @@ defmodule SymphonyElixir.Artifacts do
   alias SymphonyElixir.{AgentTmpDir, Config, PathSafety, RunStore}
   alias SymphonyElixir.Artifacts.Store
 
-  @kinds ~w(screenshot transcript log report diff file)
+  @kinds ~w(screenshot transcript log report diff file step_output)
   @kind_mimes %{"screenshot" => ["image/png", "image/jpeg"], "transcript" => ["application/x-ndjson"]}
 
-  @typedoc "One of `screenshot`, `transcript`, `log`, `report`, `diff` and `file`."
+  @typedoc "One of `screenshot`, `transcript`, `log`, `report`, `diff`, `file` and `step_output` (a machine step's output)."
   @type kind :: String.t()
 
   @type ticket :: %{repo_key: String.t(), issue_id: String.t()}
