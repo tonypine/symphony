@@ -615,7 +615,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
           optional(:issue_id) => String.t(),
           optional(:workspace) => Path.t(),
           optional(:comment_registry) => pid() | nil,
-          optional(:command_security) => map()
+          optional(:command_security) => map(),
+          optional(atom()) => term()
         }
 
   @spec get_current_issue(context(), keyword()) :: {:ok, map()} | {:error, term()}

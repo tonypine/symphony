@@ -390,6 +390,7 @@ defmodule SymphonyElixir.ReviewAgent do
                tool_scope: :read_only,
                review_verdict_sink: self(),
                linear_comment_registry: Keyword.get(opts, :linear_comment_registry),
+               agent_tmp_dir: Keyword.get(opts, :agent_tmp_dir),
                # The run's temp folder, which its settings already make writable.
                extra_env: AgentTmpDir.env(reviewer_settings.agent.kind, Keyword.get(opts, :agent_tmp_dir))
              ) do
@@ -418,6 +419,8 @@ defmodule SymphonyElixir.ReviewAgent do
       settings: reviewer_settings,
       repo_key: Keyword.get(opts, :repo_key),
       run_id: Keyword.get(opts, :run_id),
+      run_kind: "code_review",
+      agent_tmp_dir: Keyword.get(opts, :agent_tmp_dir),
       tool_scope: :read_only,
       review_verdict_sink: self(),
       linear_comment_registry: Keyword.get(extra, :linear_comment_registry)

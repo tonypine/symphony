@@ -5,7 +5,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   require Logger
 
-  alias SymphonyElixir.AgentTools.{GitHub, Linear}
+  alias SymphonyElixir.AgentTools.{GitHub, Linear, TicketLedger}
   alias SymphonyElixir.Linear.Usage, as: LinearUsage
   alias SymphonyElixir.QaAgent.Verdict, as: QaVerdict
   alias SymphonyElixir.QaAndroid.Driver, as: QaAndroidDriver
@@ -571,6 +571,11 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       }
     }
   ]
+
+  # The ticket's own history (`SymphonyElixir.AgentTools.TicketLedger`), offered in every scope.
+  @ticket_tool_schemas TicketLedger.tool_specs()
+  @ticket_tools MapSet.new(@ticket_tool_schemas, & &1["name"])
+  @tool_schemas @tool_schemas ++ @ticket_tool_schemas
 
   # Host-side macOS app tools (`SymphonyElixir.QaDriver`), listed and allowed only in
   # the `:qa` scope.
@@ -1176,6 +1181,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "review_verdict" => Verdict.tool_arguments(),
     "qa_verdict" => QaVerdict.tool_arguments()
   }
+  @allowed_arguments Map.merge(@allowed_arguments, TicketLedger.tool_arguments())
   @legacy_tool_aliases %{
     "linear.get_current_issue" => "linear_get_current_issue",
     "linear.get_subissues" => "linear_get_subissues",
@@ -1254,13 +1260,13 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   @spec tool_specs(:default | :read_only | :qa | nil) :: [map()]
   # The reviewer (`SymphonyElixir.ReviewAgent`) reads, and records its verdict with `review_verdict`.
-  def tool_specs(:read_only), do: Enum.filter(@tool_schemas, &(Map.get(&1, "name") in @read_only_tools)) ++ [Verdict.tool_spec()]
+  def tool_specs(:read_only), do: Enum.filter(@tool_schemas, &(Map.get(&1, "name") in @read_only_tools)) ++ @ticket_tool_schemas ++ [Verdict.tool_spec()]
 
   def tool_specs(:qa) do
     @tool_schemas
     |> Enum.filter(&(Map.get(&1, "name") in @qa_tools))
     |> Enum.map(&qa_tool_spec/1)
-    |> Kernel.++(@qa_tool_schemas ++ @qa_android_tool_schemas)
+    |> Kernel.++(@ticket_tool_schemas ++ @qa_tool_schemas ++ @qa_android_tool_schemas)
     |> Kernel.++([QaVerdict.tool_spec()])
   end
 
@@ -1270,14 +1276,33 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   defp qa_tool_spec(spec), do: spec
 
   defp tool_context(opts) do
+    issue = Keyword.get(opts, :issue)
+
     %{
-      issue: Keyword.get(opts, :issue),
+      issue: issue,
       issue_id: Keyword.get(opts, :issue_id),
+      repo_key: Keyword.get(opts, :repo_key) || (is_map(issue) && Map.get(issue, :repo_key)) || nil,
+      run_id: Keyword.get(opts, :run_id),
+      run_kind: run_kind(opts),
+      agent_tmp_dir: Keyword.get(opts, :agent_tmp_dir),
       workspace: Keyword.get(opts, :workspace),
       comment_registry: Keyword.get(opts, :comment_registry),
       command_security: Keyword.get(opts, :command_security) || %{}
     }
   end
+
+  # The run kind the session's ticket tools record as: the one its runner names, else its run
+  # profile's, else its scope's (the reviewer's and the QA pass's), else an implementation run.
+  defp run_kind(opts) do
+    case Keyword.get(opts, :run_kind) || get_in(opts, [:run_profile, :kind]) do
+      nil -> scope_run_kind(Keyword.get(opts, :tool_scope))
+      kind -> to_string(kind)
+    end
+  end
+
+  defp scope_run_kind(:read_only), do: "code_review"
+  defp scope_run_kind(:qa), do: "qa"
+  defp scope_run_kind(_scope), do: "implementation"
 
   defp with_arguments(tool, arguments, allowed_keys, fun) when is_function(fun, 1) do
     with {:ok, args} <- normalize_arguments(arguments),
@@ -1300,6 +1325,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     do: QaAndroidDriver.call_tool(Keyword.get(opts, :qa_android_driver), tool, args)
 
   defp execute_tool("qa_" <> _rest = tool, _context, args, opts), do: QaDriver.call_tool(Keyword.get(opts, :qa_driver), tool, args)
+  defp execute_tool("ticket_events", context, args, _opts), do: TicketLedger.events(context, args)
+  defp execute_tool("ticket_record", context, args, _opts), do: TicketLedger.record(context, args)
   defp execute_tool("review_verdict", _context, args, opts), do: Verdict.record(args, Keyword.get(opts, :review_verdict_sink))
 
   defp execute_authorized_tool(tool, context, args, opts) do
@@ -1326,10 +1353,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   defp authorize_tool_scope(tool, opts) do
     case Keyword.get(opts, :tool_scope) do
       :read_only ->
-        if MapSet.member?(@read_only_tools, tool), do: :ok, else: {:error, {:tool_scope_rejected, :read_only, tool}}
+        if MapSet.member?(@read_only_tools, tool) or MapSet.member?(@ticket_tools, tool), do: :ok, else: {:error, {:tool_scope_rejected, :read_only, tool}}
 
       :qa ->
-        if MapSet.member?(@qa_tools, tool), do: :ok, else: {:error, {:tool_scope_rejected, :qa, tool}}
+        if MapSet.member?(@qa_tools, tool) or MapSet.member?(@ticket_tools, tool), do: :ok, else: {:error, {:tool_scope_rejected, :qa, tool}}
 
       _scope ->
         :ok
@@ -1631,6 +1658,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   end
 
   defp encode_payload(payload), do: inspect(payload)
+
+  defp tool_error_payload({:ticket_ledger, error}), do: %{"error" => error}
 
   defp tool_error_payload(:invalid_arguments) do
     %{

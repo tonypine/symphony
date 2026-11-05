@@ -874,7 +874,8 @@ defmodule SymphonyElixir.AgentRunner do
       dependency_audit_command_runner: Keyword.get(opts, :dependency_audit_command_runner),
       extra_env: AgentTmpDir.env(settings.agent.kind, Keyword.get(opts, :agent_tmp_dir)),
       on_tool_call: Keyword.get(opts, :on_tool_call),
-      unlocked_paths: Keyword.get(opts, :unlocked_paths, [])
+      unlocked_paths: Keyword.get(opts, :unlocked_paths, []),
+      agent_tmp_dir: Keyword.get(opts, :agent_tmp_dir)
     )
   end
 
@@ -889,6 +890,8 @@ defmodule SymphonyElixir.AgentRunner do
       settings: Keyword.fetch!(opts, :settings),
       repo_key: Keyword.get(opts, :repo_key),
       run_id: Keyword.get(opts, :run_id),
+      run_profile: Keyword.get(opts, :run_profile),
+      agent_tmp_dir: Keyword.get(opts, :agent_tmp_dir),
       linear_comment_registry: Keyword.get(opts, :linear_comment_registry),
       dependency_audit_module: dependency_audit_module(opts),
       dependency_audit_base_ref: Keyword.get(opts, :dependency_audit_base_ref),

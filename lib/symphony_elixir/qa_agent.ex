@@ -1450,6 +1450,7 @@ defmodule SymphonyElixir.QaAgent do
       qa_driver: Keyword.get(opts, :qa_driver),
       qa_android_driver: Keyword.get(opts, :qa_android_driver),
       qa_verdict_sink: self(),
+      agent_tmp_dir: tmp_dir,
       extra_env: Map.merge(AgentTmpDir.env(qa_settings.agent.kind, tmp_dir), host_ports_env(Map.get(job, :host_ports, [])))
     ]
 

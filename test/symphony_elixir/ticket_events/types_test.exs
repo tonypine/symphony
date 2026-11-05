@@ -290,6 +290,49 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
     end
   end
 
+  describe "agent_types/1" do
+    test "a QA run also records findings; every other run kind records the same agent types; nothing else is an agent's" do
+      every = ~w(checklist.answered evidence finding.resolved note step.completed step.skipped step.started)
+
+      assert Types.agent_types("qa") == Enum.sort(["finding.recorded" | every])
+      assert Types.agent_types(:qa) == Types.agent_types("qa")
+
+      for run_kind <- Types.agent_run_kinds() -- ["qa"], do: assert(Types.agent_types(run_kind) == every, run_kind)
+
+      assert Types.agent_types("supervisor") == []
+      assert Types.agent_types(nil) == []
+    end
+  end
+
+  describe "schema/1" do
+    test "describes each field a tool's caller may send, leaving out the machinery's signal" do
+      assert %{required: [%{name: "title", type: "string", max: 200}, %{name: "mode", type: "enum", values: ~w(orchestrated delegated output)}]} =
+               Types.schema("step.started")
+
+      assert %{optional: [%{name: "step_id", type: "string", max: 200, nullable: true}]} = Types.schema("step.started")
+
+      assert %{optional: [%{name: "artifacts", type: "list", item: %{type: "string"}}, %{name: "proof", type: "map", fields: proof}]} =
+               Types.schema("evidence")
+
+      assert proof == [%{name: "step", type: "non_neg_integer"}, %{name: "test", type: "string", max: 500}]
+      assert %{optional: [_head, %{name: "evidence", type: "any_of", of: [%{type: "string"}, %{type: "list"}]}]} = Types.schema("finding.resolved")
+      refute Enum.any?(Types.schema("phase.entered").optional, &(&1.name == "signal"))
+      assert Types.schema("nope") == nil
+    end
+  end
+
+  describe "an evidence's proof" do
+    test "names the walkthrough step and the test, and nothing else" do
+      assert {:ok, %{proof: %{step: 2, test: "a_test.exs"}}} =
+               Types.validate("evidence", %{"caption" => "c", "proof" => %{"step" => 2, "test" => "a_test.exs"}}, :agent, "rework")
+
+      for proof <- [%{step: 2}, %{step: "two", test: "t"}, %{step: 2, test: "t", extra: 1}, %{step: 2, test: nil}, "step 2"] do
+        result = Types.validate("evidence", %{caption: "c", proof: proof}, :agent, "rework")
+        assert {:error, {:invalid_payload, [:proof]}} = result, inspect(proof)
+      end
+    end
+  end
+
   defp finding, do: %{class: "unclassified", severity: "high", description: "The button is clipped."}
   defp step, do: %{title: "Open the app", mode: "orchestrated"}
 end
