@@ -348,9 +348,17 @@ defmodule SymphonyElixir.Workpad.Projection do
     settings = Keyword.get_lazy(opts, :settings, &Config.settings!/0)
 
     if linear?(settings),
-      do: :global.trans({__MODULE__, issue_id}, fn -> project(issue_id, Keyword.put(opts, :settings, settings)) end),
+      do: :global.trans(lock_id(issue_id), fn -> project(issue_id, Keyword.put(opts, :settings, settings)) end),
       else: :ok
   end
+
+  @doc """
+  The `:global` lock id `project_now/2` serializes on: the ticket is the resource and the calling
+  process the requester, so two processes projecting one ticket take turns, and tickets never wait
+  on each other.
+  """
+  @spec lock_id(String.t()) :: {{module(), String.t()}, pid()}
+  def lock_id(issue_id) when is_binary(issue_id), do: {{__MODULE__, issue_id}, self()}
 
   @doc """
   `project_now/2` in a task of its own, so the step runner never waits on Linear; a projection that

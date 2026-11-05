@@ -296,6 +296,48 @@ defmodule SymphonyElixir.Workpad.ProjectionTest do
       assert :ok = Projection.project_now({:ticket, "repo-a", issue_id}, settings: %{}, linear_client: unused)
     end
 
+    test "projections of one ticket take turns, and another ticket's never waits on them", %{issue_id: issue_id} do
+      settings = linear_settings!()
+      other_id = issue_id <> "-other"
+      record_steps!(issue_id)
+      record_steps!(other_id)
+      test = self()
+
+      # Reports entering the projection's Linear read under `tag`, then holds it until released.
+      blocking = fn tag ->
+        fn _query, _variables, _opts ->
+          send(test, {:entered, tag, self()})
+
+          receive do
+            :release -> {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => []}}}}}
+          end
+        end
+      end
+
+      project = fn id, tag -> Task.async(fn -> Projection.project_now({:ticket, "repo-a", id}, settings: settings, linear_client: blocking.(tag)) end) end
+
+      first = project.(issue_id, :first)
+      assert_receive {:entered, :first, first_pid}, 5_000
+      second = project.(issue_id, :second)
+      other = project.(other_id, :other)
+
+      # The other ticket's projection runs while the first holds its ticket's lock.
+      assert_receive {:entered, :other, other_pid}, 5_000
+      send(other_pid, :release)
+      assert :ok = Task.await(other)
+      refute_received {:entered, :second, _pid}
+
+      send(first_pid, :release)
+      assert :ok = Task.await(first)
+      assert_receive {:entered, :second, second_pid}, 5_000
+      send(second_pid, :release)
+      assert :ok = Task.await(second)
+    end
+
+    test "lock_id/1 locks the ticket for the calling process" do
+      assert Projection.lock_id("issue-1") == {{Projection, "issue-1"}, self()}
+    end
+
     test "a failed read is the projection's error", %{issue_id: issue_id} do
       settings = linear_settings!()
       record_steps!(issue_id)
