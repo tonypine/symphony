@@ -250,7 +250,7 @@ defmodule SymphonyElixir.TicketEventsTest do
       assert TicketEvents.query(@issue_id, open_decisions: true) == []
     end
 
-    test "a finding is open until an unsuperseded resolution names it" do
+    test "a finding stays listed until QA confirms its resolution, and is listed again once reopened" do
       qa = {:agent, "run-qa", "qa"}
       finding = %{class: "unclassified", severity: "high", description: "Clipped label."}
 
@@ -259,9 +259,9 @@ defmodule SymphonyElixir.TicketEventsTest do
       assert [^finding] = TicketEvents.query(@issue_id, open_findings: true)
 
       assert {:ok, resolution} =
-               TicketEvents.record(@repo_key, @issue_id, "finding.resolved", %{finding_id: finding.id, how: "Widened it"}, actor: {:agent, "run-rw", "rework"})
+               TicketEvents.record(@repo_key, @issue_id, "finding.resolved", %{finding_id: finding.id, how: "Widened it"}, actor: {:agent, "run-rw", "rework"}, head_sha: "abc")
 
-      assert TicketEvents.query(@issue_id, open_findings: true) == []
+      assert [^finding] = TicketEvents.query(@issue_id, open_findings: true)
 
       assert {:ok, _reopen} =
                TicketEvents.record(@repo_key, @issue_id, "verdict.recorded", %{kind: "qa", outcome: "fail"}, supersedes: resolution.id)
@@ -269,6 +269,13 @@ defmodule SymphonyElixir.TicketEventsTest do
       assert [^finding] = TicketEvents.query(@issue_id, open_findings: true)
       assert [^finding, ^request] = TicketEvents.query(@issue_id, open_findings: true, open_decisions: true)
       assert [^finding] = TicketEvents.query(@issue_id, open_findings: true, open_decisions: true, limit: 0)
+
+      assert {:ok, again} =
+               TicketEvents.record(@repo_key, @issue_id, "finding.resolved", %{finding_id: finding.id, how: "Wrapped it"}, actor: {:agent, "run-rw2", "rework"}, head_sha: "def")
+
+      assert {:ok, _confirmed} = TicketEvents.record(@repo_key, @issue_id, "finding.confirmed", %{finding_id: finding.id, resolution: again.id, head: "def"})
+      assert TicketEvents.query(@issue_id, open_findings: true) == []
+      assert [^request] = TicketEvents.query(@issue_id, open_findings: true, open_decisions: true)
     end
 
     test "filters by types, run and since (exclusive), oldest first" do
@@ -313,6 +320,110 @@ defmodule SymphonyElixir.TicketEventsTest do
 
     test "passes a store error through" do
       assert TicketEvents.query(nil) == {:error, :invalid_issue_id}
+    end
+  end
+
+  describe "a finding's life" do
+    @qa {:agent, "run-qa", "qa"}
+    @rework {:agent, "run-rw", "rework"}
+
+    defp found!(fields \\ %{}, opts \\ []) do
+      payload = Map.merge(%{class: "clipped", severity: "major", description: "The row is cut off.", step: "Step 2"}, fields)
+      {:ok, event} = TicketEvents.record(@repo_key, @issue_id, "finding.recorded", payload, [actor: @qa] ++ opts)
+      event
+    end
+
+    defp resolve(id, opts \\ [head_sha: "abc1234"]),
+      do: TicketEvents.record(@repo_key, @issue_id, "finding.resolved", %{finding_id: id, how: "Let it wrap"}, [actor: @rework] ++ opts)
+
+    defp states, do: @issue_id |> RunStore.list_ticket_events([]) |> TicketEvents.findings() |> Enum.map(&{&1.finding.id, &1.state})
+
+    test "a resolution carries the head it is recorded on, and resolves the finding awaiting QA" do
+      finding = found!()
+      assert [{_id, :open}] = states()
+
+      assert {:ok, resolution} = resolve(finding.id)
+      assert resolution.payload.head == "abc1234"
+      assert resolution.summary == %{title: "Finding marked resolved", detail: "Let it wrap · on abc1234"}
+      assert [{_id, :resolved}] = states()
+
+      # A head the payload names is kept over the one it is recorded on.
+      other = found!()
+
+      assert {:ok, %{payload: %{head: "fff0000"}}} =
+               TicketEvents.record(@repo_key, @issue_id, "finding.resolved", %{finding_id: other.id, how: "x", head: "fff0000"}, actor: @rework, head_sha: "abc1234")
+    end
+
+    test "resolving an unknown finding, an already resolved one or one with no head is refused with the reason, and writes nothing" do
+      finding = found!()
+      {:ok, note} = TicketEvents.record(@repo_key, @issue_id, "note", %{text: "not a finding"})
+
+      assert {:error, {:unknown_finding, "01NOPE"}} = resolve("01NOPE")
+      assert {:error, {:unknown_finding, id}} = resolve(note.id)
+      assert id == note.id
+      assert {:error, {:no_head, _id}} = resolve(finding.id, [])
+
+      assert {:ok, resolution} = resolve(finding.id)
+      resolution_id = resolution.id
+      assert {:error, {:finding_already_resolved, _id, ^resolution_id}} = resolve(finding.id)
+
+      {:ok, _confirmed} = TicketEvents.record(@repo_key, @issue_id, "finding.confirmed", %{finding_id: finding.id, resolution: resolution.id, head: "abc1234"})
+      assert {:error, {:finding_already_resolved, _id, ^resolution_id}} = resolve(finding.id)
+
+      assert ["finding.recorded", "note", "finding.resolved", "finding.confirmed"] = Enum.map(TicketEvents.query(@issue_id), & &1.type)
+    end
+
+    test "the same resolution recorded again with its idempotency key is the no-op, not a refusal" do
+      finding = found!()
+      assert {:ok, first} = resolve(finding.id, head_sha: "abc1234", idempotency: "fix-1")
+      assert {:ok, ^first} = resolve(finding.id, head_sha: "abc1234", idempotency: "fix-1")
+    end
+
+    test "a later finding.recorded superseding the resolution reopens the finding, and the finding can be resolved again" do
+      finding = found!()
+      {:ok, resolution} = resolve(finding.id)
+
+      reopen = found!(%{description: "Still cut off."}, supersedes: resolution.id)
+      assert reopen.summary.title == "QA reopened clipped: Step 2"
+
+      assert [%{finding: ^finding, state: :reopened, reopened_by: ^reopen, superseded: ^resolution, resolution: nil}] =
+               @issue_id |> RunStore.list_ticket_events([]) |> TicketEvents.findings()
+
+      # The reopening is the same finding seen again, not a second one.
+      assert [^finding] = TicketEvents.query(@issue_id, open_findings: true)
+      assert {:error, {:unknown_finding, _id}} = resolve(reopen.id)
+      assert {:ok, _again} = resolve(finding.id, head_sha: "def5678")
+      assert [{_id, :resolved}] = states()
+    end
+
+    test "a confirmed finding is reopened by an event superseding its resolution; a confirmation naming another resolution changes nothing" do
+      finding = found!()
+      {:ok, resolution} = resolve(finding.id)
+
+      {:ok, _stale} = TicketEvents.record(@repo_key, @issue_id, "finding.confirmed", %{finding_id: finding.id, resolution: "01OTHER", head: "abc1234"})
+      {:ok, _unknown} = TicketEvents.record(@repo_key, @issue_id, "finding.confirmed", %{finding_id: "01NOPE", resolution: "01ELSE", head: "abc1234"})
+      assert [{_id, :resolved}] = states()
+
+      {:ok, confirmed} = TicketEvents.record(@repo_key, @issue_id, "finding.confirmed", %{finding_id: finding.id, resolution: resolution.id, head: "abc1234"})
+      assert confirmed.summary == %{title: "QA confirmed a finding fixed", detail: "on abc1234"}
+      assert [{_id, :confirmed}] = states()
+      assert TicketEvents.query(@issue_id, open_findings: true) == []
+
+      _reopen = found!(%{}, supersedes: resolution.id)
+      assert [{_id, :reopened}] = states()
+
+      # A supersedes naming no standing resolution is a finding of its own.
+      _other = found!(%{}, supersedes: "01NOPE")
+      assert [{_id, :reopened}, {_other_id, :open}] = states()
+    end
+
+    test "findings/1 ignores a resolution of a finding the stream does not hold, or one already resolved" do
+      {:ok, finding} = TicketEvents.build(@repo_key, @issue_id, "finding.recorded", %{class: "c", severity: "s", description: "d"}, actor: @qa)
+      {:ok, stray} = TicketEvents.build(@repo_key, @issue_id, "finding.resolved", %{finding_id: "01NOPE", how: "x"}, actor: @rework)
+      {:ok, first} = TicketEvents.build(@repo_key, @issue_id, "finding.resolved", %{finding_id: finding.id, how: "x"}, actor: @rework)
+      {:ok, second} = TicketEvents.build(@repo_key, @issue_id, "finding.resolved", %{finding_id: finding.id, how: "y"}, actor: @rework)
+
+      assert [%{state: :resolved, resolution: ^first}] = TicketEvents.findings([finding, stray, first, second])
     end
   end
 

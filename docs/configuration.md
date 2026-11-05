@@ -3112,7 +3112,8 @@ ledger:
 - `prompt_brief_enabled` (default `true`): every agent prompt that carries the ticket's state also
   carries a summary of the ticket's whole history, read from its ledger, after the ticket state:
   its phase and holds; every decision (each request with its answer or withdrawal, every open
-  request, every ruling); every open finding, grouped by class with a count, each with its
+  request, every ruling); every finding QA has not confirmed fixed, grouped by class with a count, each with
+  where it stands (open, resolved awaiting QA with the head that fixes it, or reopened), its
   viewport, commit, when it was last seen and its whole description; every note, a person's shown
   as the Director's; one line per run, with the latest run's events in full; and every other event
   outside a run, newest first. Nothing is left out to fit a size, and the same ledger renders the
@@ -3424,8 +3425,8 @@ Every run kind, the reviewer and QA included, gets two tools on the current tick
 
 | Tool | What it does |
 | --- | --- |
-| `ticket_events` | Reads the ticket's events, oldest first, each with its id, seq, time, type, actor, summary, payload, head and artifacts (`{id, kind, label, url}`). `types`, `since` (ISO 8601, exclusive), `run_id`, `open_findings` (the findings no unsuperseded `finding.resolved` closes) and `limit` (at most 200) narrow the read. |
-| `ticket_record` | Records one event: `finding.resolved`, `step.started`, `step.completed`, `step.skipped`, `evidence` (with an optional `proof`: the walkthrough step and its test), `checklist.answered` and `note` in any run, and `finding.recorded` in a QA run. Symphony fills the run, run kind, phase and head. `artifacts` are files under the workspace or the run's `$TMPDIR`, kept in the artifact store. A refusal (`unknown_type`, `not_allowed` with the types the run may record, `invalid_payload` naming the fields, `unknown_finding`, `unknown_parent`, `invalid_artifact`) returns the type's schema and writes nothing. |
+| `ticket_events` | Reads the ticket's events, oldest first, each with its id, seq, time, type, actor, summary, payload, head and artifacts (`{id, kind, label, url}`). `types`, `since` (ISO 8601, exclusive), `run_id`, `open_findings` (the findings QA has not confirmed fixed: open, resolved awaiting QA, reopened; each finding's `finding.recorded` carries `finding`, its `state`, resolution, the head it was resolved on, the event that reopened it and the resolution that event superseded) and `limit` (at most 200) narrow the read. |
+| `ticket_record` | Records one event: `finding.resolved`, `step.started`, `step.completed`, `step.skipped`, `evidence` (with an optional `proof`: the walkthrough step and its test), `checklist.answered` and `note` in any run, and `finding.recorded` in a QA run. Symphony fills the run, run kind, phase and head. `artifacts` are files under the workspace or the run's `$TMPDIR`, kept in the artifact store. A refusal (`unknown_type`, `not_allowed` with the types the run may record, `invalid_payload` naming the fields, `unknown_finding`, `already_resolved` naming the resolution, `no_head` for a resolution with no head that fixes it, `unknown_parent`, `invalid_artifact`) returns the type's schema and writes nothing. |
 
 ### Push check
 

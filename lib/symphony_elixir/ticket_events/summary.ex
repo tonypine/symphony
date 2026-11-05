@@ -100,8 +100,9 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     {"Evidence recorded" <> suffix(" with ", plural(length(strings(field(payload, :artifacts))), "file")), [text(payload, :caption)]}
   end
 
-  defp summary("finding.recorded", payload, _event) do
-    title = "QA found #{finding_class(text(payload, :class))}" <> suffix(" at ", text(payload, :viewport)) <> suffix(": ", text(payload, :step))
+  defp summary("finding.recorded", payload, event) do
+    found = if is_binary(Map.get(event, :supersedes)), do: "QA reopened #{finding_class(text(payload, :class))}", else: "QA found #{finding_class(text(payload, :class))}"
+    title = found <> suffix(" at ", text(payload, :viewport)) <> suffix(": ", text(payload, :step))
 
     case present([class_count(count(payload, :class_count)), plural(length(strings(field(payload, :evidence))), "screenshot")]) do
       [] -> {title, [text(payload, :description)]}
@@ -109,7 +110,8 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     end
   end
 
-  defp summary("finding.resolved", payload, _event), do: {"Finding marked resolved", [text(payload, :how)]}
+  defp summary("finding.resolved", payload, _event), do: {"Finding marked resolved", [text(payload, :how) | prefixed("on", short_sha(text(payload, :head)))]}
+  defp summary("finding.confirmed", payload, _event), do: {"QA confirmed a finding fixed", prefixed("on", short_sha(text(payload, :head)))}
 
   defp summary("checklist.answered", payload, _event) do
     {"Checklist item answered", [Enum.join(present([text(payload, :item), text(payload, :answer)]), ": ")]}

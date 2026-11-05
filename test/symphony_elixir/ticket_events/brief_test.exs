@@ -221,36 +221,50 @@ defmodule SymphonyElixir.TicketEvents.BriefTest do
                """
     end
 
-    test "open findings grouped by class, with viewport, commit, last seen and the whole description" do
+    test "open findings grouped by class, with where each stands, viewport, commit, last seen and the whole description" do
       long = String.duplicate("word ", 100) |> String.trim()
+      rework = {:agent, "run-rw", "rework"}
       run = event(0, "run.started", %{run_id: "run-qa", run_kind: "qa", run_number: 2, state: "QA", head: @head}, run_id: "run-qa")
       own_head = finding(1, "clipped", "Cut off.\nNo scroll reaches it.", %{viewport: "laptop"}, head_sha: "abcdef1234")
       from_run = event(2, "finding.recorded", %{class: "clipped", severity: "minor", description: long, step: "Open it", evidence: ["a1", "a2"]}, actor: @qa)
       fixed = finding(3, "truncated", "Labels cut.")
-      reopened = finding(4, "truncated", "Names cut.")
+      reopened = finding(4, "truncated", "Names cut.", %{step: "Step 2"})
       unclassified = event(5, "finding.recorded", %{class: "unclassified", severity: "major", description: "Odd.", evidence: "a3"}, actor: @qa)
-      fix = event(6, "finding.resolved", %{finding_id: fixed.id, how: "Wrapped."}, actor: {:agent, "run-rw", "rework"})
-      claimed = event(7, "finding.resolved", %{finding_id: reopened.id, how: "Widened."}, actor: {:agent, "run-rw", "rework"})
-      reopen = event(9, "verdict.recorded", %{kind: "qa", outcome: "fail"}, supersedes: claimed.id)
+      awaiting = finding(6, "truncated", "Title cut.")
+      fix = event(7, "finding.resolved", %{finding_id: fixed.id, how: "Wrapped."}, actor: rework, head_sha: "c0ffee1234")
+      claimed = event(8, "finding.resolved", %{finding_id: reopened.id, how: "Widened."}, actor: rework, head_sha: "c0ffee1234")
+      confirm = event(9, "finding.confirmed", %{finding_id: fixed.id, resolution: fix.id, head: "c0ffee1234"}, run_id: "run-qa")
+      reopen = finding(10, "truncated", "Names still cut.", %{step: "Step 2"}, supersedes: claimed.id)
+      pending = event(11, "finding.resolved", %{finding_id: awaiting.id, how: "Shortened it."}, actor: rework, head_sha: "beefcafe99")
 
-      brief = Brief.build(nil, [run, own_head, from_run, fixed, reopened, unclassified, fix, claimed, reopen])
+      brief = Brief.build(nil, [run, own_head, from_run, fixed, reopened, unclassified, awaiting, fix, claimed, confirm, reopen, pending])
 
-      assert brief.open_findings == 4
+      assert brief.open_findings == 5
 
       assert brief.text =~
                """
-               Open findings (4):
+               Open findings (5):
                - clipped (2):
-                 - major, at laptop, commit abcdef1, last seen 2026-10-22T10:01:00Z: Cut off.
+                 - open, major, at laptop, commit abcdef1, last seen 2026-10-22T10:01:00Z: Cut off.
                    No scroll reaches it.
-                 - minor, step Open it, commit 4f1c2a9, last seen 2026-10-22T10:02:00Z: #{long} (files: a1, a2)
-               - truncated (1):
-                 - major, commit 4f1c2a9, last seen 2026-10-22T10:09:00Z: Names cut.
+                 - open, minor, step Open it, commit 4f1c2a9, last seen 2026-10-22T10:02:00Z: #{long} (files: a1, a2)
+               - truncated (2):
+                 - reopened, major, step Step 2, commit 4f1c2a9, last seen 2026-10-22T10:10:00Z: Names cut.
+                 - resolved, awaiting QA on beefcaf, major, commit 4f1c2a9, last seen 2026-10-22T10:06:00Z: Title cut.
                - unclassified (1):
-                 - major, commit 4f1c2a9, last seen 2026-10-22T10:05:00Z: Odd. (files: a3)
+                 - open, major, commit 4f1c2a9, last seen 2026-10-22T10:05:00Z: Odd. (files: a3)
                """
 
       refute brief.text =~ "Labels cut."
+    end
+
+    test "a reopening the next verdict records by superseding the resolution reopens the finding, and a resolution with no head shows none" do
+      found = finding(1, "clipped", "Cut off.")
+      fix = event(2, "finding.resolved", %{finding_id: found.id, how: "Moved it."}, actor: {:agent, "run-rw", "rework"})
+      assert Brief.build(nil, [found, fix]).text =~ "- resolved, awaiting QA, major, last seen 2026-10-22T10:01:00Z: Cut off."
+
+      verdict = event(3, "verdict.recorded", %{kind: "qa", outcome: "fail"}, supersedes: fix.id)
+      assert Brief.build(nil, [found, fix, verdict]).text =~ "- reopened, major, last seen 2026-10-22T10:03:00Z: Cut off."
     end
 
     test "every note in full, a person's as the Director's" do
@@ -358,7 +372,7 @@ defmodule SymphonyElixir.TicketEvents.BriefTest do
 
       assert text =~ "- 2026-10-22T10:01:00Z, the Director (Sam): string keys"
       assert text =~ "- Agent run (latest): running, started 2026-10-22T10:02:00Z\n  - 2026-10-22T10:03:00Z Blocked hold cleared\n"
-      assert text =~ "- unclassified (1):\n  - last seen 2026-10-22T10:04:00Z: No class."
+      assert text =~ "- unclassified (1):\n  - open, last seen 2026-10-22T10:04:00Z: No class."
       assert text =~ "Other events, newest first (1):\n-  Entered QA"
     end
   end

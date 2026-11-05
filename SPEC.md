@@ -538,7 +538,8 @@ type does not allow, is refused. The types: `phase.entered`, `hold.set` and `hol
 `restart`), `ticket.cancelled` (the Director's cancel, with its note), `ticket.moved` (the
 Director's free move into any phase, with its note), `step.started`,
 `step.completed`, `step.skipped`, `evidence`, `finding.recorded` (QA
-runs), `finding.resolved`, `checklist.answered`, `drift.detected`, `drift.reverted`,
+runs), `finding.resolved`, `finding.confirmed` (machine only: a QA pass confirmed a resolution),
+`checklist.answered`, `drift.detected`, `drift.reverted`,
 `drift.revert_failed`, `pause.set`, `pause.reason_added`, `pause.reason_cleared`, `pause.cleared`,
 `question.asked`, `question.answered`, `question.withdrawn`, `question.reopened`, `park.backfilled`
 (machine only: an older park brought up to date at start-up, with what it was given),
@@ -692,7 +693,11 @@ its entries name, and one for the transcript, captioned "QA session transcript",
 when it gives none), keyed `finding:<run_id>:<n>`: class `unclassified` and severity `unrated` until
 findings are classified, the finding's line as `description` (at most 2,000 characters), its `step`,
 `viewport` and `evidence` as given, and as `artifacts` the files its evidence names, or those of the
-step it names when it cites none. Handling the same outcome again writes none of them twice. Keeping
+step it names when it cites none. A finding whose `step` and `viewport` (and class) match a resolved
+finding's is recorded with `supersedes` naming that finding's resolution, which reopens it, one
+report finding per resolution at most. For a `pass`, the machine writes one `finding.confirmed` per
+finding resolved and awaiting QA, naming the finding, its resolution and the head the pass judged,
+keyed by the resolution. Handling the same outcome again writes none of them twice. Keeping
 the files or writing the events never changes the verdict or the ticket's next state; a failure is
 logged.
 
@@ -703,8 +708,12 @@ reads them (an older `decision.requested`, ended by the `decision.recorded` or `
 naming it), and no live writer records them. The `Needs Decision` label and the request comment are
 the pause projector's projections of an open Question, never an event of their own; a write Linear
 refuses is marked pending and applied again by the reconciler. A query with `open_decisions`
-lists the requests no answer or withdrawal names; `open_findings` the findings no unsuperseded
-resolution names.
+lists the requests no answer or withdrawal names; `open_findings` the findings QA has not confirmed
+fixed. A finding is open once recorded; a `finding.resolved` naming it, with the head that fixes it,
+resolves it, awaiting QA; a `finding.confirmed` naming that resolution confirms it, and a later event
+whose `supersedes` names the resolution (QA's next `finding.recorded` on the same step) reopens it,
+as the same finding seen again. A resolution of a finding the ticket does not hold, of one already
+resolved, or with no head is refused with the reason.
 
 At startup the ledger's backfill converts each ticket's history from before the stream existed,
 once, in a task the startup does not wait for (a failure is logged). For every ticket record of

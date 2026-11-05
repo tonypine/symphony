@@ -61,6 +61,14 @@ defmodule SymphonyElixir.QaVerification do
   (the epic plan, where one exists, is the parent the QA agent reads with its Linear tools), and the
   agent judges the outcome as a careful engineer testing their own feature, not by executing a
   script. `run/3` returns `:skip` for anything but a `QA` ticket.
+
+  A verdict also judges the findings an agent resolved (`SymphonyElixir.TicketEvents.findings/1`).
+  A `pass` confirms every finding resolved and awaiting QA, each with a `finding.confirmed` naming
+  its resolution and the head the pass judged: every resolution the ticket holds was recorded on
+  that head or an earlier one. A `fail` records each report finding whose `class`, `step` and
+  `viewport` match a resolved finding's (the step named and equal ignoring case, the viewport equal
+  or absent on both) with `supersedes` naming that finding's resolution, which reopens it; each
+  resolution is superseded by one report finding at most, the newest finding first.
   """
 
   require Logger
@@ -77,7 +85,9 @@ defmodule SymphonyElixir.QaVerification do
     PrWatch,
     QaPolicy,
     QaPreCheck,
+    RunStore,
     SelfHeal,
+    TicketEvents,
     TicketPullRequest,
     TicketSignals,
     TransitionGuard,
@@ -1048,6 +1058,7 @@ defmodule SymphonyElixir.QaVerification do
       run_id = qa_run_id(issue, opts, head)
       record_evidence(repo_key, issue, run_id, outcome)
       if verdict == "fail", do: record_findings(repo_key, issue, run_id, outcome)
+      if verdict == "pass", do: confirm_findings(repo_key, issue, run_id, head)
     end
 
     record_verdict(issue, opts, head, verdict, details)
@@ -1080,11 +1091,17 @@ defmodule SymphonyElixir.QaVerification do
   defp record_findings(repo_key, issue, run_id, outcome) do
     artifacts = Map.get(outcome, :artifacts)
     steps = Map.get(outcome, :steps, [])
+    resolved = issue.id |> ticket_findings() |> Enum.filter(&(&1.state in [:resolved, :confirmed])) |> Enum.reverse()
 
     outcome
     |> finding_details()
     |> Enum.with_index(1)
-    |> Enum.each(fn {finding, n} ->
+    |> Enum.map_reduce(resolved, fn {finding, n}, candidates ->
+      {match, rest} = take_match(candidates, finding)
+      {{finding, n, match}, rest}
+    end)
+    |> elem(0)
+    |> Enum.each(fn {finding, n, match} ->
       ids =
         case finding.evidence do
           [] -> resolved(artifacts, step_evidence(steps, finding.step))
@@ -1100,8 +1117,42 @@ defmodule SymphonyElixir.QaVerification do
         evidence: if(finding.evidence == [], do: nil, else: finding.evidence)
       }
 
-      TicketSignals.record_event(repo_key, issue.id, "finding.recorded", payload, pass_event_opts(run_id, "finding:#{run_id}:#{n}", ids))
+      opts = pass_event_opts(run_id, "finding:#{run_id}:#{n}", ids) ++ [supersedes: match && match.resolution.id]
+      TicketSignals.record_event(repo_key, issue.id, "finding.recorded", payload, opts)
     end)
+  end
+
+  # The report finding's class is `unclassified` until the findings model classifies them.
+  defp take_match(candidates, %{step: step} = finding) when is_binary(step) do
+    key = {"unclassified", match_text(step), match_text(finding.viewport)}
+
+    case Enum.split_with(candidates, &(finding_key(&1.finding) == key)) do
+      {[match | others], rest} -> {match, others ++ rest}
+      {[], rest} -> {nil, rest}
+    end
+  end
+
+  defp take_match(candidates, _finding), do: {nil, candidates}
+
+  defp finding_key(%{payload: payload}), do: {match_text(Map.get(payload, :class)), match_text(Map.get(payload, :step)), match_text(Map.get(payload, :viewport))}
+
+  defp match_text(text) when is_binary(text), do: text |> String.trim() |> String.downcase()
+  defp match_text(_text), do: nil
+
+  # A pass confirms every finding resolved and awaiting QA. The machine writes it, in the QA run,
+  # keyed by the resolution, so handling the same pass again confirms nothing twice.
+  defp confirm_findings(repo_key, issue, run_id, head) do
+    for %{state: :resolved, finding: finding, resolution: resolution} <- ticket_findings(issue.id) do
+      payload = %{finding_id: finding.id, resolution: resolution.id, head: head}
+      TicketSignals.record_event(repo_key, issue.id, "finding.confirmed", payload, run_id: run_id, head_sha: head)
+    end
+
+    :ok
+  end
+
+  defp ticket_findings(issue_id) do
+    events = RunStore.list_ticket_events(issue_id, [])
+    if is_list(events), do: TicketEvents.findings(events), else: []
   end
 
   # The findings the agent gave, else its failing steps, as `QaAgent.failure_findings/1` reads them.

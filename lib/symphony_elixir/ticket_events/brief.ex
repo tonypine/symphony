@@ -11,9 +11,11 @@ defmodule SymphonyElixir.TicketEvents.Brief do
     * **Decisions**: every request (a `decision.requested`, or a Question's `question.asked`) with
       its answer or withdrawal, every open request, and every ruling a person recorded without a
       request.
-    * **Open findings**: every finding no unsuperseded resolution names, grouped by class with a
-      count, each with its viewport, its commit (the event's, else its run's), when it was last
-      seen (its event, or a later event that reopened it) and its whole description.
+    * **Open findings**: every finding QA has not confirmed fixed
+      (`SymphonyElixir.TicketEvents.findings/1`), grouped by class with a count, each with where it
+      stands (`open`, `resolved, awaiting QA` with the head that fixes it, `reopened`), its
+      viewport, its commit (the event's, else its run's), when it was last seen (its event, or the
+      later event that reopened it) and its whole description.
     * **Notes**: every note, in full, with who wrote it; a person's is the Director's.
     * **Runs**: one line per run (kind, number, result or state, commit, when), with the latest
       run's events in full under it. An earlier run's steps are summed up in its line.
@@ -27,7 +29,7 @@ defmodule SymphonyElixir.TicketEvents.Brief do
   same bytes.
   """
 
-  alias SymphonyElixir.{RunStore, TicketState}
+  alias SymphonyElixir.{RunStore, TicketEvents, TicketState}
   alias SymphonyElixir.TicketEvents.{Event, Summary}
 
   @type t :: %{
@@ -194,20 +196,23 @@ defmodule SymphonyElixir.TicketEvents.Brief do
 
   # Open findings
 
+  # Every finding QA has not confirmed fixed (`TicketEvents.findings/1`), with where it stands.
   defp open_findings(events, runs) do
-    superseded = events |> Enum.map(& &1.supersedes) |> MapSet.new()
-    resolutions = Enum.filter(events, &(&1.type == "finding.resolved"))
-    resolved = for event <- resolutions, not MapSet.member?(superseded, event.id), into: MapSet.new(), do: text(event, :finding_id)
     commits = Map.new(runs, &{&1.id, &1.commit})
 
-    events
-    |> Enum.filter(&(&1.type == "finding.recorded" and not MapSet.member?(resolved, &1.id)))
-    |> Enum.map(fn finding ->
-      reopened_by = for event <- resolutions, text(event, :finding_id) == finding.id, into: MapSet.new(), do: event.id
-      seen = events |> Enum.filter(&MapSet.member?(reopened_by, &1.supersedes)) |> Enum.map(& &1.at)
-      %{event: finding, commit: finding.head_sha || Map.get(commits, finding.run_id), last_seen: List.last([finding.at | seen])}
-    end)
+    for %{state: state, finding: finding} = entry <- TicketEvents.findings(events), state != :confirmed do
+      %{
+        event: finding,
+        state: state_text(entry),
+        commit: finding.head_sha || Map.get(commits, finding.run_id),
+        last_seen: if(entry.reopened_by, do: entry.reopened_by.at, else: finding.at)
+      }
+    end
   end
+
+  defp state_text(%{state: :open}), do: "open"
+  defp state_text(%{state: :reopened}), do: "reopened"
+  defp state_text(%{state: :resolved, resolution: resolution}), do: "resolved, awaiting QA" <> suffix(" on ", short_sha(text(resolution, :head)))
 
   defp findings_section(findings) do
     groups =
@@ -223,9 +228,10 @@ defmodule SymphonyElixir.TicketEvents.Brief do
 
   defp finding_group({class, findings}), do: ["- #{class} (#{length(findings)}):" | Enum.map(findings, &finding_line/1)]
 
-  defp finding_line(%{event: event, commit: commit, last_seen: last_seen}) do
+  defp finding_line(%{event: event, state: state, commit: commit, last_seen: last_seen}) do
     facts =
       present([
+        state,
         text(event, :severity),
         prefixed("at ", text(event, :viewport)),
         prefixed("step ", text(event, :step)),

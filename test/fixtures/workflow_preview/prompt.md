@@ -70,12 +70,13 @@ Do not craft raw Linear GraphQL from prompts.
 Every run also gets the ticket's own history, Symphony's ledger, through two tools
 that act on the current ticket and take no ticket argument:
 `ticket_events(types?, since?, run_id?, open_findings?, limit?)` reads its events
-(`open_findings: true` lists the findings no fix has closed yet, with their
-screenshots), and `ticket_record(type, payload, artifacts?, parent?)` records one:
-a `note`, `evidence` (with an optional `proof`: the walkthrough step and the test
-that proves it), a step's `step.started`, `step.completed` or `step.skipped`, a
-`checklist.answered`, or a `finding.resolved` naming the finding a fix closes; a QA
-run also records `finding.recorded`. `artifacts` are files in the workspace or your
+(`open_findings: true` lists the findings QA has not confirmed fixed, each with
+its state: open, resolved awaiting QA, or reopened, and their screenshots), and
+`ticket_record(type, payload, artifacts?, parent?)` records one: a `note`,
+`evidence` (with an optional `proof`: the walkthrough step and the test that proves
+it), a step's `step.started`, `step.completed` or `step.skipped`, a
+`checklist.answered`, or a `finding.resolved` naming the open or reopened finding a
+fix closes, on the head that fixes it; a QA run also records `finding.recorded`. `artifacts` are files in the workspace or your
 `$TMPDIR`; Symphony fills the run, phase and head. Verdicts, moves, pauses and
 questions are Symphony's: `ticket_record` refuses them, with the list of what the run
 may record.
@@ -1086,20 +1087,20 @@ Decisions (2):
 
 Open findings (12):
 - clipped (5):
-  - major, at laptop 1440×900, step Open the export dialog, commit 4f1c2a9, last seen 2026-01-05T11:10:00Z: The Export button is cut off at the dialog's bottom edge; no scroll reaches it.
-  - major, at laptop 1440×900, step Pick the columns, commit 4f1c2a9, last seen 2026-01-05T11:13:00Z: The column list's last three rows are hidden behind the footer.
-  - major, at desktop 2560×1440, step Open the export dialog, commit 4f1c2a9, last seen 2026-01-05T11:16:00Z: The dialog's right edge is cut off when the sidebar is open.
-  - major, at laptop 1440×900, step Choose the format, commit 4f1c2a9, last seen 2026-01-05T11:19:00Z: The format menu opens past the window's bottom edge.
-  - major, at laptop 1440×900, step Review the summary, commit 4f1c2a9, last seen 2026-01-05T11:22:00Z: The summary's totals row is hidden under the toolbar.
+  - open, major, at laptop 1440×900, step Open the export dialog, commit 4f1c2a9, last seen 2026-01-05T11:10:00Z: The Export button is cut off at the dialog's bottom edge; no scroll reaches it.
+  - open, major, at laptop 1440×900, step Pick the columns, commit 4f1c2a9, last seen 2026-01-05T11:13:00Z: The column list's last three rows are hidden behind the footer.
+  - open, major, at desktop 2560×1440, step Open the export dialog, commit 4f1c2a9, last seen 2026-01-05T11:16:00Z: The dialog's right edge is cut off when the sidebar is open.
+  - open, major, at laptop 1440×900, step Choose the format, commit 4f1c2a9, last seen 2026-01-05T11:19:00Z: The format menu opens past the window's bottom edge.
+  - open, major, at laptop 1440×900, step Review the summary, commit 4f1c2a9, last seen 2026-01-05T11:22:00Z: The summary's totals row is hidden under the toolbar.
 - truncated (4):
-  - major, at laptop 1440×900, step Pick the columns, commit 4f1c2a9, last seen 2026-01-05T11:25:00Z: Long column names end in an ellipsis with no way to read them.
-  - major, at desktop 2560×1440, step Pick the columns, commit 4f1c2a9, last seen 2026-01-05T11:28:00Z: The column type labels are cut to three letters.
-  - major, at laptop 1440×900, step Review the summary, commit 4f1c2a9, last seen 2026-01-05T11:31:00Z: The file name is truncated in the middle.
-  - major, at laptop 1440×900, step Choose the format, commit 4f1c2a9, last seen 2026-01-05T11:34:00Z: The format descriptions are cut to one line.
+  - open, major, at laptop 1440×900, step Pick the columns, commit 4f1c2a9, last seen 2026-01-05T11:25:00Z: Long column names end in an ellipsis with no way to read them.
+  - open, major, at desktop 2560×1440, step Pick the columns, commit 4f1c2a9, last seen 2026-01-05T11:28:00Z: The column type labels are cut to three letters.
+  - open, major, at laptop 1440×900, step Review the summary, commit 4f1c2a9, last seen 2026-01-05T11:31:00Z: The file name is truncated in the middle.
+  - open, major, at laptop 1440×900, step Choose the format, commit 4f1c2a9, last seen 2026-01-05T11:34:00Z: The format descriptions are cut to one line.
 - state missing (3):
-  - major, at laptop 1440×900, step Start the export, commit 4f1c2a9, last seen 2026-01-05T11:37:00Z: No progress shows while the export runs.
-  - major, at laptop 1440×900, step Start the export, commit 4f1c2a9, last seen 2026-01-05T11:40:00Z: A failed export shows no error.
-  - major, at desktop 2560×1440, step Open the export dialog, commit 4f1c2a9, last seen 2026-01-05T11:43:00Z: The dialog shows no empty state when there are no rows.
+  - open, major, at laptop 1440×900, step Start the export, commit 4f1c2a9, last seen 2026-01-05T11:37:00Z: No progress shows while the export runs.
+  - open, major, at laptop 1440×900, step Start the export, commit 4f1c2a9, last seen 2026-01-05T11:40:00Z: A failed export shows no error.
+  - open, major, at desktop 2560×1440, step Open the export dialog, commit 4f1c2a9, last seen 2026-01-05T11:43:00Z: The dialog shows no empty state when there are no rows.
 
 Notes (3):
 - 2026-01-05T09:25:00Z, an agent (Implementation run): The export spends most of its time writing rows one by one; batching them is the plan.

@@ -31,7 +31,9 @@ defmodule SymphonyElixir.TicketEvents.Types do
   records them any more, but for one: a ruling the Director records on a ticket's page, which no
   Question asked for, is a `decision.recorded` with no `request` (`SymphonyElixir.DirectorRulings`). `hold.set` and `hold.cleared` take only the `blocked` kind, and
   `person.action` has no `decide`.
-  State is machinery-only: an agent claims `finding.resolved`, it never records a verdict.
+  State is machinery-only: an agent claims `finding.resolved`, it never records a verdict. A QA
+  `pass` confirms the claim with a machine `finding.confirmed` naming the finding, the resolution
+  and the head the pass judged (`SymphonyElixir.QaVerification`), keyed by the resolution.
 
   An agent records through `ticket_record` (`SymphonyElixir.AgentTools.TicketLedger`) only the types
   `agent_types/1` lists for its run kind: `finding.recorded` in a QA run; `finding.resolved`,
@@ -295,6 +297,13 @@ defmodule SymphonyElixir.TicketEvents.Types do
       required: [finding_id: :string, how: {:string, 2_000}],
       optional: [head: :string, evidence: @evidence],
       idempotency: :writer
+    },
+    "finding.confirmed" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [finding_id: :string, resolution: :string, head: :string],
+      optional: @signal,
+      idempotency: {:fields, [:resolution]}
     },
     "checklist.answered" => %{
       writers: [:agent],

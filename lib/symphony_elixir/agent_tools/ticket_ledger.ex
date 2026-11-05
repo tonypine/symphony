@@ -1,7 +1,8 @@
 defmodule SymphonyElixir.AgentTools.TicketLedger do
   @moduledoc """
   The agents' tools on the current ticket's event stream (`SymphonyElixir.TicketEvents`):
-  `ticket_events` reads it and `ticket_record` appends to it.
+  `ticket_events` reads it and `ticket_record` appends to it. `ticket_events` gives each finding's
+  `finding.recorded` where the finding stands (`SymphonyElixir.TicketEvents.findings/1`).
 
   The ticket comes from the session context, never from an argument, as
   `SymphonyElixir.AgentTools.Linear` does. Symphony fills what the agent cannot vouch for: the
@@ -12,7 +13,8 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
   run's kind, and each rejection names its `reason` and returns the type's schema: an unknown type
   (`unknown_type`) or one the run may not record (`not_allowed`, with the types it may), a payload
   the schema refuses (`invalid_payload`, naming the fields), a `finding.resolved` naming no finding
-  of the ticket (`unknown_finding`), a `parent` that is no event of the ticket (`unknown_parent`)
+  of the ticket (`unknown_finding`) or one already resolved (`already_resolved`, naming the
+  resolution), or carrying no head that fixes it (`no_head`), a `parent` that is no event of the ticket (`unknown_parent`)
   and an artifact that is not a regular file under the workspace or the run's `$TMPDIR`
   (`invalid_artifact`). Every check runs before anything is written: a refused call ingests no file
   and records no event.
@@ -48,7 +50,8 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
         "description" =>
           "Read the current ticket's history of events (Symphony's ledger), oldest first: findings, steps, evidence, notes, runs, verdicts and moves. " <>
             "Each event carries its id, seq, time, type, actor, summary, payload, the head it was recorded on and its artifacts (id, kind, label, url). " <>
-            "`open_findings: true` keeps the findings no resolution closes; `types`, `since` (ISO 8601, exclusive), `run_id` and `limit` (at most #{@max_limit}) narrow the read.",
+            "A finding's `finding.recorded` carries `finding`: its `state` (`open`, `resolved_awaiting_qa`, `reopened`, `confirmed`), its `resolution` and the head it was `resolved_on`, the event that `reopened_by` it and the resolution it `superseded`, and the verdict's `confirmed_by`. " <>
+            "`open_findings: true` keeps the findings QA has not confirmed fixed (open, resolved awaiting QA, reopened); `types`, `since` (ISO 8601, exclusive), `run_id` and `limit` (at most #{@max_limit}) narrow the read.",
         "inputSchema" => %{
           "type" => "object",
           "additionalProperties" => false,
@@ -64,7 +67,7 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
       %{
         "name" => "ticket_record",
         "description" =>
-          "Record an event on the current ticket's history. A run records `finding.resolved` (a finding it fixed, by `finding_id`), `step.started`, `step.completed`, `step.skipped`, " <>
+          "Record an event on the current ticket's history. A run records `finding.resolved` (an open or reopened finding it fixed, by `finding_id`; Symphony fills the head that fixes it), `step.started`, `step.completed`, `step.skipped`, " <>
             "`evidence` (with an optional `proof`: the walkthrough `step` number and the `test` that proves it), `checklist.answered` and `note`; a QA run also records `finding.recorded`. " <>
             "Verdicts, moves, pauses, questions and runs are Symphony's: ask a question with the question tool. " <>
             "`artifacts` are paths of files in the workspace or your $TMPDIR, kept with the event (a screenshot shows as a thumbnail in the Director); `parent` nests the event under another. " <>
@@ -98,10 +101,29 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
   def events(context, args) do
     with {:ok, %{issue_id: issue_id}} <- ticket(context),
          {:ok, opts} <- query_opts(args),
-         events when is_list(events) <- TicketEvents.query(issue_id, opts) do
-      {:ok, %{"events" => Enum.map(events, &event_json/1)}}
+         events when is_list(events) <- TicketEvents.query(issue_id, opts),
+         stored when is_list(stored) <- RunStore.list_ticket_events(issue_id, []) do
+      findings = stored |> TicketEvents.findings() |> Map.new(&{&1.finding.id, &1})
+      {:ok, %{"events" => Enum.map(events, &(&1 |> event_json() |> put_present("finding", finding_json(findings[&1.id]))))}}
     end
   end
+
+  # Where a finding stands, on its `finding.recorded` event.
+  defp finding_json(nil), do: nil
+
+  defp finding_json(finding) do
+    %{
+      "state" => finding_state(finding.state),
+      "resolution" => finding.resolution && finding.resolution.id,
+      "resolved_on" => finding.resolution && Map.get(finding.resolution.payload, :head),
+      "reopened_by" => finding.reopened_by && finding.reopened_by.id,
+      "superseded" => finding.superseded && finding.superseded.id,
+      "confirmed_by" => finding.confirmation && finding.confirmation.id
+    }
+  end
+
+  defp finding_state(:resolved), do: "resolved_awaiting_qa"
+  defp finding_state(state), do: Atom.to_string(state)
 
   @doc "`ticket_record`: records `args`' event on the current ticket (see the moduledoc)."
   @spec record(context(), map()) :: {:ok, map()} | {:error, error() | term()}
@@ -109,18 +131,20 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
     type = Map.get(args, "type")
     run_kind = Map.get(context, :run_kind)
 
+    head = head(context)
+
     with {:ok, ticket} <- ticket(context),
          :ok <- allowed(type, run_kind),
          {:ok, payload} <- payload(type, Map.get(args, "payload"), run_kind),
          stored when is_list(stored) <- RunStore.list_ticket_events(ticket.issue_id, []),
-         :ok <- finding(type, payload, stored),
+         :ok <- finding(type, payload, stored, head),
          {:ok, parent} <- parent(type, Map.get(args, "parent"), stored),
          {:ok, sources} <- sources(type, Map.get(args, "artifacts"), context),
          {:ok, artifact_ids} <- ingest(type, sources, ticket, context),
          {:ok, event} <-
            TicketEvents.record(ticket.repo_key, ticket.issue_id, type, payload,
              actor: {:agent, Map.get(context, :run_id), run_kind},
-             head_sha: head(context),
+             head_sha: head,
              parent: parent,
              artifacts: artifact_ids
            ) do
@@ -191,13 +215,25 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
     end
   end
 
-  defp finding("finding.resolved", %{finding_id: id}, stored) do
-    if Enum.any?(stored, &(&1.type == "finding.recorded" and &1.id == id)),
-      do: :ok,
-      else: refusal("unknown_finding", "#{inspect(id)} is not a finding of this ticket.", "finding.resolved")
+  defp finding("finding.resolved", %{finding_id: id} = payload, stored, head) do
+    case TicketEvents.check_resolution(stored, id, Map.get(payload, :head) || head) do
+      :ok ->
+        :ok
+
+      {:error, {:unknown_finding, _id}} ->
+        refusal("unknown_finding", "#{inspect(id)} is not a finding of this ticket.", "finding.resolved")
+
+      {:error, {:finding_already_resolved, _id, resolution}} ->
+        refusal("already_resolved", "#{inspect(id)} is already resolved by #{resolution}; only an open or reopened finding can be resolved.", "finding.resolved", nil, %{
+          "resolution" => resolution
+        })
+
+      {:error, {:no_head, _id}} ->
+        refusal("no_head", "The workspace has no readable head: pass the commit that fixes #{inspect(id)} as the payload's `head`.", "finding.resolved")
+    end
   end
 
-  defp finding(_type, _payload, _stored), do: :ok
+  defp finding(_type, _payload, _stored, _head), do: :ok
 
   defp parent(_type, nil, _stored), do: {:ok, nil}
 
