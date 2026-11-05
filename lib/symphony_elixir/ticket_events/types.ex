@@ -12,6 +12,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
     * `:non_neg_integer`, `:boolean`, `:map`, `{:list, :string}`, `:list`.
     * `{:nullable, spec}` - `spec` or nil.
     * `{:any_of, specs}` - the first spec that accepts the value.
+    * `{:map, fields}` - a map holding exactly `fields` (a keyword of specs, each required), its keys
+      as atoms.
 
   An optional field given as nil is left out, unless its spec is nullable. A field the type does
   not name is rejected. Every type a machine or a person writes also takes an optional `signal`, the
@@ -30,6 +32,12 @@ defmodule SymphonyElixir.TicketEvents.Types do
   Question asked for, is a `decision.recorded` with no `request` (`SymphonyElixir.DirectorRulings`). `hold.set` and `hold.cleared` take only the `blocked` kind, and
   `person.action` has no `decide`.
   State is machinery-only: an agent claims `finding.resolved`, it never records a verdict.
+
+  An agent records through `ticket_record` (`SymphonyElixir.AgentTools.TicketLedger`) only the types
+  `agent_types/1` lists for its run kind: `finding.recorded` in a QA run; `finding.resolved`,
+  `step.*`, `evidence`, `checklist.answered` and `note` in any run. Every other type is the
+  machine's or a person's (a question is asked through the question tool), and a legacy type is
+  never an agent's. An `evidence` may carry a `proof`: the walkthrough step it proves and the test.
 
   A person's cancel of a ticket Symphony owns is one `ticket.cancelled` (`SymphonyElixir.DirectorMoves`):
   the phase it left and the canceled state, the Director's note, whether a run was stopped and the
@@ -84,6 +92,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
           | {:list, :string}
           | {:nullable, field_spec()}
           | {:any_of, [field_spec()]}
+          | {:map, keyword(field_spec())}
   @type idempotency_rule :: :writer | {:fields, [atom()]}
   @type entry :: %{
           writers: [actor_kind()],
@@ -270,7 +279,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:agent],
       run_kinds: :any,
       required: [caption: {:string, 500}],
-      optional: [artifacts: {:list, :string}],
+      optional: [artifacts: {:list, :string}, proof: {:map, [step: :non_neg_integer, test: {:string, 500}]}],
       idempotency: :writer
     },
     "finding.recorded" => %{
@@ -396,6 +405,49 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @doc "The run kinds an agent actor may carry: every `SymphonyElixir.RunKind` name."
   @spec agent_run_kinds() :: [String.t()]
   def agent_run_kinds, do: RunKind.names()
+
+  @doc """
+  The types an agent of `run_kind` may record, sorted: the ones an agent writes whose run kinds
+  include it, never a legacy type. Empty for a name that is not an agent run kind.
+  """
+  @spec agent_types(String.t() | atom() | nil) :: [String.t()]
+  def agent_types(run_kind) do
+    run_kind = run_kind_name(run_kind)
+
+    types =
+      for {type, %{writers: writers, run_kinds: kinds}} <- @catalog,
+          run_kind in agent_run_kinds(),
+          :agent in writers and not legacy?(type),
+          kinds == :any or run_kind in kinds,
+          do: type
+
+    Enum.sort(types)
+  end
+
+  @doc """
+  The payload schema of `type` as plain data a tool can return: its `required` and `optional`
+  fields, each `%{name, type}` with a `max` length, the enum `values`, the `item` spec of a list,
+  the `of` specs of a choice or the `fields` of a map. Nil for an unknown type. A field only the
+  machinery passes (`signal`) is left out.
+  """
+  @spec schema(term()) :: %{required: [map()], optional: [map()]} | nil
+  def schema(type) do
+    case fetch(type) do
+      {:ok, entry} -> %{required: describe_fields(entry.required), optional: entry.optional |> Keyword.delete(:signal) |> describe_fields()}
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp describe_fields(fields), do: Enum.map(fields, fn {name, spec} -> Map.put(describe(spec), :name, Atom.to_string(name)) end)
+
+  defp describe(:string), do: %{type: "string"}
+  defp describe({:string, max}), do: %{type: "string", max: max}
+  defp describe({:enum, values}), do: %{type: "enum", values: values}
+  defp describe({:list, spec}), do: %{type: "list", item: describe(spec)}
+  defp describe({:nullable, spec}), do: Map.put(describe(spec), :nullable, true)
+  defp describe({:any_of, specs}), do: %{type: "any_of", of: Enum.map(specs, &describe/1)}
+  defp describe({:map, fields}), do: %{type: "map", fields: describe_fields(fields)}
+  defp describe(spec) when is_atom(spec), do: %{type: Atom.to_string(spec)}
 
   @doc """
   Validates a payload of `type` written by an actor of `actor_kind` (an agent also names its
@@ -528,6 +580,18 @@ defmodule SymphonyElixir.TicketEvents.Types do
   defp check(:map, value) when is_map(value), do: {:ok, value}
   defp check(:list, value) when is_list(value), do: {:ok, value}
 
+  defp check({:map, fields}, value) when is_map(value) do
+    names = Keyword.keys(fields)
+
+    case atomize(value, names) do
+      {given, []} when map_size(given) == length(names) ->
+        Enum.reduce_while(fields, {:ok, %{}}, &check_field(&1, given, &2))
+
+      _missing_or_unknown ->
+        :error
+    end
+  end
+
   defp check({:list, :string}, value) when is_list(value) do
     if Enum.all?(value, &match?({:ok, _}, check(:string, &1))), do: {:ok, value}, else: :error
   end
@@ -542,6 +606,13 @@ defmodule SymphonyElixir.TicketEvents.Types do
   end
 
   defp check(_spec, _value), do: :error
+
+  defp check_field({field, spec}, given, {:ok, acc}) do
+    case check(spec, Map.get(given, field)) do
+      {:ok, checked} when not is_nil(checked) -> {:cont, {:ok, Map.put(acc, field, checked)}}
+      _invalid -> {:halt, :error}
+    end
+  end
 
   defp derived_key(type, %{idempotency: {:fields, fields}}, payload) when is_map(payload) do
     values = Enum.map(fields, &Map.get(payload, &1))

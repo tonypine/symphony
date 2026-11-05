@@ -3417,6 +3417,16 @@ The epic review uses `github_ci_log` to name why CI failed on the commit it revi
 quotes the same log (failed steps, annotations, the last 60 lines of each failed job) in the
 follow-up it files for that CI. The CI Fix run gets the failed log in its prompt, as before.
 
+### Ticket tools
+
+Every run kind, the reviewer and QA included, gets two tools on the current ticket's own history
+(its ledger of events), which take no ticket argument:
+
+| Tool | What it does |
+| --- | --- |
+| `ticket_events` | Reads the ticket's events, oldest first, each with its id, seq, time, type, actor, summary, payload, head and artifacts (`{id, kind, label, url}`). `types`, `since` (ISO 8601, exclusive), `run_id`, `open_findings` (the findings no unsuperseded `finding.resolved` closes) and `limit` (at most 200) narrow the read. |
+| `ticket_record` | Records one event: `finding.resolved`, `step.started`, `step.completed`, `step.skipped`, `evidence` (with an optional `proof`: the walkthrough step and its test), `checklist.answered` and `note` in any run, and `finding.recorded` in a QA run. Symphony fills the run, run kind, phase and head. `artifacts` are files under the workspace or the run's `$TMPDIR`, kept in the artifact store. A refusal (`unknown_type`, `not_allowed` with the types the run may record, `invalid_payload` naming the fields, `unknown_finding`, `unknown_parent`, `invalid_artifact`) returns the type's schema and writes nothing. |
+
 ### Push check
 
 `github_push_branch` pushes through Symphony, outside the agent sandbox, with repo git hooks turned

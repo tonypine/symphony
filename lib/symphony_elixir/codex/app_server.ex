@@ -412,7 +412,12 @@ defmodule SymphonyElixir.Codex.AppServer do
     :qa_android_driver,
     :unlocked_paths,
     :review_verdict_sink,
-    :qa_verdict_sink
+    :qa_verdict_sink,
+    :repo_key,
+    :run_id,
+    :run_kind,
+    :run_profile,
+    :agent_tmp_dir
   ]
 
   defp dynamic_tool_executor(issue, workspace, command_security, dependency_gate, on_message, metadata, opts) do

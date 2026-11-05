@@ -67,6 +67,19 @@ branch's changes to write-protected files such as `.agents/skills` come through.
 
 Do not craft raw Linear GraphQL from prompts.
 
+Every run also gets the ticket's own history, Symphony's ledger, through two tools
+that act on the current ticket and take no ticket argument:
+`ticket_events(types?, since?, run_id?, open_findings?, limit?)` reads its events
+(`open_findings: true` lists the findings no fix has closed yet, with their
+screenshots), and `ticket_record(type, payload, artifacts?, parent?)` records one:
+a `note`, `evidence` (with an optional `proof`: the walkthrough step and the test
+that proves it), a step's `step.started`, `step.completed` or `step.skipped`, a
+`checklist.answered`, or a `finding.resolved` naming the finding a fix closes; a QA
+run also records `finding.recorded`. `artifacts` are files in the workspace or your
+`$TMPDIR`; Symphony fills the run, phase and head. Verdicts, moves, pauses and
+questions are Symphony's: `ticket_record` refuses them, with the list of what the run
+may record.
+
 Keep a ticket's long-lived artifacts (a domain brief, journeys, a Kano map,
 screens, an ADR draft) in Linear documents rather than comments:
 `linear_create_document(title, content)` creates one in the issue's project,

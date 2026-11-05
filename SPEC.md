@@ -4620,6 +4620,13 @@ Scoped GitHub tool extension contract:
   (`gh run view --job <id> --log-failed`), bounded: at most 400 lines per job, each line clipped,
   and at most 10 jobs, counting the rest. It is a read tool, so every run kind has it, the reviewer
   and QA included; it gives no other `gh` access.
+- `ticket_events` and `ticket_record`, if exposed, MUST act only on the session's current ticket
+  and take no ticket argument; every run kind gets both. `ticket_record` MUST take only the types the
+  event catalog allows the run's kind (`finding.recorded` in a QA run; `finding.resolved`, `step.*`,
+  `evidence`, `checklist.answered` and `note` in any run), MUST fill the event's actor, run, phase
+  and head itself, MUST take artifacts only from regular files under the workspace or the run's
+  temp folder, and MUST write nothing when it refuses a call, returning the reason and the type's
+  schema.
 - The epic review SHOULD read the failed jobs of CI on the commit it reviewed itself when it files a
   follow-up about CI (a failing step or finding that names CI or a workflow run), and quote their
   failed steps, annotations and log tail in the follow-up's description, so the run that takes it
