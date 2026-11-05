@@ -56,6 +56,8 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
     # The issue-scoping quality gate's clarification: its questions for a ticket scored below the
     # threshold, answered in the Inbox.
     "lib/symphony_elixir/quality_gate/question.ex" => [:quality_gate],
+    # A run that spent its per-issue token budget: the spend, the limit and the ways forward.
+    "lib/symphony_elixir/token_budget.ex" => [:token_budget],
     # A run's block report that names no blocker: "The run on <id> cannot continue on its own".
     "lib/symphony_elixir/transition_guard.ex" => [:block_report]
   }
