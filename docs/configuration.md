@@ -3332,8 +3332,7 @@ the arrow buttons), add or remove one, set its title, id, kind, command or promp
 fields (each a name and a type, written as its `answer`), timeout, the step it returns to on failure
 and its no-result limit, or reset the kind to its default list (which
 removes `phases.<kind>` from the file). A step the rules below refuse says why on its row and is not
-saved. The editor has no control for an orchestrated step's `answer` yet: set it in the file by hand,
-and don't save that kind's list from Settings, which would drop it. Under the list, a preview shows the list as `symphony workflow preview` prints it. Save checks
+saved. Under the list, a preview shows the list as `symphony workflow preview` prints it. Save checks
 the file with `symphony check` first and rewrites only the kind's `steps:` block, as an indented
 list; a block it can't read (an anchor, a folded `>` prompt) is reported with its line, to change by
 hand.
